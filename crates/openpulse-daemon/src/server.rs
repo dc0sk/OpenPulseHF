@@ -869,6 +869,11 @@ pub async fn run(cfg: OpenpulseConfig, modem_backend: Box<dyn AudioBackend>) -> 
                         &mut runtime_state,
                     );
                 }
+                // Drop a finished or abandoned QSY negotiation BEFORE the auto-QSY gate reads it:
+                // that gate returns early whenever a session exists, so a session that can never
+                // complete disables the anti-jam response entirely, and an unsigned inbound QSY_REQ
+                // is enough to create one (audit 2026-07-19, #4).
+                runtime_state.expire_stale_qsy_session(crate::QSY_SESSION_TTL);
                 // Auto-QSY if the notch persistence tracker confirmed an in-band interferer this
                 // tick (one a notch can't remove). Runs every tick — interference shows during
                 // silence too — and self-gates on config / candidates / an in-flight session.

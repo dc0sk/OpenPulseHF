@@ -155,6 +155,15 @@ pub struct QsySession {
 }
 
 impl QsySession {
+    /// Whether the negotiation has finished, successfully or not.
+    ///
+    /// A terminal session holds no further obligations, so a caller keeping one per link should drop
+    /// it — the daemon gates auto-QSY on "is a session in progress", and a retained terminal session
+    /// answers that question wrongly forever.
+    pub fn is_terminal(&self) -> bool {
+        matches!(self.state, State::Agreed { .. } | State::Rejected)
+    }
+
     /// Create a session for the station that will start the negotiation.
     pub fn new_initiator() -> Self {
         Self {

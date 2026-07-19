@@ -182,6 +182,8 @@ pub struct RuntimeControlState {
     pub qsy_pending_token: Option<String>,
     /// Active QSY negotiation session (present after operator accepts a pending token).
     pub qsy_session: Option<QsySession>,
+    /// When the current QSY session was created, for TTL expiry. `None` whenever `qsy_session` is.
+    pub qsy_session_started: Option<Instant>,
     /// Candidate frequencies (Hz) supplied from config for QSY scanning.
     pub qsy_candidate_freqs: Vec<u64>,
     /// QSY policy parsed from config; governs which requests are accepted.
@@ -290,7 +292,33 @@ pub struct RuntimeControlState {
     pub peer_cache: openpulse_core::peer_cache::PeerCache,
 }
 
+/// How long a QSY negotiation may sit without advancing before it is abandoned.
+///
+/// The negotiation is a handful of frames over RF; minutes is generous. The bound exists because a
+/// session that never completes blocks auto-QSY entirely, and an unsigned inbound QSY_REQ is enough
+/// to create one (audit 2026-07-19, #4).
+pub const QSY_SESSION_TTL: Duration = Duration::from_secs(300);
+
 impl RuntimeControlState {
+    /// Drop the QSY session if it has finished, or has sat longer than `ttl` without completing.
+    ///
+    /// Called from the daemon tick. Without it, one unsigned QSY_REQ from any station — or a
+    /// negotiation whose peer simply walked away — disables the anti-jam response for the process
+    /// lifetime, because `maybe_qsy_on_interference` returns early whenever a session exists.
+    pub fn expire_stale_qsy_session(&mut self, ttl: Duration) {
+        let Some(session) = self.qsy_session.as_ref() else {
+            self.qsy_session_started = None;
+            return;
+        };
+        let terminal = session.is_terminal();
+        let stale = self.qsy_session_started.is_none_or(|t| t.elapsed() >= ttl);
+        if terminal || stale {
+            tracing::debug!(terminal, stale, "clearing QSY session");
+            self.qsy_session = None;
+            self.qsy_session_started = None;
+        }
+    }
+
     /// True when a verified peer's OTA ladder is known to differ from ours — OTA rate-stepping must
     /// be suppressed (fixed-mode fallback) so a `recommended_level` can't mean different modes.
     /// OTA without a handshake, or with a compatible/undetermined peer, is unaffected.
@@ -376,6 +404,7 @@ impl Default for RuntimeControlState {
             qsy_decisions: HashMap::new(),
             qsy_pending_token: None,
             qsy_session: None,
+            qsy_session_started: None,
             qsy_candidate_freqs: Vec::new(),
             qsy_policy: QsyPolicy::default(),
             qsy_scan_dwell_ms: 500,
@@ -1345,6 +1374,11 @@ pub async fn process_received_bytes(
     let qsy_policy = runtime_state.qsy_policy.clone();
     let peer_trust = runtime_state.rf_peer_trust();
     let is_new_session = runtime_state.qsy_session.is_none();
+    if is_new_session {
+        // Stamp on creation so an abandoned negotiation can time out. Without this a single
+        // unsigned inbound REQ blocks auto-QSY forever (audit 2026-07-19, #4).
+        runtime_state.qsy_session_started = Some(Instant::now());
+    }
     let session = runtime_state
         .qsy_session
         .get_or_insert_with(|| QsySession::new_responder(qsy_policy, peer_trust));
@@ -1761,6 +1795,7 @@ pub async fn maybe_qsy_on_interference(
     )
     .await;
     runtime_state.qsy_session = Some(session);
+    runtime_state.qsy_session_started = Some(Instant::now());
     // The old interferer no longer applies once we move; start fresh so we don't re-trigger.
     engine.clear_in_band_interferers();
 }
@@ -2128,6 +2163,7 @@ pub async fn apply_command_to_engine(
                     .await;
 
                     runtime_state.qsy_session = Some(session);
+                    runtime_state.qsy_session_started = Some(Instant::now());
                 }
             }
         }
@@ -4389,6 +4425,80 @@ mod command_apply_tests {
         assert!(
             runtime_state.qsy_session.is_some(),
             "responder session should be created on first QSY_REQ"
+        );
+    }
+
+    /// Audit 2026-07-19 #4: a single spoofed, unsigned QSY_REQ created a responder session that was
+    /// never cleared, and `maybe_qsy_on_interference` returns early whenever a session exists — so
+    /// one frame permanently disabled the anti-jam response for the daemon's lifetime.
+    #[tokio::test]
+    async fn a_stale_qsy_session_does_not_permanently_block_auto_qsy() {
+        let mut engine = test_engine();
+        let active_mode: SharedMode = Arc::new(Mutex::new("BPSK250".to_string()));
+        let (tx, _rx) = broadcast::channel::<ControlEvent>(16);
+        let ev_tx = Arc::new(tx);
+        let mut runtime_state = RuntimeControlState {
+            local_callsign: "W1AW".into(),
+            ..RuntimeControlState::default()
+        };
+
+        // One spoofed inbound REQ. Nothing else happens: the "peer" never sends QSY_LIST, which is
+        // exactly what an attacker who only wants to jam the anti-jam response would do.
+        process_received_bytes(
+            b"QSY_REQ spoofed 2",
+            &mut runtime_state,
+            None,
+            &ev_tx,
+            &active_mode,
+            &mut engine,
+        )
+        .await;
+        assert!(
+            runtime_state.qsy_session.is_some(),
+            "precondition: the REQ must create a responder session, else this proves nothing"
+        );
+
+        // Simulate the TTL having elapsed with the negotiation never advancing. A zero TTL means
+        // "anything not created this instant is stale", which is the same condition the daemon tick
+        // reaches after QSY_SESSION_TTL of silence.
+        runtime_state.expire_stale_qsy_session(Duration::ZERO);
+
+        assert!(
+            runtime_state.qsy_session.is_none(),
+            "an abandoned QSY session must expire — otherwise one unsigned frame disables auto-QSY \
+             for the daemon's lifetime"
+        );
+    }
+
+    /// Control: a session that is still within its TTL must NOT be expired, or an in-progress
+    /// negotiation would be torn down mid-flight.
+    #[tokio::test]
+    async fn a_live_qsy_session_is_not_expired() {
+        let mut engine = test_engine();
+        let active_mode: SharedMode = Arc::new(Mutex::new("BPSK250".to_string()));
+        let (tx, _rx) = broadcast::channel::<ControlEvent>(16);
+        let ev_tx = Arc::new(tx);
+        let mut runtime_state = RuntimeControlState {
+            local_callsign: "W1AW".into(),
+            ..RuntimeControlState::default()
+        };
+
+        process_received_bytes(
+            b"QSY_REQ live 2",
+            &mut runtime_state,
+            None,
+            &ev_tx,
+            &active_mode,
+            &mut engine,
+        )
+        .await;
+
+        // The real TTL: the session was created moments ago, so it must survive.
+        runtime_state.expire_stale_qsy_session(QSY_SESSION_TTL);
+        assert!(
+            runtime_state.qsy_session.is_some(),
+            "a session well inside its TTL must survive — expiring it would tear down an \
+             in-progress negotiation mid-flight"
         );
     }
 

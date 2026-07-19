@@ -9,6 +9,42 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-07-19 — fix(daemon): expire stale QSY sessions so one spoofed frame can't disable auto-QSY (audit #4)
+
+- **Requirement/change:** `maybe_qsy_on_interference` returns early whenever `qsy_session.is_some()`
+  (`lib.rs:1710`), an inbound QSY_REQ creates a responder session via `get_or_insert_with`
+  (`lib.rs:1349`), and **nothing in the daemon ever set it back to `None`** — verified by grepping
+  every `qsy_session` touch point for `= None` / `.take()`: zero hits. So a single spoofed, unsigned
+  18-byte QSY_REQ permanently disabled auto-QSY — the *anti-jam* response — for the process lifetime.
+  A jammer needs one frame to switch off the countermeasure aimed at them. Audit 2026-07-19, #4.
+- **Design decision:** two conditions, because they cover different failure shapes. `is_terminal()`
+  (new, on `QsySession`) clears a negotiation that reached `Agreed`/`Rejected` — a finished session
+  holds no obligations and answering "is a negotiation in progress?" with `yes` forever is simply
+  wrong. A **TTL** covers the actual attack, which parks the session in the non-terminal
+  `WaitingForList` waiting for a QSY_LIST that never comes; no terminal check can see that.
+  `QSY_SESSION_TTL = 300 s`: the negotiation is a handful of RF frames, so minutes is generous, and
+  the bound exists to cap the blocked window rather than to time the protocol.
+  Expiry runs in the daemon tick **before** `maybe_qsy_on_interference`, so a stale session is cleared
+  in time for the same tick's gate rather than one tick later — and beside the existing
+  `expire_pending_handshake`, which is the same pattern for the handshake path.
+- **Implementation:** `crates/openpulse-qsy/src/session.rs` — `QsySession::is_terminal()`;
+  `crates/openpulse-daemon/src/lib.rs` — `qsy_session_started` field, `QSY_SESSION_TTL`,
+  `RuntimeControlState::expire_stale_qsy_session()`, and a creation stamp at **all three** session
+  creation sites (responder + two initiator paths); `crates/openpulse-daemon/src/server.rs` — the
+  tick call.
+- **Tests:** `a_stale_qsy_session_does_not_permanently_block_auto_qsy` drives the real attack (one
+  spoofed REQ, peer never follows up) through `process_received_bytes`; the control
+  `a_live_qsy_session_is_not_expired` asserts a session inside its TTL survives, so the fix cannot
+  degenerate into tearing down live negotiations.
+- **Test results:** 2/2 pass; `openpulse-daemon` + `openpulse-qsy` 193 passed / 0 failed; clippy
+  `--all-targets -D warnings` clean; fmt clean. **Sabotage-verified**: disabling the clear
+  (`if false && (terminal || stale)`) reproduced the pre-fix behaviour and the gate failed with its
+  own diagnostic; restore asserted green.
+- **Note on method:** the first version of the test passed `QSY_SESSION_TTL + 1s` expecting expiry —
+  backwards, since a *larger* TTL makes expiry less likely. It failed, and the failure was mine, not
+  the code's. Simulating elapsed time means passing a *smaller* TTL (`Duration::ZERO`), not a larger
+  one.
+
 ## 2026-07-19 — test(core): decoder robustness sweep against malformed input (audit #15)
 
 - **Requirement/change:** there was **no fuzzing, proptest or corpus anywhere in the tree**, while
