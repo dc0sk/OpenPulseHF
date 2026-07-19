@@ -97,6 +97,47 @@ single attempt understates them. Results are written as JSON to
 Useful env overrides: `TX_DEVICE`/`RX_DEVICE`, `TX_CARD`/`RX_CARD`,
 `CAPTURE_GAIN`, `FEC`, `RETRIES`, `IRS_LISTEN_MS`, `IRS_STARTUP_WAIT`, `OUTPUT_DIR`.
 
+## Status (2026-07-19) — MFSK16 validated, QPSK250-D blocked
+
+First run after the registry-driven `--full` change (loopback-revalidation-plan task A). Rig: cards
+`Device`/`Device_1` (USB `07:00.4-2` / `07:00.3-2`), `CAPTURE_GAIN=16`, TX playback raised 14 → 30
+(the default left the captured level at rms 0.033; at 30 it is rms 0.222 / peak 0.353, unclipped).
+Binary built with `--features cpal-backend` — without it the CLI silently falls back to the loopback
+backend and would report a "hardware" pass that never touched a sound card.
+
+| Mode | FEC | Result |
+|---|---|---|
+| **MFSK16** | `rs` | **PASS** — first validation of `hpx_hf` SL1 on real audio |
+| QPSK250 | none | PASS (attempt 2) |
+| QPSK250 | `rs` | FAIL — `FEC data length 128 is not a non-zero multiple of 255` |
+| **QPSK250-D** | `rs` | **FAIL** — same framing error (len 123/124) |
+| **QPSK250-D** | `ldpc` | **FAIL** — `differential QPSK has no soft-LLR path` |
+
+### QPSK250-D (SL6) cannot currently complete over a real audio path
+
+This is the rung the differential work exists for (#923), and it is boxed in by three facts that only
+collide on hardware:
+
+1. **It requires FEC.** Uncoded differential decodes 0.00 by design — a per-slip dibit error has to be
+   corrected.
+2. **`rs` needs a frame-exact demodulator output.** `FecCodec` emits multiples of 255 bytes and the
+   decoder rejects anything else. In-process the demod returns the exact transmitted byte count; over
+   a real audio link it returns whatever the onset/timing search sliced (123, 124, 128 …), so RS
+   never gets a valid block. **This is not `-D`-specific** — plain `QPSK250 + rs` fails identically,
+   which is what the ablation established. Uncoded QPSK250 passes on the same cable minutes earlier,
+   so the analog path and the rig are fine.
+3. **The length-tolerant FECs need soft LLRs**, and `-D` deliberately has none: `qpsk_demodulate_soft`
+   errors rather than emit miscalibrated coherent LLRs. So `ldpc` and `soft-concatenated` are not
+   available to it.
+
+So the ladder's designated fade rung has no working FEC over real audio today. Closing it means
+either a length-tolerant hard-decision FEC, or making the QPSK demodulator emit a frame-exact byte
+count on a real audio path. **Not attempted here** — recorded so the next attempt starts from the
+measurement rather than re-deriving it.
+
+Note the scope: this says nothing about whether `QPSK250-D` survives a *fade*. Every fading claim for
+it remains Watterson-simulator.
+
 ## Status (2026-06-19)
 
 Validated on this host (cards `Device`/`Device_1`, USB `07:00.3`/`07:00.4`,

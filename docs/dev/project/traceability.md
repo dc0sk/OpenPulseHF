@@ -9,6 +9,39 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-07-19 — test(hardware): MFSK16 validated on real audio; QPSK250-D blocked by FEC framing
+
+- **Requirement/change:** run the two rungs that had never been on real audio through the dual-card
+  (dual-clock) rig — `MFSK16` (`hpx_hf` SL1) and `QPSK250-D` (SL6). Unblocked by a reboot into
+  6.18.38: the running kernel had been 6.18.33 with its module tree removed, so `snd_usb_audio` could
+  not load and neither C-Media adapter enumerated despite being plugged in.
+- **Setup that mattered:** built with `--features cpal-backend` — **without it the CLI silently falls
+  back to the loopback backend and would report a "hardware" pass that never touched a sound card**,
+  which is the worst possible outcome for this exercise. TX playback was raised 14 → 30 (default left
+  the captured level at rms 0.033 against the doc's recorded 0.497; at 30 it is rms 0.222 / peak
+  0.353, unclipped). RX AGC confirmed off.
+- **Results:** `MFSK16 + rs` **PASS** — first validation of the SL1 sub-floor rung on real audio.
+  `QPSK250-D` **FAIL** on both `rs` (`FEC data length 123/124 is not a non-zero multiple of 255`) and
+  `ldpc` (`differential QPSK has no soft-LLR path`).
+- **The ablation is the finding.** `QPSK250 + rs` fails **identically** (len 128), while
+  `QPSK250 + none` passes on the same cable minutes earlier. So the defect is **not** differential and
+  not the rig: `FecCodec` emits multiples of 255 and its decoder rejects anything else, but a real
+  audio path returns whatever the onset/timing search sliced. In-process the demod returns the exact
+  transmitted byte count, so this never appears in the suite.
+  `QPSK250-D` is then boxed in: it **requires** FEC (uncoded differential is 0.00 by design), `rs`
+  needs a frame-exact demod output it cannot get over audio, and the length-tolerant FECs need soft
+  LLRs it deliberately does not provide. **The ladder's designated fade rung has no working FEC over
+  real audio today.** Not fixed here; recorded so the next attempt starts from the measurement.
+- **Scope limit, stated:** this says nothing about whether `QPSK250-D` survives a *fade*. Every fading
+  claim for it remains Watterson-simulator. Hardware loopback adds dual-clock and an analog cable, not
+  propagation.
+- **Implementation:** `scripts/run-loopback-dualcard.sh` — an explicitly-set `FEC=` now overrides the
+  per-mode default. My own task-A code had hardcoded `rs` for `-D`, which silently ran the wrong FEC
+  when I tried LDPC; a per-mode value should be a default that prevents a naive false failure, not a
+  mandate that blocks a deliberate experiment.
+- **Evidence retained:** five run reports committed with `git add -f` (the glob is gitignored for
+  routine debug runs, which is right; a milestone measurement should survive).
+
 ## 2026-07-19 — fix(scripts+docs): registry-driven hardware sweep, and an on-air plan that targets hpx_hf
 
 - **Requirement/change:** two items from `loopback-revalidation-plan.md`.
