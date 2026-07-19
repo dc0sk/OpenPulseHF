@@ -113,6 +113,43 @@ backend and would report a "hardware" pass that never touched a sound card.
 | **QPSK250-D** | `rs` | **FAIL** — same framing error (len 123/124) |
 | **QPSK250-D** | `ldpc` | **FAIL** — `differential QPSK has no soft-LLR path` |
 
+### The FEC scanning receive cannot find a frame inside a long capture (2026-07-19)
+
+**Reproduction, everything else held constant:**
+
+| Capture window | `QPSK250 + rs`, 64 B payload |
+|---|---|
+| `IRS_LISTEN_MS=7000` (buffer ≈ frame) | **PASS** |
+| `IRS_LISTEN_MS=45000` (the default) | **FAIL** |
+
+Same mode, same FEC, same rig, same level, same payload. The only variable is how much audio the
+receiver captured around the frame. This is a software defect in
+`receive_with_fec_mode_timeout`, not a channel or waveform limitation, and it is why the in-process
+suite never sees it: `ChannelSimHarness` hands the receiver a buffer that *is* the frame.
+
+**What was ruled out first**, each by measurement rather than argument:
+
+- **Frame length / airtime.** Uncoded `QPSK250` with a 250 B payload — 260 B wire, **4.16 s**, the same
+  airtime as the failing coded frame — decodes **perfectly**. Uncoded means any single bit error fails
+  the CRC, so the physical path delivers a 4.2 s frame error-free.
+- **Sample-rate offset.** `sro_confirmation::does_sro_alone_break_a_long_coded_qpsk_frame`: the coded
+  and uncoded frames tolerate the *same* 500 ppm and fail at the same 1000 ppm. The long frame is not
+  more SRO-sensitive. Arithmetic agrees — at 100 ppm the drift across the whole frame is 0.10 symbol
+  periods.
+- **Signal level.** Raising TX to rms 0.3955 / peak 0.6302 (the documented working point) changed
+  nothing.
+- **RS correction capacity.** `rs-strong` (t=32, double) fails identically.
+- **TX buffer starvation.** The single `snd_pcm_recover: underrun` line appears in the **passing** runs
+  too — it is the documented benign end-of-stream one that `flush()` pads for.
+- **Physical corruption.** RX audio captured to WAV during both a passing and a failing run: 4.20 s
+  continuous burst, stable envelope (rms 0.409, min 0.325, max 0.437), **zero interior dropouts**.
+- **Sub-symbol scan granularity.** Quartering the scan step (`symbol_period_samples / 4`) did not fix
+  it.
+
+**Still open, and NOT explained by the above:** `QPSK250-D` fails *even with the tight window*, where
+coherent `QPSK250` passes. So SL6 has a second, differential-specific problem behind the window bug.
+That has not been characterised.
+
 ### QPSK250-D (SL6) cannot currently complete over a real audio path
 
 > **CORRECTION (2026-07-19, same day).** The first version of this section said the blocker was "FEC
