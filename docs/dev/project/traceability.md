@@ -9,6 +9,35 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-07-19 — fix(repeater): honour `full_duplex` before keying for a whole session (audit #2)
+
+- **Requirement/change:** `run_full_duplex` asserted PTT for the entire relay session without checking
+  `config.full_duplex`, which **defaults to false** and whose own doc comment reads "When true, PTT is
+  held for the entire relay session by `run_full_duplex()`". Four other methods in the crate
+  (`relay_one_frame`, `maybe_identify` and the two ID paths) all gate on the flag; the one that keys
+  the transmitter did not. Enabling the repeater on a default config therefore put an **unbounded
+  dead-air carrier** on a simplex channel and double-keyed against the per-frame assert that
+  half-duplex relaying already performs. Found by the 2026-07-19 transmit-safety audit (finding #2).
+- **Design decision:** gate both the session-level assert and its paired release on the flag, and
+  return early in half-duplex rather than issuing a release for a key that was never made — a
+  redundant release would mask the per-frame paths' own release accounting. The doc comment was
+  rewritten to state both modes explicitly, since the old one described only the full-duplex half and
+  the method name alone implies the flag is already honoured.
+- **Implementation:** `crates/openpulse-repeater/src/lib.rs` — `run_full_duplex`, `hold_ptt` binding.
+- **Tests:** `crates/openpulse-repeater/tests/half_duplex_ptt.rs` — a `SpyPtt` recording the exact
+  edge **sequence**. `half_duplex_session_does_not_hold_ptt` is the gate; two controls stop the fix
+  degenerating into "disable the feature": `full_duplex_session_holds_then_releases_ptt` asserts the
+  session-long carrier is still produced when the flag is set, and `disabled_repeater_never_keys`
+  covers both modes.
+- **Test results:** gate observed RED before the fix (`left: ["assert", "release"]` — the half-duplex
+  session keyed the rig), GREEN after. Repeater crate 10 passed / 0 failed (including the two
+  pre-existing full-duplex tests, which set `full_duplex: true` explicitly and so were not encoding
+  the bug). Caller unaffected: `openpulse-daemon` 145 passed / 0 failed. Clippy `--all-targets -D
+  warnings` clean.
+- **Note:** the test harness ignores the session's return value — on an idle loopback
+  `relay_one_frame` errors ("signal too short") and the loop exits early. That is incidental to the
+  question being asked, which is whether the rig was keyed *at session start*, before any relaying.
+
 ## 2026-07-19 — refactor(radio): relocate the PTT watchdog safety core out of the daemon
 
 - **Requirement/change:** the watchdog, deadline bookkeeping and RAII key guard added under #863 lived
