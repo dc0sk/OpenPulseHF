@@ -816,7 +816,17 @@ pub async fn run(cfg: OpenpulseConfig, modem_backend: Box<dyn AudioBackend>) -> 
                                 {
                                     // RAII guard (REQ-PTT-01): releases at block end / on unwind. On assert
                                     // failure `keyed` returns Err and we skip the ACK, leaving nothing keyed.
-                                    if let Ok(_guard) = ptt.keyed(Some(&handle.event_tx)) {
+                                    // Skipping is correct; skipping SILENTLY is not — receiver-led ARQ then
+                                    // stalls with no diagnostic anywhere, and the operator sees a link that
+                                    // simply stops (audit 2026-07-19, #8).
+                                    let ack_guard = ptt.keyed(Some(&handle.event_tx));
+                                    if ack_guard.is_err() {
+                                        tracing::warn!(
+                                            "OTA ACK skipped — PTT assert failed; the sender will \
+                                             see no ACK and the ARQ exchange will stall"
+                                        );
+                                    }
+                                    if let Ok(_guard) = ack_guard {
                                         // Mode-aware ACK: K=3 union MFSK16-ACK (with a leading FSK4 copy)
                                         // when recommending the sub-floor rung, else FSK4-ACK. The ISS
                                         // union-listens, so either is heard.
@@ -998,7 +1008,19 @@ pub async fn run(cfg: OpenpulseConfig, modem_backend: Box<dyn AudioBackend>) -> 
                         let id_mode = handle.active_mode.lock().await.clone();
                         let id_body = format!("DE {id_callsign}");
                         // RAII guard (REQ-PTT-01): releases at block end / on unwind; skip on assert fail.
-                        if let Ok(_guard) = ptt.keyed(Some(&handle.event_tx)) {
+                        // A skipped station ID is a §97.119 obligation not met, so it is logged at
+                        // `error`: the operator has to know the station is transmitting without
+                        // identifying, and this was previously silent (audit 2026-07-19, #8).
+                        let id_guard = ptt.keyed(Some(&handle.event_tx));
+                        if id_guard.is_err() {
+                            tracing::error!(
+                                callsign = %id_callsign,
+                                kind = reason,
+                                "station ID NOT transmitted — PTT assert failed; §97.119 \
+                                 identification has not gone out"
+                            );
+                        }
+                        if let Ok(_guard) = id_guard {
                             match tokio::task::block_in_place(|| {
                                 engine.transmit(id_body.as_bytes(), &id_mode, None)
                             }) {
