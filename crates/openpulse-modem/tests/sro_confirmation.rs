@@ -182,4 +182,14 @@ fn does_sro_alone_break_a_long_coded_qpsk_frame() {
         let ok = decodes_at("QPSK250", ppm, &payload);
         println!("  {ppm:7.0} ppm : {}", if ok { "decode" } else { "FAIL" });
     }
+
+    // QPSK250-D was named in this file's original doc comment but never actually exercised — the
+    // body only ever passed "QPSK250". A test that claims coverage it does not have is worse than
+    // no test, so the differential rung is swept here explicitly. It is the mode that still fails
+    // on hardware even with a tight capture window.
+    println!("\nQPSK250-D + rs — the differential rung that fails on hardware:");
+    for ppm in [0.0f32, 100.0, 500.0, 1000.0, 2000.0] {
+        let ok = decodes_at_fec("QPSK250-D", ppm, &payload, FecMode::Rs);
+        println!("  {ppm:7.0} ppm : {}", if ok { "decode" } else { "FAIL" });
+    }
 }

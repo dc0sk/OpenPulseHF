@@ -279,6 +279,38 @@ impl FecCodec {
 
         Ok(decoded[PREFIX_LEN..end].to_vec())
     }
+
+    /// Decode the longest valid block-aligned **prefix** of `data`, ignoring any trailing bytes.
+    ///
+    /// [`FecCodec::decode`] requires `data.len()` to be an exact multiple of the 255-byte block, which
+    /// suits a caller that already knows the frame extent. A *scanning* receiver does not: it slices a
+    /// fixed-length window out of a capture buffer, so the byte count it hands over is a function of
+    /// the window, not of the frame, and is essentially never block-aligned. Before this existed, the
+    /// scanning FEC receive hit the length gate on every attempt whenever the capture was longer than
+    /// the frame — a 45 s listen window could not decode a frame that a 7 s window decoded fine
+    /// (measured 2026-07-19 on the dual-card rig).
+    ///
+    /// Tries ascending block counts and returns the first that decodes. That is safe because
+    /// [`FecCodec::decode`] validates its own 4-byte length prefix against the decoded size, so a
+    /// too-short `k` whose payload claims more bytes than it holds is rejected rather than returned
+    /// truncated.
+    pub fn decode_prefix(&self, data: &[u8]) -> Result<Vec<u8>, ModemError> {
+        let blocks = data.len() / BLOCK_TOTAL;
+        if blocks == 0 {
+            return Err(ModemError::Fec(format!(
+                "FEC data length {} is shorter than one {BLOCK_TOTAL}-byte block",
+                data.len()
+            )));
+        }
+        let mut last: Option<ModemError> = None;
+        for k in 1..=blocks {
+            match self.decode(&data[..k * BLOCK_TOTAL]) {
+                Ok(out) => return Ok(out),
+                Err(e) => last = Some(e),
+            }
+        }
+        Err(last.unwrap_or_else(|| ModemError::Fec("FEC prefix decode failed".into())))
+    }
 }
 
 impl Default for FecCodec {

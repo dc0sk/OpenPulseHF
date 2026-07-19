@@ -1,8 +1,9 @@
 # Dual-card hardware loopback — the two-soundcard rung on one host
 
-> **Evidence currency (2026-07-18):** the results recorded below predate the fade-aware ladder
-> arc. No loopback run in the tree is newer than 2026-06-25, and several shipped modes
-> (`QPSK250-D`, `QPSK500-D`, `MFSK16`, JS8) have never been run on real audio at all. See
+> **Evidence currency (2026-07-20):** `MFSK16` (SL1) and `QPSK250-D` (SL6) — the two load-bearing
+> `hpx_hf` fade rungs — are now validated on real audio, and doing so found and fixed a scanning-receive
+> defect that had made every long coded capture fail. The wider mode sweep still predates the
+> fade-aware ladder arc (`QPSK500-D` and JS8 have never been on real audio). See
 > [loopback-revalidation-plan.md](loopback-revalidation-plan.md).
 
 
@@ -97,7 +98,7 @@ single attempt understates them. Results are written as JSON to
 Useful env overrides: `TX_DEVICE`/`RX_DEVICE`, `TX_CARD`/`RX_CARD`,
 `CAPTURE_GAIN`, `FEC`, `RETRIES`, `IRS_LISTEN_MS`, `IRS_STARTUP_WAIT`, `OUTPUT_DIR`.
 
-## Status (2026-07-19) — MFSK16 validated, QPSK250-D blocked
+## Status (2026-07-20) — MFSK16 and QPSK250-D both validated on real audio
 
 First run after the registry-driven `--full` change (loopback-revalidation-plan task A). Rig: cards
 `Device`/`Device_1` (USB `07:00.4-2` / `07:00.3-2`), `CAPTURE_GAIN=16`, TX playback raised 14 → 30
@@ -105,13 +106,17 @@ First run after the registry-driven `--full` change (loopback-revalidation-plan 
 Binary built with `--features cpal-backend` — without it the CLI silently falls back to the loopback
 backend and would report a "hardware" pass that never touched a sound card.
 
-| Mode | FEC | Result |
+The **pre-fix** run, kept because it is the evidence that located the scanning-receive defect. For
+current results see [RESOLVED (2026-07-20)](#resolved-2026-07-20--qpsk250-d-passes-on-real-audio-there-was-never-a-second-defect)
+below — every FAIL here except the `ldpc` one is now a PASS.
+
+| Mode | FEC | Result (pre-fix) |
 |---|---|---|
 | **MFSK16** | `rs` | **PASS** — first validation of `hpx_hf` SL1 on real audio |
 | QPSK250 | none | PASS (attempt 2) |
 | QPSK250 | `rs` | FAIL — `FEC data length 128 is not a non-zero multiple of 255` |
 | **QPSK250-D** | `rs` | **FAIL** — same framing error (len 123/124) |
-| **QPSK250-D** | `ldpc` | **FAIL** — `differential QPSK has no soft-LLR path` |
+| **QPSK250-D** | `ldpc` | **FAIL** — `differential QPSK has no soft-LLR path` (still open) |
 
 ### Pin the cards by NAME, not index (2026-07-19)
 
@@ -169,40 +174,61 @@ suite never sees it: `ChannelSimHarness` hands the receiver a buffer that *is* t
 - **Sub-symbol scan granularity.** Quartering the scan step (`symbol_period_samples / 4`) did not fix
   it.
 
-**Still open, and NOT explained by the above:** `QPSK250-D` fails *even with the tight window*, where
-coherent `QPSK250` passes. So SL6 has a second, differential-specific problem behind the window bug.
-That has not been characterised.
+**The mechanism.** Every decode attempt slices a *fixed-length* window —
+`end = (start + max_frame_samples).min(accumulated.len())` — so the demodulated byte count is a
+function of the **window**, not of the frame. `FecCodec::decode` demands an exact multiple of 255, so
+once the capture outlasted the frame, the length gate rejected attempt after attempt before Reed–Solomon
+ever ran. The tight window passed only because the slice happened to land near the frame's own length.
 
-### QPSK250-D (SL6) cannot currently complete over a real audio path
+**The fix (2026-07-20).** `FecCodec::decode_prefix` tries successively longer block prefixes
+(1..=N blocks) and returns the first that decodes. This is safe because `decode` already validates its
+own 4-byte length prefix against the decoded size, so a wrong block count cannot silently succeed. Wired
+into the `Rs` and `RsStrong` arms of `receive_from_samples_with_fec`; the single-shot
+`receive_with_fec_mode` and `decode_combined_llrs` stay strict, and `RsInterleaved` is untouched (it
+deinterleaves first and genuinely needs the exact length).
 
-> **CORRECTION (2026-07-19, same day).** The first version of this section said the blocker was "FEC
-> framing" — that the demodulator never produced a valid 255-byte block. **That was wrong.** The
-> scanning receive *does* reach length 255 (four attempts, positions 96960+), RS runs there, and it
-> fails with `TooManyErrors`. The framing error message dominates the log only because every *other*
-> scan position produces an invalid length; 255 is absent from that message precisely because it
-> passes the length check and fails later. I inferred a mechanism from the absence of a log line.
+Gate: `crates/openpulse-modem/tests/fec_scan_long_capture.rs`, which embeds a frame in a capture several
+times its length via the new `ChannelSimHarness::route_embedded`. Sabotage-verified — reverting the two
+arms reproduces the hardware error verbatim (`FEC data length 270 is not a non-zero multiple of 255`).
 
-Measured on this rig, TX at rms 0.3955 / peak 0.6302 (the documented working point):
+### RESOLVED (2026-07-20) — QPSK250-D passes on real audio; there was never a second defect
 
-| Mode | FEC | Wire | Airtime | Result | Mechanism |
-|---|---|---|---|---|---|
-| QPSK250 | none | 74 B | 1.18 s | **PASS** | — |
-| QPSK250 | `rs` | 255 B | 4.08 s | FAIL | `RS correction failed at block 0: TooManyErrors` |
-| QPSK250 | `rs-strong` | 255 B | 4.08 s | FAIL | t=32 still insufficient |
-| QPSK250 | `short-rs` | 106 B | 1.70 s | FAIL | rejected by the scanning receive *by design* |
-| QPSK250-D | `rs` | 255 B | 4.08 s | FAIL | identical to coherent |
-| QPSK250-D | `ldpc` | — | — | FAIL | `differential QPSK has no soft-LLR path` |
-| MFSK16 | `rs` | — | — | **PASS** | — |
+> **CORRECTION #1 (2026-07-19).** The first version of this section said the blocker was "FEC framing" —
+> that the demodulator never produced a valid 255-byte block. **Wrong.** The scanning receive *does*
+> reach length 255, RS runs there, and fails with `TooManyErrors`. The framing message dominates the log
+> only because every *other* scan position produces an invalid length; 255 is absent from it precisely
+> because it passes the length check and fails later. I inferred a mechanism from the absence of a log line.
+>
+> **CORRECTION #2 (2026-07-20).** The second version concluded SL6 had a **separate, differential-specific
+> defect** behind the window bug, since `-D` failed even at the tight window where coherent passed, and
+> named **sample-rate offset** the best-supported hypothesis for the long-frame failures. **Both were
+> wrong.** With the window bug fixed, `QPSK250-D + rs` passes on this rig at the *default* 45 s window,
+> 4/4 including a 200 B multi-block frame. There was one defect, not two: the tight window was not a
+> control, it was a coin flip, and coherent won it. SRO was independently falsified in
+> `sro_confirmation` — coded and uncoded tolerate the same 500 ppm.
 
-**What the evidence supports.** A short uncoded frame (1.18 s) survives; a padded 255-byte coded frame
-(4.08 s) does not, and doubling the RS correction capacity does not rescue it — so the errors are far
-beyond marginal and concentrated in a long frame. That is the signature of **sample-rate offset (SRO)
-between two independent soundcard clocks**, the condition this rig exists to expose and the same one
-already recorded here for the wideband multicarrier modes.
+Measured on this rig after the fix, TX at rms 0.3963 / peak 0.6304:
 
-**What it does not establish.** The SRO magnitude on this rig has not been measured, and no ablation
-has yet isolated drift from any other long-frame effect. Do not treat "SRO" as proven — it is the
-best-supported hypothesis, not a measurement.
+| Mode | FEC | Window | Result |
+|---|---|---|---|
+| **QPSK250-D** | `rs` | 45 s (default) | **PASS** ×3 — first validation of `hpx_hf` SL6 on real audio |
+| **QPSK250-D** | `rs`, 200 B payload | 45 s | **PASS** — multi-block |
+| QPSK250 | `rs` | 45 s (default) | **PASS** |
+| **MFSK16** | `rs` | — | **PASS** — `hpx_hf` SL1 |
+
+Both load-bearing fade rungs of `hpx_hf` — SL1 (`MFSK16`) and SL6 (`QPSK250-D`) — are now validated on
+real audio.
+
+**Still open:** `QPSK250-D` + `ldpc` fails with `differential QPSK has no soft-LLR path`. That is
+correct behaviour badly surfaced — `supports_soft_demod()` in `plugins/qpsk/src/lib.rs` returns `true`
+unconditionally, so the mode advertises a capability it refuses at call time. The advertisement is the
+bug, not the refusal.
+
+**Method note.** Eight hypotheses were falsified before the real one landed, and the two that survived
+longest were the two I had reasoned my way to rather than measured: a "second differential defect"
+inferred from a single tight-window comparison, and SRO inferred from frame length. Both died to a
+direct test. The tight-vs-wide window comparison is what actually located it — *vary one thing about
+the receiver, not about the signal.*
 
 `short-rs` is not an escape route: `receive_with_fec_mode_timeout` explicitly rejects it because it is
 byte-exact with no length prefix, so a scanning receive cannot guarantee its frame length. It was
