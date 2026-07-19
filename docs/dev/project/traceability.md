@@ -9,6 +9,47 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-07-19 — test(core): enforce the workspace layering mechanically (audit #14)
+
+- **Requirement/change:** nothing checked the crate layering — no `deny.toml`, no xtask, no test — so
+  the drift the crate map forbids arrived unnoticed: `mfsk16-plugin` grew a **production** dependency
+  on `js8-plugin`. A layering rule that lives only in prose is a rule that is already being broken
+  somewhere. Audit 2026-07-19, finding #14.
+- **Design decision:** a Rust test, not `cargo-deny`. cargo-deny's `[bans]` cannot express a directed
+  constraint — its `wrappers` key is an allow-list of exceptions to a global ban, not a "must not
+  depend on" edge — so a `deny.toml` here would have looked like enforcement without being it (the
+  audit found exactly that misuse annotated as a layer rule in the `architecture-fitness` material).
+  Four rules: no plugin→plugin production edge; no library→app/tool edge; `openpulse-core` and
+  `openpulse-dsp` depend on no workspace member; and the allow-list itself must not go stale.
+  **Only `[dependencies]` are checked.** `[dev-dependencies]` are deliberately exempt: `openpulse-modem`
+  dev-depends on eight plugins to test real waveforms and several plugins dev-depend back on it for
+  loopback harnesses. Those cycles are legal in Cargo and are the normal shape of integration testing
+  — banning them would delete real coverage to satisfy a diagram. (This also corrects the audit's
+  "pilot-plugin ↔ openpulse-modem cycle" framing: `openpulse-modem` production-depends on only
+  `bpsk-plugin` and `qpsk-plugin`; the other eight are dev-deps.)
+  `mfsk16-plugin → js8-plugin` is **allow-listed with a rationale and a retirement condition** rather
+  than fixed here, so the gate can land now and block NEW drift while the extraction is done
+  separately. The imports are `modulate_tones`, `GfskParams`, `DEFAULT_BT` and `goertzel_energy` —
+  generic DSP with no JS8-specific behaviour, i.e. a misplacement rather than a real coupling; they
+  belong in `openpulse-dsp`, which both plugins already depend on.
+- **Implementation:** `crates/openpulse-core/tests/workspace_layering.rs`;
+  `crates/openpulse-core/Cargo.toml` gains `toml` as a dev-dependency (already used at the same
+  version by `openpulse-radio`/`openpulse-config` — no new external dependency). Manifests are parsed
+  with a real TOML parser, not grep: a context-free grep for a dependency name cannot tell
+  `[dependencies]` from `[dev-dependencies]`, which is precisely the mistake that made the audit
+  report a production cycle that does not exist.
+- **Tests:** 4 gates. Guarded against vacuity by asserting the scan found >30 manifests — a layering
+  test that silently scans nothing passes forever.
+- **Test results:** 4/4 pass. **Sabotage-verified three ways**, each caught: emptying the allow-list
+  → `mfsk16-plugin -> js8-plugin`; pointing the allow-list at a non-existent edge →
+  `still lists fsk4-plugin -> ofdm-plugin, but that dependency is gone`; adding `openpulse-dsp` to
+  `openpulse-core` → `base-layer crate but production-depends on ["openpulse-dsp"]`. Restore asserted
+  green each time, not just the sabotage. A clippy `nonminimal_bool` fix inverted the plugin
+  predicate afterwards, so the sabotage was **re-run against the changed logic** and still caught it.
+  `openpulse-core` 511 passed / 0 failed; clippy `--all-targets -D warnings` clean; fmt clean.
+- **Follow-up:** extract the four DSP items into `openpulse-dsp` and delete the allow-list entry —
+  `every_allowed_plugin_edge_still_exists` will fail if the entry is left behind afterwards.
+
 ## 2026-07-19 — fix(ci): SHA-pin every GitHub Action (audit #18)
 
 - **Requirement/change:** all 37 action references across the workflows were pinned to **mutable
