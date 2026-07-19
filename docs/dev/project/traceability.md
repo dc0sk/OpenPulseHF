@@ -9,6 +9,38 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-07-19 — fix(discovery): make the JS8 clock-skew gate honest about what it can enforce (audit #10)
+
+- **Requirement/change:** the ±2 s TX-skew gate (plan D5) is **structurally unable to fire**.
+  `drift_bias_ms` is an EWMA of `dt_ms`, and `dt_ms` comes from where a decode landed inside the
+  decoder's slot-start search window, which `runtime::decode_slot` sets at **±0.75 s**. An EWMA of
+  values bounded by ±750 ms can never leave ±750 ms, so a 2000 ms tolerance can never refuse. It also
+  **fails open at zero observations**: `drift_bias_ms` starts at 0, which the gate reads as a perfect
+  clock. And its unit test asserted the gate *could* trip — by feeding `observe_dt_ms(-2500)`, a value
+  production cannot produce. A test proving a property on an unreachable input is the vacuous-gate
+  shape this repo keeps finding. Audit 2026-07-19, #10.
+- **Design decision:** make the limits explicit rather than paper over them, because both plausible
+  "fixes" are worse. Widening the decode search window to ±2 s would make the gate reachable at real
+  CPU cost on a Pi for a threshold that sub-second skew already covers. Refusing TX at zero
+  observations would stop a station on a **quiet band** from ever beaconing — it has heard nothing to
+  measure against, and beaconing is how it becomes discoverable in the first place. So TX stays
+  permitted when unmeasured, and the distinction is exposed instead: `clock_verified()` separates
+  "measured and good" from "never measured", which a status readout must not conflate.
+  `skew_gate_is_inert()` lets a caller tell an operator that their configured ±2 s is not being
+  enforced, rather than letting them believe it is.
+- **Implementation:** `crates/openpulse-discovery/src/scheduler.rs` — `OBSERVABLE_SKEW_BOUND_MS`,
+  `observations` counter, `observations()`, `clock_verified()`, `skew_gate_is_inert()`, and honest
+  doc comments on `tx_allowed` naming both limits.
+- **Tests:** the dishonest test is **replaced**, not deleted:
+  `observe_dt_converges_toward_the_offset` keeps the real EWMA-convergence assertion;
+  `the_configured_two_second_skew_gate_is_structurally_inert` drives the estimator with the largest
+  value the decoder can actually report, sustained, and asserts the ±2 s gate still cannot fire —
+  while a 500 ms tolerance *does* fire on the same data, so the mechanism is proven working within
+  its real range; `an_unmeasured_clock_is_not_reported_as_verified` pins the zero-observation
+  distinction and documents why TX stays open.
+- **Test results:** `openpulse-discovery` scheduler 7/7; with `openpulse-daemon` 213 passed / 0
+  failed; clippy `--all-targets -D warnings` clean; fmt clean.
+
 ## 2026-07-19 — fix(filexfer): stop reporting a file that was never written, and don't ack an un-accepted transfer (audit #9, #11)
 
 - **Requirement/change:** two receive-path ordering defects.
