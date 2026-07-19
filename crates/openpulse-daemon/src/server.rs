@@ -35,6 +35,38 @@ use qam64_plugin::Qam64Plugin;
 use qpsk_plugin::QpskPlugin;
 use scfdma_plugin::ScFdmaPlugin;
 
+/// Load the station identity seed, failing closed.
+///
+/// `load_identity_from` already handles first run internally — it generates the key, persists it with
+/// owner-only permissions, and returns `Ok` — so an `Err` here never means "no key yet". It means the
+/// key exists and is unusable: group/world-readable (REQ-SEC-CTL-05), the wrong length, or unreadable.
+///
+/// The previous behaviour was to warn and substitute a **random ephemeral key**, which is a fail-open
+/// on identity: the station keeps transmitting, but signs handshake frames with a key no peer can
+/// match to its known identity, so a configuration error silently degrades into an unrecognisable
+/// station. Refusing to start matches the trust-store load a few lines below, whose comment states
+/// the same principle — a load error "must fail closed rather than silently start empty"
+/// (audit 2026-07-19, #7).
+fn load_station_seed(identity_key_path: &str) -> Result<[u8; 32], String> {
+    let loaded = if identity_key_path.is_empty() {
+        openpulse_config::load_or_generate_identity()
+    } else {
+        openpulse_config::load_identity_from(std::path::Path::new(identity_key_path))
+    };
+    loaded.map_err(|e| {
+        let where_ = if identity_key_path.is_empty() {
+            "the default location".to_string()
+        } else {
+            identity_key_path.to_string()
+        };
+        format!(
+            "station identity key at {where_} failed to load; refusing to start rather than sign \
+             with a throwaway key no peer can verify — fix [station] identity_key_path, its \
+             permissions (owner-only, 0600), or the file: {e}"
+        )
+    })
+}
+
 /// Run the full daemon stack to completion (the loop never returns on success).
 ///
 /// `modem_backend` is the engine's audio backend, injected by the caller: the
@@ -519,25 +551,7 @@ pub async fn run(cfg: OpenpulseConfig, modem_backend: Box<dyn AudioBackend>) -> 
 
     // Station identity seed for signing handshake (CONREQ/CONACK) frames. An explicit path lets
     // co-located stations (the twin rig) hold distinct identities; empty uses the platform default.
-    let station_seed = {
-        let loaded = if cfg.station.identity_key_path.is_empty() {
-            openpulse_config::load_or_generate_identity()
-        } else {
-            openpulse_config::load_identity_from(std::path::Path::new(
-                &cfg.station.identity_key_path,
-            ))
-        };
-        match loaded {
-            Ok(seed) => seed,
-            Err(e) => {
-                tracing::warn!(error = %e, "failed to load station identity key; handshake frames will use an ephemeral key");
-                let mut seed = [0u8; 32];
-                use rand::RngCore;
-                rand::rngs::OsRng.fill_bytes(&mut seed);
-                seed
-            }
-        }
-    };
+    let station_seed = load_station_seed(&cfg.station.identity_key_path)?;
 
     // A configured trust store carries revocations; a load *error* (unreadable/malformed) must fail
     // closed rather than silently start empty and re-admit revoked keys. A missing path is empty-ok.
@@ -2733,5 +2747,52 @@ mod ws_auth_gate_tests {
         // The one safe case: no TCP auth required and the WS port is loopback-only.
         assert!(!ws_disabled_for_auth(false, "127.0.0.1"));
         assert!(!ws_disabled_for_auth(false, "localhost"));
+    }
+}
+
+#[cfg(test)]
+mod station_identity_tests {
+    use super::load_station_seed;
+
+    /// Audit 2026-07-19 #7: an unusable identity key must stop the daemon, not silently downgrade it
+    /// to a random throwaway key that no peer can match to this station's known identity.
+    #[test]
+    fn an_unusable_identity_key_fails_closed() {
+        let dir = std::env::temp_dir().join(format!("oph-ident-bad-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("tmp dir");
+        let path = dir.join("identity.key");
+        // The file EXISTS but is the wrong length: "present but unusable", not "first run".
+        std::fs::write(&path, b"too short").expect("write");
+
+        let err = load_station_seed(path.to_str().expect("utf8"))
+            .expect_err("a malformed identity key must not be silently replaced");
+        assert!(
+            err.contains("refusing to start"),
+            "the error must say the daemon is refusing to start: {err}"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Control: a fresh path is first run — the key is generated and persisted, and startup must
+    /// still succeed. Failing closed must not become "cannot start without a pre-existing key".
+    #[test]
+    fn a_fresh_identity_path_still_succeeds_and_is_stable() {
+        let dir = std::env::temp_dir().join(format!("oph-ident-new-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let path = dir.join("identity.key");
+        let p = path.to_str().expect("utf8");
+
+        let seed = load_station_seed(p).expect("first run must generate and persist a key");
+        assert_ne!(seed, [0u8; 32], "a generated seed must not be all-zero");
+        assert!(path.exists(), "the generated key must be persisted");
+
+        // A second load returns the SAME key: the identity is stable across restarts, which is the
+        // property the old fail-open silently destroyed.
+        assert_eq!(
+            seed,
+            load_station_seed(p).expect("reload"),
+            "the persisted identity must be stable across loads"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
