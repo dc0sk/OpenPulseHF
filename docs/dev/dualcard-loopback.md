@@ -115,28 +115,43 @@ backend and would report a "hardware" pass that never touched a sound card.
 
 ### QPSK250-D (SL6) cannot currently complete over a real audio path
 
-This is the rung the differential work exists for (#923), and it is boxed in by three facts that only
-collide on hardware:
+> **CORRECTION (2026-07-19, same day).** The first version of this section said the blocker was "FEC
+> framing" — that the demodulator never produced a valid 255-byte block. **That was wrong.** The
+> scanning receive *does* reach length 255 (four attempts, positions 96960+), RS runs there, and it
+> fails with `TooManyErrors`. The framing error message dominates the log only because every *other*
+> scan position produces an invalid length; 255 is absent from that message precisely because it
+> passes the length check and fails later. I inferred a mechanism from the absence of a log line.
 
-1. **It requires FEC.** Uncoded differential decodes 0.00 by design — a per-slip dibit error has to be
-   corrected.
-2. **`rs` needs a frame-exact demodulator output.** `FecCodec` emits multiples of 255 bytes and the
-   decoder rejects anything else. In-process the demod returns the exact transmitted byte count; over
-   a real audio link it returns whatever the onset/timing search sliced (123, 124, 128 …), so RS
-   never gets a valid block. **This is not `-D`-specific** — plain `QPSK250 + rs` fails identically,
-   which is what the ablation established. Uncoded QPSK250 passes on the same cable minutes earlier,
-   so the analog path and the rig are fine.
-3. **The length-tolerant FECs need soft LLRs**, and `-D` deliberately has none: `qpsk_demodulate_soft`
-   errors rather than emit miscalibrated coherent LLRs. So `ldpc` and `soft-concatenated` are not
-   available to it.
+Measured on this rig, TX at rms 0.3955 / peak 0.6302 (the documented working point):
 
-So the ladder's designated fade rung has no working FEC over real audio today. Closing it means
-either a length-tolerant hard-decision FEC, or making the QPSK demodulator emit a frame-exact byte
-count on a real audio path. **Not attempted here** — recorded so the next attempt starts from the
-measurement rather than re-deriving it.
+| Mode | FEC | Wire | Airtime | Result | Mechanism |
+|---|---|---|---|---|---|
+| QPSK250 | none | 74 B | 1.18 s | **PASS** | — |
+| QPSK250 | `rs` | 255 B | 4.08 s | FAIL | `RS correction failed at block 0: TooManyErrors` |
+| QPSK250 | `rs-strong` | 255 B | 4.08 s | FAIL | t=32 still insufficient |
+| QPSK250 | `short-rs` | 106 B | 1.70 s | FAIL | rejected by the scanning receive *by design* |
+| QPSK250-D | `rs` | 255 B | 4.08 s | FAIL | identical to coherent |
+| QPSK250-D | `ldpc` | — | — | FAIL | `differential QPSK has no soft-LLR path` |
+| MFSK16 | `rs` | — | — | **PASS** | — |
 
-Note the scope: this says nothing about whether `QPSK250-D` survives a *fade*. Every fading claim for
-it remains Watterson-simulator.
+**What the evidence supports.** A short uncoded frame (1.18 s) survives; a padded 255-byte coded frame
+(4.08 s) does not, and doubling the RS correction capacity does not rescue it — so the errors are far
+beyond marginal and concentrated in a long frame. That is the signature of **sample-rate offset (SRO)
+between two independent soundcard clocks**, the condition this rig exists to expose and the same one
+already recorded here for the wideband multicarrier modes.
+
+**What it does not establish.** The SRO magnitude on this rig has not been measured, and no ablation
+has yet isolated drift from any other long-frame effect. Do not treat "SRO" as proven — it is the
+best-supported hypothesis, not a measurement.
+
+`short-rs` is not an escape route: `receive_with_fec_mode_timeout` explicitly rejects it because it is
+byte-exact with no length prefix, so a scanning receive cannot guarantee its frame length. It was
+briefly exposed on the CLI during this investigation and reverted — a `--fec` value the receive path
+refuses is a footgun.
+
+So `QPSK250-D` is boxed in: it **requires** FEC (uncoded differential is 0.00 by design), the padded RS
+frame is too long to survive the clock offset, and the length-tolerant FECs need soft LLRs it
+deliberately does not provide.
 
 ## Status (2026-06-19)
 
