@@ -690,4 +690,5 @@ External modem/DSP references (gnuradio FLL band-edge, liquid-dsp framesync, dan
 | Loopback transports (virtual → hardware → on-air) | `docs/dev/virtual-loopback.md` |
 | Loopback re-validation at HEAD (why the recorded evidence is stale, and the plan to close it) | `docs/dev/loopback-revalidation-plan.md` |
 | Pre-1.x completeness audit (2026-07-18) — what is claimed done but is not proven | `docs/dev/reviews/pre-1x-completeness-audit-2026-07-18.md` |
+| Transmit-safety / supply-chain audit (2026-07-19) — PTT-asserted, pre-auth reach, sibling front-ends | `docs/dev/reviews/audit-2026-07-19-transmit-safety-and-supply-chain.md` |
 | Agent safety rules | `AGENTS.md`, `docs/dev/AGENTS.md` |
