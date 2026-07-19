@@ -9,6 +9,43 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-07-19 — fix(filexfer): stop reporting a file that was never written, and don't ack an un-accepted transfer (audit #9, #11)
+
+- **Requirement/change:** two receive-path ordering defects.
+  **#9:** `clear_partials` ran **before** `write_file`, so a disk-full or permission failure destroyed
+  the resume blocks a retry would need. Worse, the `Err` arm only logged a warning, leaving
+  `file_received_emitted` false — so `emit_terminal` went on to emit **`FileReceived` with an empty
+  path**, telling the operator a file had arrived that does not exist on disk.
+  **#11:** `persist_block` (writing peer bytes) and the on-air `BlockAck` both ran **before**
+  `note_block_complete` consulted the state machine, so a peer that sent data while the operator was
+  still deciding got its bytes written and its blocks acknowledged on the air.
+- **Design decision:** both are orderings, not missing logic — the checks existed, they simply ran too
+  late. #9: clear partials only inside the `Ok` arm, and on failure mark the receive as
+  already-reported so the false `FileReceived` is suppressed, then emit `FileFailed{direction:"rx"}`
+  and log at `error`. Partials are deliberately **kept** on failure: they are exactly what a resume
+  needs. #11: `ReceiverSession::is_receiving()` (new) gated at the top of `on_block_fragment`, so the
+  authorisation question is answered before either side effect.
+- **Known limitation, recorded in code rather than fixed:** the wire `CompleteStatus` describes the
+  *verification* result (hash + signature) and has **no variant for "verified but could not be
+  stored"**, so a receiver that fails to write still reports `VerifiedOk` to the sender. Adding one is
+  a breaking change — `CompleteStatus::from_u8` rejects unknown values, so an older peer would drop
+  the frame outright — and that decision deserves its own change rather than being slipped into a
+  bug fix. The **local** side no longer claims success; the wire gap is commented at the site.
+- **Implementation:** `crates/openpulse-filexfer/src/receiver.rs` (`is_receiving`);
+  `crates/openpulse-daemon/src/filexfer.rs` (partials ordering, failure reporting, block gate).
+- **Tests:** `blocks_are_not_acked_while_awaiting_the_operators_decision` — a real offer that
+  *prompts* (`auto_accept_max_bytes: 0`) followed by the peer sending blocks anyway, asserting nothing
+  reaches the TX queue.
+- **Test results:** `openpulse-daemon` + `openpulse-filexfer` 180 passed / 0 failed; production-path
+  `twin_daemon_bridge` 4/4 including `a_file_crosses_the_bridge_between_two_real_daemons`, so accepted
+  transfers are unaffected. Clippy `--all-targets -D warnings` clean; fmt clean.
+  **Sabotage-verified**: disabling the `is_receiving` gate reproduced the premature ack and the test
+  failed with its own diagnostic; restore asserted green.
+- **Note on method:** the first draft of the test invented three APIs that do not exist
+  (`file_policy`, `auto_accept`, a 3-argument `encode_block`). Reading the existing
+  `inbound_offer_and_blocks_write_verified_file` test — which already performs this exact flow —
+  supplied the real shapes. Copying a working neighbour beats guessing at an API.
+
 ## 2026-07-19 — fix: two silent-drop paths — PTT assert failure and ARDOP event lag (audit #8, #12)
 
 - **Requirement/change:** two independent "the failure is handled but nobody is told" defects.

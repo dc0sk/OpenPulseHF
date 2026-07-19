@@ -573,6 +573,13 @@ fn on_block_fragment(
     let Some(mut fx) = rs.file_rx.take() else {
         return;
     };
+    // Only an ACCEPTED transfer may have its bytes written to disk or its blocks acknowledged on
+    // air. The state check used to run *after* both, so a peer that sent data while the operator was
+    // still deciding got its bytes persisted and an on-air BlockAck for them (audit 2026-07-19, #11).
+    if !fx.receiver.is_receiving() {
+        rs.file_rx = Some(fx);
+        return;
+    }
     if let BlockEvent::Complete { block_index } = fx.assembler.ingest_fragment(bytes) {
         // Persist the just-completed block so an interrupted transfer can resume (disjoint field
         // borrows: `assembler` and `partial_dir` are separate fields).
@@ -669,6 +676,11 @@ fn reassemble_verify_write(
     };
     let sig_ok = fx.peer_pubkey.is_some() && fx.offer.verify_signature(&pubkey).is_ok();
     let verified = hash_ok && sig_ok;
+    // NOTE (audit 2026-07-19, #9): `CompleteStatus` describes the *verification* result — hash and
+    // signature — and the wire protocol has no variant for "verified but could not be stored". So a
+    // receiver that fails to write still reports `VerifiedOk` to the sender. Adding a variant is a
+    // breaking change: `CompleteStatus::from_u8` rejects unknown values, so an older peer would drop
+    // the frame outright. Tracked as a protocol follow-up; the local side no longer claims success.
     let status = if verified {
         CompleteStatus::VerifiedOk
     } else if !hash_ok {
@@ -677,12 +689,12 @@ fn reassemble_verify_write(
         CompleteStatus::SignatureInvalid // intact but unsigned/unknown peer → quarantine
     };
 
-    // The file is fully assembled — the resume partials are no longer needed (a re-offer would start
-    // fresh anyway; on a hash mismatch that is the correct outcome).
-    clear_partials(&fx.partial_dir);
-
     match write_file(rs, &fx.from, &fx.offer.name, &payload, verified) {
         Ok(path) => {
+            // Only now are the resume partials redundant. Clearing them BEFORE the write meant a
+            // disk-full or permission failure destroyed the very blocks a resume would need
+            // (audit 2026-07-19, #9).
+            clear_partials(&fx.partial_dir);
             fx.file_received_emitted = true;
             let timestamp_secs = std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
@@ -706,7 +718,27 @@ fn reassemble_verify_write(
                 verified,
             });
         }
-        Err(e) => tracing::warn!(error = %e, "filexfer: file write failed"),
+        Err(e) => {
+            // The bytes arrived and verified, but we could not store them. Previously this logged a
+            // warning and nothing else, so `file_received_emitted` stayed false and `emit_terminal`
+            // went on to emit `FileReceived` with an empty path — telling the operator a file had
+            // arrived that does not exist on disk (audit 2026-07-19, #9).
+            //
+            // Suppress that by marking the receive as already-reported, and report the failure
+            // instead. The partials are deliberately NOT cleared here: they are what a resume needs.
+            tracing::error!(
+                error = %e,
+                name = %fx.offer.name,
+                from = %fx.from,
+                "filexfer: file write FAILED — the transfer verified but could not be stored"
+            );
+            fx.file_received_emitted = true;
+            let _ = event_tx.send(ControlEvent::FileFailed {
+                transfer_id: fx.offer.transfer_id,
+                direction: "rx".into(),
+                reason: format!("write failed: {e}"),
+            });
+        }
     }
 
     let countersig = if verified {
