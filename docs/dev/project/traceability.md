@@ -9,6 +9,41 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-07-19 — test(core): decoder robustness sweep against malformed input (audit #15)
+
+- **Requirement/change:** there was **no fuzzing, proptest or corpus anywhere in the tree**, while
+  ~15 binary decoders parse bytes arriving from an unauthenticated source — off the air, or off a TCP
+  port that by design has no authentication (REQ-SEC-CTL-06). A panic in any of them is a remote
+  crash of an unattended station, and prior hand-audits found real defects in exactly this code
+  (unbounded allocation from wire-supplied lengths, index-out-of-range on truncated frames).
+  Audit 2026-07-19, finding #15.
+- **Design decision:** an in-suite sweep, **not** `cargo-fuzz`. libFuzzer needs nightly and a separate
+  `cargo fuzz run`; the CI workflow is disabled by choice and gates run locally, so a nightly-only
+  target would never execute — and a harness nobody runs finds nothing. This runs inside
+  `cargo test --workspace --no-default-features`, the gate that actually happens.
+  The corpus **mutates valid encodings** rather than only generating garbage: pure random bytes die
+  at the first magic/length check, so a garbage-only sweep would exercise the reject path and nothing
+  else. Deterministic xorshift PRNG from a fixed seed (no new dependency), because a random seed
+  makes a failure unreproducible.
+  Assertion scope is deliberately narrow — the decoder must not panic or hang, and any `Ok` must be
+  self-consistent (payload no larger than the input that produced it, which is the shape a
+  length-field-trusted-over-buffer bug takes). Correctness of *rejection* stays with each crate's
+  targeted tests.
+- **Implementation:** `crates/openpulse-core/tests/decoder_robustness.rs` — `Frame`, `AckFrame`
+  (including the full low-16-bit space, not just sampling), `WireEnvelope`, plus degenerate
+  empty/single-byte inputs and the `len_prefix` LLR helpers (fed NaN as well as zeros).
+- **Tests:** 5. One of them, `the_sweep_actually_reaches_the_decoders`, exists purely to stop the
+  sweep going vacuous: it asserts the base sample decodes, that mutations produce >20 distinct
+  lengths, and that **at least one mutated frame still decodes successfully** — otherwise everything
+  is dying at the header and the payload path is untested.
+- **Test results:** 5/5 pass; `openpulse-core` 519 passed / 0 failed; clippy `--all-targets -D
+  warnings` clean; fmt clean. **Harness sabotage-verified with a planted panic** (an
+  index-out-of-range reachable only from malformed input, `bytes[2] == 0xAB`): the sweep found it and
+  two tests failed; restore asserted green. Without that step a clean run would mean nothing.
+- **Known limit:** this is a smoke-level sweep at 4 000 cases per decoder, not a fuzzing campaign, and
+  it covers three of ~15 decoders. B2F/WL2K header parsing, KISS/AX.25, OPFX filexfer frames, JS8
+  message unpack and the PQ handshake decoders are **not** covered here.
+
 ## 2026-07-19 — fix(audio): report capture-device loss instead of going silently deaf (audit #19)
 
 - **Requirement/change:** a cpal stream reports device loss (USB unplug, card reset, sound-server
