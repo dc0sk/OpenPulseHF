@@ -9,6 +9,32 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-07-19 — fix(daemon): fail closed on an unusable station identity key (audit #7)
+
+- **Requirement/change:** when the station identity key failed to load, the daemon logged a `warn` and
+  **substituted a random ephemeral key**, then carried on. Fifteen lines below, the trust-store load
+  does the opposite and its comment states the principle: a load error "must fail closed rather than
+  silently start empty". Same file, same startup, opposite postures. Audit 2026-07-19, #7.
+- **Design decision:** fail closed, matching the neighbour. `load_identity_from` already handles first
+  run **internally** — it generates the key, persists it `0600`, and returns `Ok` — so an `Err` never
+  means "no key yet". It means the key exists and is unusable: group/world-readable
+  (REQ-SEC-CTL-05), wrong length, or unreadable. Continuing then means the station transmits
+  handshake frames signed with a key **no peer can match to its known identity**, so a permissions or
+  corruption problem silently degrades into an unrecognisable station — the failure the operator is
+  least able to diagnose from the air.
+  Extracted `load_station_seed()` rather than inlining the change: the original was a closure inside
+  `run()`, which is not reachable from a test, and an untestable security posture is how the
+  divergence from the trust-store path survived.
+- **Implementation:** `crates/openpulse-daemon/src/server.rs` — `load_station_seed()` returning
+  `Result<[u8; 32], String>`, with an error naming the fix (path, `0600` permissions, or the file).
+- **Tests:** `an_unusable_identity_key_fails_closed` (a present-but-malformed key must not be
+  replaced) plus the control `a_fresh_identity_path_still_succeeds_and_is_stable`, which asserts first
+  run still generates + persists **and** that a reload returns the same seed — identity stability
+  across restarts is precisely the property the fail-open destroyed.
+- **Test results:** 2/2 pass; `openpulse-daemon` 151 passed / 0 failed; clippy `--all-targets -D
+  warnings` clean; fmt clean. **Sabotage-verified**: reinstating the random-key fallback made the gate
+  fail with its own diagnostic; restore asserted green.
+
 ## 2026-07-19 — fix(testmatrix): account for MFSK16 in the mode-coverage gate (regression from #13)
 
 - **Requirement/change:** completing the plugin registrars in #978 (audit #13) made `MFSK16` and
