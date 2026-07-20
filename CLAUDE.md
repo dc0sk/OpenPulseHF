@@ -520,6 +520,7 @@ Each requirement below is done when the linked test passes. Add new links as tes
 | Receiver AGC: decode level-invariant on/off + AGC tracks level (REQ-AGC-01) | `cargo test -p openpulse-modem --test agc_amplitude_sweep` |
 | Simultaneous multi-mode receive monitor (REQ-RX-01) | `cargo test -p openpulse-daemon --no-default-features monitor::` |
 | Hotplug-safe audio device resolution (REQ-DEV-01) | `cargo test -p openpulse-core --no-default-features audio::tests` |
+| Every device the backend LISTS can also be selected by name (cpal's ALSA enumeration truncates when devices are retained — needs a real audio host, so not in the `--no-default-features` gate) | `cargo test -p openpulse-audio --features cpal-backend --test device_enumeration` |
 | CM108 / GPIO PTT backends (REQ-PTT-02/03) | `cargo test -p openpulse-radio --no-default-features -- cm108 gpio` |
 | Relay authenticates envelope origin — rejects forged/unsigned `src_peer_id` (audit E3) | `cargo test -p openpulse-core --lib relay::` + `cargo test -p openpulse-mesh --test mesh_loopback -- impersonated_origin_rejected_at_relay authenticated_relay_forwarding` |
 | Handshake replay-freshness — signed timestamp; stale/future/missing rejected | `cargo test -p openpulse-core --lib handshake::tests` (fresh/stale/future/missing/none/stale-conack) |

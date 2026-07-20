@@ -78,3 +78,64 @@ These modes fail 0/8 on the **hardware** rig but pass on the **virtual** rig, an
 > group-delay/phase survives** — and it has not been tested. Do not schedule "sample-rate-offset
 > tracking in the wideband demodulators" on the strength of this rig's evidence; on a genuine two-host
 > rig SRO may still matter for deployment, but that has to be measured there, not assumed from topology.
+
+## Full coded sweep at HEAD (2026-07-20) — 63/73, and what it settles
+
+Task B of [loopback-revalidation-plan.md](loopback-revalidation-plan.md), run `FEC=rs` to match the
+dual-card sweep so the two rungs are comparable. Report:
+`docs/dev/test-reports/loopback-virtual-2026-07-20T090857Z.json`.
+
+**63 pass, 6 fail, 4 skip (of 73).**
+
+### It could not run at all before this date
+
+`aloop_tx` was unreachable: cpal's ALSA enumeration is stateful, and holding `cpal::Device` values
+alive while iterating **silently truncates the list** (39 devices when each is named and dropped, 18
+when retained, 4 when collected first). `select_cpal_device` retained them, so the resolver saw a
+truncated list and returned `device not found` for a device that `openpulse devices` had just listed.
+`hwloop_tx` happened to fall inside the surviving prefix, which is why the hardware rung worked and
+this one did not. Fixed by enumerating twice — names only in pass 1, retaining just the match in
+pass 2. Gate: `crates/openpulse-audio/tests/device_enumeration.rs`.
+
+### Virtual × hardware: the comparison that settles the attribution
+
+The virtual rung shares the entire software path with the dual-card rig but has **no analog cable**.
+With sample-rate offset eliminated by measurement (+0.10 ppm — see
+[dualcard-loopback.md](dualcard-loopback.md)), a mode that passes here and fails there has exactly one
+remaining variable: **the analog path**.
+
+| Modes | virtual | dual-card | Verdict |
+|---|---|---|---|
+| `64QAM{500,1000,2000-RRC}`, `SCFDMA52-{16QAM,32QAM,64QAM,64QAM-P4}`, `PILOT-QPSK500` | pass | fail | **Analog path** — confirms the surviving half of the 2026-06-13 disjunction |
+| `8PSK2000`, `BPSK250-RRC`, `SCFDMA52-LP` | fail | fail | **Software defect** — fails with no analog path at all |
+| `QPSK125` | fail | pass | Virtual-only, and **consistent** (3/3) — see below |
+
+This closes the question the 2026-06-13 note left open. That note offered "two independent soundcard
+clocks (sample-rate offset) **and/or** analog group-delay/phase". The clock half was eliminated by
+measurement; this sweep confirms the other half by construction. **`64QAM` and `SCFDMA52-*` are limited
+by the analog path, not by a code defect and not by SRO.**
+
+Note `BPSK31`'s dual-card FAIL in that run is stale — it was the 60 s flush clamp, fixed the same day,
+and it now passes on both rungs.
+
+### Open items this sweep produced
+
+- **`8PSK2000`** — fails on both rungs and at 0 ppm in-process, i.e. on a clean channel. A genuine
+  software defect. In no shipped profile (manual-select only). Its `-RRC` sibling passes.
+- **`BPSK250-RRC`** — reclassified. It was recorded as an unexplained hardware failure; it fails on the
+  virtual rung too, so it is software.
+- **`SCFDMA52-LP`** — likewise moved out of the "dual-clock" group into software.
+- **`QPSK125`** — fails here 3/3 while passing on hardware, which is the inverse of the usual
+  direction. Both runners use identical flags and the wire length is identical under `rs` (both pad to
+  one 255-byte block), so payload size is not the difference. The RX log shows the demodulator
+  recovering ~82 of the 255 bytes it needs (`FEC data length 82 is shorter than one 255-byte block`),
+  i.e. it is seeing about a third of the frame. Not diagnosed further.
+
+### Runner parity
+
+`FSK4-ACK` and `MFSK16-ACK` were recorded as failures here while the dual-card runner **skips them by
+rule** ("ACK-channel waveform, exercised by the ARQ tests not a data sweep"). Two runners disagreeing
+about what is even in scope makes their results incomparable, so `skip_reason_for` is now shared in
+shape between them. This runner also gained `FEC=` support: it previously never passed `--fec` at all,
+which silently made the revalidation plan's own `FEC=rs MODES="QPSK250-D ..."` command inert — and a
+no-FEC differential run decodes 0.00 **by design**, so it would have manufactured a regression.

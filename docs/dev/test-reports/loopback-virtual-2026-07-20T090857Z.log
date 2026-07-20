@@ -1,0 +1,79 @@
+==> virtual loopback (snd-aloop)  2026-07-20T090857Z
+    bin=/home/dc0sk/git/OpenPulseHF/target/release/openpulse  tx=aloop_tx  rx=aloop_rx  modes=73  payload=32B  retries=3  fec=rs
+
+  64QAM1000          PASS
+  64QAM2000-RRC      PASS
+  64QAM500           PASS
+  8PSK1000           PASS
+  8PSK1000-HF        PASS
+  8PSK1000-HF-RRC    PASS
+  8PSK1000-RRC       PASS
+  8PSK2000           FAIL (payload not decoded)
+  8PSK2000-RRC       PASS
+  8PSK500            PASS
+  8PSK500-RRC        PASS
+  8PSK9600           SKIP (needs Fs>=38.4kHz; 9600 baud impossible at 8kHz)
+  8PSK9600-RRC       SKIP (needs Fs>=38.4kHz; 9600 baud impossible at 8kHz)
+  BPSK100            PASS
+  BPSK250            PASS
+  BPSK250-RRC        FAIL (payload not decoded)
+  BPSK31             PASS
+  BPSK63             PASS
+  FSK4-ACK           FAIL (payload not decoded)
+  MFSK16             PASS
+  MFSK16-ACK         FAIL (tx error: Error: transmit failed)
+  OFDM16             PASS
+  OFDM52             PASS
+  OFDM52-16QAM       PASS
+  OFDM52-32QAM       PASS
+  OFDM52-64QAM       PASS
+  OFDM52-8PSK        PASS
+  PILOT-16QAM1000    PASS
+  PILOT-16QAM1000-RRC PASS
+  PILOT-16QAM2000-RRC PASS
+  PILOT-16QAM500     PASS
+  PILOT-16QAM500-RRC PASS
+  PILOT-32APSK1000   PASS
+  PILOT-32APSK1000-RRC PASS
+  PILOT-32APSK2000-RRC PASS
+  PILOT-32APSK500    PASS
+  PILOT-32APSK500-RRC PASS
+  PILOT-8PSK1000     PASS
+  PILOT-8PSK1000-RRC PASS
+  PILOT-8PSK2000-RRC PASS
+  PILOT-8PSK500      PASS
+  PILOT-8PSK500-RRC  PASS
+  PILOT-QPSK1000     PASS
+  PILOT-QPSK1000-RRC PASS
+  PILOT-QPSK2000-RRC PASS
+  PILOT-QPSK500      PASS
+  PILOT-QPSK500-RRC  PASS
+  QPSK1000           PASS
+  QPSK1000-HF        PASS
+  QPSK1000-HF-RRC    PASS
+  QPSK1000-RRC       PASS
+  QPSK125            FAIL (payload not decoded)
+  QPSK2000           PASS
+  QPSK2000-RRC       PASS
+  QPSK250            PASS
+  QPSK250-D          PASS
+  QPSK500            PASS
+  QPSK500-D          PASS
+  QPSK500-RRC        PASS
+  QPSK9600           SKIP (needs Fs>=38.4kHz; 9600 baud impossible at 8kHz)
+  QPSK9600-RRC       SKIP (needs Fs>=38.4kHz; 9600 baud impossible at 8kHz)
+  SCFDMA16           PASS
+  SCFDMA26-16QAM     PASS
+  SCFDMA26-32QAM     PASS
+  SCFDMA26-8PSK      PASS
+  SCFDMA52           PASS
+  SCFDMA52-16QAM     PASS
+  SCFDMA52-32QAM     PASS
+  SCFDMA52-64QAM     PASS
+  SCFDMA52-64QAM-P4  PASS
+  SCFDMA52-8PSK      PASS
+  SCFDMA52-LP        FAIL (payload not decoded)
+  SCFDMA52-P2        PASS
+
+==> results: 63 pass, 6 fail, 4 skip (of 73)
+    report: docs/dev/test-reports/loopback-virtual-2026-07-20T090857Z.json

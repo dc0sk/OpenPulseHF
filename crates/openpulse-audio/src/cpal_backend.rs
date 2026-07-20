@@ -22,27 +22,41 @@ use openpulse_core::error::AudioError;
 
 use crate::fault::StreamFault;
 
-/// Pick a cpal device matching `selector` from `devices` using the hotplug-safe resolver
-/// ([`resolve_device`]): exact name → ALSA `CARD=` token → case-insensitive substring, refusing to
-/// guess on ambiguity. Survives a device reorder/rename that changes the exact system name.
-fn select_cpal_device<I: Iterator<Item = cpal::Device>>(
-    devices: I,
-    selector: &str,
-) -> Result<cpal::Device, AudioError> {
-    let named: Vec<(String, cpal::Device)> = devices
-        .filter_map(|d| d.name().ok().map(|n| (n, d)))
-        .collect();
-    let names: Vec<String> = named.iter().map(|(n, _)| n.clone()).collect();
-    match resolve_device(selector, &names) {
+/// Pick a cpal device matching `selector` using the hotplug-safe resolver ([`resolve_device`]):
+/// exact name → ALSA `CARD=` token → case-insensitive substring, refusing to guess on ambiguity.
+/// Survives a device reorder/rename that changes the exact system name.
+///
+/// **Enumerates twice, on purpose.** cpal's ALSA enumeration is stateful: holding `cpal::Device`
+/// values alive while iterating silently truncates the list. On this host, naming each device and
+/// dropping it yields 39 devices; naming it and *retaining* it (what this function used to do) yields
+/// 18; collecting the devices first and naming them afterwards yields 4. The truncation is silent —
+/// the missing entries simply never arrive — so `openpulse devices` (which drops as it goes) listed
+/// devices that `--device` could not open, and `aloop_tx` was unreachable while `hwloop_tx` happened
+/// to survive. Pass 1 therefore takes names only and drops every device; pass 2 re-enumerates and
+/// retains just the single match.
+fn select_cpal_device<I, F>(mut enumerate: F, selector: &str) -> Result<cpal::Device, AudioError>
+where
+    I: Iterator<Item = cpal::Device>,
+    F: FnMut() -> Result<I, AudioError>,
+{
+    // Pass 1 — names only. Retaining a device here is what truncates the enumeration.
+    let names: Vec<String> = enumerate()?.filter_map(|d| d.name().ok()).collect();
+    let resolved = resolve_name_from(&names, selector)?;
+
+    // Pass 2 — fetch the one device we want, retaining nothing else.
+    enumerate()?
+        .find(|d| d.name().map(|n| n == resolved).unwrap_or(false))
+        .ok_or(AudioError::DeviceNotFound(resolved))
+}
+
+/// Apply the hotplug-safe resolver to an already-collected name list.
+fn resolve_name_from(names: &[String], selector: &str) -> Result<String, AudioError> {
+    match resolve_device(selector, names) {
         DeviceResolution::Resolved(name) => {
             if name != selector {
                 debug!("audio device '{selector}' resolved to '{name}' (hotplug-safe match)");
             }
-            named
-                .into_iter()
-                .find(|(n, _)| *n == name)
-                .map(|(_, d)| d)
-                .ok_or(AudioError::DeviceNotFound(name))
+            Ok(name)
         }
         DeviceResolution::Ambiguous(hits) => Err(AudioError::DeviceNotFound(format!(
             "'{selector}' matches multiple devices ({}); set an exact name",
@@ -75,6 +89,34 @@ impl CpalBackend {
         Self {
             host: cpal::default_host(),
         }
+    }
+}
+
+impl CpalBackend {
+    /// Resolve `selector` to the system name of an output device, without opening a stream.
+    ///
+    /// Exposed for diagnostics and for testing the resolver: opening a stream perturbs ALSA state,
+    /// so a test that opened every device to check reachability would change the very enumeration it
+    /// is measuring.
+    pub fn resolve_output_name(&self, selector: &str) -> Result<String, AudioError> {
+        let names: Vec<String> = self
+            .host
+            .output_devices()
+            .map_err(|e| AudioError::Stream(e.to_string()))?
+            .filter_map(|d| d.name().ok())
+            .collect();
+        resolve_name_from(&names, selector)
+    }
+
+    /// Resolve `selector` to the system name of an input device, without opening a stream.
+    pub fn resolve_input_name(&self, selector: &str) -> Result<String, AudioError> {
+        let names: Vec<String> = self
+            .host
+            .input_devices()
+            .map_err(|e| AudioError::Stream(e.to_string()))?
+            .filter_map(|d| d.name().ok())
+            .collect();
+        resolve_name_from(&names, selector)
     }
 }
 
@@ -151,13 +193,14 @@ impl AudioBackend for CpalBackend {
                 .host
                 .default_input_device()
                 .ok_or_else(|| AudioError::DeviceNotFound("no default input device".into()))?,
-            Some(name) => {
-                let all = self
-                    .host
-                    .input_devices()
-                    .map_err(|e| AudioError::Stream(e.to_string()))?;
-                select_cpal_device(all, name)?
-            }
+            Some(name) => select_cpal_device(
+                || {
+                    self.host
+                        .input_devices()
+                        .map_err(|e| AudioError::Stream(e.to_string()))
+                },
+                name,
+            )?,
         };
 
         let stream_config = StreamConfig {
@@ -221,13 +264,14 @@ impl AudioBackend for CpalBackend {
                 .host
                 .default_output_device()
                 .ok_or_else(|| AudioError::DeviceNotFound("no default output device".into()))?,
-            Some(name) => {
-                let all = self
-                    .host
-                    .output_devices()
-                    .map_err(|e| AudioError::Stream(e.to_string()))?;
-                select_cpal_device(all, name)?
-            }
+            Some(name) => select_cpal_device(
+                || {
+                    self.host
+                        .output_devices()
+                        .map_err(|e| AudioError::Stream(e.to_string()))
+                },
+                name,
+            )?,
         };
 
         let stream_config = StreamConfig {
