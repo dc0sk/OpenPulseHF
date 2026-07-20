@@ -7926,3 +7926,50 @@ and the actually-observed results per change.
   to four decimals for four different waveforms — a stray `aplay` from the SNR test was still running
   and every capture recorded that 1 kHz tone; an occupied-bandwidth check (0 Hz wide, exactly 1 kHz)
   settled it in one step.
+
+## 2026-07-20 — fix(scfdma): enable the timing deramp for the localized (block-pilot) layout
+
+- **Requirement/change:** `SCFDMA52-LP` failed on both audio loopback rungs while passing every
+  in-process test. It was the last unfixed defect from the virtual sweep triage.
+- **Reproduction without hardware:** it passes `route_clean` but fails `route_embedded`. Sweeping the
+  lead offset showed the real shape — it decoded at **1 of 12** frame positions, the only success being
+  `lead = 0`, and a **one-sample** offset was enough to break it. `SCFDMA52` scored 12/12 on the same
+  sweep. A real receiver never has the frame at sample 0 (it listens for seconds and the frame arrives
+  somewhere inside), so the mode could not work on any real capture — which is precisely why it passed
+  in-process and failed on both audio rungs.
+- **Root cause:** `deramp_timing` returned early on `p.localized`, with the reasoning "the block-pilot
+  layout has no evenly-spaced pilots to fit a ramp". **That premise is false.** `pilot_positions`
+  returns a *contiguous* block for the localized layout (subcarriers 77–80), and contiguous is evenly
+  spaced with step 1 — which `pilot_spacing: 1` already records. The general slope fit was correct for
+  this layout all along; the guard was skipping a computation that works.
+- **Design decision:** remove the early return so the shared fit handles both layouts. The divisor was
+  verified to be genuinely correct rather than coincidental (adjacent-subcarrier step *is* 1 for a
+  contiguous block), and the `pilot_spacing` field comment — which called the value an "unused …
+  div-by-zero" placeholder — was corrected, since it is now a load-bearing value.
+  - **Two regressions along the way, each of which corrected the design.** (1) Enabling the per-symbol
+    fit for the localized layout fixed frame position but **broke `SCFDMA52-LP` on AWGN at 20 dB** (CRC
+    mismatch): 4 pilots give only 3 adjacent products, so the per-symbol slope is noisy enough that
+    de-rotating 65 subcarriers by it is worse than not correcting. (2) Fitting the slope frame-wide
+    instead then **decalibrated the interleaved modes** — `llr_reliability` fired on `SCFDMA52-16QAM`
+    ("wrong 6.6× more often than promised"). My premise that "the offset is constant across a frame"
+    was wrong, and the function's own docstring said so: under a sample-rate offset the ramp **grows
+    with symbol index**, which a per-symbol fit tracks and a frame-wide average destroys.
+  - **Final shape — the two layouts are fitted differently, for a physical reason.** Interleaved (13
+    pilots) keeps the **per-symbol** fit so it continues to track the growing SRO ramp. Localized (4
+    pilots) uses a **frame-wide** fit, trading that growing-ramp term for `sqrt(n_symbols)` less
+    estimator noise — the right trade for a flat-channel demonstrator that does not claim SRO tracking,
+    and the wrong one for the interleaved modes.
+- **Implementation:** `plugins/scfdma/src/channel.rs` (`deramp_timing`), `plugins/scfdma/src/params.rs`
+  (the `SCFDMA52_LP` docstring's timing-fragility claims and the `pilot_spacing` comment).
+- **Tests:** `crates/openpulse-modem/tests/scfdma_lp_frame_position.rs` — 4 tests: all 8 offsets decode,
+  the one-sample case by name, an `SCFDMA52` control proving the interleaved path is unchanged, and an
+  anti-vacuity check that the offset set spans more than the origin (so it cannot pass by testing only
+  the `lead = 0` case that used to be the sole success).
+- **Test results:** **Sabotage-verified** — restoring the early return fails 2 of 4 with
+  `failed at lead offsets [1, 2, 3, 5, 16, 40000, 40001]`. All 58 `scfdma-plugin` tests pass, including
+  the `papr_ablation` test that documents LP's low-PAPR tradeoff (the fix is receive-side only and does
+  not touch the modulator). **On the virtual loopback rung `SCFDMA52-LP` now PASSES**, with `SCFDMA52`
+  and `SCFDMA52-8PSK` unaffected. Full workspace gate below.
+- **Scope note:** this does not make `SCFDMA52-LP` generally robust. It stays a flat-channel
+  demonstrator registered in no adaptive profile — its single-tap CE still assumes flat gain/phase and
+  no passband tilt. Only the timing-offset fragility was a defect; the rest is by design.

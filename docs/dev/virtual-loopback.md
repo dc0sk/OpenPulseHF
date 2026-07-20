@@ -151,8 +151,16 @@ is refused. Gate: `plugins/psk8/tests/plain_pulse_sps_floor.rs`.
 ### Open items this sweep produced
 
 - **`8PSK2000`** — **FIXED** (see above): a plain-pulse samples/symbol floor, now enforced.
-- **`BPSK250-RRC`, `SCFDMA52-LP`** — moved out of the "dual-clock" group, and then narrowed again: both
-  pass in-process, so the defect is in the **audio I/O path**, not the DSP. Not diagnosed further.
+- **`BPSK250-RRC`, `QPSK125`** — **FIXED (#1000)**: the long-frame classification was computed on the
+  raw geometry before the 3× FEC widening, so their ~28 s coded frames kept a retry that starves the
+  capture read loop. They never finished buffering on a streaming capture.
+- **`SCFDMA52-LP`** — **FIXED**: `deramp_timing` returned early for the localized (block-pilot) layout
+  on the false premise that block pilots are not evenly spaced. Contiguous pilots *are* evenly spaced,
+  with step 1, which `pilot_spacing` already records. Without the fit the mode decoded **only** with the
+  frame at sample 0 and failed at a **one-sample** offset (1/12 embedded positions vs `SCFDMA52`'s
+  12/12) — so it could not work on any real capture, where the frame always sits inside a longer
+  recording. Now 12/12, and it passes the virtual rung. It remains a flat-channel demonstrator in no
+  adaptive profile: only the timing fragility was a bug, the single-tap CE still assumes a flat channel.
 - **`QPSK125`** — fails here 3/3 while passing on hardware, which is the inverse of the usual
   direction. Both runners use identical flags and the wire length is identical under `rs` (both pad to
   one 255-byte block), so payload size is not the difference. The RX log shows the demodulator

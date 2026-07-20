@@ -199,10 +199,18 @@ pub const SCFDMA52_64QAM_P4: ScFdmaParams = ScFdmaParams {
 /// — pilot COUNT/power dominates PAPR here, not placement. (An interleaved 4-pilot SCFDMA52 would
 /// reach most of the same PAPR *and* keep an interpolatable channel estimate.)
 ///
-/// The 4-block-pilot + single-tap CE is FRAGILE beyond a truly flat, well-timed channel: it assumes
-/// flat gain/phase AND ~zero residual timing offset (deramp is skipped) AND no passband tilt. Under
-/// frequency selectivity, a ±1-sample sync error, or SSB tilt it can SILENTLY mis-decode (no error).
-/// Hence a demonstrator only: registered but in NO adaptive profile, AWGN/flat/well-timed only.
+/// The 4-block-pilot + single-tap CE is still FRAGILE beyond a flat channel: it assumes flat
+/// gain/phase and no passband tilt, so under frequency selectivity or SSB tilt it can SILENTLY
+/// mis-decode (no error). Hence a demonstrator only: registered but in NO adaptive profile.
+///
+/// **Timing tolerance FIXED 2026-07-20.** This previously also required "~zero residual timing offset
+/// (deramp is skipped)" and listed a ±1-sample sync error among the failure modes. That was a real
+/// defect, not an inherent property: `deramp_timing` returned early on `localized` on the false premise
+/// that block pilots are not evenly spaced (contiguous pilots are evenly spaced, with step 1, which
+/// `pilot_spacing` already records). The mode decoded **only** with the frame at sample 0 of the
+/// receive buffer and failed at a one-sample offset — so it could not work on any real capture, where
+/// the frame is always somewhere inside a longer recording. With the fit enabled it decodes at every
+/// tested offset.
 /// Fewer pilots also raise gross rate to ~3389 bps (vs 2889) — but that's the pilot trade, not the
 /// localization. The residual ~10 dB (vs a true single carrier's ~6–7 dB) is the real-valued
 /// passband + rectangular-LFDMA ceiling.
@@ -212,7 +220,8 @@ pub const SCFDMA52_LP: ScFdmaParams = ScFdmaParams {
     n_data: 61,
     n_pilots: 4,
     bits_per_sc: 2,
-    pilot_spacing: 1, // unused (localized layout); non-zero to avoid div-by-zero on shared paths
+    pilot_spacing: 1, // localized layout: the 4 pilots are CONTIGUOUS, so the adjacent-SC step is 1.
+    // This is a real value, used by `deramp_timing`'s slope fit -- not a div-by-zero placeholder.
     localized: true,
     pn_pilots: false,
 };

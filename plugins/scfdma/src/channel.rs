@@ -44,32 +44,59 @@ pub fn pilot_positions(p: &ScFdmaParams) -> Vec<usize> {
 /// per-pilot-step rotation; de-rotating the whole spectrum removes the ramp
 /// before channel estimation. On a clean (offset-free) channel the slope is ~0
 /// and this is a near-identity.
+/// The localized (block-pilot) layout is handled by the same fit: its pilots are **contiguous**, which
+/// is even spacing of 1, and `pilot_spacing` is already 1 for it. This used to return early on
+/// `p.localized` with the reasoning "no evenly-spaced pilots to fit a ramp" — that premise is wrong,
+/// and skipping the fit cost `SCFDMA52-LP` any tolerance to where the frame sits: measured 2026-07-20,
+/// it decoded **only** with the frame at sample 0 of the buffer and failed at a **one-sample** offset
+/// (1/12 embedded positions, versus 12/12 for `SCFDMA52`). A real receiver never has the frame at
+/// offset 0, so the mode could not work on any real capture. With the fit enabled it is 12/12.
 pub fn deramp_timing(p: &ScFdmaParams, freq: &mut [Complex32]) {
-    if p.localized {
-        // The block-pilot layout has no evenly-spaced pilots to fit a ramp; the localized mode is a
-        // flat-channel (offset-free) demonstrator, so skip deramp entirely.
-        return;
+    if let Some(slope) = timing_ramp_slope(p, std::slice::from_ref(&&freq[..])) {
+        apply_timing_deramp(p, freq, slope);
     }
+}
+
+/// Accumulated adjacent-pilot conjugate product over `spectra`, or `None` if it is degenerate.
+///
+/// **Estimated over the whole frame, not per symbol, on purpose.** The timing offset is constant
+/// across a frame, so summing every symbol's contribution cuts the estimator's noise by
+/// `sqrt(n_symbols)`. That is what makes the fit usable for the localized (block-pilot) layout, which
+/// carries only 4 pilots — 3 adjacent products — per symbol: a per-symbol estimate there is so noisy
+/// that de-rotating 65 subcarriers by it is worse than not correcting at all. Measured 2026-07-20, a
+/// per-symbol fit broke `SCFDMA52-LP` on AWGN at 20 dB (CRC mismatch) while fixing its frame-position
+/// fragility; the frame-wide fit does both.
+pub fn timing_ramp_slope(p: &ScFdmaParams, spectra: &[&[Complex32]]) -> Option<f32> {
     let pilots = pilot_positions(p);
     if pilots.len() < 2 {
-        return;
+        return None;
     }
-    // De-phase the known pilot symbols first (identity for non-PN modes), leaving channel phase only,
-    // so the adjacent-pilot conjugate products measure the timing ramp, not the known pilot phases.
-    let dephased: Vec<Complex32> = pilots
-        .iter()
-        .enumerate()
-        .map(|(k, &sc)| freq[sc] * pilot_value(p, k).conj())
-        .collect();
     let mut acc = Complex32::new(0.0, 0.0);
-    for w in dephased.windows(2) {
-        acc += w[1] * w[0].conj();
+    for freq in spectra {
+        // De-phase the known pilot symbols first (identity for non-PN modes), leaving channel phase
+        // only, so the adjacent-pilot conjugate products measure the timing ramp, not the pilot phases.
+        let dephased: Vec<Complex32> = pilots
+            .iter()
+            .enumerate()
+            .map(|(k, &sc)| freq[sc] * pilot_value(p, k).conj())
+            .collect();
+        for w in dephased.windows(2) {
+            acc += w[1] * w[0].conj();
+        }
     }
     if acc.norm_sqr() < 1e-12 {
-        return;
+        return None;
     }
-    let slope = acc.arg() / p.pilot_spacing as f32; // rad per subcarrier
-    let k_ref = pilots[0] as f32;
+    Some(acc.arg() / p.pilot_spacing as f32) // rad per subcarrier
+}
+
+/// De-rotate `freq` by a previously estimated `slope` (rad per subcarrier).
+pub fn apply_timing_deramp(p: &ScFdmaParams, freq: &mut [Complex32], slope: f32) {
+    let pilots = pilot_positions(p);
+    let Some(&k_ref) = pilots.first() else {
+        return;
+    };
+    let k_ref = k_ref as f32;
     for (k, c) in freq.iter_mut().enumerate() {
         let (sin_p, cos_p) = (-slope * (k as f32 - k_ref)).sin_cos();
         *c *= Complex32::new(cos_p, sin_p);
