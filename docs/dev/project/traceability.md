@@ -7704,3 +7704,29 @@ and the actually-observed results per change.
   physical corruption (captured WAV shows a clean 4.20 s burst, zero interior dropouts). A ninth
   hypothesis — that `QPSK250-D` had a *second*, differential-specific defect because it failed even at the
   tight window — was also wrong: the tight window was a coin flip that coherent won. One defect, not two.
+
+## 2026-07-20 — fix(plugins): `supports_soft_demod` is per-mode, so `-D` stops advertising a refused capability
+
+- **Requirement/change:** validating `hpx_hf` SL6 on the dual-card rig left one failure: `QPSK250-D` +
+  `ldpc` errors with `differential QPSK has no soft-LLR path`. That refusal is *correct* (#923 — a
+  differential detector has no calibrated coherent LLR, and emitting miscalibrated ones is worse than
+  refusing), but `supports_soft_demod()` returned `true` for the whole QPSK plugin, so the engine
+  selected the soft path for `-D` and only discovered the refusal at demodulation. The advertisement was
+  the bug, not the refusal.
+- **Design decision:** the capability is a property of the **mode**, not the plugin, so the trait method
+  takes the mode: `supports_soft_demod(&self, mode: &str) -> bool`. Every call site in the engine already
+  had `mode` in scope. QPSK returns `!is_differential(mode)`; the other seven implementors are
+  unconditionally soft-capable and ignore the argument. Considered and rejected: keeping the plugin-level
+  signature and special-casing `-D` in the engine, which would put a waveform fact in the wrong layer and
+  leave the trait still able to lie.
+- **Implementation:** `crates/openpulse-core/src/plugin.rs` (trait default);
+  `plugins/{qpsk,bpsk,psk8,64qam,mfsk16,ofdm,scfdma,pilot}/src/lib.rs`;
+  `crates/openpulse-modem/src/engine.rs` (4 call sites — HARQ policy, retry-candidate selection, the
+  soft-demod preference in the capture path, and the soft-FEC mismatch warning).
+- **Tests:** `plugins/qpsk/tests/differential_soft_capability.rs` — 3 tests: a general invariant that
+  `supports_soft_demod(mode)` and `demodulate_soft(mode)` agree for **every** mode in the plugin's info
+  (with an anti-vacuity floor on the modes actually exercised), the named `-D` case, and a control that
+  the coherent modes still advertise soft demod so the fix did not disable the soft path wholesale.
+- **Test results:** **Sabotage-verified** — restoring the unconditional `true` turns the suite red (2 of
+  3) with `QPSK250-D: supports_soft_demod() says true but demodulate_soft() errored`. Full workspace gate
+  below.

@@ -21,7 +21,7 @@ fn llrs_to_bytes(llrs: &[f32]) -> Vec<u8> {
 
 fn assert_conformance(plugin: &dyn ModulationPlugin, mode: &str, fc: f32) {
     assert!(
-        plugin.supports_soft_demod(),
+        plugin.supports_soft_demod(mode),
         "{mode}: test only applies to soft-capable plugins"
     );
     let cfg = ModulationConfig {

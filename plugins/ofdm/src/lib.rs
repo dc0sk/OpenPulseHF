@@ -158,7 +158,8 @@ impl ModulationPlugin for OfdmPlugin {
         })
     }
 
-    fn supports_soft_demod(&self) -> bool {
+    fn supports_soft_demod(&self, mode: &str) -> bool {
+        let _ = mode;
         true
     }
 
@@ -522,7 +523,7 @@ mod tests {
     #[test]
     fn ofdm_supports_soft_demod() {
         let plugin = OfdmPlugin::new();
-        assert!(plugin.supports_soft_demod());
+        assert!(plugin.supports_soft_demod("OFDM52"));
     }
 
     // Timing acquisition: frame arriving at a non-symbol-aligned sample offset,

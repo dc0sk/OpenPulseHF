@@ -1613,7 +1613,7 @@ impl ModemEngine {
                 let soft = self
                     .plugins
                     .get(mode)
-                    .map(|p| p.supports_soft_demod())
+                    .map(|p| p.supports_soft_demod(mode))
                     .unwrap_or(false)
                     && matches!(
                         fec,
@@ -1887,7 +1887,7 @@ impl ModemEngine {
         let soft_capable = self
             .plugins
             .get(mode)
-            .map(|p| p.supports_soft_demod())
+            .map(|p| p.supports_soft_demod(mode))
             .unwrap_or(false);
         HarqPolicy::default()
             .with_soft_capable(soft_capable)
@@ -2712,7 +2712,7 @@ impl ModemEngine {
             // error is a genuine demodulation failure, not a cue to re-demodulate hard
             // (which would double the per-attempt cost and can't succeed where the
             // soft pass failed — both share the same acquisition front end).
-            if plugin.supports_soft_demod() {
+            if plugin.supports_soft_demod(mode) {
                 let llrs = plugin.demodulate_soft(&samples.samples, &mod_cfg)?;
                 // Absolute RX SNR for rate adaptation: the mode's calibrated symbol-domain estimate
                 // (M2M4 fallback inside `rx_snr_db`). The old mean-|LLR| proxy reads ≈ −2 dB on a
@@ -4364,7 +4364,7 @@ impl ModemEngine {
         );
         if is_soft_fec {
             if let Some(plugin) = self.plugins.get(mode) {
-                if !plugin.supports_soft_demod() {
+                if !plugin.supports_soft_demod(mode) {
                     tracing::warn!(
                         mode,
                         fec = ?fec,

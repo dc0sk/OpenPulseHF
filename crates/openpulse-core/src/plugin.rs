@@ -194,7 +194,8 @@ pub trait ModulationPlugin: Send + Sync {
     ///
     /// The modem engine logs a warning when a soft-FEC mode is paired with a
     /// plugin that returns `false`.
-    fn supports_soft_demod(&self) -> bool {
+    fn supports_soft_demod(&self, mode: &str) -> bool {
+        let _ = mode;
         false
     }
 
@@ -478,7 +479,7 @@ mod tests {
             .collect();
         assert_eq!(resliced, hard);
         // Defaults for the opt-in trait hooks.
-        assert!(!p.supports_soft_demod());
+        assert!(!p.supports_soft_demod("BPSK31"));
         assert!(p.frame_geometry(&cfg).is_none());
         assert!(p.estimate_afc_hz(&[], &cfg).is_none());
         assert!(p.occupied_bandwidth_hz("BPSK31").is_none());

@@ -22,7 +22,7 @@ fn engine() -> ModemEngine {
 #[test]
 fn pilot_plugin_is_soft_capable() {
     assert!(
-        PilotPlugin::new().supports_soft_demod(),
+        PilotPlugin::new().supports_soft_demod("PILOT-QPSK500"),
         "pilot plugin must advertise soft demod so the engine feeds it to soft FEC"
     );
 }

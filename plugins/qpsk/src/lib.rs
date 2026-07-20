@@ -120,8 +120,10 @@ impl ModulationPlugin for QpskPlugin {
         })
     }
 
-    fn supports_soft_demod(&self) -> bool {
-        true
+    /// Differential modes have no soft-LLR path — `qpsk_demodulate_soft` errors on them rather than
+    /// emit miscalibrated coherent LLRs (#923), so they must not advertise the capability.
+    fn supports_soft_demod(&self, mode: &str) -> bool {
+        !is_differential(mode)
     }
 
     fn estimate_afc_hz(&self, samples: &[f32], config: &ModulationConfig) -> Option<f32> {

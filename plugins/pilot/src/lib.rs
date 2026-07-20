@@ -103,7 +103,8 @@ impl ModulationPlugin for PilotPlugin {
         demodulate::pilot_demodulate_soft(samples, config)
     }
 
-    fn supports_soft_demod(&self) -> bool {
+    fn supports_soft_demod(&self, mode: &str) -> bool {
+        let _ = mode;
         true
     }
 
