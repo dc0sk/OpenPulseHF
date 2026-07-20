@@ -355,18 +355,14 @@ impl AudioOutputStream for CpalOutputStream {
             }
         }
         // Wait until the driver has consumed all buffered samples.
-        // Timeout adapts to queued audio length so slow modes can fully drain.
+        // Timeout adapts to queued audio length so slow modes can fully drain; see
+        // `flush::flush_timeout_seconds` for why the old 60 s cap made that adaptation inert.
         let queued_samples = {
             let guard = self.buf.lock().unwrap_or_else(|p| p.into_inner());
             guard.len()
         };
-        let samples_per_second = (self.sample_rate_hz as f64) * (self.channels as f64);
-        let queued_seconds = if samples_per_second > 0.0 {
-            (queued_samples as f64) / samples_per_second
-        } else {
-            0.0
-        };
-        let timeout_seconds = (queued_seconds + 3.0).clamp(5.0, 60.0);
+        let timeout_seconds =
+            crate::flush::flush_timeout_seconds(queued_samples, self.sample_rate_hz, self.channels);
         let deadline = std::time::Instant::now() + Duration::from_secs_f64(timeout_seconds);
         loop {
             std::thread::sleep(Duration::from_millis(10));

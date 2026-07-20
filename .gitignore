@@ -11,3 +11,4 @@ docs/VARA Doc/
 # deliberately-committed records remain tracked; force-add (-f) to keep a new one.
 docs/dev/test-reports/loopback-*.json
 docs/test-reports/loopback-*.json
+__pycache__/

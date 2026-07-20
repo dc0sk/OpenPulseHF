@@ -199,8 +199,8 @@ fn main() -> Result<()> {
         Commands::Devices => {
             commands::devices::run(&cli.backend)?;
         }
-        Commands::Modes => {
-            commands::modes::run_modes(&engine)?;
+        Commands::Modes { airtime } => {
+            commands::modes::run_modes(&engine, airtime)?;
         }
         Commands::SessionMetrics { opts } => {
             exit_code = commands::session_metrics::run(&engine, &opts)?;

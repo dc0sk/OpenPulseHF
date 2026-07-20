@@ -142,7 +142,13 @@ pub enum Commands {
     /// List available audio devices.
     Devices,
     /// List registered modulation modes.
-    Modes,
+    Modes {
+        /// Print one `MODE<TAB>SECONDS` line per mode: the airtime of the largest frame the mode can
+        /// send at 8 kHz. Test harnesses use this to size transmit and listen windows per mode
+        /// instead of guessing a fixed one.
+        #[arg(long)]
+        airtime: bool,
+    },
     /// Recommend a speed level and mode for the current SNR.
     ModeAdvisor {
         /// Estimated signal-to-noise ratio in dB.

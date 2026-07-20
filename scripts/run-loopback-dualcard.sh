@@ -58,8 +58,16 @@ TX_CARD="${TX_CARD:-$(_slave_card hwloop_tx)}"
 RX_CARD="${RX_CARD:-$(_slave_card hwloop_rx)}"
 
 IRS_STARTUP_WAIT="${IRS_STARTUP_WAIT:-10}"  # RX AFC settle (~6.4 s) + margin before TX
-IRS_LISTEN_MS="${IRS_LISTEN_MS:-45000}"
-TX_TIMEOUT="${TX_TIMEOUT:-60}"
+# Defaults are FLOORS. Per case they are raised to fit the mode's own airtime -- see
+# `airtime_for`. A fixed window silently truncates the slow rungs: a 255-byte RS block at
+# BPSK31's 31.25 baud is 65 s of audio, so the 60 s transmit timeout and 45 s listen window
+# reported BPSK31 as a mode failure when nothing was wrong with the waveform.
+IRS_LISTEN_MS_FLOOR="${IRS_LISTEN_MS:-45000}"
+TX_TIMEOUT_FLOOR="${TX_TIMEOUT:-60}"
+IRS_LISTEN_EXPLICIT="${IRS_LISTEN_MS+set}"
+TX_TIMEOUT_EXPLICIT="${TX_TIMEOUT+set}"
+IRS_LISTEN_MS="$IRS_LISTEN_MS_FLOOR"
+TX_TIMEOUT="$TX_TIMEOUT_FLOOR"
 KILL_WAIT="${KILL_WAIT:-12}"
 RETRIES="${RETRIES:-3}"                      # absorb transient wideband acquisition flakiness in long sweeps (matches run-loopback-virtual.sh)
 FEC_EXPLICIT="${FEC+set}"
@@ -120,6 +128,31 @@ fec_for() {
     esac
 }
 
+# Airtime (seconds) of the largest frame each mode can send, read from the plugin registry via
+# `openpulse modes --airtime`. Queried once; modes the CLI does not report fall back to the floors.
+declare -A AIRTIME
+_load_airtimes() {
+    local m a
+    while IFS=$'\t' read -r m a; do
+        [[ -n "$m" ]] && AIRTIME["$m"]="$a"
+    done < <("$BIN" --log error modes --airtime 2>/dev/null)
+}
+
+airtime_for() { echo "${AIRTIME[$1]:-0}"; }
+
+# Raise TX_TIMEOUT / IRS_LISTEN_MS to fit this mode, unless the operator set them explicitly.
+size_windows_for() {
+    local mode="$1" a
+    a="$(airtime_for "$mode")"
+    if [[ -z "${TX_TIMEOUT_EXPLICIT:-}" ]]; then
+        TX_TIMEOUT="$(awk -v a="$a" -v f="$TX_TIMEOUT_FLOOR" 'BEGIN{t=a*1.5+20; print (t>f)?int(t+0.5):f}')"
+    fi
+    if [[ -z "${IRS_LISTEN_EXPLICIT:-}" ]]; then
+        IRS_LISTEN_MS="$(awk -v a="$a" -v w="$IRS_STARTUP_WAIT" -v f="$IRS_LISTEN_MS_FLOOR" \
+            'BEGIN{t=(a+w+25)*1000; print (t>f)?int(t+0.5):f}')"
+    fi
+}
+
 # Modes that cannot run on this rig, with the reason. Reported as SKIP, never silently dropped.
 skip_reason_for() {
     case "$1" in
@@ -132,11 +165,13 @@ skip_reason_for() {
 TIER="${TIER:-quick}"
 SINGLE_CASE=""
 LEVEL_CHECK=0
+SRO_CHECK=0
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --quick)       TIER="quick";     shift ;;
         --full)        TIER="full";      shift ;;
         --single-case) SINGLE_CASE="$2"; shift 2 ;;
+        --sro-check)   SRO_CHECK=1;      shift ;;
         --output)      OUTPUT_DIR="$2";  shift 2 ;;
         --level-check) LEVEL_CHECK=1;    shift ;;
         *) echo "Unknown option: $1" >&2; exit 1 ;;
@@ -166,6 +201,39 @@ _normalise() {  # disable AGC, restore moderate capture gain on both cards
 # Measures the actual captured RMS/peak with arecord (reliable; the modem build
 # logs no energy line) while the modem transmits, so it catches both a missing
 # cable (no signal) and an over-hot mic input (clipping).
+# Measure the sample-rate offset between the two cards. The rig's whole claimed value over the
+# single-clock virtual rung is "two independent clocks" -- this is what proves whether it delivers it.
+# Measured 2026-07-20: +0.10 ppm. These USB adapters slave to the host's USB frame clock, so they do
+# NOT run independently, and an SRO explanation for a failure on this rig needs this number first.
+if [[ "$SRO_CHECK" -eq 1 ]]; then
+    echo "==> SRO check: 1 kHz tone, TX card ${TX_CARD:-?} -> RX card ${RX_CARD:-?}"
+    python3 "$(dirname "$0")/lib/sro_estimator.py" >/dev/null || {
+        echo "    ERROR: estimator self-test failed; a reading from it would be meaningless" >&2; exit 1; }
+    _normalise
+    pkill -x openpulse 2>/dev/null; sleep 0.3
+    tone="/tmp/openpulse-sro-tone.wav"; rec="/tmp/openpulse-sro-rec.wav"
+    python3 -c "
+import math,struct,wave
+sr=48000; w=wave.open('$tone','wb'); w.setnchannels(1); w.setsampwidth(2); w.setframerate(sr)
+w.writeframes(b''.join(struct.pack('<h',int(12000*math.sin(2*math.pi*1000.0*n/sr))) for n in range(sr*60))); w.close()"
+    arecord -D "plughw:${RX_CARD},0" -f S16_LE -r 48000 -c 1 -d 63 "$rec" >/dev/null 2>&1 &
+    _rp=$!
+    sleep 1; aplay -D "$TX_DEVICE" "$tone" >/dev/null 2>&1
+    wait $_rp
+    python3 -c "
+import wave,struct,sys; sys.path.insert(0,'$(dirname "$0")/lib')
+from sro_estimator import est_ppm
+w=wave.open('$rec'); sr=w.getframerate(); n=w.getnframes()
+d=struct.unpack('<%dh'%n, w.readframes(n))
+amp=[abs(x) for x in d]; thr=max(amp)*0.3
+idx=[i for i,a in enumerate(amp) if a>thr]
+if len(idx)<sr*5: print('    ERROR: no tone captured -- check the cable'); sys.exit(1)
+seg=d[idx[0]+sr:idx[-1]-sr]
+print('    analysed %.1f s'%(len(seg)/sr))
+print('    measured SRO: %+.2f ppm'%est_ppm(seg,sr,1000.0))"
+    exit $?
+fi
+
 if [[ "$LEVEL_CHECK" -eq 1 ]]; then
     echo "==> Level check: modem TX on ${TX_DEVICE} (card ${TX_CARD:-?}), capture on RX card ${RX_CARD:-?}"
     _normalise
@@ -196,11 +264,14 @@ PY
     exit 0
 fi
 
+# Declared unconditionally: it is read by the summary below regardless of tier, and a
+# tier-local declaration made that read a syntax error that silently swallowed every SKIP.
+SKIPPED=()
+
 if [[ -n "$SINGLE_CASE" ]]; then
     CASES=("$SINGLE_CASE")
 elif [[ "$TIER" == "full" ]]; then
     CASES=()
-    SKIPPED=()
     if [[ -n "${MODES:-}" ]]; then
         read -r -a _reg <<< "$MODES"
     else
@@ -225,12 +296,17 @@ fi
 ts="$(date -u +%Y-%m-%dT%H%M%SZ)"
 mkdir -p "$OUTPUT_DIR"
 report="${OUTPUT_DIR}/loopback-dualcard-${TIER}-${ts}.json"
+_load_airtimes
 pass=0; fail=0; total="${#CASES[@]}"; results=()
 
 echo "==> Dual-card hardware loopback (${ts})  tier=${TIER}  cases=${total}"
 echo "    TX: ${TX_DEVICE} (card ${TX_CARD:-?})   RX: ${RX_DEVICE} (card ${RX_CARD:-?})   FEC=${FEC}"
-echo "    listen=${IRS_LISTEN_MS}ms  report=${report}"
-if [[ ${#SKIPPED[@]:-0} -gt 0 ]]; then
+if [[ -n "${IRS_LISTEN_EXPLICIT:-}" ]]; then
+    echo "    listen=${IRS_LISTEN_MS}ms (explicit)  report=${report}"
+else
+    echo "    listen>=${IRS_LISTEN_MS_FLOOR}ms (raised per mode to fit its airtime)  report=${report}"
+fi
+if [[ ${#SKIPPED[@]} -gt 0 ]]; then
     echo "    skipped (${#SKIPPED[@]}):"
     for sk in "${SKIPPED[@]}"; do
         IFS='|' read -r sm sr <<< "$sk"
@@ -269,6 +345,7 @@ for case_spec in "${CASES[@]}"; do
     IFS='|' read -r MODE PAYLOAD_SIZE <<< "$case_spec"
     payload="$(python3 -c "import secrets,string;print(''.join(secrets.choice(string.ascii_letters+string.digits) for _ in range(${PAYLOAD_SIZE})))")"
     CASE_FEC="$(fec_for "$MODE")"
+    size_windows_for "$MODE"
     printf "  [%-14s payload=%4sB fec=%-16s] ... " "$MODE" "$PAYLOAD_SIZE" "$CASE_FEC"
 
     ok=1; REASON=""; attempts=0

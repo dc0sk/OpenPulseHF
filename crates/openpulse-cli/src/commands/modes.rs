@@ -1,6 +1,7 @@
 use anyhow::Result;
 use serde_json::json;
 
+use openpulse_core::plugin::ModulationConfig;
 use openpulse_core::trust::allowed_signing_modes;
 use openpulse_modem::ModemEngine;
 
@@ -11,7 +12,10 @@ use crate::{
     IdentityCommands,
 };
 
-pub fn run_modes(engine: &ModemEngine) -> Result<()> {
+pub fn run_modes(engine: &ModemEngine, airtime: bool) -> Result<()> {
+    if airtime {
+        return print_airtimes(engine);
+    }
     for info in engine.plugins().list() {
         println!(
             "{}: {} ({})",
@@ -19,6 +23,33 @@ pub fn run_modes(engine: &ModemEngine) -> Result<()> {
             info.description,
             info.supported_modes.join(", ")
         );
+    }
+    Ok(())
+}
+
+/// Print `MODE<TAB>SECONDS` for every mode that reports a frame geometry.
+///
+/// The value is the largest frame the mode can put on the air at 8 kHz. A harness that sizes its
+/// transmit timeout and listen window from a fixed constant will cut off the slow modes — a 255-byte
+/// RS block at BPSK31's 31.25 baud is 65 s, which is how BPSK31 came to fail a hardware sweep for a
+/// reason that had nothing to do with the waveform.
+fn print_airtimes(engine: &ModemEngine) -> Result<()> {
+    for info in engine.plugins().list() {
+        for mode in &info.supported_modes {
+            let cfg = ModulationConfig {
+                mode: mode.clone(),
+                sample_rate: 8000,
+                ..ModulationConfig::default()
+            };
+            let Some(plugin) = engine.plugins().get(mode) else {
+                continue;
+            };
+            let Some(geometry) = plugin.frame_geometry(&cfg) else {
+                continue;
+            };
+            let seconds = geometry.max_frame_samples as f64 / f64::from(cfg.sample_rate);
+            println!("{mode}\t{seconds:.1}");
+        }
     }
     Ok(())
 }
