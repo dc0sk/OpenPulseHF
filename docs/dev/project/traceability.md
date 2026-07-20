@@ -7787,3 +7787,45 @@ and the actually-observed results per change.
   with the rig at 0.1 ppm their hardware failure is **unexplained**. The `64QAM`/`SCFDMA52-*` group was
   additionally measured at hard-decision `rs` while those modes are designed around soft FEC (~+6 dB) —
   read as *not disproven* rather than *failed*.
+
+## 2026-07-20 — fix(audio): cpal enumeration truncates when devices are retained; virtual rung at HEAD
+
+- **Requirement/change:** Task B of the loopback revalidation plan (virtual rung at HEAD). It could not
+  be started: every `aloop_*` device returned `device not found` from `transmit`, while
+  `openpulse devices` listed them and `aplay -D aloop_tx` worked.
+- **Root cause:** cpal's ALSA enumeration is **stateful** — holding `cpal::Device` values alive while
+  iterating silently truncates the list. Measured in one process, same moment: naming each device and
+  dropping it yields 39; naming and **retaining** it yields 18; collecting devices then naming yields 4.
+  Nothing errors; the entries simply never arrive. `select_cpal_device` collected
+  `Vec<(String, cpal::Device)>`, so the resolver operated on a truncated list. `openpulse devices` (which
+  drops as it iterates) therefore advertised devices that `--device` could not open. `hwloop_tx` fell
+  inside the surviving prefix, which is why the hardware rung worked and the virtual rung was unrunnable.
+- **Design decision:** enumerate twice — pass 1 takes names only and drops every device, pass 2
+  re-enumerates and retains just the single match. Resolution policy is unchanged and factored into
+  `resolve_name_from`, also exposed as `CpalBackend::resolve_{output,input}_name` so the property can be
+  tested **without opening a stream** (opening perturbs ALSA state; the first version of the test opened
+  all 32 devices and the count moved under it, 39 → 32 — it was measuring its own side effects).
+- **Implementation:** `crates/openpulse-audio/src/cpal_backend.rs` (`select_cpal_device`,
+  `resolve_name_from`, the two public resolvers, both call sites);
+  `scripts/run-loopback-virtual.sh` (`FEC=`/`fec_for`, airtime-derived windows, `skip_reason_for` parity
+  with the hardware runner).
+- **Tests:** `crates/openpulse-audio/tests/device_enumeration.rs` — every listed output device must
+  resolve by its own name, plus a direct test of the retention property. Gated on `cpal-backend` (needs a
+  real audio host), so it does not run in the `--no-default-features` workspace gate.
+- **Test results:** **Sabotage-verified** — restoring the retaining enumeration gives `7 retained vs 34
+  dropped` and `14 of 34 listed output devices could not be resolved by their own name`; both tests fail.
+  With the fix, all of `aloop_{tx,rx,a,b}` and `hwloop_{tx,rx}` open. Full workspace gate below, plus
+  `cargo clippy -p openpulse-audio --features cpal-backend --all-targets`.
+- **Sweep result (Task B):** 63 pass / 6 fail / 4 skip of 73, `FEC=rs`.
+- **What the virtual × hardware comparison settles.** With SRO eliminated by measurement (+0.10 ppm), a
+  mode passing virtual and failing dual-card leaves exactly one variable — the analog path.
+  `64QAM{500,1000,2000-RRC}`, `SCFDMA52-{16QAM,32QAM,64QAM,64QAM-P4}` and `PILOT-QPSK500` are
+  **analog-path limited**, confirming the surviving half of the 2026-06-13 disjunction ("SRO and/or
+  analog group-delay/phase") now that the clock half is gone. `8PSK2000`, `BPSK250-RRC` and
+  `SCFDMA52-LP` fail on **both** rungs and are software defects — `BPSK250-RRC` and `SCFDMA52-LP` are
+  reclassified out of the former "dual-clock" group. `QPSK125` fails virtual 3/3 while passing hardware,
+  with the demodulator recovering ~82 of 255 bytes; recorded, not diagnosed.
+- **Harness defect found in the plan itself:** `run-loopback-virtual.sh` never passed `--fec`, so the
+  revalidation plan's own `FEC=rs MODES="QPSK250-D QPSK500-D"` command was **inert** — and an uncoded
+  differential run decodes 0.00 by design, so following the plan verbatim would have manufactured a
+  regression two lines after the plan warned against exactly that.
