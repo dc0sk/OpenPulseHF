@@ -482,6 +482,7 @@ Each requirement below is done when the linked test passes. Add new links as tes
 | QPSK loopback correctness | `cargo test -p openpulse-modem --test channel_loopback_multimode qpsk500_awgn_20db` (real decode) + `--test qpsk500_acquisition`; `--test qpsk_hardening` covers the TX/state-machine paths only |
 | FEC RS encode/decode | `cargo test -p openpulse-modem --test fec_loopback` |
 | The scanning FEC receive finds a frame inside a capture LONGER than the frame (the defect that blocked every long coded frame on real audio) | `cargo test -p openpulse-modem --test fec_scan_long_capture` |
+| A mode never advertises a soft-demod capability it refuses at call time (`supports_soft_demod(mode)` agrees with `demodulate_soft`) | `cargo test -p qpsk-plugin --test differential_soft_capability` |
 | HPX state machine transitions | `cargo test -p openpulse-modem --test hpx_conformance_integration` |
 | Benchmark 100% pass, mean_transitions ≤ 20 | `cargo test -p openpulse-modem --test benchmark_integration` |
 | Session persistence | `cargo test -p openpulse-cli --test local_state_integration` |

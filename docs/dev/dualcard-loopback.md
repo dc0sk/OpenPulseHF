@@ -219,10 +219,12 @@ Measured on this rig after the fix, TX at rms 0.3963 / peak 0.6304:
 Both load-bearing fade rungs of `hpx_hf` — SL1 (`MFSK16`) and SL6 (`QPSK250-D`) — are now validated on
 real audio.
 
-**Still open:** `QPSK250-D` + `ldpc` fails with `differential QPSK has no soft-LLR path`. That is
-correct behaviour badly surfaced — `supports_soft_demod()` in `plugins/qpsk/src/lib.rs` returns `true`
-unconditionally, so the mode advertises a capability it refuses at call time. The advertisement is the
-bug, not the refusal.
+`QPSK250-D` + `ldpc` still fails with `differential QPSK has no soft-LLR path` — but that is now
+**correct and correctly surfaced**. The refusal is by design (#923); what was wrong was that
+`supports_soft_demod()` returned `true` for the whole QPSK plugin, so the mode advertised a capability
+it refused at call time. The capability is now per-mode (`supports_soft_demod(&self, mode: &str)`), QPSK
+returns `!is_differential(mode)`, and the engine no longer routes `-D` down the soft path. Pair `-D`
+with a hard-decision FEC (`rs`); it has no soft path to pair with a soft-input decoder.
 
 **Method note.** Eight hypotheses were falsified before the real one landed, and the two that survived
 longest were the two I had reasoned my way to rather than measured: a "second differential defect"

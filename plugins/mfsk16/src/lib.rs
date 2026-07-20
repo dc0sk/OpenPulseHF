@@ -373,7 +373,8 @@ impl ModulationPlugin for Mfsk16Plugin {
         Ok(out)
     }
 
-    fn supports_soft_demod(&self) -> bool {
+    fn supports_soft_demod(&self, mode: &str) -> bool {
+        let _ = mode;
         true
     }
 
