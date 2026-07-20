@@ -107,7 +107,7 @@ remaining variable: **the analog path**.
 | Modes | virtual | dual-card | Verdict |
 |---|---|---|---|
 | `64QAM{500,1000,2000-RRC}`, `SCFDMA52-{16QAM,32QAM,64QAM,64QAM-P4}`, `PILOT-QPSK500` | pass | fail | **Analog path** — confirms the surviving half of the 2026-06-13 disjunction |
-| `8PSK2000`, `BPSK250-RRC`, `SCFDMA52-LP` | fail | fail | **Software defect** — fails with no analog path at all |
+| `8PSK2000`, `BPSK250-RRC`, `SCFDMA52-LP` | fail | fail | **Software** — fails with no analog path at all. Narrowed further below. |
 | `QPSK125` | fail | pass | Virtual-only, and **consistent** (3/3) — see below |
 
 This closes the question the 2026-06-13 note left open. That note offered "two independent soundcard
@@ -118,13 +118,41 @@ by the analog path, not by a code defect and not by SRO.**
 Note `BPSK31`'s dual-card FAIL in that run is stale — it was the 60 s flush clamp, fixed the same day,
 and it now passes on both rungs.
 
+### Narrowed by a third rung (2026-07-20, after the sweep)
+
+"Fails on both audio rungs" is not the same as "the DSP is wrong". Re-running the three through the
+**in-process** `ChannelSimHarness` — no cpal, no ALSA, no resampler — on a clean channel splits them
+again:
+
+| Mode | in-process | virtual | dual-card | Layer |
+|---|---|---|---|---|
+| `8PSK2000` | **fail** | fail | fail | **DSP core** |
+| `BPSK250-RRC` | pass | fail | fail | **audio I/O path** (cpal/ALSA/resampler) |
+| `SCFDMA52-LP` | pass | fail | fail | **audio I/O path** |
+| `QPSK125` | pass | fail | pass | **audio I/O path**, virtual only |
+
+So three rungs isolate three different variables, and only `8PSK2000` is a modem-DSP defect. The other
+three pass every DSP test and fail once real audio I/O is in the path, which is a materially different
+place to look than "the waveform is broken".
+
+**`8PSK2000` — diagnosed and fixed.** It fails in-process on a *clean, noiseless* channel, the repo's
+signature for a bug rather than a limitation. Cause: `samples_per_symbol` enforced a floor of 4, so
+`8PSK2000` at 8 kHz (exactly 4 samples/symbol) was accepted, modulated and transmitted — and nothing
+could decode it. The plain pulse's residual ISI grows as `n` shrinks and at 4 sps exceeds 8PSK's ±22.5°
+margin. Measured: `8PSK500` (16 sps) and `8PSK1000` (8 sps) round-trip; `8PSK2000` (4 sps) does not;
+`8PSK2000-RRC` at the same 4 sps does; and plain `QPSK2000` at 4 sps does. **It is the phase margin
+that runs out, not the sample rate.** The floor is **5**: the pre-existing `psk8_9600_loopback_48k`
+test (5 sps, plain pulse) refuted a first attempt that used 8 — generalised past the boundary that
+made the measurement true, the same mistake as the `RsStrong is free` entry in CLAUDE.md. The plain pulse now requires ≥5 samples/symbol and refuses the
+combination with a message naming the `-RRC` variant, on both the transmit and receive paths. The mode
+is still advertised because at 48 kHz it is 24 sps and perfectly usable — only the pairing with 8 kHz
+is refused. Gate: `plugins/psk8/tests/plain_pulse_sps_floor.rs`.
+
 ### Open items this sweep produced
 
-- **`8PSK2000`** — fails on both rungs and at 0 ppm in-process, i.e. on a clean channel. A genuine
-  software defect. In no shipped profile (manual-select only). Its `-RRC` sibling passes.
-- **`BPSK250-RRC`** — reclassified. It was recorded as an unexplained hardware failure; it fails on the
-  virtual rung too, so it is software.
-- **`SCFDMA52-LP`** — likewise moved out of the "dual-clock" group into software.
+- **`8PSK2000`** — **FIXED** (see above): a plain-pulse samples/symbol floor, now enforced.
+- **`BPSK250-RRC`, `SCFDMA52-LP`** — moved out of the "dual-clock" group, and then narrowed again: both
+  pass in-process, so the defect is in the **audio I/O path**, not the DSP. Not diagnosed further.
 - **`QPSK125`** — fails here 3/3 while passing on hardware, which is the inverse of the usual
   direction. Both runners use identical flags and the wire length is identical under `rs` (both pad to
   one 255-byte block), so payload size is not the difference. The RX log shows the demodulator

@@ -321,11 +321,25 @@ structural gaps vs our single-`current_adaptive_mode` model.
 | C3 | **Clarke-Jakes flat fader (+ Rician)** | `flat_fader_impl.cc` | 🟡 | S–M |
 | C4 | **Selective fading w/ sinc fractional-delay taps** | `selective_fading_model_impl.cc:73` | 🟡 | M |
 
-**C1 is high-value:** our persistent dual-clock hardware failure (SCFDMA52/64QAM
-fail on two-soundcard rigs but pass single-clock virtual loop — see memory
-`loopback-mode-matrix`) is *exactly* an SRO. Adding an SRO channel to
-`openpulse-channel` lets us reproduce and gate that failure class **in CI without
-hardware** — the single most useful test-infra item in the whole scan.
+> **C1 — DONE, and its justification was WRONG (2026-07-20).** Two separate corrections:
+>
+> 1. **It is already built.** `crates/openpulse-channel/src/sro.rs` provides `SroChannel`/`SroConfig`,
+>    reachable from tests via `ChannelSimHarness::route_with_sro(ppm)` (6 call sites). Nothing to do.
+> 2. **The failure it was prioritized to explain is not an SRO.** The dual-card rig was **measured at
+>    +0.10 ppm** (`run-loopback-dualcard.sh --sro-check`): both USB adapters slave to the host's USB
+>    frame clock, so the "two independent clocks" premise was an inference from topology, never a
+>    measurement. `SCFDMA52-*`/`64QAM` also tolerate 400–800 ppm of *injected* SRO in-process while
+>    failing on the rig at 0.1 ppm. The virtual rung (identical software, no analog cable) passes them.
+>    The remaining variable is the **analog path**, not the clock.
+>
+> Original text, kept as a dated record: *"C1 is high-value: our persistent dual-clock hardware failure
+> (SCFDMA52/64QAM fail on two-soundcard rigs but pass single-clock virtual loop) is exactly an SRO.
+> Adding an SRO channel to `openpulse-channel` lets us reproduce and gate that failure class in CI
+> without hardware — the single most useful test-infra item in the whole scan."*
+>
+> The SRO model remains useful as a channel model. It is simply not the explanation for this failure,
+> and gating on it would gate the wrong thing. See `docs/dev/dualcard-loopback.md` and
+> `docs/dev/virtual-loopback.md`.
 
 ---
 
@@ -375,7 +389,10 @@ If I were sequencing this, in order:
 2. **AGC (T1.1) + SNR estimator (T1.3)** — the highest-leverage small additions for
    real-HF robustness; everything downstream (rate adaptation, LLR scaling, T1.6)
    benefits.
-3. **SRO channel model (C1)** — turn the dual-clock hardware failure into a CI gate.
+3. ~~**SRO channel model (C1)** — turn the dual-clock hardware failure into a CI gate.~~ **DROPPED
+   (2026-07-20):** already implemented (`openpulse_channel::sro`), and the failure it was meant to gate
+   is not an SRO — the rig measures +0.10 ppm and the modes tolerate 400–800 ppm injected. See the C1
+   note above.
 4. **Burst synchronizer (T2.1) + m-sequence preamble (T3.6)** as one new-waveform
    effort — the convergent #1 finding and the durable fix for the carrier-offset
    gaps. Ship as a new profile to preserve interop.

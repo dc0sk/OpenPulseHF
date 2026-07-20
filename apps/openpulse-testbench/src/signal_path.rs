@@ -1445,11 +1445,42 @@ mod tests {
     fn all_modes_have_measured_rates() {
         // Every advertised mode must modulate and yield a positive steady-state rate —
         // this also proves make_plugin routes every mode (including pilot) to a plugin.
+        //
+        // A mode may legitimately refuse THIS testbench's 8 kHz rate: `8PSK2000` is exactly 4
+        // samples/symbol there, below what the plain pulse can carry (see
+        // `plugins/psk8/tests/plain_pulse_sps_floor.rs`). That refusal is accepted only when the
+        // plugin SAYS SO — an unexplained `None` is still a failure. Note this measures modulation
+        // geometry, not decodability: it compares emitted sample counts and never demodulates, which
+        // is why `8PSK2000` reported a healthy rate for as long as it was emitting audio nothing
+        // could decode.
+        let cfg = |mode: &str| ModulationConfig {
+            mode: mode.into(),
+            center_frequency: 1500.0,
+            sample_rate: 8000,
+            ..ModulationConfig::default()
+        };
+        let mut refused = Vec::new();
         for &mode in crate::state::ALL_MODES {
-            let r = measure_mode_rate(mode);
+            if let Some(v) = measure_mode_rate(mode) {
+                assert!(v > 0.0, "{mode}: measured rate was not positive ({v})");
+                continue;
+            }
+            let why = make_plugin(mode)
+                .modulate(&[0u8; 128], &cfg(mode))
+                .err()
+                .map(|e| e.to_string())
+                .unwrap_or_default();
             assert!(
-                r.is_some_and(|v| v > 0.0),
-                "{mode}: no positive measured rate ({r:?})"
+                why.contains("samples/symbol"),
+                "{mode}: no measured rate, and no stated sample-rate reason (error: {why:?})"
+            );
+            refused.push(format!("{mode} ({why})"));
+        }
+        // Never silently drop: if a mode is excluded, say which and why.
+        if !refused.is_empty() {
+            eprintln!(
+                "modes refused at this testbench's 8 kHz rate:\n  {}",
+                refused.join("\n  ")
             );
         }
     }

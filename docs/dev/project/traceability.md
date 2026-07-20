@@ -7829,3 +7829,57 @@ and the actually-observed results per change.
   revalidation plan's own `FEC=rs MODES="QPSK250-D QPSK500-D"` command was **inert** — and an uncoded
   differential run decodes 0.00 by design, so following the plan verbatim would have manufactured a
   regression two lines after the plan warned against exactly that.
+
+## 2026-07-20 — fix(psk8): the plain 8PSK pulse needs ≥8 samples/symbol; loopback revalidation closed
+
+- **Requirement/change:** triage of the three modes the virtual sweep left as "software defects", plus
+  Task E of the loopback revalidation plan.
+- **Finding — the classification in #998 was under-specified.** "Fails on both audio rungs" is not the
+  same as "the DSP is wrong". Re-running the three through the **in-process** `ChannelSimHarness` (no
+  cpal, no ALSA, no resampler) on a clean channel splits them: `8PSK2000` fails, while `BPSK250-RRC`,
+  `SCFDMA52-LP` and `QPSK125` all pass. Three rungs isolate three variables — DSP core, audio I/O path,
+  analog path — and only `8PSK2000` is a modem-DSP defect. The other three fail once real audio I/O is
+  in the path, which is a materially different place to look.
+- **Root cause (`8PSK2000`):** `samples_per_symbol` enforced a floor of 4, so `8PSK2000` at 8 kHz —
+  exactly 4 samples/symbol — was accepted, modulated and transmitted, and nothing could decode it. The
+  plain pulse blends adjacent symbols with a raised cosine and the demodulator integrates against the
+  squared window, leaving a residual ISI term that grows as `n` shrinks; at 4 sps it exceeds 8PSK's
+  ±22.5° margin. Measured on a clean channel: `8PSK500` (16 sps) and `8PSK1000` (8 sps) round-trip,
+  `8PSK2000` (4 sps) does not, `8PSK2000-RRC` at the same 4 sps does, and plain `QPSK2000` at 4 sps
+  does. **It is the phase margin that runs out, not the sample rate** — the same ordering as #923.
+- **Design decision:** `samples_per_symbol_for_pulse` enforces ≥5 for the plain pulse and keeps ≥4 for
+  the shaped ones, on both the transmit and receive paths, with an error naming the `-RRC` variant. The
+  mode stays advertised: at 48 kHz it is 24 sps and perfectly usable, so unlike #996 this is a
+  rate-specific refusal, not a capability the mode can never honour.
+  - **The floor is 5, and my first attempt used 8.** I generalised from the 4/8/16 samples the 8 kHz
+    modes happen to give, straight past the boundary. The **pre-existing** `psk8_9600_loopback_48k`
+    test — plain pulse at 5 sps — went red and refuted it. The gate now pins the floor from *both*
+    sides (a floor of 4 fails 2 tests, a floor of 8 fails 1, only 5 passes), so neither error can
+    return. Same shape as the `RsStrong is free` entry in CLAUDE.md: measure the boundary before
+    generalising.
+- **Implementation:** `plugins/psk8/src/{modulate.rs,demodulate.rs}`.
+- **Tests:** `plugins/psk8/tests/plain_pulse_sps_floor.rs` — 5 tests: the refusal with a usable message,
+  the receive-side refusal, and three controls (the working plain modes, the RRC variant at the same
+  rate, and the same mode accepted at 48 kHz).
+- **Test results:** **Sabotage-verified** — lowering the plain floor back to 4 turns the suite red (2 of
+  5). Full workspace gate below.
+- **Task E — resolved, and its own instruction was wrong.** Task E asked to mark the 2026-06-13
+  diagnostic superseded "*(the SRO reasoning it contains is still the right explanation for the modes
+  that do still fail)*". That parenthetical is false: the rig measures +0.10 ppm, and the modes tolerate
+  400–800 ppm injected. The 2026-06-13 note offered "SRO **and/or** analog group-delay/phase"; the clock
+  half is eliminated by measurement and the analog half confirmed by construction (in-process pass →
+  virtual pass → dual-card fail). `SCFDMA52-*`/`64QAM` are **analog-path limited**.
+- **Downstream closed:** `reference-mining` item **C1** was prioritized on that refuted premise. It is
+  closed twice over — the SRO channel model is *already implemented* (`openpulse_channel::sro`, 6 call
+  sites) and the failure it was meant to gate is not an SRO. Corrected in `reference-mining-plan.md`.
+- **Docs corrected:** `loopback-revalidation-plan.md` (Tasks A–E marked done; the "two independent
+  sample clocks" claim in §3 corrected), `reference-mining-plan.md`, `virtual-loopback.md`.
+
+  - **A downstream gate caught this, and it was itself weak.** `openpulse-testbench`'s
+    `all_modes_have_measured_rates` asserted every advertised mode yields a positive rate, and went red
+    when `8PSK2000` started refusing 8 kHz. But `measure_mode_rate` only calls `modulate` and compares
+    emitted sample counts — it never demodulates, so `8PSK2000` reported a healthy rate for as long as
+    it was emitting audio nothing could decode. The test now accepts a refusal **only when the plugin
+    states a sample-rate reason**, and prints which modes were excluded rather than dropping them
+    silently. (Same lesson as PR #978: when a change alters what a crate *advertises*, its own tests
+    are not the affected set — `-p psk8-plugin` was green throughout.)
