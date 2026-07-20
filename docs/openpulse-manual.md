@@ -1654,8 +1654,9 @@ Key vars: `MODES`, `LISTEN_MS` (120000), `PAYLOAD_BYTES` (32), `RETRIES` (3),
 
 #### D. Dual-card hardware loopback (two USB cards, one host)
 
-Two independent soundcard clocks + an analog cable — reproduces the dual-clock
-sample-rate-offset that breaks wideband/dense-QAM modes, without a second machine.
+Two USB soundcards + an analog cable — exercises the real analog path without a
+second machine. It does **not** reproduce sample-rate offset: both adapters slave
+to the host's USB frame clock, measured at +0.10 ppm (`--sro-check`).
 
 ```bash
 scripts/setup-dualcard-loopback.sh       # resolves both USB cards; disables AGC; sets capture gain

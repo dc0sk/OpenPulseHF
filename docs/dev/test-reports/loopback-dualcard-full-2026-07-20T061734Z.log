@@ -1,0 +1,255 @@
+==> Dual-card hardware loopback (2026-07-20T061734Z)  tier=full  cases=67
+    TX: hwloop_tx (card 3)   RX: hwloop_rx (card 5)   FEC=rs
+    listen=45000ms  report=docs/dev/test-reports/loopback-dualcard-full-2026-07-20T061734Z.json
+scripts/run-loopback-dualcard.sh: line 233: ${#SKIPPED[@]:-0}: bad substitution
+
+  [64QAM1000      payload= 128B fec=rs              ] ... FAIL (payload not decoded) after 3 attempt(s)
+    RX AFC:
+      [2m2026-07-20T06:18:31.659491Z[0m [32m INFO[0m AFC settling done: correction=0.0Hz onset=80264 (coarse=80144) buf_len=80400
+    RX tail:
+      [2m2026-07-20T06:18:43.868176Z[0m [34mDEBUG[0m received 178000 accumulated audio samples
+      [2m2026-07-20T06:18:43.878997Z[0m [34mDEBUG[0m received 178200 accumulated audio samples
+      [2m2026-07-20T06:18:43.913130Z[0m [34mDEBUG[0m received 178400 accumulated audio samples
+      [2m2026-07-20T06:18:43.936372Z[0m [34mDEBUG[0m received 178600 accumulated audio samples
+      [2m2026-07-20T06:18:43.959432Z[0m [34mDEBUG[0m received 178800 accumulated audio samples
+      [2m2026-07-20T06:18:43.982640Z[0m [34mDEBUG[0m received 179000 accumulated audio samples
+      [2m2026-07-20T06:18:44.005934Z[0m [34mDEBUG[0m received 179200 accumulated audio samples
+      [2m2026-07-20T06:18:44.029107Z[0m [34mDEBUG[0m received 179400 accumulated audio samples
+      [2m2026-07-20T06:18:44.053384Z[0m [34mDEBUG[0m received 179600 accumulated audio samples
+      [2m2026-07-20T06:18:44.087346Z[0m [34mDEBUG[0m received 179800 accumulated audio samples
+      [2m2026-07-20T06:18:44.110575Z[0m [34mDEBUG[0m received 180000 accumulated audio samples
+      [2m2026-07-20T06:18:44.133694Z[0m [34mDEBUG[0m received 180200 accumulated audio samples
+  [64QAM2000-RRC  payload= 128B fec=rs              ] ... FAIL (payload not decoded) after 3 attempt(s)
+    RX AFC:
+      [2m2026-07-20T06:19:40.858374Z[0m [32m INFO[0m AFC settling done: correction=0.0Hz onset=80184 (coarse=80132) buf_len=80400
+    RX tail:
+      [2m2026-07-20T06:19:53.119256Z[0m [34mDEBUG[0m AFC full-retry: pos=81580 correction=0.0Hz
+      [2m2026-07-20T06:19:53.119898Z[0m [34mDEBUG[0m AFC full-retry: pos=81580 FAILED: FEC error: RS correction failed at block 0: TooManyErrors
+      [2m2026-07-20T06:19:53.119930Z[0m [34mDEBUG[0m AFC full-retry: pos=81584 correction=0.0Hz
+      [2m2026-07-20T06:19:53.120570Z[0m [34mDEBUG[0m AFC full-retry: pos=81584 FAILED: FEC error: RS correction failed at block 0: TooManyErrors
+      [2m2026-07-20T06:19:53.120602Z[0m [34mDEBUG[0m AFC full-retry: pos=81588 correction=0.0Hz
+      [2m2026-07-20T06:19:53.121239Z[0m [34mDEBUG[0m AFC full-retry: pos=81588 FAILED: FEC error: RS correction failed at block 0: TooManyErrors
+      [2m2026-07-20T06:19:53.121276Z[0m [34mDEBUG[0m AFC full-retry: pos=81592 correction=0.0Hz
+      [2m2026-07-20T06:19:53.123211Z[0m [34mDEBUG[0m AFC full-retry: pos=81592 FAILED: FEC error: RS correction failed at block 0: TooManyErrors
+      [2m2026-07-20T06:19:53.123359Z[0m [34mDEBUG[0m AFC full-retry: pos=81596 correction=0.0Hz
+      [2m2026-07-20T06:19:53.124506Z[0m [34mDEBUG[0m AFC full-retry: pos=81596 FAILED: FEC error: RS correction failed at block 0: TooManyErrors
+      [2m2026-07-20T06:19:53.124540Z[0m [34mDEBUG[0m AFC full-retry: pos=81600 correction=0.0Hz
+      [2m2026-07-20T06:19:53.125179Z[0m [34mDEBUG[0m AFC full-retry: pos=81600 FAILED: FEC error: RS correction failed at block 0: TooManyErrors
+  [64QAM500       payload= 128B fec=rs              ] ... FAIL (payload not decoded) after 3 attempt(s)
+    RX AFC:
+      [2m2026-07-20T06:20:50.923260Z[0m [32m INFO[0m AFC settling done: correction=0.0Hz onset=79976 (coarse=79928) buf_len=80400
+    RX tail:
+      [2m2026-07-20T06:21:03.445539Z[0m [34mDEBUG[0m received 180600 accumulated audio samples
+      [2m2026-07-20T06:21:03.468672Z[0m [34mDEBUG[0m received 180800 accumulated audio samples
+      [2m2026-07-20T06:21:03.502507Z[0m [34mDEBUG[0m received 181000 accumulated audio samples
+      [2m2026-07-20T06:21:03.527476Z[0m [34mDEBUG[0m received 181200 accumulated audio samples
+      [2m2026-07-20T06:21:03.552498Z[0m [34mDEBUG[0m received 181400 accumulated audio samples
+      [2m2026-07-20T06:21:03.577522Z[0m [34mDEBUG[0m received 181600 accumulated audio samples
+      [2m2026-07-20T06:21:03.600778Z[0m [34mDEBUG[0m received 181800 accumulated audio samples
+      [2m2026-07-20T06:21:03.625948Z[0m [34mDEBUG[0m received 182000 accumulated audio samples
+      [2m2026-07-20T06:21:03.651088Z[0m [34mDEBUG[0m received 182200 accumulated audio samples
+      [2m2026-07-20T06:21:03.675719Z[0m [34mDEBUG[0m received 182400 accumulated audio samples
+      [2m2026-07-20T06:21:03.700314Z[0m [34mDEBUG[0m received 182600 accumulated audio samples
+      [2m2026-07-20T06:21:03.723867Z[0m [34mDEBUG[0m received 182800 accumulated audio samples
+  [8PSK1000       payload= 128B fec=rs              ] ... PASS
+  [8PSK1000-HF    payload= 128B fec=rs              ] ... PASS
+  [8PSK1000-HF-RRC payload= 128B fec=rs              ] ... PASS
+  [8PSK1000-RRC   payload= 128B fec=rs              ] ... PASS
+  [8PSK2000       payload= 128B fec=rs              ] ... FAIL (payload not decoded) after 3 attempt(s)
+    RX AFC:
+      [2m2026-07-20T06:23:34.776562Z[0m [32m INFO[0m AFC settling done: correction=0.0Hz onset=80168 (coarse=80132) buf_len=80400
+    RX tail:
+      [2m2026-07-20T06:23:47.222789Z[0m [34mDEBUG[0m AFC full-retry: pos=81048 FAILED: FEC error: RS correction failed at block 0: TooManyErrors
+      [2m2026-07-20T06:23:47.223899Z[0m [34mDEBUG[0m AFC full-retry: pos=81052 correction=0.0Hz
+      [2m2026-07-20T06:23:47.224733Z[0m [34mDEBUG[0m AFC full-retry: pos=81052 FAILED: FEC error: RS correction failed at block 0: TooManyErrors
+      [2m2026-07-20T06:23:47.225830Z[0m [34mDEBUG[0m AFC full-retry: pos=81056 correction=0.0Hz
+      [2m2026-07-20T06:23:47.226636Z[0m [34mDEBUG[0m AFC full-retry: pos=81056 FAILED: FEC error: RS correction failed at block 0: TooManyErrors
+      [2m2026-07-20T06:23:47.227725Z[0m [34mDEBUG[0m AFC full-retry: pos=81060 correction=0.0Hz
+      [2m2026-07-20T06:23:47.228504Z[0m [34mDEBUG[0m AFC full-retry: pos=81060 FAILED: FEC error: RS correction failed at block 0: TooManyErrors
+      [2m2026-07-20T06:23:47.229592Z[0m [34mDEBUG[0m AFC full-retry: pos=81064 correction=0.0Hz
+      [2m2026-07-20T06:23:47.230436Z[0m [34mDEBUG[0m AFC full-retry: pos=81064 FAILED: FEC error: RS correction failed at block 0: TooManyErrors
+      [2m2026-07-20T06:23:47.231527Z[0m [34mDEBUG[0m AFC full-retry: pos=81068 correction=0.0Hz
+      [2m2026-07-20T06:23:47.232384Z[0m [34mDEBUG[0m AFC full-retry: pos=81068 FAILED: FEC error: RS correction failed at block 0: TooManyErrors
+      [2m2026-07-20T06:23:47.233474Z[0m [34mDEBUG[0m AFC full-retry: pos=81072 correction=0.0Hz
+  [8PSK2000-RRC   payload= 128B fec=rs              ] ... PASS
+  [8PSK500        payload= 128B fec=rs              ] ... PASS
+  [8PSK500-RRC    payload= 128B fec=rs              ] ... PASS
+  [BPSK100        payload=  64B fec=rs              ] ... PASS
+  [BPSK250        payload=  64B fec=rs              ] ... PASS
+  [BPSK250-RRC    payload=  64B fec=rs              ] ... FAIL (payload not decoded) after 3 attempt(s)
+    RX AFC:
+      [2m2026-07-20T06:27:27.142618Z[0m [32m INFO[0m AFC settling done: correction=0.0Hz onset=81040 (coarse=80944) buf_len=82200
+    RX tail:
+      [2m2026-07-20T06:27:47.356024Z[0m [34mDEBUG[0m AFC full-retry: pos=103584 correction=0.0Hz
+      [2m2026-07-20T06:27:47.366876Z[0m [34mDEBUG[0m AFC full-retry: pos=103584 FAILED: FEC error: FEC data length 89 is shorter than one 255-byte block
+      [2m2026-07-20T06:27:47.370930Z[0m [34mDEBUG[0m AFC full-retry: pos=103616 correction=0.0Hz
+      [2m2026-07-20T06:27:47.381777Z[0m [34mDEBUG[0m AFC full-retry: pos=103616 FAILED: FEC error: FEC data length 88 is shorter than one 255-byte block
+      [2m2026-07-20T06:27:47.385841Z[0m [34mDEBUG[0m AFC full-retry: pos=103648 correction=0.0Hz
+      [2m2026-07-20T06:27:47.396640Z[0m [34mDEBUG[0m AFC full-retry: pos=103648 FAILED: FEC error: FEC data length 88 is shorter than one 255-byte block
+      [2m2026-07-20T06:27:47.400714Z[0m [34mDEBUG[0m AFC full-retry: pos=103680 correction=0.0Hz
+      [2m2026-07-20T06:27:47.411505Z[0m [34mDEBUG[0m AFC full-retry: pos=103680 FAILED: FEC error: FEC data length 88 is shorter than one 255-byte block
+      [2m2026-07-20T06:27:47.415552Z[0m [34mDEBUG[0m AFC full-retry: pos=103712 correction=0.0Hz
+      [2m2026-07-20T06:27:47.426310Z[0m [34mDEBUG[0m AFC full-retry: pos=103712 FAILED: FEC error: FEC data length 88 is shorter than one 255-byte block
+      [2m2026-07-20T06:27:47.430332Z[0m [34mDEBUG[0m AFC full-retry: pos=103744 correction=0.0Hz
+      [2m2026-07-20T06:27:47.441077Z[0m [34mDEBUG[0m AFC full-retry: pos=103744 FAILED: FEC error: FEC data length 88 is shorter than one 255-byte block
+  [BPSK31         payload=  32B fec=rs              ] ... FAIL (TX exit 124: ) after 3 attempt(s)
+    RX AFC:
+      [2m2026-07-20T06:30:44.429590Z[0m [32m INFO[0m AFC settling done: correction=0.0Hz onset=80952 (coarse=80952) buf_len=89400
+    RX tail:
+      [2m2026-07-20T06:31:17.434648Z[0m [34mDEBUG[0m received 355200 accumulated audio samples
+      [2m2026-07-20T06:31:17.512001Z[0m [34mDEBUG[0m received 355800 accumulated audio samples
+      [2m2026-07-20T06:31:17.589885Z[0m [34mDEBUG[0m received 356400 accumulated audio samples
+      [2m2026-07-20T06:31:17.668335Z[0m [34mDEBUG[0m received 357000 accumulated audio samples
+      [2m2026-07-20T06:31:17.745823Z[0m [34mDEBUG[0m received 357600 accumulated audio samples
+      [2m2026-07-20T06:31:17.823148Z[0m [34mDEBUG[0m received 358200 accumulated audio samples
+      [2m2026-07-20T06:31:17.900835Z[0m [34mDEBUG[0m received 358800 accumulated audio samples
+      [2m2026-07-20T06:31:17.978744Z[0m [34mDEBUG[0m received 359400 accumulated audio samples
+      Error: receive failed
+      
+      Caused by:
+          FEC error: FEC data length 131 is shorter than one 255-byte block
+  [BPSK63         payload=  32B fec=rs              ] ... PASS
+  [MFSK16         payload=  32B fec=rs              ] ... PASS
+  [OFDM16         payload=  64B fec=rs              ] ... PASS
+  [OFDM52         payload=  64B fec=rs              ] ... PASS
+  [OFDM52-16QAM   payload=  64B fec=rs              ] ... PASS
+  [OFDM52-32QAM   payload=  64B fec=rs              ] ... PASS
+  [OFDM52-64QAM   payload=  64B fec=rs              ] ... PASS
+  [OFDM52-8PSK    payload=  64B fec=rs              ] ... PASS
+  [PILOT-16QAM1000 payload= 128B fec=rs              ] ... PASS
+  [PILOT-16QAM1000-RRC payload= 128B fec=rs              ] ... PASS
+  [PILOT-16QAM2000-RRC payload= 128B fec=rs              ] ... PASS
+  [PILOT-16QAM500 payload= 128B fec=rs              ] ... PASS
+  [PILOT-16QAM500-RRC payload= 128B fec=rs              ] ... PASS
+  [PILOT-32APSK1000 payload= 128B fec=rs              ] ... PASS
+  [PILOT-32APSK1000-RRC payload= 128B fec=rs              ] ... PASS
+  [PILOT-32APSK2000-RRC payload= 128B fec=rs              ] ... PASS (attempt 2)
+  [PILOT-32APSK500 payload= 128B fec=rs              ] ... PASS
+  [PILOT-32APSK500-RRC payload= 128B fec=rs              ] ... PASS
+  [PILOT-8PSK1000 payload= 128B fec=rs              ] ... PASS
+  [PILOT-8PSK1000-RRC payload= 128B fec=rs              ] ... PASS
+  [PILOT-8PSK2000-RRC payload= 128B fec=rs              ] ... PASS
+  [PILOT-8PSK500  payload= 128B fec=rs              ] ... PASS
+  [PILOT-8PSK500-RRC payload= 128B fec=rs              ] ... PASS
+  [PILOT-QPSK1000 payload= 128B fec=rs              ] ... PASS
+  [PILOT-QPSK1000-RRC payload= 128B fec=rs              ] ... PASS
+  [PILOT-QPSK2000-RRC payload= 128B fec=rs              ] ... PASS
+  [PILOT-QPSK500  payload= 128B fec=rs              ] ... FAIL (payload not decoded) after 3 attempt(s)
+    RX AFC:
+      [2m2026-07-20T06:44:22.364399Z[0m [32m INFO[0m AFC settling done: correction=0.0Hz onset=80272 (coarse=80144) buf_len=83800
+    RX tail:
+      [2m2026-07-20T06:44:36.201307Z[0m [34mDEBUG[0m AFC full-retry: pos=87936 FAILED: FEC error: FEC data length 101 is shorter than one 255-byte block
+      [2m2026-07-20T06:44:36.211364Z[0m [34mDEBUG[0m AFC full-retry: pos=87952 correction=0.0Hz
+      [2m2026-07-20T06:44:36.219902Z[0m [34mDEBUG[0m AFC full-retry: pos=87952 FAILED: FEC error: FEC data length 101 is shorter than one 255-byte block
+      [2m2026-07-20T06:44:36.229934Z[0m [34mDEBUG[0m AFC full-retry: pos=87968 correction=0.0Hz
+      [2m2026-07-20T06:44:36.238481Z[0m [34mDEBUG[0m AFC full-retry: pos=87968 FAILED: FEC error: FEC data length 101 is shorter than one 255-byte block
+      [2m2026-07-20T06:44:36.248526Z[0m [34mDEBUG[0m AFC full-retry: pos=87984 correction=0.0Hz
+      [2m2026-07-20T06:44:36.257029Z[0m [34mDEBUG[0m AFC full-retry: pos=87984 FAILED: FEC error: FEC data length 101 is shorter than one 255-byte block
+      [2m2026-07-20T06:44:36.267056Z[0m [34mDEBUG[0m AFC full-retry: pos=88000 correction=0.0Hz
+      [2m2026-07-20T06:44:36.275571Z[0m [34mDEBUG[0m AFC full-retry: pos=88000 FAILED: FEC error: FEC data length 101 is shorter than one 255-byte block
+      [2m2026-07-20T06:44:36.285612Z[0m [34mDEBUG[0m AFC full-retry: pos=88016 correction=0.0Hz
+      [2m2026-07-20T06:44:36.294097Z[0m [34mDEBUG[0m AFC full-retry: pos=88016 FAILED: FEC error: FEC data length 101 is shorter than one 255-byte block
+      [2m2026-07-20T06:44:36.304159Z[0m [34mDEBUG[0m AFC full-retry: pos=88032 correction=0.0Hz
+  [PILOT-QPSK500-RRC payload= 128B fec=rs              ] ... PASS
+  [QPSK1000       payload= 128B fec=rs              ] ... PASS
+  [QPSK1000-HF    payload= 128B fec=rs              ] ... PASS
+  [QPSK1000-HF-RRC payload= 128B fec=rs              ] ... PASS
+  [QPSK1000-RRC   payload= 128B fec=rs              ] ... PASS
+  [QPSK125        payload=  64B fec=rs              ] ... PASS (attempt 2)
+  [QPSK2000       payload= 128B fec=rs              ] ... PASS
+  [QPSK2000-RRC   payload= 128B fec=rs              ] ... PASS
+  [QPSK250        payload=  64B fec=rs              ] ... PASS
+  [QPSK250-D      payload=  64B fec=rs              ] ... PASS
+  [QPSK500        payload= 128B fec=rs              ] ... PASS
+  [QPSK500-D      payload= 128B fec=rs              ] ... PASS
+  [QPSK500-RRC    payload= 128B fec=rs              ] ... PASS
+  [SCFDMA16       payload=  64B fec=rs              ] ... PASS
+  [SCFDMA26-16QAM payload=  64B fec=rs              ] ... PASS
+  [SCFDMA26-32QAM payload=  64B fec=rs              ] ... PASS
+  [SCFDMA26-8PSK  payload=  64B fec=rs              ] ... PASS
+  [SCFDMA52       payload=  64B fec=rs              ] ... PASS
+  [SCFDMA52-16QAM payload=  64B fec=rs              ] ... FAIL (payload not decoded) after 3 attempt(s)
+    RX AFC:
+      [2m2026-07-20T06:53:32.855888Z[0m [32m INFO[0m AFC settling done: correction=0.0Hz onset=80272 (coarse=80272) buf_len=82000
+    RX tail:
+      [2m2026-07-20T06:53:45.043058Z[0m [34mDEBUG[0m received 179600 accumulated audio samples
+      [2m2026-07-20T06:53:45.062257Z[0m [34mDEBUG[0m received 179800 accumulated audio samples
+      [2m2026-07-20T06:53:45.092210Z[0m [34mDEBUG[0m received 180000 accumulated audio samples
+      [2m2026-07-20T06:53:45.121289Z[0m [34mDEBUG[0m received 180200 accumulated audio samples
+      [2m2026-07-20T06:53:45.140432Z[0m [34mDEBUG[0m received 180400 accumulated audio samples
+      [2m2026-07-20T06:53:45.170211Z[0m [34mDEBUG[0m received 180600 accumulated audio samples
+      [2m2026-07-20T06:53:45.189512Z[0m [34mDEBUG[0m received 180800 accumulated audio samples
+      [2m2026-07-20T06:53:45.218731Z[0m [34mDEBUG[0m received 181000 accumulated audio samples
+      [2m2026-07-20T06:53:45.238977Z[0m [34mDEBUG[0m received 181200 accumulated audio samples
+      [2m2026-07-20T06:53:45.268753Z[0m [34mDEBUG[0m received 181400 accumulated audio samples
+      [2m2026-07-20T06:53:45.287857Z[0m [34mDEBUG[0m received 181600 accumulated audio samples
+      [2m2026-07-20T06:53:45.317472Z[0m [34mDEBUG[0m received 181800 accumulated audio samples
+  [SCFDMA52-32QAM payload=  64B fec=rs              ] ... FAIL (payload not decoded) after 3 attempt(s)
+    RX AFC:
+      [2m2026-07-20T06:54:42.547452Z[0m [32m INFO[0m AFC settling done: correction=0.0Hz onset=80072 (coarse=80072) buf_len=81800
+    RX tail:
+      [2m2026-07-20T06:54:54.670869Z[0m [34mDEBUG[0m received 178800 accumulated audio samples
+      [2m2026-07-20T06:54:54.690092Z[0m [34mDEBUG[0m received 179000 accumulated audio samples
+      [2m2026-07-20T06:54:54.720462Z[0m [34mDEBUG[0m received 179200 accumulated audio samples
+      [2m2026-07-20T06:54:54.739732Z[0m [34mDEBUG[0m received 179400 accumulated audio samples
+      [2m2026-07-20T06:54:54.770124Z[0m [34mDEBUG[0m received 179600 accumulated audio samples
+      [2m2026-07-20T06:54:54.789667Z[0m [34mDEBUG[0m received 179800 accumulated audio samples
+      [2m2026-07-20T06:54:54.819893Z[0m [34mDEBUG[0m received 180000 accumulated audio samples
+      [2m2026-07-20T06:54:54.839566Z[0m [34mDEBUG[0m received 180200 accumulated audio samples
+      [2m2026-07-20T06:54:54.871540Z[0m [34mDEBUG[0m received 180400 accumulated audio samples
+      [2m2026-07-20T06:54:54.891001Z[0m [34mDEBUG[0m received 180600 accumulated audio samples
+      [2m2026-07-20T06:54:54.921643Z[0m [34mDEBUG[0m received 180800 accumulated audio samples
+      [2m2026-07-20T06:54:54.941163Z[0m [34mDEBUG[0m received 181000 accumulated audio samples
+  [SCFDMA52-64QAM payload=  64B fec=rs              ] ... FAIL (payload not decoded) after 3 attempt(s)
+    RX AFC:
+      [2m2026-07-20T06:55:52.099866Z[0m [32m INFO[0m AFC settling done: correction=0.0Hz onset=80272 (coarse=80272) buf_len=82000
+    RX tail:
+      [2m2026-07-20T06:56:04.161672Z[0m [34mDEBUG[0m received 178600 accumulated audio samples
+      [2m2026-07-20T06:56:04.191335Z[0m [34mDEBUG[0m received 178800 accumulated audio samples
+      [2m2026-07-20T06:56:04.210753Z[0m [34mDEBUG[0m received 179000 accumulated audio samples
+      [2m2026-07-20T06:56:04.240151Z[0m [34mDEBUG[0m received 179200 accumulated audio samples
+      [2m2026-07-20T06:56:04.259291Z[0m [34mDEBUG[0m received 179400 accumulated audio samples
+      [2m2026-07-20T06:56:04.289245Z[0m [34mDEBUG[0m received 179600 accumulated audio samples
+      [2m2026-07-20T06:56:04.308443Z[0m [34mDEBUG[0m received 179800 accumulated audio samples
+      [2m2026-07-20T06:56:04.337478Z[0m [34mDEBUG[0m received 180000 accumulated audio samples
+      [2m2026-07-20T06:56:04.356791Z[0m [34mDEBUG[0m received 180200 accumulated audio samples
+      [2m2026-07-20T06:56:04.386552Z[0m [34mDEBUG[0m received 180400 accumulated audio samples
+      [2m2026-07-20T06:56:04.415499Z[0m [34mDEBUG[0m received 180600 accumulated audio samples
+      [2m2026-07-20T06:56:04.434589Z[0m [34mDEBUG[0m received 180800 accumulated audio samples
+  [SCFDMA52-64QAM-P4 payload=  64B fec=rs              ] ... FAIL (payload not decoded) after 3 attempt(s)
+    RX AFC:
+      [2m2026-07-20T06:57:01.617614Z[0m [32m INFO[0m AFC settling done: correction=0.0Hz onset=80272 (coarse=80272) buf_len=82000
+    RX tail:
+      [2m2026-07-20T06:57:13.710840Z[0m [34mDEBUG[0m received 178800 accumulated audio samples
+      [2m2026-07-20T06:57:13.730064Z[0m [34mDEBUG[0m received 179000 accumulated audio samples
+      [2m2026-07-20T06:57:13.759898Z[0m [34mDEBUG[0m received 179200 accumulated audio samples
+      [2m2026-07-20T06:57:13.789761Z[0m [34mDEBUG[0m received 179400 accumulated audio samples
+      [2m2026-07-20T06:57:13.809140Z[0m [34mDEBUG[0m received 179600 accumulated audio samples
+      [2m2026-07-20T06:57:13.838962Z[0m [34mDEBUG[0m received 179800 accumulated audio samples
+      [2m2026-07-20T06:57:13.858080Z[0m [34mDEBUG[0m received 180000 accumulated audio samples
+      [2m2026-07-20T06:57:13.888267Z[0m [34mDEBUG[0m received 180200 accumulated audio samples
+      [2m2026-07-20T06:57:13.907722Z[0m [34mDEBUG[0m received 180400 accumulated audio samples
+      [2m2026-07-20T06:57:13.937311Z[0m [34mDEBUG[0m received 180600 accumulated audio samples
+      [2m2026-07-20T06:57:13.956475Z[0m [34mDEBUG[0m received 180800 accumulated audio samples
+      [2m2026-07-20T06:57:13.986231Z[0m [34mDEBUG[0m received 181000 accumulated audio samples
+  [SCFDMA52-8PSK  payload=  64B fec=rs              ] ... PASS
+  [SCFDMA52-LP    payload=  64B fec=rs              ] ... FAIL (payload not decoded) after 3 attempt(s)
+    RX AFC:
+      [2m2026-07-20T06:58:35.261690Z[0m [32m INFO[0m AFC settling done: correction=0.0Hz onset=80072 (coarse=80072) buf_len=81800
+    RX tail:
+      [2m2026-07-20T06:58:47.729217Z[0m [34mDEBUG[0m received 181600 accumulated audio samples
+      [2m2026-07-20T06:58:47.748263Z[0m [34mDEBUG[0m received 181800 accumulated audio samples
+      [2m2026-07-20T06:58:47.778769Z[0m [34mDEBUG[0m received 182000 accumulated audio samples
+      [2m2026-07-20T06:58:47.797998Z[0m [34mDEBUG[0m received 182200 accumulated audio samples
+      [2m2026-07-20T06:58:47.828563Z[0m [34mDEBUG[0m received 182400 accumulated audio samples
+      [2m2026-07-20T06:58:47.847656Z[0m [34mDEBUG[0m received 182600 accumulated audio samples
+      [2m2026-07-20T06:58:47.877896Z[0m [34mDEBUG[0m received 182800 accumulated audio samples
+      [2m2026-07-20T06:58:47.897025Z[0m [34mDEBUG[0m received 183000 accumulated audio samples
+      [2m2026-07-20T06:58:47.926812Z[0m [34mDEBUG[0m received 183200 accumulated audio samples
+      [2m2026-07-20T06:58:47.945894Z[0m [34mDEBUG[0m received 183400 accumulated audio samples
+      [2m2026-07-20T06:58:47.975189Z[0m [34mDEBUG[0m received 183600 accumulated audio samples
+      [2m2026-07-20T06:58:47.994288Z[0m [34mDEBUG[0m received 183800 accumulated audio samples
+  [SCFDMA52-P2    payload=  64B fec=rs              ] ... PASS
+
+==> Results: 55/67 passed, 12 failed.
+    Report: docs/dev/test-reports/loopback-dualcard-full-2026-07-20T061734Z.json

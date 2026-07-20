@@ -7730,3 +7730,60 @@ and the actually-observed results per change.
 - **Test results:** **Sabotage-verified** — restoring the unconditional `true` turns the suite red (2 of
   3) with `QPSK250-D: supports_soft_demod() says true but demodulate_soft() errored`. Full workspace gate
   below.
+
+## 2026-07-20 — fix(audio+harness): a 60 s flush clamp made BPSK31 untransmittable; full coded sweep
+
+- **Requirement/change:** the first full 67-mode coded sweep on the dual-card rig (`FEC=rs`, so every
+  case exercises the scanning-receive path fixed in #995) returned 55/67. Triage of the 12 failures
+  found three defects and falsified one long-standing premise.
+- **Defect 1 — the flush clamp (real, blocking a ladder rung).** `CpalBackend::flush` computed its
+  drain deadline as `(queued_seconds + 3.0).clamp(5.0, 60.0)` under a comment reading "Timeout adapts to
+  queued audio length so slow modes can fully drain". The adaptation was correct; **the upper clamp made
+  it inert for exactly those slow modes.** RS pads any payload to a full 255-byte block, so a `BPSK31`
+  frame is 255×8÷31.25 = 65.3 s of audio: it requested 68.3 s, was clamped to 60 s, and failed 100 % of
+  the time with `output buffer did not drain within 60.0 s`. The mode could not transmit at all on real
+  hardware, and it is `hpx_hf` SL2.
+- **Design decision:** extract to `openpulse_audio::flush::flush_timeout_seconds` in an **ungated**
+  module (the `crate::fault` precedent from #979) — the workspace suite runs `--no-default-features`, so
+  logic inside the cpal module is untestable in the gate that actually runs, which is how this survived.
+  The missing invariant is now the gate: *the deadline must always exceed the audio it is waiting on.*
+  Timeout is `queued × 1.25 + 5 s`, floored at 5 s, with a 600 s runaway backstop chosen to sit well
+  above the slowest frame the ladder can emit (`BPSK31` at three blocks ≈ 196 s) so it never binds.
+- **Defect 2 — fixed harness windows.** `TX_TIMEOUT=60` / `IRS_LISTEN_MS=45000` are both shorter than a
+  `BPSK31` frame, so even with defect 1 fixed the sweep would still report a false failure. Windows are
+  now derived per mode from a new `openpulse modes --airtime`, which reads `frame_geometry` from the
+  plugin registry — the same registry-driven principle that replaced the frozen `FULL_CASES` list.
+  Explicit `TX_TIMEOUT=` / `IRS_LISTEN_MS=` still win.
+- **Defect 3 — the SKIP report was a syntax error.** `${#SKIPPED[@]:-0}` is invalid bash (`${#arr[@]}`
+  cannot take `:-`), so the line errored and all 6 skipped modes vanished from the summary — directly
+  contradicting the code's own comment, "Reported as SKIP, never silently dropped". The array was also
+  declared inside the `full` branch while being read unconditionally.
+- **Implementation:** `crates/openpulse-audio/src/{flush.rs (new),lib.rs,cpal_backend.rs}`;
+  `crates/openpulse-cli/src/{cli.rs,main.rs,commands/modes.rs}` (`modes --airtime`);
+  `scripts/run-loopback-dualcard.sh` (`airtime_for`/`size_windows_for`/`--sro-check`, SKIP fix);
+  `scripts/lib/sro_estimator.py` (new, with self-test).
+- **Tests:** `crates/openpulse-audio/src/flush.rs` — 6 unit tests: the `BPSK31` case by name, the
+  general "deadline exceeds queued audio" invariant across 0–400 s, the slowest-possible-frame case, the
+  short-queue floor, channel/rate scaling, and a zero-sample-rate guard.
+- **Test results:** **Sabotage-verified** — restoring `(queued + 3.0).clamp(5.0, 60.0)` turns the suite
+  red (3 of 6) with `a 65.3 s frame got a 60.0 s deadline`. **On hardware:** `BPSK31 + rs` now PASSes
+  with no manual override, which completes the ladder — **all 12 distinct `hpx_hf` waveforms decode on
+  real audio**. Full workspace gate below.
+- **Premise falsified — this rig has no meaningful SRO.** `--sro-check` measures **+0.10 ppm** (repeat:
+  +0.01). Both `dualcard-loopback.md` and `virtual-loopback.md` asserted from *topology* that two USB
+  cards give two independent clocks; they do not, as these adapters slave to the host's USB frame clock.
+  The 2026-06-13 conclusion that the `SCFDMA52-*`/`64QAM` hardware failures are "the two independent
+  soundcard clocks (sample-rate offset)" therefore **cannot hold on this rig**. That diagnosis offered a
+  disjunction (SRO *and/or* analog group-delay/phase); the first half is now eliminated and only the
+  second survives, untested. Docs corrected in four files. **Do not schedule SRO tracking in the wideband
+  demodulators on this rig's evidence.**
+  - The estimator has a self-test and `--sro-check` refuses to report a reading if it fails. The **first**
+    version wrapped phase above ~5 ppm and reported an injected 200 ppm as −6.9 ppm — it would have
+    certified a badly offset rig as clean. A device that cannot detect a known offset cannot measure an
+    unknown one.
+- **Remaining failures, characterised (not fixed):** `8PSK2000` is a **real software defect** — it fails
+  at 0 ppm in-process on a clean channel (the "fails at all inputs" signature), and is in no shipped
+  profile. `BPSK250-RRC` and `PILOT-QPSK500` pass in-process through 400–800 ppm of injected SRO, so
+  with the rig at 0.1 ppm their hardware failure is **unexplained**. The `64QAM`/`SCFDMA52-*` group was
+  additionally measured at hard-decision `rs` while those modes are designed around soft FEC (~+6 dB) —
+  read as *not disproven* rather than *failed*.

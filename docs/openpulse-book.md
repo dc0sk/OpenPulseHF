@@ -3940,12 +3940,13 @@ Environment overrides: `TWIN_SNR_DB` (default `20`), `INTERVAL` (`3` s), `SIZE` 
 `COUNT` (`0` = forever), `NO_TRAFFIC=1`, `NO_VIEW=1`. The build is CPU-only
 (`--no-default-features --example twin_station`), so it needs neither ALSA headers nor wgpu.
 
-To step up to real audio with two independent clocks (still no radio):
+To step up to real audio through a physical analog path (still no radio):
 `scripts/setup-twin-loopback.sh` + `scripts/run-twin-station-audio.sh` run two real
 `openpulse-server` daemons over a bidirectional `snd-aloop` path, and
 `scripts/demo-hwloop-panel.sh` does the same over two physical USB soundcards joined by an
 analog cable — "no radios, no RF — but a real cpal+ALSA audio path with two independent
-clocks" (its default mode is `BPSK250`, chosen as "robust on the dual-clock rig").
+clocks" (its default mode is `BPSK250`, chosen as "robust on the hardware rig"). Note the
+dual-card rig shares one clock in practice — measured +0.10 ppm.
 
 ### 4.7 Scenario 7 — mesh, relay and repeater
 

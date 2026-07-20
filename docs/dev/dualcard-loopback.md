@@ -1,31 +1,35 @@
 # Dual-card hardware loopback — the two-soundcard rung on one host
 
-> **Evidence currency (2026-07-20):** `MFSK16` (SL1) and `QPSK250-D` (SL6) — the two load-bearing
-> `hpx_hf` fade rungs — are now validated on real audio, and doing so found and fixed a scanning-receive
-> defect that had made every long coded capture fail. The wider mode sweep still predates the
-> fade-aware ladder arc (`QPSK500-D` and JS8 have never been on real audio). See
-> [loopback-revalidation-plan.md](loopback-revalidation-plan.md).
+> **Evidence currency (2026-07-20):** a full 67-mode coded sweep ran at HEAD — **55/67 pass, and every
+> rung of the `hpx_hf` ladder decodes on real audio**. It found three defects (a 60 s flush clamp that
+> made `BPSK31` untransmittable, fixed-size harness windows, a silently-swallowed SKIP report) and
+> falsified this rig's dual-clock premise by measurement. See
+> [Full coded sweep](#full-coded-sweep-2026-07-20--5567-and-the-whole-hpx_hf-ladder-passes).
+> `QPSK500-D` and JS8 have still never been on real audio.
 
 
 This rig runs the modem TX→RX through **two USB soundcards plugged into the same
-PC**, joined by an analog cable. It is the **hardware / dual-clock rung** of the
-loopback ladder (see [virtual-loopback.md](virtual-loopback.md)) made runnable on
-a single machine — no SSH, no two Raspberry Pis.
+PC**, joined by an analog cable. It is the **hardware (real analog path) rung** of
+the loopback ladder (see [virtual-loopback.md](virtual-loopback.md)) made runnable
+on a single machine — no SSH, no two Raspberry Pis. It was long described as the
+*dual-clock* rung; measurement says otherwise (see the note below the table).
 
 | Rung | Transport | Script | Adds over the rung below |
 |---|---|---|---|
 | 1 | Virtual (snd-aloop, one clock) | `scripts/run-loopback-virtual.sh` | real cpal+ALSA+resampler path |
-| 2a | **Dual-card (two USB cards, one host)** | `scripts/run-loopback-dualcard.sh` | **two independent clocks (SRO) + analog cable** |
+| 2a | **Dual-card (two USB cards, one host)** | `scripts/run-loopback-dualcard.sh` | **a real analog cable** (NOT a second clock — measured +0.10 ppm) |
 | 2b | Two Pis (two hosts) | `scripts/run-loopback-rpi51-rpi52.sh` | physically separate machines |
 | 3 | On-air (real rigs / RF) | `scripts/run-onair-*.sh` | RF, noise, multipath |
 
-Rung 2a delivers exactly what the single-clock virtual rig **cannot**: two
-independent sample clocks (sample-rate offset / drift) and a real analog cable.
-That is the condition that broke the wideband multicarrier (SCFDMA52-\*) and dense
-QAM (64QAM) modes on the two-Pi rig — see the
-`project-loopback-mode-matrix` memory and the SRO diagnosis in
-[virtual-loopback.md](virtual-loopback.md). Rung 2a reproduces it without needing
-two machines, so SRO-tracking work can be iterated locally.
+Rung 2a adds a real analog cable over the virtual rung.
+
+> **It does NOT add a second clock — measured 2026-07-20 at +0.10 ppm** (`--sro-check`; see
+> [Measured: this rig has no meaningful SRO](#measured-2026-07-20--this-rig-has-no-meaningful-sro)).
+> This section previously claimed rung 2a "delivers exactly what the single-clock virtual rig cannot:
+> two independent sample clocks (sample-rate offset / drift)". That is false: these USB adapters slave
+> to the host's USB frame clock, so plugging two into the same host gives you two cards sharing one
+> clock. **Any SRO explanation for a failure on this rig must cite a measurement, not the topology.**
+> Genuine dual-clock testing needs two hosts (rung 2b) or a deliberately offset clock.
 
 ## Hardware
 
@@ -293,3 +297,73 @@ Net: the dual-card rig reproduces the two-Pi dual-clock results locally and, for
 SCFDMA52-16QAM, slightly exceeds them. Remaining hardware failures are 64QAM500
 (SNR-bound on the cable) and the pilot dense rungs under soft-concatenated
 (dual-clock resampler slip — use LDPC); neither is a static code/geometry bug.
+
+## Full coded sweep (2026-07-20) — 55/67, and the whole `hpx_hf` ladder passes
+
+First `--full` sweep at HEAD after the scanning-receive fix (#995), run with `FEC=rs` so every case
+exercises the coded path the fix lives on. Report:
+`docs/dev/test-reports/loopback-dualcard-full-2026-07-20T061734Z.json`.
+
+**The `hpx_hf` ladder is fully validated on real audio.** All 12 distinct waveforms decode:
+
+| Rung | Mode | Result |
+|---|---|---|
+| SL1 | `MFSK16` | PASS |
+| SL2 | `BPSK31` | PASS *(after the flush fix below; FAIL in the sweep itself)* |
+| SL3–SL5 | `BPSK63`, `BPSK100`, `BPSK250` | PASS |
+| SL6 | `QPSK250-D` | PASS |
+| SL7–SL10 | `OFDM52`, `OFDM52-{8PSK,16QAM,32QAM,64QAM}` | PASS |
+| SL11–SL14 | the same waveforms at LDPC r≈8/9 | covered — same waveform as their SC pair |
+
+### Three defects the sweep exposed
+
+**1. A 60 s flush clamp made `BPSK31` untransmittable.** `cpal_backend`'s drain deadline was
+`(queued_seconds + 3.0).clamp(5.0, 60.0)`, under a comment reading "Timeout adapts to queued audio
+length so slow modes can fully drain". The adaptation was correct; **the upper clamp made it inert for
+exactly those slow modes.** RS pads any payload to a full 255-byte block, so a `BPSK31` frame is 65.3 s
+of audio: it asked for 68.3 s, got 60 s, and failed every time with `output buffer did not drain within
+60.0 s`. The mode could not transmit at all, and it is `hpx_hf` SL2. Extracted to
+`openpulse_audio::flush::flush_timeout_seconds` (an **ungated** module, so it is testable under
+`--no-default-features`) with the missing invariant as its gate: *the deadline must always exceed the
+audio it is waiting on.*
+
+**2. The harness sized every case with one fixed window.** `TX_TIMEOUT=60` / `IRS_LISTEN_MS=45000` are
+both shorter than a `BPSK31` frame, so even with the flush fix the sweep would still have reported a
+false failure. Windows are now derived per mode from `openpulse modes --airtime`, which reads
+`frame_geometry` from the plugin registry — the same registry-driven principle that replaced the frozen
+`FULL_CASES` list. An explicit `TX_TIMEOUT=` / `IRS_LISTEN_MS=` still wins.
+
+**3. The SKIP report was a syntax error, so skips were silently dropped.** `${#SKIPPED[@]:-0}` is
+invalid bash — `${#arr[@]}` cannot take `:-`. The line errored and the 6 skipped modes vanished from
+the summary, directly contradicting the code's own comment ("Reported as SKIP, never silently
+dropped"). The array was also declared inside the `full` branch while being read unconditionally.
+
+### Measured (2026-07-20) — this rig has no meaningful SRO
+
+`scripts/run-loopback-dualcard.sh --sro-check` plays a 60 s 1 kHz tone across the cable and measures the
+received frequency: **+0.10 ppm**. Repeat runs read +0.01 ppm.
+
+This **falsifies the standing premise for this rig**, which both this document and
+[virtual-loopback.md](virtual-loopback.md) asserted from the topology: two USB cards were assumed to
+mean two independent clocks. They do not — these adapters slave to the host's USB frame clock, so both
+cards on one host share it. The 2026-06-13 conclusion that the `SCFDMA52-*` / `64QAM` hardware failures
+are "the two independent soundcard clocks (sample-rate offset)" **cannot be right on this rig**, and
+those failures are now unexplained.
+
+The estimator has a self-test (`python3 scripts/lib/sro_estimator.py`) and `--sro-check` refuses to
+report a reading if it fails. That is not decoration: the **first** version of the estimator wrapped
+phase above ~5 ppm and reported an injected 200 ppm as −6.9 ppm, i.e. it would have called a badly
+offset rig "clean". A measurement device that cannot detect a known offset cannot certify an unknown one.
+
+### The 12 sweep failures
+
+| Group | Modes | Status |
+|---|---|---|
+| Slow-rung harness/flush defect | `BPSK31` | **Fixed** — now PASSes |
+| Software defect | `8PSK2000` | **Real bug** — fails at **0 ppm in-process**, on a clean channel. Not in any shipped profile (manual-select only). Its `-RRC` sibling passes. |
+| Hardware-only, unexplained | `BPSK250-RRC`, `PILOT-QPSK500` | Pass in-process through 400–800 ppm of injected SRO, and the rig has 0.1 ppm — so **SRO does not explain them**. |
+| Previously attributed to dual-clock SRO | `64QAM{500,1000,2000-RRC}`, `SCFDMA52-{16QAM,32QAM,64QAM,64QAM-P4,LP}` | **Attribution withdrawn** — see the SRO measurement above. Also measured at `rs` (hard-decision), while these modes are designed around soft FEC (~+6 dB), so read them as *not disproven* rather than *failed*. |
+
+Note the pulse-variant split, which is suggestive but has one data point per mode and no ablation behind
+it — recorded as an observation, **not** a mechanism: `8PSK2000` FAIL / `8PSK2000-RRC` PASS,
+`PILOT-QPSK500` FAIL / `PILOT-QPSK500-RRC` PASS, but `BPSK250` PASS / `BPSK250-RRC` FAIL, which inverts.

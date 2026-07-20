@@ -12,7 +12,7 @@ on the previous one passing:
 | Rung | Transport | Script | When |
 |---|---|---|---|
 | 1 | **Virtual** (snd-aloop, single clock, no analog) | `scripts/run-loopback-virtual.sh` | **default — every run** |
-| 2a | **Dual-card** (two USB soundcards on one host, cable) | `scripts/run-loopback-dualcard.sh` | dual-clock check, no second machine — see [dualcard-loopback.md](dualcard-loopback.md) |
+| 2a | **Dual-card** (two USB soundcards on one host, cable) | `scripts/run-loopback-dualcard.sh` | real analog path, no second machine. **Not a dual-clock check** — measured +0.10 ppm, see [dualcard-loopback.md](dualcard-loopback.md) |
 | 2b | **Two Pis** (two soundcards, cable + ground-loop isolator) | `scripts/run-loopback-rpi51-rpi52.sh` | on request |
 | 3 | **On-air** (real rigs / RF) | `scripts/run-onair-*.sh` | after rungs 1 and 2 pass |
 
@@ -20,14 +20,14 @@ The three differ by exactly which real-world effects they add:
 
 - **In-process channel sim** (`openpulse-testmatrix`) — no audio device at all; pure DSP through a simulated channel.
 - **Virtual loopback** — adds the real cpal + ALSA + 8 kHz↔48 kHz resampler device path, but with **one shared clock** and **no analog cable/isolator**.
-- **Hardware loopback** — adds **two independent soundcard clocks** (sample-rate offset/drift) and the **analog cable + ground-loop isolator**.
+- **Hardware loopback** — adds the **analog cable + ground-loop isolator**. It was assumed to add **two independent soundcard clocks** too; on the dual-card rig that is false (measured +0.10 ppm — USB adapters slave to the host frame clock). Genuine sample-rate offset needs two hosts (rung 2b).
 - **On-air** — adds RF, real noise, multipath, and (still) two independent station clocks.
 
 A failure that appears only when you move *up* a rung tells you which layer is responsible. This is how the SCFDMA52-\*/64QAM hardware failures were diagnosed (see below).
 
 ## Why virtual is the default
 
-The virtual rung catches DSP, acquisition, framing, resampler, and config regressions on the real audio path without needing two Raspberry Pis and a cable. It is deterministic, fast, and runnable in CI (given the `snd-aloop` module). Hardware and on-air then only need to be run to validate the effects they uniquely add (dual-clock SRO, analog response, RF).
+The virtual rung catches DSP, acquisition, framing, resampler, and config regressions on the real audio path without needing two Raspberry Pis and a cable. It is deterministic, fast, and runnable in CI (given the `snd-aloop` module). Hardware and on-air then only need to be run to validate the effects they uniquely add (analog response, RF — and true SRO only on a genuinely two-host rig).
 
 ### In CI
 
@@ -69,4 +69,12 @@ underruns as a TX-pacing failure (one is the stream-close artifact). `RETRIES`
 
 ## Diagnostic finding (2026-06-13): SCFDMA52-\* / 64QAM
 
-These modes fail 0/8 on the **hardware** rig but pass on the **virtual** rig, and the chirp probe shows the analog path is flat ±0.2 dB from 250 Hz to 3.75 kHz (the only magnitude rolloff is the resampler above ~3.2 kHz, well above SCFDMA52's 2.5 kHz top subcarrier). Conclusion: the hardware failure is the **two independent soundcard clocks (sample-rate offset)** and/or **analog group-delay/phase**, **not** bandwidth, SNR, or a code bug — the DSP decodes correctly through the identical software+resampler path when the clock is shared. Wideband multicarrier and dense QAM are sample-rate-offset-intolerant; narrowband/single-carrier modes are not. The fix is sample-rate-offset tracking in the wideband demodulators (or disciplined/shared clocks on hardware); on-air has the same two-clock condition, so it matters for deployment.
+These modes fail 0/8 on the **hardware** rig but pass on the **virtual** rig, and the chirp probe shows the analog path is flat ±0.2 dB from 250 Hz to 3.75 kHz (the only magnitude rolloff is the resampler above ~3.2 kHz, well above SCFDMA52's 2.5 kHz top subcarrier). Conclusion at the time: the hardware failure is the **two independent soundcard clocks (sample-rate offset)** and/or **analog group-delay/phase**, **not** bandwidth, SNR, or a code bug.
+
+> **CORRECTION (2026-07-20).** The first half of that disjunction is **eliminated by measurement**: the
+> dual-card rig runs at **+0.10 ppm** (`--sro-check`), because both USB adapters slave to the host's USB
+> frame clock rather than free-running. The clocks were never independent, so SRO cannot be what broke
+> these modes here. Of the two candidates the original diagnosis offered, **only analog
+> group-delay/phase survives** — and it has not been tested. Do not schedule "sample-rate-offset
+> tracking in the wideband demodulators" on the strength of this rig's evidence; on a genuine two-host
+> rig SRO may still matter for deployment, but that has to be measured there, not assumed from topology.
