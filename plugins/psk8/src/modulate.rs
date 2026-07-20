@@ -36,8 +36,6 @@ pub fn psk8_modulate(data: &[u8], config: &ModulationConfig) -> Result<Vec<f32>,
     let baud = parse_baud_rate(&config.mode)?;
     let fs = config.sample_rate as f32;
     let fc = config.center_frequency;
-    let n = samples_per_symbol(fs, baud)?;
-
     let cosine_overlap =
         config.pulse_shape == PulseShape::CosineOverlap || config.mode.ends_with("-HF");
     let rrc_alpha = if let PulseShape::Rrc { alpha } = config.pulse_shape {
@@ -47,6 +45,8 @@ pub fn psk8_modulate(data: &[u8], config: &ModulationConfig) -> Result<Vec<f32>,
     } else {
         None
     };
+    let shaped = rrc_alpha.is_some() || cosine_overlap;
+    let n = samples_per_symbol_for_pulse(fs, baud, shaped, &config.mode)?;
 
     let mut symbols = preamble_symbols();
     symbols.extend(bytes_to_symbols(data));
@@ -160,11 +160,63 @@ pub(crate) fn bytes_to_bits(bytes: &[u8]) -> Vec<bool> {
     bits
 }
 
+/// Absolute floor: below this there is not enough of a symbol to shape or integrate at all.
+pub(crate) const MIN_SAMPLES_PER_SYMBOL: usize = 4;
+
+/// Floor for the plain (crossfade) pulse, which needs one more sample per symbol than a matched filter.
+///
+/// The plain modulator blends adjacent symbols with a raised cosine, and the demodulator integrates
+/// against the squared window, leaving a residual ISI term whose size depends on `n` (β ≈ 0.182 at
+/// 16 sps, 0.167 at 8 sps — see CLAUDE.md → *Known sharp edges*). At 4 sps that residual exceeds
+/// 8PSK's ±22.5° decision margin and the frame does not decode **on a clean, noiseless channel**.
+///
+/// Measured 2026-07-20, all clean-channel round-trips:
+///
+/// | sps | mode | plain pulse |
+/// |---|---|---|
+/// | 4 | `8PSK2000` @ 8 kHz | **fails** |
+/// | 5 | `8PSK9600` @ 48 kHz | works |
+/// | 8 | `8PSK1000` @ 8 kHz | works |
+/// | 16 | `8PSK500` @ 8 kHz | works |
+///
+/// So the floor is **5**, not 8. The first version of this guard used 8 — generalised from the 4/8/16
+/// samples the 8 kHz modes happen to give, straight past the boundary that made it true. The existing
+/// `psk8_9600_loopback_48k` test caught it. Check the boundary before generalising a measurement.
+///
+/// `8PSK2000-RRC` decodes at the same 4 sps, and so does plain `QPSK2000` — it is the phase margin
+/// that runs out, not the sample rate: QPSK has ±45° to spend and 8PSK does not.
+///
+/// Before this guard, `8PSK2000` at 8 kHz emitted audio that nothing could decode and reported a
+/// generic framing error at the receiver — a silent capability lie.
+pub(crate) const MIN_SAMPLES_PER_SYMBOL_PLAIN: usize = 5;
+
 pub(crate) fn samples_per_symbol(sample_rate: f32, baud: f32) -> Result<usize, ModemError> {
     let n = (sample_rate / baud).round() as usize;
-    if n < 4 {
+    if n < MIN_SAMPLES_PER_SYMBOL {
         return Err(ModemError::Configuration(format!(
-            "sample rate {sample_rate} Hz is too low for {baud} baud (need at least 4 samples/symbol)"
+            "sample rate {sample_rate} Hz is too low for {baud} baud (need at least \
+             {MIN_SAMPLES_PER_SYMBOL} samples/symbol)"
+        )));
+    }
+    Ok(n)
+}
+
+/// Like [`samples_per_symbol`], but enforces the higher floor the plain pulse needs.
+///
+/// `shaped` is true for RRC and for the `-HF` cosine-overlap pulse, both of which are per-symbol
+/// shapes that survive 4 samples/symbol.
+pub(crate) fn samples_per_symbol_for_pulse(
+    sample_rate: f32,
+    baud: f32,
+    shaped: bool,
+    mode: &str,
+) -> Result<usize, ModemError> {
+    let n = samples_per_symbol(sample_rate, baud)?;
+    if !shaped && n < MIN_SAMPLES_PER_SYMBOL_PLAIN {
+        return Err(ModemError::Configuration(format!(
+            "{mode} at {sample_rate} Hz gives {n} samples/symbol; the plain 8PSK pulse needs at least \
+             {MIN_SAMPLES_PER_SYMBOL_PLAIN} (its inter-symbol residual exceeds 8PSK's 22.5-degree \
+             margin below that). Use {mode}-RRC, which is a matched filter and works at this rate."
         )));
     }
     Ok(n)

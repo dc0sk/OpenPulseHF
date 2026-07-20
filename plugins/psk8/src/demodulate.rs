@@ -13,7 +13,8 @@ use openpulse_dsp::pll::CarrierPll;
 use openpulse_dsp::rrc::generate_rrc_coefficients;
 
 use crate::modulate::{
-    gray_map_8psk, preamble_symbols, samples_per_symbol, PREAMBLE_SYMS, RRC_SPAN_SYMBOLS, TAIL_SYMS,
+    gray_map_8psk, preamble_symbols, samples_per_symbol, samples_per_symbol_for_pulse,
+    PREAMBLE_SYMS, RRC_SPAN_SYMBOLS, TAIL_SYMS,
 };
 use crate::parse_baud_rate;
 
@@ -262,7 +263,6 @@ fn extract_data_symbols(
     let baud = parse_baud_rate(&config.mode)?;
     let fs = config.sample_rate as f32;
     let fc = config.center_frequency;
-    let n = samples_per_symbol(fs, baud)?;
     let cosine_overlap =
         config.pulse_shape == PulseShape::CosineOverlap || is_hf_mode(&config.mode);
     let rrc_alpha = if let PulseShape::Rrc { alpha } = config.pulse_shape {
@@ -272,6 +272,15 @@ fn extract_data_symbols(
     } else {
         None
     };
+    // Refuse the same combinations the modulator refuses, so a receiver told to listen on a mode
+    // that cannot work at this rate says so instead of scanning a full window for a frame that
+    // could never have been transmitted.
+    let n = samples_per_symbol_for_pulse(
+        fs,
+        baud,
+        rrc_alpha.is_some() || cosine_overlap,
+        &config.mode,
+    )?;
 
     if samples.len() < n * (PREAMBLE_SYMS + 1) {
         return Err(ModemError::Demodulation("signal too short".to_string()));
