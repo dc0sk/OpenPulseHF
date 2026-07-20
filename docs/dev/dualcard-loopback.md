@@ -387,12 +387,55 @@ standard analog impairment came back clean:
 measurement rather than argument. Do not "fix" filtering, levels, or sample-rate offset on the strength
 of this — all three are measured clean.
 
-**The leading remaining candidate is the capture-side AGC.** These C-Media adapters have a hardware AGC
-that this document already records as drifting capture gain down after strong frames (the runner
-re-normalises mixers between cases because of it). A slowly time-varying gain would be near-harmless to
-the phase-only modes that pass — `BPSK`, `QPSK`, `8PSK` — and destructive to exactly the set that
-fails, because `64QAM` and the 16/32/64QAM SC-FDMA modes carry information in **amplitude**. That fits
-the failure set better than anything measured above, and it has not been tested.
+### Update (2026-07-20, later) — AGC and nonlinearity eliminated too; the AUDIO is what is bad
+
+Continued after the section below was written. Three further results, and one invalid measurement:
+
+- **The AGC hypothesis is dead.** `amixer -c <rx> sget 'Auto Gain Control'` reports the control
+  **already off**. No re-run needed.
+- **Nonlinearity is eliminated.** A two-tone test (1200 + 1700 Hz at the modem's working peak, ~0.63 FS)
+  measures **IMD3 at −60…−62 dBc** and IMD5 at −80 dBc. A pure-tone SNR cannot see intermodulation;
+  this can, and there is none worth the name.
+- **Short-term timing wander is eliminated.** The +0.10 ppm SRO figure is a 58 s average and would hide
+  wander. Removing the constant slope leaves rms **0.115** modem samples, peak 0.48, and at most
+  **0.72 samples of drift within a 4 s frame** — far too little to matter.
+- **The failures still reproduce at HEAD**, after #997–#1001: `SCFDMA52-16QAM`, `SCFDMA52-64QAM`,
+  `64QAM500`, `64QAM1000` and `PILOT-QPSK500` all still FAIL. This was worth checking — the original
+  measurements predated five fixes.
+
+**The decisive split: it is the audio content, not the live streaming path.** Capturing a frame to a
+WAV at 8 kHz and decoding it **offline**, through the same engine, reproduces the failure:
+
+| mode | captured audio decoded offline |
+|---|---|
+| `BPSK250` | **decodes** — proves the capture/replay method is sound |
+| `64QAM1000` | fails (`RS correction failed at block 0`) |
+| `SCFDMA52-16QAM` | fails |
+
+So the signal coming off the cable is genuinely damaged, and cpal/ALSA streaming, buffer scheduling and
+capture timing are all ruled out. That contradicts every channel-level measurement above, which means
+the impairment is **signal-dependent in a way none of the probe signals (tone, two-tone, chirp)
+reproduce** — the remaining suspects are wideband/high-PAPR-specific effects, not the flat-channel
+properties measured so far.
+
+**An invalid measurement, recorded so it is not repeated.** An attempt to quantify this as an
+end-to-end waveform SNR against the ideal transmitted samples produced **5.3 dB for `BPSK250` — a
+signal that decodes perfectly**. The metric was a time-domain cross-correlation with neither
+fractional-sample nor carrier-phase alignment, so it measured its own alignment error. A valid version
+must compare **recovered symbols** (post-demod, post-carrier-recovery EVM), not raw passband samples.
+
+**The earlier leading candidate was the capture-side AGC** — these adapters have one, and this document
+records it drifting capture gain after strong frames, which would be near-harmless to the phase-only
+modes that pass and destructive to the amplitude-carrying modes that fail. It fit the failure set
+better than anything else. **It is now eliminated: the control is already off.**
+
+### Where this stands
+
+Eight mechanisms measured, all clean: magnitude, group delay, SNR, clipping/PAPR, AGC, IMD3/IMD5,
+timing wander, and the live-streaming path. The failure is real, reproduces at HEAD, and lives in the
+captured audio. **No mechanism has been identified.** The next step is a *valid* EVM measurement on
+recovered symbols — not on raw passband samples — since that is the metric these modes actually fail
+on and the only one that will show a signal-dependent impairment the probe tones cannot.
 
 ### Method note
 
