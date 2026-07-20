@@ -4,9 +4,9 @@ use num_complex::Complex32;
 use rustfft::FftPlanner;
 
 use crate::channel::{
-    deramp_timing, estimate_noise_var, estimate_rician_k_linear, flat_ce_debias,
-    flat_channel_estimate, mmse_equalize, mmse_llr_noise_var, pilot_comb_noise_var,
-    pilot_diff_noise_var, pilot_positions, CeSolver, DelayCe,
+    apply_timing_deramp, deramp_timing, estimate_noise_var, estimate_rician_k_linear,
+    flat_ce_debias, flat_channel_estimate, mmse_equalize, mmse_llr_noise_var, pilot_comb_noise_var,
+    pilot_diff_noise_var, pilot_positions, timing_ramp_slope, CeSolver, DelayCe,
 };
 use crate::modulate::{modulate_with_params, preamble_payload};
 use crate::params::PILOT_AMPLITUDE;
@@ -153,10 +153,34 @@ impl FrameFront {
         p: &ScFdmaParams,
         ce: Option<&DelayCe>,
     ) -> Self {
-        for freq in &mut spectra {
-            // Remove the per-symbol sampling-frequency-offset phase ramp before de-spreading
-            // (mirrors the OFDM path); critical for SC-FDMA under SRO.
-            deramp_timing(p, freq);
+        // Remove the sampling-frequency-offset / residual-timing phase ramp before de-spreading
+        // (mirrors the OFDM path); critical for SC-FDMA under SRO.
+        //
+        // The slope is fitted across ALL symbols at once. The offset is constant over a frame, so a
+        // frame-wide fit cuts estimator noise by sqrt(n_symbols) — which is what makes this usable for
+        // the localized (block-pilot) layout, whose 4 pilots give only 3 adjacent products per symbol.
+        //
+        // The two layouts are fitted differently, for a physical reason:
+        //
+        // * Interleaved (13 pilots): fit PER SYMBOL. Under a sample-rate offset the ramp grows with
+        //   symbol index, so a per-symbol fit tracks it and a frame-wide average does not. Averaging
+        //   here measurably decalibrated the LLRs (`llr_reliability` fired on SCFDMA52-16QAM).
+        // * Localized (4 pilots = 3 adjacent products): fit ONCE across the frame. A per-symbol
+        //   estimate is so noisy that de-rotating 65 subcarriers by it is worse than not correcting —
+        //   it broke SCFDMA52-LP on AWGN at 20 dB. This layout is a flat-channel demonstrator that
+        //   does not claim SRO tracking, so trading the growing-ramp term for sqrt(n_symbols) less
+        //   estimator noise is the right trade for it and the wrong one for the interleaved modes.
+        if p.localized {
+            let views: Vec<&[Complex32]> = spectra.iter().map(|f| &f[..]).collect();
+            if let Some(slope) = timing_ramp_slope(p, &views) {
+                for freq in &mut spectra {
+                    apply_timing_deramp(p, freq, slope);
+                }
+            }
+        } else {
+            for freq in &mut spectra {
+                deramp_timing(p, freq);
+            }
         }
 
         let Some(ce) = ce else {
