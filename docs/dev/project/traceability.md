@@ -7973,3 +7973,36 @@ and the actually-observed results per change.
 - **Scope note:** this does not make `SCFDMA52-LP` generally robust. It stays a flat-channel
   demonstrator registered in no adaptive profile — its single-tap CE still assumes flat gain/phase and
   no passband tilt. Only the timing-offset fragility was a defect; the rest is by design.
+
+## 2026-07-20 — analog-path investigation: eight mechanisms eliminated, none identified
+
+- **Requirement/change:** identify the mechanism behind the dense-mode failures localised to the
+  "analog path" (`SCFDMA52-{16,32,64}QAM`, `64QAM{500,1000,2000-RRC}`, `PILOT-QPSK500` — pass the
+  virtual rung, fail the dual-card rig).
+- **First: the premise was re-verified.** The original failures were measured before #997–#1001, so
+  they were re-run at HEAD. All five still FAIL. The investigation is not chasing a stale result.
+- **Mechanisms eliminated by measurement** (adding to the four recorded earlier — magnitude ±0.21 dB,
+  group delay ~1.04 ms, SNR 71.1 dB, no clipping):
+  - **Capture-side AGC** — the leading hypothesis, and it fit the failure set well (amplitude-carrying
+    modes fail, phase-only pass). `amixer sget 'Auto Gain Control'` reports it **already off**.
+  - **Nonlinearity** — two-tone test at the working level measures **IMD3 −60…−62 dBc**, IMD5 −80 dBc.
+    A pure-tone SNR cannot see intermodulation; this can, and there is effectively none.
+  - **Short-term timing wander** — the +0.10 ppm SRO figure is a 58 s average that would hide wander.
+    With the constant slope removed: rms 0.115 modem samples, peak 0.48, **≤0.72 samples of drift
+    within a 4 s frame**.
+  - **The live streaming path** — see below.
+- **Decisive split — it is the audio content, not live streaming.** A frame captured to WAV at 8 kHz and
+  decoded **offline** through the same engine reproduces the failure: `BPSK250` decodes (proving the
+  capture/replay method sound), `64QAM1000` and `SCFDMA52-16QAM` fail with `RS correction failed at
+  block 0`. cpal/ALSA streaming, buffer scheduling and capture timing are therefore all ruled out.
+- **Status: no mechanism identified.** Eight measurements are clean while the failure is real and
+  reproducible, which means the impairment is **signal-dependent in a way none of the probe signals
+  (tone, two-tone, chirp) reproduce**. Recorded rather than guessed at.
+- **An invalid measurement, recorded so it is not repeated.** An attempt to quantify this as end-to-end
+  waveform SNR against the ideal transmitted samples reported **5.3 dB for `BPSK250` — which decodes
+  perfectly**. The metric was a time-domain cross-correlation with neither fractional-sample nor
+  carrier-phase alignment, so it measured its own alignment error. A valid version must compare
+  **recovered symbols** (post-demod, post-carrier-recovery EVM), not raw passband samples. This was the
+  third invalid measurement in this investigation, after the phase-wrapping SRO estimator and the PAPR
+  capture that recorded a stray tone — in each case the tell was a number that was too clean, too
+  uniform, or contradicted a known-good control.
