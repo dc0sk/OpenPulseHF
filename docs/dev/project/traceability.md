@@ -8006,3 +8006,44 @@ and the actually-observed results per change.
   third invalid measurement in this investigation, after the phase-wrapping SRO estimator and the PAPR
   capture that recorded a stray tone — in each case the tell was a number that was too clean, too
   uniform, or contradicted a known-good control.
+
+## 2026-07-20 — analog-path resolution: FEC operating point, plus untracked wander in 64QAM
+
+- **Requirement/change:** act on a second-opinion review (Fable) of the analog-path investigation. It
+  attacked the eight eliminations, found two unsound, and proposed three experiments. All three run.
+- **Experiment 1 — plugin-level vs engine-level decode (Fable's top hypothesis: the damage is the engine
+  path, not the waveform).** **Refuted.** A hardware capture of `SCFDMA52-16QAM` fails at *plugin* level
+  too, bypassing the engine entirely. The sliding-window probe was validated against a coded control
+  frame produced by the engine and embedded in silence — it decodes at offset 4608 while the hardware
+  capture does not — so the negative result is trustworthy. Engine AFC settling / `mix_to_nominal` is
+  ruled out for that group.
+- **Experiment 2 — re-run at the FEC each mode is designed for.** **Five of the eight "analog-path
+  limited" modes were never analog-path limited.** `SCFDMA52-16QAM`, `SCFDMA52-32QAM` (soft-concatenated
+  *and* ldpc) and `64QAM{500,1000,2000-RRC}` (soft-concatenated) all PASS on the rig. The sweep had
+  measured them at hard-decision `rs`, roughly 6 dB below their operating point. This document's own
+  sweep table already warned to read those rows as "not disproven rather than failed", and the June
+  record already had `SCFDMA52-16QAM` passing this rig — the warning was written and then not acted on.
+- **Experiment 3 — the 64QAM mechanism.** Elimination #8 (timing wander) was **unsound**: 0.72 samples
+  was judged against a symbol period and dismissed, but at a 1500 Hz carrier 0.48 samples is **32° of
+  carrier phase**, and the wander is concentrated at **0.1–2 Hz** — exactly where the 64QAM
+  decision-directed loop (natural frequency ≈0.4 Hz at `loop_bw = 0.01`) cannot track it. `plugins/64qam`
+  is the only receiver with **no mid-frame reference update** (scalar preamble AGC, absolute PAM-8
+  thresholds, preamble-only phase whose drift fit is gated on `afc_correction_hz >= 0.5` and so never
+  fires on a 0.1 ppm rig, fixed-stride sampling). Reproduced in-process and noiselessly: at the rig's
+  measured drift amplitude `64QAM500` takes 125 byte errors and `64QAM1000` 151, against RS's capacity of
+  16, while **every** OFDM/SCFDMA/PILOT mode takes 0. With pure sinc interpolation (drift, no resampler
+  comb) `64QAM500` still takes 99 — so the wander itself is the cause.
+  - The earlier "amplitude-carrying modes fail, phase-only pass" framing was the right observation on the
+    **wrong axis**; the axis is *frame-static reference vs tracked reference*.
+  - **Fix direction measured but NOT shipped.** Sweeping the DD loop bandwidth: `64QAM500` improves
+    125 → 15 errors at `loop_bw = 0.06` (under the RS threshold) and degrades by 0.12; `64QAM1000` shows
+    61 errors in the **static** case alone, so it needs timing interpolation as well. Not a one-constant
+    change, the modes pass with their intended FEC, and a speculative change to a shipped demodulator
+    needs its own evidence.
+- **Correction — the virtual rung does not exercise the resampler.** Verified: `hw:Loopback` reports
+  `RATE: [8000 768000]` (so `plug` is a pass-through at 8 kHz) while the C-Media cards report
+  `RATE: [44100 48000]` and always resample both ways. `virtual-loopback.md`'s rung table claimed the
+  virtual rung adds the resampler path; corrected. "Analog path" in the earlier analysis therefore means
+  *analog cable + double linear resample + inter-card wander*.
+- **Net:** the unexplained set drops from **8 modes to 3** — `SCFDMA52-64QAM`, `SCFDMA52-64QAM-P4` and
+  `PILOT-QPSK500` fail with every FEC tried.
