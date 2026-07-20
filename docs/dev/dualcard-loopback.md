@@ -367,3 +367,44 @@ offset rig "clean". A measurement device that cannot detect a known offset canno
 Note the pulse-variant split, which is suggestive but has one data point per mode and no ablation behind
 it — recorded as an observation, **not** a mechanism: `8PSK2000` FAIL / `8PSK2000-RRC` PASS,
 `PILOT-QPSK500` FAIL / `PILOT-QPSK500-RRC` PASS, but `BPSK250` PASS / `BPSK250-RRC` FAIL, which inverts.
+
+## Analog-path characterisation (2026-07-20) — four mechanisms eliminated, none explains the failures
+
+The virtual×hardware comparison localised `64QAM{500,1000,2000-RRC}`,
+`SCFDMA52-{16QAM,32QAM,64QAM,64QAM-P4}` and `PILOT-QPSK500` to the **analog path** (they pass the
+virtual rung, which shares all software and has no cable). This section measures that path. Every
+standard analog impairment came back clean:
+
+| Property | Measured | Verdict |
+|---|---|---|
+| Magnitude response, 306–3388 Hz | flat within **±0.21 dB** | not the mechanism |
+| Group delay, 250–3400 Hz | **~1.04 ms** spread, no systematic slope — mostly measurement jitter | inside SC-FDMA's cyclic prefix; not the mechanism |
+| SNR (1 kHz tone vs idle floor) | **71.1 dB** | 64QAM needs ~25–30 dB; not the mechanism |
+| PAPR / clipping at the working level | PAPR 3.4–6.1 dB, peak ≤ 0.78 FS, **0 clipped samples** on all of `BPSK250`, `OFDM52`, `SCFDMA52-64QAM`, `64QAM1000` | not the mechanism |
+
+**So the attribution is a localisation, not an explanation.** "Analog path" is where the failure lives;
+*what* about the analog path is still unknown, and the four obvious candidates are now ruled out by
+measurement rather than argument. Do not "fix" filtering, levels, or sample-rate offset on the strength
+of this — all three are measured clean.
+
+**The leading remaining candidate is the capture-side AGC.** These C-Media adapters have a hardware AGC
+that this document already records as drifting capture gain down after strong frames (the runner
+re-normalises mixers between cases because of it). A slowly time-varying gain would be near-harmless to
+the phase-only modes that pass — `BPSK`, `QPSK`, `8PSK` — and destructive to exactly the set that
+fails, because `64QAM` and the 16/32/64QAM SC-FDMA modes carry information in **amplitude**. That fits
+the failure set better than anything measured above, and it has not been tested.
+
+### Method note
+
+Two of the measurements in this section were wrong before they were right, in the same way both times:
+
+- The **first SRO estimator** wrapped phase above ~5 ppm and reported an injected 200 ppm as −6.9 ppm.
+  It would have certified a badly offset rig as clean.
+- The **first PAPR capture** returned identical rms, peak and PAPR to four decimal places for four
+  completely different waveforms — because a stray `aplay` from the SNR test was still running and every
+  capture was recording that 1 kHz tone. An occupied-bandwidth check (0 Hz wide, exactly 1 kHz)
+  confirmed it instantly.
+
+Both were caught by the result looking *too clean or too uniform*, not by the tooling. When measuring a
+physical path, check the instrument against a known input and check the capture is of the thing you
+think it is — a spectrum is cheap and unambiguous.

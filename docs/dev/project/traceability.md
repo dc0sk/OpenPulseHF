@@ -7883,3 +7883,46 @@ and the actually-observed results per change.
     states a sample-rate reason**, and prints which modes were excluded rather than dropping them
     silently. (Same lesson as PR #978: when a change alters what a crate *advertises*, its own tests
     are not the affected set — `-p psk8-plugin` was green throughout.)
+
+## 2026-07-20 — fix(modem): classify long-frame AFTER the FEC widening; analog path characterised
+
+- **Requirement/change:** diagnose the two open groups from the virtual sweep — the "audio I/O path"
+  defects (`BPSK250-RRC`, `SCFDMA52-LP`, `QPSK125`) and the "analog path" limit on the dense modes.
+- **Root cause (audio I/O path, 2 of 3):** `receive_with_fec_mode_timeout` skips a full-buffer retry
+  for long-frame modes because that retry re-scans the whole buffer every 2 s and outruns the capture
+  read cadence, starving it. The classification was computed from the **raw** geometry and the slice
+  was widened 3× for FEC only *afterwards*, so three modes whose coded frames run ~28 s were treated as
+  short and kept the starving retry: `BPSK250`, `BPSK250-RRC` (74 400 raw / 223 200 coded) and
+  `QPSK125` (75 200 / 225 600). Measured on the virtual rung: `BPSK250-RRC` reached at most **152 of
+  the 255 bytes** it needs across all 1042 scan positions, `QPSK125` at most 82 — starved mid-frame.
+- **Why only the audio rungs saw it:** in-process there is no read cadence to starve, so
+  `ChannelSimHarness` passes these modes either way. It took a real streaming capture to expose it.
+- **Design decision:** `frame_plan(raw, fec) -> (coded, long)` performs the widening and the
+  classification **in one function**, because splitting them is what let them drift out of order.
+  Verified against the whole registry that exactly these three modes reclassify — the SCFDMA/OFDM modes
+  that depend on the retry for acquisition are untouched.
+- **Implementation:** `crates/openpulse-modem/src/engine.rs` (`frame_plan`, `LONG_FRAME_SAMPLES`).
+- **Tests:** `crates/openpulse-modem/tests/long_frame_classification.rs` — 5 tests exercising the
+  engine's own `frame_plan` (not a copy of the rule, so an ordering regression must change the tested
+  function): the three affected modes, the same modes uncoded staying short, the wideband control set
+  keeping its retry, both sides of the threshold, and the returned widened length.
+- **Test results:** **Sabotage-verified** — classifying on the raw value inside `frame_plan` turns the
+  suite red. **On the virtual rung**, `BPSK250-RRC`, `QPSK125` and `BPSK250` all now PASS, and the
+  controls (`SCFDMA52`, `OFDM52`, `SCFDMA52-8PSK`, `BPSK63`) still pass. Workspace gate 265 suites /
+  2213 passed / 0 failed.
+- **`SCFDMA52-LP` is a separate defect, now reproducible without hardware:** it passes `route_clean`
+  but fails `route_embedded` (frame inside a long capture) with `RS correction failed at block 0:
+  TooManyErrors` — a frame-location/acquisition fault, not the starvation above. Not fixed.
+- **Analog path characterised — four mechanisms ELIMINATED, none explains the failures.** Magnitude
+  flat ±0.21 dB (306–3388 Hz); group delay ~1.04 ms spread with no systematic slope (inside SC-FDMA's
+  CP); SNR **71.1 dB**; and no clipping at the working level (PAPR 3.4–6.1 dB, peak ≤0.78 FS, 0 clipped
+  samples across `BPSK250`/`OFDM52`/`SCFDMA52-64QAM`/`64QAM1000`). The "analog path" attribution is a
+  **localisation, not an explanation**. Leading untested candidate: the C-Media **capture-side AGC**,
+  which this repo already records as drifting gain after strong frames — a time-varying gain is nearly
+  harmless to the phase-only modes that pass and destructive to the amplitude-carrying modes that fail.
+- **Measurement integrity:** two measurements were wrong before they were right, both caught by the
+  result looking too uniform rather than by tooling. The first SRO estimator wrapped phase above ~5 ppm
+  (reported an injected 200 ppm as −6.9 ppm). The first PAPR capture returned identical rms/peak/PAPR
+  to four decimals for four different waveforms — a stray `aplay` from the SNR test was still running
+  and every capture recorded that 1 kHz tone; an occupied-bandwidth check (0 Hz wide, exactly 1 kHz)
+  settled it in one step.

@@ -161,6 +161,31 @@ impl ScanPlanner {
 /// `carrier_phase_correct` enters a fragile drift-fit branch at ≥0.5 Hz.  Real HF
 /// offsets are tens to hundreds of Hz (the carrier-offset regression uses 15 Hz;
 /// the measured inter-rig offset is ~400 Hz), so this never suppresses a real one.
+/// Buffering time above which the settled full-buffer retry starves the capture read loop.
+///
+/// 120 000 samples is 15 s at 8 kHz. The retry re-scans the whole buffer every 2 s, which for a
+/// frame this long outruns the read cadence so the frame never finishes buffering.
+pub const LONG_FRAME_SAMPLES: usize = 120_000;
+
+/// Per-attempt slice length and long-frame classification for a mode's raw geometry under `fec`.
+///
+/// Returns `(max_frame_samples, long_frame)`.
+///
+/// **The widening and the classification live in one function on purpose.** A coded frame is 3x the
+/// raw geometry, and what starves the capture read loop is how long the frame actually takes to
+/// buffer. Classifying on the raw value — which is what this code did until 2026-07-20 — put three
+/// modes with ~28 s coded frames (`BPSK250`, `BPSK250-RRC`, `QPSK125`) on the wrong side, so they kept
+/// the retry that starves the capture and never finished buffering on a real audio path. Splitting
+/// these two steps apart is what allowed them to drift out of order; keep them together.
+pub fn frame_plan(raw_max_frame_samples: usize, fec: FecMode) -> (usize, bool) {
+    let coded = if matches!(fec, FecMode::None) {
+        raw_max_frame_samples
+    } else {
+        raw_max_frame_samples.saturating_mul(3)
+    };
+    (coded, coded > LONG_FRAME_SAMPLES)
+}
+
 const AFC_SETTLE_DEADBAND_HZ: f32 = 2.0;
 
 /// Result of [`ModemEngine::afc_mini_settle`].
@@ -2318,18 +2343,10 @@ impl ModemEngine {
         // the wideband multicarrier modes (SCFDMA/OFDM) in particular have short
         // frames AND a marginal settle that the single-carrier first-energy path
         // can't decode, so they depend on the retry's per-position re-acquisition.
-        // The raw (pre-FEC) geometry separates them cleanly: BPSK31/63/100 are
-        // >180k samples, every other mode <=75k.
-        let long_frame = max_frame_samples > 120_000;
-
-        // FEC frames are larger than the un-coded frame the geometry describes
-        // (conv rate-1/2 ≈ 2×, RS ≈ 1.15×); widen the per-attempt slice so the whole
-        // coded frame is decoded rather than truncated at max_frame_samples.
-        let max_frame_samples = if matches!(fec, FecMode::None) {
-            max_frame_samples
-        } else {
-            max_frame_samples.saturating_mul(3)
-        };
+        // FEC widens the per-attempt slice (conv rate-1/2 ≈ 2×, RS ≈ 1.15×) so the whole coded frame
+        // is decoded rather than truncated, and the long-frame classification must be made on that
+        // widened length — see `frame_plan` for what went wrong when it was not.
+        let (max_frame_samples, long_frame) = frame_plan(max_frame_samples, fec);
 
         // AFC settling window.  It must span at least one data symbol past the
         // preamble so the plugin's fine (IQ-squaring) estimator engages; on a
