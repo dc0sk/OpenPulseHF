@@ -12,7 +12,7 @@ on the previous one passing:
 | Rung | Transport | Script | When |
 |---|---|---|---|
 | 1 | **Virtual** (snd-aloop, single clock, no analog) | `scripts/run-loopback-virtual.sh` | **default — every run** |
-| 2a | **Dual-card** (two USB soundcards on one host, cable) | `scripts/run-loopback-dualcard.sh` | real analog path, no second machine. **Not a dual-clock check** — measured +0.10 ppm, see [dualcard-loopback.md](dualcard-loopback.md) |
+| 2a | **Dual-card** (two USB soundcards on one host, cable) | `scripts/run-loopback-dualcard.sh` | real analog path **+ the 8k↔48k resampler** (see note), no second machine. **Not a dual-clock check** — measured +0.10 ppm, see [dualcard-loopback.md](dualcard-loopback.md) |
 | 2b | **Two Pis** (two soundcards, cable + ground-loop isolator) | `scripts/run-loopback-rpi51-rpi52.sh` | on request |
 | 3 | **On-air** (real rigs / RF) | `scripts/run-onair-*.sh` | after rungs 1 and 2 pass |
 
@@ -27,7 +27,13 @@ A failure that appears only when you move *up* a rung tells you which layer is r
 
 ## Why virtual is the default
 
-The virtual rung catches DSP, acquisition, framing, resampler, and config regressions on the real audio path without needing two Raspberry Pis and a cable. It is deterministic, fast, and runnable in CI (given the `snd-aloop` module). Hardware and on-air then only need to be run to validate the effects they uniquely add (analog response, RF — and true SRO only on a genuinely two-host rig).
+> **Correction (2026-07-20): the virtual rung does NOT exercise the resampler.** `hw:Loopback` reports
+> `RATE: [8000 768000]`, so `plug` is a pass-through at the modem's 8 kHz; the C-Media cards report
+> `RATE: [44100 48000]` and therefore always resample 8k↔48k both ways. Resampling is a **rung-2a-only**
+> component. Anything attributed to "the analog path" by a virtual-vs-dual-card comparison is really
+> *analog cable + double linear resample + inter-card wander*.
+
+The virtual rung catches DSP, acquisition, framing, and config regressions on the real audio path without needing two Raspberry Pis and a cable. It is deterministic, fast, and runnable in CI (given the `snd-aloop` module). Hardware and on-air then only need to be run to validate the effects they uniquely add (analog response, RF — and true SRO only on a genuinely two-host rig).
 
 ### In CI
 
