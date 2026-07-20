@@ -5,7 +5,9 @@
 > made `BPSK31` untransmittable, fixed-size harness windows, a silently-swallowed SKIP report) and
 > falsified this rig's dual-clock premise by measurement. See
 > [Full coded sweep](#full-coded-sweep-2026-07-20--5567-and-the-whole-hpx_hf-ladder-passes).
-> `QPSK500-D` and JS8 have still never been on real audio.
+> `QPSK500-D` has since passed both rungs. **JS8 is still unvalidated on real audio and cannot be
+> reached by these sweeps at all** — it is not registered in the CLI's plugin registry, so `modes`
+> never lists it. Its validation is FF-15 Phase H (on-air).
 
 
 This rig runs the modem TX→RX through **two USB soundcards plugged into the same

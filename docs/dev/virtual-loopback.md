@@ -2,7 +2,8 @@
 
 > **Evidence currency (2026-07-18):** the results recorded below predate the fade-aware ladder
 > arc. No loopback run in the tree is newer than 2026-06-25, and several shipped modes
-> (`QPSK250-D`, `QPSK500-D`, `MFSK16`, JS8) have never been run on real audio at all. See
+> (JS8) have never been run on real audio at all — `QPSK250-D`, `QPSK500-D` and `MFSK16` have since
+> passed both rungs, and JS8 is not in the CLI plugin registry so no sweep can reach it. See
 > [loopback-revalidation-plan.md](loopback-revalidation-plan.md).
 
 
