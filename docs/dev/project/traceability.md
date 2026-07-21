@@ -8047,3 +8047,39 @@ and the actually-observed results per change.
   *analog cable + double linear resample + inter-card wander*.
 - **Net:** the unexplained set drops from **8 modes to 3** — `SCFDMA52-64QAM`, `SCFDMA52-64QAM-P4` and
   `PILOT-QPSK500` fail with every FEC tried.
+
+## 2026-07-21 — fix(modem): budget the full-buffer retry by scan COST, not frame geometry
+
+- **Requirement/change:** `PILOT-QPSK500` was the last tractable mode of the "analog path" group. It is
+  the odd one out of its family — `PILOT-8PSK500`, `PILOT-16QAM500` and `PILOT-32APSK500` all pass, and
+  only the **least dense** mode failed. That inversion said software, not channel.
+- **Localisation, in order:** it passes **in-process** on every FEC, clean and embedded; its hardware
+  audio captured to WAV **decodes offline** through the same engine; and it fails **3/3 live** on the rig
+  while `PILOT-QPSK500-RRC` passes 3/3. So the audio is fine and the DSP is fine — the failure is the
+  live path. The live RX log shows the demodulator returning **0 bytes** at each of 1028 scan positions,
+  having reached only ~10.9 s of buffer.
+- **Root cause:** the full-buffer retry is O(buffer), and `PILOT-QPSK500` costs ~640 ms per decode
+  attempt — 1028 positions is **~11 minutes of CPU for a 45 s listen**, so the scan never reaches the
+  frame. `PILOT-QPSK500-RRC` costs *more* per attempt (~1150 ms, measured) but acquires early and stops.
+  **Cost starves the loop, not frame length.**
+- **The `long_frame` proxy is the wrong variable.** `PILOT-QPSK500` is 55 200 coded samples (classified
+  "short") and starves; `QPSK250` is 112 800 — twice as long — and passes comfortably. Confirmed by
+  ablation: forcing the retry off makes `PILOT-QPSK500` pass while `SCFDMA52`/`OFDM52` (which depend on
+  the retry for acquisition) still pass.
+- **Design decision:** budget each retry pass by the audio it covers — a scan that cannot walk its own
+  buffer in less than real time can never catch up, because the buffer keeps growing — and **enforce it
+  from inside the pass**. The first implementation measured the pass *after* it completed and was
+  **inert on hardware**: the pathological pass never completes, so it must be abandoned while running.
+  Checked every 16 positions (cheap check, expensive decode). `long_frame` is retained as the cheap
+  a-priori guard; the budget is the measured backstop.
+- **Implementation:** `crates/openpulse-modem/src/engine.rs` (`retry_budget` / `retry_over_budget` /
+  `retry_cost_secs` in `receive_with_fec_mode_timeout`).
+- **Tests:** `crates/openpulse-modem/tests/retry_budget.rs` — 4 tests pinning the policy arithmetic: a
+  slower-than-real-time pass is over budget, a cheap wideband pass is not, frame length does **not**
+  predict which modes starve (the case that refuted the proxy), and an empty buffer does not abandon the
+  first pass. In-process there is no read cadence to starve, so the failure cannot be reproduced through
+  `ChannelSimHarness`; the hardware evidence is recorded in `docs/dev/dualcard-loopback.md`.
+- **Test results:** **On the rig** `PILOT-QPSK500` now PASSES, with `PILOT-QPSK500-RRC`, `SCFDMA52`,
+  `OFDM52`, `SCFDMA52-8PSK`, `BPSK250`, `QPSK250-D`, `MFSK16` and `BPSK31` all still passing. Full
+  workspace gate 267 suites / 2221 passed / 0 failed.
+- **Net: the unexplained set is down to 2** — `SCFDMA52-64QAM` and `SCFDMA52-64QAM-P4`.
