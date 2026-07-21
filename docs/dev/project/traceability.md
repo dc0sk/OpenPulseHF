@@ -8083,3 +8083,31 @@ and the actually-observed results per change.
   `OFDM52`, `SCFDMA52-8PSK`, `BPSK250`, `QPSK250-D`, `MFSK16` and `BPSK31` all still passing. Full
   workspace gate 267 suites / 2221 passed / 0 failed.
 - **Net: the unexplained set is down to 2** — `SCFDMA52-64QAM` and `SCFDMA52-64QAM-P4`.
+
+## 2026-07-21 — SCFDMA52-64QAM: narrowed, not solved
+
+- **Requirement/change:** the last mode of the "analog path" group. Same localisation ladder that
+  resolved `PILOT-QPSK500`, `BPSK250-RRC`, `QPSK125`, `8PSK2000` and `SCFDMA52-LP`.
+- **Premise re-verified at HEAD first** (the retry-budget fix had just landed): `SCFDMA52-64QAM` and
+  `SCFDMA52-64QAM-P4` still FAIL with `rs`, `soft-concatenated` and `ldpc` — 6 runs.
+- **Established:**
+  - passes **in-process** on every FEC, clean and embedded → not the DSP core, not frame location;
+  - hardware audio **fails offline** while the clean control decodes → the captured audio is damaged;
+  - the same test for `SCFDMA52-32QAM` with soft FEC: **hardware audio decodes**. So 64QAM is below a
+    threshold that one constellation order down, on the same waveform and width, clears.
+- **The impairment is NOT noise-like.** An AWGN decode-threshold sweep (soft-concatenated, 3 seeds/point)
+  puts `SCFDMA52-64QAM` at **14 dB** and `-16QAM`/`-32QAM` at ≤10 dB, against a cable measured at **71 dB
+  SNR**. "It needs more margin" is the wrong description; additive noise is not the limiting quantity.
+- **Shape of the remainder (hypothesis, not measured):** `OFDM52-64QAM` passes on this rig — same order,
+  same 52 subcarriers, same analog path. The receivers differ: OFDM equalises per subcarrier, SC-FDMA's
+  DFT de-spread coherently combines all of them, smearing any per-subcarrier impairment across every
+  recovered symbol. Consistent with a frequency-selective impairment only the densest DFT-spread mode
+  cannot absorb — recorded as a hypothesis shaped by the evidence, explicitly **not** a mechanism.
+- **Next step is instrumentation, not another probe:** per-subcarrier EVM taken *before* the IDFT
+  (post-MMSE residual per bin) discriminates band-edge slope (filtering) from single-bin spikes (spurs)
+  from flat-and-high (broadband). Needs a scoped extension inside `demodulate_soft_with_params`.
+- **A fourth invalid measurement, recorded so it is not repeated.** Computing EVM from
+  `scfdma_constellation` against a snapped ideal grid gave clean-signal EVM of **10.9 dB for 32QAM vs
+  19.0 dB for 64QAM** — backwards, since 64QAM needs the *better* EVM. The snapping assumed a square
+  constellation; `SCFDMA52-32QAM` is **cross**-32QAM. Never measure EVM against an assumed grid — use the
+  plugin's own decisions or the known transmitted symbols.

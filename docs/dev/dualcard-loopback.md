@@ -533,9 +533,46 @@ it has to be abandoned while running. Verified on the rig: `PILOT-QPSK500` PASS,
 `PILOT-QPSK500-RRC`, `SCFDMA52`, `OFDM52`, `SCFDMA52-8PSK`, `BPSK250`, `QPSK250-D`, `MFSK16`, `BPSK31`
 all still PASS. Gate: `crates/openpulse-modem/tests/retry_budget.rs`.
 
+### `SCFDMA52-64QAM` — narrowed, not solved (2026-07-21)
+
+Localised with the same ladder that resolved the others. What is established:
+
+| test | result |
+|---|---|
+| hardware, `rs` / `soft-concatenated` / `ldpc`, at HEAD | **FAIL** (6 runs, both `-64QAM` and `-64QAM-P4`) |
+| in-process, clean and embedded, `rs` and soft | **passes** |
+| hardware audio decoded **offline**, clean control alongside | control **decodes**, hardware **fails** |
+| the same for `SCFDMA52-32QAM` with soft FEC | control decodes, **hardware decodes too** |
+
+So the captured audio is genuinely damaged, and **`SCFDMA52-64QAM` is below a threshold that
+`SCFDMA52-32QAM` — one constellation order down, same waveform, same width — clears.**
+
+**The impairment is not noise-like.** An AWGN sweep of the decode threshold (soft-concatenated, 3 seeds
+per point) puts `SCFDMA52-64QAM` at **14 dB** and `-16QAM`/`-32QAM` at ≤10 dB, while the cable measures
+**71 dB SNR**. Additive noise is nowhere near the limiting quantity, so "it just needs more margin" is
+the wrong description.
+
+**The shape of what is left.** `OFDM52-64QAM` passes on this rig — same constellation order, same 52
+subcarriers, same analog path — and the difference between them is the receiver: OFDM equalises per
+subcarrier, while SC-FDMA's DFT de-spread coherently combines all subcarriers, so a per-subcarrier
+impairment is smeared across every recovered data symbol. That is *consistent* with a frequency-selective
+or per-subcarrier impairment that only the densest DFT-spread mode cannot absorb — but it is a hypothesis
+shaped by the evidence, **not a measured mechanism**, and it should not be repeated as one.
+
+**The next step is instrumentation, not another probe.** The discriminating measurement is per-subcarrier
+EVM taken *before* the IDFT (post-MMSE residual per bin): a band-edge slope indicates filtering, single-bin
+spikes indicate spurs, flat-and-high indicates broadband. That needs a small extension inside
+`demodulate_soft_with_params` to expose the residual — a scoped change, not a scratch probe.
+
+> **A fourth invalid measurement, recorded so it is not repeated.** An attempt to shortcut the above by
+> computing EVM from `scfdma_constellation` against a snapped ideal grid produced clean-signal EVM of
+> **10.9 dB for 32QAM versus 19.0 dB for 64QAM** — backwards, since 64QAM requires the *better* EVM. The
+> grid snapping assumed a square constellation, but `SCFDMA52-32QAM` is **cross**-32QAM. Do not measure
+> EVM against an assumed grid; use the plugin's own decisions or known transmitted symbols.
+
 ### Still genuinely unexplained (2 modes, down from 8)
 
-`SCFDMA52-64QAM` and `SCFDMA52-64QAM-P4` fail with every FEC tried. `SCFDMA52-16QAM`
+`SCFDMA52-64QAM` and `SCFDMA52-64QAM-P4` — narrowed as above; mechanism not identified. `SCFDMA52-16QAM`
 was additionally decoded from a hardware capture at **plugin level** (bypassing the engine entirely,
 with the probe validated against a coded control frame that decodes at the same offset) and still
 failed — so an engine-path/AFC explanation is ruled out for that group too.
