@@ -2364,6 +2364,11 @@ impl ModemEngine {
         // < 2.5e-5 mean-square; a live BPSK carrier at 30 % full-scale gives
         // ≈ 0.045.
         let mut energy_gate = EnergyGate::new();
+        // Cost of the last full-buffer retry pass, and how much audio it covered. If a pass costs
+        // more wall time than the audio it walked, further passes can only fall further behind.
+        let mut retry_cost_secs: f64 = 0.0;
+        let mut retry_span_secs: f64 = 0.0;
+        let mut retry_over_budget = false;
         // Maximum AFC correction magnitude accepted after settling.
         // The Goertzel acquisition range is ±400 Hz (range_hz = 800 in the
         // estimate_carrier_hz_wide implementation).  On-air measurements between
@@ -2440,9 +2445,22 @@ impl ModemEngine {
             // single-carrier micro-sweep can't decode) keep the retry; their short
             // frames re-scan cheaply, so it never starves them.
             let elapsed_secs = start_time.elapsed().as_secs();
+            // A retry pass that takes longer than the audio it covers can never catch up: the buffer
+            // grows faster than the scan walks it, so every later pass is further behind and the
+            // frame is never reached. `long_frame` is only a *proxy* for that — it guesses from frame
+            // geometry, and geometry is the wrong variable. `PILOT-QPSK500` (55 200 coded samples,
+            // "short") costs ~640 ms per decode attempt and needs ~1000 positions, i.e. ~11 minutes of
+            // CPU for a 45 s listen, while `QPSK250` at twice the frame length passes comfortably.
+            // So measure the previous pass instead of predicting it: once a pass has proved slower
+            // than real time, stop retrying and leave the decode to the first-energy micro-sweep.
+            let retry_hopeless =
+                retry_over_budget || (retry_cost_secs > retry_span_secs && retry_span_secs > 0.0);
             if (!long_frame || !planner.is_settled())
+                && !retry_hopeless
                 && planner.retry_due(elapsed_secs, accumulated.len())
             {
+                let retry_started = Instant::now();
+                let retry_span_start = accumulated.len();
                 {
                     // Scan the entire accumulated buffer from the start.
                     // The AFC correction is kept from the settled value:
@@ -2456,7 +2474,22 @@ impl ModemEngine {
                     // the retry falls back to AFC=0 naturally.
                     let retry_end = accumulated.len().saturating_sub(min_frame_samples);
                     let saved_afc = self.afc_correction_hz;
-                    for start in (0..=retry_end).step_by(step) {
+                    // Budget the pass from INSIDE. Measuring it afterwards is useless: the pathological
+                    // case is a pass that never finishes at all (`PILOT-QPSK500` needs ~1000 positions
+                    // at ~640 ms each — ~11 minutes for a 45 s listen), so it must be abandoned while
+                    // running. The budget is the audio the pass covers: a scan that cannot walk its own
+                    // buffer in less than real time can never catch up, because the buffer keeps growing.
+                    let retry_budget = Duration::from_secs_f64(
+                        retry_span_start as f64 / audio_cfg.sample_rate as f64,
+                    );
+                    let mut over_budget = false;
+                    for (scanned, start) in (0..=retry_end).step_by(step).enumerate() {
+                        // Check periodically rather than per position; the check is cheap but the
+                        // decode it guards is not, so granularity of ~16 positions is plenty.
+                        if scanned % 16 == 0 && retry_started.elapsed() > retry_budget {
+                            over_budget = true;
+                            break;
+                        }
                         let gate_end = (start + acq_samples).min(accumulated.len());
                         let gate_len = gate_end - start;
                         // Adaptive energy gate: skip silent positions.  The
@@ -2520,6 +2553,17 @@ impl ModemEngine {
                         }
                     }
                     self.afc_correction_hz = saved_afc;
+                    if over_budget {
+                        retry_over_budget = true;
+                    }
+                }
+                retry_cost_secs = retry_started.elapsed().as_secs_f64();
+                retry_span_secs = retry_span_start as f64 / audio_cfg.sample_rate as f64;
+                if retry_over_budget {
+                    debug!(
+                        "full-buffer retry exceeded its {retry_span_secs:.1} s budget after \
+                         {retry_cost_secs:.1} s — slower than real time, disabling further retries"
+                    );
                 }
             }
 
