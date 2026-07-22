@@ -8188,3 +8188,82 @@ and the actually-observed results per change.
 - **Not fixed, deliberately:** `64QAM2000-RRC` is unchanged — its frame is ~364 symbols, so the
   smoothing window spans a quarter of it and there is too little data either side of each symbol to
   read a local level. It needs a different mechanism.
+## 2026-07-22 — SCFDMA52-64QAM: the discriminating instrument, built and validated
+
+- **Requirement/change:** the "next step is instrumentation, not another probe" item closing the
+  2026-07-21 `SCFDMA52-64QAM` entry. Every measurement so far was taken *after* the DFT de-spread,
+  which averages all 52 subcarriers into every output symbol — past that point a single ruined
+  subcarrier and a uniformly degraded band are indistinguishable, which is why the mode's failure
+  stayed unattributed while `SCFDMA52-32QAM` decodes the same captured audio.
+- **Design decision:** a standalone diagnostic function rather than an `Option` field threaded
+  through `SoftDemodOutput`. The map found the pre-IDFT values are a local (`equalized`, consumed in
+  place one line later) in **five** near-identical loops; a new sibling of the existing shared front
+  end `equalized_data_symbols` adds no cost to any production receive and no field to a `Copy` struct.
+  Reference is the receiver's own hard decision re-spread by a forward DFT, so what it reports is
+  residual *after* equalization — what a channel-estimate or equalizer defect leaves behind — not raw
+  channel response. Absolute subcarrier indices are carried, not implied: spacing 5 gives 52 data
+  subcarriers and spacing 4 gives 49, so a bare vector would not be comparable against the `-P4`
+  variant it most needs comparing against.
+- **Implementation:** `plugins/scfdma/src/demodulate.rs` — `scfdma_subcarrier_evm_db`.
+- **Tests:** `plugins/scfdma/tests/subcarrier_evm.rs` — 4 tests, all about the *instrument*, because
+  a diagnostic that has not been checked against known inputs is not evidence. This repo has had four
+  invalid measurements in this investigation alone (the SRO estimator reading an injected 200 ppm as
+  −6.9 ppm; a capture recording a stray tone; a device probe mutating the enumeration it measured;
+  EVM against an assumed-square grid for a *cross*-32QAM mode), and every one looked plausible.
+- **Test results (run):** 4 passed / 0 failed.
+  - noiseless frame → **−75.9 dB** mean residual (gate: < −40), so the reconstruction is correctly
+    scaled and aligned;
+  - AWGN → mean tracks SNR monotonically (−29.8 / −20.2 / −16.8 dB at 30 / 20 / 14 dB) and **no
+    subcarrier stands more than 12 dB above the band mean**, so broadband reads as broadband;
+  - **the gate:** a notch injected at 1000 / 1500 / 2000 Hz peaks on subcarrier **32 / 48 / 64** —
+    exactly the subcarriers at those frequencies (8000/256 = 31.25 Hz spacing) — each ≥ 6 dB above the
+    band mean. The instrument localizes.
+  - index vector is absolute, strictly ascending, pilot-free, and the right length for both
+    `SCFDMA52-64QAM` (52) and `SCFDMA52-64QAM-P4` (49).
+- **NOT YET APPLIED to the failing capture.** The dual-soundcard rig's two USB adapters were not
+  connected during this session (`aplay -l` shows only snd-aloop, HDMI and the internal codec), and
+  the failure only reproduces there. The instrument is built and proven; running it on hardware audio
+  and reading off which subcarriers are damaged is the next step and needs the rig plugged in.
+  Recorded as pending rather than as a result — the conclusion this was built to reach has **not**
+  been reached.
+
+## 2026-07-22 — SCFDMA52-64QAM: the premise does not reproduce; the AGC does
+
+Run with the USB adapters connected, on the dual-card rig, after re-running
+`scripts/setup-dualcard-loopback.sh`.
+
+- **The inherited premise is wrong at HEAD.** `SCFDMA52-64QAM` **passes** on the dual-card rig with
+  `soft-concatenated` FEC: 3 of 4 invocations of `run-loopback-dualcard.sh` (each ≤3 attempts). The
+  2026-07-21 entry recorded 6/6 FAIL across `rs` / `soft-concatenated` / `ldpc`. It is *marginal* —
+  0/4 single-shot in a hand-rolled harness — but it is not the categorical failure the record claims.
+- **The capture-side AGC is a confirmed impairment — memory's "leading untested candidate", now
+  tested.** Clean two-direction ablation, 2 trials per cell, one variable (`amixer -c 4 cset name=
+  'Auto Gain Control'`):
+
+  | mode | AGC on | AGC off |
+  |---|---|---|
+  | `SCFDMA52-16QAM` | FAIL FAIL | **PASS PASS** |
+  | `SCFDMA52-32QAM` | FAIL FAIL | **PASS PASS** |
+
+  `setup-dualcard-loopback.sh` turns the AGC off, and the runner re-asserts it before every case — so
+  a session that did not re-run setup (the adapters had been unplugged, which resets mixer state)
+  measures a rig whose capture AGC is live. That produces exactly the pattern the record describes:
+  amplitude-carrying modes fail, phase-only modes pass. **This is the same mechanism as the
+  single-carrier 64QAM gain-wander finding** — a level that moves *during* a frame.
+- **Clipping/compression is dead — the number did not move.** SC-FDMA's ~10 dB PAPR puts peaks at
+  0.98 FS where the low-PAPR level-check waveform reads 0.79, which looked like a lead. But only
+  **2** samples in ~400k were near full scale, and EVM is **flat across a 3× level change**
+  (`SCFDMA52-64QAM` −6.5 / −6.5 / −6.4 dB at capture gain 16 / 10 / 6, peak 0.98 → 0.31).
+- **The instrument has a validity floor, found by using it.** `scfdma_subcarrier_evm_db`'s reference
+  is the receiver's own hard decisions, so localization holds to ≈ −11 dB mean EVM and is **lost by
+  −7.5 dB**. The hardware captures landed at −6.5 dB — *past* the floor — so their 24 dB spread and
+  +12 dB peak subcarrier are **not** readable as a narrowband defect, and were not reported as one.
+  Now documented on the function and pinned by `evm_localization_is_valid_only_above_its_measured_floor`.
+  The original validation only covered the mildly-impaired regime; a diagnostic must be checked in
+  the regime it will actually be used in.
+- **Two self-inflicted measurement errors, recorded.** (1) A hand-rolled harness gave
+  `SCFDMA52-64QAM` 0/5 because it keyed TX 2 s after starting the receiver (which needs ~6.4 s to
+  settle AFC) and killed it 3 s after TX instead of the runner's 12 s — cutting the scanning decode
+  short. **The failure was manufactured by the harness, not observed.** (2) The first captures were
+  recorded through `plughw:4,0` at 8 kHz, letting ALSA resample 48 k → 8 k; re-recording at the
+  native 48 kHz and downsampling with a polyphase filter offline is what made them measurable at all.
