@@ -283,7 +283,10 @@ fn track_gain_across_frame(i_syms: &[f32], q_syms: &[f32]) -> (Vec<f32>, Vec<f32
     // window mean. About the window mean and not the frame mean on purpose: the frame-mean spread
     // also contains the wander being tracked, so using it makes the deadband grow with the very
     // signal it is meant to let through, and the correction vanishes exactly when it is needed.
-    let resid_var = (0..m).map(|j| (pow[j] - window_mean(j)).powi(2)).sum::<f32>() / m as f32;
+    let resid_var = (0..m)
+        .map(|j| (pow[j] - window_mean(j)).powi(2))
+        .sum::<f32>()
+        / m as f32;
     let win = (2 * GAIN_TRACK_HALF_WIN + 1) as f32;
     // Standard error of a windowed POWER mean as a fraction; halved to convert to amplitude.
     let se_amp = 0.5 * resid_var.sqrt() / (frame_mean * win.sqrt());

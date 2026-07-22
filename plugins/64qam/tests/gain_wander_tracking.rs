@@ -37,7 +37,9 @@ fn cfg(mode: &str) -> ModulationConfig {
 }
 
 fn payload() -> Vec<u8> {
-    (0..255u32).map(|i| (i.wrapping_mul(37) & 0xff) as u8).collect()
+    (0..255u32)
+        .map(|i| (i.wrapping_mul(37) & 0xff) as u8)
+        .collect()
 }
 
 /// `1 + depth·sin(2π·f·t)` applied sample by sample.
@@ -72,7 +74,9 @@ fn byte_err(mode: &str, rx: &[f32], expect: &[u8]) -> f32 {
 fn a_two_hertz_fifteen_percent_level_wander_decodes_exactly() {
     let p = payload();
     for mode in ["64QAM500", "64QAM1000"] {
-        let tx = Qam64Plugin::new().modulate(&p, &cfg(mode)).expect("modulate");
+        let tx = Qam64Plugin::new()
+            .modulate(&p, &cfg(mode))
+            .expect("modulate");
         let rx = gain_wander(&tx, 8000.0, 2.0, 0.15);
         let err = byte_err(mode, &rx, &p);
         assert_eq!(
@@ -96,7 +100,9 @@ fn a_deep_level_wander_stays_inside_fec_capacity() {
     // from. It is unchanged by this pass (0.369 before and after) rather than regressed, and needs
     // a different mechanism — noted rather than silently dropped, so the gap stays visible.
     for mode in ["64QAM500", "64QAM1000"] {
-        let tx = Qam64Plugin::new().modulate(&p, &cfg(mode)).expect("modulate");
+        let tx = Qam64Plugin::new()
+            .modulate(&p, &cfg(mode))
+            .expect("modulate");
         let rx = gain_wander(&tx, 8000.0, 2.0, 0.30);
         let err = byte_err(mode, &rx, &p);
         assert!(
@@ -116,7 +122,9 @@ fn a_deep_level_wander_stays_inside_fec_capacity() {
 fn a_clean_frame_is_untouched() {
     let p = payload();
     for mode in ["64QAM500", "64QAM1000", "64QAM2000-RRC"] {
-        let tx = Qam64Plugin::new().modulate(&p, &cfg(mode)).expect("modulate");
+        let tx = Qam64Plugin::new()
+            .modulate(&p, &cfg(mode))
+            .expect("modulate");
         let err = byte_err(mode, &tx, &p);
         assert_eq!(
             err, 0.0,
@@ -135,7 +143,9 @@ fn a_clean_frame_is_untouched() {
 fn a_near_static_level_is_still_handled_by_the_static_fit() {
     let p = payload();
     for mode in ["64QAM500", "64QAM1000", "64QAM2000-RRC"] {
-        let tx = Qam64Plugin::new().modulate(&p, &cfg(mode)).expect("modulate");
+        let tx = Qam64Plugin::new()
+            .modulate(&p, &cfg(mode))
+            .expect("modulate");
         for depth in [0.05f32, 0.15, 0.30] {
             let rx = gain_wander(&tx, 8000.0, 0.1, depth);
             let err = byte_err(mode, &rx, &p);
