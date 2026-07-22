@@ -452,6 +452,139 @@ fn equalized_data_symbols(samples: &[f32], p: &ScFdmaParams) -> Option<Vec<Compl
     Some(syms)
 }
 
+/// Per-subcarrier error-vector magnitude (dB), measured **before** the DFT de-spread.
+///
+/// SC-FDMA de-spreads with an IDFT, which averages every subcarrier into every output symbol. That
+/// is the modulation's whole point on a selective channel — and it is also why a post-despread
+/// measurement cannot tell a *narrowband* impairment from a *broadband* one: one ruined subcarrier
+/// and a uniformly noisy band produce the same smeared constellation. `SCFDMA52-64QAM` fails on the
+/// dual-soundcard hardware loopback while decoding cleanly in-process and while `SCFDMA52-32QAM` —
+/// one constellation order down, same subcarriers, same pilots — decodes the *same* captured audio.
+/// A decode-threshold sweep put the mode's AWGN floor at 14 dB against a cable measuring 71 dB SNR,
+/// so whatever is doing the damage is not noise-like. This is the measurement that separates the
+/// remaining possibilities, taken at the only point where the per-subcarrier structure still exists.
+///
+/// Returns one `(absolute subcarrier index, EVM dB)` pair per data subcarrier, in ascending
+/// frequency order, averaged over every payload symbol in the frame. The absolute index is carried
+/// rather than implied because the data-subcarrier map differs between pilot spacings — spacing 5
+/// gives 52 data subcarriers, spacing 4 gives 49 — so a bare vector would not be comparable across
+/// the `-P4` variant it most needs comparing against.
+///
+/// The reference is the receiver's own hard decision, re-spread back to the frequency domain: decide
+/// each de-spread symbol, forward-DFT the decisions, and difference against what was equalized. So
+/// this measures residual *after* equalization, which is what a channel-estimate or equalizer defect
+/// would leave behind — not raw channel response. Diagnostic only: nothing in the decode path calls
+/// it, so it costs a production receive nothing.
+///
+/// `None` if the mode is unknown or sync fails.
+pub fn scfdma_subcarrier_evm_db(samples: &[f32], mode: &str) -> Option<Vec<(usize, f32)>> {
+    let p = params_for_mode(mode)?;
+    let sync = modulate_with_params(&preamble_payload(&p), &p);
+    if samples.len() < sync.len() + SYM_LEN {
+        return None;
+    }
+    let offset = find_sync_offset(samples, &sync)?;
+    let payload_start = offset + sync.len();
+    if payload_start >= samples.len() {
+        return None;
+    }
+    let samples = &samples[payload_start..];
+    if samples.len() / SYM_LEN == 0 {
+        return None;
+    }
+
+    let mut planner = FftPlanner::<f32>::new();
+    let idft = planner.plan_fft_inverse(p.n_data);
+    let dft = planner.plan_fft_forward(p.n_data);
+    let idft_scale = 1.0 / (p.n_data as f32).sqrt();
+    let ce = DelayCe::new(&p);
+    let front = FrameFront::new(samples, &p, (!p.localized).then_some(&ce));
+    if front.is_empty() {
+        return None;
+    }
+    let solver = front.solver(&p, &ce);
+    let ce_err = ce_error_var(&front, solver.as_ref());
+    let points = constellation_points(p.bits_per_sc);
+
+    let mut ema_h: Option<Vec<Complex32>> = None;
+    let mut err_pow = vec![0.0f64; p.n_data];
+    let mut ref_pow = vec![0.0f64; p.n_data];
+    let mut n_syms = 0usize;
+
+    for freq in &front.spectra {
+        let raw_h = front.estimate(&p, solver.as_ref(), freq);
+        let noise_var = front.noise_var_for(&p, solver.as_ref(), freq, &raw_h);
+        let h_est = smooth_ce(&mut ema_h, &raw_h);
+        let (_, alpha_avg) = mmse_llr_noise_var(&p, &h_est, noise_var, &ce_err);
+        if alpha_avg.abs() < 1e-9 {
+            continue;
+        }
+        let equalized = mmse_equalize(&p, freq, &h_est, noise_var);
+
+        // De-spread, decide, and re-spread the decisions to rebuild what a clean frame would have
+        // put on each subcarrier.
+        let mut despread = equalized.clone();
+        idft.process(&mut despread);
+        let mut redecided: Vec<Complex32> = despread
+            .iter()
+            .map(|c| {
+                let sym = c * idft_scale / alpha_avg;
+                // Nearest constellation point by Euclidean distance, taken directly over the point
+                // table rather than through `demap_symbol` — that returns a bit pattern, and mapping
+                // it back to a point would just re-do this search through a lookup.
+                let decided = points
+                    .iter()
+                    .min_by(|a, b| {
+                        (sym - a.1)
+                            .norm_sqr()
+                            .total_cmp(&(sym - b.1).norm_sqr())
+                    })
+                    .map(|(_, pt)| *pt)
+                    .unwrap_or(sym);
+                // Undo the same scaling, so the forward transform below lands back on `equalized`'s
+                // scale rather than the constellation's.
+                decided * alpha_avg / idft_scale
+            })
+            .collect();
+        dft.process(&mut redecided);
+
+        // rustfft is unnormalized, so a forward-after-inverse round trip carries a factor of n_data.
+        let norm = 1.0 / p.n_data as f32;
+        for k in 0..p.n_data {
+            let reference = redecided[k] * norm;
+            let residual = equalized[k] - reference;
+            err_pow[k] += f64::from(residual.norm_sqr());
+            ref_pow[k] += f64::from(reference.norm_sqr());
+        }
+        n_syms += 1;
+    }
+
+    if n_syms == 0 {
+        return None;
+    }
+
+    // Data subcarriers in ascending absolute order — the same walk `mmse_equalize` uses to fill
+    // `equalized`, so index `k` here is subcarrier `sc` there.
+    let data_scs: Vec<usize> = (p.first_sc..=p.last_sc)
+        .filter(|&sc| !crate::channel::is_pilot(&p, sc))
+        .collect();
+
+    Some(
+        data_scs
+            .into_iter()
+            .enumerate()
+            .map(|(k, sc)| {
+                let evm_db = if ref_pow[k] > 0.0 {
+                    10.0 * (err_pow[k] / ref_pow[k]).log10() as f32
+                } else {
+                    f32::NAN
+                };
+                (sc, evm_db)
+            })
+            .collect(),
+    )
+}
+
 /// Equalized, de-spread constellation symbols for display — the real QAM scatter the receiver
 /// recovers, normalized to RMS ≈ 1 and capped in point count. Returns `None` if the mode is unknown
 /// or sync fails. Display-only.

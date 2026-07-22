@@ -8188,3 +8188,41 @@ and the actually-observed results per change.
 - **Not fixed, deliberately:** `64QAM2000-RRC` is unchanged — its frame is ~364 symbols, so the
   smoothing window spans a quarter of it and there is too little data either side of each symbol to
   read a local level. It needs a different mechanism.
+## 2026-07-22 — SCFDMA52-64QAM: the discriminating instrument, built and validated
+
+- **Requirement/change:** the "next step is instrumentation, not another probe" item closing the
+  2026-07-21 `SCFDMA52-64QAM` entry. Every measurement so far was taken *after* the DFT de-spread,
+  which averages all 52 subcarriers into every output symbol — past that point a single ruined
+  subcarrier and a uniformly degraded band are indistinguishable, which is why the mode's failure
+  stayed unattributed while `SCFDMA52-32QAM` decodes the same captured audio.
+- **Design decision:** a standalone diagnostic function rather than an `Option` field threaded
+  through `SoftDemodOutput`. The map found the pre-IDFT values are a local (`equalized`, consumed in
+  place one line later) in **five** near-identical loops; a new sibling of the existing shared front
+  end `equalized_data_symbols` adds no cost to any production receive and no field to a `Copy` struct.
+  Reference is the receiver's own hard decision re-spread by a forward DFT, so what it reports is
+  residual *after* equalization — what a channel-estimate or equalizer defect leaves behind — not raw
+  channel response. Absolute subcarrier indices are carried, not implied: spacing 5 gives 52 data
+  subcarriers and spacing 4 gives 49, so a bare vector would not be comparable against the `-P4`
+  variant it most needs comparing against.
+- **Implementation:** `plugins/scfdma/src/demodulate.rs` — `scfdma_subcarrier_evm_db`.
+- **Tests:** `plugins/scfdma/tests/subcarrier_evm.rs` — 4 tests, all about the *instrument*, because
+  a diagnostic that has not been checked against known inputs is not evidence. This repo has had four
+  invalid measurements in this investigation alone (the SRO estimator reading an injected 200 ppm as
+  −6.9 ppm; a capture recording a stray tone; a device probe mutating the enumeration it measured;
+  EVM against an assumed-square grid for a *cross*-32QAM mode), and every one looked plausible.
+- **Test results (run):** 4 passed / 0 failed.
+  - noiseless frame → **−75.9 dB** mean residual (gate: < −40), so the reconstruction is correctly
+    scaled and aligned;
+  - AWGN → mean tracks SNR monotonically (−29.8 / −20.2 / −16.8 dB at 30 / 20 / 14 dB) and **no
+    subcarrier stands more than 12 dB above the band mean**, so broadband reads as broadband;
+  - **the gate:** a notch injected at 1000 / 1500 / 2000 Hz peaks on subcarrier **32 / 48 / 64** —
+    exactly the subcarriers at those frequencies (8000/256 = 31.25 Hz spacing) — each ≥ 6 dB above the
+    band mean. The instrument localizes.
+  - index vector is absolute, strictly ascending, pilot-free, and the right length for both
+    `SCFDMA52-64QAM` (52) and `SCFDMA52-64QAM-P4` (49).
+- **NOT YET APPLIED to the failing capture.** The dual-soundcard rig's two USB adapters were not
+  connected during this session (`aplay -l` shows only snd-aloop, HDMI and the internal codec), and
+  the failure only reproduces there. The instrument is built and proven; running it on hardware audio
+  and reading off which subcarriers are damaged is the next step and needs the rig plugged in.
+  Recorded as pending rather than as a result — the conclusion this was built to reach has **not**
+  been reached.
