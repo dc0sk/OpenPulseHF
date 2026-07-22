@@ -8344,3 +8344,35 @@ representative of this hardware.
   *type* line is the number of values the control holds, not its state — so the guard read every card
   as "on" and refused a correctly-configured rig. Found by running the control case first. A guard
   that has only been tested in its firing direction is half-tested.
+
+## 2026-07-22 — SCFDMA52-64QAM-P4: not a separate defect, the same cliff with less margin
+
+The last mode still failing on the dual-card rig after the AGC misclassification was cleared.
+
+- **The phenomenon is real and robust.** 5 fresh runner reps on a verified-normalised rig:
+  `SCFDMA52-64QAM` **3/5**, `SCFDMA52-64QAM-P4` **0/5** (0/8 including earlier runs).
+- **It inverts in-process, which is what made it look like a defect.** `-P4` is the *dense-pilot*
+  variant (16 pilots at spacing 4 vs 13 at spacing 5) and is the **better** mode on the bench —
+  uncoded AWGN 8/8 vs 6/8 at 25 dB, clean EVM −78.3 vs −75.9 dB. More pilots helping in-process and
+  appearing to hurt on hardware is the signature this repo treats as a bug.
+- **Four mechanisms proposed and killed, each by measurement:**
+  - **band-edge extrapolation.** Real and structural: `-64QAM`'s last pilot sits *on* `last_sc` (80),
+    while `-P4`'s is at 79, so SC 80 is data the channel estimate must **extrapolate**. Visible in the
+    per-subcarrier EVM (SC 80 reads ~10 dB worse than its neighbours) — and **harmless**: under a
+    one-pole HF tilt at α = 0.7/0.5/0.35 both modes decode and mean EVM stays at −74 dB.
+  - **sample-rate offset.** Both modes decode to **100 ppm**; the rig measures 0.10 ppm.
+  - **frame location.** Both modes decode through the engine's *scanning* receive with the frame
+    embedded in a long capture (leads of 0/1 000/7 919/40 000 samples), on both `SoftConcatenated`
+    and `Rs`. The #995 class of defect is not present here.
+  - **a spectral difference.** The two modes' hardware captures are indistinguishable band by band.
+- **What the measurement actually says.** Hardware mean EVM: `-64QAM` **−7.4 dB**, `-P4` **−6.8 dB**
+  — 0.6 dB apart, both at the decode cliff, and both *below* `scfdma_subcarrier_evm_db`'s validity
+  floor, so neither profile is readable for attribution. That is consistent with `-P4` being the same
+  marginal case with slightly less margin (it carries 49 data subcarriers to `-64QAM`'s 52, so the
+  same payload needs a ~3 % longer frame), and **not** with a distinct defect.
+- **Conclusion, stated as a limit rather than a finding:** no mechanism was identified, and the
+  evidence now points away from there being a separate one to find. Both SC-FDMA 64QAM modes sit at
+  the edge of what this analog path supports for a DFT-spread 64QAM waveform; `-P4` sits slightly
+  further over it. Re-attempting this needs either a *better* instrument (one whose reference does not
+  degenerate at −7 dB EVM — the decision-directed reference is the binding limit) or a rig with more
+  margin, not another hypothesis.
