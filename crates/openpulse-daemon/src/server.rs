@@ -706,12 +706,23 @@ pub async fn run(cfg: OpenpulseConfig, modem_backend: Box<dyn AudioBackend>) -> 
                 // then listen for the peer's ACK and adopt its recommendation. Handled
                 // here rather than in apply_command_to_engine so PTT is sequenced
                 // around the half-duplex turnaround.
+                // Baseline for the post-arm capture-stream drop below.
+                let tx_frames_before_cmd = engine.frames_transmitted();
                 let mut ota_send_handled = false;
                 if let crate::Command::SendMessage { body, to, .. } = &cmd {
                     // Suppress adaptive OTA (fixed-mode fallback) when a verified peer's rate ladder
                     // differs from ours — a `recommended_level` would otherwise mean different modes.
                     if engine.ota_active() && !runtime_state.ota_suppressed_by_peer() {
                         ota_send_handled = true;
+                        // Close the persistent capture stream before keying (audit #917, finding #6).
+                        // `receive_ota_ack_within` opens its OWN capture stream for the ACK window, so
+                        // leaving this one open puts two concurrent input streams on one device — which
+                        // an exclusive ALSA `hw:` device refuses outright, making the ACK unreceivable.
+                        // It also cannot be usefully left open: nothing reads it for the whole
+                        // transmit + ACK window (up to ~9 s per attempt), so on cpal the capture
+                        // callback appends to an unbounded buffer and the next receive tick is handed
+                        // one multi-second blob of during-transmit audio. The rx tick reopens lazily.
+                        rx_stream = None;
                         // Compress the session payload on the wire when enabled; the peer's rx tick
                         // unpacks the self-describing frame. Falls back to raw bytes when disabled.
                         let payload = if compress_tx {
@@ -740,6 +751,18 @@ pub async fn run(cfg: OpenpulseConfig, modem_backend: Box<dyn AudioBackend>) -> 
                     &handle.event_tx,
                     &mut runtime_state,
                 );
+                // Any keyed transmit on this arm — the OTA send above, a file-transfer burst, a
+                // CONREQ or QSY frame from `apply_command_to_engine` — blocks the loop while nothing
+                // reads `rx_stream`. On cpal that capture buffer is unbounded, so whatever it holds is
+                // audio captured while this station was transmitting: never decodable, and delivered
+                // to the next receive tick as one discontinuous multi-second blob. Drop it so the tick
+                // reopens clean. Keyed on the transmit counter rather than the command variant so a
+                // future keyed command cannot silently miss this (the OTA path was the one that got
+                // noticed; the siblings were not). Non-transmitting commands keep their stream, which
+                // is what stops a status-poll flood from thrashing the device open/closed.
+                if engine.frames_transmitted() != tx_frames_before_cmd {
+                    rx_stream = None;
+                }
             }
             _ = rx_ticker.tick() => {
                 // Belt-and-suspenders: also check the watchdog on the rx tick (idempotent — it fires
