@@ -197,6 +197,81 @@ _normalise() {  # disable AGC, restore moderate capture gain on both cards
     done
 }
 
+# Read the AGC state of a card: "off", "on", or "" when the card has no such control.
+#
+# Parses ONLY the value line, which `amixer cget` prefixes with ':' —
+#     ; type=BOOLEAN,access=rw------,values=1
+#     : values=off
+# The `values=1` on the *type* line is the number of values the control carries, not its state.
+# Matching `values=` anywhere reads that as "on" and makes the guard fire on a correctly-configured
+# rig, which is how the first version of this function behaved.
+_agc_state() {
+    local line
+    line="$(amixer -c "$1" cget name='Auto Gain Control' 2>/dev/null | sed -n 's/^[[:space:]]*:[[:space:]]*values=//p')" || return 0
+    [[ -z "$line" ]] && return 0
+    if [[ "${line%%,*}" == "on" || "${line%%,*}" == "1" ]]; then echo on; else echo off; fi
+}
+
+# Refuse to run a sweep on a rig whose capture AGC is live.
+#
+# `_normalise` SETS the mixers but cannot tell whether it worked: it `continue`s past an unresolved
+# card, and every `amixer` call ends in `|| true`, so a wrong card index or a renamed control is
+# silently a no-op. That is not hypothetical. ALSA assigns card indices in enumeration order, and
+# unplugging the adapters resets their mixer state — so a session that ran a sweep without re-running
+# `setup-dualcard-loopback.sh` measured a rig whose capture AGC was ON, and recorded the result as a
+# property of the waveform.
+#
+# It cost eight modes a wrong classification. A capture AGC moves the level *during* a frame, so it
+# destroys exactly the amplitude-carrying modes (64QAM, the dense SC-FDMA QAMs) and leaves the
+# phase-only ones alone — which reads convincingly as "these modes can't survive the analog path".
+# Re-run on a normalised rig, six of those eight passed with no code change at all (2026-07-22).
+# Ablated directly: SCFDMA52-16QAM and -32QAM each FAIL 2/2 with the AGC on and PASS 2/2 with it off.
+#
+# So: verify, and abort loudly. A sweep that silently measures the wrong rig is worse than one that
+# refuses to start.
+_preflight_mixers() {
+    local bad=0 c label idx state hot=()
+
+    # Scan EVERY card that has the control, not just the two this script resolved. The failure this
+    # guards against is `_normalise` touching the wrong card, and a guard that trusts the same
+    # resolution would read the wrong card too and pass. Card indices shift on re-probe (2026-07-19:
+    # `acp` moved 3 -> 4 mid-session and hwloop_tx silently followed), which is exactly when the
+    # resolution is wrong and the check most needs to be independent of it.
+    for idx in $(sed -n 's/^ *\([0-9]\+\) \[.*/\1/p' /proc/asound/cards 2>/dev/null); do
+        [[ "$(_agc_state "$idx")" == "on" ]] && hot+=("$idx")
+    done
+    if [[ ${#hot[@]} -gt 0 ]]; then
+        echo "ERROR: capture AGC is ON for card(s): ${hot[*]}" >&2
+        for idx in "${hot[@]}"; do
+            echo "  amixer -c ${idx} cset name='Auto Gain Control' off" >&2
+        done
+        echo "  ...or re-run scripts/setup-dualcard-loopback.sh (mixer state resets on replug)." >&2
+        bad=1
+    fi
+
+    # An unresolved card means `_normalise` silently skipped it — the state above may be luck.
+    for c in "$TX_CARD:TX" "$RX_CARD:RX"; do
+        label="${c##*:}"; c="${c%%:*}"
+        if [[ -z "$c" ]]; then
+            echo "ERROR: could not resolve the ${label} card from ~/.asoundrc, so mixer" >&2
+            echo "  normalisation is silently skipped for it." >&2
+            echo "  Run: scripts/setup-dualcard-loopback.sh" >&2
+            bad=1
+        fi
+    done
+
+    if [[ $bad -ne 0 ]]; then
+        echo "Refusing to sweep: results from a rig with a live capture AGC are not attributable" >&2
+        echo "to the modem. Set AGC_PREFLIGHT=0 to override (and say so in whatever you report)." >&2
+        exit 1
+    fi
+}
+
+if [[ "${AGC_PREFLIGHT:-1}" != "0" ]]; then
+    _normalise
+    _preflight_mixers
+fi
+
 # ── Level check: confirm the analog cable carries TX -> RX at a sane level ────
 # Measures the actual captured RMS/peak with arecord (reliable; the modem build
 # logs no energy line) while the modem transmits, so it catches both a missing

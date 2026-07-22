@@ -8315,3 +8315,32 @@ claim must be scoped to the *synthetic* sinusoidal level wander it was measured 
 capture AGC is a harsher and differently-shaped impairment (attack/decay at burst onset, not a slow
 sinusoid) that the fix does **not** rescue. The mechanism class is right; the model of it is not
 representative of this hardware.
+## 2026-07-22 — the rig refuses to sweep with a live capture AGC
+
+- **Requirement/change:** prevent a recurrence of the misclassification recorded above, where eight
+  modes were attributed to the "analog path" while the rig's capture AGC was on.
+- **Why the existing normalisation was not enough.** `run-loopback-dualcard.sh`'s `_normalise` *sets*
+  the mixers but cannot tell whether it worked: it `continue`s past an unresolved card, and every
+  `amixer` call ends in `|| true`, so a wrong card index or a renamed control is silently a no-op.
+  `setup-dualcard-loopback.sh` likewise *announced* "AGC off" without reading it back. ALSA assigns
+  card indices in enumeration order and they shift on re-probe, which is precisely when the
+  resolution is wrong and the claim is false.
+- **Design decision — the guard must not trust the same resolution it is checking.** The runner's
+  preflight scans **every** card in `/proc/asound/cards` that exposes an `Auto Gain Control`, rather
+  than only the two it resolved. A guard keyed to `TX_CARD`/`RX_CARD` would read the wrong card in
+  exactly the scenario it exists for. Unresolved-card detection is kept as a separate check, since a
+  skipped normalisation makes a passing read luck rather than evidence. Override: `AGC_PREFLIGHT=0`.
+- **Implementation:** `scripts/run-loopback-dualcard.sh` — `_agc_state`, `_preflight_mixers`, run
+  once at startup after `_normalise`. `scripts/setup-dualcard-loopback.sh` — reads the AGC back and
+  exits non-zero rather than printing an unverified claim; the success line now says "verified".
+- **Tests (run):** sabotage-verified in both directions with a stub `amixer` that delegates to the
+  real binary but reports the AGC as permanently on:
+  - control, AGC genuinely off → runner proceeds, `SCFDMA16` PASS 1/1; setup prints "AGC off [verified]";
+  - AGC stuck on → setup exits 1 naming cards 5 and 4; runner refuses, naming the hot cards;
+  - card resolution lost (`TX_CARD`/`RX_CARD` unresolvable, so `_normalise` is skipped) with the AGC
+    left on → runner refuses and names card 4, proving the scan does not depend on the resolution.
+- **A defect in the first version of the guard, caught by its own control.** `_agc_state` matched
+  `values=` anywhere in `amixer cget` output. That output carries two such fields — `values=1` on the
+  *type* line is the number of values the control holds, not its state — so the guard read every card
+  as "on" and refused a correctly-configured rig. Found by running the control case first. A guard
+  that has only been tested in its firing direction is half-tested.

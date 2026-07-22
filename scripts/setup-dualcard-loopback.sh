@@ -99,7 +99,30 @@ _normalise_card() {  # card-index
 }
 _normalise_card "$TX_IDX"
 _normalise_card "$RX_IDX"
-echo "==> normalised mixers (AGC off, capture=${CAPTURE_GAIN}, speaker max, sidetone off) on both cards"
+
+# Read the AGC back rather than announcing it. Every `amixer` call above ends in `|| true`, so a
+# renamed control or a card that has since moved leaves this claiming a state it did not set — and a
+# live capture AGC moves the level *during* a frame, which reads downstream as the amplitude-carrying
+# modes (64QAM, the dense SC-FDMA QAMs) failing on the analog path. That misclassified eight modes
+# until the rig was re-normalised and six of them passed unchanged (2026-07-22).
+_agc_is_on() {  # card-index
+    local v
+    v="$(amixer -c "$1" cget name='Auto Gain Control' 2>/dev/null | sed -n 's/^[[:space:]]*:[[:space:]]*values=//p')"
+    [[ "${v%%,*}" == "on" || "${v%%,*}" == "1" ]]
+}
+_agc_bad=0
+for _i in "$TX_IDX" "$RX_IDX"; do
+    if _agc_is_on "$_i"; then
+        echo "ERROR: capture AGC is still ON for card ${_i} after normalisation." >&2
+        echo "  amixer -c ${_i} cset name='Auto Gain Control' off" >&2
+        _agc_bad=1
+    fi
+done
+if [[ $_agc_bad -ne 0 ]]; then
+    echo "Sweep results from this rig would not be attributable to the modem." >&2
+    exit 1
+fi
+echo "==> normalised mixers (AGC off [verified], capture=${CAPTURE_GAIN}, speaker max, sidetone off) on both cards"
 
 # 3) Verify cpal enumerates them.
 BIN="${OPENPULSE_BIN:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/target/release/openpulse}"
