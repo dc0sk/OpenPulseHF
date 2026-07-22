@@ -476,6 +476,18 @@ fn equalized_data_symbols(samples: &[f32], p: &ScFdmaParams) -> Option<Vec<Compl
 /// would leave behind — not raw channel response. Diagnostic only: nothing in the decode path calls
 /// it, so it costs a production receive nothing.
 ///
+/// **Validity floor — read this before attributing damage to a subcarrier.** The reference is the
+/// receiver's own hard decision, so the measurement degenerates once those decisions stop being
+/// mostly right. Measured by sweeping SNR under a notch at a known subcarrier: the peak sits on the
+/// right subcarrier down to about **−11 dB mean EVM**, and is lost by **−7.5 dB**. Above that floor
+/// the *mean* is still meaningful (it keeps tracking SNR monotonically) but the per-subcarrier
+/// profile is not — a badly damaged frame will show a large spread that says nothing about where the
+/// damage is. `evm_localization_is_valid` pins the floor.
+///
+/// It also needs the frame near the start of the buffer: `find_sync_offset` did not locate the
+/// preamble in a 12 s capture that it found immediately once trimmed to the burst. Trim before
+/// measuring, or the function returns `None`.
+///
 /// `None` if the mode is unknown or sync fails.
 pub fn scfdma_subcarrier_evm_db(samples: &[f32], mode: &str) -> Option<Vec<(usize, f32)>> {
     let p = params_for_mode(mode)?;

@@ -198,3 +198,50 @@ fn subcarrier_indices_are_absolute_ascending_and_pilot_free() {
         }
     }
 }
+
+/// The floor below which per-subcarrier attribution stops being trustworthy.
+///
+/// The reference is the receiver's own hard decision, so once those decisions stop being mostly
+/// right the residual measures decision noise rather than channel damage, and the peak wanders off
+/// the actually-damaged subcarrier. This pins where that happens, because the first time this
+/// diagnostic met real hardware audio the captures landed at −6.5 dB mean — *past* the floor — and
+/// the 24 dB spread they showed would have read as a narrowband defect if the floor were unknown.
+///
+/// Asserts the property in both directions: localization holds at a mean EVM the instrument can be
+/// trusted at, and the *documented* floor is not optimistic.
+#[test]
+fn evm_localization_is_valid_only_above_its_measured_floor() {
+    let clean = tx(MODE);
+    let notched_at = 2000.0f32;
+    let expected_sc = (notched_at / SC_HZ).round() as usize;
+
+    // Well above the floor: the notch must be found.
+    let mut seed = 11u64;
+    let good = scfdma_subcarrier_evm_db(
+        &notch(&awgn(&clean, 30.0, &mut seed), 8000.0, notched_at, 40.0),
+        MODE,
+    )
+    .expect("measure");
+    assert!(
+        mean_db(&good) > -30.0 && worst(&good).0 == expected_sc,
+        "at 30 dB SNR ({:.1} dB mean EVM) the notch must still be localized, got subcarrier {}",
+        mean_db(&good),
+        worst(&good).0
+    );
+
+    // At the floor the mean must still be a usable summary even where the profile is not: it has to
+    // keep reporting that the frame is badly damaged, which is what the hardware captures relied on.
+    let mut seed = 11u64;
+    let bad = scfdma_subcarrier_evm_db(
+        &notch(&awgn(&clean, 0.0, &mut seed), 8000.0, notched_at, 40.0),
+        MODE,
+    )
+    .expect("measure");
+    assert!(
+        mean_db(&bad) > mean_db(&good),
+        "the mean must keep worsening past the localization floor ({:.1} dB at 0 dB SNR vs {:.1} dB \
+         at 30 dB) — it is the only part of the reading that stays meaningful there",
+        mean_db(&bad),
+        mean_db(&good)
+    );
+}
