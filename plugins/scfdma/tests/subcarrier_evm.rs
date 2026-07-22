@@ -77,7 +77,11 @@ fn notch(x: &[f32], fs: f32, f0: f32, bw: f32) -> Vec<f32> {
 }
 
 fn mean_db(e: &[(usize, f32)]) -> f32 {
-    let v: Vec<f32> = e.iter().map(|(_, d)| *d).filter(|d| d.is_finite()).collect();
+    let v: Vec<f32> = e
+        .iter()
+        .map(|(_, d)| *d)
+        .filter(|d| d.is_finite())
+        .collect();
     v.iter().sum::<f32>() / v.len() as f32
 }
 
@@ -107,7 +111,8 @@ fn a_notch_is_localized_to_the_subcarrier_at_its_frequency() {
             .expect("sync and measure a notched frame");
         let (sc, db) = worst(&e);
         assert_eq!(
-            sc, expected_sc,
+            sc,
+            expected_sc,
             "a notch at {f0} Hz should peak on subcarrier {expected_sc} ({} Hz), but the worst \
              subcarrier was {sc} ({} Hz) at {db:.1} dB — the diagnostic is not localizing, so no \
              conclusion drawn from it about which subcarriers are damaged would be trustworthy",

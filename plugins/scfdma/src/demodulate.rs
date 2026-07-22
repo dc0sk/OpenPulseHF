@@ -534,11 +534,7 @@ pub fn scfdma_subcarrier_evm_db(samples: &[f32], mode: &str) -> Option<Vec<(usiz
                 // it back to a point would just re-do this search through a lookup.
                 let decided = points
                     .iter()
-                    .min_by(|a, b| {
-                        (sym - a.1)
-                            .norm_sqr()
-                            .total_cmp(&(sym - b.1).norm_sqr())
-                    })
+                    .min_by(|a, b| (sym - a.1).norm_sqr().total_cmp(&(sym - b.1).norm_sqr()))
                     .map(|(_, pt)| *pt)
                     .unwrap_or(sym);
                 // Undo the same scaling, so the forward transform below lands back on `equalized`'s
