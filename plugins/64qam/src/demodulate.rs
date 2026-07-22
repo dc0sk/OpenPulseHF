@@ -199,6 +199,118 @@ fn normalize_to_constellation(i_syms: &[f32], q_syms: &[f32]) -> (Vec<f32>, Vec<
     )
 }
 
+/// Half-width, in symbols, of the window each local level estimate is taken over.
+const GAIN_TRACK_HALF_WIN: usize = 48;
+
+/// How many standard errors of the level estimator a correction must clear before any of it is applied.
+const GAIN_TRACK_SHRINK_SIGMAS: f32 = 2.5;
+
+/// Track the amplitude reference *across* the frame, not just at its start.
+///
+/// `normalize_to_constellation` fits ONE scalar gain from the 16-symbol preamble and applies it to
+/// every symbol. That is right for inter-station level spread, which is constant, and wrong for
+/// anything that moves the level *during* a frame — a capture-side soundcard AGC riding its own
+/// attack/decay, or HF QSB. 64QAM carries three of its six bits per axis in amplitude, so a level
+/// that drifts mid-frame slides the outer PAM-8 rings across their decision boundaries while the
+/// phase is still perfect. The carrier loop already tracks phase mid-frame; nothing tracked
+/// amplitude.
+///
+/// Ablated with **no AWGN at all**, so no cell below is a noise limitation. `64QAM500` byte error
+/// rate under sinusoidal wander, before → after this pass:
+///
+/// | wander | depth 0.05 | 0.15 | 0.30 |
+/// |---|---|---|---|
+/// | gain, 0.5 Hz | 0.000 → 0.000 | 0.000 → 0.000 | 0.341 → 0.341 |
+/// | gain, 2 Hz | 0.000 → 0.000 | **0.102 → 0.000** | **0.318 → 0.094** |
+/// | phase, 0.5 Hz | 0.000 | 0.000 | 0.027 |
+/// | phase, 2 Hz | 0.000 | 0.125 | 0.447 |
+///
+/// The phase row is the control that made this worth writing: at the slow rates a soundcard AGC
+/// actually produces, gain wander is an order of magnitude more damaging than the same fractional
+/// phase wander (0.341 vs 0.027 at 0.5 Hz), and it was the one nothing corrected.
+///
+/// **What this does not fix**, and why it is left alone. The pass removes the *variation* in level
+/// across the frame; it does not move the frame's absolute scale, so it cannot help when the
+/// preamble happens to sit at a different level from the frame average — the 0.5 Hz / 0.30 column,
+/// where a frame spanning less than one wander cycle is uniformly mis-scaled. Re-anchoring
+/// afterwards (re-running the static preamble fit on the now-flat frame) does fix that column, and
+/// was tried: it broke `window_arq_engine_path_across_mode_families` with an RS `TooManyErrors` on a
+/// clean loopback, because on a matched level the static fit is only *approximately* unity and
+/// applying it twice compounds the residual into a systematic scale error the dense grid cannot
+/// absorb. A correction that costs a clean frame to rescue an extreme one is the wrong trade.
+///
+/// Blind rather than decision-directed, which was also measured: a DD version (project each symbol
+/// onto its decided point, smooth the ratios) helps where decisions are already mostly right and
+/// *amplifies* the error where they are not, because the wrong decisions feed straight back into the
+/// gain — it took `64QAM2000-RRC` at 2 Hz/0.15 from 0.012 to 0.102. A level estimate must not depend
+/// on the decisions it is about to correct.
+fn track_gain_across_frame(i_syms: &[f32], q_syms: &[f32]) -> (Vec<f32>, Vec<f32>) {
+    let n = i_syms.len();
+    // The level is read from the DATA symbols only. The preamble is equal-magnitude corner symbols
+    // and the tail is not payload either, so both sit far off the 64QAM average power — letting them
+    // into the windows makes the estimator read a level step at each frame edge and "correct" it,
+    // which is worse than not tracking at all.
+    if n <= PREAMBLE_SYMS + TAIL_SYMS {
+        return (i_syms.to_vec(), q_syms.to_vec());
+    }
+    let (lo_d, hi_d) = (PREAMBLE_SYMS, n - TAIL_SYMS);
+    let m = hi_d - lo_d;
+    if m < 2 * GAIN_TRACK_HALF_WIN + 1 {
+        return (i_syms.to_vec(), q_syms.to_vec());
+    }
+
+    let pow: Vec<f32> = (lo_d..hi_d)
+        .map(|k| i_syms[k] * i_syms[k] + q_syms[k] * q_syms[k])
+        .collect();
+    let mut cum = vec![0.0f32; m + 1];
+    for k in 0..m {
+        cum[k + 1] = cum[k] + pow[k];
+    }
+    let frame_mean = cum[m] / m as f32;
+    if frame_mean <= 1e-9 {
+        return (i_syms.to_vec(), q_syms.to_vec());
+    }
+
+    // Windowed mean at data index `j`; symbols outside the data range take the nearest edge value.
+    let window_mean = |j: usize| {
+        let j = j.min(m - 1);
+        let lo = j.saturating_sub(GAIN_TRACK_HALF_WIN);
+        let hi = (j + GAIN_TRACK_HALF_WIN + 1).min(m);
+        (cum[hi] - cum[lo]) / (hi - lo) as f32
+    };
+
+    // Noise floor of a windowed level estimate, from the spread of each symbol's power about its OWN
+    // window mean. About the window mean and not the frame mean on purpose: the frame-mean spread
+    // also contains the wander being tracked, so using it makes the deadband grow with the very
+    // signal it is meant to let through, and the correction vanishes exactly when it is needed.
+    let resid_var = (0..m).map(|j| (pow[j] - window_mean(j)).powi(2)).sum::<f32>() / m as f32;
+    let win = (2 * GAIN_TRACK_HALF_WIN + 1) as f32;
+    // Standard error of a windowed POWER mean as a fraction; halved to convert to amplitude.
+    let se_amp = 0.5 * resid_var.sqrt() / (frame_mean * win.sqrt());
+    let deadband = GAIN_TRACK_SHRINK_SIGMAS * se_amp;
+
+    let mut i_out = Vec::with_capacity(n);
+    let mut q_out = Vec::with_capacity(n);
+    for k in 0..n {
+        let mean = window_mean(k.saturating_sub(lo_d));
+        // Referenced to the frame mean, not to the constellation's nominal power: this pass only
+        // de-trends the level ACROSS the frame. An absolute reference would fold the noise power
+        // into the estimate and systematically shrink the constellation at low SNR — a 4.7 % squeeze
+        // at 10 dB, a third of the outer ring's decision margin — moving the LLR calibration with it.
+        let g = if mean > 1e-9 {
+            (frame_mean / mean).sqrt()
+        } else {
+            1.0
+        };
+        let d = g - 1.0;
+        let shrunk = (1.0 + d.signum() * (d.abs() - deadband).max(0.0)).clamp(0.75, 1.25);
+        i_out.push(i_syms[k] * shrunk);
+        q_out.push(q_syms[k] * shrunk);
+    }
+    // NOT re-anchored, deliberately — see the "what this does not fix" note on the function.
+    (i_out, q_out)
+}
+
 // ── IQ demodulation (rectangular integration path) ───────────────────────────
 //
 // Deliberately rectangular, NOT the half-Hann window used by the PSK plugins:
@@ -500,6 +612,8 @@ pub fn qam64_demodulate(samples: &[f32], config: &ModulationConfig) -> Result<Ve
     // Track residual carrier frequency drift across the frame (hardware crystal
     // offset); static phase correction alone cannot follow it on the dense grid.
     let (i_syms, q_syms) = dd_carrier_track_2pass(&i_syms, &q_syms, 0.01);
+    // Then track the AMPLITUDE reference across the frame; the preamble fit above is static.
+    let (i_syms, q_syms) = track_gain_across_frame(&i_syms, &q_syms);
 
     if i_syms.len() <= PREAMBLE_SYMS + TAIL_SYMS {
         return Err(ModemError::Demodulation(
@@ -546,6 +660,8 @@ pub fn qam64_demodulate_soft(
     // Track residual carrier frequency drift across the frame (hardware crystal
     // offset); static phase correction alone cannot follow it on the dense grid.
     let (i_syms, q_syms) = dd_carrier_track_2pass(&i_syms, &q_syms, 0.01);
+    // Then track the AMPLITUDE reference across the frame; the preamble fit above is static.
+    let (i_syms, q_syms) = track_gain_across_frame(&i_syms, &q_syms);
 
     if i_syms.len() <= PREAMBLE_SYMS + TAIL_SYMS {
         return Err(ModemError::Demodulation(
@@ -636,6 +752,8 @@ pub fn qam64_demodulate_soft_gpu(
     // Track residual carrier frequency drift across the frame (hardware crystal
     // offset); static phase correction alone cannot follow it on the dense grid.
     let (i_syms, q_syms) = dd_carrier_track_2pass(&i_syms, &q_syms, 0.01);
+    // Then track the AMPLITUDE reference across the frame; the preamble fit above is static.
+    let (i_syms, q_syms) = track_gain_across_frame(&i_syms, &q_syms);
 
     if i_syms.len() <= PREAMBLE_SYMS + TAIL_SYMS {
         return Err(ModemError::Demodulation(

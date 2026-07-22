@@ -8135,3 +8135,56 @@ and the actually-observed results per change.
   `an_ota_send_never_opens_a_second_concurrent_capture_stream` fails with peak **2** (expected 1),
   and `the_capture_stream_is_reopened_after_a_keyed_transmit` fails with **1 open before, 1 after**.
   Full workspace gate re-run before merge.
+## 2026-07-22 — 64QAM tracks the amplitude reference across the frame
+
+- **Requirement/change:** the deferred "64QAM mid-frame reference tracking" item. The single-carrier
+  64QAM modes fail on the dual-soundcard hardware loopback and pass on the virtual single-clock one;
+  the working hypothesis was untracked slow wander against a frame-static receiver.
+- **Ablation first, per repo culture.** Injected sinusoidal *gain* wander and sinusoidal *phase*
+  wander separately, with **no AWGN at all**, so no result could be a noise limitation. On
+  `64QAM500` at 0.5 Hz, 30 % depth: gain 0.341 byte error, phase 0.027 — an order of magnitude apart
+  at the slow rates a soundcard AGC produces. The carrier loop already tracks phase mid-frame;
+  **nothing tracked amplitude**. `normalize_to_constellation` fits one scalar from the 16-symbol
+  preamble and applies it to the whole frame. This relocated the item from carrier tracking (where
+  the `loop_bw` probe pointed) to the AGC, and matches the failure set: amplitude-carrying modes
+  fail, phase-only modes pass.
+- **Design decision:** blind (windowed power), not decision-directed; referenced to the frame mean,
+  not to nominal constellation power; every correction shrunk by the estimator's own standard error.
+  Each of the three was forced by a measured regression, recorded on `track_gain_across_frame`:
+  - **decision-directed was built and rejected** — it helps where decisions are already right and
+    amplifies error where they are not (`64QAM2000-RRC` 2 Hz/0.15: 0.012 → **0.102**);
+  - **an absolute reference was rejected** — it folds noise power into the estimate and shrinks the
+    constellation ~4.7 % at 10 dB, a third of the outer ring's margin, moving LLR calibration with it;
+  - **no shrinkage was rejected** — the estimator's own variance cost a *clean* noiseless frame one
+    byte in 255 (0.000 → 0.004);
+  - **re-anchoring after de-trending was built and rejected** — it fixes the 0.5 Hz/0.30 column but
+    broke `window_arq_engine_path_across_mode_families` with RS `TooManyErrors` on a **clean**
+    loopback, because the static fit is only approximately unity and applying it twice compounds.
+    That column is therefore explicitly *not* fixed, and is documented rather than quietly dropped.
+  - the level is read from **data symbols only** — the preamble is constant-modulus corners and sits
+    far off the 64QAM average power, so including it made the estimator read and "correct" a step at
+    each frame edge (`64QAM500` 2 Hz/0.15: 0.000 → 0.090).
+- **Implementation:** `plugins/64qam/src/demodulate.rs` — `track_gain_across_frame`, wired at all
+  three CPU demod entry points (hard, soft, soft-GPU), which the map flagged as prone to drift.
+- **Tests:** `plugins/64qam/tests/gain_wander_tracking.rs` — 4 tests. The wander cases assert a
+  bound; the clean and near-static controls assert **exactness**, which is what rejected three of the
+  four variants above.
+- **Test results (run):** measured before → after, noiseless, byte error rate:
+
+  | case | before | after |
+  |---|---|---|
+  | `64QAM500` 2 Hz / 0.15 | 0.102 | **0.000** |
+  | `64QAM500` 2 Hz / 0.30 | 0.318 | **0.094** |
+  | `64QAM1000` 2 Hz / 0.15 | 0.024 | **0.000** |
+  | `64QAM1000` 2 Hz / 0.30 | 0.337 | **0.051** |
+  | `64QAM2000-RRC` 2 Hz / 0.30 | 0.369 | 0.369 (unchanged) |
+  | all clean controls | 0.000 | 0.000 |
+
+  No cell regresses. `qam64-plugin` 14 + 1 + 4 passed / 0 failed, including `llr_reliability`.
+  Sabotage-verified: with the three call sites removed, both wander gates fail and both controls
+  correctly stay green. `sro_confirmation`, `llr_calibration`, `llr_convention_conformance`,
+  `acquisition_coverage`, `cessb_power_evm`, `window_arq_multimode`,
+  `harq_rate_selection_watterson` all pass. Full workspace gate re-run before merge.
+- **Not fixed, deliberately:** `64QAM2000-RRC` is unchanged — its frame is ~364 symbols, so the
+  smoothing window spans a quarter of it and there is too little data either side of each symbol to
+  read a local level. It needs a different mechanism.
