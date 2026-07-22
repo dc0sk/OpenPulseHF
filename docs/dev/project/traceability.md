@@ -8111,3 +8111,27 @@ and the actually-observed results per change.
   19.0 dB for 64QAM** — backwards, since 64QAM needs the *better* EVM. The snapping assumed a square
   constellation; `SCFDMA52-32QAM` is **cross**-32QAM. Never measure EVM against an assumed grid — use the
   plugin's own decisions or the known transmitted symbols.
+
+## 2026-07-22 — daemon holds only one capture stream (audit #917, finding #6)
+
+- **Requirement/change:** the last open item on the 2026-07-16 modem loose-ends audit, parked since
+  filing as "needs real audio hardware to verify".
+- **Design decision:** the defect was filed as "the OTA ACK-wait opens a second capture stream", and
+  that is real — `receive_ota_ack_within` opens its own stream while the receive tick's persistent
+  `rx_stream` stays open. But the *cause* is that a keyed transmit on the command arm blocks the
+  `select!` loop while nothing reads `rx_stream`, and the OTA path is only the sibling that got
+  noticed. So the fix is keyed on `engine.frames_transmitted()` advancing rather than on the command
+  variant, which also covers the file-transfer burst and anything `apply_command_to_engine` keys.
+  Non-transmitting commands keep their stream, so a status-poll flood cannot thrash the device.
+- **Rationale for not needing hardware:** the property is "how many capture streams are open at
+  once", which a backend can *report*. `LoopbackBackend` hides it because its streams clone a shared
+  buffer; a counting backend does not. The parking assumption — that this needed cpal — was wrong.
+- **Implementation:** `crates/openpulse-daemon/src/server.rs` — `rx_stream = None` before
+  `ota_send_with_ptt`, and again after the command arm when the transmit counter advanced.
+- **Tests:** `crates/openpulse-daemon/tests/ota_ack_capture_stream.rs` — `CountingBackend` records
+  the concurrent-input-stream high-water mark; both tests drive the real `server::run` over the real
+  control protocol.
+- **Test results (run):** 2 passed / 0 failed. Sabotage-verified — with both drops removed:
+  `an_ota_send_never_opens_a_second_concurrent_capture_stream` fails with peak **2** (expected 1),
+  and `the_capture_stream_is_reopened_after_a_keyed_transmit` fails with **1 open before, 1 after**.
+  Full workspace gate re-run before merge.
