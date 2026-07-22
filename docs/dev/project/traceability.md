@@ -8267,3 +8267,51 @@ Run with the USB adapters connected, on the dual-card rig, after re-running
   short. **The failure was manufactured by the harness, not observed.** (2) The first captures were
   recorded through `plughw:4,0` at 8 kHz, letting ALSA resample 48 k → 8 k; re-recording at the
   native 48 kHz and downsampling with a polyphase filter offline is what made them measurable at all.
+## 2026-07-22 — the "analog path" failure set re-run on a correctly-normalised rig
+
+Every mode the record classified as **ANALOG PATH**, re-run on the dual-card rig after
+`scripts/setup-dualcard-loopback.sh` (which turns the capture-side AGC off and normalises both
+cards' mixers). `FEC=soft-concatenated`, on **`main`** — no fix from this session's PRs.
+
+| mode | recorded | re-run on `main` |
+|---|---|---|
+| `64QAM500` | FAIL | **PASS** — marginal (2/3 runs, often needs attempt 2) |
+| `64QAM1000` | FAIL | **PASS** 3/3 |
+| `64QAM2000-RRC` | FAIL | **PASS** 3/3 |
+| `SCFDMA52-16QAM` | FAIL | **PASS** |
+| `SCFDMA52-32QAM` | FAIL | **PASS** |
+| `SCFDMA52-64QAM` | FAIL | **PASS** — marginal (≈2/3–3/4) |
+| `SCFDMA52-64QAM-P4` | FAIL | FAIL 0/3 |
+| `PILOT-QPSK500` | FAIL | **PASS** (already resolved by #1005) |
+
+**Six of the eight pass with no code change at all.** The classification was measuring rig state, not
+the analog path: unplugging the USB adapters resets their mixers, and a session that did not re-run
+the setup script was capturing through a **live AGC**. That is a level that moves *during* a frame,
+which is why the failure set was exactly the amplitude-carrying modes.
+
+**What is actually left:** `SCFDMA52-64QAM-P4` (0/3), and two modes that are genuinely marginal
+rather than broken (`64QAM500`, `SCFDMA52-64QAM`). "Analog path" as a category should be retired —
+it never named a mechanism, and most of what it held was a mixer setting.
+
+### #1008 is NOT validated on this hardware
+
+The 64QAM gain-tracking fix was tested against `main` on the same rig, same session:
+
+| condition | mode | `main` | with #1008 |
+|---|---|---|---|
+| AGC off | `64QAM500` | 2/3 | 3/4 |
+| AGC off | `64QAM1000` | 3/3 | 4/4 |
+| AGC off | `64QAM2000-RRC` | 3/3 | 3/4 |
+| AGC **on** | `64QAM500` | 0/3 | 0/3 |
+| AGC **on** | `64QAM1000` | 0/3 | 0/3 |
+| AGC **on** | `64QAM2000-RRC` | 0/3 → **1/6** | 2/3 → **1/6** |
+
+With the AGC off there is nothing to correct — turning it off is precisely what removes the wander —
+and the differences are inside the noise of 3–4 reps. With the AGC on, an apparent 0/3 → 2/3 rescue
+**failed to replicate at 6 reps (1/6 vs 1/6)** and is withdrawn.
+
+So: #1008 stands on its in-process ablation, where it is unambiguous and regresses nothing, but its
+claim must be scoped to the *synthetic* sinusoidal level wander it was measured against. The real
+capture AGC is a harsher and differently-shaped impairment (attack/decay at burst onset, not a slow
+sinusoid) that the fix does **not** rescue. The mechanism class is right; the model of it is not
+representative of this hardware.
