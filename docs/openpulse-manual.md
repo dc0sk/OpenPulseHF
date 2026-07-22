@@ -1664,7 +1664,17 @@ cargo build --release -p openpulse-cli
 scripts/run-loopback-dualcard.sh --quick
 FEC=soft-concatenated scripts/run-loopback-dualcard.sh --single-case "SCFDMA26-16QAM|64"
 ```
-**Gotcha:** `CAPTURE_GAIN=16` (not max). At 16 the modem TX peaks ~0.79 FS
+**Gotcha 1 — re-run the setup script after every replug.** USB mixer state is not
+persistent, and the capture AGC comes back on. An AGC moves the level *during* a
+frame, which is near-harmless to a phase-only mode and destructive to anything
+carrying bits in amplitude (64QAM, the dense SC-FDMA QAMs) — so a sweep run on a
+non-normalised rig fails exactly those modes and looks like a waveform limit. That
+misclassified eight modes; six of them passed unchanged once the rig was
+re-normalised. Both scripts now verify rather than assume: the setup script reads
+the AGC back and fails if it is still on, and `run-loopback-dualcard.sh` refuses to
+sweep while any card's AGC is live (`AGC_PREFLIGHT=0` overrides).
+
+**Gotcha 2:** `CAPTURE_GAIN=16` (not max). At 16 the modem TX peaks ~0.79 FS
 unclipped; higher clips line-level input. Other vars: `TX_BYPATH`/`RX_BYPATH`,
 `TIER` (quick/full), `FEC`, `IRS_LISTEN_MS`.
 

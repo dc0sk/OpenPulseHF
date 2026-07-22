@@ -8376,3 +8376,39 @@ The last mode still failing on the dual-card rig after the AGC misclassification
   further over it. Re-attempting this needs either a *better* instrument (one whose reference does not
   degenerate at −7 dB EVM — the decision-directed reference is the binding limit) or a rig with more
   margin, not another hypothesis.
+
+## 2026-07-22 — doc sweep: the "analog path" attribution retracted everywhere it was asserted
+
+- **Requirement/change:** the ledger recorded the correction, but the *living* docs still asserted the
+  refuted conclusion. Memory's own rule from the #948 sweep: after retracting a claim, grep the whole
+  tree — a retraction that lives only in the changelog is not a retraction.
+- **Corrected (claims that were false as written):**
+  - `docs/dev/virtual-loopback.md` — the three-rung classification table's **ANALOG PATH** verdict row,
+    now struck with the measured retraction and the reason the comparison was invalid.
+  - `docs/dev/dualcard-loopback.md` — two directly-false statements: *"The AGC hypothesis is dead"*
+    and AGC's presence in *"Eight mechanisms measured, all clean"*. Both struck in place with why the
+    elimination was invalid (inspection, not ablation; and read after a `_normalise`). New
+    `RESOLVED (2026-07-22)` section with the pass table, the ablation, the operational rule, and the
+    `-P4` finding.
+  - `docs/dev/loopback-revalidation-plan.md` — the *"These modes are analog-path limited"* conclusion
+    and the summary line at the top.
+  - `docs/openpulse-book.md` — the rung diagram still said the hardware rung "adds dual clocks"
+    (already refuted at +0.10 ppm).
+- **Updated (true but incomplete):**
+  - `crates/openpulse-core/src/profile.rs` — `hpx_wideband_hd`'s SL12–SL15 table gains a real-audio
+    status column; **SL14 (`SCFDMA52-64QAM`) is flagged marginal (3/5)**, with the note that its 28 dB
+    floor is necessary but not sufficient.
+  - `docs/mode-fec-ladder.md` — the ≥25 dB row flags SL14 as marginal, plus a measured 64QAM
+    real-audio block recommending `64QAM2000-RRC` over `SCFDMA52-64QAM` where bandwidth allows
+    (single-carrier, 3/3, and higher throughput).
+  - `docs/openpulse-manual.md` — operator-facing rule: **re-run the setup script after every replug**,
+    with why it matters and what the scripts now verify.
+  - `CLAUDE.md` — new *Known sharp edges* entry: "A rig setting you did not verify is a variable you
+    did not control."
+- **Deliberately not touched:** `docs/dev/reviews/*` and `docs/dev/archive/*` are dated records of what
+  was believed at the time; rewriting them would destroy the audit trail. The mode tables in
+  `README.md`, `docs/features.md` and `docs/openpulse-book.md` are factual mode listings and were
+  already correct — `SCFDMA52-64QAM-P4` is in no profile and is documented as a research variant.
+- **Tests (run):** `ladder_doc_matches_profile` 2 passed / 0 failed; `roadmap_profile_table` 2 passed /
+  0 failed (1 ignored) — the two gates that keep the ladder docs and `SessionProfile` in agreement.
+  Full workspace gate re-run before merge.
