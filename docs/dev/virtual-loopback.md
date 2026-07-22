@@ -111,16 +111,31 @@ With sample-rate offset eliminated by measurement (+0.10 ppm — see
 [dualcard-loopback.md](dualcard-loopback.md)), a mode that passes here and fails there has exactly one
 remaining variable: **the analog path**.
 
-| Modes | virtual | dual-card | Verdict |
+| Modes | virtual | dual-card | Verdict (as recorded then) |
 |---|---|---|---|
-| `64QAM{500,1000,2000-RRC}`, `SCFDMA52-{16QAM,32QAM,64QAM,64QAM-P4}`, `PILOT-QPSK500` | pass | fail | **Analog path** — confirms the surviving half of the 2026-06-13 disjunction |
+| `64QAM{500,1000,2000-RRC}`, `SCFDMA52-{16QAM,32QAM,64QAM,64QAM-P4}`, `PILOT-QPSK500` | pass | fail | ~~**Analog path**~~ — **WRONG, see below** |
 | `8PSK2000`, `BPSK250-RRC`, `SCFDMA52-LP` | fail | fail | **Software** — fails with no analog path at all. Narrowed further below. |
 | `QPSK125` | fail | pass | Virtual-only, and **consistent** (3/3) — see below |
 
-This closes the question the 2026-06-13 note left open. That note offered "two independent soundcard
-clocks (sample-rate offset) **and/or** analog group-delay/phase". The clock half was eliminated by
-measurement; this sweep confirms the other half by construction. **`64QAM` and `SCFDMA52-*` are limited
-by the analog path, not by a code defect and not by SRO.**
+> ### ⚠️ The "analog path" row above is retracted (2026-07-22)
+>
+> Re-run on a rig whose setup script had been re-applied, **six of those eight modes pass on `main`
+> with no code change**: `64QAM{500,1000,2000-RRC}`, `SCFDMA52-{16QAM,32QAM}` and `PILOT-QPSK500`
+> (the last had already been fixed by #1005). `SCFDMA52-64QAM` is marginal (3/5) and
+> `SCFDMA52-64QAM-P4` still fails (0/8) — see [dualcard-loopback.md](dualcard-loopback.md).
+>
+> The comparison was measuring **rig state**, not the analog path. Unplugging the USB adapters resets
+> their mixers, and a session that did not re-run `setup-dualcard-loopback.sh` captured through a
+> **live capture AGC**. Ablated directly, one variable, two trials per cell: `SCFDMA52-16QAM` and
+> `-32QAM` each **FAIL 2/2 with the AGC on and PASS 2/2 with it off**.
+>
+> A capture AGC moves the level *during* a frame, so it destroys exactly the amplitude-carrying modes
+> and leaves the phase-only ones alone — which is why the failure set looked so much like a
+> waveform property. `run-loopback-dualcard.sh` now refuses to sweep with a live AGC (#1011).
+>
+> **The methodological point, which is the reusable part:** "passes here, fails there" isolates a
+> variable only if everything *else* is genuinely equal. Mixer state is not persistent, so it is not
+> automatically equal — and nothing in the comparison surfaced it.
 
 Note `BPSK31`'s dual-card FAIL in that run is stale — it was the 60 s flush clamp, fixed the same day,
 and it now passes on both rungs.

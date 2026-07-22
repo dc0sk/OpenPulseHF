@@ -308,7 +308,32 @@ retransmit cost is on top of that). Recommended HF pairings:
 | Good HF, want more | 8PSK500 / SCFDMA52-8PSK | `SoftConcatenated` | ~660 / ~1 900 | 8PSK needs the soft-coding gain |
 | Marginal-SNR dense (the `hpx_wideband_hd` SL9–11 fallback) | **SCFDMA26-16QAM / -32QAM** | **`SoftConcatenated`** | ~1 270 / ~1 590 | **+3 dB narrowing + soft FEC — hardware-validated reliable** |
 | High SNR, ~2 kHz, max data | SCFDMA52-16QAM/-32QAM | `SoftConcatenated` | ~2 540 / ~3 180 | Soft FEC closes them where hard RS can't |
-| Very high SNR (≥25 dB) | SCFDMA52-64QAM / 64QAM2000-RRC | `SoftConcatenated` / `Ldpc` | ~3 800 / ~5 300 | Only on excellent links / on-air with margin |
+| Very high SNR (≥25 dB) | SCFDMA52-64QAM / 64QAM2000-RRC | `SoftConcatenated` / `Ldpc` | ~3 800 / ~5 300 | Only on excellent links / on-air with margin. **`SCFDMA52-64QAM` is marginal even on a clean cable** — see below |
+
+> ### The 64QAM rungs on real audio (measured 2026-07-22)
+>
+> Dual-card hardware loopback, `soft-concatenated` FEC, on a rig whose setup script had been
+> re-applied — the first measurement of these rungs on a correctly-normalised rig:
+>
+> | mode | real audio |
+> |---|---|
+> | `64QAM1000`, `64QAM2000-RRC` | **PASS 3/3** |
+> | `64QAM500` | PASS, marginal (2/3) |
+> | `SCFDMA52-16QAM`, `SCFDMA52-32QAM` | **PASS** |
+> | `SCFDMA52-64QAM` | PASS, **marginal (3/5)** |
+> | `SCFDMA52-64QAM-P4` | FAIL 0/8 — not in any profile |
+>
+> An earlier sweep recorded all of these as failures and attributed them to "the analog path". That
+> was **rig state, not waveform**: the capture AGC was live, which moves the level *during* a frame
+> and so destroys exactly the amplitude-carrying modes. Ablated directly, `SCFDMA52-16QAM` and
+> `-32QAM` each FAIL 2/2 with the AGC on and PASS 2/2 with it off
+> (`docs/dev/dualcard-loopback.md`).
+>
+> **What to take from this for mode selection:** the `SCFDMA52-64QAM` rung decodes 3 of 5 attempts on
+> a *cable* measuring 71 dB SNR. Its 28 dB floor is necessary but not sufficient — a DFT-spread 64QAM
+> waveform is at the edge of what a real analog path holds, and the IDFT de-spread smears any
+> per-subcarrier impairment across every recovered symbol. Prefer `64QAM2000-RRC` (single-carrier,
+> 3/3, and higher throughput) where the bandwidth allows it.
 
 Combinations that **don't** make sense:
 

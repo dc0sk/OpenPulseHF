@@ -2,13 +2,99 @@
 project: openpulsehf
 doc: docs/dev/project/changelog.md
 status: living
-last_updated: 2026-07-18
+last_updated: 2026-07-22
 ---
 
 # Changelog
 
 > Phase/roadmap history lives in [roadmap.md](roadmap.md); this file tracks
 > user-visible changes. "Unreleased" = merged to `main`, not yet in a tagged release.
+
+## Unreleased
+
+Merged to `main` since v0.16.0; not yet tagged. Two arcs dominate: the **transmit-safety audit
+fix-down** (#971–#988) and the **loopback re-validation on real audio** (#989–#1012), which found
+several live defects and — at the end — retracted a long-standing misattribution.
+
+### Fixed — safety and correctness
+
+- **PTT is released when a keyed ARDOP client disconnects** ([#971]) and the PTT watchdog safety core
+  moved out of the daemon so the sibling front-ends share it ([#972]).
+- **The repeater honours `full_duplex` before keying** for a whole session ([#973]).
+- **Audio capture loss is reported instead of read as a quiet band** ([#979]) — a lost device
+  previously produced an unbroken run of successful empty reads, so the station went deaf in silence.
+- **Stale QSY sessions expire**, so one spoofed frame cannot disable auto-QSY ([#981]); the rendezvous
+  responder is rate-limited per peer ([#982]); inbound file-transfer frames are gated on a valid
+  station callsign ([#983]); an unusable station identity key now fails closed ([#985]).
+- **Two silent-drop paths closed** — PTT assert failure and ARDOP event lag ([#986]) — and file
+  transfer no longer reports a file that was never written or acks an un-accepted transfer ([#987]).
+- **The daemon never holds two capture streams open on one device** ([#1007]). The OTA ACK-wait opened
+  its own stream while the receive tick's persistent one sat unread; on an exclusive ALSA device the
+  second open fails and the ACK is never heard. Closes the last item of #917.
+
+### Fixed — modem and DSP
+
+- **The scanning FEC receive can find a frame inside a capture longer than the frame** ([#995]). It
+  sliced a *fixed-length* window, so the demodulated byte count tracked the window rather than the
+  frame and the multiple-of-255 gate rejected every attempt before RS ran. This is what had blocked
+  `QPSK250-D` — `hpx_hf`'s SL6 fade rung — on real audio.
+- **A 60 s flush clamp made `BPSK31` untransmittable** ([#997]) — the ladder's entry rung, and the
+  clamp existed for exactly the slow modes it made inert.
+- **`long_frame` is classified after the FEC widening, not before** ([#1000]); the full-buffer retry is
+  budgeted by scan cost rather than frame geometry ([#1005]); the SC-FDMA timing deramp is enabled for
+  the localized block-pilot layout ([#1001]); the plain 8PSK pulse now refuses a rate below 5
+  samples/symbol instead of emitting undecodable audio ([#999]); `supports_soft_demod` is per-mode so
+  `-D` stops advertising a capability it refuses ([#996]).
+- **64QAM tracks its amplitude reference across the frame** ([#1008]). The reference was fitted once
+  from the 16-symbol preamble, so nothing tracked a level that moves *during* a frame — measured
+  noiselessly, gain wander is an order of magnitude more damaging than the same fractional phase
+  wander at slow rates. Scoped honestly: validated in-process, **not** on hardware.
+- **cpal enumeration truncates when devices are retained** ([#998]) — the listing advertised devices
+  that could not be opened, which made the virtual-loopback rung unrunnable.
+
+### Added
+
+- **Per-subcarrier EVM measured before the DFT de-spread** ([#1009], `scfdma_subcarrier_evm_db`).
+  SC-FDMA's IDFT averages every subcarrier into every output symbol, so a post-despread measurement
+  cannot separate a narrowband impairment from a broadband one. Diagnostic only.
+
+### Changed — a retraction worth reading
+
+- **The "analog path" mode classification is withdrawn** ([#1010], [#1011], [#1012]). Eight modes had
+  been recorded as limited by the dual-card rig's analog path. Re-run on a rig whose setup script had
+  been re-applied, **six of the eight pass on `main` with no code change**. The comparison had been
+  measuring a **live capture AGC** — unplugging the USB adapters resets their mixers — which moves the
+  level *during* a frame and so destroys exactly the amplitude-carrying modes. Ablated directly:
+  `SCFDMA52-16QAM` and `-32QAM` each FAIL 2/2 with the AGC on and PASS 2/2 with it off.
+  `run-loopback-dualcard.sh` now **refuses to sweep** while any card's AGC is live, and
+  `setup-dualcard-loopback.sh` reads the setting back instead of printing an unverified claim.
+- **`hpx_wideband_hd` SL14 (`SCFDMA52-64QAM`) is documented as marginal** (3/5 on a 71 dB-SNR cable);
+  `64QAM2000-RRC` is preferred where bandwidth allows. `SCFDMA52-64QAM-P4` remains in no profile.
+
+[#971]: https://github.com/dc0sk/OpenPulseHF/pull/971
+[#972]: https://github.com/dc0sk/OpenPulseHF/pull/972
+[#973]: https://github.com/dc0sk/OpenPulseHF/pull/973
+[#979]: https://github.com/dc0sk/OpenPulseHF/pull/979
+[#981]: https://github.com/dc0sk/OpenPulseHF/pull/981
+[#982]: https://github.com/dc0sk/OpenPulseHF/pull/982
+[#983]: https://github.com/dc0sk/OpenPulseHF/pull/983
+[#985]: https://github.com/dc0sk/OpenPulseHF/pull/985
+[#986]: https://github.com/dc0sk/OpenPulseHF/pull/986
+[#987]: https://github.com/dc0sk/OpenPulseHF/pull/987
+[#995]: https://github.com/dc0sk/OpenPulseHF/pull/995
+[#996]: https://github.com/dc0sk/OpenPulseHF/pull/996
+[#997]: https://github.com/dc0sk/OpenPulseHF/pull/997
+[#998]: https://github.com/dc0sk/OpenPulseHF/pull/998
+[#999]: https://github.com/dc0sk/OpenPulseHF/pull/999
+[#1000]: https://github.com/dc0sk/OpenPulseHF/pull/1000
+[#1001]: https://github.com/dc0sk/OpenPulseHF/pull/1001
+[#1005]: https://github.com/dc0sk/OpenPulseHF/pull/1005
+[#1007]: https://github.com/dc0sk/OpenPulseHF/pull/1007
+[#1008]: https://github.com/dc0sk/OpenPulseHF/pull/1008
+[#1009]: https://github.com/dc0sk/OpenPulseHF/pull/1009
+[#1010]: https://github.com/dc0sk/OpenPulseHF/pull/1010
+[#1011]: https://github.com/dc0sk/OpenPulseHF/pull/1011
+[#1012]: https://github.com/dc0sk/OpenPulseHF/pull/1012
 
 ## v0.16.0 — 2026-07-18
 

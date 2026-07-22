@@ -20,6 +20,8 @@ Related: [virtual-loopback.md](virtual-loopback.md), [dualcard-loopback.md](dual
 > could not run at all (#998), an 8PSK samples/symbol floor, and this plan's own Task B command being
 > inert. It also **falsified the dual-card rig's dual-clock premise by measurement** (+0.10 ppm), which
 > re-attributed the `SCFDMA52-*`/`64QAM` failures to the analog path and closed `reference-mining` C1.
+> **The analog-path re-attribution was itself wrong — see the correction in §"How it actually
+> resolves" below.** The clock half stands; the other half was rig state.
 
 ## 1. The gap, stated precisely
 
@@ -138,9 +140,27 @@ variables cleanly:
 | virtual (`snd-aloop`) | real cpal/ALSA/resampler | **pass** |
 | dual-card | a real analog cable (**not** a second clock) | **fail** |
 
-The clock half is eliminated by measurement; the analog half is confirmed by construction. These modes
-are **analog-path limited**. The apparent contradiction between the two documents was two different
-mechanisms being filed under one label.
+The clock half is eliminated by measurement; the analog half is confirmed by construction. ~~These
+modes are **analog-path limited**.~~ The apparent contradiction between the two documents was two
+different mechanisms being filed under one label.
+
+> ### ⚠️ Corrected 2026-07-22 — "analog-path limited" was rig state, not the analog path
+>
+> Re-run on a rig whose setup script had been re-applied, **six of the eight modes pass on `main` with
+> no code change**: `64QAM{500,1000,2000-RRC}`, `SCFDMA52-{16QAM,32QAM}`, `PILOT-QPSK500`.
+> `SCFDMA52-64QAM` is marginal (3/5); only `SCFDMA52-64QAM-P4` still fails (0/8), and that is the same
+> marginality with less margin rather than a separate defect.
+>
+> The dual-card row of the table above was measuring a **live capture AGC**, not the cable. Unplugging
+> the USB adapters resets their mixers, and `_normalise` could not report that it had failed to turn
+> the AGC off. Ablated directly: `SCFDMA52-16QAM` and `-32QAM` each **FAIL 2/2 with the AGC on and
+> PASS 2/2 with it off**.
+>
+> **The reasoning error worth keeping.** A three-rung table isolates a variable only if the rungs
+> differ in *exactly* the stated way. "Dual-card adds a real analog cable" was true and incomplete —
+> it also added a rig whose mixer state nobody had established. *Confirmed by construction* is only as
+> good as the construction, and here the construction had an unlisted variable in it.
+> See [dualcard-loopback.md](dualcard-loopback.md) and [virtual-loopback.md](virtual-loopback.md).
 
 **Downstream, as this task warned:** `reference-mining` item **C1** was prioritized on the refuted
 premise. C1 is now closed twice over — the SRO channel model is *already implemented*

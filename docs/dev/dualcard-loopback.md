@@ -393,8 +393,14 @@ of this — all three are measured clean.
 
 Continued after the section below was written. Three further results, and one invalid measurement:
 
-- **The AGC hypothesis is dead.** `amixer -c <rx> sget 'Auto Gain Control'` reports the control
-  **already off**. No re-run needed.
+- ~~**The AGC hypothesis is dead.**~~ **THIS WAS WRONG — see the 2026-07-22 section at the end.**
+  The reasoning was: `amixer -c <rx> sget 'Auto Gain Control'` reports the control **already off**,
+  so "no re-run needed". Two things are wrong with that. (1) The control was read *after* runs that
+  had each called `_normalise`, which sets it off — so the reading describes the rig *then*, not
+  during the failing measurements. **A mutable rig setting read after the fact does not establish
+  what it was during the measurement.** (2) It eliminates a mechanism by *inspection* rather than by
+  *ablation*, which is exactly the move this repo's own rule forbids: delete the mechanism and see
+  whether the number moves. Turning the AGC **on** flips two modes from PASS 2/2 to FAIL 2/2.
 - **Nonlinearity is eliminated.** A two-tone test (1200 + 1700 Hz at the modem's working peak, ~0.63 FS)
   measures **IMD3 at −60…−62 dBc** and IMD5 at −80 dBc. A pure-tone SNR cannot see intermodulation;
   this can, and there is none worth the name.
@@ -429,7 +435,13 @@ must compare **recovered symbols** (post-demod, post-carrier-recovery EVM), not 
 **The earlier leading candidate was the capture-side AGC** — these adapters have one, and this document
 records it drifting capture gain after strong frames, which would be near-harmless to the phase-only
 modes that pass and destructive to the amplitude-carrying modes that fail. It fit the failure set
-better than anything else. **It is now eliminated: the control is already off.**
+better than anything else. ~~**It is now eliminated: the control is already off.**~~
+
+> **That elimination was wrong, and the candidate was right.** Reading the control after the fact does
+> not establish its state during the failing runs — every case calls `_normalise`, which sets it off.
+> Ablated properly on 2026-07-22 it flips the result cleanly (2/2 both directions). The instinct that
+> it "fit the failure set better than anything else" was correct; the check was not. See the
+> 2026-07-22 section at the end of this document.
 
 ## RESOLVED (2026-07-20) — most of it was the FEC operating point; 64QAM is untracked slow wander
 
@@ -579,11 +591,17 @@ failed — so an engine-path/AFC explanation is ruled out for that group too.
 
 ### Where this stands
 
-Eight mechanisms measured, all clean: magnitude, group delay, SNR, clipping/PAPR, AGC, IMD3/IMD5,
+Eight mechanisms measured, all clean: magnitude, group delay, SNR, clipping/PAPR, ~~AGC~~, IMD3/IMD5,
 timing wander, and the live-streaming path. The failure is real, reproduces at HEAD, and lives in the
 captured audio. **No mechanism has been identified.** The next step is a *valid* EVM measurement on
 recovered symbols — not on raw passband samples — since that is the metric these modes actually fail
 on and the only one that will show a signal-dependent impairment the probe tones cannot.
+
+> **AGC does not belong on that list.** It was struck by reading the mixer, not by ablating it, and
+> it turned out to be the mechanism for most of this failure set (2026-07-22, below). Seven measured
+> clean; the eighth was never measured. Both remaining steps in that paragraph were carried out — the
+> valid EVM measurement now exists as `scfdma_subcarrier_evm_db` (#1009) — and neither is what
+> resolved this.
 
 ### Method note
 
@@ -599,3 +617,69 @@ Two of the measurements in this section were wrong before they were right, in th
 Both were caught by the result looking *too clean or too uniform*, not by the tooling. When measuring a
 physical path, check the instrument against a known input and check the capture is of the thing you
 think it is — a spectrum is cheap and unambiguous.
+
+## RESOLVED (2026-07-22) — it was the capture AGC, and the rig now refuses to run with it live
+
+Re-run with the USB adapters reconnected and `scripts/setup-dualcard-loopback.sh` re-applied.
+
+### Six of the eight "analog path" modes pass on `main` with no code change
+
+`FEC=soft-concatenated`, no fix from the same session's PRs applied:
+
+| mode | recorded | re-run |
+|---|---|---|
+| `64QAM500` | FAIL | **PASS** — marginal (2/3, often attempt 2) |
+| `64QAM1000` | FAIL | **PASS** 3/3 |
+| `64QAM2000-RRC` | FAIL | **PASS** 3/3 |
+| `SCFDMA52-16QAM` | FAIL | **PASS** |
+| `SCFDMA52-32QAM` | FAIL | **PASS** |
+| `SCFDMA52-64QAM` | FAIL | **PASS** — marginal (3/5) |
+| `SCFDMA52-64QAM-P4` | FAIL | FAIL 0/8 — *not a separate defect*, see below |
+| `PILOT-QPSK500` | FAIL | **PASS** (already fixed by #1005) |
+
+### The mechanism, ablated
+
+One variable, two trials per cell, `amixer -c <rx> cset name='Auto Gain Control'`:
+
+| mode | AGC on | AGC off |
+|---|---|---|
+| `SCFDMA52-16QAM` | FAIL FAIL | **PASS PASS** |
+| `SCFDMA52-32QAM` | FAIL FAIL | **PASS PASS** |
+
+A capture AGC moves the level *during* a frame. That is near-harmless to a phase-only waveform and
+destructive to one carrying bits in amplitude — which is precisely why the failure set was the 64QAM
+and dense SC-FDMA QAM modes, and why it read so convincingly as a waveform property.
+
+**Why it was live at all:** unplugging the adapters resets their mixer state, and `_normalise` cannot
+tell you it failed — it `continue`s past an unresolved card and every `amixer` call ends in `|| true`.
+ALSA card indices shift on re-probe (this document already records `acp` moving 3 → 4 mid-session),
+which is exactly when the resolution is wrong and the normalisation silently lands on another card.
+
+### Operational rule
+
+**Re-run `scripts/setup-dualcard-loopback.sh` after every replug.** Mixer state is not persistent and
+nothing else restores it. Both scripts now verify rather than assert (#1011): the setup script reads
+the AGC back and exits non-zero instead of printing an unverified "AGC off", and
+`run-loopback-dualcard.sh` refuses to sweep while any card's AGC is live (`AGC_PREFLIGHT=0` overrides).
+
+### What is actually left
+
+`SCFDMA52-64QAM-P4` (0/8) and two genuinely marginal modes (`64QAM500`, `SCFDMA52-64QAM`).
+
+`-P4` is **not a separate defect**. It is the *dense-pilot* variant and is the **better** mode
+in-process (uncoded AWGN 8/8 vs 6/8 at 25 dB; clean EVM −78.3 vs −75.9 dB) — that inversion is what
+made it look like a bug. Four mechanisms were proposed and killed by measurement: band-edge
+extrapolation (real and visible at SC 80, harmless under tilt), sample-rate offset (both decode to
+100 ppm), frame location (both decode through the *scanning* receive embedded in a long capture, both
+FECs), and a spectral difference (captures indistinguishable). Hardware mean EVM is **−7.4 dB**
+(`-64QAM`) vs **−6.8 dB** (`-P4`): 0.6 dB apart, both at the decode cliff, both below
+`scfdma_subcarrier_evm_db`'s validity floor. Consistent with the same marginal case having slightly
+less margin (49 data subcarriers vs 52 → ~3 % longer frame), not with a distinct defect.
+
+### Method note
+
+Two eliminations in this document were made by **inspecting** a setting rather than **ablating** it,
+and the AGC one was wrong for that reason. A mutable rig setting read after the fact does not
+establish what it was during the measurement. And "passes on rig A, fails on rig B" isolates a
+variable only if everything else is genuinely equal — mixer state is not persistent, so it is not
+automatically equal, and nothing in the comparison surfaced it.

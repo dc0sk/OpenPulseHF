@@ -746,12 +746,23 @@ impl SessionProfile {
     /// ceiling does not apply and SNR margins of 16–40 dB are achievable.
     /// Not suitable for HF ionospheric paths (Watterson fading breaks QAM coherence).
     ///
-    /// | SL   | Mode              | Gross bps (8 kHz audio) | Min SNR |
-    /// |------|-------------------|-------------------------|---------|
-    /// | SL12 | SCFDMA52-16QAM   | ≈ 5778                  | 16 dB   |
-    /// | SL13 | SCFDMA52-32QAM   | ≈ 7222                  | 20 dB   |
-    /// | SL14 | SCFDMA52-64QAM   | ≈ 8667                  | 28 dB   |
-    /// | SL15 | 64QAM2000-RRC    | ≈ 12000                 | 35 dB   |
+    /// | SL   | Mode              | Gross bps (8 kHz audio) | Min SNR | Real-audio status |
+    /// |------|-------------------|-------------------------|---------|---|
+    /// | SL12 | SCFDMA52-16QAM   | ≈ 5778                  | 16 dB   | PASS |
+    /// | SL13 | SCFDMA52-32QAM   | ≈ 7222                  | 20 dB   | PASS |
+    /// | SL14 | SCFDMA52-64QAM   | ≈ 8667                  | 28 dB   | **marginal — 3/5** |
+    /// | SL15 | 64QAM2000-RRC    | ≈ 12000                 | 35 dB   | PASS 3/3 |
+    ///
+    /// Real-audio status is the dual-card hardware loopback with `soft-concatenated` FEC
+    /// (2026-07-22), which is the first time these rungs were measured on a correctly-normalised rig —
+    /// an earlier sweep recorded all four as failures while the capture AGC was live, and that was a
+    /// property of the rig rather than of the waveforms (`docs/dev/dualcard-loopback.md`).
+    ///
+    /// **SL14 is the rung to watch.** It decodes 3 of 5 attempts on a clean cable at 71 dB SNR, so it
+    /// is at the edge of what a DFT-spread 64QAM waveform holds on a real analog path rather than
+    /// comfortably inside it. The ladder reaches it only on an evidence-based climb, and demotes off
+    /// it on failure, so a marginal rung costs retries rather than correctness — but do not read the
+    /// 28 dB floor as the only thing standing between a link and this rate.
     pub fn hpx_wideband_hd() -> Self {
         let mut modes = [None; 21];
         // SL9–SL11: half-width SCFDMA26 higher-order rungs — the robust graceful-

@@ -3576,7 +3576,8 @@ the previous:
 
 ```
 virtual   snd-aloop, single clock, no analog     -> a failure is DSP/code/config
-hardware  two USB soundcards + analog cable      -> adds dual clocks + analog path
+hardware  two USB soundcards + analog cable      -> adds a real analog path
+                                                   (NOT dual clocks: measured +0.10 ppm)
 on-air    real radios                            -> adds RF
 ```
 
