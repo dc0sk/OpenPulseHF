@@ -56,16 +56,24 @@ IC-705 (hamlib 3085), and the SDRplay RSP2pro on the dev host.
    between the host and each rig's USB-audio interface. Ferrites alone are documented insufficient.
    Alternative: drive/capture audio through a rear DATA/ACC jack with 1:1 isolation transformers
    instead of the rig's USB CODEC.
-2. **Measure the idle noise floor after isolation.** With no TX anywhere and the SDR process stopped,
-   capture ~5 s of each rig's RX USB audio and check for the birdies the campaign recorded
-   (600–1400 Hz at ~0 dBFS on the FT-991A; 1286/1394/1745 Hz on the IC-705). Success = a flat noise
-   floor with no discrete tones above ~−40 dBFS in 300–2600 Hz.
-   - Tool: `scripts/onair-sdr/` is IQ-side; for the rig-audio idle check use a plain
-     `arecord -D <cpal-or-alsa-dev> -f S16_LE -r 48000 -c 1 -d 5` and an FFT (the dualcard
-     `identify-loopback-audio.sh` FFT helper is reusable).
-3. **Gate:** do not proceed to Phase G1 until both rigs show a clean idle floor. A live birdie here is
-   the whole reason the June campaign read 0/3 — it is cheaper to kill it now than to misattribute it
-   again later.
+2. **Measure the idle noise floor after isolation, on each rig, with the runnable gate:**
+   ```bash
+   # locally, or over SSH for a remote rig — NO TX anywhere, SDR stopped:
+   scripts/onair-rx-idle-floor.sh plughw:CARD=CODEC,DEV=0
+   ssh dc0sk@dc0sk-rpi53 'cd ~/git/OpenPulseHF && scripts/onair-rx-idle-floor.sh plughw:CARD=CODEC,DEV=0'
+   ```
+   It captures ~5 s of the rig's RX USB audio and runs `scripts/onair-rx-idle-floor.py`, which fails
+   on any narrow line standing ≥15 dB above the broadband floor (or above −40 dBFS) in 300–2600 Hz —
+   the birdies the campaign recorded (600–1400 Hz on the FT-991A; 1286/1394/1745 Hz on the IC-705).
+   The prominence criterion is gain-independent (a real birdie is ~40 dB up; ADC noise is flat), so
+   it works regardless of the operator's capture level. Exit 0 = clean, 1 = birdies (with the
+   offending frequencies listed), 2 = capture error.
+   - The analyzer was validated against synthetic captures before use: pure noise → PASS; three
+     injected lines → exactly those three; a single −30 dBFS line → exactly one. Adjust the band /
+     prominence / absolute thresholds via the `OPHF_*` env knobs if a rig needs different limits.
+3. **Gate:** do not proceed to Phase G1 until **both** rigs return exit 0 from this script. A live
+   birdie here is the whole reason the June campaign read 0/3 — it is cheaper to kill it now than to
+   misattribute it again later.
 
 **Exit criterion G0:** both healthy rigs present a clean RX USB-audio idle floor (no in-passband
 birdies above −40 dBFS).

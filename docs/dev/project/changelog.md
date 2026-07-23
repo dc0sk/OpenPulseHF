@@ -64,6 +64,9 @@ several live defects and — at the end — retracted a long-standing misattribu
 
 ### Added
 
+- **Phase G0 idle-floor gate** (`scripts/onair-rx-idle-floor.{sh,py}`) — a runnable check that a rig's
+  receive USB-audio floor is clean of the conducted-RFI birdies that blocked every prior rig-to-rig
+  link, gain-independent (prominence-based) and validated against synthetic captures before use.
 - **On-air execution plan** (`docs/dev/onair-execution-plan.md`) — the sequenced 1.0 group-A campaign,
   grounded in the recorded ground truth that the modem, waveforms, decoder and transmitters are
   already SDR-proven on real RF, and the rig→rig blocker is conducted USB-audio RFI (fix = galvanic
