@@ -10,6 +10,8 @@ last_updated: 2026-06-10
 
 For the reproducible, gate-based preflight procedure to run before each test run, see [`onair-signal-chain-verification.md`](onair-signal-chain-verification.md).
 
+For the full sequenced campaign (the phases that turn this status into the 1.0 group-A evidence), see [`onair-execution-plan.md`](onair-execution-plan.md). **The headline from that plan:** the modem, every waveform, the decoder and two transmitters are already SDR-proven on real RF; the rig→rig blocker is conducted computer RFI into the receive USB audio, whose recorded fix is galvanic USB isolation — not a modem change. Kill that first (Phase G0) before any further matrix run.
+
 ---
 
 ## Current status / blockers

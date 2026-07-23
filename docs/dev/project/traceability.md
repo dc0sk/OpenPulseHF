@@ -8412,3 +8412,37 @@ The last mode still failing on the dual-card rig after the AGC misclassification
 - **Tests (run):** `ladder_doc_matches_profile` 2 passed / 0 failed; `roadmap_profile_table` 2 passed /
   0 failed (1 ignored) — the two gates that keep the ladder docs and `SessionProfile` in agreement.
   Full workspace gate re-run before merge.
+
+## 2026-07-23 — on-air tooling brought current + execution plan written
+
+- **Requirement/change:** produce a sequenced on-air execution plan (1.0 group-A evidence) and bring
+  the on-air scripts current with the CLI, which had drifted 6–8 weeks behind the
+  loopback-revalidation arc (#989–#1013).
+- **Currency audit (vs `openpulse modes` + live `--help`):** every mode *name* the scripts use still
+  exists; the drift was elsewhere. Highest-impact: `deploy-rpi-pair.sh` cross-builds
+  `--no-default-features`, so its deployed binaries have no audio backend and key nothing —
+  `run-onair-tests.sh` invoked those exact binaries and additionally called `openpulse send`
+  (nonexistent) and `openpulse-tnc --listen` (nonexistent flags). The two mature runners
+  (IC-9700/FT-991A, TX500/KX3) never passed `--fec`, so recorded evidence claimed a FEC that was
+  never applied. All three carried `IRS_STARTUP_WAIT=5` (corrected value 10) and a bare `sleep 2`
+  where the scanning decode needs ~12 s.
+- **Fixes (verified without a rig):**
+  - `deploy-rpi-pair.sh` refuses by default (`ALLOW_NO_AUDIO_DEPLOY=1` to override) and documents the
+    on-Pi cpal build.
+  - `run-onair-tests.sh` rewired to the real `transmit`/`receive` surface (`--backend cpal`, `--fec`,
+    `--device`, rigctld `--ptt`); pass criterion now checks the decoded payload; added the MFSK16 and
+    QPSK250-D fade rungs the test plan requires.
+  - both mature runners thread `--fec` on both ends; RX-invalid hard `concatenated` case dropped;
+    TX500's false "CLI does not expose FEC" note corrected.
+  - timings corrected across all three (startup 10 s, `KILL_WAIT=12`).
+  - `onair-preflight.sh` gains a `--backend cpal devices` probe — presence of the binary is not
+    capability; a loopback-only build passed the old file check and would transmit nothing.
+- **Tests (run):** every changed CLI invocation parses and runs on the loopback backend (BPSK250,
+  MFSK16, QPSK250-D each transmit with their FEC); all five scripts pass `bash -n`; the preflight
+  cpal probe correctly reports the in-repo (cpal-enabled) build as flight-ready. **Not verifiable
+  without two rigs:** an actual on-air QSO — that is Phase A1 of the plan.
+- **New doc:** `docs/dev/onair-execution-plan.md` — the sequenced campaign, grounded in the recorded
+  ground truth (modem/waveforms/transmitters SDR-proven; rig→rig blocked by conducted USB-audio RFI,
+  fix = galvanic isolation). Critical path: G0 kill the RX RFI → G1 seven signal-chain gates → A1 one
+  rig→rig decode → A2 ladder on a real fade → A3 Winlink over RF. Linked from `onair-status.md` and
+  `on-air_testplan.md`.

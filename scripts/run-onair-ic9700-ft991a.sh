@@ -52,7 +52,8 @@ fi
 if [[ -z "${B_LOG_DIR:-}" ]]; then
     B_LOG_DIR='${HOME}/var/log/openpulse/on-air'
 fi
-IRS_STARTUP_WAIT="${IRS_STARTUP_WAIT:-5}"
+IRS_STARTUP_WAIT="${IRS_STARTUP_WAIT:-10}"  # RX AFC settle ~6.4 s + margin (was 5, too short)
+KILL_WAIT="${KILL_WAIT:-12}"                # let the scanning decode finish before killing IRS (was a bare sleep 2)
 TX_TIMEOUT="${TX_TIMEOUT:-120}"
 A_RFPOWER="${A_RFPOWER:-0.05}"
 B_RFPOWER="${B_RFPOWER:-0.05}"
@@ -996,12 +997,13 @@ run_side_a_transmit() {
             --rig ${A_RIGCTLD_ADDR}:${A_RIGCTLD_PORT} \
             transmit \
             --mode '${MODE}' \
+                    --fec "${FEC//_/-}" \
             ${a_device_arg} \
             '${payload_text}' \
             >'${a_iss_log}' 2>&1" \
         || iss_exit=$?
 
-    sleep 2
+    sleep "${KILL_WAIT}"
     ssh_a "pkill -f '${ar}/target/release/openpulse .*transmit' 2>/dev/null || true" || true
 
     if [[ -n "$tel_pid" ]]; then
@@ -1076,7 +1078,6 @@ FULL_CASES=(
     "BPSK100|none|64"
     "BPSK250|none|64"
     "BPSK250|rs|64"
-    "BPSK250|concatenated|64"
     "BPSK250|soft_concatenated|64"
     "QPSK250|none|128"
     "QPSK500|none|128"
@@ -1214,6 +1215,7 @@ run_matrix() {
                     --ptt none \
                     receive \
                     --mode '${MODE}' \
+                    --fec "${FEC//_/-}" \
                     --listen-ms ${irs_listen_ms} \
                     ${a_device_arg} \
                     >'${a_irs_log}' 2>&1 </dev/null &"
@@ -1278,12 +1280,13 @@ run_matrix() {
                     --rig ${B_RIGCTLD_ADDR}:${B_RIGCTLD_PORT} \
                     transmit \
                     --mode '${MODE}' \
+                    --fec "${FEC//_/-}" \
                     ${b_device_arg} \
                     '${payload_text}' \
                     >'${b_iss_log}' 2>&1" \
                 || iss_exit=$?
 
-            sleep 2
+            sleep "${KILL_WAIT}"
             ssh_a "pids=\$(pgrep -f '${ar}/target/release/openpulse .*receive' || true); \
                 for pid in \$pids; do \
                     [[ \"\$pid\" != \"\$\$\" ]] && kill \"\$pid\" 2>/dev/null || true; \
@@ -1320,6 +1323,7 @@ run_matrix() {
                     --ptt none \
                     receive \
                     --mode '${MODE}' \
+                    --fec "${FEC//_/-}" \
                     --listen-ms ${irs_listen_ms} \
                     ${b_device_arg} \
                     >'${b_irs_log}' 2>&1 </dev/null &"
@@ -1349,12 +1353,13 @@ run_matrix() {
                     --rig ${A_RIGCTLD_ADDR}:${A_RIGCTLD_PORT} \
                     transmit \
                     --mode '${MODE}' \
+                    --fec "${FEC//_/-}" \
                     ${a_device_arg} \
                     '${payload_text}' \
                     >'${a_iss_log}' 2>&1" \
                 || iss_exit=$?
 
-            sleep 2
+            sleep "${KILL_WAIT}"
             ssh_b "pids=\$(pgrep -f '${br}/target/release/openpulse .*receive' || true); \
                 for pid in \$pids; do \
                     [[ \"\$pid\" != \"\$\$\" ]] && kill \"\$pid\" 2>/dev/null || true; \

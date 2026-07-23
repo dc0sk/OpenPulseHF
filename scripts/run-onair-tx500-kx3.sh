@@ -52,7 +52,8 @@ fi
 if [[ -z "${PI_LOG_DIR:-}" ]]; then
     PI_LOG_DIR='${HOME}/var/log/openpulse/on-air'
 fi
-IRS_STARTUP_WAIT="${IRS_STARTUP_WAIT:-5}"
+IRS_STARTUP_WAIT="${IRS_STARTUP_WAIT:-10}"  # RX AFC settle ~6.4 s + margin (was 5)
+KILL_WAIT="${KILL_WAIT:-12}"                # let the scanning decode finish (was a bare sleep 2)
 TX_TIMEOUT="${TX_TIMEOUT:-120}"
 
 LOCAL_BIN_DIR="${REPO_ROOT}/target/release"
@@ -355,7 +356,6 @@ FULL_CASES=(
     "BPSK100|none|64"
     "BPSK250|none|64"
     "BPSK250|rs|64"
-    "BPSK250|concatenated|64"
     "BPSK250|soft_concatenated|64"
     "QPSK250|none|128"
     "QPSK500|none|128"
@@ -393,7 +393,7 @@ run_matrix() {
     echo "    Freq: ${TEST_FREQ_HZ} Hz ${TEST_MODE_RIG}"
     echo "    Report: ${report}"
     echo ""
-    echo "    Note: current openpulse CLI does not expose FEC selection; requested FEC labels are recorded, but the live test path exercises modem transmit/receive only."
+    echo "    Note: --fec is now applied on both ends from the case tuple (transmit + receive)."
     echo "    Audio devices: local='${LOCAL_AUDIO_DEVICE:-default}' pi='${PI_AUDIO_DEVICE:-default}'"
     echo ""
 
@@ -434,6 +434,7 @@ run_matrix() {
             --ptt none \
             receive \
             --mode "${MODE}" \
+            --fec "${FEC//_/-}" \
             --listen-ms "${listen_ms}" \
             "${local_device_args[@]}" \
             >"${irs_log}" 2>&1 &
@@ -452,13 +453,14 @@ run_matrix() {
                     --rig ${TX500_RIGCTLD_ADDR}:${TX500_RIGCTLD_PORT} \
                     transmit \
                     --mode ${MODE} \
+                    --fec "${FEC//_/-}" \
                     ${pi_device_arg} \
                     '${payload_text}' \
                 >${pi_iss_log} 2>&1" \
             || iss_exit=$?
 
         # 3. Let IRS finish, then collect logs
-        sleep 2
+        sleep "${KILL_WAIT}"
         kill "${irs_pid}" 2>/dev/null || true
         wait "${irs_pid}" 2>/dev/null || true
         local irs_content

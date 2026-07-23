@@ -6,10 +6,11 @@
 #   ./scripts/run-onair-tests.sh [--quick | --full] [--output DIR] [--no-preflight]
 #
 # Prerequisites on each station:
-#   - ~/bin/openpulse-tnc  (deployed by deploy-rpi-pair.sh)
-#   - ~/bin/openpulse      (deployed by deploy-rpi-pair.sh)
-#   - Audio loopback or transceiver connected; ARDOP_CMD_PORT / ARDOP_DATA_PORT
-#     environment set in ~/bin/openpulse-env.sh if non-default
+#   - A cpal-enabled `openpulse` built ON each station (OPENPULSE_BIN); the
+#     cross-compiled binaries from deploy-rpi-pair.sh have NO audio backend and
+#     will transmit nothing — build with `--features cpal-backend` on the Pi.
+#   - A transceiver connected; set PTT_BACKEND (e.g. rigctld) + A_/B_RIGCTLD and
+#     A_/B_AUDIO_DEVICE, or run PTT_BACKEND=none for an audio-cable loopback.
 #
 # Results are written as JSON to OUTPUT_DIR/onair-TIMESTAMP.json.
 
@@ -39,9 +40,23 @@ STATION_B="${STATION_B:-dc0sk@192.168.1.11}"
 SSH_OPTS="${SSH_OPTS:-}"
 CALLSIGN_A="${CALLSIGN_A:-K1ABC}"
 CALLSIGN_B="${CALLSIGN_B:-K2DEF}"
-PTT_BACKEND="${PTT_BACKEND:-none}"
-IRS_STARTUP_WAIT="${IRS_STARTUP_WAIT:-5}"   # seconds to wait for IRS TNC to be ready
-TX_TIMEOUT="${TX_TIMEOUT:-90}"              # seconds before ISS transmit is declared failed
+PTT_BACKEND="${PTT_BACKEND:-none}"        # none | rigctld | rts | dtr | vox | cm108 | gpio
+IRS_STARTUP_WAIT="${IRS_STARTUP_WAIT:-10}" # RX AFC settle ~6.4 s + margin (was 5, too short)
+KILL_WAIT="${KILL_WAIT:-12}"               # let the scanning decode finish before stopping IRS
+TX_TIMEOUT="${TX_TIMEOUT:-90}"             # seconds before ISS transmit is declared failed
+
+# Path to the cpal-enabled openpulse CLI on each station. This MUST be a binary built
+# WITH the cpal feature (`cargo build --release -p openpulse-cli --features cpal-backend`),
+# built on the Pi — the cross-compiled `~/bin/openpulse` from deploy-rpi-pair.sh has NO
+# audio backend and transmits nothing (see that script's header). Default assumes an
+# in-repo build on each station.
+OPENPULSE_BIN="${OPENPULSE_BIN:-\$HOME/git/OpenPulseHF/target/release/openpulse}"
+# Per-station capture/playback device by cpal name (empty = backend default).
+A_AUDIO_DEVICE="${A_AUDIO_DEVICE:-}"
+B_AUDIO_DEVICE="${B_AUDIO_DEVICE:-}"
+# rigctld address:port for --ptt rigctld (only used when PTT_BACKEND=rigctld).
+A_RIGCTLD="${A_RIGCTLD:-127.0.0.1:4532}"
+B_RIGCTLD="${B_RIGCTLD:-127.0.0.1:4532}"
 
 TIER="quick"
 OUTPUT_DIR="docs/dev/test-reports"
@@ -91,8 +106,9 @@ FULL_CASES=(
     "BPSK100|none|64"
     "BPSK250|none|64"
     "BPSK250|rs|64"
-    "BPSK250|concatenated|64"
     "BPSK250|soft_concatenated|64"
+    "MFSK16|rs|32"
+    "QPSK250-D|rs|128"
     "QPSK250|none|128"
     "QPSK500|none|128"
     "QPSK500|rs|128"
@@ -140,52 +156,73 @@ echo ""
 for case_spec in "${CASES[@]}"; do
     IFS='|' read -r MODE FEC PAYLOAD_SIZE <<< "$case_spec"
 
-    echo -n "  [${MODE}] fec=${FEC} payload=${PAYLOAD_SIZE}B ... "
+    # Normalise the case FEC token to the CLI vocabulary (soft_concatenated -> soft-concatenated).
+    CLI_FEC="${FEC//_/-}"
+
+    echo -n "  [${MODE}] fec=${CLI_FEC} payload=${PAYLOAD_SIZE}B ... "
 
     IRS_LOG="/tmp/openpulse-irs-${MODE}-${FEC}.log"
     ISS_LOG="/tmp/openpulse-iss-${MODE}-${FEC}.log"
 
-    # Build a random payload of the requested size.
-    PAYLOAD_HEX=$(python3 -c "import os,sys; sys.stdout.write(os.urandom(${PAYLOAD_SIZE}).hex())")
+    # A fixed, printable payload the IRS can be checked against verbatim.
+    PAYLOAD="ONAIR ${CALLSIGN_A} DE ${CALLSIGN_B} ${MODE} ${CLI_FEC} $(printf 'X%.0s' $(seq 1 "${PAYLOAD_SIZE}"))"
+    PAYLOAD="${PAYLOAD:0:${PAYLOAD_SIZE}}"
 
-    # 1. Start IRS TNC on station B (background).
-    ssh_b "pkill -f openpulse-tnc || true; \
-        ~/bin/openpulse-tnc \
+    # Per-station PTT/device flags.
+    a_ptt_args="--ptt ${PTT_BACKEND}"; b_ptt_args="--ptt ${PTT_BACKEND}"
+    if [[ "${PTT_BACKEND}" == "rigctld" ]]; then
+        a_ptt_args="--ptt rigctld --rig ${A_RIGCTLD}"
+        b_ptt_args="--ptt rigctld --rig ${B_RIGCTLD}"
+    fi
+    a_dev_arg=""; [[ -n "${A_AUDIO_DEVICE}" ]] && a_dev_arg="--device '${A_AUDIO_DEVICE}'"
+    b_dev_arg=""; [[ -n "${B_AUDIO_DEVICE}" ]] && b_dev_arg="--device '${B_AUDIO_DEVICE}'"
+
+    irs_listen_ms=$(( (IRS_STARTUP_WAIT + TX_TIMEOUT + 30) * 1000 ))
+
+    # 1. Start the IRS receiver on station B (background). `receive` is the real CLI surface;
+    #    the old `openpulse-tnc --listen` / `openpulse send --hex` path no longer exists.
+    ssh_b "pkill -f 'openpulse .*receive' 2>/dev/null || true; \
+        nohup ${OPENPULSE_BIN} \
+            --backend cpal \
+            --log debug \
+            ${b_ptt_args} \
+            receive \
             --mode ${MODE} \
-            --callsign ${CALLSIGN_B} \
-            --ptt ${PTT_BACKEND} \
-            --listen \
-        >${IRS_LOG} 2>&1 &"
+            --fec ${CLI_FEC} \
+            --listen-ms ${irs_listen_ms} \
+            ${b_dev_arg} \
+        >${IRS_LOG} 2>&1 </dev/null &"
 
     sleep "${IRS_STARTUP_WAIT}"
 
     # 2. Transmit from station A (ISS), wait for TX to complete.
     ISS_EXIT=0
     timeout "${TX_TIMEOUT}" ssh_a \
-        "echo '${PAYLOAD_HEX}' | \
-            ~/bin/openpulse send \
-                --mode ${MODE} \
-                --fec ${FEC} \
-                --callsign ${CALLSIGN_A} \
-                --to ${CALLSIGN_B} \
-                --hex \
+        "${OPENPULSE_BIN} \
+            --backend cpal \
+            --log info \
+            ${a_ptt_args} \
+            transmit \
+            --mode ${MODE} \
+            --fec ${CLI_FEC} \
+            ${a_dev_arg} \
+            '${PAYLOAD}' \
         >${ISS_LOG} 2>&1" || ISS_EXIT=$?
 
-    # 3. Give IRS a moment to finish writing, then stop it and fetch logs.
-    sleep 2
-    IRS_LOG_CONTENT=$(ssh_b "cat ${IRS_LOG} 2>/dev/null || true; pkill -f openpulse-tnc || true")
+    # 3. Give IRS time to finish the scanning decode, then stop it and fetch logs.
+    sleep "${KILL_WAIT}"
+    IRS_LOG_CONTENT=$(ssh_b "cat ${IRS_LOG} 2>/dev/null || true; pkill -f 'openpulse .*receive' 2>/dev/null || true")
 
     # 4. Fetch ISS log.
     ISS_LOG_CONTENT=$(ssh_a "cat ${ISS_LOG} 2>/dev/null || true")
 
-    # 5. Determine pass/fail.
-    # ISS must exit 0; IRS log must contain "frame received" (case-insensitive).
+    # 5. Determine pass/fail: ISS must exit 0; the IRS must have printed the payload it decoded.
     TEST_PASS=false
     FAIL_REASON=""
     if [[ $ISS_EXIT -ne 0 ]]; then
         FAIL_REASON="ISS exit code ${ISS_EXIT}"
-    elif ! echo "${IRS_LOG_CONTENT}" | grep -qi "frame received"; then
-        FAIL_REASON="IRS did not log 'frame received'"
+    elif ! echo "${IRS_LOG_CONTENT}" | grep -qF "${PAYLOAD}"; then
+        FAIL_REASON="IRS did not decode the transmitted payload"
     else
         TEST_PASS=true
     fi

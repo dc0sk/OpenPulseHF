@@ -16,6 +16,16 @@ Merged to `main` since v0.16.0; not yet tagged. Two arcs dominate: the **transmi
 fix-down** (#971–#988) and the **loopback re-validation on real audio** (#989–#1012), which found
 several live defects and — at the end — retracted a long-standing misattribution.
 
+### Fixed — on-air tooling currency
+
+- **The on-air scripts were brought current with the CLI**, which had drifted 6–8 weeks behind the
+  loopback-revalidation arc. `deploy-rpi-pair.sh` cross-built no-audio binaries that key nothing and
+  now refuses by default; `run-onair-tests.sh` called a `send` subcommand and TNC flags that no
+  longer exist and is rewired to the real `transmit`/`receive` surface with `--fec`; the two mature
+  runners never applied `--fec` (evidence claimed a FEC never used) and now do; receiver-settle
+  timings corrected; and `onair-preflight.sh` gained a probe that catches a loopback-only build
+  before it wastes an on-air window transmitting nothing.
+
 ### Fixed — safety and correctness
 
 - **PTT is released when a keyed ARDOP client disconnects** ([#971]) and the PTT watchdog safety core
@@ -54,6 +64,11 @@ several live defects and — at the end — retracted a long-standing misattribu
 
 ### Added
 
+- **On-air execution plan** (`docs/dev/onair-execution-plan.md`) — the sequenced 1.0 group-A campaign,
+  grounded in the recorded ground truth that the modem, waveforms, decoder and transmitters are
+  already SDR-proven on real RF, and the rig→rig blocker is conducted USB-audio RFI (fix = galvanic
+  isolation), not a modem defect. Critical path: kill the RX RFI → signal-chain gates → one rig→rig
+  decode → ladder on a real fade → Winlink over RF.
 - **Per-subcarrier EVM measured before the DFT de-spread** ([#1009], `scfdma_subcarrier_evm_db`).
   SC-FDMA's IDFT averages every subcarrier into every output symbol, so a post-despread measurement
   cannot separate a narrowband impairment from a broadband one. Diagnostic only.

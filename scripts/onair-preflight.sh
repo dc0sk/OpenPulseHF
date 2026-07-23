@@ -117,6 +117,24 @@ check_binary "$REPO_ROOT/target/release/openpulse-tnc" "openpulse-tnc"
 check_binary "$REPO_ROOT/target/release/openpulse-kisstnc" "openpulse-kisstnc"
 check_binary "$REPO_ROOT/target/release/openpulse-gateway" "openpulse-gateway"
 
+# The cpal footgun (CLAUDE.md → "Audio backend opt-in"): a CLI built without its
+# cpal feature is byte-present and passes the check above, but silently falls back
+# to the loopback backend and keys NO audio. Presence is not capability. Probe it:
+# `--backend cpal devices` on a real-audio build enumerates devices; on a
+# loopback-only build it errors or lists nothing. This is the difference between a
+# preflight that passes and an on-air window that transmits into a void.
+CLI_BIN="$REPO_ROOT/target/release/openpulse"
+if [[ -x "$CLI_BIN" ]]; then
+    if "$CLI_BIN" --backend cpal devices >/dev/null 2>&1 \
+        && [[ -n "$("$CLI_BIN" --backend cpal devices 2>/dev/null)" ]]; then
+        ok "openpulse CLI has a working cpal audio backend (devices enumerated)"
+    else
+        msg="openpulse CLI cannot enumerate cpal devices — it was likely built WITHOUT the cpal \
+feature and will transmit NOTHING on air (rebuild: cargo build --release -p openpulse-cli --features cpal-backend)"
+        if [[ $STRICT -eq 1 ]]; then fail "$msg"; else warn "$msg"; fi
+    fi
+fi
+
 if git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
     SHA=$(git rev-parse --short HEAD)
     ok "git sha: $SHA"

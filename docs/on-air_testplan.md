@@ -13,7 +13,10 @@ OpenPulseHF. All tests should be completed before any public release or the Phas
 regulatory compliance report is filed.
 
 **Status:** Pending station setup by both operators.  
-**Prerequisite gate:** `cargo test --workspace --no-default-features` passes on both machines.
+**Prerequisite gate:** `cargo test --workspace --no-default-features` passes on both machines.  
+**Execution order:** this document is the *matrix* (what to run). The *sequence* — which phase to run
+first and why the receive path must be fixed before anything else — is in
+[onair-execution-plan.md](dev/onair-execution-plan.md). Start there.
 
 ---
 
