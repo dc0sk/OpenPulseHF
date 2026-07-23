@@ -8446,3 +8446,25 @@ The last mode still failing on the dual-card rig after the AGC misclassification
   fix = galvanic isolation). Critical path: G0 kill the RX RFI → G1 seven signal-chain gates → A1 one
   rig→rig decode → A2 ladder on a real fade → A3 Winlink over RF. Linked from `onair-status.md` and
   `on-air_testplan.md`.
+
+## 2026-07-23 — Phase G0 idle-floor gate (runnable)
+
+- **Requirement/change:** the on-air execution plan's Phase G0 needs a runnable check that the
+  galvanic-USB-isolation fix cleared the conducted-RFI birdies from a rig's receive audio, before any
+  modem run. Previously described only as "capture and FFT".
+- **Implementation:** `scripts/onair-rx-idle-floor.py` (Welch PSD, Blackman-Harris window, robust
+  25th-percentile broadband floor; flags in-band narrow lines ≥15 dB prominence or ≥−40 dBFS) +
+  `scripts/onair-rx-idle-floor.sh` (arecord capture wrapper, idle-state warning, exit-code
+  propagation). Prominence-based so the verdict is independent of capture gain.
+- **Tests (run — "check your checker"):** validated against synthetic captures. Pure noise → PASS
+  (exit 0). Three injected lines at 1286/1394/1745 Hz → FAIL listing **exactly those three**. A single
+  −30 dBFS line → FAIL listing **exactly one**. Live `arecord`→analyze path exercised end-to-end on a
+  real host capture device (PASS on a silent floor). All exit codes propagate through the wrapper.
+- **A defect in the test found by the checker's checker:** the first synthetic "birdie" input summed
+  five ~0 dBFS sines, which clipped to full scale and generated intermodulation across the whole band
+  — the analyzer faithfully reported ~33 lines and looked broken. The analyzer was correct; the *test
+  input* was clipping. Fixed the test to inject non-clipping lines (asserted `peak < 0.999`), after
+  which the analyzer localized exactly the injected set. Also replaced a local-running-median floor
+  (which a birdie-dense band inflated by ~30 dB, manufacturing phantom peaks) with the global
+  percentile floor. Both are recorded so neither is reintroduced.
+- **Wired into:** the execution plan's Phase G0 (with the exact commands and the validation note).
