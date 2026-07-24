@@ -64,6 +64,11 @@ several live defects and — at the end — retracted a long-standing misattribu
 
 ### Added
 
+- **Second on-air pairing prepared** — IC-9700 (rpi51, stationary, over VPN) ↔ FT-818 + SCU-17 (this
+  laptop, portable) on 2 m 144.640 MHz. Config profile `docs/config/onair-ic9700-ft818.example.sh` +
+  setup doc `docs/dev/onair-ic9700-ft818-setup.md` (FT-818 DIG/USER-U mode, rear-antenna menu, the G0
+  idle-floor check on the SCU-17 audio); flags that the LDG Z817 is HF-only and inert on 2 m. No
+  script change — the runner is already Side-B-config-driven.
 - **Phase G0 idle-floor gate** (`scripts/onair-rx-idle-floor.{sh,py}`) — a runnable check that a rig's
   receive USB-audio floor is clean of the conducted-RFI birdies that blocked every prior rig-to-rig
   link, gain-independent (prominence-based) and validated against synthetic captures before use.
