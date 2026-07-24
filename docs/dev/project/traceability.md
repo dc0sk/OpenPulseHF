@@ -8468,3 +8468,28 @@ The last mode still failing on the dual-card rig after the AGC misclassification
   (which a birdie-dense band inflated by ~30 dB, manufacturing phantom peaks) with the global
   percentile floor. Both are recorded so neither is reintroduced.
 - **Wired into:** the execution plan's Phase G0 (with the exact commands and the validation note).
+
+## 2026-07-24 — second on-air pairing prepared: IC-9700 ↔ FT-818
+
+- **Requirement/change:** prepare a test setup for a new 2 m pairing — IC-9700 on rpi51 (stationary,
+  over VPN) ↔ FT-818 + SCU-17 + LDG Z817 on this laptop (portable), same 144.640 MHz as before, FT-818
+  on the rear antenna socket.
+- **Grounding (verified, not assumed):** frequency 144.640 MHz PKTUSB and the full IC-9700/rpi51
+  config taken verbatim from the working `onair-ic9700-ft991a.example.sh`; hamlib **FT-818 = 1041**,
+  IC-9700 = 3081 (`rigctl -l`); the runner `run-onair-ic9700-ft991a.sh` is fully Side-B-config-driven
+  (`B_LABEL`/`B_HAMLIB_MODEL`/`B_PTT_TYPE`/`B_SSH`), so this is a config+docs task with **no script
+  change**. The SCU-17 was **not connected** when writing (checked `arecord -l`/`/dev/serial/by-id`/
+  `lsusb`), so its device names are marked `TODO-CONFIRM` with the discovery commands rather than
+  fabricated.
+- **Implementation:** `docs/config/onair-ic9700-ft818.example.sh` (sources cleanly; sets freq/models/
+  SSH; Side B = `dc0sk@localhost`) + `docs/dev/onair-ic9700-ft818-setup.md` (FT-818 DIG/USER-U mode,
+  DIG GAIN, CAT rate, rear-antenna menu, PTT choice, the G0 idle-floor gate on the SCU-17 audio, and
+  the signal-chain gates). Linked from the execution plan.
+- **Two operator-facing flags raised (careful-colleague catches):**
+  (1) the **LDG Z817 is HF-only and inert on 2 m** — the antenna must be resonant on its own, the
+  tuner cannot correct it here (`ALLOW_TUNER_ON_HIGH_SWR=0`);
+  (2) the FT-818 **rear SO-239 at 2 m** is a lossier connector than the front BNC and is not the
+  factory default — set by menu, link budget slightly worse. Also carried forward the IC-9700's
+  unresolved USB-capture-during-TX caveat (Gate 3 covers it).
+- **Tests (run):** config `bash -n` + sources and sets the expected vars; doc frontmatter validates.
+  Not runnable further without the hardware connected (device names) and the two rigs on air.

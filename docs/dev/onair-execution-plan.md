@@ -125,6 +125,12 @@ ladder, logs retained.
 SSH-pair runner, now on the real `transmit`/`receive` CLI). Both build/require a **cpal** binary on
 each Pi — do **not** deploy via `deploy-rpi-pair.sh` (no-audio; it now refuses by default).
 
+**Station pairings** (each has a config profile + a setup doc):
+- IC-9700 (rpi51) ↔ FT-991A (dd2zm) — [signal-chain-verification](onair-signal-chain-verification.md).
+- IC-9700 (rpi51, stationary) ↔ FT-818 + SCU-17 (this laptop, portable) —
+  [onair-ic9700-ft818-setup.md](onair-ic9700-ft818-setup.md), profile
+  `docs/config/onair-ic9700-ft818.example.sh`. 2 m 144.640 MHz; SDR co-located with the portable end.
+
 Sequence:
 1. **SDR up first, always.** Start `scripts/onair-sdr/sdr_capture.py` on the dev host so every TX is
    independently monitored. The SDR is the arbiter: if a rig-RX fails but the SDR decoded the same
