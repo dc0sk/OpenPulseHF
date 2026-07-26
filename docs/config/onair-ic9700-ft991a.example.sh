@@ -45,7 +45,7 @@ export B_RIGCTLD_PORT=4532
 # 2m safety guard for this test window (script enforces this range)
 export BAND2M_MIN_HZ=144500000
 export BAND2M_MAX_HZ=144750000
-export TEST_FREQ_HZ=144500000
+export TEST_FREQ_HZ=144600000
 export TEST_MODE_RIG="PKTUSB"
 
 # IC-9700 audio prerequisites for digital USB TX (set on the radio UI):
