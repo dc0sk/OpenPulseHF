@@ -48,7 +48,7 @@ export A_RIGCTLD_PORT=4532
 export A_AUDIO_DEVICE="pulse"
 export A_AUDIO_DEVICE_LABEL="IC-9700 USB Audio CODEC (PulseAudio)"
 export A_REPO_DIR='${HOME}/git/OpenPulseHF'
-export A_RFPOWER=0.5
+export A_RFPOWER=0.05                     # IC-9700: ~5 W of 100 W (0.5 would be ~50 W — do not)
 
 # ── Station B — FT-818 + SCU-17 on THIS laptop ─────────────────────────────────
 # CAT serial port of the SCU-17. TODO-CONFIRM once plugged in:
