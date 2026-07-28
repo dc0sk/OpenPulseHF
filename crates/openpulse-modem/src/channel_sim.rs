@@ -115,6 +115,50 @@ impl ChannelSimHarness {
         n
     }
 
+    /// Route TX samples with band-limited NOISE padded around them, at a chosen idle level.
+    ///
+    /// [`route_embedded`](Self::route_embedded) pads *silence*, and silence cannot reproduce a whole
+    /// class of real-radio failure: the receiver's energy gate falls back to an absolute floor
+    /// (`EnergyGate::ABS_THRESHOLD`) until it has accumulated 32 windows of history, so a real idle
+    /// noise floor above that floor makes the gate fire — and AFC settle — on NOISE, before the
+    /// frame has arrived. A silence-padded capture always has an idle level of exactly zero, so it
+    /// can never trip it, and every in-process test stayed blind to it.
+    ///
+    /// Measured on air (issue #1021, IC-9700 <-> FT-991A, 2 m): an idle floor of mean-square 4.2e-4
+    /// against a 1e-4 cold-start threshold settled AFC at 0.2 s — some 40 000 samples before the
+    /// transmission started — and the coded receive never recovered.
+    ///
+    /// `noise_rms` is the RMS amplitude of the padding (mean-square = `noise_rms²`), and `seed`
+    /// makes the noise deterministic so a failure reproduces exactly. Returns the number of TX
+    /// samples routed (excluding the padding).
+    pub fn route_embedded_noisy(
+        &mut self,
+        lead: usize,
+        trail: usize,
+        noise_rms: f32,
+        seed: u64,
+    ) -> usize {
+        // Deterministic xorshift64* rather than a seeded RNG dependency: the padding only has to be
+        // reproducible and roughly white, and a test that cannot reproduce its own failure is worse
+        // than no test.
+        let mut state = seed | 1;
+        let mut next_noise = move || {
+            state ^= state >> 12;
+            state ^= state << 25;
+            state ^= state >> 27;
+            let u = (state.wrapping_mul(0x2545_F491_4F6C_DD1D) >> 11) as f64 / (1u64 << 53) as f64; // uniform [0,1)
+            ((u as f32) * 2.0 - 1.0) * noise_rms * 1.732_050_8 // uniform -> RMS = a/sqrt(3)
+        };
+        let samples = self.tx_loopback.drain_samples();
+        let n = samples.len();
+        let mut buf = Vec::with_capacity(lead + n + trail);
+        buf.extend((0..lead).map(|_| next_noise()));
+        buf.extend_from_slice(&samples);
+        buf.extend((0..trail).map(|_| next_noise()));
+        self.rx_loopback.fill_samples(&buf);
+        n
+    }
+
     /// Route TX samples with silence padded around them, so the receiver must LOCATE the frame.
     ///
     /// Every other route fills the RX loopback with a buffer that **is** the frame, which is a
