@@ -1,0 +1,26 @@
+{
+  "captured_at_utc": "2026-07-28T173053Z",
+  "git_sha": "7d5372fc14cd5138b59c5734b2a9d0048157f62d",
+  "git_branch": "onair/gate-initial-loopback",
+  "git_dirty": false,
+  "host": "DC0SK-P14s",
+  "operator_user": "dc0sk",
+  "label": "ic9700-ft991a-quick",
+  "files": {
+    "report": {
+      "source": "docs/dev/test-reports/onair-2026-07-28T172924.json",
+      "bundle_name": "onair-2026-07-28T172924.json",
+      "sha256": "8d4a2e82f5351a27b391e64559778fdb1cb22c1fe14507921ae445d6389ba630"
+    },
+    "config_snapshot": {
+      "source": "/home/dc0sk/.config/openpulse/config.toml",
+      "bundle_name": "config.toml.snapshot",
+      "sha256": "a9e03c952f9def952f592ad247373f0b3c49d726605284384bd86f7705ee7b99"
+    },
+    "notes": {
+      "bundle_name": "",
+      "sha256": ""
+    }
+  },
+  "preflight": null
+}

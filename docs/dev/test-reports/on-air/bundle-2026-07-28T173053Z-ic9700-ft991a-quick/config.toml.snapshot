@@ -1,0 +1,219 @@
+[station]
+callsign = "N0CALL"
+grid_square = "AA00"
+identity_key_path = ""
+auto_id_interval_secs = 600
+auto_id_signoff_idle_secs = 10
+tx_power_watts = 0.0
+
+[audio]
+backend = "default"
+device = ""
+tx_limiter_threshold = 0.0
+
+[modem]
+mode = "BPSK250"
+profile = "hpx_hf"
+ptt_backend = "none"
+ptt_device = ""
+ptt_gpio = 3
+ota_enabled = false
+ota_profile = ""
+ota_min_level = ""
+ota_max_level = ""
+ota_lock_level = ""
+ota_min_backlog = 0
+ota_upgrade_hold_frames = 0
+ota_aggressiveness = ""
+dcd_squelch = 0.009999999776482582
+cessb_enabled = true
+notch_enabled = false
+notch_max = 10
+notch_q = 25.0
+notch_persistence = 0
+agc_enabled = false
+agc_target_rms = 0.30000001192092896
+agc_bandwidth = 0.019999999552965164
+agc_max_gain_db = 40.0
+
+[modem.dcd_squelch_bands]
+
+[radio]
+cat_backend = "rigctld"
+rigctld_addr = "127.0.0.1:4532"
+serial_port = ""
+rig_file = ""
+meter_poll_ms = 500
+
+[radio.rig_a]
+rigctld_addr = "127.0.0.1:4532"
+backend = "rigctld"
+serial_port = ""
+rig_file = ""
+
+[repeater]
+enabled = false
+mode = "BPSK250"
+tx_hang_ms = 500
+full_duplex = false
+
+[ardop]
+bind_addr = "127.0.0.1"
+cmd_port = 8515
+data_port = 8516
+enable_adaptive_arq = false
+adaptive_profile = "hpx500"
+
+[kiss]
+bind_addr = "127.0.0.1"
+port = 8100
+
+[logging]
+level = "info"
+
+[relay]
+enabled = false
+max_hops = 3
+store_forward_ttl_s = 300
+deny_list = []
+allow_list = []
+
+[trust]
+store_path = ""
+
+[mesh]
+enabled = false
+max_hops = 3
+relay_policy = "balanced"
+store_forward_ttl_s = 300
+beacon_interval_s = 60
+peer_cache_capacity = 256
+peer_cache_ttl_s = 3600
+
+[qsy]
+enabled = false
+allow_trustlevels = [
+    "verified",
+    "psk_verified",
+]
+bandplan_mode = "ham-iaru-r1"
+bandplan_awareness_enabled = false
+enforce_max_channel_width = true
+enforce_segment_conventions = true
+candidate_freqs_hz = []
+scan_dwell_ms = 500
+switchover_offset_s = 5
+allow_integrated_tuner_on_high_swr = false
+auto_qsy_on_interference = false
+
+[daemon]
+tcp_bind_addr = "127.0.0.1"
+tcp_port = 9000
+websocket_bind_addr = "127.0.0.1"
+websocket_port = 9001
+receive_tick_ms = 50
+
+[logbook]
+enabled = false
+adif_path = "~/.local/share/openpulse/openpulse.adi"
+
+[logbook.peer_grids]
+
+[observability]
+audit_mode = false
+archive_dir = "~/.local/share/openpulse/audit"
+
+[control_security]
+require_auth = false
+psk_key_id = "control-psk"
+
+[compression]
+enabled = false
+
+[file_transfer]
+enabled = false
+download_dir = "~/.local/share/openpulse/downloads"
+auto_accept_max_bytes = 0
+max_file_bytes = 1048576
+per_peer_quota_bytes = 0
+require_verified_peer = true
+allowed_peers = []
+offer_timeout_secs = 120
+partial_ttl_hours = 72
+burst_max_secs = 20.0
+
+[discovery]
+enabled = false
+mode = "rx_only"
+submode = "normal"
+idle_grace_secs = 120
+dwell_secs = 900
+heartbeat_interval_slots = 8
+hint_interval_beacons = 3
+query_new_stations = false
+max_queries_per_10min = 2
+station_ttl_secs = 3600
+max_clock_skew_ms = 2000
+group = "OPULSE"
+
+[discovery.calling_freqs_hz]
+10m = 28078000
+12m = 24922000
+15m = 21078000
+160m = 1842000
+17m = 18104000
+20m = 14078000
+30m = 10130000
+40m = 7078000
+80m = 3578000
+
+[discovery.rendezvous_channels_hz]
+10m = [
+    28121000,
+    28123000,
+    28125000,
+]
+12m = [
+    24926000,
+    24927000,
+    24928000,
+]
+15m = [
+    21101000,
+    21103000,
+    21105000,
+]
+160m = [
+    1843000,
+    1844000,
+    1845000,
+]
+17m = [
+    18106000,
+    18107000,
+    18108000,
+]
+20m = [
+    14101000,
+    14103000,
+    14105000,
+]
+30m = [
+    10142000,
+    10143000,
+    10144000,
+]
+40m = [
+    7101000,
+    7103000,
+    7105000,
+]
+80m = [
+    3583000,
+    3585000,
+    3587000,
+]
+
+[monitor]
+enabled = false
+modes = []

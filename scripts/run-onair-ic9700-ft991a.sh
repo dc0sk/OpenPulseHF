@@ -289,6 +289,24 @@ verify_audio_routing() {
     fi
 }
 
+# An RX capture level above the energy gate's MAX_THRESHOLD/3 makes the gate fire on idle
+# noise, so the receiver settles AFC on noise and every frame decodes to "invalid magic" —
+# a whole matrix fails with strong RF and correctly aligned rigs. Measured, and the cause of
+# the first A1 failure (2026-07-28). Cheap idle measurement; refuses to key if it would fail.
+verify_rx_level() {
+    local check="${REPO_ROOT}/scripts/onair-rx-level-check.sh"
+    if [[ ! -x "$check" ]]; then
+        echo "  [rx-level] WARN: ${check} missing; skipping capture-level check" >&2
+        return 0
+    fi
+    echo "  [rx-level] checking each station's idle floor against the energy gate"
+    if ! "$check"; then
+        echo "ERROR: an RX capture level prevents the modem's energy gate from discriminating;" >&2
+        echo "       decodes would fail on noise-settled AFC. Fix the per-side RX level first." >&2
+        exit 1
+    fi
+}
+
 verify_ptt_control_a() {
     echo "  [${A_LABEL} ptt] asserting rigctld PTT briefly"
     local ptt_on ptt_off
@@ -901,6 +919,7 @@ setup() {
     fi
     verify_audio_device_b
     verify_audio_routing
+    verify_rx_level
 
     if is_truthy "${POWER_CYCLE_ENABLE}"; then
         power_cycle_a
