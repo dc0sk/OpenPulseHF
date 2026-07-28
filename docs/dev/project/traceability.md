@@ -8493,3 +8493,46 @@ The last mode still failing on the dual-card rig after the AGC misclassification
   unresolved USB-capture-during-TX caveat (Gate 3 covers it).
 - **Tests (run):** config `bash -n` + sources and sets the expected vars; doc frontmatter validates.
   Not runnable further without the hardware connected (device names) and the two rigs on air.
+
+## On-air runner: per-side frequency offset + PipeWire routing preflight (2026-07-28)
+
+- **Change:** make the two things that brought up the IC-9700 ↔ FT-991A pair (all seven signal-chain
+  gates PASS, first OTA BPSK250 decode) reproducible by the runner instead of hand-set each session:
+  (1) a per-side dial trim for the real ~64 Hz rig-to-rig crystal offset, and (2) PipeWire default
+  sink/source routing to the rig CODEC at a non-clipping TX level.
+- **Design/rationale:**
+  - *Frequency:* two independent 2 m rigs differ by tens of Hz (~1 ppm = 145 Hz at 144.6 MHz), which
+    is at/over BPSK250's ±62.5 Hz AFC. Measured on air: both commanded to 144.600000 → received
+    carrier 1436 Hz (−64 Hz); trimming **Station B +64 Hz** → 1501.5 Hz. A single-side trim corrects
+    the actual crystal difference, so it aligns **both** directions. RF alignment is therefore
+    "each rig on `TEST_FREQ_HZ + its offset`", **not** "the two commanded frequencies equal".
+  - *Routing:* `--device pulse` follows the host DEFAULT sink/source; on a laptop the default sink is
+    the built-in speaker (TX never reaches the rig), and openpulse emits near-full-scale audio that
+    pins the rig ALC. Set the default sink/source to the CODEC at TX volume 0.15 (Gate-6-validated).
+    A script that SETS state must VERIFY it (dual-card AGC lesson) — the setup tool reads the routing
+    back, and the runner refuses to key if it is wrong (fail-closed).
+- **Implementation:**
+  - `scripts/run-onair-ic9700-ft991a.sh`: `A_FREQ_OFFSET_HZ`/`B_FREQ_OFFSET_HZ` → `A_FREQ_HZ`/
+    `B_FREQ_HZ`; band guard validates all three; `tune_a`/`tune_b` tune per-side; the CRITICAL freq
+    check compares each rig to its own expected value; new `verify_audio_routing` preflight (no-op
+    unless a side uses `pulse`) calls the setup tool `--verify` and `exit 1`s on failure.
+  - `scripts/onair-setup-audio-routing.sh` (new): resolves each host's CODEC sink+source from
+    `wpctl status` by description match, sets them default + TX sink volume, then reads back and
+    prints a `RESULT pass|fail` line; `--verify` mode checks without changing.
+  - `docs/config/onair-ic9700-ft991a.example.sh`: `A_FREQ_OFFSET_HZ=0`, `B_FREQ_OFFSET_HZ=64`,
+    `A_CODEC_MATCH`/`B_CODEC_MATCH="Codec"`, `A_TX_SINK_VOLUME`/`B_TX_SINK_VOLUME=0.15`, documented.
+  - `docs/dev/onair-execution-plan.md`: G1 "session bring-up" subsection documenting both steps and
+    the `pw-record --target` suspended-node trap (it produced a fake G3 fail during bring-up).
+- **Tests (run):**
+  - `bash -n` on the runner, the new setup script, and the config: all pass.
+  - Per-side offset arithmetic + band guard + per-side verify: unit-tested in isolation — with
+    `B_FREQ_OFFSET_HZ=64`, `A_FREQ_HZ=144600000`/`B_FREQ_HZ=144600064` (in band); verify passes when B
+    reads 144600064 and correctly flags when B reads 144600000.
+  - `onair-setup-audio-routing.sh` live against both hosts: **set → both `RESULT pass`** (rpi51
+    default sink 35 / source 46; dd2zm sink 58 / source 59; sink_vol 0.15); **sabotage** (dd2zm
+    default sink → 69) → `--verify` reports `RESULT fail default_sink=69` and overall FAIL; set-mode
+    restores both to PASS.
+  - Runner `verify_audio_routing` extracted and exercised: skips (rc 0) when both sides use `hw:`;
+    PASS (rc 0) with `pulse` + good routing; **exits rc 1** with `pulse` + sabotaged routing.
+- **Not yet run:** the runner end-to-end (build + transfer + loopback regression + keyed matrix) —
+  that is Phase A1/A2 and needs an agreed on-air window.

@@ -113,6 +113,30 @@ Two known code/config items from the June campaign to carry into G5/G6:
 
 **Exit criterion G1:** all seven gates pass for the chosen rig pair on the chosen frequency.
 
+### G1 session bring-up — two reproducibility steps the runner now depends on
+
+The 2026-07-28 IC-9700 ↔ FT-991A bring-up (all seven gates PASS, first OTA BPSK250 decode) surfaced
+two things that must be established **once per session** before the matrix, and are now
+config-driven so the runner reproduces them instead of re-discovering them by hand:
+
+1. **Per-side dial trim for the rig crystal offset (G5).** The two rigs differed by **~64 Hz** at
+   144.6 MHz — with both commanded to 144.600000 the received carrier sat at 1436 Hz, at the edge of
+   BPSK250's ±62.5 Hz AFC. The runner now tunes each side to `TEST_FREQ_HZ + {A,B}_FREQ_OFFSET_HZ`
+   and verifies each rig against *its own* expected frequency (not that the two are equal). Measure
+   the offset with G5 (`received carrier − 1500 Hz`), put it on **one** side (`B_FREQ_OFFSET_HZ=64`
+   for this pair), and re-measure — it aligns both directions because it corrects the actual crystal
+   difference. Re-measure whenever a rig or its TCXO changes.
+2. **PipeWire default sink/source + TX level.** `A_AUDIO_DEVICE/B_AUDIO_DEVICE="pulse"` follow each
+   host's *default* sink (TX) and source (RX); on a laptop the default sink is the built-in speaker,
+   so TX audio never reaches the rig, and openpulse's near-full-scale audio pins the rig ALC. Run
+   `scripts/onair-setup-audio-routing.sh` (set) once — it points both defaults at the rig CODEC and
+   sets the TX sink volume to **0.15** (Gate-6-validated: clean, non-clipping BPSK250, decoded first
+   try) — then the runner's `verify_audio_routing` preflight refuses to key if that routing is not in
+   place (fail-closed, like the dual-card AGC guard). **Do NOT capture the CODEC with
+   `pw-record --target=<id>`** — it binds a *suspended* node and returns digital silence (this
+   produced a fake "G3 fail" during bring-up); capture through the PulseAudio server (`parecord`
+   / cpal `pulse`), which resumes the node.
+
 ---
 
 ## 3. Phase A1 — Two-station QSO on the `hpx_hf` ladder

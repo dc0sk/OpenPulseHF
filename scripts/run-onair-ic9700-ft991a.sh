@@ -37,6 +37,15 @@ B_PTT_TYPE="${B_PTT_TYPE:-RTS}"
 B_RIGCTLD_ADDR="${B_RIGCTLD_ADDR:-127.0.0.1}"
 B_RIGCTLD_PORT="${B_RIGCTLD_PORT:-4532}"
 TEST_FREQ_HZ="${TEST_FREQ_HZ:-145650000}"
+# Per-side dial trim (Hz) to null a real rig-to-rig crystal offset so the received
+# audio carrier lands on 1500 Hz. Two independent rigs on 2 m routinely differ by
+# tens of Hz (~1 ppm = 145 Hz at 144.6 MHz), which is at/over BPSK250's +-62.5 Hz
+# AFC. Measure it with Gate 5 (received carrier - 1500 Hz) and put the correction
+# on ONE side. Both sides are still bounded by the 2 m band guard below.
+A_FREQ_OFFSET_HZ="${A_FREQ_OFFSET_HZ:-0}"
+B_FREQ_OFFSET_HZ="${B_FREQ_OFFSET_HZ:-0}"
+A_FREQ_HZ=$(( TEST_FREQ_HZ + A_FREQ_OFFSET_HZ ))
+B_FREQ_HZ=$(( TEST_FREQ_HZ + B_FREQ_OFFSET_HZ ))
 TEST_MODE_RIG_A="${TEST_MODE_RIG_A:-${TEST_MODE_RIG:-USB}}"
 TEST_MODE_RIG_B="${TEST_MODE_RIG_B:-${TEST_MODE_RIG:-PKTUSB}}"
 A_AUDIO_DEVICE="${A_AUDIO_DEVICE:-}"
@@ -176,10 +185,13 @@ fi
 # Enforce requested 2m test sub-band by default (Germany): 144.500-144.750 MHz.
 BAND2M_MIN_HZ="${BAND2M_MIN_HZ:-144500000}"
 BAND2M_MAX_HZ="${BAND2M_MAX_HZ:-144750000}"
-if (( TEST_FREQ_HZ < BAND2M_MIN_HZ || TEST_FREQ_HZ > BAND2M_MAX_HZ )); then
-    echo "ERROR: TEST_FREQ_HZ=${TEST_FREQ_HZ} is outside allowed test range ${BAND2M_MIN_HZ}-${BAND2M_MAX_HZ}." >&2
-    exit 1
-fi
+for _f in "TEST_FREQ_HZ:${TEST_FREQ_HZ}" "A_FREQ_HZ:${A_FREQ_HZ}" "B_FREQ_HZ:${B_FREQ_HZ}"; do
+    _fn="${_f%%:*}"; _fv="${_f#*:}"
+    if (( _fv < BAND2M_MIN_HZ || _fv > BAND2M_MAX_HZ )); then
+        echo "ERROR: ${_fn}=${_fv} is outside allowed test range ${BAND2M_MIN_HZ}-${BAND2M_MAX_HZ}." >&2
+        exit 1
+    fi
+done
 
 ssh_a() {
     # shellcheck disable=SC2086
@@ -253,6 +265,28 @@ verify_audio_device_b() {
         exit 1
     fi
     echo "  [${B_LABEL} device] ${device_line}"
+}
+
+# When either side uses the "pulse" device, `--device pulse` follows the host's DEFAULT
+# sink/source — which must point at the rig CODEC (not the host's built-in) at a
+# non-clipping TX level. This refuses to run the matrix if that routing is not in place,
+# the same fail-closed discipline the dual-card AGC preflight uses. Set it with
+# scripts/onair-setup-audio-routing.sh. A no-op unless a side uses "pulse".
+verify_audio_routing() {
+    if [[ "${A_AUDIO_DEVICE}" != "pulse" && "${B_AUDIO_DEVICE}" != "pulse" ]]; then
+        return 0
+    fi
+    local setup="${REPO_ROOT}/scripts/onair-setup-audio-routing.sh"
+    if [[ ! -x "$setup" ]]; then
+        echo "  [routing] WARN: ${setup} missing; skipping default-sink/source check" >&2
+        return 0
+    fi
+    echo "  [routing] verifying default sink/source point at the rig CODECs"
+    if ! "$setup" --verify; then
+        echo "ERROR: audio routing is not set (a side uses --device pulse but its default" >&2
+        echo "       sink/source is not the rig CODEC). Run: scripts/onair-setup-audio-routing.sh" >&2
+        exit 1
+    fi
 }
 
 verify_ptt_control_a() {
@@ -479,14 +513,14 @@ stop_rigctld_b() {
 }
 
 tune_a() {
-    echo "  [tune] ${A_LABEL} (A) -> ${TEST_FREQ_HZ} Hz ${TEST_MODE_RIG_A}"
-    ssh_a "rigctl -m 2 -r ${A_RIGCTLD_ADDR}:${A_RIGCTLD_PORT} F ${TEST_FREQ_HZ} 2>/dev/null || true; \
+    echo "  [tune] ${A_LABEL} (A) -> ${A_FREQ_HZ} Hz ${TEST_MODE_RIG_A} (offset ${A_FREQ_OFFSET_HZ} Hz)"
+    ssh_a "rigctl -m 2 -r ${A_RIGCTLD_ADDR}:${A_RIGCTLD_PORT} F ${A_FREQ_HZ} 2>/dev/null || true; \
         rigctl -m 2 -r ${A_RIGCTLD_ADDR}:${A_RIGCTLD_PORT} M ${TEST_MODE_RIG_A} 2400 2>/dev/null || true"
 }
 
 tune_b() {
-    echo "  [tune] ${B_LABEL} (B) -> ${TEST_FREQ_HZ} Hz ${TEST_MODE_RIG_B}"
-    ssh_b "rigctl -m 2 -r ${B_RIGCTLD_ADDR}:${B_RIGCTLD_PORT} F ${TEST_FREQ_HZ} 2>/dev/null || true; \
+    echo "  [tune] ${B_LABEL} (B) -> ${B_FREQ_HZ} Hz ${TEST_MODE_RIG_B} (offset ${B_FREQ_OFFSET_HZ} Hz)"
+    ssh_b "rigctl -m 2 -r ${B_RIGCTLD_ADDR}:${B_RIGCTLD_PORT} F ${B_FREQ_HZ} 2>/dev/null || true; \
         rigctl -m 2 -r ${B_RIGCTLD_ADDR}:${B_RIGCTLD_PORT} M ${TEST_MODE_RIG_B} 2400 2>/dev/null || true"
 }
 
@@ -726,25 +760,28 @@ preflight_check() {
     # Display per-station summary.
     echo ""
     echo "  ${A_LABEL} (ISS / TX):"
-    echo "    freq     = ${a_freq} Hz  [expected ${TEST_FREQ_HZ}]"
+    echo "    freq     = ${a_freq} Hz  [expected ${A_FREQ_HZ}]"
     echo "    mode     = ${a_mode}  passband = ${a_passband} Hz"
     echo "    rfpower  = ${a_rfpower}  comp=${a_comp}  nb=${a_nb}  nr=${a_nr}  sql=${a_sql}  vox=${a_vox}"
     echo "    rfgain   = ${a_rfgain}  preamp=${a_preamp}  swr=${a_swr}  strength=${a_strength} dBm"
     echo "    audio TX = ${a_sinkvol}%  mute=${a_sinkmute}"
     echo ""
     echo "  ${B_LABEL} (IRS / RX):"
-    echo "    freq     = ${b_freq} Hz  [expected ${TEST_FREQ_HZ}]"
+    echo "    freq     = ${b_freq} Hz  [expected ${B_FREQ_HZ}]"
     echo "    mode     = ${b_mode}  passband = ${b_passband} Hz"
     echo "    rfpower  = ${b_rfpower}  comp=${b_comp}  nb=${b_nb}  nr=${b_nr}  sql=${b_sql}  vox=${b_vox}"
     echo "    rfgain   = ${b_rfgain}  preamp=${b_preamp}  swr=${b_swr}  strength=${b_strength} dBm"
     echo "    audio RX = ${b_srcvol}%  mute=${b_srcmute}"
     echo ""
 
-    # --- CRITICAL: frequency must match on both stations ---
-    for _entry in "${A_LABEL}:${a_freq}" "${B_LABEL}:${b_freq}"; do
-        local _lbl="${_entry%%:*}" _val="${_entry#*:}"
-        if [[ "$_val" != "na" && "$_val" != "${TEST_FREQ_HZ}" ]]; then
-            echo "  ERROR: ${_lbl} frequency ${_val} != expected ${TEST_FREQ_HZ}" >&2
+    # --- CRITICAL: each station must be on ITS OWN expected frequency ---
+    # (A and B differ by the per-side crystal-offset trim; RF alignment is A_FREQ_HZ
+    #  and B_FREQ_HZ being TEST_FREQ_HZ + their offsets, not the two being equal.)
+    for _entry in "${A_LABEL}:${a_freq}:${A_FREQ_HZ}" "${B_LABEL}:${b_freq}:${B_FREQ_HZ}"; do
+        local _lbl="${_entry%%:*}" _rest="${_entry#*:}"
+        local _val="${_rest%%:*}" _exp="${_rest#*:}"
+        if [[ "$_val" != "na" && "$_val" != "${_exp}" ]]; then
+            echo "  ERROR: ${_lbl} frequency ${_val} != expected ${_exp}" >&2
             fail=1
         fi
     done
@@ -849,6 +886,7 @@ setup() {
         verify_audio_device_a
     fi
     verify_audio_device_b
+    verify_audio_routing
 
     if is_truthy "${POWER_CYCLE_ENABLE}"; then
         power_cycle_a
