@@ -2839,7 +2839,30 @@ impl ModemEngine {
     /// demodulate the slice, apply codec `fec`, then decode the frame. Mirrors the
     /// one-shot `receive_with_*_fec` methods but operates on a provided sample slice
     /// so the timeout-scanning loop can apply FEC per attempt.
+    /// Logging wrapper: the coded path had NO instrumentation at all, so an on-air coded
+    /// failure produced an empty log while the uncoded path logged every attempt — the
+    /// difference that made issue #1021 undiagnosable from a real capture. Every per-attempt
+    /// outcome is now visible at `--log debug`, at one line per attempt (same order of volume
+    /// as the uncoded path's "demodulated N bytes").
     fn receive_from_samples_with_fec(
+        &mut self,
+        mode: &str,
+        samples: AudioSamples,
+        fec: FecMode,
+    ) -> Result<Vec<u8>, ModemError> {
+        let n = samples.samples.len();
+        let result = self.receive_from_samples_with_fec_inner(mode, samples, fec);
+        match &result {
+            Ok(payload) => debug!(
+                "fec attempt OK: mode={mode} fec={fec:?} samples={n} payload={} bytes",
+                payload.len()
+            ),
+            Err(e) => debug!("fec attempt FAILED: mode={mode} fec={fec:?} samples={n}: {e}"),
+        }
+        result
+    }
+
+    fn receive_from_samples_with_fec_inner(
         &mut self,
         mode: &str,
         samples: AudioSamples,
@@ -2882,6 +2905,16 @@ impl ModemEngine {
                 )
             }
         };
+
+        // What the demodulator actually produced, before any codec runs. Distinguishes "the
+        // demod yielded nothing / a length the codec must reject" from "the codec ran and
+        // failed" — the two look identical from the outside and need different fixes. For the
+        // hard codecs the byte count is what the multiple-of-255 / prefix logic keys off.
+        debug!(
+            "fec demod: mode={mode} fec={fec:?} soft={soft} wire_bytes={} llrs={}",
+            raw_wire.as_ref().map_or(0, |w| w.bytes.len()),
+            llrs.as_ref().map_or(0, |l| l.len())
+        );
 
         // Feed the rate policy an absolute RX SNR whenever soft demod ran — same as the no-FEC
         // path (`receive_from_samples`) and `receive_with_ack_hint`. Without this, an adaptive
