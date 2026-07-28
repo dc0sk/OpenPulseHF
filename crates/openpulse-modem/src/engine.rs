@@ -80,6 +80,10 @@ struct ScanPlanner {
     first_energy_pos: Option<usize>,
     /// Elapsed-seconds timestamp of the last fired retry.
     last_retry_at_secs: Option<u64>,
+    /// Consecutive micro-sweep failures against a FULLY buffered window from the settled
+    /// position. Only counted once the whole frame would be present if it really started there,
+    /// so "the frame has not arrived yet" is never mistaken for "the anchor is wrong".
+    settle_failures: usize,
 }
 
 impl ScanPlanner {
@@ -99,7 +103,42 @@ impl ScanPlanner {
             last_tried_end: 0,
             first_energy_pos: None,
             last_retry_at_secs: None,
+            settle_failures: 0,
         }
+    }
+
+    /// How many fully-buffered micro-sweep failures condemn a settle.
+    ///
+    /// The sweep cycles 9 forward half-symbol offsets, one per iteration, so a full cycle is 9
+    /// attempts; two cycles gives the anchor a second chance against a grown buffer before it is
+    /// abandoned.
+    const SETTLE_FAILURE_LIMIT: usize = 18;
+
+    /// Record a micro-sweep decode failure at a fully-buffered settled position, and report
+    /// whether the anchor has now been condemned.
+    ///
+    /// **Why this exists.** `note_settled` used to be permanent, with no way back. The energy gate
+    /// falls back to an absolute floor until it has 32 windows of history, so a real receiver's
+    /// idle noise can trip it and settle AFC on noise *before* the frame arrives (measured on air,
+    /// issue #1021: settled at 0.2 s, 40 000 samples early, on a -49.8 Hz estimate when the true
+    /// offset was +1.2 Hz). The micro-sweep then re-decodes from that noise position forever — its
+    /// reach is only a few symbols — and for `long_frame` modes the full-buffer retry that would
+    /// have rescued it is disabled precisely because a settle exists. Uncoded survived only because
+    /// its shorter frame keeps that retry enabled.
+    fn note_settle_failure(&mut self) -> bool {
+        self.settle_failures += 1;
+        self.settle_failures >= Self::SETTLE_FAILURE_LIMIT
+    }
+
+    /// Abandon a settled position that has proved undecodable, and reopen the search.
+    ///
+    /// `last_tried_end` is rewound so the broad scan revisits everything: the real frame is
+    /// *later* than a premature noise anchor, but positions before it were already marked tried
+    /// while the bogus anchor was held.
+    fn unsettle(&mut self) {
+        self.first_energy_pos = None;
+        self.settle_failures = 0;
+        self.last_tried_end = 0;
     }
 
     /// `true` once AFC settling has located the first signal energy.
@@ -2608,6 +2647,10 @@ impl ModemEngine {
                 fep_offset_k = fep_offset_k.wrapping_add(1);
                 let end = (onset + max_frame_samples).min(accumulated.len());
                 if end.saturating_sub(onset) >= min_frame_samples {
+                    // Only a FULLY buffered window can condemn the anchor: a short window fails
+                    // for lack of audio, not because the position is wrong, and counting those
+                    // would abandon a perfectly good settle on a slow frame.
+                    let window_complete = accumulated.len() >= onset + max_frame_samples;
                     let afc_before = self.afc_correction_hz;
                     match self.decode_attempt(
                         mode,
@@ -2620,6 +2663,22 @@ impl ModemEngine {
                         Err(err) => {
                             last_err = Some(err);
                             self.afc_correction_hz = afc_before;
+                            // A settle that cannot decode its own fully-buffered window, across a
+                            // whole sweep of onsets, is not a settle — it is noise the gate
+                            // mistook for a preamble. Re-open the search rather than re-decoding
+                            // the same wrong position until the listen window expires (#1021).
+                            if window_complete && planner.note_settle_failure() {
+                                debug!(
+                                    "settle at {fep} condemned after {} fully-buffered failures; \
+                                     re-opening the scan (AFC reset from {:.1} Hz)",
+                                    ScanPlanner::SETTLE_FAILURE_LIMIT,
+                                    self.afc_correction_hz
+                                );
+                                planner.unsettle();
+                                // The correction came from the discredited anchor; keeping it
+                                // would bias every subsequent acquisition.
+                                self.afc_correction_hz = 0.0;
+                            }
                         }
                     }
                 }

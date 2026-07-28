@@ -48,6 +48,14 @@ const LEAD: usize = 40_000;
 /// reason that has nothing to do with the defect under test. The on-air listen window was 155 s.
 const RECEIVE_TIMEOUT_MS: u64 = 25_000;
 
+/// Trailing padding that makes the total capture ~269 000 samples, matching the on-air run
+/// (268 000 accumulated). This is load-bearing, not cosmetic: a coded slice is `max_frame_samples`
+/// widened x3 (223 872 samples for BPSK250), so a receiver cannot judge a settled position
+/// undecodable until that much audio exists past it. A shorter capture leaves the anchor forever
+/// "not yet fully buffered" and the recovery can never engage — which is exactly how this test
+/// failed before the length was matched to the real capture.
+const TRAIL: usize = 160_000;
+
 fn harness() -> ChannelSimHarness {
     let mut h = ChannelSimHarness::new();
     for eng in [&mut h.tx_engine, &mut h.rx_engine] {
@@ -61,7 +69,7 @@ fn round_trip_in_noise(fec: FecMode, payload: &[u8], seed: u64) -> Result<Vec<u8
     h.tx_engine
         .transmit_with_fec_mode(payload, "BPSK250", fec, None)
         .map_err(|e| format!("transmit: {e}"))?;
-    let frame_samples = h.route_embedded_noisy(LEAD, 8_000, ONAIR_IDLE_RMS, seed);
+    let frame_samples = h.route_embedded_noisy(LEAD, TRAIL, ONAIR_IDLE_RMS, seed);
     assert!(
         frame_samples > 0,
         "nothing was transmitted — the test would prove nothing"
