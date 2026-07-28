@@ -363,6 +363,20 @@ run_loopback_regression() {
     fi
 }
 
+# The rpi51<->rpi52 USB loopback regression needs a second box (rpi52). Pairings that
+# don't include it set LOOPBACK_REGRESSION_INTERVAL=0 to disable the periodic re-run;
+# honour that for the one-shot session-start run too. Otherwise `set -e` aborts the whole
+# session here on an unreachable rpi52 (which is not part of e.g. the IC-9700<->FT-991A
+# pairing). The rig-vs-rig signal-chain gates (G1-G6) are the real preflight in that case.
+maybe_run_initial_loopback() {
+    local tier="${1:-full}"
+    if (( LOOPBACK_REGRESSION_INTERVAL > 0 )); then
+        run_loopback_regression "$tier"
+    else
+        echo "  [loopback] skipped session-start regression (LOOPBACK_REGRESSION_INTERVAL=0; rpi52 not in this pairing)"
+    fi
+}
+
 read_swr_a() {
     ssh_a "rigctl -m 2 -r ${A_RIGCTLD_ADDR}:${A_RIGCTLD_PORT} l SWR 2>/dev/null | tail -n1 || echo na"
 }
@@ -877,7 +891,7 @@ setup() {
 
     build_on_a
     transfer_binaries_a_to_b
-    run_loopback_regression full
+    maybe_run_initial_loopback
 
     ssh_a "command -v rigctld >/dev/null || { echo 'ERROR: rigctld missing on Station A'; exit 1; }"
     ssh_b "command -v rigctld >/dev/null || { echo 'ERROR: rigctld missing on Station B'; exit 1; }"
@@ -917,7 +931,7 @@ setup_side_a() {
     mkdir -p "$OUTPUT_DIR"
 
     build_on_a
-    run_loopback_regression full
+    maybe_run_initial_loopback
 
     ssh_a "command -v rigctld >/dev/null || { echo 'ERROR: rigctld missing on Station A'; exit 1; }"
 
@@ -1422,7 +1436,7 @@ run_matrix() {
         else
             echo "FAIL (${fail_reason})"
             fail=$(( fail + 1 ))
-            run_loopback_regression || echo "  [loopback] FAIL after test failure — software regression suspected" >&2
+            (( LOOPBACK_REGRESSION_INTERVAL > 0 )) && { run_loopback_regression || echo "  [loopback] FAIL after test failure — software regression suspected" >&2; }
             # Show the last lines of the IRS log to expose audio/decode issues.
             local irs_head="" irs_tail=""
             if [[ "$REVERSE" == "1" ]]; then
@@ -1511,7 +1525,7 @@ case "$ACTION" in
         maybe_tune_high_swr_b "startup"
         maybe_tune_high_swr_a "qsy"
         maybe_tune_high_swr_b "qsy"
-        run_loopback_regression quick
+        maybe_run_initial_loopback quick
         run_matrix
         ;;
     sidea)
