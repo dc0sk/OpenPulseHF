@@ -32,3 +32,4 @@ ofdm-plugin = { workspace = true }
 pilot-plugin = { workspace = true }
 openpulse-filexfer = { workspace = true }
 ed25519-dalek = { version = "2.0" }
+tracing-subscriber = { workspace = true }

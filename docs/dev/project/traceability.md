@@ -8589,3 +8589,64 @@ The last mode still failing on the dual-card rig after the AGC misclassification
   runtime knob; the execution plan's older "cap it at 100" mitigation is not settable today. Not
   changed here — the level fix addresses the observed failure, and a code change wants its own
   measurement.
+
+## #1021 — coded receive could not recover from a noise settle (2026-07-28)
+
+- **Requirement/defect:** on air (IC-9700 ↔ FT-991A, 2 m 144.600), `BPSK250|none` decoded reliably
+  while `BPSK250|rs` and `BPSK250|soft_concatenated` never decoded — same session, same rigs,
+  `strength_max=21`, carrier alignment measured at +1.2 Hz. First quick matrix scored 1/3
+  (`docs/dev/test-reports/onair-2026-07-28T180257.json`).
+- **Root cause (two parts, both required):**
+  1. `EnergyGate::threshold()` returns the bare `ABS_THRESHOLD` (1e-4) until 32 windows of history
+     accumulate. A real idle floor above that (measured 4.2e-4) trips the gate within the first few
+     scan positions, and `afc_mini_settle` returns a confident, plausible correction from noise —
+     measured `AFC settling done: correction=-49.8Hz onset=240 buf_len=1600`, i.e. 0.2 s in, some
+     40 000 samples BEFORE the transmission started.
+  2. `ScanPlanner::note_settled` was permanent — no un-settle, no re-anchor. The first-energy
+     micro-sweep then re-decodes from that noise position forever; its reach is `fep + 8×(step/2)`,
+     about four symbols.
+  **Why coded failed and uncoded passed:** `frame_plan` widens a coded frame ×3, which moves
+  BPSK250 from 74 624 to 223 872 samples — across `LONG_FRAME_SAMPLES` (120 000). That flips
+  `long_frame`, and the gate `(!long_frame || !planner.is_settled())` then disables the full-buffer
+  retry, which the code's own comments call "the fallback for a bad settle". Uncoded stays under the
+  threshold, keeps the retry, and recovered in 115 attempts despite an equally bogus 136.7 Hz settle.
+- **Implementation:**
+  - `crates/openpulse-modem/src/engine.rs`: `ScanPlanner` gains `settle_failures`,
+    `note_settle_failure()` and `unsettle()`; the micro-sweep condemns a settled position after
+    `SETTLE_FAILURE_LIMIT` (18 = two full 9-offset sweeps) failures **against a fully buffered
+    window** (`accumulated.len() >= onset + max_frame_samples`), then re-opens the scan
+    (`last_tried_end` rewound) and resets the discredited AFC correction to 0. The
+    fully-buffered guard is what prevents abandoning a good settle on a slow frame.
+  - `crates/openpulse-modem/src/engine.rs`: `receive_from_samples_with_fec` split into a logging
+    wrapper + `_inner`; adds per-attempt `fec attempt OK/FAILED` and a pre-codec `fec demod` line.
+    The coded path previously had **zero** log statements vs three in the uncoded path, which is
+    why the on-air failure produced an empty log and could not be diagnosed.
+  - `crates/openpulse-modem/src/channel_sim.rs`: `route_embedded_noisy(lead, trail, noise_rms, seed)`
+    — `route_embedded` pads *silence*, so the idle level is exactly zero and the cold-start
+    absolute floor can never fire early; the whole noise-settle failure class was structurally
+    invisible to the suite.
+- **Tests (run):**
+  - `cargo test -p openpulse-modem --no-default-features --test coded_noise_settle_recovery` — 3/3.
+    `coded_bpsk250_is_long_frame_while_uncoded_is_not` independently confirms the classification
+    crux; `uncoded_bpsk250_recovers_from_a_noise_settle` is the control; 
+    `coded_bpsk250_recovers_from_a_noise_settle` is the defect.
+  - **A/B (the fix is what passes it):** with the identical capture and ONLY the re-anchor disabled
+    (`if false && window_complete && ...`), the coded test FAILS again and takes 50 s instead of
+    1 s (it burns the whole listen window re-decoding the condemned anchor). Restored → passes.
+  - `--test coded_receive_instrumentation` — 3/3, **sabotage-verified**: with both `debug!` calls
+    removed all three fail.
+  - Full modem crate: **99 suites, 436 passed, 0 failed**. Workspace gate + clippy
+    (`-D warnings`) + `cargo fmt --check`: all exit 0.
+- **Two reproduction errors worth recording (both caught by keeping the CONTROL honest):**
+  1. the first reproduction set the receive timeout to exactly `RETRY_START_SECS` (12 s), so the
+     retry that rescues the uncoded control never fired and the control failed — which would have
+     made the coded assertion meaningless;
+  2. the first fix attempt could never fire, because the test capture (116 864 samples) was shorter
+     than the widened window it must judge against (224 112). Matching the capture to the real
+     on-air buffer (~269 000) is what let the recovery engage.
+- **Still open (found by the Fable control-flow analysis, NOT fixed here):** the broad-scan decode
+  block at `engine.rs` (inside `if !accumulated.is_empty() && !planner.is_settled()`) is
+  unreachable — every inner path `continue`s or `break`s before it, so the broad scan can only
+  settle, never decode. Dead weight that misleadingly suggests otherwise.
+- **Not yet proven:** the on-air re-run. In-process reproduction + fix is not a substitute for the
+  radio link that produced the defect.
