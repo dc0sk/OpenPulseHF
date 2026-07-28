@@ -48,6 +48,15 @@ export BAND2M_MAX_HZ=144750000
 export TEST_FREQ_HZ=144600000
 export TEST_MODE_RIG="PKTUSB"
 
+# Per-side dial trim to null the measured rig-to-rig crystal offset (Gate 5).
+# On 2026-07-28 the FT-991A ran ~64 Hz LOW of the IC-9700 at 144.6 MHz: with both
+# commanded to 144.600000 the received audio carrier sat at 1436 Hz instead of 1500,
+# i.e. at the edge of BPSK250's +-62.5 Hz AFC. Trimming Station B (FT-991A) up 64 Hz
+# corrects the actual crystal difference and aligns BOTH directions (received carrier
+# measured back at 1501.5 Hz). Re-measure with Gate 5 if a rig or its TCXO changes.
+export A_FREQ_OFFSET_HZ=0
+export B_FREQ_OFFSET_HZ=64
+
 # IC-9700 audio prerequisites for digital USB TX (set on the radio UI):
 # - DATA MOD = USB
 # - USB MOD Level > 0 (start around mid-scale)
@@ -62,6 +71,20 @@ export TEST_MODE_RIG="PKTUSB"
 export A_AUDIO_DEVICE="pulse"
 export A_AUDIO_DEVICE_LABEL="IC-9700 USB Audio CODEC (PulseAudio)"
 export B_AUDIO_DEVICE="pulse"
+
+# --- Audio routing + TX level (consumed by scripts/onair-setup-audio-routing.sh) ---
+# Because A_AUDIO_DEVICE/B_AUDIO_DEVICE = "pulse" resolve to each host's DEFAULT sink
+# (TX) and DEFAULT source (RX), those defaults must point at the rig CODEC, and the TX
+# sink volume must be low enough that openpulse's near-full-scale audio does not pin the
+# rig ALC. Run `scripts/onair-setup-audio-routing.sh` (set) once per session, then the
+# runner's `--device pulse` reaches the radios. Gate-6-validated values (2026-07-28):
+#   TX sink volume 0.15 gave a clean non-clipping BPSK250 that decoded first try.
+# A_CODEC_MATCH/B_CODEC_MATCH are case-insensitive substrings of the CODEC's description
+# in `wpctl status` (IC-9700: "PCM2901 Audio Codec"; FT-991A: "PCM2903B Audio CODEC").
+export A_CODEC_MATCH="Codec"
+export B_CODEC_MATCH="Codec"
+export A_TX_SINK_VOLUME=0.15
+export B_TX_SINK_VOLUME=0.15
 
 # Paths:
 # A is a normal repo checkout and used as build source.
