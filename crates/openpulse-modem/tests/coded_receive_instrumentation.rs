@@ -39,7 +39,10 @@ impl LogBuf {
 
 impl Write for LogBuf {
     fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
-        self.0.lock().expect("log buffer poisoned").extend_from_slice(buf);
+        self.0
+            .lock()
+            .expect("log buffer poisoned")
+            .extend_from_slice(buf);
         Ok(buf.len())
     }
     fn flush(&mut self) -> std::io::Result<()> {
@@ -130,7 +133,10 @@ fn a_failing_coded_receive_reports_the_failure_reason() {
             .transmit_with_fec_mode(&payload, "BPSK250", FecMode::Rs, None)
             .expect("transmit");
         let frame_samples = h.route_embedded(4000, 4000);
-        assert!(frame_samples > 0, "nothing transmitted — test would prove nothing");
+        assert!(
+            frame_samples > 0,
+            "nothing transmitted — test would prove nothing"
+        );
         let got = h.rx_engine.receive_with_fec_mode_timeout(
             "BPSK250",
             FecMode::RsInterleaved,
@@ -169,8 +175,12 @@ fn a_successful_coded_receive_reports_its_payload_length() {
         }
     }
 
-    let decoded = decoded.expect("a clean-channel coded round trip should decode within 6 attempts");
-    assert_eq!(decoded, payload, "round trip must return the payload intact");
+    let decoded =
+        decoded.expect("a clean-channel coded round trip should decode within 6 attempts");
+    assert_eq!(
+        decoded, payload,
+        "round trip must return the payload intact"
+    );
     assert!(
         logs.contains("fec attempt OK"),
         "a successful coded decode must be logged too — otherwise a 'log only on error' \
