@@ -8536,3 +8536,56 @@ The last mode still failing on the dual-card rig after the AGC misclassification
     PASS (rc 0) with `pulse` + good routing; **exits rc 1** with `pulse` + sabotaged routing.
 - **Not yet run:** the runner end-to-end (build + transfer + loopback regression + keyed matrix) —
   that is Phase A1/A2 and needs an agreed on-air window.
+
+## On-air A1: RX capture level is a decode gate (energy-gate clamp) — 2026-07-28
+
+- **Requirement/finding:** the first runner-driven A1 (`supervise --single-case 'BPSK250|none|64'
+  --reverse`, IC-9700 ↔ FT-991A, 2 m 144.600) **FAILED 0/1** with strong RF (IRS `strength_max=21`)
+  and `fail_reason: "IRS: payload not observed"`. Root cause is the **RX capture level**, not RF,
+  frequency, or the waveform.
+- **Diagnosis (measured, not inferred):**
+  - IRS log: `AFC settling done: correction=81.2Hz ... buf_len=1400` at 17:29:42, then
+    `AFC full-retry: pos=... FAILED: invalid magic` at every position at 17:29:54 — the AFC settled
+    **12 s before the frame arrived**.
+  - A Gate-5 style tone+FFT re-measurement showed the received carrier at **1501.2 Hz (+1.2 Hz)** —
+    the rigs were still correctly aligned, so the 81 Hz "correction" was damage, and the obvious fix
+    (re-trim `B_FREQ_OFFSET_HZ`) would have been **wrong**.
+  - `EnergyGate` (`crates/openpulse-modem/src/engine.rs`) sets
+    `threshold = clamp(idle_floor*3, ABS=0.0001, MAX=0.0032)`. Measured IC-9700 idle `mean_sq`
+    **0.0154** at PipeWire source volume 1.00 — **4.7× above the maximum threshold**, so the gate
+    could never shut and fired on noise; AFC then settled on that noise.
+  - A dial-frequency ablation (144.600 / 144.700 / 145.000) showed the strong lines move with the
+    dial (RF, not conducted RFI), and the official Welch-averaged G0 analyzer showed prominences of
+    only 2.5–8.4 dB — i.e. **not birdies**; the capture was simply far too hot. (My first ad-hoc
+    single-FFT script overstated peaks at ~16 dB — a periodogram of noise does that; the validated
+    instrument corrected it.)
+- **Fix (measured both directions):** lower the per-side RX capture level so the adaptive threshold
+  stays unclamped. IC-9700 source volume 1.00 → **0.55**: idle 0.00042, signal 0.0024, threshold
+  ~0.0013 sitting **between** them. FT-991A unchanged at 1.00 (idle 0.000125 — its USB AF output is
+  quieter). PipeWire volume is cubic, so capture power scales ≈ `v^6`.
+- **Implementation:**
+  - `scripts/onair-rx-level-check.sh` (new): captures idle on both stations (handles `parecord` and
+    `pw-record` hosts), computes `mean_sq`, and FAILs when `idle*3` would clamp; reports the
+    absolute-floor case too.
+  - `scripts/onair-setup-audio-routing.sh`: now also **sets and reads back** the RX source volume
+    (`A_RX_SOURCE_VOLUME`/`B_RX_SOURCE_VOLUME`), not just the TX sink volume.
+  - `scripts/run-onair-ic9700-ft991a.sh`: new `verify_rx_level` preflight (fail-closed) alongside
+    `verify_audio_routing`.
+  - `docs/config/onair-ic9700-ft991a.example.sh`: per-side RX levels with the measured rationale.
+  - `CLAUDE.md` sharp edge + `docs/dev/onair-execution-plan.md` G1 bring-up step.
+- **Tests (run):**
+  - **A1 re-run after the level fix: PASSED 1/1** — `docs/dev/test-reports/onair-2026-07-28T175040.json`
+    (`"result": "pass"`, BPSK250 `none` 64 B over the air, FT-991A TX → IC-9700 RX). The identical
+    invocation before the fix: `onair-2026-07-28T172924.json` (`"result": "fail"`).
+  - `onair-rx-level-check.sh` live: PASS at the configured levels (IC-9700 idle 0.000432 / thr
+    0.001297; FT-991A idle 0.000144 / thr 0.000432). **Sabotage** (IC-9700 source volume back to
+    1.00 — the A1-failing condition) → `idle mean_sq=0.015534 gate threshold=0.003200 CLAMPED`,
+    exit 1; restore → exit 0.
+  - `onair-setup-audio-routing.sh` set+verify with the new RX-volume check: both sides
+    `RESULT pass ... src_vol=0.55 / 1.00`; it also correctly FAILED the FT-991A while its source
+    volume was still an unconfigured 1.00 vs a 0.55 default before the per-side values were set.
+  - `bash -n` on all three scripts and the config.
+- **Note for later:** the engine's `AFC_MAX_CORRECTION_HZ` is a hardcoded 450 Hz const with no
+  runtime knob; the execution plan's older "cap it at 100" mitigation is not settable today. Not
+  changed here — the level fix addresses the observed failure, and a code change wants its own
+  measurement.

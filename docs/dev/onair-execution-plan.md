@@ -126,7 +126,17 @@ config-driven so the runner reproduces them instead of re-discovering them by ha
    the offset with G5 (`received carrier − 1500 Hz`), put it on **one** side (`B_FREQ_OFFSET_HZ=64`
    for this pair), and re-measure — it aligns both directions because it corrects the actual crystal
    difference. Re-measure whenever a rig or its TCXO changes.
-2. **PipeWire default sink/source + TX level.** `A_AUDIO_DEVICE/B_AUDIO_DEVICE="pulse"` follow each
+2. **RX capture level (a decode gate — this sank the first A1 run).** The modem's energy gate
+   uses `threshold = clamp(idle_floor*3, 0.0001, 0.0032)`. If the **idle** floor exceeds
+   `0.0032/3 = 0.00107` the threshold clamps *below* the noise, the gate never shuts, the
+   receiver settles AFC on noise, and every frame decodes to "invalid magic" — with strong RF
+   and rigs aligned to ~1 Hz. Measured: IC-9700 idle `mean_sq` **0.0154** at source volume 1.00
+   → `BPSK250|none|64` FAILED; **0.00042** at 0.55 (signal 0.0024) → the same case PASSED (A1
+   1/1). The FT-991A needed no reduction (idle 0.000125 at 1.00). Set the per-side
+   `A_RX_SOURCE_VOLUME`/`B_RX_SOURCE_VOLUME` and verify with `scripts/onair-rx-level-check.sh`
+   (also wired into the runner preflight). **Do not "fix" the symptom by re-trimming the rigs**
+   — the visible symptom is a large bogus AFC correction, but the carrier was already aligned.
+3. **PipeWire default sink/source + TX level.** `A_AUDIO_DEVICE/B_AUDIO_DEVICE="pulse"` follow each
    host's *default* sink (TX) and source (RX); on a laptop the default sink is the built-in speaker,
    so TX audio never reaches the rig, and openpulse's near-full-scale audio pins the rig ALC. Run
    `scripts/onair-setup-audio-routing.sh` (set) once — it points both defaults at the rig CODEC and

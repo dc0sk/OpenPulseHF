@@ -86,6 +86,18 @@ export B_CODEC_MATCH="Codec"
 export A_TX_SINK_VOLUME=0.15
 export B_TX_SINK_VOLUME=0.15
 
+# RX capture level — a DECODE GATE, not cosmetics. The modem's energy gate sets its
+# threshold to clamp(idle_floor*3, 0.0001, 0.0032); if the idle floor is above 0.00107 the
+# threshold clamps BELOW the noise, the gate never shuts, the receiver settles AFC on noise,
+# and a perfectly aligned frame decodes to "invalid magic". Measured on air 2026-07-28:
+#   IC-9700 at 1.00 -> idle mean_sq 0.0154 (CLAMPED) -> BPSK250 64B FAILED;
+#   IC-9700 at 0.55 -> idle 0.00042, signal 0.0024   -> the same case PASSED (A1 1/1).
+#   FT-991A needs no reduction: its USB AF output is quieter (idle 0.000125 at 1.00).
+# These are PER-RIG measurements, not values to copy. Verify with:
+#   scripts/onair-rx-level-check.sh
+export A_RX_SOURCE_VOLUME=0.55
+export B_RX_SOURCE_VOLUME=1.0
+
 # Paths:
 # A is a normal repo checkout and used as build source.
 export A_REPO_DIR='${HOME}/git/OpenPulseHF'

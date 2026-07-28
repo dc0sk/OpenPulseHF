@@ -289,6 +289,24 @@ verify_audio_routing() {
     fi
 }
 
+# An RX capture level above the energy gate's MAX_THRESHOLD/3 makes the gate fire on idle
+# noise, so the receiver settles AFC on noise and every frame decodes to "invalid magic" —
+# a whole matrix fails with strong RF and correctly aligned rigs. Measured, and the cause of
+# the first A1 failure (2026-07-28). Cheap idle measurement; refuses to key if it would fail.
+verify_rx_level() {
+    local check="${REPO_ROOT}/scripts/onair-rx-level-check.sh"
+    if [[ ! -x "$check" ]]; then
+        echo "  [rx-level] WARN: ${check} missing; skipping capture-level check" >&2
+        return 0
+    fi
+    echo "  [rx-level] checking each station's idle floor against the energy gate"
+    if ! "$check"; then
+        echo "ERROR: an RX capture level prevents the modem's energy gate from discriminating;" >&2
+        echo "       decodes would fail on noise-settled AFC. Fix the per-side RX level first." >&2
+        exit 1
+    fi
+}
+
 verify_ptt_control_a() {
     echo "  [${A_LABEL} ptt] asserting rigctld PTT briefly"
     local ptt_on ptt_off
@@ -360,6 +378,20 @@ run_loopback_regression() {
     if [[ ${lb_exit} -ne 0 ]]; then
         echo "  [loopback] FAIL (exit ${lb_exit}) — modem regression on rpi51↔rpi52" >&2
         return 1
+    fi
+}
+
+# The rpi51<->rpi52 USB loopback regression needs a second box (rpi52). Pairings that
+# don't include it set LOOPBACK_REGRESSION_INTERVAL=0 to disable the periodic re-run;
+# honour that for the one-shot session-start run too. Otherwise `set -e` aborts the whole
+# session here on an unreachable rpi52 (which is not part of e.g. the IC-9700<->FT-991A
+# pairing). The rig-vs-rig signal-chain gates (G1-G6) are the real preflight in that case.
+maybe_run_initial_loopback() {
+    local tier="${1:-full}"
+    if (( LOOPBACK_REGRESSION_INTERVAL > 0 )); then
+        run_loopback_regression "$tier"
+    else
+        echo "  [loopback] skipped session-start regression (LOOPBACK_REGRESSION_INTERVAL=0; rpi52 not in this pairing)"
     fi
 }
 
@@ -877,7 +909,7 @@ setup() {
 
     build_on_a
     transfer_binaries_a_to_b
-    run_loopback_regression full
+    maybe_run_initial_loopback
 
     ssh_a "command -v rigctld >/dev/null || { echo 'ERROR: rigctld missing on Station A'; exit 1; }"
     ssh_b "command -v rigctld >/dev/null || { echo 'ERROR: rigctld missing on Station B'; exit 1; }"
@@ -887,6 +919,7 @@ setup() {
     fi
     verify_audio_device_b
     verify_audio_routing
+    verify_rx_level
 
     if is_truthy "${POWER_CYCLE_ENABLE}"; then
         power_cycle_a
@@ -917,7 +950,7 @@ setup_side_a() {
     mkdir -p "$OUTPUT_DIR"
 
     build_on_a
-    run_loopback_regression full
+    maybe_run_initial_loopback
 
     ssh_a "command -v rigctld >/dev/null || { echo 'ERROR: rigctld missing on Station A'; exit 1; }"
 
@@ -1422,7 +1455,7 @@ run_matrix() {
         else
             echo "FAIL (${fail_reason})"
             fail=$(( fail + 1 ))
-            run_loopback_regression || echo "  [loopback] FAIL after test failure — software regression suspected" >&2
+            (( LOOPBACK_REGRESSION_INTERVAL > 0 )) && { run_loopback_regression || echo "  [loopback] FAIL after test failure — software regression suspected" >&2; }
             # Show the last lines of the IRS log to expose audio/decode issues.
             local irs_head="" irs_tail=""
             if [[ "$REVERSE" == "1" ]]; then
@@ -1511,7 +1544,7 @@ case "$ACTION" in
         maybe_tune_high_swr_b "startup"
         maybe_tune_high_swr_a "qsy"
         maybe_tune_high_swr_b "qsy"
-        run_loopback_regression quick
+        maybe_run_initial_loopback quick
         run_matrix
         ;;
     sidea)
