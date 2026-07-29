@@ -179,6 +179,151 @@ impl ChannelSimHarness {
         n
     }
 
+    /// Route TX samples embedded in REAL recorded radio audio.
+    ///
+    /// Every other padding here is synthetic — flat pseudo-random noise at a chosen level. A real
+    /// receiver's idle output is not flat: it carries the rig's own noise shaping, whatever spurs
+    /// the host puts into the USB audio, and an absolute level set by the rig and mixer rather than
+    /// by us. Padding with a recorded capture puts the frame in that actual context, so the test
+    /// cannot be wrong about the radio the way a model can.
+    ///
+    /// `capture` supplies the lead and trail (cycled if shorter than requested), and the frame is
+    /// scaled by `signal_gain` so the signal-to-idle ratio can be swept against a fixed real floor.
+    ///
+    /// Returns the number of TX samples routed (excluding padding).
+    pub fn route_embedded_in_capture(
+        &mut self,
+        capture: &crate::capture_replay::Capture,
+        lead: usize,
+        trail: usize,
+        signal_gain: f32,
+    ) -> usize {
+        let samples = self.tx_loopback.drain_samples();
+        let n = samples.len();
+        let mut buf = Vec::with_capacity(lead + n + trail);
+        buf.extend(capture.cycled(0, lead));
+        buf.extend(samples.iter().map(|&s| s * signal_gain));
+        buf.extend(capture.cycled(lead, trail));
+        self.rx_loopback.fill_samples(&buf);
+        n
+    }
+
+    /// Route TX samples through a fixed capture gain, with noise padded around the frame.
+    ///
+    /// The absolute level a receiver hands the modem is set by the rig's audio output and the host
+    /// mixer, not by the channel — and it matters because `EnergyGate` compares against *absolute*
+    /// thresholds. Measured on air 2026-07-28: an idle floor of mean-square 0.0154 sat 4.7x above
+    /// the gate's maximum threshold, so the gate could never shut, fired on noise, and settled AFC
+    /// on it. Every other harness route runs at a normalised level where that cannot happen.
+    ///
+    /// `idle_mean_sq` sets the noise floor directly (it is the quantity the gate actually compares),
+    /// and `capture_gain` scales the whole capture including the frame.
+    pub fn route_embedded_at_level(
+        &mut self,
+        lead: usize,
+        trail: usize,
+        idle_mean_sq: f32,
+        capture_gain: f32,
+        seed: u64,
+    ) -> usize {
+        let noise_rms = idle_mean_sq.max(0.0).sqrt();
+        let samples = self.tx_loopback.drain_samples();
+        let n = samples.len();
+        let mut state = seed | 1;
+        let mut next_noise = move || {
+            state ^= state >> 12;
+            state ^= state << 25;
+            state ^= state >> 27;
+            let u = (state.wrapping_mul(0x2545_F491_4F6C_DD1D) >> 11) as f64 / (1u64 << 53) as f64;
+            ((u as f32) * 2.0 - 1.0) * noise_rms * 1.732_050_8
+        };
+        let mut buf = Vec::with_capacity(lead + n + trail);
+        buf.extend((0..lead).map(|_| next_noise()));
+        buf.extend_from_slice(&samples);
+        buf.extend((0..trail).map(|_| next_noise()));
+        if capture_gain != 1.0 {
+            for s in buf.iter_mut() {
+                *s *= capture_gain;
+            }
+        }
+        self.rx_loopback.fill_samples(&buf);
+        n
+    }
+
+    /// Route TX samples through a live capture-side AGC.
+    ///
+    /// An AGC moves the gain *during* a frame: near-harmless to a phase-only waveform, destructive
+    /// to one carrying bits in amplitude. That asymmetry once made eight modes look
+    /// "analog-path limited" when the real cause was a live mixer AGC on the capture card.
+    pub fn route_with_capture_agc(
+        &mut self,
+        target_rms: f32,
+        attack_secs: f32,
+        decay_secs: f32,
+    ) -> usize {
+        let mut channel = openpulse_channel::agc::AgcChannel::new(
+            openpulse_channel::agc::AgcConfig::agc(target_rms, attack_secs, decay_secs, 8_000.0),
+        )
+        .expect("valid agc parameters");
+        self.route(&mut channel)
+    }
+
+    /// Route TX samples through a pure carrier-frequency-offset channel.
+    ///
+    /// Two independent transceivers never agree exactly: measured on air 2026-07-28, an IC-9700 and
+    /// an FT-991A both commanded to 144.600000 MHz put the received carrier at **1436 Hz — a −64 Hz
+    /// offset**, at the edge of BPSK250's ±62.5 Hz AFC. Carrier recovery is the most-churned area of
+    /// this modem and every offset bug so far had to be found on hardware, because nothing
+    /// in-process gave the acquisition path a real frequency offset.
+    ///
+    /// This is NOT [`route_with_sro`](Self::route_with_sro): a sampling-clock offset drifts the
+    /// symbol clock and leaves the carrier alone; this shifts the carrier and leaves timing alone.
+    pub fn route_with_cfo(&mut self, offset_hz: f32) -> usize {
+        let mut channel = openpulse_channel::cfo::CfoChannel::new(
+            openpulse_channel::cfo::CfoConfig::new(offset_hz, 8_000.0),
+        )
+        .expect("finite offset and sample rate");
+        self.route(&mut channel)
+    }
+
+    /// Route TX samples through a carrier offset with noise padded around the frame, so the
+    /// receiver must both LOCATE the frame in a realistic idle floor and ACQUIRE it off-frequency —
+    /// the combination a real receiver actually faces.
+    pub fn route_embedded_with_cfo(
+        &mut self,
+        lead: usize,
+        trail: usize,
+        noise_rms: f32,
+        seed: u64,
+        offset_hz: f32,
+    ) -> usize {
+        let samples = self.tx_loopback.drain_samples();
+        let n = samples.len();
+        let shifted = if offset_hz == 0.0 {
+            samples
+        } else {
+            let mut ch = openpulse_channel::cfo::CfoChannel::new(
+                openpulse_channel::cfo::CfoConfig::new(offset_hz, 8_000.0),
+            )
+            .expect("finite offset and sample rate");
+            ch.apply(&samples)
+        };
+        let mut state = seed | 1;
+        let mut next_noise = move || {
+            state ^= state >> 12;
+            state ^= state << 25;
+            state ^= state >> 27;
+            let u = (state.wrapping_mul(0x2545_F491_4F6C_DD1D) >> 11) as f64 / (1u64 << 53) as f64;
+            ((u as f32) * 2.0 - 1.0) * noise_rms * 1.732_050_8
+        };
+        let mut buf = Vec::with_capacity(lead + shifted.len() + trail);
+        buf.extend((0..lead).map(|_| next_noise()));
+        buf.extend_from_slice(&shifted);
+        buf.extend((0..trail).map(|_| next_noise()));
+        self.rx_loopback.fill_samples(&buf);
+        n
+    }
+
     /// Route TX samples through a pure sample-rate-offset (clock-drift) channel.
     ///
     /// `ppm` is the RX-vs-TX clock offset in parts-per-million (positive = RX

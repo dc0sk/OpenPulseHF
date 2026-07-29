@@ -8650,3 +8650,91 @@ The last mode still failing on the dual-card rig after the AGC misclassification
   settle, never decode. Dead weight that misleadingly suggests otherwise.
 - **Not yet proven:** the on-air re-run. In-process reproduction + fix is not a substitute for the
   radio link that produced the defect.
+
+## Loopback harness realism: capture-context impairments (2026-07-29)
+
+- **Requirement:** the 2026-07-28 on-air session produced four defects that no in-process test could
+  have found. Root observation: the channel models simulate the **signal path** (they degrade the
+  transmitted frame), while every one of those defects lived in the **capture context** — what the
+  receiver hears when nobody is transmitting, at what level, with what clock, delivered at what rate.
+- **Implementation (each impairment self-validating):**
+  - `crates/openpulse-channel/src/cfo.rs` — `CfoChannel`: shifts the whole audio band by a fixed
+    offset via the analytic signal (FFT → zero negative freqs → rotate → real part), with a phase
+    accumulator for block continuity. Distinct from `SroChannel` (sampling-clock, not carrier).
+  - `crates/openpulse-channel/src/agc.rs` — `AgcChannel`: fixed capture gain and/or a tracking AGC
+    with attack/decay. Covers both the absolute-level impairment and the gain-moves-during-a-frame
+    impairment that caused the "analog path" misclassification.
+  - `crates/openpulse-audio/src/loopback.rs` — `LoopbackBackend::with_pacing(hz)`: `read()` returns
+    only the samples that would have ARRIVED by now. The default drains the whole buffer instantly,
+    which is why read-cadence starvation was recorded as untestable in-process.
+  - `crates/openpulse-modem/src/channel_sim.rs` — `route_with_cfo`, `route_embedded_with_cfo`,
+    `route_embedded_at_level`, `route_with_capture_agc`.
+- **Tests (run):**
+  - `openpulse-channel` cfo 5/5 — including `a_tone_moves_by_exactly_the_requested_offset` (the
+    channel must move the spectrum by the requested amount, else every acquisition test built on it
+    is vacuous), power preservation, and zero-offset passthrough.
+  - `openpulse-channel` agc 5/5 — including `the_agc_gain_moves_when_the_level_jumps` and
+    `the_agc_compresses_amplitude_structure` (the mechanism that broke the amplitude-bearing modes).
+  - `openpulse-audio --test paced_loopback` 4/4 — progressive delivery, order/no-loss preservation,
+    an unpaced control, and a non-positive-rate fallback (a silent stall would be worse than no
+    pacing).
+  - `openpulse-modem --test carrier_offset_acquisition` 5/5, with a FALSIFIER (a 1600 Hz offset must
+    fail) so an inert channel cannot make the passing cases meaningless.
+  - `openpulse-modem --test capture_level_energy_gate` 3/3 — reproduces #1020 in process: at the
+    on-air idle floor (mean-square 0.0154, 4.8x the gate ceiling) acquisition degrades, while the
+    level that passed on air (0.00042) decodes. Includes the healthy-level CONTROL.
+  - Full workspace: **271 suites, 2192 passed, 0 failed**; clippy `-D warnings` and
+    `cargo fmt --check` clean.
+- **Measured finding (new capability figure):** sweeping the acquisition chain through `CfoChannel`
+  gives **BPSK250 ≤ 600 Hz** and **QPSK500 ≤ 400 Hz** before decode fails — roughly **ten times** the
+  ±baud/4 per-symbol tracking range. The per-symbol figure describes what the carrier *tracker*
+  holds; acquisition additionally has the coarse `afc_mini_settle` pass and the retry's per-position
+  re-acquisition. Quoting the tracking range as the system's offset budget understates it by an
+  order of magnitude — and it independently confirms the −64 Hz rig-to-rig offset measured on air was
+  never near the limit, corroborating that the coded failures were a capture-level/settle problem.
+- **A misattribution caught in progress:** the first version of the CFO test used the one-shot
+  `receive()`, which performs **no AFC settling at all** (the energy-gate → refine-onset →
+  `afc_mini_settle` chain exists only in the scanning loop). A 20 Hz offset "failing" there is the
+  wrong entry point, not a bug. Fixed to use the timeout receive.
+- **Still hardware-only:** rig DSP (NR/NB), analog nonlinearity, USB re-enumeration resetting mixer
+  state, and two genuinely independent oscillators. An emulation must also be validated against a
+  real capture, or the suite tests the model of the radio rather than the radio.
+
+## Capture-replay harness: real recorded radio audio as a test corpus (2026-07-29)
+
+- **Requirement:** the emulated capture-context impairments are each a *model* of a radio, and a
+  model can be wrong in exactly the way that hides a bug. Replay removes the model: a recording is
+  what the rig actually produced. Complements, does not replace, the emulations — a capture covers
+  only the conditions recorded, and goes stale as the DSP changes.
+- **Implementation:**
+  - `crates/openpulse-modem/src/capture_replay.rs`: `Capture` + `load_wav`/`load_corpus`, with a
+    minimal RIFF chunk-walking reader (no new dependency; a fixed 44-byte header offset would read
+    audio as metadata whenever a recorder interleaves LIST/fact chunks). `cycled()` lets a few
+    seconds of recorded idle pad an arbitrarily long capture.
+  - `crates/openpulse-modem/src/channel_sim.rs`: `route_embedded_in_capture` — a synthetic frame
+    embedded in REAL recorded idle audio, with a `signal_gain` so the signal-to-real-floor ratio can
+    be swept against a fixed genuine floor.
+  - `crates/openpulse-modem/tests/captures/` — corpus (8 kHz mono 16-bit) + README with provenance
+    and the measured property each file exists to preserve. Decimated 48→8 kHz with
+    `resample_poly`; naive decimation would alias the noise floor and destroy that property.
+  - `scripts/onair-record-capture.sh` — records and prepares new corpus entries (local or over SSH,
+    parecord or pw-record), and tells the operator to record provenance, since a capture with no
+    recorded expectation cannot be asserted against.
+- **Corpus (all real, 2026-07-28 on air):** `ic9700-idle-hot.wav` (mean-square ≈0.0158 — the level
+  that broke #1020, 4.9x the energy-gate ceiling); `ft991a-idle.wav` (≈3.7e-7 — the OPPOSITE
+  failure, below the gate's absolute floor, showing "just lower the level" is not a universal fix);
+  `ic9700-tone-1501hz.wav` (carrier ≈1501.5 Hz, independently measured on air after the +64 Hz trim).
+- **Tests (run):** `--test capture_replay_corpus` 6/6.
+  - Corpus integrity: files load, are 8 kHz, are not silent; the IC-9700 floor is still above the
+    gate ceiling; the FT-991A floor is still below the absolute threshold; the recorded carrier
+    still measures 1495–1510 Hz against the 1501.5 Hz taken off the radio (this pins our measurement
+    chain to a real-world truth).
+  - Behaviour: a frame at a healthy level decodes inside real recorded idle audio (**the control**),
+    while the same frame at the SAME signal gain inside the recorded hot floor is not reliably
+    acquired — an A/B by construction, where the only variable is the real recorded floor.
+  - Full workspace: **272 suites, 2198 passed, 0 failed**; clippy `-D warnings` + fmt clean.
+- **Known gap, recorded rather than glossed:** there is **no capture of a real modem frame** — the
+  on-air runs decoded inside `openpulse` on the remote host and the raw audio was never saved. That
+  is the highest-value slot in the corpus and it is empty; only a frame capture can assert an
+  end-to-end decode against real audio. `scripts/onair-record-capture.sh` exists to fill it on the
+  next on-air session.

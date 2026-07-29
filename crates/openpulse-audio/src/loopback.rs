@@ -36,6 +36,15 @@ pub struct LoopbackBackend {
     in_buf: Buf,
     frame_queue: FrameQueue,
     iq_buf: IqBuf,
+    /// Optional real-time delivery rate, in samples per second. See [`with_pacing`](Self::with_pacing).
+    pace_hz: Option<f32>,
+}
+
+/// Wall-clock state for a paced input stream.
+struct Pacing {
+    hz: f64,
+    start: std::time::Instant,
+    delivered: usize,
 }
 
 impl Default for LoopbackBackend {
@@ -53,6 +62,7 @@ impl LoopbackBackend {
             in_buf: buf,
             frame_queue: Arc::new(Mutex::new(VecDeque::new())),
             iq_buf: Arc::new(Mutex::new(Vec::new())),
+            pace_hz: None,
         }
     }
 
@@ -69,6 +79,7 @@ impl LoopbackBackend {
             in_buf: Arc::new(Mutex::new(VecDeque::new())),
             frame_queue: Arc::new(Mutex::new(VecDeque::new())),
             iq_buf: Arc::new(Mutex::new(Vec::new())),
+            pace_hz: None,
         }
     }
 
@@ -83,6 +94,7 @@ impl LoopbackBackend {
             in_buf: Arc::clone(&self.in_buf),
             frame_queue: Arc::clone(&self.frame_queue),
             iq_buf: Arc::clone(&self.iq_buf),
+            pace_hz: self.pace_hz,
         }
     }
 
@@ -115,6 +127,27 @@ impl LoopbackBackend {
         guard.push_back(samples.to_vec());
     }
 
+    /// Deliver input samples at a real-time rate instead of all at once.
+    ///
+    /// **Why this exists.** The default `read()` hands back the entire buffered capture in one
+    /// call, so a receive loop always has the whole frame available the instant it starts scanning.
+    /// A real capture does not work that way: audio arrives at the sample rate, and a scan pass
+    /// that takes longer than the audio it covers falls permanently behind — the buffer grows
+    /// faster than the scan walks it. That is a real, shipped failure mode (the retry that starved
+    /// the capture read loop, fixed 2026-07-20), and `CLAUDE.md` records it as untestable
+    /// in-process precisely because there was "no read cadence to starve".
+    ///
+    /// With pacing enabled, `read()` returns only the samples that would have arrived by now at
+    /// `hz` samples/second, measured from the first read. That makes read-cadence starvation
+    /// reproducible without hardware.
+    ///
+    /// Wall-clock based, so a paced test is inherently timing-sensitive: keep the paced span short
+    /// and assert on ordering/progress rather than on exact sample counts.
+    pub fn with_pacing(mut self, hz: f32) -> Self {
+        self.pace_hz = if hz > 0.0 { Some(hz) } else { None };
+        self
+    }
+
     /// Drain all I/Q pairs written via [`open_iq_output`](Self::open_iq_output).
     pub fn drain_iq_samples(&self) -> Vec<(f32, f32)> {
         let mut guard = self.iq_buf.lock().unwrap_or_else(|e| e.into_inner());
@@ -145,6 +178,11 @@ impl AudioBackend for LoopbackBackend {
         Ok(Box::new(LoopbackInputStream {
             buf: Arc::clone(&self.in_buf),
             frame_queue: Arc::clone(&self.frame_queue),
+            pacing: self.pace_hz.map(|hz| Pacing {
+                hz: hz as f64,
+                start: std::time::Instant::now(),
+                delivered: 0,
+            }),
         }))
     }
 
@@ -175,6 +213,7 @@ impl AudioBackend for LoopbackBackend {
 pub struct LoopbackInputStream {
     buf: Buf,
     frame_queue: FrameQueue,
+    pacing: Option<Pacing>,
 }
 
 impl AudioInputStream for LoopbackInputStream {
@@ -187,7 +226,17 @@ impl AudioInputStream for LoopbackInputStream {
             }
         }
         let mut guard = self.buf.lock().unwrap_or_else(|e| e.into_inner());
-        Ok(guard.drain(..).collect())
+        match self.pacing.as_mut() {
+            None => Ok(guard.drain(..).collect()),
+            Some(p) => {
+                // Only the samples that would have ARRIVED by now, at the paced rate.
+                let arrived = (p.start.elapsed().as_secs_f64() * p.hz) as usize;
+                let budget = arrived.saturating_sub(p.delivered);
+                let take = budget.min(guard.len());
+                p.delivered += take;
+                Ok(guard.drain(..take).collect())
+            }
+        }
     }
 
     fn close(self: Box<Self>) {}

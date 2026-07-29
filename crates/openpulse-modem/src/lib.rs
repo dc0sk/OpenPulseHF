@@ -4,6 +4,7 @@
 //! together to provide simple `transmit` and `receive` operations.
 
 pub mod benchmark;
+pub mod capture_replay;
 pub mod channel_sim;
 pub mod diagnostics;
 pub mod engine;

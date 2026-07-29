@@ -5,7 +5,9 @@
 
 use thiserror::Error;
 
+pub mod agc;
 pub mod awgn;
+pub mod cfo;
 pub mod chirp;
 pub mod composite;
 pub mod dsp;
