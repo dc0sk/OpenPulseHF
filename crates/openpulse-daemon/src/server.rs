@@ -819,6 +819,29 @@ pub async fn run(cfg: OpenpulseConfig, modem_backend: Box<dyn AudioBackend>) -> 
                         }
                     }
                 });
+                // Multi-mode monitor (REQ-RX-01): try the configured extra modes on this burst,
+                // independent of the active session mode, and emit a MonitorFrame per decode.
+                //
+                // Hoisted ABOVE the dispatch on purpose. It used to live inside the non-OTA arm
+                // below, which made it unreachable whenever an OTA session was active — and
+                // `start_ota_session` runs once at daemon startup under `ota_enabled` and is never
+                // cleared (nothing ever sets `engine.ota` back to `None`), so the monitor was dark
+                // for the entire process lifetime under exactly the on-air configuration
+                // (archetype scan 2026-07-29, finding 9). The monitor is about what the RADIO hears,
+                // which does not depend on which decoder the session happens to be running.
+                if let Ok(Some(b)) = &burst {
+                    if let Some(mon) = runtime_state.monitor.as_mut() {
+                        let decoded = tokio::task::block_in_place(|| mon.decode_all(&b.samples));
+                        for (m, payload) in decoded {
+                            let _ = handle.event_tx.send(
+                                crate::protocol::ControlEvent::MonitorFrame {
+                                    mode: m,
+                                    bytes: payload,
+                                },
+                            );
+                        }
+                    }
+                }
                 let bytes = match burst {
                     Ok(Some(burst)) if engine.ota_active() && !runtime_state.ota_suppressed_by_peer() => {
                         // Receiver-led OTA: decode the burst, then key PTT only to answer
@@ -869,20 +892,7 @@ pub async fn run(cfg: OpenpulseConfig, modem_backend: Box<dyn AudioBackend>) -> 
                         }
                     }
                     Ok(Some(burst)) => {
-                        // Multi-mode monitor (REQ-RX-01): try the configured extra modes on this burst,
-                        // independent of the active session mode, and emit a MonitorFrame per decode.
-                        if let Some(mon) = runtime_state.monitor.as_mut() {
-                            let decoded =
-                                tokio::task::block_in_place(|| mon.decode_all(&burst.samples));
-                            for (m, payload) in decoded {
-                                let _ = handle.event_tx.send(
-                                    crate::protocol::ControlEvent::MonitorFrame {
-                                        mode: m,
-                                        bytes: payload,
-                                    },
-                                );
-                            }
-                        }
+                        // The monitor already ran above, for every arm.
                         tokio::task::block_in_place(|| engine.decode_burst(&mode, &burst))
                             .unwrap_or_default()
                     }
