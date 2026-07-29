@@ -51,8 +51,17 @@ This document tracks the 11-item execution plan to achieve VARA-class performanc
 **Acceptance Criteria**:
 - [x] Preamble codec (encode/decode) with configurable length and constellation.
 - [x] PLL settling time ≤200 ms measured on Watterson F1 @ 15 dB SNR.
-- [x] Frame lock reliability ≥99% on 100-frame loopback test across 10–25 dB AWGN.
+- [x] Frame lock reliability ≥99% on 100-frame loopback test across 10–25 dB AWGN. (Re-verified
+  2026-07-30 with an offset check added: 100/100 at the correct sample at every SNR — on AWGN there
+  is no delayed ray to lock onto, so this claim is unaffected by the correction below.)
 - [x] Integration test: `tests/waveform_lock_watterson.rs` (Watterson F1/F2, 15/20/25 dB, 20 frames each).
+  **Read the two numbers separately.** Until 2026-07-30 this test counted a lock on correlation
+  alone and discarded the offset, so frames locked onto the **delayed multipath ray** counted as
+  locks. Measured: ~90 % of frames declare a lock, but only **55–60 %** land at or before the true
+  frame start (good_f1 7/20 mislocated at offset 20, good_f2 7–8/20 at offset 24 — each the
+  profile's own delay). Both rates are now asserted. This is a fading-channel property of a bare
+  matched filter, not a production-acquisition figure: the engine's acquisition path scans back for
+  the leading tap and has its own gates.
 
 **Depends On**: None (can parallelize).
 
