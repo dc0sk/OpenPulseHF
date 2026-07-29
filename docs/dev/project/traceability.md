@@ -9204,3 +9204,38 @@ The last mode still failing on the dual-card rig after the AGC misclassification
 - **Docs:** `docs/dev/vara-parity-execution-board.md` — the ≥99 % AWGN claim is re-verified and
   stands; the Watterson line now states both rates and that this is a bare-matched-filter property,
   not a production-acquisition figure.
+
+---
+
+## 2026-07-30 — Archetype scan finding 12: `HarqPolicy` is inert, and two documents claimed otherwise
+
+- **Requirement / change:** the completion claim for Item 6 (SC-FDMA HARQ tuning) must match what
+  actually runs.
+- **Verification (done first, not taken from the scan):**
+  - `grep` for `HarqPolicy` across `crates`/`apps`/`plugins`: reached only via
+    `ModemEngine::select_harq_decision` (engine.rs:2028) and `select_harq_decision_for_mode`
+    (:2048). Callers of those: `tests/harq_rate_selection_watterson.rs` and
+    `tests/ldpc_engine_loopback.rs`. **No production caller.**
+  - The shipped ARQ takes FEC from `SessionProfile::fec_for` + `free_rs_strengthening`
+    (engine.rs:1323, :4605) and its ACK timeout from `ota_ack_timeout_ms` (:4890), which does not
+    share a numeric range with `HarqPolicy`'s curve. So the timeout tier is doubly inert.
+  - **Measured, not inferred:** instrumented `harq_watterson_f1_throughput_and_latency_gate` to count
+    decodes instead of discarding them (`let _ = policy_engine.receive_with_harq_attempt(...)`).
+    Result: **0 of 105 attempts decode**, and the gate passes. `policy_goodput_bps` is a closed-form
+    function of `decision.code_rate` and `decision.ack_timeout_ms`, so it cannot fail on a decode.
+- **Design decision (+ rationale):** **not** wiring the selector up. The per-rung MODCOD table is the
+  deliberate shipped design; the selector is an unused alternative. The defect is the completion
+  claim, so the fix is documentary — the code is left as it is.
+- **Implementation (docs + test rationale only, no behaviour change):**
+  - `docs/dev/vara-parity-execution-board.md` Item 6: status changed from
+    **"✅ FUNCTIONALLY COMPLETE"** to **"⚠️ SELECTOR BUILT, NOT WIRED"**, with the mechanism spelled
+    out. The old status sat four lines below a "Current State" bullet reading *"Retransmit on NACK
+    without rate change"* — both statements were true, and only because the selector never runs.
+    Criteria annotated: the latency tick is a **proxy**, and the throughput criterion is marked NOT
+    MEASURED rather than merely deferred.
+  - `docs/dev/project/traceability-matrix.md` CAP-36: scope note separating the LLR-combining retry
+    loop and rate policy (which do ship) from the `HarqPolicy` selector (which does not).
+  - `crates/openpulse-modem/tests/harq_rate_selection_watterson.rs`: module doc now states what the
+    file does not prove, including the measured 0/105.
+- **Test results (run):** `harq_rate_selection_watterson` **2/2** (unchanged — this change asserts
+  nothing new; it stops a passing test from being cited as evidence it cannot supply).
