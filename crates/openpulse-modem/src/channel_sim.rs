@@ -265,16 +265,46 @@ impl ChannelSimHarness {
     /// An AGC moves the gain *during* a frame: near-harmless to a phase-only waveform, destructive
     /// to one carrying bits in amplitude. That asymmetry once made eight modes look
     /// "analog-path limited" when the real cause was a live mixer AGC on the capture card.
+    ///
+    /// **The AGC is primed with `idle_secs` of idle noise before the frame, and that is not
+    /// cosmetic.** A cold AGC starts at unity and ramps, and the ramp lands exactly on the preamble
+    /// the acquisition path depends on. Measured: cold start peaks at **272x** the input over the
+    /// first 200 samples; primed with 1 s of idle it peaks at **5.9x**, with the same settled gain
+    /// (1.10x) either way — so priming changes the transient and nothing else. The cold transient is
+    /// also in the wrong causal direction: a real receiver's AGC has been listening to the noise
+    /// floor for minutes and *settles down* onto an arriving signal rather than ramping up from
+    /// unity. Left uncorrected, this seam would have mis-measured the very defect it was built to
+    /// reproduce (archetype scan 2026-07-29, finding 14).
+    ///
+    /// Pass `idle_secs = 0.0` deliberately if you want the cold transient itself.
     pub fn route_with_capture_agc(
         &mut self,
         target_rms: f32,
         attack_secs: f32,
         decay_secs: f32,
+        idle_secs: f32,
     ) -> usize {
         let mut channel = openpulse_channel::agc::AgcChannel::new(
             openpulse_channel::agc::AgcConfig::agc(target_rms, attack_secs, decay_secs, 8_000.0),
         )
         .expect("valid agc parameters");
+        let n_idle = (idle_secs.max(0.0) * 8_000.0) as usize;
+        if n_idle > 0 {
+            // Deterministic idle noise at a realistic floor, so the AGC arrives at the frame with a
+            // settled gain the way a real receiver does.
+            let mut state = 0x51ED_2701u64 | 1;
+            let idle: Vec<f32> = (0..n_idle)
+                .map(|_| {
+                    state ^= state >> 12;
+                    state ^= state << 25;
+                    state ^= state >> 27;
+                    let u = (state.wrapping_mul(0x2545_F491_4F6C_DD1D) >> 11) as f64
+                        / (1u64 << 53) as f64;
+                    ((u as f32) * 2.0 - 1.0) * 0.02
+                })
+                .collect();
+            let _ = channel.apply(&idle);
+        }
         self.route(&mut channel)
     }
 
