@@ -1045,9 +1045,27 @@ mod tests {
         }
     }
 
+    /// The notch experiments run on `hpx_wideband` — a wide profile that assigns no per-rung FEC, so
+    /// the sim's own `params.fec` knob (below) selects it and the experiment controls its own coding.
+    ///
+    /// This was `hpx_wideband_hd` until 2026-07-29. That worked only because the profile had
+    /// accidentally shipped with no FEC assigned, so it *also* fell through to `params.fec = Rs` —
+    /// the very fallback that hid the missing-FEC defect from every sweep (archetype scan finding 5).
+    /// Once the profile was corrected to `SoftConcatenated` on every rung, the notch's measured
+    /// benefit there collapsed from 1.12x to **1.022x** (710 → 725 bps): strong FEC already recovers
+    /// what notching an out-of-band carrier was saving, so the experiment could no longer see its own
+    /// effect. Measured across candidates at the same operating point, baseline → oracle:
+    ///
+    ///   hpx_wideband_hd  710 → 725  (1.022)   effect absorbed by FEC
+    ///   hpx_wideband     505 → 755  (1.495)   healthy baseline, decisive effect  <-- chosen
+    ///   hpx_hf            24 → 127  (5.195)   baseline near-collapsed
+    ///   hpx500             9 → 135  (14.84)   baseline dead; measures collapse, not notch benefit
+    ///
+    /// `hpx_wideband` is the only candidate with both a *live* baseline and a large effect, so it is
+    /// the regime where this experiment actually measures the notch rather than a link falling over.
     fn qrm_run(notch: Option<LinkNotch>) -> LinkResult {
         run_link(&LinkParams {
-            profile_name: "hpx_wideband_hd".into(),
+            profile_name: "hpx_wideband".into(),
             forward: ChannelSpec::Qrm {
                 snr_floor_db: 20.0,
                 tones: vec![(2650.0, 1.5)],
@@ -1084,14 +1102,14 @@ mod tests {
         let off = qrm_run(None);
         let oracle = qrm_run(out_of_band_notch(false));
         // Notching a known out-of-band CW interferer must raise throughput above the no-notch
-        // baseline. The margin is ~12% at this operating point (852 vs 762 bps): the QRM is *out of
-        // band*, so the notch removes AGC/front-end desense rather than in-band energy — a real but
-        // modest gain, not a dramatic one. The bar was 1.15 against a 12-frame run; the #934 climb
-        // change made both sides climb faster and compressed the ratio just under it. 1.08 keeps a
-        // real assertion (the notch must clearly help) without pretending the effect is larger than
-        // it is.
+        // baseline. The QRM is *out of band*, so the notch removes AGC/front-end desense rather than
+        // in-band energy. On `hpx_wideband` (see `qrm_run` for why that profile) this measures
+        // **505 → 755 bps, a 1.495x gain** — a decisive effect with a live baseline. The bar is 1.25:
+        // comfortably under the measured ratio, and far enough above 1.0 that the assertion cannot
+        // pass on noise. Earlier bars of 1.15 and then 1.08 were chasing a shrinking effect on a
+        // profile where FEC was progressively absorbing it; the fix was the regime, not the bar.
         assert!(
-            oracle.effective_bps > off.effective_bps * 1.08,
+            oracle.effective_bps > off.effective_bps * 1.25,
             "oracle notch {:.0} should clearly beat baseline {:.0}",
             oracle.effective_bps,
             off.effective_bps
