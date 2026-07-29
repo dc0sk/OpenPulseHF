@@ -1031,6 +1031,63 @@ pub fn run_link(params: &LinkParams) -> LinkResult {
 mod tests {
     use super::*;
 
+    /// `net_bps` must be the code rate that was on the WIRE, not the one the sim was asked for
+    /// (#1029).
+    ///
+    /// The two agree on every profile that assigns no per-rung FEC — which was most of them, and is
+    /// exactly why the divergence went unnoticed. The anti-vacuity guard below is therefore the
+    /// load-bearing part: without it this test would pass on a profile where the question never
+    /// arises, and would keep passing if the accounting reverted.
+    #[test]
+    fn net_bps_is_accounted_against_the_fec_actually_transmitted() {
+        let profile = SessionProfile::hpx_hf();
+        let mut sim = LinkSim::new(&LinkParams {
+            profile_name: "hpx_hf".into(),
+            forward: ChannelSpec::Clean,
+            reverse: ChannelSpec::Clean,
+            payload_bytes_per_frame: 64,
+            total_frames: 25,
+            fec: FecMode::Rs,
+            seed: 3,
+            ..LinkParams::default()
+        });
+
+        let mut diverged = 0usize;
+        let mut checked = 0usize;
+        while let Some(step) = sim.step() {
+            let Some(level) = SpeedLevel::from_u8(step.level) else {
+                continue;
+            };
+            let wire_fec = match profile.fec_for(level) {
+                FecMode::None => fec_for(&step.mode, FecMode::Rs),
+                f => f,
+            };
+            if wire_fec != FecMode::Rs {
+                diverged += 1;
+            }
+            let expected = step.gross_bps * fec_code_rate(wire_fec);
+            assert!(
+                (step.net_bps - expected).abs() < 1e-6,
+                "SL{} ({}) transmits {:?} (r={:.3}) but net_bps {:.1} implies r={:.3}",
+                step.level,
+                step.mode,
+                wire_fec,
+                fec_code_rate(wire_fec),
+                step.net_bps,
+                step.net_bps / step.gross_bps.max(1e-9)
+            );
+            checked += 1;
+        }
+
+        assert!(checked > 0, "no frames stepped — the fixture proves nothing");
+        assert!(
+            diverged > 0,
+            "every rung this run visited transmits the requested FecMode::Rs, so the requested and \
+             transmitted code rates never diverged and this test cannot distinguish them. Pick a \
+             profile/run that reaches a rung with a different per-rung FEC."
+        );
+    }
+
     #[test]
     fn ldpc_and_turbo_decode_through_a_clean_link() {
         // These modes used to silently fall back to *no* FEC in the linksim's private
