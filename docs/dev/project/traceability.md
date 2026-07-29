@@ -8650,3 +8650,52 @@ The last mode still failing on the dual-card rig after the AGC misclassification
   settle, never decode. Dead weight that misleadingly suggests otherwise.
 - **Not yet proven:** the on-air re-run. In-process reproduction + fix is not a substitute for the
   radio link that produced the defect.
+
+## Loopback harness realism: capture-context impairments (2026-07-29)
+
+- **Requirement:** the 2026-07-28 on-air session produced four defects that no in-process test could
+  have found. Root observation: the channel models simulate the **signal path** (they degrade the
+  transmitted frame), while every one of those defects lived in the **capture context** — what the
+  receiver hears when nobody is transmitting, at what level, with what clock, delivered at what rate.
+- **Implementation (each impairment self-validating):**
+  - `crates/openpulse-channel/src/cfo.rs` — `CfoChannel`: shifts the whole audio band by a fixed
+    offset via the analytic signal (FFT → zero negative freqs → rotate → real part), with a phase
+    accumulator for block continuity. Distinct from `SroChannel` (sampling-clock, not carrier).
+  - `crates/openpulse-channel/src/agc.rs` — `AgcChannel`: fixed capture gain and/or a tracking AGC
+    with attack/decay. Covers both the absolute-level impairment and the gain-moves-during-a-frame
+    impairment that caused the "analog path" misclassification.
+  - `crates/openpulse-audio/src/loopback.rs` — `LoopbackBackend::with_pacing(hz)`: `read()` returns
+    only the samples that would have ARRIVED by now. The default drains the whole buffer instantly,
+    which is why read-cadence starvation was recorded as untestable in-process.
+  - `crates/openpulse-modem/src/channel_sim.rs` — `route_with_cfo`, `route_embedded_with_cfo`,
+    `route_embedded_at_level`, `route_with_capture_agc`.
+- **Tests (run):**
+  - `openpulse-channel` cfo 5/5 — including `a_tone_moves_by_exactly_the_requested_offset` (the
+    channel must move the spectrum by the requested amount, else every acquisition test built on it
+    is vacuous), power preservation, and zero-offset passthrough.
+  - `openpulse-channel` agc 5/5 — including `the_agc_gain_moves_when_the_level_jumps` and
+    `the_agc_compresses_amplitude_structure` (the mechanism that broke the amplitude-bearing modes).
+  - `openpulse-audio --test paced_loopback` 4/4 — progressive delivery, order/no-loss preservation,
+    an unpaced control, and a non-positive-rate fallback (a silent stall would be worse than no
+    pacing).
+  - `openpulse-modem --test carrier_offset_acquisition` 5/5, with a FALSIFIER (a 1600 Hz offset must
+    fail) so an inert channel cannot make the passing cases meaningless.
+  - `openpulse-modem --test capture_level_energy_gate` 3/3 — reproduces #1020 in process: at the
+    on-air idle floor (mean-square 0.0154, 4.8x the gate ceiling) acquisition degrades, while the
+    level that passed on air (0.00042) decodes. Includes the healthy-level CONTROL.
+  - Full workspace: **271 suites, 2192 passed, 0 failed**; clippy `-D warnings` and
+    `cargo fmt --check` clean.
+- **Measured finding (new capability figure):** sweeping the acquisition chain through `CfoChannel`
+  gives **BPSK250 ≤ 600 Hz** and **QPSK500 ≤ 400 Hz** before decode fails — roughly **ten times** the
+  ±baud/4 per-symbol tracking range. The per-symbol figure describes what the carrier *tracker*
+  holds; acquisition additionally has the coarse `afc_mini_settle` pass and the retry's per-position
+  re-acquisition. Quoting the tracking range as the system's offset budget understates it by an
+  order of magnitude — and it independently confirms the −64 Hz rig-to-rig offset measured on air was
+  never near the limit, corroborating that the coded failures were a capture-level/settle problem.
+- **A misattribution caught in progress:** the first version of the CFO test used the one-shot
+  `receive()`, which performs **no AFC settling at all** (the energy-gate → refine-onset →
+  `afc_mini_settle` chain exists only in the scanning loop). A 20 Hz offset "failing" there is the
+  wrong entry point, not a bug. Fixed to use the timeout receive.
+- **Still hardware-only:** rig DSP (NR/NB), analog nonlinearity, USB re-enumeration resetting mixer
+  state, and two genuinely independent oscillators. An emulation must also be validated against a
+  real capture, or the suite tests the model of the radio rather than the radio.
