@@ -8999,3 +8999,49 @@ The last mode still failing on the dual-card rig after the AGC misclassification
 - **Wire note:** `fingerprint()` covers `(level → mode, level → FEC)`, so `hpx_wideband_hd`'s
   fingerprint changes. That is the mechanism working as designed — it exists to detect exactly this
   kind of ladder divergence between builds.
+
+## Seam gaps — a transform wired at one caller, not the shared seam (2026-07-29)
+
+- **Requirement:** cluster 3 of the defect-archetype scan
+  (`docs/dev/reviews/archetype-scan-2026-07-29.md`). Both findings are cross-cutting behaviours that
+  the code **claimed in a comment** to apply everywhere and did not. This is the shape CLAUDE.md's
+  "cross-cutting RX/TX feature checklist" exists for; it recurred anyway, which is why the checklist's
+  rule 3 — *never claim "covers all paths" from a callers-grep; prove it with a test that FAILS
+  without the wiring* — is the operative one.
+- **Implementation:**
+  - `crates/openpulse-modem/src/engine.rs`: `wire_for_modulation()` is now the single source of the
+    bytes that go on the air, and the new `stage_modulate_payload_iq()` mirrors the audio stage for
+    the baseband path. `transmit_iq` goes through it instead of calling `plugin.modulate_iq()`.
+    **Design note:** deliberately *not* moved to `route_wire_stage(EncodeModulate)`, even though that
+    is the seam both paths already share — it has 13 call sites and whitening is XOR, so any path
+    reaching it twice would silently self-cancel. A cancelling transform is a worse failure mode than
+    the bug being fixed. Two stage functions are unavoidable because the plugin trait exposes
+    `modulate` and `modulate_iq` with different return types; one function can still own their bytes.
+  - `crates/openpulse-daemon/src/server.rs`: the multi-mode monitor (REQ-RX-01) is hoisted above the
+    receive tick's OTA/non-OTA dispatch so it runs on every captured burst.
+- **Measurements / reproduction (actually run):**
+  - Finding 8 reproduced before the fix: `BPSK100` and `QPSK250` both returned
+    **`frame encoding/decoding error: invalid magic`** through I/Q transmit → upconvert → audio
+    receive, while the audio-only control passed. That is the same signature that made #1021
+    undiagnosable, which is what makes it expensive rather than merely wrong.
+  - Finding 9's precondition verified directly: `grep` finds **no `end_ota_session` anywhere**, and
+    `start_ota_session` only ever assigns `self.ota = Some(..)`. So `ota_active()` is permanently true
+    once the daemon starts under `ota_enabled`, and the monitor's single emit site was unreachable for
+    the whole process lifetime.
+- **Tests:**
+  - `crates/openpulse-modem/tests/iq_decode_round_trip.rs` (new, 4 tests). Upconverts the baseband
+    I/Q to the real passband (`i·cos − q·sin`) and decodes through the normal receive path — what an
+    external upconverter/SDR does with these samples anyway. The pre-existing `tests/iq_output.rs`
+    asserts sample counts, Q-RMS, the attenuation ratio and the regulatory log: everything *about* the
+    samples, nothing requiring the bytes to survive, so no decode existed anywhere on the I/Q path.
+  - `crates/openpulse-daemon/tests/monitor_during_ota.rs` (new). Drives the real `server::run` receive
+    tick with **both** `ota_enabled` and the monitor on, and asserts a `MonitorFrame` reaches a control
+    client. REQ-RX-01's existing acceptance test calls `MonitorRuntime::decode_all` directly — the
+    monitor was never broken, the *dispatch around it* was, so that test passes whichever arm is taken.
+- **Test results (run):** `iq_decode_round_trip` **4/4**; `iq_output` **7/7** unchanged;
+  `monitor_during_ota` **1/1**.
+- **Sabotage verification:** reverting the I/Q path to `plugin.modulate_iq(&wire.bytes, ..)` fails
+  **2/4** with `invalid magic` while the control and fixture tests stay green. For the monitor, the
+  **exact pre-fix code** (the emit restored inside the non-OTA arm) fails the new test — which also
+  proves the fixture genuinely has an OTA session active, since otherwise the pre-fix placement would
+  have passed.

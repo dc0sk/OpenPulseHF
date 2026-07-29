@@ -2325,12 +2325,10 @@ impl ModemEngine {
                 .plugins
                 .get(mode)
                 .ok_or_else(|| ModemError::PluginNotFound(mode.to_string()))?;
-            let mod_cfg = ModulationConfig {
-                mode: mode.to_string(),
-                center_frequency: self.center_frequency,
-                ..ModulationConfig::default()
-            };
-            plugin.modulate_iq(&outbound.bytes, &mod_cfg)?
+            // Via the shared stage, NOT `plugin.modulate_iq` directly: the bytes must be whitened
+            // exactly as the audio path whitens them, because every receive path un-whitens
+            // unconditionally. Calling the plugin here is what made this transmit undecodable.
+            self.stage_modulate_payload_iq(plugin, mode, &outbound)?
         };
 
         // Power control: apply the configured TX attenuation to the baseband IQ (same dB as the audio
@@ -5186,13 +5184,45 @@ impl ModemEngine {
             center_frequency: self.center_frequency,
             ..ModulationConfig::default()
         };
-        // Whiten the wire immediately before modulation. This is the single TX seam, so every
-        // caller is covered by construction. Placing it AFTER FEC means the padding and the parity
-        // are whitened too — and RS padding producing 6.2 s of unmodulated carrier is precisely the
-        // on-air defect this prevents (#1021). See openpulse_core::scramble.
-        let whitened = openpulse_core::scramble::scrambled(&wire.bytes);
-        let samples = plugin.modulate(&whitened, &mod_cfg)?;
+        let samples = plugin.modulate(&self.wire_for_modulation(wire), &mod_cfg)?;
         Ok(AudioSamples { samples })
+    }
+
+    /// The wire bytes exactly as they go on the air: **whitened**.
+    ///
+    /// Placing the transform after FEC means the padding and the parity are whitened too — and RS
+    /// padding producing 6.2 s of unmodulated carrier is precisely the on-air defect this prevents
+    /// (#1021). See `openpulse_core::scramble`.
+    ///
+    /// **Every modulation entry point must take its bytes from here.** There are two, because the
+    /// plugin trait exposes two different methods with different return types:
+    /// [`stage_modulate_payload`](Self::stage_modulate_payload) (audio, `modulate`) and
+    /// [`stage_modulate_payload_iq`](Self::stage_modulate_payload_iq) (baseband, `modulate_iq`).
+    /// Until 2026-07-29 the audio one whitened inline under a comment asserting it was "the single
+    /// TX seam, so every caller is covered by construction" — which was false: `transmit_iq` reached
+    /// `modulate_iq` directly and whitened nothing, while every RECEIVE path un-whitens
+    /// unconditionally. An I/Q-transmitted frame therefore decoded to `invalid magic` on a receiver
+    /// of the same build (archetype scan 2026-07-29, finding 8). The claim is now true because the
+    /// bytes come from one function rather than because a comment says so; the gate that keeps it
+    /// true is `tests/iq_decode_round_trip.rs`, which decodes an I/Q transmission end to end.
+    fn wire_for_modulation(&self, wire: &WirePayload) -> Vec<u8> {
+        openpulse_core::scramble::scrambled(&wire.bytes)
+    }
+
+    /// Baseband-I/Q counterpart of [`stage_modulate_payload`](Self::stage_modulate_payload).
+    fn stage_modulate_payload_iq(
+        &self,
+        plugin: &dyn openpulse_core::plugin::ModulationPlugin,
+        mode: &str,
+        wire: &WirePayload,
+    ) -> Result<(Vec<f32>, Vec<f32>), ModemError> {
+        let _stage = PipelineStage::EncodeModulate;
+        let mod_cfg = ModulationConfig {
+            mode: mode.to_string(),
+            center_frequency: self.center_frequency,
+            ..ModulationConfig::default()
+        };
+        plugin.modulate_iq(&self.wire_for_modulation(wire), &mod_cfg)
     }
 
     /// Transmit pre-built baseband audio (e.g. a JS8 beacon frame) through the OutputEmit seam,
