@@ -760,6 +760,10 @@ impl LinkSim {
         let mut last_level = self.ota.tx_level();
         let mut last_snr = 0.0_f32;
         let mut last_mode = String::new();
+        // The FEC the frame was actually TRANSMITTED with, which is not `params.fec` on any profile
+        // that assigns per-rung FEC. Accounting throughput against the requested knob instead
+        // overstated `net_bps` by ~2x on every `SoftConcatenated` rung (issue #1029).
+        let mut last_fec = self.params.fec;
         let mut last_compress_ratio = 1.0_f64;
         let mut ack_sent = AckType::Nack;
         let mut ack_received = AckType::Nack;
@@ -785,6 +789,7 @@ impl LinkSim {
                 FecMode::None => fec_for(&mode, self.params.fec),
                 f => f,
             };
+            last_fec = fec;
             let payload = make_payload(frame, attempts, self.params.payload_bytes_per_frame);
 
             // Compress, then send the wire bytes as a burst of ≤FRAME_CHUNK modem frames
@@ -940,7 +945,10 @@ impl LinkSim {
             .rate_cache
             .entry(last_mode.clone())
             .or_insert_with(|| mode_gross_bps(&last_mode).unwrap_or(0.0));
-        let net_bps = gross_bps * fec_code_rate(self.params.fec);
+        // `last_fec`, not `params.fec`: the code rate that was on the wire. See #1029 — these two
+        // agree only while no profile assigns per-rung FEC, which was true of most profiles and is
+        // exactly why the divergence went unnoticed.
+        let net_bps = gross_bps * fec_code_rate(last_fec);
         let compress_adv = 1.0 / last_compress_ratio.max(1e-9);
         let effective_bps = net_bps * compress_adv * success_rate;
 
