@@ -1,10 +1,32 @@
 ---
 title: On-Air Test Status
-status: in-progress
-last_updated: 2026-06-10
+status: superseded
+last_updated: 2026-07-30
 ---
 
 # On-Air Test Status
+
+> **⚠️ SUPERSEDED — read this first (2026-07-30).**
+>
+> Everything below is a snapshot of **2026-06-10** and is retained as a debugging record, not as
+> current status. Two things in it are now **false**, and one is actively misleading:
+>
+> 1. **"The on-air test still fails … 0/3" is out of date.** Phase **A1 passed on 2026-07-28** — a
+>    rig→rig decode on 2 m. See `onair-execution-plan.md` for the live gate sequence
+>    (G0 → G1 → **A1 ✅** → A2 → A3) and issues #1019/#1020.
+> 2. **"Step 3 — Lower energy gate if signal level is near noise" is the wrong fix and would make
+>    things worse.** The root cause found on air was the opposite: the capture was **too hot**. At an
+>    idle `mean_sq` of 0.0154 — 4.7× above `EnergyGate`'s maximum threshold — the threshold clamps
+>    *below* the noise floor, so the gate never shuts, fires on noise, and settles AFC on it. The fix
+>    is to **lower the RX source volume** (per rig; PipeWire volume is cubic, so capture power scales
+>    ≈ v⁶), not to lower the gate. `scripts/onair-rx-level-check.sh` fails the preflight when the
+>    threshold would clamp. Note the trap: this presents as a frequency-drift bug — an FFT showed the
+>    carrier already at +1.2 Hz, so re-trimming the rigs would have been pure damage.
+> 3. The "core open question" about flat IC-9700 USB audio was already resolved by a reboot; that is
+>    noted inline below.
+>
+> The current on-air pairing is **IC-9700 ↔ FT-818 on 144.600 MHz at 5 W**, not the FT-991A setup
+> described here (see `onair-ic9700-ft818-setup.md`).
 
 **Status as of 2026-06-10.** This document is the current state of the on-air validation effort. It consolidates the on-air test handoff and the on-air debugging learnings into one place: current blockers, confirmed facts, and the root causes found and fixed during loopback and on-air debugging (2026-06-06 to 2026-06-09).
 
@@ -88,9 +110,18 @@ If the USB audio level during TX is below the AFC settling threshold (`ENERGY_GA
 - IC-9700 menu → Connectors → USB Serial Function (should be DATA for PKT)
 - IC-9700 AF gain (physical knob or menu) — affects USB output level
 
-#### Step 3 — Lower energy gate if signal level is near noise
+#### Step 3 — ~~Lower energy gate if signal level is near noise~~ **RETRACTED (2026-07-30)**
 
-If Step 1 shows the IC-9700 USB audio has a slight signal increase (but below 0.0001 mean_sq), lower `ENERGY_GATE_THRESHOLD` in `engine.rs` and the retry gate from 0.01 to something matching the observed level.
+> ~~If Step 1 shows the IC-9700 USB audio has a slight signal increase (but below 0.0001 mean_sq),
+> lower `ENERGY_GATE_THRESHOLD` in `engine.rs` and the retry gate from 0.01 to something matching the
+> observed level.~~
+>
+> **Do not do this.** The measured on-air problem was the opposite — the capture was too *hot*, not
+> too quiet. `EnergyGate` picks `threshold = clamp(idle_floor × 3, 1e-4, 0.0032)`; once the idle
+> floor exceeds `MAX/3 ≈ 0.00107` the threshold clamps *below* the noise, the gate fires
+> continuously, and AFC settles on noise seconds before the frame arrives. Lowering the gate makes
+> that failure mode strictly easier to hit. Fix the **level** instead (see the banner at the top),
+> and use `scripts/onair-rx-level-check.sh`, which fails when the threshold would clamp.
 
 #### Step 4 — Consider IC-9700 Ethernet audio
 

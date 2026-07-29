@@ -326,3 +326,54 @@ never grows a buffer past the point where the defect fires. The proven fix shape
 (`FecCodec::decode_prefix`) already exists in the repo for two of five affected consumers; extending
 it to the LDPC and RsInterleaved arms, and re-deriving `BURST_MAX_SAMPLES` and the settle-recovery
 window against real per-mode frame lengths, would close the whole cluster at once.
+
+---
+
+## Disposition (closed 2026-07-29 → 2026-07-30)
+
+**All 18 findings are closed.** Five PRs, one spun-out issue. Everything below was re-derived
+independently before any code was touched; where the scan's own reasoning turned out to be wrong,
+the correction is recorded rather than quietly dropped.
+
+| # | Severity | Disposition |
+|---|---|---|
+| 1–4 | high/medium | Fixed — PR #1028 (cluster 1, container-derived length) |
+| 5–7 | medium/low | Fixed — PR #1030 (cluster 2, proxy metric) |
+| 8–9 | medium/low | Fixed — PR #1031 (cluster 3, seam gap) |
+| 10, 11, 14, 15 | low | Fixed — low-tail PR |
+| 12 | medium | Closed as a **documentation** defect; the code is the deliberate design |
+| 13 | medium | Fixed — frame-lock offset gate |
+| 16 | low | Closed in passing during cluster 1 (the stale `×3` rationale) |
+| 17 | low | Fixed — whitening gate rewritten to the real regime |
+
+### Corrections to the scan itself
+
+Three of the scan's stated mechanisms did not survive verification, and in each case checking first
+changed what got built:
+
+1. **Finding 5's scope was 9× too large.** "9 of 12 profiles assign no FEC" shrank to **one** on
+   measurement — most of those profiles derived their SNR floors *uncoded* and the code matches them.
+   Fixing from the assertion would have wrongly re-FEC'd eight profiles.
+2. **Issue #1029's stated consequence was wrong.** It claimed the CI goodput baseline rests on
+   `net_bps`. It does not: `LinkResult::effective_bps` is measured from airtime and never touches
+   `fec_code_rate`. Verified statically *and* by running all three gate cases under both accountings
+   for bit-identical numbers. The bug was real; its blast radius was the GUI and panel display.
+3. **Finding 13's cited line was refuted** by the scan's own verifier, and the real mechanism (the
+   discarded `offset`) was found by instrumentation. Worth noting as the pattern that worked.
+
+### Two things found only because a fix was measured rather than assumed
+
+- **Finding 12 is worse than reported.** The scan said the cited throughput gate *would* pass with
+  zero frames decoded. Instrumented, it **does**: 0 of 105 attempts decode, and the gate is green.
+- **A drifted CI floor, unrelated to any finding.** Re-deriving the goodput baselines for #1029
+  showed `ofdm_ladder_goodput_floor_dispersive_fade` sitting at 50 % of baseline against the module's
+  own stated ~65 % rule — loose enough to pass a 40 % throughput regression on the fade the OFDM
+  ladder exists to survive. Re-derived to 360 bps.
+
+### The organizing lesson
+
+Cluster 1's four defects were one shape, and the entry point to all four was a sentence in a living
+doc: *"`RsInterleaved` is untouched since it deinterleaves first and needs the exact length."* That
+was written as a reason to skip a sibling arm, and it **described the defect**. The rule now in
+CLAUDE.md — *a reason to skip a sibling deserves the same measurement as the fix* — is the highest-
+value output of this scan, above any individual bug.

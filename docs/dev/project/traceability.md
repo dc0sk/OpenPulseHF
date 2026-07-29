@@ -9239,3 +9239,59 @@ The last mode still failing on the dual-card rig after the AGC misclassification
     file does not prove, including the measured 0/105.
 - **Test results (run):** `harq_rate_selection_watterson` **2/2** (unchanged — this change asserts
   nothing new; it stops a passing test from being cited as evidence it cannot supply).
+
+---
+
+## 2026-07-30 — Archetype scan low tail: findings 10, 11, 14, 15
+
+- **Finding 10 — RX SNR recorded only on the soft-demod branch.**
+  - *Mechanism:* `record_rx_snr` sat inside the `plugin.supports_soft_demod(mode)` arm, so the
+    predicate gating it was the demodulator's **soft capability**, not whether an SNR estimate
+    exists. Unrelated properties: `QPSK250-D` implements `estimate_snr_db` and reports
+    `supports_soft_demod = false` by design (#923). All of `hpx_hf`'s hard-FEC lower half recorded
+    nothing.
+  - *Blast radius:* the rate ladder is unaffected (it reads a value computed in a separate call
+    path). `last_rx_snr_db()` feeds the QSY scan's candidate scoring — which scored every channel on
+    `unwrap_or(0.0)` — and the ADIF logbook's `rx_snr`.
+  - *Fix:* `crates/openpulse-modem/src/engine.rs` — `rx_snr_db` hoisted above the branch.
+  - *Test:* `tests/engine_events.rs::receive_populates_last_rx_snr_db_on_a_hard_only_mode`, with an
+    anti-vacuity assertion that the chosen mode really is hard-only. The pre-existing test named the
+    gap in its own assertion message ("a plugin that supports demodulate_soft") without it being
+    noticed as one.
+  - *Sabotage:* restoring `(wire, None)` on the hard arm fails the new test; **the pre-existing one
+    stays green**, which is the demonstration that it was blind to that branch.
+
+- **Finding 11 — non-OTA burst decode errors swallowed.** `crates/openpulse-daemon/src/server.rs`
+  used `.unwrap_or_default()` with no log while both sibling arms in the same `match` log theirs.
+  The callee emits partial diagnostics one layer down, so the arm was never fully silent — only the
+  terminal reason was lost. One-line mirror of the siblings.
+
+- **Finding 15 — the slice-factor table was measured on one plugin and 6 of 10 variants.**
+  - `tests/fec_slice_expansion.rs` hardcoded `MODE = "BPSK250"` and skipped `Ldpc`, `LdpcHighRate`,
+    `ShortRs`, `Turbo` — while the factor table's own doc quotes `LdpcHighRate 1.50` and `Ldpc 2.65`
+    as "measured". All ten now run and **all pass**: the factors were right, just unverified.
+  - The table's *justification* is a claim about plugin geometry, so it is now measured on a second
+    plugin. **Measured: `MFSK16 + Rs` emits 135 936 samples — exactly 1.00× its raw geometry —
+    against a 271 872-sample reserve.** Its geometry *is* one RS block with no margin, so the
+    "reserve covers the second block" premise does not hold and it carries a permanent 2× over-
+    allocation. Waste rather than defect: `frame_arrival_samples` already sizes settle recovery from
+    the raw geometry, so the reachability harm this would once have caused is closed. Pinned with
+    the numbers so a future mode-aware factor has a baseline.
+
+- **Finding 14 — two reproduction seams with no caller, one of them wrong.**
+  - `route_with_capture_agc` and `route_embedded_with_cfo` were built to reproduce the
+    hardware-diagnosed AGC (#1009/#1010) and carrier-offset defects, then left uncalled.
+  - **Measured cold-start transient:** a cold AGC peaks at **272× the input** over the first 200
+    samples — the preamble region — versus **5.9×** when primed with 1 s of idle noise, with the
+    **same settled gain (1.10×)** either way. So priming changes the transient and nothing else, and
+    the cold ramp is in the wrong causal direction (a real AGC settles *down* onto an arriving
+    signal). Uncorrected, the seam would have mis-measured the defect it exists for.
+  - *Fix:* `route_with_capture_agc` gains an `idle_secs` prime; both seams now have callers in
+    `tests/carrier_offset_acquisition.rs`.
+  - **Correction found by probing rather than assuming:** the first embedded+CFO test failed with
+    `invalid magic`, which reads as a carrier-tracking failure. It was not — at `noise_rms = 0.02`
+    the decode fails **at offset 0 too**; the idle floor alone defeats acquisition. Parameters moved
+    to 0.005 and a **zero-offset control** added so the noise level and the carrier offset stay
+    separable.
+- **Test results (run):** `fec_slice_expansion` **3/3**; `engine_events` **9/9**;
+  `carrier_offset_acquisition` **7/7**; clippy clean on `openpulse-modem` + `openpulse-daemon`.

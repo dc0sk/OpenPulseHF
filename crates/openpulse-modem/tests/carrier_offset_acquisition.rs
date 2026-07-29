@@ -147,3 +147,73 @@ fn qpsk500_also_sees_the_offset() {
         "QPSK500 decoded through a 900 Hz offset — the channel is not shifting the signal"
     );
 }
+
+// ── The two seams that existed for this class of bug but had no caller ────────
+//
+// `route_embedded_with_cfo` and `route_with_capture_agc` were both added to reproduce
+// hardware-diagnosed defects and then left uncalled (archetype scan 2026-07-29, finding 14). An
+// uncalled reproduction seam is not neutral: nothing keeps it correct, and the AGC one shipped with
+// a cold-start transient that peaks at 272x the input across the preamble — it would have
+// mis-measured the very defect it was built for. These two tests give both a caller.
+
+/// The combination a real receiver faces: LOCATE the frame in an idle floor **and** ACQUIRE it
+/// off-frequency. Either alone is easier than both together, which is the point of the seam.
+///
+/// **The noise level is an independent variable with its own ceiling, well below the CFO limit.**
+/// Measured while writing this: at `noise_rms = 0.02` the decode fails **at offset 0** — the idle
+/// floor alone defeats acquisition, and any CFO conclusion drawn there would be about the wrong
+/// impairment. At 0.005 it decodes. The zero-offset control below keeps the two separable: if both
+/// cases fail together, the noise level moved, not the carrier tracking.
+#[test]
+fn a_frame_embedded_in_noise_still_acquires_through_a_carrier_offset() {
+    const LEAD: usize = 16_000;
+    const NOISE_RMS: f32 = 0.005;
+
+    let payload = b"embedded and off-frequency".to_vec();
+
+    // Control: same noise, no offset. Establishes that the idle floor is decodable on its own.
+    let mut h = harness();
+    h.tx_engine.transmit(&payload, "BPSK250", None).expect("tx");
+    h.route_embedded_with_cfo(LEAD, LEAD, NOISE_RMS, 0xC0FF_EE01, 0.0);
+    let control = h
+        .rx_engine
+        .receive_with_timeout("BPSK250", None, Duration::from_millis(8_000));
+    assert!(
+        control.is_ok(),
+        "the zero-offset control failed, so NOISE_RMS={NOISE_RMS} is already past what acquisition          tolerates and the offset assertion below would be measuring the wrong impairment: {:?}",
+        control.err()
+    );
+
+    let mut h = harness();
+    h.tx_engine.transmit(&payload, "BPSK250", None).expect("tx");
+    let n = h.route_embedded_with_cfo(LEAD, LEAD, NOISE_RMS, 0xC0FF_EE01, 20.0);
+    assert!(n > 0, "nothing was routed — the test would prove nothing");
+
+    let got = h
+        .rx_engine
+        .receive_with_timeout("BPSK250", None, Duration::from_millis(8_000))
+        .expect("a frame embedded in noise must still acquire through a 20 Hz carrier offset");
+    assert_eq!(got, payload);
+}
+
+/// A live capture AGC must not destroy a phase-only waveform.
+///
+/// This is the asymmetry that made eight modes look "analog-path limited" (#1009/#1010): an AGC
+/// moving gain mid-frame is near-harmless to a waveform carrying bits in phase and destructive to
+/// one carrying them in amplitude. BPSK is the harmless side, so it is the right side to pin — an
+/// AGC that broke *this* would be a harness bug, not a finding.
+#[test]
+fn a_phase_only_waveform_survives_a_live_capture_agc() {
+    let mut h = harness();
+    let payload = b"agc should not matter here".to_vec();
+    h.tx_engine.transmit(&payload, "BPSK250", None).expect("tx");
+    // 1 s of idle priming: the AGC arrives at the frame settled, as a real receiver's does.
+    let n = h.route_with_capture_agc(0.1, 0.01, 0.5, 1.0);
+    assert!(n > 0, "nothing was routed — the test would prove nothing");
+
+    let got = h
+        .rx_engine
+        .receive_with_timeout("BPSK250", None, Duration::from_millis(8_000))
+        .expect("a phase-only waveform must survive a settled capture AGC");
+    assert_eq!(got, payload);
+}
