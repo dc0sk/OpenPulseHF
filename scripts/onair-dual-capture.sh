@@ -257,9 +257,20 @@ if [[ $rc -eq 0 ]]; then
     cat <<NEXT
 Both captures succeeded. To turn them into corpus entries:
 
-  1. Prepare the rig audio for the corpus (48k stereo -> 8k mono, anti-aliased):
-       OUT_DIR=crates/openpulse-modem/tests/captures \\
-       scripts/onair-record-capture.sh ${NAME} 0    # or re-run it live during a transmission
+  1. Prepare the rig audio for the corpus (48k stereo -> 8k mono, anti-aliased).
+     This capture is ALREADY on disk, so decimate it in place — do NOT call
+     onair-record-capture.sh, which always records a NEW live capture (passing it 0
+     seconds records nothing at all):
+       python3 - '${RIG_OUT}' crates/openpulse-modem/tests/captures/<rig>-${NAME}.wav <<'EOP'
+       import sys, wave, struct, numpy as np
+       from scipy.signal import resample_poly
+       src, dst = sys.argv[1], sys.argv[2]
+       w = wave.open(src, "rb"); n, ch, fs = w.getnframes(), w.getnchannels(), w.getframerate()
+       x = np.frombuffer(w.readframes(n), dtype="<i2").astype(np.float64)[0::ch] / 32768.0; w.close()
+       y = resample_poly(x, 1, fs // 8000)
+       o = wave.open(dst, "wb"); o.setnchannels(1); o.setsampwidth(2); o.setframerate(8000)
+       o.writeframes(struct.pack("<%dh" % len(y), *np.clip(y*32768, -32768, 32767).astype(int))); o.close()
+       EOP
 
   2. Add a row to crates/openpulse-modem/tests/captures/README.md recording PROVENANCE
      (rig, frequency, mode, FEC, payload, level settings, date) and the property the file

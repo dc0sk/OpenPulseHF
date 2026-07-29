@@ -11,4 +11,15 @@ docs/VARA Doc/
 # deliberately-committed records remain tracked; force-add (-f) to keep a new one.
 docs/dev/test-reports/loopback-*.json
 docs/test-reports/loopback-*.json
+
+# Raw on-air capture artifacts from scripts/onair-dual-capture.sh. A single 30 s SDR
+# IQ file is 46 MB and one keyed run produces two of them plus two 48 kHz WAVs — ~100 MB
+# per capture pair, none of it needed to reproduce anything. The DERIVED 8 kHz corpus
+# files under crates/openpulse-modem/tests/captures/ are what the tests replay, and they
+# stay tracked. Force-add (-f) if a specific raw artifact must be kept.
+docs/dev/test-reports/on-air/captures/*.cf32
+docs/dev/test-reports/on-air/captures/*.cf32.log
+docs/dev/test-reports/on-air/captures/*-rig48k.wav
+docs/dev/test-reports/on-air/captures/*-rig48k.wav.status
+docs/dev/test-reports/on-air/captures/*-tx.log
 __pycache__/
