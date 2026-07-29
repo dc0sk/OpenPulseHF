@@ -31,6 +31,7 @@ pub mod rate;
 pub mod relay;
 pub mod remote_control;
 pub mod route_discovery;
+pub mod scramble;
 pub mod sar;
 pub mod session_key;
 pub mod signed_envelope;
