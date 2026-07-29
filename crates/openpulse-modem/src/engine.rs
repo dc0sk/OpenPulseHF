@@ -303,28 +303,50 @@ struct AfcSettleOutcome {
     last_delta: f32,
 }
 
-/// Adaptive scan energy gate: an absolute floor plus a noise-floor-relative
-/// threshold.
+/// Adaptive scan energy gate: a noise-floor-relative threshold, from the first window.
 ///
-/// The fixed 1e-4 mean-square gate passes every position when the band noise
-/// floor is elevated (on-air QRM ≈ 1.5e-3), firing the expensive AFC
-/// mini-settle at each scan step.  The gate keeps a short history of window
-/// energies and uses the 25th percentile as the noise-floor estimate (robust
-/// to up to 75% signal-bearing windows in the history), gating at 3× that
-/// floor.  The threshold is clamped to [1e-4, 3.2e-3] so it can never rise
-/// above the weakest decodable loopback signal level, and the adaptive part
-/// only engages once enough history exists to be a genuine noise estimate.
+/// The gate keeps a short history of window energies and uses the 25th percentile as the
+/// noise-floor estimate (robust to up to 75 % signal-bearing windows), gating at 3× that floor,
+/// clamped to `[ABS_THRESHOLD, MAX_THRESHOLD]`. A fixed 1e-4 gate alone passes every position when
+/// the band noise floor is elevated (on-air QRM ≈ 1.5e-3), firing the expensive AFC mini-settle at
+/// every scan step.
+///
+/// **There is no cold-start fallback, and that is the point (#1021).** This returned the fixed
+/// `ABS_THRESHOLD` until it held `MIN_HISTORY = 32` windows — but a real receiver's idle floor sits
+/// *above* that constant, so the very first window of pure noise passed, and the receiver settled
+/// AFC on it before the frame arrived. Measured on `ic9700-frame-bpsk250-rs-whitened.wav`: idle
+/// floor **4.1e-4**, four times the 1e-4 fallback, settling at sample 96 with a bogus +364 Hz
+/// correction some 82 000 samples before a frame that is byte-perfect on the air. Worse, that
+/// station **passes** `scripts/onair-rx-level-check.sh`, which only checks the floor against the
+/// *ceiling* — leaving `1e-4 … 1.07e-3` a blind window, and that is exactly where a correctly
+/// configured station sits.
+///
+/// **Why estimating from one window is safe, which is what made the fallback look necessary.**
+/// With a single window the 25th percentile is that window, so the threshold is 3× it — and the
+/// two regimes separate cleanly, in opposite directions:
+///
+/// | first window is | floor×3 | clamped to | verdict |
+/// |---|---|---|---|
+/// | real idle noise (4e-4) | 1.2e-3 | 1.2e-3 | **rejected** — correct, it is noise |
+/// | a fixture's own signal (0.36, measured) | 1.08 | `MAX_THRESHOLD` 3.2e-3 | **passes** — 100× below the signal |
+///
+/// `MAX_THRESHOLD` is what protects the buffer-is-the-frame fixtures whose window 1 *is* signal:
+/// their level is two orders of magnitude above the clamp, so a self-derived threshold can never
+/// gate them out. (Note the clamp's own comment claimed loopback levels of 1e-3…5e-3; measured,
+/// `route_clean` delivers ≈ 0.36 — the clamp has far more headroom than it advertised.)
 struct EnergyGate {
     history: std::collections::VecDeque<f32>,
 }
 
 impl EnergyGate {
-    /// Legacy absolute floor (DcdState default: 0.01 RMS → 1e-4 mean-square).
+    /// Absolute floor (DcdState default: 0.01 RMS → 1e-4 mean-square). A lower bound on the
+    /// adaptive threshold, never a substitute for it.
     const ABS_THRESHOLD: f32 = 0.0001;
-    /// Upper clamp: below loopback signal levels (mean-square ≈ 1e-3 … 5e-3).
+    /// Upper clamp. Measured `route_clean` loopback level is ≈ 0.36 mean-square, so this sits ~100×
+    /// below the weakest fixture signal — the headroom that lets the threshold be derived from a
+    /// single window without ever gating out a real one.
     const MAX_THRESHOLD: f32 = 0.0032;
     const HISTORY: usize = 128;
-    const MIN_HISTORY: usize = 32;
 
     fn new() -> Self {
         Self {
@@ -332,8 +354,9 @@ impl EnergyGate {
         }
     }
 
+    /// Threshold from whatever history exists. Empty only before the first `passes` call.
     fn threshold(&self) -> f32 {
-        if self.history.len() < Self::MIN_HISTORY {
+        if self.history.is_empty() {
             return Self::ABS_THRESHOLD;
         }
         let mut sorted: Vec<f32> = self.history.iter().copied().collect();
@@ -343,13 +366,17 @@ impl EnergyGate {
     }
 
     /// Record one gate-window energy and return whether it passes the gate.
+    ///
+    /// The window is recorded **before** the threshold is computed, so the very first window is
+    /// judged against a floor derived from itself rather than from a constant. That is what removes
+    /// the cold-start blind spot: idle noise cannot clear 3× its own level, while a fixture's
+    /// full-scale signal clears the clamped ceiling by two orders of magnitude.
     fn passes(&mut self, mean_sq: f32) -> bool {
-        let thr = self.threshold();
         if self.history.len() == Self::HISTORY {
             self.history.pop_front();
         }
         self.history.push_back(mean_sq);
-        mean_sq >= thr
+        mean_sq >= self.threshold()
     }
 }
 
@@ -6099,14 +6126,53 @@ mod tests {
     }
 
     #[test]
-    fn energy_gate_uses_absolute_floor_until_history_fills() {
+    fn energy_gate_never_falls_below_the_absolute_floor() {
         let mut g = EnergyGate::new();
-        // Loopback silence well below the absolute floor: always gated.
+        // Loopback silence well below the absolute floor: always gated, at any history depth.
         for _ in 0..10 {
             assert!(!g.passes(0.000_025));
         }
-        // A loopback-level signal passes regardless of history fill.
+        // A loopback-level signal passes regardless of history depth.
         assert!(g.passes(0.002));
+    }
+
+    /// THE #1021 REGIME: a real receiver's idle floor must be gated out by the **first** window.
+    ///
+    /// This is the case the removed cold-start fallback could not handle. The measured IC-9700
+    /// idle floor is 4.1e-4 — four times `ABS_THRESHOLD` — so while the gate returned that
+    /// constant, the first window of pure noise passed, AFC settled on it, and a byte-perfect
+    /// frame arriving 82 000 samples later never decoded.
+    #[test]
+    fn energy_gate_rejects_a_real_idle_floor_from_the_very_first_window() {
+        let mut g = EnergyGate::new();
+        assert!(
+            !g.passes(0.000_41),
+            "a real on-air idle floor must not pass the FIRST gate window — that is exactly the \
+             #1021 noise settle"
+        );
+        for _ in 0..40 {
+            assert!(!g.passes(0.000_41), "and must keep being rejected");
+        }
+        // The burst measured over that same floor must still pass, or the fix would be a blindfold.
+        assert!(
+            g.passes(0.001_97),
+            "the measured on-air burst level must still clear the adaptive threshold"
+        );
+    }
+
+    /// The counterweight: a fixture whose very first window IS the signal must still pass.
+    ///
+    /// This is why the threshold can be derived from a single window at all. `route_clean` delivers
+    /// ≈ 0.36 mean-square (measured), and `MAX_THRESHOLD` clamps the self-derived threshold at
+    /// 3.2e-3 — two orders of magnitude below — so buffer-is-the-frame harnesses are untouched.
+    #[test]
+    fn energy_gate_passes_a_fixture_whose_first_window_is_signal() {
+        let mut g = EnergyGate::new();
+        assert!(
+            g.passes(0.36),
+            "a full-scale fixture signal must pass on its own first window, or every \
+             buffer-is-the-frame test breaks"
+        );
     }
 
     #[test]

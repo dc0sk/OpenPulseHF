@@ -9295,3 +9295,56 @@ The last mode still failing on the dual-card rig after the AGC misclassification
     separable.
 - **Test results (run):** `fec_slice_expansion` **3/3**; `engine_events` **9/9**;
   `carrier_offset_acquisition` **7/7**; clippy clean on `openpulse-modem` + `openpulse-daemon`.
+
+---
+
+## 2026-07-30 — The energy gate's cold-start blind window (the #1021 trigger) is closed
+
+- **Requirement / change:** `EnergyGate` must not pass a real receiver's idle noise floor. This was
+  the *trigger* for #1021; PR #1038 made it survivable (the scan walks past a condemned anchor) but
+  left the receiver still settling AFC on noise first.
+- **The blind window.** `threshold()` returned a fixed `ABS_THRESHOLD = 1e-4` until it held
+  `MIN_HISTORY = 32` windows. A real idle floor sits **above** that constant, so the first window of
+  pure noise passed. Measured: IC-9700 idle **4.1e-4**, four times the fallback. And that station
+  **passes `scripts/onair-rx-level-check.sh`**, which bounds the floor only from above (against the
+  clamp *ceiling*, 1.07e-3) — so `1e-4 … 1.07e-3` was covered by neither, and it is exactly the band
+  a correctly configured station occupies.
+- **Design decision (+ rationale).** The threshold is now derived from whatever history exists,
+  including a single window, and `passes` records the window **before** computing the threshold so
+  the first one is judged against a floor derived from itself.
+  - **What made the fallback look necessary, and why it was not.** The buffer-is-the-frame fixtures
+    have signal in window 1, so a self-derived threshold appears certain to gate them out. Measured,
+    the two regimes separate in *opposite* directions:
+
+    | first window is | `floor × 3` | after clamp | verdict |
+    |---|---|---|---|
+    | real idle noise, 4e-4 | 1.2e-3 | 1.2e-3 | **rejected** (correct) |
+    | fixture signal, **0.36** | 1.08 | `MAX_THRESHOLD` 3.2e-3 | **passes** (100× headroom) |
+
+  - `MAX_THRESHOLD` is what protects the fixtures. Note its own comment claimed loopback levels of
+    "1e-3 … 5e-3"; `route_clean` actually delivers ≈ **0.36** mean-square, so the clamp had two
+    orders of magnitude more headroom than it advertised. **Measuring the fixture regime is what
+    unblocked this** — the design was rejected on an assumed level in the previous session.
+- **Implementation:** `crates/openpulse-modem/src/engine.rs` — `EnergyGate::threshold` /
+  `EnergyGate::passes`; `MIN_HISTORY` removed.
+- **Measurements (actually run)** on `ic9700-frame-bpsk250-rs-whitened.wav`, composing with #1038:
+
+  | | settles | condemnations | where |
+  |---|---|---|---|
+  | before both fixes | 78 | 77 | all on noise at sample 96 |
+  | #1038 livelock fix only | 8 | 7 | walks from noise to the frame |
+  | **+ this fix** | **2** | **1** | **both at the frame** (82144, 82304); decodes in 0.72 s |
+
+- **Tests:** `energy_gate_rejects_a_real_idle_floor_from_the_very_first_window` (the #1021 regime,
+  at the measured 4.1e-4 floor, asserting the measured 1.97e-3 burst still passes) and
+  `energy_gate_passes_a_fixture_whose_first_window_is_signal` (the counterweight, at the measured
+  0.36). `energy_gate_uses_absolute_floor_until_history_fills` renamed to
+  `energy_gate_never_falls_below_the_absolute_floor` — its old name described the removed behaviour.
+- **Test results (run):** gate unit tests **4/4**; `capture_replay_corpus` **8/8**.
+- **Sabotage verification:** restoring the exact pre-fix cold-start fallback
+  (`if self.history.len() < 32 { return ABS_THRESHOLD }`) fails
+  `energy_gate_rejects_a_real_idle_floor_from_the_very_first_window` while the fixture counterweight
+  stays green — i.e. the sabotage reproduces the blind window and nothing else.
+- **Docs:** `scripts/onair-rx-level-check.sh` now records that its ceiling check never covered this
+  band, that the gap was a decode gate, and that it is closed in code — so the script's remaining
+  check is necessary and sufficient rather than silently partial.
