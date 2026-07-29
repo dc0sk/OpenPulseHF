@@ -8866,3 +8866,70 @@ The last mode still failing on the dual-card rig after the AGC misclassification
   is the highest-value slot in the corpus and it is empty; only a frame capture can assert an
   end-to-end decode against real audio. `scripts/onair-record-capture.sh` exists to fill it on the
   next on-air session.
+
+## Receive-side preconditions sized from the container, not the frame (2026-07-29)
+
+- **Requirement:** the 2026-07-29 defect-archetype scan
+  (`docs/dev/reviews/archetype-scan-2026-07-29.md`) hunted the repo by defect *shape* rather than by
+  symptom. Its dominant result was not any single bug but a cluster: **four** independent places
+  where a receive-side completeness or recovery precondition is sized from the *container* — a fixed
+  burst cap, a FEC slice reserve, a capture window — rather than from the frame that actually
+  arrived. Three of the four sit on `hpx_hf` SL2/SL3 (BPSK31/BPSK63), the entry rungs a session must
+  confirm before it can climb, so the cluster sat directly on the on-air critical path.
+- **Design decision:** fix the *shape*, in one change, using the repair pattern the repo had already
+  proven for two of the five affected consumers (`FecCodec::decode_prefix`) — rather than four
+  unrelated patches. Where a length genuinely could not be derived, name the decision in a function
+  so it has one home and a gate can be coupled to it (`frame_arrival_samples`).
+- **Implementation** (`crates/openpulse-modem/src/engine.rs`):
+  - `burst_cap_samples(mode)` replaces the flat `BURST_MAX_SAMPLES` (240 000 = 30 s at 8 kHz). The
+    cap is now derived from the mode's own `frame_geometry`, scaled by the worst FEC expansion, and
+    clamped between `BURST_MIN_CAP_SAMPLES` and `BURST_MAX_CAP_SAMPLES` so it remains a genuine
+    runaway guard. **Measured**: BPSK31+Rs transmits 532 480 samples (66.6 s) and BPSK63+Rs 266 240
+    (33.3 s) — both past the old cap, so the accumulator force-flushed mid-frame into two
+    preamble-less halves on *every* normal streaming capture.
+  - `decode_ldpc_llrs_prefix` for the scanning receive: stop at the first failed codeword instead of
+    aborting the frame. The scanning slice is the FEC reserve, so a real capture (which always
+    outlasts the frame) leaves whole codewords of trailing noise past the last real one. The
+    single-shot `receive_with_ldpc*` and the HARQ combiner keep strict `decode_ldpc_llrs` — they know
+    the frame extent.
+  - `rs_interleaved_decode_prefix`: deinterleave each candidate block-count prefix *at its own
+    length*. `Interleaver::deinterleave` derives its permutation from `data.len()`, so a
+    window-length buffer was unscrambled with a different permutation than the transmitter used;
+    `FecCodec::decode_prefix` cannot rescue that, because trimming after the wrong permutation has
+    already run recovers nothing.
+  - `frame_arrival_samples(raw, fec)` — deliberately **not** widened by `fec`, which is the whole
+    point of it being a named function. Arrival ("has the frame finished buffering") and slicing
+    ("how much window must an attempt cover") are different questions; conflating them demanded
+    149.2 s of post-onset audio for BPSK31, more than any configured harness listens for, which
+    disabled the #1021 settle recovery outright on the ladder's entry rung.
+- **Tests — all written failing-first and confirmed RED before the fix, then sabotage-verified
+  against the committed state:**
+  - `tests/burst_cap_frame_length.rs` (new, 4 tests). Asserts the cap against a **measured**
+    transmission rather than a restated constant, and drives the production `accumulate_capture`
+    streaming entry in 800-sample daemon-sized ticks — `receive()` and `ChannelSimHarness` hand the
+    receiver a whole buffer and cannot exercise the accumulator at all.
+  - `tests/fec_scan_long_capture.rs` — 4 new cases: `RsInterleaved` long **and tight** (the tight one
+    is the tell: it failed too, which is what proves the defect is the window-derived permutation and
+    not the capture length), plus `Ldpc` and `LdpcHighRate`. The suite previously covered only
+    `Rs`/`RsStrong` — the two arms that had already been fixed.
+  - `tests/coded_noise_settle_recovery.rs` — new `the_settle_recovery_threshold_is_reachable_for_the_slow_rungs`,
+    coupled to `frame_arrival_samples` (not to the geometry it happens to be derived from today) so
+    re-sizing arrival back to the reserve fails it. Also corrects a doc constant that a same-week
+    commit had already made stale (scan finding 16).
+- **Test results (actually run, 2026-07-29):**
+  - Failing-first: `fec_scan_long_capture` 4 passed / **4 failed**; `burst_cap_frame_length` 2 passed
+    / **2 failed** (`BPSK31+Rs transmits 532480 samples (66.6 s) but the burst cap is 240000 (30.0 s)`;
+    the streaming path flushed mid-frame at exactly 240 000).
+  - After the fix: `fec_scan_long_capture` **8/8**, `burst_cap_frame_length` **4/4**,
+    `coded_noise_settle_recovery` **4/4**.
+  - Sabotage verification (each defect reintroduced against the committed fix): arrival→reserve fails
+    1/4 in `coded_noise_settle_recovery`; LDPC-strict + straight-deinterleave fails **4/4** of the new
+    cases in `fec_scan_long_capture` while the 4 pre-existing `Rs`/`RsStrong` cases stay green;
+    flat burst cap fails 2/4 in `burst_cap_frame_length`. Restored: all green.
+- **Why the suite could not have caught any of it:** every test that reaches `accumulate_capture`
+  uses a fast mode (OFDM52-16QAM, QPSK500, BPSK250) whose frames are far under 30 s, so the burst cap
+  cannot fire for them; the long-capture gate covered only the two FEC arms already fixed; the
+  `RsInterleaved` gate used `route()`, the buffer-is-the-frame fixture that `route_embedded` exists
+  to close; and the settle-recovery gate pins BPSK250 exclusively — the one mode where the old
+  precondition was satisfiable. In each case the gate's own fixture sits on the side of the boundary
+  where the defect cannot fire. That is the archetype, and it is worth more than the four fixes.
