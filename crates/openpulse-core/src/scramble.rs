@@ -86,6 +86,55 @@ pub fn descramble_llrs(llrs: &mut [f32]) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::fec::FecCodec;
+    use crate::frame::Frame;
+
+    /// The wire's own bit order: **LSB-first** within each byte.
+    ///
+    /// This is not a stylistic choice — it is what `bytes_to_bits` does in every modulator, and what
+    /// [`descramble_llrs`] documents for the soft path. Measuring transition density in the other
+    /// order silently reorders every run that crosses a byte boundary, so a stream that is a dead
+    /// carrier on the air can read as healthy here. That is precisely how the previous version of
+    /// the gate below was blind.
+    fn wire_bits(bytes: &[u8]) -> Vec<u8> {
+        bytes
+            .iter()
+            .flat_map(|b| (0..8).map(move |i| (b >> i) & 1))
+            .collect()
+    }
+
+    /// The longest run of **zero** bits — the differential-BPSK dead-carrier condition.
+    ///
+    /// `nrzi_encode` flips the carrier phase on a `1` and holds it on a `0`, so only a run of zeros
+    /// starves timing recovery. A run of ones is the opposite: a phase reversal every symbol, the
+    /// densest transition pattern there is. Counting runs of *identical* bits therefore measures
+    /// the wrong quantity in both directions — it flags the healthy case and its bound on the
+    /// harmful one is incidental.
+    fn longest_zero_run(bits: &[u8]) -> usize {
+        let mut longest = 0usize;
+        let mut run = 0usize;
+        for &b in bits {
+            run = if b == 0 { run + 1 } else { 0 };
+            longest = longest.max(run);
+        }
+        longest
+    }
+
+    /// Pack a bit sequence into bytes in the wire's LSB-first order. Inverse of [`wire_bits`].
+    fn pack_wire_bits(bits: &[u8]) -> Vec<u8> {
+        bits.chunks(8)
+            .map(|c| {
+                c.iter()
+                    .enumerate()
+                    .fold(0u8, |acc, (i, &b)| acc | ((b & 1) << i))
+            })
+            .collect()
+    }
+
+    fn ones_ratio(bytes: &[u8]) -> f32 {
+        let ones: u32 = bytes.iter().map(|b| b.count_ones()).sum();
+        ones as f32 / (bytes.len() * 8) as f32
+    }
 
     /// Self-inverse: scrambling twice returns the original. Without this the receive path would
     /// need a separate descrambler that could drift out of step with the transmitter.
@@ -105,34 +154,95 @@ mod tests {
         }
     }
 
-    /// THE POINT: an all-zero block — exactly what RS padding produces — must come out with a
-    /// balanced mix of ones and zeros, because that is what puts transitions on the air.
+    /// The longest dead carrier tolerated on the whitened wire, in bits.
+    ///
+    /// The keystream is a maximal-length 9-bit LFSR, whose longest run of zeros is `n - 1 = 8` per
+    /// period by construction, so the real margin is 8. Set at 12 to leave headroom for a seed or
+    /// tap change without flagging, while staying far below the 17+ runs a genuinely weakened
+    /// keystream produces.
+    const MAX_DEAD_BITS: usize = 12;
+
+    /// THE GATE: the real on-air wire for the frame that failed in #1021 must carry no long run of
+    /// zero bits.
+    ///
+    /// **This test was rewritten on 2026-07-30 (archetype scan 2026-07-29, finding 17).** The
+    /// previous version stood behind the whole #1021 fix while measuring three things about a
+    /// regime the wire does not have: it unpacked MSB-first where the wire is LSB-first, it counted
+    /// runs of *identical* bits where only *zero* runs are a dead carrier, and it whitened a bare
+    /// `[0u8; 195]` at keystream offset 0 where the real padding begins at offset 28. Verified
+    /// blind: a stream with repeated 17-bit zero runs — a real dead carrier — passed both of its
+    /// assertions. The property did happen to hold in the real regime, so this was a blind spot
+    /// rather than a live regression, but the defect it exists to prevent could have recurred
+    /// unseen.
+    ///
+    /// It now measures the actual bytes that go on the air, which removes the offset question by
+    /// construction rather than approximating it.
     #[test]
-    fn an_all_zero_block_becomes_transition_rich() {
-        // 195 zero bytes is the real padding measured on air for a 14-byte payload.
-        let out = scrambled(&[0u8; 195]);
-        let ones: u32 = out.iter().map(|b| b.count_ones()).sum();
-        let total = (out.len() * 8) as u32;
-        let ratio = ones as f32 / total as f32;
+    fn the_real_padded_wire_carries_no_dead_carrier_run() {
+        // The #1021 frame: a 14-byte payload, framed, through the standard RS codec. `FecCodec`
+        // prefixes 4 length bytes and pads with ZEROS to fill the 223-byte data block, so the
+        // padding starts at offset 4 + 10 (frame header) + 14 = 28 — the real keystream offset.
+        let frame = Frame::new(1, vec![0xA5u8; 14]).expect("frame");
+        let coded = FecCodec::new().encode(&frame.encode());
+
+        // CONTROL: unwhitened, this wire IS the defect — one uninterrupted run of zero bits where
+        // the padding sits. If this ever stops holding, the fixture no longer reproduces #1021 and
+        // the assertion below proves nothing.
+        let raw_run = longest_zero_run(&wire_bits(&coded));
+        assert!(
+            raw_run > 1000,
+            "the fixture no longer reproduces #1021: the unwhitened wire's longest zero run is \
+             only {raw_run} bits. Whitening cannot be shown to fix a defect the fixture does not \
+             contain."
+        );
+
+        let whitened = scrambled(&coded);
+        let run = longest_zero_run(&wire_bits(&whitened));
+        assert!(
+            run <= MAX_DEAD_BITS,
+            "the whitened wire still contains a {run}-bit run of zeros — in differential BPSK that \
+             is {run} symbols of unmodulated carrier, which is the #1021 failure (measured 6.2 s \
+             on air). Unwhitened the same wire runs {raw_run} bits."
+        );
+
+        let ratio = ones_ratio(&whitened);
         assert!(
             (0.4..=0.6).contains(&ratio),
-            "whitened zero padding is {ratio:.3} ones — it must be near 0.5 or the carrier is \
-             still effectively unmodulated"
+            "whitened wire is {ratio:.3} ones — it must be near 0.5"
         );
-        // No long run of identical BITS, which is what actually starves timing recovery.
-        let bits: Vec<u8> = out
-            .iter()
-            .flat_map(|b| (0..8).rev().map(move |i| (b >> i) & 1))
-            .collect();
-        let mut longest = 1usize;
-        let mut run = 1usize;
-        for w in bits.windows(2) {
-            run = if w[0] == w[1] { run + 1 } else { 1 };
-            longest = longest.max(run);
-        }
+    }
+
+    /// Anti-vacuity: the measurement must be ABLE to fail, and specifically on the case that
+    /// slipped past the old one.
+    ///
+    /// A stream can be perfectly balanced in ones and zeros and still be a dead carrier — balance
+    /// is an average, and a dead carrier is a run. This is the exact pattern that passed the
+    /// previous gate: 17 zeros then 17 ones, repeating. It is 50 % ones, and in MSB-first order its
+    /// longest identical run is 16, one below the old bound. Read the way the wire actually reads
+    /// it, it is 17 symbols of unmodulated carrier every 34 symbols.
+    #[test]
+    fn the_dead_carrier_measurement_catches_a_balanced_but_dead_stream() {
+        let bits: Vec<u8> = (0..1224)
+            .map(|i| u8::from((i / 17) % 2 == 1))
+            .collect::<Vec<_>>();
+        let bytes = pack_wire_bits(&bits);
+
+        let ratio = ones_ratio(&bytes);
         assert!(
-            longest <= 16,
-            "whitened zero padding still contains a {longest}-bit run with no transition"
+            (0.4..=0.6).contains(&ratio),
+            "fixture is not balanced ({ratio:.3}) — it would be caught by the balance check \
+             instead, which is not what this test is demonstrating"
+        );
+
+        let run = longest_zero_run(&wire_bits(&bytes));
+        assert_eq!(
+            run, 17,
+            "the dead-carrier measurement failed to see a 17-bit zero run"
+        );
+        assert!(
+            run > MAX_DEAD_BITS,
+            "a balanced stream with 17-bit zero runs must exceed the tolerance, or the gate above \
+             cannot fail for the reason it exists"
         );
     }
 
