@@ -1079,7 +1079,10 @@ mod tests {
             checked += 1;
         }
 
-        assert!(checked > 0, "no frames stepped — the fixture proves nothing");
+        assert!(
+            checked > 0,
+            "no frames stepped — the fixture proves nothing"
+        );
         assert!(
             diverged > 0,
             "every rung this run visited transmits the requested FecMode::Rs, so the requested and \
@@ -1534,12 +1537,21 @@ mod goodput_gate {
         );
     }
 
+    // Baselines re-measured 2026-07-30 (seeded, so deterministic — two runs agreed to 0.1 bps).
+    // They are NOT affected by the #1029 accounting fix: `LinkResult::effective_bps` is
+    // `bytes_delivered * 8 / total_air_s`, measured from real airtime, and never touches
+    // `fec_code_rate`. Confirmed both ways — statically, and by measuring all three cases under the
+    // old and new accounting and getting bit-identical numbers. `net_bps` (which #1029 corrects)
+    // feeds the GUI and the panel display, not this gate.
+    //
+    // Two of the annotations they replaced had drifted far enough to matter, in opposite directions.
+
     #[test]
     fn psk_ladder_goodput_floor_awgn() {
         let g = bps("hpx_hf", ChannelSpec::Awgn(20.0));
         assert!(
             g >= 250.0,
-            "hpx_hf AWGN 20 dB goodput {g:.0} bps below the floor (baseline ~397)"
+            "hpx_hf AWGN 20 dB goodput {g:.0} bps below the floor (baseline 331, floor 75%)"
         );
     }
 
@@ -1548,16 +1560,21 @@ mod goodput_gate {
         let g = bps("hpx_ofdm_hf", ChannelSpec::Awgn(20.0));
         assert!(
             g >= 600.0,
-            "hpx_ofdm_hf AWGN 20 dB goodput {g:.0} bps below the floor (baseline ~919)"
+            "hpx_ofdm_hf AWGN 20 dB goodput {g:.0} bps below the floor (baseline 893, floor 67%)"
         );
     }
 
+    /// The floor here was 280 against a stale `~414` annotation. The case now measures **555**, so
+    /// that floor had quietly become 50 % of baseline — it would have passed a 40 % throughput
+    /// regression, on the dispersive fade this ladder exists to survive. Re-derived to the module's
+    /// own stated rule (~65 %), which is what the other two already sit at.
     #[test]
     fn ofdm_ladder_goodput_floor_dispersive_fade() {
         let g = bps("hpx_ofdm_hf", ChannelSpec::WattersonModerateF1(25.0));
         assert!(
-            g >= 280.0,
-            "hpx_ofdm_hf moderate_f1 25 dB goodput {g:.0} bps below the floor (baseline ~414)"
+            g >= 360.0,
+            "hpx_ofdm_hf moderate_f1 25 dB goodput {g:.0} bps below the floor (baseline 555, \
+             floor 65%)"
         );
     }
 }
