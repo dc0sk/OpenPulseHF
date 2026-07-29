@@ -13,35 +13,69 @@ use openpulse_dsp::pll::CarrierPll;
 use openpulse_dsp::preamble::{PreambleDetector, PreambleType};
 use std::f32::consts::PI;
 
+/// Where the guard band ends, i.e. the sample the preamble actually starts on.
+const GUARD: usize = 16;
+
+/// Outcome of a lock sweep, split by whether the lock landed on the right sample.
+struct LockStats {
+    /// Fraction of frames where correlation cleared the threshold — a lock was *declared*.
+    detected: f32,
+    /// Fraction where the lock also landed at or **before** the true frame start.
+    ///
+    /// The asymmetry is physical, and it is the rule CLAUDE.md states as *"sync must lock ahead of
+    /// the correlation peak, never on it"*: an early start begins inside the symbol's own cyclic
+    /// prefix, a circular shift the receiver removes, while a late start pulls the next symbol into
+    /// the window and cannot be undone.
+    correct: f32,
+}
+
+/// Run `frames` frames through `channel` and report both lock rates.
+///
+/// **Why `offset` is checked (archetype scan 2026-07-29, finding 13).** This helper used to read
+/// only `res.rho` and discard `res.offset`, so any frame whose correlation peaked on the **delayed
+/// multipath ray** was counted as a lock. That is not a hypothetical: measured here, `good_f1` locks
+/// 11/20 at the true offset 16 and **7/20 at offset 20**, and `good_f2` 12/20 at 16 and **7-8/20 at
+/// offset 24** — in each case exactly the profile's delay (0.5 ms = 4 samples, 1 ms = 8 samples).
+/// So 35-40 % of the frames this test reported as "locked" were locked onto the wrong ray, which is
+/// the #688 defect reproduced inside a test whose stated purpose is frame-lock reliability.
+///
+/// Both rates are returned rather than the correct one replacing the old one: the declared-lock rate
+/// is a real property worth keeping, and reporting them separately is what makes the gap visible.
 fn lock_rate_with_channel(
     channel: &mut dyn ChannelModel,
     preamble: &[f32],
     frames: usize,
     corr_threshold: f32,
-) -> f32 {
-    let guard = 16usize;
-    let mut tx_frame = vec![0.0_f32; guard];
+) -> LockStats {
+    let mut tx_frame = vec![0.0_f32; GUARD];
     tx_frame.extend_from_slice(preamble);
-    tx_frame.extend(std::iter::repeat_n(0.0_f32, guard));
+    tx_frame.extend(std::iter::repeat_n(0.0_f32, GUARD));
 
     // Carrier-phase-invariant matched filter (I/Q via the template's Hilbert companion).
     // A real-only correlation collapses to ~0 when the channel rotates the carrier ~90°,
     // which a physical fading channel does; this is the detector the dsp crate documents
     // for passband / rotated-symbol acquisition.
     let mf = IqMatchedFilter::new(preamble.to_vec());
-    let search_bound = guard + 12;
-    let mut lock_count = 0usize;
+    let search_bound = GUARD + 12;
+    let mut detected = 0usize;
+    let mut correct = 0usize;
 
     for _ in 0..frames {
         let distorted = channel.apply(&tx_frame);
         if let Some(res) = mf.search(&distorted, search_bound) {
             if res.rho >= corr_threshold {
-                lock_count += 1;
+                detected += 1;
+                if res.offset <= GUARD {
+                    correct += 1;
+                }
             }
         }
     }
 
-    lock_count as f32 / frames as f32
+    LockStats {
+        detected: detected as f32 / frames as f32,
+        correct: correct as f32 / frames as f32,
+    }
 }
 
 fn wrap_phase(mut x: f32) -> f32 {
@@ -93,16 +127,34 @@ fn test_frame_lock_reliability_awgn_10_to_25_db() {
         })
         .expect("awgn channel should construct");
 
-        let rate = lock_rate_with_channel(&mut channel, &preamble, 100, 0.75);
+        let s = lock_rate_with_channel(&mut channel, &preamble, 100, 0.75);
         assert!(
-            rate >= 0.99,
+            s.detected >= 0.99,
             "AWGN {:.1} dB lock rate {:.2}% must be >= 99%",
             snr_db,
-            rate * 100.0
+            s.detected * 100.0
+        );
+        // No multipath, so there is no delayed ray to lock onto and every declared lock must be on
+        // the true sample. Measured 100/100 at offset 16 across all four SNRs — this costs nothing
+        // here, which is what makes the Watterson shortfall below a channel effect rather than a
+        // property of the detector.
+        assert!(
+            (s.correct - s.detected).abs() < 1e-6,
+            "AWGN {:.1} dB: {:.2}% of frames locked but only {:.2}% on the correct sample — with no \
+             multipath these must be equal",
+            snr_db,
+            s.detected * 100.0,
+            s.correct * 100.0
         );
     }
 }
 
+/// Frame lock through Watterson F1/F2, measured two ways.
+///
+/// The `>= 0.85` declared-lock bar is unchanged. The `correct` bar is **new** and its number is
+/// lower because it is measuring something the old assertion could not see: of the ~90 % of frames
+/// that declare a lock, only ~55-60 % land on the true frame start. That gap is the point of the
+/// test, not a regression — see [`lock_rate_with_channel`].
 #[test]
 fn test_frame_lock_watterson_f1_f2_matrix() {
     let preamble = PreambleType::Pn63.sequence();
@@ -118,16 +170,51 @@ fn test_frame_lock_watterson_f1_f2_matrix() {
             let mut channel =
                 WattersonChannel::new(cfg).expect("watterson channel should construct");
 
-            let rate = lock_rate_with_channel(&mut channel, &preamble, 20, 0.70);
+            let s = lock_rate_with_channel(&mut channel, &preamble, 20, 0.70);
             assert!(
-                rate >= 0.85,
+                s.detected >= 0.85,
                 "Watterson {} {:.1} dB lock rate {:.2}% must be >= 85%",
                 profile_name,
                 snr_db,
-                rate * 100.0
+                s.detected * 100.0
+            );
+            // Measured 0.55 (good_f1, 11/20) and 0.60 (good_f2, 12/20); floored at 0.50 to leave
+            // room for a channel-realization change without flagging. This is the honest
+            // frame-lock number and it must not silently drop further.
+            assert!(
+                s.correct >= 0.50,
+                "Watterson {} {:.1} dB: {:.0}% of frames declared a lock but only {:.0}% landed at \
+                 or before the true frame start — the rest locked onto the delayed ray, which pulls \
+                 the next symbol into the window (the #688 failure).",
+                profile_name,
+                snr_db,
+                s.detected * 100.0,
+                s.correct * 100.0
             );
         }
     }
+}
+
+/// Anti-vacuity: the offset check must be ABLE to fail, and this is what it is guarding against.
+///
+/// A late lock is the damaging one, so the gate is `offset <= GUARD`. This pins that a lock on the
+/// **delayed ray** is genuinely rejected — without it, `s.correct` could quietly equal `s.detected`
+/// through a bug in the comparison and every assertion above would still pass.
+#[test]
+fn a_lock_on_the_delayed_ray_is_not_counted_as_a_correct_lock() {
+    let preamble = PreambleType::Pn63.sequence();
+    let mut cfg = WattersonConfig::good_f1(Some(501));
+    cfg.snr_db = 20.0;
+    let mut channel = WattersonChannel::new(cfg).expect("watterson channel should construct");
+    let s = lock_rate_with_channel(&mut channel, &preamble, 20, 0.70);
+    assert!(
+        s.correct < s.detected,
+        "good_f1 must produce SOME mislocated locks (measured 7/20 at offset 20, the profile's \
+         0.5 ms delay); detected {:.2} == correct {:.2} means the offset check is inert and the \
+         gates above prove nothing",
+        s.detected,
+        s.correct
+    );
 }
 
 #[test]
