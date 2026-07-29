@@ -1,0 +1,61 @@
+[2m2026-07-29T07:38:03.074963Z[0m [32m INFO[0m registering plugin: BPSK
+[2m2026-07-29T07:38:03.075008Z[0m [32m INFO[0m plugin registered successfully
+[2m2026-07-29T07:38:03.075038Z[0m [32m INFO[0m registering plugin: FSK4
+[2m2026-07-29T07:38:03.075044Z[0m [32m INFO[0m plugin registered successfully
+[2m2026-07-29T07:38:03.075057Z[0m [32m INFO[0m registering plugin: MFSK16
+[2m2026-07-29T07:38:03.075062Z[0m [32m INFO[0m plugin registered successfully
+[2m2026-07-29T07:38:03.075078Z[0m [32m INFO[0m registering plugin: OFDM
+[2m2026-07-29T07:38:03.075083Z[0m [32m INFO[0m plugin registered successfully
+[2m2026-07-29T07:38:03.075098Z[0m [32m INFO[0m registering plugin: 8PSK
+[2m2026-07-29T07:38:03.075104Z[0m [32m INFO[0m plugin registered successfully
+[2m2026-07-29T07:38:03.075110Z[0m [32m INFO[0m registering plugin: 64QAM
+[2m2026-07-29T07:38:03.075114Z[0m [32m INFO[0m plugin registered successfully
+[2m2026-07-29T07:38:03.075129Z[0m [32m INFO[0m registering plugin: QPSK
+[2m2026-07-29T07:38:03.075134Z[0m [32m INFO[0m plugin registered successfully
+[2m2026-07-29T07:38:03.075150Z[0m [32m INFO[0m registering plugin: SC-FDMA
+[2m2026-07-29T07:38:03.075154Z[0m [32m INFO[0m plugin registered successfully
+[2m2026-07-29T07:38:03.075163Z[0m [32m INFO[0m registering plugin: PILOT
+[2m2026-07-29T07:38:03.075168Z[0m [32m INFO[0m plugin registered successfully
+[2m2026-07-29T07:38:08.307346Z[0m [33m WARN[0m bandplan awareness enabled but rig frequency read failed from 127.0.0.1:4532: rigctld I/O error: Resource temporarily unavailable (os error 11); skipping operating-mode guardrail check
+ALSA lib pcm_asym.c:105:(_snd_pcm_asym_open) capture slave is not defined
+ALSA lib pcm_asym.c:105:(_snd_pcm_asym_open) capture slave is not defined
+Cannot connect to server socket err = No such file or directory
+Cannot connect to server request channel
+jack server is not running or cannot be started
+JackShmReadWritePtr::~JackShmReadWritePtr - Init not done for -1, skipping unlock
+JackShmReadWritePtr::~JackShmReadWritePtr - Init not done for -1, skipping unlock
+Cannot connect to server socket err = No such file or directory
+Cannot connect to server request channel
+jack server is not running or cannot be started
+JackShmReadWritePtr::~JackShmReadWritePtr - Init not done for -1, skipping unlock
+JackShmReadWritePtr::~JackShmReadWritePtr - Init not done for -1, skipping unlock
+ALSA lib pcm_oss.c:404:(_snd_pcm_oss_open) Cannot open device /dev/dsp
+ALSA lib pcm_oss.c:404:(_snd_pcm_oss_open) Cannot open device /dev/dsp
+ALSA lib pcm_asym.c:105:(_snd_pcm_asym_open) capture slave is not defined
+ALSA lib pcm_asym.c:105:(_snd_pcm_asym_open) capture slave is not defined
+ALSA lib pcm_dmix.c:1000:(snd_pcm_dmix_open) unable to open slave
+ALSA lib pcm_dmix.c:973:(snd_pcm_dmix_open) The dmix plugin supports only playback stream
+ALSA lib pcm_asym.c:105:(_snd_pcm_asym_open) capture slave is not defined
+ALSA lib pcm_asym.c:105:(_snd_pcm_asym_open) capture slave is not defined
+ALSA lib pcm_dmix.c:1000:(snd_pcm_dmix_open) unable to open slave
+ALSA lib pcm_dmix.c:973:(snd_pcm_dmix_open) The dmix plugin supports only playback stream
+ALSA lib pcm_dmix.c:973:(snd_pcm_dmix_open) The dmix plugin supports only playback stream
+ALSA lib pcm_dmix.c:973:(snd_pcm_dmix_open) The dmix plugin supports only playback stream
+ALSA lib pcm_dsnoop.c:541:(snd_pcm_dsnoop_open) The dsnoop plugin supports only capture stream
+ALSA lib pcm_dsnoop.c:541:(snd_pcm_dsnoop_open) The dsnoop plugin supports only capture stream
+ALSA lib pcm_asym.c:105:(_snd_pcm_asym_open) capture slave is not defined
+ALSA lib pcm_asym.c:105:(_snd_pcm_asym_open) capture slave is not defined
+Cannot connect to server socket err = No such file or directory
+Cannot connect to server request channel
+jack server is not running or cannot be started
+JackShmReadWritePtr::~JackShmReadWritePtr - Init not done for -1, skipping unlock
+JackShmReadWritePtr::~JackShmReadWritePtr - Init not done for -1, skipping unlock
+Cannot connect to server socket err = No such file or directory
+Cannot connect to server request channel
+jack server is not running or cannot be started
+JackShmReadWritePtr::~JackShmReadWritePtr - Init not done for -1, skipping unlock
+JackShmReadWritePtr::~JackShmReadWritePtr - Init not done for -1, skipping unlock
+ALSA lib pcm_oss.c:404:(_snd_pcm_oss_open) Cannot open device /dev/dsp
+ALSA lib pcm_oss.c:404:(_snd_pcm_oss_open) Cannot open device /dev/dsp
+Transmitted 14 bytes in BPSK250 mode (fec=Rs).
+PTT after TX: 0

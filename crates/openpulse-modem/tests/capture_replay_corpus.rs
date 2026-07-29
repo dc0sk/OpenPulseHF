@@ -197,3 +197,59 @@ fn the_recorded_hot_floor_degrades_acquisition_as_it_did_on_air() {
         hot.mean_sq() / GATE_CEILING_MEAN_SQ
     );
 }
+
+// ── The open #1021 defect, captured off the air ──────────────────────────────
+
+/// Replay of a REAL `BPSK250|rs` frame that the modem cannot decode (issue #1021).
+///
+/// Recorded 2026-07-29 with `scripts/onair-dual-capture.sh`: the FT-991A transmitted the payload
+/// below at 5 W on 144.600 MHz while the IC-9700's USB audio AND an independent SDR both recorded.
+///
+/// **What the pair of captures established, which no single capture could.** The SDR shows a
+/// correctly-formed **8.4 s** burst (BPSK250+Rs at 250 baud predicts ~8.3 s) at 10.6 dB above the
+/// noise floor — so the frame really was on the air. The rig audio contains the same burst at 8.3 dB
+/// above its floor — so the signal really did reach the receiver. Yet replaying that audio fails
+/// with `RS correction failed at block 0: TooManyErrors`, the exact error seen on air. The defect is
+/// therefore **receive-side**, and it is now reproducible with no radio, no second operator and no
+/// on-air window.
+///
+/// Two earlier hypotheses were refuted by measurement before this capture existed — rig frequency
+/// drift (the carrier measured +1.2 Hz) and capture level (fixed, and the failure persisted). This
+/// artifact is what makes the next attempt cheap instead of speculative.
+///
+/// **IGNORED ON PURPOSE.** It documents an open defect, so it must not redden the workspace gate.
+/// Removing `#[ignore]` — and having it pass — is the definition of done for #1021:
+///
+/// ```text
+/// cargo test -p openpulse-modem --no-default-features --test capture_replay_corpus -- --ignored
+/// ```
+#[test]
+#[ignore = "open defect #1021: this real on-air frame does not decode yet"]
+fn the_real_on_air_frame_decodes() {
+    let c = corpus("ic9700-frame-bpsk250-rs.wav");
+    // Guard the artifact itself: a capture that lost its burst would turn this into a test of
+    // silence, and it would then "fail" for a reason unrelated to #1021.
+    assert!(
+        c.mean_sq() > 1e-4,
+        "the captured frame audio has gone silent (mean_sq {:.6}); the artifact is corrupt",
+        c.mean_sq()
+    );
+
+    let mut h = harness();
+    h.feed_capture(&c);
+    let got = h
+        .rx_engine
+        .receive_with_fec_mode_timeout(
+            "BPSK250",
+            openpulse_core::fec::FecMode::Rs,
+            None,
+            Duration::from_millis(40_000),
+        )
+        .expect("the real on-air BPSK250|rs frame must decode (issue #1021)");
+
+    assert_eq!(
+        String::from_utf8_lossy(&got),
+        "DUALCAP TEST 1",
+        "decoded payload must match what was actually transmitted"
+    );
+}
