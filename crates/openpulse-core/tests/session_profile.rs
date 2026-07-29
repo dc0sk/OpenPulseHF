@@ -110,9 +110,32 @@ fn hpx_pilot_fast_rrc_combines_throughput_and_narrowband() {
         fast_rrc.mode_for(SpeedLevel::Sl5),
         Some("PILOT-32APSK1000-RRC")
     );
-    // Same per-symbol floors as the base pilot ladder.
+    // Floors are inherited from the base pilot ladder — EXCEPT SL2, which measurement showed the
+    // inheritance was wrong for.
+    //
+    // `hpx_pilot`'s floors were derived on 500-baud, non-RRC modes. Blanket inheritance assumed that
+    // carries to a 1000-baud RRC-shaped waveform, and for SL2 it does not: measured on AWGN, 12
+    // trials per point, `PILOT-QPSK1000-RRC` vs the plain 1000-baud sibling at the same SNR —
+    // 6 dB **8/12** vs 11/12, 7 dB 11/12 vs 11/12, 8 dB 12/12 vs 12/12. A floor is the SNR below
+    // which the adapter steps down immediately, so declaring 6 dB advertised a rung that decodes two
+    // thirds of the time there. SL2 is pinned to the corrected 8 dB; SL3–SL5 genuinely do inherit
+    // (12/12 at their own floors), and are still checked against the base so a future drift shows up.
     let base = SessionProfile::hpx_pilot();
-    for sl in fast_rrc.defined_levels() {
+    assert_eq!(
+        fast_rrc.snr_floor_for_level(SpeedLevel::Sl2),
+        Some(8.0),
+        "SL2 must keep the measured RRC floor, not the base ladder's optimistic 6 dB"
+    );
+    assert_ne!(
+        fast_rrc.snr_floor_for_level(SpeedLevel::Sl2),
+        base.snr_floor_for_level(SpeedLevel::Sl2),
+        "SL2 is deliberately NOT inherited; if these have converged again the correction was lost"
+    );
+    for sl in fast_rrc
+        .defined_levels()
+        .into_iter()
+        .filter(|&l| l != SpeedLevel::Sl2)
+    {
         assert_eq!(
             fast_rrc.snr_floor_for_level(sl),
             base.snr_floor_for_level(sl),
