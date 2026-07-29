@@ -98,6 +98,51 @@ fn rs_strong_frame_decodes_when_embedded_in_a_long_capture() {
     assert_eq!(got, payload);
 }
 
+/// `RsInterleaved` was left behind when `Rs`/`RsStrong` were fixed (archetype scan 2026-07-29,
+/// finding 3). Its failure is worse than theirs: `Interleaver::deinterleave` builds its permutation
+/// from `data.len()`, so a window-length buffer is unscrambled with a *different* permutation than
+/// the transmitter used and the bytes are scattered — it fails at every non-trivial capture length,
+/// not only long ones. Its only gate used `route()` (buffer-is-the-frame), so it never saw this.
+#[test]
+fn rs_interleaved_frame_decodes_when_embedded_in_a_long_capture() {
+    let payload: Vec<u8> = (0..64u8).collect();
+    let got = round_trip_embedded("QPSK250", FecMode::RsInterleaved, &payload, 40_000, 120_000)
+        .expect("an RsInterleaved frame embedded in a long capture must decode");
+    assert_eq!(got, payload);
+}
+
+/// The tight-capture control for `RsInterleaved`. This one is the tell: `Rs` passes here and always
+/// did, so if this fails too, the defect is the window-derived permutation and not the capture
+/// length.
+#[test]
+fn rs_interleaved_frame_decodes_in_a_tight_capture() {
+    let payload: Vec<u8> = (0..64u8).collect();
+    let got = round_trip_embedded("QPSK250", FecMode::RsInterleaved, &payload, 2_000, 2_000)
+        .expect("a tightly-captured RsInterleaved frame must decode");
+    assert_eq!(got, payload);
+}
+
+/// `Ldpc` decodes every whole codeword in the over-reserved scanning slice and aborts the frame on
+/// the first failure, so trailing noise past the frame kills a decode that had already succeeded
+/// (archetype scan 2026-07-29, finding 2). Its failure surfaces as "LDPC did not converge" — a
+/// channel message for a length bug, which is what makes it expensive to triage on air.
+#[test]
+fn ldpc_frame_decodes_when_embedded_in_a_long_capture() {
+    let payload: Vec<u8> = (0..64u8).collect();
+    let got = round_trip_embedded("QPSK250", FecMode::Ldpc, &payload, 40_000, 120_000)
+        .expect("an Ldpc frame embedded in a long capture must decode");
+    assert_eq!(got, payload);
+}
+
+/// Same for the high-rate LDPC tier, which `hpx_hf` SL12–14 actually run.
+#[test]
+fn ldpc_high_rate_frame_decodes_when_embedded_in_a_long_capture() {
+    let payload: Vec<u8> = (0..64u8).collect();
+    let got = round_trip_embedded("QPSK250", FecMode::LdpcHighRate, &payload, 40_000, 120_000)
+        .expect("an LdpcHighRate frame embedded in a long capture must decode");
+    assert_eq!(got, payload);
+}
+
 /// Anti-vacuity: prove the padding is actually there and large relative to the frame. Without this,
 /// a future edit that quietly shrank the padding would leave the gate green while testing the easy
 /// case again — exactly how the original defect stayed hidden.
