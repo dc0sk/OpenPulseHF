@@ -20,6 +20,15 @@
 # still free to sit above the noise. It also reports whether the threshold would sit on the
 # absolute floor (idle very quiet), where the signal must clear 0.0001 instead.
 #
+# WHAT THIS CHECK DOES NOT COVER, and no longer needs to. It only bounds the idle floor from
+# ABOVE. A floor between ABS_THRESHOLD (1e-4) and that 1.07e-3 ceiling passes here, and used
+# to be a decode gate anyway: EnergyGate returned the fixed 1e-4 until it held 32 windows of
+# history, so any floor above 1e-4 made the FIRST window of pure noise pass, and the receiver
+# settled AFC on noise before the frame arrived. This station measures 4.1e-4 — inside that
+# blind window — and that is what sank #1021 twice. The gate now derives its threshold from
+# the first window it sees, so the blind window is closed in code; this script's ceiling check
+# remains necessary and sufficient.
+#
 # This captures IDLE audio only. Run it with NO transmission anywhere. It keys nothing.
 #
 # Usage:
