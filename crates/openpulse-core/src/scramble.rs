@@ -66,13 +66,18 @@ pub fn scrambled(data: &[u8]) -> Vec<u8> {
 ///
 /// A soft demodulator yields a log-likelihood ratio per **bit**, not bytes, so descrambling cannot
 /// be an XOR. XOR with a 1 flips the bit, and flipping a bit negates its LLR — the magnitude
-/// (confidence) is untouched, only the sign moves. `llrs` is in transmission order, MSB-first
-/// within each byte, matching the demodulators' output convention.
+/// (confidence) is untouched, only the sign moves.
+///
+/// **Bit order is LSB-first within each byte**, matching how the engine packs soft decisions back
+/// into wire bytes (`acc | (bit << i)` for i = 0..8). Getting this backwards flips the wrong bits
+/// and yields `invalid magic` on every frame — and a unit test written to the same wrong convention
+/// will still pass, because it is self-consistent. The test below therefore packs bytes exactly the
+/// way the engine does rather than asserting against an assumed order.
 pub fn descramble_llrs(llrs: &mut [f32]) {
     let ks = keystream(llrs.len().div_ceil(8));
     for (i, l) in llrs.iter_mut().enumerate() {
-        // Bit i of the stream: byte i/8, and the demodulators emit MSB first.
-        if (ks[i / 8] >> (7 - (i % 8))) & 1 == 1 {
+        // Bit i of the stream: byte i/8, LSB-first within the byte (the engine's packing order).
+        if (ks[i / 8] >> (i % 8)) & 1 == 1 {
             *l = -*l;
         }
     }
@@ -137,7 +142,10 @@ mod tests {
         let out = scrambled(&vec![0xFFu8; 195]);
         let ones: u32 = out.iter().map(|b| b.count_ones()).sum();
         let ratio = ones as f32 / (out.len() * 8) as f32;
-        assert!((0.4..=0.6).contains(&ratio), "all-ones whitened to {ratio:.3} ones");
+        assert!(
+            (0.4..=0.6).contains(&ratio),
+            "all-ones whitened to {ratio:.3} ones"
+        );
     }
 
     /// The sequence must not repeat within a frame-sized block in a way that recreates long runs.
@@ -164,9 +172,10 @@ mod tests {
         let data = vec![0u8; 32];
         let wire = scrambled(&data);
         // Ideal soft demod of `wire`: +1 for a 0 bit, -1 for a 1 bit (MSB first).
+        // Pack exactly as the engine unpacks: bit i of each byte is LLR index i (LSB-first).
         let mut llrs: Vec<f32> = wire
             .iter()
-            .flat_map(|b| (0..8).rev().map(move |i| if (b >> i) & 1 == 1 { -1.0 } else { 1.0 }))
+            .flat_map(|b| (0..8).map(move |i| if (b >> i) & 1 == 1 { -1.0 } else { 1.0 }))
             .collect();
         let magnitudes: Vec<f32> = llrs.iter().map(|l| l.abs()).collect();
         descramble_llrs(&mut llrs);
@@ -176,6 +185,9 @@ mod tests {
             "soft descrambling did not recover the original all-zero data"
         );
         let after: Vec<f32> = llrs.iter().map(|l| l.abs()).collect();
-        assert_eq!(magnitudes, after, "descrambling must not change LLR confidence");
+        assert_eq!(
+            magnitudes, after,
+            "descrambling must not change LLR confidence"
+        );
     }
 }

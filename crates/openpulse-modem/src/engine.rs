@@ -2870,7 +2870,9 @@ impl ModemEngine {
             // (which would double the per-attempt cost and can't succeed where the
             // soft pass failed — both share the same acquisition front end).
             if plugin.supports_soft_demod(mode) {
-                let llrs = openpulse_modem_descramble_soft(plugin.demodulate_soft(&samples.samples, &mod_cfg)?);
+                let llrs = openpulse_modem_descramble_soft(
+                    plugin.demodulate_soft(&samples.samples, &mod_cfg)?,
+                );
                 // Absolute RX SNR for rate adaptation: the mode's calibrated symbol-domain estimate
                 // (M2M4 fallback inside `rx_snr_db`). The old mean-|LLR| proxy reads ≈ −2 dB on a
                 // clean path (only a relative confidence indicator) and can't drive the SNR-hint
@@ -2991,7 +2993,9 @@ impl ModemEngine {
                 .ok_or_else(|| ModemError::PluginNotFound(mode.to_string()))?;
             if soft {
                 (
-                    Some(openpulse_modem_descramble_soft(plugin.demodulate_soft(&samples.samples, &mod_cfg)?)),
+                    Some(openpulse_modem_descramble_soft(
+                        plugin.demodulate_soft(&samples.samples, &mod_cfg)?,
+                    )),
                     None,
                 )
             } else {
@@ -3151,7 +3155,8 @@ impl ModemEngine {
             .get(mode)
             .ok_or_else(|| ModemError::PluginNotFound(mode.to_string()))?;
 
-        let llrs = openpulse_modem_descramble_soft(plugin.demodulate_soft(&samples.samples, &mod_cfg)?);
+        let llrs =
+            openpulse_modem_descramble_soft(plugin.demodulate_soft(&samples.samples, &mod_cfg)?);
         // Absolute SNR for the rate decision: the mode's calibrated symbol-domain estimate (M2M4
         // fallback inside `rx_snr_db`); the mean-|LLR| proxy reads ~-2 dB on a clean path and can't
         // drive the ladder.
