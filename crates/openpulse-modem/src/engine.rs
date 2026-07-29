@@ -262,7 +262,6 @@ fn openpulse_modem_descramble_soft(mut llrs: Vec<f32>) -> Vec<f32> {
     llrs
 }
 
-
 const AFC_SETTLE_DEADBAND_HZ: f32 = 2.0;
 
 /// Result of [`ModemEngine::afc_mini_settle`].

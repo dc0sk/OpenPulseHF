@@ -9,6 +9,69 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-07-29 — test: `qam64_tolerates_realistic_sro` re-derived (100→50 ppm) — the 100 ppm bar was measuring the RS padding
+
+- **Requirement/change:** the first fully-complete workspace run (`--no-fail-fast`, 272 suites,
+  2204 passed) left exactly one failure: `sro_confirmation::qam64_tolerates_realistic_sro`
+  (64QAM500 + SoftConcatenated @ 100 ppm).
+- **Diagnosis before any change (2×2, pre-whitening main vs whitened branch × padded-64B vs
+  padding-free-209B payload, 0/25/50/100/200 ppm):** main+padded holds 100 ppm; main+**padding-free
+  fails 100 ppm exactly like the whitened branch** (which fails identically for both payloads);
+  every cell holds 50 ppm; whitened 0 ppm decodes (machinery exonerated). The rate-1/2 conv encoder
+  maps the 145 zero-pad bytes to zeros, so over half the pre-whitening wire was ONE constant
+  constellation point — trivially robust under clock drift. The test comment's "~2.1 % raw BER at
+  100 ppm" was measured on that diluted wire. Verdict: **padding-calibrated expectation**, not a
+  defect — the same class as the `bpsk_snr_tracks_a_fade` bar.
+- **Decision:** bar 100→50 ppm with the 2×2 recorded in the test comment. 50 ppm is the honest
+  measured capability on real content on BOTH sides of whitening, and the dual-card rig this test
+  models was measured at **+0.10 ppm** (USB adapters slave to the host frame clock), so the new bar
+  still carries ~500× hardware margin. Not a get-green relaxation: the 100 ppm capability existed
+  only for frames that were mostly unmodulated carrier, which never decoded over a real radio
+  (#1021).
+- **Tests/results:** `sro_confirmation` 3 passed / 1 ignored. Final complete gate results recorded
+  in the branch report.
+
+## 2026-07-29 — fix: whitening's fade cost — free RS strengthening moved to the canonical FEC seam; two uncoded-path gates re-derived
+
+- **Requirement/change:** the first *complete* workspace run after the entries below found three
+  more latent failures, all masked until then by cargo's fail-fast (each earlier run had aborted at
+  its first failing suite — 93, then 113, then 147 "suites run" were all partial):
+  `hpx_hf_rungs_survive_fade::every_rung_decodes_on_moderate_f1` (SL6 QPSK250-D+Rs 0.08 vs 0.25
+  bar) and both fade/low-SNR tests in `ota_channel_adaptation`.
+- **Mechanism (one cause, three surfaces):** whitening moves bits from the crossfade pulse's
+  robust no-transition class into its vulnerable flip-bit class. Coded rungs near the RS cliff tip
+  over it: QPSK250-D+Rs on moderate_f1 measured 0.25→0.08 at floor+4 (11 dB) and 0.75→0.25 at
+  20 dB (12 frames, gate seeds). RsStrong — free for these ≤191 B frames — recovers it: 0.42 @11,
+  0.67 @20 (matching #923's ~0.65). Uncoded paths pay a small real cost with no code to absorb it:
+  OTA AWGN@2 dB 19/24→14/24; the OTA fade test's `decoded > 0` had passed on exactly ONE frame in
+  24 pre-whitening (0/24 whitened) — uncoded rungs on a fade are the ladder's measured 0.00 (#932).
+- **Fix 1 — free RS strengthening at the canonical seam (`engine.rs`):** `transmit_with_fec_mode`
+  now upgrades `Rs`→`RsStrong` when block-count-free (previously only the ARQ caller did), and all
+  8 `Rs` receive arms dual-decode via `rs_decode_free_strengthened`. **Trap found by measurement:
+  RS(255,223) and RS(255,191) are nested codes** — a clean strong codeword decodes under the t=16
+  codec with ZERO corrections, returning strong parity bytes as data (Frame CRC then reads
+  0x0000) — so decode success cannot arbitrate the code; the helper accepts a t=16 candidate only
+  if its frame validates, else tries t=32 (the same CRC arbiter the OTA candidate loop uses). The
+  linksim per-chunk upgrade from the entry below was reverted — the seam now covers it (and every
+  other caller) by construction. Compatibility note: small-frame `Rs` wires change on the air —
+  moot in the same release that whitened the wire (an old receiver cannot decode either way).
+- **Fix 2 — `ota_channel_adaptation` re-derived (uncoded hpx500 harness):** the AWGN@2 dB delivery
+  bar 2/3→1/2 with the 19→14 measurement recorded; the fade test's fluke `decoded > 0` replaced by
+  a **stronger, deterministic recovery phase** — after 24 fade losses the same link must deliver
+  ≥4/8 on a 30 dB channel (this also guards the state-poisoning class the QRM AFC collapse showed).
+  The per-frame lockstep bound is unchanged. Fade delivery remains gated where it belongs, on the
+  coded rungs (`hpx_hf_rungs_survive_fade`, now green through the seam).
+- **The net-positive question, stated plainly:** whitening trades a measurable in-sim margin loss
+  on marginal/uncoded frames for the on-air fix of #1021 (recorded captures: 6.2 s dead carrier,
+  `--fec rs` undecodable over a real link that `--fec none` crossed). With the seam fix the coded
+  ladder is net *better* than pre-whitening at the gate points; the residual cost lands only on
+  uncoded rungs, which the ladder's own law already declares unusable on a fade. Judgement: net
+  positive as implemented; the maintainer decision worth making explicitly is whether hpx500's
+  uncoded rungs should gain per-level FEC (out of scope here).
+- **Tests/results:** `hpx_hf_rungs_survive_fade` 3/3; `ota_channel_adaptation` 3/3;
+  `cessb_ofdm_lowentropy` 3/3 (caught the nested-code trap); full `openpulse-modem` suite green.
+  Final full gates recorded below after a complete `--no-fail-fast` run.
+
 ## 2026-07-29 — test: `bpsk_snr_tracks_a_fade` spread bar re-derived — it was calibrated on the zero-pad carrier
 
 - **Requirement/change:** after the linksim fixes below, the full workspace gate had one remaining

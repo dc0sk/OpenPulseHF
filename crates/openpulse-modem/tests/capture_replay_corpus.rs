@@ -218,13 +218,17 @@ fn the_recorded_hot_floor_degrades_acquisition_as_it_did_on_air() {
 /// artifact is what makes the next attempt cheap instead of speculative.
 ///
 /// **IGNORED ON PURPOSE.** It documents an open defect, so it must not redden the workspace gate.
-/// Removing `#[ignore]` — and having it pass — is the definition of done for #1021:
 ///
-/// ```text
-/// cargo test -p openpulse-modem --no-default-features --test capture_replay_corpus -- --ignored
-/// ```
+/// **The definition of done moved when the fix landed.** The fix for #1021 is wire whitening —
+/// a TRANSMIT-side change — and this capture was recorded from a pre-whitening sender, so the
+/// whitened receiver now descrambles it into garbage *by design*. This artifact can therefore
+/// never decode again, and un-ignoring this test as-is would "prove" the fix failed. It stays as
+/// the recorded evidence of the defect; the definition of done for #1021 is a **fresh dual
+/// capture** (`scripts/onair-dual-capture.sh`) of the same `BPSK250|rs` frame from a whitening
+/// sender, decoding where this one could not — at which point this test should be re-pointed at
+/// the new artifact and un-ignored.
 #[test]
-#[ignore = "open defect #1021: this real on-air frame does not decode yet"]
+#[ignore = "open defect #1021: pre-whitening artifact; closure needs a fresh on-air capture from a whitening sender (see comment)"]
 fn the_real_on_air_frame_decodes() {
     let c = corpus("ic9700-frame-bpsk250-rs.wav");
     // Guard the artifact itself: a capture that lost its burst would turn this into a test of
