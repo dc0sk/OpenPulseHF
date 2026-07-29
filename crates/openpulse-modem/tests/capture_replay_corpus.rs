@@ -230,41 +230,39 @@ fn a_real_on_air_frame_decodes_end_to_end() {
     );
 }
 
-/// Replay of a REAL `BPSK250|rs` frame from a **whitening** sender that STILL does not decode.
+/// THE #1021 GATE: the real coded on-air frame that could not be decoded, decoding.
 ///
-/// **#1021 is not closed, and this artifact is why.** Wire whitening — the fix that closed the
-/// issue — is a transmit-side change, so closure required a fresh keyed capture rather than a code
-/// change. That capture was taken on 2026-07-29 and the frame fails with
-/// `RS correction failed at block 0: TooManyErrors`: the *same error as before the fix*.
+/// Recorded 2026-07-29, IC-9700 ↔ FT-991A over 2 m at 5 W on 144.600 MHz from a whitening build.
+/// [`a_real_on_air_frame_decodes_end_to_end`] is its control — same link, same rigs, same levels,
+/// minutes apart, uncoded.
 ///
-/// **The fix did work; it just was not the whole cause.** Measured on this capture against its
-/// pre-whitening predecessor, per 0.25 s window across the burst:
+/// **The bug was never in the signal.** Reconstructing the exact transmitted wire and diffing it
+/// against the demodulated bytes showed **0 byte errors in all 255** — the 8.3 s frame arrived off
+/// the air byte-perfect, and demodulates cleanly across a **±32 Hz** AFC window. Every physical
+/// hypothesis was measured and refuted: carrier at +2.42 Hz drifting −0.3 Hz over the whole burst,
+/// margin 7.2 dB against the control's 7.3 dB, amplitude stable to 1.07, and a tight ±0.5 s window
+/// failing identically (so not the frame-location class either).
 ///
-/// | | dead-carrier windows | min spectral spread | median |
-/// |---|---|---|---|
-/// | pre-whitening (`ic9700-frame-bpsk250-rs.wav`) | **25 of 33** | 0.000 | 0.000 |
-/// | post-whitening (this file) | **0 of 33** | 0.481 | 0.544 |
+/// **It was a livelock in the settle recovery.** The energy gate falls back to a fixed 1e-4
+/// absolute threshold until it holds 32 windows of history, and this station's idle floor is 4.1e-4
+/// — four times that — so the very first window of pure noise passed the gate and AFC settled on it
+/// at sample 96, ~82 000 samples before the frame, with a bogus +364 Hz correction (BPSK250 can
+/// track ±62.5 Hz). `ScanPlanner::note_settle_failure` correctly condemned that anchor — and
+/// `unsettle` then rewound the scan to 0, where the same noise passed the same gate and re-settled
+/// at the same sample. Measured on this artifact: **78 settles, 77 condemnations, all at sample
+/// 96**, until the listen window expired. The recovery was reachable and ineffective.
 ///
-/// The 6.2 s of unmodulated carrier is gone and the burst is continuously modulated end to end.
-/// The decode outcome did not move. So the dead carrier was a real defect and a real fix, and it
-/// was **not the only cause** of the on-air failure.
+/// `unsettle` now resumes just past the condemned anchor, which is sound by the same argument its
+/// own comment already made for rewinding — a premature noise anchor sits *before* the real frame.
+/// The scan then walks forward, the gate's adaptive threshold takes over once it has history, and
+/// the receiver settles at onset 82304 with a **+2.0 Hz** correction — matching the independently
+/// measured carrier. 8 settles instead of 78.
 ///
-/// **What was ruled out on this capture, by measurement rather than argument:**
-/// - *Frequency.* The squaring estimator (BPSK suppresses its carrier, so an FFT peak is not one)
-///   reads **1502.42 Hz, +2.42 Hz** offset, drifting **−0.3 Hz** across the whole 8.2 s burst. The
-///   uncoded control that decodes reads +2.44 Hz — indistinguishable.
-/// - *Level and margin.* 7.2 dB above the idle floor, against 7.3 dB for the control that decodes.
-///   Amplitude is stable across the burst (max/min 1.07).
-/// - *Frame location.* Trimming the capture to the burst ±0.5 s fails identically, so this is not
-///   the window-versus-frame-length class that `fec_scan_long_capture` covers.
-///
-/// What remains different between the two is the frame itself: 8.3 s and one full 255-byte RS block
-/// versus 0.9 s and 14 bytes. [`a_real_on_air_frame_decodes_end_to_end`] is the control — same link,
-/// same rigs, same levels, minutes apart, same whitening sender.
-///
-/// **IGNORED ON PURPOSE.** It documents an open defect, so it must not redden the workspace gate.
+/// Note what closing this required: the whitening fix (#1027) was real and is retained — it removed
+/// 6.2 s of dead carrier, verified on this capture at **0 of 33** dead windows against the
+/// predecessor's 25 of 33 — but it was not the cause of the decode failure. Two defects, one
+/// symptom.
 #[test]
-#[ignore = "open defect #1021: whitening removed the dead carrier (measured) but the coded frame still fails; cause not yet found"]
 fn the_real_on_air_frame_decodes() {
     let c = corpus("ic9700-frame-bpsk250-rs-whitened.wav");
     // Guard the artifact itself: a capture that lost its burst would turn this into a test of
