@@ -9168,3 +9168,39 @@ The last mode still failing on the dual-card rig after the AGC misclassification
 - **Sabotage verification:** restoring the exact original line
   (`fec_code_rate(self.params.fec)`) fails the new test — `SL7 (OFDM52) transmits SoftConcatenated
   (r=0.437) but net_bps 2487.5 implies r=0.875`, the predicted ~2x overstatement.
+
+---
+
+## 2026-07-30 — Archetype scan finding 13: the frame-lock test discarded the field that shows mislocation
+
+- **Requirement / change:** `tests/waveform_lock_watterson.rs` claims to measure *frame lock
+  reliability*; it must not count a lock that landed on the wrong sample.
+- **Design decision (+ rationale):** `lock_rate_with_channel` read `res.rho` and discarded
+  `res.offset`, so a correlation peaking on the **delayed multipath ray** counted as a lock — the
+  #688 defect ("sync must lock ahead of the peak, never on it") reproduced inside the test written to
+  guard against it. The criterion added is `offset <= GUARD`, **not** equality: an early start begins
+  inside the symbol's own cyclic prefix (a removable circular shift), a late start pulls the next
+  symbol into the window and cannot be undone. Both rates are returned and asserted rather than the
+  correct one replacing the declared one — the declared-lock rate is a real property, and reporting
+  them separately is what makes the gap visible.
+- **Implementation:** `crates/openpulse-modem/tests/waveform_lock_watterson.rs` — `LockStats
+  { detected, correct }`, `GUARD` promoted to a named constant.
+- **Measurements (actually run, by instrumenting the real helper):**
+  - `good_f1` (all of 15/20/25 dB): 18/20 declared, **offsets {16: 11, 20: 7}**.
+  - `good_f2`: 19–20/20 declared, **offsets {16: 12, 24: 7–8}**.
+  - The mislocated offsets are exactly each profile's delay: 0.5 ms = 4 samples (16→20), 1 ms = 8
+    samples (16→24).
+  - AWGN 10/15/20/25 dB: **100/100 at offset 16** — no multipath, no delayed ray, so the offset
+    check costs nothing there. That is what makes the Watterson shortfall a channel effect rather
+    than a property of the detector.
+- **Tests:** declared-lock bars **unchanged** (AWGN ≥ 0.99, Watterson ≥ 0.85). New: correct-lock bar
+  ≥ 0.50 (measured 0.55/0.60); AWGN asserts `correct == detected`; and
+  `a_lock_on_the_delayed_ray_is_not_counted_as_a_correct_lock` pins that the offset check is live.
+- **Test results (run):** `waveform_lock_watterson` **10/10**.
+- **Sabotage verification:** restoring the exact pre-fix behaviour (increment `correct`
+  unconditionally, offset ignored) fails **1/10**. Note *which* one: the matrix test still passes
+  under that sabotage — the anti-vacuity test is the only thing that catches it, which is precisely
+  why a gate whose two rates could silently converge needs one.
+- **Docs:** `docs/dev/vara-parity-execution-board.md` — the ≥99 % AWGN claim is re-verified and
+  stands; the Watterson line now states both rates and that this is a bare-matched-filter property,
+  not a production-acquisition figure.
