@@ -262,15 +262,34 @@ density or higher-order channel tracking, which is Item 6 scope.
 - Timeout tuning: SNR-dependent ACK wait time (15 dB = 800 ms, 25 dB = 400 ms).
 
 **Acceptance Criteria**:
-- [x] Rate selector: SNR→(FEC type, code rate) mapping validated on Watterson.
-- [ ] Throughput gate: ≥90% VARA baseline on 100-frame Watterson F1 test. **[DEFERRED — see note below]**
-- [x] Latency: median frame cycle (TX + retransmit + ACK) ≤1.5 s on 20 dB SNR.
+- [x] Rate selector: SNR→(FEC type, code rate) mapping validated on Watterson. *(Unit-level: the
+  mapping is deterministic and tested. It does not run in production — see Status.)*
+- [ ] Throughput gate: ≥90% VARA baseline on 100-frame Watterson F1 test. **[NOT MEASURED — the
+  cited gate is arithmetic; see Status]**
+- [x] Latency: median frame cycle (TX + retransmit + ACK) ≤1.5 s on 20 dB SNR. *(Cycle **proxy**,
+  computed from the decision's own code rate and timeout — not a measured cycle.)*
 - [x] Integration test: `tests/harq_rate_selection_watterson.rs`.
 
-**Status**: ✅ **FUNCTIONALLY COMPLETE** (HARQ policy, FEC selection, latency, integration tests all passing).
-The VARA WattersonF1 throughput parity criterion is deferred — see note.
+**Status**: ⚠️ **SELECTOR BUILT, NOT WIRED** — corrected 2026-07-30 (archetype scan finding 12).
+The previous status read "✅ FUNCTIONALLY COMPLETE (HARQ policy, FEC selection, latency, integration
+tests all passing)", four lines below a "Current State" bullet still reading *"Retransmit on NACK
+without rate change"*. **Both were true, and only because the selector never runs.**
 
-**Note**: current throughput gate in `harq_rate_selection_watterson.rs` compares HARQ policy-cycle throughput against a payload-ceiling-normalized VARA reference (frame payload is limited to 255 bytes in this harness).
+- `HarqPolicy` is reached only via `ModemEngine::select_harq_decision{,_for_mode}`, whose only
+  callers are `tests/harq_rate_selection_watterson.rs` and `tests/ldpc_engine_loopback.rs`. There is
+  no production caller.
+- The shipped ARQ (`transmit_arq_ota_within`) takes its FEC from `SessionProfile::fec_for` plus
+  `free_rs_strengthening`, and its ACK timeout from `ota_ack_timeout_ms` — which does not share a
+  numeric range with the curve this item's tests assert.
+- **This is not a defect to fix by wiring it up.** The per-rung MODCOD table is the deliberate
+  design and it is what ships. The defect was the completion claim.
+
+**Note on the throughput figure**: `harq_watterson_f1_throughput_and_latency_gate` derives
+`policy_goodput_bps` in closed form from `decision.code_rate` and `decision.ack_timeout_ms`; its
+`receive_with_harq_attempt` call discards its result and, measured 2026-07-30, **decodes 0 of 105
+attempts** (64QAM2000-RRC on a Watterson F1 fade). The gate passes with nothing decoded. Any
+throughput or parity number sourced from it is arithmetic about the policy, not a measurement of the
+modem.
 
 **HARQ-rate gate (Item 6 benchmark loop)**:
 - Scenario: `benchmark/scenarios/HF2300-AWGN30-ITEM6.yaml` — SCFDMA52-64QAM-P4 at AWGN 30 dB (valid 64QAM operating point per loopback tests)

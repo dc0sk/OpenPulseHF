@@ -4,6 +4,23 @@
 //! - SNR + fading-depth inputs map to deterministic FEC selections.
 //! - Retry attempts never reduce coding strength.
 //! - ACK timeout follows the configured SNR curve.
+//!
+//! **What this file does NOT prove (archetype scan 2026-07-29, finding 12).** Read
+//! `harq_watterson_f1_throughput_and_latency_gate` as an *arithmetic* check on the policy's own
+//! outputs, never as a throughput measurement. `policy_goodput_bps` is computed entirely from
+//! `cycle_proxy_ms(payload, gross_bps, decision.code_rate, decision.ack_timeout_ms)` — a closed-form
+//! function of the decision struct. The `receive_with_harq_attempt` call in the loop discards its
+//! result, and **measured 2026-07-30 it decodes 0 of 105 attempts**: 64QAM2000-RRC through a
+//! Watterson F1 fade at this operating point is exactly the case the ladder would never select. So
+//! the gate passes at zero decoded frames, and it did.
+//!
+//! Also note the policy it exercises is **not on any production path**: `HarqPolicy` is reached only
+//! through `ModemEngine::select_harq_decision{,_for_mode}`, whose only callers are this file and
+//! `ldpc_engine_loopback.rs`. The shipped ARQ takes its FEC from `SessionProfile::fec_for` plus
+//! `free_rs_strengthening`, and its ACK timeout from `ota_ack_timeout_ms` — which does not even
+//! share a numeric range with the curve asserted here. That is the deliberate design (the MODCOD
+//! table is the real ladder); what was wrong was `vara-parity-execution-board.md` citing this file
+//! as evidence that the selector ships.
 
 use bpsk_plugin::BpskPlugin;
 use openpulse_audio::LoopbackBackend;
