@@ -9095,3 +9095,38 @@ The last mode still failing on the dual-card rig after the AGC misclassification
   (un-ignored) plus `a_real_on_air_frame_decodes_end_to_end` (uncoded control).
 - **Test results (run):** `capture_replay_corpus` **8 passed, 0 ignored**.
 - **Sabotage verification:** restoring the exact pre-fix `self.last_tried_end = 0` fails the test.
+## 2026-07-30 — Archetype scan finding 17: the whitening gate measured three wrong regimes
+
+- **Requirement / change:** the one unit test standing behind the #1021 wire-whitening fix
+  (`scramble::tests::an_all_zero_block_becomes_transition_rich`) must actually be able to detect the
+  defect it exists to prevent.
+- **Design decision (+ rationale):** the test had three simultaneous regime mismatches against the
+  wire it claims to measure — MSB-first bit order (the wire is LSB-first, per `bytes_to_bits` in
+  every modulator), runs of *identical* bits (only runs of **zero** are a dead carrier, because
+  `nrzi_encode` flips phase on a `1` and holds on a `0`), and keystream offset 0 (the real RS padding
+  starts at offset 28: 4 length + 10 frame header + 14 payload). The fix builds the **actual** on-air
+  wire with `Frame` + `FecCodec` rather than approximating it, which makes the offset correct by
+  construction instead of by a constant that can drift; and it asserts the *unwhitened* wire still
+  contains the defect before claiming whitening removes it, so the gate cannot pass on a fixture that
+  no longer reproduces #1021.
+- **Implementation:** `crates/openpulse-core/src/scramble.rs` — test module gains `wire_bits`
+  (LSB-first), `longest_zero_run`, `pack_wire_bits`, `ones_ratio`, and `MAX_DEAD_BITS = 12` (the
+  maximal-length 9-bit LFSR's longest zero run is `n - 1 = 8` by construction, so 12 leaves headroom
+  for a seed/tap change without flagging). `an_all_zero_block_becomes_transition_rich` is replaced by
+  `the_real_padded_wire_carries_no_dead_carrier_run`.
+- **Measurements (actually run):**
+  - Real wire for a 14-byte payload: **unwhitened longest zero run = 1561 bits**; whitened = 8 bits.
+  - Old gate's own numbers, re-measured: ratio 0.499, longest identical run 16.
+- **Tests:** `crates/openpulse-core/src/scramble.rs` — `the_real_padded_wire_carries_no_dead_carrier_run`
+  (the gate) and `the_dead_carrier_measurement_catches_a_balanced_but_dead_stream` (anti-vacuity: pins
+  that the measurement can fail, on the exact pattern the old one missed).
+- **Test results (run):** `cargo test -p openpulse-core --no-default-features --lib scramble` — **6
+  passed, 0 failed**.
+- **Sabotage verification (decisive, and it shows the blind spot rather than merely asserting it):**
+  replacing the LFSR with a *balanced but dead* keystream — 17 zeros then 17 ones, repeating — makes
+  the new gate **FAIL** (`a 17-bit run of zeros … unwhitened the same wire runs 1561 bits`). Under the
+  identical sabotage, the old assertions were re-run and both **PASS**: ratio 0.499 is inside
+  `0.4..=0.6`, and the MSB-first longest identical run is exactly 16, one below its own `<= 16` bound.
+  A wire carrying a 17-symbol dead carrier every 34 symbols was invisible to the only gate guarding
+  the fix. Note this is a blind spot, not a live regression: the property does hold for the shipped
+  LFSR (measured whitened run = 8 bits).
