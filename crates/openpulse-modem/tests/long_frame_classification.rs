@@ -98,8 +98,25 @@ fn the_threshold_is_pinned_on_both_sides() {
 /// The widened length is returned too, and the caller must use it as the slice bound.
 #[test]
 fn the_returned_length_is_the_widened_one() {
+    // The widening is now PER-FEC and measured (see `fec_slice_expansion.rs`): RS reaches 1.77x the
+    // raw geometry, not 3x, because a plugin's `max_frame_samples` is already sized for "a full
+    // 255-byte RS block + envelope" — the blanket 3x double-counted an expansion the geometry
+    // already contained. That over-reserve is not free: the scanning receive cannot judge a settled
+    // position undecodable until this much audio exists past it, so it made the bad-settle recovery
+    // unreachable on a real capture (#1021). The classification this file exists to protect is
+    // unchanged — 2 x 74 400 = 148 800 is still over LONG_FRAME_SAMPLES, so the three starving modes
+    // above still classify long (see `coded_frames_over_the_threshold_classify_as_long`).
     let (coded, _) = frame_plan(74_400, FecMode::Rs);
-    assert_eq!(coded, 223_200, "a coded frame is 3x the raw geometry");
+    assert_eq!(
+        coded, 148_800,
+        "an RS-coded frame reserves 2x the raw geometry"
+    );
+    let (conv, _) = frame_plan(74_400, FecMode::Concatenated);
+    assert_eq!(
+        conv, 297_600,
+        "rate-1/2 conv over RS reserves 4x — the old blanket 3x UNDER-reserved this one and would \
+         truncate a full-payload frame (measured: 264 704 samples needed, 223 872 reserved)"
+    );
     let (plain, _) = frame_plan(74_400, FecMode::None);
     assert_eq!(plain, 74_400, "an uncoded frame is not widened");
 }

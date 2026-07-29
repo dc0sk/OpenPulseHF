@@ -216,12 +216,38 @@ pub const LONG_FRAME_SAMPLES: usize = 120_000;
 /// modes with ~28 s coded frames (`BPSK250`, `BPSK250-RRC`, `QPSK125`) on the wrong side, so they kept
 /// the retry that starves the capture and never finished buffering on a real audio path. Splitting
 /// these two steps apart is what allowed them to drift out of order; keep them together.
+/// How many times a mode's raw `max_frame_samples` a coded frame can actually reach.
+///
+/// **Measured, not guessed** (`tests/fec_slice_expansion.rs`, BPSK250 @ 8 kHz, worst case over
+/// payloads that straddle the RS block boundary): `None` 0.93, `Rs`/`RsStrong`/`RsInterleaved`
+/// 1.77, `LdpcHighRate` 1.50, `Ldpc` 2.65, `Concatenated`/`SoftConcatenated` 3.55. The values below
+/// carry ~15 % headroom over those.
+///
+/// A single blanket factor cannot serve that spread, and the previous blanket ×3 was wrong in
+/// **both** directions at once: it over-reserved for RS — a plugin's `max_frame_samples` is already
+/// sized for "a full 255-byte RS block + envelope", so ×3 double-counted an expansion the geometry
+/// already contained — while under-reserving for `Concatenated`, whose real frame (264 704 samples)
+/// exceeds the ×3 bound (223 872) and would be silently truncated at the largest payloads.
+///
+/// The over-reserve is not merely wasteful: the scanning receive cannot judge a settled position
+/// undecodable until this much audio exists past it, so an inflated reserve makes that recovery
+/// unreachable on a real capture — the mechanism that kept the coded rungs broken on air (#1021).
+fn fec_slice_factor(fec: FecMode) -> usize {
+    match fec {
+        FecMode::None => 1,
+        // One or two 255-byte RS blocks over a geometry already sized for one.
+        FecMode::Rs | FecMode::RsStrong | FecMode::RsInterleaved => 2,
+        // Byte-exact short block: barely larger than the frame it wraps.
+        FecMode::ShortRs => 2,
+        FecMode::LdpcHighRate => 2,
+        FecMode::Ldpc => 3,
+        // Rate-1/2 convolutional stacked on RS, and the soft variants of the same.
+        FecMode::Concatenated | FecMode::SoftConcatenated | FecMode::Turbo => 4,
+    }
+}
+
 pub fn frame_plan(raw_max_frame_samples: usize, fec: FecMode) -> (usize, bool) {
-    let coded = if matches!(fec, FecMode::None) {
-        raw_max_frame_samples
-    } else {
-        raw_max_frame_samples.saturating_mul(3)
-    };
+    let coded = raw_max_frame_samples.saturating_mul(fec_slice_factor(fec));
     (coded, coded > LONG_FRAME_SAMPLES)
 }
 
