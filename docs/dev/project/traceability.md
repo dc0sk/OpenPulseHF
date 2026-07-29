@@ -8699,3 +8699,42 @@ The last mode still failing on the dual-card rig after the AGC misclassification
 - **Still hardware-only:** rig DSP (NR/NB), analog nonlinearity, USB re-enumeration resetting mixer
   state, and two genuinely independent oscillators. An emulation must also be validated against a
   real capture, or the suite tests the model of the radio rather than the radio.
+
+## Capture-replay harness: real recorded radio audio as a test corpus (2026-07-29)
+
+- **Requirement:** the emulated capture-context impairments are each a *model* of a radio, and a
+  model can be wrong in exactly the way that hides a bug. Replay removes the model: a recording is
+  what the rig actually produced. Complements, does not replace, the emulations — a capture covers
+  only the conditions recorded, and goes stale as the DSP changes.
+- **Implementation:**
+  - `crates/openpulse-modem/src/capture_replay.rs`: `Capture` + `load_wav`/`load_corpus`, with a
+    minimal RIFF chunk-walking reader (no new dependency; a fixed 44-byte header offset would read
+    audio as metadata whenever a recorder interleaves LIST/fact chunks). `cycled()` lets a few
+    seconds of recorded idle pad an arbitrarily long capture.
+  - `crates/openpulse-modem/src/channel_sim.rs`: `route_embedded_in_capture` — a synthetic frame
+    embedded in REAL recorded idle audio, with a `signal_gain` so the signal-to-real-floor ratio can
+    be swept against a fixed genuine floor.
+  - `crates/openpulse-modem/tests/captures/` — corpus (8 kHz mono 16-bit) + README with provenance
+    and the measured property each file exists to preserve. Decimated 48→8 kHz with
+    `resample_poly`; naive decimation would alias the noise floor and destroy that property.
+  - `scripts/onair-record-capture.sh` — records and prepares new corpus entries (local or over SSH,
+    parecord or pw-record), and tells the operator to record provenance, since a capture with no
+    recorded expectation cannot be asserted against.
+- **Corpus (all real, 2026-07-28 on air):** `ic9700-idle-hot.wav` (mean-square ≈0.0158 — the level
+  that broke #1020, 4.9x the energy-gate ceiling); `ft991a-idle.wav` (≈3.7e-7 — the OPPOSITE
+  failure, below the gate's absolute floor, showing "just lower the level" is not a universal fix);
+  `ic9700-tone-1501hz.wav` (carrier ≈1501.5 Hz, independently measured on air after the +64 Hz trim).
+- **Tests (run):** `--test capture_replay_corpus` 6/6.
+  - Corpus integrity: files load, are 8 kHz, are not silent; the IC-9700 floor is still above the
+    gate ceiling; the FT-991A floor is still below the absolute threshold; the recorded carrier
+    still measures 1495–1510 Hz against the 1501.5 Hz taken off the radio (this pins our measurement
+    chain to a real-world truth).
+  - Behaviour: a frame at a healthy level decodes inside real recorded idle audio (**the control**),
+    while the same frame at the SAME signal gain inside the recorded hot floor is not reliably
+    acquired — an A/B by construction, where the only variable is the real recorded floor.
+  - Full workspace: **272 suites, 2198 passed, 0 failed**; clippy `-D warnings` + fmt clean.
+- **Known gap, recorded rather than glossed:** there is **no capture of a real modem frame** — the
+  on-air runs decoded inside `openpulse` on the remote host and the raw audio was never saved. That
+  is the highest-value slot in the corpus and it is empty; only a frame capture can assert an
+  end-to-end decode against real audio. `scripts/onair-record-capture.sh` exists to fill it on the
+  next on-air session.

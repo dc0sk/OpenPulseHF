@@ -179,6 +179,35 @@ impl ChannelSimHarness {
         n
     }
 
+    /// Route TX samples embedded in REAL recorded radio audio.
+    ///
+    /// Every other padding here is synthetic — flat pseudo-random noise at a chosen level. A real
+    /// receiver's idle output is not flat: it carries the rig's own noise shaping, whatever spurs
+    /// the host puts into the USB audio, and an absolute level set by the rig and mixer rather than
+    /// by us. Padding with a recorded capture puts the frame in that actual context, so the test
+    /// cannot be wrong about the radio the way a model can.
+    ///
+    /// `capture` supplies the lead and trail (cycled if shorter than requested), and the frame is
+    /// scaled by `signal_gain` so the signal-to-idle ratio can be swept against a fixed real floor.
+    ///
+    /// Returns the number of TX samples routed (excluding padding).
+    pub fn route_embedded_in_capture(
+        &mut self,
+        capture: &crate::capture_replay::Capture,
+        lead: usize,
+        trail: usize,
+        signal_gain: f32,
+    ) -> usize {
+        let samples = self.tx_loopback.drain_samples();
+        let n = samples.len();
+        let mut buf = Vec::with_capacity(lead + n + trail);
+        buf.extend(capture.cycled(0, lead));
+        buf.extend(samples.iter().map(|&s| s * signal_gain));
+        buf.extend(capture.cycled(lead, trail));
+        self.rx_loopback.fill_samples(&buf);
+        n
+    }
+
     /// Route TX samples through a fixed capture gain, with noise padded around the frame.
     ///
     /// The absolute level a receiver hands the modem is set by the rig's audio output and the host
