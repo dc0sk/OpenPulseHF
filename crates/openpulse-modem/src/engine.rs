@@ -251,6 +251,24 @@ pub fn frame_plan(raw_max_frame_samples: usize, fec: FecMode) -> (usize, bool) {
     (coded, coded > LONG_FRAME_SAMPLES)
 }
 
+/// How much post-onset audio must exist before a decode failure is evidence that the ONSET is wrong
+/// rather than that the frame has not finished arriving.
+///
+/// **Deliberately not widened by `fec`** — this is the one thing that distinguishes it from
+/// [`frame_plan`], and the reason it is a named function rather than an inline expression. A
+/// plugin's `max_frame_samples` is already "the largest frame this mode emits, plus margin";
+/// `frame_plan`'s factor is a per-attempt *slice* reserve, generous so a slice still contains the
+/// frame wherever inside it the frame begins. Sizing arrival from that reserve demanded 149.2 s of
+/// post-onset audio for BPSK31 — more than any configured harness listens for — which disabled the
+/// settle recovery outright on `hpx_hf`'s entry rung (archetype scan 2026-07-29, finding 4).
+///
+/// A multi-block frame can exceed this, so the threshold can be reached slightly early; the
+/// `ScanPlanner::SETTLE_FAILURE_LIMIT` budget absorbs that. An unreachable threshold cannot be
+/// absorbed by anything. Gate: `tests/coded_noise_settle_recovery.rs`.
+pub fn frame_arrival_samples(raw_max_frame_samples: usize, _fec: FecMode) -> usize {
+    raw_max_frame_samples
+}
+
 /// Un-whiten soft decisions coming off a demodulator.
 ///
 /// The wire is whitened before modulation (see `stage_modulate_payload`), so every receive path
@@ -508,10 +526,25 @@ const CESSB_CLIP_RATIO: f32 = 2.0;
 /// Peak-stretcher look-ahead window (samples) for CE-SSB TX conditioning.
 const CESSB_LOOKAHEAD: usize = 16;
 
-/// Safety cap on the [`ModemEngine::capture_burst`] accumulator (~30 s at 8 kHz):
-/// if a carrier never "drops" (e.g. DCD threshold below the noise floor) the burst
-/// is force-flushed rather than growing without bound.
-const BURST_MAX_SAMPLES: usize = 240_000;
+/// Floor for the [`ModemEngine::burst_cap_samples`] runaway guard (~30 s at 8 kHz), and the cap used
+/// when the receive mode is unknown or unregistered.
+///
+/// This was the *whole* cap until 2026-07-29, as a flat constant. It is far shorter than the frames
+/// the ladder's slow rungs emit — BPSK31 + Rs measures 532 480 samples (66.6 s) and BPSK63 + Rs
+/// 266 240 (33.3 s) — so on a streaming capture it force-flushed mid-frame on every normal
+/// transmission, splitting the burst into two preamble-less halves. SL2 (BPSK31) is `hpx_hf`'s
+/// `initial_level`, so this sat on the entry rung of every session. Gate:
+/// `tests/burst_cap_frame_length.rs`.
+const BURST_MIN_CAP_SAMPLES: usize = 240_000;
+
+/// Absolute ceiling on the burst accumulator (~320 s at 8 kHz, ≈10 MB of `f32`). The cap exists so a
+/// carrier that never drops — a DCD threshold under the noise floor — cannot grow the buffer without
+/// bound; this is what keeps that property when the per-mode figure is derived from geometry.
+const BURST_MAX_CAP_SAMPLES: usize = 2_560_000;
+
+/// Largest value [`fec_slice_factor`] returns. The burst cap must clear the longest frame a mode can
+/// emit under *any* FEC, and the receive tick does not know which one the transmitter used.
+const MAX_FEC_SLICE_FACTOR: usize = 4;
 
 /// Cap on the [`ModemEngine::last_audio`] window — a few FFT frames is plenty for a
 /// representative spectrum row and bounds the per-call clone.
@@ -1435,6 +1468,27 @@ impl ModemEngine {
             .map_err(|e| ModemError::Audio(e.to_string()))
     }
 
+    /// Runaway cap for the burst accumulator, in samples, derived from `mode`'s real frame geometry.
+    ///
+    /// A flat cap cannot serve a ladder spanning 31 to 9600 baud: what bounds runaway growth for
+    /// BPSK250 (74 624-sample frames) truncates BPSK31 (596 992) mid-frame. Scaling the mode's own
+    /// `max_frame_samples` by the worst FEC expansion keeps the guard's purpose while making it
+    /// impossible for it to fire on a legitimate frame. An unknown or unregistered mode falls back to
+    /// [`BURST_MIN_CAP_SAMPLES`], which is also the floor for fast modes.
+    pub fn burst_cap_samples(&self, mode: Option<&str>) -> usize {
+        let raw = mode
+            .and_then(|m| {
+                let cfg = ModulationConfig {
+                    mode: m.to_string(),
+                    ..ModulationConfig::default()
+                };
+                self.plugins.get(m).and_then(|p| p.frame_geometry(&cfg))
+            })
+            .map_or(0, |g| g.max_frame_samples);
+        raw.saturating_mul(MAX_FEC_SLICE_FACTOR)
+            .clamp(BURST_MIN_CAP_SAMPLES, BURST_MAX_CAP_SAMPLES)
+    }
+
     /// Burst-accumulate samples the CALLER already captured from a persistent input
     /// stream, returning a complete burst when the carrier drops (same contract as
     /// [`capture_burst`](Self::capture_burst)).
@@ -1475,7 +1529,8 @@ impl ModemEngine {
             // Carrier present: keep accumulating this burst.
             self.rx_burst.extend_from_slice(&samples.samples);
             self.rx_capturing = true;
-            if self.rx_burst.len() >= BURST_MAX_SAMPLES {
+            // Per-mode, not a flat constant: a 30 s cap force-flushes BPSK31/BPSK63 mid-frame.
+            if self.rx_burst.len() >= self.burst_cap_samples(self.rx_mode.as_deref()) {
                 self.rx_capturing = false;
                 return Ok(Some(AudioSamples {
                     samples: std::mem::take(&mut self.rx_burst),
@@ -2422,6 +2477,14 @@ impl ModemEngine {
         // FEC widens the per-attempt slice (conv rate-1/2 ≈ 2×, RS ≈ 1.15×) so the whole coded frame
         // is decoded rather than truncated, and the long-frame classification must be made on that
         // widened length — see `frame_plan` for what went wrong when it was not.
+        // Keep the RAW geometry: it is the plugin's own "largest frame this mode emits, plus margin"
+        // and is the right measure of *has the frame arrived yet*. `frame_plan`'s widened value is a
+        // per-attempt SLICE reserve — deliberately generous so the slice still contains the frame
+        // wherever inside it the frame starts — and using a slice reserve to judge arrival made the
+        // settle-recovery precondition unreachable for the slow rungs: BPSK31 needed 149.2 s of
+        // post-onset audio, more than any configured harness listens for (archetype scan
+        // 2026-07-29, finding 4). The two lengths answer different questions; keep them apart.
+        let arrival_samples = frame_arrival_samples(max_frame_samples, fec);
         let (max_frame_samples, long_frame) = frame_plan(max_frame_samples, fec);
 
         // AFC settling window.  It must span at least one data symbol past the
@@ -2687,7 +2750,14 @@ impl ModemEngine {
                     // Only a FULLY buffered window can condemn the anchor: a short window fails
                     // for lack of audio, not because the position is wrong, and counting those
                     // would abandon a perfectly good settle on a slow frame.
-                    let window_complete = accumulated.len() >= onset + max_frame_samples;
+                    //
+                    // Measured against `arrival_samples` (the raw geometry), not the widened slice
+                    // reserve — see where `arrival_samples` is bound. A multi-block frame can exceed
+                    // this, so the threshold can be reached slightly early; the
+                    // `SETTLE_FAILURE_LIMIT` budget absorbs that, because each of those 18 iterations
+                    // demodulates a multi-second window and far more audio has arrived by the end of
+                    // them. An unreachable threshold, by contrast, disables the recovery outright.
+                    let window_complete = accumulated.len() >= onset + arrival_samples;
                     let afc_before = self.afc_correction_hz;
                     match self.decode_attempt(
                         mode,
@@ -3054,9 +3124,11 @@ impl ModemEngine {
             FecMode::RsInterleaved => {
                 let wire =
                     self.route_wire_stage(PipelineStage::DemodulateDecode, raw_wire.unwrap())?;
-                let deint = Interleaver::new(DEFAULT_INTERLEAVER_DEPTH).deinterleave(&wire.bytes);
                 WirePayload {
-                    bytes: FecCodec::new().decode(&deint)?,
+                    // Prefix trial, not a straight deinterleave: the permutation is derived from the
+                    // buffer length, so the window length must be trimmed to the frame's *before* it
+                    // is unscrambled. Same reason the `Rs` arm above uses `decode_prefix`.
+                    bytes: rs_interleaved_decode_prefix(DEFAULT_INTERLEAVER_DEPTH, &wire.bytes)?,
                 }
             }
             FecMode::SoftConcatenated => {
@@ -3066,12 +3138,13 @@ impl ModemEngine {
             }
             FecMode::Ldpc => {
                 let llrs = llrs.unwrap();
-                let info = decode_ldpc_llrs(&LdpcCodec::new(), &llrs)?;
+                // Prefix, not strict: trailing-noise codewords past the frame must not abort it.
+                let info = decode_ldpc_llrs_prefix(&LdpcCodec::new(), &llrs)?;
                 self.route_wire_stage(PipelineStage::DemodulateDecode, WirePayload { bytes: info })?
             }
             FecMode::LdpcHighRate => {
                 let llrs = llrs.unwrap();
-                let info = decode_ldpc_llrs(&LdpcCodec::high_rate(), &llrs)?;
+                let info = decode_ldpc_llrs_prefix(&LdpcCodec::high_rate(), &llrs)?;
                 self.route_wire_stage(PipelineStage::DemodulateDecode, WirePayload { bytes: info })?
             }
             FecMode::Concatenated => {
@@ -5525,6 +5598,10 @@ fn soft_concat_decode_llrs(llrs: &[f32]) -> Result<Vec<u8>, ModemError> {
 /// The block count comes from the LLR count: the soft demodulators return exactly the transmitted
 /// bit count (their length prefix trims the modulation padding). Trailing LLRs that do not complete a
 /// block are dropped — a whole block is the smallest decodable unit.
+///
+/// Strict: **every** whole codeword must decode. Correct only where the caller knows the frame
+/// extent (the single-shot `receive_with_ldpc*` and the HARQ combiner, whose LLR vector is one
+/// attempt's worth). The scanning receive must use [`decode_ldpc_llrs_prefix`] instead.
 fn decode_ldpc_llrs(codec: &LdpcCodec, llrs: &[f32]) -> Result<Vec<u8>, ModemError> {
     let n_bits = codec.codeword_bytes() * 8;
     if llrs.len() < n_bits {
@@ -5538,6 +5615,72 @@ fn decode_ldpc_llrs(codec: &LdpcCodec, llrs: &[f32]) -> Result<Vec<u8>, ModemErr
         out.extend_from_slice(&codec.decode_soft(block)?);
     }
     Ok(out)
+}
+
+/// LDPC counterpart of [`FecCodec::decode_prefix`] for the SCANNING receive.
+///
+/// The scanning slice is sized from `frame_plan`'s FEC reserve, not from the frame, so a real
+/// capture — which always outlasts the frame — leaves whole codewords of trailing noise past the
+/// last real one. [`decode_ldpc_llrs`] aborts the entire frame when any of them fails belief
+/// propagation, so `--fec ldpc` failed on every capture longer than the frame and reported "LDPC did
+/// not converge": a channel message for a length bug (archetype scan 2026-07-29). Stopping at the
+/// first failed codeword keeps the prefix that decoded, which is where the frame is — the frame's
+/// own magic/CRC in `stage_decode_frame` is what decides whether enough of it arrived.
+fn decode_ldpc_llrs_prefix(codec: &LdpcCodec, llrs: &[f32]) -> Result<Vec<u8>, ModemError> {
+    let n_bits = codec.codeword_bytes() * 8;
+    if llrs.len() < n_bits {
+        return Err(ModemError::Fec(format!(
+            "LDPC: {} LLRs is less than one {n_bits}-bit codeword",
+            llrs.len()
+        )));
+    }
+    let mut out = Vec::with_capacity((llrs.len() / n_bits) * codec.info_bytes());
+    let mut first_err: Option<ModemError> = None;
+    for block in llrs.chunks_exact(n_bits) {
+        match codec.decode_soft(block) {
+            Ok(info) => out.extend_from_slice(&info),
+            Err(e) => {
+                first_err = Some(e);
+                break;
+            }
+        }
+    }
+    if out.is_empty() {
+        return Err(first_err
+            .unwrap_or_else(|| ModemError::Fec("LDPC prefix decode produced nothing".into())));
+    }
+    Ok(out)
+}
+
+/// `RsInterleaved` counterpart of [`FecCodec::decode_prefix`] for the SCANNING receive.
+///
+/// `Interleaver::deinterleave` derives its permutation from `data.len()`, so handing it the capture
+/// window rather than the frame unscrambles with a *different* permutation than the transmitter used
+/// and scatters the bytes. That made this arm fail at **every** non-trivial capture length — not just
+/// long ones — and `FecCodec::decode_prefix` cannot rescue it, because trimming after the wrong
+/// permutation has already run recovers nothing (archetype scan 2026-07-29).
+///
+/// The transmitter interleaves exactly the RS-coded bytes (a whole number of 255-byte blocks), so
+/// trying each block-count prefix *and* deinterleaving that prefix at its own length reproduces the
+/// transmit permutation exactly at the right `k`.
+fn rs_interleaved_decode_prefix(depth: usize, data: &[u8]) -> Result<Vec<u8>, ModemError> {
+    let blocks = data.len() / RS_BLOCK_BYTES;
+    if blocks == 0 {
+        return Err(ModemError::Fec(format!(
+            "FEC data length {} is shorter than one {RS_BLOCK_BYTES}-byte block",
+            data.len()
+        )));
+    }
+    let il = Interleaver::new(depth);
+    let mut last: Option<ModemError> = None;
+    for k in 1..=blocks {
+        let deint = il.deinterleave(&data[..k * RS_BLOCK_BYTES]);
+        match FecCodec::new().decode(&deint) {
+            Ok(out) => return Ok(out),
+            Err(e) => last = Some(e),
+        }
+    }
+    Err(last.unwrap_or_else(|| ModemError::Fec("RsInterleaved prefix decode failed".into())))
 }
 
 fn minimum_trust_for_profile(profile: PolicyProfile) -> ConnectionTrustLevel {
