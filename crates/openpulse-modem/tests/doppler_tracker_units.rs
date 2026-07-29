@@ -1,10 +1,19 @@
-//! AFC Doppler tracking integration test under Watterson fading.
+//! Unit tests for `openpulse-dsp::doppler_tracker` — the Doppler phase-slope estimator and the
+//! adaptive AFC loop-bandwidth controller — driven by synthetic phase sequences.
 //!
-//! Validates:
-//! - Doppler rate estimation from phase slope
-//! - Adaptive loop bandwidth selection based on SNR and Doppler
-//! - AFC tracking stability on Watterson F2 channel
-//! - Frequency error <±5 Hz under moderate fading
+//! **Scope, stated honestly because it was previously overstated.** This file was named
+//! `afc_doppler_watterson.rs` and its header claimed it validated "AFC tracking stability on
+//! Watterson F2" and "frequency error <±5 Hz under moderate fading". It does none of those things:
+//! there is no `WattersonChannel`, no `ModemEngine`, no audio and no decode anywhere in it. It feeds
+//! hand-built phase ramps to two standalone structs. That is a perfectly good unit test — it was just
+//! cited as integration coverage it never provided (archetype scan 2026-07-29, finding 7).
+//!
+//! **The component under test has no production callers.** `DopplerTracker` and
+//! `AdaptiveAfcLoopBandwidth` are referenced only from this file; the engine's real acquisition chain
+//! is `energy gate → refine_onset → afc_mini_settle → decode → carrier tracker` and does not use
+//! either. So a green run here says the estimator is arithmetically sound, and says nothing about the
+//! modem's behaviour under fading. The real fade/AFC gates are `bpsk_snr_tracks_a_fade`,
+//! `hpx_hf_rungs_survive_fade` and `waveform_lock_watterson`; they are independent of this file.
 
 use openpulse_dsp::doppler_tracker::{AdaptiveAfcLoopBandwidth, DopplerTracker};
 use std::f32::consts::PI;
@@ -87,27 +96,26 @@ fn test_adaptive_bandwidth_scaling() {
     );
 }
 
+/// A noisy phase ramp must not make the rate estimate diverge, and the adaptive bandwidth must not
+/// collapse while tracking it.
+///
+/// Previously named `test_watterson_f2_doppler_profile`, which it never was — the phase sequence is a
+/// linear ramp plus a deterministic sinusoid, not a Watterson channel. Renamed rather than left to
+/// keep implying fading coverage that does not exist here.
 #[test]
-fn test_watterson_f2_doppler_profile() {
-    // Watterson F2: Doppler spread = 2.0 Hz (fast fading)
-    // At 1000 baud (symbol rate), this is ~0.002 Hz / symbol
-    // Or ~2π × 0.002 rad/symbol ≈ 0.0126 rad/symbol
-
+fn test_noisy_phase_ramp_does_not_diverge() {
     let mut tracker = DopplerTracker::new(32);
     let mut bw_ctrl = AdaptiveAfcLoopBandwidth::new(0.02, 0.001, 0.1);
 
-    // Simulate moderate Doppler rate (0.03 rad/symbol = ~5 Hz drift @ 1000 baud)
+    // Moderate Doppler rate (0.03 rad/symbol ≈ 5 Hz drift @ 1000 baud) plus a small perturbation.
     let doppler_rate = 0.03;
     let mut phase = 0.0;
 
     for step in 0..100 {
-        tracker.update(phase);
-        phase += doppler_rate + 0.01 * (step as f32 * 0.1).sin(); // Add noise
+        phase += doppler_rate + 0.01 * (step as f32 * 0.1).sin();
 
         if let Some((est_rate, _conf)) = tracker.update(phase) {
-            // Expect some convergence toward true rate
             if step > 50 {
-                // Allow larger error due to added noise
                 assert!(
                     est_rate.abs() < doppler_rate * 2.5,
                     "Noisy Doppler tracking diverged at step {}",
@@ -122,35 +130,38 @@ fn test_watterson_f2_doppler_profile() {
     }
 }
 
+/// The estimator must recover a 3 Hz drift to better than 5 Hz once its window has filled.
+///
+/// **This assertion used to be unreachable.** It is guarded by `doppler_estimates.len() > 50`, but the
+/// test ran 64 symbols through a 32-symbol window, so at most 33 estimates could ever exist — the only
+/// live assertion in the whole test was `!doppler_estimates.is_empty()`. A sabotage probe confirmed
+/// it: replacing the `< 5.0` bound with an impossible `< -1.0` still passed. The symbol count now
+/// exceeds the guard, and `estimates_after_guard` is asserted so the guard cannot silently go
+/// unreachable again.
 #[test]
 fn test_frequency_lock_under_mild_doppler() {
-    // Simulate BPSK-31 receiver with Doppler compensation
-    // 1000 baud, 8 kHz sample rate = 8 sps
-    // Target: maintain lock with <5 Hz error on 3-Hz Doppler shift
-
     let mut tracker = DopplerTracker::new(32);
     let mut bw_ctrl = AdaptiveAfcLoopBandwidth::new(0.02, 0.001, 0.1);
 
-    // Simulate 3 Hz Doppler over 64 symbols at 1000 baud = 64 ms
-    // Phase accumulation at 3 Hz for 64 ms = 3 × 0.064 × 2π ≈ 1.2 rad
     let doppler_hz = 3.0;
-    let num_symbols = 64;
+    let num_symbols = 256;
     let baud_rate = 1000.0;
     let phase_per_symbol = 2.0 * PI * doppler_hz / baud_rate;
 
     let mut phase = 0.0;
     let mut doppler_estimates = Vec::new();
+    let mut estimates_after_guard = 0usize;
 
     for _sym in 0..num_symbols {
         if let Some((est_doppler_rad_per_sym, _conf)) = tracker.update(phase) {
             doppler_estimates.push(est_doppler_rad_per_sym);
 
-            // Convert back to Hz
             let est_doppler_hz = est_doppler_rad_per_sym * baud_rate / (2.0 * PI);
             bw_ctrl.update(18.0, est_doppler_rad_per_sym); // 18 dB SNR
 
             // After convergence, error should be <5 Hz
             if doppler_estimates.len() > 50 {
+                estimates_after_guard += 1;
                 assert!(
                     (est_doppler_hz - doppler_hz).abs() < 5.0,
                     "Doppler tracking error {} Hz, true {} Hz",
@@ -166,5 +177,11 @@ fn test_frequency_lock_under_mild_doppler() {
     assert!(
         !doppler_estimates.is_empty(),
         "No Doppler estimates produced"
+    );
+    // Anti-vacuity: the <5 Hz bound above must actually have been evaluated.
+    assert!(
+        estimates_after_guard > 100,
+        "the convergence guard admitted only {estimates_after_guard} estimates — the headline \
+         accuracy assertion is (nearly) unreachable again, which is the defect this test had"
     );
 }

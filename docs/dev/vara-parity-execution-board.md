@@ -64,10 +64,14 @@ This document tracks the 11-item execution plan to achieve VARA-class performanc
 
 **Description**: Extend AFC estimator to track Doppler shift and maintain carrier lock under rapid fading.
 
-**Current State**:
+**Current State** (corrected 2026-07-29 — see the note below):
 - Doppler phase-slope tracking is implemented in `openpulse-dsp::doppler_tracker::DopplerTracker`.
 - Adaptive AFC loop bandwidth controller is implemented in `AdaptiveAfcLoopBandwidth`.
-- Integration coverage for Watterson F2 and mild Doppler lock is present in `tests/afc_doppler_watterson.rs`.
+- **Neither has any production caller.** `grep` finds them referenced only from their own module and
+  from `tests/doppler_tracker_units.rs`. The engine's real acquisition chain is
+  `energy gate → refine_onset → afc_mini_settle → decode → carrier tracker` and uses neither.
+- Unit coverage of the two structs is in `tests/doppler_tracker_units.rs` (renamed from
+  `afc_doppler_watterson.rs`). It drives synthetic phase ramps — **no channel, no engine, no decode**.
 
 **Requirements**:
 - Doppler rate estimation: use phase difference across blocks or pilot tones.
@@ -76,9 +80,21 @@ This document tracks the 11-item execution plan to achieve VARA-class performanc
 
 **Acceptance Criteria**:
 - [x] Doppler rate estimator (phase slope across N-symbol windows).
-- [x] AFC error <±5 Hz on Watterson F2 @ 20 dB SNR (500-symbol window).
-- [x] Loop stability: no cycle slips in 100-frame Watterson F2 test.
-- [x] Integration test: `tests/afc_doppler_watterson.rs`.
+- [ ] AFC error <±5 Hz on Watterson F2 @ 20 dB SNR (500-symbol window). **Not measured.** The test
+  cited for this had no Watterson channel, no SNR, and ran 64 symbols through a 32-symbol window — so
+  its `<5 Hz` assertion sat behind a `len() > 50` guard that could never be satisfied. A sabotage
+  probe confirmed the vacuity: an impossible `< -1.0` bound still passed. The reachability is fixed in
+  `tests/doppler_tracker_units.rs`, but it measures a synthetic ramp, not Watterson F2 at 20 dB.
+- [ ] Loop stability: no cycle slips in 100-frame Watterson F2 test. **No such test exists.**
+- [x] Unit test: `tests/doppler_tracker_units.rs` — the two structs in isolation. This is **not**
+  integration coverage; it was cited as such and was not.
+
+> **Correction (2026-07-29, archetype scan finding 7).** Three of the four boxes above were checked
+> against a test that could not substantiate them. The real fade/AFC gates —
+> `bpsk_snr_tracks_a_fade`, `hpx_hf_rungs_survive_fade`, `waveform_lock_watterson` — are independent
+> of this item and unaffected; the harm was confined to evidence integrity in this record. Since the
+> tracked component has no production callers, closing the two open boxes means first deciding whether
+> the component should be wired in at all, or retired.
 
 **Depends On**: Item 1 (preamble available for phase reference).
 
@@ -451,7 +467,7 @@ None
 | HPX waveband HD profile | ✅ | 2026-05-13 | PR #218 merged |
 | BL-TP-7 pilot-density | ✅ | 2026-05-13 | Crossover policy wired |
 | Waveform lock (Item 1) | ✅ | 2026-05-13 | Preamble detection + phase coherence |
-| AFC Doppler (Item 2) | ✅ | 2026-05-13 | <5 Hz tracking error under fading |
+| AFC Doppler (Item 2) | ⚠️ partial | 2026-05-13 (corrected 2026-07-29) | Estimator unit-tested only; the "<5 Hz under fading" claim was never measured and its assertion was unreachable — see Item 2 |
 | Hysteresis (Item 3) | ✅ | 2026-05-13 | SnrEstimator + HysteresisController; 21 tests passing |
 | Pilot estimation + soft symbols (Item 4) | ✅ | 2026-05-14 | LS/MMSE soft demod path + AWGN/Watterson acceptance gates |
 | Cross-mode gate (Item 7) | ✅ | 2026-05-15 | Complete (PR #226) |
