@@ -2948,15 +2948,24 @@ impl ModemEngine {
             // error is a genuine demodulation failure, not a cue to re-demodulate hard
             // (which would double the per-attempt cost and can't succeed where the
             // soft pass failed — both share the same acquisition front end).
+            // Absolute RX SNR for rate adaptation: the mode's calibrated symbol-domain estimate
+            // (M2M4 fallback inside `rx_snr_db`). The old mean-|LLR| proxy reads ≈ −2 dB on a
+            // clean path (only a relative confidence indicator) and can't drive the SNR-hint
+            // ladder.
+            //
+            // Computed on BOTH branches. Until 2026-07-30 it lived inside the soft arm, so the
+            // predicate gating it was the demodulator's *soft capability* rather than the
+            // availability of an SNR estimate — two unrelated properties. `QPSK250-D` implements
+            // `estimate_snr_db` and reports `supports_soft_demod = false` (differential has no soft
+            // path, #923), so `hpx_hf`'s whole hard-FEC lower half recorded nothing (archetype scan
+            // 2026-07-29, finding 10). The rate ladder was unaffected — it reads a value computed in
+            // a separate call path — but `last_rx_snr_db()` feeds the QSY scan's candidate scoring
+            // (which scored every channel on `unwrap_or(0.0)`) and the ADIF logbook's `rx_snr`.
+            let snr = self.rx_snr_db(mode, &samples.samples);
             if plugin.supports_soft_demod(mode) {
                 let llrs = openpulse_modem_descramble_soft(
                     plugin.demodulate_soft(&samples.samples, &mod_cfg)?,
                 );
-                // Absolute RX SNR for rate adaptation: the mode's calibrated symbol-domain estimate
-                // (M2M4 fallback inside `rx_snr_db`). The old mean-|LLR| proxy reads ≈ −2 dB on a
-                // clean path (only a relative confidence indicator) and can't drive the SNR-hint
-                // ladder.
-                let snr = self.rx_snr_db(mode, &samples.samples);
                 let wire_bytes: Vec<u8> = llrs
                     .chunks(8)
                     .map(|byte_llrs| {
@@ -2968,7 +2977,7 @@ impl ModemEngine {
                 (WirePayload { bytes: wire_bytes }, Some(snr))
             } else {
                 let wire = self.stage_demodulate_payload(plugin, mode, &samples)?;
-                (wire, None)
+                (wire, Some(snr))
             }
         };
         if let Some(snr) = snr_opt {

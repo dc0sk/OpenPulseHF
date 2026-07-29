@@ -58,6 +58,47 @@ fn receive_populates_last_rx_snr_db() {
     );
 }
 
+/// The same, on a mode with **no** soft path — which is the case the test above cannot reach.
+///
+/// `record_rx_snr` used to sit inside the `supports_soft_demod` arm, so the predicate gating it was
+/// the demodulator's soft capability rather than whether an SNR estimate exists. Those are unrelated:
+/// `QPSK250-D` implements `estimate_snr_db` and deliberately reports `supports_soft_demod = false`
+/// (differential detection has no calibrated soft path, #923), so every hard-FEC rung — all of
+/// `hpx_hf`'s lower half — recorded nothing. Its own assertion message named the gap
+/// ("a plugin that supports demodulate_soft") without anyone noticing it was one
+/// (archetype scan 2026-07-29, finding 10).
+///
+/// Consumers this starved: the QSY frequency scan, which scored every candidate channel on
+/// `unwrap_or(0.0)`, and the ADIF logbook's `rx_snr` field.
+#[test]
+fn receive_populates_last_rx_snr_db_on_a_hard_only_mode() {
+    let mut engine = make_engine();
+    engine
+        .register_plugin(Box::new(qpsk_plugin::QpskPlugin::new()))
+        .unwrap();
+
+    const MODE: &str = "QPSK250-D";
+    // Anti-vacuity: if this mode ever gains a soft path it takes the OTHER branch and this test
+    // silently stops covering the one it exists for.
+    assert!(
+        !openpulse_core::plugin::ModulationPlugin::supports_soft_demod(
+            &qpsk_plugin::QpskPlugin::new(),
+            MODE
+        ),
+        "{MODE} is expected to be hard-only; if it gained a soft path this test no longer covers \
+         the branch it exists for and needs a different mode"
+    );
+
+    engine.transmit(b"hello", MODE, None).unwrap();
+    engine.receive(MODE, None).unwrap();
+
+    assert!(
+        engine.last_rx_snr_db().is_some(),
+        "last_rx_snr_db() is None after receiving {MODE}. RX SNR must be recorded whenever the mode \
+         can estimate it, not only when the demodulator happens to emit soft decisions."
+    );
+}
+
 #[test]
 fn emits_hpx_transition() {
     let mut engine = make_engine();

@@ -893,8 +893,18 @@ pub async fn run(cfg: OpenpulseConfig, modem_backend: Box<dyn AudioBackend>) -> 
                     }
                     Ok(Some(burst)) => {
                         // The monitor already ran above, for every arm.
-                        tokio::task::block_in_place(|| engine.decode_burst(&mode, &burst))
-                            .unwrap_or_default()
+                        // Log the terminal reason like both sibling arms do. `decode_burst`'s callee
+                        // emits partial diagnostics one layer down, so this arm was never fully
+                        // silent — but the reason the decode ended (PluginNotFound, bad magic, CRC)
+                        // was dropped on the floor while the OTA arm 30 lines up logged its
+                        // equivalent (archetype scan 2026-07-29, finding 11).
+                        match tokio::task::block_in_place(|| engine.decode_burst(&mode, &burst)) {
+                            Ok(b) => b,
+                            Err(e) => {
+                                tracing::debug!("burst decode error: {e}");
+                                Vec::new()
+                            }
+                        }
                     }
                     Ok(None) => Vec::new(),
                     Err(e) => {
