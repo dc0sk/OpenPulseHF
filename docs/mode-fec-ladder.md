@@ -181,7 +181,7 @@ ceiling *and* a positive ACK arrives.
 | `hpx_pilot_rrc` | HF pilot, narrowband | same ladder on the `-RRC` variants | ~half the bandwidth (RRC); same per-symbol floors. Prefer `hpx_pilot` when SRO-heavy |
 | `hpx_pilot_fast` | HF pilot, high-throughput | PILOT-{QPSK,8PSK,16QAM,32APSK}**1000** (SL2–5) | 2× bits/s at the same per-symbol floors; ~2× bandwidth |
 | `hpx_pilot_fast_rrc` | HF pilot, fast + narrowband | the 1000-baud ladder on `-RRC` | 2× throughput **and** ~half-band (~1350 Hz) |
-| `hpx_wideband_hd` | Wideband HD | SCFDMA26-{8PSK,16QAM,32QAM} (SL9–11 fallback) → SCFDMA52-{16QAM,32QAM,64QAM} → 64QAM2000-RRC (SL12–15) | >2700 Hz links; SL9–11 are the graceful-degradation rungs |
+| `hpx_wideband_hd` | Wideband HD | SCFDMA26-{8PSK,16QAM,32QAM} (SL9–11 fallback) → SCFDMA52-{16QAM,32QAM,64QAM} → 64QAM2000-RRC (SL12–15) | >2700 Hz links; SL9–11 are the graceful-degradation rungs. **Every rung runs `SoftConcatenated`** — it shipped with no FEC assigned until 2026-07-29 despite its floors and its hardware validation both being measured with it; SL9–SL12 decoded 0–4 of 8 uncoded at their own declared floors |
 | `hpx_wideband` / `hpx_narrowband` / `hpx_narrowband_hd` | Wide / post-1.0 | QPSK/8PSK 1000, 2000-RRC, 9600-RRC | FM / VHF / UHF or wider-than-HF; deferred (§8) |
 
 The four `hpx_pilot*` profiles share one carrier architecture and the same

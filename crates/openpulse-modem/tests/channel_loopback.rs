@@ -360,3 +360,135 @@ fn every_profile_rung_decodes_clean_with_its_fec() {
         "expected exactly the 2 known >8 kHz rungs (hpx_narrowband_hd 9600); got {known_unmodulatable}"
     );
 }
+
+/// THE GATE WITH TEETH: every rung must decode **at its own declared SNR floor** with the FEC its
+/// profile assigns it.
+///
+/// `every_profile_rung_decodes_clean_with_its_fec` above runs on `route_clean()` — a noiseless
+/// channel, where an uncoded decode always succeeds. So it retains teeth for the *wrong-FEC* half of
+/// the bug class its docstring names, and is structurally blind to the *missing-FEC* half: direct
+/// ablation showed that reintroducing the exact named bug (`FecMode::None` on nine modes including
+/// every OFDM/SC-FDMA variant) leaves it green (archetype scan 2026-07-29, finding 6). This gate is
+/// the missing half, and it is what caught `hpx_wideband_hd` shipping `fec_modes: [None; 21]` seven
+/// lines below its own comment saying those modes run under soft-concatenated FEC.
+///
+/// **On failure it says whether FEC is the reason.** A rung that fails with its assigned FEC but
+/// succeeds with `SoftConcatenated` at the same SNR is under-FEC'd; one that fails with both has a
+/// floor that is too optimistic. Those need different fixes, and the message distinguishes them.
+///
+/// **A note on units, because it constrains what this can assert.** `snr_floor` is in per-waveform
+/// -family units — single-carrier PSK floors are ~true channel SNR while OFDM/SC-FDMA floors are
+/// plugin-domain and saturate (see the SNR-scale-boundary sharp edge in CLAUDE.md). So this does NOT
+/// claim the AWGN SNR here is the same quantity a rung's floor is expressed in. What it asserts is
+/// the profile's own promise — *at this number, with this FEC, this rung works* — and the
+/// same-SNR FEC A/B on failure is valid regardless of scale, because FEC is then the only variable.
+///
+/// Deterministic: fixed seeds 0..N, so this is a fixed set of channel realisations, not a sample.
+#[test]
+fn every_profile_rung_decodes_at_its_floor_with_its_fec() {
+    use openpulse_core::profile::SessionProfile;
+    /// Trials per rung, and how many must decode. Fixed seeds ⇒ no flake.
+    const TRIALS: usize = 4;
+    const NEEDED: usize = 3;
+
+    fn reg(e: &mut openpulse_modem::ModemEngine) {
+        e.register_plugin(Box::new(bpsk_plugin::BpskPlugin::new()))
+            .ok();
+        e.register_plugin(Box::new(qpsk_plugin::QpskPlugin::new()))
+            .ok();
+        e.register_plugin(Box::new(psk8_plugin::Psk8Plugin::new()))
+            .ok();
+        e.register_plugin(Box::new(qam64_plugin::Qam64Plugin::new()))
+            .ok();
+        e.register_plugin(Box::new(fsk4_plugin::Fsk4Plugin::new()))
+            .ok();
+        e.register_plugin(Box::new(ofdm_plugin::OfdmPlugin::new()))
+            .ok();
+        e.register_plugin(Box::new(scfdma_plugin::ScFdmaPlugin::new()))
+            .ok();
+        e.register_plugin(Box::new(pilot_plugin::PilotPlugin::new()))
+            .ok();
+        e.register_plugin(Box::new(mfsk16_plugin::Mfsk16Plugin::new()))
+            .ok();
+    }
+
+    fn decodes(mode: &str, fec: FecMode, snr_db: f32, trials: usize) -> usize {
+        let payload: Vec<u8> = (0..64u8).collect();
+        let mut ok = 0;
+        for seed in 0..trials as u64 {
+            let mut h = ChannelSimHarness::new();
+            reg(&mut h.tx_engine);
+            reg(&mut h.rx_engine);
+            if h.tx_engine
+                .transmit_with_fec_mode(&payload, mode, fec, None)
+                .is_err()
+            {
+                return usize::MAX; // unmodulatable at 8 kHz; covered by the clean gate above
+            }
+            let mut ch = AwgnChannel::new(AwgnConfig::new(snr_db, Some(seed))).unwrap();
+            h.route(&mut ch);
+            if h.rx_engine
+                .receive_with_fec_mode(mode, fec, None)
+                .map(|d| d == payload)
+                .unwrap_or(false)
+            {
+                ok += 1;
+            }
+        }
+        ok
+    }
+
+    let mut checked = 0usize;
+    for name in SessionProfile::PROFILE_NAMES {
+        let p = SessionProfile::by_name(name).unwrap();
+        for level in p.defined_levels() {
+            let Some(mode) = p.mode_for(level) else {
+                continue;
+            };
+            // FSK4-ACK is the ACK channel, not a data rung; the 9600 rungs need a 48 kHz path.
+            if mode == "FSK4-ACK" || mode.contains("9600") {
+                continue;
+            }
+            // A rung with no declared floor makes no promise this gate can check. MFSK16 (hpx_hf
+            // SL1) is the only one, and it has its own gates (mfsk16_engine, mfsk16_harq).
+            let Some(floor) = p.snr_floor_for_level(level) else {
+                continue;
+            };
+            let fec = p.fec_for(level);
+            let ok = decodes(mode, fec, floor, TRIALS);
+            if ok == usize::MAX {
+                continue;
+            }
+            checked += 1;
+            if ok < NEEDED {
+                // Diagnose before failing: is FEC the missing variable, or is the floor wrong?
+                let with_fec = if fec == FecMode::SoftConcatenated {
+                    ok
+                } else {
+                    decodes(mode, FecMode::SoftConcatenated, floor, TRIALS)
+                };
+                let verdict = if with_fec >= NEEDED {
+                    format!(
+                        "UNDER-FEC'd — SoftConcatenated decodes {with_fec}/{TRIALS} at the same SNR, \
+                         so the rung works and the profile is not asking for the FEC it needs"
+                    )
+                } else {
+                    format!(
+                        "FLOOR TOO OPTIMISTIC — SoftConcatenated only manages {with_fec}/{TRIALS} \
+                         here either, so more FEC is not the answer; the declared floor is wrong"
+                    )
+                };
+                panic!(
+                    "{name}/{level:?} {mode} with its assigned {fec:?} decodes only {ok}/{TRIALS} \
+                     at its own declared floor of {floor} dB. {verdict}"
+                );
+            }
+        }
+    }
+
+    // Anti-vacuity: a filter bug that skipped every rung would otherwise leave this green.
+    assert!(
+        checked >= 50,
+        "only {checked} rungs were actually measured — the skip conditions are eating the suite"
+    );
+}

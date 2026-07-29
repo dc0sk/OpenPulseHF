@@ -344,6 +344,12 @@ impl SessionProfile {
         p.modes[SpeedLevel::Sl3 as usize] = Some("PILOT-8PSK1000-RRC");
         p.modes[SpeedLevel::Sl4 as usize] = Some("PILOT-16QAM1000-RRC");
         p.modes[SpeedLevel::Sl5 as usize] = Some("PILOT-32APSK1000-RRC");
+        // SL2's floor is inherited from `hpx_pilot`, whose modes are 500-baud and not RRC-shaped, and
+        // it is ~2 dB optimistic here. Measured on AWGN, 12 trials per point, RRC vs the plain
+        // 1000-baud sibling at the same SNR: 6 dB 8/12 vs 11/12, 7 dB 11/12 vs 11/12, 8 dB 12/12 vs
+        // 12/12. The other three rungs' inherited floors hold (12/12 at their own floors), so only
+        // SL2 moves. Found by the per-rung floor sweep added with the profile-FEC gate (2026-07-29).
+        p.snr_floors[SpeedLevel::Sl2 as usize] = Some(8.0_f32);
         p
     }
 
@@ -793,6 +799,25 @@ impl SessionProfile {
         snr_ceilings[SpeedLevel::Sl13 as usize] = Some(26.0_f32);
         snr_ceilings[SpeedLevel::Sl14 as usize] = Some(33.0_f32);
         // SL15 is the ceiling; no upgrade above it.
+
+        // Every rung runs SoftConcatenated — the FEC this profile's own comments and real-audio
+        // status table have always said these modes run under, and the FEC the 2026-07-22 hardware
+        // validation actually used. Until 2026-07-29 this was `[None; 21]`, so `fec_for` returned
+        // `FecMode::None` for every rung and the shipped ladder never applied the FEC its floors were
+        // measured with. Measured at each rung's own declared floor (8 trials, AWGN, seeds 0..7):
+        //
+        //   SL9  SCFDMA26-8PSK  @  9 dB   uncoded 2/8   SoftConcatenated 8/8
+        //   SL10 SCFDMA26-16QAM @ 11 dB   uncoded 2/8   SoftConcatenated 8/8
+        //   SL11 SCFDMA26-32QAM @ 13 dB   uncoded 0/8   SoftConcatenated 8/8
+        //   SL12 SCFDMA52-16QAM @ 16 dB   uncoded 4/8   SoftConcatenated 8/8
+        //   SL13/SL14/SL15                uncoded 8/8   SoftConcatenated 8/8
+        //
+        // Note which rungs broke: the SCFDMA26 tier described above as "the robust
+        // graceful-degradation path" was the *least* robust part of the profile. SL13–SL15 pass
+        // uncoded on AWGN, but they are assigned FEC too — the recorded hardware validation used it,
+        // and an in-process AWGN pass is not evidence about a real analog path.
+        let fec_modes = [Some(FecMode::SoftConcatenated); 21];
+
         Self {
             modes,
             initial_level: SpeedLevel::Sl12,
@@ -800,7 +825,7 @@ impl SessionProfile {
             snr_floors,
             snr_ceilings,
             ack_up_requires_snr_candidate_at: Some(SpeedLevel::Sl14),
-            fec_modes: [None; 21],
+            fec_modes,
         }
     }
 }

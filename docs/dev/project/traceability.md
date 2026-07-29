@@ -8933,3 +8933,69 @@ The last mode still failing on the dual-card rig after the AGC misclassification
   to close; and the settle-recovery gate pins BPSK250 exclusively — the one mode where the old
   precondition was satisfiable. In each case the gate's own fixture sits on the side of the boundary
   where the defect cannot fire. That is the archetype, and it is worth more than the four fixes.
+
+## Gates that measure a proxy instead of the objective (2026-07-29)
+
+- **Requirement:** cluster 2 of the defect-archetype scan
+  (`docs/dev/reviews/archetype-scan-2026-07-29.md`) — three gates that measure something *correlated*
+  with the real property under conditions where the correlation happens to be perfect, then silently
+  stop tracking it under the conditions the objective actually cares about. Unlike cluster 1 (where
+  the shipped code was wrong), here the shipped **evidence** was wrong; two of the three exposed a
+  real code defect only once the gate was fixed.
+- **Design decision:** fix the *gate* first and let it find the code defect, rather than fixing the
+  code from the audit's assertion. This is what narrowed the scope: the scan's first pass read as
+  "9 of 12 profiles assign no FEC", and measurement showed most of those are **self-consistent** —
+  their floors were derived uncoded and the code matches. Only one profile was actually defective.
+- **Implementation:**
+  - `crates/openpulse-modem/tests/channel_loopback.rs`:
+    `every_profile_rung_decodes_at_its_floor_with_its_fec` — AWGN at each rung's own declared floor,
+    fixed seeds (deterministic, not a sample). On failure it runs a same-SNR FEC A/B and names which
+    of two different problems it found: **UNDER-FEC'd** (succeeds with `SoftConcatenated`) vs
+    **FLOOR TOO OPTIMISTIC** (does not). The pre-existing clean gate is kept — it still has teeth for
+    the *wrong*-FEC half of the class; it was blind only to the *missing*-FEC half.
+    Note on units: floors are per-waveform-family (the SNR-scale-boundary sharp edge), so the gate
+    does **not** claim the AWGN SNR equals the quantity a floor is expressed in. It asserts the
+    profile's own promise — *at this number, with this FEC, this rung works* — and the failure-path
+    A/B is scale-independent because FEC is then the only variable.
+  - `crates/openpulse-core/src/profile.rs`: `hpx_wideband_hd` gains
+    `fec_modes = [Some(FecMode::SoftConcatenated); 21]`. It previously shipped `[None; 21]` **seven
+    lines below its own comment** stating these modes run under soft-concatenated FEC, so the ladder
+    never applied the FEC its floors and its hardware validation were measured with.
+  - `crates/openpulse-core/src/profile.rs`: `hpx_pilot_fast_rrc` SL2 floor 6.0 → 8.0 dB. It inherited
+    a floor from `hpx_pilot`, whose modes are 500-baud and not RRC-shaped.
+  - `crates/openpulse-modem/tests/afc_doppler_watterson.rs` → `doppler_tracker_units.rs`, header
+    corrected, headline assertion made reachable, anti-vacuity counter added.
+  - `docs/dev/vara-parity-execution-board.md`, `docs/dev/project/traceability-matrix.md`: two
+    acceptance boxes UNCHECKED with the reason, one reworded integration→unit, summary row done→partial.
+- **Measurements (actually run, AWGN at each rung's own declared floor, 8 trials, seeds 0..7):**
+
+  | rung | floor | uncoded | SoftConcatenated |
+  |---|---|---|---|
+  | `hpx_wideband_hd` SL9 SCFDMA26-8PSK | 9 dB | **2/8** | 8/8 |
+  | SL10 SCFDMA26-16QAM | 11 dB | **2/8** | 8/8 |
+  | SL11 SCFDMA26-32QAM | 13 dB | **0/8** | 8/8 |
+  | SL12 SCFDMA52-16QAM | 16 dB | **4/8** | 8/8 |
+  | SL13 / SL14 / SL15 | 20 / 28 / 35 dB | 8/8 | 8/8 |
+
+  The broken rungs are the **low** ones — the SCFDMA26 tier the profile's own comment calls "the
+  robust graceful-degradation path" was the least robust part of it.
+
+  `hpx_pilot_fast_rrc` SL2 floor sweep (12 trials/point, RRC vs the plain 1000-baud sibling):
+  6 dB **8/12** vs 11/12 · 7 dB 11/12 vs 11/12 · 8 dB 12/12 vs 12/12.
+
+  Not defects, confirmed by the same sweep: `hpx500`, `hpx_pilot`, `hpx_pilot_rrc`,
+  `hpx_pilot_fast`, `hpx_wideband`, `hpx_narrowband` all decode at their own floors uncoded.
+  `hpx_hf` SL7–14 and all of `hpx_ofdm_hf` decode 0–1/3 uncoded and 3/3 with their assigned FEC, so
+  those assignments are load-bearing. `hpx_hf` SL6 `QPSK250-D` scores 0/3 with `SoftConcatenated` and
+  3/3 with its assigned `Rs` — the documented "differential has no soft path", working as designed.
+- **Test results:** `channel_loopback every_profile_rung` **2/2**; `doppler_tracker_units` **5/5**;
+  `openpulse-core` 321 + 16 + 22 + … **0 failed**.
+- **Sabotage verification:** reverting `hpx_wideband_hd` to `[None; 21]` fails the new gate with
+  *"hpx_wideband_hd/Sl9 SCFDMA26-8PSK with its assigned None decodes only 1/4 at its own declared
+  floor of 9 dB. UNDER-FEC'd — SoftConcatenated decodes 4/4 at the same SNR"* — **while the old clean
+  gate stays green**, which is scan finding 6 demonstrated directly rather than asserted. Replacing
+  the Doppler test's `< 5.0` bound with an impossible `< -1.0` now **fails** (it passed before);
+  the estimator recovers 3.0000083 Hz against a true 3 Hz.
+- **Wire note:** `fingerprint()` covers `(level → mode, level → FEC)`, so `hpx_wideband_hd`'s
+  fingerprint changes. That is the mechanism working as designed — it exists to detect exactly this
+  kind of ladder divergence between builds.
