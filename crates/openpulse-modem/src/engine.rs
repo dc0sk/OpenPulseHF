@@ -130,15 +130,26 @@ impl ScanPlanner {
         self.settle_failures >= Self::SETTLE_FAILURE_LIMIT
     }
 
-    /// Abandon a settled position that has proved undecodable, and reopen the search.
+    /// Abandon a settled position that has proved undecodable, and reopen the search **past it**.
     ///
-    /// `last_tried_end` is rewound so the broad scan revisits everything: the real frame is
-    /// *later* than a premature noise anchor, but positions before it were already marked tried
-    /// while the bogus anchor was held.
+    /// **The condemned position must not be re-offered to the scan.** Rewinding `last_tried_end` to
+    /// 0 — which this did until 2026-07-29 — restarts the broad scan at the beginning, where the
+    /// same idle noise passes the same energy gate and re-settles at the same sample. That is a
+    /// livelock, not a recovery: measured on the real on-air capture
+    /// `ic9700-frame-bpsk250-rs-whitened.wav`, the receiver settled **78 times and condemned 77
+    /// times at the identical position (sample 96)**, burning the entire 40 s listen window ~82 000
+    /// samples short of a frame that is byte-perfect on the air (#1021).
+    ///
+    /// Resuming just past the anchor is sound by the same argument the old comment made for
+    /// rewinding: **a premature noise anchor sits BEFORE the real frame**, so the frame is later.
+    /// And the anchor has earned its exclusion — `SETTLE_FAILURE_LIMIT` fully-buffered decodes
+    /// across a 9-offset sweep have already failed there, so it is proven undecodable rather than
+    /// merely unpromising.
     fn unsettle(&mut self) {
+        let condemned = self.first_energy_pos.unwrap_or(0);
         self.first_energy_pos = None;
         self.settle_failures = 0;
-        self.last_tried_end = 0;
+        self.last_tried_end = condemned.saturating_add(self.step.max(1));
     }
 
     /// `true` once AFC settling has located the first signal energy.

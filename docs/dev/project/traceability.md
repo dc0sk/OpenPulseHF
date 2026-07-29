@@ -9045,3 +9045,53 @@ The last mode still failing on the dual-card rig after the AGC misclassification
   **exact pre-fix code** (the emit restored inside the non-OTA arm) fails the new test — which also
   proves the fixture genuinely has an OTA session active, since otherwise the pre-fix placement would
   have passed.
+
+---
+
+## 2026-07-30 — #1021 CLOSED: the settle recovery was a livelock, not the signal
+
+- **Requirement / change:** a real coded on-air `BPSK250|rs` frame must decode. #1021 had survived
+  the whitening fix (#1027) and a reopening.
+- **How the cause was found — every physical hypothesis was wrong.** Two fresh dual captures were
+  taken on air 2026-07-29 from a whitening build. The coded one failed identically, which made it
+  reproducible offline. Then, instead of another signal hypothesis, the **exact transmitted wire was
+  reconstructed** (`Frame::encode` → `FecCodec` → `scramble`) and diffed against the demodulated
+  bytes:
+  - **0 byte errors in all 255.** The 8.3 s frame arrived off the air byte-perfect.
+  - It demodulates cleanly across a **±32 Hz** AFC acceptance window — acquisition is not fragile.
+  - Refuted by measurement: carrier **+2.42 Hz** drifting **−0.3 Hz** over the whole burst; margin
+    **7.2 dB** against the passing control's 7.3 dB; amplitude stable to 1.07; a tight ±0.5 s window
+    failing identically (so not the frame-location class).
+  - An intermediate hypothesis — that the transmitter's `free_rs_strengthening` upgrade to
+    `RsStrong` was not matched by the receiver — was **correct about the wire** (the diff only
+    matches against `FecCodec::strong()`, errors starting exactly at byte 191 = `255 − 64`) but
+    **not the cause**: the receive arms already dual-decode, and forcing `RsStrong` failed too.
+- **The actual defect.** The engine's trace showed `AFC settling done: correction=364.4Hz onset=96`
+  — settled on idle noise at sample 96, ~82 000 samples before the frame, on a correction 6× outside
+  BPSK250's ±62.5 Hz tracking range. `ScanPlanner::note_settle_failure` **correctly condemned** it —
+  and `unsettle` rewound `last_tried_end` to **0**, so the broad scan restarted at the beginning
+  where the same noise passed the same gate and re-settled at the same sample. Measured:
+  **78 settles, 77 condemnations, all at sample 96**, until the listen window expired. The recovery
+  #1022 added was *reachable* (#1028 made it so) and *ineffective*.
+- **Trigger.** `EnergyGate::threshold` returns a fixed `ABS_THRESHOLD = 1e-4` until it holds 32
+  windows of history. This station's idle floor is **4.1e-4**, four times that, so the first window
+  of pure noise passes. Note it also **passes `onair-rx-level-check.sh`**, which only checks the
+  floor against the clamp *ceiling* — the blind window `1e-4 .. 1.07e-3` is exactly where a
+  correctly configured station sits.
+- **Design decision (+ rationale):** `unsettle` resumes at `condemned + step` instead of 0. Sound by
+  the same argument the old comment already made for rewinding — *a premature noise anchor sits
+  before the real frame* — and the anchor has earned exclusion: `SETTLE_FAILURE_LIMIT` (18)
+  fully-buffered decodes across a 9-offset sweep already failed there. Deliberately **not** fixed by
+  tightening `AFC_MAX_CORRECTION_HZ` (a threshold tweak that would reject this particular noise
+  settle while noise converging to 50 Hz would still pass) nor by changing the gate's cold start
+  (which would break every buffer-is-the-frame fixture, whose first window is signal).
+- **Implementation:** `crates/openpulse-modem/src/engine.rs` — `ScanPlanner::unsettle`.
+- **Result after the fix:** 8 settles instead of 78; the receiver lands at **onset 82304 with a
+  +2.0 Hz correction**, matching the independently measured +2.42 Hz carrier.
+- **Whitening is retained and was a real fix**, verified on this capture: **0 of 33** dead-carrier
+  windows against the pre-whitening predecessor's 25 of 33. It removed 6.2 s of unmodulated carrier
+  and was not the cause of the decode failure. **Two defects, one symptom.**
+- **Tests:** `crates/openpulse-modem/tests/capture_replay_corpus.rs::the_real_on_air_frame_decodes`
+  (un-ignored) plus `a_real_on_air_frame_decodes_end_to_end` (uncoded control).
+- **Test results (run):** `capture_replay_corpus` **8 passed, 0 ignored**.
+- **Sabotage verification:** restoring the exact pre-fix `self.last_tried_end = 0` fails the test.
