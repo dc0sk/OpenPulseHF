@@ -9130,3 +9130,41 @@ The last mode still failing on the dual-card rig after the AGC misclassification
   A wire carrying a 17-symbol dead carrier every 34 symbols was invisible to the only gate guarding
   the fix. Note this is a blind spot, not a live regression: the property does hold for the shipped
   LFSR (measured whitened run = 8 bits).
+
+---
+
+## 2026-07-30 — #1029: linksim accounted throughput against the requested FEC, not the transmitted one
+
+- **Requirement / change:** `FrameStep::net_bps` must reflect the code rate that was on the wire.
+- **Design decision (+ rationale):** the per-frame FEC is resolved from the profile
+  (`self.ota.tx_fec()`, falling back to the sim's knob only for unprotected rungs), but the
+  accounting used `self.params.fec`. The resolved value is now carried in `last_fec` alongside
+  `last_mode`/`last_level` and used for `net_bps`. Same archetype as cluster 2 — a proxy that tracked
+  the objective only while no profile assigned per-rung FEC, which was true of most profiles.
+- **Implementation:** `apps/openpulse-linksim/src/lib.rs` — `last_fec` added in `step()`, assigned
+  from the resolved per-attempt `fec`, and used in place of `self.params.fec` for `net_bps`.
+- **CORRECTION to the issue as filed.** #1029 states that `goodput_gate` "reads `effective_bps`,
+  which is derived from `net_bps`", and that the fix therefore moves the CI baseline. **That is
+  wrong, and both halves were checked.** `LinkResult::effective_bps` (lib.rs:992) is
+  `bytes_delivered * 8 / total_air_s` — measured from real airtime and delivered bytes, never
+  touching `fec_code_rate`. Measured confirmation: all three gate cases were run under the old and
+  the new accounting and returned **bit-identical** numbers (331.5 / 893.3 / 555.4 bps). The
+  corrected `net_bps` reaches the linksim GUI (`gui.rs:879`) and the panel feed
+  (`serve.rs:407` → `openpulse-panel`), which is where the ~2x overstatement was visible.
+- **Found while re-deriving:** the gate's baseline annotations had drifted in **both** directions,
+  and one mattered. `ofdm_ladder_goodput_floor_dispersive_fade` carried a `~414` annotation against a
+  floor of 280; the case now measures **555**, so the floor had silently become 50 % of baseline
+  against the module's own stated ~65 % rule — it would have passed a 40 % throughput regression on
+  the dispersive fade the OFDM ladder exists to survive. Floor re-derived to 360. The other two were
+  already at or tighter than the rule (331 → floor 250 = 75 %; 893 → floor 600 = 67 %) and are
+  unchanged; only their stale annotations were corrected.
+- **Tests:** `apps/openpulse-linksim/src/lib.rs` —
+  `tests::net_bps_is_accounted_against_the_fec_actually_transmitted`. Steps `hpx_hf` and asserts
+  `net_bps == gross_bps * fec_code_rate(profile-resolved FEC)` per frame. The **anti-vacuity guard**
+  is load-bearing: it requires at least one visited rung whose transmitted FEC differs from the
+  requested one, so the test cannot pass on a run where the question never arises.
+- **Test results (run):** `net_bps_is_accounted_against_the_fec_actually_transmitted` **1/1**;
+  `goodput_gate` **4/4** with the re-derived floor.
+- **Sabotage verification:** restoring the exact original line
+  (`fec_code_rate(self.params.fec)`) fails the new test — `SL7 (OFDM52) transmits SoftConcatenated
+  (r=0.437) but net_bps 2487.5 implies r=0.875`, the predicted ~2x overstatement.

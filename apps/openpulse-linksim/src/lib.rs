@@ -760,6 +760,10 @@ impl LinkSim {
         let mut last_level = self.ota.tx_level();
         let mut last_snr = 0.0_f32;
         let mut last_mode = String::new();
+        // The FEC the frame was actually TRANSMITTED with, which is not `params.fec` on any profile
+        // that assigns per-rung FEC. Accounting throughput against the requested knob instead
+        // overstated `net_bps` by ~2x on every `SoftConcatenated` rung (issue #1029).
+        let mut last_fec = self.params.fec;
         let mut last_compress_ratio = 1.0_f64;
         let mut ack_sent = AckType::Nack;
         let mut ack_received = AckType::Nack;
@@ -785,6 +789,7 @@ impl LinkSim {
                 FecMode::None => fec_for(&mode, self.params.fec),
                 f => f,
             };
+            last_fec = fec;
             let payload = make_payload(frame, attempts, self.params.payload_bytes_per_frame);
 
             // Compress, then send the wire bytes as a burst of ≤FRAME_CHUNK modem frames
@@ -940,7 +945,10 @@ impl LinkSim {
             .rate_cache
             .entry(last_mode.clone())
             .or_insert_with(|| mode_gross_bps(&last_mode).unwrap_or(0.0));
-        let net_bps = gross_bps * fec_code_rate(self.params.fec);
+        // `last_fec`, not `params.fec`: the code rate that was on the wire. See #1029 — these two
+        // agree only while no profile assigns per-rung FEC, which was true of most profiles and is
+        // exactly why the divergence went unnoticed.
+        let net_bps = gross_bps * fec_code_rate(last_fec);
         let compress_adv = 1.0 / last_compress_ratio.max(1e-9);
         let effective_bps = net_bps * compress_adv * success_rate;
 
@@ -1022,6 +1030,66 @@ pub fn run_link(params: &LinkParams) -> LinkResult {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `net_bps` must be the code rate that was on the WIRE, not the one the sim was asked for
+    /// (#1029).
+    ///
+    /// The two agree on every profile that assigns no per-rung FEC — which was most of them, and is
+    /// exactly why the divergence went unnoticed. The anti-vacuity guard below is therefore the
+    /// load-bearing part: without it this test would pass on a profile where the question never
+    /// arises, and would keep passing if the accounting reverted.
+    #[test]
+    fn net_bps_is_accounted_against_the_fec_actually_transmitted() {
+        let profile = SessionProfile::hpx_hf();
+        let mut sim = LinkSim::new(&LinkParams {
+            profile_name: "hpx_hf".into(),
+            forward: ChannelSpec::Clean,
+            reverse: ChannelSpec::Clean,
+            payload_bytes_per_frame: 64,
+            total_frames: 25,
+            fec: FecMode::Rs,
+            seed: 3,
+            ..LinkParams::default()
+        });
+
+        let mut diverged = 0usize;
+        let mut checked = 0usize;
+        while let Some(step) = sim.step() {
+            let Some(level) = SpeedLevel::from_u8(step.level) else {
+                continue;
+            };
+            let wire_fec = match profile.fec_for(level) {
+                FecMode::None => fec_for(&step.mode, FecMode::Rs),
+                f => f,
+            };
+            if wire_fec != FecMode::Rs {
+                diverged += 1;
+            }
+            let expected = step.gross_bps * fec_code_rate(wire_fec);
+            assert!(
+                (step.net_bps - expected).abs() < 1e-6,
+                "SL{} ({}) transmits {:?} (r={:.3}) but net_bps {:.1} implies r={:.3}",
+                step.level,
+                step.mode,
+                wire_fec,
+                fec_code_rate(wire_fec),
+                step.net_bps,
+                step.net_bps / step.gross_bps.max(1e-9)
+            );
+            checked += 1;
+        }
+
+        assert!(
+            checked > 0,
+            "no frames stepped — the fixture proves nothing"
+        );
+        assert!(
+            diverged > 0,
+            "every rung this run visited transmits the requested FecMode::Rs, so the requested and \
+             transmitted code rates never diverged and this test cannot distinguish them. Pick a \
+             profile/run that reaches a rung with a different per-rung FEC."
+        );
+    }
 
     #[test]
     fn ldpc_and_turbo_decode_through_a_clean_link() {
@@ -1469,12 +1537,21 @@ mod goodput_gate {
         );
     }
 
+    // Baselines re-measured 2026-07-30 (seeded, so deterministic — two runs agreed to 0.1 bps).
+    // They are NOT affected by the #1029 accounting fix: `LinkResult::effective_bps` is
+    // `bytes_delivered * 8 / total_air_s`, measured from real airtime, and never touches
+    // `fec_code_rate`. Confirmed both ways — statically, and by measuring all three cases under the
+    // old and new accounting and getting bit-identical numbers. `net_bps` (which #1029 corrects)
+    // feeds the GUI and the panel display, not this gate.
+    //
+    // Two of the annotations they replaced had drifted far enough to matter, in opposite directions.
+
     #[test]
     fn psk_ladder_goodput_floor_awgn() {
         let g = bps("hpx_hf", ChannelSpec::Awgn(20.0));
         assert!(
             g >= 250.0,
-            "hpx_hf AWGN 20 dB goodput {g:.0} bps below the floor (baseline ~397)"
+            "hpx_hf AWGN 20 dB goodput {g:.0} bps below the floor (baseline 331, floor 75%)"
         );
     }
 
@@ -1483,16 +1560,21 @@ mod goodput_gate {
         let g = bps("hpx_ofdm_hf", ChannelSpec::Awgn(20.0));
         assert!(
             g >= 600.0,
-            "hpx_ofdm_hf AWGN 20 dB goodput {g:.0} bps below the floor (baseline ~919)"
+            "hpx_ofdm_hf AWGN 20 dB goodput {g:.0} bps below the floor (baseline 893, floor 67%)"
         );
     }
 
+    /// The floor here was 280 against a stale `~414` annotation. The case now measures **555**, so
+    /// that floor had quietly become 50 % of baseline — it would have passed a 40 % throughput
+    /// regression, on the dispersive fade this ladder exists to survive. Re-derived to the module's
+    /// own stated rule (~65 %), which is what the other two already sit at.
     #[test]
     fn ofdm_ladder_goodput_floor_dispersive_fade() {
         let g = bps("hpx_ofdm_hf", ChannelSpec::WattersonModerateF1(25.0));
         assert!(
-            g >= 280.0,
-            "hpx_ofdm_hf moderate_f1 25 dB goodput {g:.0} bps below the floor (baseline ~414)"
+            g >= 360.0,
+            "hpx_ofdm_hf moderate_f1 25 dB goodput {g:.0} bps below the floor (baseline 555, \
+             floor 65%)"
         );
     }
 }
