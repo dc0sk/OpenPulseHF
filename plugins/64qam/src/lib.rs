@@ -272,4 +272,43 @@ mod tests {
             "expected about +20 Hz AFC, got {est:.2} Hz"
         );
     }
+
+    /// The RRC mode's AFC estimate must come from the RRC matched-filter front-end. The old
+    /// rectangular-integration front-end read ~-20 Hz on a clean, offset-free 64QAM2000-RRC frame
+    /// (data-dependent: -7 to -21 Hz with content), and the engine integrated that into a
+    /// persistent cross-mode afc_correction_hz that then failed every following SC-FDMA decode
+    /// (measured: 12 consecutive linksim frame failures after one SL15 visit on clean AWGN).
+    #[test]
+    fn rrc_afc_estimate_near_zero_on_carrier_match() {
+        let plugin = Qam64Plugin::new();
+        let tx_cfg = cfg("64QAM2000-RRC");
+        // A realistic full RS-block wire (255 bytes) — the bias was content-dependent, so a short
+        // payload can under-read it.
+        let wire: Vec<u8> = (0..255u32).map(|i| (i * 7 + 13) as u8).collect();
+        let samples = plugin.modulate(&wire, &tx_cfg).expect("modulate");
+        let est = plugin
+            .estimate_afc_hz(&samples, &tx_cfg)
+            .expect("afc estimate");
+        assert!(
+            est.abs() < 4.0,
+            "expected near-zero AFC on the RRC mode, got {est:.2} Hz (rect front-end bias?)"
+        );
+    }
+
+    #[test]
+    fn rrc_afc_estimate_tracks_positive_offset() {
+        let plugin = Qam64Plugin::new();
+        let mut tx_cfg = cfg("64QAM2000-RRC");
+        tx_cfg.center_frequency = 1520.0;
+        let rx_cfg = cfg("64QAM2000-RRC");
+        let wire: Vec<u8> = (0..255u32).map(|i| (i * 7 + 13) as u8).collect();
+        let samples = plugin.modulate(&wire, &tx_cfg).expect("modulate");
+        let est = plugin
+            .estimate_afc_hz(&samples, &rx_cfg)
+            .expect("afc estimate");
+        assert!(
+            (est - 20.0).abs() < 6.0,
+            "expected about +20 Hz AFC on the RRC mode, got {est:.2} Hz"
+        );
+    }
 }

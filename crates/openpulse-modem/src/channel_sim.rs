@@ -179,6 +179,16 @@ impl ChannelSimHarness {
         n
     }
 
+    /// Hand a recorded capture straight to the RX engine, with no synthetic signal at all.
+    ///
+    /// This is the highest-fidelity path the suite has: the receiver is fed exactly the audio a rig
+    /// produced during a real transmission, so a decode result is a statement about the modem
+    /// against reality rather than against a model of a radio.
+    pub fn feed_capture(&mut self, capture: &crate::capture_replay::Capture) -> usize {
+        self.rx_loopback.fill_samples(&capture.samples);
+        capture.samples.len()
+    }
+
     /// Route TX samples embedded in REAL recorded radio audio.
     ///
     /// Every other padding here is synthetic — flat pseudo-random noise at a chosen level. A real

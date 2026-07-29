@@ -65,9 +65,22 @@ fn bpsk_snr_estimate_still_carries_information_on_a_fade() {
     let mid = reported_snr(15.0, 5);
     let high = reported_snr(25.0, 5);
 
-    // The defect this guards: M2M4 reported the SAME number across this whole span.
+    // The defect this guards: M2M4 reported the SAME number across this whole span (spread ≈ 0).
+    //
+    // The bar was 3.0, calibrated before wire whitening (#1021) — when this 64-byte payload put a
+    // 149-byte all-zero RS pad on the wire, i.e. 57% of the frame was an unmodulated carrier the
+    // estimator reads artificially well through a fade (constant symbols: a decision flip at a
+    // fade null is absorbed by the per-window LS gain; on random data it lands in the residual).
+    // Measured (10 frames/point, this channel): pre-whitening padded wire spread 4.5 dB; the SAME
+    // pre-whitening estimator on a full 209-byte (padding-free) block spread 2.7 dB; whitened wire
+    // 2.5 dB for both payload sizes. So the old bar measured the padding content — physics the
+    // wire no longer carries (and which never decoded on air, #1021) — not the estimator, whose
+    // behavior on identical content is unchanged. 1.5 keeps a real assertion: the honest spread is
+    // ~2.5–2.7 and the M2M4 defect signature is ~0. The controller-level gate
+    // (`psk_ladder_climbs_off_the_entry_rung_on_a_fade`) separately proves the ladder still climbs
+    // on this estimate + decode evidence.
     assert!(
-        high - low >= 3.0,
+        high - low >= 1.5,
         "the SNR estimate must move with the channel: 5 dB → {low:.1}, 25 dB → {high:.1} \
          (spread {:.1} dB). A flat estimate makes every rate decision a decision on a constant — \
          it is what pinned the ladder in #934.",

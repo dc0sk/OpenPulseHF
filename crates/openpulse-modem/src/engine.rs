@@ -251,6 +251,17 @@ pub fn frame_plan(raw_max_frame_samples: usize, fec: FecMode) -> (usize, bool) {
     (coded, coded > LONG_FRAME_SAMPLES)
 }
 
+/// Un-whiten soft decisions coming off a demodulator.
+///
+/// The wire is whitened before modulation (see `stage_modulate_payload`), so every receive path
+/// must undo it. A hard path XORs; a soft path cannot, because an LLR carries confidence as well as
+/// a decision — flipping a bit negates its LLR and leaves the magnitude alone. Wrapping every
+/// `demodulate_soft` call in this keeps the two families symmetric.
+fn openpulse_modem_descramble_soft(mut llrs: Vec<f32>) -> Vec<f32> {
+    openpulse_core::scramble::descramble_llrs(&mut llrs);
+    llrs
+}
+
 const AFC_SETTLE_DEADBAND_HZ: f32 = 2.0;
 
 /// Result of [`ModemEngine::afc_mini_settle`].
@@ -1876,7 +1887,7 @@ impl ModemEngine {
                 .plugins
                 .get(mode)
                 .ok_or_else(|| ModemError::PluginNotFound(mode.to_string()))?;
-            plugin.demodulate_soft(&routed.samples, &mod_cfg)?
+            openpulse_modem_descramble_soft(plugin.demodulate_soft(&routed.samples, &mod_cfg)?)
         };
         self.update_afc_estimate(mode, &routed.samples);
         Ok(llrs)
@@ -1919,7 +1930,7 @@ impl ModemEngine {
                     },
                 )?;
                 WirePayload {
-                    bytes: FecCodec::new().decode(&wire.bytes)?,
+                    bytes: self.rs_decode_free_strengthened(&wire.bytes)?,
                 }
             }
             FecMode::RsInterleaved => {
@@ -2859,7 +2870,9 @@ impl ModemEngine {
             // (which would double the per-attempt cost and can't succeed where the
             // soft pass failed — both share the same acquisition front end).
             if plugin.supports_soft_demod(mode) {
-                let llrs = plugin.demodulate_soft(&samples.samples, &mod_cfg)?;
+                let llrs = openpulse_modem_descramble_soft(
+                    plugin.demodulate_soft(&samples.samples, &mod_cfg)?,
+                );
                 // Absolute RX SNR for rate adaptation: the mode's calibrated symbol-domain estimate
                 // (M2M4 fallback inside `rx_snr_db`). The old mean-|LLR| proxy reads ≈ −2 dB on a
                 // clean path (only a relative confidence indicator) and can't drive the SNR-hint
@@ -2980,7 +2993,9 @@ impl ModemEngine {
                 .ok_or_else(|| ModemError::PluginNotFound(mode.to_string()))?;
             if soft {
                 (
-                    Some(plugin.demodulate_soft(&samples.samples, &mod_cfg)?),
+                    Some(openpulse_modem_descramble_soft(
+                        plugin.demodulate_soft(&samples.samples, &mod_cfg)?,
+                    )),
                     None,
                 )
             } else {
@@ -3033,7 +3048,7 @@ impl ModemEngine {
                     // gate before RS ever ran whenever the capture outlasted the frame
                     // (audit 2026-07-19). `decode_combined_llrs` and the single-shot
                     // `receive_with_fec_mode` keep strict `decode` — they know the frame extent.
-                    bytes: FecCodec::new().decode_prefix(&wire.bytes)?,
+                    bytes: self.rs_decode_prefix_free_strengthened(&wire.bytes)?,
                 }
             }
             FecMode::RsInterleaved => {
@@ -3140,7 +3155,8 @@ impl ModemEngine {
             .get(mode)
             .ok_or_else(|| ModemError::PluginNotFound(mode.to_string()))?;
 
-        let llrs = plugin.demodulate_soft(&samples.samples, &mod_cfg)?;
+        let llrs =
+            openpulse_modem_descramble_soft(plugin.demodulate_soft(&samples.samples, &mod_cfg)?);
         // Absolute SNR for the rate decision: the mode's calibrated symbol-domain estimate (M2M4
         // fallback inside `rx_snr_db`); the mean-|LLR| proxy reads ~-2 dB on a clean path and can't
         // drive the ladder.
@@ -3468,7 +3484,7 @@ impl ModemEngine {
             });
         }
 
-        let corrected_bytes = FecCodec::new().decode(&raw_wire.bytes)?;
+        let corrected_bytes = self.rs_decode_free_strengthened(&raw_wire.bytes)?;
         let corrected_wire = WirePayload {
             bytes: corrected_bytes,
         };
@@ -3705,7 +3721,7 @@ impl ModemEngine {
                 center_frequency: self.center_frequency + self.afc_correction_hz,
                 ..ModulationConfig::default()
             };
-            plugin.demodulate_soft(&samples.samples, &mod_cfg)?
+            openpulse_modem_descramble_soft(plugin.demodulate_soft(&samples.samples, &mod_cfg)?)
         };
 
         self.update_afc_estimate(mode, &samples.samples);
@@ -3918,7 +3934,7 @@ impl ModemEngine {
                 center_frequency: self.center_frequency + self.afc_correction_hz,
                 ..ModulationConfig::default()
             };
-            plugin.demodulate_soft(&samples.samples, &mod_cfg)?
+            openpulse_modem_descramble_soft(plugin.demodulate_soft(&samples.samples, &mod_cfg)?)
         };
 
         self.update_afc_estimate(mode, &samples.samples);
@@ -4012,7 +4028,7 @@ impl ModemEngine {
                 center_frequency: self.center_frequency + self.afc_correction_hz,
                 ..ModulationConfig::default()
             };
-            plugin.demodulate_soft(&samples.samples, &mod_cfg)?
+            openpulse_modem_descramble_soft(plugin.demodulate_soft(&samples.samples, &mod_cfg)?)
         };
 
         self.update_afc_estimate(mode, &samples.samples);
@@ -4103,7 +4119,7 @@ impl ModemEngine {
         };
         let raw_wire = self.route_wire_stage(PipelineStage::DemodulateDecode, raw_wire)?;
 
-        let rs_decoded = FecCodec::new().decode(&raw_wire.bytes)?;
+        let rs_decoded = self.rs_decode_free_strengthened(&raw_wire.bytes)?;
         let frame = self.stage_decode_frame(&WirePayload { bytes: rs_decoded })?;
         let frame = self.route_decoded_stage(PipelineStage::HpxStateUpdate, frame)?;
         let _ = self.event_tx.send(EngineEvent::FrameReceived {
@@ -4176,7 +4192,7 @@ impl ModemEngine {
                     .plugins
                     .get(mode)
                     .ok_or_else(|| ModemError::PluginNotFound(mode.to_string()))?;
-                plugin.demodulate_soft(&samples.samples, &mod_cfg)?
+                openpulse_modem_descramble_soft(plugin.demodulate_soft(&samples.samples, &mod_cfg)?)
             };
 
             attempts.push(llrs);
@@ -4219,7 +4235,7 @@ impl ModemEngine {
             ) else {
                 continue;
             };
-            let Ok(rs) = FecCodec::new().decode(&wire.bytes) else {
+            let Ok(rs) = self.rs_decode_free_strengthened(&wire.bytes) else {
                 continue;
             };
             if let Ok(frame) = self.stage_decode_frame(&WirePayload { bytes: rs }) {
@@ -4238,7 +4254,7 @@ impl ModemEngine {
                 };
                 let hard_wire =
                     self.route_wire_stage(PipelineStage::DemodulateDecode, hard_wire)?;
-                let rs_decoded = FecCodec::new().decode(&hard_wire.bytes)?;
+                let rs_decoded = self.rs_decode_free_strengthened(&hard_wire.bytes)?;
                 self.stage_decode_frame(&WirePayload { bytes: rs_decoded })?
             }
         };
@@ -4300,7 +4316,7 @@ impl ModemEngine {
                     .plugins
                     .get(mode)
                     .ok_or_else(|| ModemError::PluginNotFound(mode.to_string()))?;
-                plugin.demodulate_soft(&samples.samples, &mod_cfg)?
+                openpulse_modem_descramble_soft(plugin.demodulate_soft(&samples.samples, &mod_cfg)?)
             };
 
             attempts.push(llrs);
@@ -4331,7 +4347,7 @@ impl ModemEngine {
         let hard_wire = WirePayload { bytes: hard_bytes };
         let hard_wire = self.route_wire_stage(PipelineStage::DemodulateDecode, hard_wire)?;
 
-        let rs_decoded = FecCodec::new().decode(&hard_wire.bytes)?;
+        let rs_decoded = self.rs_decode_free_strengthened(&hard_wire.bytes)?;
         let frame = self.stage_decode_frame(&WirePayload { bytes: rs_decoded })?;
         let frame = self.route_decoded_stage(PipelineStage::HpxStateUpdate, frame)?;
         let _ = self.event_tx.send(EngineEvent::FrameReceived {
@@ -4438,7 +4454,7 @@ impl ModemEngine {
             apply_window_retransmit(protected_frame, &packet)?;
         }
 
-        let rs_decoded = FecCodec::new().decode(protected_frame)?;
+        let rs_decoded = self.rs_decode_free_strengthened(protected_frame)?;
         let frame = self.stage_decode_frame(&WirePayload { bytes: rs_decoded })?;
         let frame = self.route_decoded_stage(PipelineStage::HpxStateUpdate, frame)?;
         let _ = self.event_tx.send(EngineEvent::FrameReceived {
@@ -4508,7 +4524,21 @@ impl ModemEngine {
     ) -> Result<(), ModemError> {
         match fec {
             FecMode::None => self.transmit(data, mode, device),
-            FecMode::Rs => self.transmit_with_fec(data, mode, device),
+            // Free strengthening at the canonical dispatch seam: whitening (#1021) removed the
+            // artificially-easy zero padding, and the measured cost pushed the small-frame Rs rungs
+            // over the t=16 cliff on a fade (QPSK250-D at floor+4 on moderate_f1: 0.08 with Rs,
+            // 0.42 with RsStrong — which is free for these sizes). The ARQ path already did this
+            // (see `transmit_arq_frames_with`); doing it here covers every caller, and every `Rs`
+            // receive arm dual-decodes via `rs_decode_free_strengthened`.
+            FecMode::Rs => {
+                match openpulse_core::fec::free_rs_strengthening(
+                    FecMode::Rs,
+                    data.len() + openpulse_core::frame::Frame::WIRE_OVERHEAD,
+                ) {
+                    FecMode::RsStrong => self.transmit_with_strong_fec(data, mode, device),
+                    _ => self.transmit_with_fec(data, mode, device),
+                }
+            }
             FecMode::RsInterleaved => {
                 self.transmit_with_fec_interleaved(data, mode, device, DEFAULT_INTERLEAVER_DEPTH)
             }
@@ -4937,7 +4967,10 @@ impl ModemEngine {
             if end.saturating_sub(start) < copy_len {
                 continue;
             }
-            if let Ok(llrs) = plugin.demodulate_soft(&samples[start..end], &cfg) {
+            if let Ok(llrs) = plugin
+                .demodulate_soft(&samples[start..end], &cfg)
+                .map(openpulse_modem_descramble_soft)
+            {
                 copies.push(llrs);
             }
         }
@@ -5080,7 +5113,12 @@ impl ModemEngine {
             center_frequency: self.center_frequency,
             ..ModulationConfig::default()
         };
-        let samples = plugin.modulate(&wire.bytes, &mod_cfg)?;
+        // Whiten the wire immediately before modulation. This is the single TX seam, so every
+        // caller is covered by construction. Placing it AFTER FEC means the padding and the parity
+        // are whitened too — and RS padding producing 6.2 s of unmodulated carrier is precisely the
+        // on-air defect this prevents (#1021). See openpulse_core::scramble.
+        let whitened = openpulse_core::scramble::scrambled(&wire.bytes);
+        let samples = plugin.modulate(&whitened, &mod_cfg)?;
         Ok(AudioSamples { samples })
     }
 
@@ -5299,7 +5337,11 @@ impl ModemEngine {
             afc_correction_hz: self.afc_correction_hz,
             ..ModulationConfig::default()
         };
-        let wire_bytes = plugin.demodulate(&samples.samples, &mod_cfg)?;
+        let mut wire_bytes = plugin.demodulate(&samples.samples, &mod_cfg)?;
+        // Un-whiten: the mirror of stage_modulate_payload. Self-inverse, so the same call undoes
+        // it. This is the single hard-decision RX seam; the soft (LLR) paths negate instead of
+        // XOR-ing, via scramble::descramble_llrs.
+        openpulse_core::scramble::scramble(&mut wire_bytes);
         Ok(WirePayload { bytes: wire_bytes })
     }
 
@@ -5310,6 +5352,44 @@ impl ModemEngine {
             sequence: frame.sequence,
             payload: frame.payload,
         })
+    }
+
+    /// RS-decode a wire that may carry the freely-strengthened code.
+    ///
+    /// `transmit_with_fec_mode` upgrades `Rs` to `RsStrong` whenever the stronger code costs no
+    /// extra 255-byte block (`free_rs_strengthening`), so every `Rs` receive arm must accept both
+    /// parities. **RS(255,191) and RS(255,223) are nested codes** — the strong generator contains
+    /// every root of the standard one — so a clean strong codeword decodes under the t=16 codec
+    /// with ZERO corrections, returning 32 bytes of strong parity as "data" (measured: the frame
+    /// CRC then reads 0x0000). Decode success therefore cannot arbitrate which code is on the
+    /// wire; the frame CRC can, and this is the same arbiter the OTA receive candidates already
+    /// use. A t=16 candidate is accepted only if its frame validates; otherwise the strong decode
+    /// is tried.
+    fn rs_decode_free_strengthened(&self, bytes: &[u8]) -> Result<Vec<u8>, ModemError> {
+        if let Ok(d) = FecCodec::new().decode(bytes) {
+            if self
+                .stage_decode_frame(&WirePayload { bytes: d.clone() })
+                .is_ok()
+            {
+                return Ok(d);
+            }
+        }
+        FecCodec::strong().decode(bytes)
+    }
+
+    /// `decode_prefix` variant of [`rs_decode_free_strengthened`](Self::rs_decode_free_strengthened)
+    /// for the scanning receive, whose input length is a function of the capture window rather than
+    /// the frame.
+    fn rs_decode_prefix_free_strengthened(&self, bytes: &[u8]) -> Result<Vec<u8>, ModemError> {
+        if let Ok(d) = FecCodec::new().decode_prefix(bytes) {
+            if self
+                .stage_decode_frame(&WirePayload { bytes: d.clone() })
+                .is_ok()
+            {
+                return Ok(d);
+            }
+        }
+        FecCodec::strong().decode_prefix(bytes)
     }
 
     fn route_wire_stage(

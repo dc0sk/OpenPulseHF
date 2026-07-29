@@ -144,19 +144,31 @@ fn scfdma52_tolerates_realistic_sro() {
 
 /// 64QAM (dense single-carrier) under a realistic sample-rate offset.
 ///
-/// Two-pass DD carrier tracking cuts the raw byte-error rate at 100 ppm from ~6.2 %
-/// to ~2.1 % — within soft-FEC capacity — so with the soft code these dense modes
-/// run under, 64QAM decodes at a realistic two-clock offset. (Bare 64QAM is still
-/// SNR/eye-marginal at 100 ppm no-FEC, expected for a 64-point grid; full no-FEC
-/// closure is deferred — it is sim-only validatable and not a v1.0 blocker.)
+/// Two-pass DD carrier tracking brings the raw byte-error rate under SRO within soft-FEC
+/// capacity, so with the soft code these dense modes run under, 64QAM decodes at a realistic
+/// two-clock offset. (Bare 64QAM is still SNR/eye-marginal no-FEC, expected for a 64-point grid;
+/// full no-FEC closure is deferred — it is sim-only validatable and not a v1.0 blocker.)
+///
+/// The bar was 100 ppm, calibrated before wire whitening (#1021) — and it was measuring the RS
+/// padding, not the modem: this 64-byte payload leaves 145 zero-pad bytes in the RS block, the
+/// rate-1/2 conv encoder maps zeros to zeros, so **over half the pre-whitening wire was one
+/// constant constellation point**, trivially robust under clock drift. Measured 2x2 on
+/// pre-whitening main vs the whitened branch x padded-64B vs padding-free-209B payloads: main
+/// padded holds 100 ppm; main *padding-free* fails 100 ppm exactly like the whitened branch (both
+/// payloads), and every cell holds 50 ppm. So 50 ppm is the mode's honest capability on real
+/// content, on both sides of whitening — and the dual-card rig this test models was MEASURED at
+/// +0.10 ppm (USB adapters slave to the host frame clock), so 50 ppm is ~500x the real hardware
+/// offset. The bar moves to the capability that actually exists; the old one existed only for
+/// frames that were mostly unmodulated carrier — which never decoded over a real radio anyway
+/// (#1021).
 #[test]
 fn qam64_tolerates_realistic_sro() {
     let payload: Vec<u8> = (0..64)
         .map(|i| b"OpenPulseHF-SRO-target--64QAM-fc"[i % 31])
         .collect();
     assert!(
-        decodes_at_fec("64QAM500", 100.0, &payload, FecMode::SoftConcatenated),
-        "64QAM500 @ 100 ppm with soft-concatenated FEC"
+        decodes_at_fec("64QAM500", 50.0, &payload, FecMode::SoftConcatenated),
+        "64QAM500 @ 50 ppm with soft-concatenated FEC"
     );
 }
 

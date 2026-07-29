@@ -1,0 +1,9 @@
+[INFO] devIdx: 0
+[INFO] SerNo: 2003052C43
+[INFO] hwVer: 4
+[INFO] rspDuoMode: 0
+[INFO] tuner: 1
+[INFO] rspDuoSampleFreq: 0.000000
+[INFO] Using format CF32.
+cfg: f=144.6001MHz RFGR=6 IFGR=40 ant=Antenna A
+captured 20.00s peak=0.0267 rms=0.0059 clip=0.00% OK
