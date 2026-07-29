@@ -525,6 +525,7 @@ Each requirement below is done when the linked test passes. Add new links as tes
 | Simultaneous multi-mode receive monitor (REQ-RX-01) | `cargo test -p openpulse-daemon --no-default-features monitor::` |
 | The multi-mode monitor keeps emitting **while an OTA session is active** — through the real `server::run` dispatch, not by calling `MonitorRuntime` directly | `cargo test -p openpulse-daemon --no-default-features --test monitor_during_ota` |
 | An I/Q-transmitted frame **decodes** on a receiver of the same build (the wire-whitening seam covers the baseband path, not just audio) | `cargo test -p openpulse-modem --no-default-features --test iq_decode_round_trip` |
+| A **real coded on-air frame** decodes from the replay corpus — the #1021 artifact, which needs the settle recovery to walk PAST a condemned noise anchor | `cargo test -p openpulse-modem --no-default-features --test capture_replay_corpus the_real_on_air_frame_decodes` |
 | Hotplug-safe audio device resolution (REQ-DEV-01) | `cargo test -p openpulse-core --no-default-features audio::tests` |
 | Every device the backend LISTS can also be selected by name (cpal's ALSA enumeration truncates when devices are retained — needs a real audio host, so not in the `--no-default-features` gate) | `cargo test -p openpulse-audio --features cpal-backend --test device_enumeration` |
 | CM108 / GPIO PTT backends (REQ-PTT-02/03) | `cargo test -p openpulse-radio --no-default-features -- cm108 gpio` |

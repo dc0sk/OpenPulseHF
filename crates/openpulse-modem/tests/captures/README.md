@@ -28,25 +28,24 @@ very property these files exist to preserve.
 | `ic9700-tone-1501hz.wav` | IC-9700 receiving an FT-991A 1500 Hz tone over 2 m at 5 W, after the +64 Hz rig trim, 2026-07-28 | carrier **≈1501.5 Hz** | A real received signal with an independently measured carrier. Pins the measurement chain against a known on-air truth. |
 | `ic9700-frame-bpsk250-rs.wav` | IC-9700 receiving an FT-991A `BPSK250\|rs` frame over 2 m at 5 W, payload `DUALCAP TEST 1`, 144.600 MHz, 2026-07-29 | burst at t≈10.5–18.8 s, 8.3 dB above floor; mean-square ≈0.00104 | **The open #1021 defect, captured.** The SDR recorded the same transmission independently and shows a correctly-formed 8.4 s burst, so the frame WAS on the air — yet replaying this audio through the modem fails with `RS correction failed at block 0: TooManyErrors`, exactly as on air. Receive-side, and now reproducible with no radio. |
 | `ic9700-frame-bpsk250-none.wav` | Same link, same payload, minutes after the `rs` capture — `BPSK250\|none`, 144.600 MHz, 5 W, 2026-07-29 | 0.9 s burst, continuous modulation | **The control that isolated #1021.** Same rigs, levels and frequency as the failing `rs` capture, so margin and propagation are held constant. This one **decodes** (`DUALCAP TEST 1`); the only difference is frame structure. |
-| `ic9700-frame-bpsk250-rs-whitened.wav` | IC-9700 receiving an FT-991A `BPSK250\|rs` frame over 2 m at 5 W from a **whitening** build, payload `DUALCAP TEST 1`, 144.600 MHz, 2026-07-29 | burst t≈10.3–18.6 s (8.3 s), 7.2 dB above floor; carrier **1502.42 Hz** (+2.42, drift −0.3 Hz over the burst); spectral spread ≥0.481 in **every** window | **#1021 is still open, and this is the proof.** Recorded to close the issue; it fails with the same `RS correction failed at block 0: TooManyErrors` as its pre-whitening predecessor. The dead carrier is measurably gone (25 of 33 windows at 0.000 spread before, **0 of 33** now), so whitening worked and was not the whole cause. |
+| `ic9700-frame-bpsk250-rs-whitened.wav` | IC-9700 receiving an FT-991A `BPSK250\|rs` frame over 2 m at 5 W from a **whitening** build, payload `DUALCAP TEST 1`, 144.600 MHz, 2026-07-29 | burst t≈10.3–18.6 s (8.3 s), 7.2 dB above floor; carrier **1502.42 Hz** (+2.42, drift −0.3 Hz over the burst); spectral spread ≥0.481 in **every** window | **The artifact that closed #1021.** It arrived byte-perfect (0 errors in all 255 when diffed against the reconstructed transmitted wire) and still would not decode: the receiver had settled AFC on idle noise at sample 96 and the recovery re-settled there forever. Asserted by `the_real_on_air_frame_decodes`. |
 | `ic9700-frame-bpsk250-none-whitened.wav` | Same link, same whitening build, minutes after the `rs` capture — `BPSK250\|none`, 144.600 MHz, 5 W, 2026-07-29 | 0.9 s burst, 7.3 dB above floor, carrier **1502.44 Hz** (+2.44) | **The control, and the corpus's former missing piece.** Holds margin, propagation, frequency and levels constant against the failing `rs` capture. It **decodes** (`DUALCAP TEST 1`) and is asserted by `a_real_on_air_frame_decodes_end_to_end` — the first end-to-end decode in this suite against audio a radio actually produced. |
 
-## The gap is closed — and it reopened a defect
+## The gap is closed, and it closed a defect
 
-A real modem frame now decodes end to end from recorded radio audio
-(`ic9700-frame-bpsk250-none-whitened.wav`, asserted by `a_real_on_air_frame_decodes_end_to_end`).
-That was the one thing neither the emulations nor the earlier corpus could do.
+A real modem frame now decodes end to end from recorded radio audio — both an uncoded one
+(`ic9700-frame-bpsk250-none-whitened.wav`) and the **coded** one that defeated four rounds of on-air
+debugging (`ic9700-frame-bpsk250-rs-whitened.wav`). That was the one thing neither the emulations nor
+the earlier corpus could do.
 
-Taking it also **reopened #1021**. The plan was: whitening is a transmit-side fix, so record a fresh
-frame from a whitening sender, watch it decode, and close the issue. The fresh capture
-(`ic9700-frame-bpsk250-rs-whitened.wav`) fails with the identical error. The mechanism the fix
-targeted was verifiably removed — 6.2 s of dead carrier, 25 of 33 windows at exactly 0.000 spectral
-spread, now **0 of 33** — and the outcome did not move.
+Taking these two captures is what closed **#1021**, and not in the way anyone expected. The plan was
+that whitening (a transmit-side fix) needed a fresh capture to demonstrate closure. The fresh coded
+capture failed identically — which was the useful result, because it made the defect reproducible
+offline. Diffing the demodulated bytes against the reconstructed transmitted wire then showed **0
+errors in all 255**: the frame was perfect on the air, and the receiver was looking in the wrong
+place. It had settled AFC on idle noise 82 000 samples early and its own recovery kept re-settling
+on the same sample. See `the_real_on_air_frame_decodes` for the full account.
 
-Held constant between the failing coded capture and the passing uncoded control: link, rigs, levels
-(7.2 vs 7.3 dB above floor), carrier (+2.42 vs +2.44 Hz), and minutes of wall-clock. What differs is
-the frame: 8.3 s and one full 255-byte RS block, versus 0.9 s and 14 bytes. Trimming the capture to
-the burst ±0.5 s fails identically, so it is not the frame-location class either.
-
-This is what the corpus is for: the next attempt costs no radio, no second operator and no on-air
-window.
+The lesson worth keeping: **every physical hypothesis was wrong** — frequency, level, margin,
+fading, frame location were each measured and refuted — and the artifact is what made measuring them
+cheap. The next defect of this class costs no radio, no second operator and no on-air window.
