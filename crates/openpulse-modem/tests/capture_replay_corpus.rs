@@ -200,37 +200,73 @@ fn the_recorded_hot_floor_degrades_acquisition_as_it_did_on_air() {
 
 // ── The open #1021 defect, captured off the air ──────────────────────────────
 
-/// Replay of a REAL `BPSK250|rs` frame that the modem cannot decode (issue #1021).
+/// THE END-TO-END GATE: a real on-air frame, recorded off a radio, decoding through the modem.
 ///
-/// Recorded 2026-07-29 with `scripts/onair-dual-capture.sh`: the FT-991A transmitted the payload
-/// below at 5 W on 144.600 MHz while the IC-9700's USB audio AND an independent SDR both recorded.
+/// Recorded 2026-07-29 with `scripts/onair-dual-capture.sh`: the FT-991A transmitted `DUALCAP
+/// TEST 1` at 5 W on 144.600 MHz from a **whitening** build while the IC-9700's USB audio and an
+/// independent SDR both recorded. This is the artifact the corpus README long listed as its missing
+/// piece — the only thing that can assert a decode against audio a radio actually produced, rather
+/// than against a model of one.
+#[test]
+fn a_real_on_air_frame_decodes_end_to_end() {
+    let c = corpus("ic9700-frame-bpsk250-none-whitened.wav");
+    assert!(
+        c.mean_sq() > 1e-4,
+        "the captured frame audio has gone silent (mean_sq {:.6}); the artifact is corrupt",
+        c.mean_sq()
+    );
+
+    let mut h = harness();
+    h.feed_capture(&c);
+    let got = h
+        .rx_engine
+        .receive_with_timeout("BPSK250", None, Duration::from_millis(40_000))
+        .expect("a real on-air BPSK250 frame must decode");
+
+    assert_eq!(
+        String::from_utf8_lossy(&got),
+        "DUALCAP TEST 1",
+        "decoded payload must match what was actually transmitted"
+    );
+}
+
+/// Replay of a REAL `BPSK250|rs` frame from a **whitening** sender that STILL does not decode.
 ///
-/// **What the pair of captures established, which no single capture could.** The SDR shows a
-/// correctly-formed **8.4 s** burst (BPSK250+Rs at 250 baud predicts ~8.3 s) at 10.6 dB above the
-/// noise floor — so the frame really was on the air. The rig audio contains the same burst at 8.3 dB
-/// above its floor — so the signal really did reach the receiver. Yet replaying that audio fails
-/// with `RS correction failed at block 0: TooManyErrors`, the exact error seen on air. The defect is
-/// therefore **receive-side**, and it is now reproducible with no radio, no second operator and no
-/// on-air window.
+/// **#1021 is not closed, and this artifact is why.** Wire whitening — the fix that closed the
+/// issue — is a transmit-side change, so closure required a fresh keyed capture rather than a code
+/// change. That capture was taken on 2026-07-29 and the frame fails with
+/// `RS correction failed at block 0: TooManyErrors`: the *same error as before the fix*.
 ///
-/// Two earlier hypotheses were refuted by measurement before this capture existed — rig frequency
-/// drift (the carrier measured +1.2 Hz) and capture level (fixed, and the failure persisted). This
-/// artifact is what makes the next attempt cheap instead of speculative.
+/// **The fix did work; it just was not the whole cause.** Measured on this capture against its
+/// pre-whitening predecessor, per 0.25 s window across the burst:
+///
+/// | | dead-carrier windows | min spectral spread | median |
+/// |---|---|---|---|
+/// | pre-whitening (`ic9700-frame-bpsk250-rs.wav`) | **25 of 33** | 0.000 | 0.000 |
+/// | post-whitening (this file) | **0 of 33** | 0.481 | 0.544 |
+///
+/// The 6.2 s of unmodulated carrier is gone and the burst is continuously modulated end to end.
+/// The decode outcome did not move. So the dead carrier was a real defect and a real fix, and it
+/// was **not the only cause** of the on-air failure.
+///
+/// **What was ruled out on this capture, by measurement rather than argument:**
+/// - *Frequency.* The squaring estimator (BPSK suppresses its carrier, so an FFT peak is not one)
+///   reads **1502.42 Hz, +2.42 Hz** offset, drifting **−0.3 Hz** across the whole 8.2 s burst. The
+///   uncoded control that decodes reads +2.44 Hz — indistinguishable.
+/// - *Level and margin.* 7.2 dB above the idle floor, against 7.3 dB for the control that decodes.
+///   Amplitude is stable across the burst (max/min 1.07).
+/// - *Frame location.* Trimming the capture to the burst ±0.5 s fails identically, so this is not
+///   the window-versus-frame-length class that `fec_scan_long_capture` covers.
+///
+/// What remains different between the two is the frame itself: 8.3 s and one full 255-byte RS block
+/// versus 0.9 s and 14 bytes. [`a_real_on_air_frame_decodes_end_to_end`] is the control — same link,
+/// same rigs, same levels, minutes apart, same whitening sender.
 ///
 /// **IGNORED ON PURPOSE.** It documents an open defect, so it must not redden the workspace gate.
-///
-/// **The definition of done moved when the fix landed.** The fix for #1021 is wire whitening —
-/// a TRANSMIT-side change — and this capture was recorded from a pre-whitening sender, so the
-/// whitened receiver now descrambles it into garbage *by design*. This artifact can therefore
-/// never decode again, and un-ignoring this test as-is would "prove" the fix failed. It stays as
-/// the recorded evidence of the defect; the definition of done for #1021 is a **fresh dual
-/// capture** (`scripts/onair-dual-capture.sh`) of the same `BPSK250|rs` frame from a whitening
-/// sender, decoding where this one could not — at which point this test should be re-pointed at
-/// the new artifact and un-ignored.
 #[test]
-#[ignore = "open defect #1021: pre-whitening artifact; closure needs a fresh on-air capture from a whitening sender (see comment)"]
+#[ignore = "open defect #1021: whitening removed the dead carrier (measured) but the coded frame still fails; cause not yet found"]
 fn the_real_on_air_frame_decodes() {
-    let c = corpus("ic9700-frame-bpsk250-rs.wav");
+    let c = corpus("ic9700-frame-bpsk250-rs-whitened.wav");
     // Guard the artifact itself: a capture that lost its burst would turn this into a test of
     // silence, and it would then "fail" for a reason unrelated to #1021.
     assert!(
