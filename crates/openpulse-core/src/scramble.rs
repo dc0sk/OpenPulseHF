@@ -110,7 +110,7 @@ mod tests {
     #[test]
     fn an_all_zero_block_becomes_transition_rich() {
         // 195 zero bytes is the real padding measured on air for a 14-byte payload.
-        let out = scrambled(&vec![0u8; 195]);
+        let out = scrambled(&[0u8; 195]);
         let ones: u32 = out.iter().map(|b| b.count_ones()).sum();
         let total = (out.len() * 8) as u32;
         let ratio = ones as f32 / total as f32;
@@ -139,7 +139,7 @@ mod tests {
     /// An all-ones block is the other degenerate input and must whiten just as well.
     #[test]
     fn an_all_ones_block_becomes_transition_rich() {
-        let out = scrambled(&vec![0xFFu8; 195]);
+        let out = scrambled(&[0xFFu8; 195]);
         let ones: u32 = out.iter().map(|b| b.count_ones()).sum();
         let ratio = ones as f32 / (out.len() * 8) as f32;
         assert!(

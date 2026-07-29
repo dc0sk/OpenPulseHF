@@ -262,6 +262,7 @@ fn openpulse_modem_descramble_soft(mut llrs: Vec<f32>) -> Vec<f32> {
     llrs
 }
 
+
 const AFC_SETTLE_DEADBAND_HZ: f32 = 2.0;
 
 /// Result of [`ModemEngine::afc_mini_settle`].
@@ -1930,7 +1931,7 @@ impl ModemEngine {
                     },
                 )?;
                 WirePayload {
-                    bytes: FecCodec::new().decode(&wire.bytes)?,
+                    bytes: self.rs_decode_free_strengthened(&wire.bytes)?,
                 }
             }
             FecMode::RsInterleaved => {
@@ -3048,7 +3049,7 @@ impl ModemEngine {
                     // gate before RS ever ran whenever the capture outlasted the frame
                     // (audit 2026-07-19). `decode_combined_llrs` and the single-shot
                     // `receive_with_fec_mode` keep strict `decode` — they know the frame extent.
-                    bytes: FecCodec::new().decode_prefix(&wire.bytes)?,
+                    bytes: self.rs_decode_prefix_free_strengthened(&wire.bytes)?,
                 }
             }
             FecMode::RsInterleaved => {
@@ -3484,7 +3485,7 @@ impl ModemEngine {
             });
         }
 
-        let corrected_bytes = FecCodec::new().decode(&raw_wire.bytes)?;
+        let corrected_bytes = self.rs_decode_free_strengthened(&raw_wire.bytes)?;
         let corrected_wire = WirePayload {
             bytes: corrected_bytes,
         };
@@ -4119,7 +4120,7 @@ impl ModemEngine {
         };
         let raw_wire = self.route_wire_stage(PipelineStage::DemodulateDecode, raw_wire)?;
 
-        let rs_decoded = FecCodec::new().decode(&raw_wire.bytes)?;
+        let rs_decoded = self.rs_decode_free_strengthened(&raw_wire.bytes)?;
         let frame = self.stage_decode_frame(&WirePayload { bytes: rs_decoded })?;
         let frame = self.route_decoded_stage(PipelineStage::HpxStateUpdate, frame)?;
         let _ = self.event_tx.send(EngineEvent::FrameReceived {
@@ -4235,7 +4236,7 @@ impl ModemEngine {
             ) else {
                 continue;
             };
-            let Ok(rs) = FecCodec::new().decode(&wire.bytes) else {
+            let Ok(rs) = self.rs_decode_free_strengthened(&wire.bytes) else {
                 continue;
             };
             if let Ok(frame) = self.stage_decode_frame(&WirePayload { bytes: rs }) {
@@ -4254,7 +4255,7 @@ impl ModemEngine {
                 };
                 let hard_wire =
                     self.route_wire_stage(PipelineStage::DemodulateDecode, hard_wire)?;
-                let rs_decoded = FecCodec::new().decode(&hard_wire.bytes)?;
+                let rs_decoded = self.rs_decode_free_strengthened(&hard_wire.bytes)?;
                 self.stage_decode_frame(&WirePayload { bytes: rs_decoded })?
             }
         };
@@ -4347,7 +4348,7 @@ impl ModemEngine {
         let hard_wire = WirePayload { bytes: hard_bytes };
         let hard_wire = self.route_wire_stage(PipelineStage::DemodulateDecode, hard_wire)?;
 
-        let rs_decoded = FecCodec::new().decode(&hard_wire.bytes)?;
+        let rs_decoded = self.rs_decode_free_strengthened(&hard_wire.bytes)?;
         let frame = self.stage_decode_frame(&WirePayload { bytes: rs_decoded })?;
         let frame = self.route_decoded_stage(PipelineStage::HpxStateUpdate, frame)?;
         let _ = self.event_tx.send(EngineEvent::FrameReceived {
@@ -4454,7 +4455,7 @@ impl ModemEngine {
             apply_window_retransmit(protected_frame, &packet)?;
         }
 
-        let rs_decoded = FecCodec::new().decode(protected_frame)?;
+        let rs_decoded = self.rs_decode_free_strengthened(protected_frame)?;
         let frame = self.stage_decode_frame(&WirePayload { bytes: rs_decoded })?;
         let frame = self.route_decoded_stage(PipelineStage::HpxStateUpdate, frame)?;
         let _ = self.event_tx.send(EngineEvent::FrameReceived {
@@ -4524,7 +4525,21 @@ impl ModemEngine {
     ) -> Result<(), ModemError> {
         match fec {
             FecMode::None => self.transmit(data, mode, device),
-            FecMode::Rs => self.transmit_with_fec(data, mode, device),
+            // Free strengthening at the canonical dispatch seam: whitening (#1021) removed the
+            // artificially-easy zero padding, and the measured cost pushed the small-frame Rs rungs
+            // over the t=16 cliff on a fade (QPSK250-D at floor+4 on moderate_f1: 0.08 with Rs,
+            // 0.42 with RsStrong — which is free for these sizes). The ARQ path already did this
+            // (see `transmit_arq_frames_with`); doing it here covers every caller, and every `Rs`
+            // receive arm dual-decodes via `rs_decode_free_strengthened`.
+            FecMode::Rs => {
+                match openpulse_core::fec::free_rs_strengthening(
+                    FecMode::Rs,
+                    data.len() + openpulse_core::frame::Frame::WIRE_OVERHEAD,
+                ) {
+                    FecMode::RsStrong => self.transmit_with_strong_fec(data, mode, device),
+                    _ => self.transmit_with_fec(data, mode, device),
+                }
+            }
             FecMode::RsInterleaved => {
                 self.transmit_with_fec_interleaved(data, mode, device, DEFAULT_INTERLEAVER_DEPTH)
             }
@@ -5338,6 +5353,44 @@ impl ModemEngine {
             sequence: frame.sequence,
             payload: frame.payload,
         })
+    }
+
+    /// RS-decode a wire that may carry the freely-strengthened code.
+    ///
+    /// `transmit_with_fec_mode` upgrades `Rs` to `RsStrong` whenever the stronger code costs no
+    /// extra 255-byte block (`free_rs_strengthening`), so every `Rs` receive arm must accept both
+    /// parities. **RS(255,191) and RS(255,223) are nested codes** — the strong generator contains
+    /// every root of the standard one — so a clean strong codeword decodes under the t=16 codec
+    /// with ZERO corrections, returning 32 bytes of strong parity as "data" (measured: the frame
+    /// CRC then reads 0x0000). Decode success therefore cannot arbitrate which code is on the
+    /// wire; the frame CRC can, and this is the same arbiter the OTA receive candidates already
+    /// use. A t=16 candidate is accepted only if its frame validates; otherwise the strong decode
+    /// is tried.
+    fn rs_decode_free_strengthened(&self, bytes: &[u8]) -> Result<Vec<u8>, ModemError> {
+        if let Ok(d) = FecCodec::new().decode(bytes) {
+            if self
+                .stage_decode_frame(&WirePayload { bytes: d.clone() })
+                .is_ok()
+            {
+                return Ok(d);
+            }
+        }
+        FecCodec::strong().decode(bytes)
+    }
+
+    /// `decode_prefix` variant of [`rs_decode_free_strengthened`](Self::rs_decode_free_strengthened)
+    /// for the scanning receive, whose input length is a function of the capture window rather than
+    /// the frame.
+    fn rs_decode_prefix_free_strengthened(&self, bytes: &[u8]) -> Result<Vec<u8>, ModemError> {
+        if let Ok(d) = FecCodec::new().decode_prefix(bytes) {
+            if self
+                .stage_decode_frame(&WirePayload { bytes: d.clone() })
+                .is_ok()
+            {
+                return Ok(d);
+            }
+        }
+        FecCodec::strong().decode_prefix(bytes)
     }
 
     fn route_wire_stage(

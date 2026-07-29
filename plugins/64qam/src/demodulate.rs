@@ -39,8 +39,18 @@ pub fn afc_estimate_hz(samples: &[f32], config: &ModulationConfig) -> Option<f32
         return None;
     }
 
-    let offset = find_timing_offset(samples, n, fc, fs);
-    let (i_syms, q_syms) = demodulate_iq(samples, n, fc, fs, offset);
+    // Use the SAME front-end as the demodulators (#420's lesson, repeated here in the qam64
+    // twin): rectangular integration of an RRC-shaped pulse is a mismatched filter, and the
+    // passband timing search lands wrong on it — together they biased the 64QAM2000-RRC estimate
+    // by ~-20 Hz on a clean, offset-free frame (data-dependent, so no constant could remove it).
+    // The engine integrates that estimate into a persistent cross-mode afc_correction_hz, which
+    // then failed every following SC-FDMA decode until it relaxed.
+    let (i_syms, q_syms) = if let Some(alpha) = rrc_alpha(config) {
+        qam64_demodulate_rrc(samples, n, baud, fc, fs, alpha)
+    } else {
+        let offset = find_timing_offset(samples, n, fc, fs);
+        demodulate_iq(samples, n, fc, fs, offset)
+    };
     if i_syms.len() < 2 {
         return None;
     }
