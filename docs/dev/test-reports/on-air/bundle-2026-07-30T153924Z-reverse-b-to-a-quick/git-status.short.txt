@@ -1,0 +1,13 @@
+?? crates/openpulse-modem/tests/captures/scratch-nrfix-inv.wav
+?? crates/openpulse-modem/tests/captures/scratch-nrfix.wav
+?? crates/openpulse-modem/tests/captures/scratch-post1039b-inv.wav
+?? crates/openpulse-modem/tests/captures/scratch-post1039b.wav
+?? crates/openpulse-modem/tests/captures/scratch-sdr-nrfix-rs.wav
+?? crates/openpulse-modem/tests/captures/scratch-sdr-post1039b-rs.wav
+?? crates/openpulse-modem/tests/scratch_replay.rs
+?? docs/dev/test-reports/on-air/bundle-2026-07-30T151104Z-post1039-coded-quick/
+?? docs/dev/test-reports/on-air/bundle-2026-07-30T153024Z-trim0-nr-off-quick/
+?? docs/dev/test-reports/on-air/bundle-2026-07-30T153924Z-reverse-b-to-a-quick/
+?? docs/dev/test-reports/onair-2026-07-30T151012.json
+?? docs/dev/test-reports/onair-2026-07-30T152931.json
+?? docs/dev/test-reports/onair-2026-07-30T153757.json

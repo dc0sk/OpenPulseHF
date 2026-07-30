@@ -210,6 +210,20 @@ _ssh "$TX_SSH" "
 tx_rc=$?
 grep -E 'Transmitted|PTT after TX' "$TX_LOG" | sed 's/^/    /'
 
+# Did a transmission actually happen? Until 2026-07-30 nothing checked: `tx_rc` was captured and
+# never read, so a run whose transmit died outright still reported "Both captures succeeded". That
+# is exactly what happened when TX_REPO_DIR pointed at the wrong station's layout — the binary was
+# "No such file or directory", nothing was keyed, and the script reported two good captures of
+# 30 seconds of bare noise. A capture with no transmission in it is worse than no capture: it looks
+# like evidence.
+#
+# The ssh exit status alone is not enough (ssh reports the remote shell's status, and the modem can
+# fail after a zero-exit step), so require the transmitter's own confirmation line.
+tx_ok=0
+if [[ $tx_rc -eq 0 ]] && grep -qE '^Transmitted [0-9]+ bytes' "$TX_LOG"; then
+    tx_ok=1
+fi
+
 echo "==> Waiting for captures to finish"
 wait "$SDR_PID" 2>/dev/null; sdr_rc=$?
 wait "$RIG_PID" 2>/dev/null || true
@@ -218,6 +232,14 @@ wait "$RIG_PID" 2>/dev/null || true
 rc=0
 echo ""
 echo "==> Results"
+
+if [[ $tx_ok -ne 1 ]]; then
+    echo "    TRANSMIT: FAILED (ssh exit ${tx_rc}; no 'Transmitted N bytes' line in ${TX_LOG})" >&2
+    echo "              Nothing was keyed, so BOTH captures below contain only ambient noise." >&2
+    echo "              Do not use them as evidence. Common cause: TX_REPO_DIR points at the" >&2
+    echo "              wrong station's layout (it defaults to Station B's)." >&2
+    rc=1
+fi
 
 if [[ -s "$IQ_OUT" ]]; then
     echo "    SDR IQ : $IQ_OUT ($(stat -c%s "$IQ_OUT") bytes)"
@@ -280,6 +302,8 @@ Both captures succeeded. To turn them into corpus entries:
      A rig capture WITH a known payload is the corpus's missing piece: it is the only thing
      that can assert an end-to-end DECODE against real audio.
 NEXT
+elif [[ $tx_ok -ne 1 ]]; then
+    echo "No transmission took place; the captures hold ambient noise only and are NOT evidence." >&2
 else
     echo "One or both captures failed; nothing was added to the corpus." >&2
 fi
