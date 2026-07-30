@@ -9,6 +9,44 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-07-30 — eval: the IC-9700's transmit chain proven off-air by SDR; the A→B fault is the FT-991A's receiver
+
+- **Requirement/change:** four keyed `BPSK250|rs` runs IC-9700 (A) → FT-991A (B) failed on 2 m, while
+  the reverse direction B→A **passed** (validating #1038 + #1039 on air). The open question was
+  whether A transmitted a bad signal or B received badly — a rig-audio capture cannot answer it,
+  because it measures transmitter and receiver together.
+- **Decision:** record the SDR (RSPdx, off-air, independent reference and front end) in parallel with
+  the receiving rig's USB audio during the *same* keyed transmission, which is exactly the split
+  `onair-dual-capture.sh` was built for, and replay both offline.
+- **Result — transmitter exonerated.** All three SDR captures **decode**, each to its own distinct
+  payload, in 0.5 s with no settle recovery: carrier 1511–1513 Hz, SNR 47–56 dB. The FT-991A's
+  rig audio from the same transmissions fails, with its received carrier pinned at ~1372 Hz
+  **regardless of its own dial** — verified by raw CAT (`FA;`) readback before *and* after each
+  capture, across a 128 Hz dial change that moved the measured offset by ~0 Hz, agreed by two
+  independent instruments (a squaring estimator and the modem's own AFC, −127.9 and −127.5 Hz).
+  The fault is in that receiver, not in the modem and not in the transmitter.
+- **Hypotheses ablated before being believed (all refuted):** sideband inversion — BPSK's baseband
+  symbols are real, so conjugation is a near no-op and inversion cannot explain a decode failure;
+  the offline inverted replay failed identically, as predicted. VFO drift — the carrier is steady to
+  0.06 Hz across the whole 8.3 s burst. VFO being knob-turned between runs — readback identical
+  before and after every capture. A **withdrawn** conclusion: mid-session I judged the `+64` trim
+  sign wrong; that rested on a capture taken while the VFO sat 700 Hz off a commanded value, and
+  with B's audio not tracking its dial the trim cannot be evaluated at all. It is not established.
+- **Implementation:** `crates/openpulse-modem/tests/captures/sdr-ic9700tx-bpsk250-rs-{1,2,3}.wav`
+  (+ README provenance and the rationale for why an off-air witness settles what a rig capture
+  cannot); `crates/openpulse-modem/tests/capture_replay_corpus.rs` —
+  `the_ic9700_transmit_chain_decodes_off_air_from_an_independent_receiver`. Three files rather than
+  one deliberately: the distinct payloads are the anti-vacuity control.
+- **Tests → results (actually run, 2026-07-30):** the new test passes (3/3 correct payloads);
+  **sabotage-verified** by swapping the expected payloads of captures 1 and 2 — FAILS with
+  `left: "RFGAINFIX RS TEST" right: "TRIMSIGN RS TEST"`, then passes again on revert, so it really
+  does distinguish the captures. Whole corpus suite: 9 passed, 0 failed.
+- **Instrument caveat recorded:** at RFGR 12 the RSPdx saturated (~1 % clipping) and yielded an
+  undecodable 523–808 Hz smear that mimics a modulation defect; RFGR 22 gives 0.00 % clipping and
+  clean decodes. An overloaded SDR is not a neutral witness.
+
+---
+
 ## 2026-07-30 — fix(scripts): the on-air preflight and dual-capture could both report success on unverified state
 
 - **Requirement/change:** the 2026-07-30 on-air session (validating #1038/#1039 on 2 m) hit two

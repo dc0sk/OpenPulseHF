@@ -291,3 +291,62 @@ fn the_real_on_air_frame_decodes() {
         "decoded payload must match what was actually transmitted"
     );
 }
+
+/// The IC-9700's TRANSMIT chain, proven off-air by an independent receiver.
+///
+/// Every other frame in this corpus was recorded from a *rig's* USB audio, which measures the
+/// transmitter and the receiver together. These three were recorded by an SDR (RSPdx, off-air,
+/// its own reference and its own front end) during the same keyed transmissions whose rig-side
+/// captures **failed**, on 2026-07-30. That asymmetry is the whole point of the file:
+///
+/// * SDR decodes + rig audio does not → the fault is in that rig's RECEIVE chain, with evidence.
+///
+/// It is what closed the A→B question of 2026-07-30. Four keyed `BPSK250|rs` runs from the IC-9700
+/// to the FT-991A all failed, and the FT-991A's received carrier sat at ~1372 Hz **regardless of
+/// its dial** — verified by raw CAT readback before and after each capture, across a 128 Hz dial
+/// change that moved the measured offset by ~0 Hz. The SDR heard the same transmissions at
+/// 1511–1513 Hz with 47–56 dB SNR and decoded all three. So the transmitter was never the problem,
+/// and neither was the modem.
+///
+/// **The three distinct payloads are the anti-vacuity control.** A test that decoded one fixed
+/// string could pass by returning a constant; three captures each recovering their own different
+/// string cannot. Do not collapse them to one file.
+///
+/// Provenance: 144.600 MHz, IC-9700 at 5 W over 2 m, RSPdx on Antenna A, centre 144.600 MHz,
+/// fs 192 kHz, RFGR 22 / IFGR 40 (RFGR 12 saturated and produced an undecodable 523–808 Hz smear —
+/// the gain matters). IQ demodulated to 8 kHz USB audio by keeping only positive baseband
+/// frequencies and taking twice the real part.
+#[test]
+fn the_ic9700_transmit_chain_decodes_off_air_from_an_independent_receiver() {
+    for (name, expected) in [
+        ("sdr-ic9700tx-bpsk250-rs-1.wav", "RFGAINFIX RS TEST"),
+        ("sdr-ic9700tx-bpsk250-rs-2.wav", "TRIMSIGN RS TEST"),
+        ("sdr-ic9700tx-bpsk250-rs-3.wav", "TRIMEMP RS TEST"),
+    ] {
+        let c = corpus(name);
+        assert!(
+            c.mean_sq() > 1e-4,
+            "{name} has gone silent (mean_sq {:.6}); the artifact is corrupt",
+            c.mean_sq()
+        );
+
+        let mut h = harness();
+        h.feed_capture(&c);
+        let got = h
+            .rx_engine
+            .receive_with_fec_mode_timeout(
+                "BPSK250",
+                openpulse_core::fec::FecMode::Rs,
+                None,
+                Duration::from_millis(40_000),
+            )
+            .unwrap_or_else(|e| panic!("{name} must decode off-air: {e}"));
+
+        assert_eq!(
+            String::from_utf8_lossy(&got),
+            expected,
+            "{name} must decode to its OWN payload — matching the wrong one would mean this \
+             test is not distinguishing the captures"
+        );
+    }
+}

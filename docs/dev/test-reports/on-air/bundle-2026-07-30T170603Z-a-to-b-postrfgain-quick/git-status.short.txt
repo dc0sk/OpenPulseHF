@@ -1,0 +1,7 @@
+?? crates/openpulse-modem/tests/captures/scratch-rfgainfix.wav
+?? crates/openpulse-modem/tests/captures/scratch-trimemp.wav
+?? crates/openpulse-modem/tests/captures/scratch-trimsign.wav
+?? crates/openpulse-modem/tests/scratch_replay.rs
+?? "docs/TRX docs/"
+?? docs/dev/test-reports/on-air/bundle-2026-07-30T170603Z-a-to-b-postrfgain-quick/
+?? docs/dev/test-reports/onair-2026-07-30T170446.json

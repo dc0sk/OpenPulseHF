@@ -1,0 +1,26 @@
+{
+  "captured_at_utc": "2026-07-30T170837Z",
+  "git_sha": "01946024f797af0a1735b7bc07a65a79493a5ff6",
+  "git_branch": "main",
+  "git_dirty": false,
+  "host": "DC0SK-P14s",
+  "operator_user": "dc0sk",
+  "label": "trimsign-minus64-quick",
+  "files": {
+    "report": {
+      "source": "docs/dev/test-reports/onair-2026-07-30T170720.json",
+      "bundle_name": "onair-2026-07-30T170720.json",
+      "sha256": "394ce02bb59a6ad92dc6262772bc529271339027aafec004f5fc583471d76bde"
+    },
+    "config_snapshot": {
+      "source": "/home/dc0sk/.config/openpulse/config.toml",
+      "bundle_name": "config.toml.snapshot",
+      "sha256": "a9e03c952f9def952f592ad247373f0b3c49d726605284384bd86f7705ee7b99"
+    },
+    "notes": {
+      "bundle_name": "",
+      "sha256": ""
+    }
+  },
+  "preflight": null
+}
