@@ -350,3 +350,47 @@ fn the_ic9700_transmit_chain_decodes_off_air_from_an_independent_receiver() {
         );
     }
 }
+
+/// Regression guard on the *cost* of the settle recovery, not a proof of the #1040 fix.
+///
+/// **Be clear about what this does not do.** It passes identically before and after the #1040
+/// change — measured 2026-07-30, this capture needs **1 condemnation either way**, because #1039
+/// left the gate settling essentially at the frame. So it cannot fail for the crawl it is named
+/// after, and it is not the gate that proved the fix; that is
+/// `engine::tests::scan_planner_reanchors_past_the_span_the_sweep_already_proved`, which fails
+/// without it.
+///
+/// What it *is* worth: `the_real_on_air_frame_decodes` kept passing through two wildly different
+/// recoveries — the original livelock (78 settles at one sample) and the 32-sample crawl — because
+/// a decode-or-not assertion is structurally blind to cost. Reading the condemnation count pins
+/// this capture's cost so a future change that reintroduces a crawl *here* is caught. Re-anchoring
+/// is not free: each condemnation costs `SETTLE_FAILURE_LIMIT` (18) fully-buffered decodes, and a
+/// coded BPSK250 decode is a multi-second demodulation.
+#[test]
+fn the_settle_recovery_reaches_the_frame_without_crawling() {
+    let c = corpus("ic9700-frame-bpsk250-rs-whitened.wav");
+    let mut h = harness();
+    h.feed_capture(&c);
+    let got = h
+        .rx_engine
+        .receive_with_fec_mode_timeout(
+            "BPSK250",
+            openpulse_core::fec::FecMode::Rs,
+            None,
+            Duration::from_millis(40_000),
+        )
+        .expect("the #1021 capture must still decode");
+    assert_eq!(String::from_utf8_lossy(&got), "DUALCAP TEST 1");
+
+    // The micro-sweep tests onsets at `fep + k*(step/2)` for k in 0..9 — four whole symbols — so
+    // every condemnation has already proven that span undecodable. Re-offering it costs the
+    // recovery a factor of four for nothing. Bound chosen from measurement, not taste: see the
+    // recorded before/after in the traceability ledger.
+    let condemnations = h.rx_engine.settle_condemnations();
+    assert!(
+        condemnations <= 2,
+        "settle recovery took {condemnations} condemnations (~{} wasted decodes); it is crawling \
+         over ground the micro-sweep already proved undecodable (#1040)",
+        condemnations * 18
+    );
+}
