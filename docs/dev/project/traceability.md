@@ -9,6 +9,67 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-07-30 — fix(scripts): the on-air preflight and dual-capture could both report success on unverified state
+
+- **Requirement/change:** the 2026-07-30 on-air session (validating #1038/#1039 on 2 m) hit two
+  tooling defects, both of the "a check that cannot fail" shape. Neither is a modem bug; both cost
+  real time inside a keyed window.
+- **Defect 1 — `onair-dual-capture.sh` reported success with no transmission.** `tx_rc` was captured
+  and never read. A run whose transmit died outright (`TX_REPO_DIR` defaults to Station B's layout,
+  so a TX-from-A run looked for the binary at a path that does not exist on A; the log read
+  "No such file or directory") still printed **"Both captures succeeded"** and produced two 30 s
+  files of ambient noise. That is worse than no capture — it looks like evidence. Caught only by
+  reading the TX log by hand.
+- **Defect 2 — the preflight's NB/NR warning read the wrong control.** It applied `L NB/NR 0`
+  (the LEVEL knob) and warned on `l NB/NR` (the level), but the DSP is gated by the FUNCTION SWITCH
+  (`U`/`u`). Wrong in **both** directions: it warned "FT-991A NR=0.0666667 — DSP filter still
+  active" for a rig whose `u NR` read 0 (false alarm — measured on BOTH stations that day), and it
+  was silent for a switch that is ON at level 0 (false silence). The correction it applied could
+  never turn the filter off.
+- **Decision:** warn on the switch, report the level only as context, and treat an unreadable switch
+  as UNVERIFIED rather than silent — "no reading" is not "verified off". This is the same rule the
+  dual-card AGC episode produced: a script that *sets* state must *verify* it, by ablation not by
+  reading a neighbouring control.
+- **Implementation:** `scripts/onair-dual-capture.sh` — `tx_ok` requires ssh exit 0 **and** the
+  transmitter's own `^Transmitted N bytes` line; failure sets `rc=1` and states plainly that both
+  captures hold ambient noise. `scripts/run-onair-ic9700-ft991a.sh` — corrections now also send
+  `U NB 0`/`U NR 0`; the readback adds `NBSW:`/`NRSW:` (`u NB`/`u NR`) for both stations; the
+  warning loop keys off the switch.
+- **Tests → results (actually run, 2026-07-30):**
+  - Transmit check, sabotage-verified against the two REAL logs from that session:
+    `post1039-rs-tx.log` (binary missing, nothing keyed) → `tx_ok=0` ✅;
+    `post1039b-rs-tx.log` ("Transmitted 19 bytes") → `tx_ok=1` ✅;
+    same good log with ssh exit 1 → `tx_ok=0` ✅.
+  - NB/NR warning, sabotage-verified on the extracted loop body: switch=0/level=0.0666667 (the real
+    false alarm) → silent ✅; switch=1/level=0.0666667 → warns ✅; switch=1/level=0 (the case the old
+    code missed entirely) → warns ✅; switch=na → warns UNVERIFIED ✅.
+  - Instrument confirmed live on both rigs: IC-9700 (hamlib 3081) `u NR`=0 `u NB`=0 `l NR`=0.0313726;
+    FT-991A (1035) `u NR`=0 `u NB`=0 `l NR`=0.0666667 — i.e. both stations' warnings that day were
+    false alarms.
+  - `bash -n` clean on both scripts.
+- **Defect 3 (same class, found while fixing 2) — RF GAIN is CAT-invisible and was reported silently.**
+  Neither rig returns a value for `l RFGAIN` (measured 2026-07-30: IC-9700 hamlib 3081 and FT-991A
+  1035 both empty). The preflight printed `rfgain = na` and warned nothing, so an unverifiable
+  setting read as a checked one. A receiver with RF GAIN backed off is desensitised and runs a
+  raised AGC threshold — it degrades a data signal while still showing energy on the meter, and it
+  can only be confirmed at the radio. Now warned as UNVERIFIED with the physical check to perform.
+  **Then made readable rather than merely warned about:** the operator supplied the FT-991A CAT
+  reference (`RG` = RF gain, `RA` = attenuator/preamp; manual now in `docs/TRX docs/`), and the rig
+  answers the raw `RG0;` query even though hamlib's RFGAIN level is unimplemented. The preflight now
+  reads RF gain via raw CAT and **fails** below 230/255 (90 %), falling back to UNVERIFIED only when
+  the raw query also fails. **This immediately found the live defect: the FT-991A was sitting at
+  `RG0037;` — 37/255, ~15 % — while failing to decode the far station.** A desensitised front end
+  running AGC AUTO smears a data signal while the meter still shows a healthy burst, which matches
+  the measured 94–107 Hz main lobe against 84 Hz on the capture that decodes. Restored to 255
+  (original 037 recorded).
+  Sabotage-verified: raw=037 → warns+fails ✅, raw=255 → silent ✅, raw=230 → silent ✅,
+  raw=229 → warns ✅, raw unreadable → UNVERIFIED ✅; and `na`/empty/`1.0` on the level path ✅.
+- **Not fixed here:** the settle re-anchor advances only 32 samples per 18 fully-buffered decodes,
+  so recovery from a bad settle is a crawl — filed as **#1040** with the measured on-air numbers
+  (the passing run needed 16 settles / 15 condemnations).
+
+---
+
 ## 2026-07-29 — test: `qam64_tolerates_realistic_sro` re-derived (100→50 ppm) — the 100 ppm bar was measuring the RS padding
 
 - **Requirement/change:** the first fully-complete workspace run (`--no-fail-fast`, 272 suites,

@@ -684,14 +684,22 @@ preflight_check() {
 
     # Apply corrections on both stations before readback (best-effort).
     echo "  Applying corrections (COMP/NB/NR/SQL/VOX=0)..."
+    # `L NB/NR 0` sets the LEVEL knob; `U NB/NR 0` clears the FUNCTION switch. The switch is what
+    # gates the DSP — a rig can sit at level 0.067 with the switch off (inert) or at any level with
+    # the switch on (chewing the signal). Sending only the level left the switch untouched, so the
+    # "correction" could not actually turn the filter off.
     ssh_a "${rc_a} L COMP 0 2>/dev/null || true; \
            ${rc_a} L NB   0 2>/dev/null || true; \
            ${rc_a} L NR   0 2>/dev/null || true; \
+           ${rc_a} U NB   0 2>/dev/null || true; \
+           ${rc_a} U NR   0 2>/dev/null || true; \
            ${rc_a} L SQL  0 2>/dev/null || true; \
            ${rc_a} L VOX  0 2>/dev/null || true" 2>/dev/null || true
     ssh_b "${rc_b} L COMP 0 2>/dev/null || true; \
            ${rc_b} L NB   0 2>/dev/null || true; \
            ${rc_b} L NR   0 2>/dev/null || true; \
+           ${rc_b} U NB   0 2>/dev/null || true; \
+           ${rc_b} U NR   0 2>/dev/null || true; \
            ${rc_b} L SQL  0 2>/dev/null || true; \
            ${rc_b} L VOX  0 2>/dev/null || true" 2>/dev/null || true
 
@@ -712,9 +720,12 @@ preflight_check() {
         printf 'COMP:%s\n'     \"\$(${rc_a} l COMP     2>/dev/null | grep -v Hamlib | tail -n1 || echo na)\"
         printf 'NB:%s\n'       \"\$(${rc_a} l NB       2>/dev/null | grep -v Hamlib | tail -n1 || echo na)\"
         printf 'NR:%s\n'       \"\$(${rc_a} l NR       2>/dev/null | grep -v Hamlib | tail -n1 || echo na)\"
+        printf 'NBSW:%s\n'     \"\$(${rc_a} u NB       2>/dev/null | grep -v Hamlib | tail -n1 || echo na)\"
+        printf 'NRSW:%s\n'     \"\$(${rc_a} u NR       2>/dev/null | grep -v Hamlib | tail -n1 || echo na)\"
         printf 'SQL:%s\n'      \"\$(${rc_a} l SQL      2>/dev/null | grep -v Hamlib | tail -n1 || echo na)\"
         printf 'VOX:%s\n'      \"\$(${rc_a} l VOX      2>/dev/null | grep -v Hamlib | tail -n1 || echo na)\"
         printf 'RFGAIN:%s\n'   \"\$(${rc_a} l RFGAIN   2>/dev/null | grep -v Hamlib | tail -n1 || echo na)\"
+        printf 'RFGAINRAW:%s\n' \"\$(${rc_a} w 'RG0;' 2>/dev/null | tr -cd '[:print:]' | sed -n 's/.*RG0\\([0-9][0-9][0-9]\\);.*/\\1/p' | tail -n1 || echo na)\"
         printf 'PREAMP:%s\n'   \"\$(${rc_a} l PREAMP   2>/dev/null | grep -v Hamlib | tail -n1 || echo na)\"
         printf 'SWR:%s\n'      \"\$(${rc_a} l SWR      2>/dev/null | grep -v Hamlib | tail -n1 || echo na)\"
         printf 'STRENGTH:%s\n' \"\$(${rc_a} l STRENGTH 2>/dev/null | grep -v Hamlib | tail -n1 || echo na)\"
@@ -736,9 +747,12 @@ preflight_check() {
         printf 'COMP:%s\n'     \"\$(${rc_b} l COMP     2>/dev/null | grep -v Hamlib | tail -n1 || echo na)\"
         printf 'NB:%s\n'       \"\$(${rc_b} l NB       2>/dev/null | grep -v Hamlib | tail -n1 || echo na)\"
         printf 'NR:%s\n'       \"\$(${rc_b} l NR       2>/dev/null | grep -v Hamlib | tail -n1 || echo na)\"
+        printf 'NBSW:%s\n'     \"\$(${rc_b} u NB       2>/dev/null | grep -v Hamlib | tail -n1 || echo na)\"
+        printf 'NRSW:%s\n'     \"\$(${rc_b} u NR       2>/dev/null | grep -v Hamlib | tail -n1 || echo na)\"
         printf 'SQL:%s\n'      \"\$(${rc_b} l SQL      2>/dev/null | grep -v Hamlib | tail -n1 || echo na)\"
         printf 'VOX:%s\n'      \"\$(${rc_b} l VOX      2>/dev/null | grep -v Hamlib | tail -n1 || echo na)\"
         printf 'RFGAIN:%s\n'   \"\$(${rc_b} l RFGAIN   2>/dev/null | grep -v Hamlib | tail -n1 || echo na)\"
+        printf 'RFGAINRAW:%s\n' \"\$(${rc_b} w 'RG0;' 2>/dev/null | tr -cd '[:print:]' | sed -n 's/.*RG0\\([0-9][0-9][0-9]\\);.*/\\1/p' | tail -n1 || echo na)\"
         printf 'PREAMP:%s\n'   \"\$(${rc_b} l PREAMP   2>/dev/null | grep -v Hamlib | tail -n1 || echo na)\"
         printf 'SWR:%s\n'      \"\$(${rc_b} l SWR      2>/dev/null | grep -v Hamlib | tail -n1 || echo na)\"
         printf 'STRENGTH:%s\n' \"\$(${rc_b} l STRENGTH 2>/dev/null | grep -v Hamlib | tail -n1 || echo na)\"
@@ -753,6 +767,8 @@ preflight_check() {
 
     # Parse Station A.
     local a_freq a_mode a_passband a_rfpower a_comp a_nb a_nr a_sql a_vox
+    local a_nbsw a_nrsw
+    local a_rfgainraw
     local a_rfgain a_preamp a_swr a_strength a_sinkvol a_sinkmute
     a_freq="$(_pf_val "$a_raw" FREQ)";         a_freq="${a_freq:-na}"
     a_mode="$(_pf_val "$a_raw" MODE)";         a_mode="${a_mode:-na}"
@@ -761,9 +777,12 @@ preflight_check() {
     a_comp="$(_pf_val "$a_raw" COMP)";         a_comp="${a_comp:-na}"
     a_nb="$(_pf_val "$a_raw" NB)";             a_nb="${a_nb:-na}"
     a_nr="$(_pf_val "$a_raw" NR)";             a_nr="${a_nr:-na}"
+    a_nbsw="$(_pf_val "$a_raw" NBSW)";         a_nbsw="${a_nbsw:-na}"
+    a_nrsw="$(_pf_val "$a_raw" NRSW)";         a_nrsw="${a_nrsw:-na}"
     a_sql="$(_pf_val "$a_raw" SQL)";           a_sql="${a_sql:-na}"
     a_vox="$(_pf_val "$a_raw" VOX)";           a_vox="${a_vox:-na}"
     a_rfgain="$(_pf_val "$a_raw" RFGAIN)";     a_rfgain="${a_rfgain:-na}"
+    a_rfgainraw="$(_pf_val "$a_raw" RFGAINRAW)"; a_rfgainraw="${a_rfgainraw:-na}"
     a_preamp="$(_pf_val "$a_raw" PREAMP)";     a_preamp="${a_preamp:-na}"
     a_swr="$(_pf_val "$a_raw" SWR)";           a_swr="${a_swr:-na}"
     a_strength="$(_pf_val "$a_raw" STRENGTH)"; a_strength="${a_strength:-na}"
@@ -772,6 +791,8 @@ preflight_check() {
 
     # Parse Station B.
     local b_freq b_mode b_passband b_rfpower b_comp b_nb b_nr b_sql b_vox
+    local b_nbsw b_nrsw
+    local b_rfgainraw
     local b_rfgain b_preamp b_swr b_strength b_srcvol b_srcmute
     b_freq="$(_pf_val "$b_raw" FREQ)";         b_freq="${b_freq:-na}"
     b_mode="$(_pf_val "$b_raw" MODE)";         b_mode="${b_mode:-na}"
@@ -780,9 +801,12 @@ preflight_check() {
     b_comp="$(_pf_val "$b_raw" COMP)";         b_comp="${b_comp:-na}"
     b_nb="$(_pf_val "$b_raw" NB)";             b_nb="${b_nb:-na}"
     b_nr="$(_pf_val "$b_raw" NR)";             b_nr="${b_nr:-na}"
+    b_nbsw="$(_pf_val "$b_raw" NBSW)";         b_nbsw="${b_nbsw:-na}"
+    b_nrsw="$(_pf_val "$b_raw" NRSW)";         b_nrsw="${b_nrsw:-na}"
     b_sql="$(_pf_val "$b_raw" SQL)";           b_sql="${b_sql:-na}"
     b_vox="$(_pf_val "$b_raw" VOX)";           b_vox="${b_vox:-na}"
     b_rfgain="$(_pf_val "$b_raw" RFGAIN)";     b_rfgain="${b_rfgain:-na}"
+    b_rfgainraw="$(_pf_val "$b_raw" RFGAINRAW)"; b_rfgainraw="${b_rfgainraw:-na}"
     b_preamp="$(_pf_val "$b_raw" PREAMP)";     b_preamp="${b_preamp:-na}"
     b_swr="$(_pf_val "$b_raw" SWR)";           b_swr="${b_swr:-na}"
     b_strength="$(_pf_val "$b_raw" STRENGTH)"; b_strength="${b_strength:-na}"
@@ -874,13 +898,55 @@ preflight_check() {
     done
 
     # --- WARN: noise blanker / noise reduction still active after correction ---
-    for _entry in "${A_LABEL}:NB:${a_nb}" "${A_LABEL}:NR:${a_nr}" \
-                  "${B_LABEL}:NB:${b_nb}" "${B_LABEL}:NR:${b_nr}"; do
+    #
+    # Warn on the FUNCTION SWITCH (`u NB`/`u NR`), not the level (`l NB`/`l NR`). The level is the
+    # knob position and is inert while the switch is off, so warning on it is a false alarm: on
+    # 2026-07-30 this printed "FT-991A NR=0.0666667 — DSP filter still active" for a rig whose
+    # `u NR` read 0, and that misleading warning cost real time in an on-air session. The level is
+    # still reported alongside as context, but only the switch decides.
+    for _entry in "${A_LABEL}:NB:${a_nbsw}:${a_nb}" "${A_LABEL}:NR:${a_nrsw}:${a_nr}" \
+                  "${B_LABEL}:NB:${b_nbsw}:${b_nb}" "${B_LABEL}:NR:${b_nrsw}:${b_nr}"; do
         local _lbl="${_entry%%:*}"
-        local _key; _key="$(printf '%s' "$_entry" | cut -d: -f2)"
-        local _val; _val="$(printf '%s' "$_entry" | cut -d: -f3)"
-        if [[ "$_val" != "na" ]] && [[ "$(_pf_gt "$_val" 0.0)" == "1" ]]; then
-            echo "  WARN: ${_lbl} ${_key}=${_val} — DSP filter still active after correction attempt" >&2
+        local _key;  _key="$(printf  '%s' "$_entry" | cut -d: -f2)"
+        local _sw;   _sw="$(printf   '%s' "$_entry" | cut -d: -f3)"
+        local _lvl;  _lvl="$(printf  '%s' "$_entry" | cut -d: -f4)"
+        if [[ "$_sw" == "na" ]]; then
+            # No switch reading means the state is UNKNOWN, not clean — say so rather than stay
+            # silent, which would read as "verified off".
+            echo "  WARN: ${_lbl} ${_key} switch state unreadable (level=${_lvl}) — DSP filter state UNVERIFIED" >&2
+        elif [[ "$(_pf_gt "$_sw" 0.0)" == "1" ]]; then
+            echo "  WARN: ${_lbl} ${_key} switch is ON (level=${_lvl}) — DSP filter still active after correction attempt" >&2
+        fi
+    done
+
+    # --- WARN: RF GAIN could not be verified ---
+    #
+    # Neither the IC-9700 (hamlib 3081) nor the FT-991A (1035) returns a value for `l RFGAIN`
+    # — measured 2026-07-30, both empty. A receiver whose RF GAIN is backed off is desensitised and
+    # runs with a raised AGC threshold, which degrades a data signal while still showing plenty of
+    # energy on the meter. Because it is CAT-invisible it can ONLY be checked at the radio, so the
+    # preflight must say that out loud rather than print "rfgain = na" and move on: silence here
+    # reads as "checked and fine", which is the exact mistake that made the dual-card capture AGC
+    # look like a waveform property for a whole release.
+    # Yaesu answers the raw `RG0;` command with RG0nnn; (000-255) even where hamlib's RFGAIN level
+    # is unimplemented, so prefer the raw reading and only fall back to UNVERIFIED when neither
+    # works. Measured 2026-07-30: the FT-991A sat at **037/255 (~15 %)** while it was failing to
+    # decode the far station — a desensitised front end running AGC AUTO, which smears a data
+    # signal while the meter still shows a healthy burst.
+    for _entry in "${A_LABEL}:${a_rfgain}:${a_rfgainraw}" "${B_LABEL}:${b_rfgain}:${b_rfgainraw}"; do
+        local _lbl="${_entry%%:*}"
+        local _val; _val="$(printf '%s' "$_entry" | cut -d: -f2)"
+        local _raw; _raw="$(printf '%s' "$_entry" | cut -d: -f3)"
+        if [[ "$_raw" =~ ^[0-9]+$ ]]; then
+            # 230/255 = 90 %. Anything below that is a deliberately reduced front end.
+            if [[ "$(_pf_gt 230 "$_raw")" == "1" ]]; then
+                echo "  WARN: ${_lbl} RF GAIN = ${_raw}/255 — receiver is DESENSITISED (below 90%)." >&2
+                echo "        Set it to maximum before trusting an RX result: rigctl w 'RG0255;'" >&2
+                fail=1
+            fi
+        elif [[ "$_val" == "na" || -z "$_val" ]]; then
+            echo "  WARN: ${_lbl} RF GAIN is not readable over CAT and the raw RG0; query failed —" >&2
+            echo "        UNVERIFIED. Confirm at the radio that RF GAIN is at maximum." >&2
         fi
     done
 
