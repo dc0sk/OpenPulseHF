@@ -9,6 +9,49 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-07-30 — fix(modem): the settle re-anchor resumes past the span the micro-sweep already tested (#1040)
+
+- **Requirement/change:** #1038 stopped the #1021 livelock, but `ScanPlanner::unsettle` resumed at
+  `condemned + step` — one symbol. The micro-sweep that condemns an anchor tries onsets at
+  `fep + k*(step/2)` for k in `0..9`, i.e. **four symbols**, so three quarters of every re-anchor
+  re-tested ground already proven undecodable. Each cycle costs `SETTLE_FAILURE_LIMIT` (18)
+  fully-buffered decodes of a multi-second window. Measured on air 2026-07-30: the run that PASSED
+  spent 15 condemnations walking 480 samples in exact 32-sample increments.
+- **Root cause:** the sweep span and the re-anchor advance were **independent literals** — a `% 9`
+  in the receive loop and a `self.step` in `unsettle` — with nothing forcing them to agree.
+- **Decision:** hoist `ScanPlanner::SWEEP_OFFSETS` and derive both from it, so the re-anchor is
+  defined as *"past what the sweep proved"* rather than as a separate constant. The bound is
+  deliberately **two-sided**: advancing less re-tests proven ground; advancing more skips audio the
+  sweep never examined, which may hold the real preamble. `SETTLE_FAILURE_LIMIT` is now
+  `2 * SWEEP_OFFSETS` rather than a bare 18, matching its own doc ("two cycles").
+- **Implementation:** `crates/openpulse-modem/src/engine.rs` — `SWEEP_OFFSETS`, `unsettle`, the
+  receive-loop sweep, and a `settle_condemnations()` tripwire counter (same role as
+  `notch_blocks_processed`) so the *cost* of recovery is observable rather than log-only.
+- **Tests → results (actually run, 2026-07-30):**
+  - `scan_planner_reanchors_past_the_span_the_sweep_already_proved` — **written first and watched
+    fail**: `re-anchored at 84440, but the micro-sweep already proved every onset through 84536
+    undecodable`. 84408→84440 is verbatim the on-air log. Passes after the fix.
+  - Real-capture corpus: 10 passed, 0 failed.
+  - Full workspace gate recorded in the PR.
+- **Honest limits, both measured:**
+  1. `the_settle_recovery_reaches_the_frame_without_crawling` (corpus, #1021 capture) passes
+     **identically before and after** — 1 condemnation either way, because #1039 leaves the gate
+     settling at the frame. It is a regression guard on cost, **not** proof of this fix, and its doc
+     says so. The unit gate is what proved it.
+  2. **The fix does not rescue a saturated-gate region.** Synthetic reproduction (coded BPSK250|rs
+     embedded in the recorded hot idle floor `ic9700-idle-hot.wav`, leads 40k/80k/120k) needs
+     **82/73/72 condemnations and still fails** with the fix in place — bounded forward stepping
+     cannot cross a long span where the gate fires on noise everywhere. That is #1020's saturated
+     gate, not #1040's redundant stepping.
+- **Considered and REJECTED (measured, then reverted):** geometric backoff on consecutive
+  condemnations, capped at `min_frame_samples`. It converted the 40k-lead case from failure to a
+  decode (30 condemnations) but left 80k and 120k failing. A partial, heuristic gain in the
+  acquisition path — the most-churned and most-misdiagnosed area in this repo — whose skip-the-
+  preamble risk was not bounded by measurement. Not shipped; the numbers are recorded here so the
+  next attempt starts from them rather than re-deriving them.
+
+---
+
 ## 2026-07-30 — eval: the IC-9700's transmit chain proven off-air by SDR; the A→B fault is the FT-991A's receiver
 
 - **Requirement/change:** four keyed `BPSK250|rs` runs IC-9700 (A) → FT-991A (B) failed on 2 m, while

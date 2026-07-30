@@ -107,12 +107,21 @@ impl ScanPlanner {
         }
     }
 
+    /// Forward half-symbol onsets the micro-sweep cycles through before an anchor is condemned.
+    ///
+    /// Load-bearing in two places that must agree: the sweep in the receive loop takes
+    /// `fep + (k % SWEEP_OFFSETS) * (step/2)`, and [`Self::unsettle`] reopens the scan past the
+    /// span those offsets covered. They were chosen independently — the sweep spanned four symbols
+    /// while the re-anchor advanced one — so three quarters of every recovery step re-tested ground
+    /// already proven undecodable (#1040).
+    const SWEEP_OFFSETS: usize = 9;
+
     /// How many fully-buffered micro-sweep failures condemn a settle.
     ///
-    /// The sweep cycles 9 forward half-symbol offsets, one per iteration, so a full cycle is 9
-    /// attempts; two cycles gives the anchor a second chance against a grown buffer before it is
-    /// abandoned.
-    const SETTLE_FAILURE_LIMIT: usize = 18;
+    /// The sweep cycles `SWEEP_OFFSETS` forward half-symbol offsets, one per iteration, so a full
+    /// cycle is `SWEEP_OFFSETS` attempts; two cycles gives the anchor a second chance against a
+    /// grown buffer before it is abandoned.
+    const SETTLE_FAILURE_LIMIT: usize = 2 * Self::SWEEP_OFFSETS;
 
     /// Record a micro-sweep decode failure at a fully-buffered settled position, and report
     /// whether the anchor has now been condemned.
@@ -145,11 +154,27 @@ impl ScanPlanner {
     /// And the anchor has earned its exclusion — `SETTLE_FAILURE_LIMIT` fully-buffered decodes
     /// across a 9-offset sweep have already failed there, so it is proven undecodable rather than
     /// merely unpromising.
+    /// Resume **past the span the micro-sweep actually tested**, not one scan step past the anchor.
+    ///
+    /// The sweep tried onsets at `condemned + k*(step/2)` for k in `0..SWEEP_OFFSETS` — four whole
+    /// symbols at the default 9 offsets — and every one failed against a fully buffered window, so
+    /// that entire span is proven undecodable. Advancing by a single `step` re-offered three
+    /// quarters of it, and each re-anchor costs `SETTLE_FAILURE_LIMIT` fully-buffered decodes of a
+    /// multi-second window. Measured on air 2026-07-30: the run that passed spent 15 condemnations
+    /// walking 480 samples in 32-sample increments and only just finished inside its listen window
+    /// (#1040).
+    ///
+    /// The bound is two-sided, which is why this is a span and not simply a bigger constant.
+    /// Advancing *less* re-tests proven ground; advancing *more* skips audio the sweep never
+    /// examined, and for `long_frame` modes the full-buffer retry that might have rescued a skipped
+    /// preamble is disabled precisely because a settle occurred.
     fn unsettle(&mut self) {
         let condemned = self.first_energy_pos.unwrap_or(0);
         self.first_energy_pos = None;
         self.settle_failures = 0;
-        self.last_tried_end = condemned.saturating_add(self.step.max(1));
+        let half = (self.step / 2).max(1);
+        let swept = (Self::SWEEP_OFFSETS - 1) * half;
+        self.last_tried_end = condemned.saturating_add(swept).saturating_add(1);
     }
 
     /// `true` once AFC settling has located the first signal energy.
@@ -533,6 +558,14 @@ pub struct ModemEngine {
     /// Count of capture blocks the notch processed — a tripwire: an enabled notch that never runs
     /// on a given path (e.g. a new capture path that skips the InputCapture seam) leaves this at 0.
     notch_blocks_processed: u64,
+    /// Count of settle anchors condemned by the micro-sweep and handed back to the scan.
+    ///
+    /// A *count*, not a pass/fail: the settle recovery can succeed while re-anchoring dozens of
+    /// times, and that difference is invisible to any decode-or-not gate. Measured on air
+    /// 2026-07-30 the passing run needed 15 condemnations, each costing
+    /// `SETTLE_FAILURE_LIMIT` fully-buffered decodes, and only just finished inside the listen
+    /// window (#1040).
+    settle_condemnations: u64,
     /// Receiver-side streaming AGC on captured audio (default off). Normalises the level so the
     /// PSK/QAM ladder sees a consistent amplitude despite QSB fading and inter-station spread.
     /// Active-span gated: the gain only adapts on carrier-present blocks (RMS ≥ DCD threshold) and
@@ -643,6 +676,7 @@ impl ModemEngine {
             notch_in_band_interferers: Vec::new(),
             rx_mode: None,
             notch_blocks_processed: 0,
+            settle_condemnations: 0,
             agc_enabled: false,
             // target RMS 0.3 (headroom below ±1.0), slow loop (α=0.02), ±40 dB clamp.
             agc: openpulse_dsp::agc::Agc::new(0.3, 0.02, 40.0),
@@ -676,6 +710,16 @@ impl ModemEngine {
     /// the daemon runs, the receive path isn't reaching the front-end seam.
     pub fn notch_blocks_processed(&self) -> u64 {
         self.notch_blocks_processed
+    }
+
+    /// How many settle anchors the micro-sweep has condemned and returned to the scan.
+    ///
+    /// Exposed so a test can gate the *cost* of the settle recovery, not merely whether it
+    /// eventually worked. `the_real_on_air_frame_decodes` passed throughout the period when
+    /// recovery re-anchored 78 times (#1021) and again when it crawled 15 times (#1040): a
+    /// decode-or-not assertion cannot see the difference.
+    pub fn settle_condemnations(&self) -> u64 {
+        self.settle_condemnations
     }
 
     /// Tripwire count of capture blocks the DCD carrier detector processed at the seam. DCD runs on the
@@ -2779,7 +2823,10 @@ impl ModemEngine {
                 // multi-second window, so sweeping every offset per read would starve
                 // the loop and the long frame would never finish buffering.
                 let half = (step / 2).max(1);
-                let onset = fep + (fep_offset_k % 9) * half;
+                // Same constant `ScanPlanner::unsettle` sizes its re-anchor from: the span swept
+                // here is exactly the span proven undecodable when the anchor is condemned. These
+                // were independent literals until #1040, and the mismatch was the crawl.
+                let onset = fep + (fep_offset_k % ScanPlanner::SWEEP_OFFSETS) * half;
                 fep_offset_k = fep_offset_k.wrapping_add(1);
                 let end = (onset + max_frame_samples).min(accumulated.len());
                 if end.saturating_sub(onset) >= min_frame_samples {
@@ -2818,6 +2865,7 @@ impl ModemEngine {
                                     self.afc_correction_hz
                                 );
                                 planner.unsettle();
+                                self.settle_condemnations += 1;
                                 // The correction came from the discredited anchor; keeping it
                                 // would bias every subsequent acquisition.
                                 self.afc_correction_hz = 0.0;
@@ -6215,6 +6263,52 @@ mod tests {
         assert!(p.is_settled());
         assert_eq!(p.first_energy_pos(), Some(1234));
         assert_eq!(p.scan_positions(50_000).next(), Some(50_000 - 1056));
+    }
+
+    /// #1040: a condemned anchor must not hand back ground the micro-sweep already tested.
+    ///
+    /// The sweep tries onsets at `fep + k*(step/2)` for k in 0..SWEEP_OFFSETS, i.e. it proves a
+    /// span of `(SWEEP_OFFSETS-1) * step/2` samples — four whole symbols at the default 9 offsets —
+    /// undecodable before condemning. `unsettle` used to advance by a single `step`, so three
+    /// quarters of every re-anchor re-tested proven ground. Each of those cycles costs
+    /// `SETTLE_FAILURE_LIMIT` fully-buffered decodes, which is why the on-air recovery of
+    /// 2026-07-30 crawled through 15 condemnations to cover ~480 samples.
+    #[test]
+    fn scan_planner_reanchors_past_the_span_the_sweep_already_proved() {
+        const STEP: usize = 32;
+        let mut p = ScanPlanner::new(STEP, 1056);
+        p.commit_scan(200_000);
+
+        let anchor = 84_408usize;
+        p.note_settled(anchor);
+        for _ in 0..ScanPlanner::SETTLE_FAILURE_LIMIT - 1 {
+            assert!(
+                !p.note_settle_failure(),
+                "must not condemn before the limit"
+            );
+        }
+        assert!(p.note_settle_failure(), "the limit must condemn");
+        p.unsettle();
+
+        assert!(!p.is_settled(), "condemning must clear the settle");
+
+        // The last onset the sweep actually tried.
+        let swept_through = anchor + (ScanPlanner::SWEEP_OFFSETS - 1) * (STEP / 2);
+        let resume = p
+            .scan_positions(200_000)
+            .next()
+            .expect("the scan must reopen");
+        assert!(
+            resume > swept_through,
+            "re-anchored at {resume}, but the micro-sweep already proved every onset through \
+             {swept_through} undecodable — re-offering that span is the #1040 crawl"
+        );
+        // ...and it must not overshoot into untested audio, which could skip a real frame onset.
+        assert!(
+            resume <= swept_through + STEP,
+            "re-anchored at {resume}, past the tested span end {swept_through} by more than one \
+             symbol: audio beyond the sweep is UNTESTED and may hold the real preamble"
+        );
     }
 
     #[test]
