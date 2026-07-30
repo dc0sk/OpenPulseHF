@@ -23,3 +23,6 @@ docs/dev/test-reports/on-air/captures/*-rig48k.wav
 docs/dev/test-reports/on-air/captures/*-rig48k.wav.status
 docs/dev/test-reports/on-air/captures/*-tx.log
 __pycache__/
+
+# Vendor transceiver manuals kept locally as reference (third-party, not ours to redistribute).
+docs/TRX docs/

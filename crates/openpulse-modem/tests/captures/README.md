@@ -30,6 +30,29 @@ very property these files exist to preserve.
 | `ic9700-frame-bpsk250-none.wav` | Same link, same payload, minutes after the `rs` capture — `BPSK250\|none`, 144.600 MHz, 5 W, 2026-07-29 | 0.9 s burst, continuous modulation | **The control that isolated #1021.** Same rigs, levels and frequency as the failing `rs` capture, so margin and propagation are held constant. This one **decodes** (`DUALCAP TEST 1`); the only difference is frame structure. |
 | `ic9700-frame-bpsk250-rs-whitened.wav` | IC-9700 receiving an FT-991A `BPSK250\|rs` frame over 2 m at 5 W from a **whitening** build, payload `DUALCAP TEST 1`, 144.600 MHz, 2026-07-29 | burst t≈10.3–18.6 s (8.3 s), 7.2 dB above floor; carrier **1502.42 Hz** (+2.42, drift −0.3 Hz over the burst); spectral spread ≥0.481 in **every** window | **The artifact that closed #1021.** It arrived byte-perfect (0 errors in all 255 when diffed against the reconstructed transmitted wire) and still would not decode: the receiver had settled AFC on idle noise at sample 96 and the recovery re-settled there forever. Asserted by `the_real_on_air_frame_decodes`. |
 | `ic9700-frame-bpsk250-none-whitened.wav` | Same link, same whitening build, minutes after the `rs` capture — `BPSK250\|none`, 144.600 MHz, 5 W, 2026-07-29 | 0.9 s burst, 7.3 dB above floor, carrier **1502.44 Hz** (+2.44) | **The control, and the corpus's former missing piece.** Holds margin, propagation, frequency and levels constant against the failing `rs` capture. It **decodes** (`DUALCAP TEST 1`) and is asserted by `a_real_on_air_frame_decodes_end_to_end` — the first end-to-end decode in this suite against audio a radio actually produced. |
+| `sdr-ic9700tx-bpsk250-rs-1.wav` | **SDR** (RSPdx, off-air, Antenna A, centre 144.600 MHz, fs 192 kHz, RFGR 22 / IFGR 40) receiving an **IC-9700** `BPSK250\|rs` transmission over 2 m at 5 W, payload `RFGAINFIX RS TEST`, 2026-07-30 | carrier **1513.1 Hz**, SNR ≈55.7 dB, burst t≈9.0–19.0 s | **The IC-9700's TRANSMIT chain, proven.** Recorded during the same keyed run whose FT-991A rig-audio capture FAILED. Decodes. Asserted by `the_ic9700_transmit_chain_decodes_off_air_from_an_independent_receiver`. |
+| `sdr-ic9700tx-bpsk250-rs-2.wav` | Same SDR setup and link, payload `TRIMSIGN RS TEST`, B's dial at 144 599 936, 2026-07-30 | carrier **1512.2 Hz**, SNR ≈47.4 dB | Second of three. The **distinct payload is the anti-vacuity control** — a test decoding one fixed string could pass by returning a constant. |
+| `sdr-ic9700tx-bpsk250-rs-3.wav` | Same SDR setup and link, payload `TRIMEMP RS TEST`, B's dial at 144 599 812, 2026-07-30 | carrier **1511.4 Hz**, SNR ≈53.1 dB | Third of three. Together they show the transmitted carrier is stable at 1511–1513 Hz while the FT-991A reported ~1372 Hz **regardless of its own verified dial**. |
+
+## What the SDR captures settle that a rig capture cannot
+
+Every other frame here was recorded from a *rig's* USB audio, which measures the transmitter and the
+receiver **together** — when such a capture fails you cannot say which end is at fault. The three
+`sdr-ic9700tx-*` files were recorded off-air by an independent receiver during the same keyed
+transmissions whose rig-side captures failed, which makes the split a direct observation:
+
+* SDR decodes **and** rig audio does not → the fault is in that rig's RECEIVE chain.
+
+That is what closed the A→B question of 2026-07-30. Four keyed `BPSK250|rs` runs IC-9700 → FT-991A
+all failed; the FT-991A's received carrier sat at ~1372 Hz **regardless of its dial**, verified by
+raw CAT readback before and after each capture across a 128 Hz dial change that moved the measured
+offset by ~0 Hz. The SDR heard the same transmissions at 1511–1513 Hz and decoded all three, in
+0.5 s with no settle recovery at all. Transmitter exonerated, modem exonerated, one receiver
+indicted — and no further on-air time needed to establish it.
+
+One gain note worth keeping: at **RFGR 12 the RSPdx front end saturated** (peak > 1.0, ~1 % clipping)
+and produced an undecodable 523–808 Hz smear that looks exactly like a modulation defect. RFGR 22
+gives 0.00 % clipping and clean decodes. An overloaded SDR is not a neutral witness.
 
 ## The gap is closed, and it closed a defect
 
