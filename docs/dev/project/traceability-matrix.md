@@ -2,7 +2,7 @@
 project: openpulsehf
 doc: docs/dev/project/traceability-matrix.md
 status: living
-last_updated: 2026-07-11
+last_updated: 2026-07-30
 ---
 
 # Traceability matrix
@@ -185,6 +185,12 @@ the testmatrix quick tier at commit `76de87e`, dated 2026-06-29 (555/555 pass, 0
 | REQ-FX-04 | File transfer (FF-16) | Operator-controlled acceptance: verified-peer requirement, size-gated auto-accept (default off), per-peer quota, prompt-on-offer | CAP-71 | ✅ covered |
 | REQ-FX-05 | File transfer (FF-16) | Hybrid reliable delivery (OTA per-burst rate + block-ack bitmap selective retransmit) with resume from the last completed block | CAP-71 | ✅ covered |
 | REQ-FX-06 | File transfer (FF-16) | Airtime-bounded TX bursts keep PTT within the radio watchdog and yield the channel between bursts | CAP-71 | ✅ covered |
+| REQ-CAT-01 | Rig control (CAT) | Dedicated CAT crate with per-model drivers; unsupported controls typed, never an empty value | — | ⛔ not started |
+| REQ-CAT-02 | Rig control (CAT) | 100 % of each model's published CAT command set, coverage mechanically diffed in CI against a per-model inventory | — | ⛔ not started |
+| REQ-CAT-03 | Rig control (CAT) | Set-then-verify: a write whose readback disagrees is an error, not a success | — | ⛔ not started |
+| REQ-CAT-04 | Rig control (CAT) | Per-model validation on REAL hardware, recording evidence tier, firmware revision, operator, date and expiry | — | ⛔ not started |
+| REQ-CAT-05 | Rig control (CAT) | Guided validation procedure so contributors can validate their own rigs and submit an evidence bundle | — | ⛔ not started |
+| REQ-CAT-06 | Rig control (CAT) | Open candidate model list (Elecraft K4/K3/KX3/KX2, QRP Labs QMX/QMX+, Yaesu FT-710/991A/817/818, ICOM IC-9700/705); candidacy is not support | — | ⛔ not started |
 
 ## Capabilities & end-to-end traceability (CAP-IDs)
 
