@@ -100,14 +100,20 @@ fn at_a_healthy_idle_floor_the_frame_decodes() {
     );
 }
 
-/// THE DEFECT: at the level measured on air, acquisition is degraded — the gate cannot
-/// discriminate, so the receiver settles on noise instead of the frame.
+/// FORMERLY THE DEFECT, now its fix — **re-derived exactly as the old assertion asked for**.
 ///
-/// Deliberately asserted as "does not reliably decode" rather than "always errors": the gate being
-/// saturated open does not make a decode impossible, it makes it a coin flip on where the scan
-/// happens to land. Requiring a hard error would encode luck as a requirement.
+/// This asserted `successes < trials` at the on-air hot floor, pinning #1020's mechanism: with the
+/// floor above `MAX_THRESHOLD` the clamped threshold lands *under* the noise, the gate passes every
+/// window, and the receiver settles on noise instead of the frame. Its own failure message named the
+/// condition for re-deriving it — *"the gate no longer clamps, in which case #1020's mechanism is
+/// gone"* — and #1045 is exactly that: a condemned settle now raises the gate above the noise that
+/// produced it, so acquisition recovers at this level instead of thrashing.
+///
+/// Inverted rather than deleted, because the *level* is still what is worth pinning: 0.0154
+/// mean-square is 4.8x the gate ceiling and remains the level that broke a real on-air session. If a
+/// future change removes the condemnation feedback, this goes red again.
 #[test]
-fn a_hot_idle_floor_degrades_acquisition() {
+fn a_hot_idle_floor_no_longer_defeats_acquisition() {
     let mut successes = 0;
     let trials = 3;
     for seed in 1..=trials {
@@ -115,12 +121,13 @@ fn a_hot_idle_floor_degrades_acquisition() {
             successes += 1;
         }
     }
-    assert!(
-        successes < trials,
-        "all {trials} trials decoded at an idle floor of {HOT_IDLE_MEAN_SQ} mean-square, which is \
-         {:.1}x the energy gate's {GATE_CEILING_MEAN_SQ} ceiling. Either the gate no longer clamps \
-         (in which case #1020's mechanism is gone and this test should be re-derived) or the \
-         harness is not actually applying the level.",
+    assert_eq!(
+        successes,
+        trials,
+        "only {successes} of {trials} trials decoded at an idle floor of {HOT_IDLE_MEAN_SQ} \
+         mean-square ({:.1}x the energy gate's {GATE_CEILING_MEAN_SQ} ceiling). Since #1045 a \
+         condemned settle raises the gate above the noise that produced it, so a saturating floor \
+         must no longer defeat acquisition at this level.",
         HOT_IDLE_MEAN_SQ / GATE_CEILING_MEAN_SQ
     );
 }

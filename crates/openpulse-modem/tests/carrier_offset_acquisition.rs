@@ -204,6 +204,14 @@ fn a_frame_embedded_in_noise_still_acquires_through_a_carrier_offset() {
 /// AGC that broke *this* would be a harness bug, not a finding.
 #[test]
 fn a_phase_only_waveform_survives_a_live_capture_agc() {
+    // SCOPE, measured 2026-07-30 (#1045): `route_with_capture_agc` PRIMES the AGC with idle and
+    // discards it (`let _ = channel.apply(&idle)`), then routes only the frame. So the buffer the
+    // receiver sees is AGC(frame) with **no idle in it** — this gates "a settled AGC gain does not
+    // break a phase-only waveform", NOT "acquisition survives an AGC that has normalised idle noise
+    // up to signal level". That second regime is genuinely unserved by an energy gate (after
+    // normalisation both sit at ~0.010 mean-square, leaving no ratio) and is untested here — it is
+    // also outside the project's operating contract, which forbids a live capture AGC.
+
     let mut h = harness();
     let payload = b"agc should not matter here".to_vec();
     h.tx_engine.transmit(&payload, "BPSK250", None).expect("tx");

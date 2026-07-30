@@ -9,6 +9,61 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-07-30 — fix(modem): a condemned settle raises the energy gate above the noise that produced it (#1045)
+
+- **Requirement/change:** at an idle floor at or above `EnergyGate::MAX_THRESHOLD` (0.0032) the
+  clamped threshold sits *below* the noise, the gate passes every window, and the receiver settles on
+  noise, condemns, re-anchors and immediately re-settles. Measured on the recorded
+  `ic9700-idle-hot.wav` floor (0.0154) with coded `BPSK250|rs`: **83 / 73 / 73 condemnations at leads
+  40k / 80k / 120k, zero decodes.**
+- **E0 control first:** the same frame at an 8k lead decodes (21 condemnations) at identical gain,
+  noise and SNR — so always decodable; the failure was how far the recovery had to walk, not margin.
+- **Ablations before building (the repo's own law):** E1 forcing the full-buffer retry live —
+  **refuted**, no lead rescued (it reuses the same saturated gate, so it settles on noise too).
+  E2 removing `MAX_THRESHOLD` — **worse**, 0 settles and nothing decoded, *including the 8k lead that
+  previously worked* (3x a 0.0154 floor is 0.046 against a ~0.048 signal).
+- **The first working fix was rejected, and why matters more than the fix.** Engaging a `floor*1.5`
+  fallback on *level saturation* rescued every lead — and gated out every buffer-is-the-frame
+  fixture, because there the 25th-percentile "floor" IS the signal. Bounding it by an absolute
+  constant is impossible, not merely fragile: the measured fixture levels are 0.36 (`route_clean`)
+  and **0.010** (`route_with_capture_agc`), and 0.010 sits *below* the 0.0154 hot noise floor the
+  fallback exists for. **The ordering inverts, so no absolute separator exists at any margin.** The
+  `SATURATION_FLOOR_CEILING = 0.05` attempt was artifact-calibrated — fitted between the two fixture
+  levels then known, falsified by the third.
+- **Decision:** keep the lever (`floor * 1.5`, uncapped), change the *engagement condition* from
+  level to **evidence**. `EnergyGate::note_condemned` is called at the condemnation site and raises a
+  per-receive-call `condemned_floor`. A condemnation means `SETTLE_FAILURE_LIMIT` fully-buffered
+  decodes across a 9-offset sweep have already failed there, so this capture demonstrably contains
+  noise the gate is passing — which a fixture that decodes never demonstrates, and so never raises the
+  floor. Zero constants in the contested 0.010–0.05 band. This is the #1021 rule applied to the gate:
+  *a recovery is not one until it changes the input to the failed decision* — E1 failed precisely
+  because it re-ran the recovery through the unchanged gate.
+- **Implementation:** `crates/openpulse-modem/src/engine.rs` — `EnergyGate::condemned_floor`,
+  `CONDEMNED_MULTIPLIER`, `note_condemned()`, the `.max(condemned_floor)` in `threshold()`, and the
+  call at the condemnation site. The raise is taken from the **history floor**, not the condemned
+  anchor's own window: `refine_onset` can place the anchor on a noise/signal edge carrying partial
+  signal energy, while the 25th percentile is noise-dominated by construction.
+- **Tests → results (actually run, 2026-07-30):**
+  - Leads 8k/40k/80k/120k: all decode at **4–5** condemnations (from 21/83/73/73, three of them
+    non-decoding); suite 160 s → 9 s.
+  - `a_coded_frame_decodes_through_a_saturating_floor` (leads 80k, 120k; condemnations ≤ 12) —
+    **sabotage-verified**: removing the `note_condemned` call fails it with
+    `TooManyErrors — after 73 settle condemnations`.
+  - `a_hot_idle_floor_no_longer_defeats_acquisition` — the #1020 defect pin, **re-derived exactly as
+    its own failure message asked** (*"the gate no longer clamps … this test should be re-derived"*),
+    also sabotage-verified.
+  - Corpus suite 11 passed; `carrier_offset_acquisition` 7 passed; lib 49 passed.
+- **A harness misconception corrected (mine).** I reported the AGC test as proving "idle and signal
+  both normalise to ~0.010, so no energy ratio survives". `route_with_capture_agc` **primes** the AGC
+  with idle and **discards** it (`let _ = channel.apply(&idle)`), then routes only the frame — the
+  delivered buffer contains no idle. So it gates "a settled AGC gain does not break a phase-only
+  waveform", not AGC survival, and its scope is now annotated in place. The true regime (idle
+  normalised up to signal level, both in one buffer) is genuinely unservable by an energy gate,
+  **untested, and would fail on `main` too** — it is also outside the operating contract, which
+  forbids a live capture AGC. Filed as follow-on rather than bundled.
+
+---
+
 ## 2026-07-30 — fix(modem): the settle re-anchor resumes past the span the micro-sweep already tested (#1040)
 
 - **Requirement/change:** #1038 stopped the #1021 livelock, but `ScanPlanner::unsettle` resumed at
