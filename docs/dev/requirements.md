@@ -2,7 +2,7 @@
 project: openpulsehf
 doc: docs/dev/requirements.md
 status: living
-last_updated: 2026-07-14
+last_updated: 2026-07-30
 ---
 
 # Requirements
@@ -357,6 +357,57 @@ in the roadmap; each is a candidate, not a committed deliverable.
 - Audio device selection shall be **hotplug-safe**, surviving OS renaming/reorder by keying on a stable
   device identity rather than an ordinal index or path. Acceptance: a test that a configured device
   resolves after a simulated reorder. (REQ-DEV-01)
+
+## Rig control (CAT) reliability requirements
+
+> **Why this family exists.** The 2026-07-30 on-air session lost most of a keyed window to rig state
+> the software believed it had set or read, and had not. Every item below is a defect that actually
+> happened that day, not a hypothetical: (a) `hamlib` returned an **empty** value for `l RFGAIN` on
+> both an IC-9700 and an FT-991A, so the preflight printed `rfgain = na` and warned nothing — while
+> the FT-991A's RF gain sat at **37/255**, crippling its receiver; (b) the runner's tune step *set*
+> frequency and mode and never read them back, and the FT-991A was later found sitting **700 Hz off**
+> a commanded value; (c) the preflight corrected and reported the NB/NR **level** (`l/L NR`) while the
+> DSP is gated by the **function switch** (`u/U NR`), producing a false alarm on both stations and
+> false silence for a switch on at level 0. Each was invisible to the software, and each was
+> indistinguishable at the time from a modem defect. Reliable operation requires rig control that
+> cannot report success it did not achieve.
+
+- Rig control shall live in a **dedicated crate** with a per-transceiver driver per supported model,
+  rather than depending on a lowest-common-denominator abstraction whose unimplemented controls are
+  indistinguishable from controls that are genuinely absent. The crate shall expose, for every
+  control, whether it is *supported*, *unsupported*, or *unknown on this model* — never a bare empty
+  value. Acceptance: a driver-trait conformance test asserting that an unsupported control returns a
+  typed `Unsupported` rather than an empty/default value, and that no caller can silently coerce it
+  to a number. (REQ-CAT-01)
+- Each supported transceiver's driver shall cover **100 % of that model's published CAT command set**,
+  derived from the manufacturer's own specification, with the source document and its revision
+  recorded. Coverage shall be **mechanically demonstrated** — a machine-readable command inventory
+  per model, diffed against the implemented set in CI — never asserted from a reading of the code.
+  Acceptance: a coverage test that fails when a command in the model's inventory has no
+  implementation, and a recorded inventory-vs-manual provenance note. (REQ-CAT-02)
+- Every control the modem's operation depends on shall be **set-then-verified**: the driver reads the
+  value back from the rig and reports a typed error when the rig did not take the command. A write
+  whose effect was never confirmed shall not be reported as success. Acceptance: a test that a driver
+  whose readback disagrees with the commanded value returns an error rather than `Ok` — the direct
+  regression for the FT-991A found 700 Hz off a commanded frequency. (REQ-CAT-03)
+- Support for each transceiver shall be **validated against the real hardware** before that model is
+  advertised as supported, and the validation shall record the evidence tier, the firmware revision,
+  the operator, and the date. Simulation and hardware are separate, non-substitutable gates: a model
+  that has only ever been exercised against a mock is *not* supported. Validation evidence shall
+  carry an explicit expiry/re-validation trigger so it cannot silently age into a false claim.
+  Acceptance: a per-model support table whose "validated" state is derived from recorded hardware-run
+  evidence, and a docs gate that fails when a model is listed as supported without it. (REQ-CAT-04)
+- The project shall publish a **guided validation procedure** so users and co-developers with access
+  to a model can validate it themselves and contribute the result — a scripted run that exercises the
+  model's command inventory, captures readbacks, and emits a submittable evidence bundle. This is the
+  mechanism by which the supported-model list grows beyond hardware the maintainers own. Acceptance:
+  the procedure is runnable end-to-end against a rig by someone who did not write it, and produces an
+  evidence bundle that satisfies REQ-CAT-04. (REQ-CAT-05)
+- Initial transceiver candidates, ordered by nothing but availability for validation: **Elecraft** K4,
+  K3, KX3, KX2; **QRP Labs** QMX, QMX+; **Yaesu** FT-710, FT-991A, FT-817, FT-818; **ICOM** IC-9700,
+  IC-705. The list is deliberately open — any further model is in scope once someone with access can
+  complete the REQ-CAT-05 guided validation. A model's presence on this list is a *candidate* claim
+  and confers no support status until REQ-CAT-04 is satisfied for it. (REQ-CAT-06)
 
 ## Documentation requirements
 
