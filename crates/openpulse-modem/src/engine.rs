@@ -346,8 +346,9 @@ const AFC_SETTLE_DEADBAND_HZ: f32 = 2.0;
 ///
 /// **This is a broadband-noise discriminator and nothing more.** It says "a preamble is here",
 /// against a *noise* floor. It cannot rule out a structured interferer in general, so it does not
-/// retire `EnergyGate::note_condemned` (#1045) or the settle-condemnation recovery (#1021, #1040) —
-/// those remain the backstop for anything that correlates but does not decode.
+/// retire the settle-condemnation recovery (#1021, #1040), which remains the backstop for anything
+/// that correlates but does not decode — and which ablation confirms is load-bearing: removing it
+/// fails all three leads of the saturating-floor reproduction.
 ///
 /// What would falsify it: a mode or channel where a frame decodes at ρ below this. Re-measure the
 /// table per waveform family before extending the template beyond BPSK.
@@ -438,10 +439,6 @@ struct AfcSettleOutcome {
 /// `route_clean` delivers ≈ 0.36 — the clamp has far more headroom than it advertised.)
 struct EnergyGate {
     history: std::collections::VecDeque<f32>,
-    /// A floor raised by *evidence*, not by level: set when a settled anchor has been condemned, so
-    /// the noise that produced it can no longer pass. Per receive call (see `EnergyGate::new` at the
-    /// top of the receive loop); it does not persist across calls.
-    condemned_floor: f32,
 }
 
 impl EnergyGate {
@@ -454,48 +451,10 @@ impl EnergyGate {
     const MAX_THRESHOLD: f32 = 0.0032;
     const HISTORY: usize = 128;
 
-    /// Multiplier applied to the *proven-noise* history floor when an anchor is condemned.
-    ///
-    /// Measured (#1045): on the recorded `ic9700-idle-hot.wav` floor the noise sits at 0.0154
-    /// mean-square and signal+noise reaches ~0.048 — a 3.1x contrast. 1.5x lands between them with
-    /// 2x margin on the signal, where the normal 3x multiplier would land *on* it (ablated: removing
-    /// the clamp and keeping 3x gates the signal out entirely, 0 settles).
-    const CONDEMNED_MULTIPLIER: f32 = 1.5;
-
     fn new() -> Self {
         Self {
             history: std::collections::VecDeque::with_capacity(Self::HISTORY),
-            condemned_floor: 0.0,
         }
-    }
-
-    /// A settled anchor proved undecodable: raise the gate above the noise that produced it.
-    ///
-    /// **Why engagement is on evidence rather than on level.** The obvious fix — detect that the
-    /// adaptive threshold has hit `MAX_THRESHOLD` and switch to a relative criterion — collides with
-    /// every buffer-is-the-frame fixture, where the 25th-percentile "floor" IS the signal, so a
-    /// relative threshold lands above it and gates the fixture out. Bounding that by an absolute
-    /// level cannot work: the fixture levels measured in this repo are 0.36 (`route_clean`) and
-    /// **0.010** (`route_with_capture_agc`), and the latter sits *below* the 0.0154 hot noise floor
-    /// the fallback exists for. The ordering inverts, so no absolute separator exists at any margin.
-    ///
-    /// A condemnation is the evidence that resolves it. `SETTLE_FAILURE_LIMIT` fully-buffered
-    /// decodes across a 9-offset sweep have already failed at that anchor, so this capture demonstrably
-    /// contains noise the gate is passing — which a fixture that decodes never demonstrates, and so
-    /// never raises this floor. It is the repo's own #1021 rule applied to the gate: *a recovery is
-    /// not one until it changes the input to the failed decision.*
-    ///
-    /// The raise is taken from the **history floor**, not from the condemned anchor's own window:
-    /// `refine_onset` can place the anchor on a noise/signal edge where it carries partial signal
-    /// energy, whereas the 25th percentile is noise-dominated by construction.
-    fn note_condemned(&mut self) {
-        if self.history.is_empty() {
-            return;
-        }
-        let mut sorted: Vec<f32> = self.history.iter().copied().collect();
-        sorted.sort_by(f32::total_cmp);
-        let floor = sorted[sorted.len() / 4];
-        self.condemned_floor = self.condemned_floor.max(floor * Self::CONDEMNED_MULTIPLIER);
     }
 
     /// Threshold from whatever history exists. Empty only before the first `passes` call.
@@ -508,11 +467,9 @@ impl EnergyGate {
         let floor = sorted[sorted.len() / 4];
         // `MAX_THRESHOLD` keeps the clamped value from ever gating out a fixture signal. When the
         // real floor is above it the clamp lands *under* the noise and the gate stops carrying
-        // information — `condemned_floor` is what lifts it back out, once a condemnation has proved
-        // that is happening.
-        (floor * 3.0)
-            .clamp(Self::ABS_THRESHOLD, Self::MAX_THRESHOLD)
-            .max(self.condemned_floor)
+        // information; that regime is handled by the preamble-correlation veto on the settle, not by
+        // moving this threshold — see the removal note at the condemnation site.
+        (floor * 3.0).clamp(Self::ABS_THRESHOLD, Self::MAX_THRESHOLD)
     }
 
     /// Record one gate-window energy and return whether it passes the gate.
@@ -3023,12 +2980,28 @@ impl ModemEngine {
                                 );
                                 planner.unsettle();
                                 self.settle_condemnations += 1;
-                                // Feed the condemnation back into the gate that endorsed the anchor.
-                                // Without this the scan re-opens onto the same saturated gate and
-                                // re-settles on the same noise (measured: 73-83 condemnations, no
-                                // decode). One `EnergyGate` serves both the broad scan and the
-                                // full-buffer retry, so the raise covers both paths.
-                                energy_gate.note_condemned();
+                                // A condemnation used to raise the energy gate here
+                                // (`EnergyGate::note_condemned`, #1045). **Removed 2026-07-31 after
+                                // ablation: it was inert where the correlation veto runs, and
+                                // actively harmful where it does not.** On BPSK250 removing it is
+                                // bit-identical (4/4/5 condemnations at leads 40k/80k/120k, all
+                                // decoding, same ρ rejections). On QPSK500 — no preamble template,
+                                // so energy is still the only frame-start criterion — removing it
+                                // turns **FAIL into OK** at leads 40k and 80k (92/87 condemnations
+                                // and no decode, versus 315 and a decode).
+                                //
+                                // The mechanism compounds: each condemnation raised the floor
+                                // through `.max()`, and with nothing suppressing the noise settles
+                                // that drive it, the raises stacked until the gate sat *above the
+                                // signal* and no settle was possible at all. #1045 measured its fix
+                                // on BPSK250 alone and applied it to every mode.
+                                //
+                                // The eliminations recorded with #1045 still stand and are not
+                                // reopened by this: do not re-engage a floor raise on *level*
+                                // saturation (it gates out every buffer-is-the-frame fixture, and no
+                                // absolute bound separates them — the 0.010 AGC fixture sits below
+                                // the 0.0154 hot noise floor), and do not force the full-buffer
+                                // retry live (it reuses the same gate and settles on noise too).
                                 // The correction came from the discredited anchor; keeping it
                                 // would bias every subsequent acquisition.
                                 self.afc_correction_hz = 0.0;

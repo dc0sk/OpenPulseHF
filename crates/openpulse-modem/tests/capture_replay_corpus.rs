@@ -466,3 +466,95 @@ fn a_coded_frame_decodes_through_a_saturating_floor() {
         );
     }
 }
+
+/// A mode with NO preamble template must also decode through the saturating floor.
+///
+/// **This is the case #1045's fix made worse, and #1049 could not see.** The correlation veto only
+/// runs where the plugin publishes a `preamble_template`, which today is BPSK alone. Everything else
+/// — QPSK, 8PSK, the multicarrier modes — still decides frame start on energy, so it is the honest
+/// test of what the energy path does on its own, and it is the configuration a station running any
+/// rung above SL5 is actually in.
+///
+/// Measured on the recorded IC-9700 floor, `QPSK500 + Rs`, before the `condemned_floor` removal:
+///
+/// | lead | with `condemned_floor` | without |
+/// |---|---|---|
+/// | 40 000 | **FAIL**, 92 condemnations | OK, 315 |
+/// | 80 000 | **FAIL**, 87 condemnations | OK, 314 |
+/// | 120 000 | OK, 6 | OK, 315 |
+///
+/// The mechanism compounds: every condemnation raises the floor through `.max()`, and where no
+/// correlation veto suppresses the noise settles, the raises stack until the gate sits *above the
+/// signal* and no settle is possible at all. #1045 measured its fix on BPSK250 only and applied it
+/// to every mode — the generalised-past-the-boundary shape, made visible only once #1049 removed the
+/// BPSK justification for it.
+///
+/// Keep this test on a NO-TEMPLATE mode. If QPSK ever gains a `preamble_template`, this stops
+/// covering the energy-only path and a different mode must take its place.
+#[test]
+fn a_no_template_mode_decodes_through_a_saturating_floor() {
+    let hot = corpus("ic9700-idle-hot.wav");
+    assert!(
+        hot.mean_sq() > GATE_CEILING_MEAN_SQ,
+        "corpus floor {:.4} no longer saturates the gate — this test's premise is gone",
+        hot.mean_sq()
+    );
+
+    let mut h = ChannelSimHarness::new();
+    for eng in [&mut h.tx_engine, &mut h.rx_engine] {
+        eng.register_plugin(Box::new(BpskPlugin::new())).unwrap();
+        eng.register_plugin(Box::new(qpsk_plugin::QpskPlugin::new()))
+            .unwrap();
+    }
+    // Guard the premise that makes this test what it is: QPSK must publish no template, or this is
+    // just another BPSK case wearing a different name.
+    assert!(
+        openpulse_core::plugin::ModulationPlugin::preamble_template(
+            &qpsk_plugin::QpskPlugin::new(),
+            &openpulse_core::plugin::ModulationConfig {
+                mode: "QPSK500".into(),
+                ..Default::default()
+            }
+        )
+        .is_none(),
+        "QPSK now publishes a preamble template, so this no longer covers the energy-only path"
+    );
+
+    for lead in [40_000usize, 80_000] {
+        let mut h2 = ChannelSimHarness::new();
+        for eng in [&mut h2.tx_engine, &mut h2.rx_engine] {
+            eng.register_plugin(Box::new(BpskPlugin::new())).unwrap();
+            eng.register_plugin(Box::new(qpsk_plugin::QpskPlugin::new()))
+                .unwrap();
+        }
+        h2.tx_engine
+            .transmit_with_fec_mode(
+                b"no template probe",
+                "QPSK500",
+                openpulse_core::fec::FecMode::Rs,
+                None,
+            )
+            .expect("transmit");
+        h2.route_embedded_in_capture(&hot, lead, 40_000, 0.3);
+
+        let got = h2
+            .rx_engine
+            .receive_with_fec_mode_timeout(
+                "QPSK500",
+                openpulse_core::fec::FecMode::Rs,
+                None,
+                Duration::from_millis(40_000),
+            )
+            .unwrap_or_else(|e| {
+                panic!(
+                    "lead {lead}: a no-template mode must still decode through a saturating floor: \
+                     {e} — after {} settle condemnations. A condemnation-triggered gate raise \
+                     starves this path, because nothing here suppresses the noise settles that \
+                     drive it.",
+                    h2.rx_engine.settle_condemnations()
+                )
+            });
+        assert_eq!(String::from_utf8_lossy(&got), "no template probe");
+    }
+    drop(h);
+}
