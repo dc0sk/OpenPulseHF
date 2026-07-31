@@ -147,6 +147,29 @@ pub fn bpsk_modulate_iq(
     Ok((i_bb, q_bb))
 }
 
+/// The modulated preamble alone, for correlation-based frame detection.
+///
+/// Built by modulating an empty payload and keeping the preamble span, so it is produced by the
+/// **same** code path as a real transmission — pulse shaping, NRZI and carrier included. A
+/// hand-rolled copy would drift out of step with the modulator the first time either changes, and
+/// a template that no longer matches the wire silently stops detecting frames rather than failing.
+///
+/// The last preamble symbol is dropped on the crossfade path: the rectangular pulse blends each
+/// symbol into the next (see the crossfade-ISI sharp edge), so the final symbol period carries a
+/// third of the *first data* symbol, which differs frame to frame.
+pub fn bpsk_preamble_template(config: &ModulationConfig) -> Result<Vec<f32>, ModemError> {
+    let baud = parse_baud_rate(&config.mode)?;
+    let n = samples_per_symbol(config.sample_rate as f32, baud)?;
+    let full = bpsk_modulate(&[], config)?;
+    let span = n * (PREAMBLE_SYMS - 1);
+    if full.len() < span {
+        return Err(ModemError::Demodulation(
+            "modulated preamble shorter than its own symbol span".into(),
+        ));
+    }
+    Ok(full[..span].to_vec())
+}
+
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 /// Convert bytes to LSB-first bits.

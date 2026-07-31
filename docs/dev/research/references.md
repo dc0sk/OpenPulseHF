@@ -379,6 +379,38 @@ by healthy SNR, blocking every downgrade above the fade cliff — is the same *s
 recovery livelock, which is independent confirmation that *a recovery must change the input to the
 failed decision* is a law rather than a local lesson.
 
+### Outcome (#1049, 2026-07-31) — and the limit the comparison did not show
+
+Shipped: the AFC settle is now corroborated by normalised preamble correlation, and the saturating
+noise-floor reproduction went from 4–5 condemnations to **0**. But implementing it surfaced a
+constraint that reading the references could not, and which qualifies the recommendation above.
+
+**We imported the detection *statistic* without the sync-word *property* that makes it work for
+them.** codec2's sync sequence is designed for correlation detection. Ours is 32 *alternating* BPSK
+symbols — a square-wave-modulated carrier whose energy sits in two lines at `fc ± baud/2`. Measured
+ρ of a pure tone against that template, by residual-frequency search width:
+
+| grid half-width | ρ of a pure tone |
+|---|---|
+| ±20 Hz (shipped) | 0.017–0.042 |
+| ±160 Hz | 0.659 |
+| ±450 Hz (full acquisition range) | 0.696 at every frequency |
+
+At ±160 Hz a **birdie outscores our best real on-air frame** (0.654). The alternation is what saves
+the narrow grid — a steady carrier cancels between the +1 and −1 half-symbols — and that protection
+disappears as soon as the search can rotate a spectral line onto plain carrier.
+
+**Therefore the codec2 *ordering* — grid the full acquisition range as the detector, then seed the
+frequency estimate from the winner — is rejected for our waveform**, measured, not assumed. It is
+the design the comparison above most naturally implies, and it is the one that cannot distinguish a
+birdie from a preamble. Our second OTA rig was blocked by PC/USB birdies, so this is not theoretical.
+
+The correlation gate therefore closes the *broadband* noise case (which is what #1020/#1021/#1039/
+#1040/#1045 actually were) and leaves the structured-interferer case to the existing condemnation
+recovery. **The ceiling is the preamble, not the detector.** Matching the references properly would
+mean adopting a PN or chirp sync word — a wire-format change on both ends, and the real follow-on
+item.
+
 ---
 
 ## Recurring lesson

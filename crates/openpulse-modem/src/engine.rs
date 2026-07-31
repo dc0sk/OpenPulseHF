@@ -1,6 +1,7 @@
 //! The core [`ModemEngine`] struct.
 
 use openpulse_audio::tanh_limit;
+use openpulse_dsp::acquisition::IqMatchedFilter;
 use rand::Rng;
 use std::time::{Duration, Instant};
 use tokio::sync::broadcast;
@@ -318,6 +319,82 @@ fn openpulse_modem_descramble_soft(mut llrs: Vec<f32>) -> Vec<f32> {
 
 const AFC_SETTLE_DEADBAND_HZ: f32 = 2.0;
 
+/// Minimum normalised preamble correlation ρ for a settle to be believed (#1049).
+///
+/// **Derived from the decode cliff, not from two captures.** The number in issue #1049 (0.40 from a
+/// real frame at ρ = 0.811 against a hot idle floor at 0.182) came from one capture whose carrier
+/// offset happened to be +1.2 Hz; taken alone it is an artifact-calibrated constant. Measured
+/// in-repo 2026-07-31, BPSK250 + `Rs` through AWGN, ρ against decode outcome:
+///
+/// | SNR | −1 dB | −3 dB | −5 dB | −7 dB | −9 dB |
+/// |---|---|---|---|---|---|
+/// | ρ | 0.646 | 0.561 | 0.455 | 0.392 | 0.322 |
+/// | decode | OK | OK | fail | fail | fail |
+///
+/// The decode dies between −3 and −5 dB while ρ is still ≈ 0.5, and ρ only reaches this threshold
+/// **two SNR steps past** the last frame the demodulator can actually decode — so the gate cannot
+/// reject a decodable frame before the channel already has. On the false-accept side, recorded idle
+/// audio settled and correlated the same way peaks at ρ = 0.205 (`ic9700-idle-hot.wav`) and 0.205
+/// (`ft991a-idle.wav`), so this sits ~2× above measured noise and ~1.4× below the weakest decodable
+/// frame. Watterson `moderate_f1` frames measured ρ = 0.58–0.84 across 10–30 dB, including runs that
+/// failed to decode — a fade does not push a real preamble under this line before it stops being a
+/// frame.
+///
+/// **Margin, stated honestly.** The reference point is the real on-air frame at ρ = 0.654 measured
+/// the way the engine measures it, not the 0.811 in issue #1049 (that came from a whole-capture
+/// search rather than a settled onset). Against recorded idle that is 3.2×, not the issue's 4.4×.
+///
+/// **This is a broadband-noise discriminator and nothing more.** It says "a preamble is here",
+/// against a *noise* floor. It cannot rule out a structured interferer in general, so it does not
+/// retire `EnergyGate::note_condemned` (#1045) or the settle-condemnation recovery (#1021, #1040) —
+/// those remain the backstop for anything that correlates but does not decode.
+///
+/// What would falsify it: a mode or channel where a frame decodes at ρ below this. Re-measure the
+/// table per waveform family before extending the template beyond BPSK.
+const PREAMBLE_RHO_THRESHOLD: f32 = 0.40;
+
+/// Half-width of the residual-frequency grid the preamble correlation searches, in Hz.
+///
+/// **Bounded from both sides, and the upper bound is the interesting one.**
+///
+/// Below: the AFC settle is what estimates frequency, so this only has to cover what the settle
+/// leaves behind. Measured residual after `afc_mini_settle` over a 1056-sample window is ≤ 0.3 Hz
+/// for every true offset the engine can reach (0 to 400 Hz; past that `AFC_MAX_CORRECTION_HZ`
+/// rejects the settle before this check runs at all). ±20 Hz is already generous.
+///
+/// Above: **the grid must stay well inside ±baud/2, or the gate stops discriminating.** The BPSK
+/// preamble is 32 phase-alternating symbols — a square-wave-modulated carrier whose energy sits in
+/// lines at `fc ± baud/2`. Rotate the template by that much and a line lands on plain carrier, so a
+/// steady tone starts scoring like a preamble. Measured against a pure tone (`the_gate_is_not_fooled
+/// _by_a_steady_tone`):
+///
+/// | grid half-width | ρ of a pure tone |
+/// |---|---|
+/// | ±20 Hz | 0.017–0.042 |
+/// | ±160 Hz | **0.659** |
+/// | ±450 Hz (the full acquisition range) | **0.696 at every frequency** |
+///
+/// A birdie at 0.66 outscores this receiver's best real on-air frame (0.654). That kills the
+/// otherwise-attractive design of running the grid over the whole ±450 Hz acquisition range as a
+/// *detector* and seeding the settle from it (codec2's ordering): our sync word is two spectral
+/// lines, not a pseudo-random sequence, so it cannot survive being searched over its own line
+/// spacing. Widening this constant is not a cost/benefit trade against compute — past ~baud/4 it
+/// destroys the thing being bought. Re-derive it from `baud` before extending to another waveform.
+const PREAMBLE_RHO_GRID_HZ: f32 = 20.0;
+
+/// Longest preamble template the correlation will use, in samples (256 ms at 8 kHz).
+///
+/// Two costs grow with the template and both bite at once: the grid step must shrink as `fs/tlen`
+/// to stay inside the correlation's coherent bandwidth (a step wider than that steps *over* the
+/// peak and reads noise), and every extra grid point is another full correlation. BPSK31's
+/// 31-symbol preamble is 7936 samples — a ~1 s coherent integration needing a ~0.5 Hz step, i.e.
+/// hundreds of correlations of an 8000-sample template per candidate settle.
+///
+/// Modes past this bound keep the pre-#1049 energy-only settle. That is a real gap rather than a
+/// tidy default: the slow rungs listen longest and are the most exposed to a noise settle. Closing
+/// it needs a cheaper detector (decimation, or a segmented non-coherent sum), not a bigger grid.
+const MAX_PREAMBLE_CORRELATION_SAMPLES: usize = 2_048;
+
 /// Result of [`ModemEngine::afc_mini_settle`].
 struct AfcSettleOutcome {
     /// Correction after the one-shot wide-scan anchor pass.
@@ -614,6 +691,12 @@ pub struct ModemEngine {
     /// `SETTLE_FAILURE_LIMIT` fully-buffered decodes, and only just finished inside the listen
     /// window (#1040).
     settle_condemnations: u64,
+    /// Settles rejected because the preamble correlation did not corroborate them (#1049).
+    ///
+    /// A tripwire as much as a counter: it stays 0 when the mode publishes no template, so a test
+    /// that expects the correlation gate to be doing work can tell "it accepted everything" from
+    /// "it never ran" — the two are indistinguishable in a decode-or-not assertion.
+    rho_rejected_settles: u64,
     /// Receiver-side streaming AGC on captured audio (default off). Normalises the level so the
     /// PSK/QAM ladder sees a consistent amplitude despite QSB fading and inter-station spread.
     /// Active-span gated: the gain only adapts on carrier-present blocks (RMS ≥ DCD threshold) and
@@ -725,6 +808,7 @@ impl ModemEngine {
             rx_mode: None,
             notch_blocks_processed: 0,
             settle_condemnations: 0,
+            rho_rejected_settles: 0,
             agc_enabled: false,
             // target RMS 0.3 (headroom below ±1.0), slow loop (α=0.02), ±40 dB clamp.
             agc: openpulse_dsp::agc::Agc::new(0.3, 0.02, 40.0),
@@ -768,6 +852,15 @@ impl ModemEngine {
     /// decode-or-not assertion cannot see the difference.
     pub fn settle_condemnations(&self) -> u64 {
         self.settle_condemnations
+    }
+
+    /// How many candidate settles the preamble correlation refused (#1049).
+    ///
+    /// Zero has two meanings and a test must distinguish them: the gate ran and accepted
+    /// everything, or the mode publishes no preamble template and the gate never ran at all. Pair
+    /// this with a case that must reject.
+    pub fn rho_rejected_settles(&self) -> u64 {
+        self.rho_rejected_settles
     }
 
     /// Tripwire count of capture blocks the DCD carrier detector processed at the seam. DCD runs on the
@@ -2631,6 +2724,22 @@ impl ModemEngine {
         // < 2.5e-5 mean-square; a live BPSK carrier at 30 % full-scale gives
         // ≈ 0.045.
         let mut energy_gate = EnergyGate::new();
+        // Correlation corroboration for a settle (#1049). `None` when the mode's plugin publishes
+        // no preamble template, or when the template is too long to correlate affordably — in both
+        // cases the settle is decided on energy alone, exactly as before.
+        let preamble_matcher = self
+            .plugins
+            .get(mode)
+            .and_then(|p| {
+                p.preamble_template(&ModulationConfig {
+                    sample_rate: audio_cfg.sample_rate,
+                    mode: mode.to_string(),
+                    center_frequency: self.center_frequency,
+                    ..ModulationConfig::default()
+                })
+            })
+            .filter(|t| !t.is_empty() && t.len() <= MAX_PREAMBLE_CORRELATION_SAMPLES)
+            .map(IqMatchedFilter::new);
         // Cost of the last full-buffer retry pass, and how much audio it covered. If a pass costs
         // more wall time than the audio it walked, further passes can only fall further behind.
         let mut retry_cost_secs: f64 = 0.0;
@@ -3002,6 +3111,97 @@ impl ModemEngine {
                             );
                             self.afc_correction_hz = 0.0;
                             continue;
+                        }
+                        // Corroborate the settle by CORRELATION before believing it (#1049).
+                        //
+                        // Energy answers "is something here", never "is this a preamble", and that
+                        // gap is the whole #1020/#1021/#1039/#1040/#1045 family: on a band floor
+                        // above the gate the receiver settles AFC on idle noise before the frame
+                        // arrives, then spends its listen window re-decoding that position. codec2
+                        // decides frame start on a normalised correlation ratio with no absolute
+                        // energy threshold at all, which makes that failure impossible for it by
+                        // construction.
+                        //
+                        // The check runs AFTER the settle, not before it, because a matched filter
+                        // integrates coherently: at this template length a 20 Hz carrier offset
+                        // already drops a real frame's ρ to 0.332 and 400 Hz drops it to 0.016,
+                        // while this chain is required to acquire to ±400 Hz (`AFC_MAX_CORRECTION_HZ`
+                        // caps it there; the measured decode reach is 600 Hz via the retry arm).
+                        // Checking first would reject every off-frequency frame. The settle supplies
+                        // the frequency and the correlation confirms the *waveform* — the settle
+                        // proposes, the correlation disposes.
+                        //
+                        // Only this arm is gated. The full-buffer retry (above) never calls
+                        // `note_settled`, so it cannot strand the receiver on a noise anchor, which
+                        // is the specific failure this exists to prevent; leaving it ungated also
+                        // preserves it as the documented fallback for a bad settle.
+                        let mut onset = onset;
+                        if let Some(mf) = preamble_matcher.as_ref() {
+                            let corr_end = (onset + afc_window).min(accumulated.len());
+                            if let Some((rho, _)) =
+                                self.preamble_rho(mf, &accumulated[onset..corr_end], settle.fine)
+                            {
+                                if rho < PREAMBLE_RHO_THRESHOLD {
+                                    debug!(
+                                        "settle at onset={onset} rejected: preamble correlation \
+                                         rho={rho:.3} < {PREAMBLE_RHO_THRESHOLD:.2} \
+                                         (correction={:.1}Hz) — energy without a preamble",
+                                        settle.fine
+                                    );
+                                    self.rho_rejected_settles += 1;
+                                    self.afc_correction_hz = 0.0;
+                                    continue;
+                                }
+                                // Corroborated — now let the correlation PLACE the onset, not just
+                                // vet it.
+                                //
+                                // Measured on the saturating-floor reproduction: the surviving
+                                // settles were never noise. They sat on the frame's leading EDGE
+                                // (onsets 39328…39972 for a frame at 40000, ρ climbing 0.461 →
+                                // 1.000 as the window slid onto it), where a partial overlap clears
+                                // the threshold but the demodulator cannot decode. Each one then
+                                // cost `SETTLE_FAILURE_LIMIT` fully-buffered decodes to condemn —
+                                // #1040's crawl again, from a different cause.
+                                //
+                                // The matched filter already knows the true alignment, so the wide
+                                // search is a second stage run ONLY after a candidate is accepted:
+                                // accepts are rare, and the rejection above stays as cheap as it
+                                // was. The bound is one acquisition window because that is how
+                                // early the energy gate is documented to trip.
+                                let snap_end =
+                                    (onset + afc_window + acq_samples).min(accumulated.len());
+                                if let Some((_, snap)) = self.preamble_rho(
+                                    mf,
+                                    &accumulated[onset..snap_end],
+                                    settle.fine,
+                                ) {
+                                    if snap > 0 {
+                                        debug!(
+                                            "settle at onset={onset} corroborated rho={rho:.3}; \
+                                             correlation snaps the onset {snap} samples later"
+                                        );
+                                        onset += snap;
+                                        // Re-settle at the corrected position: the correction we
+                                        // are about to keep was measured over a window that began
+                                        // in noise, and a frequency estimate belongs to the samples
+                                        // it was taken from.
+                                        let re_end = (onset + afc_window).min(accumulated.len());
+                                        if re_end - onset < afc_window {
+                                            continue;
+                                        }
+                                        let re =
+                                            self.afc_mini_settle(mode, &accumulated[onset..re_end]);
+                                        if re.last_delta >= 5.0
+                                            || (re.fine - re.anchor).abs() > 20.0
+                                            || re.fine.abs() > AFC_MAX_CORRECTION_HZ
+                                        {
+                                            self.afc_correction_hz = 0.0;
+                                            continue;
+                                        }
+                                    }
+                                }
+                                debug!("settle at onset={onset} corroborated: rho={rho:.3}");
+                            }
                         }
                         planner.note_settled(onset);
                         info!(
@@ -5499,6 +5699,38 @@ impl ModemEngine {
     /// state for settling — the previous inline copies of this sequence each
     /// hand-rolled the save/restore and had already caused >1000 Hz of
     /// accumulated drift once (review E5).
+    /// Peak normalised preamble correlation in `window`, searched around the settled correction.
+    ///
+    /// `None` when the window is too short to hold the template — not a rejection: a candidate that
+    /// has not finished buffering has not been measured, and treating "no measurement" as "no
+    /// preamble" would gate out every frame that arrives one read at a time.
+    ///
+    /// The grid step is derived from the template's own coherent bandwidth (`fs / tlen`) rather
+    /// than fixed. A matched filter's ρ falls off over roughly `1 / (template duration)`, so a step
+    /// chosen for one baud rate steps clean over the peak at another and reads noise — the same
+    /// class of error as a constant fitted to one artifact.
+    fn preamble_rho(
+        &self,
+        mf: &IqMatchedFilter,
+        window: &[f32],
+        settled_hz: f32,
+    ) -> Option<(f32, usize)> {
+        let tlen = mf.len();
+        if window.len() <= tlen {
+            return None;
+        }
+        let fs = AudioConfig::default().sample_rate as f32;
+        let step = (0.25 * fs / tlen as f32).max(0.5);
+        let n = (PREAMBLE_RHO_GRID_HZ / step).round() as i32;
+        let freqs: Vec<f32> = (-n..=n).map(|k| settled_hz + k as f32 * step).collect();
+        // The search bound is whatever timing slack the window leaves past the template — about two
+        // symbol periods for every mode, since the settle window is the preamble plus one symbol.
+        // That is the span `refine_onset` can be wrong over, which is why the micro-sweep exists.
+        let bound = window.len() - tlen;
+        mf.search_normalized_over_frequency(window, bound, 0.05, fs, &freqs)
+            .map(|(r, _)| (r.rho, r.offset))
+    }
+
     fn afc_mini_settle(&mut self, mode: &str, window: &[f32]) -> AfcSettleOutcome {
         let saved_step = self.afc_step;
         self.afc_step = 1.0;
