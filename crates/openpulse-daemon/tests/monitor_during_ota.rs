@@ -12,6 +12,21 @@
 //! monitor code was never broken — the *dispatch around it* was — so a test that calls the monitor
 //! itself passes no matter which arm the daemon takes. This test drives the real `server::run` tick
 //! and asserts on the event actually reaching a control client, which is the only place the bug lives.
+//!
+//! **This test did not pass until 2026-07-31, including at the commit that introduced it (#1051).**
+//! It was merged red, so for its whole life REQ-RX-01's during-OTA claim rested on a gate that only
+//! ever failed. The daemon was never at fault — instrumented, the burst arrived, `ota_active()` was
+//! `true`, and `decode_all` returned a decode, so the hoisted emit worked exactly as intended. The
+//! harness was one-shot: `ReplayBackend` drained its single frame during the daemon's first rx ticks
+//! and returned silence for the remaining ~400, so the `MonitorFrame` was broadcast before the test's
+//! control client connected 400 ms later — and `tokio::sync::broadcast` drops events with no
+//! subscriber. The fix is a recurring burst (see `ReplayStream::read`), not a longer sleep.
+//!
+//! Two lessons, both in the repo's own idiom: a test that has *never* passed is not a gate, it is an
+//! unverified claim wearing a gate's clothes; and a red test is as much a candidate for
+//! *self*-diagnosis as the code it accuses — its failure message asserted a specific product defect
+//! that measurement disproved. It is now sabotage-verified in both directions: re-gating the emit on
+//! `!engine.ota_active()` fails it at 20 s, and the fix passes it in 0.6 s.
 
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -34,25 +49,49 @@ const MODE: &str = "BPSK250";
 #[derive(Clone)]
 struct ReplayBackend {
     pending: Arc<Mutex<Vec<f32>>>,
+    frame: Vec<f32>,
 }
 
 impl ReplayBackend {
     fn new(frame: Vec<f32>) -> Self {
         Self {
-            pending: Arc::new(Mutex::new(frame)),
+            pending: Arc::new(Mutex::new(frame.clone())),
+            frame,
         }
     }
 }
 
 struct ReplayStream {
     pending: Arc<Mutex<Vec<f32>>>,
+    /// The frame to re-arm with, so the burst RECURS rather than happening once.
+    frame: Vec<f32>,
+    silence_reads: usize,
 }
+
+/// Silence reads between bursts: enough for `accumulate_capture` to see the carrier drop and flush
+/// (the DCD hold window is ~100 ms = 800 samples at 8 kHz, i.e. one read), plus margin.
+const SILENCE_READS_BETWEEN_BURSTS: usize = 4;
 
 impl AudioInputStream for ReplayStream {
     fn read(&mut self) -> Result<Vec<f32>, AudioError> {
         let mut g = self.pending.lock().unwrap_or_else(|e| e.into_inner());
         if g.is_empty() {
             // Carrier dropped: silence flushes the accumulated burst.
+            //
+            // Then RE-ARM. This backend used to be one-shot, and that is why this test could never
+            // pass: the daemon's rx tick starts at process startup, consumed the single burst, and
+            // broadcast its `MonitorFrame` before the test's control client connected 400 ms later
+            // — and `tokio::sync::broadcast` drops events that have no subscriber. Every one of the
+            // ~400 ticks that followed read pure silence, so there was never a second chance. The
+            // daemon was emitting correctly the whole time; the harness simply could not observe it.
+            //
+            // A recurring burst removes the race instead of papering over it with a longer sleep,
+            // which would still be a bet on scheduling.
+            self.silence_reads += 1;
+            if self.silence_reads >= SILENCE_READS_BETWEEN_BURSTS {
+                self.silence_reads = 0;
+                *g = self.frame.clone();
+            }
             Ok(vec![0.0; 800])
         } else {
             let take = g.len().min(4096);
@@ -87,6 +126,8 @@ impl AudioBackend for ReplayBackend {
     ) -> Result<Box<dyn AudioInputStream>, AudioError> {
         Ok(Box::new(ReplayStream {
             pending: Arc::clone(&self.pending),
+            frame: self.frame.clone(),
+            silence_reads: 0,
         }))
     }
     fn open_output(
@@ -175,9 +216,10 @@ async fn the_monitor_still_emits_while_an_ota_session_is_active() {
 
     assert!(
         saw_monitor_frame,
-        "no MonitorFrame arrived within 20 s while an OTA session was active. The monitor is wired \
-         into only one arm of the receive dispatch, and `ota_active()` is permanently true once \
-         `start_ota_session` runs at daemon startup — so REQ-RX-01 is dark for the whole process \
-         lifetime under the on-air configuration."
+        "no MonitorFrame reached a control client within 20 s while an OTA session was active. \
+         REQ-RX-01 is dark under exactly the configuration an on-air station uses. The likeliest \
+         cause is the original one: the monitor's emit sitting inside the non-OTA arm of the \
+         receive dispatch, which `ota_active()` makes unreachable for the whole process lifetime. \
+         Check `server.rs` — the emit must stay hoisted ABOVE the dispatch."
     );
 }

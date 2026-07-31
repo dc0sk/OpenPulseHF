@@ -37,14 +37,26 @@ fn corpus(name: &str) -> Capture {
     load_corpus(name).unwrap_or_else(|e| panic!("corpus file {name} must load: {e}"))
 }
 
-/// THE ACCEPTANCE CASE: a coded frame in a saturating real noise floor decodes with the receiver
-/// never once settling on the noise.
+/// THE ACCEPTANCE CASE: a coded frame in a saturating real noise floor decodes, and the correlation
+/// check is demonstrably the thing refusing the noise.
 ///
-/// This is `a_coded_frame_decodes_through_a_saturating_floor` measured on a stricter axis. That
-/// test allows up to 12 condemnations because the #1045 fix is *triggered* by a condemnation — the
-/// gate only learns the floor is bad after it has already been fooled once. A correlation check
-/// needs no such trigger: it can tell noise from a preamble on the first window, so the count
-/// should be zero rather than merely small.
+/// **Read the bound carefully — it is 4, not 0, and the difference is a measured correction to my
+/// own reasoning.** This test first asserted zero, on the argument that a correlation check needs no
+/// trigger (unlike #1045's `condemned_floor`, which only learns a floor is bad *after* being fooled
+/// once) and so should never settle on noise at all. Instrumented, that argument was right about the
+/// noise and wrong about the count: the surviving settles are not noise. They sit on the frame's
+/// leading EDGE — onsets 39328…39972 for a frame at 40000, ρ climbing 0.461 → 1.000 as the window
+/// slides onto it — where a partial overlap genuinely contains preamble, clears the threshold
+/// honestly, and still cannot be demodulated because the preamble is truncated.
+///
+/// Snapping the onset to the correlation's own answer removes them, and was built; see the note at
+/// the check in `engine.rs` for the measurement that rejected it (an alternating preamble is
+/// periodic, so the same search misplaces a *correct* onset by two symbols on the capture-AGC
+/// fixture — and every rule separating the two cases is a constant fitted to those two fixtures).
+///
+/// So what this pins is what the veto actually buys, which is narrower than #1049 predicted: the
+/// settle-on-NOISE class is gone, the frame decodes at every lead, and the residual edge settles
+/// stay well inside #1045's ≤ 12 budget.
 ///
 /// The lead is the point. A short lead passes even on the broken code because the recovery walk is
 /// short enough to finish; before #1045 these leads gave 73-83 condemnations and no decode at all.
@@ -84,23 +96,26 @@ fn the_receiver_never_settles_on_a_saturating_noise_floor() {
             });
         assert_eq!(String::from_utf8_lossy(&got), "correlation gate probe");
 
-        assert_eq!(
-            h.rx_engine.settle_condemnations(),
-            0,
-            "lead {lead}: the receiver settled on noise {} time(s) and had to recover. The \
-             correlation check exists so that never happens in the first place — a condemnation \
-             here means it is not gating the settle.",
-            h.rx_engine.settle_condemnations()
+        // Bound taken from measurement (4 at every lead), not from taste. The residual settles are
+        // the leading-edge ones described above; a rise past this means the NOISE class is back,
+        // since noise settles arrive in the dozens (73-83 pre-#1045), never in ones and twos.
+        let condemnations = h.rx_engine.settle_condemnations();
+        assert!(
+            condemnations <= 6,
+            "lead {lead}: {condemnations} settle condemnations (~{} wasted fully-buffered decodes). \
+             Measured behaviour is 4 leading-edge settles; a jump from here means the receiver is \
+             settling on NOISE again, which is what the correlation check exists to prevent.",
+            condemnations * 18
         );
 
-        // The tripwire. Zero condemnations is also what a completely inert gate produces on an
-        // easy capture, so the count above is only evidence if the gate was actually exercised:
-        // this floor DOES pass the energy gate (that is what saturation means), so something must
-        // have refused those candidates.
+        // The tripwire, and the reason the bound above is evidence rather than coincidence: a
+        // completely inert gate also produces a low count on a lucky capture. This floor DOES pass
+        // the energy gate — that is what saturation means — so something must have refused those
+        // candidates, and only the correlation check can have.
         assert!(
             h.rx_engine.rho_rejected_settles() > 0,
             "lead {lead}: no settle was ever refused on correlation, yet this floor saturates the \
-             energy gate — the check is inert and the zero above proves nothing"
+             energy gate — the check is inert and the count above proves nothing"
         );
     }
 }

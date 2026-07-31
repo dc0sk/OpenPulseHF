@@ -9,6 +9,91 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-07-31 — test: two gates corrected after #1049, and a correction to how #1049's own gate run was reported
+
+### The onset-snap stage of #1049: BUILT, MEASURED, REJECTED — and two gates it had broken
+
+- **What happened:** #1049 merged with two workspace tests red —
+  `capture_replay_corpus::the_recorded_hot_floor_degrades_acquisition_as_it_did_on_air` and
+  `carrier_offset_acquisition::a_phase_only_waveform_survives_a_live_capture_agc`. Both were caused by
+  the change's **second stage**, which snapped the settled onset to the correlation's argmax. Verified
+  by checkout: both **pass at a4dc2edb** (pre-#1049).
+- **The rejection, which is the durable part.** The snap exists because the settles surviving the ρ
+  veto are not noise — they sit on the frame's leading **edge** (onsets 39328…39972 for a frame at
+  40000, ρ climbing 0.461 → 1.000), where partial overlap clears the threshold honestly but the
+  truncated preamble cannot demodulate. Snapping fixes exactly that. **It also breaks the opposite
+  case, because our preamble is 32 *alternating* symbols and therefore periodic**: an alignment two
+  symbols late still matches 29 of 31. Measured on the capture-AGC fixture, whose frame starts at
+  sample 0 with ρ = 0.877, the argmax chose **offset 65** — two symbol periods — decoding to "invalid
+  magic". Taking the **first threshold crossing** instead (the repo's own lock-ahead-of-the-peak rule,
+  implemented and measured) fixes that case and un-fixes the first, because the partial overlap
+  already clears 0.40. Both cases live in one search, and every rule that separates them — a
+  peak-ratio, a decisive-improvement margin — is a constant fitted to exactly those two fixtures,
+  which is the archetype this repo keeps paying for.
+- **Decision:** ship the **veto only**. It removes the settle-on-noise class, which is what the five
+  defects were; the leading-edge residue is what the micro-sweep and condemnation recovery already
+  exist to absorb. Correct onset placement needs a preamble whose autocorrelation is not periodic — a
+  PN/chirp sync word, a wire-format change on both ends. `IqMatchedFilter::first_offset_above` was
+  written for the snap and **removed with it** rather than left as unconsumed API.
+- **Consequent corrections to #1049's own record**, since the benefit was attributed to the wrong
+  stage: the "4–5 condemnations → 0" claim in `CLAUDE.md`, `references.md` and the #1049 ledger entry
+  is now stated as "removes the settle-on-noise class; hot-floor acquisition unchanged", and
+  `preamble_correlation_settle::the_receiver_never_settles_on_a_saturating_noise_floor` asserts the
+  **measured** bound (≤ 6, observed 4) instead of 0, with the leading-edge explanation in place.
+
+### How it was missed, which is the more useful half
+
+- **`cargo test` stops launching further test binaries after the first failing one.** #1049's
+  pre-merge workspace run aborted at `monitor_during_ota` (a *pre-existing* red gate, see below) and
+  therefore never reached `capture_replay_corpus`. It was reported as "1088 passed across 68 suites,
+  full workspace green". The complete run is **1497 tests across 115 suites** — the earlier figure was
+  a truncated run misread as a total.
+- The separate corpus run that did pass 11/11 predated the onset-snap stage added later in the same
+  change, so nothing ever exercised the final code against that test.
+- **Standing correction: run the workspace gate with `--no-fail-fast`**, and read the suite count as
+  well as the pass count. A pass total with no denominator cannot distinguish "everything ran" from
+  "everything that ran before the abort". This is the measurement-integrity rule applied to the gate
+  itself rather than to a checker script.
+
+---
+
+## 2026-07-31 — test(daemon): make REQ-RX-01's during-OTA gate observable — it had never passed (#1051)
+
+- **Requirement/change:** `monitor_during_ota::the_monitor_still_emits_while_an_ota_session_is_active`
+  — the acceptance gate `CLAUDE.md` cites for *"the multi-mode monitor keeps emitting while an OTA
+  session is active, through the real `server::run` dispatch"* — failed at `main` HEAD, and **failed
+  identically at a563984d, the single commit that introduced it.** It was merged red and never once
+  passed, so REQ-RX-01's during-OTA claim rested on a gate that could only fail.
+- **Diagnosis before fix (the accused party was innocent).** Instrumented at the emit site: the burst
+  arrived (`Some(8000)` samples), `runtime_state.monitor` was `Some`, **`engine.ota_active()` was
+  `true`**, and `decode_all` returned 1 decode. The hoisted emit in `server.rs` works exactly as
+  designed — the product was never at fault, and the test's own failure message asserted a product
+  defect that measurement disproved.
+- **Root cause is the harness, and it is a race, not a flake.** `ReplayBackend` was **one-shot**: it
+  drained its single frame during the daemon's first rx ticks and returned silence for the remaining
+  ~400. The daemon therefore broadcast the `MonitorFrame` before the test's control client connected
+  400 ms later, and `tokio::sync::broadcast` drops events with no subscriber. Deterministic — 4
+  reproductions, all at the 20.40 s timeout.
+- **Decision:** re-arm the replay so the burst **recurs** (`SILENCE_READS_BETWEEN_BURSTS = 4`, enough
+  for `accumulate_capture` to see the carrier drop and flush). A longer sleep before connecting would
+  still be a bet on scheduling; a recurring burst removes the race instead of widening it. The stale
+  assertion message was rewritten to describe the observation and point at the seam to check.
+- **Implementation:** `crates/openpulse-daemon/tests/monitor_during_ota.rs` — `ReplayBackend::frame`,
+  `ReplayStream::{frame, silence_reads}` and the re-arm in `read()`. **No production change**; the
+  diagnostic instrumentation in `server.rs` was reverted.
+- **Tests → results (actually run, 2026-07-31):**
+  - `monitor_during_ota` **1 passed in 0.56 s** (was a 20.40 s timeout).
+  - **Sabotage-verified in both directions** — the thing this gate had never had: re-gating the emit
+    on `!engine.ota_active()` (the original defect) fails it at 20 s; reverting passes it in 0.6 s.
+  - `openpulse-daemon` suite **155 passed, exit 0**; full workspace green.
+- **Lesson, in the repo's own idiom:** *a test that has never passed is not a gate, it is an
+  unverified claim wearing a gate's clothes.* The archetype scan's own rule — write the test first
+  and **confirm it fails for the right reason** — was applied here to a *red* test: a failing test is
+  as much a candidate for self-diagnosis as the code it accuses. Found while running the full gate
+  for #1049, which is why an unrelated change's gate run is worth reading rather than skimming.
+
+---
+
 ## 2026-07-31 — fix(modem): corroborate the AFC settle with preamble correlation, not energy alone (#1049)
 
 - **Requirement/change:** #1020 / #1021 / #1039 / #1040 / #1045 are one mechanism patched five
@@ -64,11 +149,13 @@ and the actually-observed results per change.
   `PREAMBLE_RHO_THRESHOLD`, `PREAMBLE_RHO_GRID_HZ`, `MAX_PREAMBLE_CORRELATION_SAMPLES`, and the
   `rho_rejected_settles` tripwire.
 - **Tests → results (actually run, 2026-07-31):**
-  - `preamble_correlation_settle` **5 passed** — saturating floor at leads 40k/80k/120k now decodes
-    at **0 condemnations** (was 4–5 after #1045, 73–83 before it), with `rho_rejected_settles > 0`
-    asserted so a zero cannot mean "the gate never ran"; off-frequency frames at 0/20/200/400 Hz
-    still acquired; a no-template mode unaffected; the tone case pinned with a widen-the-grid
-    falsifier.
+  - `preamble_correlation_settle` **5 passed** — saturating floor at leads 40k/80k/120k decodes with
+    the noise settles gone, at **4 residual leading-edge condemnations** (73–83 before #1045), with
+    `rho_rejected_settles > 0` asserted so a low count cannot mean "the gate never ran";
+    off-frequency frames at 0/20/200/400 Hz still acquired; a no-template mode unaffected; the tone
+    case pinned with a widen-the-grid falsifier. **Corrected 2026-07-31 (see the entry above):** this
+    first read "0 condemnations", which the onset-snap stage delivered at the cost of two other
+    gates; the snap was removed and the bound re-derived from measurement.
   - **Sabotage-verified:** disabling the matcher returns the count to 4 and fails the test.
   - `capture_replay_corpus` 11 passed (the real on-air #1021 frame included);
     `carrier_offset_acquisition` 7 passed; `openpulse-dsp` acquisition 11 passed.
