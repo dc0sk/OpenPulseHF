@@ -9,6 +9,48 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-07-31 — fix(modem): remove #1045's condemned_floor — inert where the veto runs, harmful where it does not
+
+- **Requirement/change:** #1049 asked for the follow-on explicitly — *"`EnergyGate::note_condemned` /
+  `condemned_floor` and possibly the `ScanPlanner` micro-sweep may become dead weight. Do not delete
+  them in the same PR; measure first, remove in a follow-up with the numbers."* These are the numbers.
+- **Method — ablation, one mechanism at a time** (the repo's own rule: delete the mechanism; if the
+  number does not move, it was never the mechanism). Recorded IC-9700 hot floor (`mean_sq` 0.0158),
+  coded `Rs`, leads 40k/80k/120k, counting decodes **and** condemnations rather than pass/fail:
+
+  | ablation | BPSK250 (veto runs) | QPSK500 (no template) |
+  |---|---|---|
+  | baseline | OK / OK / OK — 4, 4, 5 condemnations; **126, 236, 361 ρ rejections** | **FAIL / FAIL** / OK — 92, 87, 6 |
+  | `condemned_floor` removed | OK / OK / OK — 4, 4, 5 — **bit-identical** | **OK / OK / OK** — 315, 314, 315 |
+  | condemnation recovery removed | **FAIL / FAIL / FAIL** — 0 | — |
+
+- **Two findings, opposite directions.** The condemnation *recovery* (#1021/#1040) is **load-bearing**
+  — removing it fails every lead — and stays. `condemned_floor` (#1045) is **worse than dead weight**:
+  inert on BPSK250, and on QPSK500 its removal turns FAIL into OK at two of three leads.
+- **Mechanism:** the raise compounds. Each condemnation lifts the floor through `.max()`, and where
+  no correlation veto suppresses the noise settles that drive it, the raises stack until the gate sits
+  **above the signal** and no settle is possible at all. #1045 measured its fix on BPSK250 alone and
+  applied it to every mode — generalised past the boundary, and only visible once #1049 removed the
+  BPSK justification that had been carrying it.
+- **Decision:** delete `condemned_floor`, `CONDEMNED_MULTIPLIER`, `note_condemned()` and the call
+  site. The **eliminations** recorded with #1045 are explicitly NOT reopened and are restated at the
+  removal site: no floor raise on *level* saturation (gates out every buffer-is-the-frame fixture; no
+  absolute bound separates them), no forcing the full-buffer retry live, no removing `MAX`.
+- **Implementation:** `crates/openpulse-modem/src/engine.rs` — `EnergyGate` loses its second field and
+  `threshold()` its `.max()`; the call site carries the ablation table and the preserved eliminations.
+- **Tests → results (actually run, 2026-07-31):**
+  - New gate `capture_replay_corpus::a_no_template_mode_decodes_through_a_saturating_floor`
+    (`QPSK500 + Rs`, leads 40k/80k) — **written first and confirmed FAILING on `main`**, passes after
+    the removal. It asserts QPSK publishes no template, so it cannot silently stop covering the
+    energy-only path if QPSK later gains one.
+  - `capture_replay_corpus` **12 passed**; full workspace with the mechanism ablated: **exit 0, 2242
+    passed across 276 suites**, identical to baseline — nothing depended on it.
+- **What this leaves open:** the correlation veto only runs where a plugin publishes a
+  `preamble_template` — BPSK alone. Every other mode still decides frame start on energy, which is
+  what the new QPSK gate now pins.
+
+---
+
 ## 2026-07-31 — test: two gates corrected after #1049, and a correction to how #1049's own gate run was reported
 
 ### The onset-snap stage of #1049: BUILT, MEASURED, REJECTED — and two gates it had broken
