@@ -394,3 +394,75 @@ fn the_settle_recovery_reaches_the_frame_without_crawling() {
         condemnations * 18
     );
 }
+
+/// #1045: a coded frame must decode through a SATURATING noise floor, at a realistic lead.
+///
+/// When the idle floor reaches `EnergyGate::MAX_THRESHOLD` the clamped threshold lands *under* the
+/// noise, so the gate passes every window and stops carrying information. Nothing downstream knows:
+/// the receiver settles on noise, condemns after 18 fully-buffered decodes, re-anchors, and
+/// immediately re-settles on the same noise. Measured before the fix, coded `BPSK250|rs` in the
+/// recorded `ic9700-idle-hot.wav` floor: **83 / 73 / 73 condemnations at leads 40k / 80k / 120k and
+/// not one decode**, while the identical frame at an 8k lead decoded fine — never a margin problem,
+/// only how far the recovery had to walk.
+///
+/// The lead is the point of the test. A short lead passes even on the broken code, because the walk
+/// is short enough to finish; anything under ~40k proves nothing here.
+///
+/// Three fixes were measured and rejected before the one that shipped, all worth not re-attempting:
+/// forcing the full-buffer retry live (it reuses the same saturated gate, so it settles on noise too
+/// — no lead rescued); removing `MAX_THRESHOLD` (3x a hot floor lands *on* the signal — 0 settles,
+/// nothing decoded, including the 8k lead that previously worked); and engaging a relative criterion
+/// on *level* saturation, which gates out every buffer-is-the-frame fixture, and cannot be bounded by
+/// an absolute constant because the 0.010 AGC fixture sits BELOW the 0.0154 hot noise floor.
+#[test]
+fn a_coded_frame_decodes_through_a_saturating_floor() {
+    let hot = corpus("ic9700-idle-hot.wav");
+    // Guard the premise: if this file stopped saturating the gate, the test would silently become an
+    // ordinary decode and prove nothing.
+    assert!(
+        hot.mean_sq() > GATE_CEILING_MEAN_SQ,
+        "corpus floor {:.4} no longer saturates the gate — this test's premise is gone",
+        hot.mean_sq()
+    );
+
+    for lead in [80_000usize, 120_000] {
+        let mut h = harness();
+        h.tx_engine
+            .transmit_with_fec_mode(
+                b"saturated gate probe",
+                "BPSK250",
+                openpulse_core::fec::FecMode::Rs,
+                None,
+            )
+            .expect("transmit");
+        h.route_embedded_in_capture(&hot, lead, 40_000, 0.3);
+
+        let got = h
+            .rx_engine
+            .receive_with_fec_mode_timeout(
+                "BPSK250",
+                openpulse_core::fec::FecMode::Rs,
+                None,
+                Duration::from_millis(40_000),
+            )
+            .unwrap_or_else(|e| {
+                panic!(
+                    "lead {lead}: a coded frame must decode through a saturating floor (#1045): \
+                     {e} — after {} settle condemnations",
+                    h.rx_engine.settle_condemnations()
+                )
+            });
+        assert_eq!(String::from_utf8_lossy(&got), "saturated gate probe");
+
+        // Decoding is necessary but not sufficient — the recovery must also stop thrashing. The
+        // pre-fix runs burned 73-83 condemnations without arriving. One or two are expected here by
+        // design: the gate raise is *triggered* by the first condemnation.
+        let c = h.rx_engine.settle_condemnations();
+        assert!(
+            c <= 12,
+            "lead {lead}: decoded, but after {c} settle condemnations (~{} wasted fully-buffered \
+             decodes) — the condemnation feedback is not engaging",
+            c * 18
+        );
+    }
+}
