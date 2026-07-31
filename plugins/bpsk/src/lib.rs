@@ -155,6 +155,10 @@ impl ModulationPlugin for BpskPlugin {
         demodulate::afc_estimate_hz(samples, config)
     }
 
+    fn preamble_template(&self, config: &ModulationConfig) -> Option<Vec<f32>> {
+        modulate::bpsk_preamble_template(config).ok()
+    }
+
     fn occupied_bandwidth_hz(&self, mode: &str) -> Option<f32> {
         // Rectangular main-lobe null-to-null = 2×baud; a safe over-estimate for the RRC path.
         parse_baud_rate(mode).ok().map(|b| 2.0 * b)

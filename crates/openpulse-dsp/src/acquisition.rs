@@ -186,6 +186,111 @@ impl IqMatchedFilter {
         })
     }
 
+    /// Peak normalised correlation ρ over timing offsets `0..=bound` **and** a residual-frequency
+    /// grid, returning the best `(result, frequency)`.
+    ///
+    /// **Why the frequency dimension is not optional.** A matched filter integrates coherently, so
+    /// a carrier offset `Δf` rotates the window against the template and ρ collapses roughly as
+    /// `|sinc(Δf·T)|` over the template span `T`. Measured on a 1024-sample (128 ms) BPSK250
+    /// preamble: ρ = 1.000 at 0 Hz, 0.332 at 20 Hz, 0.016 at 400 Hz — while the same acquisition
+    /// chain is required to pull in offsets to ±600 Hz (`tests/carrier_offset_acquisition.rs`).
+    /// A bare [`search_normalized`](Self::search_normalized) used as a presence test would
+    /// therefore reject real frames a few Hz off-frequency, and shortening the template to widen
+    /// the tolerance destroys the discrimination it exists for (at 256 samples the recorded idle
+    /// floor itself reaches ρ = 0.377).
+    ///
+    /// Each grid point rotates the *analytic template* rather than mixing the window, so no
+    /// per-hypothesis Hilbert transform is needed: `t' = t·e^{j2πfm/fs}` is exact for the analytic
+    /// pair this filter already holds. `t_energy` is recomputed per rotation because `Σ Re(t')²`
+    /// is not rotation-invariant.
+    ///
+    /// Note the cost of the extra dimension in false alarms: taking a maximum over more hypotheses
+    /// raises the noise floor of ρ itself. Measured over recorded idle audio, worst-case noise ρ
+    /// rises from 0.157 (single frequency) to 0.233 (±160 Hz at 4 Hz). Size the grid from the
+    /// offsets that must be acquired, not from what is cheap.
+    pub fn search_normalized_over_frequency(
+        &self,
+        samples: &[f32],
+        bound: usize,
+        min_energy_frac: f32,
+        sample_rate: f32,
+        freqs: &[f32],
+    ) -> Option<(IqSearchResult, f32)> {
+        if samples.len() < self.template.len() || self.template.is_empty() || sample_rate <= 0.0 {
+            return None;
+        }
+        let mut best: Option<(IqSearchResult, f32)> = None;
+        let mut ti = vec![0.0f32; self.template.len()];
+        let mut tq = vec![0.0f32; self.template.len()];
+        for &f in freqs {
+            let w = 2.0 * std::f32::consts::PI * f / sample_rate;
+            let mut t_energy = 0.0f32;
+            for m in 0..self.template.len() {
+                let (s, c) = (w * m as f32).sin_cos();
+                ti[m] = self.template[m] * c - self.template_q[m] * s;
+                tq[m] = self.template[m] * s + self.template_q[m] * c;
+                t_energy += ti[m] * ti[m];
+            }
+            if let Some(r) = Self::search_with(samples, &ti, &tq, t_energy, bound, min_energy_frac)
+            {
+                if best.as_ref().is_none_or(|(b, _)| r.rho > b.rho) {
+                    best = Some((r, f));
+                }
+            }
+        }
+        best
+    }
+
+    /// [`search_normalized`](Self::search_normalized) against an explicit template pair, so a
+    /// frequency-rotated copy can reuse it.
+    fn search_with(
+        samples: &[f32],
+        ti: &[f32],
+        tq: &[f32],
+        t_energy: f32,
+        bound: usize,
+        min_energy_frac: f32,
+    ) -> Option<IqSearchResult> {
+        let tlen = ti.len();
+        let max_offset = (samples.len() - tlen).min(bound);
+        let mut scored: Vec<(f32, f32)> = Vec::with_capacity(max_offset + 1);
+        let mut energy_sum = 0.0f64;
+        for offset in 0..=max_offset {
+            let win = &samples[offset..offset + tlen];
+            let mut dot_i = 0.0f32;
+            let mut dot_q = 0.0f32;
+            let mut energy = 0.0f32;
+            for (m, &s) in win.iter().enumerate() {
+                dot_i += s * ti[m];
+                dot_q += s * tq[m];
+                energy += s * s;
+            }
+            energy_sum += energy as f64;
+            scored.push((dot_i * dot_i + dot_q * dot_q, energy));
+        }
+        let mean_energy = (energy_sum / (max_offset + 1) as f64) as f32;
+        let floor = mean_energy * min_energy_frac;
+
+        let mut best_offset = None;
+        let mut best_rho = f32::NEG_INFINITY;
+        for (offset, &(score, energy)) in scored.iter().enumerate() {
+            if energy < floor {
+                continue;
+            }
+            let rho = score.sqrt() / ((energy * t_energy).sqrt() + 1e-12);
+            if rho > best_rho {
+                best_rho = rho;
+                best_offset = Some(offset);
+            }
+        }
+        let offset = best_offset?;
+        Some(IqSearchResult {
+            offset,
+            score: scored[offset].0,
+            rho: best_rho,
+        })
+    }
+
     /// Normalised correlation ρ for every offset in `lo..=hi` (clamped).
     ///
     /// Used by multipath-aware acquisition (e.g. OFDM leading-path selection)
@@ -368,6 +473,99 @@ mod tests {
             .collect();
         let r = filt.search(&noise, 8192).expect("search");
         assert!(r.rho < 0.5, "noise rho {} should be well below lock", r.rho);
+    }
+
+    /// Mix a real passband signal up by `hz` via its analytic companion.
+    fn mix(x: &[f32], hz: f32, fs: f32) -> Vec<f32> {
+        let q = quadrature(x);
+        x.iter()
+            .zip(q.iter())
+            .enumerate()
+            .map(|(k, (&i, &qq))| {
+                let (s, c) = (2.0 * PI * hz * k as f32 / fs).sin_cos();
+                i * c - qq * s
+            })
+            .collect()
+    }
+
+    /// A narrowband BPSK-like preamble: 32 symbols of alternating phase at 250 baud on a 1500 Hz
+    /// carrier, 8 kHz — the geometry the engine's frame detection actually uses.
+    ///
+    /// Deliberately NOT [`chirp_template`]: a chirp has a large time-bandwidth product and is
+    /// famously delay-Doppler tolerant, so it survives a carrier offset that destroys a narrowband
+    /// correlation. Using one here would have made the test below pass while demonstrating nothing.
+    fn narrowband_preamble(fs: f32) -> Vec<f32> {
+        let sps = 32usize; // 8000 / 250
+        (0..32 * sps)
+            .map(|k| {
+                let sign = if (k / sps).is_multiple_of(2) {
+                    1.0
+                } else {
+                    -1.0
+                };
+                sign * (2.0 * PI * 1_500.0 * k as f32 / fs).cos()
+            })
+            .collect()
+    }
+
+    /// The frequency grid recovers what a fixed-frequency correlation loses to a carrier offset —
+    /// and the fixed one must actually lose it, or this test proves nothing.
+    #[test]
+    fn frequency_grid_recovers_rho_a_fixed_correlation_loses_to_an_offset() {
+        const FS: f32 = 8_000.0;
+        let template = narrowband_preamble(FS);
+        let filt = IqMatchedFilter::new(template.clone());
+        let mut signal = vec![0.0f32; 300];
+        signal.extend_from_slice(&template);
+        signal.extend(std::iter::repeat_n(0.0, 300));
+
+        // Control: no offset, both find it.
+        let flat = filt.search_normalized(&signal, 2_000, 0.05).expect("clean");
+        assert!(flat.rho > 0.9, "clean rho {} should lock", flat.rho);
+
+        let offset = mix(&signal, 25.0, FS);
+        // The falsifier: a fixed-frequency correlation must be BROKEN by the offset, otherwise the
+        // grid below would be recovering nothing and the whole frequency dimension is unjustified.
+        let fixed = filt
+            .search_normalized(&offset, 2_000, 0.05)
+            .expect("search");
+        assert!(
+            fixed.rho < 0.6,
+            "a 25 Hz offset left the fixed correlation at rho {} — this test cannot show the grid \
+             recovering anything",
+            fixed.rho
+        );
+
+        let grid: Vec<f32> = (-20..=20).map(|k| k as f32 * 4.0).collect();
+        let (r, f) = filt
+            .search_normalized_over_frequency(&offset, 2_000, 0.05, FS, &grid)
+            .expect("grid search");
+        assert!(
+            r.rho > 0.9,
+            "grid search rho {} should recover the offset frame",
+            r.rho
+        );
+        assert!(
+            (f - 25.0).abs() <= 4.0,
+            "grid picked {f} Hz for a 25 Hz offset — it is not estimating the frequency"
+        );
+    }
+
+    /// A one-point grid at 0 Hz must reproduce `search_normalized` exactly: the added dimension is
+    /// a generalisation, not a different measurement.
+    #[test]
+    fn a_single_zero_frequency_grid_point_matches_the_plain_search() {
+        let template = chirp_template(256);
+        let filt = IqMatchedFilter::new(template.clone());
+        let mut signal = vec![0.0f32; 100];
+        signal.extend_from_slice(&template);
+        let plain = filt.search_normalized(&signal, 500, 0.05).expect("plain");
+        let (grid, f) = filt
+            .search_normalized_over_frequency(&signal, 500, 0.05, 8_000.0, &[0.0])
+            .expect("grid");
+        assert_eq!(f, 0.0);
+        assert_eq!(plain.offset, grid.offset);
+        assert!((plain.rho - grid.rho).abs() < 1e-4, "{plain:?} vs {grid:?}");
     }
 
     #[test]

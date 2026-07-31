@@ -9,6 +9,79 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-07-31 — fix(modem): corroborate the AFC settle with preamble correlation, not energy alone (#1049)
+
+- **Requirement/change:** #1020 / #1021 / #1039 / #1040 / #1045 are one mechanism patched five
+  times — an **energy** gate deciding where a frame starts *and* triggering the AFC settle. Energy
+  answers "is something here", never "is this a preamble", so above a hot band floor the receiver
+  settles on idle noise before the frame arrives. codec2/FreeDV decides frame start on a normalised
+  correlation ratio with no absolute receive-energy threshold anywhere (`src/ofdm.c`,
+  `timing_mx_thresh = 0.30` normalised by `av_level`) — read directly, not second-hand.
+- **The issue's own design was falsified before building it.** #1049 proposed requiring
+  `search_normalized(window).rho >= 0.40` **before** the settle. Measured on a 1024-sample BPSK250
+  preamble template, a real frame's ρ under carrier offset: **1.000 @ 0 Hz, 0.332 @ 20 Hz, 0.016 @
+  400 Hz** — a matched filter integrates coherently, and this chain must acquire to ±400 Hz
+  (`AFC_MAX_CORRECTION_HZ`; `carrier_offset_acquisition.rs` pins 400 Hz). The pre-settle check would
+  have rejected nearly every off-frequency frame. Shortening the template to widen the tolerance
+  destroys the discrimination it exists for (at 256 samples the recorded idle floor itself reaches
+  ρ = 0.377). The issue's 0.811/0.40 pair came from a capture measured at +1.2 Hz offset — an
+  artifact-calibrated constant.
+- **Decision:** run the check **after** `afc_mini_settle`, against the settled frequency, over a
+  narrow residual grid. *The settle proposes, the correlation disposes.* Measured settle residual
+  over a 1056-sample window is ≤ 0.3 Hz for every offset the engine can reach (0–400 Hz), so the
+  correlation sees ρ ≈ 1.0 even far off-frequency.
+- **Second decision — the correlation PLACES the onset, it does not only vet it.** With vetting
+  alone the saturating-floor reproduction still took 4 condemnations. Instrumented, those were never
+  noise: they sat on the frame's leading **edge** (onsets 39328…39972 for a frame at 40000, ρ
+  climbing 0.461 → 1.000 as the window slid onto it), where a partial overlap clears the threshold
+  but the demodulator cannot decode — #1040's crawl from a different cause. The matched filter
+  already knows the true alignment, so an accepted candidate gets a second, wider search that snaps
+  the onset and re-settles there. Two stages, because accepts are rare and rejection must stay cheap.
+- **The grid width is bounded from ABOVE, and that is the load-bearing finding.** The BPSK preamble
+  is 32 phase-alternating symbols — a square-wave-modulated carrier with energy in lines at
+  `fc ± baud/2`. Rotate the template that far and a line lands on plain carrier. Measured ρ of a
+  **pure tone**: ±20 Hz grid → **0.017–0.042**; ±160 Hz → **0.659**; ±450 Hz (the full acquisition
+  range) → **0.696 at every frequency**, above this receiver's best real on-air frame (0.654). This
+  **rejects** the otherwise-attractive alternative of searching the whole acquisition range as a
+  detector and seeding the settle from it (codec2's ordering): our sync word is two spectral lines,
+  not a PN sequence, so it cannot survive being searched over its own line spacing. Raising that
+  ceiling needs a different preamble — a wire-format change, not a bigger grid.
+- **Threshold derived from the decode cliff, not from captures.** BPSK250 + `Rs` through AWGN,
+  ρ vs decode: −1 dB 0.646 OK, −3 dB 0.561 OK, **−5 dB 0.455 fail**, −7 dB 0.392 fail, −9 dB 0.322
+  fail. The decode dies two SNR steps before ρ reaches 0.40, so the gate cannot reject a frame the
+  demodulator could have decoded. Watterson `moderate_f1` measured ρ = 0.58–0.84 across 10–30 dB,
+  including runs that failed to decode.
+- **Scope, stated rather than implied:** BPSK only (the trait method defaults to `None`), and
+  templates over `MAX_PREAMBLE_CORRELATION_SAMPLES` (2048) are excluded — which exempts BPSK31,
+  whose 7936-sample preamble would need a ~0.5 Hz grid step. The five defects were all diagnosed on
+  BPSK250, which is covered. This is a **broadband-noise** discriminator: it does not retire
+  `note_condemned` (#1045) or the condemnation recovery (#1021/#1040), which remain the backstop for
+  anything that correlates but does not decode.
+- **Implementation:** `ModulationPlugin::preamble_template` (additive, `None` default;
+  `PLUGIN_TRAIT_VERSION` 1.0.0 → 1.1.0); `bpsk_preamble_template` built from the modulator itself so
+  it cannot drift from the wire; `IqMatchedFilter::search_normalized_over_frequency` (rotates the
+  analytic template per hypothesis — no per-point Hilbert transform); engine `preamble_rho`,
+  `PREAMBLE_RHO_THRESHOLD`, `PREAMBLE_RHO_GRID_HZ`, `MAX_PREAMBLE_CORRELATION_SAMPLES`, and the
+  `rho_rejected_settles` tripwire.
+- **Tests → results (actually run, 2026-07-31):**
+  - `preamble_correlation_settle` **5 passed** — saturating floor at leads 40k/80k/120k now decodes
+    at **0 condemnations** (was 4–5 after #1045, 73–83 before it), with `rho_rejected_settles > 0`
+    asserted so a zero cannot mean "the gate never ran"; off-frequency frames at 0/20/200/400 Hz
+    still acquired; a no-template mode unaffected; the tone case pinned with a widen-the-grid
+    falsifier.
+  - **Sabotage-verified:** disabling the matcher returns the count to 4 and fails the test.
+  - `capture_replay_corpus` 11 passed (the real on-air #1021 frame included);
+    `carrier_offset_acquisition` 7 passed; `openpulse-dsp` acquisition 11 passed.
+- **Adversarial review (standing rule) found four real defects in my own write-up**, all corrected
+  here: the ±160 Hz grid was justified by a 600 Hz case that `AFC_MAX_CORRECTION_HZ` rejects before
+  the check ever runs; "4.4× separation" was a whole-capture number, 3.2× engine-shaped; a
+  three-modem citation rested on one verification; and the narrowband-interferer weakness above was
+  its find. Its headline claim — that a tone scores 0.64–0.71 and so the gate is useless — is true
+  **only at grid widths this change does not use**, and its recommended full-range design is the one
+  that measurement rejects.
+
+---
+
 ## 2026-07-30 — fix(modem): a condemned settle raises the energy gate above the noise that produced it (#1045)
 
 - **Requirement/change:** at an idle floor at or above `EnergyGate::MAX_THRESHOLD` (0.0032) the

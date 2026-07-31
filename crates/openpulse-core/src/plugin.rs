@@ -4,7 +4,10 @@ use crate::error::{ModemError, PluginError};
 
 /// Current plugin trait version.
 /// Format: `<major>.<minor>.<patch>`
-pub const PLUGIN_TRAIT_VERSION: &str = "1.0.0";
+///
+/// 1.1.0 added [`ModulationPlugin::preamble_template`] — additive, with a `None` default, so every
+/// plugin declaring `1.0.0` keeps working unchanged.
+pub const PLUGIN_TRAIT_VERSION: &str = "1.1.0";
 
 // ── Plugin metadata ───────────────────────────────────────────────────────────
 
@@ -228,6 +231,25 @@ pub trait ModulationPlugin: Send + Sync {
     /// floor. It is decision-directed, so it saturates once symbol errors are common — the safe
     /// direction for a rate decision.
     fn estimate_snr_db(&self, _samples: &[f32], _config: &ModulationConfig) -> Option<f32> {
+        None
+    }
+
+    /// The passband preamble this mode transmits, as audio samples, for a receiver that must decide
+    /// whether a candidate window contains a frame *before* committing to it.
+    ///
+    /// `None` (the default) means the plugin offers no template, and the receiver falls back to
+    /// deciding on energy alone — which is what every mode did before this existed, and which
+    /// cannot work when the band noise floor rises above the gate: energy says "something is here",
+    /// never "this is a preamble". Five separately-diagnosed defects (#1020, #1021, #1039, #1040,
+    /// #1045) were that one gap. codec2/FreeDV detects frames on a normalised correlation ratio
+    /// instead, with no absolute receive-energy threshold anywhere (`src/ofdm.c`: `timing_mx_thresh`
+    /// 0.30, normalised by `av_level`) — read directly, unlike the other reference modems, whose
+    /// approach is recorded second-hand in `docs/dev/research/references.md`.
+    ///
+    /// The returned samples must be the *modulated* preamble at `config`'s carrier and sample rate,
+    /// so a correlator can use them directly. Keep it to the preamble: a template running into the
+    /// data symbols correlates against payload that differs frame to frame.
+    fn preamble_template(&self, _config: &ModulationConfig) -> Option<Vec<f32>> {
         None
     }
 
