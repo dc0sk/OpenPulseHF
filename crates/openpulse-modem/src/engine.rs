@@ -3135,7 +3135,6 @@ impl ModemEngine {
                         // `note_settled`, so it cannot strand the receiver on a noise anchor, which
                         // is the specific failure this exists to prevent; leaving it ungated also
                         // preserves it as the documented fallback for a bad settle.
-                        let mut onset = onset;
                         if let Some(mf) = preamble_matcher.as_ref() {
                             let corr_end = (onset + afc_window).min(accumulated.len());
                             if let Some((rho, _)) =
@@ -3152,54 +3151,35 @@ impl ModemEngine {
                                     self.afc_correction_hz = 0.0;
                                     continue;
                                 }
-                                // Corroborated — now let the correlation PLACE the onset, not just
-                                // vet it.
+                                // **The correlation VETOES a settle; it does not place it.**
                                 //
-                                // Measured on the saturating-floor reproduction: the surviving
-                                // settles were never noise. They sat on the frame's leading EDGE
+                                // Placing it was tried and reverted, and the reason is worth
+                                // keeping. On the saturating-floor reproduction the surviving
+                                // settles are not noise — they sit on the frame's leading EDGE
                                 // (onsets 39328…39972 for a frame at 40000, ρ climbing 0.461 →
-                                // 1.000 as the window slid onto it), where a partial overlap clears
-                                // the threshold but the demodulator cannot decode. Each one then
-                                // cost `SETTLE_FAILURE_LIMIT` fully-buffered decodes to condemn —
-                                // #1040's crawl again, from a different cause.
+                                // 1.000 as the window slides on), where a partial overlap clears
+                                // the threshold but the demodulator cannot decode, and each one
+                                // then costs `SETTLE_FAILURE_LIMIT` decodes to condemn. Snapping
+                                // the onset to the correlation's answer fixes exactly that.
                                 //
-                                // The matched filter already knows the true alignment, so the wide
-                                // search is a second stage run ONLY after a candidate is accepted:
-                                // accepts are rare, and the rejection above stays as cheap as it
-                                // was. The bound is one acquisition window because that is how
-                                // early the energy gate is documented to trip.
-                                let snap_end =
-                                    (onset + afc_window + acq_samples).min(accumulated.len());
-                                if let Some((_, snap)) = self.preamble_rho(
-                                    mf,
-                                    &accumulated[onset..snap_end],
-                                    settle.fine,
-                                ) {
-                                    if snap > 0 {
-                                        debug!(
-                                            "settle at onset={onset} corroborated rho={rho:.3}; \
-                                             correlation snaps the onset {snap} samples later"
-                                        );
-                                        onset += snap;
-                                        // Re-settle at the corrected position: the correction we
-                                        // are about to keep was measured over a window that began
-                                        // in noise, and a frequency estimate belongs to the samples
-                                        // it was taken from.
-                                        let re_end = (onset + afc_window).min(accumulated.len());
-                                        if re_end - onset < afc_window {
-                                            continue;
-                                        }
-                                        let re =
-                                            self.afc_mini_settle(mode, &accumulated[onset..re_end]);
-                                        if re.last_delta >= 5.0
-                                            || (re.fine - re.anchor).abs() > 20.0
-                                            || re.fine.abs() > AFC_MAX_CORRECTION_HZ
-                                        {
-                                            self.afc_correction_hz = 0.0;
-                                            continue;
-                                        }
-                                    }
-                                }
+                                // It also breaks the opposite case, because an ALTERNATING preamble
+                                // is periodic: an alignment two symbols late still matches 29 of 31
+                                // symbols. Measured on the capture-AGC fixture, whose frame starts
+                                // at sample 0 with ρ = 0.877, the argmax chose offset 65 — two
+                                // symbol periods in — truncating the preamble into "invalid magic".
+                                // Taking the first threshold crossing instead fixes that one and
+                                // un-fixes the first, because the partial overlap already clears
+                                // 0.40. Both live in the same search, and every rule that separates
+                                // them (a peak-ratio, a decisive-improvement margin) is a constant
+                                // fitted to these two fixtures — the archetype this repo keeps
+                                // paying for.
+                                //
+                                // So the snap is left out. The veto is what carries #1049's value:
+                                // it removes the settle-on-NOISE class outright, which is the class
+                                // the five defects were. The residual edge settles are what the
+                                // micro-sweep and condemnation recovery already exist to handle.
+                                // Placing the onset properly needs a preamble whose autocorrelation
+                                // is not periodic — a PN or chirp sync word, a wire-format change.
                                 debug!("settle at onset={onset} corroborated: rho={rho:.3}");
                             }
                         }
@@ -5715,6 +5695,24 @@ impl ModemEngine {
         window: &[f32],
         settled_hz: f32,
     ) -> Option<(f32, usize)> {
+        let (freqs, bound) = self.preamble_search_plan(mf, window, settled_hz)?;
+        let fs = AudioConfig::default().sample_rate as f32;
+        mf.search_normalized_over_frequency(window, bound, 0.05, fs, &freqs)
+            .map(|(r, _)| (r.rho, r.offset))
+    }
+
+    /// The residual-frequency grid and timing bound for the correlation check.
+    ///
+    /// The grid step is derived from the template's own coherent bandwidth (`fs / tlen`) rather
+    /// than fixed. A matched filter's ρ falls off over roughly `1 / (template duration)`, so a step
+    /// chosen for one baud rate steps clean over the peak at another and reads noise — the same
+    /// class of error as a constant fitted to one artifact.
+    fn preamble_search_plan(
+        &self,
+        mf: &IqMatchedFilter,
+        window: &[f32],
+        settled_hz: f32,
+    ) -> Option<(Vec<f32>, usize)> {
         let tlen = mf.len();
         if window.len() <= tlen {
             return None;
@@ -5726,9 +5724,7 @@ impl ModemEngine {
         // The search bound is whatever timing slack the window leaves past the template — about two
         // symbol periods for every mode, since the settle window is the preamble plus one symbol.
         // That is the span `refine_onset` can be wrong over, which is why the micro-sweep exists.
-        let bound = window.len() - tlen;
-        mf.search_normalized_over_frequency(window, bound, 0.05, fs, &freqs)
-            .map(|(r, _)| (r.rho, r.offset))
+        Some((freqs, window.len() - tlen))
     }
 
     fn afc_mini_settle(&mut self, mode: &str, window: &[f32]) -> AfcSettleOutcome {

@@ -381,9 +381,12 @@ failed decision* is a law rather than a local lesson.
 
 ### Outcome (#1049, 2026-07-31) — and the limit the comparison did not show
 
-Shipped: the AFC settle is now corroborated by normalised preamble correlation, and the saturating
-noise-floor reproduction went from 4–5 condemnations to **0**. But implementing it surfaced a
-constraint that reading the references could not, and which qualifies the recommendation above.
+Shipped: the AFC settle is now corroborated by normalised preamble correlation, which removes the
+settle-on-**noise** class outright. It does **not** improve hot-floor acquisition — the residual
+settles there are leading-edge, not noise, and the onset-snap stage that would fix them was measured
+and rejected (an alternating preamble is periodic, so the same search misplaces a correct onset by
+two symbols). Implementing it surfaced two constraints that reading the references could not, and
+both qualify the recommendation above.
 
 **We imported the detection *statistic* without the sync-word *property* that makes it work for
 them.** codec2's sync sequence is designed for correlation detection. Ours is 32 *alternating* BPSK
