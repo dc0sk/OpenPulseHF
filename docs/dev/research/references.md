@@ -2,7 +2,7 @@
 project: openpulsehf
 doc: docs/dev/research/references.md
 status: living
-last_updated: 2026-07-14
+last_updated: 2026-07-31
 ---
 
 # External references and inspirations
@@ -118,9 +118,63 @@ DATAC modes are a shared reference point.
 - The FreeDV DATAC OFDM data modes as a proven HF-OFDM comparison for our OFDM
   higher-order ladder (cyclic-prefix + pilot design rather than RRC + FLL).
 
-**Revisit for:** ARQ rate-adaptation policy (backlog-aware, per-direction), HF
+**Gear-shifting, verified in source** (`datalink_arq/arq_fsm.c` — `select_best_mode`,
+`record_tx_outcome`; constants in `arq_protocol.h`) — **five** inputs, not one:
+peer-reported *forward*-link SNR (a byte in every frame, EMA'd `(old*3+new)/4`); an **OLLA**
+delivery-corrected offset (target first-try FER 0.30, `+FER/(1-FER)` dB per clean delivery, −1 dB per
+first-try failure, clamped [−20,+3]); **TX backlog** floors per rung (no upgrade unless the backlog
+exceeds the current rung's frame capacity); a hard-loss net (8 consecutive retries → robust floor);
+and **reverse-loss discrimination** (a retry while peer SNR still clears the mode floor + 2 dB is
+attributed to a lost ACK on the independently-faded reverse path, so the forward mode is *held* —
+bounded at 3, because an unbounded hold froze every downgrade path above the fade cliff, their "S1"
+bug). Upgrade hysteresis 5 dB, asymmetric. They **removed** a retry-count downgrade that ran
+*alongside* OLLA: two controllers fought, measured 4–8× mode churn and −20 % goodput at 5–8 dB.
+Thresholds derive from measured **goodput crossovers including the ACK cycle**, not decode
+probability.
+
+**Energy is only ever a CSMA question here.** Mercury's sole energy detector is
+`modem/channel_busy.c` — passband spectral peak against an asymmetric-EMA noise floor, relative dB,
+hysteresis and debounce — used to decide *transmit* deferral, never frame start. Its floor is the
+passband **spectral minimum**, which an in-band signal cannot poison, unlike a time-domain
+percentile history (cf. our `EnergyGate`). Frame start comes from the vendored FreeDV correlation.
+
+**Revisit for:** backlog-aware climb gating (cheapest adoption); **OLLA as a replacement for**, never
+alongside, our consecutive-count climb rules (they measured what "alongside" costs); reverse-path
+ACK-loss discrimination plus the bounded-hold lesson; the SNR-byte-in-frame wire design; ARQ
+rate-adaptation policy (backlog-aware, per-direction), HF
 store-and-forward email protocol design (cf. B2F/Winlink), and the FreeDV DATAC OFDM
 modem parameters (CP length, pilot scheme).
+
+---
+
+## drowe67/codec2 — FreeDV OFDM modem (`src/ofdm.c`)
+
+<https://github.com/drowe67/codec2> · LGPL-2.1 · C
+
+The acquisition reference *for* Mercury, and the direct counter-example to our energy-anchored
+frame location. Verified by reading `src/ofdm.c` (2696 lines) on 2026-07-31:
+
+- `est_timing()` correlates against known pilot samples and divides by
+  `av_level = 1/(2·sqrt(timing_norm·acc/length))` (lines 807–808, applied line 895) — so `timing_mx`
+  is a **dimensionless ρ**, and validity is the ratio test `timing_mx > timing_mx_thresh`
+  (lines 915, 1356) with the threshold defaulting to **0.30** (line 189). There is **no absolute
+  rx-energy threshold in the receiver** and **no receiver AGC** — pilots supply the per-carrier
+  amplitude reference, which doubles as equalization.
+- Burst acquisition (`est_timing_and_freq`) is a **joint time × frequency** correlation search,
+  coarse then fine, returning `(t_est, foff_est)` from **one** measurement. A frequency estimate
+  therefore cannot exist without a detection — "AFC settled on idle noise before the frame arrived"
+  is impossible by construction, not by tuning.
+- On a failed unique-word check the burst state machine returns to `search` **and zeroes the receive
+  buffer** — `ofdm->rxbufst = ofdm->nrxbufhistory` with the comment *"reset rxbuf to make sure we
+  only ever do a postamble loop once through same samples"* (lines 2187–2189). That is our #1021
+  rule — *a recovery is not one until it changes the input to the failed decision* — as two lines
+  of C.
+- A **postamble** correlator lets a late-tuning receiver detect a burst and back up `np` frames.
+
+**Revisit for:** replacing the engine's energy-anchored frame location with normalized joint
+time×frequency preamble correlation; and a unique-word-**outside**-the-FEC frame format — our magic
+`OPLS` lives in the frame header *inside* the FEC-protected payload, which is precisely why
+validating an anchor currently costs a full frame decode (18 of them, per `SETTLE_FAILURE_LIMIT`).
 
 ---
 
@@ -153,6 +207,19 @@ VOX/rigctl/serial/CM108 PTT.
 
 **Revisit for:** parallel multi-mode RX; a robust narrowband weak-signal waveform (vs.
 the rejected diversity rung); OFDM parameter comparison.
+
+---
+
+**Detection is a dimensionless statistic with staged validation** (verified in
+`schmidl_cox.hh`): Schmidl-Cox `M = |P|²/R²` — scale-invariant, so a capture AGC cannot break it —
+with Schmitt-trigger hysteresis (0.05 on / 0.04 off) and a `min_R` floor that exists only to stop
+silence dividing to infinity (the same role as the energy floor argument on our
+`search_normalized`). A candidate then survives frequency-domain kernel correlation with a
+peak-to-second-peak ≥ 4 rejection and a guard-bounded position check — **three rejections before any
+payload decode**. One detection event yields timing, fractional CFO *and* integer-bin CFO. A false
+sync then dies at a BCH-protected **meta symbol** one symbol in, and an erasure budget (¾ of code
+redundancy) aborts hopeless decodes early rather than grinding to the end. Net effect: no
+anchor-condemnation machinery exists, because being wrong is cheap and known immediately.
 
 ---
 
@@ -273,6 +340,44 @@ wholesale — and one was explicitly weighed and **rejected** for a data modem.
   baud-drop and HARQ. See `docs/dev/research/weak-signal-diversity-measurement.md`. A
   purpose-built *robust narrowband* waveform (cf. MODEM73's ROBUST family, below) is the
   better direction if a sub-floor rung is ever revisited.
+
+---
+
+## Recurring lesson — energy is not a frame detector
+
+From the 2026-07-31 adversarial comparison, prompted by a defect family that is really **one
+mechanism patched five times** (#1020 → #1021 → #1039 → #1040 → #1045):
+
+**Every reference modem decides "a frame starts here" on preamble correlation — normalized in three
+of four — and derives its frequency estimate from the same measurement that declared the detection.**
+Energy appears in these systems only as a CSMA/occupancy question (Mercury `channel_busy.c`) or as a
+divide-by-zero floor (modem73 `min_R`). None of them has any analog of our settle → micro-sweep →
+condemn → re-anchor apparatus, because false detections are *rare* under a ρ threshold, *validated
+cheaply and early* (FreeDV unique word, modem73 BCH meta symbol), and *recovered from by discarding
+the samples that caused them* (FreeDV zeroes `rxbuf`).
+
+The uncomfortable part: **we already own the primitive.** `IqMatchedFilter::search_normalized`
+(`crates/openpulse-dsp/src/acquisition.rs`) is used by the SC-FDMA and pilot plugins, and our own
+playbook already states the rule — *"acquire on the normalised correlation, not the unnormalised
+score"*. The engine's receive loop calls it **zero times**. Single-carrier frame location is
+anchored on `EnergyGate` → `refine_onset` (itself an energy test) → AFC settle → decode. Nothing in
+the code or the docs marks that as a considered choice; it predates the correlation work and survived
+because the in-process fixtures handed the receiver a buffer that *was* the frame (the same blind
+spot `route_embedded` was added to close).
+
+**Where the energy gate is defensible:** as an O(1) compute gate and DCD — deciding whether to spend
+the expensive settle, and whether the channel is busy enough to defer a transmission. Mercury keeps
+an energy detector for exactly that. What four deployed implementations and five of our own patch
+rounds agree is *not* defensible is using it as the frame-start decision, and worse as the trigger
+for frequency estimation.
+
+**One shared weakness, worth knowing:** qo100-modem's acquisition threshold is also absolute rather
+than normalized — but on *correlation magnitude*, so it fails **closed** (a frame is missed) where an
+absolute *energy* threshold fails **open** (noise is accepted and the AFC is poisoned). The
+failure-polarity difference is the whole ballgame. And Mercury's own "S1" bug — an OLLA hold frozen
+by healthy SNR, blocking every downgrade above the fade cliff — is the same *shape* as our #1021
+recovery livelock, which is independent confirmation that *a recovery must change the input to the
+failed decision* is a law rather than a local lesson.
 
 ---
 
