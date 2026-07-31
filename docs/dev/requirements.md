@@ -334,6 +334,22 @@ in the roadmap; each is a candidate, not a committed deliverable.
   a hard limiter is constant-envelope and destroys the amplitude information the calibrated soft-LLR path
   needs (QAM/APSK), and acquisition is already amplitude-invariant (`search_normalized` / relative
   `refine_onset`), so nothing motivates it. (REQ-AGC-01)
+- The receiver's **carrier detect shall track the band's noise floor** rather than compare against a
+  fixed threshold, at the single shared `InputCapture` seam and independently of the active mode. The
+  shipped `DcdState` used a constant 0.01 RMS squelch; the recorded IC-9700 idle capture measures
+  **0.126 RMS, twelve times that**, so on such a band the daemon's DCD reads permanently busy, the
+  burst never ends on a carrier drop, only the runaway cap flushes it, and a real frame is never handed
+  to the decoder at all. This is the daemon's half of the hot-floor failure the scanning receive path
+  hit five times (#1020/#1021/#1039/#1040/#1045/#1049) — **none of that path's machinery
+  (`EnergyGate`, the AFC settle, the correlation veto) runs on the daemon's `accumulate_capture`
+  route.** The floor shall be estimated from the **passband spectral distribution**, not from block
+  energies: a carrier that stays on raises every block and drags a time-domain percentile up with it,
+  which is exactly how `EnergyGate` saturates, whereas a narrowband signal cannot reach a low
+  percentile across bins (Mercury uses the same spectral-minimum floor for its channel-busy decision).
+  Level, floor and interference are properties of the environment, not of the waveform, so this is
+  deliberately mode-independent — frame *detection* remains per-waveform. Acceptance: recorded idle at
+  0.126 RMS produces no burst, and a real frame in that same floor still produces one bounded burst
+  that ends on the carrier drop rather than at the cap. (REQ-DCD-ADAPT)
 - Every PTT-keyed transmit scope shall release the transmitter **deterministically on scope exit** —
   including on an early return or a panic/unwind — via an RAII guard, rather than relying solely on the
   max-duration watchdog (REQ-REG-10 / #863). This bounds an unexpected key-down to the current stack

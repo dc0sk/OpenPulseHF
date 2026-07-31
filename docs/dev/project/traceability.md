@@ -9,6 +9,64 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-07-31 — feat(modem,dsp): carrier detect tracks the band noise floor (REQ-DCD-ADAPT)
+
+- **Requirement/change:** the shipped daemon's only frame-start decision is `DcdState`, created with a
+  **fixed 0.01 RMS squelch** (`engine.rs`). The recorded IC-9700 idle capture is **0.126 RMS — 12×
+  that**. On such a band the DCD reads permanently busy, the burst never ends on a carrier drop, only
+  the runaway cap flushes it, and `decode_burst` is handed a cap-length buffer of noise while a real
+  frame never arrives at all.
+- **The architectural finding that motivated it.** `server.rs`'s rx tick calls only
+  `accumulate_capture` → `decode_burst`/`ota_decode_burst` — **never** `receive_with_timeout*`. So
+  `EnergyGate`, the AFC settle, the #1049 correlation veto and the condemnation recovery are all
+  **test-path-only**; the daemon has its own, much simpler frame-start mechanism and it failed the
+  same environment by a different route. Verified by reading the call graph, independently confirmed
+  by adversarial review.
+- **Design decision — mode-independent, at the seam.** Level, floor and interference are properties of
+  the *environment*, not of the waveform, so this lives at the single shared
+  `route_audio_stage(InputCapture)` seam and takes no mode. Frame *detection* stays per-waveform
+  (codec2 also correlates against per-mode templates; what is mode-independent there is the
+  criterion). This is the maintainer's allocation rule, and it is the level at which it is satisfiable.
+- **Why a SPECTRAL floor and not a block-energy percentile.** A carrier that stays on raises every
+  block, so a time-domain percentile follows the signal up — precisely how `EnergyGate` saturates
+  (#1045). A narrowband signal cannot reach a low percentile *across bins*. Mercury uses the same
+  spectral floor for its channel-busy decision. Measured on the real capture: floor **0.138 RMS idle
+  → 0.140 with a frame present**, while the total goes 0.126 → 0.225. The immovability is the point.
+- **The margin is bracketed by measurement, not chosen:** it must exceed 0.126/0.138 = 0.91 or idle
+  reads busy, and stay under 0.225/0.140 = 1.61 or the frame cannot open the squelch. 1.25 sits
+  between, ~1.35× headroom on the idle side and ~1.29× on the signal side. Both bounds are named
+  failures with assertions on them.
+- **Implementation:** new `crates/openpulse-dsp/src/noise_floor.rs`
+  (`spectral_noise_floor_mean_sq`, `NoiseFloorTracker` with an asymmetric rise/fall EMA); engine
+  `noise_floor` field re-aiming `DcdState::set_threshold` inside `update_dcd_at_seam`, with
+  `DCD_SQUELCH_MARGIN` and `DCD_MIN_SQUELCH_THRESHOLD` (a degenerate-floor guard, not a policy).
+- **Two self-inflicted errors caught in the doing, both worth recording:**
+  1. **The estimator read 3.06× high**, and the ratio was diagnostic: I averaged 32 periodograms
+     before taking the quantile, but the exponential-quantile correction only holds for a *single*
+     periodogram — averaging M of them makes the distribution Gamma(M), whose 25th percentile sits
+     near its mean. Pooling the (window, bin) powers instead keeps them exponential. The constant
+     stays **derived**; `noise_floor_recovers_a_known_variance` validates the chain against a *known*
+     variance rather than against any recording.
+  2. **The first acceptance test passed vacuously.** It fed 20 s of idle against a 37 s runaway cap,
+     so a permanently-busy receiver accumulated silently and flushed nothing — the defect fully
+     present, the test green. Caught by reading *why* it passed. The feed is now longer than the cap,
+     and that length is documented as load-bearing.
+- **Tests → results (actually run, 2026-07-31):**
+  - `daemon_squelch_noise_floor` **2 passed**, both written first and confirmed failing on `main` from
+    opposite sides: pure recorded idle flushed a **299 200-sample burst of noise**; a real frame in
+    that floor produced **no burst at all**. Both drive the production entry `accumulate_capture`.
+  - `openpulse-dsp --lib noise_floor` **4 passed**, including the poison-resistance property (a 30×
+    in-band carrier must not move the floor) with a counter-assertion that the carrier really did
+    dominate the time-domain level, so the contrast cannot be claimed vacuously.
+  - **Full workspace `--no-fail-fast`: cargo exit 0, 2249 passed across 277 suites** (from 2243/276 —
+    exactly the six new tests, nothing else moved). `clippy --all-targets` clean, `fmt` clean.
+- **Left open:** notch and AGC still default OFF and no on-air script enables them — every recorded
+  failure was measured with the only optional hardening off. Turning them on and measuring is the
+  cheapest remaining environmental win. And `openpulse-core/src/snr_hysteresis.rs`'s
+  `SnrEstimator::set_noise_floor_from_samples` remains unconsumed.
+
+---
+
 ## 2026-07-31 — fix(modem): remove #1045's condemned_floor — inert where the veto runs, harmful where it does not
 
 - **Requirement/change:** #1049 asked for the follow-on explicitly — *"`EnergyGate::note_condemned` /
