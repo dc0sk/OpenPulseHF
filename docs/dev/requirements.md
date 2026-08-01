@@ -334,6 +334,18 @@ in the roadmap; each is a candidate, not a committed deliverable.
   a hard limiter is constant-envelope and destroys the amplitude information the calibrated soft-LLR path
   needs (QAM/APSK), and acquisition is already amplitude-invariant (`search_normalized` / relative
   `refine_onset`), so nothing motivates it. (REQ-AGC-01)
+- The receiver's **automatic notch shall be enabled by default**. It was built, documented as "a
+  clear win against out-of-band QRM", and left opt-in — so it was **off in every recorded on-air
+  failure**, which is how "we already harden against interference" and "the station could not decode"
+  were both true at once. Built-and-never-enabled is a distinct failure from a seam gap: the wiring
+  was correct throughout, nothing switched it on. Measured on the recorded hot floor with a 2200 Hz
+  interferer just outside `BPSK250`'s occupied band, the decode **fails with the notch off and
+  succeeds with it on at amplitude 0.30**; at 0.05–0.15 it is unnecessary and at 0.60 the interferer
+  wins either way — so it buys a real band of conditions and costs nothing where there is nothing to
+  notch. The protected band tracks the active mode, so the signal itself is never notched, and an
+  in-band interferer remains a QSY case. Acceptance: a gate asserting BOTH edges — the decode fails
+  without the notch at the rescue level, and a strong enough interferer defeats it regardless.
+  (REQ-QRM-01)
 - The receiver's **carrier detect shall track the band's noise floor** rather than compare against a
   fixed threshold, at the single shared `InputCapture` seam and independently of the active mode. The
   shipped `DcdState` used a constant 0.01 RMS squelch; the recorded IC-9700 idle capture measures
