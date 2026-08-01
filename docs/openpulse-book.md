@@ -840,10 +840,17 @@ Requirement coverage stands at 118 of 141 covered, 16 gaps, 7 planned for 1.x.
 | File transfer | `[file_transfer] enabled` | `false` |
 | Receiver-led OTA rate stepping | `[modem] ota_enabled` | `false` |
 | Multi-mode receive monitor | `[monitor] enabled` | `false` |
-| Receiver notch / AGC | `[modem] notch_enabled` / `agc_enabled` | `false` / `false` |
+| Receiver AGC | `[modem] agc_enabled` | `false` |
 | ADIF logbook | `[logbook] enabled` | `false` |
 | Session compression | `[compression] enabled` | `false` |
 | Cross-band repeater | `[repeater] enabled` | `false` |
+
+The **receiver auto-notch** (`[modem] notch_enabled`) left this list on 2026-08-01 and is now **on by
+default**. It had been opt-in since it was built, and was therefore switched off in every recorded
+on-air failure — measured against a 2200 Hz interferer just outside `BPSK250`'s occupied band on a
+recorded hot noise floor, the decode fails with it off and succeeds with it on. It costs nothing
+where there is nothing to notch, and the protected band tracks the active mode so the wanted signal
+is never notched.
 | ARDOP adaptive ARQ | `[ardop] enable_adaptive_arq` | `false` |
 | Auto-QSY on interference | `[qsy] auto_qsy_on_interference` | `false` |
 | Control-channel auth on loopback | `[control_security] require_auth` | `false` (mandatory on non-loopback regardless) |

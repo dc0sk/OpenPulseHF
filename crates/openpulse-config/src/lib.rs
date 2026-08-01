@@ -436,8 +436,16 @@ pub struct ModemConfig {
     /// whose tighter decision regions the clip's EVM breaks. See `ModemEngine::cessb_benefits`.
     pub cessb_enabled: bool,
     /// Receiver-side automatic notch: removes out-of-band CW interference (QRM) before demod.
-    /// Default `false`. The protected band tracks the active mode so the signal is never
-    /// notched; an in-band interferer still can't be removed (that is a QSY case).
+    /// **Default `true` since 2026-08-01, on measurement.** The protected band tracks the active
+    /// mode so the signal is never notched; an in-band interferer still can't be removed (that is a
+    /// QSY case).
+    ///
+    /// It was opt-in and therefore off in every recorded on-air failure — built and never enabled,
+    /// which is why "we already harden against interference" and "the station could not decode" were
+    /// both true at once. Measured on the recorded hot floor with a 2200 Hz interferer just outside
+    /// BPSK250's occupied band: at amplitude 0.30 the decode **fails with the notch off and succeeds
+    /// with it on**; at 0.05–0.15 it is unnecessary and at 0.60 the interferer wins either way. So it
+    /// buys a real band of conditions and costs nothing where there is nothing to notch.
     pub notch_enabled: bool,
     /// Max simultaneous notches.
     pub notch_max: usize,
@@ -651,7 +659,7 @@ impl Default for ModemConfig {
             dcd_squelch: 0.01, // matches the engine's built-in DcdState default
             dcd_squelch_bands: std::collections::BTreeMap::new(),
             cessb_enabled: true,
-            notch_enabled: false,
+            notch_enabled: true,
             notch_max: 10,
             notch_q: 25.0,
             notch_persistence: 0,
@@ -1042,8 +1050,11 @@ dcd_squelch = 0.01
 cessb_enabled = true
 # Receiver-side automatic notch: removes out-of-band CW interference (QRM) before
 # demod. The protected band tracks the active mode, so the signal is never notched;
-# an in-band interferer can't be removed this way (that is a QSY case). Default off.
-notch_enabled = false
+# an in-band interferer can't be removed this way (that is a QSY case). Default ON:
+# measured against a 2200 Hz interferer just outside BPSK250's band on a recorded hot
+# floor, the decode fails with it off and succeeds with it on. Set false only if you
+# have a reason -- it costs nothing when there is nothing to notch.
+notch_enabled = true
 # Max simultaneous notches, and notch sharpness (bandwidth ~= f0 / notch_q).
 notch_max = 10
 notch_q = 25.0
@@ -1350,8 +1361,11 @@ mod tests {
         // Audio device defaults to empty (system default device).
         assert_eq!(cfg.audio.backend, "default");
         assert_eq!(cfg.audio.device, "");
-        // Receiver auto-notch is opt-in.
-        assert!(!cfg.modem.notch_enabled);
+        // Receiver auto-notch is ON by default (REQ-QRM-01, 2026-08-01). It was opt-in and
+        // therefore off in every recorded on-air failure; measured, it turns a FAIL into a decode at
+        // a 2200 Hz out-of-band interferer of amplitude 0.30. Do not flip this back without
+        // re-measuring — `notch_rescues_interferer` is the gate that justified it.
+        assert!(cfg.modem.notch_enabled);
         assert_eq!(cfg.modem.notch_max, 10);
         assert_eq!(cfg.modem.notch_q, 25.0);
         assert_eq!(cfg.modem.notch_persistence, 0);

@@ -9,6 +9,51 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-08-01 — feat(config): enable the receiver notch by default, on measurement (REQ-QRM-01)
+
+- **Requirement/change:** the auto-notch was built, documented as "a clear win against out-of-band
+  QRM", and left **opt-in** — so it was off in every recorded on-air failure. "We already harden
+  against interference" and "the station could not decode" were both true simultaneously.
+  **Built-and-never-enabled is a distinct archetype from a seam gap**: the wiring was correct
+  throughout, and no test could have caught it, because nothing was wrong with the code.
+- **Measured before flipping the default**, because flipping one without evidence only moves the
+  guess. Recorded IC-9700 hot floor, `BPSK250 + Rs`, 2200 Hz interferer just outside the mode's
+  ~1250–1750 Hz occupied band:
+
+  | tone amplitude | notch off | notch on |
+  |---|---|---|
+  | 0.05, 0.15 | OK | OK — unnecessary |
+  | **0.30** | **FAIL** | **OK** — the rescue |
+  | 0.60 | FAIL | FAIL — interferer wins regardless |
+
+- **A first attempt at this measurement was vacuous and was discarded.** A 2×2 notch × AGC matrix on
+  the plain hot floor returned OK in all four cells: the baseline already passes there (post-#1049
+  and #1055), so there was no headroom for either to show value. A comparison whose baseline already
+  succeeds cannot measure a rescue. The interferer sweep above was built specifically to create a
+  regime where the baseline fails.
+- **What the hot capture actually contains**, measured rather than assumed: exactly **one** discrete
+  peak clearing the notch's 14 dB prominence bar — 1675.8 Hz at +14.6 dB — and at `BPSK250`'s
+  occupied bandwidth that sits **inside** the protected band, which is never notched. So on this
+  capture the notch legitimately has nothing to act on, and enabling it changes nothing. Its value is
+  for interferers outside the active mode's band; the protected band narrows with the mode, so the
+  same birdie is notchable for a narrower rung.
+- **AGC left default-off.** No scenario was found where it changes an outcome, and its documented
+  value is QSB level-tracking and metering rather than sub-squelch rescue (REQ-AGC-01). Turning it on
+  without a measurement would be the same error in the other direction.
+- **Implementation:** `crates/openpulse-config/src/lib.rs` — `notch_enabled` default `false` → `true`,
+  with the measurement recorded at the field. No engine change; `server.rs` already wires it.
+- **Tests → results (actually run, 2026-08-01):**
+  - New gate `notch_rescues_interferer` **2 passed**, asserting **both** edges: the decode must FAIL
+    without the notch at the rescue level (without that negative control the test would pass on a
+    build where the notch does nothing and the interferer never mattered — precisely the state the
+    feature was in), and a 0.60 interferer must still defeat it, so the default is not read as
+    immunity.
+  - Full workspace `--no-fail-fast`: see the run recorded with this change.
+- **Left open:** `openpulse-core/src/snr_hysteresis.rs`'s `SnrEstimator::set_noise_floor_from_samples`
+  remains unconsumed — the third instance of built-and-never-wired in this area.
+
+---
+
 ## 2026-07-31 — feat(modem,dsp): carrier detect tracks the band noise floor (REQ-DCD-ADAPT)
 
 - **Requirement/change:** the shipped daemon's only frame-start decision is `DcdState`, created with a
