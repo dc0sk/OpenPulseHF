@@ -147,6 +147,70 @@ pub fn bpsk_modulate_iq(
     Ok((i_bb, q_bb))
 }
 
+/// Minimum normalised preamble correlation ρ for a settle to be believed (#1049).
+///
+/// **Derived from the decode cliff, not from two captures.** The number in issue #1049 (0.40 from a
+/// real frame at ρ = 0.811 against a hot idle floor at 0.182) came from one capture whose carrier
+/// offset happened to be +1.2 Hz; taken alone it is an artifact-calibrated constant. Measured
+/// in-repo 2026-07-31, BPSK250 + `Rs` through AWGN, ρ against decode outcome:
+///
+/// | SNR | −1 dB | −3 dB | −5 dB | −7 dB | −9 dB |
+/// |---|---|---|---|---|---|
+/// | ρ | 0.646 | 0.561 | 0.455 | 0.392 | 0.322 |
+/// | decode | OK | OK | fail | fail | fail |
+///
+/// The decode dies between −3 and −5 dB while ρ is still ≈ 0.5, and ρ only reaches this threshold
+/// **two SNR steps past** the last frame the demodulator can actually decode — so the gate cannot
+/// reject a decodable frame before the channel already has. On the false-accept side, recorded idle
+/// audio settled and correlated the same way peaks at ρ = 0.205 (`ic9700-idle-hot.wav`) and 0.205
+/// (`ft991a-idle.wav`), so this sits ~2× above measured noise and ~1.4× below the weakest decodable
+/// frame. Watterson `moderate_f1` frames measured ρ = 0.58–0.84 across 10–30 dB, including runs that
+/// failed to decode — a fade does not push a real preamble under this line before it stops being a
+/// frame.
+///
+/// **Margin, stated honestly.** The reference point is the real on-air frame at ρ = 0.654 measured
+/// the way the engine measures it, not the 0.811 in issue #1049 (that came from a whole-capture
+/// search rather than a settled onset). Against recorded idle that is 3.2×, not the issue's 4.4×.
+///
+/// **This is a broadband-noise discriminator and nothing more.** It says "a preamble is here",
+/// against a *noise* floor. It cannot rule out a structured interferer in general, so it does not
+/// retire the settle-condemnation recovery (#1021, #1040), which remains the backstop for anything
+/// that correlates but does not decode — and which ablation confirms is load-bearing: removing it
+/// fails all three leads of the saturating-floor reproduction.
+///
+/// What would falsify it: a mode or channel where a frame decodes at ρ below this. Re-measure the
+/// table per waveform family before extending the template beyond BPSK.
+pub const PREAMBLE_RHO_THRESHOLD: f32 = 0.40;
+
+/// Half-width of the residual-frequency grid the preamble correlation searches, in Hz.
+///
+/// **Bounded from both sides, and the upper bound is the interesting one.**
+///
+/// Below: the AFC settle is what estimates frequency, so this only has to cover what the settle
+/// leaves behind. Measured residual after `afc_mini_settle` over a 1056-sample window is ≤ 0.3 Hz
+/// for every true offset the engine can reach (0 to 400 Hz; past that `AFC_MAX_CORRECTION_HZ`
+/// rejects the settle before this check runs at all). ±20 Hz is already generous.
+///
+/// Above: **the grid must stay well inside ±baud/2, or the gate stops discriminating.** The BPSK
+/// preamble is 32 phase-alternating symbols — a square-wave-modulated carrier whose energy sits in
+/// lines at `fc ± baud/2`. Rotate the template by that much and a line lands on plain carrier, so a
+/// steady tone starts scoring like a preamble. Measured against a pure tone (`the_gate_is_not_fooled
+/// _by_a_steady_tone`):
+///
+/// | grid half-width | ρ of a pure tone |
+/// |---|---|
+/// | ±20 Hz | 0.017–0.042 |
+/// | ±160 Hz | **0.659** |
+/// | ±450 Hz (the full acquisition range) | **0.696 at every frequency** |
+///
+/// A birdie at 0.66 outscores this receiver's best real on-air frame (0.654). That kills the
+/// otherwise-attractive design of running the grid over the whole ±450 Hz acquisition range as a
+/// *detector* and seeding the settle from it (codec2's ordering): our sync word is two spectral
+/// lines, not a pseudo-random sequence, so it cannot survive being searched over its own line
+/// spacing. Widening this constant is not a cost/benefit trade against compute — past ~baud/4 it
+/// destroys the thing being bought. Re-derive it from `baud` before extending to another waveform.
+pub const PREAMBLE_RHO_GRID_HZ: f32 = 20.0;
+
 /// The modulated preamble alone, for correlation-based frame detection.
 ///
 /// Built by modulating an empty payload and keeping the preamble span, so it is produced by the

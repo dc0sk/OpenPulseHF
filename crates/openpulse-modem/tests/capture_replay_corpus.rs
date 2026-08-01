@@ -470,10 +470,10 @@ fn a_coded_frame_decodes_through_a_saturating_floor() {
 /// A mode with NO preamble template must also decode through the saturating floor.
 ///
 /// **This is the case #1045's fix made worse, and #1049 could not see.** The correlation veto only
-/// runs where the plugin publishes a `preamble_template`, which today is BPSK alone. Everything else
-/// — QPSK, 8PSK, the multicarrier modes — still decides frame start on energy, so it is the honest
-/// test of what the energy path does on its own, and it is the configuration a station running any
-/// rung above SL5 is actually in.
+/// runs where the plugin publishes a `preamble_template` — BPSK, and since #1053 the QPSK modes at
+/// or below 500 baud. Everything else — 8PSK, the multicarrier modes, and the QPSK modes whose
+/// template is too short to place a threshold in — still decides frame start on energy, so this is
+/// the honest test of what the energy path does on its own.
 ///
 /// Measured on the recorded IC-9700 floor, `QPSK500 + Rs`, before the `condemned_floor` removal:
 ///
@@ -489,8 +489,20 @@ fn a_coded_frame_decodes_through_a_saturating_floor() {
 /// to every mode — the generalised-past-the-boundary shape, made visible only once #1049 removed the
 /// BPSK justification for it.
 ///
-/// Keep this test on a NO-TEMPLATE mode. If QPSK ever gains a `preamble_template`, this stops
-/// covering the energy-only path and a different mode must take its place.
+/// Keep this test on a NO-TEMPLATE mode. It ran on QPSK500 until #1053 gave QPSK a template; it now
+/// runs on QPSK1000, whose 120-sample template leaves no gap between recorded idle noise (rho 0.58)
+/// and its weakest decodable frame (0.879) — so it publishes none for a measured reason rather than
+/// an unfinished one. When a longer sync word closes that gap, move this again rather than deleting
+/// it: the energy-only path stays reachable for as long as any mode lacks a template.
+///
+/// 8PSK500 was tried first, as the mode next in line for a template, and does not survive this
+/// fixture at all (RS TooManyErrors at both leads) — its tighter constellation cannot decode at the
+/// 0.3 amplitude the fixture injects into that floor. That is a property of the waveform, not of the
+/// gate, so it would have made this a test of 8PSK's noise margin instead of the energy path.
+///
+/// The measured table above is QPSK500's and is kept as the record of what the energy path did; the
+/// mechanism it demonstrates is not mode-specific, which is why moving the mode does not invalidate
+/// it.
 #[test]
 fn a_no_template_mode_decodes_through_a_saturating_floor() {
     let hot = corpus("ic9700-idle-hot.wav");
@@ -500,37 +512,30 @@ fn a_no_template_mode_decodes_through_a_saturating_floor() {
         hot.mean_sq()
     );
 
-    let mut h = ChannelSimHarness::new();
-    for eng in [&mut h.tx_engine, &mut h.rx_engine] {
-        eng.register_plugin(Box::new(BpskPlugin::new())).unwrap();
-        eng.register_plugin(Box::new(qpsk_plugin::QpskPlugin::new()))
-            .unwrap();
-    }
-    // Guard the premise that makes this test what it is: QPSK must publish no template, or this is
-    // just another BPSK case wearing a different name.
+    // Guard the premise that makes this test what it is: the mode must publish no template, or this
+    // is just another BPSK case wearing a different name.
     assert!(
         openpulse_core::plugin::ModulationPlugin::preamble_template(
             &qpsk_plugin::QpskPlugin::new(),
             &openpulse_core::plugin::ModulationConfig {
-                mode: "QPSK500".into(),
+                mode: "QPSK1000".into(),
                 ..Default::default()
             }
         )
         .is_none(),
-        "QPSK now publishes a preamble template, so this no longer covers the energy-only path"
+        "QPSK1000 now publishes a preamble template, so this no longer covers the energy-only path"
     );
 
     for lead in [40_000usize, 80_000] {
         let mut h2 = ChannelSimHarness::new();
         for eng in [&mut h2.tx_engine, &mut h2.rx_engine] {
-            eng.register_plugin(Box::new(BpskPlugin::new())).unwrap();
             eng.register_plugin(Box::new(qpsk_plugin::QpskPlugin::new()))
                 .unwrap();
         }
         h2.tx_engine
             .transmit_with_fec_mode(
                 b"no template probe",
-                "QPSK500",
+                "QPSK1000",
                 openpulse_core::fec::FecMode::Rs,
                 None,
             )
@@ -540,7 +545,7 @@ fn a_no_template_mode_decodes_through_a_saturating_floor() {
         let got = h2
             .rx_engine
             .receive_with_fec_mode_timeout(
-                "QPSK500",
+                "QPSK1000",
                 openpulse_core::fec::FecMode::Rs,
                 None,
                 Duration::from_millis(40_000),
@@ -556,5 +561,4 @@ fn a_no_template_mode_decodes_through_a_saturating_floor() {
             });
         assert_eq!(String::from_utf8_lossy(&got), "no template probe");
     }
-    drop(h);
 }

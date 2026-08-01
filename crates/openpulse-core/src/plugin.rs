@@ -7,7 +7,20 @@ use crate::error::{ModemError, PluginError};
 ///
 /// 1.1.0 added [`ModulationPlugin::preamble_template`] — additive, with a `None` default, so every
 /// plugin declaring `1.0.0` keeps working unchanged.
-pub const PLUGIN_TRAIT_VERSION: &str = "1.1.0";
+///
+/// 2.0.0 changed that method's return type from `Option<Vec<f32>>` to [`Option<PreambleTemplate>`],
+/// which is breaking: the samples now travel with the correlation constants measured for that
+/// waveform. Migration for a plugin that published a template is to wrap the samples in
+/// `PreambleTemplate::new(samples, rho_threshold, rho_grid_hz)` with values re-derived for the mode
+/// (see the type's docs); a plugin that did not is unaffected beyond declaring `"2.0"`.
+///
+/// Why the bundling had to be breaking rather than a second optional method: the constants are
+/// waveform-specific and the failure mode of getting them wrong is silent. BPSK's 0.40 threshold
+/// sits *below* QPSK500's recorded idle-noise ceiling of 0.429, so a QPSK template inheriting it
+/// would corroborate settles on pure noise — the exact defect the check exists to prevent, and one
+/// that produces no error, only a receiver that stops acquiring. A single method makes publishing a
+/// template without its own measured constants unrepresentable.
+pub const PLUGIN_TRAIT_VERSION: &str = "2.0.0";
 
 // ── Plugin metadata ───────────────────────────────────────────────────────────
 
@@ -109,6 +122,53 @@ pub struct FrameGeometry {
     /// Slice length that bounds one demodulation attempt: the largest frame
     /// this mode emits (255-byte RS block) plus margin.
     pub max_frame_samples: usize,
+}
+
+// ── Preamble correlation template ─────────────────────────────────────────────
+
+/// A mode's modulated preamble together with the correlation constants measured for it.
+///
+/// They travel together because they are one measurement. ρ is a *normalised* correlation, so its
+/// noise floor is set by the template's time-bandwidth product and nothing else: measured over the
+/// recorded idle corpus it follows `≈ 6.5 / √len` across both BPSK and QPSK, from 0.205 at 992
+/// samples to 0.581 at 120. A threshold that is generous for a long template sits *underneath* the
+/// noise of a short one, so "the threshold" is not a property of the receiver — it is a property of
+/// the waveform at that baud rate, and it has to be derived from two measurements per mode:
+///
+/// 1. the ρ ceiling of recorded band noise, which the threshold must clear, and
+/// 2. the weakest ρ that still decodes, which the threshold must stay under.
+///
+/// A mode with no usable gap between them publishes no template at all (`None`) and keeps the
+/// energy-only settle, which is worse but honest. Never widen a gap by picking a threshold from
+/// another mode's table.
+#[derive(Debug, Clone, PartialEq)]
+pub struct PreambleTemplate {
+    /// The *modulated* preamble at the config's carrier and sample rate, so a correlator can use it
+    /// directly. Keep it to the preamble: a template running into the data symbols correlates
+    /// against payload that differs frame to frame.
+    pub samples: Vec<f32>,
+    /// Normalised-correlation floor below which a candidate window is not this preamble.
+    pub rho_threshold: f32,
+    /// Half-width, in Hz, of the residual-frequency grid the correlation searches around the
+    /// settled carrier correction.
+    ///
+    /// Bounded below by what the AFC settle leaves behind (≤ 0.3 Hz measured, so ±20 Hz is already
+    /// generous) and above by the preamble's own line structure. The upper bound is waveform
+    /// -specific and can be brutal: BPSK's alternating preamble is a square-wave-modulated carrier
+    /// with lines at `fc ± baud/2`, so a grid reaching that far rotates a line onto plain carrier
+    /// and a steady tone starts scoring like a preamble (0.017 at ±20 Hz, 0.659 at ±160 Hz).
+    pub rho_grid_hz: f32,
+}
+
+impl PreambleTemplate {
+    /// Bundle a modulated preamble with its measured correlation constants.
+    pub fn new(samples: Vec<f32>, rho_threshold: f32, rho_grid_hz: f32) -> Self {
+        Self {
+            samples,
+            rho_threshold,
+            rho_grid_hz,
+        }
+    }
 }
 
 // ── Plugin trait ──────────────────────────────────────────────────────────────
@@ -246,10 +306,9 @@ pub trait ModulationPlugin: Send + Sync {
     /// 0.30, normalised by `av_level`) — read directly, unlike the other reference modems, whose
     /// approach is recorded second-hand in `docs/dev/research/references.md`.
     ///
-    /// The returned samples must be the *modulated* preamble at `config`'s carrier and sample rate,
-    /// so a correlator can use them directly. Keep it to the preamble: a template running into the
-    /// data symbols correlates against payload that differs frame to frame.
-    fn preamble_template(&self, _config: &ModulationConfig) -> Option<Vec<f32>> {
+    /// The returned [`PreambleTemplate`] carries the samples *and* the ρ threshold and search grid
+    /// measured for that mode — see its docs for why those cannot be receiver-wide constants.
+    fn preamble_template(&self, _config: &ModulationConfig) -> Option<PreambleTemplate> {
         None
     }
 

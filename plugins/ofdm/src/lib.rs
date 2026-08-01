@@ -48,7 +48,7 @@ impl OfdmPlugin {
                     "OFDM52-32QAM".into(),
                     "OFDM52-64QAM".into(),
                 ],
-                trait_version_required: "1.0".into(),
+                trait_version_required: "2.0".into(),
             },
         }
     }

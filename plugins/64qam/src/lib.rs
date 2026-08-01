@@ -57,7 +57,7 @@ impl Qam64Plugin {
                 "64QAM1000".to_string(),
                 "64QAM2000-RRC".to_string(),
             ],
-            trait_version_required: "1.0".to_string(),
+            trait_version_required: "2.0".to_string(),
         }
     }
 }

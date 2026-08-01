@@ -155,20 +155,37 @@ fn an_off_frequency_frame_is_still_settled_on() {
 /// The trait method defaults to `None` so this degrades gracefully rather than forking the engine,
 /// and the counter must stay at zero — if it did not, the correlation path would be running against
 /// some other mode's template, which is worse than not running at all.
+///
+/// **This test has to sit on a mode that genuinely has none.** It was QPSK500 until #1053 gave QPSK
+/// a template; 8PSK is next in line for one, so if that lands, move this again rather than deleting
+/// it — the energy-only path stays reachable for as long as any mode lacks a template, and it is the
+/// path that has produced five separately-diagnosed defects.
 #[test]
 fn a_mode_without_a_template_is_unaffected() {
     let mut h = ChannelSimHarness::new();
     for eng in [&mut h.tx_engine, &mut h.rx_engine] {
-        eng.register_plugin(Box::new(qpsk_plugin::QpskPlugin::new()))
+        eng.register_plugin(Box::new(psk8_plugin::Psk8Plugin::new()))
             .unwrap();
     }
+    // Guard the premise: with a template published this would be an ordinary decode test.
+    assert!(
+        ModulationPlugin::preamble_template(
+            &psk8_plugin::Psk8Plugin::new(),
+            &ModulationConfig {
+                mode: "8PSK500".into(),
+                ..Default::default()
+            }
+        )
+        .is_none(),
+        "8PSK now publishes a preamble template — move this test to a mode that has none"
+    );
     let payload = b"no template here".to_vec();
-    h.tx_engine.transmit(&payload, "QPSK500", None).expect("tx");
+    h.tx_engine.transmit(&payload, "8PSK500", None).expect("tx");
     h.route_clean();
     let got = h
         .rx_engine
-        .receive_with_timeout("QPSK500", None, Duration::from_millis(8_000))
-        .expect("QPSK500 must decode exactly as before");
+        .receive_with_timeout("8PSK500", None, Duration::from_millis(8_000))
+        .expect("8PSK500 must decode exactly as before");
     assert_eq!(got, payload);
     assert_eq!(
         h.rx_engine.rho_rejected_settles(),
@@ -209,10 +226,13 @@ fn the_gate_is_not_fooled_by_a_steady_tone() {
         ..Default::default()
     };
     let template = p.preamble_template(&cfg).expect("template");
-    let tlen = template.len();
-    let mf = openpulse_dsp::acquisition::IqMatchedFilter::new(template);
-    // The shipped grid: PREAMBLE_RHO_GRID_HZ = 20 Hz, step 0.25*fs/tlen = 2 Hz.
-    let grid: Vec<f32> = (-10..=10).map(|k| k as f32 * 2.0).collect();
+    let tlen = template.samples.len();
+    let threshold = template.rho_threshold;
+    // The shipped grid, built the way the engine builds it: step = 0.25*fs/tlen.
+    let step = (0.25 * 8_000.0 / tlen as f32).max(0.5);
+    let n = (template.rho_grid_hz / step).round() as i32;
+    let grid: Vec<f32> = (-n..=n).map(|k| k as f32 * step).collect();
+    let mf = openpulse_dsp::acquisition::IqMatchedFilter::new(template.samples);
 
     for f in [1_250.0f32, 1_375.0, 1_500.0, 1_625.0, 1_750.0] {
         let tone: Vec<f32> = (0..tlen + 200)
@@ -222,7 +242,7 @@ fn the_gate_is_not_fooled_by_a_steady_tone() {
             .search_normalized_over_frequency(&tone, 200, 0.05, 8_000.0, &grid)
             .expect("search");
         assert!(
-            r.rho < 0.40,
+            r.rho < threshold,
             "a pure {f} Hz tone scores rho {:.3}, at or above the settle threshold — the grid has \
              been widened past ~baud/2 and the gate can no longer tell a birdie from a preamble",
             r.rho
@@ -239,7 +259,7 @@ fn the_gate_is_not_fooled_by_a_steady_tone() {
         .search_normalized_over_frequency(&tone, 200, 0.05, 8_000.0, &wide)
         .expect("search");
     assert!(
-        r.rho > 0.40,
+        r.rho > threshold,
         "a +-160 Hz grid left a pure tone at rho {:.3}; the narrow-grid assertions above are then \
          not testing the grid width at all",
         r.rho
@@ -266,10 +286,10 @@ fn the_bpsk_template_matches_the_front_of_a_real_frame() {
         .expect("BPSK must publish a preamble template");
     // 31 of the 32 preamble symbols at 32 samples/symbol: the last is dropped because the
     // rectangular pulse crossfades a third of the first DATA symbol into it.
-    assert_eq!(template.len(), 31 * 32);
+    assert_eq!(template.samples.len(), 31 * 32);
 
     let frame = p.modulate(b"payload does not matter", &cfg).unwrap();
-    let mf = openpulse_dsp::acquisition::IqMatchedFilter::new(template);
+    let mf = openpulse_dsp::acquisition::IqMatchedFilter::new(template.samples);
     let r = mf
         .search_normalized(&frame, 2_000, 0.05)
         .expect("the template must be findable in the frame it was built from");

@@ -30,7 +30,9 @@ pub mod modulate;
 use std::sync::Arc;
 
 use openpulse_core::error::ModemError;
-use openpulse_core::plugin::{FrameGeometry, ModulationConfig, ModulationPlugin, PluginInfo};
+use openpulse_core::plugin::{
+    FrameGeometry, ModulationConfig, ModulationPlugin, PluginInfo, PreambleTemplate,
+};
 
 // ── BpskPlugin ────────────────────────────────────────────────────────────────
 
@@ -84,7 +86,7 @@ impl BpskPlugin {
                 "BPSK250".to_string(),
                 "BPSK250-RRC".to_string(),
             ],
-            trait_version_required: "1.0".to_string(),
+            trait_version_required: "2.0".to_string(),
         }
     }
 }
@@ -155,8 +157,13 @@ impl ModulationPlugin for BpskPlugin {
         demodulate::afc_estimate_hz(samples, config)
     }
 
-    fn preamble_template(&self, config: &ModulationConfig) -> Option<Vec<f32>> {
-        modulate::bpsk_preamble_template(config).ok()
+    fn preamble_template(&self, config: &ModulationConfig) -> Option<PreambleTemplate> {
+        let samples = modulate::bpsk_preamble_template(config).ok()?;
+        Some(PreambleTemplate::new(
+            samples,
+            modulate::PREAMBLE_RHO_THRESHOLD,
+            modulate::PREAMBLE_RHO_GRID_HZ,
+        ))
     }
 
     fn occupied_bandwidth_hz(&self, mode: &str) -> Option<f32> {

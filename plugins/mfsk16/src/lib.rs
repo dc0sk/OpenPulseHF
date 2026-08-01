@@ -280,7 +280,7 @@ impl Mfsk16Plugin {
                         .to_string(),
                 author: "OpenPulse Contributors".to_string(),
                 supported_modes: vec!["MFSK16".to_string(), "MFSK16-ACK".to_string()],
-                trait_version_required: "1.0".to_string(),
+                trait_version_required: "2.0".to_string(),
             },
         }
     }
