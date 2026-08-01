@@ -86,7 +86,7 @@ pub struct PluginInfo {
     pub description: String,             // one-liner
     pub author: String,                  // you!
     pub supported_modes: Vec<String>,    // e.g., ["ARDOP1200", "ARDOP2400"]
-    pub trait_version_required: String,  // e.g., "1.0"
+    pub trait_version_required: String,  // current framework major.minor, e.g. "2.0"
 }
 ```
 
@@ -160,7 +160,7 @@ impl MymodePlugin {
                     "MyMode1200".to_string(),
                     "MyMode2400".to_string(),
                 ],
-                trait_version_required: "1.0".to_string(),
+                trait_version_required: "2.0".to_string(),
             },
         }
     }
@@ -515,7 +515,8 @@ Before submitting, verify:
 - [ ] Mode strings are recognized: `cargo run -p openpulse-cli -- receive MyMode1200` (should not error on unknown mode)
 - [ ] Basic modulate/demodulate works: `cargo run -p openpulse-cli -- transmit "X" MyMode1200 && cargo run -p openpulse-cli -- receive MyMode1200`
 - [ ] No unsafe code (unless documented and audited)
-- [ ] Trait version compatibility is declared: `trait_version_required: "1.0"`
+- [ ] Trait version compatibility is declared: `trait_version_required: "2.0"` (must match the
+      framework's `PLUGIN_TRAIT_VERSION` major, and be ≤ its minor)
 
 ---
 

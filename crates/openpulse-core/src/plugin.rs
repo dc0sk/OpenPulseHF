@@ -478,7 +478,7 @@ mod tests {
     #[test]
     fn register_then_lookup_is_case_insensitive_and_misses_are_none() {
         let mut reg = PluginRegistry::new();
-        reg.register(FakePlugin::boxed("BPSK", &["BPSK31", "BPSK100"], "1.0"))
+        reg.register(FakePlugin::boxed("BPSK", &["BPSK31", "BPSK100"], "2.0"))
             .unwrap();
         assert!(reg.get("BPSK31").is_some());
         assert!(
@@ -492,9 +492,9 @@ mod tests {
     #[test]
     fn later_registration_shadows_earlier_for_the_same_mode() {
         let mut reg = PluginRegistry::new();
-        reg.register(FakePlugin::boxed("OLD", &["BPSK31"], "1.0"))
+        reg.register(FakePlugin::boxed("OLD", &["BPSK31"], "2.0"))
             .unwrap();
-        reg.register(FakePlugin::boxed("NEW", &["BPSK31"], "1.0"))
+        reg.register(FakePlugin::boxed("NEW", &["BPSK31"], "2.0"))
             .unwrap();
         // `get` walks registrations in reverse, so the newer plugin wins.
         assert_eq!(reg.get("BPSK31").unwrap().info().name, "NEW");
@@ -504,15 +504,15 @@ mod tests {
     #[test]
     fn compatible_trait_version_registers() {
         let mut reg = PluginRegistry::new();
-        // Framework is 1.0.0; a plugin requiring "1.0" is compatible.
-        assert!(reg.register(FakePlugin::boxed("OK", &["X"], "1.0")).is_ok());
+        // Framework is 2.0.0; a plugin requiring "2.0" is compatible.
+        assert!(reg.register(FakePlugin::boxed("OK", &["X"], "2.0")).is_ok());
     }
 
     #[test]
     fn incompatible_major_trait_version_is_rejected() {
         let mut reg = PluginRegistry::new();
         let err = reg
-            .register(FakePlugin::boxed("FUTURE", &["X"], "2.0"))
+            .register(FakePlugin::boxed("FUTURE", &["X"], "3.0"))
             .unwrap_err();
         assert!(matches!(err, PluginError::IncompatibleTraitVersion { .. }));
     }
@@ -520,9 +520,10 @@ mod tests {
     #[test]
     fn higher_minor_than_framework_is_rejected() {
         let mut reg = PluginRegistry::new();
-        // Framework minor is 0; a plugin requiring minor 5 needs a newer framework.
+        // Framework minor is 0; a plugin requiring minor 5 needs a newer framework. The major must
+        // MATCH here, or this passes on the major check and says nothing about the minor one.
         let err = reg
-            .register(FakePlugin::boxed("NEWER", &["X"], "1.5"))
+            .register(FakePlugin::boxed("NEWER", &["X"], "2.5"))
             .unwrap_err();
         assert!(matches!(err, PluginError::IncompatibleTraitVersion { .. }));
     }

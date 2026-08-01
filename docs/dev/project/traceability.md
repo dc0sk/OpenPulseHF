@@ -9,6 +9,99 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-08-01 — feat(qpsk,modem): preamble-correlation veto for the QPSK rungs (#1053)
+
+- **Requirement/change:** #1049 gated the AFC settle on preamble correlation, removing the
+  settle-on-noise class. It only ran where a plugin publishes a `preamble_template`, and BPSK was the
+  only one that did — so the protection stopped exactly where `hpx_hf` starts using its faster rungs
+  (BPSK on SL2–SL5, QPSK from SL6). Measured on `main`, `QPSK500 + Rs` in the recorded IC-9700 hot
+  floor **failed at leads 40 000 and 80 000** (92 and 87 settle condemnations).
+- **Design decision — the constants travel with the template, and the trait break is the point.**
+  ρ is a *normalised* correlation, so its noise floor is set by the template's time-bandwidth product
+  and nothing else: over the recorded idle corpus it follows `≈ 6.5/√len` across **both** waveforms
+  (BPSK250 at 992 samples reads 0.205; QPSK125 at 960 reads 0.216 — the same number for the same
+  length, different modulation). QPSK's preamble is 16 symbols to BPSK's 32, so at equal baud its
+  template is half as long and its noise ceiling √2 higher — and **BPSK's 0.40 threshold sits below
+  QPSK500's measured idle-noise ceiling of 0.429.** Inheriting it would have corroborated settles on
+  pure noise, silently. `ModulationPlugin::preamble_template` therefore returns
+  `PreambleTemplate { samples, rho_threshold, rho_grid_hz }`, which makes publishing a template
+  without its own measured constants unrepresentable. Breaking change: `PLUGIN_TRAIT_VERSION`
+  1.1.0 → **2.0.0**, every plugin's `trait_version_required` bumped to `"2.0"`.
+- **Implementation:** `crates/openpulse-core/src/plugin.rs` (`PreambleTemplate`, version bump);
+  `plugins/qpsk/src/modulate.rs` (`qpsk_preamble_template`, `preamble_rho_threshold`,
+  `PREAMBLE_RHO_GRID_HZ`); `plugins/qpsk/src/lib.rs`; `plugins/bpsk/src/modulate.rs` (BPSK's two
+  constants moved out of the engine into the plugin that measured them);
+  `crates/openpulse-modem/src/engine.rs` (`PreambleVeto` carries the per-mode constants;
+  `preamble_rho`/`preamble_search_plan` read them instead of engine globals).
+- **Measured 2026-08-01** with `tests/qpsk_preamble_rho_survey.rs` (kept as an `#[ignore]`d research
+  harness). Noise = every window of `ic9700-idle-hot.wav` and `ft991a-idle.wav` through the engine's
+  own window and grid; decode = `Rs`-coded frames through AWGN (seed 7), ρ taken at the true onset:
+
+  | mode | template | idle-noise ceiling | weakest ρ that decodes | threshold | margins |
+  |---|---|---|---|---|---|
+  | QPSK125 | 960 | 0.216 | 0.557 (−4 dB) | **0.35** | 1.62× / 1.59× |
+  | QPSK250(-D) | 480 | 0.291 | 0.811 (−D, 3 dB) | **0.45** | 1.55× / 1.80× |
+  | QPSK500(-D) | 240 | 0.429 | 0.820 (2 dB) | **0.60** | 1.40× / 1.37× |
+  | QPSK1000 | 120 | 0.581 | 0.879 (5 dB) | *none* | 1.23× / 1.23× |
+
+- **QPSK1000 and faster publish nothing on purpose.** 1.23× on each side of the geometric mean, with
+  the decode column measured on AWGN (a fade lowers it) and the noise column on one band (a hotter
+  one raises it) — the two sides close from both directions. An energy-only settle is worse than a
+  working veto but better than one that vetoes real frames. Closing it needs more processing gain in
+  the template, i.e. a longer sync word: the same PN/chirp wire-format change #1052 already points to.
+  `-RRC`/`-HF` are excluded because their pulse was never measured, and `-RRC` additionally breaks the
+  "drop the last symbol" rule the crossfade template relies on (a 12-symbol RRC span smears data back
+  over the preamble tail).
+- **QPSK's tone behaviour is the OPPOSITE of BPSK's, and that reshaped the test rather than the
+  code.** BPSK's alternating preamble is a square-wave-modulated carrier with lines at `fc ± baud/2`,
+  so the grid width is load-bearing: a tone scores 0.017 at ±20 Hz and 0.659 at ±160 Hz. QPSK's
+  designed sequence is *aperiodic*, so a tone finds a partial alignment at any width and barely moves
+  — ±20 → ±450 Hz gives 0.014→0.524 (QPSK125), 0.316→0.524 (QPSK250), 0.506→0.524 (QPSK500). So
+  QPSK's thresholds are derived from noise and the decode cliff, **not** from tone rejection, and the
+  issue's requested "widen-the-grid counter-assertion" only holds for QPSK250 (0.316 < 0.45 < 0.524).
+  It is asserted there and the QPSK500 case is documented as structurally unavailable rather than
+  forced. A birdie that passes the veto degrades to the pre-#1049 behaviour; a threshold that rejects
+  decodable frames does not degrade, it breaks.
+- **Tests:** new `crates/openpulse-modem/tests/qpsk_preamble_correlation_settle.rs` (8);
+  `a_mode_without_a_template_is_unaffected` re-pointed QPSK500 → 8PSK500;
+  `a_no_template_mode_decodes_through_a_saturating_floor` re-pointed QPSK500 → **QPSK1000** (8PSK500
+  was tried first, as the mode next in line for a template, and cannot decode that fixture at all —
+  RS `TooManyErrors` at both leads — so it would have become a test of 8PSK's noise margin instead of
+  the energy path). `plugin::tests` trait-version fixtures updated for the major bump, including
+  `higher_minor_than_framework_is_rejected` which had to move 1.5 → 2.5 or it would have passed on
+  the *major* check and stopped testing the minor one.
+- **Test results (actually run, release profile):**
+  - `qpsk_preamble_correlation_settle` **8 passed** — saturating-floor acceptance at leads 40k/80k
+    with the ρ-rejection tripwire, off-frequency false-reject at 0/20/200/400 Hz, both threshold
+    bounds, no-template-where-no-margin with the short-template falsifier, steady tone with the
+    widen-the-grid falsifier, template-matches-frame per mode with a cross-mode falsifier, and the
+    `-D` rung sharing the coherent template.
+  - `preamble_correlation_settle` **5 passed**, `capture_replay_corpus` **12 passed**,
+    `carrier_offset_acquisition` green (the veto runs after the settle precisely so off-frequency
+    frames survive).
+  - Full workspace: **2329 passed, 0 failed** (`cargo test --release --workspace
+    --no-default-features --no-fail-fast`), `cargo fmt --all -- --check` clean,
+    `cargo clippy --workspace --no-default-features --all-targets -- -D warnings` clean.
+- **Sabotage verification — four runs, and the fourth found a real hole.**
+  1. QPSK publishes no template → **5 of 8 fail**, including the acceptance case on its tripwire
+     (`no QPSK settle was ever refused on correlation`). The two that survive are correctly
+     insensitive: an absence assertion and a false-reject test.
+  2. QPSK inherits BPSK's 0.40 → `every_qpsk_threshold_clears_its_modes_recorded_noise_ceiling`
+     fails with the measured number: *"QPSK500: recorded idle noise reaches rho 0.429, at or above
+     its published threshold 0.40"*. That is the defect the API redesign exists to prevent, caught.
+  3. Threshold dropped to 0.20 (below the noise ceiling) → the noise-ceiling gate fails, and the
+     **acceptance case still passes**. That is not a flaw in either test: an inert veto is exactly
+     the pre-#1049 behaviour, and that behaviour decodes. Recorded in the test docs so the pair is
+     read as a pair.
+  4. Thresholds raised to 0.90 (above every decodable frame) → **nothing failed** except, by
+     accident, the tone test's widen-the-grid falsifier. The decode-cliff half of the derivation was
+     unpinned, and a veto that rejects real frames is the worse of the two failures. Added
+     `every_qpsk_threshold_stays_under_its_modes_decode_cliff`, which measures ρ of the weakest
+     decodable frame per mode and asserts the cliff is where it is claimed (decodes at the cliff SNR,
+     does not one step below) so the margin is not certified at an arbitrary point. Re-sabotaged: it
+     now fails with *"QPSK250: its weakest decodable frame scores rho 0.852 at 4 dB, at or below the
+     published threshold 0.90"*.
+
 ## 2026-08-01 — feat(config): enable the receiver notch by default, on measurement (REQ-QRM-01)
 
 - **Requirement/change:** the auto-notch was built, documented as "a clear win against out-of-band
@@ -150,7 +243,8 @@ and the actually-observed results per change.
     passed across 276 suites**, identical to baseline — nothing depended on it.
 - **What this leaves open:** the correlation veto only runs where a plugin publishes a
   `preamble_template` — BPSK alone. Every other mode still decides frame start on energy, which is
-  what the new QPSK gate now pins.
+  what the new QPSK gate now pins. *(Closed for QPSK ≤ 500 baud by #1053, 2026-08-01; that gate moved
+  to QPSK1000, which still has no template. 8PSK and the multicarrier modes remain open.)*
 
 ---
 

@@ -162,6 +162,13 @@ fn an_off_frequency_qpsk_frame_is_still_settled_on() {
 ///
 /// The false-accept side of the derivation, re-measured against both idle captures through the
 /// engine's own window and grid. This is the assertion BPSK's 0.40 would fail on QPSK500.
+///
+/// It is one of a **pair**, and neither half is sufficient. This one catches a threshold set too
+/// LOW: it fails at 0.40 (BPSK's) and at 0.20, both of which leave the veto passing noise. The
+/// acceptance case above cannot catch that — sabotaged to 0.20 the frame still decodes and the
+/// rho-rejection tripwire still fires, because an inert veto is exactly the pre-#1049 behaviour and
+/// that behaviour decodes. `every_qpsk_threshold_stays_under_its_modes_decode_cliff` is the other
+/// half, catching a threshold set too HIGH.
 #[test]
 fn every_qpsk_threshold_clears_its_modes_recorded_noise_ceiling() {
     // (mode, measured idle-noise ceiling over both captures, 2026-08-01)
@@ -202,6 +209,87 @@ fn every_qpsk_threshold_clears_its_modes_recorded_noise_ceiling() {
             "{mode}: idle-noise ceiling measured {peak:.3}, recorded {recorded_ceiling:.3} — \
              re-derive the threshold table before trusting it"
         );
+    }
+}
+
+/// Every published threshold stays under the weakest frame its mode can still decode.
+///
+/// The other half of the pair, and the one that was missing until a sabotage run found the gap:
+/// raising QPSK250's and QPSK500's thresholds to 0.90 — above the ρ of every frame either mode can
+/// decode — broke nothing. A veto that rejects real frames is the *worse* failure of the two,
+/// because a veto that passes noise only restores the pre-#1049 behaviour while a veto that rejects
+/// frames removes acquisition outright.
+///
+/// The cliff SNRs come from `tests/qpsk_preamble_rho_survey.rs` (AWGN, seed 7, `Rs`-coded). Each mode
+/// is asserted at its cliff — the frame decodes AND its ρ clears the threshold with margin — and one
+/// step below it, where the frame must NOT decode. Without that second assertion the "cliff" would be
+/// an arbitrary SNR and the margin it certifies would be unearned.
+#[test]
+fn every_qpsk_threshold_stays_under_its_modes_decode_cliff() {
+    use openpulse_channel::awgn::AwgnChannel;
+    use openpulse_channel::{AwgnConfig, ChannelModel};
+
+    let awgn = |snr: f32| {
+        AwgnChannel::new(AwgnConfig {
+            snr_db: snr,
+            seed: Some(7),
+        })
+        .expect("awgn")
+    };
+    let payload = b"decode cliff probe";
+
+    // (mode, cliff SNR dB, one step below, ρ measured at the cliff)
+    let cliffs = [
+        ("QPSK125", -4.0f32, -5.0, 0.557f32),
+        ("QPSK250", 4.0, 3.0, 0.852),
+        ("QPSK500", 2.0, 1.0, 0.820),
+    ];
+
+    for (mode, cliff_db, below_db, recorded_rho) in cliffs {
+        let t = QpskPlugin::new()
+            .preamble_template(&cfg(mode))
+            .unwrap_or_else(|| panic!("{mode} must publish a template"));
+
+        // ρ of the weakest frame this mode can decode, measured the way the receiver measures it.
+        let clean = QpskPlugin::new().modulate(payload, &cfg(mode)).unwrap();
+        let win = t.samples.len() / 15 * 17;
+        let noisy = awgn(cliff_db).apply(&clean);
+        let at_cliff = rho(mode, &noisy[..win.min(noisy.len())], None).expect("search");
+
+        assert!(
+            at_cliff > t.rho_threshold,
+            "{mode}: its weakest decodable frame scores rho {at_cliff:.3} at {cliff_db} dB, at or \
+             below the published threshold {:.2} — the veto would reject frames the demodulator can \
+             still decode",
+            t.rho_threshold
+        );
+        assert!(
+            (at_cliff - recorded_rho).abs() < 0.05,
+            "{mode}: cliff rho measured {at_cliff:.3}, recorded {recorded_rho:.3} — re-derive the \
+             threshold table before trusting it"
+        );
+
+        // The cliff is where it is claimed to be: decodes at `cliff_db`, does not one step below.
+        for (snr, must_decode) in [(cliff_db, true), (below_db, false)] {
+            let mut h = harness();
+            h.tx_engine
+                .transmit_with_fec_mode(payload, mode, FecMode::Rs, None)
+                .expect("tx");
+            h.route(&mut awgn(snr));
+            let got = h.rx_engine.receive_with_fec_mode_timeout(
+                mode,
+                FecMode::Rs,
+                None,
+                Duration::from_millis(8_000),
+            );
+            assert_eq!(
+                got.is_ok(),
+                must_decode,
+                "{mode} at {snr} dB: decode = {}, expected {must_decode} — the cliff has moved, so \
+                 the rho margin certified above is measured at the wrong point",
+                got.is_ok()
+            );
+        }
     }
 }
 

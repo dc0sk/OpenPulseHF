@@ -3038,7 +3038,7 @@ Everything lives in one file, `crates/openpulse-core/src/plugin.rs`. Abbreviated
 
 ```rust
 /// Current plugin trait version. Format: `<major>.<minor>.<patch>`
-pub const PLUGIN_TRAIT_VERSION: &str = "1.0.0";
+pub const PLUGIN_TRAIT_VERSION: &str = "2.0.0";
 
 pub trait ModulationPlugin: Send + Sync {
     /// Return this plugin's static metadata.
@@ -3108,7 +3108,7 @@ The ten plugins and their mode counts: BPSK (5), QPSK (14), 8PSK (10), 64QAM (3)
 The smallest real plugin in the tree is the ACK-channel plugin, `plugins/fsk4/src/lib.rs`, and it is the template to copy. The complete recipe:
 
 1. **Crate**: new directory under `plugins/`, depending on `openpulse-core` and (usually) `openpulse-dsp`. Add it to the workspace `members`.
-2. **`PluginInfo`**: name, version (`env!("CARGO_PKG_VERSION")`), description, `supported_modes`, and `trait_version_required: "1.0"`.
+2. **`PluginInfo`**: name, version (`env!("CARGO_PKG_VERSION")`), description, `supported_modes`, and `trait_version_required: "2.0"`.
 3. **Implement the trait** — `Fsk4Plugin` in full is ~35 lines of trait impl:
 
 ```rust
