@@ -12,6 +12,7 @@ pub mod equalizer;
 pub mod farrow;
 pub mod filter;
 pub mod freq_acquire;
+pub mod noise_floor;
 pub mod notch;
 pub mod pilot_tracker;
 pub mod pll;

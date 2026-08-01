@@ -580,6 +580,8 @@ pub struct ModemEngine {
     /// so a listener can't forge rate-control ACKs. `None` = legacy unauthenticated ACK.
     ack_mac_key: Option<[u8; 32]>,
     dcd: DcdState,
+    /// Passband noise-floor tracker driving the DCD squelch. Mode-independent by design.
+    noise_floor: openpulse_dsp::noise_floor::NoiseFloorTracker,
     csma_enabled: bool,
     csma_persistence: f32,
     event_tx: broadcast::Sender<EngineEvent>,
@@ -694,6 +696,24 @@ const CESSB_LOOKAHEAD: usize = 16;
 /// transmission, splitting the burst into two preamble-less halves. SL2 (BPSK31) is `hpx_hf`'s
 /// `initial_level`, so this sat on the entry rung of every session. Gate:
 /// `tests/burst_cap_frame_length.rs`.
+/// How far above the tracked noise floor the channel counts as busy, as an RMS ratio.
+///
+/// **Bracketed by measurement, not chosen.** On the recorded IC-9700 hot floor the spectral floor
+/// reads 0.138 RMS while idle measures 0.126 total, so the margin must exceed 0.126/0.138 = 0.91 or
+/// idle reads busy. With a frame at the corpus test's level the total reaches 0.225 against a floor
+/// still at 0.140, so it must stay under 0.225/0.140 = 1.61 or the frame never opens the squelch.
+/// 1.25 sits between them with ~1.35x headroom on the idle side and ~1.29x on the signal side —
+/// about +1.9 dB over the floor, i.e. deliberately sensitive, which is what a data modem wants.
+///
+/// Both bounds are real failures with names: too low is the permanently-busy daemon this replaced,
+/// too high is a receiver that cannot hear. `daemon_squelch_noise_floor.rs` pins both sides.
+const DCD_SQUELCH_MARGIN: f32 = 1.25;
+
+/// Absolute lower bound on the squelch, so a digitally-silent input cannot drive the threshold to
+/// zero and make every sample a carrier. A guard against a degenerate floor, NOT a squelch policy —
+/// the FT-991A capture's floor is 0.0006 RMS, so this must stay well below anything real.
+const DCD_MIN_SQUELCH_THRESHOLD: f32 = 0.001;
+
 const BURST_MIN_CAP_SAMPLES: usize = 240_000;
 
 /// Absolute ceiling on the burst accumulator (~320 s at 8 kHz, ≈10 MB of `f32`). The cap exists so a
@@ -740,7 +760,8 @@ impl ModemEngine {
             ota_retained_llrs: std::collections::HashMap::new(),
             ota_retained_session: None,
             ack_mac_key: None,
-            dcd: DcdState::new(0.01, 800), // 100 ms hold at 8 kHz
+            dcd: DcdState::new(0.01, 800), // 100 ms hold at 8 kHz; re-aimed per band at the seam
+            noise_floor: openpulse_dsp::noise_floor::NoiseFloorTracker::default(),
             csma_enabled: false,
             csma_persistence: 0.3,
             event_tx,
@@ -1602,6 +1623,32 @@ impl ModemEngine {
     /// threshold (that self-sustaining "held gain × noise → busy forever" deadlock wedged CSMA TX).
     fn update_dcd_at_seam(&mut self, samples: &[f32]) {
         self.dcd_blocks_processed = self.dcd_blocks_processed.wrapping_add(1);
+        // Re-aim the squelch at the band we are actually on, BEFORE judging this block.
+        //
+        // `DcdState` shipped with a fixed 0.01 RMS threshold, and a real band floor walks straight
+        // over a constant: the recorded IC-9700 idle capture measures 0.126 RMS, twelve times it. On
+        // that band the daemon's carrier detect reads permanently busy, the burst never ends on a
+        // carrier drop, and only the runaway cap flushes it — so the decoder is handed a bufferful
+        // of noise and a real frame never arrives at all. This is the *daemon's* half of the same
+        // hot-floor failure the scanning receive path hit five times; none of that path's machinery
+        // (`EnergyGate`, the settle, the #1049 veto) runs here.
+        //
+        // The floor comes from the passband spectral distribution, not from block energies, because
+        // a carrier that stays on raises every block and drags a time-domain percentile up with it —
+        // exactly how `EnergyGate` saturates. Measured on the real capture: the spectral floor reads
+        // 0.138 RMS on idle and **0.140 with a frame present**, while the total level goes 0.126 →
+        // 0.225. That immovability is the whole point.
+        //
+        // Deliberately mode-independent. A noise floor is a property of the band, not the waveform,
+        // and this sits at the single shared `InputCapture` seam so every receive path gets it.
+        if let Some(floor_rms) = self
+            .noise_floor
+            .update(samples, AudioConfig::default().sample_rate as f32)
+            .map(|m| m.sqrt())
+        {
+            self.dcd
+                .set_threshold((floor_rms * DCD_SQUELCH_MARGIN).max(DCD_MIN_SQUELCH_THRESHOLD));
+        }
         let prev_busy = self.dcd.is_busy();
         self.dcd.update(samples);
         if self.dcd.is_busy() != prev_busy {
