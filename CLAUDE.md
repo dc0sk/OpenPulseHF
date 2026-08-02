@@ -719,6 +719,12 @@ Two classes of work go to Fable *before* they land, with no judgement call about
   `docs/`, `traceability.md`, an issue or PR body, a commit message, or used as the premise of the
   next piece of work. Send the *apparatus* with the conclusion, and send it whether the result looks
   bad, good, or unsurprising.
+- **The write-up itself, not only the conclusions behind it** (added 2026-08-02 after I posted a
+  reviewed set of findings in unreviewed prose). Reviewing the finding and then writing it up
+  unsupervised leaves the two failure modes review exists to catch: a hedge that quietly hardens
+  into a claim, and an emphasis that makes a secondary result read as the headline. Send the actual
+  text that will be posted or committed — not a summary of it — even when every underlying
+  conclusion has already been cleared.
 
 The costs of skipping are asymmetric and already paid here: a wrong elimination closes a door
 silently (the 2026-07-30 settle-recovery case in item 5 below), an unreviewed constant ships fitted
