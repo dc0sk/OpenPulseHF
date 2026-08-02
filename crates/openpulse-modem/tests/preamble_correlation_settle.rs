@@ -155,37 +155,20 @@ fn an_off_frequency_frame_is_still_settled_on() {
 /// The trait method defaults to `None` so this degrades gracefully rather than forking the engine,
 /// and the counter must stay at zero — if it did not, the correlation path would be running against
 /// some other mode's template, which is worse than not running at all.
-///
-/// **This test has to sit on a mode that genuinely has none.** It was QPSK500 until #1053 gave QPSK
-/// a template; 8PSK is next in line for one, so if that lands, move this again rather than deleting
-/// it — the energy-only path stays reachable for as long as any mode lacks a template, and it is the
-/// path that has produced five separately-diagnosed defects.
 #[test]
 fn a_mode_without_a_template_is_unaffected() {
     let mut h = ChannelSimHarness::new();
     for eng in [&mut h.tx_engine, &mut h.rx_engine] {
-        eng.register_plugin(Box::new(psk8_plugin::Psk8Plugin::new()))
+        eng.register_plugin(Box::new(qpsk_plugin::QpskPlugin::new()))
             .unwrap();
     }
-    // Guard the premise: with a template published this would be an ordinary decode test.
-    assert!(
-        ModulationPlugin::preamble_template(
-            &psk8_plugin::Psk8Plugin::new(),
-            &ModulationConfig {
-                mode: "8PSK500".into(),
-                ..Default::default()
-            }
-        )
-        .is_none(),
-        "8PSK now publishes a preamble template — move this test to a mode that has none"
-    );
     let payload = b"no template here".to_vec();
-    h.tx_engine.transmit(&payload, "8PSK500", None).expect("tx");
+    h.tx_engine.transmit(&payload, "QPSK500", None).expect("tx");
     h.route_clean();
     let got = h
         .rx_engine
-        .receive_with_timeout("8PSK500", None, Duration::from_millis(8_000))
-        .expect("8PSK500 must decode exactly as before");
+        .receive_with_timeout("QPSK500", None, Duration::from_millis(8_000))
+        .expect("QPSK500 must decode exactly as before");
     assert_eq!(got, payload);
     assert_eq!(
         h.rx_engine.rho_rejected_settles(),

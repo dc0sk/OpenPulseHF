@@ -1,7 +1,14 @@
-//! RESEARCH HARNESS — derives the QPSK preamble-correlation constants for #1053. Asserts nothing.
+//! RESEARCH HARNESS for deriving preamble-correlation constants. Asserts nothing.
+//!
+//! Measures the two columns a ρ threshold must sit between: the noise ceiling (recorded idle) and
+//! the weakest ρ that still decodes. **Both columns as written here are too narrow to derive a
+//! threshold from** — the noise column is two SSB-bandwidth captures and the decode column is AWGN.
+//! Measurement showed each of those omissions is load-bearing; see
+//! `preamble_rho_fade_and_filter_probe.rs` and the issue it is cited from. Widen both before
+//! trusting any number this prints.
 //!
 //! Run with:
-//! `cargo test -p openpulse-modem --no-default-features --test qpsk_preamble_rho_survey -- --ignored --nocapture`
+//! `cargo test -p openpulse-modem --no-default-features --test preamble_rho_corpus_survey -- --ignored --nocapture`
 
 use openpulse_core::fec::FecMode;
 use openpulse_core::plugin::{ModulationConfig, ModulationPlugin};

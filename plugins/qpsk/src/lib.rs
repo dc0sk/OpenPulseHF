@@ -7,9 +7,7 @@ pub mod modulate;
 use std::sync::Arc;
 
 use openpulse_core::error::ModemError;
-use openpulse_core::plugin::{
-    FrameGeometry, ModulationConfig, ModulationPlugin, PluginInfo, PreambleTemplate,
-};
+use openpulse_core::plugin::{FrameGeometry, ModulationConfig, ModulationPlugin, PluginInfo};
 
 /// QPSK modulation plugin.
 pub struct QpskPlugin {
@@ -126,13 +124,6 @@ impl ModulationPlugin for QpskPlugin {
     /// emit miscalibrated coherent LLRs (#923), so they must not advertise the capability.
     fn supports_soft_demod(&self, mode: &str) -> bool {
         !is_differential(mode)
-    }
-
-    /// Publishes a template only for the plain-pulse modes at or below 500 baud — see
-    /// [`modulate::qpsk_preamble_template`] for the measured table and why the faster modes get
-    /// nothing.
-    fn preamble_template(&self, config: &ModulationConfig) -> Option<PreambleTemplate> {
-        modulate::qpsk_preamble_template(config).ok().flatten()
     }
 
     fn estimate_afc_hz(&self, samples: &[f32], config: &ModulationConfig) -> Option<f32> {

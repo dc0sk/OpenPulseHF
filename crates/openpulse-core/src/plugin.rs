@@ -128,19 +128,27 @@ pub struct FrameGeometry {
 
 /// A mode's modulated preamble together with the correlation constants measured for it.
 ///
-/// They travel together because they are one measurement. ρ is a *normalised* correlation, so its
-/// noise floor is set by the template's time-bandwidth product and nothing else: measured over the
-/// recorded idle corpus it follows `≈ 6.5 / √len` across both BPSK and QPSK, from 0.205 at 992
-/// samples to 0.581 at 120. A threshold that is generous for a long template sits *underneath* the
-/// noise of a short one, so "the threshold" is not a property of the receiver — it is a property of
-/// the waveform at that baud rate, and it has to be derived from two measurements per mode:
+/// They travel together because a threshold is a property of the waveform, never of the receiver.
+/// A threshold generous for one template sits *underneath* the noise floor of another, so a
+/// receiver-wide constant silently corroborates settles on noise for some modes. Deployed practice
+/// agrees: codec2's `timing_mx_thresh` is per-mode config spanning 0.08–0.5 (`src/ofdm_mode.c`), and
+/// modem73 gates its known-sequence probes per geometry (`robust_modem.hh:913`).
 ///
-/// 1. the ρ ceiling of recorded band noise, which the threshold must clear, and
-/// 2. the weakest ρ that still decodes, which the threshold must stay under.
+/// A threshold has to sit between two measured quantities:
 ///
-/// A mode with no usable gap between them publishes no template at all (`None`) and keeps the
-/// energy-only settle, which is worse but honest. Never widen a gap by picking a threshold from
-/// another mode's table.
+/// 1. the ρ ceiling of band noise, which it must clear, and
+/// 2. the weakest ρ that still decodes, which it must stay under.
+///
+/// **Both are easy to measure too narrowly, and #1053 shipped nothing because of it.** Measure the
+/// decode column on the channel the mode exists for, not on AWGN: `QPSK250-D` — the `hpx_hf` fade
+/// rung — decodes `moderate_f1` frames down to ρ = 0.276, *below* its own recorded idle ceiling of
+/// 0.291, so the two distributions overlap and no threshold exists. And measure the noise column
+/// across receive bandwidths: the ceiling is set by the overlap of the noise spectrum with the
+/// *template's* spectrum, not by template length, and a 500 Hz filter lifts idle ρ above every
+/// threshold derived from wideband captures.
+///
+/// A mode with no usable gap publishes no template at all (`None`) and keeps the energy-only settle,
+/// which is worse but honest. Never widen a gap by picking a threshold from another mode's table.
 #[derive(Debug, Clone, PartialEq)]
 pub struct PreambleTemplate {
     /// The *modulated* preamble at the config's carrier and sample rate, so a correlator can use it
@@ -302,8 +310,8 @@ pub trait ModulationPlugin: Send + Sync {
     /// cannot work when the band noise floor rises above the gate: energy says "something is here",
     /// never "this is a preamble". Five separately-diagnosed defects (#1020, #1021, #1039, #1040,
     /// #1045) were that one gap. codec2/FreeDV detects frames on a normalised correlation ratio
-    /// instead, with no absolute receive-energy threshold anywhere (`src/ofdm.c`: `timing_mx_thresh`
-    /// 0.30, normalised by `av_level`) — read directly, unlike the other reference modems, whose
+    /// instead, with no absolute receive-energy threshold anywhere (`src/ofdm.c`: `timing_mx_thresh`,
+    /// normalised by `av_level`; per-mode 0.08-0.5 in `src/ofdm_mode.c`) — read directly, unlike the other reference modems, whose
     /// approach is recorded second-hand in `docs/dev/research/references.md`.
     ///
     /// The returned [`PreambleTemplate`] carries the samples *and* the ρ threshold and search grid

@@ -1,7 +1,7 @@
 use std::f32::consts::PI;
 
 use openpulse_core::error::ModemError;
-use openpulse_core::plugin::{ModulationConfig, PreambleTemplate, PulseShape};
+use openpulse_core::plugin::{ModulationConfig, PulseShape};
 use openpulse_dsp::filter::FirFilter;
 use openpulse_dsp::rrc::generate_rrc_coefficients;
 
@@ -122,107 +122,6 @@ pub fn qpsk_modulate(data: &[u8], config: &ModulationConfig) -> Result<Vec<f32>,
     }
 
     Ok(out)
-}
-
-/// The modulated preamble alone, plus the ρ constants measured for `config.mode` (#1053).
-///
-/// `None` where no correlation veto is safe for the mode — see [`preamble_rho_threshold`].
-///
-/// Built by modulating an empty payload and keeping the preamble span, so it comes out of the
-/// **same** code path as a real transmission. A hand-rolled copy drifts out of step with the
-/// modulator the first time either changes, and a template that no longer matches the wire stops
-/// corroborating settles silently rather than failing.
-///
-/// The last preamble symbol is dropped: the plain QPSK pulse is a raised-cosine *crossfade*, so the
-/// final preamble symbol period already carries a third of the first data symbol (see the
-/// crossfade-ISI sharp edge in `CLAUDE.md`), which differs frame to frame.
-pub fn qpsk_preamble_template(
-    config: &ModulationConfig,
-) -> Result<Option<PreambleTemplate>, ModemError> {
-    let baud = parse_baud_rate(&config.mode)?;
-    let Some(threshold) = preamble_rho_threshold(&config.mode, baud) else {
-        return Ok(None);
-    };
-    let n = samples_per_symbol(config.sample_rate as f32, baud)?;
-    let full = qpsk_modulate(&[], config)?;
-    let span = n * (PREAMBLE_SYMS - 1);
-    if full.len() < span {
-        return Err(ModemError::Demodulation(
-            "modulated preamble shorter than its own symbol span".into(),
-        ));
-    }
-    Ok(Some(PreambleTemplate::new(
-        full[..span].to_vec(),
-        threshold,
-        PREAMBLE_RHO_GRID_HZ,
-    )))
-}
-
-/// Half-width of the residual-frequency grid the preamble correlation searches, in Hz.
-///
-/// Bounded below by the AFC settle's residual (≤ 0.3 Hz measured), which is what this has to cover
-/// — the settle supplies the frequency, the correlation confirms the waveform.
-///
-/// **The upper bound that constrains BPSK does not constrain QPSK, and that is a measured
-/// difference, not an oversight.** BPSK's preamble is 32 *alternating* symbols: a square-wave
-/// -modulated carrier with two spectral lines at `fc ± baud/2`, so a grid reaching that far rotates
-/// a line onto plain carrier and a steady tone starts scoring like a preamble (0.017 at ±20 Hz →
-/// 0.659 at ±160 Hz). QPSK's preamble is an *aperiodic* designed sequence with no such structure,
-/// and a tone's ρ barely moves with grid width — measured across QPSK125/250/500, ±20 Hz through
-/// ±450 Hz: 0.014→0.524, 0.316→0.524, 0.506→0.524, i.e. the correlator finds a partial alignment at
-/// any width. So the tone score is a property of the sequence here, not of the grid.
-///
-/// It stays at ±20 Hz anyway, because nothing asks for more and every extra grid point is another
-/// full correlation *and* another maximisation that lifts the noise floor of ρ itself.
-pub const PREAMBLE_RHO_GRID_HZ: f32 = 20.0;
-
-/// Minimum normalised preamble correlation ρ for a settle to be believed, per QPSK mode (#1053).
-///
-/// `None` means the mode publishes no template and keeps the pre-#1049 energy-only settle.
-///
-/// **Nothing here is inherited from BPSK, and the reason is arithmetic.** ρ is normalised, so its
-/// noise floor is fixed by the template's length: measured over the recorded idle corpus it tracks
-/// `≈ 6.5/√len` for both waveforms (BPSK250's 992-sample template reads 0.205; QPSK125's 960-sample
-/// one reads 0.216). QPSK's preamble is 16 symbols to BPSK's 32, so at the same baud its template is
-/// half as long and its noise ceiling is √2 higher — and BPSK's 0.40 threshold sits *below*
-/// QPSK500's noise ceiling of 0.429. Copying it would have corroborated settles on pure noise.
-///
-/// Measured 2026-08-01. Noise = every window of `ic9700-idle-hot.wav` and `ft991a-idle.wav` through
-/// the engine's own window/grid; decode = `Rs`-coded frames through AWGN, ρ taken at the true onset:
-///
-/// | mode | template | idle-noise ceiling | weakest ρ that decodes | threshold | margins |
-/// |---|---|---|---|---|---|
-/// | QPSK125 | 960 | 0.216 | 0.557 (−4 dB) | **0.35** | 1.62× / 1.59× |
-/// | QPSK250(-D) | 480 | 0.291 | 0.811 (−D, 3 dB) | **0.45** | 1.55× / 1.80× |
-/// | QPSK500(-D) | 240 | 0.429 | 0.820 (2 dB) | **0.60** | 1.40× / 1.37× |
-/// | QPSK1000 | 120 | 0.581 | 0.879 (5 dB) | *none* | 1.23× / 1.23× |
-///
-/// **QPSK1000 and faster publish nothing on purpose.** Their gap is too narrow to place a threshold
-/// in: the geometric mean leaves 1.23× on each side, and the decode column is AWGN — a fade lowers
-/// it while a hotter band raises the noise column, so the two sides close from both directions. An
-/// energy-only settle is worse than a working veto but better than one that vetoes real frames.
-/// Buying those modes a veto needs more processing gain in the template, i.e. a longer sync word:
-/// a wire-format change, tracked with the PN/chirp preamble work.
-///
-/// The `-RRC` modes are excluded for a different reason: the RRC pulse spans
-/// `RRC_SPAN_SYMBOLS` = 12 symbols, so the first data symbols smear back over the preamble tail and
-/// the "drop the last symbol" rule that makes the crossfade template clean does not hold. Nothing
-/// about them was measured, so nothing is claimed.
-///
-/// What would falsify a row: a channel where that mode decodes at ρ below its threshold, or a band
-/// floor whose ρ ceiling exceeds it. Both are re-measurable with
-/// `tests/qpsk_preamble_rho_survey.rs`.
-fn preamble_rho_threshold(mode: &str, baud: f32) -> Option<f32> {
-    // Only the plain (crossfade) pulse is measured; -RRC and -HF shape the preamble differently.
-    if mode.ends_with("-RRC") || mode.ends_with("-HF") {
-        return None;
-    }
-    match baud {
-        b if b <= 125.0 => Some(0.35),
-        b if b <= 250.0 => Some(0.45),
-        b if b <= 500.0 => Some(0.60),
-        _ => None,
-    }
 }
 
 /// Apply RRC FIR on bb_i/bb_q via wgpu, then upconvert to bandpass.
