@@ -134,7 +134,7 @@ impl ScFdmaPlugin {
                 "SCFDMA26-16QAM".into(),
                 "SCFDMA26-32QAM".into(),
             ],
-            trait_version_required: "1.0".into(),
+            trait_version_required: "2.0".into(),
         }
     }
 }

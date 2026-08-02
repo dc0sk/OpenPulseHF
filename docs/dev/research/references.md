@@ -104,10 +104,33 @@ single-carrier DSP references above, Mercury is a full **OFDM + ARQ + applicatio
 stack — the closest analog to OpenPulseHF's *system* (HPX ARQ + B2F/Winlink), not
 just its DSP.
 
-Built on **FreeDV's OFDM modem** (David Rowe): `DATAC13` for signaling, `DATAC4`/
-`DATAC3`/`DATAC1` for payload, plus an experimental `FSK_LDPC` mode. We already
-interface FreeDV for authenticated voice (`openpulse-freedv-auth`), so the FreeDV
-DATAC modes are a shared reference point.
+Built on **FreeDV's OFDM modem** (David Rowe). We already interface FreeDV for authenticated voice
+(`openpulse-freedv-auth`), so the FreeDV DATAC modes are a shared reference point.
+
+**Mercury has no acquisition code of its own** (verified at source 2026-08-02, `cc5bbc7`): its PHY is
+a vendored codec2 tree under `modem/freedv/`, and `modem/modem.c` only *calls* the FreeDV API —
+`freedv_rawdatapreambletx` to transmit (line 988), `freedv_nin`/`freedv_rawdatarx` to receive
+(lines 1142, 1201). So everything in the codec2 section below **is** Mercury's frame detector. Two
+consequences worth carrying:
+
+- **It runs the burst path.** `freedv_set_frames_per_burst` is called for every pooled mode
+  (`modem.c:459`), and that reaches `ofdm_set_packets_per_burst`, which sets `data_mode = "burst"`
+  and enables the postamble detector. Detection is therefore the joint time × frequency search
+  against a one-modem-frame PN preamble, thresholded on **ρ²**.
+- **The shipped mode pool** (`modem.c:466–484`) is DATAC16, DATAC15, DATAC13, DATAC4, DATAC3, DATAC1,
+  DATAC17, QAM16C2 — where **datac15/16/17 are Mercury-custom modes added inside the vendored tree**
+  (`freedv/ofdm_mode.c:136, 315, 345`; datac16 is documented there as the robust control mode that
+  "replaces datac13"). They follow upstream's per-mode threshold convention: 0.10 for datac17,
+  0.45 for datac13/15/16.
+
+**No wall clock reaches detection.** The vendored `ofdm.c` contains **zero** `clock_gettime`/
+`gettimeofday`/`usleep`/`time()` calls, and RX is `freedv_nin`-driven. `modem.c` does use `usleep`
+and `clock_gettime` — but only for idle-loop pacing, PTT and playback, never for a detection
+decision. Relevant to #1058, where our own acquisition is bounded by wall clock. Mercury's one place
+where timing nearly touches the signal path argues the same way, in the **virtual-clock simulation
+transport** specifically: PTT must span the burst *"IN SIGNAL TIME. The wall-clock sleeps of the
+else-branch would tear the keyed window away from the audio actually on the virtual cable"*
+(`modem.c:1049–1060`).
 
 **Inspirations:**
 - **Adaptive ARQ "gear-shifting" driven by link quality *and* backlog**, with
@@ -157,9 +180,26 @@ frame location. Verified by reading `src/ofdm.c` (2696 lines) on 2026-07-31:
 - `est_timing()` correlates against known pilot samples and divides by
   `av_level = 1/(2·sqrt(timing_norm·acc/length))` (lines 807–808, applied line 895) — so `timing_mx`
   is a **dimensionless ρ**, and validity is the ratio test `timing_mx > timing_mx_thresh`
-  (lines 915, 1356) with the threshold defaulting to **0.30** (line 189). There is **no absolute
-  rx-energy threshold in the receiver** and **no receiver AGC** — pilots supply the per-carrier
-  amplitude reference, which doubles as equalization.
+  (lines 915, 1356). There is **no absolute rx-energy threshold in the receiver** and **no receiver
+  AGC** — pilots supply the per-carrier amplitude reference, which doubles as equalization.
+- **The threshold is per-mode configuration, not a receiver constant** (re-read 2026-08-02, upstream
+  and in Mercury's vendored copy). `ofdm.c:189`'s **0.30 is only the struct default**, overridden at
+  `ofdm.c:225` from `OFDM_CONFIG`; `src/ofdm_mode.c` then sets datac0 **0.08**, datac1/datac3
+  **0.10**, datac4 **0.5**, datac13/14 **0.45**. The burst preamble is the *same duration* for every
+  mode, so the 6× spread tracks the template's **structure**: 3–4-carrier pilots are near-tone combs
+  with a high noise/tone correlation floor and get 0.45–0.5, while 9–33-carrier templates get
+  0.08–0.10. This is the deployed counterpart of our `PreambleTemplate`-carries-its-own-threshold
+  API — **no deployed modem we have read uses one detection threshold across templates of differing
+  structure.** ⚠ An earlier revision of this section quoted only the 0.30 default; that omission was
+  later cited as "codec2 uses one global constant" while designing #1053, i.e. our own second-hand
+  summary became the false premise. Read the mode table, not just the struct initialiser.
+- **The same field is compared against two different statistics.** `ofdm_sync_search_core`
+  (`ofdm.c:1466`) branches on `data_mode`: the streaming path thresholds the `av_level`-normalised
+  **ρ** (line 915) while the burst path thresholds `max_corr²/(mag1·mag2)` — **ρ²** (line 1287,
+  tested line 1356). `ofdm_set_packets_per_burst` flips `data_mode` to `"burst"` at *runtime*, so a
+  mode's configured number means ρ or ρ² depending on the application. On the burst path (the one
+  Mercury uses) 0.45 ≈ ρ 0.67 and 0.08 ≈ ρ 0.28 — a 2.5× spread in ρ terms. Never compare their
+  constants to ours without first establishing which path a mode is deployed on.
 - Burst acquisition (`est_timing_and_freq`) is a **joint time × frequency** correlation search,
   coarse then fine, returning `(t_est, foff_est)` from **one** measurement. A frequency estimate
   therefore cannot exist without a detection — "AFC settled on idle noise before the frame arrived"
@@ -187,9 +227,35 @@ modulation families at once** and decodes all of them from a single receiver —
 switching. **OFDM** (derived from the open-source COFDMTV modem: BPSK→QAM4096, code
 rates 1/4–5/6, 790 bps–>13 kbps), **ROBUST** (five modes 1150–149 bps purpose-built for
 fading HF/NVIS, in 2400 Hz *and* narrowband 600 Hz variants), and a non-coherent
-**MFSK** weak-signal fallback. Schmidl–Cox pilot acquisition (`schmidl_cox.hh`), aicodix
-DSP libraries, miniaudio I/O; KISS-over-TCP plus a JSON control API and
-VOX/rigctl/serial/CM108 PTT.
+**MFSK** weak-signal fallback. aicodix DSP libraries, miniaudio I/O; KISS-over-TCP plus a JSON
+control API and VOX/rigctl/serial/CM108 PTT. License is **Unlicense/public domain**; the vendored
+aicodix deps are ISC-style. ROBUST is now **13 modes** (RDM-800 punctured, short variants, RDM-QB
+micro-burst — `robust_modem.hh:30–54`), not five.
+
+**Three detectors, one per family, none energy-anchored and none clocked** (read at source
+2026-08-02, v2.1.1):
+
+- **OFDM** — Schmidl–Cox self-normalised autocorrelation (`schmidl_cox.hh:15–23`, per-sample
+  threshold 0.05), confirmed by a frequency-domain **differential-MLS** kernel: adjacent-bin division
+  cancels common carrier/channel phase, so one FFT resolves integer-bin CFO across the whole band,
+  gated on peak/second-peak ≥ 4.
+- **ROBUST** — CP autocorrelation (`m > 0.15`) plus an MLS pilot scan whose gates are **per
+  geometry**: `robust_modem.hh:913` `gate = nc_ <= 8 ? 0.78 : 0.60`, `:1144` `qgate = nc_ <= 8 ?
+  0.62 : 0.4`. Narrow templates get the higher gate — the same direction as codec2's per-mode
+  thresholds and as our own measurements.
+- **MFSK** — 8 *alternating* tones for cheap run detection, **terminated by a 2-symbol ordered unique
+  word for timing** (`mfsk_modem.hh:34–36`). That is the aperiodic-terminator answer to the problem
+  that killed our onset-snap in #1052: an alternating preamble is periodic and cannot place an onset,
+  so they append something that can. Searched over 7 explicit coarse frequency hypotheses — *"the
+  preamble tracker must search frequency as well as time: beyond about half a tone spacing of
+  mistuning the nominal bins see nothing"* (`mfsk_modem.hh:717`).
+
+**Every deadline is a sample count**, never a clock: `peak_deadline_ = n + 2·D` (`robust_modem.hh:512`),
+`COLLECT_STALE`/`PREEMPT_STALE = 288000` samples, pilot scan every `SCAN_STRIDE = 240` samples. No
+`<chrono>`/`clock_gettime`/`gettimeofday` exists anywhere in the phy layer — only in `rigctl_ptt`,
+`kiss_tnc`, `miniaudio_audio` and `tnc_ui`. Detection is **O(1) per sample by construction** (running
+-sum autocorrelators, strided FFT scans), so the "can I keep up?" question our wall-clock retry budget
+answers (#1058) never arises for them.
 
 **Inspirations:**
 - **Simultaneous multi-family reception** — decode every registered waveform from one
@@ -217,7 +283,7 @@ silence dividing to infinity (the same role as the energy floor argument on our
 `search_normalized`). A candidate then survives frequency-domain kernel correlation with a
 peak-to-second-peak ≥ 4 rejection and a guard-bounded position check — **three rejections before any
 payload decode**. One detection event yields timing, fractional CFO *and* integer-bin CFO. A false
-sync then dies at a BCH-protected **meta symbol** one symbol in, and an erasure budget (¾ of code
+sync then dies at a **CRC-checked polar-coded meta symbol** one symbol in, and an erasure budget (¾ of code
 redundancy) aborts hopeless decodes early rather than grinding to the end. Net effect: no
 anchor-condemnation machinery exists, because being wrong is cheap and known immediately.
 
@@ -351,9 +417,15 @@ mechanism patched five times** (#1020 → #1021 → #1039 → #1040 → #1045):
 **Every reference modem decides "a frame starts here" on preamble correlation — normalized in three
 of four — and derives its frequency estimate from the same measurement that declared the detection.**
 Energy appears in these systems only as a CSMA/occupancy question (Mercury `channel_busy.c`) or as a
-divide-by-zero floor (modem73 `min_R`). None of them has any analog of our settle → micro-sweep →
+divide-by-zero floor (modem73 `min_R`). **Corrected 2026-08-02:** modem73 *does* carry
+condemnation-adjacent machinery — a failed-collect position memory that refuses to re-sync within
+half a symbol of a position that just failed (`mfsk_modem.hh:520`), spent-anchor suppression, lock
+preemption by a better-quality candidate, and backward rescue off a trail sequence. The difference is
+not that being wrong never needs recovery; it is that every recovery keys off a *normalised-quality
+detection* and a *sample count*, never energy and never a wall clock. The claim below overstates it.
+None of them has any analog of our settle → micro-sweep →
 condemn → re-anchor apparatus, because false detections are *rare* under a ρ threshold, *validated
-cheaply and early* (FreeDV unique word, modem73 BCH meta symbol), and *recovered from by discarding
+cheaply and early* (FreeDV unique word, modem73 polar/CRC meta symbol), and *recovered from by discarding
 the samples that caused them* (FreeDV zeroes `rxbuf`).
 
 The uncomfortable part: **we already own the primitive.** `IqMatchedFilter::search_normalized`
@@ -415,6 +487,33 @@ mean adopting a PN or chirp sync word — a wire-format change on both ends, and
 item.
 
 ---
+
+### Outcome (#1053, 2026-08-02) — checked against Mercury + modem73 at source, and it changed the design
+
+The QPSK extension of the #1049 veto was compared against both projects **read as source**, not from
+this doc's earlier summaries. Three durable results:
+
+1. **Per-template thresholds are the deployed norm, and our own doc was the false premise.** codec2's
+   `timing_mx_thresh` is per-mode 0.08–0.5 *upstream* (spread by template tone-likeness at constant
+   preamble duration); modem73 gates its known-sequence probes per geometry (0.78/0.60, 0.62/0.40).
+   The `PreambleTemplate`-carries-its-constants API (PR #1057) matches practice. The contrary belief
+   — "codec2 uses one global constant" — came from **this document quoting only the struct default**.
+2. **No reference lets the sync word scale with symbol rate, and that is why our thresholds would not
+   close.** codec2 keeps a ~110 ms PN preamble regardless of payload rate, paying **33 % of the burst
+   on datac14** without complaint. Ours is 16 symbols, so it shrinks to 15 ms at QPSK1000 and the gap
+   between the noise ceiling and the decode cliff closes from both sides. The QPSK threshold table was
+   withdrawn for exactly that reason (see the ledger entry for #1053). **The fix is #1052's
+   wire-format change extended to decouple sync *duration* from symbol rate — not more threshold
+   tuning, which cannot buy processing gain a template does not have.**
+3. **No reference consults a wall clock for a detection decision.** All budgets are sample counts over
+   O(1)-per-sample streaming detectors. Our wall-clock retry latch (#1058) is a defensible real-time
+   viability test *given* an O(buffer) rescan primitive — and the reference answer is to not own that
+   primitive. The open question #1058 leaves is therefore not "why do we consult a clock" but "why are
+   we scanning a growing buffer for a frame at all".
+
+Also transferable, and cheap: modem73's MFSK preamble is alternating tones **terminated by a
+2-symbol ordered unique word**, which is precisely the structure whose absence made our onset-snap
+ambiguous in #1052 — alternation for run detection, an aperiodic terminator for placement.
 
 ## Recurring lesson
 

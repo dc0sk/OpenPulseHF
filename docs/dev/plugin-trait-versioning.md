@@ -39,12 +39,15 @@ Plugin trait compatibility is tracked via **semantic versioning** applied to the
 <major>.<minor>.<patch>
 ```
 
-The current trait version is **`1.0.0`**.
+The current trait version is **`2.0.0`** — bumped from `1.1.0` by #1053, which changed
+`ModulationPlugin::preamble_template` to return `PreambleTemplate` (samples bundled with the ρ
+constants measured for that waveform) instead of bare `Vec<f32>`. See `docs/dev/project/traceability.md`
+for the rationale and the one-line migration.
 
 ### Trait Version Identification
 
 The trait version is:
-- **Canonical source**: hardcoded in `crates/openpulse-core/src/lib.rs` as the constant `PLUGIN_TRAIT_VERSION: &str = "1.0.0"`.
+- **Canonical source**: hardcoded in `crates/openpulse-core/src/plugin.rs` as the constant `PLUGIN_TRAIT_VERSION`.
 - **Published in**: each framework release's `docs/releasenotes.md`.
 - **Declared by plugins**: in `PluginInfo::trait_version_compatibility` (see § Plugin Declaration below).
 

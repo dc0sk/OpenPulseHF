@@ -22,7 +22,7 @@ use openpulse_core::frame::Frame;
 use openpulse_core::hpx::{HpxEvent, HpxSession, HpxState, HpxTransition};
 use openpulse_core::ldpc::{IterativeDecoder, LdpcCodec};
 use openpulse_core::ota_rate::{OtaRateController, RxOutcome};
-use openpulse_core::plugin::{ModulationConfig, PluginRegistry};
+use openpulse_core::plugin::{ModulationConfig, PluginRegistry, PreambleTemplate};
 use openpulse_core::profile::SessionProfile;
 use openpulse_core::rate::OtaAggressiveness;
 use openpulse_core::rate::RateEvent;
@@ -319,70 +319,6 @@ fn openpulse_modem_descramble_soft(mut llrs: Vec<f32>) -> Vec<f32> {
 
 const AFC_SETTLE_DEADBAND_HZ: f32 = 2.0;
 
-/// Minimum normalised preamble correlation ρ for a settle to be believed (#1049).
-///
-/// **Derived from the decode cliff, not from two captures.** The number in issue #1049 (0.40 from a
-/// real frame at ρ = 0.811 against a hot idle floor at 0.182) came from one capture whose carrier
-/// offset happened to be +1.2 Hz; taken alone it is an artifact-calibrated constant. Measured
-/// in-repo 2026-07-31, BPSK250 + `Rs` through AWGN, ρ against decode outcome:
-///
-/// | SNR | −1 dB | −3 dB | −5 dB | −7 dB | −9 dB |
-/// |---|---|---|---|---|---|
-/// | ρ | 0.646 | 0.561 | 0.455 | 0.392 | 0.322 |
-/// | decode | OK | OK | fail | fail | fail |
-///
-/// The decode dies between −3 and −5 dB while ρ is still ≈ 0.5, and ρ only reaches this threshold
-/// **two SNR steps past** the last frame the demodulator can actually decode — so the gate cannot
-/// reject a decodable frame before the channel already has. On the false-accept side, recorded idle
-/// audio settled and correlated the same way peaks at ρ = 0.205 (`ic9700-idle-hot.wav`) and 0.205
-/// (`ft991a-idle.wav`), so this sits ~2× above measured noise and ~1.4× below the weakest decodable
-/// frame. Watterson `moderate_f1` frames measured ρ = 0.58–0.84 across 10–30 dB, including runs that
-/// failed to decode — a fade does not push a real preamble under this line before it stops being a
-/// frame.
-///
-/// **Margin, stated honestly.** The reference point is the real on-air frame at ρ = 0.654 measured
-/// the way the engine measures it, not the 0.811 in issue #1049 (that came from a whole-capture
-/// search rather than a settled onset). Against recorded idle that is 3.2×, not the issue's 4.4×.
-///
-/// **This is a broadband-noise discriminator and nothing more.** It says "a preamble is here",
-/// against a *noise* floor. It cannot rule out a structured interferer in general, so it does not
-/// retire the settle-condemnation recovery (#1021, #1040), which remains the backstop for anything
-/// that correlates but does not decode — and which ablation confirms is load-bearing: removing it
-/// fails all three leads of the saturating-floor reproduction.
-///
-/// What would falsify it: a mode or channel where a frame decodes at ρ below this. Re-measure the
-/// table per waveform family before extending the template beyond BPSK.
-const PREAMBLE_RHO_THRESHOLD: f32 = 0.40;
-
-/// Half-width of the residual-frequency grid the preamble correlation searches, in Hz.
-///
-/// **Bounded from both sides, and the upper bound is the interesting one.**
-///
-/// Below: the AFC settle is what estimates frequency, so this only has to cover what the settle
-/// leaves behind. Measured residual after `afc_mini_settle` over a 1056-sample window is ≤ 0.3 Hz
-/// for every true offset the engine can reach (0 to 400 Hz; past that `AFC_MAX_CORRECTION_HZ`
-/// rejects the settle before this check runs at all). ±20 Hz is already generous.
-///
-/// Above: **the grid must stay well inside ±baud/2, or the gate stops discriminating.** The BPSK
-/// preamble is 32 phase-alternating symbols — a square-wave-modulated carrier whose energy sits in
-/// lines at `fc ± baud/2`. Rotate the template by that much and a line lands on plain carrier, so a
-/// steady tone starts scoring like a preamble. Measured against a pure tone (`the_gate_is_not_fooled
-/// _by_a_steady_tone`):
-///
-/// | grid half-width | ρ of a pure tone |
-/// |---|---|
-/// | ±20 Hz | 0.017–0.042 |
-/// | ±160 Hz | **0.659** |
-/// | ±450 Hz (the full acquisition range) | **0.696 at every frequency** |
-///
-/// A birdie at 0.66 outscores this receiver's best real on-air frame (0.654). That kills the
-/// otherwise-attractive design of running the grid over the whole ±450 Hz acquisition range as a
-/// *detector* and seeding the settle from it (codec2's ordering): our sync word is two spectral
-/// lines, not a pseudo-random sequence, so it cannot survive being searched over its own line
-/// spacing. Widening this constant is not a cost/benefit trade against compute — past ~baud/4 it
-/// destroys the thing being bought. Re-derive it from `baud` before extending to another waveform.
-const PREAMBLE_RHO_GRID_HZ: f32 = 20.0;
-
 /// Longest preamble template the correlation will use, in samples (256 ms at 8 kHz).
 ///
 /// Two costs grow with the template and both bite at once: the grid step must shrink as `fs/tlen`
@@ -395,6 +331,29 @@ const PREAMBLE_RHO_GRID_HZ: f32 = 20.0;
 /// tidy default: the slow rungs listen longest and are the most exposed to a noise settle. Closing
 /// it needs a cheaper detector (decimation, or a segmented non-coherent sum), not a bigger grid.
 const MAX_PREAMBLE_CORRELATION_SAMPLES: usize = 2_048;
+
+/// A mode's preamble matched filter together with the ρ constants its plugin measured for it.
+///
+/// The constants are carried per mode rather than held as engine-wide values because ρ is
+/// normalised: its noise floor is set by the template's length, so one threshold cannot serve two
+/// waveforms. BPSK250's 0.40 sits *below* QPSK500's recorded idle-noise ceiling of 0.429 — an
+/// engine-wide constant would have corroborated QPSK settles on pure noise. See
+/// [`openpulse_core::plugin::PreambleTemplate`].
+struct PreambleVeto {
+    filter: IqMatchedFilter,
+    rho_threshold: f32,
+    rho_grid_hz: f32,
+}
+
+impl PreambleVeto {
+    fn new(t: PreambleTemplate) -> Self {
+        Self {
+            filter: IqMatchedFilter::new(t.samples),
+            rho_threshold: t.rho_threshold,
+            rho_grid_hz: t.rho_grid_hz,
+        }
+    }
+}
 
 /// Result of [`ModemEngine::afc_mini_settle`].
 struct AfcSettleOutcome {
@@ -2742,8 +2701,10 @@ impl ModemEngine {
                     ..ModulationConfig::default()
                 })
             })
-            .filter(|t| !t.is_empty() && t.len() <= MAX_PREAMBLE_CORRELATION_SAMPLES)
-            .map(IqMatchedFilter::new);
+            .filter(|t| {
+                !t.samples.is_empty() && t.samples.len() <= MAX_PREAMBLE_CORRELATION_SAMPLES
+            })
+            .map(PreambleVeto::new);
         // Cost of the last full-buffer retry pass, and how much audio it covered. If a pass costs
         // more wall time than the audio it walked, further passes can only fall further behind.
         let mut retry_cost_secs: f64 = 0.0;
@@ -3155,17 +3116,17 @@ impl ModemEngine {
                         // `note_settled`, so it cannot strand the receiver on a noise anchor, which
                         // is the specific failure this exists to prevent; leaving it ungated also
                         // preserves it as the documented fallback for a bad settle.
-                        if let Some(mf) = preamble_matcher.as_ref() {
+                        if let Some(veto) = preamble_matcher.as_ref() {
                             let corr_end = (onset + afc_window).min(accumulated.len());
                             if let Some((rho, _)) =
-                                self.preamble_rho(mf, &accumulated[onset..corr_end], settle.fine)
+                                self.preamble_rho(veto, &accumulated[onset..corr_end], settle.fine)
                             {
-                                if rho < PREAMBLE_RHO_THRESHOLD {
+                                if rho < veto.rho_threshold {
                                     debug!(
                                         "settle at onset={onset} rejected: preamble correlation \
-                                         rho={rho:.3} < {PREAMBLE_RHO_THRESHOLD:.2} \
+                                         rho={rho:.3} < {:.2} \
                                          (correction={:.1}Hz) — energy without a preamble",
-                                        settle.fine
+                                        veto.rho_threshold, settle.fine
                                     );
                                     self.rho_rejected_settles += 1;
                                     self.afc_correction_hz = 0.0;
@@ -5711,13 +5672,14 @@ impl ModemEngine {
     /// class of error as a constant fitted to one artifact.
     fn preamble_rho(
         &self,
-        mf: &IqMatchedFilter,
+        veto: &PreambleVeto,
         window: &[f32],
         settled_hz: f32,
     ) -> Option<(f32, usize)> {
-        let (freqs, bound) = self.preamble_search_plan(mf, window, settled_hz)?;
+        let (freqs, bound) = self.preamble_search_plan(veto, window, settled_hz)?;
         let fs = AudioConfig::default().sample_rate as f32;
-        mf.search_normalized_over_frequency(window, bound, 0.05, fs, &freqs)
+        veto.filter
+            .search_normalized_over_frequency(window, bound, 0.05, fs, &freqs)
             .map(|(r, _)| (r.rho, r.offset))
     }
 
@@ -5729,17 +5691,17 @@ impl ModemEngine {
     /// class of error as a constant fitted to one artifact.
     fn preamble_search_plan(
         &self,
-        mf: &IqMatchedFilter,
+        veto: &PreambleVeto,
         window: &[f32],
         settled_hz: f32,
     ) -> Option<(Vec<f32>, usize)> {
-        let tlen = mf.len();
+        let tlen = veto.filter.len();
         if window.len() <= tlen {
             return None;
         }
         let fs = AudioConfig::default().sample_rate as f32;
         let step = (0.25 * fs / tlen as f32).max(0.5);
-        let n = (PREAMBLE_RHO_GRID_HZ / step).round() as i32;
+        let n = (veto.rho_grid_hz / step).round() as i32;
         let freqs: Vec<f32> = (-n..=n).map(|k| settled_hz + k as f32 * step).collect();
         // The search bound is whatever timing slack the window leaves past the template — about two
         // symbol periods for every mode, since the settle window is the preamble plus one symbol.

@@ -9,6 +9,68 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-08-02 — feat(core,plugins): preamble templates carry their own ρ constants (#1053, partial)
+
+- **Requirement/change:** #1049's correlation veto only runs where a plugin publishes a
+  `preamble_template`, and BPSK is the only one that does — so the protection stops where `hpx_hf`
+  climbs to its faster rungs. The intent was to extend it to QPSK. **What shipped is the API half
+  only; the QPSK thresholds were built, measured, falsified and withdrawn before merge.**
+- **Design decision (kept):** the ρ threshold and search grid are published *with* the template
+  (`PreambleTemplate { samples, rho_threshold, rho_grid_hz }`), making "publish a template, inherit
+  another waveform's constants" unrepresentable. Breaking: `PLUGIN_TRAIT_VERSION` 1.1.0 → **2.0.0**,
+  every plugin's `trait_version_required` → `"2.0"`. BPSK's two constants moved from `engine.rs` into
+  the plugin that measured them. No behaviour change: BPSK publishes the same numbers it always did.
+- **Externally corroborated**, read at source 2026-08-02: codec2's `timing_mx_thresh` is **per-mode
+  config, 0.08–0.5 upstream** (`src/ofdm_mode.c`), not the single 0.30 our own docs quoted; modem73
+  gates its known-sequence probes per geometry (`robust_modem.hh:913` `nc_ <= 8 ? 0.78 : 0.60`,
+  `:1144` `0.62 : 0.4`); Mercury has no acquisition code of its own (vendored FreeDV, burst path).
+  **No deployed modem read uses one detection threshold across templates of differing structure.**
+- **Implementation:** `crates/openpulse-core/src/plugin.rs` (`PreambleTemplate`, version bump);
+  `plugins/bpsk/src/modulate.rs` (constants moved in); `crates/openpulse-modem/src/engine.rs`
+  (`PreambleVeto` carries per-mode constants); all ten plugins' declared trait version.
+- **Tests:** `preamble_correlation_settle` **5 passed**, `capture_replay_corpus` **12 passed**,
+  `carrier_offset_acquisition` **7 passed**; full workspace release green. `plugin::tests`
+  trait-version fixtures updated, including `higher_minor_than_framework_is_rejected` moved 1.5 → 2.5
+  or it would have passed on the *major* check and stopped testing the minor one.
+
+### The withdrawn half, and why — this is the part worth keeping
+
+A QPSK threshold table (QPSK125 0.35 / QPSK250(-D) 0.45 / QPSK500 0.60, nothing above 500 baud) was
+derived from two measurements: the ρ ceiling of recorded idle noise, and the weakest ρ that still
+decodes. Adversarial review (Fable) and independent replication under this repo's own config
+falsified both columns.
+
+- **The decode column was AWGN-only, on a feature whose purpose is protecting fade rungs.**
+  `hpx_hf` SL6 is `QPSK250-D` *because* it is the fade rung (#923). Measured on `moderate_f1` at its
+  own 7 dB floor, 150 seeds: a frame **decodes at ρ = 0.276** (seed 127), which is **below that
+  mode's recorded idle-noise ceiling of 0.291**. The decodable-frame and noise distributions overlap
+  — no threshold separates them. The AWGN column had reported the weakest decodable ρ as 0.811 and a
+  1.80× margin. Review found the same failure independently (2/78 decodable frames below threshold at
+  ρ 0.425 and 0.377); replication found 1/41 at a worse value. Applied to its own design channel, the
+  PR's own refusal rule (it declined QPSK1000 at a 1.23× gap) disqualifies QPSK250-D.
+- **The noise column was two SSB-bandwidth captures.** The stated law "ρ noise ≈ 6.5/√len and nothing
+  else" is false: the constant is ≈5.2 on white noise, and a **500 Hz receive filter lifts idle ρ
+  above every threshold measured, including BPSK250's shipped 0.40** (0.441 measured against a
+  brick-wall mask — a worst case; a real filter with skirts sits lower). Same length, different
+  template, same noise: BPSK250@992 = 0.159 vs QPSK125@960 = 0.218. Harness cross-check: synthetic
+  SSB-shaped noise reproduces the recorded captures to within 0.01 ρ, which is how we know the corpus
+  samples one regime.
+- **The publish/refuse boundary was therefore not principled** — it sat where the AWGN/idle-capture
+  measurement happened to stop, not at a property of the modes.
+- **Gates were not vacuous but certified the wrong inputs.** Both threshold gates recompute ρ live
+  from the captures, so the pinned constants are drift tripwires rather than hardcoded conclusions —
+  and they would have stayed green forever while the above remained true. Coverage illusion, not
+  vacuousness.
+- **Kept as instruments** rather than deleted: `tests/preamble_rho_corpus_survey.rs` (the two-column
+  survey, with its own limitations now stated in its header) and
+  `tests/preamble_rho_fade_and_filter_probe.rs` (the fade-cliff and noise-colour measurements that
+  falsified the table). Re-derivation is tracked in its own issue; the narrow-filter gap against the
+  **already-merged** BPSK threshold is tracked separately, since it affects `main`.
+- **Process note:** four sabotage runs passed before review, and the fourth found a genuine hole (an
+  unpinned decode-cliff bound). Sabotage verified the gates were wired to the code; it could not
+  verify the *inputs* were representative. Widening the input is a different check from breaking the
+  code, and only the former would have caught this.
+
 ## 2026-08-01 — feat(config): enable the receiver notch by default, on measurement (REQ-QRM-01)
 
 - **Requirement/change:** the auto-notch was built, documented as "a clear win against out-of-band
@@ -150,7 +212,8 @@ and the actually-observed results per change.
     passed across 276 suites**, identical to baseline — nothing depended on it.
 - **What this leaves open:** the correlation veto only runs where a plugin publishes a
   `preamble_template` — BPSK alone. Every other mode still decides frame start on energy, which is
-  what the new QPSK gate now pins.
+  what the new QPSK gate now pins. *(Closed for QPSK ≤ 500 baud by #1053, 2026-08-01; that gate moved
+  to QPSK1000, which still has no template. 8PSK and the multicarrier modes remain open.)*
 
 ---
 
@@ -246,7 +309,7 @@ and the actually-observed results per change.
   answers "is something here", never "is this a preamble", so above a hot band floor the receiver
   settles on idle noise before the frame arrives. codec2/FreeDV decides frame start on a normalised
   correlation ratio with no absolute receive-energy threshold anywhere (`src/ofdm.c`,
-  `timing_mx_thresh = 0.30` normalised by `av_level`) — read directly, not second-hand.
+  `timing_mx_thresh` normalised by `av_level`) — read directly, not second-hand. **Corrected 2026-08-02:** 0.30 is only the struct default; `src/ofdm_mode.c` overrides it per mode (0.08–0.5), and the burst path compares the same field against ρ² rather than ρ. Quoting the default as "the" threshold seeded a false premise in #1053.
 - **The issue's own design was falsified before building it.** #1049 proposed requiring
   `search_normalized(window).rho >= 0.40` **before** the settle. Measured on a 1024-sample BPSK250
   preamble template, a real frame's ρ under carrier offset: **1.000 @ 0 Hz, 0.332 @ 20 Hz, 0.016 @

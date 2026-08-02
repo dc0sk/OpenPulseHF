@@ -7,7 +7,20 @@ use crate::error::{ModemError, PluginError};
 ///
 /// 1.1.0 added [`ModulationPlugin::preamble_template`] — additive, with a `None` default, so every
 /// plugin declaring `1.0.0` keeps working unchanged.
-pub const PLUGIN_TRAIT_VERSION: &str = "1.1.0";
+///
+/// 2.0.0 changed that method's return type from `Option<Vec<f32>>` to [`Option<PreambleTemplate>`],
+/// which is breaking: the samples now travel with the correlation constants measured for that
+/// waveform. Migration for a plugin that published a template is to wrap the samples in
+/// `PreambleTemplate::new(samples, rho_threshold, rho_grid_hz)` with values re-derived for the mode
+/// (see the type's docs); a plugin that did not is unaffected beyond declaring `"2.0"`.
+///
+/// Why the bundling had to be breaking rather than a second optional method: the constants are
+/// waveform-specific and the failure mode of getting them wrong is silent. BPSK's 0.40 threshold
+/// sits *below* QPSK500's recorded idle-noise ceiling of 0.429, so a QPSK template inheriting it
+/// would corroborate settles on pure noise — the exact defect the check exists to prevent, and one
+/// that produces no error, only a receiver that stops acquiring. A single method makes publishing a
+/// template without its own measured constants unrepresentable.
+pub const PLUGIN_TRAIT_VERSION: &str = "2.0.0";
 
 // ── Plugin metadata ───────────────────────────────────────────────────────────
 
@@ -109,6 +122,61 @@ pub struct FrameGeometry {
     /// Slice length that bounds one demodulation attempt: the largest frame
     /// this mode emits (255-byte RS block) plus margin.
     pub max_frame_samples: usize,
+}
+
+// ── Preamble correlation template ─────────────────────────────────────────────
+
+/// A mode's modulated preamble together with the correlation constants measured for it.
+///
+/// They travel together because a threshold is a property of the waveform, never of the receiver.
+/// A threshold generous for one template sits *underneath* the noise floor of another, so a
+/// receiver-wide constant silently corroborates settles on noise for some modes. Deployed practice
+/// agrees: codec2's `timing_mx_thresh` is per-mode config spanning 0.08–0.5 (`src/ofdm_mode.c`), and
+/// modem73 gates its known-sequence probes per geometry (`robust_modem.hh:913`).
+///
+/// A threshold has to sit between two measured quantities:
+///
+/// 1. the ρ ceiling of band noise, which it must clear, and
+/// 2. the weakest ρ that still decodes, which it must stay under.
+///
+/// **Both are easy to measure too narrowly, and #1053 shipped nothing because of it.** Measure the
+/// decode column on the channel the mode exists for, not on AWGN: `QPSK250-D` — the `hpx_hf` fade
+/// rung — decodes `moderate_f1` frames down to ρ = 0.276, *below* its own recorded idle ceiling of
+/// 0.291, so the two distributions overlap and no threshold exists. And measure the noise column
+/// across receive bandwidths: the ceiling is set by the overlap of the noise spectrum with the
+/// *template's* spectrum, not by template length, and a 500 Hz filter lifts idle ρ above every
+/// threshold derived from wideband captures.
+///
+/// A mode with no usable gap publishes no template at all (`None`) and keeps the energy-only settle,
+/// which is worse but honest. Never widen a gap by picking a threshold from another mode's table.
+#[derive(Debug, Clone, PartialEq)]
+pub struct PreambleTemplate {
+    /// The *modulated* preamble at the config's carrier and sample rate, so a correlator can use it
+    /// directly. Keep it to the preamble: a template running into the data symbols correlates
+    /// against payload that differs frame to frame.
+    pub samples: Vec<f32>,
+    /// Normalised-correlation floor below which a candidate window is not this preamble.
+    pub rho_threshold: f32,
+    /// Half-width, in Hz, of the residual-frequency grid the correlation searches around the
+    /// settled carrier correction.
+    ///
+    /// Bounded below by what the AFC settle leaves behind (≤ 0.3 Hz measured, so ±20 Hz is already
+    /// generous) and above by the preamble's own line structure. The upper bound is waveform
+    /// -specific and can be brutal: BPSK's alternating preamble is a square-wave-modulated carrier
+    /// with lines at `fc ± baud/2`, so a grid reaching that far rotates a line onto plain carrier
+    /// and a steady tone starts scoring like a preamble (0.017 at ±20 Hz, 0.659 at ±160 Hz).
+    pub rho_grid_hz: f32,
+}
+
+impl PreambleTemplate {
+    /// Bundle a modulated preamble with its measured correlation constants.
+    pub fn new(samples: Vec<f32>, rho_threshold: f32, rho_grid_hz: f32) -> Self {
+        Self {
+            samples,
+            rho_threshold,
+            rho_grid_hz,
+        }
+    }
 }
 
 // ── Plugin trait ──────────────────────────────────────────────────────────────
@@ -242,14 +310,13 @@ pub trait ModulationPlugin: Send + Sync {
     /// cannot work when the band noise floor rises above the gate: energy says "something is here",
     /// never "this is a preamble". Five separately-diagnosed defects (#1020, #1021, #1039, #1040,
     /// #1045) were that one gap. codec2/FreeDV detects frames on a normalised correlation ratio
-    /// instead, with no absolute receive-energy threshold anywhere (`src/ofdm.c`: `timing_mx_thresh`
-    /// 0.30, normalised by `av_level`) — read directly, unlike the other reference modems, whose
+    /// instead, with no absolute receive-energy threshold anywhere (`src/ofdm.c`: `timing_mx_thresh`,
+    /// normalised by `av_level`; per-mode 0.08-0.5 in `src/ofdm_mode.c`) — read directly, unlike the other reference modems, whose
     /// approach is recorded second-hand in `docs/dev/research/references.md`.
     ///
-    /// The returned samples must be the *modulated* preamble at `config`'s carrier and sample rate,
-    /// so a correlator can use them directly. Keep it to the preamble: a template running into the
-    /// data symbols correlates against payload that differs frame to frame.
-    fn preamble_template(&self, _config: &ModulationConfig) -> Option<Vec<f32>> {
+    /// The returned [`PreambleTemplate`] carries the samples *and* the ρ threshold and search grid
+    /// measured for that mode — see its docs for why those cannot be receiver-wide constants.
+    fn preamble_template(&self, _config: &ModulationConfig) -> Option<PreambleTemplate> {
         None
     }
 
@@ -419,7 +486,7 @@ mod tests {
     #[test]
     fn register_then_lookup_is_case_insensitive_and_misses_are_none() {
         let mut reg = PluginRegistry::new();
-        reg.register(FakePlugin::boxed("BPSK", &["BPSK31", "BPSK100"], "1.0"))
+        reg.register(FakePlugin::boxed("BPSK", &["BPSK31", "BPSK100"], "2.0"))
             .unwrap();
         assert!(reg.get("BPSK31").is_some());
         assert!(
@@ -433,9 +500,9 @@ mod tests {
     #[test]
     fn later_registration_shadows_earlier_for_the_same_mode() {
         let mut reg = PluginRegistry::new();
-        reg.register(FakePlugin::boxed("OLD", &["BPSK31"], "1.0"))
+        reg.register(FakePlugin::boxed("OLD", &["BPSK31"], "2.0"))
             .unwrap();
-        reg.register(FakePlugin::boxed("NEW", &["BPSK31"], "1.0"))
+        reg.register(FakePlugin::boxed("NEW", &["BPSK31"], "2.0"))
             .unwrap();
         // `get` walks registrations in reverse, so the newer plugin wins.
         assert_eq!(reg.get("BPSK31").unwrap().info().name, "NEW");
@@ -445,15 +512,15 @@ mod tests {
     #[test]
     fn compatible_trait_version_registers() {
         let mut reg = PluginRegistry::new();
-        // Framework is 1.0.0; a plugin requiring "1.0" is compatible.
-        assert!(reg.register(FakePlugin::boxed("OK", &["X"], "1.0")).is_ok());
+        // Framework is 2.0.0; a plugin requiring "2.0" is compatible.
+        assert!(reg.register(FakePlugin::boxed("OK", &["X"], "2.0")).is_ok());
     }
 
     #[test]
     fn incompatible_major_trait_version_is_rejected() {
         let mut reg = PluginRegistry::new();
         let err = reg
-            .register(FakePlugin::boxed("FUTURE", &["X"], "2.0"))
+            .register(FakePlugin::boxed("FUTURE", &["X"], "3.0"))
             .unwrap_err();
         assert!(matches!(err, PluginError::IncompatibleTraitVersion { .. }));
     }
@@ -461,9 +528,10 @@ mod tests {
     #[test]
     fn higher_minor_than_framework_is_rejected() {
         let mut reg = PluginRegistry::new();
-        // Framework minor is 0; a plugin requiring minor 5 needs a newer framework.
+        // Framework minor is 0; a plugin requiring minor 5 needs a newer framework. The major must
+        // MATCH here, or this passes on the major check and says nothing about the minor one.
         let err = reg
-            .register(FakePlugin::boxed("NEWER", &["X"], "1.5"))
+            .register(FakePlugin::boxed("NEWER", &["X"], "2.5"))
             .unwrap_err();
         assert!(matches!(err, PluginError::IncompatibleTraitVersion { .. }));
     }

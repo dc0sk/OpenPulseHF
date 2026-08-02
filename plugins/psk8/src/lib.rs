@@ -67,7 +67,7 @@ impl Psk8Plugin {
                 "8PSK9600".to_string(),
                 "8PSK9600-RRC".to_string(),
             ],
-            trait_version_required: "1.0".to_string(),
+            trait_version_required: "2.0".to_string(),
         }
     }
 }
