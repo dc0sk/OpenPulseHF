@@ -706,6 +706,25 @@ A second model (**Fable**) reviews work in this repo before it is trusted. This 
 expensive failures here are not bad code — they are **confident wrong beliefs** that survive long
 enough to get built on. Every item below is a real occurrence, not a precaution.
 
+**Mandatory scope (set 2026-08-02 by the maintainer; in force until the maintainer says otherwise).**
+Two classes of work go to Fable *before* they land, with no judgement call about whether they are
+"big enough":
+
+- **Every design or architecture decision — reviewed BEFORE implementing.** Not after a prototype
+  exists, not alongside the first commit: before the code is written. This includes wire-format and
+  trait changes, new modules or crates, where a transform is seamed, what a state machine owns, and
+  any choice between two viable approaches.
+- **Every conclusion drawn from a test, feasibility check, prototype, or work result — reviewed
+  BEFORE it becomes part of the project.** "Part of the project" means: written into `CLAUDE.md`,
+  `docs/`, `traceability.md`, an issue or PR body, a commit message, or used as the premise of the
+  next piece of work. Send the *apparatus* with the conclusion, and send it whether the result looks
+  bad, good, or unsurprising.
+
+The costs of skipping are asymmetric and already paid here: a wrong elimination closes a door
+silently (the 2026-07-30 settle-recovery case in item 5 below), an unreviewed constant ships fitted
+to an inventory nobody widened (#1053), and a conclusion that reaches `CLAUDE.md` is quoted back as
+fact for months.
+
 **Route to Fable:**
 
 1. **New hypotheses**, for plausibility — before building the fix a diagnosis implies.
@@ -741,10 +760,11 @@ same session's review approved a design whose three regressions were caught only
 full gate at the end regardless of how the review went; the evidence tiers are independent, exactly
 as simulation and hardware are.
 
-**When not to bother.** Routine edits, mechanical refactors, and anything already covered by a gate
-that can fail. Reserve it for work that will be *built on*: a diagnosis before a multi-step fix, an
-elimination before it is written down, a constant before it ships, a surprising measurement before it
-becomes a conclusion.
+**What is still out of scope.** Mechanical work that decides nothing and concludes nothing: applying
+a review's own verdict, renames and formatting, a fix whose shape the maintainer already specified,
+running an existing gate and reporting its output verbatim. The line is *decision or conclusion*, not
+size — a one-line change that picks between two designs is in scope; a 500-line mechanical refactor
+is not. When it is unclear which side something falls on, send it.
 
 ---
 
