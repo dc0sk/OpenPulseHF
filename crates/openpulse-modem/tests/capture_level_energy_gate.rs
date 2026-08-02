@@ -35,6 +35,17 @@ const GOOD_IDLE_MEAN_SQ: f32 = 0.00042;
 /// not about patience.
 const RECEIVE_TIMEOUT_MS: u64 = 7_000;
 
+/// TEMPORARY #1058 measurement hook — do not merge. Scales the listen window so the gate's
+/// outcome can be tested against wall-clock budget rather than only observed at one setting.
+/// Note `ScanPlanner::RETRY_START_SECS = 12`: at scale 1 the full-buffer retry can never fire
+/// here, so a flip at scale 4 would mean something structurally different became reachable.
+fn timeout_scale() -> u64 {
+    std::env::var("ABL_TIMEOUT_SCALE")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(1)
+}
+
 const LEAD: usize = 40_000;
 const TRAIL: usize = 40_000;
 
@@ -58,7 +69,11 @@ fn round_trip_at_idle_level(idle_mean_sq: f32, seed: u64) -> Result<Vec<u8>, Str
         "nothing was transmitted — the test would prove nothing"
     );
     h.rx_engine
-        .receive_with_timeout("BPSK250", None, Duration::from_millis(RECEIVE_TIMEOUT_MS))
+        .receive_with_timeout(
+            "BPSK250",
+            None,
+            Duration::from_millis(RECEIVE_TIMEOUT_MS * timeout_scale()),
+        )
         .map_err(|e| format!("{e}"))
 }
 

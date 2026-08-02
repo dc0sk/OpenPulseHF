@@ -543,7 +543,14 @@ fn a_no_template_mode_decodes_through_a_saturating_floor() {
                 "QPSK500",
                 openpulse_core::fec::FecMode::Rs,
                 None,
-                Duration::from_millis(40_000),
+                // TEMPORARY #1058 measurement hook — do not merge.
+                Duration::from_millis(
+                    40_000
+                        * std::env::var("ABL_TIMEOUT_SCALE")
+                            .ok()
+                            .and_then(|v| v.parse::<u64>().ok())
+                            .unwrap_or(1),
+                ),
             )
             .unwrap_or_else(|e| {
                 panic!(
