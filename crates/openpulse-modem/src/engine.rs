@@ -2823,6 +2823,15 @@ impl ModemEngine {
                     let retry_budget = Duration::from_secs_f64(
                         retry_span_start as f64 / audio_cfg.sample_rate as f64,
                     );
+                    // TEMPORARY #1058 ABLATION — do not merge. Neutralises the span-derived budget
+                    // so the pass runs to completion, isolating "the budget cut the pass" from
+                    // "the pass was too slow". Prediction if the budget is causal: debug @40 s
+                    // still fails on wall clock, debug @80 s flips to OK at ~65 s.
+                    let retry_budget = if std::env::var("ABL_NO_BUDGET").is_ok() {
+                        Duration::MAX
+                    } else {
+                        retry_budget
+                    };
                     let mut over_budget = false;
                     for (scanned, start) in (0..=retry_end).step_by(step).enumerate() {
                         // Check periodically rather than per position; the check is cheap but the
@@ -2894,7 +2903,12 @@ impl ModemEngine {
                         }
                     }
                     self.afc_correction_hz = saved_afc;
-                    if over_budget {
+                    // TEMPORARY #1058 ABLATION — do not merge. `ABL_NO_PERMANENCE` abandons the
+                    // over-budget pass but does NOT latch, so later passes may run again.
+                    // Prediction offline (prefilled buffer): no change, because every pass gets the
+                    // identical budget and dies at the identical position — which is what separates
+                    // the offline mechanism from the live-slow-host one.
+                    if over_budget && std::env::var("ABL_NO_PERMANENCE").is_err() {
                         retry_over_budget = true;
                     }
                 }
