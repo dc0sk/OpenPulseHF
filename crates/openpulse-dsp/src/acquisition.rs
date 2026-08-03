@@ -757,3 +757,178 @@ mod goertzel_tests {
         assert!((df + 150.0).abs() <= 25.0, "df = {df}");
     }
 }
+
+// ── Decimating (DDC) matched filter ───────────────────────────────────────────
+
+/// Matched filter that correlates at complex baseband after decimation.
+///
+/// [`IqMatchedFilter`] correlates in the passband, so its cost scales with the raw template length.
+/// That is what puts the slow rungs over the engine's correlation budget: BPSK31's 32-symbol
+/// preamble is 16 128 samples, so those modes are exempt from the #1049 veto entirely — not because
+/// correlation cannot help them, but because it was too expensive. They are the modes that listen
+/// longest and are most exposed to a noise settle.
+///
+/// This mixes to complex baseband, lowpasses, and decimates by `decim` before correlating. The
+/// search then costs roughly `1/decim²` (fewer offsets over shorter vectors), while the grid count
+/// is unchanged because the grid step scales with duration and duration is unchanged.
+///
+/// **The anti-alias lowpass is not overhead paid to make decimation legal — it rejects
+/// interference before the correlator sees it.** Measured against the passband filter on a BPSK250
+/// frame: an out-of-band tone at `fc + 1200 Hz` costs the passband correlator ρ 1.000 → 0.945 while
+/// this path stays at 1.000; out-of-band noise 0.955 → 1.000. Equivalence on signals that are
+/// genuinely in-band is exact to four decimals at `decim` up to 32 (clean frame delta 0.0000,
+/// in-band noise 0.0016–0.0039). Bench: `openpulse-modem/tests/ddc_correlation_equivalence.rs`.
+pub struct DdcMatchedFilter {
+    template: Vec<(f32, f32)>,
+    t_energy: f32,
+    taps: Vec<f32>,
+    decim: usize,
+    center_hz: f32,
+    sample_rate: f32,
+}
+
+impl DdcMatchedFilter {
+    /// Build from a real passband template. `cutoff_hz` must pass the signal plus the residual
+    /// grid; `decim` must keep the complex rate above twice that.
+    pub fn new(
+        template: &[f32],
+        center_hz: f32,
+        sample_rate: f32,
+        cutoff_hz: f32,
+        decim: usize,
+    ) -> Self {
+        let decim = decim.max(1);
+        let taps = lowpass_taps(cutoff_hz, sample_rate, 129);
+        let t = ddc_mix(template, center_hz, sample_rate, decim, &taps);
+        let t_energy = t.iter().map(|c| c.0 * c.0 + c.1 * c.1).sum();
+        Self {
+            template: t,
+            t_energy,
+            taps,
+            decim,
+            center_hz,
+            sample_rate,
+        }
+    }
+
+    /// Decimated template length, i.e. the cost the correlation budget should be measured against.
+    pub fn len(&self) -> usize {
+        self.template.len()
+    }
+
+    /// Returns `true` if the decimated template is empty.
+    pub fn is_empty(&self) -> bool {
+        self.template.is_empty()
+    }
+
+    /// Best normalised correlation over onsets and a residual-frequency grid.
+    ///
+    /// `freqs` are absolute residual offsets in Hz, as for
+    /// [`IqMatchedFilter::search_normalized_over_frequency`] — each is folded into the mix, which is
+    /// where a baseband correlator applies it most cheaply.
+    pub fn search_normalized_over_frequency(
+        &self,
+        samples: &[f32],
+        min_energy_frac: f32,
+        freqs: &[f32],
+    ) -> Option<(IqSearchResult, f32)> {
+        if self.template.is_empty() {
+            return None;
+        }
+        let mut best: Option<(IqSearchResult, f32)> = None;
+        for &f in freqs {
+            let w = ddc_mix(
+                samples,
+                self.center_hz + f,
+                self.sample_rate,
+                self.decim,
+                &self.taps,
+            );
+            if w.len() <= self.template.len() {
+                continue;
+            }
+            let span = w.len() - self.template.len();
+            let mut energies = Vec::with_capacity(span + 1);
+            for off in 0..=span {
+                energies.push(
+                    w[off..off + self.template.len()]
+                        .iter()
+                        .map(|c| c.0 * c.0 + c.1 * c.1)
+                        .sum::<f32>(),
+                );
+            }
+            let mean: f32 = energies.iter().sum::<f32>() / energies.len() as f32;
+            let floor = mean * min_energy_frac;
+            for (off, &energy) in energies.iter().enumerate() {
+                if energy < floor {
+                    continue;
+                }
+                let (mut ri, mut rq) = (0.0f32, 0.0f32);
+                for (m, t) in self.template.iter().enumerate() {
+                    let s = w[off + m];
+                    ri += s.0 * t.0 + s.1 * t.1;
+                    rq += s.1 * t.0 - s.0 * t.1;
+                }
+                let score = ri * ri + rq * rq;
+                let rho = score.sqrt() / ((energy * self.t_energy).sqrt() + 1e-12);
+                if best.as_ref().is_none_or(|(b, _)| rho > b.rho) {
+                    best = Some((
+                        IqSearchResult {
+                            offset: off * self.decim,
+                            score,
+                            rho,
+                        },
+                        f,
+                    ));
+                }
+            }
+        }
+        best
+    }
+}
+
+/// Hamming-windowed sinc lowpass.
+fn lowpass_taps(cutoff_hz: f32, sample_rate: f32, n: usize) -> Vec<f32> {
+    let fc = cutoff_hz / sample_rate;
+    let m = n as f32 - 1.0;
+    (0..n)
+        .map(|i| {
+            let x = i as f32 - m / 2.0;
+            let sinc = if x.abs() < 1e-6 {
+                2.0 * fc
+            } else {
+                (2.0 * core::f32::consts::PI * fc * x).sin() / (core::f32::consts::PI * x)
+            };
+            let w = 0.54 - 0.46 * (2.0 * core::f32::consts::PI * i as f32 / m).cos();
+            sinc * w
+        })
+        .collect()
+}
+
+/// Mix to complex baseband at `f_hz`, lowpass with `taps`, decimate by `decim`.
+fn ddc_mix(x: &[f32], f_hz: f32, sample_rate: f32, decim: usize, taps: &[f32]) -> Vec<(f32, f32)> {
+    let two_pi = 2.0 * core::f32::consts::PI;
+    let mixed: Vec<(f32, f32)> = x
+        .iter()
+        .enumerate()
+        .map(|(n, &s)| {
+            let ph = -two_pi * f_hz * n as f32 / sample_rate;
+            (s * ph.cos(), s * ph.sin())
+        })
+        .collect();
+    let ntap = taps.len();
+    let mut out = Vec::with_capacity(mixed.len() / decim + 1);
+    for n in (ntap - 1)..mixed.len() {
+        if !(n - ntap + 1).is_multiple_of(decim) {
+            continue;
+        }
+        let (mut i, mut q) = (0.0f32, 0.0f32);
+        for (k, &t) in taps.iter().enumerate() {
+            let s = mixed[n - k];
+            i += t * s.0;
+            q += t * s.1;
+        }
+        out.push((i, q));
+    }
+    out
+}

@@ -157,7 +157,27 @@ impl ModulationPlugin for BpskPlugin {
         demodulate::afc_estimate_hz(samples, config)
     }
 
+    /// Published only for modes whose ρ constants have actually been derived.
+    ///
+    /// `PREAMBLE_RHO_THRESHOLD` is a **BPSK250** number — its doc derives it from BPSK250's own
+    /// decode cliff and BPSK250's own recorded idle ceiling. Handing it to BPSK31 would be
+    /// borrowing a threshold across templates, which is the practice #1053 was withdrawn for and
+    /// which `PreambleTemplate`'s own doc calls unrepresentable by design: ρ is normalised, so its
+    /// noise floor is set by template length, and BPSK31's template is eight times longer.
+    ///
+    /// This guard used to be provided *accidentally* by `MAX_PREAMBLE_CORRELATION_SAMPLES`: the
+    /// slow rungs' templates exceeded the cap, so the engine discarded them before the borrowed
+    /// constant could be used. Phase 0 of #1062 decimates oversized templates instead of refusing
+    /// them, which removes that accident — so the constraint has to be stated where it belongs,
+    /// here, rather than depending on a cost limit to enforce a correctness property.
+    ///
+    /// To add a mode: derive its own threshold from its own noise column (across receive
+    /// bandwidths) and its own decode column (on the channel that rung exists for), then list it.
     fn preamble_template(&self, config: &ModulationConfig) -> Option<PreambleTemplate> {
+        const DERIVED_THRESHOLD_MODES: [&str; 1] = ["BPSK250"];
+        if !DERIVED_THRESHOLD_MODES.contains(&config.mode.as_str()) {
+            return None;
+        }
         let samples = modulate::bpsk_preamble_template(config).ok()?;
         Some(PreambleTemplate::new(
             samples,
