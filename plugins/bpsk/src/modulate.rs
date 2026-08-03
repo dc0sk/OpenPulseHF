@@ -191,17 +191,31 @@ pub const PREAMBLE_RHO_THRESHOLD: f32 = 0.40;
 /// for every true offset the engine can reach (0 to 400 Hz; past that `AFC_MAX_CORRECTION_HZ`
 /// rejects the settle before this check runs at all). ±20 Hz is already generous.
 ///
-/// Above: **the grid must stay well inside ±baud/2, or the gate stops discriminating.** The BPSK
-/// preamble is 32 phase-alternating symbols — a square-wave-modulated carrier whose energy sits in
-/// lines at `fc ± baud/2`. Rotate the template by that much and a line lands on plain carrier, so a
-/// steady tone starts scoring like a preamble. Measured against a pure tone (`the_gate_is_not_fooled
-/// _by_a_steady_tone`):
+/// Above: **the grid must stay well inside ±baud/4, or the gate stops discriminating.** The 32
+/// preamble *bits* alternate, but `nrzi_encode` flips phase only on a `1`, so the *symbols* are
+/// `--++` repeating — a square wave of period **four symbols**, not two. Its energy therefore sits
+/// in lines at `fc ± baud/4` plus odd harmonics: measured at BPSK250, ±62.5 Hz at 0 dB, ±187.5 at
+/// −14 dB, ±312.5 at −31 dB, and **nothing at ±125**. Rotate the template onto a line and it lands
+/// on plain carrier, so a steady tone starts scoring like a preamble. Measured against a pure tone
+/// (`the_gate_is_not_fooled_by_a_steady_tone`):
 ///
-/// | grid half-width | ρ of a pure tone |
-/// |---|---|
-/// | ±20 Hz | 0.017–0.042 |
-/// | ±160 Hz | **0.659** |
-/// | ±450 Hz (the full acquisition range) | **0.696 at every frequency** |
+/// | grid half-width | tone BETWEEN lines | tone ON a line (`fc ± 62.5`) |
+/// |---|---|---|
+/// | ±20 Hz (shipped) | 0.017–0.042 | **0.700** |
+/// | ±160 Hz | **0.659** | 0.700 |
+/// | ±450 Hz (the full acquisition range) | **0.696 at every frequency** | 0.700 |
+///
+/// **The second column is the one that was missing, and it does not depend on the grid at all.**
+/// A tone landing on one of the two dominant lines captures roughly half the template's energy —
+/// ρ ≈ √0.5 — however narrow the grid is, because no rotation is needed. Narrowing the grid narrows
+/// the *vulnerable bands* around each line (measured ±25 Hz at the shipped width: 1415–1465 and
+/// 1535–1585 Hz for BPSK250 at fc = 1500) but cannot remove them.
+///
+/// This matters less than it looks in the deployed chain and more than it looks on the bench: for a
+/// *lone* tone the AFC settle lands on the tone first, which parks it ~baud/4 from both rotated
+/// lines, and the veto then refuses it (`preamble_veto_interference`, 5/5 decodes). Interference
+/// whose apparent carrier sits at fc with sidebands *on* the lines — hum-modulated carriers,
+/// suppressed-carrier pairs, birdie combs — gets no such protection. See #1062.
 ///
 /// A birdie at 0.66 outscores this receiver's best real on-air frame (0.654). That kills the
 /// otherwise-attractive design of running the grid over the whole ±450 Hz acquisition range as a

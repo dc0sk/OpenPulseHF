@@ -461,8 +461,10 @@ two symbols). Implementing it surfaced two constraints that reading the referenc
 both qualify the recommendation above.
 
 **We imported the detection *statistic* without the sync-word *property* that makes it work for
-them.** codec2's sync sequence is designed for correlation detection. Ours is 32 *alternating* BPSK
-symbols — a square-wave-modulated carrier whose energy sits in two lines at `fc ± baud/2`. Measured
+them.** codec2's sync sequence is designed for correlation detection. Ours is 32 BPSK symbols whose *bits*
+alternate — NRZI makes the symbols `--++` repeating, period 4 — a square-wave-modulated carrier
+whose energy sits in lines at `fc ± baud/4` and odd harmonics (corrected 2026-08-03; this said
+`baud/2`, twice the true spacing). Measured
 ρ of a pure tone against that template, by residual-frequency search width:
 
 | grid half-width | ρ of a pure tone |
@@ -500,7 +502,7 @@ this doc's earlier summaries. Three durable results:
    — "codec2 uses one global constant" — came from **this document quoting only the struct default**.
 2. **No reference lets the sync word scale with symbol rate, and that is why our thresholds would not
    close.** codec2 keeps a ~110 ms PN preamble regardless of payload rate, paying **33 % of the burst
-   on datac14** without complaint. Ours is an alternating run — 32 symbols on BPSK, 16 on QPSK — so BPSK250 is 124 ms but QPSK1000 shrinks to 15 ms, and the gap
+   on datac14** without complaint. Ours is a period-4 run of 32 symbols on BPSK; the 16-symbol QPSK preamble is a *designed* sequence, not an alternating run, so this comparison covers BPSK only. BPSK250 is 124 ms but QPSK1000 shrinks to 15 ms, and the gap
    between the noise ceiling and the decode cliff closes from both sides. The QPSK threshold table was
    withdrawn for exactly that reason (see the ledger entry for #1053). **The fix is #1052's
    wire-format change extended to decouple sync *duration* from symbol rate — not more threshold

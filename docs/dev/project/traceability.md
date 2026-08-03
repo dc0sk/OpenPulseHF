@@ -230,7 +230,8 @@ falsified both columns.
   veto are not noise — they sit on the frame's leading **edge** (onsets 39328…39972 for a frame at
   40000, ρ climbing 0.461 → 1.000), where partial overlap clears the threshold honestly but the
   truncated preamble cannot demodulate. Snapping fixes exactly that. **It also breaks the opposite
-  case, because our preamble is 32 *alternating* symbols and therefore periodic**: an alignment two
+  case, because our preamble is periodic** (32 symbols; the *bits* alternate, NRZI makes the
+  *symbols* `--++`, period 4 — corrected 2026-08-03, this said "alternating symbols"): an alignment two
   symbols late still matches 29 of 31. Measured on the capture-AGC fixture, whose frame starts at
   sample 0 with ρ = 0.877, the argmax chose **offset 65** — two symbol periods — decoding to "invalid
   magic". Taking the **first threshold crossing** instead (the repo's own lock-ahead-of-the-peak rule,
@@ -331,8 +332,11 @@ falsified both columns.
   already knows the true alignment, so an accepted candidate gets a second, wider search that snaps
   the onset and re-settles there. Two stages, because accepts are rare and rejection must stay cheap.
 - **The grid width is bounded from ABOVE, and that is the load-bearing finding.** The BPSK preamble
-  is 32 phase-alternating symbols — a square-wave-modulated carrier with energy in lines at
-  `fc ± baud/2`. Rotate the template that far and a line lands on plain carrier. Measured ρ of a
+  is 32 symbols whose *bits* alternate — NRZI makes the *symbols* `--++`, period 4 — a
+  square-wave-modulated carrier with energy in lines at `fc ± baud/4` and odd harmonics.
+  **[Corrected 2026-08-03: this entry said `fc ± baud/2`, twice the true spacing; a tone ON a line
+  also scores ρ ≈ 0.70 regardless of grid width. See #1062.]** Rotate the template onto a line and
+  it lands on plain carrier. Measured ρ of a
   **pure tone**: ±20 Hz grid → **0.017–0.042**; ±160 Hz → **0.659**; ±450 Hz (the full acquisition
   range) → **0.696 at every frequency**, above this receiver's best real on-air frame (0.654). This
   **rejects** the otherwise-attractive alternative of searching the whole acquisition range as a
