@@ -615,6 +615,14 @@ pub struct ModemEngine {
     /// that expects the correlation gate to be doing work can tell "it accepted everything" from
     /// "it never ran" — the two are indistinguishable in a decode-or-not assertion.
     rho_rejected_settles: u64,
+    /// Settles the preamble correlation *accepted* (#1049).
+    ///
+    /// The companion to `rho_rejected_settles`, and it exists because that counter alone cannot
+    /// answer the question the veto is for. A zero rejection count is consistent with three very
+    /// different worlds: no settle was attempted, every settle was accepted, or the mode publishes
+    /// no template. Only the accept count separates "the gate passed this input" from "the gate
+    /// never saw it" — which is exactly what a test feeding deliberate interference must know.
+    rho_accepted_settles: u64,
     /// Receiver-side streaming AGC on captured audio (default off). Normalises the level so the
     /// PSK/QAM ladder sees a consistent amplitude despite QSB fading and inter-station spread.
     /// Active-span gated: the gain only adapts on carrier-present blocks (RMS ≥ DCD threshold) and
@@ -746,6 +754,7 @@ impl ModemEngine {
             notch_blocks_processed: 0,
             settle_condemnations: 0,
             rho_rejected_settles: 0,
+            rho_accepted_settles: 0,
             agc_enabled: false,
             // target RMS 0.3 (headroom below ±1.0), slow loop (α=0.02), ±40 dB clamp.
             agc: openpulse_dsp::agc::Agc::new(0.3, 0.02, 40.0),
@@ -798,6 +807,11 @@ impl ModemEngine {
     /// this with a case that must reject.
     pub fn rho_rejected_settles(&self) -> u64 {
         self.rho_rejected_settles
+    }
+
+    /// Settles the preamble correlation accepted. See [`Self::rho_rejected_settles`].
+    pub fn rho_accepted_settles(&self) -> u64 {
+        self.rho_accepted_settles
     }
 
     /// Tripwire count of capture blocks the DCD carrier detector processed at the seam. DCD runs on the
@@ -3173,6 +3187,7 @@ impl ModemEngine {
                                 // micro-sweep and condemnation recovery already exist to handle.
                                 // Placing the onset properly needs a preamble whose autocorrelation
                                 // is not periodic — a PN or chirp sync word, a wire-format change.
+                                self.rho_accepted_settles += 1;
                                 debug!("settle at onset={onset} corroborated: rho={rho:.3}");
                             }
                         }
