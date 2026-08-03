@@ -500,7 +500,7 @@ this doc's earlier summaries. Three durable results:
    — "codec2 uses one global constant" — came from **this document quoting only the struct default**.
 2. **No reference lets the sync word scale with symbol rate, and that is why our thresholds would not
    close.** codec2 keeps a ~110 ms PN preamble regardless of payload rate, paying **33 % of the burst
-   on datac14** without complaint. Ours is 16 symbols, so it shrinks to 15 ms at QPSK1000 and the gap
+   on datac14** without complaint. Ours is an alternating run — 32 symbols on BPSK, 16 on QPSK — so BPSK250 is 124 ms but QPSK1000 shrinks to 15 ms, and the gap
    between the noise ceiling and the decode cliff closes from both sides. The QPSK threshold table was
    withdrawn for exactly that reason (see the ledger entry for #1053). **The fix is #1052's
    wire-format change extended to decouple sync *duration* from symbol rate — not more threshold
