@@ -733,3 +733,86 @@ fn g6_where_are_the_condemned_anchors() {
     println!("  not decode it -- a second defect a new preamble would not fix. All anchors below");
     println!("  the frame start means the receiver never got there, which a recovery fix would.");
 }
+
+// ── G7: work-to-acquire, not a verdict ───────────────────────────────────────
+
+/// The mechanism as a RATE, which is the only budget-independent way to state it.
+///
+/// Reporting "decodes / does not decode" hides that the budget IS the verdict: under the shipped
+/// wall-clock budget on an idle machine this same case reached 582 condemnations and DECODED, while
+/// a 400-iteration budget reaches 110 and does not. At ~126 samples of lead-in per condemnation,
+/// 110 stops about 2 100 samples short of a frame at 16 000 — the budget was fitted to a fixture,
+/// not to anything real.
+///
+/// So sweep the budget and report the work required, which is a property of the interference and
+/// the crawl, not of the machine or the constant.
+#[test]
+#[ignore = "verification"]
+fn g7_work_to_acquire() {
+    let (backend, mut tx) = engine();
+    tx.transmit_with_fec_mode(b"work to acquire", MODE, FecMode::Rs, None)
+        .expect("transmit");
+    let frame = backend.drain_samples();
+    let frame_rms = (frame.iter().map(|s| s * s).sum::<f32>() / frame.len() as f32).sqrt();
+    let amp = frame_rms / 10f32.powf(20.0 / 20.0) * std::f32::consts::SQRT_2;
+
+    for lead_s in [1.0f32, 2.0] {
+        let pad = secs(lead_s);
+        let total = pad + frame.len() + secs(1.0);
+        println!(
+            "\nG7: lead-in {lead_s} s ({pad} samples), frame at {pad}..{}",
+            pad + frame.len()
+        );
+        println!(
+            "{:<22} {:>10} {:>8} {:>12} {:>12} {:>9}",
+            "case", "iter cap", "cond", "anchor max", "samples/cond", "decoded"
+        );
+        for &iters in &[100usize, 200, 400, 800, 1_600] {
+            for (label, veto) in [("tone, veto REMOVED", false), ("comb, veto on", true)] {
+                let bed = if label.starts_with("tone") {
+                    tone(FC + LINE_HZ, amp, total)
+                } else {
+                    comb(60.0, 65.0, amp, total)
+                };
+                let mut sig = bed.clone();
+                for (i, s) in frame.iter().enumerate() {
+                    sig[pad + i] += s;
+                }
+                let backend = LoopbackBackend::new();
+                let mut e = ModemEngine::new(Box::new(backend.clone_shared()));
+                if veto {
+                    e.register_plugin(Box::new(bpsk_plugin::BpskPlugin::new()))
+                        .expect("reg");
+                } else {
+                    e.register_plugin(Box::new(NoTemplateBpsk(bpsk_plugin::BpskPlugin::new())))
+                        .expect("reg");
+                }
+                e.set_deterministic_scan_positions(Some(SCAN_POSITIONS));
+                e.set_deterministic_max_iterations(Some(iters));
+                e.enable_notch();
+                backend.fill_samples(&sig);
+                let decoded = e
+                    .receive_with_fec_mode_timeout(
+                        MODE,
+                        FecMode::Rs,
+                        None,
+                        Duration::from_millis(120_000),
+                    )
+                    .is_ok();
+                let pos = e.condemned_positions();
+                let hi = pos.iter().copied().max().unwrap_or(0);
+                let rate = if pos.is_empty() {
+                    0.0
+                } else {
+                    hi as f32 / pos.len() as f32
+                };
+                println!(
+                    "{label:<22} {iters:>10} {:>8} {hi:>12} {rate:>12.1} {decoded:>9}",
+                    pos.len()
+                );
+            }
+        }
+    }
+    println!("\n  If decode flips ON once anchor max passes the frame start, the mechanism is a");
+    println!("  CRAWL RATE against a budget -- not 'the receiver never advances'.");
+}
