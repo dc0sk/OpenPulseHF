@@ -15,6 +15,7 @@
 
 use openpulse_audio::loopback::LoopbackBackend;
 use openpulse_core::fec::FecMode;
+use openpulse_core::plugin::ModulationPlugin;
 use openpulse_modem::engine::ModemEngine;
 use std::f32::consts::PI;
 use std::time::Duration;
@@ -356,4 +357,190 @@ fn g3_does_a_frame_survive_the_interference() {
     println!("\n  * = no settle was ever corroborated in that run.");
     println!("  The control row is the counterfactual: broadband noise at the same SIR. An");
     println!("  interferer shape only indicts the veto where it does WORSE than the control.");
+}
+
+// ── G4: which mechanism? veto, settle-anchoring, or symbol corruption ────────
+
+/// `BpskPlugin` with the preamble template removed and nothing else changed.
+///
+/// This is the counterfactual for the veto specifically: with `preamble_template` returning `None`
+/// the engine falls back to the energy-only settle that every no-template mode already runs, which
+/// is exactly the path #1049 was built on top of. Every other override is delegated, because an
+/// incomplete delegation would silently ablate more than the veto and invalidate the comparison.
+struct NoTemplateBpsk(bpsk_plugin::BpskPlugin);
+
+impl openpulse_core::plugin::ModulationPlugin for NoTemplateBpsk {
+    fn info(&self) -> &openpulse_core::plugin::PluginInfo {
+        self.0.info()
+    }
+    fn modulate(
+        &self,
+        d: &[u8],
+        c: &openpulse_core::plugin::ModulationConfig,
+    ) -> Result<Vec<f32>, openpulse_core::error::ModemError> {
+        self.0.modulate(d, c)
+    }
+    fn demodulate(
+        &self,
+        s: &[f32],
+        c: &openpulse_core::plugin::ModulationConfig,
+    ) -> Result<Vec<u8>, openpulse_core::error::ModemError> {
+        self.0.demodulate(s, c)
+    }
+    fn demodulate_soft(
+        &self,
+        s: &[f32],
+        c: &openpulse_core::plugin::ModulationConfig,
+    ) -> Result<Vec<f32>, openpulse_core::error::ModemError> {
+        self.0.demodulate_soft(s, c)
+    }
+    fn frame_geometry(
+        &self,
+        c: &openpulse_core::plugin::ModulationConfig,
+    ) -> Option<openpulse_core::plugin::FrameGeometry> {
+        self.0.frame_geometry(c)
+    }
+    fn estimate_snr_db(
+        &self,
+        s: &[f32],
+        c: &openpulse_core::plugin::ModulationConfig,
+    ) -> Option<f32> {
+        self.0.estimate_snr_db(s, c)
+    }
+    fn supports_soft_demod(&self, m: &str) -> bool {
+        self.0.supports_soft_demod(m)
+    }
+    fn estimate_afc_hz(
+        &self,
+        s: &[f32],
+        c: &openpulse_core::plugin::ModulationConfig,
+    ) -> Option<f32> {
+        self.0.estimate_afc_hz(s, c)
+    }
+    fn occupied_bandwidth_hz(&self, m: &str) -> Option<f32> {
+        self.0.occupied_bandwidth_hz(m)
+    }
+    fn modulate_iq(
+        &self,
+        d: &[u8],
+        c: &openpulse_core::plugin::ModulationConfig,
+    ) -> Result<(Vec<f32>, Vec<f32>), openpulse_core::error::ModemError> {
+        self.0.modulate_iq(d, c)
+    }
+    // preamble_template deliberately NOT overridden -> trait default None -> no veto.
+}
+
+fn run_no_veto(signal: Vec<f32>) -> bool {
+    let backend = LoopbackBackend::new();
+    let mut e = ModemEngine::new(Box::new(backend.clone_shared()));
+    e.register_plugin(Box::new(NoTemplateBpsk(bpsk_plugin::BpskPlugin::new())))
+        .expect("register");
+    e.enable_notch();
+    backend.fill_samples(&signal);
+    e.receive_with_fec_mode_timeout(MODE, FecMode::Rs, None, Duration::from_millis(20_000))
+        .is_ok()
+}
+
+/// Byte-error rate of the raw demodulator on the exact frame span — no engine, no settle, no veto.
+/// Non-zero means the interferer is corrupting symbols and the acquisition chain is a bystander.
+fn demod_ber(frame: &[f32], interferer: &[f32]) -> f32 {
+    let p = bpsk_plugin::BpskPlugin::new();
+    let c = openpulse_core::plugin::ModulationConfig {
+        mode: MODE.into(),
+        sample_rate: 8_000,
+        center_frequency: FC,
+        ..Default::default()
+    };
+    let clean = match p.demodulate(frame, &c) {
+        Ok(v) => v,
+        Err(_) => return f32::NAN,
+    };
+    let mixed: Vec<f32> = frame.iter().zip(interferer).map(|(a, b)| a + b).collect();
+    let got = match p.demodulate(&mixed, &c) {
+        Ok(v) => v,
+        Err(_) => return 1.0,
+    };
+    if clean.is_empty() {
+        return f32::NAN;
+    }
+    let n = clean.len().min(got.len());
+    let diff = clean[..n]
+        .iter()
+        .zip(&got[..n])
+        .filter(|(a, b)| a != b)
+        .count()
+        + clean.len().abs_diff(got.len());
+    diff as f32 / clean.len() as f32
+}
+
+#[test]
+#[ignore = "verification"]
+fn g4_which_mechanism() {
+    let (backend, mut tx) = engine();
+    tx.transmit_with_fec_mode(b"frame during interference", MODE, FecMode::Rs, None)
+        .expect("transmit");
+    let frame = backend.drain_samples();
+    let frame_rms = (frame.iter().map(|s| s * s).sum::<f32>() / frame.len() as f32).sqrt();
+
+    const SEEDS: usize = 5;
+    let cells: Vec<(&str, f32)> = vec![("comb FC-60/+65", 20.0), ("DSB FC x 60 Hz", 10.0)];
+
+    println!("\nG4: mechanism ablation, {SEEDS} seeds per cell (decode fraction)");
+    println!(
+        "    lead-in = 2 s of interferer before the frame; none = interferer starts with it\n"
+    );
+    println!(
+        "{:<20} {:>7} {:>12} {:>12} {:>12} {:>12}",
+        "cell", "SIR", "baseline", "no lead-in", "veto REMOVED", "demod BER"
+    );
+
+    for (name, sir) in cells {
+        let amp = frame_rms / 10f32.powf(sir / 20.0) * std::f32::consts::SQRT_2;
+        let (mut base, mut nolead, mut noveto) = (0, 0, 0);
+        let mut ber_sum = 0.0f32;
+        for seed in 0..SEEDS {
+            let pad = secs(2.0);
+            let total = pad * 2 + frame.len();
+            // Vary the interferer's phase per seed; at n=1 each boundary is a coin edge.
+            let long = if name.starts_with("comb") {
+                comb(60.0, 65.0, amp, total + 1_000)
+            } else {
+                dsb(60.0, amp, total + 1_000)
+            };
+            let off = (seed * 137) % 1_000;
+            let bed = &long[off..off + total];
+
+            let mut with_lead = bed.to_vec();
+            for (i, s) in frame.iter().enumerate() {
+                with_lead[pad + i] += s;
+            }
+            if run_cfg(with_lead.clone(), true, true).decoded {
+                base += 1;
+            }
+            if run_no_veto(with_lead) {
+                noveto += 1;
+            }
+
+            let mut no_lead = bed[..frame.len() + pad].to_vec();
+            for (i, s) in frame.iter().enumerate() {
+                no_lead[i] += s;
+            }
+            if run_cfg(no_lead, true, true).decoded {
+                nolead += 1;
+            }
+
+            ber_sum += demod_ber(&frame, &bed[..frame.len()]);
+        }
+        println!(
+            "{name:<20} {:>6.0}dB {:>10}/{SEEDS} {:>10}/{SEEDS} {:>10}/{SEEDS} {:>12.4}",
+            sir,
+            base,
+            nolead,
+            noveto,
+            ber_sum / SEEDS as f32
+        );
+    }
+    println!("\n  Reading: 'veto REMOVED' >> 'baseline' means the veto's corroboration causes the");
+    println!("  loss. Similar means it is a bystander. A high demod BER means the interferer");
+    println!("  corrupts symbols directly and no acquisition change can help.");
 }
