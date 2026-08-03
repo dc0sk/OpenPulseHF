@@ -25,12 +25,23 @@ const FC: f32 = 1_500.0;
 const MODE: &str = "BPSK250";
 /// BPSK250's preamble lines sit at odd multiples of baud/4. This is the fundamental.
 const LINE_HZ: f32 = 62.5;
+/// Positions the retry scan may examine per pass. Fixed so results depend on the audio, not the CPU.
+const SCAN_POSITIONS: usize = 3_000;
+/// Outer receive-loop iterations. The retry budget alone is not enough — the outer loop keeps
+/// scanning until the wall-clock listen deadline, so under load it completes fewer passes and
+/// reaches a different verdict. Both budgets must be work-based.
+const MAX_ITERATIONS: usize = 400;
 
 fn engine() -> (LoopbackBackend, ModemEngine) {
     let backend = LoopbackBackend::new();
     let mut e = ModemEngine::new(Box::new(backend.clone_shared()));
     e.register_plugin(Box::new(bpsk_plugin::BpskPlugin::new()))
         .expect("register bpsk");
+    // Budget the scan in POSITIONS, not seconds. With the shipped wall-clock budget the same input
+    // decoded on one run and failed on the next, because the pass covers however many positions the
+    // machine had time for. Every number in this file would otherwise be a measure of CPU load.
+    e.set_deterministic_scan_positions(Some(SCAN_POSITIONS));
+    e.set_deterministic_max_iterations(Some(MAX_ITERATIONS));
     (backend, e)
 }
 
@@ -435,6 +446,8 @@ fn run_no_veto_full(signal: Vec<f32>) -> Outcome {
     let mut e = ModemEngine::new(Box::new(backend.clone_shared()));
     e.register_plugin(Box::new(NoTemplateBpsk(bpsk_plugin::BpskPlugin::new())))
         .expect("register");
+    e.set_deterministic_scan_positions(Some(SCAN_POSITIONS));
+    e.set_deterministic_max_iterations(Some(MAX_ITERATIONS));
     e.enable_notch();
     backend.fill_samples(&signal);
     let decoded = e
@@ -630,4 +643,93 @@ fn g5_is_the_veto_protective_where_it_rejects() {
     println!(
         "  If both hold, the veto is genuinely outcome-neutral and this files as #1021-family."
     );
+}
+
+// ── G6: WHERE does the receiver thrash? hold, or advance-and-still-fail? ─────
+
+/// The mechanism question the counters cannot answer, and the one that decides whether a cheaper
+/// non-wire fix exists.
+///
+/// ~550 condemnations is compatible with two different bugs. If the anchors all sit inside the
+/// interferer-only lead-in, the receiver is stuck before the frame and a recovery that advanced
+/// further would find it — a recovery-side fix, no wire change. If the anchors sweep across the
+/// frame span and still fail, there is a second defect that a new preamble does not fix, and the
+/// predicted benefit of a spread sequence is smaller than it looks.
+#[test]
+#[ignore = "verification"]
+fn g6_where_are_the_condemned_anchors() {
+    let (backend, mut tx) = engine();
+    tx.transmit_with_fec_mode(b"frame during interference", MODE, FecMode::Rs, None)
+        .expect("transmit");
+    let frame = backend.drain_samples();
+    let frame_rms = (frame.iter().map(|s| s * s).sum::<f32>() / frame.len() as f32).sqrt();
+    let pad = secs(2.0);
+    let total = pad * 2 + frame.len();
+
+    println!("\nG6: condemned anchor positions vs the frame span");
+    println!(
+        "    frame occupies samples {}..{} of {} ({:.1} s buffer)\n",
+        pad,
+        pad + frame.len(),
+        total,
+        total as f32 / FS
+    );
+    println!(
+        "{:<24} {:>7} {:>6} {:>9} {:>9} {:>9} {:>11} {:>9}",
+        "case", "SIR", "cond", "min", "max", "in-frame", "past frame", "decoded"
+    );
+
+    for (name, sir, veto) in [
+        ("comb, veto on", 20.0f32, true),
+        ("comb, veto REMOVED", 20.0, false),
+        ("tone, veto REMOVED", 20.0, false),
+        ("tone, veto on", 20.0, true),
+    ] {
+        let amp = frame_rms / 10f32.powf(sir / 20.0) * std::f32::consts::SQRT_2;
+        let bed = if name.starts_with("comb") {
+            comb(60.0, 65.0, amp, total)
+        } else {
+            tone(FC + LINE_HZ, amp, total)
+        };
+        let mut sig = bed.clone();
+        for (i, s) in frame.iter().enumerate() {
+            sig[pad + i] += s;
+        }
+
+        let backend = LoopbackBackend::new();
+        let mut e = ModemEngine::new(Box::new(backend.clone_shared()));
+        if veto {
+            e.register_plugin(Box::new(bpsk_plugin::BpskPlugin::new()))
+                .expect("register");
+        } else {
+            e.register_plugin(Box::new(NoTemplateBpsk(bpsk_plugin::BpskPlugin::new())))
+                .expect("register");
+        }
+        e.set_deterministic_scan_positions(Some(SCAN_POSITIONS));
+        e.set_deterministic_max_iterations(Some(MAX_ITERATIONS));
+        e.set_deterministic_max_iterations(Some(MAX_ITERATIONS));
+        e.enable_notch();
+        backend.fill_samples(&sig);
+        let decoded = e
+            .receive_with_fec_mode_timeout(MODE, FecMode::Rs, None, Duration::from_millis(20_000))
+            .is_ok();
+        let pos = e.condemned_positions();
+        let lo = pos.iter().copied().min().unwrap_or(0);
+        let hi = pos.iter().copied().max().unwrap_or(0);
+        let in_frame = pos
+            .iter()
+            .filter(|&&p| p >= pad && p < pad + frame.len())
+            .count();
+        let past = pos.iter().filter(|&&p| p >= pad + frame.len()).count();
+        println!(
+            "{name:<24} {sir:>6.0}dB {:>6} {lo:>9} {hi:>9} {in_frame:>9} {past:>11} {:>9}",
+            pos.len(),
+            decoded
+        );
+    }
+    println!(
+        "\n  in-frame > 0 with decoded=false means recovery REACHED the frame and still could"
+    );
+    println!("  not decode it -- a second defect a new preamble would not fix. All anchors below");
+    println!("  the frame start means the receiver never got there, which a recovery fix would.");
 }
