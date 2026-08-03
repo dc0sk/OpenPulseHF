@@ -151,12 +151,26 @@ Group 2 is the cheapest and is currently blocking nothing but itself. Group 1 se
 
 ---
 
+## Decided by the maintainer
+
+1. **On-air evidence is a HARD GATE for 1.0** (decided 2026-08-03). "Simulator-validated, on-air
+   pending" is **not** an acceptable 1.0, with or without a release-note caveat. The A-series
+   criteria below are therefore blocking, not aspirational, and no amount of simulation substitutes
+   for them — the evidence tiers are independent (`CLAUDE.md`, *evidence-tiers*: unit test < model <
+   hardware-in-the-loop < field).
+
+   **Consequences, so this is not just a line in a table:**
+   - The critical path to 1.0 runs through the rigs, not the modem. Work that cannot be validated
+     on air does not shorten the release.
+   - The FT-991A receive-path blocker (A→B fails offline too, so it is in the receiver) is on the
+     critical path, and so is FF-15 Phase H.
+   - Any wire-format change (#1062) re-opens the on-air evidence, because the recorded corpus in
+     `crates/openpulse-modem/tests/captures/` contains the **old** preamble. Sequencing a format
+     break before the on-air campaign means paying for the campaign twice.
+
 ## Open questions for the maintainer
 
-1. **Is on-air evidence a hard gate for 1.0, or is "simulator-validated, on-air pending" an
-   acceptable 1.0 with the caveat stated in the release notes?** This single answer changes the
-   release date more than everything else combined.
-2. **CI: re-enable, or re-word the requirements to describe local pre-merge gates?** Both are
+1. **CI: re-enable, or re-word the requirements to describe local pre-merge gates?** Both are
    defensible; the status quo (requirements describing CI that does not run) is not.
 3. **Is a coverage threshold wanted at all,** or is the acceptance-criteria table considered the
    real quality gate? D2 assumes yes; it is genuinely optional.
