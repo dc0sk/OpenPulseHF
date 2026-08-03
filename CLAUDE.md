@@ -700,6 +700,48 @@ External modem/DSP references (gnuradio FLL band-edge, liquid-dsp framesync, dan
 
 ---
 
+## Verification mechanics (mandatory — these ban CONSTRUCTS, not virtues)
+
+Added 2026-08-03 after one session produced five wrong verdicts, none of them caused by bad code —
+every one was a **corrupted verdict channel**. A rule like "check exit codes properly" cannot fail
+and had already been written down; these ban specific greppable constructs instead, so a violation
+is visible in the transcript rather than indistinguishable from compliance.
+
+1. **Pipelines never carry verdicts.** A pass/fail claim, exit status or count may come only from
+   `scripts/gate.sh`, or from the two-line form `cmd > log 2>&1; rc=$?`. Never `$?` after a
+   pipeline; never `${PIPESTATUS[…]}` or `$pipestatus` (**dialect trap — the login shell here is
+   zsh, where the bash form silently yields an empty string**); never from eyeballing piped output.
+   Piping to `tail`/`head` to *read* is fine: **a pipe may shape what you read, never what you
+   conclude.**
+2. **The workspace gate is `scripts/gate.sh`.** It runs fmt + clippy + `cargo test --workspace
+   --no-default-features --no-fail-fast`, captures real statuses without pipes, prints the failure
+   list **untruncated**, and writes `target/gate-verdict.json`. Quote gate results only from its
+   `GATE:` line. `--no-fail-fast` is not optional discipline — without it cargo stops at the first
+   failing *binary* and the count is a lower bound (this repo has been bitten twice, #1052 latest).
+3. **After editing `gate.sh`, sabotage-verify it** (`scripts/gate.sh --self-test`, which plants a
+   failing test and requires `GATE: FAIL`). A gate nobody has watched fail is the self-consistent
+   checker it exists to prevent.
+4. **A zero from a filter is a claim about the filter.** Before reporting any absence found through
+   `grep`/`jq`/a log pattern — "0 occurrences", "never fires" — show the same filter matching a
+   known-present instance, or write **"my filter found nothing"**, which is a different sentence
+   from "there is nothing". A too-narrow trace filter nearly became a published finding.
+5. **Reproduction harnesses share constants by reference.** A harness claiming to reproduce gate X
+   takes X's parameters (mode, FEC, step, channel) from the same `const`/module X uses, or asserts
+   equality at startup and aborts on mismatch. **A doc-comment fidelity claim with hand-transcribed
+   parameters is banned — a comment cannot fail**, and one claiming to reproduce a QPSK500 gate
+   while defaulting to QPSK1000 inverts the conclusion drawn from it.
+6. **Before `gh pr create`**, print `git log --oneline origin/main..HEAD` and `git diff --stat
+   origin/main...HEAD`, and confirm both match the PR description. A PR labelled "docs-only" merged
+   `engine.rs` because the branch was cut while standing on a code branch.
+
+**Known hole, not yet closed:** `.git/hooks/pre-push` runs `cargo check` only and defers by comment
+to a PR CI job — and that workflow is `disabled_manually`. **The full gate is therefore enforced by
+no machine.** Rules 1–3 are the local imitation; they are not CI. Until that is resolved, the gate
+is only as reliable as the person remembering to run it, which is precisely the failure mode that
+produced three recorded ungated merges.
+
+---
+
 ## Adversarial review (standing rule)
 
 A second model (**Fable**) reviews work in this repo before it is trusted. This exists because the
