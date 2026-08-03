@@ -693,11 +693,18 @@ fn f6_would_a_spread_template_refuse_the_interferers() {
         "DSB x62.5",
         "comb -60/+65",
     ];
-    println!("\nF6: peak rho of each template against each interferer (grid +/-20 Hz)");
     println!(
-        "    the shipped threshold is 0.40; BELOW it the veto REFUSES, which g5 shows is what"
+        "\nF6: COMPONENT-LEVEL peak rho, template vs interferer (grid +/-20 Hz, CENTRED AT 0)"
     );
-    println!("    keeps the receiver free to find the frame\n");
+    println!("    This is NOT the deployed response, and the LONE TONE row is where they diverge.");
+    println!(
+        "    The engine centres this grid on the AFC settle; for a lone tone the settle lands"
+    );
+    println!("    on the tone, parking it ~baud/4 from both rotated lines, so the deployed chain");
+    println!("    REFUSES the tone this table scores at 0.701 (measured: g5, 5/5 decodes with the");
+    println!("    veto on). The SIDEBAND rows carry over unchanged, because their settle lands at");
+    println!("    ~0 Hz -- g2a reads 0.0 Hz correction on every one -- so for those the grid the");
+    println!("    engine actually builds is centred where this table centres it.\n");
     print!("{:<16}", "interferer");
     for (name, _, _) in f3_templates() {
         print!("{name:>20}");
