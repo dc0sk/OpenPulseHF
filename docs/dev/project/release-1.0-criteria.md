@@ -2,12 +2,13 @@
 project: openpulsehf
 doc: docs/dev/project/release-1.0-criteria.md
 status: living
-last_updated: 2026-07-18
+last_updated: 2026-08-03
 ---
 
 # What 1.0 means
 
-**Draft for review — nothing here is agreed yet.** This exists because "pre-1.x" was undefinable:
+**Draft, except for the *Decided by the maintainer* section below — those three are settled.** This
+exists because "pre-1.x" was undefinable:
 the only reference to 1.x anywhere in the repo was backlog item 12 ("wide-channel, targeted at a
 future 1.x"), so there was no bar to plan against. This proposes one.
 
@@ -151,14 +152,51 @@ Group 2 is the cheapest and is currently blocking nothing but itself. Group 1 se
 
 ---
 
+## Decided by the maintainer
+
+1. **On-air evidence is a HARD GATE for 1.0** (decided 2026-08-03). "Simulator-validated, on-air
+   pending" is **not** an acceptable 1.0, with or without a release-note caveat. The A-series
+   criteria below are therefore blocking, not aspirational, and no amount of simulation substitutes
+   for them — the evidence tiers are independent (`CLAUDE.md`, *evidence-tiers*: unit test < model <
+   hardware-in-the-loop < field).
+
+   **Consequences, so this is not just a line in a table:**
+   - The critical path to 1.0 runs through the rigs, not the modem. Work that cannot be validated
+     on air does not shorten the release.
+   - The FT-991A receive-path blocker (A→B fails offline too, so it is in the receiver) is on the
+     critical path, and so is FF-15 Phase H.
+   - Any wire-format change (#1062) re-opens the on-air evidence, because the recorded corpus in
+     `crates/openpulse-modem/tests/captures/` contains the **old** preamble — so the corpus must be
+     re-recorded after the break, and the campaign run against the final format.
+
+2. **The wire format may change freely until 1.0 is tagged — and that is the reason to maximise
+   maturity before tagging** (decided 2026-08-03). The tag is the irreversible act; the on-air
+   campaign is cheap and repeatable. Post-1.0 a format change costs a compatibility-mode discussion,
+   permanently. The order is therefore:
+
+   > **wire format / modem maturity → on-air campaign → tag 1.0**
+
+   This **supersedes** the "paying for the campaign twice" objection above as a reason to *defer* a
+   format break: that objection only bites once a campaign has already been paid for, and none has.
+   #1062 is consequently on the critical path and lands **before** the campaign, not after.
+
+3. **Add-on DSP stays runtime-optional so on-air runs can attribute its effects** (decided
+   2026-08-03). The bare modem is the low-risk part — it re-implements known-to-work references and
+   invents nothing. The risk sits in what is layered on top (receiver notch, capture AGC, CE-SSB),
+   which must be **proven on air, not assumed**. Each must therefore be switchable at runtime so a
+   campaign can be run with and without it and the difference attributed — the repo's standing
+   ablation discipline applied to the deployment surface. The flags already exist
+   (`modem.notch_enabled`, `modem.agc_enabled`, `modem.cessb_enabled` in `openpulse-config`); what is
+   missing is an on-air runner that sweeps them and records which combination produced each evidence
+   bundle.
+
 ## Open questions for the maintainer
 
-1. **Is on-air evidence a hard gate for 1.0, or is "simulator-validated, on-air pending" an
-   acceptable 1.0 with the caveat stated in the release notes?** This single answer changes the
-   release date more than everything else combined.
-2. **CI: re-enable, or re-word the requirements to describe local pre-merge gates?** Both are
+1. **CI: re-enable, or re-word the requirements to describe local pre-merge gates?** Both are
    defensible; the status quo (requirements describing CI that does not run) is not.
-3. **Is a coverage threshold wanted at all,** or is the acceptance-criteria table considered the
+2. **Is a coverage threshold wanted at all,** or is the acceptance-criteria table considered the
    real quality gate? D2 assumes yes; it is genuinely optional.
-4. **Which jurisdictions does 1.0 claim compliance documentation for?** `REQ-REG-07..12` name FCC,
+3. **Which jurisdictions does 1.0 claim compliance documentation for?** `REQ-REG-07..12` name FCC,
    CEPT/EU, BNetzA and Ofcom. Claiming fewer is faster and more honest than claiming all four.
+4. **If an add-on cannot be proven on air by 1.0, does it ship off by default or get removed?**
+   Off-by-default keeps the code path alive but makes 1.0's shipped configuration the bare modem.
