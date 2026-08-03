@@ -764,8 +764,8 @@ fn g7_work_to_acquire() {
             pad + frame.len()
         );
         println!(
-            "{:<22} {:>10} {:>8} {:>12} {:>12} {:>9}",
-            "case", "iter cap", "cond", "anchor max", "samples/cond", "decoded"
+            "{:<22} {:>10} {:>8} {:>12} {:>12} {:>12} {:>9}",
+            "case", "iter cap", "cond", "anchor max", "samples/cond", "settled at", "decoded"
         );
         for &iters in &[100usize, 200, 400, 800, 1_600] {
             for (label, veto) in [("tone, veto REMOVED", false), ("comb, veto on", true)] {
@@ -806,8 +806,13 @@ fn g7_work_to_acquire() {
                 } else {
                     hi as f32 / pos.len() as f32
                 };
+                // Where the ACCEPTED settle landed. Without this the "walk reached the frame"
+                // reading is inferred from the condemned anchors alone, and the 1 s row decodes
+                // with its highest condemned anchor BELOW the frame start.
+                let acc = e.accepted_settle_positions();
+                let accepted = acc.last().map(|v| v.to_string()).unwrap_or("-".into());
                 println!(
-                    "{label:<22} {iters:>10} {:>8} {hi:>12} {rate:>12.1} {decoded:>9}",
+                    "{label:<22} {iters:>10} {:>8} {hi:>12} {rate:>12.1} {accepted:>12} {decoded:>9}",
                     pos.len()
                 );
             }

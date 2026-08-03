@@ -616,6 +616,13 @@ pub struct ModemEngine {
     /// buffer and still never decodes. Those are different bugs with different fixes, and only the
     /// positions separate them. Bounded so a pathological run cannot grow it without limit.
     condemned_positions: Vec<usize>,
+    /// Sample positions of settles the correlation ACCEPTED.
+    ///
+    /// The companion to `condemned_positions`, and it exists for the same reason the accept COUNTER
+    /// does: logging only the anchors that failed cannot show where the one that succeeded landed,
+    /// so "the recovery walk reached the frame" stays an inference. Recording only failures was the
+    /// same asymmetry twice.
+    accepted_settle_positions: Vec<usize>,
     /// Optional work-unit budget for the retry scan, replacing its wall-clock budget.
     ///
     /// The shipped budget compares *elapsed real time* against the audio duration a pass covers
@@ -780,6 +787,7 @@ impl ModemEngine {
             notch_blocks_processed: 0,
             settle_condemnations: 0,
             condemned_positions: Vec::new(),
+            accepted_settle_positions: Vec::new(),
             deterministic_scan_positions: None,
             deterministic_max_iterations: None,
             rho_rejected_settles: 0,
@@ -832,6 +840,11 @@ impl ModemEngine {
     /// Sample positions of condemned settle anchors, oldest first (bounded).
     pub fn condemned_positions(&self) -> &[usize] {
         &self.condemned_positions
+    }
+
+    /// Sample positions of settles the correlation accepted, oldest first (bounded).
+    pub fn accepted_settle_positions(&self) -> &[usize] {
+        &self.accepted_settle_positions
     }
 
     /// Budget the retry scan in positions rather than wall-clock time.
@@ -3246,6 +3259,9 @@ impl ModemEngine {
                                 // Placing the onset properly needs a preamble whose autocorrelation
                                 // is not periodic — a PN or chirp sync word, a wire-format change.
                                 self.rho_accepted_settles += 1;
+                                if self.accepted_settle_positions.len() < 4_096 {
+                                    self.accepted_settle_positions.push(onset);
+                                }
                                 debug!("settle at onset={onset} corroborated: rho={rho:.3}");
                             }
                         }
