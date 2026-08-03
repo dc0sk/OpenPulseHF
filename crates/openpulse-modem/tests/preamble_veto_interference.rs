@@ -824,3 +824,117 @@ fn g7_work_to_acquire() {
     println!("\n  If decode flips ON once anchor max passes the frame start, the mechanism is a");
     println!("  CRAWL RATE against a budget -- not 'the receiver never advances'.");
 }
+
+// ── D: the shipped gate ──────────────────────────────────────────────────────
+
+/// A frame preceded by interference the veto CAN refuse must still be acquired.
+///
+/// This is the system-level half of the steady-tone story. `preamble_correlation_settle`'s
+/// `the_gate_is_not_fooled_by_a_steady_tone` tests the correlator as a component, with its grid
+/// centred at 0; the deployed chain centres that grid on the AFC settle, which lands on a lone tone
+/// and parks it ~baud/4 from both rotated template lines. The component and the system therefore
+/// give opposite answers for the same input, and only this test covers the one that ships.
+///
+/// **What is deliberately NOT asserted:** that removing the veto loses the frame, and that the
+/// condemnation counts differ by any particular amount. Both are properties of the present crawl
+/// rate (see the work-to-acquire measurement in `g7_work_to_acquire`), and a legitimate fix to that
+/// rate would break a gate written against them — for a good reason. Gate the outcome, tripwire the
+/// mechanism.
+///
+/// Budgets are work-based because the wall-clock ones make this verdict a measure of CPU load
+/// (#1066): the same case decoded 5/5 idle and 0/5 on eight busy cores before that fix.
+#[test]
+fn a_frame_behind_refusable_interference_is_still_acquired() {
+    let (backend, mut tx) = engine();
+    tx.transmit_with_fec_mode(b"refusable interference", MODE, FecMode::Rs, None)
+        .expect("transmit");
+    let frame = backend.drain_samples();
+    let frame_rms = (frame.iter().map(|s| s * s).sum::<f32>() / frame.len() as f32).sqrt();
+    // +20 dB SIR: the interferer is well below the frame, so a failure here is an ACQUISITION
+    // failure and not a signal-to-noise one.
+    let amp = frame_rms / 10.0 * std::f32::consts::SQRT_2;
+
+    let pad = secs(1.0);
+    let total = pad + frame.len() + secs(1.0);
+    let mut sig = tone(FC + LINE_HZ, amp, total);
+    for (i, s) in frame.iter().enumerate() {
+        sig[pad + i] += s;
+    }
+
+    let backend = LoopbackBackend::new();
+    let mut e = ModemEngine::new(Box::new(backend.clone_shared()));
+    e.register_plugin(Box::new(bpsk_plugin::BpskPlugin::new()))
+        .expect("register");
+    e.set_deterministic_scan_positions(Some(SCAN_POSITIONS));
+    e.set_deterministic_max_iterations(Some(MAX_ITERATIONS));
+    e.enable_notch();
+    backend.fill_samples(&sig);
+
+    let got = e
+        .receive_with_fec_mode_timeout(MODE, FecMode::Rs, None, Duration::from_millis(120_000))
+        .unwrap_or_else(|err| {
+            panic!(
+                "a frame behind a steady tone at a preamble line must still be acquired: {err} \
+                 (rho rejections {}, condemnations {}, accepted settles {:?})",
+                e.rho_rejected_settles(),
+                e.settle_condemnations(),
+                e.accepted_settle_positions()
+            )
+        });
+    assert_eq!(String::from_utf8_lossy(&got), "refusable interference");
+
+    // TRIPWIRE 1: the veto must have actually refused something. Without this the decode above
+    // passes just as well on a build where the veto never runs at all, which is the state this
+    // whole test exists to distinguish from working protection.
+    assert!(
+        e.rho_rejected_settles() > 0,
+        "the frame decoded but the correlation veto never refused a single settle — the tone is \
+         supposed to be refusable, so either it is not reaching the veto or the veto is inert, and \
+         this test proves nothing about protection"
+    );
+
+    // TRIPWIRE 2: the settle that led to the decode must sit on the frame, not somewhere in the
+    // interferer. A decode reached by some other path would leave this far from the onset.
+    let accepted = e.accepted_settle_positions().to_vec();
+    let near_frame = accepted
+        .iter()
+        .any(|&p| p + 4 * 32 >= pad && p <= pad + frame.len());
+    assert!(
+        near_frame,
+        "decoded, but no accepted settle landed on the frame span ({pad}..{}): accepted {accepted:?}. \
+         The decode came from somewhere other than acquiring the frame where it actually is.",
+        pad + frame.len()
+    );
+}
+
+/// REPRODUCTION, not a gate: a frame behind interference the veto CANNOT refuse is not acquired.
+///
+/// The comb's sidebands sit on the template's own spectral lines, so the veto corroborates the
+/// interferer instead of refusing it, the recovery crawl starts, and at ~4 symbol periods of
+/// lead-in per condemnation it does not reach the frame inside any reasonable budget. Ignored
+/// because it documents a defect rather than protecting a behaviour; convert it to a gate when a
+/// fix lands — either a faster recovery or a sync word whose veto can refuse this shape.
+#[test]
+#[ignore = "reproduction for the crawl-rate acquisition defect; see #1062"]
+fn a_frame_behind_unrefusable_interference_is_not_acquired() {
+    let (backend, mut tx) = engine();
+    tx.transmit_with_fec_mode(b"unrefusable interference", MODE, FecMode::Rs, None)
+        .expect("transmit");
+    let frame = backend.drain_samples();
+    let frame_rms = (frame.iter().map(|s| s * s).sum::<f32>() / frame.len() as f32).sqrt();
+    let amp = frame_rms / 10.0 * std::f32::consts::SQRT_2;
+
+    let pad = secs(2.0);
+    let total = pad + frame.len() + secs(1.0);
+    let mut sig = comb(60.0, 65.0, amp, total);
+    for (i, s) in frame.iter().enumerate() {
+        sig[pad + i] += s;
+    }
+
+    let o = run_cfg(sig, true, true);
+    assert!(
+        !o.decoded,
+        "the comb case now DECODES — the crawl-rate defect this reproduces has been fixed, or the \
+         budget changed. Promote this to a gate and update #1062."
+    );
+}
