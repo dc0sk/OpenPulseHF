@@ -211,24 +211,55 @@ fn the_gate_is_not_fooled_by_a_steady_tone() {
     let template = p.preamble_template(&cfg).expect("template");
     let tlen = template.samples.len();
     let threshold = template.rho_threshold;
+    let samples_for_spectrum = template.samples.clone();
     // The shipped grid, built the way the engine builds it: step = 0.25*fs/tlen.
     let step = (0.25 * 8_000.0 / tlen as f32).max(0.5);
     let n = (template.rho_grid_hz / step).round() as i32;
     let grid: Vec<f32> = (-n..=n).map(|k| k as f32 * step).collect();
     let mf = openpulse_dsp::acquisition::IqMatchedFilter::new(template.samples);
 
-    for f in [1_250.0f32, 1_375.0, 1_500.0, 1_625.0, 1_750.0] {
-        let tone: Vec<f32> = (0..tlen + 200)
-            .map(|k| (2.0 * std::f32::consts::PI * f * k as f32 / 8_000.0).cos())
-            .collect();
-        let (r, _) = mf
-            .search_normalized_over_frequency(&tone, 200, 0.05, 8_000.0, &grid)
-            .expect("search");
+    // The probe frequencies are LOCATED FROM THE TEMPLATE'S OWN SPECTRUM, not written down.
+    //
+    // The previous list was 1250/1375/1500/1625/1750 — 125 Hz steps. The preamble's lines sit at
+    // ODD multiples of baud/4 (±62.5, ±187.5, ±312.5 for BPSK250: the bits alternate but NRZI
+    // flips only on a 1, so the SYMBOLS are `--++` repeating with a period of four), which put
+    // every one of those probes on an EVEN multiple — maximally far from every line. The test
+    // measured 0.017–0.043 and passed while a tone at 1437.5 scores 0.700. Hardcoding 1437.5
+    // instead would be the same bug one wire-format change later, so the peaks are found at run
+    // time and the sequence can change underneath this test without silently disarming it.
+    let peaks = template_line_offsets(&samples_for_spectrum, 8_000.0, 1_500.0);
+    assert!(
+        peaks.len() >= 2,
+        "no spectral lines found in the preamble template; the probe cannot locate its own targets \
+         and every assertion below would be vacuous"
+    );
+
+    // ON a line, the correlator IS fooled — that is a property of a two-line sync word, not a
+    // regression, and asserting otherwise would assert something false. What protects the deployed
+    // receiver is the AFC settle, which lands on a lone tone and so parks it ~baud/4 from both
+    // rotated lines; that is a SYSTEM property and is gated in `preamble_veto_interference`, not
+    // here. This test's job is the component claim its name makes, scoped honestly.
+    for &off in peaks.iter().take(2) {
+        let f = 1_500.0 + off;
+        let rho = tone_rho(&mf, f, tlen, &grid);
         assert!(
-            r.rho < threshold,
-            "a pure {f} Hz tone scores rho {:.3}, at or above the settle threshold — the grid has \
-             been widened past ~baud/2 and the gate can no longer tell a birdie from a preamble",
-            r.rho
+            rho > threshold,
+            "a tone at {f} Hz — ON the template's own spectral line at {off:+.1} Hz — scores only \
+             {rho:.3}. Either the preamble is no longer two-line (in which case this test's whole \
+             premise, and #1062's, needs re-deriving) or the probe is no longer finding the lines."
+        );
+    }
+
+    // BETWEEN the lines the correlator is not fooled, and that is what the shipped ±20 Hz grid
+    // buys: the vulnerable bands stay narrow instead of covering the passband.
+    for w in peaks.windows(2) {
+        let f = 1_500.0 + (w[0] + w[1]) / 2.0;
+        let rho = tone_rho(&mf, f, tlen, &grid);
+        assert!(
+            rho < threshold,
+            "a pure {f} Hz tone — BETWEEN the template's lines — scores rho {rho:.3}, at or above \
+             the settle threshold. The grid has been widened until it can rotate a line onto any \
+             frequency, and the gate can no longer tell a birdie from a preamble."
         );
     }
 
@@ -306,4 +337,54 @@ fn the_bpsk_template_matches_the_front_of_a_real_frame() {
          discriminating between waveforms",
         r2.rho
     );
+}
+
+/// Offsets, in Hz from `fc`, of the dominant spectral lines in a modulated preamble template.
+///
+/// Located from the template itself so a change of sync word moves the probe points with it. A
+/// hardcoded frequency here would go stale the moment the preamble changes and would then be
+/// testing a frequency the new template has no energy at — passing, and meaning nothing.
+fn template_line_offsets(samples: &[f32], fs: f32, fc: f32) -> Vec<f32> {
+    use rustfft::{num_complex::Complex, FftPlanner};
+    let n = 8_192;
+    let mut buf: Vec<Complex<f32>> = samples
+        .iter()
+        .map(|&v| Complex::new(v, 0.0))
+        .chain(std::iter::repeat_n(Complex::new(0.0, 0.0), n))
+        .take(n)
+        .collect();
+    FftPlanner::new().plan_fft_forward(n).process(&mut buf);
+    let bin_hz = fs / n as f32;
+    let mag: Vec<f32> = buf.iter().take(n / 2).map(|c| c.norm()).collect();
+    let peak = mag.iter().cloned().fold(0.0f32, f32::max);
+    // Local maxima above half the global peak, within +/-500 Hz of fc: the lines that carry enough
+    // energy for a tone landing on them to capture a large share of the correlation.
+    let mut out: Vec<f32> = (1..mag.len() - 1)
+        .filter(|&k| {
+            let f = k as f32 * bin_hz;
+            (f - fc).abs() <= 500.0
+                && mag[k] > peak * 0.5
+                && mag[k] >= mag[k - 1]
+                && mag[k] >= mag[k + 1]
+        })
+        .map(|k| k as f32 * bin_hz - fc)
+        .collect();
+    out.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    out.dedup_by(|a, b| (*a - *b).abs() < 10.0);
+    out
+}
+
+/// Peak rho of a pure tone at `f` against `mf`, over `grid`.
+fn tone_rho(
+    mf: &openpulse_dsp::acquisition::IqMatchedFilter,
+    f: f32,
+    tlen: usize,
+    grid: &[f32],
+) -> f32 {
+    let tone: Vec<f32> = (0..tlen + 200)
+        .map(|k| (2.0 * std::f32::consts::PI * f * k as f32 / 8_000.0).cos())
+        .collect();
+    mf.search_normalized_over_frequency(&tone, 200, 0.05, 8_000.0, grid)
+        .map(|(r, _)| r.rho)
+        .unwrap_or(0.0)
 }

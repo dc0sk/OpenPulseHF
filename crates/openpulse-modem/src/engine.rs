@@ -609,12 +609,53 @@ pub struct ModemEngine {
     /// `SETTLE_FAILURE_LIMIT` fully-buffered decodes, and only just finished inside the listen
     /// window (#1040).
     settle_condemnations: u64,
+    /// Sample positions of condemned settle anchors, for diagnosing WHERE a receiver is thrashing.
+    ///
+    /// The count alone cannot distinguish the two failure shapes that produce it: an anchor that
+    /// holds one wrong position until the window expires, and a recovery that advances through the
+    /// buffer and still never decodes. Those are different bugs with different fixes, and only the
+    /// positions separate them. Bounded so a pathological run cannot grow it without limit.
+    condemned_positions: Vec<usize>,
+    /// Sample positions of settles the correlation ACCEPTED.
+    ///
+    /// The companion to `condemned_positions`, and it exists for the same reason the accept COUNTER
+    /// does: logging only the anchors that failed cannot show where the one that succeeded landed,
+    /// so "the recovery walk reached the frame" stays an inference. Recording only failures was the
+    /// same asymmetry twice.
+    accepted_settle_positions: Vec<usize>,
+    /// Optional work-unit budget for the retry scan, replacing its wall-clock budget.
+    ///
+    /// The shipped budget compares *elapsed real time* against the audio duration a pass covers
+    /// (`retry_started.elapsed() > retry_budget`), which is right in production — a scan that
+    /// cannot walk its own buffer faster than real time can never catch up — and fatal for
+    /// measurement, because the number of positions examined then depends on machine speed and
+    /// load. The same input decoded on one run and failed on the next, and a debug build is slower
+    /// still, which is the shape #1058 records as a debug/release verdict split.
+    ///
+    /// `None` keeps the shipped wall-clock behaviour. `Some(n)` abandons the pass after `n`
+    /// positions regardless of time, making a measurement a function of the audio alone.
+    deterministic_scan_positions: Option<usize>,
+    /// Optional cap on outer receive-loop iterations, replacing the wall-clock listen deadline.
+    ///
+    /// Bounding the retry pass alone is not enough: the outer loop keeps scanning until
+    /// `listen_for` expires, so under load it completes fewer passes and reaches a different
+    /// verdict. Measured: the same input decoded 5/5 unloaded and 0/5 on eight busy cores, with
+    /// condemnations 582 vs 296. Both budgets must be work-based for a run to be reproducible.
+    deterministic_max_iterations: Option<usize>,
     /// Settles rejected because the preamble correlation did not corroborate them (#1049).
     ///
     /// A tripwire as much as a counter: it stays 0 when the mode publishes no template, so a test
     /// that expects the correlation gate to be doing work can tell "it accepted everything" from
     /// "it never ran" — the two are indistinguishable in a decode-or-not assertion.
     rho_rejected_settles: u64,
+    /// Settles the preamble correlation *accepted* (#1049).
+    ///
+    /// The companion to `rho_rejected_settles`, and it exists because that counter alone cannot
+    /// answer the question the veto is for. A zero rejection count is consistent with three very
+    /// different worlds: no settle was attempted, every settle was accepted, or the mode publishes
+    /// no template. Only the accept count separates "the gate passed this input" from "the gate
+    /// never saw it" — which is exactly what a test feeding deliberate interference must know.
+    rho_accepted_settles: u64,
     /// Receiver-side streaming AGC on captured audio (default off). Normalises the level so the
     /// PSK/QAM ladder sees a consistent amplitude despite QSB fading and inter-station spread.
     /// Active-span gated: the gain only adapts on carrier-present blocks (RMS ≥ DCD threshold) and
@@ -745,7 +786,12 @@ impl ModemEngine {
             rx_mode: None,
             notch_blocks_processed: 0,
             settle_condemnations: 0,
+            condemned_positions: Vec::new(),
+            accepted_settle_positions: Vec::new(),
+            deterministic_scan_positions: None,
+            deterministic_max_iterations: None,
             rho_rejected_settles: 0,
+            rho_accepted_settles: 0,
             agc_enabled: false,
             // target RMS 0.3 (headroom below ±1.0), slow loop (α=0.02), ±40 dB clamp.
             agc: openpulse_dsp::agc::Agc::new(0.3, 0.02, 40.0),
@@ -791,6 +837,32 @@ impl ModemEngine {
         self.settle_condemnations
     }
 
+    /// Sample positions of condemned settle anchors, oldest first (bounded).
+    pub fn condemned_positions(&self) -> &[usize] {
+        &self.condemned_positions
+    }
+
+    /// Sample positions of settles the correlation accepted, oldest first (bounded).
+    pub fn accepted_settle_positions(&self) -> &[usize] {
+        &self.accepted_settle_positions
+    }
+
+    /// Budget the retry scan in positions rather than wall-clock time.
+    ///
+    /// For reproducible measurement only; `None` (the default) keeps production behaviour. See
+    /// the field docs for why the wall-clock budget makes decode outcomes machine-dependent.
+    pub fn set_deterministic_scan_positions(&mut self, positions: Option<usize>) {
+        self.deterministic_scan_positions = positions;
+    }
+
+    /// Cap outer receive-loop iterations instead of using the wall-clock listen deadline.
+    ///
+    /// Pair with [`Self::set_deterministic_scan_positions`]; bounding one without the other still
+    /// leaves the verdict machine-dependent. Measurement only — `None` keeps production behaviour.
+    pub fn set_deterministic_max_iterations(&mut self, iterations: Option<usize>) {
+        self.deterministic_max_iterations = iterations;
+    }
+
     /// How many candidate settles the preamble correlation refused (#1049).
     ///
     /// Zero has two meanings and a test must distinguish them: the gate ran and accepted
@@ -798,6 +870,11 @@ impl ModemEngine {
     /// this with a case that must reject.
     pub fn rho_rejected_settles(&self) -> u64 {
         self.rho_rejected_settles
+    }
+
+    /// Settles the preamble correlation accepted. See [`Self::rho_rejected_settles`].
+    pub fn rho_accepted_settles(&self) -> u64 {
+        self.rho_accepted_settles
     }
 
     /// Tripwire count of capture blocks the DCD carrier detector processed at the seam. DCD runs on the
@@ -2606,6 +2683,7 @@ impl ModemEngine {
         let start_time = Instant::now();
         let mut accumulated = Vec::new();
         let mut last_err: Option<ModemError> = None;
+        let mut loop_iterations: usize = 0;
 
         // Frame geometry: scan step, acquisition window, and per-attempt slice
         // bounds.  Preferred source is the plugin itself via frame_geometry().
@@ -2827,7 +2905,11 @@ impl ModemEngine {
                     for (scanned, start) in (0..=retry_end).step_by(step).enumerate() {
                         // Check periodically rather than per position; the check is cheap but the
                         // decode it guards is not, so granularity of ~16 positions is plenty.
-                        if scanned % 16 == 0 && retry_started.elapsed() > retry_budget {
+                        let exhausted = match self.deterministic_scan_positions {
+                            Some(limit) => scanned >= limit,
+                            None => scanned % 16 == 0 && retry_started.elapsed() > retry_budget,
+                        };
+                        if exhausted {
                             over_budget = true;
                             break;
                         }
@@ -3000,6 +3082,9 @@ impl ModemEngine {
                                 );
                                 planner.unsettle();
                                 self.settle_condemnations += 1;
+                                if self.condemned_positions.len() < 4_096 {
+                                    self.condemned_positions.push(fep);
+                                }
                                 // A condemnation used to raise the energy gate here
                                 // (`EnergyGate::note_condemned`, #1045). **Removed 2026-07-31 after
                                 // ablation: it was inert where the correlation veto runs, and
@@ -3173,6 +3258,10 @@ impl ModemEngine {
                                 // micro-sweep and condemnation recovery already exist to handle.
                                 // Placing the onset properly needs a preamble whose autocorrelation
                                 // is not periodic — a PN or chirp sync word, a wire-format change.
+                                self.rho_accepted_settles += 1;
+                                if self.accepted_settle_positions.len() < 4_096 {
+                                    self.accepted_settle_positions.push(onset);
+                                }
                                 debug!("settle at onset={onset} corroborated: rho={rho:.3}");
                             }
                         }
@@ -3211,8 +3300,18 @@ impl ModemEngine {
                 planner.commit_scan(accumulated.len());
             }
 
-            if Instant::now() >= deadline {
-                break;
+            loop_iterations += 1;
+            match self.deterministic_max_iterations {
+                Some(max) => {
+                    if loop_iterations >= max {
+                        break;
+                    }
+                }
+                None => {
+                    if Instant::now() >= deadline {
+                        break;
+                    }
+                }
             }
         }
 
