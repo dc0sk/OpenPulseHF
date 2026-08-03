@@ -180,20 +180,30 @@ fn a_mode_without_a_template_is_unaffected() {
 /// A steady tone must NOT look like a preamble — and the frequency grid is what decides that.
 ///
 /// This is the constraint that sizes `PREAMBLE_RHO_GRID_HZ`, and it is not a compute trade. The
-/// BPSK preamble is 32 phase-alternating symbols: a square-wave-modulated carrier whose energy sits
-/// in lines at `fc ± baud/2`. Correlating a *steady* carrier against it cancels between the +1 and
-/// −1 half-symbols, which is why a tone scores near zero — but rotate the template by baud/2 and one
-/// of those lines lands on plain carrier, and the cancellation is gone. Measured here:
+/// BPSK preamble's 32 *bits* alternate, but NRZI flips phase only on a `1`, so the *symbols* are
+/// `--++` repeating: a square wave of period **four** symbols whose energy sits in lines at
+/// `fc ± baud/4` and odd harmonics (measured at BPSK250: ±62.5 Hz, ±187.5, ±312.5 — nothing at
+/// ±125). Correlating a *steady* carrier against it cancels between half-symbols, which is why a
+/// tone BETWEEN lines scores near zero — but a tone ON a line needs no rotation at all and scores
+/// ρ ≈ 0.70 at any grid width. Corrected 2026-08-03; this said `baud/2`, twice the true spacing.
+/// Measured here:
 ///
-/// | grid half-width | ρ of a pure tone |
-/// |---|---|
-/// | ±20 Hz (shipped) | 0.017–0.042 |
-/// | ±160 Hz | 0.659 |
-/// | ±450 Hz (the full acquisition range) | 0.696 at every frequency |
+/// | grid half-width | tone BETWEEN lines | tone ON a line (`fc ± 62.5`) |
+/// |---|---|---|
+/// | ±20 Hz (shipped) | 0.017–0.042 | **0.700** |
+/// | ±160 Hz | 0.659 | 0.700 |
+/// | ±450 Hz (the full acquisition range) | 0.696 at every frequency | 0.700 |
+///
+/// **The second column does not depend on the grid**, which is why this test probes both. A tone
+/// landing on a line captures ~half the template's energy — ρ ≈ √0.5 — with no rotation needed, so
+/// narrowing the grid narrows the vulnerable bands around each line (±25 Hz at the shipped width)
+/// but cannot remove them. The deployed chain still refuses a *lone* tone, because the settle lands
+/// on it and parks it ~baud/4 from both rotated lines; sideband-symmetric interference gets no such
+/// protection (see `preamble_veto_interference`).
 ///
 /// At ±160 Hz a birdie outscores this receiver's best measured real on-air frame (0.654). That is
 /// the measurement that rejected the otherwise-attractive design of searching the whole acquisition
-/// range as a detector and seeding the settle from it: our sync word is two spectral lines, not a
+/// range as a detector and seeding the settle from it: our sync word is a few spectral lines, not a
 /// pseudo-random sequence, so it cannot survive being searched over its own line spacing. Raising
 /// the ceiling needs a different preamble, not a bigger grid — a wire-format change.
 ///

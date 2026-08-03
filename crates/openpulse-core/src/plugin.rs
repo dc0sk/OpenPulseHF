@@ -162,9 +162,15 @@ pub struct PreambleTemplate {
     ///
     /// Bounded below by what the AFC settle leaves behind (≤ 0.3 Hz measured, so ±20 Hz is already
     /// generous) and above by the preamble's own line structure. The upper bound is waveform
-    /// -specific and can be brutal: BPSK's alternating preamble is a square-wave-modulated carrier
-    /// with lines at `fc ± baud/2`, so a grid reaching that far rotates a line onto plain carrier
-    /// and a steady tone starts scoring like a preamble (0.017 at ±20 Hz, 0.659 at ±160 Hz).
+    /// -specific and can be brutal: BPSK's preamble *bits* alternate, but NRZI flips phase only on a
+    /// `1`, so the *symbols* are `--++` repeating — a square wave of period **four** symbols, with
+    /// lines at `fc ± baud/4` and odd harmonics (measured at BPSK250: ±62.5 Hz at 0 dB, ±187.5 at
+    /// −14 dB, ±312.5 at −31 dB, and nothing at ±125). A grid reaching a line rotates it onto plain
+    /// carrier and a steady tone starts scoring like a preamble (0.017 at ±20 Hz, 0.659 at ±160 Hz).
+    ///
+    /// This said `fc ± baud/2` until 2026-08-03 — twice the true spacing, so the documented safe
+    /// bound sat *above* the first line. The shipped ±20 Hz is well inside it either way, but
+    /// `fc ± baud/4` is where the interference that this veto cannot refuse actually lives (#1062).
     pub rho_grid_hz: f32,
 }
 
