@@ -7,9 +7,11 @@
 //!
 //! That predicts something specific and cheap to check: under a WORK-based budget the two profiles
 //! should reach the same verdict, because the work is then identical by construction. If they do,
-//! #1058's mechanism is the wall clock and it closes essentially for free. If they still disagree,
-//! there is a second mechanism in the acquisition machinery and #1058 is a genuine blocker for any
-//! change validated against these gates.
+//! that is evidence for the wall clock being the mechanism ON THIS FIXTURE — not for the family.
+//! The five failing fixtures diverge inside the shared entry point (one is QPSK500 with no veto at
+//! all, so its work per position differs), and a budget fitted to one of them is a constant fitted
+//! to one fixture. Measured: a 4 000-iteration budget reconciles the BPSK fixtures and is far too
+//! small for the no-template path, which needs ~260 condemnations where these need four or five.
 //!
 //! Parameters are taken from the gate this reproduces
 //! (`preamble_correlation_settle::the_receiver_never_settles_on_a_saturating_noise_floor`): same
@@ -21,17 +23,19 @@ use openpulse_modem::capture_replay::load_corpus;
 use openpulse_modem::channel_sim::ChannelSimHarness;
 use std::time::Duration;
 
-/// From the gate being reproduced.
-const MODE: &str = "BPSK250";
-const LEADS: [usize; 3] = [40_000, 80_000, 120_000];
-const PAYLOAD: &[u8] = b"correlation gate probe";
+mod common;
+/// The gate's own parameters, by reference. Transcribing them under a doc-comment claiming fidelity
+/// is the construct `CLAUDE.md` bans by name: a comment cannot fail, and a reproduction that drifts
+/// then measures something else while still claiming to be the gate. Sharing the source makes the
+/// claim compiler-checked — this file stops building if the gate's fixture changes.
+use common::saturating_floor as fixture;
 
 #[test]
 #[ignore = "verification"]
 fn j1_work_budget_verdicts() {
-    let hot = load_corpus("ic9700-idle-hot.wav").expect("corpus");
+    let hot = load_corpus(fixture::CORPUS).expect("corpus");
     assert!(
-        hot.mean_sq() > 0.0032,
+        hot.mean_sq() > fixture::GATE_CEILING_MEAN_SQ,
         "corpus floor no longer saturates the gate — the premise of this reproduction is gone"
     );
 
@@ -47,29 +51,32 @@ fn j1_work_budget_verdicts() {
     );
 
     for budgeted in [false, true] {
-        for lead in LEADS {
+        for lead in fixture::LEADS {
             let mut h = ChannelSimHarness::new();
             for eng in [&mut h.tx_engine, &mut h.rx_engine] {
                 eng.register_plugin(Box::new(BpskPlugin::new()))
                     .expect("reg");
             }
             if budgeted {
+                // Sized to reproduce the RELEASE wall-clock work level on THIS fixture (4-5
+                // condemnations), not chosen for roundness — and deliberately not reused
+                // family-wide: the no-template path needs roughly four times this.
                 h.rx_engine.set_deterministic_scan_positions(Some(3_000));
                 h.rx_engine.set_deterministic_max_iterations(Some(4_000));
             }
             h.tx_engine
-                .transmit_with_fec_mode(PAYLOAD, MODE, FecMode::Rs, None)
+                .transmit_with_fec_mode(fixture::PAYLOAD, fixture::MODE, FecMode::Rs, None)
                 .expect("tx");
-            h.route_embedded_in_capture(&hot, lead, 40_000, 0.3);
+            h.route_embedded_in_capture(&hot, lead, fixture::TRAIL, fixture::EMBED_LEVEL);
             let decoded = h
                 .rx_engine
                 .receive_with_fec_mode_timeout(
-                    MODE,
+                    fixture::MODE,
                     FecMode::Rs,
                     None,
-                    Duration::from_millis(40_000),
+                    Duration::from_millis(fixture::TIMEOUT_MS),
                 )
-                .map(|v| String::from_utf8_lossy(&v) == String::from_utf8_lossy(PAYLOAD))
+                .map(|v| v == fixture::PAYLOAD)
                 .unwrap_or(false);
             println!(
                 "{lead:<10} {:>10} {:>14} {:>12} {:>10}",

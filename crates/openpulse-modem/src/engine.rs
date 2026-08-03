@@ -2863,7 +2863,31 @@ impl ModemEngine {
             // modes (notably wideband SCFDMA/OFDM, whose marginal settle the
             // single-carrier micro-sweep can't decode) keep the retry; their short
             // frames re-scan cheaply, so it never starves them.
-            let elapsed_secs = start_time.elapsed().as_secs();
+            // THIRD wall-clock dependency, and the one #1066 missed. `retry_due` schedules the
+            // full-buffer retry on elapsed SECONDS, so a slower profile fires fewer retries per
+            // unit of work. That is correct in production for the reason `RETRY_START_SECS`
+            // documents — effective sample rates vary 2300-7600/s between audio stacks, so a
+            // sample count is not a reliable clock there. It is fatal to measurement, and it
+            // dominates the no-template path specifically: with no preamble template the veto
+            // never runs, so the full-buffer retry is that path's only rescue. Measured on
+            // QPSK500 at an identical work budget, debug reached 27 condemnations and decoded
+            // where release reached 222 and did not.
+            //
+            // In measurement mode the buffer IS an exact clock, so derive it from there.
+            // Derived from LOOP ITERATIONS, not from the buffer. A buffer-derived clock looks
+            // right and is not: `LoopbackBackend::read` without pacing delivers everything on the
+            // first call, so the derived time jumps straight past `RETRY_START_SECS` and every
+            // retry front-loads — deterministic, but different behaviour rather than the same
+            // behaviour made reproducible (measured: 0 condemnations where the shipped path takes
+            // ~250). Iterations advance once per read cycle in both regimes.
+            //
+            // The nominal rate is the daemon's 100 ms receive tick, i.e. 10 iterations per second,
+            // which is what makes 120/20 the iteration equivalents of the shipped 12 s/2 s.
+            const NOMINAL_ITERS_PER_SEC: usize = 10;
+            let elapsed_secs = match self.deterministic_max_iterations {
+                Some(_) => (loop_iterations / NOMINAL_ITERS_PER_SEC) as u64,
+                None => start_time.elapsed().as_secs(),
+            };
             // A retry pass that takes longer than the audio it covers can never catch up: the buffer
             // grows faster than the scan walks it, so every later pass is further behind and the
             // frame is never reached. `long_frame` is only a *proxy* for that — it guesses from frame
