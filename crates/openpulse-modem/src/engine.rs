@@ -2964,6 +2964,18 @@ impl ModemEngine {
                     // them. An unreachable threshold, by contrast, disables the recovery outright.
                     let window_complete = accumulated.len() >= onset + arrival_samples;
                     let afc_before = self.afc_correction_hz;
+                    // The first-energy path was the ONLY decode route with no position trace, so
+                    // which onsets it actually tried had to be inferred from `unsettle` arithmetic
+                    // — and the inference is mode-dependent enough to invert a conclusion (#1058).
+                    // Log the onset WITH the correction: this path decodes at the anchor's settled
+                    // AFC, while the full-buffer retry mini-settles per candidate, so the two can
+                    // disagree at the same sample offset for a reason that is not the offset.
+                    debug!(
+                        "first-energy attempt: onset={onset} (fep={fep} k={}) correction={:.1}Hz \
+                         window_complete={window_complete}",
+                        fep_offset_k.wrapping_sub(1) % ScanPlanner::SWEEP_OFFSETS,
+                        afc_before
+                    );
                     match self.decode_attempt(
                         mode,
                         AudioSamples {
