@@ -26,6 +26,7 @@ use openpulse_modem::channel_sim::ChannelSimHarness;
 use std::time::Duration;
 
 const FS: f32 = 8_000.0;
+const PI_F: f32 = std::f32::consts::PI;
 
 fn cfg(mode: &str) -> ModulationConfig {
     ModulationConfig {
@@ -644,4 +645,78 @@ fn f5_tone_vs_sequence() {
         );
     }
     println!("\n  reference: this receiver's best real on-air frame scores rho 0.654");
+}
+
+// ── F6: could a spread sequence REFUSE what the shipped one must corroborate? ─
+
+/// The #1062 payoff, measured rather than argued.
+///
+/// `preamble_veto_interference::g5` shows the veto is protective exactly where it can refuse an
+/// interferer, and useless where it cannot: a lone tone is refused and the frame survives 5/5,
+/// while a sideband comb is corroborated and the frame dies 0/5 with or without the veto. What the
+/// veto can refuse is set by the template's spectrum. So the question a sequence change has to
+/// answer is not "is PN prettier" but: would a spread template score the comb and DSB shapes BELOW
+/// threshold, where the shipped two-line template scores them above?
+///
+/// This needs no wire change to answer — only the templates and the interferer shapes.
+#[test]
+#[ignore = "verification"]
+fn f6_would_a_spread_template_refuse_the_interferers() {
+    let fc = 1_500.0f32;
+    let n = 4_000;
+    let mk = |shape: &str, amp: f32| -> Vec<f32> {
+        (0..n)
+            .map(|k| {
+                let t = k as f32 / FS;
+                match shape {
+                    "tone +62.5" => amp * (2.0 * PI_F * (fc + 62.5) * t).cos(),
+                    "AM 60 m=1" => {
+                        amp * (1.0 + (2.0 * PI_F * 60.0 * t).cos()) * (2.0 * PI_F * fc * t).cos()
+                    }
+                    "DSB x60" => amp * (2.0 * PI_F * 60.0 * t).cos() * (2.0 * PI_F * fc * t).cos(),
+                    "DSB x62.5" => {
+                        amp * (2.0 * PI_F * 62.5 * t).cos() * (2.0 * PI_F * fc * t).cos()
+                    }
+                    _ => {
+                        amp * (2.0 * PI_F * (fc - 60.0) * t).cos()
+                            + 0.8 * amp * (2.0 * PI_F * (fc + 65.0) * t).cos()
+                    }
+                }
+            })
+            .collect()
+    };
+
+    let shapes = [
+        "tone +62.5",
+        "AM 60 m=1",
+        "DSB x60",
+        "DSB x62.5",
+        "comb -60/+65",
+    ];
+    println!("\nF6: peak rho of each template against each interferer (grid +/-20 Hz)");
+    println!(
+        "    the shipped threshold is 0.40; BELOW it the veto REFUSES, which g5 shows is what"
+    );
+    println!("    keeps the receiver free to find the frame\n");
+    print!("{:<16}", "interferer");
+    for (name, _, _) in f3_templates() {
+        print!("{name:>20}");
+    }
+    println!();
+    for shape in shapes {
+        let sig = mk(shape, 0.3);
+        print!("{shape:<16}");
+        for (_, t, _) in f3_templates() {
+            let r = rho_of(&t, &sig, 20.0).unwrap_or(f32::NAN);
+            print!("{:>17.3}{}", r, if r >= 0.40 { " !" } else { "  " });
+        }
+        println!();
+    }
+    println!(
+        "\n  ! = at or above threshold, i.e. the veto would CORROBORATE this interferer and the"
+    );
+    println!(
+        "  receiver would anchor on it. Note the grid is centred at 0 here; for the lone tone"
+    );
+    println!("  the deployed chain settles onto the tone first, which is a separate protection.");
 }

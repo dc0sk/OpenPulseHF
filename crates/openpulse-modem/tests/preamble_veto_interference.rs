@@ -430,15 +430,28 @@ impl openpulse_core::plugin::ModulationPlugin for NoTemplateBpsk {
     // preamble_template deliberately NOT overridden -> trait default None -> no veto.
 }
 
-fn run_no_veto(signal: Vec<f32>) -> bool {
+fn run_no_veto_full(signal: Vec<f32>) -> Outcome {
     let backend = LoopbackBackend::new();
     let mut e = ModemEngine::new(Box::new(backend.clone_shared()));
     e.register_plugin(Box::new(NoTemplateBpsk(bpsk_plugin::BpskPlugin::new())))
         .expect("register");
     e.enable_notch();
     backend.fill_samples(&signal);
-    e.receive_with_fec_mode_timeout(MODE, FecMode::Rs, None, Duration::from_millis(20_000))
-        .is_ok()
+    let decoded = e
+        .receive_with_fec_mode_timeout(MODE, FecMode::Rs, None, Duration::from_millis(20_000))
+        .is_ok();
+    Outcome {
+        accepted: e.rho_accepted_settles(),
+        rejected: e.rho_rejected_settles(),
+        condemned: e.settle_condemnations(),
+        correction_hz: e.afc_correction_hz(),
+        decoded,
+    }
+}
+
+/// Decode-only shorthand for [`run_no_veto_full`].
+fn run_no_veto(signal: Vec<f32>) -> bool {
+    run_no_veto_full(signal).decoded
 }
 
 /// Byte-error rate of the raw demodulator on the exact frame span — no engine, no settle, no veto.
@@ -543,4 +556,78 @@ fn g4_which_mechanism() {
     println!("\n  Reading: 'veto REMOVED' >> 'baseline' means the veto's corroboration causes the");
     println!("  loss. Similar means it is a bystander. A high demod BER means the interferer");
     println!("  corrupts symbols directly and no acquisition change can help.");
+}
+
+// ── G5: is the veto PROTECTIVE where it rejects? ─────────────────────────────
+
+/// The cell the G4 matrix was missing, and it was missing for a reason worth naming: G4 removed the
+/// veto only on inputs where it *corroborates* — where it was suspected of causing harm — and never
+/// on the input it *rejects*. Ablating a mechanism only where you suspect it of guilt cannot find
+/// the places it is protective.
+///
+/// The lone tone is the one input the veto refuses (~2500 refusals per run) and also the one that
+/// survives +10/+20 dB SIR where the comb does not. If removing the veto makes the tone fail like
+/// the comb, then refusal is what prevents the anchor — and the template's sequence decides which
+/// interference can be refused, which is a direct #1062 consequence.
+#[test]
+#[ignore = "verification"]
+fn g5_is_the_veto_protective_where_it_rejects() {
+    let (backend, mut tx) = engine();
+    tx.transmit_with_fec_mode(b"frame during interference", MODE, FecMode::Rs, None)
+        .expect("transmit");
+    let frame = backend.drain_samples();
+    let frame_rms = (frame.iter().map(|s| s * s).sum::<f32>() / frame.len() as f32).sqrt();
+
+    const SEEDS: usize = 5;
+    println!("\nG5: veto REMOVED on the input the veto REJECTS (lone tone), {SEEDS} seeds");
+    println!("    plus the counters for the veto-less runs, which G4 did not print\n");
+    println!(
+        "{:<22} {:>7} {:>13} {:>14} {:>12} {:>12}",
+        "input", "SIR", "veto on", "veto REMOVED", "cond(on)", "cond(off)"
+    );
+
+    let shapes: Vec<(&str, Box<dyn Fn(f32, usize) -> Vec<f32>>)> = vec![
+        (
+            "lone tone FC+62.5",
+            Box::new(|a, n| tone(FC + LINE_HZ, a, n)),
+        ),
+        ("comb FC-60/+65", Box::new(|a, n| comb(60.0, 65.0, a, n))),
+    ];
+
+    for (name, make) in &shapes {
+        for sir in [20.0f32, 10.0] {
+            let amp = frame_rms / 10f32.powf(sir / 20.0) * std::f32::consts::SQRT_2;
+            let (mut on, mut off) = (0, 0);
+            let (mut cond_on, mut cond_off) = (0u64, 0u64);
+            for seed in 0..SEEDS {
+                let pad = secs(2.0);
+                let total = pad * 2 + frame.len();
+                let long = make(amp, total + 1_000);
+                let offv = (seed * 137) % 1_000;
+                let mut sig = long[offv..offv + total].to_vec();
+                for (i, s) in frame.iter().enumerate() {
+                    sig[pad + i] += s;
+                }
+                let a = run_cfg(sig.clone(), true, true);
+                if a.decoded {
+                    on += 1;
+                }
+                cond_on += a.condemned;
+                let b = run_no_veto_full(sig);
+                if b.decoded {
+                    off += 1;
+                }
+                cond_off += b.condemned;
+            }
+            println!(
+                "{name:<22} {sir:>6.0}dB {:>11}/{SEEDS} {:>12}/{SEEDS} {:>12} {:>12}",
+                on, off, cond_on, cond_off
+            );
+        }
+    }
+    println!("\n  If the tone's 'veto REMOVED' column collapses while 'veto on' holds, refusal is");
+    println!("  protective and the sequence choice decides what can be refused -- a #1062 result.");
+    println!(
+        "  If both hold, the veto is genuinely outcome-neutral and this files as #1021-family."
+    );
 }
