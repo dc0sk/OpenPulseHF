@@ -20,6 +20,9 @@ use openpulse_modem::engine::ModemEngine;
 use std::f32::consts::PI;
 use std::time::Duration;
 
+/// A named interferer generator: (amplitude, sample count) -> samples.
+type Shape = (&'static str, Box<dyn Fn(f32, usize) -> Vec<f32>>);
+
 const FS: f32 = 8_000.0;
 const FC: f32 = 1_500.0;
 const MODE: &str = "BPSK250";
@@ -323,7 +326,7 @@ fn g3_does_a_frame_survive_the_interference() {
     // ~30 dB below the frame -- every row decoded, which says nothing about harm. SIR is the
     // variable that decides whether a corroborated settle costs anything.
     let sirs_db = [20.0f32, 10.0, 0.0, -6.0, -12.0];
-    let shapes: Vec<(&str, Box<dyn Fn(f32, usize) -> Vec<f32>>)> = vec![
+    let shapes: Vec<Shape> = vec![
         ("noise floor (control)", Box::new(|a, n| noise(a, n, 5))),
         (
             "lone tone FC+62.5",
@@ -599,7 +602,7 @@ fn g5_is_the_veto_protective_where_it_rejects() {
         "input", "SIR", "veto on", "veto REMOVED", "cond(on)", "cond(off)"
     );
 
-    let shapes: Vec<(&str, Box<dyn Fn(f32, usize) -> Vec<f32>>)> = vec![
+    let shapes: Vec<Shape> = vec![
         (
             "lone tone FC+62.5",
             Box::new(|a, n| tone(FC + LINE_HZ, a, n)),
