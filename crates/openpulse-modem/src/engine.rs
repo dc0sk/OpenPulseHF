@@ -85,6 +85,10 @@ struct ScanPlanner {
     /// position. Only counted once the whole frame would be present if it really started there,
     /// so "the frame has not arrived yet" is never mistaken for "the anchor is wrong".
     settle_failures: usize,
+    /// Fully-buffered micro-sweep failures that condemn an anchor. Defaults to
+    /// [`Self::SETTLE_FAILURE_LIMIT`]; overridable so the recovery cost can be measured against the
+    /// alternative of changing the wire format (#1062).
+    settle_failure_limit: usize,
 }
 
 impl ScanPlanner {
@@ -105,6 +109,7 @@ impl ScanPlanner {
             first_energy_pos: None,
             last_retry_at_secs: None,
             settle_failures: 0,
+            settle_failure_limit: Self::SETTLE_FAILURE_LIMIT,
         }
     }
 
@@ -137,7 +142,7 @@ impl ScanPlanner {
     /// its shorter frame keeps that retry enabled.
     fn note_settle_failure(&mut self) -> bool {
         self.settle_failures += 1;
-        self.settle_failures >= Self::SETTLE_FAILURE_LIMIT
+        self.settle_failures >= self.settle_failure_limit
     }
 
     /// Abandon a settled position that has proved undecodable, and reopen the search **past it**.
@@ -623,6 +628,16 @@ pub struct ModemEngine {
     /// so "the recovery walk reached the frame" stays an inference. Recording only failures was the
     /// same asymmetry twice.
     accepted_settle_positions: Vec<usize>,
+    /// Per micro-sweep attempt: `(attempt_index, onset, window_len, afc_before)`.
+    ///
+    /// Exists to settle whether the second sweep cycle can do anything the first did not.
+    /// `SETTLE_FAILURE_LIMIT` is `2 * SWEEP_OFFSETS` so the anchor gets "a second chance against a
+    /// grown buffer" — but failures are only counted once `window_complete`, and past that point
+    /// the window is a fixed slice of already-captured audio, while `afc_correction_hz` is restored
+    /// after every failure. If attempt `k + SWEEP_OFFSETS` has identical inputs to attempt `k`,
+    /// the second cycle is provably inert and halving the limit is safe by construction rather
+    /// than by fitting a constant to whichever captures happen to exist (#1062).
+    sweep_attempt_inputs: Vec<(usize, usize, usize, f32)>,
     /// Optional work-unit budget for the retry scan, replacing its wall-clock budget.
     ///
     /// The shipped budget compares *elapsed real time* against the audio duration a pass covers
@@ -642,6 +657,15 @@ pub struct ModemEngine {
     /// verdict. Measured: the same input decoded 5/5 unloaded and 0/5 on eight busy cores, with
     /// condemnations 582 vs 296. Both budgets must be work-based for a run to be reproducible.
     deterministic_max_iterations: Option<usize>,
+    /// Override for `ScanPlanner`'s condemnation threshold; `None` = the shipped `2 *
+    /// SWEEP_OFFSETS` = 18.
+    ///
+    /// One sweep cycle is `SWEEP_OFFSETS` attempts; the shipped value runs **two**, to give the
+    /// anchor "a second chance against a grown buffer". Where the buffer is already complete — a
+    /// frame sitting behind continuous pre-frame interference — the second cycle cannot find what
+    /// the first did not, and doubles the cost of clearing each swept span. This knob exists to
+    /// measure whether halving it is the cheaper alternative to a wire-format change (#1062).
+    settle_failure_limit: Option<usize>,
     /// Settles rejected because the preamble correlation did not corroborate them (#1049).
     ///
     /// A tripwire as much as a counter: it stays 0 when the mode publishes no template, so a test
@@ -788,8 +812,10 @@ impl ModemEngine {
             settle_condemnations: 0,
             condemned_positions: Vec::new(),
             accepted_settle_positions: Vec::new(),
+            sweep_attempt_inputs: Vec::new(),
             deterministic_scan_positions: None,
             deterministic_max_iterations: None,
+            settle_failure_limit: None,
             rho_rejected_settles: 0,
             rho_accepted_settles: 0,
             agc_enabled: false,
@@ -847,6 +873,11 @@ impl ModemEngine {
         &self.accepted_settle_positions
     }
 
+    /// Per-attempt micro-sweep inputs: `(attempt_index, onset, window_len, afc_before)`.
+    pub fn sweep_attempt_inputs(&self) -> &[(usize, usize, usize, f32)] {
+        &self.sweep_attempt_inputs
+    }
+
     /// Budget the retry scan in positions rather than wall-clock time.
     ///
     /// For reproducible measurement only; `None` (the default) keeps production behaviour. See
@@ -861,6 +892,11 @@ impl ModemEngine {
     /// leaves the verdict machine-dependent. Measurement only — `None` keeps production behaviour.
     pub fn set_deterministic_max_iterations(&mut self, iterations: Option<usize>) {
         self.deterministic_max_iterations = iterations;
+    }
+
+    /// Override the anchor-condemnation threshold. `None` = the shipped `2 * SWEEP_OFFSETS`.
+    pub fn set_settle_failure_limit(&mut self, limit: Option<usize>) {
+        self.settle_failure_limit = limit;
     }
 
     /// How many candidate settles the preamble correlation refused (#1049).
@@ -2806,6 +2842,9 @@ impl ModemEngine {
         // converge, by which point the scan has advanced past the preamble
         // start and can never re-decode it.
         let mut planner = ScanPlanner::new(step, min_frame_samples);
+        if let Some(limit) = self.settle_failure_limit {
+            planner.settle_failure_limit = limit.max(1);
+        }
         // Round-robin forward-onset offset for the first-energy re-decode (see the
         // fep block below).  Persisted across iterations so each iteration tries
         // exactly ONE onset — running all offsets per iteration starves the read
@@ -3046,6 +3085,14 @@ impl ModemEngine {
                     // them. An unreachable threshold, by contrast, disables the recovery outright.
                     let window_complete = accumulated.len() >= onset + arrival_samples;
                     let afc_before = self.afc_correction_hz;
+                    if window_complete && self.sweep_attempt_inputs.len() < 4_096 {
+                        self.sweep_attempt_inputs.push((
+                            fep_offset_k.wrapping_sub(1),
+                            onset,
+                            end - onset,
+                            afc_before,
+                        ));
+                    }
                     // The first-energy path was the ONLY decode route with no position trace, so
                     // which onsets it actually tried had to be inferred from `unsettle` arithmetic
                     // — and the inference is mode-dependent enough to invert a conclusion (#1058).
@@ -3073,12 +3120,12 @@ impl ModemEngine {
                             // whole sweep of onsets, is not a settle — it is noise the gate
                             // mistook for a preamble. Re-open the search rather than re-decoding
                             // the same wrong position until the listen window expires (#1021).
+                            let planner_limit = planner.settle_failure_limit;
                             if window_complete && planner.note_settle_failure() {
                                 debug!(
                                     "settle at {fep} condemned after {} fully-buffered failures; \
                                      re-opening the scan (AFC reset from {:.1} Hz)",
-                                    ScanPlanner::SETTLE_FAILURE_LIMIT,
-                                    self.afc_correction_hz
+                                    planner_limit, self.afc_correction_hz
                                 );
                                 planner.unsettle();
                                 self.settle_condemnations += 1;

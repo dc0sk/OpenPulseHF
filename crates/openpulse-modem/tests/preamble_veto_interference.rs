@@ -938,3 +938,135 @@ fn a_frame_behind_unrefusable_interference_is_not_acquired() {
          budget changed. Promote this to a gate and update #1062."
     );
 }
+
+// ── G8: is the recovery-side fix cheaper than the wire change? ───────────────
+
+/// The measurement owed before a wire-format break can be justified by the acquisition finding.
+///
+/// Two independent fixes reach a frame sitting behind continuous interference: make the veto able
+/// to refuse the interference (a new sync word — wire-format change), or make the recovery cover
+/// ground faster. Only the first breaks the format, so the second has to be measured first.
+///
+/// The stride itself is NOT the lever, and #1040 pins it for a reason: the sweep proves a span of
+/// `(SWEEP_OFFSETS-1)*step/2` samples undecodable and recovery resumes exactly past it, so
+/// advancing further would skip audio nobody examined. What is loose is the COST of proving that
+/// span. `SETTLE_FAILURE_LIMIT` is `2 * SWEEP_OFFSETS`: one full sweep cycle, then a second "to
+/// give the anchor a second chance against a grown buffer". Behind continuous interference the
+/// buffer is already complete, so the second cycle re-tests what the first just rejected.
+///
+/// Halving it should halve the work to clear each span without skipping a single sample.
+#[test]
+#[ignore = "verification"]
+fn g8_recovery_cost_vs_condemnation_threshold() {
+    let (backend, mut tx) = engine();
+    tx.transmit_with_fec_mode(b"recovery cost probe", MODE, FecMode::Rs, None)
+        .expect("transmit");
+    let frame = backend.drain_samples();
+    let frame_rms = (frame.iter().map(|s| s * s).sum::<f32>() / frame.len() as f32).sqrt();
+    let amp = frame_rms / 10.0 * std::f32::consts::SQRT_2;
+
+    println!("\nG8: work to acquire a frame behind continuous interference, vs condemnation cost");
+    println!("    interferer: comb fc-60/fc+65 at +20 dB SIR; SETTLE_FAILURE_LIMIT shipped = 18\n");
+    println!(
+        "{:<10} {:>7} {:>10} {:>8} {:>12} {:>14} {:>9}",
+        "lead-in", "limit", "iter cap", "cond", "anchor max", "settled at", "decoded"
+    );
+    for lead_s in [1.0f32, 2.0] {
+        let pad = secs(lead_s);
+        let total = pad + frame.len() + secs(1.0);
+        let mut sig = comb(60.0, 65.0, amp, total);
+        for (i, s) in frame.iter().enumerate() {
+            sig[pad + i] += s;
+        }
+        for limit in [18usize, 9, 4, 2] {
+            for iters in [400usize, 800, 1_600] {
+                let backend = LoopbackBackend::new();
+                let mut e = ModemEngine::new(Box::new(backend.clone_shared()));
+                e.register_plugin(Box::new(bpsk_plugin::BpskPlugin::new()))
+                    .expect("reg");
+                e.set_deterministic_scan_positions(Some(SCAN_POSITIONS));
+                e.set_deterministic_max_iterations(Some(iters));
+                e.set_settle_failure_limit(Some(limit));
+                e.enable_notch();
+                backend.fill_samples(&sig.clone());
+                let decoded = e
+                    .receive_with_fec_mode_timeout(
+                        MODE,
+                        FecMode::Rs,
+                        None,
+                        Duration::from_millis(120_000),
+                    )
+                    .is_ok();
+                let pos = e.condemned_positions();
+                let hi = pos.iter().copied().max().unwrap_or(0);
+                let acc = e
+                    .accepted_settle_positions()
+                    .last()
+                    .map(|v| v.to_string())
+                    .unwrap_or("-".into());
+                println!(
+                    "{lead_s:<10} {limit:>7} {iters:>10} {:>8} {hi:>12} {acc:>14} {decoded:>9}",
+                    pos.len()
+                );
+            }
+        }
+    }
+    println!("\n  If a lower limit reaches the same anchor position for proportionally fewer");
+    println!("  iterations, the recovery-side fix works and no wire change is needed for THIS.");
+}
+
+// ── G9: the recovery fix's COST side, on a real capture ─────────────────────
+
+/// G8 measured only where every anchor is hopeless. This measures where anchors are nearly right.
+///
+/// Lowering `SETTLE_FAILURE_LIMIT` makes each condemnation cheaper, which is pure gain when the
+/// anchor is sitting on interference and no number of attempts would have decoded it. It is a loss
+/// when the anchor is on a frame's leading edge, where a later attempt against a grown buffer WOULD
+/// have decoded — the receiver then abandons a good anchor and has to walk back to it.
+///
+/// The #1021 on-air capture has exactly that shape, so it is the counterfactual G8 lacks. Total
+/// work is `condemnations x limit`, which is the column that decides.
+#[test]
+#[ignore = "verification"]
+fn g9_recovery_cost_on_the_real_capture() {
+    use openpulse_modem::capture_replay::load_corpus;
+    let c = load_corpus("ic9700-frame-bpsk250-rs-whitened.wav").expect("corpus");
+
+    println!("\nG9: #1021 on-air capture, condemnations and TOTAL attempts vs condemnation limit");
+    println!("    shipped limit = 18; the #1040 gate bounds condemnations at <= 2\n");
+    println!(
+        "{:>7} {:>14} {:>16} {:>10}",
+        "limit", "condemnations", "total attempts", "decoded"
+    );
+    for limit in [18usize, 12, 9, 6, 4, 2] {
+        let mut h = openpulse_modem::channel_sim::ChannelSimHarness::new();
+        for eng in [&mut h.tx_engine, &mut h.rx_engine] {
+            eng.register_plugin(Box::new(bpsk_plugin::BpskPlugin::new()))
+                .expect("reg");
+        }
+        h.rx_engine.set_settle_failure_limit(Some(limit));
+        // Deterministic budgets, or these counts measure the CPU (#1066) -- publishing
+        // wall-clock-bound constants in the same series that filed #1066 would be self-refuting.
+        h.rx_engine
+            .set_deterministic_scan_positions(Some(SCAN_POSITIONS));
+        h.rx_engine
+            .set_deterministic_max_iterations(Some(MAX_ITERATIONS * 4));
+        h.feed_capture(&c);
+        let decoded = h
+            .rx_engine
+            .receive_with_fec_mode_timeout(MODE, FecMode::Rs, None, Duration::from_millis(40_000))
+            .is_ok();
+        let cond = h.rx_engine.settle_condemnations();
+        println!(
+            "{limit:>7} {cond:>14} {:>16} {decoded:>10}",
+            cond as usize * limit
+        );
+    }
+    println!(
+        "\n  Total attempts is the honest cost. If it rises as the limit falls, the receiver is"
+    );
+    println!(
+        "  abandoning anchors that would have decoded, and 'make condemnation cheaper' is not"
+    );
+    println!("  a free win — it is a trade against anchors that are nearly right.");
+}
