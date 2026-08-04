@@ -40,7 +40,7 @@ impl Js8Plugin {
                     "JS8-TURBO".to_string(),
                     "JS8-ULTRA".to_string(),
                 ],
-                trait_version_required: "2.0".to_string(),
+                trait_version_required: "3.0".to_string(),
             },
         }
     }

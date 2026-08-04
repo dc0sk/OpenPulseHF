@@ -66,7 +66,7 @@ impl PilotPlugin {
                     "PILOT-16QAM2000-RRC".to_string(),
                     "PILOT-32APSK2000-RRC".to_string(),
                 ],
-                trait_version_required: "2.0".to_string(),
+                trait_version_required: "3.0".to_string(),
             },
         }
     }

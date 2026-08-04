@@ -1,11 +1,11 @@
 //! The core [`ModemEngine`] struct.
 
 use openpulse_audio::tanh_limit;
-use openpulse_dsp::acquisition::IqMatchedFilter;
+use openpulse_dsp::acquisition::{DdcMatchedFilter, IqMatchedFilter};
 use rand::Rng;
 use std::time::{Duration, Instant};
 use tokio::sync::broadcast;
-use tracing::{debug, info};
+use tracing::{debug, info, warn};
 
 use openpulse_core::ack::AckFrame;
 use openpulse_core::ack::AckType;
@@ -332,9 +332,12 @@ const AFC_SETTLE_DEADBAND_HZ: f32 = 2.0;
 /// 31-symbol preamble is 7936 samples — a ~1 s coherent integration needing a ~0.5 Hz step, i.e.
 /// hundreds of correlations of an 8000-sample template per candidate settle.
 ///
-/// Modes past this bound keep the pre-#1049 energy-only settle. That is a real gap rather than a
-/// tidy default: the slow rungs listen longest and are the most exposed to a noise settle. Closing
-/// it needs a cheaper detector (decimation, or a segmented non-coherent sum), not a bigger grid.
+/// **This is a POST-DDC budget, not a raw-sample cap.** It was the latter until the phase-0 work
+/// on #1062, and as a raw cap it excluded BPSK31/63/100 from the veto entirely — the modes that
+/// listen longest and are most exposed to a noise settle, excluded not because correlation could
+/// not help them but because it was priced in the wrong domain. A template longer than this is now
+/// decimated to fit rather than refused: see [`DdcMatchedFilter`], whose equivalence to the
+/// passband correlator is measured exact to four decimals at decimation up to 32.
 const MAX_PREAMBLE_CORRELATION_SAMPLES: usize = 2_048;
 
 /// A mode's preamble matched filter together with the ρ constants its plugin measured for it.
@@ -345,15 +348,58 @@ const MAX_PREAMBLE_CORRELATION_SAMPLES: usize = 2_048;
 /// engine-wide constant would have corroborated QPSK settles on pure noise. See
 /// [`openpulse_core::plugin::PreambleTemplate`].
 struct PreambleVeto {
-    filter: IqMatchedFilter,
+    filter: VetoCorrelator,
     rho_threshold: f32,
     rho_grid_hz: f32,
 }
 
+/// Passband for templates inside the budget; decimated baseband for the ones that are not.
+///
+/// Both compute the same ρ. The split exists only because correlating a 16 128-sample template in
+/// the passband costs what the budget refuses, and decimating it does not change the answer —
+/// measured, not assumed.
+enum VetoCorrelator {
+    Passband(IqMatchedFilter),
+    Ddc(DdcMatchedFilter),
+}
+
+impl VetoCorrelator {
+    /// Template length in the domain the budget is measured in.
+    fn len(&self) -> usize {
+        match self {
+            Self::Passband(f) => f.len(),
+            Self::Ddc(f) => f.len(),
+        }
+    }
+}
+
 impl PreambleVeto {
-    fn new(t: PreambleTemplate) -> Self {
+    fn new(t: PreambleTemplate, center_hz: f32, sample_rate: f32, occupied_bw_hz: f32) -> Self {
+        let raw = t.samples.len();
+        let filter = if raw <= MAX_PREAMBLE_CORRELATION_SAMPLES {
+            VetoCorrelator::Passband(IqMatchedFilter::new(t.samples))
+        } else {
+            // Cutoff comes from the SIGNAL, and the decimation from the cutoff — not the reverse.
+            // The first version of this derived cutoff from the decimation factor, which has no
+            // baud term at all: it left BPSK31 with a 540 Hz passband for a 40 Hz signal (throwing
+            // away most of the out-of-band rejection this path exists to provide) while a wide mode
+            // at high decimation would have been filtered by its own anti-alias stage.
+            let cutoff = occupied_bw_hz / 2.0 + t.rho_grid_hz + occupied_bw_hz * 0.15;
+            // Decimated Nyquist must clear the cutoff with transition margin, and the template must
+            // fit the budget. Take the stricter of the two.
+            let by_budget = raw.div_ceil(MAX_PREAMBLE_CORRELATION_SAMPLES);
+            let by_bandwidth = ((sample_rate / 2.0) / (cutoff * 1.25)).floor().max(1.0) as usize;
+            let decim = by_budget.min(by_bandwidth).max(1);
+            VetoCorrelator::Ddc(DdcMatchedFilter::new(
+                &t.samples,
+                center_hz,
+                sample_rate,
+                cutoff,
+                decim,
+            ))
+        };
         Self {
-            filter: IqMatchedFilter::new(t.samples),
+            filter,
             rho_threshold: t.rho_threshold,
             rho_grid_hz: t.rho_grid_hz,
         }
@@ -2804,21 +2850,7 @@ impl ModemEngine {
         // Correlation corroboration for a settle (#1049). `None` when the mode's plugin publishes
         // no preamble template, or when the template is too long to correlate affordably — in both
         // cases the settle is decided on energy alone, exactly as before.
-        let preamble_matcher = self
-            .plugins
-            .get(mode)
-            .and_then(|p| {
-                p.preamble_template(&ModulationConfig {
-                    sample_rate: audio_cfg.sample_rate,
-                    mode: mode.to_string(),
-                    center_frequency: self.center_frequency,
-                    ..ModulationConfig::default()
-                })
-            })
-            .filter(|t| {
-                !t.samples.is_empty() && t.samples.len() <= MAX_PREAMBLE_CORRELATION_SAMPLES
-            })
-            .map(PreambleVeto::new);
+        let preamble_matcher = self.build_preamble_veto(mode, audio_cfg.sample_rate);
         // Cost of the last full-buffer retry pass, and how much audio it covered. If a pass costs
         // more wall time than the audio it walked, further passes can only fall further behind.
         let mut retry_cost_secs: f64 = 0.0;
@@ -5852,6 +5884,62 @@ impl ModemEngine {
     /// than fixed. A matched filter's ρ falls off over roughly `1 / (template duration)`, so a step
     /// chosen for one baud rate steps clean over the peak at another and reads noise — the same
     /// class of error as a constant fitted to one artifact.
+    /// Build the correlation veto for `mode`, or `None` if this mode gets the energy-only settle.
+    ///
+    /// Extracted so [`Self::preamble_veto_active`] can report the same answer the receive path
+    /// acts on. A second copy of this predicate would be a copy that can drift, and the property
+    /// being pinned — *which* modes have a veto — is exactly the one that changed silently when a
+    /// cost limit stopped discarding oversized templates.
+    fn build_preamble_veto(&self, mode: &str, sample_rate: u32) -> Option<PreambleVeto> {
+        self.plugins
+            .get(mode)
+            .and_then(|p| {
+                p.preamble_template(&ModulationConfig {
+                    sample_rate,
+                    mode: mode.to_string(),
+                    center_frequency: self.center_frequency,
+                    ..ModulationConfig::default()
+                })
+            })
+            .filter(|t| !t.samples.is_empty())
+            // A template whose constants were derived for a DIFFERENT mode is refused, loudly. The
+            // plugin cannot enforce this alone: the previous defence was the raw-sample cap, a cost
+            // limit standing in for a correctness property, which vanished when the cap became a
+            // post-decimation budget.
+            .filter(|t| {
+                if t.for_mode == mode {
+                    return true;
+                }
+                warn!(
+                    "refusing preamble template for {mode}: constants derived for {} — rho is \
+                     normalised, so a threshold and grid measured on one template do not transfer",
+                    t.for_mode
+                );
+                false
+            })
+            .map(|t| {
+                // Occupied bandwidth drives the anti-alias cutoff; fall back to a conservative
+                // full-passband figure if the plugin publishes none, which only widens it.
+                let bw = self
+                    .plugins
+                    .get(mode)
+                    .and_then(|p| p.occupied_bandwidth_hz(mode))
+                    .unwrap_or(sample_rate as f32 / 4.0);
+                PreambleVeto::new(t, self.center_frequency, sample_rate as f32, bw)
+            })
+    }
+
+    /// Whether `mode` gets a preamble-correlation veto, as the receive path would decide it.
+    ///
+    /// Exists to be pinned. When a capability is gated by a resource limit, the set of modes that
+    /// have it grows silently the day the limit moves — and every new member arrives wearing
+    /// whatever constants the old members were using. Pinning the membership, not just the
+    /// behaviour of current members, is what turns that into a test failure.
+    pub fn preamble_veto_active(&self, mode: &str) -> bool {
+        self.build_preamble_veto(mode, AudioConfig::default().sample_rate)
+            .is_some()
+    }
+
     fn preamble_rho(
         &self,
         veto: &PreambleVeto,
@@ -5860,9 +5948,16 @@ impl ModemEngine {
     ) -> Option<(f32, usize)> {
         let (freqs, bound) = self.preamble_search_plan(veto, window, settled_hz)?;
         let fs = AudioConfig::default().sample_rate as f32;
-        veto.filter
-            .search_normalized_over_frequency(window, bound, 0.05, fs, &freqs)
-            .map(|(r, _)| (r.rho, r.offset))
+        match &veto.filter {
+            VetoCorrelator::Passband(f) => f
+                .search_normalized_over_frequency(window, bound, 0.05, fs, &freqs)
+                .map(|(r, _)| (r.rho, r.offset)),
+            // The DDC path folds the residual frequency into its mix and searches every onset its
+            // decimated window allows, so it takes no separate timing bound.
+            VetoCorrelator::Ddc(f) => f
+                .search_normalized_over_frequency(window, 0.05, &freqs)
+                .map(|(r, _)| (r.rho, r.offset)),
+        }
     }
 
     /// The residual-frequency grid and timing bound for the correlation check.

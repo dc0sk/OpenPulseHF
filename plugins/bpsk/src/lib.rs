@@ -86,7 +86,7 @@ impl BpskPlugin {
                 "BPSK250".to_string(),
                 "BPSK250-RRC".to_string(),
             ],
-            trait_version_required: "2.0".to_string(),
+            trait_version_required: "3.0".to_string(),
         }
     }
 }
@@ -157,9 +157,64 @@ impl ModulationPlugin for BpskPlugin {
         demodulate::afc_estimate_hz(samples, config)
     }
 
+    /// Published only for modes whose ρ constants have actually been derived.
+    ///
+    /// `PREAMBLE_RHO_THRESHOLD` is a **BPSK250** number — its doc derives it from BPSK250's own
+    /// decode cliff and BPSK250's own recorded idle ceiling. Handing it to BPSK31 would be
+    /// borrowing a threshold across templates, which is the practice #1053 was withdrawn for and
+    /// which `PreambleTemplate`'s own doc calls unrepresentable by design: ρ is normalised, so its
+    /// noise floor is set by template length, and BPSK31's template is eight times longer.
+    ///
+    /// This guard used to be provided *accidentally* by `MAX_PREAMBLE_CORRELATION_SAMPLES`: the
+    /// slow rungs' templates exceeded the cap, so the engine discarded them before the borrowed
+    /// constant could be used. Phase 0 of #1062 decimates oversized templates instead of refusing
+    /// them, which removes that accident — so the constraint has to be stated where it belongs,
+    /// here, rather than depending on a cost limit to enforce a correctness property.
+    ///
+    /// To add a mode: derive its own threshold from its own noise column (across receive
+    /// bandwidths) and its own decode column (on the channel that rung exists for), then list it.
     fn preamble_template(&self, config: &ModulationConfig) -> Option<PreambleTemplate> {
+        // The constants below were derived on BPSK250 and are named as such, so the engine rejects
+        // them for any other mode rather than silently inheriting. Two of them are mode-specific,
+        // not one: besides the threshold, PREAMBLE_RHO_GRID_HZ = 20 is safe only while the grid
+        // stays under half the preamble's line spacing (baud/2). At BPSK31 that spacing is 15.6 Hz
+        // and at BPSK63 31.25 Hz, so a +/-20 Hz grid can rotate SOME line onto ANY tone frequency
+        // and the veto would corroborate a steady tone wherever it sits.
+        //
+        // To add a mode: derive its own threshold (noise column across receive bandwidths, decode
+        // column on the channel that rung exists for) AND its own grid (bounded above by baud/4,
+        // below by the settle residual, measured at <= 0.3 Hz), then name it here.
+        const DERIVED_FOR: &str = "BPSK250";
+        if config.mode != DERIVED_FOR {
+            return None;
+        }
+        // Mechanical form of the bound the comment above states, so activating a mode with an
+        // unsafe grid fails here instead of shipping. The preamble's lines sit at odd multiples of
+        // baud/4, so adjacent lines are baud/2 apart; a grid reaching half that spacing can rotate
+        // SOME line onto ANY frequency. Measured at the deployed geometry (grid centred where a
+        // locked settle puts it): BPSK31 rho 0.661 and BPSK63 0.701 against a 0.40 threshold, where
+        // BPSK250 sits at 0.042 — the settle's rescue is a coincidence of magnitudes that stops
+        // holding once baud/4 falls under the grid.
+        //
+        // Scoped to this plugin deliberately: baud/4 is a property of THIS preamble's period-4 line
+        // structure and would be wrong for a PN successor.
+        let baud = crate::parse_baud_rate(&config.mode).ok()?;
+        if modulate::PREAMBLE_RHO_GRID_HZ >= baud / 4.0 {
+            // Loud where someone would be editing this, safe-fail where it ships. Publishing
+            // nothing costs the energy-only settle; publishing this costs a veto that corroborates
+            // any steady tone, which is worse than having none.
+            debug_assert!(
+                false,
+                "{} would publish a preamble template whose grid (±{} Hz) reaches its first                  spectral line at baud/4 = {:.1} Hz — a steady tone at any frequency would                  corroborate. Derive a narrower grid for this mode before listing it.",
+                config.mode,
+                modulate::PREAMBLE_RHO_GRID_HZ,
+                baud / 4.0
+            );
+            return None;
+        }
         let samples = modulate::bpsk_preamble_template(config).ok()?;
         Some(PreambleTemplate::new(
+            DERIVED_FOR,
             samples,
             modulate::PREAMBLE_RHO_THRESHOLD,
             modulate::PREAMBLE_RHO_GRID_HZ,
