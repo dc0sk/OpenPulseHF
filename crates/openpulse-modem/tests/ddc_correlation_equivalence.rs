@@ -437,3 +437,98 @@ fn p4_the_settle_rescue_does_not_scale_to_the_slow_rungs() {
     println!("  Where it does not, a locked settle hands the correlator a tone sitting within");
     println!("  grid reach of a line -- the protection inverts into the hazard.");
 }
+
+/// The engine's own cutoff derivation, so the bench measures what ships.
+///
+/// Mirrors `PreambleVeto::new`: cutoff from the SIGNAL (occupied bandwidth, grid, shaping margin),
+/// then decimation chosen so the decimated Nyquist clears it. Deriving cutoff *from* the decimation
+/// — which the first version did — has no baud term and fails in both directions.
+fn engine_cutoff_and_decim(occupied_bw: f32, grid_hz: f32, tmpl_len: usize) -> (f32, usize) {
+    let cutoff = occupied_bw / 2.0 + grid_hz + occupied_bw * 0.15;
+    let by_budget = tmpl_len.div_ceil(2_048);
+    let by_bandwidth = ((FS / 2.0) / (cutoff * 1.25)).floor().max(1.0) as usize;
+    (cutoff, by_budget.min(by_bandwidth).max(1))
+}
+
+/// P5: equivalence at BPSK31 — the mode the whole slow-rung story is about.
+///
+/// P1/P2 measured BPSK250 only, which is the one mode that needs no decimation at all (992 samples,
+/// under the budget). So the bench had never exercised the path it exists to justify: BPSK31's
+/// template is 7936 samples and *must* decimate. It is also the mode whose numbers the old
+/// cutoff formula got wrong in the generous direction, which a BPSK250-only bench could not see.
+///
+/// BPSK31 publishes no template — that is the grid finding — so this builds one from the modulator,
+/// which is byte-for-byte what a derived-constants BPSK31 would publish.
+#[test]
+#[ignore = "verification"]
+fn p5_equivalence_at_the_slow_rungs() {
+    println!("\nP5: passband vs DDC at the modes that actually need decimation\n");
+    println!(
+        "{:<10} {:>9} {:>7} {:>9} {:>6} {:>10} {:>9} {:>11} {:>11} {:>9}",
+        "mode",
+        "template",
+        "occ BW",
+        "cutoff",
+        "D",
+        "post-DDC",
+        "clean",
+        "pb+noise",
+        "DDC+noise",
+        "delta"
+    );
+
+    for (mode, baud) in [
+        ("BPSK31", 31.25f32),
+        ("BPSK63", 62.5),
+        ("BPSK100", 100.0),
+        ("BPSK250", 250.0),
+    ] {
+        let Ok(template) = bpsk_plugin::modulate::bpsk_preamble_template(&cfg(mode)) else {
+            continue;
+        };
+        let frame = bpsk_plugin::BpskPlugin::new()
+            .modulate(b"slow rung equivalence", &cfg(mode))
+            .expect("modulate");
+        // Same over-estimate the plugin publishes: null-to-null main lobe = 2x baud.
+        let occ = 2.0 * baud;
+        let (cutoff, d) = engine_cutoff_and_decim(occ, 20.0, template.len());
+
+        // A CLEAN frame is degenerate here: the signal contains the template exactly, so rho is
+        // 1.0000 by construction on both paths and any correlator that can find a template in
+        // itself "passes". The equivalence only means something once the correlation is stressed,
+        // so the frame carries in-band noise scaled to the mode's own occupied band.
+        let noisy: Vec<f32> = {
+            let n = band_noise(
+                frame.len(),
+                FC - occ / 2.0,
+                FC + occ / 2.0,
+                0.12,
+                mode.len() as u64 * 7 + 3,
+            );
+            frame.iter().zip(n).map(|(a, b)| a + b).collect()
+        };
+        let pb = rho_passband_best(&noisy, &template);
+        let dd = rho_ddc_best(&noisy, &template, d, cutoff);
+        let pb_clean = rho_passband_best(&frame, &template);
+        println!(
+            "{:<10} {:>9} {:>7.0} {:>9.1} {:>6} {:>10} {:>9.4} {:>11.4} {:>11.4} {:>9.4}",
+            mode,
+            template.len(),
+            occ,
+            cutoff,
+            d,
+            template.len() / d,
+            pb_clean,
+            pb,
+            dd,
+            dd - pb
+        );
+    }
+    println!("\n  'clean' is the degenerate control (signal contains the template, so rho = 1 on");
+    println!(
+        "  both paths). The pb/DDC columns carry in-band noise, which is where equivalence is"
+    );
+    println!("  actually tested. post-DDC is the length the budget is measured against, <= 2048.");
+    println!("  delta near zero is the equivalence claim, now measured where decimation is real");
+    println!("  rather than only at BPSK250, where D = 1 and nothing is decimated at all.");
+}
