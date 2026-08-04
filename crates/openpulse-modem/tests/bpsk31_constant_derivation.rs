@@ -389,3 +389,327 @@ fn r4_bpsk31_decode_column() {
     println!("  0.426 at 60 Hz). If the weakest decodable rho falls into that range, the two");
     println!("  distributions overlap and BPSK31 publishes NO template — the #1053 outcome.");
 }
+
+/// R5: would an UNCONDITIONAL DDC fix #1060 for BPSK250? (Measured, because reasoning is cheap.)
+///
+/// R3 found the DDC makes white / SSB / 500 Hz noise ceilings byte-identical at BPSK31 — the
+/// correlator never sees outside its own passband, so wider receive filters stop mattering. The
+/// tempting generalisation is "#1060 is dissolved on the DDC path", and the tempting design move is
+/// to make the DDC unconditional so every mode gets that.
+///
+/// But #1060 was filed about **BPSK250**, whose 992-sample template fits the budget and therefore
+/// runs the passband correlator — the immunity does not reach it. And BPSK250's DDC passband would
+/// be ±345 Hz (occupied 500/2 + grid 20 + shaping) while #1060's case is a **500 Hz receive filter**
+/// = ±250 Hz, which is *narrower*. A lowpass cannot undo filtering that has already happened inside
+/// its own passband.
+///
+/// So the prediction is that an unconditional DDC does NOT fix #1060, and the design move would be
+/// justified by a benefit it does not deliver. Measured rather than argued.
+#[test]
+#[ignore = "verification"]
+fn r5_would_unconditional_ddc_fix_1060_for_bpsk250() {
+    use openpulse_dsp::acquisition::IqMatchedFilter;
+
+    let template =
+        bpsk_plugin::modulate::bpsk_preamble_template(&cfg("BPSK250")).expect("template");
+    let occ = 2.0 * 250.0f32;
+    let grid_hz = 20.0f32;
+    let (cutoff, _) = cutoff_and_decim(occ, grid_hz, template.len());
+    // Unconditional form: decimate as far as the bandwidth allows, ignoring the budget branch.
+    let d = ((FS / 2.0) / (cutoff * 1.25)).floor().max(1.0) as usize;
+    let ddc = DdcMatchedFilter::new(&template, FC, FS, cutoff, d);
+    let pb = IqMatchedFilter::new(template.clone());
+    let ddc_grid = grid_for(template.len(), d, grid_hz);
+    let pb_step = (0.25 * FS / template.len() as f32).max(0.5);
+    let pb_n = (grid_hz / pb_step).round() as i32;
+    let pb_grid: Vec<f32> = (-pb_n..=pb_n).map(|k| k as f32 * pb_step).collect();
+
+    println!("\nR5: BPSK250 noise ceiling, passband vs unconditional DDC");
+    println!(
+        "    DDC passband ±{cutoff:.0} Hz, D {d}, template {} -> {} complex\n",
+        template.len(),
+        template.len() / d
+    );
+    println!(
+        "{:<22} {:>12} {:>12} {:>10}",
+        "receive filter", "passband max", "DDC max", "helps?"
+    );
+
+    let win = template.len() + 400;
+    for (name, lo, hi) in [
+        ("white 0-4k", 0.0f32, 4_000.0),
+        ("ssb 300-2700", 300.0, 2_700.0),
+        ("500 Hz (the #1060 case)", 1_250.0, 1_750.0),
+        ("200 Hz", 1_400.0, 1_600.0),
+    ] {
+        let noise = band_noise(win * 120, lo, hi, 0.05, 909);
+        let (mut pmax, mut dmax) = (0.0f32, 0.0f32);
+        let mut s = 0usize;
+        while s + win <= noise.len() {
+            let w = &noise[s..s + win];
+            if let Some((r, _)) =
+                pb.search_normalized_over_frequency(w, w.len() - pb.len(), 0.05, FS, &pb_grid)
+            {
+                pmax = pmax.max(r.rho);
+            }
+            if let Some((r, _)) = ddc.search_normalized_over_frequency(w, 0.05, &ddc_grid) {
+                dmax = dmax.max(r.rho);
+            }
+            s += win;
+        }
+        let helps = if dmax < pmax - 0.02 { "yes" } else { "no" };
+        println!("{name:<22} {pmax:>12.3} {dmax:>12.3} {helps:>10}");
+    }
+    println!("\n  BPSK250's shipped threshold is 0.40. A filter NARROWER than the DDC passband is");
+    println!("  already inside it, so the lowpass cannot undo it — if the 500 Hz row shows no");
+    println!("  improvement, an unconditional DDC does not fix #1060 and must be justified on");
+    println!("  other grounds (cost, or uniformity) rather than on that benefit.");
+}
+
+/// R6: what does decimation cost the noise ceiling? (The DDC is not free, and R3 didn't price it.)
+///
+/// R5 found the DDC *raises* BPSK250's noise ceiling — 0.145 → 0.365 on white noise at D = 9. The
+/// mechanism is that ρ is normalised over the template's samples, so its noise floor scales roughly
+/// as 1/√N, and decimating by D removes a factor D of them. Two effects compete and both push the
+/// same way for wide noise: fewer samples raises the floor, and removing out-of-band noise from the
+/// window *energy* (the denominator) raises it too.
+///
+/// R3 measured BPSK31's ceiling through the DDC and reported the bands as byte-identical, which is
+/// true and is about band-*independence*. It said nothing about the level, and the level is what a
+/// threshold has to clear. This prices it.
+#[test]
+#[ignore = "verification"]
+fn r6_what_decimation_costs_the_noise_ceiling() {
+    use openpulse_dsp::acquisition::IqMatchedFilter;
+
+    println!("\nR6: noise ceiling, passband vs DDC, per mode (max over independent windows)\n");
+    println!(
+        "{:<10} {:>6} {:>8} {:>14} {:>12} {:>12} {:>10}",
+        "mode", "D", "post-DDC", "band", "passband", "DDC", "cost"
+    );
+    for (mode, baud) in [("BPSK31", 31.25f32), ("BPSK250", 250.0)] {
+        let template = bpsk_plugin::modulate::bpsk_preamble_template(&cfg(mode)).expect("template");
+        let occ = 2.0 * baud;
+        let grid_hz = if mode == "BPSK31" { 2.0 } else { 20.0 };
+        let (cutoff, d) = cutoff_and_decim(occ, grid_hz, template.len());
+        let ddc = DdcMatchedFilter::new(&template, FC, FS, cutoff, d);
+        let pb = IqMatchedFilter::new(template.clone());
+        let ddc_grid = grid_for(template.len(), d, grid_hz);
+        let step = (0.25 * FS / template.len() as f32).max(0.5);
+        let n = (grid_hz / step).round() as i32;
+        let pb_grid: Vec<f32> = (-n..=n).map(|k| k as f32 * step).collect();
+
+        let win = template.len() + 400;
+        for (bname, lo, hi) in [
+            ("white 0-4k", 0.0f32, 4_000.0),
+            ("ssb 300-2700", 300.0, 2_700.0),
+        ] {
+            let noise = band_noise(win * 60, lo, hi, 0.05, 555);
+            let (mut pmax, mut dmax) = (0.0f32, 0.0f32);
+            let mut s = 0usize;
+            while s + win <= noise.len() {
+                let w = &noise[s..s + win];
+                if let Some((r, _)) =
+                    pb.search_normalized_over_frequency(w, w.len() - pb.len(), 0.05, FS, &pb_grid)
+                {
+                    pmax = pmax.max(r.rho);
+                }
+                if let Some((r, _)) = ddc.search_normalized_over_frequency(w, 0.05, &ddc_grid) {
+                    dmax = dmax.max(r.rho);
+                }
+                s += win;
+            }
+            println!(
+                "{:<10} {:>6} {:>8} {:<14} {:>12.3} {:>12.3} {:>+10.3}",
+                mode,
+                d,
+                template.len() / d,
+                bname,
+                pmax,
+                dmax,
+                dmax - pmax
+            );
+        }
+    }
+    println!("\n  A positive 'cost' means decimation RAISED the ceiling a threshold must clear.");
+    println!("  The DDC buys band-independence and affordability, and pays for both here. That is");
+    println!("  a trade to state, not a benefit to claim.");
+}
+
+/// R7: SEPARATION, which is the quantity that decides detection — not signal ρ or noise ρ alone.
+///
+/// The DDC's anti-alias lowpass removes out-of-band energy from the correlation window. That energy
+/// sits in ρ's **denominator**, so removing it raises ρ — for the signal *and* for the noise. I
+/// recorded the signal half as "an interference-rejection stage you get paid for" (P2: an
+/// out-of-band tone costs the passband correlator 1.000 → 0.945 while the DDC path stays at 1.000)
+/// without measuring the noise half, and R6 then found the noise ceiling rising by *more*.
+///
+/// If noise rises further than signal, the DDC is not rejecting interference in any useful sense —
+/// it is renormalising both, and the detector is worse off. What matters is
+/// `ρ_signal − ρ_noise_ceiling` measured in the *same* environment, which is what this does. Values
+/// combined across P2 and R6 cannot answer it: different noise levels, different fixtures.
+#[test]
+#[ignore = "verification"]
+fn r7_separation_passband_vs_ddc() {
+    use openpulse_dsp::acquisition::IqMatchedFilter;
+
+    println!("\nR7: signal ρ and noise ceiling in ONE environment; separation is the verdict\n");
+    println!(
+        "{:<10} {:>6} {:<14} {:>9} {:>9} {:>11} {:>9} {:>9} {:>11} {:>10}",
+        "mode",
+        "D",
+        "band",
+        "pb sig",
+        "pb noise",
+        "pb SEP",
+        "dd sig",
+        "dd noise",
+        "dd SEP",
+        "better"
+    );
+    for (mode, baud) in [("BPSK31", 31.25f32), ("BPSK250", 250.0)] {
+        let template = bpsk_plugin::modulate::bpsk_preamble_template(&cfg(mode)).expect("template");
+        let frame = bpsk_plugin::BpskPlugin::new()
+            .modulate(b"separation", &cfg(mode))
+            .expect("modulate");
+        let occ = 2.0 * baud;
+        let grid_hz = if mode == "BPSK31" { 2.0 } else { 20.0 };
+        let (cutoff, d) = cutoff_and_decim(occ, grid_hz, template.len());
+        let ddc = DdcMatchedFilter::new(&template, FC, FS, cutoff, d);
+        let pb = IqMatchedFilter::new(template.clone());
+        let ddc_grid = grid_for(template.len(), d, grid_hz);
+        let step = (0.25 * FS / template.len() as f32).max(0.5);
+        let n = (grid_hz / step).round() as i32;
+        let pb_grid: Vec<f32> = (-n..=n).map(|k| k as f32 * step).collect();
+
+        let win = template.len() + 400;
+        for (bname, lo, hi) in [("ssb 300-2700", 300.0f32, 2_700.0)] {
+            // Same noise process for both the signal case and the ceiling.
+            let level = 0.05f32;
+            let sig_noise = band_noise(frame.len(), lo, hi, level, 31);
+            let noisy: Vec<f32> = frame.iter().zip(sig_noise).map(|(a, b)| a + b).collect();
+            let pb_sig = pb
+                .search_normalized_over_frequency(
+                    &noisy,
+                    noisy.len() - pb.len(),
+                    0.05,
+                    FS,
+                    &pb_grid,
+                )
+                .map(|(r, _)| r.rho)
+                .unwrap_or(f32::NAN);
+            let dd_sig = ddc
+                .search_normalized_over_frequency(&noisy, 0.05, &ddc_grid)
+                .map(|(r, _)| r.rho)
+                .unwrap_or(f32::NAN);
+
+            let noise = band_noise(win * 60, lo, hi, level, 555);
+            let (mut pmax, mut dmax) = (0.0f32, 0.0f32);
+            let mut s = 0usize;
+            while s + win <= noise.len() {
+                let w = &noise[s..s + win];
+                if let Some((r, _)) =
+                    pb.search_normalized_over_frequency(w, w.len() - pb.len(), 0.05, FS, &pb_grid)
+                {
+                    pmax = pmax.max(r.rho);
+                }
+                if let Some((r, _)) = ddc.search_normalized_over_frequency(w, 0.05, &ddc_grid) {
+                    dmax = dmax.max(r.rho);
+                }
+                s += win;
+            }
+            let psep = pb_sig - pmax;
+            let dsep = dd_sig - dmax;
+            println!(
+                "{:<10} {:>6} {:<14} {:>9.3} {:>9.3} {:>11.3} {:>9.3} {:>9.3} {:>11.3} {:>10}",
+                mode,
+                d,
+                bname,
+                pb_sig,
+                pmax,
+                psep,
+                dd_sig,
+                dmax,
+                dsep,
+                if dsep > psep { "DDC" } else { "passband" }
+            );
+        }
+    }
+    println!("\n  If passband wins on separation, the DDC is a COST compromise that degrades");
+    println!("  detection — affordable correlation of a long template, paid for in margin — and");
+    println!("  the 'interference rejection is a free benefit' framing is wrong.");
+}
+
+/// R8: derive the correlation budget instead of inheriting it.
+///
+/// `MAX_PREAMBLE_CORRELATION_SAMPLES = 2048` has never been derived. Its doc reasons qualitatively
+/// — "hundreds of correlations of an 8000-sample template" — and that reasoning was written when
+/// the grid was ±20 Hz. Round 17 derived BPSK31's grid at **±2 Hz**, which is 9 points instead of
+/// 81, so passband correlation of that template is ~9× cheaper than when the cap's argument was
+/// made. The cap may now be excluding something affordable.
+///
+/// This matters beyond tidiness: the DDC exists *only* to fit that cap, and it costs detection
+/// margin (R5–R7). If passband fits a real-time budget on the reference hardware, phase 0's shape
+/// is wrong — the answer is a derived cap, not a decimating correlator, and the DDC becomes an
+/// artifact of asking the cost question after building the answer.
+///
+/// Measured as wall time per settle, and as a fraction of the audio the settle covers. A receiver
+/// that spends more than 1.0× real time on correlation can never catch up.
+#[test]
+#[ignore = "verification"]
+fn r8_is_passband_affordable_at_the_derived_grid() {
+    use openpulse_dsp::acquisition::IqMatchedFilter;
+    use std::time::Instant;
+
+    println!("\nR8: correlation cost per settle, passband vs DDC, at each mode's DERIVED grid\n");
+    println!(
+        "{:<10} {:>7} {:>8} {:>7} {:>12} {:>12} {:>12} {:>10}",
+        "mode", "tmpl", "grid pts", "D", "pb ms", "ddc ms", "audio s", "pb/real"
+    );
+    for (mode, baud, grid_hz) in [("BPSK31", 31.25f32, 2.0f32), ("BPSK250", 250.0, 20.0)] {
+        let template = bpsk_plugin::modulate::bpsk_preamble_template(&cfg(mode)).expect("template");
+        let occ = 2.0 * baud;
+        let (cutoff, d) = cutoff_and_decim(occ, grid_hz, template.len());
+        let ddc = DdcMatchedFilter::new(&template, FC, FS, cutoff, d);
+        let pb = IqMatchedFilter::new(template.clone());
+        let ddc_grid = grid_for(template.len(), d, grid_hz);
+        let step = (0.25 * FS / template.len() as f32).max(0.5);
+        let n = (grid_hz / step).round() as i32;
+        let pb_grid: Vec<f32> = (-n..=n).map(|k| k as f32 * step).collect();
+
+        // The window a settle actually correlates over: preamble plus timing slack.
+        let win_len = template.len() + 400;
+        let w = band_noise(win_len, 300.0, 2_700.0, 0.05, 77);
+
+        const REPS: usize = 20;
+        let t0 = Instant::now();
+        for _ in 0..REPS {
+            let _ = pb.search_normalized_over_frequency(&w, w.len() - pb.len(), 0.05, FS, &pb_grid);
+        }
+        let pb_ms = t0.elapsed().as_secs_f64() * 1000.0 / REPS as f64;
+        let t1 = Instant::now();
+        for _ in 0..REPS {
+            let _ = ddc.search_normalized_over_frequency(&w, 0.05, &ddc_grid);
+        }
+        let ddc_ms = t1.elapsed().as_secs_f64() * 1000.0 / REPS as f64;
+
+        let audio_s = win_len as f64 / FS as f64;
+        println!(
+            "{:<10} {:>7} {:>8} {:>7} {:>12.2} {:>12.2} {:>12.3} {:>10.4}",
+            mode,
+            template.len(),
+            pb_grid.len(),
+            d,
+            pb_ms,
+            ddc_ms,
+            audio_s,
+            (pb_ms / 1000.0) / audio_s
+        );
+    }
+    println!("\n  'pb/real' is passband correlation time divided by the audio it covers, on THIS");
+    println!(
+        "  host. Well under 1.0 means the cap is not protecting against what its doc says, and"
+    );
+    println!("  the DDC's margin cost is being paid for nothing. The reference target is slower —");
+    println!("  rpi53-class — so the margin needed here is the ratio between the two, unmeasured.");
+}
