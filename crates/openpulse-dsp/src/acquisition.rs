@@ -772,12 +772,36 @@ mod goertzel_tests {
 /// search then costs roughly `1/decim²` (fewer offsets over shorter vectors), while the grid count
 /// is unchanged because the grid step scales with duration and duration is unchanged.
 ///
-/// **The anti-alias lowpass is not overhead paid to make decimation legal — it rejects
-/// interference before the correlator sees it.** Measured against the passband filter on a BPSK250
-/// frame: an out-of-band tone at `fc + 1200 Hz` costs the passband correlator ρ 1.000 → 0.945 while
-/// this path stays at 1.000; out-of-band noise 0.955 → 1.000. Equivalence on signals that are
-/// genuinely in-band is exact to four decimals at `decim` up to 32 (clean frame delta 0.0000,
-/// in-band noise 0.0016–0.0039). Bench: `openpulse-modem/tests/ddc_correlation_equivalence.rs`.
+/// Equivalence on signals that are genuinely in-band is exact to four decimals at `decim` up to 32
+/// (clean frame delta 0.0000, in-band noise 0.0016–0.0039).
+///
+/// **This is a cost trade, and it is paid for in detection margin.** An earlier version of this doc
+/// claimed the anti-alias lowpass "rejects interference before the correlator sees it", citing an
+/// out-of-band tone that costs the passband correlator ρ 1.000 → 0.945 while this path stays at
+/// 1.000. That measurement is correct and the conclusion drawn from it was wrong: ρ is a *ratio*,
+/// the lowpass removes out-of-band energy from its **denominator**, and so it raises ρ for signal
+/// and noise alike — the noise by more. Measured in one environment (SSB-band noise), separation
+/// `ρ_signal − ρ_noise_ceiling`:
+///
+/// | mode | passband | this filter |
+/// |---|---|---|
+/// | BPSK31 | 0.997 − 0.066 = **0.930** | 1.000 − 0.326 = **0.674** |
+/// | BPSK250 | 0.997 − 0.176 = **0.820** | 0.999 − 0.351 = **0.648** |
+///
+/// The gap narrows sharply in the environment that actually sets a threshold — under a 200 Hz
+/// receive filter the two are within 9 % (0.544 vs 0.591), because the passband correlator's low
+/// wide-band ceiling is borrowed from out-of-band noise padding the denominator, which such a
+/// filter removes. So the margin cost is real but smaller at the decision point than the table
+/// above suggests.
+///
+/// **What it does buy is affordability, and that is hardware-dependent.** On a Pi 5 (the reference
+/// class) this path is 2.8× cheaper than passband for BPSK31 — 15.2 ms against 42.7 ms per
+/// invocation — where on a fast x86 dev host it was only 1.2×, because the wider SIMD and cache
+/// there favour the long linear scan. Measuring cost on a dev host alone understates the benefit on
+/// the machine that ships.
+///
+/// Bench: `openpulse-modem/tests/ddc_correlation_equivalence.rs` and
+/// `tests/bpsk31_constant_derivation.rs` (R5–R9).
 pub struct DdcMatchedFilter {
     template: Vec<(f32, f32)>,
     t_energy: f32,
