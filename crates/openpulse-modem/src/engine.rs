@@ -5,7 +5,7 @@ use openpulse_dsp::acquisition::{DdcMatchedFilter, IqMatchedFilter};
 use rand::Rng;
 use std::time::{Duration, Instant};
 use tokio::sync::broadcast;
-use tracing::{debug, info};
+use tracing::{debug, info, warn};
 
 use openpulse_core::ack::AckFrame;
 use openpulse_core::ack::AckType;
@@ -369,16 +369,22 @@ impl VetoCorrelator {
 }
 
 impl PreambleVeto {
-    fn new(t: PreambleTemplate, center_hz: f32, sample_rate: f32) -> Self {
+    fn new(t: PreambleTemplate, center_hz: f32, sample_rate: f32, occupied_bw_hz: f32) -> Self {
         let raw = t.samples.len();
         let filter = if raw <= MAX_PREAMBLE_CORRELATION_SAMPLES {
             VetoCorrelator::Passband(IqMatchedFilter::new(t.samples))
         } else {
-            // Decimate just enough to fit the budget. The lowpass must pass the signal plus the
-            // residual grid; the complex rate must stay above twice that, which the ceil-division
-            // guarantees for every mode in the ladder.
-            let decim = raw.div_ceil(MAX_PREAMBLE_CORRELATION_SAMPLES);
-            let cutoff = (t.rho_grid_hz * 2.0 + sample_rate / decim as f32 / 4.0).max(200.0);
+            // Cutoff comes from the SIGNAL, and the decimation from the cutoff — not the reverse.
+            // The first version of this derived cutoff from the decimation factor, which has no
+            // baud term at all: it left BPSK31 with a 540 Hz passband for a 40 Hz signal (throwing
+            // away most of the out-of-band rejection this path exists to provide) while a wide mode
+            // at high decimation would have been filtered by its own anti-alias stage.
+            let cutoff = occupied_bw_hz / 2.0 + t.rho_grid_hz + occupied_bw_hz * 0.15;
+            // Decimated Nyquist must clear the cutoff with transition margin, and the template must
+            // fit the budget. Take the stricter of the two.
+            let by_budget = raw.div_ceil(MAX_PREAMBLE_CORRELATION_SAMPLES);
+            let by_bandwidth = ((sample_rate / 2.0) / (cutoff * 1.25)).floor().max(1.0) as usize;
+            let decim = by_budget.min(by_bandwidth).max(1);
             VetoCorrelator::Ddc(DdcMatchedFilter::new(
                 &t.samples,
                 center_hz,
@@ -2823,7 +2829,30 @@ impl ModemEngine {
             // them is what exempted BPSK31/63/100 from the veto: the modes that listen longest,
             // excluded because the cost was priced in the passband.
             .filter(|t| !t.samples.is_empty())
-            .map(|t| PreambleVeto::new(t, self.center_frequency, audio_cfg.sample_rate as f32));
+            // A template whose constants were derived for a DIFFERENT mode is refused, loudly. The
+            // plugin cannot enforce this alone: the previous defence was the raw-sample cap, a cost
+            // limit standing in for a correctness property, which vanished when the cap became a
+            // post-decimation budget.
+            .filter(|t| {
+                if t.for_mode == mode {
+                    return true;
+                }
+                warn!(
+                    "refusing preamble template for {mode}: constants derived for {} — rho is                      normalised, so a threshold and grid measured on one template do not transfer",
+                    t.for_mode
+                );
+                false
+            })
+            .map(|t| {
+                // Occupied bandwidth drives the anti-alias cutoff; fall back to a conservative
+                // full-passband figure if the plugin does not publish one, which only widens it.
+                let bw = self
+                    .plugins
+                    .get(mode)
+                    .and_then(|p| p.occupied_bandwidth_hz(mode))
+                    .unwrap_or(audio_cfg.sample_rate as f32 / 4.0);
+                PreambleVeto::new(t, self.center_frequency, audio_cfg.sample_rate as f32, bw)
+            });
         // Cost of the last full-buffer retry pass, and how much audio it covered. If a pass costs
         // more wall time than the audio it walked, further passes can only fall further behind.
         let mut retry_cost_secs: f64 = 0.0;

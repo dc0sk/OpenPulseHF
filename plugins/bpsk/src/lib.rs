@@ -86,7 +86,7 @@ impl BpskPlugin {
                 "BPSK250".to_string(),
                 "BPSK250-RRC".to_string(),
             ],
-            trait_version_required: "2.0".to_string(),
+            trait_version_required: "3.0".to_string(),
         }
     }
 }
@@ -174,12 +174,23 @@ impl ModulationPlugin for BpskPlugin {
     /// To add a mode: derive its own threshold from its own noise column (across receive
     /// bandwidths) and its own decode column (on the channel that rung exists for), then list it.
     fn preamble_template(&self, config: &ModulationConfig) -> Option<PreambleTemplate> {
-        const DERIVED_THRESHOLD_MODES: [&str; 1] = ["BPSK250"];
-        if !DERIVED_THRESHOLD_MODES.contains(&config.mode.as_str()) {
+        // The constants below were derived on BPSK250 and are named as such, so the engine rejects
+        // them for any other mode rather than silently inheriting. Two of them are mode-specific,
+        // not one: besides the threshold, PREAMBLE_RHO_GRID_HZ = 20 is safe only while the grid
+        // stays under half the preamble's line spacing (baud/2). At BPSK31 that spacing is 15.6 Hz
+        // and at BPSK63 31.25 Hz, so a +/-20 Hz grid can rotate SOME line onto ANY tone frequency
+        // and the veto would corroborate a steady tone wherever it sits.
+        //
+        // To add a mode: derive its own threshold (noise column across receive bandwidths, decode
+        // column on the channel that rung exists for) AND its own grid (bounded above by baud/4,
+        // below by the settle residual, measured at <= 0.3 Hz), then name it here.
+        const DERIVED_FOR: &str = "BPSK250";
+        if config.mode != DERIVED_FOR {
             return None;
         }
         let samples = modulate::bpsk_preamble_template(config).ok()?;
         Some(PreambleTemplate::new(
+            DERIVED_FOR,
             samples,
             modulate::PREAMBLE_RHO_THRESHOLD,
             modulate::PREAMBLE_RHO_GRID_HZ,

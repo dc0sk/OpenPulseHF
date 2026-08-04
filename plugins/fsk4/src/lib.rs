@@ -64,7 +64,7 @@ impl Fsk4Plugin {
                         .to_string(),
                 author: "OpenPulse Contributors".to_string(),
                 supported_modes: vec!["FSK4-ACK".to_string()],
-                trait_version_required: "2.0".to_string(),
+                trait_version_required: "3.0".to_string(),
             },
         }
     }

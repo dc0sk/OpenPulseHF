@@ -71,7 +71,7 @@ impl QpskPlugin {
                 "QPSK9600".to_string(),
                 "QPSK9600-RRC".to_string(),
             ],
-            trait_version_required: "2.0".to_string(),
+            trait_version_required: "3.0".to_string(),
         }
     }
 }

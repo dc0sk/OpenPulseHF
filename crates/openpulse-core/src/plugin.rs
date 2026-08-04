@@ -8,6 +8,11 @@ use crate::error::{ModemError, PluginError};
 /// 1.1.0 added [`ModulationPlugin::preamble_template`] — additive, with a `None` default, so every
 /// plugin declaring `1.0.0` keeps working unchanged.
 ///
+/// 3.0.0 added [`PreambleTemplate::for_mode`], which is breaking because the constructor gained a
+/// parameter. The engine refuses a template whose `for_mode` differs from the mode being received.
+/// Migration: pass the mode the constants were measured on — not the mode being modulated, when
+/// those differ, because that difference is the defect this exists to surface.
+///
 /// 2.0.0 changed that method's return type from `Option<Vec<f32>>` to [`Option<PreambleTemplate>`],
 /// which is breaking: the samples now travel with the correlation constants measured for that
 /// waveform. Migration for a plugin that published a template is to wrap the samples in
@@ -20,7 +25,7 @@ use crate::error::{ModemError, PluginError};
 /// would corroborate settles on pure noise — the exact defect the check exists to prevent, and one
 /// that produces no error, only a receiver that stops acquiring. A single method makes publishing a
 /// template without its own measured constants unrepresentable.
-pub const PLUGIN_TRAIT_VERSION: &str = "2.0.0";
+pub const PLUGIN_TRAIT_VERSION: &str = "3.0.0";
 
 // ── Plugin metadata ───────────────────────────────────────────────────────────
 
@@ -151,6 +156,20 @@ pub struct FrameGeometry {
 /// which is worse but honest. Never widen a gap by picking a threshold from another mode's table.
 #[derive(Debug, Clone, PartialEq)]
 pub struct PreambleTemplate {
+    /// The mode these constants were **derived for**, which the engine checks against the mode it
+    /// is receiving.
+    ///
+    /// Bundling samples with constants (2.0.0) stopped a template being published *without*
+    /// constants; it did not stop one being published with **another mode's** constants, and that
+    /// is what happened latently: `bpsk` returned BPSK250's threshold for every BPSK mode, and only
+    /// a cost limit — the raw-sample correlation cap, which discarded the slow rungs before the
+    /// engine could use them — kept it from mattering. A cost limit enforcing a correctness
+    /// property is not a guard; when the cap became a post-decimation budget the property vanished
+    /// with it.
+    ///
+    /// So the binding is in the type now. Inheriting another mode's constants requires naming that
+    /// mode here, which the engine rejects — accidental inheritance becomes a deliberate lie.
+    pub for_mode: String,
     /// The *modulated* preamble at the config's carrier and sample rate, so a correlator can use it
     /// directly. Keep it to the preamble: a template running into the data symbols correlates
     /// against payload that differs frame to frame.
@@ -176,8 +195,14 @@ pub struct PreambleTemplate {
 
 impl PreambleTemplate {
     /// Bundle a modulated preamble with its measured correlation constants.
-    pub fn new(samples: Vec<f32>, rho_threshold: f32, rho_grid_hz: f32) -> Self {
+    pub fn new(
+        for_mode: impl Into<String>,
+        samples: Vec<f32>,
+        rho_threshold: f32,
+        rho_grid_hz: f32,
+    ) -> Self {
         Self {
+            for_mode: for_mode.into(),
             samples,
             rho_threshold,
             rho_grid_hz,
