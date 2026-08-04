@@ -25,6 +25,9 @@ use openpulse_core::plugin::{ModulationConfig, ModulationPlugin};
 use openpulse_modem::capture_replay::{load_corpus, Capture};
 use openpulse_modem::channel_sim::ChannelSimHarness;
 
+mod common;
+use common::saturating_floor as fixture;
+
 fn harness() -> ChannelSimHarness {
     let mut h = ChannelSimHarness::new();
     for eng in [&mut h.tx_engine, &mut h.rx_engine] {
@@ -62,21 +65,21 @@ fn corpus(name: &str) -> Capture {
 /// short enough to finish; before #1045 these leads gave 73-83 condemnations and no decode at all.
 #[test]
 fn the_receiver_never_settles_on_a_saturating_noise_floor() {
-    let hot = corpus("ic9700-idle-hot.wav");
+    let hot = corpus(fixture::CORPUS);
     // Guard the premise: if this file stopped saturating the energy gate, the test would silently
     // become an ordinary decode and prove nothing about correlation.
     assert!(
-        hot.mean_sq() > 0.0032,
+        hot.mean_sq() > fixture::GATE_CEILING_MEAN_SQ,
         "corpus floor {:.4} no longer saturates the gate — this test's premise is gone",
         hot.mean_sq()
     );
 
-    for lead in [40_000usize, 80_000, 120_000] {
+    for lead in fixture::LEADS {
         let mut h = harness();
         h.tx_engine
-            .transmit_with_fec_mode(b"correlation gate probe", "BPSK250", FecMode::Rs, None)
+            .transmit_with_fec_mode(fixture::PAYLOAD, fixture::MODE, FecMode::Rs, None)
             .expect("transmit");
-        h.route_embedded_in_capture(&hot, lead, 40_000, 0.3);
+        h.route_embedded_in_capture(&hot, lead, fixture::TRAIL, fixture::EMBED_LEVEL);
 
         let got = h
             .rx_engine
