@@ -320,28 +320,51 @@ fn p3_does_the_grid_reach_a_line_at_every_frequency() {
         let n = (grid_hz / step).round() as i32;
         let grid: Vec<f32> = (-n..=n).map(|k| k as f32 * step).collect();
 
-        // Sweep a full line-spacing period, which is where any all-frequencies claim must hold.
+        // Sweep FOUR line-spacing periods, not one. Line POSITIONS are periodic; line STRENGTHS
+        // are not -- they decay as the odd-harmonic envelope (0 / -14 / -31 dB). A one-period sweep
+        // samples only the band where the strong first-order line is in grid reach, so
+        // extrapolating from it would claim "every frequency" when the honest claim is "every
+        // frequency in the first-order band". Beyond it the nearest reachable line is -14 dB and rho
+        // should collapse -- the envelope's own prediction, making the far periods a second model
+        // check alongside the BPSK250 negative control.
         let spacing = baud / 2.0;
         let mut worst: f32 = 0.0;
         let mut best_case: f32 = 1.0;
+        let mut far_max: f32 = 0.0;
         let mut f = FC;
-        let end = FC + spacing;
+        let end = FC + spacing * 12.0;
         let mut steps = 0;
         while f <= end {
             let tone: Vec<f32> = (0..tlen + 200)
                 .map(|k| (2.0 * PI * f * k as f32 / FS).cos())
                 .collect();
             if let Some((r, _)) = mf.search_normalized_over_frequency(&tone, 200, 0.05, FS, &grid) {
-                worst = worst.max(r.rho);
-                best_case = best_case.min(r.rho);
+                // Band by FIRST-ORDER LINE REACH, not by period. The strong line sits at baud/4
+                // and the grid reaches grid_hz either side of a tone, so any tone within
+                // baud/4 + grid_hz of the carrier can be rotated onto it. Splitting by period
+                // instead put much of the "beyond" sample still inside that reach, which is a
+                // property of my banding rather than of the signal.
+                if (f - FC) <= baud / 4.0 + grid_hz {
+                    worst = worst.max(r.rho);
+                    best_case = best_case.min(r.rho);
+                } else {
+                    far_max = far_max.max(r.rho);
+                }
                 steps += 1;
             }
             f += spacing / 24.0;
         }
         println!(
-            "{:<9} baud {:>7.2}  spacing {:>6.2} Hz  grid +/-{:.0}  tone rho over one full \
-             spacing period: min {:.3} max {:.3}  ({} pts)",
-            mode, baud, spacing, grid_hz, best_case, worst, steps
+            "{:<9} baud {:>7.2}  1st-line reach +/-{:>6.2} Hz  grid +/-{:.0}  WITHIN reach: \
+             min {:.3} max {:.3} | OUTSIDE reach: max {:.3}  ({} pts)",
+            mode,
+            baud,
+            baud / 4.0 + grid_hz,
+            grid_hz,
+            best_case,
+            worst,
+            far_max,
+            steps
         );
     }
     println!("\n  The model predicts: where the grid exceeds HALF the line spacing, the MINIMUM");
@@ -349,4 +372,68 @@ fn p3_does_the_grid_reach_a_line_at_every_frequency() {
         "  should already be high — no tone frequency escapes. Where it does not, the minimum"
     );
     println!("  should be low, because tones between lines cannot be rotated onto one.");
+}
+
+/// P4: does the SETTLE still rescue a lone tone at the slow rungs? (It cannot.)
+///
+/// A component-level tone verdict is not the deployed verdict — this repo learned that the hard
+/// way. For BPSK250 the chain rescues the component hole: the AFC settle lands on a lone tone, the
+/// grid re-centres there, and the template's lines end up `baud/4` = 62.5 Hz away, outside the
+/// ±20 Hz grid, so the veto refuses. Measured end-to-end at 5/5 decodes.
+///
+/// That rescue is a coincidence of magnitudes, and it does not scale. The parking distance IS
+/// `baud/4`, so at BPSK31 it is 7.8 Hz — **inside** the same ±20 Hz grid. The mechanism that saves
+/// the fast rung cannot save the slow one, by the same arithmetic that describes it.
+///
+/// Modelled here as a perfect settle: the grid is centred on the tone's own offset, which is where
+/// `preamble_search_plan` puts it once the settle has locked. That isolates the geometry from
+/// estimator noise, which is the quantity in question.
+#[test]
+#[ignore = "verification"]
+fn p4_the_settle_rescue_does_not_scale_to_the_slow_rungs() {
+    println!("\nP4: tone rho with the grid centred where a locked settle would put it");
+    println!("    (deployed geometry, not a bench: grid follows the settle onto the tone)\n");
+    println!(
+        "{:<9} {:>7} {:>10} {:>9} {:>12} {:>26}",
+        "mode", "baud", "park dist", "grid", "tone rho", "chain rescue?"
+    );
+    for (mode, baud) in [
+        ("BPSK31", 31.25f32),
+        ("BPSK63", 62.5),
+        ("BPSK100", 100.0),
+        ("BPSK250", 250.0),
+    ] {
+        let Ok(template) = bpsk_plugin::modulate::bpsk_preamble_template(&cfg(mode)) else {
+            continue;
+        };
+        let grid_hz = 20.0f32;
+        let tlen = template.len();
+        let mf = IqMatchedFilter::new(template);
+        let step = (0.25 * FS / tlen as f32).max(0.5);
+        let n = (grid_hz / step).round() as i32;
+
+        // Tone somewhere off carrier; a locked settle estimates its offset, so the grid centres there.
+        let offset = 37.0f32;
+        let grid: Vec<f32> = (-n..=n).map(|k| offset + k as f32 * step).collect();
+        let tone: Vec<f32> = (0..tlen + 200)
+            .map(|k| (2.0 * PI * (FC + offset) * k as f32 / FS).cos())
+            .collect();
+        let rho = mf
+            .search_normalized_over_frequency(&tone, 200, 0.05, FS, &grid)
+            .map(|(r, _)| r.rho)
+            .unwrap_or(f32::NAN);
+        let park = baud / 4.0;
+        let rescued = if park > grid_hz {
+            "yes - park outside grid"
+        } else {
+            "NO - park inside grid"
+        };
+        println!(
+            "{:<9} {:>7.2} {:>10.2} {:>9.0} {:>12.3} {:>26}",
+            mode, baud, park, grid_hz, rho, rescued
+        );
+    }
+    println!("\n  The rescue needs the parking distance (baud/4) to exceed the grid half-width.");
+    println!("  Where it does not, a locked settle hands the correlator a tone sitting within");
+    println!("  grid reach of a line -- the protection inverts into the hazard.");
 }

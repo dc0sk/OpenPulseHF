@@ -188,6 +188,30 @@ impl ModulationPlugin for BpskPlugin {
         if config.mode != DERIVED_FOR {
             return None;
         }
+        // Mechanical form of the bound the comment above states, so activating a mode with an
+        // unsafe grid fails here instead of shipping. The preamble's lines sit at odd multiples of
+        // baud/4, so adjacent lines are baud/2 apart; a grid reaching half that spacing can rotate
+        // SOME line onto ANY frequency. Measured at the deployed geometry (grid centred where a
+        // locked settle puts it): BPSK31 rho 0.661 and BPSK63 0.701 against a 0.40 threshold, where
+        // BPSK250 sits at 0.042 — the settle's rescue is a coincidence of magnitudes that stops
+        // holding once baud/4 falls under the grid.
+        //
+        // Scoped to this plugin deliberately: baud/4 is a property of THIS preamble's period-4 line
+        // structure and would be wrong for a PN successor.
+        let baud = crate::parse_baud_rate(&config.mode).ok()?;
+        if modulate::PREAMBLE_RHO_GRID_HZ >= baud / 4.0 {
+            // Loud where someone would be editing this, safe-fail where it ships. Publishing
+            // nothing costs the energy-only settle; publishing this costs a veto that corroborates
+            // any steady tone, which is worse than having none.
+            debug_assert!(
+                false,
+                "{} would publish a preamble template whose grid (±{} Hz) reaches its first                  spectral line at baud/4 = {:.1} Hz — a steady tone at any frequency would                  corroborate. Derive a narrower grid for this mode before listing it.",
+                config.mode,
+                modulate::PREAMBLE_RHO_GRID_HZ,
+                baud / 4.0
+            );
+            return None;
+        }
         let samples = modulate::bpsk_preamble_template(config).ok()?;
         Some(PreambleTemplate::new(
             DERIVED_FOR,
