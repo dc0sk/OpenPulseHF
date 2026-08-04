@@ -713,3 +713,71 @@ fn r8_is_passband_affordable_at_the_derived_grid() {
     println!("  the DDC's margin cost is being paid for nothing. The reference target is slower —");
     println!("  rpi53-class — so the margin needed here is the ratio between the two, unmeasured.");
 }
+
+/// R9: the denominator — how often does the veto actually fire per second of audio?
+///
+/// R8 divided per-invocation cost by the template's own duration, which silently assumes one veto
+/// per template-length of audio. That is the quiet channel. The veto exists for the opposite case:
+/// on a saturated floor the settle/veto cycle re-fires as the scan crawls, so the rate is set by
+/// the condemnation stride (4 symbol periods) and the energy gate's re-trigger, not by the template
+/// length. At BPSK31 four symbols is 128 ms, i.e. ~8 vetoes per audio-second — which turns R8's
+/// 2.2 % into ~18 % on this host before any reference-hardware ratio is applied.
+///
+/// This is the third time in this investigation that a conclusion ran past its denominator, so the
+/// denominator gets measured rather than assumed.
+#[test]
+#[ignore = "verification"]
+fn r9_veto_rate_on_a_hot_floor() {
+    use openpulse_audio::loopback::LoopbackBackend;
+    use openpulse_core::fec::FecMode;
+    use openpulse_modem::capture_replay::load_corpus;
+    use openpulse_modem::engine::ModemEngine;
+    use std::time::Duration;
+
+    let hot = load_corpus("ic9700-idle-hot.wav").expect("corpus");
+    let audio_s = hot.samples.len() as f64 / FS as f64;
+
+    println!("\nR9: veto invocations per second of audio, recorded hot idle floor");
+    println!(
+        "    capture {:.2} s; the regime the veto exists for, not the quiet one\n",
+        audio_s
+    );
+    println!(
+        "{:<10} {:>10} {:>10} {:>12} {:>14} {:>12} {:>12}",
+        "mode", "accepted", "rejected", "total", "per audio-s", "pb ms each", "pb/real"
+    );
+
+    // Per-invocation cost from R8, at this mode's derived grid. BPSK250 only: it is the one mode
+    // that publishes a template, so it is the only one whose rate the engine will actually produce
+    // without defeating the publishing guard.
+    {
+        let (mode, pb_ms) = ("BPSK250", 6.61f64);
+        let backend = LoopbackBackend::new();
+        let mut e = ModemEngine::new(Box::new(backend.clone_shared()));
+        e.register_plugin(Box::new(bpsk_plugin::BpskPlugin::new()))
+            .expect("register");
+        e.set_deterministic_scan_positions(Some(3_000));
+        e.set_deterministic_max_iterations(Some(4_000));
+        backend.fill_samples(&hot.samples);
+        let _ =
+            e.receive_with_fec_mode_timeout(mode, FecMode::Rs, None, Duration::from_millis(60_000));
+        let acc = e.rho_accepted_settles();
+        let rej = e.rho_rejected_settles();
+        let total = acc + rej;
+        let rate = total as f64 / audio_s;
+        println!(
+            "{:<10} {:>10} {:>10} {:>12} {:>14.1} {:>12.2} {:>12.3}",
+            mode,
+            acc,
+            rej,
+            total,
+            rate,
+            pb_ms,
+            rate * pb_ms / 1000.0
+        );
+    }
+    println!("\n  'pb/real' here is the honest budget fraction: invocation rate x cost per");
+    println!("  invocation. R8's figure divided by template duration instead, which is the");
+    println!("  quiet-channel rate and the most favourable one. A value near or above 1.0 means");
+    println!("  the correlation cannot keep up in the regime it was built for.");
+}
