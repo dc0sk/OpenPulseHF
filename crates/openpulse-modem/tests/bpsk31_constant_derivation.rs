@@ -781,3 +781,65 @@ fn r9_veto_rate_on_a_hot_floor() {
     println!("  quiet-channel rate and the most favourable one. A value near or above 1.0 means");
     println!("  the correlation cannot keep up in the regime it was built for.");
 }
+
+/// R10: in the band that SETS the threshold, do the two correlators converge?
+///
+/// The limits note on the BPSK31 elimination said passband would reopen the gap, citing 0.066 vs
+/// 0.326 — **wide-band** numbers. Those do not transfer to the band that decides anything. In the
+/// 60 Hz worst case (±30 Hz) both BPSK31's template band (±~20 Hz) and the DDC passband (±42.6 Hz)
+/// *contain* the noise entirely: the lowpass removes nothing, and the passband correlator's
+/// denominator holds the same energy. The two should converge — the same mechanism that made the
+/// passband advantage collapse from 2.5× to 9 % under a 200 Hz filter in R5.
+///
+/// If they do, the elimination is **correlator-independent** and its headline needs no scoping.
+#[test]
+#[ignore = "verification"]
+fn r10_do_correlators_converge_in_the_deciding_band() {
+    use openpulse_dsp::acquisition::IqMatchedFilter;
+
+    let template = bpsk_plugin::modulate::bpsk_preamble_template(&cfg("BPSK31")).expect("template");
+    let occ = 2.0 * 31.25f32;
+    let grid_hz = 2.0f32;
+    let (cutoff, d) = cutoff_and_decim(occ, grid_hz, template.len());
+    let ddc = DdcMatchedFilter::new(&template, FC, FS, cutoff, d);
+    let pb = IqMatchedFilter::new(template.clone());
+    let ddc_grid = grid_for(template.len(), d, grid_hz);
+    let step = (0.25 * FS / template.len() as f32).max(0.5);
+    let n = (grid_hz / step).round() as i32;
+    let pb_grid: Vec<f32> = (-n..=n).map(|k| k as f32 * step).collect();
+
+    println!(
+        "\nR10: BPSK31 noise ceiling by correlator, per band (DDC passband ±{cutoff:.1} Hz)\n"
+    );
+    println!(
+        "{:<22} {:>12} {:>12} {:>12}",
+        "band", "passband max", "DDC max", "difference"
+    );
+    let win = template.len() + 400;
+    for (name, lo, hi) in [
+        ("white 0-4k", 0.0f32, 4_000.0),
+        ("ssb 300-2700", 300.0, 2_700.0),
+        ("60 Hz (decides)", 1_470.0, 1_530.0),
+    ] {
+        let noise = band_noise(win * 120, lo, hi, 0.05, 4242);
+        let (mut pmax, mut dmax) = (0.0f32, 0.0f32);
+        let mut s = 0usize;
+        while s + win <= noise.len() {
+            let w = &noise[s..s + win];
+            if let Some((r, _)) =
+                pb.search_normalized_over_frequency(w, w.len() - pb.len(), 0.05, FS, &pb_grid)
+            {
+                pmax = pmax.max(r.rho);
+            }
+            if let Some((r, _)) = ddc.search_normalized_over_frequency(w, 0.05, &ddc_grid) {
+                dmax = dmax.max(r.rho);
+            }
+            s += win;
+        }
+        println!("{name:<22} {pmax:>12.3} {dmax:>12.3} {:>12.3}", dmax - pmax);
+    }
+    println!("\n  Convergence in the deciding band means the elimination does not depend on which");
+    println!(
+        "  correlator runs. Divergence there would mean the headline must be scoped to the DDC."
+    );
+}
