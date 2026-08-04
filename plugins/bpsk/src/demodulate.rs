@@ -52,6 +52,19 @@ fn symbol_stream(
     samples: &[f32],
     config: &ModulationConfig,
 ) -> Result<(Vec<f32>, Vec<f32>), ModemError> {
+    symbol_stream_with_expected(samples, config, &expected_preamble_symbols(PREAMBLE_SYMS))
+}
+
+/// [`symbol_stream`] whose timing lock uses a supplied expectation.
+///
+/// The `-RRC` path is **not** parameterised: it locks timing with Gardner+LMS
+/// rather than a preamble correlation, so a candidate sequence reaches it only
+/// through training, which this seam does not cover.
+fn symbol_stream_with_expected(
+    samples: &[f32],
+    config: &ModulationConfig,
+    expected: &[f32],
+) -> Result<(Vec<f32>, Vec<f32>), ModemError> {
     let baud = parse_baud_rate(&config.mode)?;
     let fs = config.sample_rate as f32;
     let fc = config.center_frequency;
@@ -63,7 +76,7 @@ fn symbol_stream(
     } else {
         None
     };
-    if samples.len() < n * (PREAMBLE_SYMS + 1) {
+    if samples.len() < n * (expected.len() + 1) {
         return Err(ModemError::Demodulation("signal too short".into()));
     }
     // Apply matched RRC RX filter for -RRC modes.
@@ -81,7 +94,7 @@ fn symbol_stream(
             &config.mode,
         ))
     } else {
-        let offset = find_timing_offset(samples, n, fc, fs);
+        let offset = find_timing_offset_with_expected(samples, n, fc, fs, expected);
         let (mut iv, mut qv) = demodulate_iq(samples, n, fc, fs, offset);
         // The overlapping half-Hann modulator is a crossfade, so the one-slot matched filter recovers
         // `r_k = a_k + β·a_{k+1}` (β = 1/3). Left in, that `+β` term adds a constant positive bias to the
@@ -154,11 +167,25 @@ pub fn estimate_snr_db(samples: &[f32], config: &ModulationConfig) -> Option<f32
 }
 
 pub fn bpsk_demodulate(samples: &[f32], config: &ModulationConfig) -> Result<Vec<u8>, ModemError> {
+    bpsk_demodulate_with_expected(samples, config, &expected_preamble_symbols(PREAMBLE_SYMS))
+}
+
+/// [`bpsk_demodulate`] whose timing lock and framing use a supplied expectation.
+///
+/// Both the timing correlation and the preamble/data symbol boundaries follow
+/// `expected.len()`, so a candidate preamble is decoded end-to-end on its own
+/// geometry — the column that decides whether a candidate is viable at all.
+pub fn bpsk_demodulate_with_expected(
+    samples: &[f32],
+    config: &ModulationConfig,
+    expected: &[f32],
+) -> Result<Vec<u8>, ModemError> {
+    let preamble_syms = expected.len();
     // Front-end (matched filter + timing) lives in `symbol_stream`, shared with `estimate_snr_db`
     // so the SNR is measured on exactly the symbols that get decoded.
-    let (i_syms, q_syms) = symbol_stream(samples, config)?;
+    let (i_syms, q_syms) = symbol_stream_with_expected(samples, config, expected)?;
 
-    if i_syms.len() <= PREAMBLE_SYMS + TAIL_SYMS {
+    if i_syms.len() <= preamble_syms + TAIL_SYMS {
         return Err(ModemError::Demodulation(
             "no data symbols after preamble".into(),
         ));
@@ -167,7 +194,7 @@ pub fn bpsk_demodulate(samples: &[f32], config: &ModulationConfig) -> Result<Vec
     // Differential phase detection (handles absolute-phase ambiguity).
     // We take consecutive (I,Q) pairs and compute Re(z[k] * conj(z[k-1])).
     // Positive → same phase → NRZI "0" (no flip); negative → "1" (flip).
-    let data_syms_start = PREAMBLE_SYMS;
+    let data_syms_start = preamble_syms;
     let data_syms_end = i_syms.len() - TAIL_SYMS;
 
     if data_syms_start >= data_syms_end {
@@ -176,7 +203,7 @@ pub fn bpsk_demodulate(samples: &[f32], config: &ModulationConfig) -> Result<Vec
 
     // Build the full range including the last preamble symbol as the reference
     // for the first data bit.
-    let range_start = PREAMBLE_SYMS - 1; // include prev preamble symbol as reference
+    let range_start = preamble_syms - 1; // include prev preamble symbol as reference
     let iq: Vec<(f32, f32)> = i_syms[range_start..data_syms_end]
         .iter()
         .zip(q_syms[range_start..data_syms_end].iter())
@@ -262,6 +289,19 @@ fn estimate_carrier_hz_wide(samples: &[f32], config: &ModulationConfig) -> Optio
 ///
 /// Returns `None` if the buffer is too short for either path.
 pub fn afc_estimate_hz(samples: &[f32], config: &ModulationConfig) -> Option<f32> {
+    afc_estimate_hz_with_expected(samples, config, &expected_preamble_symbols(PREAMBLE_SYMS))
+}
+
+/// [`afc_estimate_hz`] whose stage-2 timing lock uses a supplied expectation.
+///
+/// Stage 2 calls [`find_timing_offset`], which correlates against the expected
+/// preamble — so estimating AFC on candidate-preamble audio through the shipped
+/// entry point measures a TX/RX mismatch, not the candidate.
+pub fn afc_estimate_hz_with_expected(
+    samples: &[f32],
+    config: &ModulationConfig,
+    expected: &[f32],
+) -> Option<f32> {
     let baud = crate::parse_baud_rate(&config.mode).ok()?;
     let fs = config.sample_rate as f32;
     let n = crate::modulate::samples_per_symbol(fs, baud).ok()?;
@@ -269,7 +309,7 @@ pub fn afc_estimate_hz(samples: &[f32], config: &ModulationConfig) -> Option<f32
     // Stage 1: coarse Goertzel acquisition (±400 Hz).
     let coarse = estimate_carrier_hz_wide(samples, config);
 
-    if samples.len() < n * (PREAMBLE_SYMS + 1) {
+    if samples.len() < n * (expected.len() + 1) {
         return coarse;
     }
 
@@ -277,7 +317,7 @@ pub fn afc_estimate_hz(samples: &[f32], config: &ModulationConfig) -> Option<f32
     // eliminate the sub-step quantisation error (≤ 6.25 Hz).
     let c = coarse.unwrap_or(0.0);
     let corrected_fc = config.center_frequency + c;
-    let offset = find_timing_offset(samples, n, corrected_fc, fs);
+    let offset = find_timing_offset_with_expected(samples, n, corrected_fc, fs, expected);
     let (i_syms, q_syms) = demodulate_iq(samples, n, corrected_fc, fs, offset);
     let residual = estimate_frequency_offset(&i_syms, &q_syms, baud);
 
@@ -747,19 +787,39 @@ fn find_timing_offset_bb(i_bb: &[f32], q_bb: &[f32], n: usize) -> usize {
 /// Try every possible timing offset within one symbol period.  Return the
 /// offset that gives the maximum preamble correlation magnitude.
 fn find_timing_offset(samples: &[f32], n: usize, fc: f32, fs: f32) -> usize {
+    find_timing_offset_with_expected(
+        samples,
+        n,
+        fc,
+        fs,
+        &expected_preamble_symbols(PREAMBLE_SYMS),
+    )
+}
+
+/// [`find_timing_offset`] correlating against a supplied expectation.
+///
+/// The search span follows `expected.len()` rather than [`PREAMBLE_SYMS`], so a
+/// candidate preamble is searched over its own length.
+pub fn find_timing_offset_with_expected(
+    samples: &[f32],
+    n: usize,
+    fc: f32,
+    fs: f32,
+    expected: &[f32],
+) -> usize {
     let mut best_energy = f32::NEG_INFINITY;
     let mut best_offset = 0usize;
-    let expected = expected_preamble_symbols(PREAMBLE_SYMS);
+    let syms = expected.len();
 
     for offset in 0..n {
-        if samples.len() < offset + n * PREAMBLE_SYMS {
+        if samples.len() < offset + n * syms {
             break;
         }
         // Demodulate ONLY the preamble span at this offset (the slice may be
         // multi-second; demodulating all of it per offset is O(offsets × N)).
-        let span_end = (offset + n * PREAMBLE_SYMS).min(samples.len());
+        let span_end = (offset + n * syms).min(samples.len());
         let (i_syms, q_syms) = demodulate_iq(&samples[..span_end], n, fc, fs, offset);
-        if i_syms.len() < PREAMBLE_SYMS {
+        if i_syms.len() < syms {
             continue;
         }
 
@@ -769,9 +829,9 @@ fn find_timing_offset(samples: &[f32], n: usize, fc: f32, fs: f32) -> usize {
         // The previous |Σ I·e| handled the 180° polarity ambiguity but
         // collapsed at a ~90° carrier phase where the preamble energy lives in
         // Q.  The differential BPSK decoder handles polarity after timing lock.
-        let (re, im) = i_syms[..PREAMBLE_SYMS]
+        let (re, im) = i_syms[..syms]
             .iter()
-            .zip(q_syms[..PREAMBLE_SYMS].iter())
+            .zip(q_syms[..syms].iter())
             .zip(expected.iter())
             .fold((0.0f32, 0.0f32), |(re, im), ((&i, &q), &e)| {
                 (re + i * e, im + q * e)
@@ -788,7 +848,7 @@ fn find_timing_offset(samples: &[f32], n: usize, fc: f32, fs: f32) -> usize {
 }
 
 /// Build the expected I-channel amplitudes for the preamble.
-fn expected_preamble_symbols(len: usize) -> Vec<f32> {
+pub fn expected_preamble_symbols(len: usize) -> Vec<f32> {
     // The preamble bits are 1,0,1,0,… → NRZI gives phase_neg = T,T,F,F,T,T,…
     // but we want the raw alternating for correlation: +1,−1,+1,−1,…
     // Actually NRZI(1,0,1,0,…):
@@ -798,8 +858,12 @@ fn expected_preamble_symbols(len: usize) -> Vec<f32> {
     //   bit0: keep → phase_neg=false → amplitude +1
     // → pattern: −1,−1,+1,+1,−1,−1,+1,+1,…
     // Pre-compute this via nrzi_encode.
-    let bits: Vec<bool> = (0..len).map(|i| i % 2 == 0).collect();
-    let phases = nrzi_encode(&bits);
+    expected_symbols_for(&crate::modulate::preamble_bits(len))
+}
+
+/// Build the expected I-channel amplitudes for an arbitrary preamble bit pattern.
+pub fn expected_symbols_for(bits: &[bool]) -> Vec<f32> {
+    let phases = nrzi_encode(bits);
     phases
         .iter()
         .map(|&neg| if neg { -1.0f32 } else { 1.0f32 })

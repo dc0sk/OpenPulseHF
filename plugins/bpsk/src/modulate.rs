@@ -41,14 +41,29 @@ fn rrc_alpha_for(config: &ModulationConfig) -> Option<f32> {
 /// `out[k] * cos(2π·fc·k/fs)`.  For RRC path, caller must apply the RRC
 /// FIR filter and then upconvert.
 fn bpsk_baseband(data: &[u8], config: &ModulationConfig) -> Result<Vec<f32>, ModemError> {
+    bpsk_baseband_with_preamble(data, config, &preamble_bits(PREAMBLE_SYMS))
+}
+
+/// The preamble bit pattern the BPSK wire format prepends to every frame.
+///
+/// Single source of truth: the Hann/RRC modulator, the GPU modulator and the
+/// demodulator's expected-symbol table all derive from this function, so a
+/// sequence change cannot desynchronise one end from the other.
+pub fn preamble_bits(len: usize) -> Vec<bool> {
+    (0..len).map(|i| i % 2 == 0).collect()
+}
+
+/// [`bpsk_baseband`] with the preamble supplied, for wire-format vetting.
+fn bpsk_baseband_with_preamble(
+    data: &[u8],
+    config: &ModulationConfig,
+    preamble: &[bool],
+) -> Result<Vec<f32>, ModemError> {
     let baud = parse_baud_rate(&config.mode)?;
     let fs = config.sample_rate as f32;
     let n = samples_per_symbol(fs, baud)?;
 
-    let mut bits: Vec<bool> = Vec::new();
-    for i in 0..PREAMBLE_SYMS {
-        bits.push(i % 2 == 0);
-    }
+    let mut bits: Vec<bool> = preamble.to_vec();
     bits.extend(bytes_to_bits(data));
     bits.extend(std::iter::repeat_n(false, TAIL_SYMS));
 
@@ -79,12 +94,21 @@ fn bpsk_baseband(data: &[u8], config: &ModulationConfig) -> Result<Vec<f32>, Mod
 
 /// Modulate `data` bytes to a vector of normalised PCM samples.
 pub fn bpsk_modulate(data: &[u8], config: &ModulationConfig) -> Result<Vec<f32>, ModemError> {
+    bpsk_modulate_with_preamble(data, config, &preamble_bits(PREAMBLE_SYMS))
+}
+
+/// [`bpsk_modulate`] with the preamble supplied, for wire-format vetting.
+pub fn bpsk_modulate_with_preamble(
+    data: &[u8],
+    config: &ModulationConfig,
+    preamble: &[bool],
+) -> Result<Vec<f32>, ModemError> {
     let baud = parse_baud_rate(&config.mode)?;
     let fs = config.sample_rate as f32;
     let fc = config.center_frequency;
     let n = samples_per_symbol(fs, baud)?;
 
-    let bb = bpsk_baseband(data, config)?;
+    let bb = bpsk_baseband_with_preamble(data, config, preamble)?;
 
     // Apply carrier: real output = I_bb * cos(2π·fc·t), Q = 0.
     if let Some(alpha) = rrc_alpha_for(config) {
@@ -305,10 +329,7 @@ pub fn bpsk_modulate_with_gpu(
     let fc = config.center_frequency;
     let n = samples_per_symbol(fs, baud)?;
 
-    let mut bits: Vec<bool> = Vec::new();
-    for i in 0..PREAMBLE_SYMS {
-        bits.push(i % 2 == 0);
-    }
+    let mut bits: Vec<bool> = preamble_bits(PREAMBLE_SYMS);
     bits.extend(bytes_to_bits(data));
     bits.extend(std::iter::repeat_n(false, TAIL_SYMS));
 
