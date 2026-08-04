@@ -84,6 +84,17 @@ fn symbol_stream_with_expected(
     // matched filter.  (Applying the baseband RRC to the passband signal would
     // place fc far outside the filter passband and attenuate the signal to ~0.)
     if let Some(alpha) = rrc_alpha {
+        // The RRC path locks timing with Gardner+LMS and trains on the SHIPPED
+        // sequence, so it cannot honour a candidate expectation. Refuse loudly
+        // rather than silently decode a different geometry — a doc comment here
+        // would be exactly the fidelity-by-comment this seam exists to remove.
+        if expected != expected_preamble_symbols(PREAMBLE_SYMS) {
+            return Err(ModemError::Demodulation(
+                "the -RRC path cannot honour a candidate preamble: its timing is \
+                 Gardner+LMS trained on the shipped sequence"
+                    .into(),
+            ));
+        }
         Ok(bpsk_demodulate_rrc(
             samples,
             n,

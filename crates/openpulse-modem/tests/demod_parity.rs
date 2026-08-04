@@ -104,11 +104,13 @@ fn candidates(len: usize) -> Vec<Candidate> {
             .to_vec()
     };
 
-    // A balanced pseudorandom control: equal +1/-1 counts, so its transition
-    // density matches the shipped sequence's and the squared-tone energy that
-    // coarse AFC reads is held constant (measured: transition count drives that
-    // energy with r = -0.997, and the shipped sequence sits at the 54th
-    // percentile of random sequences — it is not advantaged).
+    // An amplitude-balanced pseudorandom control: equal +1/-1 counts. It was
+    // INTENDED to hold transition density constant too and does not — it lands
+    // on 23 transitions against the shipped 15, which is why it is the one
+    // candidate that fails the AFC column. Reported rather than silently
+    // reseeded: it is the only sample this harness has of what violating the
+    // transition constraint costs, but it is a sample of one at one mode, not a
+    // controlled sweep of transition count.
     let balanced = {
         let mut v: Vec<f32> = (0..len)
             .map(|i| if i < len / 2 { 1.0 } else { -1.0 })
@@ -253,7 +255,9 @@ fn afc_error_rate(mode: &str, cand: &Candidate, snr_db: f32, matched: bool) -> (
 
 // ── Column D: self-ambiguity ──────────────────────────────────────────────────
 
-/// Peak-to-sidelobe of the candidate's own template, over **whole-symbol lags**.
+/// Peak-to-sidelobe of the candidate's own template, over every **sample** lag
+/// at least one symbol away from the true onset (not whole-symbol lags only —
+/// the worst alias for an aperiodic candidate is typically fractional).
 ///
 /// This is the property #1062 exists to fix. The shipped sequence is periodic
 /// with period 4, so its autocorrelation has near-full peaks at every 4-symbol
@@ -283,7 +287,11 @@ fn self_ambiguity(mode: &str, cand: &Candidate) -> f32 {
         Some(r) => r.rho,
         None => return f32::NAN,
     };
-    // Worst ρ at any offset at least one symbol away from the true onset: the
+    // Worst ρ at any sample offset at least one symbol away from the true onset.
+    // NOTE: for non-periodic candidates this value depends on the PAYLOAD as well
+    // as the sequence — the worst alias can land in the payload region. The
+    // shipped sequence's 1.000 is payload-invariant and structural (an anti-phase
+    // alias at exactly 2 symbols, which is #1049's recorded offset-65); the
     // self-alias that made onset-snapping choose a whole-symbol-late offset and
     // decode to "invalid magic" (#1049 point 3).
     let mut worst = 0.0f32;
@@ -415,7 +423,7 @@ fn parity_table() {
     }
 
     println!();
-    println!("=== Column D: self-ambiguity — worst whole-symbol-lag rho / peak ===");
+    println!("=== Column D: self-ambiguity — worst off-onset rho / peak (payload-dependent) ===");
     println!("    Lower is better. The shipped sequence is period-4, so it should be high.");
     for mode in modes {
         for cand in candidates(PREAMBLE_SYMS) {
@@ -466,10 +474,16 @@ fn the_shipped_preamble_self_aliases_completely_and_a_pn_sequence_does_not() {
             "{mode}: shipped preamble self-ambiguity {s_amb:.3} — expected ~1.0 for a period-4 \
              sequence; if this dropped, the premise of #1062's onset-placement argument changed"
         );
+        // Compared against the shipped value rather than an absolute constant:
+        // an aperiodic candidate's worst alias depends on the PAYLOAD as well as
+        // the sequence (measured 0.317 on this harness's payload, 0.469 on
+        // another), so an absolute 0.5 would have had 0.031 of margin and would
+        // fail whoever next edited the payload string. The shipped 1.000 is
+        // payload-invariant, so the ratio is the stable comparison.
         assert!(
-            p_amb < 0.5,
-            "{mode}: pn31 self-ambiguity {p_amb:.3} — expected well below the shipped 1.0; an \
-             aperiodic candidate that self-aliases would not fix onset placement"
+            p_amb < 0.75 * s_amb,
+            "{mode}: pn31 self-ambiguity {p_amb:.3} is not meaningfully below the shipped \
+             {s_amb:.3}; an aperiodic candidate that self-aliases would not fix onset placement"
         );
     }
 }

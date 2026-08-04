@@ -75,6 +75,12 @@ fn the_preamble_parameter_actually_reaches_the_wire() {
     }
 }
 
+/// A de-delegation guard, NOT an independent check.
+///
+/// `bpsk_demodulate` currently *is* this call, so today it is f(x) == f(x) and
+/// cannot fail. It earns its place only by failing the day someone gives the
+/// shipped entry point its own body again — which is exactly how the three
+/// duplicate preamble definitions arose in the first place.
 #[test]
 fn the_parameterised_demodulator_reproduces_the_shipped_decode_exactly() {
     let data = b"OPENPULSE parity seam";
@@ -137,9 +143,11 @@ fn the_expectation_parameter_actually_reaches_the_timing_lock() {
 
 #[test]
 fn the_demodulator_expectation_derives_from_the_modulator_sequence() {
-    // The former third copy. If someone edits `preamble_bits` and the RX table
-    // does not follow, this fails at compile-time-adjacent speed rather than as
-    // an on-air "invalid magic".
+    // Also a de-delegation guard: `expected_preamble_symbols` currently delegates
+    // to `expected_symbols_for(preamble_bits(..))`, so this cannot fail today. It
+    // fires if the RX table is ever given its own copy of the sequence again —
+    // the former third copy, whose failure mode is an on-air "invalid magic"
+    // rather than a compile error.
     for len in [8usize, 16, PREAMBLE_SYMS, 64] {
         assert_eq!(
             expected_preamble_symbols(len),
