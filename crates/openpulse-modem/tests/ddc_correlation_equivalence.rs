@@ -287,3 +287,66 @@ fn p2_in_band_equivalence_and_out_of_band_benefit() {
     );
     println!("  which is the design's claim that it is a benefit rather than a cost.");
 }
+
+/// P3: does a steady tone actually score high at BPSK31 with the shipped ±20 Hz grid?
+///
+/// The grid finding is arithmetic on a model — the preamble's energy sits in lines at odd multiples
+/// of `baud/4`, so adjacent lines are `baud/2` apart, and a grid wider than half that spacing can
+/// rotate some line onto any frequency. At BPSK31 the spacing is 15.6 Hz against a ±20 Hz grid.
+///
+/// A model is not a measurement, and this one is load-bearing: the veto's entire frequency bound
+/// rests on it. So sweep tones against BPSK31's own template and see whether ρ really is elevated
+/// everywhere, rather than filing the prediction.
+///
+/// BPSK31 publishes no template (its constants are not derived — that is the point of the finding),
+/// so the template is built directly from the modulator, which is what a derived-constants version
+/// of that mode would publish.
+#[test]
+#[ignore = "verification"]
+fn p3_does_the_grid_reach_a_line_at_every_frequency() {
+    for (mode, grid_hz) in [("BPSK31", 20.0f32), ("BPSK63", 20.0), ("BPSK250", 20.0)] {
+        let template = match bpsk_plugin::modulate::bpsk_preamble_template(&cfg(mode)) {
+            Ok(t) => t,
+            Err(e) => {
+                println!("{mode}: no template ({e})");
+                continue;
+            }
+        };
+        let baud: f32 = mode.trim_start_matches("BPSK").parse().unwrap_or(31.25);
+        let baud = if mode == "BPSK31" { 31.25 } else { baud };
+        let mf = IqMatchedFilter::new(template.clone());
+        let tlen = template.len();
+        let step = (0.25 * FS / tlen as f32).max(0.5);
+        let n = (grid_hz / step).round() as i32;
+        let grid: Vec<f32> = (-n..=n).map(|k| k as f32 * step).collect();
+
+        // Sweep a full line-spacing period, which is where any all-frequencies claim must hold.
+        let spacing = baud / 2.0;
+        let mut worst: f32 = 0.0;
+        let mut best_case: f32 = 1.0;
+        let mut f = FC;
+        let end = FC + spacing;
+        let mut steps = 0;
+        while f <= end {
+            let tone: Vec<f32> = (0..tlen + 200)
+                .map(|k| (2.0 * PI * f * k as f32 / FS).cos())
+                .collect();
+            if let Some((r, _)) = mf.search_normalized_over_frequency(&tone, 200, 0.05, FS, &grid) {
+                worst = worst.max(r.rho);
+                best_case = best_case.min(r.rho);
+                steps += 1;
+            }
+            f += spacing / 24.0;
+        }
+        println!(
+            "{:<9} baud {:>7.2}  spacing {:>6.2} Hz  grid +/-{:.0}  tone rho over one full \
+             spacing period: min {:.3} max {:.3}  ({} pts)",
+            mode, baud, spacing, grid_hz, best_case, worst, steps
+        );
+    }
+    println!("\n  The model predicts: where the grid exceeds HALF the line spacing, the MINIMUM");
+    println!(
+        "  should already be high — no tone frequency escapes. Where it does not, the minimum"
+    );
+    println!("  should be low, because tones between lines cannot be rotated onto one.");
+}
