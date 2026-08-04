@@ -276,6 +276,29 @@ fn band_noise(n: usize, lo: f32, hi: f32, a: f32, seed: u64) -> Vec<f32> {
 ///
 /// Expensive by construction: `Rs` emits a 255-byte block, so a BPSK31 frame is ~65 s of audio.
 /// That cost is the reason this column gets skipped, and skipping it is what withdrew #1053.
+///
+/// **Measured 2026-08-04, 48 seeds (`R4_SEEDS=48`), 40 decoded:**
+///
+/// | | ρ |
+/// |---|---|
+/// | weakest decodable | **0.625** |
+/// | next lowest | 0.652, 0.687, 0.688, 0.692, 0.692 |
+/// | noise ceiling (R3) | 0.319 wide-filter / 0.426 at 60 Hz |
+///
+/// The distributions separate — 0.426 → 0.625 is a 1.47× gap — so a threshold near **0.51** sits
+/// 1.20× above the narrow-filter ceiling and 1.22× below the weakest decodable frame. For contrast
+/// that is *better* than the shipped BPSK250 position, where the narrow-filter ceiling (0.441)
+/// exceeds its own 0.40 threshold outright.
+///
+/// Six seeds gave 0.693 and 48 gave 0.625: the small sample flattered the bound, which is the whole
+/// reason this is run at a size that can see a roughly 1-in-40 tail — the order that withdrew
+/// #1053. It cannot exclude a rarer fade. The decodable values cluster 0.62–0.85 with no long lower
+/// tail, which is weak evidence the bound is real rather than the edge of the sample.
+///
+/// One row worth keeping: a frame at ρ 0.689 did **not** decode while one at 0.625 did. ρ measures
+/// the preamble, decode measures the whole frame, so the threshold is not predicting decode — its
+/// job is only to avoid *rejecting* decodable frames, which is why the weakest decodable value is
+/// the bound that matters and not any correlation between the two.
 #[test]
 #[ignore = "verification"]
 fn r4_bpsk31_decode_column() {
