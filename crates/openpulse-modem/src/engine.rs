@@ -2814,45 +2814,7 @@ impl ModemEngine {
         // Correlation corroboration for a settle (#1049). `None` when the mode's plugin publishes
         // no preamble template, or when the template is too long to correlate affordably — in both
         // cases the settle is decided on energy alone, exactly as before.
-        let preamble_matcher = self
-            .plugins
-            .get(mode)
-            .and_then(|p| {
-                p.preamble_template(&ModulationConfig {
-                    sample_rate: audio_cfg.sample_rate,
-                    mode: mode.to_string(),
-                    center_frequency: self.center_frequency,
-                    ..ModulationConfig::default()
-                })
-            })
-            // Oversized templates are DECIMATED to fit the budget rather than refused. Refusing
-            // them is what exempted BPSK31/63/100 from the veto: the modes that listen longest,
-            // excluded because the cost was priced in the passband.
-            .filter(|t| !t.samples.is_empty())
-            // A template whose constants were derived for a DIFFERENT mode is refused, loudly. The
-            // plugin cannot enforce this alone: the previous defence was the raw-sample cap, a cost
-            // limit standing in for a correctness property, which vanished when the cap became a
-            // post-decimation budget.
-            .filter(|t| {
-                if t.for_mode == mode {
-                    return true;
-                }
-                warn!(
-                    "refusing preamble template for {mode}: constants derived for {} — rho is                      normalised, so a threshold and grid measured on one template do not transfer",
-                    t.for_mode
-                );
-                false
-            })
-            .map(|t| {
-                // Occupied bandwidth drives the anti-alias cutoff; fall back to a conservative
-                // full-passband figure if the plugin does not publish one, which only widens it.
-                let bw = self
-                    .plugins
-                    .get(mode)
-                    .and_then(|p| p.occupied_bandwidth_hz(mode))
-                    .unwrap_or(audio_cfg.sample_rate as f32 / 4.0);
-                PreambleVeto::new(t, self.center_frequency, audio_cfg.sample_rate as f32, bw)
-            });
+        let preamble_matcher = self.build_preamble_veto(mode, audio_cfg.sample_rate);
         // Cost of the last full-buffer retry pass, and how much audio it covered. If a pass costs
         // more wall time than the audio it walked, further passes can only fall further behind.
         let mut retry_cost_secs: f64 = 0.0;
@@ -5851,6 +5813,62 @@ impl ModemEngine {
     /// than fixed. A matched filter's ρ falls off over roughly `1 / (template duration)`, so a step
     /// chosen for one baud rate steps clean over the peak at another and reads noise — the same
     /// class of error as a constant fitted to one artifact.
+    /// Build the correlation veto for `mode`, or `None` if this mode gets the energy-only settle.
+    ///
+    /// Extracted so [`Self::preamble_veto_active`] can report the same answer the receive path
+    /// acts on. A second copy of this predicate would be a copy that can drift, and the property
+    /// being pinned — *which* modes have a veto — is exactly the one that changed silently when a
+    /// cost limit stopped discarding oversized templates.
+    fn build_preamble_veto(&self, mode: &str, sample_rate: u32) -> Option<PreambleVeto> {
+        self.plugins
+            .get(mode)
+            .and_then(|p| {
+                p.preamble_template(&ModulationConfig {
+                    sample_rate,
+                    mode: mode.to_string(),
+                    center_frequency: self.center_frequency,
+                    ..ModulationConfig::default()
+                })
+            })
+            .filter(|t| !t.samples.is_empty())
+            // A template whose constants were derived for a DIFFERENT mode is refused, loudly. The
+            // plugin cannot enforce this alone: the previous defence was the raw-sample cap, a cost
+            // limit standing in for a correctness property, which vanished when the cap became a
+            // post-decimation budget.
+            .filter(|t| {
+                if t.for_mode == mode {
+                    return true;
+                }
+                warn!(
+                    "refusing preamble template for {mode}: constants derived for {} — rho is \
+                     normalised, so a threshold and grid measured on one template do not transfer",
+                    t.for_mode
+                );
+                false
+            })
+            .map(|t| {
+                // Occupied bandwidth drives the anti-alias cutoff; fall back to a conservative
+                // full-passband figure if the plugin publishes none, which only widens it.
+                let bw = self
+                    .plugins
+                    .get(mode)
+                    .and_then(|p| p.occupied_bandwidth_hz(mode))
+                    .unwrap_or(sample_rate as f32 / 4.0);
+                PreambleVeto::new(t, self.center_frequency, sample_rate as f32, bw)
+            })
+    }
+
+    /// Whether `mode` gets a preamble-correlation veto, as the receive path would decide it.
+    ///
+    /// Exists to be pinned. When a capability is gated by a resource limit, the set of modes that
+    /// have it grows silently the day the limit moves — and every new member arrives wearing
+    /// whatever constants the old members were using. Pinning the membership, not just the
+    /// behaviour of current members, is what turns that into a test failure.
+    pub fn preamble_veto_active(&self, mode: &str) -> bool {
+        self.build_preamble_veto(mode, AudioConfig::default().sample_rate)
+            .is_some()
+    }
+
     fn preamble_rho(
         &self,
         veto: &PreambleVeto,
