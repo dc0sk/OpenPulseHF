@@ -57,6 +57,13 @@ fn round_trip_at_idle_level(idle_mean_sq: f32, seed: u64) -> Result<Vec<u8>, Str
         n > 0,
         "nothing was transmitted — the test would prove nothing"
     );
+    // #1066: the receive verdict is bounded by WALL CLOCK, so the same input decodes 5/5 on an
+    // idle machine and 0/5 on eight busy cores — and debug-vs-release is just a ~5x speed proxy
+    // for that. Bound the search in WORK instead, so this asserts a property of the signal rather
+    // than of the host. The budget reconciles every fixture in the #1058 family (PR #1070); it is
+    // chosen, not derived, and a derived one sized to the reference hardware is still owed.
+    h.rx_engine.set_deterministic_scan_positions(Some(8_000));
+    h.rx_engine.set_deterministic_max_iterations(Some(64_000));
     h.rx_engine
         .receive_with_timeout("BPSK250", None, Duration::from_millis(RECEIVE_TIMEOUT_MS))
         .map_err(|e| format!("{e}"))

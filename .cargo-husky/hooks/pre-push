@@ -1,7 +1,65 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Keep local pre-push fast (instant fmt + a compile check); the full clippy/test/audit gate runs in
-# the PR CI job (.github/workflows/ci.yml), which triggers on every pull_request.
+# Test the crates this push actually touches.
+#
+# History: this hook ran `cargo check` only and deferred by comment to
+# `.github/workflows/ci.yml` "which triggers on every pull_request". That workflow is
+# `disabled_manually`, so the claim was false and the full gate was enforced by no machine —
+# CLAUDE.md's "Known hole". #1074 is what it cost: a constant bumped, four tests left stale on
+# `main`, plus a fifth that had gone vacuous, unnoticed until someone read the file by accident.
+#
+# Why a subset and not the full gate: the full gate takes ~15 minutes, and a hook that slow is a
+# hook people learn to `--no-verify` past. #1074 was caught in ~1 minute by testing only the crate
+# it touched, because `cargo build` and `cargo clippy` both passed and only a *test* run saw it.
+# The full gate belongs at merge (`scripts/gate.sh`), not on every push.
+#
+# Escape hatch: `GATE_SKIP=1 git push`. Note `git push --no-verify` already bypasses this hook
+# silently, so this exists to make skipping deliberate and visible, not to prevent it.
+
+if [ "${GATE_SKIP:-0}" = "1" ]; then
+    echo "pre-push: SKIPPED via GATE_SKIP=1 — the full gate has not run on this push."
+    exit 0
+fi
+
 cargo fmt --all -- --check
-cargo check --workspace --no-default-features
+
+# Crates owning the changed files. Falls back to the whole workspace when the upstream ref is
+# unknown (first push of a branch), which is the safe direction.
+upstream="$(git rev-parse --abbrev-ref --symbolic-full-name '@{u}' 2>/dev/null || echo '')"
+if [ -n "$upstream" ]; then
+    changed="$(git diff --name-only "$upstream"...HEAD)"
+else
+    changed="$(git diff --name-only origin/main...HEAD 2>/dev/null || echo '')"
+fi
+
+pkgs=""
+while IFS= read -r f; do
+    [ -n "$f" ] || continue
+    d="$(dirname "$f")"
+    while [ "$d" != "." ] && [ "$d" != "/" ]; do
+        if [ -f "$d/Cargo.toml" ]; then
+            name="$(grep -m1 '^name *= *' "$d/Cargo.toml" | sed 's/.*"\(.*\)".*/\1/')"
+            [ -n "$name" ] && pkgs="$pkgs $name"
+            break
+        fi
+        d="$(dirname "$d")"
+    done
+done <<< "$changed"
+
+pkgs="$(printf '%s\n' $pkgs | sort -u | tr '\n' ' ')"
+
+cargo clippy --workspace --no-default-features --all-targets -- -D warnings
+
+if [ -z "${pkgs// /}" ]; then
+    echo "pre-push: no crate-owned changes detected; fmt + clippy only."
+    exit 0
+fi
+
+echo "pre-push: testing touched crates:$pkgs"
+args=""
+for p in $pkgs; do args="$args -p $p"; done
+# shellcheck disable=SC2086
+cargo test $args --no-default-features
+
+echo "pre-push: touched-crate tests passed. The FULL gate (scripts/gate.sh) still runs at merge."

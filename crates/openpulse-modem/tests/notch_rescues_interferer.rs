@@ -56,6 +56,14 @@ fn decodes_with(notch: bool, amplitude: f32) -> bool {
     if notch {
         h.rx_engine.enable_notch();
     }
+    // #1066: the receive verdict is bounded by WALL CLOCK, so the same input decodes 5/5 on an
+    // idle machine and 0/5 on eight busy cores — and debug-vs-release is just a ~5x speed proxy
+    // for that. Bound the search in WORK instead, so this asserts a property of the signal rather
+    // than of the host. The budget reconciles every fixture in the #1058 family (PR #1070); it is
+    // chosen, not derived, and a derived one sized to the reference hardware is still owed.
+    h.rx_engine.set_deterministic_scan_positions(Some(8_000));
+    h.rx_engine.set_deterministic_max_iterations(Some(64_000));
+
     let mut buf = hot.cycled(0, 40_000);
     buf.extend(f.iter().map(|s| s * 0.3));
     buf.extend(hot.cycled(40_000, 40_000));

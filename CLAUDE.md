@@ -734,11 +734,30 @@ is visible in the transcript rather than indistinguishable from compliance.
    origin/main...HEAD`, and confirm both match the PR description. A PR labelled "docs-only" merged
    `engine.rs` because the branch was cut while standing on a code branch.
 
-**Known hole, not yet closed:** `.git/hooks/pre-push` runs `cargo check` only and defers by comment
-to a PR CI job — and that workflow is `disabled_manually`. **The full gate is therefore enforced by
-no machine.** Rules 1–3 are the local imitation; they are not CI. Until that is resolved, the gate
-is only as reliable as the person remembering to run it, which is precisely the failure mode that
-produced three recorded ungated merges.
+**Closed 2026-08-05 (was: "enforced by no machine").** `.git/hooks/pre-push` ran `cargo check`
+only and deferred by comment to a PR CI job that was `disabled_manually` — so the comment was false
+and nothing enforced the gate. It cost #1074: a constant bumped, four tests left red on `main`, plus
+a fifth that had gone vacuous, unnoticed until someone read the file for an unrelated reason. What
+closed it, in order:
+
+1. **The root cause first.** Any enforcement wired up while the gate could not pass would be red on
+   arrival, and a permanently-red gate teaches people to skip it. The five acquisition tests whose
+   verdicts depended on machine speed (#1066 — same input, 5/5 idle, 0/5 on eight busy cores) now
+   bound their search in **work** rather than elapsed time. First `GATE: PASS` on record:
+   2324 passed, 0 failed, clean tree.
+2. **`.cargo-husky/hooks/pre-push`** tests the crates a push touches (~1 min), not the whole gate
+   (~15 min) — a hook too slow to tolerate is one people `--no-verify` past. Verified against
+   #1074's actual breaking commit: it catches all four failures in 0.73 s of test time, where
+   `cargo build` and `cargo clippy` both passed.
+3. **`.github/workflows/ci.yml` re-enabled**, with its job calling `scripts/gate.sh` instead of
+   open-coding `cargo test` **without `--no-fail-fast`** — which would have under-reported failures
+   in exactly the way rule 2 warns about, while producing no `GATE:` line at all.
+
+An **expected-failure baseline** was designed for the red tests and **rejected before implementation**:
+the failure set is load-dependent, so "a listed test that starts passing is also a failure" would
+flake in both directions and the file would not be portable between machines. Fixing the cause beat
+cataloguing the symptom. Note what remains true: `--no-verify` still bypasses the hook silently, so
+CI at the merge point — not the hook — is what actually enforces this.
 
 ---
 

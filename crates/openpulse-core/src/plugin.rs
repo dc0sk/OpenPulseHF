@@ -17,7 +17,7 @@ use crate::error::{ModemError, PluginError};
 /// which is breaking: the samples now travel with the correlation constants measured for that
 /// waveform. Migration for a plugin that published a template is to wrap the samples in
 /// `PreambleTemplate::new(samples, rho_threshold, rho_grid_hz)` with values re-derived for the mode
-/// (see the type's docs); a plugin that did not is unaffected beyond declaring `"2.0"`.
+/// (see the type's docs); a plugin that did not is unaffected beyond declaring the new major.
 ///
 /// Why the bundling had to be breaking rather than a second optional method: the constants are
 /// waveform-specific and the failure mode of getting them wrong is silent. BPSK's 0.40 threshold
@@ -514,11 +514,34 @@ mod tests {
         }
     }
 
+    /// The framework's own major version, so fixtures cannot drift from it.
+    ///
+    /// These were hardcoded to `"2.0"` and silently became major-incompatible when
+    /// `PLUGIN_TRAIT_VERSION` went to `"3.0.0"` (#1074). Three of the four failures
+    /// were collateral — tests that merely register a plugin on the way to checking
+    /// lookup or shadowing — so a version bump disabled unrelated coverage.
+    fn fw_major() -> u32 {
+        PLUGIN_TRAIT_VERSION
+            .split('.')
+            .next()
+            .and_then(|m| m.parse().ok())
+            .expect("PLUGIN_TRAIT_VERSION must start with a numeric major")
+    }
+
+    /// A version a plugin can declare that the current framework accepts.
+    fn compatible_version() -> String {
+        format!("{}.0", fw_major())
+    }
+
     #[test]
     fn register_then_lookup_is_case_insensitive_and_misses_are_none() {
         let mut reg = PluginRegistry::new();
-        reg.register(FakePlugin::boxed("BPSK", &["BPSK31", "BPSK100"], "2.0"))
-            .unwrap();
+        reg.register(FakePlugin::boxed(
+            "BPSK",
+            &["BPSK31", "BPSK100"],
+            &compatible_version(),
+        ))
+        .unwrap();
         assert!(reg.get("BPSK31").is_some());
         assert!(
             reg.get("bpsk100").is_some(),
@@ -531,9 +554,9 @@ mod tests {
     #[test]
     fn later_registration_shadows_earlier_for_the_same_mode() {
         let mut reg = PluginRegistry::new();
-        reg.register(FakePlugin::boxed("OLD", &["BPSK31"], "2.0"))
+        reg.register(FakePlugin::boxed("OLD", &["BPSK31"], &compatible_version()))
             .unwrap();
-        reg.register(FakePlugin::boxed("NEW", &["BPSK31"], "2.0"))
+        reg.register(FakePlugin::boxed("NEW", &["BPSK31"], &compatible_version()))
             .unwrap();
         // `get` walks registrations in reverse, so the newer plugin wins.
         assert_eq!(reg.get("BPSK31").unwrap().info().name, "NEW");
@@ -543,15 +566,19 @@ mod tests {
     #[test]
     fn compatible_trait_version_registers() {
         let mut reg = PluginRegistry::new();
-        // Framework is 2.0.0; a plugin requiring "2.0" is compatible.
-        assert!(reg.register(FakePlugin::boxed("OK", &["X"], "2.0")).is_ok());
+        // A plugin declaring the framework's own major at minor 0 is compatible.
+        let v = compatible_version();
+        assert!(reg.register(FakePlugin::boxed("OK", &["X"], &v)).is_ok());
     }
 
     #[test]
     fn incompatible_major_trait_version_is_rejected() {
         let mut reg = PluginRegistry::new();
+        // One major ABOVE the framework, derived — a literal here is what silently
+        // turned into the *compatible* version when the framework caught up (#1074).
+        let future = format!("{}.0", fw_major() + 1);
         let err = reg
-            .register(FakePlugin::boxed("FUTURE", &["X"], "3.0"))
+            .register(FakePlugin::boxed("FUTURE", &["X"], &future))
             .unwrap_err();
         assert!(matches!(err, PluginError::IncompatibleTraitVersion { .. }));
     }
@@ -560,9 +587,11 @@ mod tests {
     fn higher_minor_than_framework_is_rejected() {
         let mut reg = PluginRegistry::new();
         // Framework minor is 0; a plugin requiring minor 5 needs a newer framework. The major must
-        // MATCH here, or this passes on the major check and says nothing about the minor one.
+        // MATCH here, or this passes on the major check and says nothing about the minor one — which
+        // is exactly what the hardcoded "2.5" had been doing since the framework moved to 3.0.0.
+        let higher_minor = format!("{}.5", fw_major());
         let err = reg
-            .register(FakePlugin::boxed("NEWER", &["X"], "2.5"))
+            .register(FakePlugin::boxed("NEWER", &["X"], &higher_minor))
             .unwrap_err();
         assert!(matches!(err, PluginError::IncompatibleTraitVersion { .. }));
     }
