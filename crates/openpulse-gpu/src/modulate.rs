@@ -10,9 +10,13 @@ use crate::GpuContext;
 struct BpskModParams {
     n_syms: u32,
     samples_per_sym: u32,
-    fc: f32,
-    sample_rate: f32,
+    /// Carrier phase advance per sample, `2π·fc/fs`.
+    phase_inc: f32,
+    _pad: f32,
 }
+
+/// Samples per workgroup — must match `@workgroup_size(64)` in `bpsk_modulate.wgsl`.
+const WORKGROUP: usize = 64;
 
 /// Render NRZI symbols to PCM samples on the GPU.
 ///
@@ -40,9 +44,21 @@ pub fn bpsk_modulate_gpu(
     let params = BpskModParams {
         n_syms: n_syms as u32,
         samples_per_sym: samples_per_sym as u32,
-        fc,
-        sample_rate,
+        phase_inc: (std::f64::consts::TAU * fc as f64 / sample_rate as f64) as f32,
+        _pad: 0.0,
     };
+
+    // One phase seed per workgroup, reduced to [0, 2π) in f64. Reducing the *cycle count*
+    // before scaling by 2π keeps the fractional part exact: at 1.05 M samples the cycle
+    // count is ~2e5, where f64 resolves ~3e-11 of a cycle.
+    let n_workgroups = total_samples.div_ceil(WORKGROUP);
+    let cycles_per_sample = fc as f64 / sample_rate as f64;
+    let phase0: Vec<f32> = (0..n_workgroups)
+        .map(|b| {
+            let cycles = cycles_per_sample * (b * WORKGROUP) as f64;
+            (std::f64::consts::TAU * (cycles - cycles.floor())) as f32
+        })
+        .collect();
 
     // ── Buffers ───────────────────────────────────────────────────────────────
 
@@ -68,6 +84,15 @@ pub fn bpsk_modulate_gpu(
         usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
         mapped_at_creation: false,
     });
+
+    let phase0_buf = ctx.device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some("bpsk-mod-phase0"),
+        size: (phase0.len() * 4) as u64,
+        usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+        mapped_at_creation: false,
+    });
+    ctx.queue
+        .write_buffer(&phase0_buf, 0, bytemuck::cast_slice(&phase0));
 
     let params_buf = ctx.device.create_buffer(&wgpu::BufferDescriptor {
         label: Some("bpsk-mod-params"),
@@ -96,6 +121,10 @@ pub fn bpsk_modulate_gpu(
                 binding: 2,
                 resource: params_buf.as_entire_binding(),
             },
+            wgpu::BindGroupEntry {
+                binding: 3,
+                resource: phase0_buf.as_entire_binding(),
+            },
         ],
     });
 
@@ -111,7 +140,9 @@ pub fn bpsk_modulate_gpu(
         });
         pass.set_pipeline(&ctx.bpsk_mod_pipeline);
         pass.set_bind_group(0, &bind_group, &[]);
-        let workgroups = (total_samples as u32).div_ceil(64);
+        // Same constant the phase seeds were generated from — one seed per workgroup, so a
+        // divergence here would index `phase0` out of bounds.
+        let workgroups = n_workgroups as u32;
         pass.dispatch_workgroups(workgroups, 1, 1);
     }
     encoder.copy_buffer_to_buffer(&out_buf, 0, &readback_buf, 0, (total_samples * 4) as u64);

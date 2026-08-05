@@ -111,6 +111,7 @@ pub fn bpsk_modulate_with_preamble(
     let bb = bpsk_baseband_with_preamble(data, config, preamble)?;
 
     // Apply carrier: real output = I_bb * cos(2π·fc·t), Q = 0.
+    let cps = fc as f64 / fs as f64;
     if let Some(alpha) = rrc_alpha_for(config) {
         let num_taps = RRC_SPAN_SYMBOLS * n + 1;
         let coeffs = generate_rrc_coefficients(fs, baud, alpha, num_taps);
@@ -122,22 +123,31 @@ pub fn bpsk_modulate_with_preamble(
             .chain(std::iter::repeat_n(0.0, group_delay))
             .collect();
         let filtered = fir.apply(&padded);
-        let two_pi = 2.0 * PI;
         Ok(filtered[group_delay..]
             .iter()
             .enumerate()
-            .map(|(k, &bb)| bb * (two_pi * fc * k as f32 / fs).cos())
+            .map(|(k, &bb)| bb * carrier(k, cps))
             .collect())
     } else {
         Ok(bb
             .iter()
             .enumerate()
-            .map(|(k, &amp)| {
-                let t = k as f32 / fs;
-                amp * (2.0 * PI * fc * t).cos()
-            })
+            .map(|(k, &amp)| amp * carrier(k, cps))
             .collect())
     }
+}
+
+/// Carrier `cos(2π·fc·k/fs)`, with the phase reduced to a single cycle before the cosine.
+///
+/// Evaluating `(2π·fc·k/fs).cos()` directly lets the argument reach ~2e5 rad on a slow-rung
+/// frame (BPSK31 runs ~2.2e5 samples), where an f32 argument resolves only ~0.015 rad — so
+/// the carrier drifts from truth by an amount that grows with frame length and is worst on
+/// the longest, slowest rungs. Reducing the *cycle count* in f64 first keeps the fractional
+/// part exact: at 1e6 samples the count is ~2e5 cycles, where f64 resolves ~3e-11 of a cycle.
+#[inline]
+fn carrier(k: usize, cycles_per_sample: f64) -> f32 {
+    let cycles = cycles_per_sample * k as f64;
+    (std::f64::consts::TAU * (cycles - cycles.floor())).cos() as f32
 }
 
 /// Return baseband I and Q samples for BPSK (Q is always zero).
