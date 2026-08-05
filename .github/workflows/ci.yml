@@ -40,11 +40,29 @@ jobs:
         with:
           toolchain: ${{ env.REQUIRED_RUST }}
 
-      - name: Pre-push migrated check gate
-        run: cargo check --workspace --no-default-features
+      # One verdict path. This job used to open-code `cargo test --workspace
+      # --no-default-features` WITHOUT `--no-fail-fast`, so cargo stopped at the first failing
+      # binary and the failure count was a lower bound — the defect CLAUDE.md verification rule 2
+      # names, and one this repo has been bitten by twice. It also produced no `GATE:` line and no
+      # gate-verdict.json, so CI and local runs could disagree about what "passing" meant.
+      #
+      # The step names said "Pre-push migrated" because the full gate was moved here from the
+      # pre-push hook — and then this workflow was disabled, which is how the gate came to be
+      # enforced by no machine (CLAUDE.md "Known hole"). It cost #1074: four tests red on `main`,
+      # plus a fifth gone vacuous, unnoticed. The hook now tests touched crates on every push; this
+      # is the full gate, and it is the thing that actually closes the hole.
+      - name: Workspace gate (fmt + clippy + tests)
+        run: ./scripts/gate.sh
 
-      - name: Pre-push migrated test gate
-        run: cargo test --workspace --no-default-features
+      - name: Publish the gate verdict
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: gate-verdict
+          path: |
+            target/gate-verdict.json
+            target/gate-*.log
+          if-no-files-found: warn
 
       - name: Pre-push migrated security audit
         run: |
