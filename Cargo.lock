@@ -5071,8 +5071,10 @@ version = "0.16.0"
 dependencies = [
  "bytemuck",
  "openpulse-core",
+ "openpulse-dsp",
  "pollster",
  "rand 0.8.6",
+ "rustfft",
  "thiserror 2.0.18",
  "tracing",
  "wgpu 0.20.1",

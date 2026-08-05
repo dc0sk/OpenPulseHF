@@ -14,6 +14,14 @@ pollster = { workspace = true }
 thiserror = { workspace = true }
 tracing   = { workspace = true }
 
+[features]
+# Differential GPU-vs-CPU tests that require a real wgpu adapter. Off by default so
+# the `--workspace --no-default-features` gate (and CI, whose runners have no
+# adapter) does not run them; the GPU CI job still compiles and lints them.
+hardware-tests = []
+
 [dev-dependencies]
 openpulse-core = { workspace = true }
+openpulse-dsp  = { workspace = true }
 rand           = { workspace = true }
+rustfft        = { workspace = true }
