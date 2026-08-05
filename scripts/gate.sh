@@ -103,7 +103,11 @@ fi
 # Counts come from the LOG FILE, never from a pipe carrying the runner's output.
 passed=$(awk '/^test result:/ {for(i=1;i<=NF;i++) if($i=="passed;") s+=$(i-1)} END {print s+0}' "$LOG")
 failed=$(awk '/^test result:/ {for(i=1;i<=NF;i++) if($i=="failed;") s+=$(i-1)} END {print s+0}' "$LOG")
-suites=$(grep -c '^test result:' "$LOG" 2>/dev/null || echo 0)
+# `grep -c` prints 0 AND exits 1 when there are no matches, so `|| echo 0` appends a SECOND line
+# and `suites` becomes "0\n0" — which produces invalid JSON in gate-verdict.json. Harmless only
+# because --quick returns before the JSON write; fixed rather than left as a latent trap.
+suites=$(grep -c '^test result:' "$LOG" 2>/dev/null | head -1)
+suites=${suites:-0}
 
 # The failure list is printed IN FULL. Truncating it is the defect this script exists to prevent.
 if [ "$failed" -gt 0 ] || [ "$rc_total" -ne 0 ]; then
