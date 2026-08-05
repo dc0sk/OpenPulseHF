@@ -20,8 +20,8 @@ Current version: **v0.15.0**. Requirement coverage: **118 of 141 ✅ covered, 16
 ## The claim 1.0 makes
 
 > **1.0 means: an operator can run this on a real radio, on the air, legally, and the behaviour
-> matches what the documentation says — including under HF fading, which has been measured on air
-> and not only in a simulator.**
+> matches what the documentation says — with the adaptive rate control exercised on air in both
+> directions, not only in a simulator.**
 
 Everything below follows from that sentence. If a criterion does not serve it, it belongs in 1.x.
 
@@ -45,13 +45,56 @@ marked as a judgement call. Nothing here should require interpretation to score.
 | # | Criterion | How it is scored |
 |---|---|---|
 | A1 | A two-station on-air QSO completes over HF using the `hpx_hf` ladder, with logs retained | Evidence bundle in `docs/dev/test-reports/on-air/` via `scripts/onair-bundle-evidence.sh` |
-| A2 | The rate ladder is observed **climbing and demoting on a real fading channel**, not only in sim | Session log showing ≥3 rung transitions driven by real channel conditions |
+| A2 | The rate ladder is observed **responding correctly to real on-air link conditions, in both directions**, with two-ended evidence | See A2 scoring below — a count of transitions is explicitly *not* the measure |
 | A3 | One end-to-end Winlink message exchanged over RF with a real CMS/RMS gateway | Retained session log + the delivered message |
 | A4 | Station ID cadence verified on air against the operator's national rules | Regulatory checklist run, exceptions documented |
 | A5 | PTT keying verified fail-safe on the real rig (release on error, release on abort) | Deliberate fault injection during an on-air window |
 
 **A1–A3 are the gate.** A4–A5 are safety items that must also pass, but they are checks rather than
-discoveries. Phase 5.5-reg in [onair-status.md](../onair-status.md) already carries the execution
+discoveries.
+
+#### A2 scoring (revised 2026-08-05 — see *Decided by the maintainer*)
+
+**Why it changed.** The original wording scored ≥3 transitions "driven by real channel conditions".
+Natural fading is not controllable, so that made the gate depend on the ionosphere cooperating on the
+day: a quiet band fails it while proving the controller is fine, and a disturbed band passes it
+without proving more. It measured propagation, not software.
+
+**Scored by a retained two-ended session log plus capture, showing all three of:**
+
+1. **≥1 climb in the receiver-led direction**, where the sender's *subsequent* frame at the new mode
+   **decodes**. A climb that is recommended but never successfully used proves nothing; closing that
+   loop is the genuinely on-air-only property, since the simulator already exercises the controller's
+   direction behaviour (`apps/openpulse-linksim`) and its lockstep under arbitrary ACK loss.
+2. **≥1 demotion in the receiver-led direction**, following at least one logged decode failure.
+3. **Stability**: over a window of clean decodes on a stable link, **no demotion occurs**. This is
+   the clause that can actually fail — a broken estimator produces a sawtooth (drop-to-floor on each
+   blip, evidence-climb back up), and a quiet band supplies the precondition for free. The
+   maintainer's objection is what makes this clause cheap to satisfy honestly.
+
+**Corroboration, because the log is written by the software under test.** Each transition must appear
+in *both* stations' logs — a receiver-led recommendation must show up at the sender as an adopted
+level and a changed transmit waveform — and be visible in the retained capture, where a mode change
+is physically identifiable by baud and occupied bandwidth without trusting the modem. A transition
+attributable *only* to the SNR estimate does not count: the estimate is the model, the decode is the
+observation, and this repo's rule is that the observation wins.
+
+**Induced level changes are allowed and must be recorded.** Reducing TX power or changing antenna is
+legitimate — the controller consumes `(RxOutcome, snr_db)` and does not know why the level moved.
+Manual `lock_level` commands do **not** count.
+
+**Residual, stated rather than hidden.** Induced runs exercise the SNR-*explained* branches. The two
+mechanisms added in #934 precisely because the estimate is uninformative on a fade in principle — the
+evidence-based climb and the adequate-SNR hysteresis — are plausibly *not* exercised by level
+inducement. That regime stays simulator-tier unless natural fading happens to be captured. 1.0
+therefore claims the rate control works on air; it does **not** claim it has been characterised
+across HF conditions.
+
+**Prerequisite (open engineering, not bookkeeping).** As of 2026-08-05 this criterion is
+**unscoreable**: the production OTA path emits no rate-transition event. `EngineEvent::RateChange` is
+raised only from the legacy `rate_policy` path (`engine.rs:1393/1405/1459`); the OTA sites
+(`engine.rs:1589`, `2253`, `2257`) emit nothing, and the daemon logs no level transition. A2 cannot
+be scored until that event exists, carrying `(from, to, RxOutcome, snr_db, branch taken)`. Phase 5.5-reg in [onair-status.md](../onair-status.md) already carries the execution
 checklist; this group is that checklist reaching completion, not a new workstream.
 
 ### B — Requirement bookkeeping is true
@@ -189,6 +232,18 @@ Group 2 is the cheapest and is currently blocking nothing but itself. Group 1 se
    (`modem.notch_enabled`, `modem.agc_enabled`, `modem.cessb_enabled` in `openpulse-config`); what is
    missing is an on-air runner that sweeps them and records which combination produced each evidence
    bundle.
+
+4. **A2 is scored on correct response, not on a transition count** (decided 2026-08-05). Natural
+   fading cannot be controlled, so requiring "≥3 transitions driven by real channel conditions" made
+   the gate depend on propagation rather than on software — a quiet band would fail it while proving
+   the controller fine. A2 now requires one climb (whose new mode is then used successfully), one
+   demotion, and **stability on a good link**, all corroborated across two stations' logs and the
+   retained capture. Induced level changes count and must be recorded.
+
+   This **narrows decision 1 without weakening it**: the evidence stays hardware-tier — real RF, real
+   estimator on real captured audio, real ACK channel, real PTT turnaround — and no simulator result
+   is substituted. What it gives up is any claim about *severe* fading, which is why the headline
+   claim above was edited in the same change rather than left to outrun the criteria.
 
 ## Open questions for the maintainer
 
