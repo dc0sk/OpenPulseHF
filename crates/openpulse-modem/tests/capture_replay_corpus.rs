@@ -437,6 +437,11 @@ fn a_coded_frame_decodes_through_a_saturating_floor() {
             .expect("transmit");
         h.route_embedded_in_capture(&hot, lead, 40_000, 0.3);
 
+        // #1066: bound the search in WORK, not wall clock — the same input decodes 5/5 idle and
+        // 0/5 on eight busy cores, and debug-vs-release is a ~5x speed proxy for that. Chosen to
+        // reconcile the #1058 family (PR #1070), not derived.
+        h.rx_engine.set_deterministic_scan_positions(Some(8_000));
+        h.rx_engine.set_deterministic_max_iterations(Some(64_000));
         let got = h
             .rx_engine
             .receive_with_fec_mode_timeout(
@@ -537,6 +542,11 @@ fn a_no_template_mode_decodes_through_a_saturating_floor() {
             .expect("transmit");
         h2.route_embedded_in_capture(&hot, lead, 40_000, 0.3);
 
+        // #1066: bound the search in WORK, not wall clock — the same input decodes 5/5 idle and
+        // 0/5 on eight busy cores, and debug-vs-release is a ~5x speed proxy for that. Chosen to
+        // reconcile the #1058 family (PR #1070), not derived.
+        h2.rx_engine.set_deterministic_scan_positions(Some(8_000));
+        h2.rx_engine.set_deterministic_max_iterations(Some(64_000));
         let got = h2
             .rx_engine
             .receive_with_fec_mode_timeout(
