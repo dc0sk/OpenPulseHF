@@ -182,8 +182,10 @@ async fn ndjson_events_unaffected_by_spectrum_subscription() {
     let (read_b, _write_b) = stream_b.into_split();
     let mut reader_b = BufReader::new(read_b);
 
-    // Wait up to 1.5 s for a Metrics NDJSON event on client B.
-    let got_metrics_b = timeout(Duration::from_millis(1500), async {
+    // Wait for a Metrics NDJSON event on client B — a DELIVERY assertion, not a latency one.
+    // #1079: the previous 1.5 s ceiling made the verdict depend on how busy the host was. The loop
+    // returns as soon as the event arrives, so a healthy machine pays nothing for the larger bound.
+    let got_metrics_b = timeout(Duration::from_secs(10), async {
         loop {
             let mut line = String::new();
             if reader_b.read_line(&mut line).await.ok() == Some(0) {
@@ -202,8 +204,9 @@ async fn ndjson_events_unaffected_by_spectrum_subscription() {
         "client B should still receive Metrics NDJSON events"
     );
 
-    // Also verify client A receives at least one binary frame.
-    let got_binary_a = timeout(Duration::from_millis(200), async {
+    // Also verify client A receives at least one binary frame. Same #1079 correction: 200 ms for a
+    // single frame at 50 fps left the verdict to host load rather than to the server.
+    let got_binary_a = timeout(Duration::from_secs(10), async {
         loop {
             match read_next_message(&mut reader_a).await {
                 Some(Either::Binary { .. }) => break true,
