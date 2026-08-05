@@ -80,6 +80,9 @@ impl GpuContext {
     /// Returns `None` if no compatible adapter is available (e.g. headless CI).
     /// Blocks the calling thread while the wgpu async setup completes.
     pub fn init() -> Option<Arc<Self>> {
+        if std::env::var("OPENPULSE_GPU_DISABLE").is_ok() {
+            return None;
+        }
         pollster::block_on(Self::init_async())
     }
 
