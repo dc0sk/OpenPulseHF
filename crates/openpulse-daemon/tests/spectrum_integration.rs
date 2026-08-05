@@ -127,9 +127,18 @@ async fn subscribe_spectrum_sends_binary_frames() {
         .await
         .unwrap();
 
-    // Collect messages for 150 ms; count binary spectrum frames.
+    // Collect binary spectrum frames, stopping as soon as there are enough.
+    //
+    // This asserts DELIVERY, not latency. It used to allow 150 ms for 5 frames at 50 fps — 100 ms
+    // of work with 50 ms of margin — so on a shared 2-core CI runner the verdict was decided by how
+    // busy the host was rather than by the server. That is #1066's defect in another crate: a
+    // wall-clock bound standing in for the property under test. The loop still breaks at the fifth
+    // frame, so a healthy machine finishes in ~100 ms and pays nothing for the larger ceiling.
+    //
+    // Frame RATE is deliberately not asserted here. A latency assertion on a shared runner measures
+    // the runner; if 50 fps needs pinning, it belongs in a benchmark on known hardware.
     let mut binary_count = 0usize;
-    let deadline = Duration::from_millis(150);
+    let deadline = Duration::from_secs(10);
     let _ = timeout(deadline, async {
         loop {
             match read_next_message(&mut reader).await {
@@ -149,7 +158,7 @@ async fn subscribe_spectrum_sends_binary_frames() {
 
     assert!(
         binary_count >= 5,
-        "expected ≥5 binary frames in 150 ms at 50 fps, got {binary_count}"
+        "expected ≥5 binary spectrum frames within the delivery ceiling, got {binary_count}"
     );
 }
 
