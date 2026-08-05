@@ -41,11 +41,28 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
         return;
     }
 
-    var total_energy = 0.0f;
+    // Accumulate the correlation as a COMPLEX sum, then score its magnitude.
+    //
+    // This kernel used to sum only the in-phase product and score the signed
+    // total. That is the algorithm the CPU path was fixed away from, and its
+    // comment says why: |Sum I*e| handles the 180-degree polarity ambiguity but
+    // COLLAPSES at a ~90-degree carrier phase, where the preamble energy sits in
+    // Q. The CPU uses (Sum I*e)^2 + (Sum Q*e)^2, which is carrier-phase
+    // invariant. The fix reached the CPU and not this sibling, so the GPU and
+    // CPU receivers disagreed about where a frame starts whenever a carrier
+    // offset rotated the preamble out of I (#1080).
+    //
+    // Measured before this change, BPSK250 through AWGN: identical decode
+    // outcomes on 48 on-frequency frames, and disagreement on 21 of 30
+    // off-frequency ones -- in both directions, which is the signature of two
+    // searches landing on different offsets rather than one being noisier.
+    var corr_re = 0.0f;
+    var corr_im = 0.0f;
 
     for (var sym_idx = 0u; sym_idx < p; sym_idx++) {
         let sym_start = sym_idx * n;
         var i_sum     = 0.0f;
+        var q_sum     = 0.0f;
         var norm      = 0.0f;
 
         for (var k = 0u; k < n; k++) {
@@ -57,16 +74,19 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
             // Carrier phase uses the absolute sample index.
             let t  = f32(sample_idx) / params.sample_rate;
             let ci = cos(TWO_PI * params.fc * t);
+            let cq = -sin(TWO_PI * params.fc * t);
 
             i_sum += sample * ci * window * 2.0;
+            q_sum += sample * cq * window * 2.0;
             norm  += window * window;
         }
 
         if (norm > 1e-9f) {
-            let i_val       = i_sum / norm;
-            total_energy   += i_val * expected_preamble[sym_idx];
+            let e = expected_preamble[sym_idx];
+            corr_re += (i_sum / norm) * e;
+            corr_im += (q_sum / norm) * e;
         }
     }
 
-    out_energy[off_idx] = total_energy;
+    out_energy[off_idx] = corr_re * corr_re + corr_im * corr_im;
 }
