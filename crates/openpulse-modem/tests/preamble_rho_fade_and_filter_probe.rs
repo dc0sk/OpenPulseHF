@@ -443,6 +443,116 @@ fn f3_pn_vs_alternating() {
     );
 }
 
+// ── F7: is DURATION the lever for a narrow filter, not spreading? (#1062) ─────
+
+/// Lag hypotheses each template is given per stride, shared by every case.
+///
+/// F3 sized the window as `template + 2 symbols` and strode by `window/4`, so the lags actually
+/// searched were `2·sps` out of every `window/4` — 64 of 264 for the shipped 32-sps template but
+/// 16 of 222 for an 8-sps one. A peak-over-noise statistic scales with the number of hypotheses
+/// drawn, so that alone biased the wideband cells low by ~3.4x in trial count. Here every template
+/// gets the same bound AND strides by exactly that bound, so lag coverage is contiguous and equal.
+const F7_LAG_BOUND: usize = 64;
+
+/// Peak rho over one noise realisation, with the equalised lag budget above.
+fn peak_rho_equalised(template: &[f32], noise: &[f32]) -> f32 {
+    let w = template.len() + F7_LAG_BOUND;
+    let mut peak = 0.0f32;
+    let mut s = 0usize;
+    while s + w <= noise.len() {
+        if let Some(r) = rho_of(template, &noise[s..s + w], 20.0) {
+            peak = peak.max(r);
+        }
+        s += F7_LAG_BOUND;
+    }
+    peak
+}
+
+/// F3 showed PN-110 has a lower absolute noise ceiling than the shipped template under a narrow
+/// filter (0.347 vs 0.441 at 500 Hz). That reads as a win for spreading — and it is not one.
+///
+/// `NOISE = ρ' × SIGNAL`, where ρ' is the correlation of in-band noise against the template's
+/// *in-band* part: the numerator only sees the in-band component while the normalising denominator
+/// carries the template's full energy. Dividing F3's own columns gives ρ' ≈ 0.44 at 500 Hz for the
+/// shipped template, PN-31 AND PN-110 alike — identical discrimination. PN-110's lower ceiling is
+/// exactly its own signal loss through the filter (SIGNAL 0.796 vs 0.998), which is not a margin
+/// you can spend.
+///
+/// The model says in-band discrimination is set by the number of in-band noise dimensions
+/// ≈ duration × filter bandwidth, and all four F3 templates run ~110–124 ms. So the prediction is
+/// that **duration**, not bandwidth, is the only lever — and doubling duration should drop ρ' by
+/// ~1/√2.
+///
+/// `ρ' = 1/√(T·B)` is standard detection theory, not a hypothesis this measurement discovers, so
+/// treat agreement as **validation of the harness** against a known result — which is exactly what
+/// F3 lacked. Read the error bar off the bandwidth axis of the same table: it misses by 4–11 %,
+/// which is the same order as the duration axis's headline agreement.
+///
+/// Template length is **not** a deployability limit either way: `MAX_PREAMBLE_CORRELATION_SAMPLES`
+/// is a post-DDC budget and an oversized template is decimated, not refused (phase 0 of #1062), so
+/// PN-220's 1 752 samples are unremarkable and a longer probe would be equally runnable.
+#[test]
+#[ignore = "verification"]
+fn f7_duration_is_the_lever() {
+    let alt = plugin_template("BPSK250").expect("BPSK250 template").0;
+    let mut m110 = m_sequence(7, &[7, 6]);
+    m110.truncate(110);
+    let pn110 = pn_template("BPSK1000", &m110).expect("pn110");
+    let mut m220 = m_sequence(8, &[8, 6, 5, 4]);
+    m220.truncate(220);
+    let pn220 = pn_template("BPSK1000", &m220).expect("pn220");
+
+    let cases: [(&str, &[f32]); 3] = [
+        ("BPSK250 alternating (shipped)", &alt),
+        ("BPSK1000 PN-110 (~109 ms)", &pn110),
+        ("BPSK1000 PN-220 (~219 ms)", &pn220),
+    ];
+    let bands = [
+        ("ssb 300-2700", 300.0f32, 2_700.0),
+        ("filter 1250-1750", 1_250.0, 1_750.0),
+        ("filter 1400-1600", 1_400.0, 1_600.0),
+    ];
+    // Several seeds because a peak over one realisation is a sample of one, and F3's cells sat
+    // within ~0.05 of each other. Reported as max and median across seeds so the spread is visible
+    // rather than hidden inside a single number.
+    let seeds: [u64; 5] = [12345, 777, 90210, 31337, 424242];
+    let per_seed = 120_000usize; // 15 s
+
+    println!(
+        "\nF7: is duration the lever? equalised lag budget, {} seeds",
+        seeds.len()
+    );
+    for (name, t) in cases {
+        println!(
+            "\n{name}: {} samples, {:.0} ms, occupancy {:.3}",
+            t.len(),
+            t.len() as f32 / FS * 1000.0,
+            band_occupancy(t)
+        );
+        println!(
+            "  {:<18} {:>12} {:>12} {:>10} {:>12}",
+            "band", "NOISE max", "NOISE med", "SIGNAL", "ratio rho'"
+        );
+        for (bname, lo, hi) in bands {
+            let mut peaks: Vec<f32> = seeds
+                .iter()
+                .map(|&sd| peak_rho_equalised(t, &band_noise(per_seed, lo, hi, sd)))
+                .collect();
+            peaks.sort_by(|a, b| a.partial_cmp(b).unwrap());
+            let (mx, med) = (peaks[peaks.len() - 1], peaks[peaks.len() / 2]);
+            let filtered = band_limit(t, lo, hi);
+            let w = (t.len() + F7_LAG_BOUND).min(filtered.len());
+            let sig = rho_of(t, &filtered[..w], 20.0).unwrap_or(f32::NAN);
+            println!(
+                "  {bname:<18} {mx:>12.3} {med:>12.3} {sig:>10.3} {:>12.3}",
+                med / sig
+            );
+        }
+    }
+    println!("\n  ratio rho' = in-band discrimination, the part a threshold can actually spend.");
+    println!("  Model predicts rho' falls ~1/sqrt(2) from PN-110 to PN-220; spreading alone should not move it.");
+}
+
 // ── F1: does a DECODABLE fade frame ever score below the threshold? ───────────
 
 #[test]
