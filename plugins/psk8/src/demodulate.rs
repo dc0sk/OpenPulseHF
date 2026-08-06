@@ -456,7 +456,25 @@ pub fn psk8_demodulate_soft_gpu(
     .iter()
     .map(|&(b2, b1, b0)| gray_map_8psk(b2, b1, b0))
     .collect();
-    let bit_table: Vec<u32> = (0..8u32).collect();
+    // Bit-REVERSED, and that is the fix rather than an optimisation.
+    //
+    // `gpu_soft_demod` indexes bits LSB-first (`(bit_table[pt] >> b) & 1`), which
+    // matches `openpulse_dsp::constellation::symbol_llrs` and therefore 64QAM. This
+    // plugin's CPU soft path is the outlier: `compute_soft_llrs` walks `bits[bit_pos]`
+    // over `(b2, b1, b0)` tuples, i.e. MSB-first. Feeding the identity table made the
+    // GPU emit each symbol's three LLRs in reversed order.
+    //
+    // Measured before this change, 8PSK1000-RRC through AWGN: 1276 of 3600 LLRs
+    // disagreed in SIGN with both paths confident — bit 1 agreed perfectly while
+    // bits 0 and 2 each disagreed ~53%, which is what reversal looks like on a
+    // 3-bit symbol. Re-pairing under reversal gave 0 disagreements of 198.
+    //
+    // Hard decisions were unaffected (0 of 32 frames), because the hard GPU path
+    // maps symbols to bits on the CPU and never consults this table — which is why
+    // no decode test could see it.
+    let bit_table: Vec<u32> = (0..8u32)
+        .map(|p| ((p & 1) << 2) | (p & 2) | ((p >> 2) & 1))
+        .collect();
 
     if let Some(raw) = openpulse_gpu::gpu_soft_demod(ctx, &data, &pts_iq, &bit_table, 3) {
         let n_complete_bytes = (data.len() * 3) / 8;
