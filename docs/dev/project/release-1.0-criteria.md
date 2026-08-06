@@ -90,12 +90,25 @@ inducement. That regime stays simulator-tier unless natural fading happens to be
 therefore claims the rate control works on air; it does **not** claim it has been characterised
 across HF conditions.
 
-**Prerequisite (open engineering, not bookkeeping).** As of 2026-08-05 this criterion is
-**unscoreable**: the production OTA path emits no rate-transition event. `EngineEvent::RateChange` is
-raised only from the legacy `rate_policy` path (`engine.rs:1393/1405/1459`); the OTA sites
-(`engine.rs:1589`, `2253`, `2257`) emit nothing, and the daemon logs no level transition. A2 cannot
-be scored until that event exists, carrying `(from, to, RxOutcome, snr_db, branch taken)`. Phase 5.5-reg in [onair-status.md](../onair-status.md) already carries the execution
-checklist; this group is that checklist reaching completion, not a new workstream.
+**Prerequisite (open engineering, not bookkeeping) — corrected 2026-08-05.** An earlier version of
+this paragraph said the production OTA path "emits no rate-transition event" and that A2 was
+therefore unscoreable. **That was wrong**, and the error is instructive: the check behind it grepped
+`server.rs` for `info!`/`debug!` level logging and found none. The filter was sound; the corpus was
+the wrong one. The daemon's observability surface is **ControlEvents**, not tracing, and
+`ControlEvent::OtaStatus` (`lib.rs:2624`) already carries `tx_level`, `rx_recommended_level`,
+`rx_confirmed_level` and `is_locked` — broadcast at ~1 Hz during a session and again immediately
+after every `apply_ota_ack` (`server.rs:1029/1640/1677`), reaching `events.ndjson` through the audit
+recorder when `observability.audit_mode` is on, and already consumed by the panel.
+
+So level *state* is observable and transitions are reconstructible by diffing snapshots. What is
+genuinely missing is **attribution**: which branch of the controller fired, whether a climb came from
+the SNR model or from decode evidence (the #934 distinction this criterion turns on), the outcome and
+SNR that drove each decision, and per-decision rather than 1 Hz granularity on the receiver side.
+Failed decodes are also unobserved — `FrameReceived` is success-only — which clause 2 needs.
+
+A2 is therefore **not attributably scoreable** rather than unscoreable, and #1081 is scoped to
+attribution. Note also the operational precondition: `observability.audit_mode` must be on for the
+session, or the events are broadcast but not retained.
 
 ### B — Requirement bookkeeping is true
 
