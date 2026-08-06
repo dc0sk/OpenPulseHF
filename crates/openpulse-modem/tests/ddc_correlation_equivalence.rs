@@ -11,9 +11,15 @@
 //! **Two cases, and only the first is an equivalence test.** The DDC's lowpass removes out-of-band
 //! energy from the correlation window, which changes ρ's denominator. On an in-band signal that is a
 //! no-op and ρ must match. On a signal carrying out-of-band interference it must NOT match — ρ_DDC
-//! should be *higher*, because the interference has been filtered out before the correlation. That
-//! second case is the design's claimed interference-rejection benefit, and measuring it as a
-//! deviation rather than an error is the difference between validating the claim and refuting it.
+//! should be *higher*, because the interference has been filtered out before the correlation.
+//!
+//! **CORRECTION (later, and it matters for how P2 is read).** That second case was recorded here as
+//! the DDC's "interference-rejection benefit", and it is not one. ρ is a ratio; removing out-of-band
+//! energy from its denominator raises ρ for the **noise** as well, and by more —
+//! `bpsk31_constant_derivation::r7` measures separation `ρ_signal − ρ_noise` at 0.930 passband
+//! versus 0.674 DDC. A one-sided movement in a normalised statistic is not a gain. P2 below measures
+//! the signal side correctly and its label overstates what that side alone can establish; the
+//! matched noise row it needed is R6/R7.
 
 use openpulse_core::plugin::{ModulationConfig, ModulationPlugin};
 use openpulse_dsp::acquisition::IqMatchedFilter;
@@ -221,9 +227,11 @@ fn band_noise(n: usize, lo: f32, hi: f32, a: f32, seed: u64) -> Vec<f32> {
 ///
 /// * **Truly in-band** noise, confined to the DDC passband: ρ must MATCH. Any deviation is the
 ///   decimation damaging the correlation, which is what would kill the design.
-/// * **Out-of-band** interference outside the cutoff: ρ_DDC must be HIGHER. That is the claimed
-///   interference-rejection benefit, and it is only a benefit if it can be shown as a deviation in
-///   the right direction rather than assumed.
+/// * **Out-of-band** interference outside the cutoff: ρ_DDC is HIGHER. This was recorded as the
+///   claimed interference-rejection benefit; see the module-level correction — the same denominator
+///   effect lifts the noise ceiling further, so a higher signal ρ here is not a detection gain. The
+///   row is kept because the *direction* is real and the equivalence half depends on distinguishing
+///   it from an error; only the interpretation was wrong.
 #[test]
 #[ignore = "verification"]
 fn p2_in_band_equivalence_and_out_of_band_benefit() {
