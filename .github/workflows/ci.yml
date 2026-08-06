@@ -205,6 +205,14 @@ jobs:
           -p bpsk-plugin -p qpsk-plugin -p psk8-plugin -p qam64-plugin -p scfdma-plugin
           -- -D warnings
 
+      # openpulse-gpu's adapter-requiring differential tests are behind
+      # `hardware-tests`, so the workspace gate never compiles them. Same rot guard
+      # as above: compile + lint only, never run — this runner has no adapter.
+      - name: GPU hardware-test rot guard (compile + lint, not run)
+        run: >
+          cargo clippy --features hardware-tests --all-targets
+          -p openpulse-gpu -- -D warnings
+
   pi5-smoke-loopback:
     name: Pi5 smoke profile (loopback)
     runs-on: ubuntu-latest
