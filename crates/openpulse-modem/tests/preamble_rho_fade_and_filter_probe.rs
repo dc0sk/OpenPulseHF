@@ -1200,3 +1200,141 @@ fn f9_decode_conditioned_rho_tail() {
     println!("  (500 Hz: 0.443) — a theta is usable only if it sits above the ceiling AND has a");
     println!("  miss rate of ~0 in this column.");
 }
+
+// ── F10: how fast does the rho ceiling fall as the filter SKIRT softens? (#1060) ──
+
+/// Band-limit with a raised-cosine skirt of a given **shape factor**, zero phase.
+///
+/// Shape factor is the −60 dB : −6 dB bandwidth ratio, which is how receiver selectivity is
+/// specified on rig datasheets — so a curve swept on this axis can be compared directly against a
+/// hardware-filtered recording by fitting that recording's effective shape factor, rather than
+/// being a separate un-relatable fact. `sf = 1.0` is a brick wall and reproduces [`band_limit`].
+///
+/// Zero phase is deliberate, not a convenience. For the noise ceiling only the **magnitude**
+/// response can matter: a stationary Gaussian process is characterised by its power spectrum, and
+/// filtering gives `|H(f)|²·S(f)` — the phase term cancels exactly. So an IIR with the same
+/// magnitude response would produce the same ρ distribution while adding non-linear group delay
+/// and an alignment problem for no gain. (The exception is non-Gaussian content — birdies and
+/// impulses — where phase does affect the waveform; tonal birdies stay magnitude-dominated, which
+/// is why the real captures are swept here alongside synthetic noise rather than instead of it.)
+fn skirted_band_limit(x: &[f32], lo_hz: f32, hi_hz: f32, shape_factor: f32) -> Vec<f32> {
+    use rustfft::{num_complex::Complex, FftPlanner};
+    let n = x.len().next_power_of_two();
+    let mut buf: Vec<Complex<f32>> = x
+        .iter()
+        .map(|&v| Complex::new(v, 0.0))
+        .chain(std::iter::repeat_n(Complex::new(0.0, 0.0), n - x.len()))
+        .collect();
+    let mut planner = FftPlanner::new();
+    planner.plan_fft_forward(n).process(&mut buf);
+    let bin_hz = FS / n as f32;
+    // -6 dB bandwidth is (hi-lo); the -60 dB bandwidth adds one transition on each side, so
+    // sf = (bw + 2w)/bw gives w = (sf-1)*bw/2.
+    let w = ((shape_factor - 1.0).max(0.0)) * (hi_hz - lo_hz) / 2.0;
+    for (k, v) in buf.iter_mut().enumerate() {
+        let f = if k <= n / 2 {
+            k as f32 * bin_hz
+        } else {
+            (n - k) as f32 * bin_hz
+        };
+        // Raised-cosine transition on each edge; real and symmetric, hence zero phase.
+        let g = if f >= lo_hz && f <= hi_hz {
+            1.0
+        } else if w <= 0.0 {
+            0.0
+        } else if f < lo_hz && f >= lo_hz - w {
+            0.5 * (1.0 + (std::f32::consts::PI * (lo_hz - f) / w).cos())
+        } else if f > hi_hz && f <= hi_hz + w {
+            0.5 * (1.0 + (std::f32::consts::PI * (f - hi_hz) / w).cos())
+        } else {
+            0.0
+        };
+        *v *= g;
+    }
+    planner.plan_fft_inverse(n).process(&mut buf);
+    let scale = 1.0 / n as f32;
+    buf.iter().map(|c| c.re * scale).collect()
+}
+
+/// Peak ρ of the shipped BPSK250 template over a noise buffer, engine window and grid.
+fn peak_rho_over(noise: &[f32], template: &[f32]) -> f32 {
+    let w = template.len() + F7_LAG_BOUND;
+    let mut peak = 0.0f32;
+    let mut s = 0usize;
+    while s + w <= noise.len() {
+        if let Some(r) = rho_of(template, &noise[s..s + w], 20.0) {
+            peak = peak.max(r);
+        }
+        s += F7_LAG_BOUND;
+    }
+    peak
+}
+
+/// #1060's open question is whether a REAL 500 Hz filter lifts idle ρ above the shipped 0.40. The
+/// only figure we have is 0.441 from a **brick wall**, which is sharper than any real filter — so
+/// the answer depends entirely on how fast ρ falls as the skirt softens.
+///
+/// Sweeping the skirt converts an unknown point value into a bounded curve, and the two ends are
+/// each decisive: if ρ stays above 0.40 across every plausible shape factor, the defect is real and
+/// the hardware capture becomes confirmation; if ρ drops under 0.40 as soon as the edge softens at
+/// all, the brick wall *was* the effect and #1060 is a documented limit rather than a defect.
+///
+/// Real captures are swept beside synthetic noise so the two can be compared like-for-like at the
+/// same length. **The absolute values here are NOT comparable to f7's 0.441**: ρ_ceiling is a peak
+/// statistic and the corpus idle captures are 3.00 s against f7's 45 s, which biases the peak low
+/// by roughly √(ln N) — about 20 %. The *shape* of the curve is what this measures; the crossing
+/// point needs the longer recordings. Cycling a 3 s capture would not fix that — the extra windows
+/// repeat the same noise and the peak simply saturates.
+#[test]
+#[ignore = "verification"]
+fn f10_skirt_sweep() {
+    let t = plugin_template("BPSK250").expect("BPSK250 template").0;
+    let (lo, hi) = (1_250.0f32, 1_750.0f32);
+    let corpus = ["ic9700-idle-hot.wav", "ft991a-idle.wav"];
+
+    println!("\nF10: peak rho vs filter shape factor, 500 Hz passband, BPSK250 template");
+    println!("  shipped threshold 0.40; f7's brick-wall 45 s figure was 0.441");
+    println!(
+        "  {:>6} {:>12} {:>14} {:>14} {:>14}",
+        "sf", "transition", "ic9700-idle", "ft991a-idle", "synthetic 3s"
+    );
+
+    let loaded: Vec<(&str, Vec<f32>)> = corpus
+        .iter()
+        .filter_map(|n| {
+            openpulse_modem::capture_replay::load_corpus(n)
+                .ok()
+                .map(|c| (*n, c.samples))
+        })
+        .collect();
+    assert_eq!(
+        loaded.len(),
+        corpus.len(),
+        "corpus captures must load; a missing one would silently drop a column"
+    );
+    // Same length as the real captures, so the peak statistics are comparable.
+    let synth = band_noise(24_000, 300.0, 2_700.0, 12345);
+
+    for sf in [1.0f32, 1.1, 1.25, 1.5, 2.0, 3.0, 4.0] {
+        let w = ((sf - 1.0).max(0.0)) * (hi - lo) / 2.0;
+        let mut cells: Vec<String> = Vec::new();
+        for (_, s) in &loaded {
+            cells.push(format!(
+                "{:.3}",
+                peak_rho_over(&skirted_band_limit(s, lo, hi, sf), &t)
+            ));
+        }
+        cells.push(format!(
+            "{:.3}",
+            peak_rho_over(&skirted_band_limit(&synth, lo, hi, sf), &t)
+        ));
+        println!(
+            "  {sf:>6.2} {:>10.0} Hz {:>14} {:>14} {:>14}",
+            w, cells[0], cells[1], cells[2]
+        );
+    }
+    println!("\n  sf = 1.0 is a brick wall. Real DSP filters are typically sharp (low sf); an");
+    println!("  analog crystal or ceramic filter is softer. When the hardware-filtered recordings");
+    println!("  arrive, fit their effective shape factor and read the curve at that point — that");
+    println!("  is what makes the model and the hardware the same axis instead of two facts.");
+}
