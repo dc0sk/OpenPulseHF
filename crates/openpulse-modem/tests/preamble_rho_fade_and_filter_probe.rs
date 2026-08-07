@@ -13,6 +13,46 @@
 //!   shipped 0.40. Note the band-limiting here is a brick-wall FFT mask, sharper than any real
 //!   filter, so its numbers are a worst case.
 //!
+//! * `f7_duration_is_the_lever` — in-band discrimination `ρ' = ρ_noise/ρ_signal` follows
+//!   `1/√(T·B)`: doubling template duration drops it by ~1/√2 while a 29× change in spectral
+//!   occupancy at fixed duration moves it by nothing. Duration, not spreading, sets the noise
+//!   floor. (Merged result, #1087.)
+//! * `f8_faded_frame_rho_tail` — ρ of a real faded frame, band-limited by the SAME mask as the
+//!   ceiling it is compared against. Exists because an earlier version compared an *unfiltered*
+//!   tail against a *filtered* ceiling and inverted its own conclusion.
+//! * `f9_decode_conditioned_rho_tail` — **produced a NEGATIVE result; read this before using it.**
+//!
+//! ## `f9`'s decoded-only column is CIRCULAR as it stands (2026-08-06)
+//!
+//! `f9` asks "would a higher ρ threshold discard frames the channel delivered?" by measuring the
+//! miss rate among frames that decoded. **The shipped 0.40 veto runs inside that decode**
+//! (`engine.rs`, `rho < veto.rho_threshold → continue`), so a frame scoring under 0.40 is vetoed,
+//! fails to decode, and leaves the conditioned set — making the miss rate at 0.40 zero *by
+//! construction*. Its own tripwire proves the contamination is live rather than theoretical:
+//! 1010–1696 settle rejections per 30 seeds, and **0 of the seeds carrying a rejection ever
+//! decoded**, in every cell measured.
+//!
+//! So the numbers it prints are not evidence about the channel. Making it sound needs a
+//! veto-disabled arm — a plugin wrapper returning `None` from `preamble_template`, so
+//! `build_preamble_veto` yields `None` and the decode runs ungated. Until then, treat the
+//! decoded-only column as a tautology and the all-frames column as unconditioned (it counts frames
+//! lost in fade nulls against the threshold, which overstates a threshold's cost).
+//!
+//! Second known contaminant, unresolved: the decode verdict is **wall-clock bounded** unless
+//! `set_deterministic_scan_positions`/`_max_iterations` are set (#1066 — the determinism is
+//! opt-in). The budget is swept via `F9_POS`/`F9_ITERS` rather than chosen, because picking one
+//! makes the constant the answer; note that even `pos=16, iters=500` does ~8.5× the scan work of
+//! the shipped path (14 580 vs 1 696 rejections per 30 seeds) and does not finish in 25 min.
+//!
+//! ## What none of these can settle
+//!
+//! Every band-limited figure here uses a **brick-wall FFT mask**, sharper than any real filter.
+//! #1060 records the true 500 Hz value as lying between 0.196 (SSB) and 0.441 (brick-wall), against
+//! a shipped threshold of 0.40 — so where it actually falls decides whether there is a defect at
+//! all, and that is a rig measurement (one ~45 s idle capture with a real 500 Hz filter engaged),
+//! not a simulation. Six conclusions were drawn from this file's synthetic columns and six were
+//! overturned in review; do not propose a constant change from them alone.
+//!
 //! Cross-check on the harness itself: synthetic SSB-shaped noise (300–2700 Hz) gives BPSK250
 //! ρ = 0.196 against 0.205 measured on the real recorded captures — so this reproduces the corpus,
 //! and the corpus is SSB-bandwidth reception.
@@ -836,4 +876,327 @@ fn f6_would_a_spread_template_refuse_the_interferers() {
         "  receiver would anchor on it. Note the grid is centred at 0 here; for the lone tone"
     );
     println!("  the deployed chain settles onto the tone first, which is a separate protection.");
+}
+
+// ── F8: does a FADED frame's rho tail clear the noise ceiling? (#1062, #1059) ──
+
+/// A template embedded in a real transmission, as the receiver would meet it.
+///
+/// The shipped template already sits at the head of `bpsk_modulate`'s output, so that case is the
+/// unmodified modulator. A candidate template is prepended to a real modulated frame instead, so
+/// the correlation window has genuine signal after the preamble rather than padding — the same
+/// construction `peak_sidelobe` uses, and for the same reason: `search_normalized` divides by the
+/// window's energy, so padding manufactures a score.
+fn frame_carrying(template: &[f32], mode: &str, shipped: bool) -> Vec<f32> {
+    let payload: Vec<u8> = (0..200u32)
+        .map(|i| (i.wrapping_mul(2_654_435_761) >> 24) as u8)
+        .collect();
+    let data = bpsk_plugin::BpskPlugin::new()
+        .modulate(&payload, &cfg(mode))
+        .expect("modulate payload");
+    if shipped {
+        data
+    } else {
+        template.iter().chain(data.iter()).copied().collect()
+    }
+}
+
+/// The quantity every threshold claim in #1062/#1059/#1060 has been missing: what ρ does a real
+/// frame score **through a fade**, per candidate template, at the low end of its distribution.
+///
+/// A threshold has to sit above the noise ceiling and below the weakest frame that must still be
+/// detected. Two earlier attempts to construct that window used the *best* on-record frame
+/// (ρ = 0.654) scaled multiplicatively, which is refuted by data already in the repo:
+/// `plugins/bpsk/src/modulate.rs` records `moderate_f1` frames at ρ = 0.58–0.84, i.e. above the
+/// ceiling that proxy builds. The design-relevant number is the **low tail**, not the best case.
+///
+/// Cross-check on the harness, and the reason the shipped template is included as a case rather
+/// than assumed: it must reproduce that recorded 0.58–0.84 band. If it does not, the apparatus is
+/// wrong and no candidate column from the same run means anything.
+///
+/// Note what this can and cannot say. Decodability is a property of the payload path, which is
+/// identical across these cases — swapping the preamble does not change whether the data decodes.
+/// So this measures the *detection* side only, which is precisely #1062's stated open question for
+/// #1059: whether the ρ tail of a real faded frame clears the ceiling its own template sets.
+#[test]
+#[ignore = "verification"]
+fn f8_faded_frame_rho_tail() {
+    let alt = plugin_template("BPSK250").expect("BPSK250 template").0;
+    let mut m110 = m_sequence(7, &[7, 6]);
+    m110.truncate(110);
+    let pn110 = pn_template("BPSK1000", &m110).expect("pn110");
+    let mut m220 = m_sequence(8, &[8, 6, 5, 4]);
+    m220.truncate(220);
+    let pn220 = pn_template("BPSK1000", &m220).expect("pn220");
+    // The two controls f3 built and an earlier version of this test dropped: PN-31 holds bandwidth
+    // fixed while changing the sequence, alt-110 holds the sequence periodic while changing
+    // bandwidth. Without both, "spreading did it" cannot be separated from "chip rate did it".
+    let pn31 = pn_template("BPSK250", &m_sequence(5, &[5, 3])).expect("pn31");
+    let alt110: Vec<f32> = {
+        let chips: Vec<f32> = (0..110)
+            .map(|i| if (i / 2) % 2 == 0 { -1.0 } else { 1.0 })
+            .collect();
+        pn_template("BPSK1000", &chips).expect("alt110")
+    };
+
+    let cases: [(&str, &[f32], &str, bool); 5] = [
+        ("shipped alt  (250, 124 ms)", &alt, "BPSK250", true),
+        ("PN-31        (250, 120 ms)", &pn31, "BPSK250", false),
+        ("alt-110      (1k,  109 ms)", &alt110, "BPSK1000", false),
+        ("PN-110       (1k,  109 ms)", &pn110, "BPSK1000", false),
+        ("PN-220       (1k,  219 ms)", &pn220, "BPSK1000", false),
+    ];
+    let seeds: u64 = std::env::var("F8_SEEDS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(120);
+
+    println!("\nF8: rho of a REAL faded frame at the true onset, {seeds} seeds/cell");
+    println!("  The frame is band-limited by the SAME mask as the noise ceiling it is compared");
+    println!(
+        "  against. An earlier version compared an UNFILTERED tail against a FILTERED ceiling:"
+    );
+    println!("  a station running a 500 Hz filter filters the frame too, which for an in-band");
+    println!("  template removes most of the window's noise and lifts the tail by ~9 dB of SNR.");
+    println!("  Reported as a MISS RATE at candidate thresholds, not as a min: one side of a");
+    println!("  min-vs-max gap is an extreme value whose size is set by the observation budget.");
+    for (label, t, mode, shipped) in cases {
+        println!("\n{label}");
+        println!(
+            "  {:<16} {:>5} {:>7} {:>7} {:>7} {:>26}",
+            "band", "snr", "min", "p5", "median", "miss rate at theta"
+        );
+        println!(
+            "  {:<16} {:>5} {:>7} {:>7} {:>7} {:>26}",
+            "", "", "", "", "", "0.30   0.40   0.50"
+        );
+        for (bname, lo, hi) in [
+            ("unfiltered", 0.0f32, 4_000.0),
+            ("ssb 300-2700", 300.0, 2_700.0),
+            ("filter 1250-1750", 1_250.0, 1_750.0),
+        ] {
+            for snr in [10.0f32, 20.0] {
+                let clean = frame_carrying(t, mode, shipped);
+                let mut rhos: Vec<f32> = Vec::new();
+                for seed in 0..seeds {
+                    let mut c = WattersonConfig::moderate_f1(Some(seed));
+                    c.snr_db = snr;
+                    let faded = WattersonChannel::new(c).expect("channel").apply(&clean);
+                    let limited = band_limit(&faded, lo, hi);
+                    let w = (t.len() + F7_LAG_BOUND).min(limited.len());
+                    if let Some(r) = rho_of(t, &limited[..w], 20.0) {
+                        rhos.push(r);
+                    }
+                }
+                if rhos.is_empty() {
+                    continue;
+                }
+                rhos.sort_by(|a, b| a.partial_cmp(b).unwrap());
+                let n = rhos.len() as f32;
+                let miss = |th: f32| rhos.iter().filter(|&&r| r < th).count() as f32 / n;
+                println!(
+                    "  {bname:<16} {snr:>5.0} {:>7.3} {:>7.3} {:>7.3} {:>7.2} {:>6.2} {:>6.2}",
+                    rhos[0],
+                    rhos[(n * 0.05) as usize],
+                    rhos[rhos.len() / 2],
+                    miss(0.30),
+                    miss(0.40),
+                    miss(0.50)
+                );
+            }
+        }
+    }
+    println!(
+        "\n  Miss rate = fraction of real faded frames a threshold would veto. Compare against"
+    );
+    println!("  the same band's noise ceiling from f7 to see whether any theta separates them.");
+    println!("  NOT decode-conditioned: a frame inside a multi-second good_f1 null scores low and");
+    println!("  would not have decoded either, so an unconditioned tail overstates the miss rate.");
+}
+
+// ── F9: the tail that matters — rho of frames that DECODED (#1060, #1059) ─────
+
+/// Watterson followed by the same brick-wall mask the noise ceiling is measured through, as one
+/// `ChannelModel`.
+///
+/// Composing them here rather than filtering afterwards is what lets ρ and the decode verdict come
+/// from **bit-identical samples**: `route_tapped` returns the very buffer it hands the receiver.
+/// Measuring ρ on one realisation and decoding another seeded the same way is not the same
+/// experiment — the two signals differ in length, so the fade they see differs.
+struct FadeThenFilter {
+    inner: WattersonChannel,
+    lo: f32,
+    hi: f32,
+}
+
+impl ChannelModel for FadeThenFilter {
+    fn apply(&mut self, input: &[f32]) -> Vec<f32> {
+        let faded = self.inner.apply(input);
+        band_limit(&faded, self.lo, self.hi)
+    }
+    fn generate_noise(&mut self, length: usize) -> Vec<f32> {
+        vec![0.0; length]
+    }
+}
+
+/// The quantity #1060 actually turns on: among frames that **decode**, how many would a candidate
+/// threshold veto?
+///
+/// Every earlier version of this measurement reported the tail of *all* faded frames. That
+/// overstates the cost of a threshold, because a frame sitting inside a multi-second fade null
+/// scores low and does not decode either — vetoing it forfeits nothing. The shipped threshold's own
+/// invariant is stated in those terms (`plugins/bpsk/src/modulate.rs`): the gate must not reject a
+/// decodable frame before the channel already has.
+///
+/// Scoped to the shipped BPSK250 template deliberately. There the template *is* the frame's
+/// preamble, so ρ and decodability are properties of one object and conditioning is meaningful. A
+/// prepended candidate template would be extra audio in front of a frame carrying its own preamble,
+/// and conditioning on that frame's decode would answer a different question. This is also where
+/// the actionable claim lives — whether the shipped 0.40 is right.
+#[test]
+#[ignore = "verification"]
+fn f9_decode_conditioned_rho_tail() {
+    let t = plugin_template("BPSK250").expect("BPSK250 template").0;
+    let seeds: u64 = std::env::var("F9_SEEDS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(120);
+    let payload: Vec<u8> = (0..200u32)
+        .map(|i| (i.wrapping_mul(2_654_435_761) >> 24) as u8)
+        .collect();
+
+    println!("\nF9: BPSK250+Rs, rho vs DECODE on identical samples, {seeds} seeds/cell");
+    println!(
+        "  {:<16} {:>5} {:>7} {:>9} {:>25} {:>25}",
+        "band", "snr", "decode", "min rho", "miss rate, ALL frames", "miss rate, DECODED only"
+    );
+    println!(
+        "  {:<16} {:>5} {:>7} {:>9} {:>25} {:>25}",
+        "", "", "rate", "decoded", "0.30   0.40   0.50", "0.30   0.40   0.50"
+    );
+    // Each cell costs ~12-15 min because a frame that fails to decode burns the full receive
+    // timeout, so the bands are selectable: a single run of all nine cells exceeds any sane
+    // wall-clock bound and gets truncated mid-table, which is worse than not running it.
+    let want = std::env::var("F9_BAND").unwrap_or_else(|_| "all".into());
+    for (bname, lo, hi) in [
+        ("unfiltered", 0.0f32, 4_000.0),
+        ("ssb 300-2700", 300.0, 2_700.0),
+        ("filter 1250-1750", 1_250.0, 1_750.0),
+    ] {
+        if want != "all" && !bname.starts_with(&want) {
+            continue;
+        }
+        for snr in [5.0f32, 10.0, 20.0] {
+            let mut all: Vec<f32> = Vec::new();
+            let mut decoded: Vec<f32> = Vec::new();
+            let (mut veto_rejections, mut veto_seeds_decoded, mut veto_seeds_failed) =
+                (0u64, 0u32, 0u32);
+            for seed in 0..seeds {
+                let mut h = ChannelSimHarness::new();
+                for eng in [&mut h.tx_engine, &mut h.rx_engine] {
+                    eng.register_plugin(Box::new(bpsk_plugin::BpskPlugin::new()))
+                        .expect("register");
+                }
+                // #1066: the receive scan's budget is WALL CLOCK unless these are set, and the
+                // determinism is opt-in. Left unset, a loaded machine truncates the retry passes —
+                // which preferentially loses the low-rho frames whose absence this test then
+                // reports as "the tail is empty". F9_DETERMINISTIC=0 restores shipped behaviour so
+                // the two can be compared.
+                // The budget is swept rather than chosen: picking one and reporting its verdict
+                // makes the constant the answer. An earlier version hardcoded 64/4000 and turned a
+                // ~10 min cell into one that had not finished in 2 h, which is itself evidence the
+                // shipped wall-clock path bounds the work far tighter than that.
+                let pos: usize = std::env::var("F9_POS")
+                    .ok()
+                    .and_then(|v| v.parse().ok())
+                    .unwrap_or(0);
+                let iters: usize = std::env::var("F9_ITERS")
+                    .ok()
+                    .and_then(|v| v.parse().ok())
+                    .unwrap_or(0);
+                if pos > 0 {
+                    h.rx_engine.set_deterministic_scan_positions(Some(pos));
+                }
+                if iters > 0 {
+                    h.rx_engine.set_deterministic_max_iterations(Some(iters));
+                }
+                if h.tx_engine
+                    .transmit_with_fec_mode(&payload, "BPSK250", FecMode::Rs, None)
+                    .is_err()
+                {
+                    continue;
+                }
+                let mut c = WattersonConfig::moderate_f1(Some(seed));
+                c.snr_db = snr;
+                let mut chan = FadeThenFilter {
+                    inner: WattersonChannel::new(c).expect("channel"),
+                    lo,
+                    hi,
+                };
+                let (_, rx) = h.route_tapped(&mut chan);
+                let w = (t.len() + F7_LAG_BOUND).min(rx.len());
+                let Some(r) = rho_of(&t, &rx[..w], 20.0) else {
+                    continue;
+                };
+                all.push(r);
+                let ok = h
+                    .rx_engine
+                    .receive_with_fec_mode_timeout(
+                        "BPSK250",
+                        FecMode::Rs,
+                        None,
+                        Duration::from_millis(8_000),
+                    )
+                    .is_ok();
+                // The shipped 0.40 veto runs INSIDE this decode. If it rejected any settle here,
+                // then "frames that decoded" is a set this test's own subject helped choose, and a
+                // miss rate at 0.40 measured over that set is circular. Counting the rejections is
+                // what distinguishes "the veto accepted everything" from "the veto shaped the set".
+                let vetoed = h.rx_engine.rho_rejected_settles();
+                veto_rejections += vetoed;
+                if vetoed > 0 {
+                    if ok {
+                        veto_seeds_decoded += 1;
+                    } else {
+                        veto_seeds_failed += 1;
+                    }
+                }
+                if ok {
+                    decoded.push(r);
+                }
+            }
+            if all.is_empty() {
+                continue;
+            }
+            let rate = |v: &Vec<f32>, th: f32| {
+                if v.is_empty() {
+                    f32::NAN
+                } else {
+                    v.iter().filter(|&&r| r < th).count() as f32 / v.len() as f32
+                }
+            };
+            let min_dec = decoded.iter().cloned().fold(f32::INFINITY, f32::min);
+            println!(
+                "  {bname:<16} {snr:>5.0} {:>7.2} {:>9.3} {:>8.2} {:>6.2} {:>6.2} {:>10.2} {:>6.2} {:>6.2}",
+                decoded.len() as f32 / all.len() as f32,
+                if decoded.is_empty() { f32::NAN } else { min_dec },
+                rate(&all, 0.30),
+                rate(&all, 0.40),
+                rate(&all, 0.50),
+                rate(&decoded, 0.30),
+                rate(&decoded, 0.40),
+                rate(&decoded, 0.50),
+            );
+            println!(
+                "      veto: {veto_rejections} settle rejections over {} seeds; seeds with a \
+                 rejection that still decoded: {veto_seeds_decoded}, that failed: \
+                 {veto_seeds_failed}",
+                all.len()
+            );
+        }
+    }
+    println!("\n  'miss rate, DECODED only' is the design quantity: frames the channel delivered");
+    println!("  that a threshold would throw away. Compare against f7's noise ceiling per band");
+    println!("  (500 Hz: 0.443) — a theta is usable only if it sits above the ceiling AND has a");
+    println!("  miss rate of ~0 in this column.");
 }
