@@ -286,23 +286,33 @@ trading bandwidth (rect vs `-RRC`) against throughput (500 vs 1000 baud).
 ### Filtering and signal enhancement
 
 Options that reduce out-of-band emissions, suppress spectral sidelobes, improve
-receiver sensitivity, or raise transmit power efficiency.  Each can be selected
-independently per mode.
+receiver sensitivity, or raise transmit power efficiency.
+
+Two different things are called "sidelobe" below and they are not
+interchangeable: **spectral** sidelobes are out-of-band emissions, shaped by the
+pulse (Hann / CosineOverlap / RRC); **autocorrelation** sidelobes are the
+peak-sidelobe ratio of a sync sequence, which governs onset placement and is a
+property of the preamble.  A pulse shape does nothing for the second and a sync
+sequence does nothing for the first.
+
+The pulse-shape and FEC rows are per-mode selectable.  The channel-estimation and
+equalization rows are **intrinsic** to their waveforms, not options.  Preambles are
+**hardcoded per plugin** and cannot be selected at all.
 
 | Technique | Where | Sidelobe / benefit | Notes |
 |---|---|---|---|
 | **CE-SSB envelope conditioning** (`openpulse_dsp::cessb`) | TX; high-PAPR multicarrier (OFDM/SC-FDMA), default-on | +1.6/+2.7/+3.8 dB avg power at fixed PEP (2.5/2.0/1.5×rms); negligible OOB regrowth | Look-ahead peak-stretcher; gated by `cessb_benefits` (no-op on single-carrier/BPSK); +1.18 dB confirmed on-air; panel "CE-SSB" toggle + `SetCessb` control |
 | **Half-Hann overlapping crossfade** (`PulseShape::Hann`) | All single-carrier modes (default) | ~−32 dB first sidelobe | 50 % symbol overlap; no ISI at SNR > 3 dB; CPU path only |
 | **Cosine overlap** (`PulseShape::CosineOverlap`) | Single-carrier alternative | ~−32 dB; null-to-null BW ≈ 2×Rs | Lower spectral leakage than rectangular; GPU-compatible |
-| **Root Raised Cosine (SRRC) FIR** (`PulseShape::Rrc`) | `-RRC` mode suffix (QPSK, 8PSK, 64QAM) | ~−35 dB OOB; excess BW = 35 % | α = 0.35 rolloff; taps configurable; ISI-free by matched-filter design |
-| **Barker-11 preamble** | Preamble / timing | PSL = −13 dB | 11-chip Barker; used for frame timing acquisition |
-| **Barker-13 preamble** | Preamble / timing | PSL = −17 dB | 13-chip Barker; better sidelobe suppression than Barker-11 |
+| **Root Raised Cosine (SRRC) FIR** (`PulseShape::Rrc`) | `-RRC` mode suffix (BPSK, QPSK, 8PSK, 64QAM) | ~−35 dB OOB; excess BW = 35 % | α = 0.35 rolloff; taps configurable; ISI-free by matched-filter design |
+| **Sync sequences** (`openpulse_dsp::preamble`) | **Library only — see note** | Barker-11 PSL −13 dB; Barker-13 −17 dB; PN-31/63 near-ideal; Zadoff-Chu-64 CAZAC | `PreambleType` + `PreambleSpec` + `PreambleDetector`. **No shipping mode uses Barker or ZC**, and `PreambleDetector` has no production caller; `pilot-plugin` is the only consumer and uses **PN-63 cycled to 48 chips** (`PREAMBLE_SYMBOLS`), which does not preserve the m-sequence autocorrelation. Corrected 2026-08-07 — this table previously claimed Barker was "used for frame timing acquisition". |
+| **Shipping preambles** | Hardcoded per plugin | see `#1062` | BPSK: 32-symbol period-4 alternating run (`preamble_bits`). QPSK: designed 16-symbol sequence. Pilot: truncated PN-63. Their autocorrelation and time-bandwidth limits are the subject of [#1062](https://github.com/dc0sk/OpenPulseHF/issues/1062). |
 | **DFT-CE pilot-aided channel estimation** | SC-FDMA (all SCFDMA modes) | Removes multipath phase rotation | DFT-domain CE on pilot subcarriers; combines with MMSE |
 | **MMSE equalization** | SC-FDMA | Suppresses inter-subcarrier interference | Per-subcarrier minimum mean-square error; requires DFT-CE |
 | **LS channel estimation** | OFDM (OFDM16 / OFDM52) | Least-squares pilot tap estimation | Per-symbol LS CE → ZF equalization |
 | **ZF equalization** | OFDM | Removes pilot-estimated channel distortion | Per-subcarrier zero-forcing; follows LS-CE |
 | **LMS/DFE adaptive equalizer** | BPSK-RRC demod path | Residual ISI suppression | Supervised preamble training → decision-directed; `crates/openpulse-dsp` |
-| **Gardner timing error detector** | All single-carrier modes | Symbol clock recovery | Symbol-rate TED; feeds symbol timing interpolator |
+| **Gardner timing error detector** | BPSK, QPSK, 8PSK, 64QAM | Symbol clock recovery | Symbol-rate TED; feeds symbol timing interpolator. **Not** the PILOT family, which is single-carrier but recovers timing from its pilots instead. |
 | **PLL carrier phase tracking** | BPSK / QPSK / 8PSK | Phase noise rejection | Phase-locked loop updated per symbol; `crates/openpulse-dsp` |
 | **AFC IQ-squaring estimator** | BPSK (all rates) | Frequency offset correction ±baud/4 | Tracking range: ±7.8 Hz (BPSK31) … ±62.5 Hz (BPSK250) |
 | **Soft-input FEC (LDPC / Turbo)** | Any mode with `supports_soft_demod()` | Coding gain vs. hard-decision FEC | Requires a plugin that returns genuine LLRs; engine warns if paired with hard-only plugin |
