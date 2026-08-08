@@ -1,0 +1,72 @@
+# Coverage is a SCHEDULED and PRE-RELEASE measurement here, never a per-PR gate.
+#
+# Instrumented, this workspace runs far longer than the ~50 min uninstrumented suite — a 50-minute
+# bound was hit mid-suite without producing a number. Per PR that would cost more than the whole
+# rest of CI, and would undo PR #1094 (which removed ~99 min/PR of duplicated testing) several
+# times over. Weekly plus on demand gives the trend and the pre-release number without paying it
+# on every push.
+#
+# Actions are SHA-pinned with the tag as a trailing comment, as in ci.yml — a tag is mutable and
+# whoever controls the action repo can repoint it at code that runs with this workflow's token.
+
+name: Coverage
+
+on:
+  schedule:
+    # Sunday 03:00 UTC — off the working week, so a 2 h run competes with nothing.
+    - cron: '0 3 * * 0'
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+  REQUIRED_RUST: 1.94.0
+
+# A scheduled run and a manual one must not overlap; the later one wins.
+concurrency:
+  group: coverage-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  workspace-coverage:
+    name: Workspace coverage (scheduled / pre-release)
+    runs-on: ubuntu-latest
+    # Instrumented full-workspace testing is slow; the default 360 min ceiling is the real bound.
+    timeout-minutes: 300
+
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
+        with:
+          toolchain: ${{ env.REQUIRED_RUST }}
+          components: llvm-tools-preview
+
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+        with:
+          shared-key: coverage
+
+      - name: Install cargo-llvm-cov
+        uses: taiki-e/install-action@6c6fd71fe4fb72c3697d269963d0e15df8adedad # v2
+        with:
+          tool: cargo-llvm-cov
+
+      - name: Measure
+        run: ./scripts/coverage.sh --json-out target/coverage.json
+
+      # Retained a year so the no-regression comparison the release flow needs has something to
+      # compare against. The number is useless without its history — a single reading cannot show
+      # a drop.
+      - name: Publish the coverage record
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: coverage-${{ github.run_number }}
+          path: |
+            target/coverage.json
+            target/coverage-*.log
+          retention-days: 365
+          if-no-files-found: warn
