@@ -46,6 +46,7 @@ This index contains development-oriented, planning, architecture, protocol-spec,
 - [docs/dev/AGENTS.md](AGENTS.md): agent safeguards and recovery countermeasures
 - [docs/dev/sbom.md](sbom.md): software bill of materials policy
 - [docs/dev/memories.md](memories.md): distilled lessons and operator notes
+- [docs/dev/lessons-and-archetypes.md](lessons-and-archetypes.md): OpenPulse's sharp edges mapped to the general defect-archetype shapes (bridge to the external coding-agent-skills library)
 - [docs/dev/onair-status.md](onair-status.md): on-air validation status, blockers, and debugging findings (Phase 5.5-reg)
 - [docs/dev/onair-signal-chain-verification.md](onair-signal-chain-verification.md): RF signal-chain preflight checklist
 
