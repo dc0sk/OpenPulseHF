@@ -78,6 +78,15 @@ fn conv_rate_is_half() {
 fn rs_vs_conv_cpu_time() {
     const PAYLOAD_LEN: usize = 1000;
     const REPS: usize = 50;
+    // Coverage instrumentation invalidates this measurement rather than merely slowing it: the
+    // per-executed-line cost does not scale uniformly across the two codecs, and ConvCodec's
+    // Viterbi executes far more instrumented points per byte than RS does. The ratio inflates past
+    // the budget while the code under test is unchanged — a verdict about the harness, not the
+    // codec. Measured: passes uninstrumented (0.38 s), fails under `cargo llvm-cov`.
+    if std::env::var_os("CARGO_LLVM_COV").is_some() {
+        println!("skipping CPU-budget ratio under coverage instrumentation — not a valid timing environment");
+        return;
+    }
     let payload: Vec<u8> = (0..PAYLOAD_LEN).map(|i| (i % 256) as u8).collect();
 
     let rs = FecCodec::new();

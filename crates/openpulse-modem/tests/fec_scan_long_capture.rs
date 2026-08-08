@@ -168,3 +168,62 @@ fn the_embedded_capture_is_genuinely_longer_than_the_frame() {
          be testing frame LOCATION rather than the easy buffer-is-the-frame case"
     );
 }
+
+// ── The sweep the hand-written cases above could not be ──────────────────────
+
+/// Every `FecMode`, embedded in a long capture — enumerated, not hand-listed.
+///
+/// **Why this exists.** The tests above were written because a length fix reached two arms of
+/// five. They then hard-coded five arms of ten, while `CLAUDE.md`'s acceptance row claimed "every
+/// FEC arm, not just the two that were fixed first". `None`, `Concatenated`, `ShortRs`,
+/// `SoftConcatenated` and `Turbo` were never swept.
+///
+/// Line coverage cannot catch this: those arms *are* executed, by other tests. What was missing is
+/// the **combination** — arm × long capture. So the fix is to iterate the enum rather than a list,
+/// with `FecMode::ALL` compiler-enforced complete, and to state an exclusion reason for anything
+/// deliberately out of scope rather than silently omitting it.
+#[test]
+fn every_fec_mode_decodes_when_embedded_in_a_long_capture() {
+    let payload: Vec<u8> = (0..64u8).collect();
+    let (lead, trail) = (40_000, 120_000);
+
+    let mut failures: Vec<String> = Vec::new();
+    let mut swept = 0usize;
+    for fec in FecMode::ALL {
+        // Exclusions carry a reason, so "not swept" is never silent. Both are properties of the
+        // mode's contract, not of the defect this file pins.
+        let skip = match fec {
+            // No FEC: there is no block-length gate to trip, so the defect cannot exist here.
+            FecMode::None => Some("no FEC layer — no block-length gate to trip"),
+            // ShortRs is defined only for demodulators that emit the exact transmitted byte count
+            // (loopback / well-framed half-duplex); a padded scan window is outside its contract.
+            FecMode::ShortRs => Some("contract requires an exact-length demod, not a scan window"),
+            // NOT a contract property — a real gap, tracked as #1093. Turbo transmits and decodes
+            // single-shot but `receive_with_fec_mode_timeout` rejects it, and it carries the
+            // HIGHEST negotiation strength (9), so it wins any negotiation it cannot then serve.
+            // Excluded rather than left red because a gate that cannot pass is one people learn to
+            // skip; remove this arm when #1093 lands.
+            FecMode::Turbo => Some("scanning receive unsupported — #1093"),
+            _ => None,
+        };
+        if let Some(why) = skip {
+            println!("  SKIP {fec:?}: {why}");
+            continue;
+        }
+        swept += 1;
+        match round_trip_embedded("QPSK250", fec, &payload, lead, trail) {
+            Ok(got) if got == payload => println!("  ok   {fec:?}"),
+            Ok(got) => failures.push(format!("{fec:?}: wrong payload ({} bytes)", got.len())),
+            Err(e) => failures.push(format!("{fec:?}: {e}")),
+        }
+    }
+    assert!(
+        swept >= 7,
+        "only {swept} modes swept — an exclusion was added without narrowing this bound"
+    );
+    assert!(
+        failures.is_empty(),
+        "modes that cannot decode from a long capture:\n  {}",
+        failures.join("\n  ")
+    );
+}
