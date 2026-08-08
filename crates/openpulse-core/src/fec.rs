@@ -79,6 +79,43 @@ pub enum FecMode {
 }
 
 impl FecMode {
+    /// Every variant, for tests that must sweep the whole enum rather than a hand-listed subset.
+    ///
+    /// **A hand-maintained list drifts, so this one is checked.** `fec_scan_long_capture` was added
+    /// because a length fix reached two arms of five — and it then hard-coded five arms of ten while
+    /// its acceptance row claimed "every FEC arm". Kept honest by [`FecMode::all_index`] plus
+    /// `all_lists_every_variant_exactly_once`: a new variant makes that match non-exhaustive and the
+    /// crate stops compiling, forcing a decision for every sweep that uses this — in scope, or
+    /// excluded with a stated reason.
+    pub const ALL: [FecMode; 10] = [
+        FecMode::None,
+        FecMode::Rs,
+        FecMode::RsInterleaved,
+        FecMode::Concatenated,
+        FecMode::ShortRs,
+        FecMode::RsStrong,
+        FecMode::SoftConcatenated,
+        FecMode::Ldpc,
+        FecMode::LdpcHighRate,
+        FecMode::Turbo,
+    ];
+
+    /// Position of `self` in [`FecMode::ALL`] — the exhaustive match that makes the list verifiable.
+    pub fn all_index(self) -> usize {
+        match self {
+            FecMode::None => 0,
+            FecMode::Rs => 1,
+            FecMode::RsInterleaved => 2,
+            FecMode::Concatenated => 3,
+            FecMode::ShortRs => 4,
+            FecMode::RsStrong => 5,
+            FecMode::SoftConcatenated => 6,
+            FecMode::Ldpc => 7,
+            FecMode::LdpcHighRate => 8,
+            FecMode::Turbo => 9,
+        }
+    }
+
     /// Numeric strength for negotiation; higher = stronger / preferred.
     pub fn strength(self) -> u8 {
         match self {
@@ -934,6 +971,31 @@ pub fn combine_llrs_weighted_in_ranges(
 
 #[cfg(test)]
 mod tests {
+    /// `ALL` must list every variant exactly once, in `all_index` order.
+    ///
+    /// Two ways this fails, which is the point: a NEW variant makes `all_index`'s match
+    /// non-exhaustive and the crate stops compiling; a variant MISSING from `ALL` (or out of
+    /// position) fails the assertions here. A hand-listed sweep has neither protection —
+    /// `fec_scan_long_capture` claimed "every FEC arm" while covering five of ten.
+    #[test]
+    fn all_lists_every_variant_exactly_once() {
+        for (i, m) in super::FecMode::ALL.iter().enumerate() {
+            assert_eq!(
+                m.all_index(),
+                i,
+                "FecMode::ALL[{i}] is {m:?}, whose all_index is {}",
+                m.all_index()
+            );
+        }
+        let mut seen: Vec<usize> = super::FecMode::ALL.iter().map(|m| m.all_index()).collect();
+        seen.sort_unstable();
+        seen.dedup();
+        assert_eq!(
+            seen.len(),
+            super::FecMode::ALL.len(),
+            "FecMode::ALL contains a duplicate"
+        );
+    }
     use super::*;
 
     /// `free_rs_strengthening` must upgrade Rs→RsStrong exactly when RsStrong costs no extra block,
