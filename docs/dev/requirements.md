@@ -216,22 +216,22 @@ Regulatory compliance is a hard requirement for any transmission on amateur radi
 
 ## Competitive performance requirements
 
-- Primary strategic goal: develop an independent, first-principles OpenPulse protocol stack that competes on reliability, throughput, and usability.
-- HPX must target outcome parity or better versus incumbent modems in benchmarked scenarios.
-- Comparisons must use equal occupied bandwidth classes and published test conditions.
-- Performance evaluation must include at least HF narrow, HF wide, and VHF FM profile families.
-- No claim of proprietary protocol compatibility may be made without defensible public evidence.
-- Any compatibility mode targeting proprietary systems (including VARA or PACTOR-4) requires explicit legal review and approval before implementation work starts.
+- **REQ-PERF-01** — Primary strategic goal: develop an independent, first-principles OpenPulse protocol stack that competes on reliability, throughput, and usability.
+- **REQ-PERF-02** — HPX must target outcome parity or better versus incumbent modems in benchmarked scenarios.
+- **REQ-PERF-03** — Comparisons must use equal occupied bandwidth classes and published test conditions.
+- **REQ-PERF-04** — Performance evaluation must include at least HF narrow, HF wide, and VHF FM profile families.
+- **REQ-PERF-05** — No claim of proprietary protocol compatibility may be made without defensible public evidence.
+- **REQ-PERF-06** — Any compatibility mode targeting proprietary systems (including VARA or PACTOR-4) requires explicit legal review and approval before implementation work starts.
 
 ## Compatibility and UX requirements
 
-- CLI usage and docs must stay aligned across releases.
-- New user-facing options must be documented in docs/cli-guide.md.
-- README usage examples should stay current with implemented behavior.
-- The operator panel application (`apps/openpulse-panel`) shall be re-implemented on the `iced` GUI
+- **REQ-UX-01** — CLI usage and docs must stay aligned across releases.
+- **REQ-UX-02** — New user-facing options must be documented in docs/cli-guide.md.
+- **REQ-UX-03** — README usage examples should stay current with implemented behavior.
+- **REQ-UX-04** — The operator panel application (`apps/openpulse-panel`) shall be re-implemented on the `iced` GUI
   toolkit (replacing egui/eframe), presenting the operating surface as a scrollable stack: a controls
   band, spectrum, waterfall, ladder (adaptive rate/mode), and a tabbed lower panel (additional info /
-  daemon config / messages / event log). (REQ-UX-04)
+  daemon config / messages / event log).
 
 ## Observability and diagnostics requirements
 
@@ -453,6 +453,6 @@ in the roadmap; each is a candidate, not a committed deliverable.
 
 ## Documentation requirements
 
-- Version bumps require updates to docs/dev/project/changelog.md and docs/releasenotes.md.
-- Docs files under docs/ must pass frontmatter validation in CI.
-- HPX benchmark assumptions and result summaries must be captured in docs/high-performance-mode.md.
+- **REQ-DOC-01** — Version bumps require updates to docs/dev/project/changelog.md and docs/releasenotes.md.
+- **REQ-DOC-02** — Docs files under docs/ must pass frontmatter validation in CI.
+- **REQ-DOC-03** — HPX benchmark assumptions and result summaries must be captured in docs/high-performance-mode.md.
