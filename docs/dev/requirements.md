@@ -188,26 +188,29 @@ Regulatory compliance is a hard requirement for any transmission on amateur radi
 
 ### United States — FCC Part 97
 
-- §97.307(f): The maximum symbol rate on any single carrier must not exceed 300 baud below 28 MHz in phone subbands. OpenPulseHF includes sub-300-baud modes (for example BPSK31/BPSK63/BPSK100/BPSK250) and higher-rate single-carrier modes (for example QPSK500+ and 8PSK500+). Operators must select frequencies, modes, and regional band segments consistent with local rules before transmission.
-- §97.309(a)(4): Digital codes whose use is not specifically prohibited elsewhere and whose technical characteristics are publicly documented are permitted. OpenPulseHF must maintain a published technical specification sufficient for any amateur to decode the transmitted signal.
-- §97.119(a): Station identification is required every 10 minutes during a transmission and at the end of each transmission series. In digital modes, identification must be in a format decodable by a receiving station.
-- §97.221: Automatically controlled digital stations (unattended nodes, relay nodes) require an automatic control point. HPX relay nodes operating without a control operator present are automatically controlled stations and must comply with §97.221 including power limits and frequency restrictions.
+- **REQ-REG-01** — §97.307(f): The maximum symbol rate on any single carrier must not exceed 300 baud below 28 MHz in phone subbands. OpenPulseHF includes sub-300-baud modes (for example BPSK31/BPSK63/BPSK100/BPSK250) and higher-rate single-carrier modes (for example QPSK500+ and 8PSK500+).
+- **REQ-REG-03** — Operators must select frequencies, modes, and regional band segments consistent with local rules before transmission. Mode availability in the software is not a statement that a mode is legal on a given frequency.
+- **REQ-REG-02** — §97.309(a)(4): Digital codes whose use is not specifically prohibited elsewhere and whose technical characteristics are publicly documented are permitted. OpenPulseHF must maintain a published technical specification sufficient for any amateur to decode the transmitted signal.
+- **REQ-REG-10** — §97.119(a): Station identification is required every 10 minutes during a transmission and at the end of each transmission series.
+- **REQ-REG-05** — In digital modes, station identification must be in a format decodable by a receiving station.
+- **REQ-REG-06** — §97.221: Automatically controlled digital stations (unattended nodes, relay nodes) require an automatic control point.
+- **REQ-REG-04** — HPX relay nodes operating without a control operator present are automatically controlled stations and must comply with §97.221, including its power limits and frequency restrictions, as documented in `docs/regulatory.md`.
 
 ### European Union and CEPT
 
-- ECC/REC(05)06 and national implementations: CEPT harmonises amateur radio digital mode permissions across member administrations. Most EU member states permit amateur digital modes across all authorised bands subject to the general licence conditions (power, bandwidth, identification).
-- CEPT T/R 61-01: harmonised licensing for portable cross-border operation within CEPT countries. OpenPulseHF documentation must state which modes and bandwidths are intended so that visiting operators can assess compliance with their visiting licence conditions.
-- Bandwidth constraint: many EU administrations limit occupied bandwidth by band and mode class. For HF digital modes the typical permitted bandwidth is ≤ 2.7 kHz (matching SSB channel spacing). HPX2300/2400 Hz profiles must be validated against the occupied bandwidth definition used by the relevant national administration.
-- Station identification: EU member states typically require identification at least every 10 minutes (consistent with FCC), though interval requirements vary (e.g. UK: every 15 minutes). The identification requirement is the same: it must be decodable by the receiving station in the digital mode in use, or transmitted in supplementary CW or voice.
-- Germany (BNetzA): §12 Amateurfunkverordnung (AFuV) requires that technical characteristics of amateur emissions be determinable. Digital modes without a published open specification may be questioned by authorities; OpenPulseHF's open specification satisfies this requirement by design.
-- United Kingdom (Ofcom): The UK Full licence permits digital modes on all amateur bands. Station identification every 15 minutes and at end of transmission. The UK left CEPT licensing arrangements post-Brexit; UK operators verify compliance with the current Ofcom amateur licence conditions document directly.
+- **REQ-REG-16** — ECC/REC(05)06 and national implementations: CEPT harmonises amateur radio digital mode permissions across member administrations. Most EU member states permit amateur digital modes across all authorised bands subject to the general licence conditions (power, bandwidth, identification).
+- **REQ-REG-17** — CEPT T/R 61-01: harmonised licensing for portable cross-border operation within CEPT countries. OpenPulseHF documentation must state which modes and bandwidths are intended so that visiting operators can assess compliance with their visiting licence conditions.
+- **REQ-REG-07** — Bandwidth constraint: many EU administrations limit occupied bandwidth by band and mode class. For HF digital modes the typical permitted bandwidth is ≤ 2.7 kHz (matching SSB channel spacing). HPX2300/2400 Hz profiles must be validated against the occupied bandwidth definition used by the relevant national administration.
+- **REQ-REG-08** — Station identification: EU member states typically require identification at least every 10 minutes (consistent with FCC), though interval requirements vary (e.g. UK: every 15 minutes). The identification requirement is the same: it must be decodable by the receiving station in the digital mode in use, or transmitted in supplementary CW or voice.
+- **REQ-REG-09** — Germany (BNetzA): §12 Amateurfunkverordnung (AFuV) requires that technical characteristics of amateur emissions be determinable. Digital modes without a published open specification may be questioned by authorities; OpenPulseHF's open specification satisfies this requirement by design.
+- **REQ-REG-18** — United Kingdom (Ofcom): The UK Full licence permits digital modes on all amateur bands. Station identification every 15 minutes and at end of transmission. The UK left CEPT licensing arrangements post-Brexit; UK operators verify compliance with the current Ofcom amateur licence conditions document directly.
 
 ### IARU Region 1 and Region 2 band plans
 
-- IARU band plans are non-binding recommendations but are widely observed to avoid mutual interference.
-- Region 2 (Americas) and Region 1 (Europe/Africa/Middle East) both designate sub-bands for HF narrowband digital modes (e.g. 14.070–14.099 MHz on 20 m).
-- OpenPulseHF documentation should recommend operating frequencies aligned with IARU band plan digital sub-bands for each supported band.
-- Wide-band HPX2300 profiles should operate in segments where wide-band digital modes are plan-consistent (e.g. 14.099–14.112 MHz on 20 m where permitted by national administration).
+- **REQ-REG-11** — IARU band plans are non-binding recommendations but are widely observed to avoid mutual interference.
+- **REQ-REG-12** — Region 2 (Americas) and Region 1 (Europe/Africa/Middle East) both designate sub-bands for HF narrowband digital modes (e.g. 14.070–14.099 MHz on 20 m).
+- **REQ-REG-13** — OpenPulseHF documentation should recommend operating frequencies aligned with IARU band plan digital sub-bands for each supported band.
+- **REQ-REG-14** — Wide-band HPX2300 profiles should operate in segments where wide-band digital modes are plan-consistent (e.g. 14.099–14.112 MHz on 20 m where permitted by national administration).
 
 ## Competitive performance requirements
 
