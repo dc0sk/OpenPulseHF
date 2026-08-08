@@ -14,87 +14,88 @@ last_updated: 2026-07-30
 
 ## Functional requirements
 
-- Provide a CLI capable of transmit, receive, device listing, and mode listing.
-- Support at least one production modulation plugin (BPSK family).
-- Preserve a loopback backend for hardware-free development and testing.
-- Support cross-platform audio through CPAL-backed implementations.
-- Validate frame integrity with versioning, sequence handling, and CRC checks.
-- Define and implement a high-performance plugin mode (HPX) with adaptive modulation and coding.
-- Support occupied bandwidth classes centered on 500 Hz and 2300-2400 Hz operation.
-- Provide deterministic session state handling: discovery, training, active transfer, recovery, teardown.
-- Support selective retransmission for ARQ-capable sessions.
-- Support signed transfer handshake and signed transfer manifests.
-- Support trust-store-based verification for station identities.
-- Support peer caching of identity, capability, and link-quality metadata.
-- Support local and network query interfaces for peer discovery and filtering.
-- Support relayed transfers across multiple hops with configurable hop limits.
-- Support route selection policies based on trust, reliability, and latency estimates.
-- Define versioned wire-level envelopes for peer query, route discovery, and relay transfer control messages.
+- **REQ-FUN-01** — Provide a CLI capable of transmit, receive, device listing, and mode listing.
+- **REQ-FUN-02** — Support at least one production modulation plugin (BPSK family).
+- **REQ-FUN-03** — Preserve a loopback backend for hardware-free development and testing.
+- **REQ-FUN-04** — Support cross-platform audio through CPAL-backed implementations.
+- **REQ-FUN-05** — Validate frame integrity with versioning, sequence handling, and CRC checks.
+- **REQ-FUN-06** — Define and implement a high-performance plugin mode (HPX) with adaptive modulation and coding.
+- **REQ-FUN-07** — Support occupied bandwidth classes centered on 500 Hz and 2300-2400 Hz operation.
+- **REQ-FUN-08** — Provide deterministic session state handling: discovery, training, active transfer, recovery, teardown.
+- **REQ-FUN-09** — Support selective retransmission for ARQ-capable sessions.
+- **REQ-FUN-10** — Support signed transfer handshake.
+- **REQ-FUN-11** — Support signed transfer manifests.
+- **REQ-FUN-12** — Support trust-store-based verification for station identities.
+- **REQ-FUN-13** — Support peer caching of identity, capability, and link-quality metadata.
+- **REQ-FUN-14** — Support local and network query interfaces for peer discovery and filtering.
+- **REQ-FUN-15** — Support relayed transfers across multiple hops with configurable hop limits.
+- **REQ-FUN-16** — Support route selection policies based on trust, reliability, and latency estimates.
+- **REQ-FUN-17** — Define versioned wire-level envelopes for peer query, route discovery, and relay transfer control messages.
 
 ## Physical layer and radio interface requirements
 
-- Audio backend must support a minimum sample rate of 48 kHz at 16-bit integer or 32-bit float resolution.
-- The receive pipeline must apply a high-pass filter (cutoff ≤ 10 Hz) before demodulation to remove DC bias introduced by SSB radio audio paths.
-- The demodulator must track station-to-station frequency offsets of up to ±50 Hz without operator intervention (automatic frequency control, AFC).
-- The AFC subsystem must handle transmitter drift up to 1 Hz per second for normal SSB radio operation.
-- Transmitter release (PTT drop) must occur within 50 ms of the last transmitted sample to preserve turnaround timing budgets.
-- The receive path must begin acquiring signal within 150 ms of remote key-down to honour the turnaround timing contract.
-- PTT keying must support at minimum: serial port RTS/DTR assertion and software-controlled VOX.
-- CAT-based PTT control via Hamlib/rigctld is a recommended integration path that provides access to the majority of amateur transceivers without per-rig code.
-- Audio input gain must remain within a range that preserves symbol amplitude stability; the system must document the expected input level range and provide a level indicator.
+- **REQ-PHY-01** — Audio backend must support a minimum sample rate of 48 kHz at 16-bit integer or 32-bit float resolution.
+- **REQ-PHY-02** — The receive pipeline must apply a high-pass filter (cutoff ≤ 10 Hz) before demodulation to remove DC bias introduced by SSB radio audio paths.
+- **REQ-PHY-03** — The demodulator must track station-to-station frequency offsets of up to ±50 Hz without operator intervention (automatic frequency control, AFC).
+- **REQ-PHY-04** — The AFC subsystem must handle transmitter drift up to 1 Hz per second for normal SSB radio operation.
+- **REQ-PHY-05** — Transmitter release (PTT drop) must occur within 50 ms of the last transmitted sample to preserve turnaround timing budgets.
+- **REQ-PHY-06** — The receive path must begin acquiring signal within 150 ms of remote key-down to honour the turnaround timing contract.
+- **REQ-PHY-07** — PTT keying must support at minimum: serial port RTS/DTR assertion and software-controlled VOX.
+- **REQ-PHY-08** — CAT-based PTT control via Hamlib/rigctld is a recommended integration path that provides access to the majority of amateur transceivers without per-rig code.
+- **REQ-PHY-09** — Audio input gain must remain within a range that preserves symbol amplitude stability; the system must document the expected input level range and provide a level indicator.
 
 ## Platform and dependency requirements
 
-- Linux support is the primary target and requires ALSA development headers for CPAL builds.
-- macOS support uses CoreAudio through CPAL.
-- Windows support uses WASAPI through CPAL.
-- Raspberry Pi 4 and Raspberry Pi 5 must be supported as first-class Linux deployment targets.
-- ARM64 builds for Raspberry Pi 4/5 must be part of regular compatibility testing.
-- Any development environment must support loopback mode for hardware-free testing.
-- Rust toolchain must build the full workspace and no-default-features variant.
+- **REQ-PLAT-01** — Linux support is the primary target and requires ALSA development headers for CPAL builds.
+- **REQ-PLAT-02** — macOS support uses CoreAudio through CPAL.
+- **REQ-PLAT-03** — Windows support uses WASAPI through CPAL.
+- **REQ-PLAT-04** — Raspberry Pi 4 and Raspberry Pi 5 must be supported as first-class Linux deployment targets.
+- **REQ-PLAT-05** — ARM64 builds for Raspberry Pi 4/5 must be part of regular compatibility testing.
+- **REQ-PLAT-06** — Any development environment must support loopback mode for hardware-free testing.
+- **REQ-PLAT-07** — Rust toolchain must build the full workspace and no-default-features variant.
 
 ## Non-functional requirements
 
-- Maintain workspace-level buildability on Linux and macOS CI runners.
-- Keep tests runnable without physical audio hardware in default CI workflows.
-- Ensure crate boundaries are clear enough for independent testing.
-- Keep plugin additions from requiring broad refactors across unrelated crates.
-- Define objective benchmark suites and publish method and result artifacts.
-- Track goodput, completion rate, retry efficiency, and completion latency across channel profiles.
-- Require HPX performance claims to be tied to reproducible benchmark runs.
-- Benchmark channel profiles must include parameterized Watterson model scenarios (Good/Moderate/Poor path conditions) and Gilbert-Elliott burst error scenarios; AWGN-only benchmarks are insufficient for HF performance claims.
-- Maintain deterministic timeout and retry behavior for session-state transitions.
-- Use multithreaded execution for modem pipelines where it improves deterministic real-time behavior.
-- Support optional GPU acceleration for compute-heavy signal-processing stages when it produces measurable benefit.
-- GPU acceleration paths must use open frameworks (for example Vulkan via wgpu, or OpenCL) and provide a CPU fallback.
-- Raspberry Pi 4/5 performance targets must be measured and published in benchmark artifacts.
-- Peer cache lookup and query operations should remain bounded under large peer tables.
-- Multi-hop relay control-plane traffic should include duplicate suppression and loop prevention.
+- **REQ-NFR-01** — Maintain workspace-level buildability on Linux and macOS CI runners.
+- **REQ-NFR-02** — Keep tests runnable without physical audio hardware in default CI workflows.
+- **REQ-NFR-03** — Ensure crate boundaries are clear enough for independent testing.
+- **REQ-NFR-04** — Keep plugin additions from requiring broad refactors across unrelated crates.
+- **REQ-NFR-05** — Define objective benchmark suites and publish method and result artifacts.
+- **REQ-NFR-06** — Track goodput, completion rate, retry efficiency, and completion latency across channel profiles.
+- **REQ-NFR-07** — Require HPX performance claims to be tied to reproducible benchmark runs.
+- **REQ-NFR-08** — Benchmark channel profiles must include parameterized Watterson model scenarios (Good/Moderate/Poor path conditions) and Gilbert-Elliott burst error scenarios; AWGN-only benchmarks are insufficient for HF performance claims.
+- **REQ-NFR-09** — Maintain deterministic timeout and retry behavior for session-state transitions.
+- **REQ-NFR-10** — Use multithreaded execution for modem pipelines where it improves deterministic real-time behavior.
+- **REQ-NFR-11** — Support optional GPU acceleration for compute-heavy signal-processing stages when it produces measurable benefit.
+- **REQ-NFR-12** — GPU acceleration paths must use open frameworks (for example Vulkan via wgpu, or OpenCL) and provide a CPU fallback.
+- **REQ-NFR-13** — Raspberry Pi 4/5 performance targets must be measured and published in benchmark artifacts.
+- **REQ-NFR-14** — Peer cache lookup and query operations should remain bounded under large peer tables.
+- **REQ-NFR-15** — Multi-hop relay control-plane traffic should include duplicate suppression and loop prevention.
 
 ## FEC and interleaving requirements
 
-- All FEC-enabled transfer modes must pair the FEC codec with a block interleaver.
-- The interleaver must shuffle symbols across multiple FEC blocks before transmission such that burst errors are dispersed into correctable random-error patterns.
-- Default interleaver depth must be at least 5× the expected maximum burst error duration expressed in symbols at the target baud rate.
-- Interleaver depth must be a documented parameter in each mode profile definition; it must not be a hidden constant.
-- FEC and interleaver parameters must be agreed upon during session handshake and must not be assumed by either party.
-- Benchmark scenarios must test FEC+interleaver effectiveness under burst-error conditions (Gilbert-Elliott model) and not only under AWGN.
+- **REQ-FEC-01** — All FEC-enabled transfer modes must pair the FEC codec with a block interleaver.
+- **REQ-FEC-02** — The interleaver must shuffle symbols across multiple FEC blocks before transmission such that burst errors are dispersed into correctable random-error patterns.
+- **REQ-FEC-03** — Default interleaver depth must be at least 5× the expected maximum burst error duration expressed in symbols at the target baud rate.
+- **REQ-FEC-04** — Interleaver depth must be a documented parameter in each mode profile definition; it must not be a hidden constant.
+- **REQ-FEC-05** — FEC and interleaver parameters must be agreed upon during session handshake and must not be assumed by either party.
+- **REQ-FEC-06** — Benchmark scenarios must test FEC+interleaver effectiveness under burst-error conditions (Gilbert-Elliott model) and not only under AWGN.
 
 ## Channel access requirements
 
-- Sessions operating in point-to-point mode may assume a dedicated channel and are not required to implement channel sensing.
-- Sessions operating in broadcast or relay mode on a shared channel must implement a channel-clear detection (CCD) mechanism before transmitting.
-- The reference channel access algorithm for shared-channel operation is 0.3-persistence CSMA: sense the channel, transmit immediately with 30% probability if clear, back off and retry otherwise.
-- Data Carrier Detect (DCD) is the mechanism for CCD and must be derived from the demodulated signal energy, not from audio amplitude alone.
-- Channel access policy must be documented per mode profile.
+- **REQ-MAC-01** — Sessions operating in point-to-point mode may assume a dedicated channel and are not required to implement channel sensing.
+- **REQ-MAC-02** — Sessions operating in broadcast or relay mode on a shared channel must implement a channel-clear detection (CCD) mechanism before transmitting.
+- **REQ-MAC-03** — The reference channel access algorithm for shared-channel operation is 0.3-persistence CSMA: sense the channel, transmit immediately with 30% probability if clear, back off and retry otherwise.
+- **REQ-MAC-04** — Data Carrier Detect (DCD) is the mechanism for CCD and must be derived from the demodulated signal energy, not from audio amplitude alone.
+- **REQ-MAC-05** — Channel access policy must be documented per mode profile.
 
 ## Compression requirements
 
-- Optional lossless payload compression at the session layer is in scope.
-- Compression algorithm must be deterministic and produce identical output for identical input across platforms.
-- Compression capability must be negotiated during session handshake and must not be assumed.
-- If compression is active, compressed size must be compared to uncompressed size before transmission; a compressed frame larger than the uncompressed original must be sent uncompressed.
-- Decompression failure must be treated as a frame integrity error.
+- **REQ-CMP-01** — Optional lossless payload compression at the session layer is in scope.
+- **REQ-CMP-02** — Compression algorithm must be deterministic and produce identical output for identical input across platforms.
+- **REQ-CMP-03** — Compression capability must be negotiated during session handshake and must not be assumed.
+- **REQ-CMP-04** — If compression is active, compressed size must be compared to uncompressed size before transmission; a compressed frame larger than the uncompressed original must be sent uncompressed.
+- **REQ-CMP-05** — Decompression failure must be treated as a frame integrity error.
 
 ## Security and trust requirements
 
@@ -117,8 +118,21 @@ last_updated: 2026-07-30
 
 ### Post-quantum and frame size dependency
 
-- ML-DSA-44 signatures are 2420 bytes. ML-KEM-768 public keys are 1184 bytes. Both exceed the current 255-byte frame payload limit.
-- In-band post-quantum handshake messages cannot be carried in the current wire format without a segmentation and reassembly (SAR) sub-layer.
+> **Transcribed 2026-08-07.** REQ-PQ-01…04 and 07…09 were fully stated in
+> `docs/dev/project/traceability-matrix.md` and cited by it, but had never been written into this
+> document — so the requirements existed in the artifact that *links* requirements to code, not in
+> the one that *holds* them. Text is transcribed from the matrix, which remains the source these
+> were recovered from; nothing here was derived by reading the implementation.
+
+- **REQ-PQ-01** — Provide a post-quantum-safe signature method for identity and transfer signing.
+- **REQ-PQ-02** — Provide a hybrid signature mode (classical + post-quantum) for the migration period.
+- **REQ-PQ-03** — The initial post-quantum default targets ML-DSA (FIPS 204).
+- **REQ-PQ-04** — Provide a post-quantum-safe KEM option; ML-KEM (FIPS 203) preferred.
+- **REQ-PQ-05** — ML-DSA-44 signatures are 2420 bytes. ML-KEM-768 public keys are 1184 bytes. Both exceed the current 255-byte frame payload limit.
+- **REQ-PQ-06** — In-band post-quantum handshake messages cannot be carried in the current wire format without a segmentation and reassembly (SAR) sub-layer.
+- **REQ-PQ-07** — SAR must be designed and implemented before the in-band post-quantum handshake.
+- **REQ-PQ-08** — Post-quantum transport is sequentially dependent on SAR delivery.
+- **REQ-PQ-09** — Out-of-band post-quantum key distribution may proceed independently of SAR.
 
 ## Control-channel security requirements
 
