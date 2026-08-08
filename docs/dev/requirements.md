@@ -99,40 +99,35 @@ last_updated: 2026-07-30
 
 ## Security and trust requirements
 
-- Signed transfers are mandatory for HPX file or object transfer mode.
-- Station identities use asymmetric key pairs with operator-managed trust anchors.
-- Session handshake messages must be signed and verified.
-- Transfer manifests must be signed and verified before final acceptance.
-- Trust status must include trusted, untrusted, revoked, and unknown states.
-- Key lifecycle must include validity windows and revocation handling.
-- Cryptographic defaults should use Ed25519 signatures and SHA-256 or stronger hashing.
-- A post-quantum-safe signature method must be supported for identity and transfer-signing workflows.
-- The implementation should support a hybrid signature mode (classical + post-quantum) during migration.
-- Initial post-quantum-safe default should target ML-DSA (FIPS 204) where available.
-- If session key establishment is used, a post-quantum-safe KEM option should be supported, with ML-KEM (FIPS 203) preferred.
-- Trust-store metadata must record algorithm type and hybrid-policy requirements per identity.
-- Relay path admission must enforce trust policy on each intermediate hop.
-- Multi-hop transfers must preserve end-to-end signed integrity and fail closed on trust violations.
-- Route metadata should support post-quantum-capable signing under configured policy.
-- Relay and query messages must include anti-replay fields and enforce loop-prevention semantics.
+- **REQ-SEC-01** — Signed transfers are mandatory for HPX file or object transfer mode.
+- **REQ-SEC-02** — Station identities use asymmetric key pairs with operator-managed trust anchors.
+- **REQ-SEC-03** — Session handshake messages must be signed and verified.
+- **REQ-SEC-04** — Transfer manifests must be signed and verified before final acceptance.
+- **REQ-SEC-05** — Trust status must include trusted, untrusted, revoked, and unknown states.
+- **REQ-SEC-06** — Key lifecycle must include validity windows and revocation handling.
+- **REQ-SEC-07** — Cryptographic defaults should use Ed25519 signatures and SHA-256 or stronger hashing.
+- **REQ-PQ-01** — A post-quantum-safe signature method must be supported for identity and transfer-signing workflows.
+- **REQ-PQ-02** — The implementation should support a hybrid signature mode (classical + post-quantum) during migration.
+- **REQ-PQ-03** — Initial post-quantum-safe default should target ML-DSA (FIPS 204) where available.
+- **REQ-PQ-04** — If session key establishment is used, a post-quantum-safe KEM option should be supported, with ML-KEM (FIPS 203) preferred.
+- **REQ-SEC-08** — Trust-store metadata must record algorithm type and hybrid-policy requirements per identity.
+- **REQ-SEC-09** — Relay path admission must enforce trust policy on each intermediate hop.
+- **REQ-SEC-10** — Multi-hop transfers must preserve end-to-end signed integrity and fail closed on trust violations.
+- **REQ-SEC-11** — Route metadata should support post-quantum-capable signing under configured policy.
+- **REQ-SEC-12** — Relay and query messages must include anti-replay fields and enforce loop-prevention semantics.
 
 ### Post-quantum and frame size dependency
 
-> **Transcribed 2026-08-07.** REQ-PQ-01…04 and 07…09 were fully stated in
-> `docs/dev/project/traceability-matrix.md` and cited by it, but had never been written into this
-> document — so the requirements existed in the artifact that *links* requirements to code, not in
-> the one that *holds* them. Text is transcribed from the matrix, which remains the source these
-> were recovered from; nothing here was derived by reading the implementation.
+> **Corrected 2026-08-08.** A previous pass (#1091) transcribed REQ-PQ-01…04 and 07…09 here from
+> the traceability matrix, on the finding that those IDs were cited but undefined. That was half
+> right: the IDs were undefined, but the requirement *text* already existed — 01…04 as unlabelled
+> prose in "Security and trust requirements", 07…09 in "Control-channel security requirements". The
+> transcription therefore created duplicates. The duplicates are removed and the original prose now
+> carries the IDs. Searching for an ID and finding none does not mean the requirement is absent;
+> search the text.
 
-- **REQ-PQ-01** — Provide a post-quantum-safe signature method for identity and transfer signing.
-- **REQ-PQ-02** — Provide a hybrid signature mode (classical + post-quantum) for the migration period.
-- **REQ-PQ-03** — The initial post-quantum default targets ML-DSA (FIPS 204).
-- **REQ-PQ-04** — Provide a post-quantum-safe KEM option; ML-KEM (FIPS 203) preferred.
 - **REQ-PQ-05** — ML-DSA-44 signatures are 2420 bytes. ML-KEM-768 public keys are 1184 bytes. Both exceed the current 255-byte frame payload limit.
 - **REQ-PQ-06** — In-band post-quantum handshake messages cannot be carried in the current wire format without a segmentation and reassembly (SAR) sub-layer.
-- **REQ-PQ-07** — SAR must be designed and implemented before the in-band post-quantum handshake.
-- **REQ-PQ-08** — Post-quantum transport is sequentially dependent on SAR delivery.
-- **REQ-PQ-09** — Out-of-band post-quantum key distribution may proceed independently of SAR.
 
 ## Control-channel security requirements
 
@@ -183,9 +178,9 @@ client. See `docs/dev/design/control-channel-security.md` for the design and thr
   OpenPulseHF's own control channel, which remains bound by REQ-SEC-CTL-01/02, nor to any new
   interface of our own design. (Recorded 2026-07-19 in response to audit finding #3, which reported
   the missing auth as a defect; the compatibility constraint makes it a deliberate trade instead.)
-- SAR must be designed and implemented before in-band PQ handshake requirements can be satisfied.
-- PQ signature transport requirements are therefore sequentially dependent on SAR delivery; planning must reflect this ordering.
-- Out-of-band or application-layer PQ key distribution (for example via the PKI tooling) may proceed independently of SAR.
+- **REQ-PQ-07** — SAR must be designed and implemented before in-band PQ handshake requirements can be satisfied.
+- **REQ-PQ-08** — PQ signature transport requirements are therefore sequentially dependent on SAR delivery; planning must reflect this ordering.
+- **REQ-PQ-09** — Out-of-band or application-layer PQ key distribution (for example via the PKI tooling) may proceed independently of SAR.
 
 ## Regulatory compliance requirements
 
