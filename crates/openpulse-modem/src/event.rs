@@ -1,6 +1,7 @@
 //! Real-time engine event types for the broadcast subscriber API.
 
 use openpulse_core::hpx::{HpxEvent, HpxState};
+use openpulse_core::ota_rate::RateDecision;
 use openpulse_core::rate::{RateEvent, RateTrigger, SpeedLevel};
 use serde::{Deserialize, Serialize};
 
@@ -34,6 +35,25 @@ pub enum EngineEvent {
         #[serde(default)]
         correction_hz: f32,
         mode: String,
+    },
+    /// The receiver-led OTA rate controller made a decision about a received data frame.
+    ///
+    /// Emitted on **every** decision, including ones that change nothing — a failed decode that
+    /// leaves the level where it was is precisely the case the periodic `OtaStatus` snapshot
+    /// cannot show, because that snapshot reports state and the state did not move. Without this
+    /// the controller's failure path is entirely dark.
+    OtaRateDecision {
+        /// Recommendation before this frame.
+        from: SpeedLevel,
+        /// Recommendation after this frame. Equal to `from` on a hold.
+        to: SpeedLevel,
+        /// Whether the frame demodulated. `None` means no candidate mode decoded.
+        decoded_level: Option<SpeedLevel>,
+        /// Measured SNR fed to the decision (dB). This is the reading the controller acted on,
+        /// which is not recoverable from any other event.
+        snr_db: f32,
+        /// Which branch fired — the field that makes a transition attributable.
+        decision: RateDecision,
     },
     /// Rate adapter advanced after an ACK was applied.
     RateChange {

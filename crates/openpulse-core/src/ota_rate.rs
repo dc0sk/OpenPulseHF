@@ -49,6 +49,7 @@ use crate::ack::AckType;
 use crate::fec::FecMode;
 use crate::profile::SessionProfile;
 use crate::rate::SpeedLevel;
+use serde::{Deserialize, Serialize};
 
 /// Consecutive clean decodes at the confirmed level that justify a climb with no SNR evidence.
 ///
@@ -68,6 +69,72 @@ pub enum RxOutcome {
     Failed,
 }
 
+/// Which branch of [`OtaRateController::on_rx_frame`] produced a recommendation.
+///
+/// Reporting the *reason* is the point, not the resulting level. The rate controller is among the
+/// most-corrected mechanisms here — #934 alone is three recorded occurrences of an SNR estimator
+/// counting a fade as noise — and its fix added branches (`ClimbOnEvidence`, the fast downshift)
+/// whose whole purpose is to act correctly *when the SNR estimate is uninformative*. A level trace
+/// alone cannot tell "the controller is working" from "the estimator is broken and the controller
+/// is compensating for it"; a stream of `ClimbOnEvidence` with no `ClimbOnSnr` says the estimate is
+/// carrying no information, which is a diagnosis rather than a symptom.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RateDecision {
+    /// Session is locked to a fixed level; both directions stay pinned.
+    Locked,
+    /// Failure, and the SNR estimate already explains it — jump straight to the SNR-adequate
+    /// level rather than crawling down one rung per NACK threshold.
+    FastDownshift,
+    /// Failure the SNR does not explain; the consecutive-NACK hysteresis is counting and the
+    /// recommendation has not moved yet.
+    NackHold,
+    /// Failure the SNR does not explain, at the NACK threshold — step the anchor down one rung.
+    NackStepDown,
+    /// Decode, and the SNR estimate clears the confirmed rung's ceiling — climb one step.
+    ClimbOnSnr,
+    /// Decode, and `ACK_CLIMB_THRESHOLD` clean decodes in a row prove the rung — climb one step
+    /// on evidence. This is the path that works when the estimate is uninformative in principle.
+    ClimbOnEvidence,
+    /// Decode with neither a clearing SNR nor a proven streak — hold at the confirmed level.
+    Hold,
+}
+
+impl RateDecision {
+    /// Every variant, for exhaustive sweeps.
+    pub const ALL: [RateDecision; 7] = [
+        RateDecision::Locked,
+        RateDecision::FastDownshift,
+        RateDecision::NackHold,
+        RateDecision::NackStepDown,
+        RateDecision::ClimbOnSnr,
+        RateDecision::ClimbOnEvidence,
+        RateDecision::Hold,
+    ];
+
+    /// Dense index. The exhaustive `match` is the enforcement: adding a variant stops this
+    /// compiling, so the domain cannot grow without `ALL` being reconsidered.
+    pub fn all_index(self) -> usize {
+        match self {
+            RateDecision::Locked => 0,
+            RateDecision::FastDownshift => 1,
+            RateDecision::NackHold => 2,
+            RateDecision::NackStepDown => 3,
+            RateDecision::ClimbOnSnr => 4,
+            RateDecision::ClimbOnEvidence => 5,
+            RateDecision::Hold => 6,
+        }
+    }
+
+    /// Whether this decision was reached on a failed demodulation.
+    pub fn is_failure_path(self) -> bool {
+        matches!(
+            self,
+            RateDecision::FastDownshift | RateDecision::NackHold | RateDecision::NackStepDown
+        )
+    }
+}
+
 /// What the receiver should put in the ACK after [`OtaRateController::on_rx_frame`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct RxAck {
@@ -75,6 +142,8 @@ pub struct RxAck {
     pub ack_type: AckType,
     /// Absolute receiver-led rate target the sender should adopt.
     pub recommended_level: SpeedLevel,
+    /// Which branch produced this recommendation (observability; see [`RateDecision`]).
+    pub decision: RateDecision,
 }
 
 /// Receiver-led per-direction rate controller for one session.
@@ -324,6 +393,7 @@ impl OtaRateController {
             return RxAck {
                 ack_type,
                 recommended_level: l,
+                decision: RateDecision::Locked,
             };
         }
         match outcome {
@@ -338,9 +408,10 @@ impl OtaRateController {
                 // as the fallback candidate so a lost downshift ACK can't desync the receiver
                 // (`rx_candidates` still covers whatever the sender is transmitting).
                 let snr_level = self.level_for_snr(snr_db);
-                if snr_level < self.rx_recommended {
+                let decision = if snr_level < self.rx_recommended {
                     self.rx_consecutive_nack = 0;
                     self.rx_recommended = snr_level;
+                    RateDecision::FastDownshift
                 } else {
                     // SNR doesn't explain the failure (a transient fade or collision at an
                     // otherwise-adequate SNR): keep the consecutive-NACK hysteresis so a single
@@ -350,11 +421,15 @@ impl OtaRateController {
                         self.rx_consecutive_nack = 0;
                         self.rx_confirmed = self.prev_mapped(self.rx_confirmed);
                         self.rx_recommended = self.rx_confirmed;
+                        RateDecision::NackStepDown
+                    } else {
+                        RateDecision::NackHold
                     }
-                }
+                };
                 RxAck {
                     ack_type: AckType::Nack,
                     recommended_level: self.rx_recommended,
+                    decision,
                 }
             }
             RxOutcome::Decoded(level) => {
@@ -395,6 +470,16 @@ impl OtaRateController {
                     .snr_ceiling_for_level(self.rx_confirmed)
                     .is_some_and(|c| snr_db >= c);
                 let proven_by_success = self.rx_consecutive_ok >= ACK_CLIMB_THRESHOLD;
+                // Precedence when BOTH fire: report `ClimbOnSnr`. The distinction that matters is
+                // whether the estimate was informative at all — a run of `ClimbOnEvidence` with no
+                // `ClimbOnSnr` is the signature of an estimate carrying no information (#934).
+                let decision = if !(snr_clears_ceiling || proven_by_success) {
+                    RateDecision::Hold
+                } else if snr_clears_ceiling {
+                    RateDecision::ClimbOnSnr
+                } else {
+                    RateDecision::ClimbOnEvidence
+                };
                 self.rx_recommended = if snr_clears_ceiling || proven_by_success {
                     let next = self.next_mapped(self.rx_confirmed);
                     // Spend the streak on the attempt, so a rung that keeps decoding proposes the
@@ -415,6 +500,7 @@ impl OtaRateController {
                 RxAck {
                     ack_type,
                     recommended_level: self.rx_recommended,
+                    decision,
                 }
             }
         }
@@ -428,8 +514,117 @@ mod tests {
     const HIGH_SNR: f32 = 1.0e9;
     const LOW_SNR: f32 = -1.0e9;
 
+    /// `ALL` must contain every variant exactly once. `all_index` is the compiler's half — adding a
+    /// variant stops it building — and this is the other half, catching a variant missing from the
+    /// list. Neither alone is sufficient.
+    #[test]
+    fn rate_decision_all_lists_every_variant_exactly_once() {
+        let mut seen = [0usize; RateDecision::ALL.len()];
+        for d in RateDecision::ALL {
+            seen[d.all_index()] += 1;
+        }
+        assert!(
+            seen.iter().all(|&n| n == 1),
+            "each variant must appear exactly once in ALL; counts by index: {seen:?}"
+        );
+    }
+
+    /// The failure-path classification must agree with which branch actually produced the
+    /// decision, or `is_failure_path` becomes a second source of truth that can drift.
+    #[test]
+    fn failure_path_classification_matches_the_branches() {
+        for d in RateDecision::ALL {
+            let expected = matches!(
+                d,
+                RateDecision::FastDownshift | RateDecision::NackHold | RateDecision::NackStepDown
+            );
+            assert_eq!(d.is_failure_path(), expected, "{d:?}");
+        }
+    }
+
     fn ctrl() -> OtaRateController {
         OtaRateController::new(SessionProfile::hpx_hf())
+    }
+
+    /// Every branch must report the decision that actually ran. A reason field that does not track
+    /// the code is worse than none, because it reads as attribution — and attribution is the entire
+    /// reason this field exists (#1081).
+    ///
+    /// Each case drives the controller into one branch and asserts the reported reason, so a future
+    /// refactor that moves a branch without moving its label fails here. `RateDecision::ALL` is
+    /// swept at the end to prove no variant is left unexercised — the pairing that stops this
+    /// becoming a hand-maintained list.
+    #[test]
+    fn every_branch_reports_the_decision_that_actually_ran() {
+        let mut exercised = [false; RateDecision::ALL.len()];
+        let mut note = |d: RateDecision| exercised[d.all_index()] = true;
+
+        // Failure the SNR explains: jump straight to the SNR-adequate level.
+        let mut c = ctrl();
+        let ack = c.on_rx_frame(RxOutcome::Failed, LOW_SNR);
+        assert_eq!(ack.decision, RateDecision::FastDownshift);
+        note(ack.decision);
+
+        // Failure the SNR does NOT explain: hysteresis counts, level holds until the threshold.
+        let mut c = ctrl();
+        let ack = c.on_rx_frame(RxOutcome::Failed, HIGH_SNR);
+        assert_eq!(ack.decision, RateDecision::NackHold);
+        assert_eq!(
+            c.rx_recommended_level(),
+            ctrl().rx_recommended_level(),
+            "NackHold must not move the recommendation"
+        );
+        note(ack.decision);
+
+        // ...and at the threshold it steps down one rung.
+        let mut last = ack.decision;
+        for _ in 1..c.profile.nack_threshold {
+            last = c.on_rx_frame(RxOutcome::Failed, HIGH_SNR).decision;
+        }
+        assert_eq!(last, RateDecision::NackStepDown);
+        note(last);
+
+        // Decode with an SNR clearing the rung's ceiling: climb on the estimate.
+        let mut c = ctrl();
+        let start = c.rx_confirmed;
+        let ack = c.on_rx_frame(RxOutcome::Decoded(start), HIGH_SNR);
+        assert_eq!(ack.decision, RateDecision::ClimbOnSnr);
+        note(ack.decision);
+
+        // Decode with an SNR that explains nothing and no streak yet: hold. This is the case that
+        // #934 used to answer with "drop a rung" while the frame had just decoded.
+        let mut c = ctrl();
+        let start = c.rx_confirmed;
+        let ack = c.on_rx_frame(RxOutcome::Decoded(start), LOW_SNR);
+        assert_eq!(ack.decision, RateDecision::Hold);
+        assert!(
+            c.rx_recommended_level() >= start,
+            "a decode must never demote below the level that just decoded"
+        );
+        note(ack.decision);
+
+        // ...and once the streak reaches the threshold, the same uninformative SNR still climbs —
+        // on evidence. This is the branch that works when the estimate carries no information.
+        let mut last = ack.decision;
+        for _ in 1..ACK_CLIMB_THRESHOLD {
+            last = c.on_rx_frame(RxOutcome::Decoded(start), LOW_SNR).decision;
+        }
+        assert_eq!(last, RateDecision::ClimbOnEvidence);
+        note(last);
+
+        // Locked pins both directions regardless of outcome.
+        let mut c = ctrl();
+        c.lock_level(c.rx_confirmed);
+        let ack = c.on_rx_frame(RxOutcome::Failed, LOW_SNR);
+        assert_eq!(ack.decision, RateDecision::Locked);
+        note(ack.decision);
+
+        for d in RateDecision::ALL {
+            assert!(
+                exercised[d.all_index()],
+                "{d:?} is never exercised — the sweep would not notice if it stopped being reachable"
+            );
+        }
     }
 
     /// The MFSK16 SL1 sub-floor rung is not a trapdoor: once SNR recovers above SL1's ceiling, the
