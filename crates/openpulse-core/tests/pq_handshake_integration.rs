@@ -1,10 +1,10 @@
 use openpulse_core::sar::{sar_encode, SarReassembler};
 use openpulse_core::{
-    create_pq_conack, create_pq_conreq, decode_pq_conreq, encode_pq_conreq,
-    generate_ml_dsa_44_keypair, generate_ml_kem_768_keypair, kem_decapsulate, verify_pq_conack,
-    verify_pq_conreq, InMemoryTrustStore, PolicyProfile, SigningMode, ML_DSA_44_PUBKEY_SIZE,
-    ML_DSA_44_SIG_SIZE, ML_KEM_768_CT_SIZE, ML_KEM_768_DK_SIZE, ML_KEM_768_EK_SIZE,
-    ML_KEM_768_SS_SIZE,
+    create_pq_conack, create_pq_conreq, decode_pq_conack, decode_pq_conreq, encode_pq_conack,
+    encode_pq_conreq, generate_ml_dsa_44_keypair, generate_ml_kem_768_keypair, kem_decapsulate,
+    verify_pq_conack, verify_pq_conreq, InMemoryTrustStore, PolicyProfile, SigningMode,
+    ML_DSA_44_PUBKEY_SIZE, ML_DSA_44_SIG_SIZE, ML_KEM_768_CT_SIZE, ML_KEM_768_DK_SIZE,
+    ML_KEM_768_EK_SIZE, ML_KEM_768_SS_SIZE,
 };
 use std::time::Duration;
 
@@ -462,4 +462,78 @@ fn sar_roundtrip_of_pq_conreq() {
     assert_eq!(decoded.pq_pubkey, req.pq_pubkey);
     assert_eq!(decoded.pq_signature, req.pq_signature);
     assert_eq!(decoded.classical_signature, req.classical_signature);
+}
+
+/// The CONACK half of the codec must survive a round trip — including its signatures.
+///
+/// **The gap this closes.** `encode_pq_conack` had no caller anywhere, and `decode_pq_conack` was
+/// only ever fed deliberately malformed bytes (`""`, `"not json"`, `"{"`) to prove it rejects them.
+/// So nothing encoded a CONACK and decoded it back: a bug in the encoder, or any disagreement
+/// between the pair, was undetectable while every test passed. CONREQ has had this coverage all
+/// along — `pq_conreq_serialized_size_fits_in_sar_capacity` plus the SAR round trip — which is what
+/// made the asymmetry visible (orphan sweep, issue #1092).
+///
+/// Verifying the *signature* after the round trip is the part that matters. Comparing a few fields
+/// would pass even if serialisation corrupted a byte of the signature or the KEM ciphertext; making
+/// the decoded copy re-verify proves every signed byte survived intact.
+#[test]
+fn pq_conack_survives_encode_decode_with_signatures_intact() {
+    let classical_seed = [0x91u8; 32];
+    let (pq_sk, _pq_pk) = generate_ml_dsa_44_keypair();
+    let (dk, ek) = generate_ml_kem_768_keypair();
+
+    let (ack, ss_responder) = create_pq_conack(
+        "W1AW",
+        &classical_seed,
+        &pq_sk,
+        &ek,
+        SigningMode::Hybrid,
+        "session-conack-roundtrip",
+    )
+    .expect("create_pq_conack");
+
+    let encoded = encode_pq_conack(&ack).expect("encode_pq_conack");
+    // Same bound the CONREQ side asserts: the frame must fit one SAR object.
+    assert!(
+        encoded.len() < 64_005,
+        "PqConAck encoded size {} exceeds SAR capacity (64 005 B)",
+        encoded.len()
+    );
+
+    let decoded = decode_pq_conack(&encoded).expect("decode_pq_conack");
+
+    // The cryptographic payload must be byte-identical, or the shared secret will not agree.
+    assert_eq!(
+        decoded.kem_ciphertext, ack.kem_ciphertext,
+        "KEM ciphertext changed across the round trip"
+    );
+    assert_eq!(decoded.session_id, ack.session_id, "session_id changed");
+    assert_eq!(
+        decoded.pq_signature, ack.pq_signature,
+        "ML-DSA signature changed"
+    );
+    assert_eq!(
+        decoded.classical_signature, ack.classical_signature,
+        "Ed25519 signature changed"
+    );
+
+    // The strong check: the DECODED copy must still verify. A field-by-field comparison would miss
+    // a corrupted byte inside a field compared as a whole but signed over separately.
+    let store = make_trust_store("W1AW");
+    verify_pq_conack(
+        &decoded,
+        "session-conack-roundtrip",
+        &[SigningMode::Hybrid],
+        &store,
+        PolicyProfile::Balanced,
+        SigningMode::Normal,
+    )
+    .expect("a round-tripped PqConAck must still verify");
+
+    // And the KEM must still decapsulate to the same secret through the decoded ciphertext.
+    let ss_initiator = kem_decapsulate(&dk, &decoded.kem_ciphertext).expect("kem_decapsulate");
+    assert_eq!(
+        ss_initiator, ss_responder,
+        "shared secret disagrees after the CONACK round trip"
+    );
 }
