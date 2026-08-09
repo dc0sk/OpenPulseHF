@@ -1,0 +1,73 @@
+# Frontmatter offenses grandfathered at the bright line. A NEW offense (not listed) fails
+# the build. Fix an entry and delete its line. Format: <file><TAB><reason>
+docs/config/README.md	missing or unterminated frontmatter block
+docs/dev/archive/handoff-2026-05-13.md	doc must equal the file path
+docs/dev/archive/handoff-2026-06-05-ic9700-audio-debug.md	missing or unterminated frontmatter block
+docs/dev/archive/handoff-2026-06-06-sidea-ready.md	missing or unterminated frontmatter block
+docs/dev/archive/project-review-2026-04-29.md	doc must equal the file path
+docs/dev/design/file-transfer-plan.md	status 'approved-plan (decisions D1–D5 locked 2026-07-10; Phases A–E shipped — crate + modem loopback + daemon SendFile/twin + panel Files tab + real-radio bursts + resume; only Phase F on-air validation remains, deferred)' not in ['archive', 'draft', 'living', 'resolved', 'review']
+docs/dev/design/freq-acquisition-design.md	missing or unterminated frontmatter block
+docs/dev/design/js8-discovery-rendezvous-plan.md	status 'approved-plan (decisions D1–D7 locked 2026-07-10; Phases A–G shipped — full RX + beacon TX + rendezvous → HPX handoff; only Phase H on-air validation remains)' not in ['archive', 'draft', 'living', 'resolved', 'review']
+docs/dev/dualcard-loopback.md	missing or unterminated frontmatter block
+docs/dev/gpu-ldpc-prototype.md	missing or unterminated frontmatter block
+docs/dev/loopback-revalidation-plan.md	missing or unterminated frontmatter block
+docs/dev/notch-equalizer-experiment.md	missing or unterminated frontmatter block
+docs/dev/onair-signal-chain-verification.md	doc must equal the file path
+docs/dev/onair-signal-chain-verification.md	project must be 'openpulsehf'
+docs/dev/onair-signal-chain-verification.md	status 'active' not in ['archive', 'draft', 'living', 'resolved', 'review']
+docs/dev/onair-status.md	doc must equal the file path
+docs/dev/onair-status.md	project must be 'openpulsehf'
+docs/dev/onair-status.md	status 'superseded' not in ['archive', 'draft', 'living', 'resolved', 'review']
+docs/dev/onair-twin-ota.md	doc must equal the file path
+docs/dev/onair-twin-ota.md	project must be 'openpulsehf'
+docs/dev/ota-hardware-validation.md	missing or unterminated frontmatter block
+docs/dev/project/traceability.md	missing or unterminated frontmatter block
+docs/dev/requests/code-review-output.md	doc must equal the file path
+docs/dev/requests/code-review-output.md	status 'complete' not in ['archive', 'draft', 'living', 'resolved', 'review']
+docs/dev/requests/code-review.md	doc must equal the file path
+docs/dev/requests/code-review.md	status 'open' not in ['archive', 'draft', 'living', 'resolved', 'review']
+docs/dev/research/freedv-auth-research.md	status 'shipped' not in ['archive', 'draft', 'living', 'resolved', 'review']
+docs/dev/research/mfsk16-arq-seam-audit.md	doc must equal the file path
+docs/dev/research/mfsk16-arq-seam-audit.md	project must be 'openpulsehf'
+docs/dev/research/reference-mining-plan.md	status 'proposal — awaiting review/decision' not in ['archive', 'draft', 'living', 'resolved', 'review']
+docs/dev/research/robust-narrowband-measurement.md	missing or unterminated frontmatter block
+docs/dev/research/weak-signal-diversity-measurement.md	missing or unterminated frontmatter block
+docs/dev/reviews/2026-05-26-project-audit-qwen-primary-codex-crosscheck.md	missing or unterminated frontmatter block
+docs/dev/reviews/2026-07-15-filexfer-relay-seams-audit.md	last_updated must be YYYY-MM-DD
+docs/dev/reviews/2026-07-15-filexfer-relay-seams-audit.md	project must be 'openpulsehf'
+docs/dev/reviews/2026-07-15-filexfer-relay-seams-audit.md	status 'partial' not in ['archive', 'draft', 'living', 'resolved', 'review']
+docs/dev/reviews/2026-07-15-handshake-trust-audit.md	last_updated must be YYYY-MM-DD
+docs/dev/reviews/2026-07-15-handshake-trust-audit.md	project must be 'openpulsehf'
+docs/dev/reviews/2026-07-15-handshake-trust-audit.md	status 'partial' not in ['archive', 'draft', 'living', 'resolved', 'review']
+docs/dev/reviews/2026-07-15-protocol-bridge-audit.md	last_updated must be YYYY-MM-DD
+docs/dev/reviews/2026-07-15-protocol-bridge-audit.md	project must be 'openpulsehf'
+docs/dev/reviews/2026-07-15-rx-decode-audit.md	last_updated must be YYYY-MM-DD
+docs/dev/reviews/2026-07-15-rx-decode-audit.md	project must be 'openpulsehf'
+docs/dev/reviews/audit-2026-07-19-transmit-safety-and-supply-chain.md	missing or unterminated frontmatter block
+docs/dev/reviews/consistency-audit-2026-07-18.md	last_updated must be YYYY-MM-DD
+docs/dev/reviews/consistency-audit-2026-07-18.md	project must be 'openpulsehf'
+docs/dev/reviews/consistency-review.md	last_updated must be YYYY-MM-DD
+docs/dev/reviews/consistency-review.md	project must be 'openpulsehf'
+docs/dev/reviews/correctness-review.md	last_updated must be YYYY-MM-DD
+docs/dev/reviews/correctness-review.md	project must be 'openpulsehf'
+docs/dev/reviews/deep-sweep-2026-05-23.md	last_updated must be YYYY-MM-DD
+docs/dev/reviews/deep-sweep-2026-05-23.md	project must be 'openpulsehf'
+docs/dev/reviews/deep-sweep-2026-05-23.md	status 'initial' not in ['archive', 'draft', 'living', 'resolved', 'review']
+docs/dev/reviews/documentation-review.md	last_updated must be YYYY-MM-DD
+docs/dev/reviews/documentation-review.md	project must be 'openpulsehf'
+docs/dev/reviews/gap-analysis-260518.md	missing or unterminated frontmatter block
+docs/dev/reviews/modem-dsp-review-260612.md	doc must equal the file path
+docs/dev/reviews/modem-dsp-review-260612.md	last_updated must be YYYY-MM-DD
+docs/dev/reviews/modem-dsp-review-260612.md	project must be 'openpulsehf'
+docs/dev/reviews/modem-dsp-review-260612.md	status '' not in ['archive', 'draft', 'living', 'resolved', 'review']
+docs/dev/reviews/pre-1x-completeness-audit-2026-07-18.md	missing or unterminated frontmatter block
+docs/dev/reviews/review-260508.md	missing or unterminated frontmatter block
+docs/dev/reviews/review-260517.md	doc must equal the file path
+docs/dev/reviews/review-260524.md	doc must equal the file path
+docs/dev/reviews/review-260531.md	doc must equal the file path
+docs/dev/reviews/review-request.md	missing or unterminated frontmatter block
+docs/dev/reviews/security-review.md	last_updated must be YYYY-MM-DD
+docs/dev/reviews/security-review.md	project must be 'openpulsehf'
+docs/dev/reviews/test-coverage-review.md	last_updated must be YYYY-MM-DD
+docs/dev/reviews/test-coverage-review.md	project must be 'openpulsehf'
+docs/dev/virtual-loopback.md	missing or unterminated frontmatter block
