@@ -22,7 +22,7 @@ CI requires this file to be in sync (`git diff --exit-code`).
 | REQ-CAT-04 | ratified | baseline | — | — |
 | REQ-CAT-05 | ratified | baseline | — | — |
 | REQ-CAT-06 | ratified | baseline | — | — |
-| REQ-CMP-01 | ratified | baseline | CAP-08 | — |
+| REQ-CMP-01 | ratified | enforced | CAP-08 | crates/openpulse-core/tests/compression_integration.rs |
 | REQ-CMP-02 | ratified | baseline | CAP-08 | — |
 | REQ-CMP-03 | ratified | baseline | CAP-08, CAP-01 | — |
 | REQ-CMP-04 | ratified | baseline | CAP-08 | — |
@@ -53,9 +53,9 @@ CI requires this file to be in sync (`git diff --exit-code`).
 | REQ-FUN-07 | ratified | baseline | CAP-37, CAP-17, CAP-18 | — |
 | REQ-FUN-08 | ratified | baseline | CAP-35 | — |
 | REQ-FUN-09 | ratified | baseline | CAP-36, CAP-26 | — |
-| REQ-FUN-10 | ratified | baseline | CAP-01, CAP-02 | — |
-| REQ-FUN-11 | ratified | baseline | CAP-03, CAP-71 | — |
-| REQ-FUN-12 | ratified | baseline | CAP-04 | — |
+| REQ-FUN-10 | ratified | enforced | CAP-01, CAP-02 | crates/openpulse-core/tests/handshake_integration.rs |
+| REQ-FUN-11 | ratified | enforced | CAP-03, CAP-71 | crates/openpulse-core/tests/manifest_integration.rs |
+| REQ-FUN-12 | ratified | enforced | CAP-04 | crates/openpulse-core/tests/handshake_integration.rs |
 | REQ-FUN-13 | ratified | baseline | CAP-09, CAP-48, CAP-70 | — |
 | REQ-FUN-14 | ratified | baseline | CAP-48, CAP-70 | — |
 | REQ-FUN-15 | ratified | baseline | CAP-47, CAP-46 | — |
@@ -116,7 +116,7 @@ CI requires this file to be in sync (`git diff --exit-code`).
 | REQ-PQ-02 | ratified | baseline | CAP-02, CAP-04 | — |
 | REQ-PQ-03 | ratified | baseline | CAP-02 | — |
 | REQ-PQ-04 | ratified | baseline | CAP-02 | — |
-| REQ-PQ-05 | ratified | baseline | CAP-02, CAP-07 | — |
+| REQ-PQ-05 | ratified | enforced | CAP-02, CAP-07 | crates/openpulse-core/tests/sar_roundtrip.rs |
 | REQ-PQ-06 | ratified | baseline | CAP-07, CAP-02 | — |
 | REQ-PQ-07 | ratified | baseline | CAP-07 | — |
 | REQ-PQ-08 | ratified | baseline | CAP-07, CAP-02 | — |

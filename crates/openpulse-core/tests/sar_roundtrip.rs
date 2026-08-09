@@ -44,6 +44,7 @@ fn sar_round_trip_64kb() {
     assert_eq!(result.unwrap(), data);
 }
 
+// VERIFIES: REQ-PQ-05
 #[test]
 fn sar_round_trip_maximum_size() {
     let data = vec![0xFFu8; SAR_MAX_SEGMENT_DATA];

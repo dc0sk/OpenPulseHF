@@ -1138,7 +1138,7 @@ requirements:
     - CAP-08
     statement: Optional lossless payload compression at the session layer is in scope.
     status: ratified
-    traceability: baseline
+    traceability: enforced
   REQ-CMP-02:
     category: Compression
     covered_by:
@@ -1397,7 +1397,7 @@ requirements:
     - CAP-02
     statement: Support signed transfer handshake.
     status: ratified
-    traceability: baseline
+    traceability: enforced
   REQ-FUN-11:
     category: Functional
     covered_by:
@@ -1405,14 +1405,14 @@ requirements:
     - CAP-71
     statement: Support signed transfer manifests.
     status: ratified
-    traceability: baseline
+    traceability: enforced
   REQ-FUN-12:
     category: Functional
     covered_by:
     - CAP-04
     statement: Support trust-store-based verification for station identities.
     status: ratified
-    traceability: baseline
+    traceability: enforced
   REQ-FUN-13:
     category: Functional
     covered_by:
@@ -1896,7 +1896,7 @@ requirements:
     statement: ML-DSA-44 signatures are 2420 bytes. ML-KEM-768 public keys are 1184 bytes. Both exceed
       the current 255-byte frame payload limit.
     status: ratified
-    traceability: baseline
+    traceability: enforced
   REQ-PQ-06:
     category: Post-quantum
     covered_by:

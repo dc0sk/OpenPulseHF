@@ -56,6 +56,7 @@ fn compress_if_smaller_picks_lz4_for_compressible_payload() {
     assert_eq!(decompress(&out, algo).unwrap(), payload.as_ref());
 }
 
+// VERIFIES: REQ-CMP-01
 #[test]
 fn compress_if_smaller_keeps_original_when_incompressible() {
     // Single byte or already-dense data should not be re-compressed.

@@ -71,6 +71,7 @@ fn valid_conreq_accepted_unknown_peer_permissive() {
     assert_eq!(decision.selected_mode, SigningMode::Normal);
 }
 
+// VERIFIES: REQ-FUN-10
 #[test]
 fn conreq_rejected_invalid_signature() {
     let mut req = ConReq::create(
@@ -98,6 +99,7 @@ fn conreq_rejected_invalid_signature() {
     );
 }
 
+// VERIFIES: REQ-FUN-12
 #[test]
 fn conreq_rejected_revoked_key() {
     let req = ConReq::create(

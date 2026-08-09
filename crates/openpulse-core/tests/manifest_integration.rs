@@ -45,6 +45,7 @@ fn manifest_rejected_tampered_payload_hash() {
     );
 }
 
+// VERIFIES: REQ-FUN-11
 #[test]
 fn manifest_rejected_tampered_signature() {
     let payload = b"data";
