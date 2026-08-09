@@ -34,6 +34,7 @@ CrossModeBenchCase	apps/openpulse-testmatrix/src/bench.rs
 CrossModeGateResult	apps/openpulse-testmatrix/src/bench.rs
 CrossModeLevel	apps/openpulse-testmatrix/src/bench.rs
 DEFAULT_PILOT_SPACING	plugins/scfdma/src/params.rs
+DEFAULT_TX_LOG_RETAIN	crates/openpulse-core/src/tx_metadata.rs
 DiagnosticEvent	crates/openpulse-modem/src/diagnostics.rs
 DiffStatus	apps/openpulse-testmatrix/src/compare.rs
 DiscoveryConfig	crates/openpulse-config/src/lib.rs
@@ -189,7 +190,6 @@ add_revoked	crates/openpulse-core/src/handshake.rs
 afc_estimate_hz_with_expected	plugins/bpsk/src/demodulate.rs
 agc_blocks_processed	crates/openpulse-modem/src/engine.rs
 agc_gain_db	crates/openpulse-modem/src/engine.rs
-all_index	crates/openpulse-core/src/fec.rs
 append_session_log_entry_at	crates/openpulse-cli/src/state.rs
 apply_band_attenuation	crates/openpulse-daemon/src/lib.rs
 apply_band_squelch	crates/openpulse-daemon/src/lib.rs
@@ -297,8 +297,10 @@ iq_sequence	crates/openpulse-dsp/src/preamble.rs
 irs_receive	crates/openpulse-gateway/src/main.rs
 is_complete	crates/openpulse-filexfer/src/blocks.rs
 is_csma_enabled	crates/openpulse-modem/src/engine.rs
+is_failure_path	crates/openpulse-core/src/ota_rate.rs
 is_faulted	crates/openpulse-audio/src/fault.rs
 is_loopback_bind	crates/openpulse-linksec/src/lib.rs
+is_truncated	crates/openpulse-core/src/tx_metadata.rs
 iss_send	crates/openpulse-gateway/src/main.rs
 kem_decapsulate	crates/openpulse-core/src/pq_handshake.rs
 last_verified_peer	crates/openpulse-daemon/src/lib.rs
@@ -436,6 +438,7 @@ transmit_with_harq_attempt	crates/openpulse-modem/src/engine.rs
 transmit_with_short_fec_data	crates/openpulse-modem/src/engine.rs
 trust_policy_profile	crates/openpulse-modem/src/engine.rs
 tx_duration_secs	plugins/js8/src/submode.rs
+tx_log_failed	crates/openpulse-modem/src/engine.rs
 tx_session_log	crates/openpulse-modem/src/engine.rs
 tx_start_ms	crates/openpulse-discovery/src/scheduler.rs
 unpack_alphanumeric50	plugins/js8/src/grammar.rs
@@ -455,5 +458,6 @@ verify_route_update	crates/openpulse-core/src/route_discovery.rs
 with_nlms	crates/openpulse-dsp/src/equalizer.rs
 with_pacing	crates/openpulse-audio/src/loopback.rs
 with_peg	crates/openpulse-core/src/ldpc.rs
+with_retain	crates/openpulse-core/src/tx_metadata.rs
 with_timestamp	crates/openpulse-core/src/tx_metadata.rs
 with_transport	crates/openpulse-radio/src/generic_cat.rs
