@@ -676,6 +676,8 @@ impl LinkSim {
     }
 
     /// Number of frames processed so far.
+    /// No caller (#1092): progress accessor on the link simulator, which is verification tooling —
+    /// a verification objective, not a product requirement.
     pub fn frames_done(&self) -> usize {
         self.frame
     }

@@ -51,6 +51,13 @@ impl Drop for GpuBusyTimer {
 }
 
 /// Errors from GPU context initialisation.
+///
+/// FIXME(#1092): never constructed. `GpuContext::init` returns `Option`, so all three outcomes —
+/// disabled by `OPENPULSE_GPU_DISABLE`, no adapter, device-creation failure — collapse to `None`
+/// and the reason is discarded. That matters more than it looks: the GPU path is default-on for
+/// the daemon and linksim, so "GPU silently unavailable" and "GPU silently failed to start" are
+/// indistinguishable at a call site that then runs the CPU path (cf. #1080, where the GPU path was
+/// live on hardware nobody expected). Surfacing it is a signature change on a public API.
 #[derive(Debug, thiserror::Error)]
 pub enum GpuError {
     #[error("no GPU adapter available")]

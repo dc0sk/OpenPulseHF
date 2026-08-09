@@ -51,6 +51,10 @@ pub fn m2m4_snr_db(i: &[f32], q: &[f32]) -> f32 {
 
 /// M2M4 SNR estimate (dB) from a real passband buffer: forms the baseband I/Q via
 /// [`hilbert_iq`] at carrier `fc` (Hz) / sample rate `fs` (Hz), then estimates.
+/// No caller (#1092): the ungated real-input variant. Production uses the GATED pair
+/// (`m2m4_snr_db_gated_from_real`), because an ungated M2M4 estimate counts a fade as noise —
+/// see the SNR-estimator edge in CLAUDE.md. Kept as the reference implementation the gated
+/// variant is defined against; do not wire it into a rate decision.
 pub fn m2m4_snr_db_from_real(samples: &[f32], fc: f32, fs: f32) -> f32 {
     let (i, q) = hilbert_iq(samples, fc, fs);
     m2m4_snr_db(&i, &q)

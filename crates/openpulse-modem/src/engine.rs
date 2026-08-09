@@ -1019,6 +1019,11 @@ impl ModemEngine {
     }
 
     /// Centre frequencies (Hz) of the notches placed on the most recent captured block.
+    ///
+    /// TODO(#1092): no caller. Inherits REQ-QRM-01 (notch default-on) as the observability half of
+    /// its surface — the siblings `in_band_interferers` / `clear_in_band_interferers` are live, this
+    /// one has no consumer. Wire it into the diagnostics bundle only if REQ-OBS grows to ask for it;
+    /// do not invent the requirement to justify the accessor.
     pub fn notch_active_freqs(&self) -> Vec<f32> {
         self.notch_bank.active_freqs()
     }
@@ -1271,6 +1276,10 @@ impl ModemEngine {
     }
 
     /// Enable the AFC tracking loop (default: enabled).
+    ///
+    /// No caller (#1092): `disable_afc` is driven by a CLI flag at startup and the processes that
+    /// use it are one-shot, so nothing needs to restore the default at runtime. Kept as the
+    /// symmetric setter of a live toggle — it inherits REQ-PHY-03 from the AFC loop itself.
     pub fn enable_afc(&mut self) {
         self.afc_enabled = true;
     }
@@ -3938,6 +3947,12 @@ impl ModemEngine {
     }
 
     /// Clear the transmission session log.
+    ///
+    /// FIXME(#1092): this is the ONLY bound on `TxSessionLog.frames`, and it has no caller.
+    /// `record_tx_frame` pushes one `TxMetadata` at every emit seam with no cap, so a long-running
+    /// daemon grows the log without limit. The fix is NOT to call this on a timer — that would
+    /// destroy the §97 compliance record it exists to keep. It needs a retention decision
+    /// (bounded window vs. spill to disk) taken against the regulatory requirement, not here.
     pub fn clear_tx_session_log(&mut self) {
         self.tx_session_log = TxSessionLog::new(self.callsign.clone());
     }

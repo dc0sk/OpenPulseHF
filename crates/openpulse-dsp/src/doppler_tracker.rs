@@ -191,6 +191,10 @@ impl AdaptiveAfcLoopBandwidth {
     }
 
     /// Get the current SNR estimate.
+    /// No caller (#1092), and neither has the component: `DopplerTracker` has no production callers
+    /// at all. That is a recorded decision, not an oversight — see the header of
+    /// `crates/openpulse-modem/tests/doppler_tracker_units.rs`, which states it and names the real
+    /// fade/AFC gates. This accessor inherits that status.
     pub fn get_snr_db(&self) -> f32 {
         self.snr_db
     }
