@@ -22,7 +22,7 @@ PY="python3 scripts/lib/trace.py"
 YAML="docs/dev/project/requirements.yaml"
 
 case "${1:-}" in
-    check)  $PY check;  exit $? ;;
+    check)  shift; $PY check "$@"; exit $? ;;   # e.g. `check --release` adds the draft-shipped gate
     import) $PY import; exit $? ;;
     render) $PY render; exit $? ;;
     --self-test) ;;
