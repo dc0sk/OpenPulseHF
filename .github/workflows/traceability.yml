@@ -42,8 +42,23 @@ jobs:
       # R4: requirements-trailer lint — production commits must carry Implements:/Refactors:/
       # Verification-objective:, IDs validated against requirements.yaml. Bright-line grandfathers
       # history. Base is the PR base commit.
-      - name: Requirements-trailer lint
+      - name: Requirements-trailer lint (branch commits)
         run: ./scripts/check-trailer.sh "${{ github.event.pull_request.base.sha }}"
+
+      # THE SQUASH BLIND SPOT. This repo squash-merges, so the commits linted above are DISCARDED
+      # and what lands on main is the squash message — composed from the PR title + body. Without
+      # this step the permanent record is unguarded; it has only worked so far because the default
+      # squash body concatenates the branch commits, which an edited message silently drops.
+      # The body reaches the script through env and a file, never inlined into the shell: a PR body
+      # is untrusted input, and `${{ }}` interpolation into a `run:` block is a script-injection
+      # vector (an attacker-authored body containing $( ) would execute with this job's token).
+      - name: Requirements-trailer lint (PR body = the squash message)
+        env:
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          PR_BODY: ${{ github.event.pull_request.body }}
+        run: |
+          printf '%s\n\n%s\n' "$PR_TITLE" "$PR_BODY" > "$RUNNER_TEMP/pr-message.txt"
+          ./scripts/check-trailer.sh --message-file "$RUNNER_TEMP/pr-message.txt"
 
       # R5's doc constitution (status: living legality + recursive frontmatter) runs in docs.yml,
       # which calls the same scripts/validate-doc-frontmatter.sh.
