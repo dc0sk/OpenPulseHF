@@ -105,6 +105,8 @@ impl AgcChannel {
 
     /// The AGC's current gain — lets a test show the gain actually MOVED during a burst rather
     /// than assuming the loop ran.
+    /// No caller (#1092): verification-tree accessor for the simulated capture AGC. It satisfies a
+    /// verification objective, not a product requirement, so it is not an orphan in the product tree.
     pub fn current_gain(&self) -> f32 {
         self.gain as f32
     }

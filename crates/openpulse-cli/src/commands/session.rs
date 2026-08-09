@@ -801,6 +801,21 @@ fn build_session_diagnostics(
         diag.record_transition(transition);
     }
 
+    // Same defect as `afc_offset_hz` above, one field over: `elapsed_ms` is serialized into the
+    // diagnostics JSON and `summary()` prints it, but `update_elapsed` had no caller anywhere, so
+    // the value was always the `0` it was initialised to. The engine has held the timing all
+    // along — every `HpxTransition` carries a `timestamp_ms`.
+    //
+    // Span of the recorded transitions, not wall-clock-now minus start: the diagnostics describe a
+    // *session*, and a bundle collected an hour after the last transition should not report an
+    // hour of session. With fewer than two transitions there is no span to report and it stays 0.
+    if let (Some(first), Some(last)) = (
+        engine.hpx_transitions().first(),
+        engine.hpx_transitions().last(),
+    ) {
+        diag.update_elapsed(first.timestamp_ms, last.timestamp_ms);
+    }
+
     diag
 }
 
@@ -840,6 +855,44 @@ fn format_hex(bytes: &[u8]) -> String {
 mod tests {
     use super::*;
     use openpulse_audio::LoopbackBackend;
+
+    /// `SessionDiagnostics.elapsed_ms` is serialized into the diagnostics JSON and printed by
+    /// `summary()`, but `update_elapsed` had no caller anywhere — so the field always carried the
+    /// `0` it was initialised to while every `HpxTransition` held a `timestamp_ms`. Exactly the
+    /// defect already fixed one field over for `afc_offset_hz`; this is its blind sibling.
+    ///
+    /// Guards the span semantics too: the value is the span of recorded transitions, not
+    /// now-minus-start, so a bundle collected long after the session does not report the delay as
+    /// session time.
+    #[test]
+    fn build_session_diagnostics_reports_the_session_span() {
+        let mut engine = ModemEngine::new(Box::new(LoopbackBackend::new()));
+
+        // No transitions yet — there is no span, and the field must not invent one.
+        assert_eq!(build_session_diagnostics(&engine, None).elapsed_ms, 0);
+
+        engine
+            .hpx_apply_event(openpulse_core::hpx::HpxEvent::StartSession, 1_000)
+            .expect("start session transition");
+
+        // A single transition is still not a span.
+        assert_eq!(build_session_diagnostics(&engine, None).elapsed_ms, 0);
+
+        engine
+            .hpx_apply_event(openpulse_core::hpx::HpxEvent::DiscoveryOk, 4_500)
+            .expect("discovery transition");
+
+        let diag = build_session_diagnostics(&engine, None);
+        assert_eq!(
+            diag.elapsed_ms, 3_500,
+            "elapsed must be the span between the first and last transition (4500 - 1000)"
+        );
+        assert!(
+            diag.summary().contains("3500"),
+            "summary() prints elapsed_ms, so it must carry the real span: {}",
+            diag.summary()
+        );
+    }
 
     #[test]
     fn build_session_diagnostics_uses_persisted_peer_and_transition_counts() {

@@ -484,6 +484,10 @@ impl Interleaver {
     }
 
     /// Create an interleaver with [`DEFAULT_INTERLEAVER_DEPTH`].
+    ///
+    /// No caller (#1092): callers spell it `Interleaver::new(DEFAULT_INTERLEAVER_DEPTH)` because the
+    /// depth has to be passed to the matching `transmit_with_fec_interleaved` call anyway. Kept as a
+    /// convenience constructor; it inherits the interleaver's own requirement.
     pub fn default_depth() -> Self {
         Self::new(DEFAULT_INTERLEAVER_DEPTH)
     }

@@ -300,6 +300,8 @@ impl DiscoveryRuntime {
     }
 
     /// Clock, for drift-bias updates from decode `dt`s.
+    /// No caller (#1092): test seam for advancing the slot clock without waiting on wall time.
+    /// Verification objective, not a product requirement.
     pub fn clock_mut(&mut self) -> &mut Js8Clock {
         &mut self.clock
     }
