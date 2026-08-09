@@ -29,8 +29,28 @@ use openpulse_core::fec::FecMode;
 use openpulse_modem::channel_sim::ChannelSimHarness;
 use qpsk_plugin::QpskPlugin;
 
+/// #1079/#1066: bound the search in WORK, not wall clock. This file is an acceptance gate, so a
+/// false red here reads as the #995/#996 length defect returning — the worst place to let a verdict
+/// depend on how busy the host is.
+///
+/// **Calibrated, and the calibration has a positive control.** Passing at a small budget is
+/// ambiguous — it means either "decodes immediately" or "the budget never reaches this path", and
+/// the second would make this a no-op wearing a fix's clothes. Measured floor: at `(1, 1)` **8 of 9
+/// cases FAIL**; at `(1, 2)` all 9 pass. So the mechanism is engaged, it is binding, and the real
+/// requirement is 2 outer iterations. Everything from `(1, 2)` to `(4000, 8000)` passes at a
+/// constant 1.72 s, because these are all positive cases that exit on success — unlike
+/// `fec_timeout_receive`, whose negative case makes cost scale with the budget.
+///
+/// 200/400 is therefore ~100x the measured floor at no cost. Headroom is free here; spend it.
+const SCAN_POSITIONS: usize = 200;
+const MAX_ITERATIONS: usize = 400;
+
 fn harness() -> ChannelSimHarness {
     let mut h = ChannelSimHarness::new();
+    h.rx_engine
+        .set_deterministic_scan_positions(Some(SCAN_POSITIONS));
+    h.rx_engine
+        .set_deterministic_max_iterations(Some(MAX_ITERATIONS));
     for eng in [&mut h.tx_engine, &mut h.rx_engine] {
         eng.register_plugin(Box::new(BpskPlugin::new())).unwrap();
         eng.register_plugin(Box::new(QpskPlugin::new())).unwrap();
