@@ -82,25 +82,63 @@ impl TxMetadata {
     }
 }
 
-/// Session transmission log — captures all TX metadata for a session.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+/// Frames the in-memory window keeps. Disk is the record (the engine spills every frame); memory
+/// is a query cache, so this only has to cover "what happened recently" — at a realistic HF frame
+/// cadence it is hours of traffic.
+pub const DEFAULT_TX_LOG_RETAIN: usize = 1024;
+
+/// Session transmission log — a bounded in-memory window over the §97 TX record.
+///
+/// **This is a window, not the whole session (#1110).** It used to be an unbounded `Vec` appended
+/// at every emit seam with nothing ever clearing it, so a long-running daemon grew it without
+/// limit. It is now capped at `retain` frames, and `ModemEngine` spills every frame to disk so the
+/// full record survives both the cap and a restart — the in-memory log was also lost on restart,
+/// which made it unfit as a compliance record independently of its size.
+///
+/// `frame_count()` therefore reports the **true total transmitted**, not the retained count.
+/// Reporting the window size there would be the truncation-that-reads-as-completeness defect: a
+/// caller asking "how many frames did we transmit" would silently get a smaller number once the
+/// cap engaged.
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TxSessionLog {
     /// Station callsign
     pub station_id: String,
-    /// All transmitted frames (in order)
+    /// The most recent frames, oldest first — at most `retain` of them. NOT the whole session.
     pub frames: Vec<TxMetadata>,
+    /// Window size.
+    retain: usize,
+    /// Every frame ever logged in this session, including ones evicted from the window.
+    total_logged: u64,
+}
+
+impl Default for TxSessionLog {
+    fn default() -> Self {
+        Self::new(String::new())
+    }
 }
 
 impl TxSessionLog {
-    /// Create a new transmission session log.
+    /// Create a new transmission session log with the default window size.
     pub fn new(station_id: impl Into<String>) -> Self {
         Self {
             station_id: station_id.into(),
             frames: Vec::new(),
+            retain: DEFAULT_TX_LOG_RETAIN,
+            total_logged: 0,
         }
     }
 
-    /// Append a transmitted frame.
+    /// Create a log with an explicit window size. A `retain` of 0 is raised to 1: a window of
+    /// nothing would make `get_by_sequence`/`time_range` permanently empty, which is a silent
+    /// behaviour change rather than a configuration.
+    pub fn with_retain(station_id: impl Into<String>, retain: usize) -> Self {
+        Self {
+            retain: retain.max(1),
+            ..Self::new(station_id)
+        }
+    }
+
+    /// Append a transmitted frame, evicting the oldest if the window is full.
     pub fn log_frame(&mut self, metadata: TxMetadata) -> Result<(), TxSessionLogError> {
         if metadata.station_id != self.station_id {
             return Err(TxSessionLogError::StationMismatch {
@@ -109,20 +147,38 @@ impl TxSessionLog {
             });
         }
         self.frames.push(metadata);
+        // Counted only after the station check, so a rejected frame is not counted as transmitted.
+        self.total_logged = self.total_logged.saturating_add(1);
+        if self.frames.len() > self.retain {
+            let excess = self.frames.len() - self.retain;
+            self.frames.drain(0..excess);
+        }
         Ok(())
     }
 
-    /// Total frames transmitted in this session.
+    /// Total frames transmitted in this session — including any evicted from the window.
     pub fn frame_count(&self) -> usize {
+        // usize on every target this runs on is 64-bit; the saturating cast is for correctness on
+        // a 32-bit build rather than a real concern.
+        self.total_logged.min(usize::MAX as u64) as usize
+    }
+
+    /// How many frames the in-memory window currently holds.
+    pub fn retained(&self) -> usize {
         self.frames.len()
     }
 
-    /// Get frame by sequence number, if present.
+    /// Whether the window has evicted anything — i.e. `frames` is no longer the whole session.
+    pub fn is_truncated(&self) -> bool {
+        self.frame_count() > self.frames.len()
+    }
+
+    /// Get frame by sequence number, if present **in the retained window**.
     pub fn get_by_sequence(&self, seq: u16) -> Option<&TxMetadata> {
         self.frames.iter().find(|m| m.frame_sequence == seq)
     }
 
-    /// Get minimum and maximum timestamps in the session.
+    /// Minimum and maximum timestamps **in the retained window**, not in the whole session.
     pub fn time_range(&self) -> Option<(u64, u64)> {
         if self.frames.is_empty() {
             return None;

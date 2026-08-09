@@ -96,6 +96,18 @@ pub async fn run(cfg: OpenpulseConfig, modem_backend: Box<dyn AudioBackend>) -> 
     // from two CLI subcommands).
     engine.set_callsign(cfg.station.callsign.clone());
     engine.set_max_power_watts(cfg.station.tx_power_watts);
+    // Persist that log (#1110). The in-memory `TxSessionLog` is a bounded window, so without this
+    // the §97 record is both capped and lost on restart. Not gated on `observability.audit_mode`:
+    // a compliance record that has to be switched on is not one.
+    if cfg.station.tx_log_path.trim().is_empty() {
+        tracing::warn!(
+            "station.tx_log_path is empty: the §97 TX record is in-memory only, capped, and lost on restart"
+        );
+    } else {
+        let p = openpulse_config::logging::expand_tilde(&cfg.station.tx_log_path);
+        tracing::info!(path = %p.display(), "recording the §97 TX metadata log");
+        engine.set_tx_log_path(Some(p));
+    }
     // Pin all audio I/O to a named device when configured (e.g. an snd-aloop PCM
     // for the real-audio twin-station rig). Empty = the backend default device.
     if !cfg.audio.device.is_empty() {
