@@ -52,12 +52,12 @@ impl Drop for GpuBusyTimer {
 
 /// Errors from GPU context initialisation.
 ///
-/// FIXME(#1092): never constructed. `GpuContext::init` returns `Option`, so all three outcomes —
-/// disabled by `OPENPULSE_GPU_DISABLE`, no adapter, device-creation failure — collapse to `None`
-/// and the reason is discarded. That matters more than it looks: the GPU path is default-on for
-/// the daemon and linksim, so "GPU silently unavailable" and "GPU silently failed to start" are
-/// indistinguishable at a call site that then runs the CPU path (cf. #1080, where the GPU path was
-/// live on hardware nobody expected). Surfacing it is a signature change on a public API.
+/// The three init outcomes — disabled by `OPENPULSE_GPU_DISABLE`, no adapter, device-creation
+/// failure — are all reported through these variants at the failure sites in `init`/`init_async`
+/// (#1111). They are *logged*, not returned: `init` still yields `Option`, because "disabled" is a
+/// deliberate choice rather than an error and a `Result` would misrepresent it. The distinction
+/// that matters operationally is now visible, which it was not when all three collapsed to a silent
+/// `None` — the condition that let #1080's kernel divergence run on hardware nobody expected.
 #[derive(Debug, thiserror::Error)]
 pub enum GpuError {
     #[error("no GPU adapter available")]
@@ -88,6 +88,7 @@ impl GpuContext {
     /// Blocks the calling thread while the wgpu async setup completes.
     pub fn init() -> Option<Arc<Self>> {
         if std::env::var("OPENPULSE_GPU_DISABLE").is_ok() {
+            tracing::info!("GPU disabled by OPENPULSE_GPU_DISABLE; using the CPU path");
             return None;
         }
         pollster::block_on(Self::init_async())
@@ -95,11 +96,23 @@ impl GpuContext {
 
     async fn init_async() -> Option<Arc<Self>> {
         let instance = wgpu::Instance::default();
-        let adapter = instance
+        // The three outcomes below used to be one `None` (#1111). The GPU path is default-on for the
+        // daemon and linksim, so "no GPU here" and "a GPU started and may be producing different
+        // numbers" are the two states that most need distinguishing on unfamiliar hardware — and
+        // #1080 is the precedent, where the GPU path ran on an rpi that nobody expected to have an
+        // adapter and two kernels diverged silently from CPU.
+        let adapter = match instance
             .request_adapter(&wgpu::RequestAdapterOptions::default())
-            .await?;
+            .await
+        {
+            Some(a) => a,
+            None => {
+                tracing::info!("{}; using the CPU path", GpuError::NoAdapter);
+                return None;
+            }
+        };
 
-        let (device, queue) = adapter
+        let (device, queue) = match adapter
             .request_device(
                 &wgpu::DeviceDescriptor {
                     label: Some("openpulse-gpu"),
@@ -109,7 +122,18 @@ impl GpuContext {
                 None,
             )
             .await
-            .ok()?;
+        {
+            Ok(dq) => dq,
+            Err(e) => {
+                // An adapter EXISTS and failed to start — materially different from having none,
+                // and the case that warrants a warning rather than an info.
+                tracing::warn!(
+                    "{}; falling back to the CPU path",
+                    GpuError::DeviceCreation(e.to_string())
+                );
+                return None;
+            }
+        };
 
         let bpsk_mod_pipeline = Self::make_pipeline(
             &device,
@@ -160,5 +184,37 @@ impl GpuContext {
             entry_point: "main",
             compilation_options: wgpu::PipelineCompilationOptions::default(),
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The variant messages are operator-visible output now that `init` logs them (#1111), so a
+    /// reword should be a deliberate act rather than a silent change to what a field report says.
+    /// This also keeps the enum constructed: it was an orphan precisely because nothing built it.
+    #[test]
+    fn gpu_error_messages_are_pinned() {
+        assert_eq!(GpuError::NoAdapter.to_string(), "no GPU adapter available");
+        assert_eq!(
+            GpuError::DeviceCreation("out of memory".into()).to_string(),
+            "failed to create wgpu device: out of memory"
+        );
+    }
+
+    /// `init` must honour the kill switch without touching wgpu at all — the one outcome that is a
+    /// deliberate choice rather than a failure, and the reason `init` still returns `Option` rather
+    /// than `Result`.
+    #[test]
+    fn init_respects_the_disable_env_var() {
+        // Serialised against nothing else in this crate: no other test reads or writes this var.
+        std::env::set_var("OPENPULSE_GPU_DISABLE", "1");
+        let ctx = GpuContext::init();
+        std::env::remove_var("OPENPULSE_GPU_DISABLE");
+        assert!(
+            ctx.is_none(),
+            "OPENPULSE_GPU_DISABLE must suppress GPU init regardless of available hardware"
+        );
     }
 }

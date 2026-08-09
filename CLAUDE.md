@@ -133,6 +133,10 @@ The `--no-default-features` flag disables the CPAL audio backend and is required
 
 **Deferred (no target date)**:
 - On-air regulatory validation (Phase 5.5-reg): on-air tests, station ID audit, compliance report
+- **REQ-PHY-05 audio-to-PTT-drop timing** (#1112): "transmitter release within 50 ms of the last
+  transmitted sample" needs the rig. No in-process test can bound it — sound-device buffering and
+  the rig's own CAT/serial latency are the dominant terms and are absent from any localhost
+  harness. The existing `rigctld_ptt_round_trip_under_50ms` covers the *control-path* half only
 
 **Recently shipped (PRs #316–#321)**:
 - `crates/openpulse-daemon/src/lib.rs`: QSY RF wiring — `QsySession` state machine wired into `AcceptQsy`; QSY_REQ + QSY_LIST frames transmitted via modem engine; `process_received_bytes` drives responder role from incoming RF (PR #321)
@@ -517,7 +521,7 @@ Each requirement below is done when the linked test passes. Add new links as tes
 | File-transfer blocks survive the modem (loopback round-trip + tamper→verify-fail) | `cargo test -p openpulse-modem --test filexfer_loopback` |
 | File-transfer multi-object >64 KB split/reassemble | `cargo test -p openpulse-filexfer --test blocks multi_object_over_64kb` |
 | File transfer crosses two real daemons (twin round-trip) | `cargo test -p openpulse-daemon --test twin_daemon_bridge a_file_crosses` |
-| PTT assert/release ≤ 50 ms | `cargo test -p openpulse-radio --no-default-features --test rigctld_integration rigctld_ptt_round_trip_under_50ms` (real socket I/O; the `noop.rs` timer flips a bool and cannot fail) |
+| PTT **control-path** command latency ≤ 50 ms — the client's own overhead, measured against a **mock** rigctld over localhost. This is NOT evidence for REQ-PHY-05, whose "within 50 ms **of the last transmitted sample**" spans the audio path this test never touches; that half is deferred to the on-air batch (#1112) | `cargo test -p openpulse-radio --no-default-features --test rigctld_integration rigctld_ptt_round_trip_under_50ms` (real socket I/O; the `noop.rs` timer flips a bool and cannot fail) |
 | Periodic station ID at interval (REQ-REG-10) | `cargo test -p openpulse-core --lib station_id` + `cargo test -p openpulse-core --lib cw_id` + `cargo test -p openpulse-modem --test station_id_txcount` |
 | MFSK16 sub-floor waveform: loopback + acquisition + calibrated LLRs (REQ-WSIG-01) | `cargo test -p mfsk16-plugin` + `cargo test -p openpulse-modem --test mfsk16_engine` |
 | MFSK16 sub-floor HARQ: combining adds diversity, and a stale message neither dilutes it nor false-delivers | `cargo test -p openpulse-modem --test mfsk16_harq` |

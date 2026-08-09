@@ -164,10 +164,17 @@ fn rigctld_ptt_backend_asserts_and_releases() {
     assert!(!ptt.is_asserted());
 }
 
-/// PTT assert/release completes within 50 ms over a real socket round-trip (REQ-PTT timing).
+/// PTT assert/release completes within 50 ms over a real socket round-trip.
 ///
 /// The `NoOpPtt` timing test cannot fail — it flips a bool — so it cannot back a timing
-/// requirement on its own. This exercises an actual TCP command/response with rigctld.
+/// requirement on its own. This exercises an actual TCP command/response.
+///
+/// **Scope, corrected (#1112).** The peer is a MOCK rigctld on localhost, so what this bounds is
+/// *our client's command overhead*, not a radio's. It is deliberately NOT evidence for REQ-PHY-05
+/// ("transmitter release within 50 ms **of the last transmitted sample**"): that requirement spans
+/// the audio path, which this test never touches, and its dominant terms — sound-device buffering
+/// and the rig's CAT/serial latency — are absent from any localhost harness. The audio half is
+/// deferred to the on-air batch.
 #[test]
 fn rigctld_ptt_round_trip_under_50ms() {
     use std::time::Instant;
