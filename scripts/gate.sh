@@ -98,6 +98,10 @@ TEST_CMD="none"
 if [ "$MODE" = "full" ]; then
     TEST_CMD="cargo test --workspace --no-default-features --no-fail-fast"
     run_step "cargo test (workspace)" cargo test --workspace --no-default-features --no-fail-fast || rc_total=1
+    # Traceability is checked INSIDE the gate, not a separately-disableable job: enforced
+    # requirements with no in-code binding, cited code/tests that don't exist, REQ<->CAP
+    # disagreement, and NEW code orphans beyond the grandfathered baseline.
+    run_step "trace check (requirements)" env GATE_LOG="$LOG" scripts/trace.sh check || rc_total=1
 fi
 
 # Counts come from the LOG FILE, never from a pipe carrying the runner's output.
