@@ -9,7 +9,15 @@
 # with no recognised trailer fails. Bright-line: commits before requirements.yaml's `bright_line`
 # date are grandfathered (history is not rewritten); newer commits are enforced.
 #
-# Usage:  scripts/check-trailer.sh [BASE_REF]      # default base: origin/main (else main)
+# THE SQUASH BLIND SPOT. This repo squash-merges, so a PR's per-commit messages are DISCARDED and
+# what lands on `main` is the squash message, which GitHub composes from the PR title + body.
+# Linting only `base..HEAD` therefore enforces trailers on commits that never survive and enforces
+# nothing on the permanent record — it has worked so far only because the default squash body
+# happens to concatenate the branch commits, which an edited message silently drops. `--message-file`
+# lints a single message (CI passes the PR body), and that is the check guarding what actually lands.
+#
+# Usage:  scripts/check-trailer.sh [BASE_REF]           # lint commits in BASE_REF..HEAD
+#         scripts/check-trailer.sh --message-file FILE  # lint ONE message (PR body / squash message)
 #         scripts/check-trailer.sh --self-test
 set -u
 REPO_ROOT=$(cd "$(dirname "$0")/.." && pwd)
@@ -69,13 +77,50 @@ lint_range() {
     echo "TRAILER-LINT: FAIL"; return 1
 }
 
-if [ "${1:-}" = "--self-test" ]; then
-    # A synthetic message with a dangling REQ id must be rejected by valid_ids.
-    bad=$(valid_ids "REQ-DOES-NOT-EXIST-99" Implements)
-    if [ "$bad" = "REQ-DOES-NOT-EXIST-99" ]; then
-        echo "SELF-TEST: PASS — a dangling Implements: id is rejected"; exit 0
+# Lint ONE message (the PR body, i.e. the squash message that actually lands on main). Unlike
+# lint_range this cannot inspect a diff, so it applies whenever the PR touches production code —
+# the caller decides that; here we simply require a valid trailer in the text.
+lint_message() {
+    file="$1"
+    [ -f "$file" ] || { echo "trailer-lint: no such message file: $file" >&2; return 2; }
+    msg=$(cat "$file")
+    impl=$(printf '%s\n' "$msg" | sed -n 's/^Implements:[[:space:]]*//p')
+    refac=$(printf '%s\n' "$msg" | sed -n 's/^Refactors:[[:space:]]*//p')
+    vobj=$(printf '%s\n' "$msg" | sed -n 's/^Verification-objective:[[:space:]]*//p')
+    if [ -z "$impl$refac$vobj" ]; then
+        echo "  FAIL: the PR body carries no Implements:/Refactors:/Verification-objective: trailer."
+        echo "        This repo squash-merges, so the PR body becomes the commit message on main —"
+        echo "        without a trailer there, the permanent record does not say what this serves."
+        echo "        Add a line to the PR description, e.g.  Implements: REQ-FUN-12"
+        echo "TRAILER-LINT: FAIL"; return 1
     fi
-    echo "SELF-TEST: FAIL — dangling id was accepted (got '$bad')"; exit 1
+    bad=""
+    [ -n "$impl" ]  && bad="$bad $(valid_ids "$impl" Implements)"
+    [ -n "$refac" ] && bad="$bad $(valid_ids "$refac" Refactors)"
+    bad=$(echo $bad)
+    if [ -n "$bad" ]; then
+        echo "  FAIL: PR-body trailer names IDs not in requirements.yaml: $bad"
+        echo "TRAILER-LINT: FAIL"; return 1
+    fi
+    echo "TRAILER-LINT: PASS (PR body)"; return 0
+}
+
+if [ "${1:-}" = "--message-file" ]; then
+    lint_message "${2:-}"; exit $?
+fi
+
+if [ "${1:-}" = "--self-test" ]; then
+    # Two probes: a dangling id must be rejected, and a message with no trailer must be rejected.
+    bad=$(valid_ids "REQ-DOES-NOT-EXIST-99" Implements)
+    if [ "$bad" != "REQ-DOES-NOT-EXIST-99" ]; then
+        echo "SELF-TEST: FAIL — dangling id was accepted (got '$bad')"; exit 1
+    fi
+    tmp=$(mktemp); printf 'fix: something\n\nno trailer here\n' > "$tmp"
+    if lint_message "$tmp" >/dev/null 2>&1; then
+        rm -f "$tmp"; echo "SELF-TEST: FAIL — a trailerless PR body was accepted"; exit 1
+    fi
+    rm -f "$tmp"
+    echo "SELF-TEST: PASS — dangling id rejected, and a trailerless PR body rejected"; exit 0
 fi
 
 base="${1:-}"

@@ -105,6 +105,12 @@ if [ "$MODE" = "full" ]; then
     # Reachability ratchet: a NEW public item no production code references (coverage would vouch
     # for it as "covered" if a test touches it). Grandfathered baseline; only growth fails.
     run_step "reachability ratchet" scripts/reachability.sh check || rc_total=1
+    # Requirements-trailer lint on this branch's commits. Here so a local `GATE: PASS` predicts CI:
+    # traceability.yml runs the same check on every PR, and a gate that green-lights a push CI then
+    # rejects has stopped meaning anything. Inspects COMMITS only, so a dirty tree mid-work does not
+    # trip it; `--quick` skips it with the rest. (The PR *body* half of this check — the squash
+    # message that actually lands on main — can only run in CI, where the body exists.)
+    run_step "requirements-trailer lint" scripts/check-trailer.sh || rc_total=1
 fi
 
 # Counts come from the LOG FILE, never from a pipe carrying the runner's output.
