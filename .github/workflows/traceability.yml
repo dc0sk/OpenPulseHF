@@ -1,0 +1,49 @@
+# Fast, always-on traceability gates. These run on EVERY pull request and need no compile
+# (Python + grep over the tree), so they hold even while the full workspace gate in ci.yml is
+# `disabled_manually` — the hole that let #1074 and the rotted matrix through. They enforce the
+# STRUCTURAL half of the trace contract; the run-status half (CITED-BUT-DIDN'T-RUN) needs a real
+# test run and is verified by scripts/gate.sh inside ci.yml / locally.
+#
+# Actions pinned to a full commit SHA with the tag as a trailing comment (see ci.yml for why).
+name: Traceability
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: trace-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  traceability:
+    name: Traceability gates (trace + reachability + trailer)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          # Full history: the trailer lint walks base..HEAD and grandfathers by commit date.
+          fetch-depth: 0
+
+      - name: Install pyyaml
+        run: python3 -m pip install --user pyyaml
+
+      # R1: requirements-as-data — every ratified/enforced requirement has a live capability and a
+      # binding; no dangling code/tests; no NEW code orphan; REQ<->CAP agree. Run-status of enforced
+      # bindings is confirmed by the full gate (needs a test run); this is the structural check.
+      - name: Trace check (requirements substrate)
+        run: ./scripts/trace.sh check
+
+      # R2: reachability ratchet — a NEW public item no production code references. Grandfathered
+      # baseline; only growth fails.
+      - name: Reachability ratchet
+        run: ./scripts/reachability.sh check
+
+      # R4: requirements-trailer lint — production commits must carry Implements:/Refactors:/
+      # Verification-objective:, IDs validated against requirements.yaml. Bright-line grandfathers
+      # history. Base is the PR base commit.
+      - name: Requirements-trailer lint
+        run: ./scripts/check-trailer.sh "${{ github.event.pull_request.base.sha }}"
+
+      # R5's doc constitution (status: living legality + recursive frontmatter) runs in docs.yml,
+      # which calls the same scripts/validate-doc-frontmatter.sh.
