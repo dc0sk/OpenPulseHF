@@ -200,6 +200,15 @@ fn ofdm52_64qam_awgn_28db() {
     assert_eq!(rx, payload);
 }
 
+/// Work budget for the ONE timeout-scanning case in this file (#1079/#1066).
+///
+/// Measured floor, with the positive control that matters: at `(1, 1)` the case **FAILS**, at
+/// `(1, 2)` it passes — so the budget is genuinely engaged and binding, not inert. The decode
+/// needs 2 outer iterations; 200/400 is ~100x that at no cost, since a positive case exits on
+/// success rather than running the budget out.
+const OFDM_SCAN_POSITIONS: usize = 200;
+const OFDM_MAX_ITERATIONS: usize = 400;
+
 /// OFDM52-16QAM + SoftConcatenated FEC over Watterson Good-F1: the high-reliability HF path.
 ///
 /// Soft LLRs (per-subcarrier |H|²-weighted max-log-MAP) feed soft-Viterbi+RS, and the CP +
@@ -212,6 +221,14 @@ fn ofdm52_16qam_soft_fec_watterson_good_f1() {
     // rather than pinning one seed (brittle to realization changes).
     let decoded = (0..16u64).any(|seed| {
         let mut h = make_harness_ofdm();
+        // #1079/#1066: bound the search in WORK, not wall clock — this asserts a DECODE, and the
+        // millisecond argument only bounded how much searching the host got to do first. Set here
+        // rather than in `make_harness_ofdm` so the sibling tests, which use the plain `receive()`
+        // path and are not Class A, are left alone.
+        h.rx_engine
+            .set_deterministic_scan_positions(Some(OFDM_SCAN_POSITIONS));
+        h.rx_engine
+            .set_deterministic_max_iterations(Some(OFDM_MAX_ITERATIONS));
         let mut channel = WattersonChannel::new(WattersonConfig::good_f1(Some(seed))).unwrap();
         if h.tx_engine
             .transmit_with_fec_mode(payload, "OFDM52-16QAM", FecMode::SoftConcatenated, None)
