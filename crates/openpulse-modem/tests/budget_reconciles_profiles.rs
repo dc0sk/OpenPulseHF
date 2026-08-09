@@ -8,6 +8,30 @@
 //! That predicts something specific and cheap to check: under a WORK-based budget the two profiles
 //! should reach the same verdict, because the work is then identical by construction. If they do,
 //! that is evidence for the wall clock being the mechanism ON THIS FIXTURE — not for the family.
+//!
+//! **RUN 2026-08-09 (3 repetitions per profile, tables byte-identical across all three).** The
+//! prediction holds, and the split is fully deterministic rather than load-noise:
+//!
+//! | lead 120 000 | RELEASE | DEBUG |
+//! |---|---|---|
+//! | wall-clock | 5 condemnations, **decodes** | 0 condemnations, **fails** |
+//! | work-budgeted | 5 condemnations, decodes | 5 condemnations, decodes |
+//!
+//! Leads 40 000 and 80 000 agree across profiles in both regimes (4/126 and 4/236, decoding). So on
+//! this fixture the wall clock IS the mechanism behind #1058's debug/release split, and the work
+//! budget removes it exactly — the budgeted rows match to the condemnation count.
+//!
+//! **One detail that does NOT fit the simple "a slower profile does proportionally less of
+//! everything" story, recorded rather than explained away:** at the diverging row the rho-rejection
+//! count is *identical* across profiles (361 both), while condemnations differ 5 vs 0. Less total
+//! work would have moved both. Whatever produces condemnations is where the divergence is
+//! concentrated, which is consistent with the third wall-clock site (`retry_due`, scheduled on
+//! elapsed SECONDS) being the operative clock rather than the outer deadline — but that is a
+//! hypothesis this table does not establish.
+//!
+//! Scope is unchanged by the run: three leads of ONE fixture. The paragraph below still governs —
+//! a budget fitted here does not transfer to the no-template path, which needs roughly four times
+//! this.
 //! The five failing fixtures diverge inside the shared entry point (one is QPSK500 with no veto at
 //! all, so its work per position differs), and a budget fitted to one of them is a constant fitted
 //! to one fixture. Measured: a 4 000-iteration budget reconciles the BPSK fixtures and is far too
