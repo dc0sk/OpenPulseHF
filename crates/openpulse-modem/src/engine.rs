@@ -6962,3 +6962,117 @@ mod tests {
         assert!(p.retry_due(16, 10_000));
     }
 }
+
+/// #1060: does a real receive filter lift idle-noise ρ above the shipped veto threshold?
+///
+/// **This is the measurement that decides whether there is a defect at all**, and it is the one
+/// thing in the #1062 family that simulation cannot settle. Every band-limited figure in
+/// `preamble_rho_fade_and_filter_probe.rs` uses a brick-wall FFT mask, sharper than any real
+/// filter. #1060 records the true 500 Hz value as lying between **0.196** (SSB-shaped) and
+/// **0.441** (brick-wall), against a shipped threshold of **0.40**. Where it actually falls decides
+/// whether the deployed BPSK250 veto is silently inert for narrow-filter stations *today*.
+///
+/// It lives here, as a unit test, rather than in `tests/`, for a reason worth keeping: it calls the
+/// receive path's OWN `build_preamble_veto` + `preamble_rho` — both private — instead of
+/// reimplementing the correlation. A probe that rebuilds the correlation can drift from the shipped
+/// veto without either side changing visibly, which already cost this repo an inverted conclusion
+/// when a reproduction harness carried hand-transcribed parameters. An earlier draft exported a
+/// `pub fn` accessor to keep the probe in `tests/`; the reachability ratchet correctly rejected it
+/// as public API no production code calls, and being a unit test is the fix rather than the
+/// workaround — private access is exactly what an instrument measuring internals needs.
+///
+/// # Recording the capture
+///
+/// On the rig, with **the 500 Hz receive filter engaged**, no transmission anywhere, SDR stopped:
+///
+/// ```text
+/// DURATION=45 OUT=/tmp/idle-500hz.wav scripts/onair-rx-idle-floor.sh plughw:CARD=CODEC,DEV=0
+/// OPHF_IDLE_WAV=/tmp/idle-500hz.wav cargo test -p openpulse-modem --no-default-features \
+///   idle_rho_against_the_shipped_threshold -- --ignored --nocapture
+/// ```
+///
+/// Record the filter width and rig with the number: ρ is normalised and level-insensitive, but the
+/// filter is the variable under test, and a capture whose filter setting is unrecorded measures
+/// nothing.
+#[cfg(test)]
+mod idle_rho_probe {
+    use super::*;
+    use crate::capture_replay::load_wav;
+    use bpsk_plugin::BpskPlugin;
+    use openpulse_audio::LoopbackBackend;
+
+    /// The only mode that publishes a template; its threshold is the constant under test.
+    const MODE: &str = "BPSK250";
+
+    #[test]
+    #[ignore = "needs a rig capture; set OPHF_IDLE_WAV"]
+    fn idle_rho_against_the_shipped_threshold() {
+        let Ok(path) = std::env::var("OPHF_IDLE_WAV") else {
+            panic!("set OPHF_IDLE_WAV to a recorded idle capture (see this module's docs)");
+        };
+        let capture = load_wav(&path).unwrap_or_else(|e| panic!("loading {path}: {e}"));
+
+        let mut engine = ModemEngine::new(Box::new(LoopbackBackend::new()));
+        engine
+            .register_plugin(Box::new(BpskPlugin::new()))
+            .expect("register bpsk");
+        let sample_rate = AudioConfig::default().sample_rate;
+        let veto = engine
+            .build_preamble_veto(MODE, sample_rate)
+            .expect("BPSK250 must publish a template, or this measures nothing");
+        let threshold = veto.rho_threshold;
+
+        // Window it the way the receive path sees it — the veto runs on an acquisition window, not
+        // the whole file. Quarter-window steps so a peak cannot fall between positions.
+        let samples = &capture.samples;
+        let window = 8_000usize.min(samples.len());
+        assert!(
+            window > 0 && samples.len() >= window,
+            "capture shorter than one acquisition window ({} samples)",
+            samples.len()
+        );
+
+        let mut rhos: Vec<f32> = Vec::new();
+        let mut start = 0usize;
+        while start + window <= samples.len() {
+            // settled_hz = 0.0: idle noise has no carrier to settle on, so this is the grid search
+            // the receive path runs after a settle that landed on noise — the failure mode the veto
+            // exists to refuse.
+            if let Some((rho, _)) = engine.preamble_rho(&veto, &samples[start..start + window], 0.0)
+            {
+                rhos.push(rho);
+            }
+            start += (window / 4).max(1);
+        }
+
+        assert!(
+            !rhos.is_empty(),
+            "no window produced a ρ — the measurement did not run, which is NOT the same as a low ρ"
+        );
+        rhos.sort_by(|a, b| a.partial_cmp(b).expect("finite ρ"));
+        let n = rhos.len();
+        let pick = |q: f64| rhos[((n as f64 - 1.0) * q).round() as usize];
+        let mean = rhos.iter().sum::<f32>() / n as f32;
+        let over = rhos.iter().filter(|r| **r >= threshold).count();
+
+        println!("\n#1060 — idle ρ from a rig capture: {path}");
+        println!("  mode {MODE}   windows {n}   shipped threshold {threshold:.3}");
+        println!(
+            "  mean {mean:.3}   p50 {:.3}   p90 {:.3}   MAX {:.3}",
+            pick(0.50),
+            pick(0.90),
+            rhos[n - 1]
+        );
+        println!("  windows at or over the threshold: {over} / {n}");
+        println!("  reference: 0.196 SSB-shaped, 0.441 brick-wall, {threshold:.3} shipped");
+        println!(
+            "  VERDICT: {}",
+            if over == 0 {
+                "idle noise never reaches the threshold here — the veto discriminates."
+            } else {
+                "idle noise REACHES the threshold — the veto is degraded or inert at this width."
+            }
+        );
+        println!("  Scope: one capture, one rig, one filter setting.\n");
+    }
+}
