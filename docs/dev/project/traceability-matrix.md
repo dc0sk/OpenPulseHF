@@ -351,7 +351,24 @@ the testmatrix quick tier at commit `76de87e`, dated 2026-06-29 (555/555 pass, 0
 - **Bidirectional tagging** ✅ fixed: the five `req_coverage` → capability mappings now agree with each capability's own `Implements` list — REQ-FUN-06 added to CAP-12/CAP-26, REQ-FUN-10 to CAP-02, REQ-NFR-02 to CAP-61, REQ-PERF-02 to CAP-53.
 
 ### Open follow-ups (not yet resolved)
-- ✅ **None.** The previously-listed 7 OFDM RawModem failures were resolved 2026-06-29 (see below). All currently-open coverage gaps are documentation/operator/on-air-validation requirements (Phase 5.5-reg, deferred) listed under "Coverage gaps" above, not code defects.
+- **Unbounded regulatory TX log** (`TxSessionLog.frames`, tagged `FIXME(#1092)` at
+  `openpulse-modem/src/engine.rs` `clear_tx_session_log`). `record_tx_frame` appends one
+  `TxMetadata` at every emit seam with no cap, and `clear_tx_session_log` — the only bound — has no
+  caller, so a long-running daemon grows the log without limit. Clearing it on a timer is the wrong
+  fix: that log **is** the §97 compliance record. Needs a retention decision (bounded window vs.
+  spill to disk) taken against the regulatory requirements above, not in the engine.
+- **GPU init failures are indistinguishable from GPU absence** (`GpuError`, tagged `FIXME(#1092)` at
+  `openpulse-gpu/src/lib.rs`). The enum is never constructed: `GpuContext::init` returns `Option`,
+  so disabled-by-env, no-adapter and device-creation-failure all collapse to `None`. The GPU path is
+  default-on for the daemon and linksim, which is the condition that let #1080's kernel divergence
+  run on hardware nobody expected. Surfacing it is a signature change on a public API.
+- The previously-listed 7 OFDM RawModem failures were resolved 2026-06-29 (see below). All currently-open coverage gaps are documentation/operator/on-air-validation requirements (Phase 5.5-reg, deferred) listed under "Coverage gaps" above.
+
+**Unreferenced public items (#1092) are recorded at the code, not here.** Each of the 16 carries an
+in-place annotation saying what it is and why it has no caller — inherited-behaviour, verification
+tree, or recorded decision. A second inventory in this file would drift from the code by default and
+then read as authoritative; the two entries above are here because they are *defects*, which is a
+different thing from an unreferenced item.
 
 ### Resolved 2026-06-29 — OFDM RawModem failures
 The refreshed quick matrix had 7 failures, root-caused to two distinct issues (not a regression):

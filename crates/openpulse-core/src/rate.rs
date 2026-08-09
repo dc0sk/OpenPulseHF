@@ -351,6 +351,12 @@ impl RateAdapter {
     }
 
     /// Reset the NACK counter (call after a successful retransmit acknowledged).
+    ///
+    /// No caller (#1092), and the doc comment above describes a call that must not be made:
+    /// `apply_ack` already zeroes `consecutive_nack` on every success path, and
+    /// `ack_ok_resets_nack_counter` pins that. Resetting it from outside would suppress a
+    /// legitimate `NackDecrement` — the adapter owns this invariant. Kept as the explicit reset
+    /// for a session restart; it inherits the rate-adaptation requirement.
     pub fn reset_nack_counter(&mut self) {
         self.consecutive_nack = 0;
     }
