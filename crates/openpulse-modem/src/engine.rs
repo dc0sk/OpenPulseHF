@@ -2257,6 +2257,10 @@ impl ModemEngine {
             .ota
             .as_mut()
             .ok_or_else(|| ModemError::Configuration("no OTA session active".into()))?;
+        // Captured BEFORE the decision so the event can report the transition rather than just the
+        // resulting state — `to` alone cannot distinguish a hold from a move that landed here.
+        let from_level = ota.rx_recommended_level();
+        let decoded_level = decoded.as_ref().map(|(_, level, _)| *level);
         let (rx_ack, decoded) = match decoded {
             Some((payload, level, mode)) => {
                 let ack = ota.on_rx_frame(RxOutcome::Decoded(level), snr);
@@ -2267,6 +2271,17 @@ impl ModemEngine {
                 (ack, None)
             }
         };
+        // Emitted on EVERY decision, including ones that move nothing: a failed decode that leaves
+        // the level alone is invisible in the periodic `OtaStatus` snapshot, because that snapshot
+        // reports state and the state did not change (#1081). The mutable borrow of `self.ota` ends
+        // here, which is why the send is not inside the match above.
+        let _ = self.event_tx.send(EngineEvent::OtaRateDecision {
+            from: from_level,
+            to: rx_ack.recommended_level,
+            decoded_level,
+            snr_db: snr,
+            decision: rx_ack.decision,
+        });
         let ack_frame = AckFrame::new(rx_ack.ack_type, session_id)
             .with_recommended_level(rx_ack.recommended_level);
         Ok((decoded, ack_frame, last_err))

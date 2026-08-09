@@ -91,6 +91,19 @@ impl App {
                     self.speed_history.pop_front();
                 }
             }
+            // The OTA controller's own level trace. Reuses the speed history/level the legacy
+            // `RateChange` path drives, so the TUI shows the rung the shipping OTA path is on
+            // rather than only the legacy adapter's. A hold (`from == to`) updates nothing, so a
+            // failed decode that changes no level does not pollute the history.
+            EngineEvent::OtaRateDecision { from, to, .. } => {
+                if from != to {
+                    self.speed_level = Some(to);
+                    self.speed_history.push_back(to);
+                    if self.speed_history.len() > 8 {
+                        self.speed_history.pop_front();
+                    }
+                }
+            }
             EngineEvent::DcdChange { busy, energy } => {
                 self.dcd_busy = busy;
                 self.dcd_energy = energy;

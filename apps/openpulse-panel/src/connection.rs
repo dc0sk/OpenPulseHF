@@ -202,6 +202,36 @@ pub(crate) fn apply_event(line: &str, shared: &Arc<Mutex<PanelState>>) {
                     st.afc_hz = *offset_hz;
                     format!("AFC {offset_hz:+.1} Hz")
                 }
+                // Shown as the log line an operator reads to attribute a rate decision — the
+                // branch name is the payload, not the level (#1081). A hold is rendered too, so a
+                // failed decode that moves nothing is still visible.
+                EngineEvent::OtaRateDecision {
+                    from,
+                    to,
+                    decoded_level,
+                    snr_db,
+                    decision,
+                } => {
+                    let outcome = if decoded_level.is_some() {
+                        "ok"
+                    } else {
+                        "FAIL"
+                    };
+                    if from == to {
+                        format!(
+                            "OTA {} hold @{} ({outcome}, {snr_db:.1} dB)",
+                            format!("{decision:?}").to_lowercase(),
+                            to.name()
+                        )
+                    } else {
+                        format!(
+                            "OTA {} {}->{} ({outcome}, {snr_db:.1} dB)",
+                            format!("{decision:?}").to_lowercase(),
+                            from.name(),
+                            to.name()
+                        )
+                    }
+                }
                 EngineEvent::RateChange {
                     speed_level, mode, ..
                 } => {
