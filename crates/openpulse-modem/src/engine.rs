@@ -607,6 +607,10 @@ pub struct ModemEngine {
     max_power_watts: f32,
     /// Transmission metadata log for regulatory compliance (station_id, timestamps).
     tx_session_log: TxSessionLog,
+    /// Where the §97 TX record is appended as NDJSON (#1110). `None` disables spilling.
+    tx_log_path: Option<std::path::PathBuf>,
+    /// Latched after a spill write fails, so a full disk cannot emit a warning per frame.
+    tx_log_failed: bool,
     /// Default audio device name used when a per-call `device` is `None`.
     /// Lets a daemon pin its engine to a specific capture/playback device (e.g. an
     /// `snd-aloop` PCM) without threading the name through every transmit/receive.
@@ -841,6 +845,8 @@ impl ModemEngine {
             tx_limiter_threshold: 0.0,
             max_power_watts: 0.0, // 0.0 means no limit
             tx_session_log: TxSessionLog::new("UNKNOWN"),
+            tx_log_path: None,
+            tx_log_failed: false,
             default_device: None,
             last_audio: Vec::new(),
             rx_burst: Vec::new(),
@@ -3946,6 +3952,61 @@ impl ModemEngine {
         &self.tx_session_log
     }
 
+    /// Persist the §97 TX record to disk (#1110). `None` disables spilling.
+    ///
+    /// Disk is the record and the in-memory `TxSessionLog` is a bounded query cache — the log was
+    /// previously unbounded AND lost on restart, and the restart half is what made it unfit as a
+    /// compliance record regardless of its size.
+    pub fn set_tx_log_path(&mut self, path: Option<std::path::PathBuf>) {
+        self.tx_log_path = path;
+        self.tx_log_failed = false;
+    }
+
+    /// Append one NDJSON record. A failed write must NEVER stop a transmission that is already on
+    /// the air, so every error here is logged and swallowed — and logged only ONCE per configured
+    /// path, because a full or unwritable disk would otherwise emit a line per frame forever.
+    fn spill_tx_metadata(&mut self, metadata: &TxMetadata) {
+        let Some(path) = self.tx_log_path.clone() else {
+            return;
+        };
+        if self.tx_log_failed {
+            return;
+        }
+        let line = match serde_json::to_string(metadata) {
+            Ok(l) => l,
+            Err(e) => {
+                warn!("tx log: could not serialise TX metadata: {e}");
+                self.tx_log_failed = true;
+                return;
+            }
+        };
+        let write = (|| -> std::io::Result<()> {
+            use std::io::Write as _;
+            if let Some(dir) = path.parent() {
+                std::fs::create_dir_all(dir)?;
+            }
+            let mut f = std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(&path)?;
+            writeln!(f, "{line}")
+        })();
+        if let Err(e) = write {
+            warn!(
+                path = %path.display(),
+                "tx log: append failed ({e}); the §97 record is incomplete from here on. \
+                 Further failures on this path are suppressed."
+            );
+            self.tx_log_failed = true;
+        }
+    }
+
+    /// Whether the TX-log spill has given up (a write failed). Tripwire: a compliance record that
+    /// silently stopped being written is the failure mode worth surfacing.
+    pub fn tx_log_failed(&self) -> bool {
+        self.tx_log_failed
+    }
+
     /// Clear the transmission session log.
     ///
     /// FIXME(#1092): this is the ONLY bound on `TxSessionLog.frames`, and it has no caller.
@@ -5851,6 +5912,7 @@ impl ModemEngine {
         self.tx_session_log
             .log_frame(metadata.clone())
             .map_err(|err| ModemError::Configuration(err.to_string()))?;
+        self.spill_tx_metadata(&metadata);
         debug!("logged TX metadata: {}", metadata.to_log_line());
         self.frames_transmitted = self.frames_transmitted.wrapping_add(1);
         Ok(())

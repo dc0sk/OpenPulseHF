@@ -363,6 +363,14 @@ pub struct StationConfig {
     /// Transmitter output power in watts, recorded in the §97 regulatory TX-metadata log. The modem
     /// cannot measure PA output, so this is the operator-declared value; `0.0` = unspecified.
     pub tx_power_watts: f32,
+    /// Where the §97 TX-metadata record is appended, one JSON object per transmitted frame. `~` is
+    /// expanded. Empty disables the on-disk record entirely.
+    ///
+    /// Deliberately NOT under `[observability]`: that section is opt-in audit tooling and defaults
+    /// off, whereas a regulatory record that only exists when someone remembered to enable it is
+    /// not a regulatory record. The in-memory log is a bounded window (#1110), so this file is the
+    /// only copy that survives a restart.
+    pub tx_log_path: String,
 }
 
 /// Audio backend selection.
@@ -626,6 +634,7 @@ impl Default for StationConfig {
             auto_id_interval_secs: 600,
             auto_id_signoff_idle_secs: 10,
             tx_power_watts: 0.0,
+            tx_log_path: "~/.local/share/openpulse/tx-log.ndjson".into(),
         }
     }
 }
@@ -981,6 +990,9 @@ auto_id_signoff_idle_secs = 10
 # Transmitter output power in watts, recorded in the regulatory TX-metadata log (the modem cannot
 # measure PA output — this is your declared value). 0 = unspecified.
 tx_power_watts = 0.0
+# Where the §97 TX record is written (one JSON object per transmitted frame).
+# Empty disables the on-disk record; the in-memory log is a bounded window and is lost on restart.
+tx_log_path = "~/.local/share/openpulse/tx-log.ndjson"
 
 [audio]
 # Audio backend: default | cpal | loopback
@@ -1455,6 +1467,23 @@ mod tests {
         assert!(cfg.modem.dcd_squelch_bands.is_empty());
         // tx_power_watts defaults to 0.0 (unspecified) for the regulatory TX log.
         assert!((cfg.station.tx_power_watts - 0.0).abs() < 1e-6);
+    }
+
+    /// The §97 TX record is on by default. If this default ever becomes empty the daemon logs a
+    /// warning and keeps only the bounded in-memory window — a silent downgrade from "compliance
+    /// record" to "recent frames, lost on restart", which is the state #1110 existed to fix.
+    #[test]
+    fn the_tx_log_path_defaults_to_enabled() {
+        let cfg = StationConfig::default();
+        assert!(
+            !cfg.tx_log_path.trim().is_empty(),
+            "the §97 TX record must not default to disabled"
+        );
+        assert!(
+            cfg.tx_log_path.ends_with(".ndjson"),
+            "one JSON object per frame: {}",
+            cfg.tx_log_path
+        );
     }
 
     #[test]
