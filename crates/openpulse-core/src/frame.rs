@@ -145,6 +145,7 @@ mod tests {
         assert!(Frame::decode(&bytes).is_err());
     }
 
+    // VERIFIES: REQ-FUN-05
     #[test]
     fn corrupted_crc_is_rejected() {
         let mut bytes = Frame::new(0, b"test".to_vec()).unwrap().encode();

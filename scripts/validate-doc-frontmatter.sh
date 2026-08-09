@@ -1,78 +1,42 @@
 #!/usr/bin/env bash
-set -euo pipefail
+# Doc frontmatter validator + anti-rot constitution. Delegates to scripts/lib/docfront.py, which
+# scans docs/ RECURSIVELY (the old check saw only docs/*.md) and enforces that `status: living` is
+# legal only for docs listed in docs/.living-manifest.txt — a doc that claims to reflect the present
+# state must be machine-maintained, or the label just suppresses suspicion while it rots.
+# Grandfathered: `--baseline` records today's offenders; `check` fails only on NEW ones.
+#
+#   scripts/validate-doc-frontmatter.sh            # check (CI entrypoint)
+#   scripts/validate-doc-frontmatter.sh --baseline # regenerate baseline + seed the living manifest
+#   scripts/validate-doc-frontmatter.sh --self-test
+set -u
+REPO_ROOT=$(cd "$(dirname "$0")/.." && pwd)
+cd "$REPO_ROOT" || exit 2
 
-shopt -s nullglob
+case "${1:-check}" in
+    --baseline) python3 scripts/lib/docfront.py baseline; exit $? ;;
+    check|"")   python3 scripts/lib/docfront.py check;    exit $? ;;
+    --self-test) ;;
+    *) echo "usage: scripts/validate-doc-frontmatter.sh {check|--baseline|--self-test}" >&2; exit 2 ;;
+esac
 
-status=0
-files=(docs/*.md)
-
-if [[ ${#files[@]} -eq 0 ]]; then
-  echo "No docs markdown files found under docs/."
-  exit 1
+# self-test: a NEW doc with a bad status must be caught (not grandfathered).
+scratch="docs/_docfront_selftest_sabotage.md"
+cat > "$scratch" <<'MD'
+---
+project: openpulsehf
+doc: docs/_docfront_selftest_sabotage.md
+status: totally-not-a-valid-status
+last_updated: 2026-08-09
+---
+sabotage fixture
+MD
+out="$(mktemp)"
+python3 scripts/lib/docfront.py check > "$out" 2>&1
+rc=$?
+rm -f "$scratch"
+if [ "$rc" -ne 0 ] && grep -q "_docfront_selftest_sabotage" "$out"; then
+    echo "SELF-TEST: PASS — a new invalid-status doc was caught (exit $rc)"
+    rm -f "$out"; exit 0
 fi
-
-for file in "${files[@]}"; do
-  project_line=""
-  doc_line=""
-  status_line=""
-  updated_line=""
-  line_count=0
-
-  while IFS= read -r line; do
-    ((line_count += 1))
-
-    if [[ ${line_count} -eq 1 && ${line} != '---' ]]; then
-      echo "${file}: missing opening frontmatter delimiter on line 1"
-      status=1
-      break
-    fi
-
-    if [[ ${line_count} -gt 1 && ${line} == '---' ]]; then
-      break
-    fi
-
-    case "${line}" in
-      project:*)
-        project_line="${line}"
-        ;;
-      doc:*)
-        doc_line="${line}"
-        ;;
-      status:*)
-        status_line="${line}"
-        ;;
-      last_updated:*)
-        updated_line="${line}"
-        ;;
-    esac
-  done < "${file}"
-
-  if [[ ${line_count} -lt 2 ]]; then
-    echo "${file}: incomplete frontmatter block"
-    status=1
-    continue
-  fi
-
-  if [[ ${project_line} != 'project: openpulsehf' ]]; then
-    echo "${file}: project must be 'openpulsehf'"
-    status=1
-  fi
-
-  expected_doc="doc: ${file}"
-  if [[ ${doc_line} != "${expected_doc}" ]]; then
-    echo "${file}: doc must match file path (${file})"
-    status=1
-  fi
-
-  if [[ ${status_line} != 'status: living' ]]; then
-    echo "${file}: status must be 'living'"
-    status=1
-  fi
-
-  if [[ ! ${updated_line} =~ ^last_updated:[[:space:]][0-9]{4}-[0-9]{2}-[0-9]{2}$ ]]; then
-    echo "${file}: last_updated must use YYYY-MM-DD"
-    status=1
-  fi
-done
-
-exit ${status}
+echo "SELF-TEST: FAIL — planted bad doc was NOT caught (exit $rc)."
+cat "$out"; rm -f "$out"; exit 1

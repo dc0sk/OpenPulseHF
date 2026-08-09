@@ -1,0 +1,2236 @@
+capabilities:
+  CAP-01:
+    code:
+    - crates/openpulse-core/src/handshake.rs
+    - crates/openpulse-daemon/src/lib.rs
+    - crates/openpulse-daemon/src/server.rs
+    name: Signed classical handshake (Ed25519)
+    satisfies:
+    - REQ-FUN-10
+    - REQ-SEC-01
+    - REQ-SEC-03
+    - REQ-SEC-07
+    - REQ-CMP-03
+    - REQ-FEC-05
+    - REQ-REG-05
+    tests:
+    - crates/openpulse-core/tests/handshake_integration.rs
+    - crates/openpulse-daemon/src/lib.rs
+    traceability: baseline
+  CAP-02:
+    code:
+    - crates/openpulse-core/src/pq_handshake.rs
+    name: Post-quantum in-band handshake (ML-DSA-44 / ML-KEM-768)
+    satisfies:
+    - REQ-PQ-01
+    - REQ-PQ-02
+    - REQ-PQ-03
+    - REQ-PQ-04
+    - REQ-PQ-05
+    - REQ-PQ-06
+    - REQ-PQ-08
+    - REQ-SEC-03
+    - REQ-SEC-11
+    - REQ-FUN-10
+    tests:
+    - crates/openpulse-core/tests/pq_handshake_integration.rs
+    traceability: baseline
+  CAP-03:
+    code:
+    - crates/openpulse-core/src/manifest.rs
+    name: Transfer manifest signing and verification
+    satisfies:
+    - REQ-FUN-11
+    - REQ-SEC-01
+    - REQ-SEC-04
+    - REQ-SEC-07
+    - REQ-SEC-10
+    tests:
+    - crates/openpulse-core/tests/manifest_integration.rs
+    traceability: baseline
+  CAP-04:
+    code:
+    - crates/openpulse-core/src/trust.rs
+    - crates/openpulse-core/src/trust_store_file.rs
+    name: Trust store and trust-level evaluation
+    satisfies:
+    - REQ-FUN-12
+    - REQ-SEC-02
+    - REQ-SEC-05
+    - REQ-SEC-06
+    - REQ-SEC-08
+    - REQ-PQ-02
+    - REQ-SEC-11
+    tests:
+    - crates/openpulse-core/src/trust_store_file.rs
+    - crates/openpulse-core/tests/handshake_integration.rs
+    traceability: baseline
+  CAP-05:
+    code:
+    - crates/openpulse-core/src/signing.rs
+    name: Ed25519 signing primitives
+    satisfies:
+    - REQ-SEC-07
+    tests:
+    - crates/openpulse-core/src/signing.rs
+    traceability: baseline
+  CAP-06:
+    code:
+    - crates/openpulse-core/src/signed_envelope.rs
+    name: Signed envelope wire format
+    satisfies:
+    - REQ-SEC-10
+    - REQ-FUN-17
+    tests:
+    - crates/openpulse-core/src/signed_envelope.rs
+    traceability: baseline
+  CAP-07:
+    code:
+    - crates/openpulse-core/src/sar.rs
+    name: Segmentation and reassembly (SAR)
+    satisfies:
+    - REQ-PQ-05
+    - REQ-PQ-06
+    - REQ-PQ-07
+    - REQ-PQ-08
+    tests:
+    - crates/openpulse-core/tests/sar_roundtrip.rs
+    traceability: baseline
+  CAP-08:
+    code:
+    - crates/openpulse-core/src/compression.rs
+    name: Session-layer compression
+    satisfies:
+    - REQ-CMP-01
+    - REQ-CMP-02
+    - REQ-CMP-03
+    - REQ-CMP-04
+    - REQ-CMP-05
+    tests:
+    - crates/openpulse-core/tests/compression_integration.rs
+    traceability: baseline
+  CAP-09:
+    code:
+    - crates/openpulse-core/src/peer_descriptor.rs
+    name: Self-authenticating peer descriptor
+    satisfies:
+    - REQ-FUN-13
+    tests:
+    - crates/openpulse-core/tests/peer_descriptor_integration.rs
+    traceability: baseline
+  CAP-10:
+    code:
+    - crates/openpulse-core/src/frame.rs
+    name: Frame format and CRC-16
+    satisfies:
+    - REQ-FUN-05
+    tests:
+    - crates/openpulse-core/src/frame.rs
+    - crates/openpulse-modem/tests/fec_loopback.rs
+    traceability: baseline
+  CAP-11:
+    code:
+    - crates/openpulse-core/src/remote_control.rs
+    name: Signed remote rig-control command
+    satisfies: []
+    tests:
+    - crates/openpulse-core/tests/remote_control_integration.rs
+    traceability: baseline
+  CAP-12:
+    code:
+    - plugins/bpsk/src/demodulate.rs
+    - plugins/bpsk/src/lib.rs
+    - plugins/bpsk/src/modulate.rs
+    name: BPSK plugin family (BPSK31/63/100/250)
+    satisfies:
+    - REQ-FUN-02
+    - REQ-FUN-06
+    - REQ-PHY-03
+    - REQ-PERF-04
+    tests:
+    - crates/openpulse-modem/tests/bpsk_hardening.rs
+    - crates/openpulse-modem/tests/psk31_longframe_acquisition.rs
+    traceability: baseline
+  CAP-13:
+    code:
+    - plugins/qpsk/src/demodulate.rs
+    - plugins/qpsk/src/lib.rs
+    - plugins/qpsk/src/modulate.rs
+    name: QPSK plugin family (QPSK125/250/500/1000 + 2000/9600-RRC)
+    satisfies:
+    - REQ-FUN-06
+    - REQ-PERF-04
+    tests:
+    - crates/openpulse-modem/tests/qpsk500_acquisition.rs
+    - crates/openpulse-modem/tests/qpsk_hardening.rs
+    traceability: baseline
+  CAP-14:
+    code:
+    - plugins/psk8/src/demodulate.rs
+    - plugins/psk8/src/lib.rs
+    - plugins/psk8/src/modulate.rs
+    name: 8PSK plugin family (8PSK500/1000 + 2000/9600-RRC)
+    satisfies:
+    - REQ-FUN-06
+    - REQ-PERF-04
+    tests:
+    - crates/openpulse-modem/tests/psk8_acquisition.rs
+    - crates/openpulse-modem/tests/psk8_carrier_offset.rs
+    traceability: baseline
+  CAP-15:
+    code:
+    - plugins/64qam/src/demodulate.rs
+    - plugins/64qam/src/lib.rs
+    - plugins/64qam/src/modulate.rs
+    name: 64QAM plugin family (64QAM500/1000/2000-RRC)
+    satisfies:
+    - REQ-FUN-06
+    - REQ-PERF-04
+    tests:
+    - plugins/64qam/src/demodulate.rs
+    - plugins/64qam/src/lib.rs
+    traceability: baseline
+  CAP-16:
+    code:
+    - plugins/fsk4/src/demodulate.rs
+    - plugins/fsk4/src/lib.rs
+    - plugins/fsk4/src/modulate.rs
+    name: FSK4-ACK plugin
+    satisfies:
+    - REQ-FUN-06
+    tests:
+    - plugins/fsk4/tests/fsk4_integration.rs
+    traceability: baseline
+  CAP-17:
+    code:
+    - plugins/ofdm/src/channel.rs
+    - plugins/ofdm/src/demodulate.rs
+    - plugins/ofdm/src/lib.rs
+    - plugins/ofdm/src/modulate.rs
+    - plugins/ofdm/src/params.rs
+    name: OFDM multicarrier plugin
+    satisfies:
+    - REQ-FUN-06
+    - REQ-FUN-07
+    - REQ-PERF-04
+    tests:
+    - crates/openpulse-modem/tests/ofdm_simulation.rs
+    traceability: baseline
+  CAP-18:
+    code:
+    - plugins/scfdma/src/adaptive_pilot.rs
+    - plugins/scfdma/src/channel.rs
+    - plugins/scfdma/src/demodulate.rs
+    - plugins/scfdma/src/lib.rs
+    - plugins/scfdma/src/modulate.rs
+    - plugins/scfdma/src/params.rs
+    name: SC-FDMA single-carrier-FDM plugin
+    satisfies:
+    - REQ-FUN-06
+    - REQ-FUN-07
+    - REQ-PERF-04
+    tests:
+    - crates/openpulse-modem/tests/scfdma_memory_arq.rs
+    - plugins/scfdma/tests/loopback.rs
+    - plugins/scfdma/tests/pilot_channel_estimation.rs
+    - plugins/scfdma/tests/scfdma_fec_interleaver.rs
+    traceability: baseline
+  CAP-19:
+    code:
+    - plugins/pilot/src/demodulate.rs
+    - plugins/pilot/src/frame.rs
+    - plugins/pilot/src/lib.rs
+    - plugins/pilot/src/modulate.rs
+    name: Pilot-framed waveform plugin (PILOT-QPSK/8PSK/16QAM/32APSK)
+    satisfies:
+    - REQ-FUN-06
+    tests:
+    - plugins/pilot/tests/engine_loopback.rs
+    - plugins/pilot/tests/passband_loopback.rs
+    - plugins/pilot/tests/soft_fec_loopback.rs
+    - plugins/pilot/tests/sro_robustness.rs
+    traceability: baseline
+  CAP-20:
+    code:
+    - crates/openpulse-dsp/src/constellation.rs
+    - crates/openpulse-dsp/src/equalizer.rs
+    - crates/openpulse-dsp/src/filter.rs
+    - crates/openpulse-dsp/src/notch.rs
+    - crates/openpulse-dsp/src/pll.rs
+    - crates/openpulse-dsp/src/preamble.rs
+    - crates/openpulse-dsp/src/rrc.rs
+    - crates/openpulse-dsp/src/timing.rs
+    name: DSP primitive library
+    satisfies:
+    - REQ-FUN-06
+    tests:
+    - crates/openpulse-dsp/src/equalizer.rs
+    - crates/openpulse-dsp/src/filter.rs
+    - crates/openpulse-dsp/src/rrc.rs
+    - crates/openpulse-dsp/src/timing.rs
+    traceability: baseline
+  CAP-21:
+    code:
+    - crates/openpulse-dsp/src/acquisition.rs
+    - crates/openpulse-dsp/src/agc.rs
+    - crates/openpulse-dsp/src/doppler_tracker.rs
+    - crates/openpulse-dsp/src/farrow.rs
+    - crates/openpulse-dsp/src/freq_acquire.rs
+    - crates/openpulse-dsp/src/pilot_tracker.rs
+    name: Carrier/frequency acquisition and tracking DSP
+    satisfies:
+    - REQ-PHY-03
+    - REQ-PHY-04
+    - REQ-PHY-06
+    - REQ-PHY-09
+    tests:
+    - crates/openpulse-dsp/src/freq_acquire.rs
+    - crates/openpulse-modem/tests/acquisition_coverage.rs
+    - crates/openpulse-modem/tests/freq_acquire_accuracy.rs
+    traceability: baseline
+  CAP-22:
+    code:
+    - crates/openpulse-modem/src/engine.rs
+    - plugins/bpsk/src/demodulate.rs
+    name: AFC loop and applied correction
+    satisfies:
+    - REQ-PHY-03
+    - REQ-PHY-04
+    tests:
+    - crates/openpulse-modem/tests/afc_correction.rs
+    - crates/openpulse-modem/tests/carrier_offset_matrix.rs
+    - crates/openpulse-modem/tests/doppler_tracker_units.rs
+    - crates/openpulse-modem/tests/rrc_carrier_offset.rs
+    traceability: baseline
+  CAP-23:
+    code:
+    - crates/openpulse-core/src/iq.rs
+    name: Hilbert analytic-signal I/Q
+    satisfies: []
+    tests:
+    - crates/openpulse-core/src/iq.rs
+    traceability: baseline
+  CAP-24:
+    code:
+    - crates/openpulse-dsp/src/cessb.rs
+    name: Controlled-envelope SSB conditioner
+    satisfies: []
+    tests:
+    - apps/openpulse-linksim/tests/cessb_ab.rs
+    - crates/openpulse-dsp/src/cessb.rs
+    - crates/openpulse-modem/tests/cessb_engine.rs
+    - crates/openpulse-modem/tests/cessb_power_evm.rs
+    traceability: baseline
+  CAP-25:
+    code:
+    - crates/openpulse-gpu/src/demodulate.rs
+    - crates/openpulse-gpu/src/fft256.rs
+    - crates/openpulse-gpu/src/ldpc_bp.rs
+    - crates/openpulse-gpu/src/lib.rs
+    - crates/openpulse-gpu/src/modulate.rs
+    - crates/openpulse-gpu/src/rrc_fir.rs
+    - crates/openpulse-gpu/src/soft_demod.rs
+    name: GPU-accelerated DSP kernels
+    satisfies:
+    - REQ-NFR-11
+    - REQ-NFR-12
+    tests:
+    - crates/openpulse-gpu/tests/ldpc_bp_bench.rs
+    traceability: baseline
+  CAP-26:
+    code:
+    - crates/openpulse-core/src/fec.rs
+    name: Reed-Solomon + block interleaver codec
+    satisfies:
+    - REQ-FEC-01
+    - REQ-FEC-02
+    - REQ-FEC-03
+    - REQ-FEC-06
+    - REQ-FUN-06
+    - REQ-FUN-09
+    tests:
+    - crates/openpulse-core/src/fec.rs
+    - crates/openpulse-modem/tests/fec_loopback.rs
+    - crates/openpulse-modem/tests/fec_mode_dispatch.rs
+    traceability: baseline
+  CAP-27:
+    code:
+    - crates/openpulse-core/src/conv.rs
+    - crates/openpulse-core/src/soft_viterbi.rs
+    name: Convolutional codec (Viterbi)
+    satisfies:
+    - REQ-FUN-06
+    tests:
+    - crates/openpulse-core/tests/fec_comparison.rs
+    - crates/openpulse-core/tests/soft_viterbi_integration.rs
+    traceability: baseline
+  CAP-28:
+    code:
+    - crates/openpulse-core/src/ldpc.rs
+    name: LDPC iterative decoder
+    satisfies:
+    - REQ-FUN-06
+    tests:
+    - crates/openpulse-modem/tests/ldpc_engine_loopback.rs
+    - crates/openpulse-modem/tests/llr_combining_gain.rs
+    - crates/openpulse-modem/tests/llr_convention_conformance.rs
+    traceability: baseline
+  CAP-29:
+    code:
+    - crates/openpulse-core/src/turbo.rs
+    name: Turbo codec
+    satisfies:
+    - REQ-FUN-06
+    tests:
+    - crates/openpulse-core/src/turbo.rs
+    - crates/openpulse-core/tests/turbo_ber.rs
+    traceability: baseline
+  CAP-30:
+    code:
+    - crates/openpulse-core/src/len_prefix.rs
+    name: Length-prefix soft-LLR framing
+    satisfies: []
+    tests:
+    - crates/openpulse-core/src/len_prefix.rs
+    traceability: baseline
+  CAP-31:
+    code:
+    - crates/openpulse-core/src/dcd.rs
+    - crates/openpulse-modem/src/engine.rs
+    name: DCD energy detection + CSMA channel access
+    satisfies:
+    - REQ-MAC-01
+    - REQ-MAC-02
+    - REQ-MAC-03
+    - REQ-MAC-04
+    tests:
+    - crates/openpulse-core/src/dcd.rs
+    - crates/openpulse-modem/tests/csma_loopback.rs
+    traceability: baseline
+  CAP-32:
+    code:
+    - crates/openpulse-core/src/ack.rs
+    - crates/openpulse-core/src/rate.rs
+    name: ACK taxonomy and adaptive rate control
+    satisfies:
+    - REQ-FUN-06
+    tests:
+    - crates/openpulse-core/tests/rate_adaptation.rs
+    - crates/openpulse-modem/tests/ack_exchange_integration.rs
+    traceability: baseline
+  CAP-33:
+    code:
+    - crates/openpulse-core/src/ota_rate.rs
+    - crates/openpulse-core/src/profile.rs
+    name: Over-the-air receiver-led rate controller
+    satisfies:
+    - REQ-FUN-06
+    tests:
+    - crates/openpulse-core/src/ota_rate.rs
+    - crates/openpulse-modem/tests/modcod_ladder.rs
+    - crates/openpulse-modem/tests/ota_channel_adaptation.rs
+    - crates/openpulse-modem/tests/ota_rate_lockstep.rs
+    - crates/openpulse-modem/tests/snr_floor_calibration.rs
+    traceability: baseline
+  CAP-34:
+    code:
+    - crates/openpulse-core/src/snr_estimate.rs
+    - crates/openpulse-core/src/snr_hysteresis.rs
+    name: SNR estimation (M2M4 + hysteresis)
+    satisfies:
+    - REQ-FUN-06
+    tests:
+    - crates/openpulse-core/src/snr_hysteresis.rs
+    - crates/openpulse-modem/tests/adaptive_hysteresis.rs
+    - crates/openpulse-modem/tests/snr_rate_adaptation.rs
+    traceability: baseline
+  CAP-35:
+    code:
+    - crates/openpulse-core/src/hpx.rs
+    name: HPX session state machine
+    satisfies:
+    - REQ-FUN-06
+    - REQ-FUN-08
+    - REQ-NFR-09
+    - REQ-PERF-01
+    tests:
+    - crates/openpulse-core/src/hpx.rs
+    - crates/openpulse-modem/tests/hpx_conformance_integration.rs
+    traceability: baseline
+  CAP-36:
+    code:
+    - crates/openpulse-modem/src/harq.rs
+    - crates/openpulse-modem/src/rate_policy.rs
+    name: ARQ/HARQ retry and rate policy
+    satisfies:
+    - REQ-FUN-09
+    - REQ-NFR-09
+    tests:
+    - crates/openpulse-modem/tests/arq_retry_integration.rs
+    - crates/openpulse-modem/tests/harq_retry_watterson_integration.rs
+    - crates/openpulse-modem/tests/two_way_arq.rs
+    - crates/openpulse-modem/tests/window_arq_selective_engine.rs
+    - crates/openpulse-modem/tests/window_arq_watterson.rs
+    traceability: baseline
+  CAP-37:
+    code:
+    - crates/openpulse-core/src/profile.rs
+    name: Adaptive session profiles
+    satisfies:
+    - REQ-FUN-06
+    - REQ-FUN-07
+    - REQ-FEC-04
+    - REQ-FEC-05
+    - REQ-MAC-05
+    - REQ-PERF-04
+    tests:
+    - crates/openpulse-core/tests/session_profile.rs
+    - crates/openpulse-modem/tests/adaptive_profile_integration.rs
+    - crates/openpulse-modem/tests/snr_floor_calibration.rs
+    traceability: baseline
+  CAP-38:
+    code:
+    - crates/openpulse-modem/src/diagnostics.rs
+    - crates/openpulse-modem/src/engine.rs
+    - crates/openpulse-modem/src/event.rs
+    - crates/openpulse-modem/src/pipeline.rs
+    name: Modem engine and pipeline scheduler
+    satisfies:
+    - REQ-NFR-10
+    - REQ-PHY-02
+    - REQ-PHY-06
+    - REQ-PERF-01
+    tests:
+    - crates/openpulse-modem/tests/channel_loopback.rs
+    - crates/openpulse-modem/tests/dc_block.rs
+    - crates/openpulse-modem/tests/engine_events.rs
+    - crates/openpulse-modem/tests/pipeline_timing_integration.rs
+    traceability: baseline
+  CAP-39:
+    code:
+    - crates/openpulse-ardop/src/bridge.rs
+    - crates/openpulse-ardop/src/command.rs
+    - crates/openpulse-ardop/src/data.rs
+    - crates/openpulse-ardop/src/lib.rs
+    - crates/openpulse-ardop/src/main.rs
+    - crates/openpulse-ardop/src/state.rs
+    name: ARDOP-compatible TCP TNC
+    satisfies: []
+    tests:
+    - crates/openpulse-ardop/src/command.rs
+    - crates/openpulse-ardop/tests/ardop_integration.rs
+    traceability: baseline
+  CAP-40:
+    code:
+    - crates/openpulse-kiss/src/ax25.rs
+    - crates/openpulse-kiss/src/bridge.rs
+    - crates/openpulse-kiss/src/kiss.rs
+    - crates/openpulse-kiss/src/lib.rs
+    - crates/openpulse-kiss/src/main.rs
+    - crates/openpulse-kiss/src/server.rs
+    name: KISS/AX.25 TCP TNC
+    satisfies: []
+    tests:
+    - crates/openpulse-kiss/tests/kiss_integration.rs
+    traceability: baseline
+  CAP-41:
+    code:
+    - crates/openpulse-b2f/src/banner.rs
+    - crates/openpulse-b2f/src/compress.rs
+    - crates/openpulse-b2f/src/frame.rs
+    - crates/openpulse-b2f/src/header.rs
+    - crates/openpulse-b2f/src/lib.rs
+    - crates/openpulse-b2f/src/session.rs
+    name: B2F/Winlink protocol state machine
+    satisfies: []
+    tests:
+    - crates/openpulse-b2f/tests/b2f_integration.rs
+    traceability: baseline
+  CAP-42:
+    code:
+    - crates/openpulse-b2f-driver/src/cmd.rs
+    - crates/openpulse-b2f-driver/src/data.rs
+    - crates/openpulse-b2f-driver/src/lib.rs
+    name: B2F session driver
+    satisfies: []
+    tests:
+    - crates/openpulse-b2f-driver/tests/driver_integration.rs
+    - crates/openpulse-b2f-driver/tests/e2e_loopback.rs
+    traceability: baseline
+  CAP-43:
+    code:
+    - crates/openpulse-gateway/src/main.rs
+    name: Direct TCP Winlink CMS gateway
+    satisfies: []
+    tests: []
+    traceability: baseline
+  CAP-44:
+    code:
+    - crates/openpulse-freedv-auth/src/beacon.rs
+    - crates/openpulse-freedv-auth/src/data_port.rs
+    - crates/openpulse-freedv-auth/src/lib.rs
+    - crates/openpulse-freedv-auth/src/scheduler.rs
+    - crates/openpulse-freedv-auth/src/verdict.rs
+    name: FreeDV authenticated-voice shim
+    satisfies: []
+    tests:
+    - crates/openpulse-freedv-auth/tests/freedv_auth_integration.rs
+    traceability: baseline
+  CAP-45:
+    code:
+    - crates/openpulse-qsy/src/bandplan.rs
+    - crates/openpulse-qsy/src/frame.rs
+    - crates/openpulse-qsy/src/lib.rs
+    - crates/openpulse-qsy/src/scanner.rs
+    - crates/openpulse-qsy/src/session.rs
+    name: QSY frequency-agility protocol
+    satisfies:
+    - REQ-REG-13
+    - REQ-REG-14
+    tests:
+    - crates/openpulse-qsy/tests/qsy_session.rs
+    traceability: baseline
+  CAP-46:
+    code:
+    - crates/openpulse-mesh/src/beacon.rs
+    - crates/openpulse-mesh/src/lib.rs
+    - crates/openpulse-mesh/src/main.rs
+    name: Mesh broadcast daemon
+    satisfies:
+    - REQ-FUN-15
+    tests:
+    - crates/openpulse-mesh/tests/mesh_loopback.rs
+    traceability: baseline
+  CAP-47:
+    code:
+    - crates/openpulse-core/src/relay.rs
+    - crates/openpulse-repeater/src/config.rs
+    - crates/openpulse-repeater/src/lib.rs
+    name: Relay forwarding and digipeater
+    satisfies:
+    - REQ-FUN-15
+    - REQ-FUN-16
+    - REQ-SEC-09
+    - REQ-SEC-10
+    - REQ-SEC-12
+    - REQ-NFR-15
+    - REQ-REG-06
+    tests:
+    - crates/openpulse-core/tests/relay_integration.rs
+    - crates/openpulse-repeater/tests/repeater_integration.rs
+    traceability: baseline
+  CAP-48:
+    code:
+    - crates/openpulse-core/src/peer_cache.rs
+    - crates/openpulse-core/src/query_propagation.rs
+    - crates/openpulse-core/src/wire_query.rs
+    name: Network query propagation and peer query
+    satisfies:
+    - REQ-FUN-13
+    - REQ-FUN-14
+    - REQ-FUN-16
+    - REQ-FUN-17
+    - REQ-NFR-14
+    - REQ-NFR-15
+    - REQ-SEC-12
+    tests:
+    - crates/openpulse-core/tests/query_propagation_integration.rs
+    - crates/openpulse-core/tests/wire_query_integration.rs
+    traceability: baseline
+  CAP-49:
+    code:
+    - crates/openpulse-tui/src/app.rs
+    - crates/openpulse-tui/src/events.rs
+    - crates/openpulse-tui/src/main.rs
+    - crates/openpulse-tui/src/ui.rs
+    name: ratatui TUI frontend
+    satisfies: []
+    tests: []
+    traceability: baseline
+  CAP-50:
+    code:
+    - apps/openpulse-panel/src/app.rs
+    - apps/openpulse-panel/src/connection.rs
+    - apps/openpulse-panel/src/main.rs
+    - apps/openpulse-panel/src/state.rs
+    - apps/openpulse-panel/src/theme.rs
+    - apps/openpulse-panel/src/transport.rs
+    - apps/openpulse-panel/src/ui.rs
+    name: Operator panel GUI
+    satisfies:
+    - REQ-PHY-09
+    - REQ-UX-04
+    tests:
+    - apps/openpulse-panel/src/theme.rs
+    traceability: baseline
+  CAP-51:
+    code:
+    - apps/openpulse-testbench/src/app.rs
+    - apps/openpulse-testbench/src/colormap.rs
+    - apps/openpulse-testbench/src/main.rs
+    - apps/openpulse-testbench/src/signal_path.rs
+    - apps/openpulse-testbench/src/state.rs
+    - apps/openpulse-testbench/src/ui.rs
+    name: Signal-path testbench GUI
+    satisfies: []
+    tests:
+    - apps/openpulse-testbench/src/signal_path.rs
+    traceability: baseline
+  CAP-52:
+    code:
+    - apps/openpulse-linksim/src/gui.rs
+    - apps/openpulse-linksim/src/lib.rs
+    - apps/openpulse-linksim/src/main.rs
+    - apps/openpulse-linksim/src/serve.rs
+    name: Two-station ARQ link simulator
+    satisfies:
+    - REQ-NFR-06
+    - REQ-PERF-02
+    - REQ-PERF-03
+    tests:
+    - apps/openpulse-linksim/tests/cessb_ab.rs
+    - apps/openpulse-linksim/tests/serve_integration.rs
+    traceability: baseline
+  CAP-53:
+    code:
+    - apps/openpulse-testmatrix/src/bench.rs
+    - apps/openpulse-testmatrix/src/cases.rs
+    - apps/openpulse-testmatrix/src/channels.rs
+    - apps/openpulse-testmatrix/src/compare.rs
+    - apps/openpulse-testmatrix/src/main.rs
+    - apps/openpulse-testmatrix/src/matrix.rs
+    - apps/openpulse-testmatrix/src/report.rs
+    name: Mode × channel test matrix runner
+    satisfies:
+    - REQ-NFR-05
+    - REQ-NFR-06
+    - REQ-NFR-07
+    - REQ-NFR-08
+    - REQ-FEC-06
+    - REQ-PERF-02
+    - REQ-PERF-03
+    - REQ-DOC-03
+    tests:
+    - apps/openpulse-testmatrix/src/bench.rs
+    - apps/openpulse-testmatrix/tests/repro.rs
+    traceability: baseline
+  CAP-54:
+    code:
+    - apps/openpulse-twinview/src/main.rs
+    - crates/openpulse-daemon/src/twin.rs
+    name: Twin-station combined view
+    satisfies: []
+    tests:
+    - apps/openpulse-twinview/src/main.rs
+    - crates/openpulse-daemon/tests/twin_daemon_bridge.rs
+    traceability: baseline
+  CAP-55:
+    code:
+    - crates/openpulse-daemon/src/lib.rs
+    - crates/openpulse-daemon/src/main.rs
+    - crates/openpulse-daemon/src/protocol.rs
+    - crates/openpulse-daemon/src/server.rs
+    - crates/openpulse-daemon/src/ws.rs
+    name: Unified background daemon and control server
+    satisfies:
+    - REQ-NFR-10
+    tests:
+    - crates/openpulse-daemon/tests/control_port.rs
+    - crates/openpulse-daemon/tests/spectrum_integration.rs
+    - crates/openpulse-daemon/tests/twin_daemon_bridge.rs
+    traceability: baseline
+  CAP-56:
+    code:
+    - crates/openpulse-cli/src/cli.rs
+    - crates/openpulse-cli/src/commands/adaptive.rs
+    - crates/openpulse-cli/src/commands/arq.rs
+    - crates/openpulse-cli/src/commands/benchmark.rs
+    - crates/openpulse-cli/src/commands/mod.rs
+    - crates/openpulse-cli/src/commands/monitor.rs
+    - crates/openpulse-cli/src/commands/qsy.rs
+    - crates/openpulse-cli/src/commands/receive.rs
+    - crates/openpulse-cli/src/commands/transmit.rs
+    - crates/openpulse-cli/src/main.rs
+    name: CLI binary and subcommands
+    satisfies:
+    - REQ-FUN-01
+    - REQ-UX-01
+    - REQ-UX-02
+    - REQ-UX-03
+    tests:
+    - crates/openpulse-cli/tests/cli_adaptive.rs
+    - crates/openpulse-cli/tests/cli_arq.rs
+    - crates/openpulse-cli/tests/cli_session_metrics.rs
+    - crates/openpulse-cli/tests/local_state_integration.rs
+    - crates/openpulse-cli/tests/ptt_wiring_integration.rs
+    traceability: baseline
+  CAP-57:
+    code:
+    - pki-tooling/src/api/handlers.rs
+    - pki-tooling/src/auth.rs
+    - pki-tooling/src/lib.rs
+    - pki-tooling/src/main.rs
+    - pki-tooling/src/startup_env.rs
+    - pki-tooling/src/verification.rs
+    name: PKI key-management and trust-bundle signing service
+    satisfies:
+    - REQ-SEC-02
+    - REQ-SEC-06
+    - REQ-PQ-09
+    tests:
+    - pki-tooling/src/verification.rs
+    - pki-tooling/tests/api_flow.rs
+    traceability: baseline
+  CAP-58:
+    code:
+    - crates/openpulse-config/src/lib.rs
+    name: Typed TOML configuration
+    satisfies:
+    - REQ-FUN-04
+    - REQ-PLAT-06
+    - REQ-FEC-04
+    - REQ-MAC-05
+    tests: []
+    traceability: baseline
+  CAP-59:
+    code:
+    - crates/openpulse-radio/src/band_levels.rs
+    - crates/openpulse-radio/src/cat_controller.rs
+    - crates/openpulse-radio/src/generic_cat.rs
+    - crates/openpulse-radio/src/lib.rs
+    - crates/openpulse-radio/src/noop.rs
+    - crates/openpulse-radio/src/rig_controller.rs
+    - crates/openpulse-radio/src/rig_definition.rs
+    - crates/openpulse-radio/src/rig_mode.rs
+    - crates/openpulse-radio/src/rigctld.rs
+    - crates/openpulse-radio/src/serial.rs
+    - crates/openpulse-radio/src/vox.rs
+    name: Radio interface, PTT, and CAT control
+    satisfies:
+    - REQ-PHY-05
+    - REQ-PHY-07
+    - REQ-PHY-08
+    tests:
+    - crates/openpulse-radio/src/noop.rs
+    - crates/openpulse-radio/tests/generic_cat_integration.rs
+    - crates/openpulse-radio/tests/rigctld_integration.rs
+    traceability: baseline
+  CAP-60:
+    code:
+    - crates/openpulse-channel/src/awgn.rs
+    - crates/openpulse-channel/src/chirp.rs
+    - crates/openpulse-channel/src/composite.rs
+    - crates/openpulse-channel/src/dsp.rs
+    - crates/openpulse-channel/src/fading.rs
+    - crates/openpulse-channel/src/flat_fading.rs
+    - crates/openpulse-channel/src/gilbert_elliott.rs
+    - crates/openpulse-channel/src/lib.rs
+    - crates/openpulse-channel/src/qrm.rs
+    - crates/openpulse-channel/src/qrn.rs
+    - crates/openpulse-channel/src/qsb.rs
+    - crates/openpulse-channel/src/sro.rs
+    - crates/openpulse-channel/src/watterson.rs
+    name: Channel simulation models
+    satisfies:
+    - REQ-NFR-08
+    - REQ-FEC-06
+    - REQ-NFR-02
+    tests:
+    - crates/openpulse-channel/src/gilbert_elliott.rs
+    - crates/openpulse-channel/src/watterson.rs
+    traceability: baseline
+  CAP-61:
+    code:
+    - crates/openpulse-modem/src/benchmark.rs
+    - crates/openpulse-modem/src/channel_sim.rs
+    - crates/openpulse-modem/src/ofdm_sim.rs
+    name: Benchmark and channel-sim harness
+    satisfies:
+    - REQ-NFR-02
+    - REQ-NFR-05
+    - REQ-NFR-06
+    - REQ-NFR-07
+    - REQ-NFR-08
+    - REQ-FEC-06
+    - REQ-PERF-02
+    - REQ-PERF-03
+    - REQ-DOC-03
+    tests:
+    - crates/openpulse-modem/tests/benchmark_integration.rs
+    - crates/openpulse-modem/tests/channel_loopback.rs
+    - crates/openpulse-modem/tests/channel_loopback_multimode.rs
+    traceability: baseline
+  CAP-62:
+    code:
+    - crates/openpulse-audio/src/cpal_backend.rs
+    - crates/openpulse-audio/src/lib.rs
+    - crates/openpulse-audio/src/loopback.rs
+    name: Audio backends (loopback + CPAL)
+    satisfies:
+    - REQ-FUN-03
+    - REQ-FUN-04
+    - REQ-PHY-01
+    - REQ-PLAT-01
+    - REQ-PLAT-02
+    - REQ-PLAT-03
+    - REQ-PLAT-04
+    - REQ-PLAT-06
+    - REQ-NFR-02
+    tests:
+    - crates/openpulse-modem/tests/channel_loopback.rs
+    traceability: baseline
+  CAP-63:
+    code:
+    - crates/openpulse-core/src/adif.rs
+    - crates/openpulse-core/src/tx_metadata.rs
+    - crates/openpulse-daemon/src/logbook.rs
+    name: ADIF logbook and TX session metadata
+    satisfies: []
+    tests:
+    - crates/openpulse-core/src/adif.rs
+    - crates/openpulse-core/src/tx_metadata.rs
+    traceability: baseline
+  CAP-64:
+    code:
+    - crates/openpulse-cli/src/plugins.rs
+    - crates/openpulse-core/src/plugin.rs
+    name: Plugin registry and modulation plugin trait
+    satisfies:
+    - REQ-NFR-03
+    - REQ-NFR-04
+    tests:
+    - crates/openpulse-core/src/plugin.rs
+    traceability: baseline
+  CAP-65:
+    code:
+    - crates/openpulse-modem/src/envelope_codec.rs
+    name: Envelope codec and modem framing helpers
+    satisfies:
+    - REQ-FUN-05
+    tests:
+    - crates/openpulse-modem/tests/fec_loopback.rs
+    - crates/openpulse-modem/tests/fec_mode_dispatch.rs
+    traceability: baseline
+  CAP-66:
+    code:
+    - crates/openpulse-ardop/src/bridge.rs
+    - crates/openpulse-core/src/cw_id.rs
+    - crates/openpulse-core/src/station_id.rs
+    - crates/openpulse-daemon/src/server.rs
+    - crates/openpulse-modem/src/engine.rs
+    name: Periodic + end-of-exchange station identification (auto-ID)
+    satisfies:
+    - REQ-REG-10
+    tests:
+    - crates/openpulse-ardop/src/command.rs
+    - crates/openpulse-core/src/cw_id.rs
+    - crates/openpulse-core/src/station_id.rs
+    - crates/openpulse-modem/tests/station_id_txcount.rs
+    traceability: baseline
+  CAP-67:
+    code:
+    - crates/openpulse-cli/src/commands/audit_bundle.rs
+    - crates/openpulse-config/src/logging.rs
+    - crates/openpulse-daemon/src/audit.rs
+    - crates/openpulse-daemon/src/main.rs
+    name: Observability / audit mode
+    satisfies:
+    - REQ-OBS-01
+    - REQ-OBS-02
+    - REQ-OBS-03
+    tests: []
+    traceability: baseline
+  CAP-68:
+    code:
+    - openpulse-config/src/secret_file.rs
+    name: Control-channel security (auth/encryption + key storage)
+    satisfies: []
+    tests: []
+    traceability: baseline
+  CAP-69:
+    code: []
+    name: Wide-channel (VHF/UHF) 12.5/25 kHz support
+    satisfies:
+    - REQ-BW-01
+    - REQ-BW-02
+    - REQ-BW-03
+    - REQ-BW-04
+    - REQ-BW-05
+    - REQ-BW-06
+    - REQ-BW-07
+    tests: []
+    traceability: baseline
+  CAP-70:
+    code:
+    - crates/openpulse-cli/src/commands/daemon.rs
+    - crates/openpulse-daemon/src/server.rs
+    - src/lib.rs
+    name: JS8-based station discovery + rendezvous (FF-15)
+    satisfies:
+    - REQ-DISC-01
+    - REQ-DISC-02
+    - REQ-DISC-03
+    - REQ-DISC-04
+    - REQ-DISC-05
+    - REQ-DISC-06
+    - REQ-DISC-07
+    - REQ-FUN-13
+    - REQ-FUN-14
+    - REQ-REG-04
+    tests: []
+    traceability: baseline
+  CAP-71:
+    code:
+    - crates/openpulse-daemon/src/filexfer.rs
+    name: Direct P2P file transfer with signed-manifest verification (FF-16)
+    satisfies:
+    - REQ-FX-01
+    - REQ-FX-02
+    - REQ-FX-03
+    - REQ-FX-04
+    - REQ-FX-05
+    - REQ-FX-06
+    - REQ-FUN-11
+    tests: []
+    traceability: baseline
+  CAP-72:
+    code: []
+    name: Receive front-end conditioning (AGC, notch, adaptive DCD)
+    satisfies:
+    - REQ-AGC-01
+    - REQ-QRM-01
+    tests: []
+    traceability: baseline
+  CAP-73:
+    code: []
+    name: Device resolution and multi-mode receive
+    satisfies:
+    - REQ-DEV-01
+    - REQ-RX-01
+    tests: []
+    traceability: baseline
+  CAP-74:
+    code: []
+    name: PTT backends
+    satisfies:
+    - REQ-PTT-01
+    - REQ-PTT-02
+    - REQ-PTT-03
+    tests: []
+    traceability: baseline
+  CAP-75:
+    code: []
+    name: MFSK16 weak-signal sub-floor waveform
+    satisfies:
+    - REQ-WSIG-01
+    tests: []
+    traceability: baseline
+meta:
+  bright_line: '2026-08-09'
+  generated_by: scripts/trace.sh import
+  note: 'baseline entries are grandfathered (checker WARNS on drift). Set traceability: enforced to make
+    an entry FAIL the build on drift; an enforced requirement must carry an in-code // VERIFIES: REQ-x
+    binding. New requirements and new code default to enforced.'
+  sources:
+  - docs/dev/requirements.md
+  - docs/dev/project/traceability-matrix.md
+requirements:
+  REQ-AGC-01:
+    category: Receiver AGC
+    covered_by:
+    - CAP-72
+    statement: Receiver AGC so decode is level-invariant, and the AGC tracks input level
+    status: ratified
+    traceability: baseline
+  REQ-BW-01:
+    category: Wide channel (1.x)
+    covered_by:
+    - CAP-69
+    statement: RF-architecture decision (direct-IQ SDR / linear exciter / 4FSK) governs all wide work
+    status: ratified
+    traceability: baseline
+  REQ-BW-02:
+    category: Wide channel (1.x)
+    covered_by:
+    - CAP-69
+    statement: Configurable audio sample rate {8000,48000,96000}, engine off the hard-coded 8 kHz
+    status: ratified
+    traceability: baseline
+  REQ-BW-03:
+    category: Wide channel (1.x)
+    covered_by:
+    - CAP-69
+    statement: ~12.5 kHz wide modes at 48 kHz audio via the adaptive ladder
+    status: ratified
+    traceability: baseline
+  REQ-BW-04:
+    category: Wide channel (1.x)
+    covered_by:
+    - CAP-69
+    statement: ~25 kHz wide modes via 96 kHz real audio or 48 kHz complex IQ
+    status: ratified
+    traceability: baseline
+  REQ-BW-05:
+    category: Wide channel (1.x)
+    covered_by:
+    - CAP-69
+    statement: Direct-IQ receive path (complements the existing IQ transmit seam)
+    status: ratified
+    traceability: baseline
+  REQ-BW-06:
+    category: Wide channel (1.x)
+    covered_by:
+    - CAP-69
+    statement: VHF/UHF bandplan tables + occupied-BW limits + channel-raster QSY
+    status: ratified
+    traceability: baseline
+  REQ-BW-07:
+    category: Wide channel (1.x)
+    covered_by:
+    - CAP-69
+    statement: Wide-mode floors calibrated vs a VHF/UHF mobile-fading model, explicit SNR reference BW
+    status: ratified
+    traceability: baseline
+  REQ-CAT-01:
+    category: Rig control (CAT)
+    covered_by: []
+    statement: Dedicated CAT crate with per-model drivers; unsupported controls typed, never an empty
+      value
+    status: ratified
+    traceability: baseline
+  REQ-CAT-02:
+    category: Rig control (CAT)
+    covered_by: []
+    statement: 100 % of each model's published CAT command set, coverage mechanically diffed in CI against
+      a per-model inventory
+    status: ratified
+    traceability: baseline
+  REQ-CAT-03:
+    category: Rig control (CAT)
+    covered_by: []
+    statement: 'Set-then-verify: a write whose readback disagrees is an error, not a success'
+    status: ratified
+    traceability: baseline
+  REQ-CAT-04:
+    category: Rig control (CAT)
+    covered_by: []
+    statement: Per-model validation on REAL hardware, recording evidence tier, firmware revision, operator,
+      date and expiry
+    status: ratified
+    traceability: baseline
+  REQ-CAT-05:
+    category: Rig control (CAT)
+    covered_by: []
+    statement: Guided validation procedure so contributors can validate their own rigs and submit an evidence
+      bundle
+    status: ratified
+    traceability: baseline
+  REQ-CAT-06:
+    category: Rig control (CAT)
+    covered_by: []
+    statement: Open candidate model list (Elecraft K4/K3/KX3/KX2, QRP Labs QMX/QMX+, Yaesu FT-710/991A/817/818,
+      ICOM IC-9700/705); candidacy is not support
+    status: ratified
+    traceability: baseline
+  REQ-CMP-01:
+    category: Compression
+    covered_by:
+    - CAP-08
+    statement: Optional lossless payload compression at the session layer is in scope.
+    status: ratified
+    traceability: enforced
+  REQ-CMP-02:
+    category: Compression
+    covered_by:
+    - CAP-08
+    statement: Compression algorithm must be deterministic and produce identical output for identical
+      input across platforms.
+    status: ratified
+    traceability: baseline
+  REQ-CMP-03:
+    category: Compression
+    covered_by:
+    - CAP-08
+    - CAP-01
+    statement: Compression capability must be negotiated during session handshake and must not be assumed.
+    status: ratified
+    traceability: baseline
+  REQ-CMP-04:
+    category: Compression
+    covered_by:
+    - CAP-08
+    statement: If compression is active, compressed size must be compared to uncompressed size before
+      transmission; a compressed frame larger than the uncompressed original must be sent uncompressed.
+    status: ratified
+    traceability: baseline
+  REQ-CMP-05:
+    category: Compression
+    covered_by:
+    - CAP-08
+    statement: Decompression failure must be treated as a frame integrity error.
+    status: ratified
+    traceability: baseline
+  REQ-DEV-01:
+    category: Devices
+    covered_by:
+    - CAP-73
+    statement: Hotplug-safe audio device resolution
+    status: ratified
+    traceability: baseline
+  REQ-DISC-01:
+    category: JS8 discovery (FF-15)
+    covered_by:
+    - CAP-70
+    statement: Native JS8-compatible waveform interoperable with stock JS8Call, no external process
+    status: ratified
+    traceability: baseline
+  REQ-DISC-02:
+    category: JS8 discovery (FF-15)
+    covered_by:
+    - CAP-70
+    statement: Idle auto-QSY to the band's JS8 calling frequency; participate as a JS8 station; restore
+      home on stand-down
+    status: ratified
+    traceability: baseline
+  REQ-DISC-03:
+    category: JS8 discovery (FF-15)
+    covered_by:
+    - CAP-70
+    statement: In-band `@OPULSE` capability hint; recognize + cache other OpenPulse stations in the shared
+      peer cache
+    status: ratified
+    traceability: baseline
+  REQ-DISC-04:
+    category: JS8 discovery (FF-15)
+    covered_by:
+    - CAP-70
+    statement: All TX off by default; receive-only default when enabled; beacon/rendezvous TX each require
+      explicit opt-in + callsign
+    status: ratified
+    traceability: baseline
+  REQ-DISC-05:
+    category: JS8 discovery (FF-15)
+    covered_by:
+    - CAP-70
+    statement: No TX unless NTP-disciplined within ±2 s of UTC; hard-refuse + degrade to RX-only beyond
+      the bound
+    status: ratified
+    traceability: baseline
+  REQ-DISC-06:
+    category: JS8 discovery (FF-15)
+    covered_by:
+    - CAP-70
+    statement: Unattended beacon TX satisfies §97.221 automatic control (control point, off-by-default,
+      periodic ID, operator power)
+    status: ratified
+    traceability: baseline
+  REQ-DISC-07:
+    category: JS8 discovery (FF-15)
+    covered_by:
+    - CAP-70
+    statement: 2-message rendezvous over JS8 → QSY → signed CONREQ/CONACK handoff for auth (rendezvous
+      itself unsigned)
+    status: ratified
+    traceability: baseline
+  REQ-DOC-01:
+    category: Documentation
+    covered_by: []
+    statement: Version bumps require updates to docs/dev/project/changelog.md and docs/releasenotes.md.
+    status: ratified
+    traceability: baseline
+  REQ-DOC-02:
+    category: Documentation
+    covered_by: []
+    statement: Docs files under docs/ must pass frontmatter validation in CI.
+    status: ratified
+    traceability: baseline
+  REQ-DOC-03:
+    category: Documentation
+    covered_by:
+    - CAP-53
+    - CAP-61
+    statement: HPX benchmark assumptions and result summaries must be captured in docs/high-performance-mode.md.
+    status: ratified
+    traceability: baseline
+  REQ-FEC-01:
+    category: FEC/Interleaving
+    covered_by:
+    - CAP-26
+    statement: All FEC-enabled transfer modes must pair the FEC codec with a block interleaver.
+    status: ratified
+    traceability: baseline
+  REQ-FEC-02:
+    category: FEC/Interleaving
+    covered_by:
+    - CAP-26
+    statement: The interleaver must shuffle symbols across multiple FEC blocks before transmission such
+      that burst errors are dispersed into correctable random-error patterns.
+    status: ratified
+    traceability: baseline
+  REQ-FEC-03:
+    category: FEC/Interleaving
+    covered_by:
+    - CAP-26
+    statement: Default interleaver depth must be at least 5× the expected maximum burst error duration
+      expressed in symbols at the target baud rate.
+    status: ratified
+    traceability: baseline
+  REQ-FEC-04:
+    category: FEC/Interleaving
+    covered_by:
+    - CAP-37
+    - CAP-58
+    statement: Interleaver depth must be a documented parameter in each mode profile definition; it must
+      not be a hidden constant.
+    status: ratified
+    traceability: baseline
+  REQ-FEC-05:
+    category: FEC/Interleaving
+    covered_by:
+    - CAP-01
+    - CAP-37
+    statement: FEC and interleaver parameters must be agreed upon during session handshake and must not
+      be assumed by either party.
+    status: ratified
+    traceability: baseline
+  REQ-FEC-06:
+    category: FEC/Interleaving
+    covered_by:
+    - CAP-60
+    - CAP-61
+    - CAP-53
+    - CAP-26
+    statement: Benchmark scenarios must test FEC+interleaver effectiveness under burst-error conditions
+      (Gilbert-Elliott model) and not only under AWGN.
+    status: ratified
+    traceability: baseline
+  REQ-FUN-01:
+    category: Functional
+    covered_by:
+    - CAP-56
+    statement: Provide a CLI capable of transmit, receive, device listing, and mode listing.
+    status: ratified
+    traceability: baseline
+  REQ-FUN-02:
+    category: Functional
+    covered_by:
+    - CAP-12
+    statement: Support at least one production modulation plugin (BPSK family).
+    status: ratified
+    traceability: baseline
+  REQ-FUN-03:
+    category: Functional
+    covered_by:
+    - CAP-62
+    statement: Preserve a loopback backend for hardware-free development and testing.
+    status: ratified
+    traceability: baseline
+  REQ-FUN-04:
+    category: Functional
+    covered_by:
+    - CAP-62
+    - CAP-58
+    statement: Support cross-platform audio through CPAL-backed implementations.
+    status: ratified
+    traceability: baseline
+  REQ-FUN-05:
+    category: Functional
+    covered_by:
+    - CAP-10
+    - CAP-65
+    statement: Validate frame integrity with versioning, sequence handling, and CRC checks.
+    status: ratified
+    traceability: enforced
+  REQ-FUN-06:
+    category: Functional
+    covered_by:
+    - CAP-35
+    - CAP-37
+    - CAP-32
+    - CAP-12
+    - CAP-13
+    - CAP-14
+    - CAP-15
+    - CAP-16
+    - CAP-17
+    - CAP-18
+    - CAP-19
+    - CAP-26
+    - CAP-27
+    - CAP-28
+    - CAP-29
+    - CAP-33
+    - CAP-34
+    statement: Define and implement a high-performance plugin mode (HPX) with adaptive modulation and
+      coding.
+    status: ratified
+    traceability: baseline
+  REQ-FUN-07:
+    category: Functional
+    covered_by:
+    - CAP-37
+    - CAP-17
+    - CAP-18
+    statement: Support occupied bandwidth classes centered on 500 Hz and 2300-2400 Hz operation.
+    status: ratified
+    traceability: baseline
+  REQ-FUN-08:
+    category: Functional
+    covered_by:
+    - CAP-35
+    statement: 'Provide deterministic session state handling: discovery, training, active transfer, recovery,
+      teardown.'
+    status: ratified
+    traceability: baseline
+  REQ-FUN-09:
+    category: Functional
+    covered_by:
+    - CAP-36
+    - CAP-26
+    statement: Support selective retransmission for ARQ-capable sessions.
+    status: ratified
+    traceability: baseline
+  REQ-FUN-10:
+    category: Functional
+    covered_by:
+    - CAP-01
+    - CAP-02
+    statement: Support signed transfer handshake.
+    status: ratified
+    traceability: enforced
+  REQ-FUN-11:
+    category: Functional
+    covered_by:
+    - CAP-03
+    - CAP-71
+    statement: Support signed transfer manifests.
+    status: ratified
+    traceability: enforced
+  REQ-FUN-12:
+    category: Functional
+    covered_by:
+    - CAP-04
+    statement: Support trust-store-based verification for station identities.
+    status: ratified
+    traceability: enforced
+  REQ-FUN-13:
+    category: Functional
+    covered_by:
+    - CAP-09
+    - CAP-48
+    - CAP-70
+    statement: Support peer caching of identity, capability, and link-quality metadata.
+    status: ratified
+    traceability: baseline
+  REQ-FUN-14:
+    category: Functional
+    covered_by:
+    - CAP-48
+    - CAP-70
+    statement: Support local and network query interfaces for peer discovery and filtering.
+    status: ratified
+    traceability: baseline
+  REQ-FUN-15:
+    category: Functional
+    covered_by:
+    - CAP-47
+    - CAP-46
+    statement: Support relayed transfers across multiple hops with configurable hop limits.
+    status: ratified
+    traceability: baseline
+  REQ-FUN-16:
+    category: Functional
+    covered_by:
+    - CAP-47
+    - CAP-48
+    statement: Support route selection policies based on trust, reliability, and latency estimates.
+    status: ratified
+    traceability: baseline
+  REQ-FUN-17:
+    category: Functional
+    covered_by:
+    - CAP-48
+    - CAP-06
+    statement: Define versioned wire-level envelopes for peer query, route discovery, and relay transfer
+      control messages.
+    status: ratified
+    traceability: baseline
+  REQ-FX-01:
+    category: File transfer (FF-16)
+    covered_by:
+    - CAP-71
+    statement: Send a file to a connected peer via a framed offer/accept/data/ack/complete/cancel protocol
+      over SAR
+    status: ratified
+    traceability: baseline
+  REQ-FX-02:
+    category: File transfer (FF-16)
+    covered_by:
+    - CAP-71
+    statement: Split objects into ≤48 KiB blocks (default 16 KiB), one SAR segment each; lift the object-size
+      cap; configurable hard cap (default 1 MiB)
+    status: ratified
+    traceability: baseline
+  REQ-FX-03:
+    category: File transfer (FF-16)
+    covered_by:
+    - CAP-71
+    statement: Inline signed `TransferManifest` + SHA-256, verified against the peer's handshake key;
+      quarantine (UNVERIFIED) on failure
+    status: ratified
+    traceability: baseline
+  REQ-FX-04:
+    category: File transfer (FF-16)
+    covered_by:
+    - CAP-71
+    statement: 'Operator-controlled acceptance: verified-peer requirement, size-gated auto-accept (default
+      off), per-peer quota, prompt-on-offer'
+    status: ratified
+    traceability: baseline
+  REQ-FX-05:
+    category: File transfer (FF-16)
+    covered_by:
+    - CAP-71
+    statement: Hybrid reliable delivery (OTA per-burst rate + block-ack bitmap selective retransmit) with
+      resume from the last completed block
+    status: ratified
+    traceability: baseline
+  REQ-FX-06:
+    category: File transfer (FF-16)
+    covered_by:
+    - CAP-71
+    statement: Airtime-bounded TX bursts keep PTT within the radio watchdog and yield the channel between
+      bursts
+    status: ratified
+    traceability: baseline
+  REQ-MAC-01:
+    category: Channel access
+    covered_by:
+    - CAP-31
+    statement: Sessions operating in point-to-point mode may assume a dedicated channel and are not required
+      to implement channel sensing.
+    status: ratified
+    traceability: baseline
+  REQ-MAC-02:
+    category: Channel access
+    covered_by:
+    - CAP-31
+    statement: Sessions operating in broadcast or relay mode on a shared channel must implement a channel-clear
+      detection (CCD) mechanism before transmitting.
+    status: ratified
+    traceability: baseline
+  REQ-MAC-03:
+    category: Channel access
+    covered_by:
+    - CAP-31
+    statement: 'The reference channel access algorithm for shared-channel operation is 0.3-persistence
+      CSMA: sense the channel, transmit immediately with 30% probability if clear, back off and retry
+      otherwise.'
+    status: ratified
+    traceability: baseline
+  REQ-MAC-04:
+    category: Channel access
+    covered_by:
+    - CAP-31
+    statement: Data Carrier Detect (DCD) is the mechanism for CCD and must be derived from the demodulated
+      signal energy, not from audio amplitude alone.
+    status: ratified
+    traceability: baseline
+  REQ-MAC-05:
+    category: Channel access
+    covered_by:
+    - CAP-37
+    - CAP-58
+    statement: Channel access policy must be documented per mode profile.
+    status: ratified
+    traceability: baseline
+  REQ-NFR-01:
+    category: Non-functional
+    covered_by: []
+    statement: Maintain workspace-level buildability on Linux and macOS CI runners.
+    status: ratified
+    traceability: baseline
+  REQ-NFR-02:
+    category: Non-functional
+    covered_by:
+    - CAP-62
+    - CAP-60
+    - CAP-61
+    statement: Keep tests runnable without physical audio hardware in default CI workflows.
+    status: ratified
+    traceability: baseline
+  REQ-NFR-03:
+    category: Non-functional
+    covered_by:
+    - CAP-64
+    statement: Ensure crate boundaries are clear enough for independent testing.
+    status: ratified
+    traceability: baseline
+  REQ-NFR-04:
+    category: Non-functional
+    covered_by:
+    - CAP-64
+    statement: Keep plugin additions from requiring broad refactors across unrelated crates.
+    status: ratified
+    traceability: baseline
+  REQ-NFR-05:
+    category: Non-functional
+    covered_by:
+    - CAP-53
+    - CAP-61
+    statement: Define objective benchmark suites and publish method and result artifacts.
+    status: ratified
+    traceability: baseline
+  REQ-NFR-06:
+    category: Non-functional
+    covered_by:
+    - CAP-52
+    - CAP-53
+    - CAP-61
+    statement: Track goodput, completion rate, retry efficiency, and completion latency across channel
+      profiles.
+    status: ratified
+    traceability: baseline
+  REQ-NFR-07:
+    category: Non-functional
+    covered_by:
+    - CAP-53
+    - CAP-61
+    statement: Require HPX performance claims to be tied to reproducible benchmark runs.
+    status: ratified
+    traceability: baseline
+  REQ-NFR-08:
+    category: Non-functional
+    covered_by:
+    - CAP-60
+    - CAP-61
+    - CAP-53
+    statement: Benchmark channel profiles must include parameterized Watterson model scenarios (Good/Moderate/Poor
+      path conditions) and Gilbert-Elliott burst error scenarios; AWGN-only benchmarks are insufficient
+      for HF performance claims.
+    status: ratified
+    traceability: baseline
+  REQ-NFR-09:
+    category: Non-functional
+    covered_by:
+    - CAP-35
+    - CAP-36
+    statement: Maintain deterministic timeout and retry behavior for session-state transitions.
+    status: ratified
+    traceability: baseline
+  REQ-NFR-10:
+    category: Non-functional
+    covered_by:
+    - CAP-38
+    - CAP-55
+    statement: Use multithreaded execution for modem pipelines where it improves deterministic real-time
+      behavior.
+    status: ratified
+    traceability: baseline
+  REQ-NFR-11:
+    category: Non-functional
+    covered_by:
+    - CAP-25
+    statement: Support optional GPU acceleration for compute-heavy signal-processing stages when it produces
+      measurable benefit.
+    status: ratified
+    traceability: baseline
+  REQ-NFR-12:
+    category: Non-functional
+    covered_by:
+    - CAP-25
+    statement: GPU acceleration paths must use open frameworks (for example Vulkan via wgpu, or OpenCL)
+      and provide a CPU fallback.
+    status: ratified
+    traceability: baseline
+  REQ-NFR-13:
+    category: Non-functional
+    covered_by: []
+    statement: Raspberry Pi 4/5 performance targets must be measured and published in benchmark artifacts.
+    status: ratified
+    traceability: baseline
+  REQ-NFR-14:
+    category: Non-functional
+    covered_by:
+    - CAP-48
+    statement: Peer cache lookup and query operations should remain bounded under large peer tables.
+    status: ratified
+    traceability: baseline
+  REQ-NFR-15:
+    category: Non-functional
+    covered_by:
+    - CAP-47
+    - CAP-48
+    statement: Multi-hop relay control-plane traffic should include duplicate suppression and loop prevention.
+    status: ratified
+    traceability: baseline
+  REQ-OBS-01:
+    category: Observability
+    covered_by:
+    - CAP-67
+    statement: Opt-in audit mode persists logs + structured events to disk for after-the-fact analysis
+    status: ratified
+    traceability: baseline
+  REQ-OBS-02:
+    category: Observability
+    covered_by:
+    - CAP-67
+    statement: Persistent rotating file logging via `[logging]` config, in addition to stdout
+    status: ratified
+    traceability: baseline
+  REQ-OBS-03:
+    category: Observability
+    covered_by:
+    - CAP-67
+    statement: Single command to collect a redacted diagnostic bundle for developer handoff
+    status: ratified
+    traceability: baseline
+  REQ-PERF-01:
+    category: Competitive perf
+    covered_by:
+    - CAP-38
+    - CAP-35
+    statement: 'Primary strategic goal: develop an independent, first-principles OpenPulse protocol stack
+      that competes on reliability, throughput, and usability.'
+    status: ratified
+    traceability: baseline
+  REQ-PERF-02:
+    category: Competitive perf
+    covered_by:
+    - CAP-52
+    - CAP-53
+    - CAP-61
+    statement: HPX must target outcome parity or better versus incumbent modems in benchmarked scenarios.
+    status: ratified
+    traceability: baseline
+  REQ-PERF-03:
+    category: Competitive perf
+    covered_by:
+    - CAP-53
+    - CAP-61
+    statement: Comparisons must use equal occupied bandwidth classes and published test conditions.
+    status: ratified
+    traceability: baseline
+  REQ-PERF-04:
+    category: Competitive perf
+    covered_by:
+    - CAP-37
+    statement: Performance evaluation must include at least HF narrow, HF wide, and VHF FM profile families.
+    status: ratified
+    traceability: baseline
+  REQ-PERF-05:
+    category: Competitive perf
+    covered_by: []
+    statement: No claim of proprietary protocol compatibility may be made without defensible public evidence.
+    status: ratified
+    traceability: baseline
+  REQ-PERF-06:
+    category: Competitive perf
+    covered_by: []
+    statement: Any compatibility mode targeting proprietary systems (including VARA or PACTOR-4) requires
+      explicit legal review and approval before implementation work starts.
+    status: ratified
+    traceability: baseline
+  REQ-PHY-01:
+    category: Physical/Radio
+    covered_by:
+    - CAP-62
+    statement: Audio backend must support a minimum sample rate of 48 kHz at 16-bit integer or 32-bit
+      float resolution.
+    status: ratified
+    traceability: baseline
+  REQ-PHY-02:
+    category: Physical/Radio
+    covered_by:
+    - CAP-38
+    statement: The receive pipeline must apply a high-pass filter (cutoff ≤ 10 Hz) before demodulation
+      to remove DC bias introduced by SSB radio audio paths.
+    status: ratified
+    traceability: baseline
+  REQ-PHY-03:
+    category: Physical/Radio
+    covered_by:
+    - CAP-22
+    - CAP-21
+    - CAP-12
+    statement: The demodulator must track station-to-station frequency offsets of up to ±50 Hz without
+      operator intervention (automatic frequency control, AFC).
+    status: ratified
+    traceability: baseline
+  REQ-PHY-04:
+    category: Physical/Radio
+    covered_by:
+    - CAP-22
+    - CAP-21
+    statement: The AFC subsystem must handle transmitter drift up to 1 Hz per second for normal SSB radio
+      operation.
+    status: ratified
+    traceability: baseline
+  REQ-PHY-05:
+    category: Physical/Radio
+    covered_by:
+    - CAP-59
+    statement: Transmitter release (PTT drop) must occur within 50 ms of the last transmitted sample to
+      preserve turnaround timing budgets.
+    status: ratified
+    traceability: baseline
+  REQ-PHY-06:
+    category: Physical/Radio
+    covered_by:
+    - CAP-38
+    - CAP-21
+    statement: The receive path must begin acquiring signal within 150 ms of remote key-down to honour
+      the turnaround timing contract.
+    status: ratified
+    traceability: baseline
+  REQ-PHY-07:
+    category: Physical/Radio
+    covered_by:
+    - CAP-59
+    statement: 'PTT keying must support at minimum: serial port RTS/DTR assertion and software-controlled
+      VOX.'
+    status: ratified
+    traceability: baseline
+  REQ-PHY-08:
+    category: Physical/Radio
+    covered_by:
+    - CAP-59
+    statement: CAT-based PTT control via Hamlib/rigctld is a recommended integration path that provides
+      access to the majority of amateur transceivers without per-rig code.
+    status: ratified
+    traceability: baseline
+  REQ-PHY-09:
+    category: Physical/Radio
+    covered_by:
+    - CAP-21
+    - CAP-50
+    statement: Audio input gain must remain within a range that preserves symbol amplitude stability;
+      the system must document the expected input level range and provide a level indicator.
+    status: ratified
+    traceability: baseline
+  REQ-PLAT-01:
+    category: Platform
+    covered_by:
+    - CAP-62
+    statement: Linux support is the primary target and requires ALSA development headers for CPAL builds.
+    status: ratified
+    traceability: baseline
+  REQ-PLAT-02:
+    category: Platform
+    covered_by:
+    - CAP-62
+    statement: macOS support uses CoreAudio through CPAL.
+    status: ratified
+    traceability: baseline
+  REQ-PLAT-03:
+    category: Platform
+    covered_by:
+    - CAP-62
+    statement: Windows support uses WASAPI through CPAL.
+    status: ratified
+    traceability: baseline
+  REQ-PLAT-04:
+    category: Platform
+    covered_by:
+    - CAP-62
+    statement: Raspberry Pi 4 and Raspberry Pi 5 must be supported as first-class Linux deployment targets.
+    status: ratified
+    traceability: baseline
+  REQ-PLAT-05:
+    category: Platform
+    covered_by: []
+    statement: ARM64 builds for Raspberry Pi 4/5 must be part of regular compatibility testing.
+    status: ratified
+    traceability: baseline
+  REQ-PLAT-06:
+    category: Platform
+    covered_by:
+    - CAP-62
+    - CAP-58
+    statement: Any development environment must support loopback mode for hardware-free testing.
+    status: ratified
+    traceability: baseline
+  REQ-PLAT-07:
+    category: Platform
+    covered_by: []
+    statement: Rust toolchain must build the full workspace and no-default-features variant.
+    status: ratified
+    traceability: baseline
+  REQ-PQ-01:
+    category: Post-quantum
+    covered_by:
+    - CAP-02
+    statement: A post-quantum-safe signature method must be supported for identity and transfer-signing
+      workflows.
+    status: ratified
+    traceability: baseline
+  REQ-PQ-02:
+    category: Post-quantum
+    covered_by:
+    - CAP-02
+    - CAP-04
+    statement: The implementation should support a hybrid signature mode (classical + post-quantum) during
+      migration.
+    status: ratified
+    traceability: baseline
+  REQ-PQ-03:
+    category: Post-quantum
+    covered_by:
+    - CAP-02
+    statement: Initial post-quantum-safe default should target ML-DSA (FIPS 204) where available.
+    status: ratified
+    traceability: baseline
+  REQ-PQ-04:
+    category: Post-quantum
+    covered_by:
+    - CAP-02
+    statement: If session key establishment is used, a post-quantum-safe KEM option should be supported,
+      with ML-KEM (FIPS 203) preferred.
+    status: ratified
+    traceability: baseline
+  REQ-PQ-05:
+    category: Post-quantum
+    covered_by:
+    - CAP-02
+    - CAP-07
+    statement: ML-DSA-44 signatures are 2420 bytes. ML-KEM-768 public keys are 1184 bytes. Both exceed
+      the current 255-byte frame payload limit.
+    status: ratified
+    traceability: enforced
+  REQ-PQ-06:
+    category: Post-quantum
+    covered_by:
+    - CAP-07
+    - CAP-02
+    statement: In-band post-quantum handshake messages cannot be carried in the current wire format without
+      a segmentation and reassembly (SAR) sub-layer.
+    status: ratified
+    traceability: baseline
+  REQ-PQ-07:
+    category: Post-quantum
+    covered_by:
+    - CAP-07
+    statement: SAR must be designed and implemented before in-band PQ handshake requirements can be satisfied.
+    status: ratified
+    traceability: baseline
+  REQ-PQ-08:
+    category: Post-quantum
+    covered_by:
+    - CAP-07
+    - CAP-02
+    statement: PQ signature transport requirements are therefore sequentially dependent on SAR delivery;
+      planning must reflect this ordering.
+    status: ratified
+    traceability: baseline
+  REQ-PQ-09:
+    category: Post-quantum
+    covered_by:
+    - CAP-57
+    statement: Out-of-band or application-layer PQ key distribution (for example via the PKI tooling)
+      may proceed independently of SAR.
+    status: ratified
+    traceability: baseline
+  REQ-PTT-01:
+    category: PTT
+    covered_by:
+    - CAP-74
+    statement: PTT assert/release within 50 ms
+    status: ratified
+    traceability: baseline
+  REQ-PTT-02:
+    category: PTT
+    covered_by:
+    - CAP-74
+    statement: CM108 PTT backend
+    status: ratified
+    traceability: baseline
+  REQ-PTT-03:
+    category: PTT
+    covered_by:
+    - CAP-74
+    statement: GPIO PTT backend
+    status: ratified
+    traceability: baseline
+  REQ-QRM-01:
+    category: Interference
+    covered_by:
+    - CAP-72
+    statement: 'Receiver notch earns its default-on status: rescues a decode that fails without it, and
+      a strong enough interferer still defeats it'
+    status: ratified
+    traceability: baseline
+  REQ-REG-01:
+    category: Regulatory
+    covered_by: []
+    statement: '§97.307(f): The maximum symbol rate on any single carrier must not exceed 300 baud below
+      28 MHz in phone subbands. OpenPulseHF includes sub-300-baud modes (for example BPSK31/BPSK63/BPSK100/BPSK250)
+      and higher-rate single-carrier modes (for example QPSK500+ and 8PSK500+).'
+    status: ratified
+    traceability: baseline
+  REQ-REG-02:
+    category: Regulatory
+    covered_by: []
+    statement: '§97.309(a)(4): Digital codes whose use is not specifically prohibited elsewhere and whose
+      technical characteristics are publicly documented are permitted. OpenPulseHF must maintain a published
+      technical specification sufficient for any amateur to decode the transmitted signal.'
+    status: ratified
+    traceability: baseline
+  REQ-REG-03:
+    category: Regulatory
+    covered_by: []
+    statement: Operators must select frequencies, modes, and regional band segments consistent with local
+      rules before transmission. Mode availability in the software is not a statement that a mode is legal
+      on a given frequency.
+    status: ratified
+    traceability: baseline
+  REQ-REG-04:
+    category: Regulatory
+    covered_by:
+    - CAP-70
+    statement: HPX relay nodes operating without a control operator present are automatically controlled
+      stations and must comply with §97.221, including its power limits and frequency restrictions, as
+      documented in `docs/regulatory.md`.
+    status: ratified
+    traceability: baseline
+  REQ-REG-05:
+    category: Regulatory
+    covered_by:
+    - CAP-01
+    statement: In digital modes, station identification must be in a format decodable by a receiving station.
+    status: ratified
+    traceability: baseline
+  REQ-REG-06:
+    category: Regulatory
+    covered_by:
+    - CAP-47
+    statement: '§97.221: Automatically controlled digital stations (unattended nodes, relay nodes) require
+      an automatic control point.'
+    status: ratified
+    traceability: baseline
+  REQ-REG-07:
+    category: Regulatory
+    covered_by: []
+    statement: 'Bandwidth constraint: many EU administrations limit occupied bandwidth by band and mode
+      class. For HF digital modes the typical permitted bandwidth is ≤ 2.7 kHz (matching SSB channel spacing).
+      HPX2300/2400 Hz profiles must be validated against the occupied bandwidth definition used by the
+      relevant national administration.'
+    status: ratified
+    traceability: baseline
+  REQ-REG-08:
+    category: Regulatory
+    covered_by: []
+    statement: 'Station identification: EU member states typically require identification at least every
+      10 minutes (consistent with FCC), though interval requirements vary (e.g. UK: every 15 minutes).
+      The identification requirement is the same: it must be decodable by the receiving station in the
+      digital mode in use, or transmitted in supplementary CW or voice.'
+    status: ratified
+    traceability: baseline
+  REQ-REG-09:
+    category: Regulatory
+    covered_by: []
+    statement: 'Germany (BNetzA): §12 Amateurfunkverordnung (AFuV) requires that technical characteristics
+      of amateur emissions be determinable. Digital modes without a published open specification may be
+      questioned by authorities; OpenPulseHF''s open specification satisfies this requirement by design.'
+    status: ratified
+    traceability: baseline
+  REQ-REG-10:
+    category: Regulatory
+    covered_by:
+    - CAP-66
+    statement: '§97.119(a): Station identification is required every 10 minutes during a transmission
+      and at the end of each transmission series.'
+    status: ratified
+    traceability: baseline
+  REQ-REG-11:
+    category: Regulatory
+    covered_by: []
+    statement: IARU band plans are non-binding recommendations but are widely observed to avoid mutual
+      interference.
+    status: ratified
+    traceability: baseline
+  REQ-REG-12:
+    category: Regulatory
+    covered_by: []
+    statement: Region 2 (Americas) and Region 1 (Europe/Africa/Middle East) both designate sub-bands for
+      HF narrowband digital modes (e.g. 14.070–14.099 MHz on 20 m).
+    status: ratified
+    traceability: baseline
+  REQ-REG-13:
+    category: Regulatory
+    covered_by:
+    - CAP-45
+    statement: OpenPulseHF documentation should recommend operating frequencies aligned with IARU band
+      plan digital sub-bands for each supported band.
+    status: ratified
+    traceability: baseline
+  REQ-REG-14:
+    category: Regulatory
+    covered_by:
+    - CAP-45
+    statement: Wide-band HPX2300 profiles should operate in segments where wide-band digital modes are
+      plan-consistent (e.g. 14.099–14.112 MHz on 20 m where permitted by national administration).
+    status: ratified
+    traceability: baseline
+  REQ-REG-16:
+    category: Regulatory
+    covered_by: []
+    statement: 'ECC/REC(05)06 and national implementations: CEPT harmonises amateur radio digital mode
+      permissions across member administrations. Most EU member states permit amateur digital modes across
+      all authorised bands subject to the general licence conditions (power, bandwidth, identification).'
+    status: ratified
+    traceability: baseline
+  REQ-REG-17:
+    category: Regulatory
+    covered_by: []
+    statement: 'CEPT T/R 61-01: harmonised licensing for portable cross-border operation within CEPT countries.
+      OpenPulseHF documentation must state which modes and bandwidths are intended so that visiting operators
+      can assess compliance with their visiting licence conditions.'
+    status: ratified
+    traceability: baseline
+  REQ-REG-18:
+    category: Regulatory
+    covered_by: []
+    statement: 'United Kingdom (Ofcom): The UK Full licence permits digital modes on all amateur bands.
+      Station identification every 15 minutes and at end of transmission. The UK left CEPT licensing arrangements
+      post-Brexit; UK operators verify compliance with the current Ofcom amateur licence conditions document
+      directly.'
+    status: ratified
+    traceability: baseline
+  REQ-RX-01:
+    category: Receive
+    covered_by:
+    - CAP-73
+    statement: Simultaneous multi-mode receive monitor, independent of the session decoder
+    status: ratified
+    traceability: baseline
+  REQ-SEC-01:
+    category: Security/Trust
+    covered_by:
+    - CAP-03
+    - CAP-01
+    statement: Signed transfers are mandatory for HPX file or object transfer mode.
+    status: ratified
+    traceability: baseline
+  REQ-SEC-02:
+    category: Security/Trust
+    covered_by:
+    - CAP-04
+    - CAP-57
+    statement: Station identities use asymmetric key pairs with operator-managed trust anchors.
+    status: ratified
+    traceability: baseline
+  REQ-SEC-03:
+    category: Security/Trust
+    covered_by:
+    - CAP-01
+    - CAP-02
+    statement: Session handshake messages must be signed and verified.
+    status: ratified
+    traceability: baseline
+  REQ-SEC-04:
+    category: Security/Trust
+    covered_by:
+    - CAP-03
+    statement: Transfer manifests must be signed and verified before final acceptance.
+    status: ratified
+    traceability: baseline
+  REQ-SEC-05:
+    category: Security/Trust
+    covered_by:
+    - CAP-04
+    statement: Trust status must include trusted, untrusted, revoked, and unknown states.
+    status: ratified
+    traceability: baseline
+  REQ-SEC-06:
+    category: Security/Trust
+    covered_by:
+    - CAP-04
+    - CAP-57
+    statement: Key lifecycle must include validity windows and revocation handling.
+    status: ratified
+    traceability: baseline
+  REQ-SEC-07:
+    category: Security/Trust
+    covered_by:
+    - CAP-05
+    - CAP-03
+    - CAP-01
+    statement: Cryptographic defaults should use Ed25519 signatures and SHA-256 or stronger hashing.
+    status: ratified
+    traceability: baseline
+  REQ-SEC-08:
+    category: Security/Trust
+    covered_by:
+    - CAP-04
+    statement: Trust-store metadata must record algorithm type and hybrid-policy requirements per identity.
+    status: ratified
+    traceability: baseline
+  REQ-SEC-09:
+    category: Security/Trust
+    covered_by:
+    - CAP-47
+    statement: Relay path admission must enforce trust policy on each intermediate hop.
+    status: ratified
+    traceability: baseline
+  REQ-SEC-10:
+    category: Security/Trust
+    covered_by:
+    - CAP-47
+    - CAP-03
+    - CAP-06
+    statement: Multi-hop transfers must preserve end-to-end signed integrity and fail closed on trust
+      violations.
+    status: ratified
+    traceability: baseline
+  REQ-SEC-11:
+    category: Security/Trust
+    covered_by:
+    - CAP-02
+    - CAP-04
+    statement: Route metadata should support post-quantum-capable signing under configured policy.
+    status: ratified
+    traceability: baseline
+  REQ-SEC-12:
+    category: Security/Trust
+    covered_by:
+    - CAP-47
+    - CAP-48
+    statement: Relay and query messages must include anti-replay fields and enforce loop-prevention semantics.
+    status: ratified
+    traceability: baseline
+  REQ-UX-01:
+    category: Compatibility/UX
+    covered_by:
+    - CAP-56
+    statement: CLI usage and docs must stay aligned across releases.
+    status: ratified
+    traceability: baseline
+  REQ-UX-02:
+    category: Compatibility/UX
+    covered_by:
+    - CAP-56
+    statement: New user-facing options must be documented in docs/cli-guide.md.
+    status: ratified
+    traceability: baseline
+  REQ-UX-03:
+    category: Compatibility/UX
+    covered_by:
+    - CAP-56
+    statement: README usage examples should stay current with implemented behavior.
+    status: ratified
+    traceability: baseline
+  REQ-UX-04:
+    category: Compatibility/UX
+    covered_by:
+    - CAP-50
+    statement: The operator panel application (`apps/openpulse-panel`) shall be re-implemented on the
+      `iced` GUI
+    status: ratified
+    traceability: baseline
+  REQ-WSIG-01:
+    category: Weak signal
+    covered_by:
+    - CAP-75
+    statement: 'MFSK16 sub-floor waveform: loopback, acquisition, calibrated LLRs'
+    status: ratified
+    traceability: baseline
