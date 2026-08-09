@@ -102,6 +102,9 @@ if [ "$MODE" = "full" ]; then
     # requirements with no in-code binding, cited code/tests that don't exist, REQ<->CAP
     # disagreement, and NEW code orphans beyond the grandfathered baseline.
     run_step "trace check (requirements)" env GATE_LOG="$LOG" scripts/trace.sh check || rc_total=1
+    # Reachability ratchet: a NEW public item no production code references (coverage would vouch
+    # for it as "covered" if a test touches it). Grandfathered baseline; only growth fails.
+    run_step "reachability ratchet" scripts/reachability.sh check || rc_total=1
 fi
 
 # Counts come from the LOG FILE, never from a pipe carrying the runner's output.
