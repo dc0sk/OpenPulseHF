@@ -330,8 +330,28 @@ def do_render():
     return 0
 
 
+def do_scope(rid):
+    """Emit a requirement's CAP code files and bound test fns, for requirement-scoped mutation."""
+    doc = yaml.safe_load(YAML.read_text(encoding="utf-8")) or {}
+    reqs, caps = doc.get("requirements", {}), doc.get("capabilities", {})
+    if rid not in reqs:
+        sys.stderr.write(f"trace scope: {rid} not in requirements.yaml\n"); return 2
+    files = set()
+    for cid in reqs[rid].get("covered_by", []):
+        for c in caps.get(cid, {}).get("code", []):
+            files.update(_matches(c))
+    for f in sorted(files):
+        print(f"CODE\t{f}")
+    for b in _scan_verifies().get(rid, []):
+        if b.get("fn"):
+            print(f"TEST\t{b['fn']}")
+    return 0
+
+
 def main():
     cmd = sys.argv[1] if len(sys.argv) > 1 else ""
+    if cmd == "scope":
+        return do_scope(sys.argv[2]) if len(sys.argv) > 2 else 2
     if cmd == "import":
         do_import(); return 0
     if cmd == "check":
