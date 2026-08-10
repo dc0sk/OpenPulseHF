@@ -2,7 +2,7 @@
 project: openpulsehf
 doc: docs/dev/research/references.md
 status: living
-last_updated: 2026-07-31
+last_updated: 2026-08-10
 ---
 
 # External references and inspirations
@@ -346,6 +346,92 @@ but two things transfer.
   (CM108-HID and GPIO are ones we don't have; tracked as REQ-PTT-02/03).
 
 **Revisit for:** CM108-HID and GPIO PTT backends (REQ-PTT-02/03).
+
+---
+
+## markqvist/Reticulum — cryptographic networking stack for minimal-bandwidth links
+
+<https://github.com/markqvist/Reticulum> · manual: <https://markqvist.github.io/Reticulum/manual/whatis.html> · (license: see repo)
+
+**Not a modem and not DSP** — a transport-agnostic layer-3+ cryptographic networking stack
+(identity, addressing, routing, encrypted links) that runs over anything providing a half-duplex
+channel ≥ 5 bps with a 500-byte MTU (LoRa, packet radio, serial). It sits *above* where our modem
+ends. It is here for one question the maintainer asked (2026-08-10): whether its identity/announce/
+link design can shrink our **cryptographic on-air signature surface** — the bytes our signed frames
+cost at 31–250 baud. The answer is: it supplies *calibration numbers* proving the same security
+property fits in a fraction of our bytes, plus two design patterns worth a future detailed
+assessment. It says nothing about RF/spectral signatures — by design it has no opinion below its
+interface.
+
+**Their numbers (from the manual — their own claims, not independently verified):** X25519 ECDH +
+Ed25519 identity; 16-byte truncated-SHA-256 destination addresses; per-packet overhead 19–35 B
+(2 B header + 16/32 B addresses + 1 B context); **announce = 167 B** (destination hash + full
+public keys + app data + random blob + Ed25519 signature); **encrypted-and-verified link
+establishment = 3 packets, 297 B total** (83 B request carrying an ephemeral X25519 key, 115 B
+proof carrying the identity signature over `(link_id, LKr)`); link keepalive 20 B ≈ 0.45 bps.
+
+**Our numbers (measured 2026-08-10 at HEAD, scratch harness against `openpulse-core`):**
+
+- **CONREQ 710 B / CONACK 718 B** (production `create_full` arguments) — the handshake encodes as
+  serde JSON with every `Vec<u8>` field (pubkey, kex key, signature) as a *number array*, ~3.4×
+  the ~200–250 B a binary layout of the same fields would need. Independently reproduced at 711 B
+  for `ConReq::create_full(..).encode()` with production-shaped arguments (the 710/711 spread is
+  just which boundary is measured — JSON body vs framed). On the wire it is 3 SAR fragments,
+  752 B uncoded ≈ **192 s at BPSK31** (`hpx_hf`'s entry rung), 24 s at BPSK250; the frame alone,
+  before SAR, is 182 s. Reticulum's
+  announce carries comparable semantic content (identity keys + signature + metadata) in 167 B.
+- **PQ CONREQ (Hybrid) 17 939 B** — 72 SAR fragments, ≈ 76 min at BPSK31. The binary content
+  (ML-DSA-44 pubkey 1312 + sig 2420 + ML-KEM-768 ek 1184 + Ed25519 material) is ~5.0 KB ≈ 21.5 min
+  at BPSK31, so JSON costs 3.6× even here. **Unwired**: `create_pq_conreq`/`encode_pq_conreq` have
+  zero production callers today, so this is a latent cost, not a shipping one. Reticulum offers no
+  help — it has no post-quantum story at all.
+- **Signed `WireEnvelope` floor 168 B** (104 B header + 64 B Ed25519), of which 64 B is two full
+  32-byte peer keys where Reticulum spends 16–32 B on truncated hashes. Mesh/relay transmit these.
+- **Authenticated ACK: 5 B** with a 24-bit truncated keyed HMAC — already *tighter* than
+  Reticulum's 20-B keepalive. Nothing to take on the ACK path.
+- `SignedEnvelope` (OPSE, also JSON with the payload as a number array) has **zero production
+  callers** — defined, not wired; listed so nobody wires it as-is.
+
+**Worth a future detailed assessment (pointers, NOT validated conclusions):**
+
+1. **Binary-pack the handshake.** The 3.4× JSON inflation is our defect, not their invention — but
+   their 167 B/297 B figures are the external existence proof that identity + signature + metadata
+   fits in ~¼ of our bytes with no security property traded. Cost: a wire-format break (permitted
+   pre-1.0) and moving the signature from canonical-JSON to a defined canonical byte layout —
+   arguably a hardening, since JSON canonicalisation is the fragile part.
+2. **Send full identity once, address by hash after.** Reticulum transmits full public keys only in
+   the announce; every subsequent packet carries a 16-B truncated hash, with keys learned from the
+   announce cache. We re-send the full 32-B pubkey (and kex key, grid, profile, capability lists)
+   in every CONREQ, and full 32-B src+dst ids in every envelope. We already own the two halves —
+   `PeerCache` and the JS8 `@OPULSE` beacon (our announce) — the assessment is whether a cached-key
+   fast path can shrink CONREQ/envelopes for known peers. Cost: truncated ids surrender the
+   "peer_id IS the verifying key" self-authentication (`peer_descriptor.rs`) in wire form; a cache
+   miss needs a full-identity fallback.
+3. **Minimal link shape as a reference.** Their link = ephemeral X25519 in the request, identity
+   signature only in the proof, per-link forward secrecy from ECDH. Our E7 `kex_pubkey` already
+   does the ephemeral half; the delta worth studying is *not re-sending static identity material to
+   a peer that has it*.
+
+**Does NOT transfer:**
+
+- **The routing/announce network model.** Announce flooding with a 2 %-of-bandwidth budget and
+  128-hop retransmit caps presupposes a multi-node packet-switched network; we are point-to-point
+  ARQ with explicit relay and JS8-slot discovery. Do not launder their mesh design into ours.
+- **The crypto suite.** AES-256-CBC + HMAC-SHA256 and classical-only keys; nothing to adopt, and
+  silence on the ML-DSA airtime problem, which is our actual hard one.
+- **Ratchets.** Their per-destination ratchets serve link-less datagrams; our session-oriented ARQ
+  already derives a per-session ephemeral key (E7).
+- **RF/spectral signatures.** Nothing — the manual's only physical-layer demands are ≥ 5 bps and a
+  500-B MTU. (Its periodic announces and 0.45 bps keepalives are channel-occupancy facts about
+  running *their* network, not waveform guidance for ours.)
+
+**Evidence tier:** manual pages only (`whatis` + `understanding`, read 2026-08-10) — no source
+read, no deployment measurement; their byte counts are the project's own claims. Our-side byte
+counts are measured at HEAD.
+
+**Revisit for:** the binary-handshake calibration numbers when the pre-1.0 wire-format break is
+scheduled; the announce/cache key-learning pattern if CONREQ shrinkage is taken up; the 297-B
+3-packet link split as the minimal-handshake reference.
 
 ---
 
