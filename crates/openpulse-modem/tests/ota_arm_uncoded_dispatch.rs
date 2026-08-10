@@ -117,7 +117,9 @@ fn one_burst_two_arms() {
     eprintln!(
         "MEASURED burst={} samples | ota_decode_burst payload={:?} | decode_burst={:?}",
         burst.samples.len(),
-        ota_payload.as_ref().map(|p| String::from_utf8_lossy(p).to_string()),
+        ota_payload
+            .as_ref()
+            .map(|p| String::from_utf8_lossy(p).to_string()),
         plain
             .as_ref()
             .map(|p| String::from_utf8_lossy(p).to_string())

@@ -113,6 +113,8 @@ fn receiver_still_decodes_a_plain_rs_frame() {
         samples: tx_backend.drain_samples(),
     };
     let (mut rx, _) = engine();
-    let out = rx.ota_decode_burst(&burst, SESSION, Some(MODE)).expect("decode");
+    let out = rx
+        .ota_decode_burst(&burst, SESSION, Some(MODE))
+        .expect("decode");
     assert_eq!(out.payload.as_deref(), Some(payload.as_slice()));
 }
