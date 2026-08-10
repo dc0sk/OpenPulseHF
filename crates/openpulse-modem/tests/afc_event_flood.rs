@@ -105,15 +105,37 @@ fn a_failed_ota_burst_emits_no_afc_events_and_keeps_its_rate_decision() {
 }
 
 /// Arm 3 — the CLI scanning receiver (`receive_with_timeout_fec`).
+///
+/// The fixture must be audio that PASSES the energy gate but cannot decode. Uniform noise does not
+/// qualify: `EnergyGate`'s threshold is derived from the floor the noise itself sets, so a flat
+/// noise buffer is rejected on its own merits and **zero** decode attempts run — a first draft used
+/// it and the test passed with the suppression removed, i.e. it was vacuous. A real frame whose
+/// second half is sign-inverted keeps the onset and the energy profile, so the scan runs its full
+/// course and every attempt fails on magic/CRC.
 #[test]
 fn a_failed_timeout_receive_scan_emits_no_afc_events() {
+    let (mut tx, tx_backend) = engine();
+    tx.transmit(b"corrupted in flight", MODE, None)
+        .expect("transmit");
+    let mut audio = tx_backend.drain_samples();
+    let half = audio.len() / 2;
+    for s in audio[half..].iter_mut() {
+        *s = -*s;
+    }
+
     let (mut e, backend) = engine();
-    backend.fill_samples(&noise(8_000).samples);
+    backend.fill_samples(&audio);
     let mut rx = e.subscribe();
-    let _ = e.receive_with_timeout(MODE, None, std::time::Duration::from_millis(300));
+    let got = e.receive_with_timeout(MODE, None, std::time::Duration::from_millis(500));
+    assert!(got.is_err(), "the corrupted frame must not decode");
+
     let (evs, lagged) = drain(&mut rx);
     assert!(!lagged, "the scan overflowed the event ring");
-    assert_eq!(afc_count(&evs), 0, "rolled-back attempts must be silent");
+    assert_eq!(
+        afc_count(&evs),
+        0,
+        "rolled-back attempts must be silent; got {evs:#?}"
+    );
 }
 
 /// Vacuity control: suppression must not be a blanket mute.
