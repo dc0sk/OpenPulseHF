@@ -528,7 +528,14 @@ fn refine_onset(buf: &[f32], start: usize, span: usize, step: usize) -> usize {
 
 /// Internal return of [`ModemEngine::ota_decode_and_ack`]: the decoded
 /// payload+mode (if any), the ACK frame to send, and the last decode error.
-type OtaDecodeOutcome = (Option<(Vec<u8>, String)>, AckFrame, Option<ModemError>);
+///
+/// The ACK is `None` for a frame recovered by the uncoded fallback — that traffic is not part of
+/// the rate ladder, so there is nothing to acknowledge and nothing to key the transmitter for.
+type OtaDecodeOutcome = (
+    Option<(Vec<u8>, String)>,
+    Option<AckFrame>,
+    Option<ModemError>,
+);
 
 /// Outcome of one daemon-facing OTA receive poll ([`ModemEngine::poll_ota_rx`]):
 /// the decode result plus the ACK frame the caller must transmit back.
@@ -536,8 +543,13 @@ type OtaDecodeOutcome = (Option<(Vec<u8>, String)>, AckFrame, Option<ModemError>
 pub struct OtaRxResult {
     /// Decoded payload, or `None` when every candidate failed (the ACK is a Nack).
     pub payload: Option<Vec<u8>>,
-    /// ACK frame to transmit back to the sender (key PTT around the transmit).
-    pub ack: AckFrame,
+    /// ACK frame to transmit back to the sender (key PTT around the transmit), or `None` when the
+    /// burst was non-ladder traffic recovered by the uncoded fallback.
+    ///
+    /// `Option` rather than a `control: bool` beside a always-present frame on purpose: a caller
+    /// must not be able to transmit an ACK that should not exist, and the type change forces every
+    /// transmit site into a compile-visible decision.
+    pub ack: Option<AckFrame>,
     /// Mode string a candidate decoded at, for event reporting.
     pub mode: Option<String>,
 }
@@ -1691,8 +1703,15 @@ impl ModemEngine {
         let samples = self.stage_capture_input(None, device)?;
         let samples = self.route_audio_stage(PipelineStage::InputCapture, samples)?;
 
-        let (decoded, ack_frame, last_err) = self.ota_decode_and_ack(&samples, session_id)?;
-        self.transmit_ack_with_short_fec(&ack_frame, device)?;
+        // `None` fallback mode: this entry has no production caller and no notion of an active
+        // non-ladder mode (`stage_capture_input(None, ..)` above leaves `rx_mode` unset), so it keeps
+        // its pre-#1123 behaviour exactly. Pinned by `fallback_mode_none_changes_nothing`.
+        let (decoded, ack_frame, last_err) = self.ota_decode_and_ack(&samples, session_id, None)?;
+        // `ack_frame` is always `Some` here: it is `None` only for an uncoded-fallback decode, which
+        // a `None` fallback mode cannot produce.
+        if let Some(ack) = &ack_frame {
+            self.transmit_ack_with_short_fec(ack, device)?;
+        }
 
         match decoded {
             Some((payload, mode)) => {
@@ -1731,7 +1750,8 @@ impl ModemEngine {
             return Ok(None);
         }
 
-        let (decoded, ack, last_err) = self.ota_decode_and_ack(&samples, session_id)?;
+        // `None` fallback mode — see `respond_arq_ota`; this entry has no production caller either.
+        let (decoded, ack, last_err) = self.ota_decode_and_ack(&samples, session_id, None)?;
         let (payload, mode) = match decoded {
             Some((p, m)) => (Some(p), Some(m)),
             None => {
@@ -2021,12 +2041,19 @@ impl ModemEngine {
     /// send back (does not transmit it) — the burst-input counterpart of
     /// [`poll_ota_rx`](Self::poll_ota_rx) for a daemon using
     /// [`capture_burst`](Self::capture_burst).
+    ///
+    /// `fallback_mode` is the mode this station is *operating* on — the one its own non-ladder
+    /// traffic (station ID, filexfer fragments, handshake, QSY, relay) is transmitted at. A burst
+    /// that no rung candidate decodes is retried uncoded at that mode; on success the OTA controller
+    /// is left untouched and the returned `ack` is `None`, because such a frame is not ladder
+    /// traffic. Pass `None` to disable the fallback entirely (#1123).
     pub fn ota_decode_burst(
         &mut self,
         burst: &AudioSamples,
         session_id: &str,
+        fallback_mode: Option<&str>,
     ) -> Result<OtaRxResult, ModemError> {
-        let (decoded, ack, last_err) = self.ota_decode_and_ack(burst, session_id)?;
+        let (decoded, ack, last_err) = self.ota_decode_and_ack(burst, session_id, fallback_mode)?;
         let (payload, mode) = match decoded {
             Some((p, m)) => (Some(p), Some(m)),
             None => {
@@ -2050,6 +2077,7 @@ impl ModemEngine {
         &mut self,
         samples: &AudioSamples,
         session_id: &str,
+        fallback_mode: Option<&str>,
     ) -> Result<OtaDecodeOutcome, ModemError> {
         // Every caller (`respond_arq_ota`, `poll_ota_rx`, `ota_decode_burst`) front-ends the burst at the
         // shared `route_audio_stage(InputCapture)` seam BEFORE calling. Suppress the seam for the
@@ -2059,7 +2087,7 @@ impl ModemEngine {
         // `decode_burst_inner`. Restore on every exit.
         let was_prerouted = self.input_prerouted;
         self.input_prerouted = true;
-        let result = self.ota_decode_and_ack_inner(samples, session_id);
+        let result = self.ota_decode_and_ack_inner(samples, session_id, fallback_mode);
         self.input_prerouted = was_prerouted;
         result
     }
@@ -2068,6 +2096,7 @@ impl ModemEngine {
         &mut self,
         samples: &AudioSamples,
         session_id: &str,
+        fallback_mode: Option<&str>,
     ) -> Result<OtaDecodeOutcome, ModemError> {
         let mut candidates: Vec<(SpeedLevel, String, FecMode)> = self
             .ota
@@ -2106,6 +2135,48 @@ impl ModemEngine {
                     break;
                 }
                 Err(e) => last_err = Some(e),
+            }
+        }
+
+        // Uncoded fallback for NON-LADDER traffic (#1123).
+        //
+        // The rung candidates above are the only thing this arm used to try, and every `hpx_*`
+        // profile that populates a FEC table codes every rung — so an uncoded frame matched nothing
+        // and the daemon simply could not receive its own station ID, filexfer fragments, handshake
+        // CONREQ/CONACK, QSY frames or relay envelopes whenever an OTA session was active. Those go
+        // out via `transmit`, at the station's ACTIVE mode, which is what `fallback_mode` carries.
+        //
+        // Placed AFTER the standalone candidates and BEFORE the HARQ block below, and the ordering
+        // is load-bearing in both directions:
+        //   * before HARQ, because the HARQ loop RETAINS this burst's LLRs per soft candidate on
+        //     failure. Running the fallback afterwards would retain one garbage vector for every
+        //     control frame, self-inflicting exactly the stale-LLR contamination the widest-first
+        //     suffix trial exists to contain — and it would need an "un-retain" mechanism to undo.
+        //     Returning here means nothing was ever retained and there is nothing to undo.
+        //   * after the candidates, so a ladder frame always keeps first claim on the burst. Under a
+        //     profile with no FEC table (`fec_for` is `unwrap_or(FecMode::None)`) the rung candidates
+        //     are themselves uncoded, and if such a rung's mode equals the active mode the two frame
+        //     classes are indistinguishable on the wire; candidates-first is what keeps those
+        //     counting as ladder traffic. Whether such profiles are legal OTA profiles at all is a
+        //     separate question (see #1123).
+        //
+        // Returns EARLY on success, bypassing `decoded`: assigning it would clear the retained LLRs
+        // and run the controller update, and a frame that is not ladder traffic must do neither. The
+        // `AckFrame` is `None` for the same reason — there is nothing to acknowledge, and the daemon
+        // must not key the transmitter for it.
+        if decoded.is_none() {
+            if let Some(mode) = fallback_mode {
+                // Same isolation every candidate gets: a failed attempt's AFC drift must not
+                // poison this one.
+                self.afc_correction_hz = afc_before;
+                if let Ok(payload) = self.decode_burst(mode, samples) {
+                    debug!(
+                        "ota fallback decoded {} bytes of non-ladder traffic at {mode}",
+                        payload.len()
+                    );
+                    return Ok((Some((payload, mode.to_string())), None, last_err));
+                }
+                self.afc_correction_hz = afc_before;
             }
         }
 
@@ -2290,7 +2361,7 @@ impl ModemEngine {
         });
         let ack_frame = AckFrame::new(rx_ack.ack_type, session_id)
             .with_recommended_level(rx_ack.recommended_level);
-        Ok((decoded, ack_frame, last_err))
+        Ok((decoded, Some(ack_frame), last_err))
     }
 
     /// Demodulate a burst to soft LLRs through the RX front-end seam, for HARQ retention.
@@ -6546,7 +6617,9 @@ mod tests {
             samples: vec![0.01f32; 4000],
         };
         let before = rx.notch_blocks_processed();
-        let _ = rx.ota_decode_burst(&burst, "sess-ota-notch");
+        // `Some(mode)` so the #1123 uncoded fallback runs too: it calls `decode_burst`, which is a
+        // second nested front-end user, and this seam assertion is exactly what must cover it.
+        let _ = rx.ota_decode_burst(&burst, "sess-ota-notch", Some("BPSK250"));
         assert_eq!(
             rx.notch_blocks_processed(),
             before,

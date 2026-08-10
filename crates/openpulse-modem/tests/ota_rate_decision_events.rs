@@ -26,6 +26,10 @@ use openpulse_modem::pipeline::AudioSamples;
 use openpulse_modem::EngineEvent;
 
 const SESSION: &str = "sess-decision";
+/// The station's active (non-ladder) mode, passed as the #1123 uncoded fallback mode so these run
+/// in the daemon's real configuration. Every burst here is noise or a ladder frame, so the fallback
+/// never fires — which is the point: it must not swallow the controller's failure path.
+const MODE: &str = "BPSK250";
 
 fn engine_with_ota_session() -> ModemEngine {
     let mut engine = ModemEngine::new(Box::new(LoopbackBackend::new()));
@@ -70,7 +74,7 @@ fn a_failed_decode_emits_a_decision_event() {
         .map(|i| ((i as f32 * 12.9898).sin() * 43_758.547).fract() * 0.05)
         .collect();
     let burst = AudioSamples { samples: noise };
-    let _ = engine.ota_decode_burst(&burst, SESSION);
+    let _ = engine.ota_decode_burst(&burst, SESSION, Some(MODE));
 
     let decisions = drain_decisions(&mut rx);
     assert!(
@@ -100,7 +104,7 @@ fn the_decision_event_carries_the_snr_it_acted_on() {
         .map(|i| ((i as f32 * 7.233).sin() * 21_312.9).fract() * 0.05)
         .collect();
     let burst = AudioSamples { samples: noise };
-    let _ = engine.ota_decode_burst(&burst, SESSION);
+    let _ = engine.ota_decode_burst(&burst, SESSION, Some(MODE));
 
     let decisions = drain_decisions(&mut rx);
     assert!(!decisions.is_empty(), "expected a decision event");
@@ -123,7 +127,7 @@ fn repeated_failures_each_emit_rather_than_only_the_transition() {
         .collect();
     let burst = AudioSamples { samples: noise };
     for _ in 0..3 {
-        let _ = engine.ota_decode_burst(&burst, SESSION);
+        let _ = engine.ota_decode_burst(&burst, SESSION, Some(MODE));
     }
 
     let decisions = drain_decisions(&mut rx);

@@ -106,7 +106,7 @@ fn a_burst_gathered_by_accumulate_capture_decodes() {
         tx.len()
     );
     let out = rx
-        .ota_decode_burst(&burst, SESSION)
+        .ota_decode_burst(&burst, SESSION, Some(MODE))
         .expect("decode call")
         .payload;
     assert_eq!(
@@ -141,7 +141,7 @@ fn run(tx: &[f32], retain: bool) -> (f32, u32) {
                 continue;
             };
             if rx
-                .ota_decode_burst(&burst, SESSION)
+                .ota_decode_burst(&burst, SESSION, Some(MODE))
                 .ok()
                 .and_then(|r| r.payload)
                 .as_deref()

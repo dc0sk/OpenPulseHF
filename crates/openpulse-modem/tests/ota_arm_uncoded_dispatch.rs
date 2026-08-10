@@ -24,6 +24,7 @@ use openpulse_core::profile::SessionProfile;
 use openpulse_core::rate::SpeedLevel;
 use openpulse_modem::engine::ModemEngine;
 use openpulse_modem::pipeline::AudioSamples;
+use openpulse_modem::EngineEvent;
 
 /// hpx_hf SL5 is `BPSK250` + `Rs`. Locking the OTA session here makes the OTA arm's candidate
 /// **mode** identical to the transmitted one, so the only remaining difference is the FEC the
@@ -93,10 +94,15 @@ fn one_burst_two_arms() {
         .expect("the daemon capture entry must flush a burst");
 
     // Arm 1 — OTA session active: `server.rs` dispatches here.
-    let ota_payload = engine
-        .ota_decode_burst(&burst, SESSION)
-        .expect("ota_decode_burst must not error")
-        .payload;
+    let ota = engine
+        .ota_decode_burst(&burst, SESSION, Some(MODE))
+        .expect("ota_decode_burst must not error");
+    let ota_payload = ota.payload.clone();
+    assert!(
+        ota.ack.is_none(),
+        "non-ladder traffic must produce no ACK — an ACK here would key the transmitter for a \
+         frame nobody is waiting on, and would credit the rate ladder for a decode it did not make"
+    );
 
     // Arm 2 — no OTA session: the same burst, same mode, same engine. Positive control.
     //
@@ -127,5 +133,146 @@ fn one_burst_two_arms() {
         ota_payload.as_deref(),
         Some(PAYLOAD),
         "the same burst must also decode with an OTA session active"
+    );
+}
+
+/// Recovering non-ladder traffic must not touch the rate controller.
+///
+/// This is the half a decode-or-not assertion is structurally blind to, and the half that was
+/// silently wrong on `main` before #1123: an uncoded frame counted as a decode FAILURE, so
+/// `on_rx_frame(RxOutcome::Failed, ..)` ran on every heard station ID, filexfer fragment, QSY frame
+/// and relay envelope. That path has a **hysteresis-free** demotion — it fast-downshifts on a
+/// single failure whenever `level_for_snr(snr) < rx_recommended`, with `snr` measured in the
+/// candidate rung's domain on audio that is not that rung — and it resets `rx_consecutive_ok`,
+/// which is the only climb path when the SNR estimate is uninformative (#934).
+///
+/// The `OtaRateDecision` assertion is the load-bearing one: the event is emitted on EVERY
+/// controller decision including ones that move nothing (#1081), so its absence proves
+/// `on_rx_frame` was never called at all — which is the only way to cover the private
+/// `rx_consecutive_ok` streak reset.
+#[test]
+fn a_control_frame_does_not_touch_the_rate_controller() {
+    let signal = uncoded_tx_samples();
+    let backend = LoopbackBackend::new();
+    let mut engine = engine_with(&backend);
+    engine.start_ota_session(SessionProfile::hpx_hf());
+    engine.ota_lock_level(LOCK_LEVEL);
+
+    let before_recommended = engine.ota_rx_recommended_level();
+    let before_confirmed = engine.ota_rx_confirmed_level();
+    let mut events = engine.subscribe();
+
+    let burst = capture_via_daemon_path(&mut engine, &signal).expect("a burst must flush");
+    let res = engine
+        .ota_decode_burst(&burst, SESSION, Some(MODE))
+        .expect("must not error");
+
+    assert_eq!(
+        res.payload.as_deref(),
+        Some(PAYLOAD),
+        "precondition: the control frame must be recovered"
+    );
+    assert!(res.ack.is_none(), "a control frame must produce no ACK");
+
+    let decisions: Vec<_> = std::iter::from_fn(|| events.try_recv().ok())
+        .filter(|e| matches!(e, EngineEvent::OtaRateDecision { .. }))
+        .collect();
+    assert!(
+        decisions.is_empty(),
+        "a control frame must drive NO controller decision; got {decisions:?}"
+    );
+    assert_eq!(
+        engine.ota_rx_recommended_level(),
+        before_recommended,
+        "the recommended level must not move for non-ladder traffic"
+    );
+    assert_eq!(
+        engine.ota_rx_confirmed_level(),
+        before_confirmed,
+        "the confirmed level must not move for non-ladder traffic"
+    );
+}
+
+/// `fallback_mode = None` must behave exactly as before #1123 — no uncoded attempt at all.
+///
+/// This pins the documented darkness of the two sibling entries (`poll_ota_rx`,
+/// `respond_arq_ota`), which pass `None`. Without this gate that behaviour is implicit, and a
+/// later change could switch them on — or off — with nothing noticing.
+#[test]
+fn fallback_mode_none_changes_nothing() {
+    let signal = uncoded_tx_samples();
+    let backend = LoopbackBackend::new();
+    let mut engine = engine_with(&backend);
+    engine.start_ota_session(SessionProfile::hpx_hf());
+    engine.ota_lock_level(LOCK_LEVEL);
+
+    let burst = capture_via_daemon_path(&mut engine, &signal).expect("a burst must flush");
+    let res = engine
+        .ota_decode_burst(&burst, SESSION, None)
+        .expect("must not error");
+
+    assert!(
+        res.payload.is_none(),
+        "with no fallback mode the uncoded frame must not be recovered (pre-#1123 behaviour)"
+    );
+    assert!(
+        res.ack.is_some(),
+        "a failed decode is ladder evidence and must still carry its Nack"
+    );
+}
+
+/// A ladder frame keeps first claim on the burst, even where the fallback could also decode it.
+///
+/// `hpx500` populates no FEC table, so `fec_for` returns `FecMode::None` for every rung
+/// (`profile.rs`) and its candidates are themselves uncoded. With the active mode equal to a rung
+/// mode, a ladder frame and a control frame are literally indistinguishable on the wire — so this
+/// is the ONLY fixture where the candidates-before-fallback ordering is observable. Under `hpx_hf`
+/// (every rung coded) reordering would be undetectable by construction.
+#[test]
+fn a_ladder_frame_still_classifies_as_ladder_when_the_fallback_could_also_decode_it() {
+    let backend = LoopbackBackend::new();
+    let mut tx = engine_with(&backend);
+    tx.transmit(PAYLOAD, "BPSK31", None).expect("transmit");
+    let signal = backend.drain_samples();
+
+    let rx_backend = LoopbackBackend::new();
+    let mut engine = engine_with(&rx_backend);
+    // hpx500's SL2 rung is BPSK31 + no FEC; the fallback mode is that same mode.
+    engine.start_ota_session(SessionProfile::hpx500());
+    let mut events = engine.subscribe();
+
+    let quiet = vec![0.0f32; TICK_SAMPLES];
+    let mut burst = None;
+    for chunk in signal.chunks(TICK_SAMPLES) {
+        if let Ok(Some(b)) = engine.accumulate_capture(Some("BPSK31"), chunk.to_vec()) {
+            burst = Some(b);
+        }
+    }
+    for _ in 0..4 {
+        if let Ok(Some(b)) = engine.accumulate_capture(Some("BPSK31"), quiet.clone()) {
+            burst = Some(b);
+        }
+    }
+    let burst = burst.expect("a burst must flush");
+
+    let res = engine
+        .ota_decode_burst(&burst, SESSION, Some("BPSK31"))
+        .expect("must not error");
+    assert_eq!(
+        res.payload.as_deref(),
+        Some(PAYLOAD),
+        "precondition: the frame must decode at all"
+    );
+    assert!(
+        res.ack.is_some(),
+        "a frame a RUNG CANDIDATE can decode is ladder traffic and must carry an ACK — the \
+         fallback must not claim it first"
+    );
+    let decisions: Vec<_> = std::iter::from_fn(|| events.try_recv().ok())
+        .filter(|e| matches!(e, EngineEvent::OtaRateDecision { .. }))
+        .collect();
+    assert!(
+        !decisions.is_empty(),
+        "a ladder decode must drive a controller decision"
     );
 }

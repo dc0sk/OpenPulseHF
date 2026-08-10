@@ -84,7 +84,7 @@ fn receiver_decodes_rsstrong_on_a_fade_that_rs_cannot() {
         // Rs tried (pre-fix) this decodes ~0.12; with the expansion, ~0.7.
         let (mut rx, _) = engine();
         if rx
-            .ota_decode_burst(&faded, SESSION)
+            .ota_decode_burst(&faded, SESSION, Some(MODE))
             .ok()
             .and_then(|r| r.payload)
             .as_deref()
@@ -113,6 +113,6 @@ fn receiver_still_decodes_a_plain_rs_frame() {
         samples: tx_backend.drain_samples(),
     };
     let (mut rx, _) = engine();
-    let out = rx.ota_decode_burst(&burst, SESSION).expect("decode");
+    let out = rx.ota_decode_burst(&burst, SESSION, Some(MODE)).expect("decode");
     assert_eq!(out.payload.as_deref(), Some(payload.as_slice()));
 }

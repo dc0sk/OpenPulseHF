@@ -74,7 +74,7 @@ fn seed(trial: u32, attempt: usize) -> u64 {
 }
 
 fn decoded(rx: &mut ModemEngine, burst: &AudioSamples) -> Option<Vec<u8>> {
-    rx.ota_decode_burst(burst, SESSION)
+    rx.ota_decode_burst(burst, SESSION, Some(MODE))
         .ok()
         .and_then(|r| r.payload)
 }
