@@ -528,7 +528,14 @@ fn refine_onset(buf: &[f32], start: usize, span: usize, step: usize) -> usize {
 
 /// Internal return of [`ModemEngine::ota_decode_and_ack`]: the decoded
 /// payload+mode (if any), the ACK frame to send, and the last decode error.
-type OtaDecodeOutcome = (Option<(Vec<u8>, String)>, AckFrame, Option<ModemError>);
+///
+/// The ACK is `None` for a frame recovered by the uncoded fallback — that traffic is not part of
+/// the rate ladder, so there is nothing to acknowledge and nothing to key the transmitter for.
+type OtaDecodeOutcome = (
+    Option<(Vec<u8>, String)>,
+    Option<AckFrame>,
+    Option<ModemError>,
+);
 
 /// Outcome of one daemon-facing OTA receive poll ([`ModemEngine::poll_ota_rx`]):
 /// the decode result plus the ACK frame the caller must transmit back.
@@ -536,8 +543,13 @@ type OtaDecodeOutcome = (Option<(Vec<u8>, String)>, AckFrame, Option<ModemError>
 pub struct OtaRxResult {
     /// Decoded payload, or `None` when every candidate failed (the ACK is a Nack).
     pub payload: Option<Vec<u8>>,
-    /// ACK frame to transmit back to the sender (key PTT around the transmit).
-    pub ack: AckFrame,
+    /// ACK frame to transmit back to the sender (key PTT around the transmit), or `None` when the
+    /// burst was non-ladder traffic recovered by the uncoded fallback.
+    ///
+    /// `Option` rather than a `control: bool` beside a always-present frame on purpose: a caller
+    /// must not be able to transmit an ACK that should not exist, and the type change forces every
+    /// transmit site into a compile-visible decision.
+    pub ack: Option<AckFrame>,
     /// Mode string a candidate decoded at, for event reporting.
     pub mode: Option<String>,
 }
@@ -630,6 +642,21 @@ pub struct ModemEngine {
     /// `route_audio_stage(InputCapture)` in the per-slice decode a pass-through, so the stateful AGC and
     /// the DCD latch are not applied a second time per scan slice.
     input_prerouted: bool,
+    /// Set while a multi-attempt scan is running, to suppress `AfcUpdate` emission from attempts
+    /// whose AFC correction is about to be ROLLED BACK.
+    ///
+    /// Every scanning loop (`decode_burst_inner`, the OTA candidate/HARQ loops, and
+    /// `receive_with_timeout_fec`'s retry loop) restores `afc_correction_hz = afc_before` after a
+    /// failed attempt. An event emitted from inside one of those attempts therefore narrates a
+    /// hypothesis the engine immediately discards — it is not state. Emitting them also floods the
+    /// 64-slot broadcast ring (a BPSK250 noise scan makes ~129 attempts), which EVICTS genuine
+    /// events: that is how a failed OTA burst could lose its own `OtaRateDecision` (#1081).
+    ///
+    /// The rule is commit-gating, not failure-gating: single-window receives keep their estimate
+    /// even when the decode fails, so those emissions are real state and must keep flowing — which
+    /// is what keeps the TUI's AFC meter alive during acquisition. Same shape as `DcdChange`, which
+    /// is already change-gated at the seam.
+    suppress_afc_events: bool,
     /// Whether [`capture_burst`](ModemEngine::capture_burst) is mid-burst (carrier
     /// was present on a prior tick and not yet flushed).
     rx_capturing: bool,
@@ -851,6 +878,7 @@ impl ModemEngine {
             last_audio: Vec::new(),
             rx_burst: Vec::new(),
             input_prerouted: false,
+            suppress_afc_events: false,
             rx_capturing: false,
             cessb_enabled: true,
             notch_enabled: false,
@@ -1691,8 +1719,15 @@ impl ModemEngine {
         let samples = self.stage_capture_input(None, device)?;
         let samples = self.route_audio_stage(PipelineStage::InputCapture, samples)?;
 
-        let (decoded, ack_frame, last_err) = self.ota_decode_and_ack(&samples, session_id)?;
-        self.transmit_ack_with_short_fec(&ack_frame, device)?;
+        // `None` fallback mode: this entry has no production caller and no notion of an active
+        // non-ladder mode (`stage_capture_input(None, ..)` above leaves `rx_mode` unset), so it keeps
+        // its pre-#1123 behaviour exactly. Pinned by `fallback_mode_none_changes_nothing`.
+        let (decoded, ack_frame, last_err) = self.ota_decode_and_ack(&samples, session_id, None)?;
+        // `ack_frame` is always `Some` here: it is `None` only for an uncoded-fallback decode, which
+        // a `None` fallback mode cannot produce.
+        if let Some(ack) = &ack_frame {
+            self.transmit_ack_with_short_fec(ack, device)?;
+        }
 
         match decoded {
             Some((payload, mode)) => {
@@ -1731,7 +1766,8 @@ impl ModemEngine {
             return Ok(None);
         }
 
-        let (decoded, ack, last_err) = self.ota_decode_and_ack(&samples, session_id)?;
+        // `None` fallback mode — see `respond_arq_ota`; this entry has no production caller either.
+        let (decoded, ack, last_err) = self.ota_decode_and_ack(&samples, session_id, None)?;
         let (payload, mode) = match decoded {
             Some((p, m)) => (Some(p), Some(m)),
             None => {
@@ -1966,8 +2002,17 @@ impl ModemEngine {
         // #11). Restore the flag on every exit.
         let was_prerouted = self.input_prerouted;
         self.input_prerouted = true;
+        // Suppress per-attempt AfcUpdate: the scan rolls back `afc_correction_hz` after every failed
+        // attempt, so those events narrate hypotheses, not state (see `suppress_afc_events`).
+        let was_quiet = self.suppress_afc_events;
+        self.suppress_afc_events = true;
         let result = self.decode_burst_inner(mode, burst);
         self.input_prerouted = was_prerouted;
+        self.suppress_afc_events = was_quiet;
+        // A successful scan's correction IS committed — emit exactly one for it.
+        if result.is_ok() {
+            self.emit_afc_update(mode);
+        }
         result
     }
 
@@ -2021,12 +2066,19 @@ impl ModemEngine {
     /// send back (does not transmit it) — the burst-input counterpart of
     /// [`poll_ota_rx`](Self::poll_ota_rx) for a daemon using
     /// [`capture_burst`](Self::capture_burst).
+    ///
+    /// `fallback_mode` is the mode this station is *operating* on — the one its own non-ladder
+    /// traffic (station ID, filexfer fragments, handshake, QSY, relay) is transmitted at. A burst
+    /// that no rung candidate decodes is retried uncoded at that mode; on success the OTA controller
+    /// is left untouched and the returned `ack` is `None`, because such a frame is not ladder
+    /// traffic. Pass `None` to disable the fallback entirely (#1123).
     pub fn ota_decode_burst(
         &mut self,
         burst: &AudioSamples,
         session_id: &str,
+        fallback_mode: Option<&str>,
     ) -> Result<OtaRxResult, ModemError> {
-        let (decoded, ack, last_err) = self.ota_decode_and_ack(burst, session_id)?;
+        let (decoded, ack, last_err) = self.ota_decode_and_ack(burst, session_id, fallback_mode)?;
         let (payload, mode) = match decoded {
             Some((p, m)) => (Some(p), Some(m)),
             None => {
@@ -2050,6 +2102,7 @@ impl ModemEngine {
         &mut self,
         samples: &AudioSamples,
         session_id: &str,
+        fallback_mode: Option<&str>,
     ) -> Result<OtaDecodeOutcome, ModemError> {
         // Every caller (`respond_arq_ota`, `poll_ota_rx`, `ota_decode_burst`) front-ends the burst at the
         // shared `route_audio_stage(InputCapture)` seam BEFORE calling. Suppress the seam for the
@@ -2059,8 +2112,17 @@ impl ModemEngine {
         // `decode_burst_inner`. Restore on every exit.
         let was_prerouted = self.input_prerouted;
         self.input_prerouted = true;
-        let result = self.ota_decode_and_ack_inner(samples, session_id);
+        // Same rollback property as `decode_burst`: every candidate and every HARQ trial restores
+        // `afc_correction_hz` on failure.
+        let was_quiet = self.suppress_afc_events;
+        self.suppress_afc_events = true;
+        let result = self.ota_decode_and_ack_inner(samples, session_id, fallback_mode);
         self.input_prerouted = was_prerouted;
+        self.suppress_afc_events = was_quiet;
+        if let Ok((Some((_, mode)), _, _)) = &result {
+            let mode = mode.clone();
+            self.emit_afc_update(&mode);
+        }
         result
     }
 
@@ -2068,6 +2130,7 @@ impl ModemEngine {
         &mut self,
         samples: &AudioSamples,
         session_id: &str,
+        fallback_mode: Option<&str>,
     ) -> Result<OtaDecodeOutcome, ModemError> {
         let mut candidates: Vec<(SpeedLevel, String, FecMode)> = self
             .ota
@@ -2106,6 +2169,48 @@ impl ModemEngine {
                     break;
                 }
                 Err(e) => last_err = Some(e),
+            }
+        }
+
+        // Uncoded fallback for NON-LADDER traffic (#1123).
+        //
+        // The rung candidates above are the only thing this arm used to try, and every `hpx_*`
+        // profile that populates a FEC table codes every rung — so an uncoded frame matched nothing
+        // and the daemon simply could not receive its own station ID, filexfer fragments, handshake
+        // CONREQ/CONACK, QSY frames or relay envelopes whenever an OTA session was active. Those go
+        // out via `transmit`, at the station's ACTIVE mode, which is what `fallback_mode` carries.
+        //
+        // Placed AFTER the standalone candidates and BEFORE the HARQ block below, and the ordering
+        // is load-bearing in both directions:
+        //   * before HARQ, because the HARQ loop RETAINS this burst's LLRs per soft candidate on
+        //     failure. Running the fallback afterwards would retain one garbage vector for every
+        //     control frame, self-inflicting exactly the stale-LLR contamination the widest-first
+        //     suffix trial exists to contain — and it would need an "un-retain" mechanism to undo.
+        //     Returning here means nothing was ever retained and there is nothing to undo.
+        //   * after the candidates, so a ladder frame always keeps first claim on the burst. Under a
+        //     profile with no FEC table (`fec_for` is `unwrap_or(FecMode::None)`) the rung candidates
+        //     are themselves uncoded, and if such a rung's mode equals the active mode the two frame
+        //     classes are indistinguishable on the wire; candidates-first is what keeps those
+        //     counting as ladder traffic. Whether such profiles are legal OTA profiles at all is a
+        //     separate question (see #1123).
+        //
+        // Returns EARLY on success, bypassing `decoded`: assigning it would clear the retained LLRs
+        // and run the controller update, and a frame that is not ladder traffic must do neither. The
+        // `AckFrame` is `None` for the same reason — there is nothing to acknowledge, and the daemon
+        // must not key the transmitter for it.
+        if decoded.is_none() {
+            if let Some(mode) = fallback_mode {
+                // Same isolation every candidate gets: a failed attempt's AFC drift must not
+                // poison this one.
+                self.afc_correction_hz = afc_before;
+                if let Ok(payload) = self.decode_burst(mode, samples) {
+                    debug!(
+                        "ota fallback decoded {} bytes of non-ladder traffic at {mode}",
+                        payload.len()
+                    );
+                    return Ok((Some((payload, mode.to_string())), None, last_err));
+                }
+                self.afc_correction_hz = afc_before;
             }
         }
 
@@ -2290,7 +2395,7 @@ impl ModemEngine {
         });
         let ack_frame = AckFrame::new(rx_ack.ack_type, session_id)
             .with_recommended_level(rx_ack.recommended_level);
-        Ok((decoded, ack_frame, last_err))
+        Ok((decoded, Some(ack_frame), last_err))
     }
 
     /// Demodulate a burst to soft LLRs through the RX front-end seam, for HARQ retention.
@@ -2778,7 +2883,32 @@ impl ModemEngine {
         self.receive_with_timeout_fec(mode, device, listen_for, fec)
     }
 
+    /// Suppression wrapper for the scanning receiver — see `suppress_afc_events`.
+    ///
+    /// The scan loop below restores `afc_correction_hz` after failed attempts (both in the settle
+    /// micro-sweep and the full-buffer retry), so per-attempt `AfcUpdate`s report corrections the
+    /// engine discards, and at ~129 attempts they evict genuine events from the 64-slot ring. A
+    /// wrapper rather than in-line guards because this function has many return points and each one
+    /// would have to restore the flag.
     fn receive_with_timeout_fec(
+        &mut self,
+        mode: &str,
+        device: Option<&str>,
+        listen_for: Duration,
+        fec: FecMode,
+    ) -> Result<Vec<u8>, ModemError> {
+        let was_quiet = self.suppress_afc_events;
+        self.suppress_afc_events = true;
+        let result = self.receive_with_timeout_fec_inner(mode, device, listen_for, fec);
+        self.suppress_afc_events = was_quiet;
+        // The correction a successful acquisition settled on IS committed state.
+        if result.is_ok() {
+            self.emit_afc_update(mode);
+        }
+        result
+    }
+
+    fn receive_with_timeout_fec_inner(
         &mut self,
         mode: &str,
         device: Option<&str>,
@@ -3521,13 +3651,7 @@ impl ModemEngine {
         debug!("demodulated {} bytes", wire.bytes.len());
 
         self.update_afc_estimate(mode, &samples.samples);
-        if let Some(hz) = self.last_afc_offset_hz {
-            let _ = self.event_tx.send(EngineEvent::AfcUpdate {
-                offset_hz: hz,
-                correction_hz: self.afc_correction_hz,
-                mode: mode.to_string(),
-            });
-        }
+        self.emit_afc_update(mode);
 
         let frame = self.stage_decode_frame(&wire)?;
         let frame = self.route_decoded_stage(PipelineStage::HpxStateUpdate, frame)?;
@@ -3647,13 +3771,7 @@ impl ModemEngine {
         }
 
         self.update_afc_estimate(mode, &samples.samples);
-        if let Some(hz) = self.last_afc_offset_hz {
-            let _ = self.event_tx.send(EngineEvent::AfcUpdate {
-                offset_hz: hz,
-                correction_hz: self.afc_correction_hz,
-                mode: mode.to_string(),
-            });
-        }
+        self.emit_afc_update(mode);
 
         // Invariant (audit G-7): the demod above populates exactly one of `raw_wire` / `llrs`, keyed
         // to the FEC family it will be decoded with — hard-decision modes (Rs*/Concatenated) carry
@@ -3760,13 +3878,7 @@ impl ModemEngine {
         let samples = self.route_audio_stage(PipelineStage::InputCapture, samples)?;
 
         self.update_afc_estimate(mode, &samples.samples);
-        if let Some(hz) = self.last_afc_offset_hz {
-            let _ = self.event_tx.send(EngineEvent::AfcUpdate {
-                offset_hz: hz,
-                correction_hz: self.afc_correction_hz,
-                mode: mode.to_string(),
-            });
-        }
+        self.emit_afc_update(mode);
 
         let mod_cfg = ModulationConfig {
             mode: mode.to_string(),
@@ -4162,13 +4274,7 @@ impl ModemEngine {
         let raw_wire = self.route_wire_stage(PipelineStage::DemodulateDecode, raw_wire)?;
 
         self.update_afc_estimate(mode, &samples.samples);
-        if let Some(hz) = self.last_afc_offset_hz {
-            let _ = self.event_tx.send(EngineEvent::AfcUpdate {
-                offset_hz: hz,
-                correction_hz: self.afc_correction_hz,
-                mode: mode.to_string(),
-            });
-        }
+        self.emit_afc_update(mode);
 
         let corrected_bytes = self.rs_decode_free_strengthened(&raw_wire.bytes)?;
         let corrected_wire = WirePayload {
@@ -4240,13 +4346,7 @@ impl ModemEngine {
         let raw_wire = self.route_wire_stage(PipelineStage::DemodulateDecode, raw_wire)?;
 
         self.update_afc_estimate(mode, &samples.samples);
-        if let Some(hz) = self.last_afc_offset_hz {
-            let _ = self.event_tx.send(EngineEvent::AfcUpdate {
-                offset_hz: hz,
-                correction_hz: self.afc_correction_hz,
-                mode: mode.to_string(),
-            });
-        }
+        self.emit_afc_update(mode);
 
         let deinterleaved = Interleaver::new(interleaver_depth).deinterleave(&raw_wire.bytes);
         let corrected_bytes = FecCodec::new().decode(&deinterleaved)?;
@@ -4325,13 +4425,7 @@ impl ModemEngine {
         let raw_wire = self.route_wire_stage(PipelineStage::DemodulateDecode, raw_wire)?;
 
         self.update_afc_estimate(mode, &samples.samples);
-        if let Some(hz) = self.last_afc_offset_hz {
-            let _ = self.event_tx.send(EngineEvent::AfcUpdate {
-                offset_hz: hz,
-                correction_hz: self.afc_correction_hz,
-                mode: mode.to_string(),
-            });
-        }
+        self.emit_afc_update(mode);
 
         let conv_decoded = ConvCodec::new().decode(&raw_wire.bytes)?;
         let rs_decoded = FecCodec::new().decode(&conv_decoded)?;
@@ -4411,13 +4505,7 @@ impl ModemEngine {
         };
 
         self.update_afc_estimate(mode, &samples.samples);
-        if let Some(hz) = self.last_afc_offset_hz {
-            let _ = self.event_tx.send(EngineEvent::AfcUpdate {
-                offset_hz: hz,
-                correction_hz: self.afc_correction_hz,
-                mode: mode.to_string(),
-            });
-        }
+        self.emit_afc_update(mode);
 
         let rs_decoded = soft_concat_decode_llrs(&llrs)?;
         let corrected_wire = WirePayload { bytes: rs_decoded };
@@ -4486,13 +4574,7 @@ impl ModemEngine {
         let raw_wire = self.route_wire_stage(PipelineStage::DemodulateDecode, raw_wire)?;
 
         self.update_afc_estimate(mode, &samples.samples);
-        if let Some(hz) = self.last_afc_offset_hz {
-            let _ = self.event_tx.send(EngineEvent::AfcUpdate {
-                offset_hz: hz,
-                correction_hz: self.afc_correction_hz,
-                mode: mode.to_string(),
-            });
-        }
+        self.emit_afc_update(mode);
 
         let rs_decoded = FecCodec::strong().decode(&raw_wire.bytes)?;
         let frame = self.stage_decode_frame(&WirePayload { bytes: rs_decoded })?;
@@ -4624,13 +4706,7 @@ impl ModemEngine {
         };
 
         self.update_afc_estimate(mode, &samples.samples);
-        if let Some(hz) = self.last_afc_offset_hz {
-            let _ = self.event_tx.send(EngineEvent::AfcUpdate {
-                offset_hz: hz,
-                correction_hz: self.afc_correction_hz,
-                mode: mode.to_string(),
-            });
-        }
+        self.emit_afc_update(mode);
 
         // LDPC block is codeword_bytes × 8 coded bits; trim any excess LLRs.
         let info_bytes = decode_ldpc_llrs(codec, &llrs)?;
@@ -4718,13 +4794,7 @@ impl ModemEngine {
         };
 
         self.update_afc_estimate(mode, &samples.samples);
-        if let Some(hz) = self.last_afc_offset_hz {
-            let _ = self.event_tx.send(EngineEvent::AfcUpdate {
-                offset_hz: hz,
-                correction_hz: self.afc_correction_hz,
-                mode: mode.to_string(),
-            });
-        }
+        self.emit_afc_update(mode);
 
         // Timing recovery can yield ±1–2 fewer symbols than transmitted; pad to the
         // next multiple of 3 so turbo_decode_soft's divisibility check always passes.
@@ -5106,13 +5176,7 @@ impl ModemEngine {
         let wire = self.route_wire_stage(PipelineStage::DemodulateDecode, wire)?;
 
         self.update_afc_estimate(mode, &samples.samples);
-        if let Some(hz) = self.last_afc_offset_hz {
-            let _ = self.event_tx.send(EngineEvent::AfcUpdate {
-                offset_hz: hz,
-                correction_hz: self.afc_correction_hz,
-                mode: mode.to_string(),
-            });
-        }
+        self.emit_afc_update(mode);
 
         Ok(wire.bytes)
     }
@@ -5414,13 +5478,7 @@ impl ModemEngine {
             self.stage_demodulate_payload(plugin, mode, samples)?
         };
         self.update_afc_estimate(mode, &samples.samples);
-        if let Some(hz) = self.last_afc_offset_hz {
-            let _ = self.event_tx.send(EngineEvent::AfcUpdate {
-                offset_hz: hz,
-                correction_hz: self.afc_correction_hz,
-                mode: mode.to_string(),
-            });
-        }
+        self.emit_afc_update(mode);
         let decoded = ShortFecCodec::new().decode(&wire.bytes)?;
         let n = decoded.len();
         let arr: [u8; 5] = decoded.try_into().map_err(|_| {
@@ -5755,13 +5813,7 @@ impl ModemEngine {
         let wire = self.route_wire_stage(PipelineStage::DemodulateDecode, wire)?;
 
         self.update_afc_estimate(mode, &samples.samples);
-        if let Some(hz) = self.last_afc_offset_hz {
-            let _ = self.event_tx.send(EngineEvent::AfcUpdate {
-                offset_hz: hz,
-                correction_hz: self.afc_correction_hz,
-                mode: mode.to_string(),
-            });
-        }
+        self.emit_afc_update(mode);
 
         let corrected_bytes =
             ShortFecCodec::with_ecc_len(Self::SHORT_FEC_DATA_ECC_LEN).decode(&wire.bytes)?;
@@ -6128,6 +6180,25 @@ impl ModemEngine {
             }
         }
         openpulse_core::snr_estimate::m2m4_snr_db_gated_from_real(samples, fc, fs)
+    }
+
+    /// Emit an `AfcUpdate` for the CURRENT AFC state, unless a scan is suppressing them.
+    ///
+    /// See `suppress_afc_events`: an attempt whose correction is about to be rolled back has no
+    /// state to report, and emitting one per attempt evicts genuine events from the broadcast ring.
+    /// A scan that ultimately succeeds emits exactly one, from the caller, once the kept correction
+    /// is committed.
+    fn emit_afc_update(&self, mode: &str) {
+        if self.suppress_afc_events {
+            return;
+        }
+        if let Some(hz) = self.last_afc_offset_hz {
+            let _ = self.event_tx.send(EngineEvent::AfcUpdate {
+                offset_hz: hz,
+                correction_hz: self.afc_correction_hz,
+                mode: mode.to_string(),
+            });
+        }
     }
 
     fn update_afc_estimate(&mut self, mode: &str, samples: &[f32]) {
@@ -6529,6 +6600,54 @@ mod tests {
         assert_eq!(&decoded[..b"burst capture".len()], b"burst capture");
     }
 
+    /// #1123 retention purity: recovering non-ladder traffic must leave the HARQ diversity set
+    /// untouched.
+    ///
+    /// This is the gate that pins the fallback's ORDERING, and it is the reason the fallback runs
+    /// before the HARQ block rather than after it. The HARQ loop retains this burst's LLRs per soft
+    /// candidate whenever the standalone candidates fail; a fallback placed after it would retain
+    /// one garbage vector for every station ID, filexfer fragment and QSY frame the station hears —
+    /// self-inflicting exactly the stale-LLR contamination the widest-first suffix trial exists to
+    /// contain, and needing an "un-retain" mechanism to undo. Returning before the retention push
+    /// means there is nothing to undo.
+    ///
+    /// A unit test rather than an integration test plus a new `pub` accessor: the state it must
+    /// observe (`ota_retained_llrs`) is private, and exporting it purely to be probed is the
+    /// construct the reachability ratchet exists to refuse.
+    #[test]
+    fn a_fallback_decode_retains_no_harq_llrs() {
+        let lb = LoopbackBackend::new();
+        let mut tx = ModemEngine::new(Box::new(lb.clone_shared()));
+        tx.register_plugin(Box::new(BpskPlugin::new())).unwrap();
+        tx.transmit(b"control frame", "BPSK250", None).unwrap();
+        let signal = lb.drain_samples();
+
+        let rx_lb = LoopbackBackend::new();
+        let mut rx = ModemEngine::new(Box::new(rx_lb.clone_shared()));
+        rx.register_plugin(Box::new(BpskPlugin::new())).unwrap();
+        rx.register_plugin(Box::new(ofdm_plugin::OfdmPlugin::new()))
+            .unwrap();
+        // SL9 is OFDM52-16QAM + SoftConcatenated — a SOFT rung, so the HARQ block would demodulate
+        // and retain this burst's LLRs if it ever reached it.
+        rx.start_ota_session(SessionProfile::hpx_hf());
+        rx.ota_lock_level(SpeedLevel::Sl9);
+
+        let burst = AudioSamples { samples: signal };
+        let res = rx
+            .ota_decode_burst(&burst, "retention", Some("BPSK250"))
+            .expect("must not error");
+        assert_eq!(
+            res.payload.as_deref(),
+            Some(&b"control frame"[..]),
+            "precondition: the fallback must recover the control frame"
+        );
+        assert!(
+            rx.ota_retained_llrs.is_empty(),
+            "a fallback decode must retain NO HARQ LLRs; retained {:?}",
+            rx.ota_retained_llrs.keys().collect::<Vec<_>>()
+        );
+    }
+
     /// Audit: the OTA candidate/soft-HARQ decode loop must NOT re-run the InputCapture front-end — its
     /// callers already routed the burst through the seam. With the notch enabled, `ota_decode_burst`
     /// must not advance the notch-processed tripwire (which would prematurely trip auto-QSY).
@@ -6546,7 +6665,9 @@ mod tests {
             samples: vec![0.01f32; 4000],
         };
         let before = rx.notch_blocks_processed();
-        let _ = rx.ota_decode_burst(&burst, "sess-ota-notch");
+        // `Some(mode)` so the #1123 uncoded fallback runs too: it calls `decode_burst`, which is a
+        // second nested front-end user, and this seam assertion is exactly what must cover it.
+        let _ = rx.ota_decode_burst(&burst, "sess-ota-notch", Some("BPSK250"));
         assert_eq!(
             rx.notch_blocks_processed(),
             before,

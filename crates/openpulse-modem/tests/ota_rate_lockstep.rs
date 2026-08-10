@@ -251,8 +251,11 @@ fn poll_ota_rx_decodes_and_yields_ack_to_transmit() {
             Some(&payload[..]),
             "payload corrupted at frame {i}"
         );
-        // Caller transmits the ACK the poll built (PTT keyed around this on radio).
-        irs.transmit_ack_with_short_fec(&res.ack, None).unwrap();
+        // Caller transmits the ACK the poll built (PTT keyed around this on radio). `poll_ota_rx`
+        // passes no fallback mode, so a ladder decode here always carries an ACK — the `expect` is
+        // the assertion that it does.
+        let ack_frame = res.ack.as_ref().expect("a ladder decode must carry an ACK");
+        irs.transmit_ack_with_short_fec(ack_frame, None).unwrap();
         route(&irs_lb, &iss_lb);
         let ack = iss.receive_ack_with_short_fec(None).unwrap();
         iss.apply_ota_ack(&ack);

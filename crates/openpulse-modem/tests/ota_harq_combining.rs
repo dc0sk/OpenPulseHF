@@ -99,7 +99,7 @@ fn standalone_success(tx: &[f32]) -> f32 {
                 samples: faded(tx, seed(trial, attempt)),
             };
             if rx
-                .ota_decode_burst(&burst, SESSION)
+                .ota_decode_burst(&burst, SESSION, Some(MODE))
                 .ok()
                 .and_then(|r| r.payload)
                 .map(|p| p == PAYLOAD)
@@ -125,7 +125,7 @@ fn combining_success(tx: &[f32]) -> f32 {
                 samples: faded(tx, seed(trial, attempt)),
             };
             if rx
-                .ota_decode_burst(&burst, SESSION)
+                .ota_decode_burst(&burst, SESSION, Some(MODE))
                 .ok()
                 .and_then(|r| r.payload)
                 .map(|p| p == PAYLOAD)
@@ -161,7 +161,7 @@ fn combining_success_after_stale(tx: &[f32], stale_tx: &[f32], stale_snr_db: f32
                     stale_snr_db,
                 ),
             };
-            let _ = rx.ota_decode_burst(&burst, SESSION);
+            let _ = rx.ota_decode_burst(&burst, SESSION, Some(MODE));
         }
         let mut got = false;
         for attempt in 0..ATTEMPTS {
@@ -169,7 +169,7 @@ fn combining_success_after_stale(tx: &[f32], stale_tx: &[f32], stale_snr_db: f32
                 samples: faded(tx, seed(trial, attempt)),
             };
             if rx
-                .ota_decode_burst(&burst, SESSION)
+                .ota_decode_burst(&burst, SESSION, Some(MODE))
                 .ok()
                 .and_then(|r| r.payload)
                 .map(|p| p == PAYLOAD)

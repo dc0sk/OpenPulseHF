@@ -859,17 +859,34 @@ pub async fn run(cfg: OpenpulseConfig, modem_backend: Box<dyn AudioBackend>) -> 
                         // Receiver-led OTA: decode the burst, then key PTT only to answer
                         // with the ACK carrying our absolute recommended_level.
                         match tokio::task::block_in_place(|| {
-                            engine.ota_decode_burst(&burst, &ota_session_id)
+                            // `mode` is this station's ACTIVE mode — what its own non-ladder traffic
+                            // (station ID, filexfer, handshake, QSY, relay) is transmitted at. Passing
+                            // it enables the uncoded fallback for exactly that traffic (#1123);
+                            // without it an OTA-enabled daemon cannot receive any of it.
+                            engine.ota_decode_burst(&burst, &ota_session_id, Some(&mode))
                         }) {
                             Ok(res) => {
-                                // A decoded frame resets the budget and is always ACKed; a failed decode is
-                                // a Nack — key it only while within OTA_NACK_BUDGET consecutive failures.
+                                // A LADDER frame resets the budget and is always ACKed; a failed decode
+                                // is a Nack — key it only while within OTA_NACK_BUDGET consecutive
+                                // failures.
+                                //
+                                // A `None` ack means the uncoded fallback recovered non-ladder traffic.
+                                // That is not evidence about the rate ladder in either direction, so it
+                                // must leave the NACK budget alone (resetting it would credit the ladder
+                                // for a frame it did not decode) and must key nothing. Before #1123 such
+                                // a burst counted as a decode FAILURE, which drove `on_rx_frame(Failed)`
+                                // — including its hysteresis-free fast-downshift — and keyed a NACK at
+                                // the peer's own file transfer.
+                                let ladder_frame = res.ack.is_some();
                                 let decoded = res.payload.is_some();
-                                consecutive_ota_nack =
-                                    if decoded { 0 } else { consecutive_ota_nack.saturating_add(1) };
+                                if ladder_frame {
+                                    consecutive_ota_nack =
+                                        if decoded { 0 } else { consecutive_ota_nack.saturating_add(1) };
+                                }
                                 // Audit F6 (§97.119): the ACK keys the transmitter; without a valid MYID
                                 // the daemon can't auto-ID, so decode the payload but don't send the ACK.
-                                if (decoded || consecutive_ota_nack <= OTA_NACK_BUDGET)
+                                if ladder_frame
+                                    && (decoded || consecutive_ota_nack <= OTA_NACK_BUDGET)
                                     && runtime_state.local_callsign_valid()
                                 {
                                     // RAII guard (REQ-PTT-01): releases at block end / on unwind. On assert
@@ -884,12 +901,12 @@ pub async fn run(cfg: OpenpulseConfig, modem_backend: Box<dyn AudioBackend>) -> 
                                              see no ACK and the ARQ exchange will stall"
                                         );
                                     }
-                                    if let Ok(_guard) = ack_guard {
+                                    if let (Ok(_guard), Some(ack)) = (ack_guard, res.ack.as_ref()) {
                                         // Mode-aware ACK: K=3 union MFSK16-ACK (with a leading FSK4 copy)
                                         // when recommending the sub-floor rung, else FSK4-ACK. The ISS
                                         // union-listens, so either is heard.
                                         if let Err(e) = tokio::task::block_in_place(|| {
-                                            engine.transmit_ota_ack(&res.ack, None)
+                                            engine.transmit_ota_ack(ack, None)
                                         }) {
                                             tracing::warn!("OTA ACK transmit failed: {e}");
                                         }
