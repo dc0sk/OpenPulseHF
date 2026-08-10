@@ -70,7 +70,10 @@ fn afc_count(evs: &[EngineEvent]) -> usize {
 fn a_failed_decode_burst_scan_emits_no_afc_events() {
     let (mut e, _b) = engine();
     let mut rx = e.subscribe();
-    assert!(e.decode_burst(MODE, &noise(8_000)).is_err(), "noise must not decode");
+    assert!(
+        e.decode_burst(MODE, &noise(8_000)).is_err(),
+        "noise must not decode"
+    );
     let (evs, lagged) = drain(&mut rx);
     assert!(!lagged, "the scan overflowed the event ring");
     assert_eq!(
