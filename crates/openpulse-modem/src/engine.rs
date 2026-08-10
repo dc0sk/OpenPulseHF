@@ -642,6 +642,21 @@ pub struct ModemEngine {
     /// `route_audio_stage(InputCapture)` in the per-slice decode a pass-through, so the stateful AGC and
     /// the DCD latch are not applied a second time per scan slice.
     input_prerouted: bool,
+    /// Set while a multi-attempt scan is running, to suppress `AfcUpdate` emission from attempts
+    /// whose AFC correction is about to be ROLLED BACK.
+    ///
+    /// Every scanning loop (`decode_burst_inner`, the OTA candidate/HARQ loops, and
+    /// `receive_with_timeout_fec`'s retry loop) restores `afc_correction_hz = afc_before` after a
+    /// failed attempt. An event emitted from inside one of those attempts therefore narrates a
+    /// hypothesis the engine immediately discards — it is not state. Emitting them also floods the
+    /// 64-slot broadcast ring (a BPSK250 noise scan makes ~129 attempts), which EVICTS genuine
+    /// events: that is how a failed OTA burst could lose its own `OtaRateDecision` (#1081).
+    ///
+    /// The rule is commit-gating, not failure-gating: single-window receives keep their estimate
+    /// even when the decode fails, so those emissions are real state and must keep flowing — which
+    /// is what keeps the TUI's AFC meter alive during acquisition. Same shape as `DcdChange`, which
+    /// is already change-gated at the seam.
+    suppress_afc_events: bool,
     /// Whether [`capture_burst`](ModemEngine::capture_burst) is mid-burst (carrier
     /// was present on a prior tick and not yet flushed).
     rx_capturing: bool,
@@ -863,6 +878,7 @@ impl ModemEngine {
             last_audio: Vec::new(),
             rx_burst: Vec::new(),
             input_prerouted: false,
+            suppress_afc_events: false,
             rx_capturing: false,
             cessb_enabled: true,
             notch_enabled: false,
@@ -1986,8 +2002,17 @@ impl ModemEngine {
         // #11). Restore the flag on every exit.
         let was_prerouted = self.input_prerouted;
         self.input_prerouted = true;
+        // Suppress per-attempt AfcUpdate: the scan rolls back `afc_correction_hz` after every failed
+        // attempt, so those events narrate hypotheses, not state (see `suppress_afc_events`).
+        let was_quiet = self.suppress_afc_events;
+        self.suppress_afc_events = true;
         let result = self.decode_burst_inner(mode, burst);
         self.input_prerouted = was_prerouted;
+        self.suppress_afc_events = was_quiet;
+        // A successful scan's correction IS committed — emit exactly one for it.
+        if result.is_ok() {
+            self.emit_afc_update(mode);
+        }
         result
     }
 
@@ -2087,8 +2112,17 @@ impl ModemEngine {
         // `decode_burst_inner`. Restore on every exit.
         let was_prerouted = self.input_prerouted;
         self.input_prerouted = true;
+        // Same rollback property as `decode_burst`: every candidate and every HARQ trial restores
+        // `afc_correction_hz` on failure.
+        let was_quiet = self.suppress_afc_events;
+        self.suppress_afc_events = true;
         let result = self.ota_decode_and_ack_inner(samples, session_id, fallback_mode);
         self.input_prerouted = was_prerouted;
+        self.suppress_afc_events = was_quiet;
+        if let Ok((Some((_, mode)), _, _)) = &result {
+            let mode = mode.clone();
+            self.emit_afc_update(&mode);
+        }
         result
     }
 
@@ -2849,7 +2883,32 @@ impl ModemEngine {
         self.receive_with_timeout_fec(mode, device, listen_for, fec)
     }
 
+    /// Suppression wrapper for the scanning receiver — see `suppress_afc_events`.
+    ///
+    /// The scan loop below restores `afc_correction_hz` after failed attempts (both in the settle
+    /// micro-sweep and the full-buffer retry), so per-attempt `AfcUpdate`s report corrections the
+    /// engine discards, and at ~129 attempts they evict genuine events from the 64-slot ring. A
+    /// wrapper rather than in-line guards because this function has many return points and each one
+    /// would have to restore the flag.
     fn receive_with_timeout_fec(
+        &mut self,
+        mode: &str,
+        device: Option<&str>,
+        listen_for: Duration,
+        fec: FecMode,
+    ) -> Result<Vec<u8>, ModemError> {
+        let was_quiet = self.suppress_afc_events;
+        self.suppress_afc_events = true;
+        let result = self.receive_with_timeout_fec_inner(mode, device, listen_for, fec);
+        self.suppress_afc_events = was_quiet;
+        // The correction a successful acquisition settled on IS committed state.
+        if result.is_ok() {
+            self.emit_afc_update(mode);
+        }
+        result
+    }
+
+    fn receive_with_timeout_fec_inner(
         &mut self,
         mode: &str,
         device: Option<&str>,
@@ -3592,13 +3651,7 @@ impl ModemEngine {
         debug!("demodulated {} bytes", wire.bytes.len());
 
         self.update_afc_estimate(mode, &samples.samples);
-        if let Some(hz) = self.last_afc_offset_hz {
-            let _ = self.event_tx.send(EngineEvent::AfcUpdate {
-                offset_hz: hz,
-                correction_hz: self.afc_correction_hz,
-                mode: mode.to_string(),
-            });
-        }
+        self.emit_afc_update(mode);
 
         let frame = self.stage_decode_frame(&wire)?;
         let frame = self.route_decoded_stage(PipelineStage::HpxStateUpdate, frame)?;
@@ -3718,13 +3771,7 @@ impl ModemEngine {
         }
 
         self.update_afc_estimate(mode, &samples.samples);
-        if let Some(hz) = self.last_afc_offset_hz {
-            let _ = self.event_tx.send(EngineEvent::AfcUpdate {
-                offset_hz: hz,
-                correction_hz: self.afc_correction_hz,
-                mode: mode.to_string(),
-            });
-        }
+        self.emit_afc_update(mode);
 
         // Invariant (audit G-7): the demod above populates exactly one of `raw_wire` / `llrs`, keyed
         // to the FEC family it will be decoded with — hard-decision modes (Rs*/Concatenated) carry
@@ -3831,13 +3878,7 @@ impl ModemEngine {
         let samples = self.route_audio_stage(PipelineStage::InputCapture, samples)?;
 
         self.update_afc_estimate(mode, &samples.samples);
-        if let Some(hz) = self.last_afc_offset_hz {
-            let _ = self.event_tx.send(EngineEvent::AfcUpdate {
-                offset_hz: hz,
-                correction_hz: self.afc_correction_hz,
-                mode: mode.to_string(),
-            });
-        }
+        self.emit_afc_update(mode);
 
         let mod_cfg = ModulationConfig {
             mode: mode.to_string(),
@@ -4233,13 +4274,7 @@ impl ModemEngine {
         let raw_wire = self.route_wire_stage(PipelineStage::DemodulateDecode, raw_wire)?;
 
         self.update_afc_estimate(mode, &samples.samples);
-        if let Some(hz) = self.last_afc_offset_hz {
-            let _ = self.event_tx.send(EngineEvent::AfcUpdate {
-                offset_hz: hz,
-                correction_hz: self.afc_correction_hz,
-                mode: mode.to_string(),
-            });
-        }
+        self.emit_afc_update(mode);
 
         let corrected_bytes = self.rs_decode_free_strengthened(&raw_wire.bytes)?;
         let corrected_wire = WirePayload {
@@ -4311,13 +4346,7 @@ impl ModemEngine {
         let raw_wire = self.route_wire_stage(PipelineStage::DemodulateDecode, raw_wire)?;
 
         self.update_afc_estimate(mode, &samples.samples);
-        if let Some(hz) = self.last_afc_offset_hz {
-            let _ = self.event_tx.send(EngineEvent::AfcUpdate {
-                offset_hz: hz,
-                correction_hz: self.afc_correction_hz,
-                mode: mode.to_string(),
-            });
-        }
+        self.emit_afc_update(mode);
 
         let deinterleaved = Interleaver::new(interleaver_depth).deinterleave(&raw_wire.bytes);
         let corrected_bytes = FecCodec::new().decode(&deinterleaved)?;
@@ -4396,13 +4425,7 @@ impl ModemEngine {
         let raw_wire = self.route_wire_stage(PipelineStage::DemodulateDecode, raw_wire)?;
 
         self.update_afc_estimate(mode, &samples.samples);
-        if let Some(hz) = self.last_afc_offset_hz {
-            let _ = self.event_tx.send(EngineEvent::AfcUpdate {
-                offset_hz: hz,
-                correction_hz: self.afc_correction_hz,
-                mode: mode.to_string(),
-            });
-        }
+        self.emit_afc_update(mode);
 
         let conv_decoded = ConvCodec::new().decode(&raw_wire.bytes)?;
         let rs_decoded = FecCodec::new().decode(&conv_decoded)?;
@@ -4482,13 +4505,7 @@ impl ModemEngine {
         };
 
         self.update_afc_estimate(mode, &samples.samples);
-        if let Some(hz) = self.last_afc_offset_hz {
-            let _ = self.event_tx.send(EngineEvent::AfcUpdate {
-                offset_hz: hz,
-                correction_hz: self.afc_correction_hz,
-                mode: mode.to_string(),
-            });
-        }
+        self.emit_afc_update(mode);
 
         let rs_decoded = soft_concat_decode_llrs(&llrs)?;
         let corrected_wire = WirePayload { bytes: rs_decoded };
@@ -4557,13 +4574,7 @@ impl ModemEngine {
         let raw_wire = self.route_wire_stage(PipelineStage::DemodulateDecode, raw_wire)?;
 
         self.update_afc_estimate(mode, &samples.samples);
-        if let Some(hz) = self.last_afc_offset_hz {
-            let _ = self.event_tx.send(EngineEvent::AfcUpdate {
-                offset_hz: hz,
-                correction_hz: self.afc_correction_hz,
-                mode: mode.to_string(),
-            });
-        }
+        self.emit_afc_update(mode);
 
         let rs_decoded = FecCodec::strong().decode(&raw_wire.bytes)?;
         let frame = self.stage_decode_frame(&WirePayload { bytes: rs_decoded })?;
@@ -4695,13 +4706,7 @@ impl ModemEngine {
         };
 
         self.update_afc_estimate(mode, &samples.samples);
-        if let Some(hz) = self.last_afc_offset_hz {
-            let _ = self.event_tx.send(EngineEvent::AfcUpdate {
-                offset_hz: hz,
-                correction_hz: self.afc_correction_hz,
-                mode: mode.to_string(),
-            });
-        }
+        self.emit_afc_update(mode);
 
         // LDPC block is codeword_bytes × 8 coded bits; trim any excess LLRs.
         let info_bytes = decode_ldpc_llrs(codec, &llrs)?;
@@ -4789,13 +4794,7 @@ impl ModemEngine {
         };
 
         self.update_afc_estimate(mode, &samples.samples);
-        if let Some(hz) = self.last_afc_offset_hz {
-            let _ = self.event_tx.send(EngineEvent::AfcUpdate {
-                offset_hz: hz,
-                correction_hz: self.afc_correction_hz,
-                mode: mode.to_string(),
-            });
-        }
+        self.emit_afc_update(mode);
 
         // Timing recovery can yield ±1–2 fewer symbols than transmitted; pad to the
         // next multiple of 3 so turbo_decode_soft's divisibility check always passes.
@@ -5177,13 +5176,7 @@ impl ModemEngine {
         let wire = self.route_wire_stage(PipelineStage::DemodulateDecode, wire)?;
 
         self.update_afc_estimate(mode, &samples.samples);
-        if let Some(hz) = self.last_afc_offset_hz {
-            let _ = self.event_tx.send(EngineEvent::AfcUpdate {
-                offset_hz: hz,
-                correction_hz: self.afc_correction_hz,
-                mode: mode.to_string(),
-            });
-        }
+        self.emit_afc_update(mode);
 
         Ok(wire.bytes)
     }
@@ -5485,13 +5478,7 @@ impl ModemEngine {
             self.stage_demodulate_payload(plugin, mode, samples)?
         };
         self.update_afc_estimate(mode, &samples.samples);
-        if let Some(hz) = self.last_afc_offset_hz {
-            let _ = self.event_tx.send(EngineEvent::AfcUpdate {
-                offset_hz: hz,
-                correction_hz: self.afc_correction_hz,
-                mode: mode.to_string(),
-            });
-        }
+        self.emit_afc_update(mode);
         let decoded = ShortFecCodec::new().decode(&wire.bytes)?;
         let n = decoded.len();
         let arr: [u8; 5] = decoded.try_into().map_err(|_| {
@@ -5826,13 +5813,7 @@ impl ModemEngine {
         let wire = self.route_wire_stage(PipelineStage::DemodulateDecode, wire)?;
 
         self.update_afc_estimate(mode, &samples.samples);
-        if let Some(hz) = self.last_afc_offset_hz {
-            let _ = self.event_tx.send(EngineEvent::AfcUpdate {
-                offset_hz: hz,
-                correction_hz: self.afc_correction_hz,
-                mode: mode.to_string(),
-            });
-        }
+        self.emit_afc_update(mode);
 
         let corrected_bytes =
             ShortFecCodec::with_ecc_len(Self::SHORT_FEC_DATA_ECC_LEN).decode(&wire.bytes)?;
@@ -6199,6 +6180,25 @@ impl ModemEngine {
             }
         }
         openpulse_core::snr_estimate::m2m4_snr_db_gated_from_real(samples, fc, fs)
+    }
+
+    /// Emit an `AfcUpdate` for the CURRENT AFC state, unless a scan is suppressing them.
+    ///
+    /// See `suppress_afc_events`: an attempt whose correction is about to be rolled back has no
+    /// state to report, and emitting one per attempt evicts genuine events from the broadcast ring.
+    /// A scan that ultimately succeeds emits exactly one, from the caller, once the kept correction
+    /// is committed.
+    fn emit_afc_update(&self, mode: &str) {
+        if self.suppress_afc_events {
+            return;
+        }
+        if let Some(hz) = self.last_afc_offset_hz {
+            let _ = self.event_tx.send(EngineEvent::AfcUpdate {
+                offset_hz: hz,
+                correction_hz: self.afc_correction_hz,
+                mode: mode.to_string(),
+            });
+        }
     }
 
     fn update_afc_estimate(&mut self, mode: &str, samples: &[f32]) {
