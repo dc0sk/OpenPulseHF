@@ -9,6 +9,120 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-08-10 — fix(daemon): an OTA-enabled daemon could not receive any uncoded frame (#1123)
+
+- **Requirement / change.** `Refactors: CAP-33` (over-the-air receiver-led rate controller). With
+  `[modem] ota_enabled = true` the daemon could not receive its own non-ladder traffic — station ID,
+  filexfer fragments, handshake CONREQ/CONACK, QSY negotiation, relay envelopes. Two defects, one
+  dispatch decision: the reception hole (#1123) and a previously unnamed controller/PTT pollution.
+- **Architecture / design decision (+ rationale).** `server::run`'s rx_ticker has two mutually
+  exclusive arms; with a session active every burst goes to `ota_decode_burst`, which tries only
+  `rx_candidates()` — at most two `(mode, FEC)` pairs, each carrying `profile.fec_for(level)`. Under
+  the default `hpx_hf` every rung is coded, so an uncoded frame matched nothing, and there was no
+  `FecMode::None` candidate and no fall-through. Keep that scoping: a populated FEC table does **not**
+  imply every rung is coded — `hpx_modcod` has one and its SL7 is a literal `Some(FecMode::None)`
+  (`profile.rs:234`). This claim has now been falsified at two broader phrasings; it is true only as
+  written here.
+
+  The fix adds a `fallback_mode` — the station's **active** mode, which is what non-ladder traffic is
+  transmitted at — and retries the burst uncoded there. Three decisions were reviewed before
+  implementation:
+
+  - **Engine, not daemon.** A daemon-side fallback after `ota_decode_burst` returns `None` was
+    rejected: by then `on_rx_frame(RxOutcome::Failed, ..)` has already run. It would have fixed
+    reception and left the controller corruption.
+  - **After the candidates, before HARQ.** After the candidates so a ladder frame keeps first claim.
+    Before the HARQ block because that block *retains* the burst's LLRs per soft candidate on
+    failure — a later placement would retain one garbage vector per control frame, self-inflicting
+    the stale-LLR contamination the widest-first suffix trial exists to contain, and would need an
+    un-retain mechanism to undo.
+  - **`Option<AckFrame>`, not `control: bool`.** A caller must not be able to transmit an ACK that
+    should not exist; the type change forces every transmit site into a compile-visible decision.
+- **Implementation.** `crates/openpulse-modem/src/engine.rs` — `ota_decode_burst`,
+  `ota_decode_and_ack`, `ota_decode_and_ack_inner` gain `fallback_mode`; `OtaDecodeOutcome` and
+  `OtaRxResult::ack` become `Option<AckFrame>`; the fallback returns early, bypassing `decoded`, so
+  neither the retained-LLR clear nor the controller update runs.
+  `crates/openpulse-daemon/src/server.rs` — passes the active mode; a `None` ack marks non-ladder
+  traffic, which leaves `consecutive_ota_nack` alone and keys nothing.
+- **Measurements (actually run).**
+
+  | | before | after |
+  |---|---|---|
+  | `ota_arm_uncoded_dispatch` (attribution, one burst two arms) | `ota_decode_burst` → `None` | → `Some("UNCODED CONTROL FRAME")` |
+  | `twin_daemon_bridge` (two real daemons, `ota_enabled = true`) | FAILED, 90 s timeout, file never arrived | ok, whole binary 5/5 in **10.23 s** |
+
+  The four pre-existing twin gates pass in both runs — that is what separates "OTA is broken" (false)
+  from "the OTA arm cannot receive uncoded traffic" (the claim).
+- **Tests.** `crates/openpulse-modem/tests/ota_arm_uncoded_dispatch.rs` — `one_burst_two_arms`
+  (attribution, OTA locked to SL5 so the candidate mode equals the transmitted one, AFC reset between
+  arms), `a_control_frame_does_not_touch_the_rate_controller` (no `OtaRateDecision`, levels unmoved,
+  no ACK), `fallback_mode_none_changes_nothing` (negative control pinning the two sibling entries'
+  documented darkness), `a_ladder_frame_still_classifies_as_ladder_when_the_fallback_could_also_decode_it`
+  (on `hpx500`, the only profile class where the ordering is observable).
+  `engine.rs` unit test `a_fallback_decode_retains_no_harq_llrs` (retention purity; a unit test rather
+  than a new `pub` accessor, since `ota_retained_llrs` is private).
+  `crates/openpulse-daemon/tests/twin_daemon_bridge.rs` — `a_file_crosses_the_bridge_with_ota_enabled`.
+- **Test results (run).** `ota_arm_uncoded_dispatch` 4/4; `twin_daemon_bridge` 5/5;
+  `a_fallback_decode_retains_no_harq_llrs` 1/1. Workspace gate: see `GATE:` line below.
+- **Sabotage verification.** Each new gate was watched failing, and each sabotage fails only the gate
+  it targets:
+
+  | sabotage | fails |
+  |---|---|
+  | fallback claims the burst unconditionally (first claim) | `a_ladder_frame_still_classifies_as_ladder…` only |
+  | control frame falls through to the controller | `one_burst_two_arms` + `a_control_frame_does_not_touch_the_rate_controller` |
+  | `None` silently falls back to ambient `rx_mode` | `fallback_mode_none_changes_nothing` only |
+  | early return neutered → fallback effectively after HARQ | `a_fallback_decode_retains_no_harq_llrs` only |
+
+  The two repro tests were born red against the unfixed code, which is their sabotage verification.
+- **Provenance.** Found by adversarial review (Fable) of the #1118 inventory, while checking a
+  different claim. The fix design was reviewed before implementation; that review corrected the
+  ordering (I had placed the fallback after HARQ) and the mode source (I had proposed ambient
+  `rx_mode`, which is `None` at two entry points — a seam gap inside the fix for a dispatch bug).
+
+## 2026-08-10 — fix(engine): AfcUpdate emitted only for COMMITTED AFC state (surfaced by #1123)
+
+- **Requirement / change.** `Refactors: CAP-38` (modem engine and pipeline scheduler). Every
+  scanning loop rolls back `afc_correction_hz` after a failed attempt, but each attempt emitted an
+  `AfcUpdate` first — narrating hypotheses the engine discards, at ~129 events per BPSK250 noise scan
+  against a 64-slot broadcast ring. The ring overflows and evicts genuine events.
+- **How it surfaced.** Routing the OTA arm through `decode_burst`'s onset scan (the #1123 fallback)
+  turned three `ota_rate_decision_events` tests from green to `[]` — their `OtaRateDecision` was
+  evicted, and their `while let Ok(..)` drain stopped on the resulting `Lagged`. The flood was
+  **pre-existing** on the non-OTA `decode_burst` arm (every burst, default config) and on the CLI
+  `receive_with_timeout_fec` scan — but the *production overflow on the OTA arm is new with #1123*.
+  Pre-change that arm emitted at most ~6 `AfcUpdate`s per failed burst (2–4 candidates plus RsStrong
+  companions; `ota_demodulate_soft` emits none), which cannot overflow a 64-slot ring. Post-change it
+  is ~129, so overflow is certain — on the one arm that emits `OtaRateDecision`, with real subscribers
+  attached (the daemon bridge, the audit recorder, the ws panel feed). The flood *class* was
+  pre-existing; this overflow was not, and the tests caught it by luck.
+- **Design decision (+ rationale).** Commit-gating, not failure-gating: a single-window receive keeps
+  its estimate even when the decode fails, so those emissions are genuine state and must keep
+  flowing — that is what preserves the TUI's AFC meter during acquisition. Only rolled-back attempts
+  go silent; a scan that succeeds emits exactly one for the correction it kept.
+  - Change-gating on magnitude was **rejected**: a noise scan is the maximum-jitter case, so any
+    honest epsilon fails to suppress it, and a large one is a fitted constant in a DSP-adjacent path.
+  - Enlarging the broadcast channel was **rejected**: it moves the cliff rather than removing it.
+  - Suppressing only the arm #1123 touched was **rejected**: three arms share the property, and
+    fixing one is the fixed-one-arm-of-a-match archetype.
+- **Implementation.** `crates/openpulse-modem/src/engine.rs` — new `suppress_afc_events` flag and
+  `emit_afc_update` helper; 13 textually identical emission blocks routed through it; the flag is
+  scoped by `decode_burst`, `ota_decode_and_ack`, and a new `receive_with_timeout_fec` wrapper (a
+  wrapper because the inner function has many return points). The three emissions left in place
+  (`receive_with_soft_combining`, `receive_with_llr_combining`, `receive_with_window_arq`) are exempt
+  because they have **no rollback** — `afc_before` appears nowhere in them — so every emission is
+  committed state, and their attempt counts are small and bounded. Note the criterion is rollback, not
+  "single window": soft-combining does emit inside a per-frame loop.
+- **Test results (run).** `ota_rate_decision_events` **3/3** (was 0/3); `afc_event_flood` **4/4**.
+- **Sabotage verification.** Re-enabling emission in each scan arm fails that arm's gate and only
+  that one; a blanket mute fails the vacuity control (`a_successful_scan_still_emits_exactly_one`).
+  - **The arm-3 gate was vacuous on first write and the sabotage is what caught it.** Its fixture was
+    flat noise, which `EnergyGate` rejects on a threshold derived from the noise itself, so zero
+    decode attempts ran and "zero events" held for the wrong reason. Replaced with a real frame whose
+    second half is sign-inverted — passes the gate, fails on magic/CRC.
+- **Follow-up filed separately.** Production drain loops that stop on `Lagged` (e.g. the daemon
+  bridge) should treat it as resumable; a consumer that fails closed silently freezes its event view.
+
 ## 2026-08-02 — feat(core,plugins): preamble templates carry their own ρ constants (#1053, partial)
 
 - **Requirement/change:** #1049's correlation veto only runs where a plugin publishes a

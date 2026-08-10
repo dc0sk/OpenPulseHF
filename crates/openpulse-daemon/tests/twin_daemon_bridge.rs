@@ -442,3 +442,72 @@ async fn a_file_crosses_the_bridge_with_ota_enabled() {
     assert_eq!(got, contents, "reassembled file must match the sent bytes");
     let _ = std::fs::remove_dir_all(&base);
 }
+
+/// An OTA-enabled receiver must not KEY THE TRANSMITTER at a peer's non-ladder traffic.
+///
+/// The reception half of #1123 is gated above; this is the controller/PTT half at the shipping
+/// surface. On `main` a heard uncoded frame counted as a decode failure, so it drove
+/// `on_rx_frame(RxOutcome::Failed, ..)` and — within `OTA_NACK_BUDGET` — keyed a NACK back at the
+/// sender. The fix gates the whole keying block on `ladder_frame` (`res.ack.is_some()`), and without
+/// this test that gate is verified only by reading.
+///
+/// A is a plain (non-OTA) station sending one uncoded message; B runs an OTA session. B has nothing
+/// to say in reply — no ladder frame, no ACK, and `SendMessage` on A is the only traffic — so the
+/// expected `PttChanged` count on B is exactly **zero**. That makes the bound exact rather than a
+/// tuned threshold.
+#[tokio::test(flavor = "multi_thread", worker_threads = 6)]
+async fn an_ota_receiver_does_not_key_ptt_at_a_peers_uncoded_traffic() {
+    let mut b_cfg = cfg("PTTB", 19062, 19063);
+    b_cfg.modem.ota_enabled = true;
+    let pair = spawn_bridged_pair(
+        cfg("PTTA", 19060, 19061),
+        b_cfg,
+        clean_awgn(1),
+        clean_awgn(2),
+        Duration::from_millis(10),
+    )
+    .await;
+
+    let b = TcpStream::connect(pair.addr_b).await.unwrap();
+    let (b_read, _b_write) = b.into_split();
+    let mut b_reader = BufReader::new(b_read);
+
+    let a = TcpStream::connect(pair.addr_a).await.unwrap();
+    let (_a_read, mut a_write) = a.into_split();
+    tokio::time::sleep(Duration::from_millis(150)).await;
+    let cmd = serde_json::to_string(&ControlCommand::SendMessage {
+        to: "PTTB".into(),
+        subject: "x".into(),
+        body: "uncoded control traffic".into(),
+    })
+    .unwrap()
+        + "\n";
+    a_write.write_all(cmd.as_bytes()).await.unwrap();
+
+    // Watch B long enough to cover several receive ticks and the whole NACK budget.
+    let keyed = timeout(Duration::from_secs(12), async {
+        let mut keyed = 0usize;
+        loop {
+            let mut buf = String::new();
+            if b_reader.read_line(&mut buf).await.unwrap() == 0 {
+                continue;
+            }
+            if let Ok(ControlEvent::PttChanged { active }) =
+                serde_json::from_str::<ControlEvent>(buf.trim())
+            {
+                if active {
+                    keyed += 1;
+                    return keyed;
+                }
+            }
+        }
+    })
+    .await;
+
+    pair.shutdown();
+    assert!(
+        keyed.is_err(),
+        "an OTA-enabled receiver keyed PTT at a peer's uncoded traffic ({keyed:?} assertions) — \
+         that is the NACK-at-your-peer's-file-transfer defect #1123 closed"
+    );
+}
