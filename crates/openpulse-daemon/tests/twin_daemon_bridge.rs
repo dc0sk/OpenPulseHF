@@ -355,3 +355,90 @@ async fn subfloor_sl1_message_crosses_with_k3_ack_between_two_real_daemons() {
         "A must be transmitting at the pinned MFSK16 SL1 rung (lock took effect)"
     );
 }
+
+/// The same file transfer, with the ONE config change `[modem] ota_enabled = true`.
+///
+/// `a_file_crosses_the_bridge_between_two_real_daemons` above runs with OTA off, which is the
+/// default — so nothing in the suite exercised filexfer under the configuration the on-air campaign
+/// actually uses. `server::run`'s rx_ticker dispatches a flushed burst to `ota_decode_burst`
+/// whenever a session is active (and `start_ota_session` runs once at startup and is never cleared
+/// except by an explicit `StopOtaSession`), and that arm tries only the current rung's candidates —
+/// at most two `(mode, FEC)` pairs. `drain_filexfer_tx` transmits fragments with `engine.transmit`
+/// — uncoded. Under the default `hpx_hf` every rung is coded, so no candidate can match.
+///
+/// The arm is isolated as the single cause in
+/// `openpulse-modem/tests/ota_arm_uncoded_dispatch.rs`, which decodes ONE burst both ways with the
+/// candidate mode locked to the transmitted one; this test is the consequence at the shipping
+/// surface. Its control is the OTA-off test above: same file, same channel, same code path,
+/// differing only in `ota_enabled`.
+#[tokio::test(flavor = "multi_thread", worker_threads = 6)]
+async fn a_file_crosses_the_bridge_with_ota_enabled() {
+    let base = std::env::temp_dir().join(format!("opfx_twin_ota_{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&base);
+    let recv_dir = base.join("recv");
+    std::fs::create_dir_all(&base).unwrap();
+
+    let src = base.join("payload.txt");
+    let contents = b"twin file-transfer payload across two real daemons ".repeat(4);
+    std::fs::write(&src, &contents).unwrap();
+
+    // EXACTLY one line differs from the control above. `ota_profile` is deliberately left empty so
+    // the daemon falls back to `[modem] profile` (server.rs:229-233) — the default `hpx_hf`, every
+    // rung of which is coded. Setting `ota_profile = "hpx500"` here (as the first draft did) would
+    // have changed the mechanism under test: `hpx500` populates no FEC table, so `fec_for` returns
+    // `FecMode::None` for every rung (profile.rs:110) and the failure would have been candidate-MODE
+    // mismatch rather than the absence of an uncoded candidate.
+    let ota_ft = |call: &str, tcp: u16, ws: u16, dir: &std::path::Path| {
+        let mut c = ft_cfg(call, tcp, ws, dir);
+        c.modem.ota_enabled = true;
+        c
+    };
+
+    let pair = spawn_bridged_pair(
+        ota_ft("STNA", 19050, 19051, &base.join("dl_a")),
+        ota_ft("STNB", 19052, 19053, &recv_dir),
+        clean_awgn(1),
+        clean_awgn(2),
+        Duration::from_millis(10),
+    )
+    .await;
+
+    let b = TcpStream::connect(pair.addr_b).await.unwrap();
+    let (b_read, _b_write) = b.into_split();
+    let mut b_reader = BufReader::new(b_read);
+
+    let a = TcpStream::connect(pair.addr_a).await.unwrap();
+    let (_a_read, mut a_write) = a.into_split();
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    let cmd = serde_json::to_string(&ControlCommand::SendFile {
+        to: "STNB".into(),
+        path: src.to_string_lossy().into_owned(),
+    })
+    .unwrap()
+        + "\n";
+    a_write.write_all(cmd.as_bytes()).await.unwrap();
+
+    let received = timeout(Duration::from_secs(90), async {
+        loop {
+            let mut buf = String::new();
+            if b_reader.read_line(&mut buf).await.unwrap() == 0 {
+                continue;
+            }
+            if let Ok(ControlEvent::FileReceived { path, name, .. }) =
+                serde_json::from_str::<ControlEvent>(buf.trim())
+            {
+                return (path, name);
+            }
+        }
+    })
+    .await;
+
+    pair.shutdown();
+
+    let (path, name) = received
+        .expect("daemon B never reported the file crossing the bridge with ota_enabled = true");
+    assert!(name.contains("payload"), "unexpected file name {name}");
+    let got = std::fs::read(&path).expect("received file must exist on disk");
+    assert_eq!(got, contents, "reassembled file must match the sent bytes");
+    let _ = std::fs::remove_dir_all(&base);
+}
