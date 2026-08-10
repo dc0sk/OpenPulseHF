@@ -6600,6 +6600,54 @@ mod tests {
         assert_eq!(&decoded[..b"burst capture".len()], b"burst capture");
     }
 
+    /// #1123 retention purity: recovering non-ladder traffic must leave the HARQ diversity set
+    /// untouched.
+    ///
+    /// This is the gate that pins the fallback's ORDERING, and it is the reason the fallback runs
+    /// before the HARQ block rather than after it. The HARQ loop retains this burst's LLRs per soft
+    /// candidate whenever the standalone candidates fail; a fallback placed after it would retain
+    /// one garbage vector for every station ID, filexfer fragment and QSY frame the station hears —
+    /// self-inflicting exactly the stale-LLR contamination the widest-first suffix trial exists to
+    /// contain, and needing an "un-retain" mechanism to undo. Returning before the retention push
+    /// means there is nothing to undo.
+    ///
+    /// A unit test rather than an integration test plus a new `pub` accessor: the state it must
+    /// observe (`ota_retained_llrs`) is private, and exporting it purely to be probed is the
+    /// construct the reachability ratchet exists to refuse.
+    #[test]
+    fn a_fallback_decode_retains_no_harq_llrs() {
+        let lb = LoopbackBackend::new();
+        let mut tx = ModemEngine::new(Box::new(lb.clone_shared()));
+        tx.register_plugin(Box::new(BpskPlugin::new())).unwrap();
+        tx.transmit(b"control frame", "BPSK250", None).unwrap();
+        let signal = lb.drain_samples();
+
+        let rx_lb = LoopbackBackend::new();
+        let mut rx = ModemEngine::new(Box::new(rx_lb.clone_shared()));
+        rx.register_plugin(Box::new(BpskPlugin::new())).unwrap();
+        rx.register_plugin(Box::new(ofdm_plugin::OfdmPlugin::new()))
+            .unwrap();
+        // SL9 is OFDM52-16QAM + SoftConcatenated — a SOFT rung, so the HARQ block would demodulate
+        // and retain this burst's LLRs if it ever reached it.
+        rx.start_ota_session(SessionProfile::hpx_hf());
+        rx.ota_lock_level(SpeedLevel::Sl9);
+
+        let burst = AudioSamples { samples: signal };
+        let res = rx
+            .ota_decode_burst(&burst, "retention", Some("BPSK250"))
+            .expect("must not error");
+        assert_eq!(
+            res.payload.as_deref(),
+            Some(&b"control frame"[..]),
+            "precondition: the fallback must recover the control frame"
+        );
+        assert!(
+            rx.ota_retained_llrs.is_empty(),
+            "a fallback decode must retain NO HARQ LLRs; retained {:?}",
+            rx.ota_retained_llrs.keys().collect::<Vec<_>>()
+        );
+    }
+
     /// Audit: the OTA candidate/soft-HARQ decode loop must NOT re-run the InputCapture front-end — its
     /// callers already routed the burst through the seam. With the notch enabled, `ota_decode_burst`
     /// must not advance the notch-processed tripwire (which would prematurely trip auto-QSY).
