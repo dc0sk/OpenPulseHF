@@ -265,7 +265,7 @@ Full spec in `docs/dev/design/testbench-design.md` and `docs/dev/benchmark-harne
   - Added `TrustFilter` enum (TrustedOnly, TrustedOrUnknown, Any) — wire codes per peer-query-relay-wire.md
   - Added `PeerCache::query(capability_mask, min_quality, trust_filter, max_results, now_ms)` — sorted by quality descending
 - `crates/openpulse-core/src/wire_query.rs`: OPHF binary envelope + peer query payloads
-  - `WireEnvelope`: encode/decode per docs/dev/peer-query-relay-wire.md; header 104 B + payload + auth_tag 16 B
+  - `WireEnvelope`: encode/decode per docs/dev/peer-query-relay-wire.md; header 104 B + payload + an **optional** 64 B Ed25519 origin signature (wire v2 replaced the old unauthenticated 16 B `auth_tag`; E3)
   - `PeerQueryRequest` (msg_type 0x01): 17-byte fixed payload
   - `PeerQueryResponse` (msg_type 0x02): variable-length results with descriptor_signature
 - Integration tests: `tests/peer_descriptor_integration.rs` (9 tests); `tests/wire_query_integration.rs` (9 tests)
