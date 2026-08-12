@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-REQUIRED_MIN="${1:-1.94.0}"
+REQUIRED_MIN="${1:-1.97.1}"
 
 version_ge() {
   local lhs="$1"

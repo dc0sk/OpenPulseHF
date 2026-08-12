@@ -4,7 +4,7 @@ set -euo pipefail
 # Install OpenPulseHF build dependencies on Raspberry Pi OS / Debian.
 # Optional runtime extras (rigctld) can be included with --with-hamlib.
 
-MIN_RUST="1.94.0"
+MIN_RUST="1.97.1"
 WITH_HAMLIB=0
 
 usage() {

@@ -19,7 +19,7 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
-  REQUIRED_RUST: 1.94.0
+  REQUIRED_RUST: 1.97.1
 
 # A scheduled run and a manual one must not overlap; the later one wins.
 concurrency:

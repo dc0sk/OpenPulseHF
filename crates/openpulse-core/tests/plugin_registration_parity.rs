@@ -59,7 +59,7 @@ fn registered_in(path: &Path) -> BTreeSet<String> {
             .rfind(|c: char| !c.is_alphanumeric() && c != '_')
             .map(|i| i + 1)
             .unwrap_or(0);
-        let name = format!("{}Plugin", &text[start..idx].trim_end_matches("Plugin"));
+        let name = format!("{}Plugin", text[start..idx].trim_end_matches("Plugin"));
         if name.len() > "Plugin".len() {
             out.insert(name);
         }
