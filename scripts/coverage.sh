@@ -29,7 +29,7 @@ mkdir -p target
 
 echo "coverage: commit $(git rev-parse HEAD) $(git diff --quiet && echo clean || echo dirty)  log ${log}"
 
-# `rs_vs_conv_cpu_time` asserts a CPU-time RATIO and is skipped under instrumentation via
+# `rs_vs_conv_relative_cost` asserts a cost RATIO and is skipped under instrumentation via
 # CARGO_LLVM_COV — instrumentation does not slow the two codecs proportionally, so the measurement
 # is invalid here rather than merely noisy.
 cargo llvm-cov --workspace --no-default-features --no-fail-fast \
