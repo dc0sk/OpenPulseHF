@@ -26,3 +26,10 @@ __pycache__/
 
 # Vendor transceiver manuals kept locally as reference (third-party, not ours to redistribute).
 docs/TRX docs/
+
+# Per-machine Claude Code state. These are local to one checkout — a permission allowlist and
+# agent worktree bookkeeping — and carry no meaning on another machine. Untracked, they made
+# scripts/gate.sh stamp every verdict `dirty`, which devalues the one field that says whether a
+# GATE line describes the committed tree. A shared `.claude/settings.json` stays trackable.
+.claude/settings.local.json
+.claude/worktrees/
