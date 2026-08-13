@@ -73,47 +73,95 @@ fn conv_rate_is_half() {
     );
 }
 
-/// Compare encode+decode latency; assert ConvCodec is within 10× of RS.
+/// Relative cost of a ConvCodec encode+decode against an RS one; assert ConvCodec stays within 10×.
+///
+/// **Why the estimator is shaped like this.** The original form timed each codec once with
+/// `Instant::now()` and divided. `Instant` is a wall clock, and the two loops had very different
+/// durations (~70 ms for RS, ~770 ms for Conv), so on a frequency-scaling machine the SHORT loop
+/// samples a boost clock the long one averages away. That is a property of the measurement, not of
+/// either codec, and it failed the workspace gate once at 10.9× on code that had not changed.
+///
+/// Measured on the failure (2026-08-12, 16 cores, `schedutil`, 20 whole-binary runs): ratio spread
+/// **3.3–8.9**, with `corr(RS_time, ratio) = -0.65` and `corr(Conv_time, ratio) = -0.00` — every
+/// high reading came from a small *denominator*, never a slow numerator. Saturating all 16 cores
+/// pins the governor and tightens the spread to **3.9–4.6, 0/10 failures**: load makes this
+/// measurement MORE stable, which is the opposite of a contention story and is why "it's flaky
+/// under load" was the wrong diagnosis.
+///
+/// So the fix is **pairing, not a different clock**. Each round runs both codecs back-to-back at
+/// one governor state, the two halves are sized to comparable duration so neither straddles a
+/// frequency change the other misses, and the median over rounds discards the minority of rounds
+/// where the clock moved mid-round. A thread-CPU clock was considered and NOT used: it removes
+/// descheduling, and the ablation above shows descheduling is not the mechanism here.
+///
+/// **Rejected: independent `min(RS)/min(Conv)`.** Its two minima come from different rounds and so
+/// different clock states, which biases the ratio upward systematically and no sample count fixes
+/// it. A minimum also hides an *intermittent* regression by construction — a decode that is slow
+/// one time in three is a real bug a user feels, and min selects the runs where it didn't fire.
+///
+/// **The 10× bound** is not fitted to this measurement: the frequency-stable ratio is ~4.2 here and
+/// was recorded as 3.8× in Phase 3.2 on an earlier toolchain, so the bound carries ~2.4× headroom.
+/// A breach means ConvCodec changed complexity class or the environment is invalid — re-derive the
+/// baseline on any toolchain change rather than widening the bound.
 #[test]
-fn rs_vs_conv_cpu_time() {
+fn rs_vs_conv_relative_cost() {
     const PAYLOAD_LEN: usize = 1000;
-    const REPS: usize = 50;
+    /// Rounds; the median of their paired ratios is the estimate. Odd, so the median is a
+    /// measured round rather than an average of two.
+    const ROUNDS: usize = 7;
+    /// Reps per side, chosen so both halves of a round take comparable wall time (ConvCodec costs
+    /// ~4× an RS cycle). Equal-duration halves are what keeps a round at one governor state.
+    const RS_REPS: usize = 60;
+    const CV_REPS: usize = 15;
     // Coverage instrumentation invalidates this measurement rather than merely slowing it: the
     // per-executed-line cost does not scale uniformly across the two codecs, and ConvCodec's
     // Viterbi executes far more instrumented points per byte than RS does. The ratio inflates past
     // the budget while the code under test is unchanged — a verdict about the harness, not the
     // codec. Measured: passes uninstrumented (0.38 s), fails under `cargo llvm-cov`.
     if std::env::var_os("CARGO_LLVM_COV").is_some() {
-        println!("skipping CPU-budget ratio under coverage instrumentation — not a valid timing environment");
+        println!(
+            "skipping cost ratio under coverage instrumentation — not a valid timing environment"
+        );
         return;
     }
     let payload: Vec<u8> = (0..PAYLOAD_LEN).map(|i| (i % 256) as u8).collect();
 
     let rs = FecCodec::new();
-    let t0 = Instant::now();
-    for _ in 0..REPS {
-        let enc = rs.encode(&payload);
-        let _ = rs.decode(&enc).unwrap();
-    }
-    let rs_us = t0.elapsed().as_micros() / REPS as u128;
-
     let cv = ConvCodec::new();
-    let t0 = Instant::now();
-    for _ in 0..REPS {
-        let enc = cv.encode(&payload);
-        let _ = cv.decode(&enc).unwrap();
-    }
-    let conv_us = t0.elapsed().as_micros() / REPS as u128;
 
-    println!("\n=== CPU time per encode+decode cycle (1000-byte payload) ===");
-    println!("  RS+interleaver : {rs_us} µs");
-    println!("  ConvCodec      : {conv_us} µs");
-    let ratio = conv_us as f64 / rs_us.max(1) as f64;
-    println!("  Conv/RS ratio  : {ratio:.1}×");
+    let mut ratios = Vec::with_capacity(ROUNDS);
+    for _ in 0..ROUNDS {
+        let t0 = Instant::now();
+        for _ in 0..RS_REPS {
+            let enc = rs.encode(&payload);
+            let _ = rs.decode(&enc).unwrap();
+        }
+        let rs_ns = t0.elapsed().as_nanos() as f64 / RS_REPS as f64;
+
+        let t0 = Instant::now();
+        for _ in 0..CV_REPS {
+            let enc = cv.encode(&payload);
+            let _ = cv.decode(&enc).unwrap();
+        }
+        let cv_ns = t0.elapsed().as_nanos() as f64 / CV_REPS as f64;
+
+        ratios.push(cv_ns / rs_ns.max(1.0));
+    }
+    ratios.sort_by(|a, b| a.partial_cmp(b).expect("timings are finite"));
+    let ratio = ratios[ROUNDS / 2];
+
+    println!("\n=== Conv/RS cost ratio ({PAYLOAD_LEN}-byte payload, {ROUNDS} paired rounds) ===");
+    for (i, r) in ratios.iter().enumerate() {
+        println!("  round {i} (sorted): {r:.2}×");
+    }
+    println!("  median          : {ratio:.2}×");
 
     assert!(
         ratio < 10.0,
-        "ConvCodec is {ratio:.1}× slower than RS — exceeds 10× CPU budget"
+        "ConvCodec is {ratio:.2}× the cost of RS (median of {ROUNDS} paired rounds) — exceeds the \
+         10× budget. The frequency-stable baseline is ~4.2×, so this is a ~2.4× headroom breach: \
+         suspect a complexity-class change in ConvCodec, not measurement noise. Per-round ratios: \
+         {ratios:.2?}"
     );
 }
 
