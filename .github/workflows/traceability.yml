@@ -9,6 +9,16 @@ name: Traceability
 
 on:
   pull_request:
+    # `edited` is NOT in the default set (opened, synchronize, reopened) and is required here, because
+    # the trailer lint reads the PR BODY and TITLE. Without it the check's own instruction — "Add a
+    # line to the PR description" — produces no new run, so a PR failing for a missing trailer cannot
+    # be fixed by adding one (#1136). `gh run rerun` does not help: it replays the original event
+    # payload, so it re-lints the STALE body and fails identically. The only other way out is pushing
+    # a commit purely to make CI re-read a text field.
+    #
+    # `edited` also fires on title changes, which is correct rather than incidental: the title is the
+    # other half of the squash message this job assembles.
+    types: [opened, synchronize, reopened, edited]
   workflow_dispatch:
 
 concurrency:
