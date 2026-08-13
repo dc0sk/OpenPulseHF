@@ -1972,6 +1972,26 @@ impl ModemEngine {
     /// Onset-scan geometry for `mode`: (scan step, acquisition window, min frame
     /// samples, max frame samples). Prefers the plugin's `frame_geometry`; falls back
     /// to trailing-digit baud with a 32-symbol preamble for unregistered plugins.
+    /// Onset-scan bounds for a gathered burst: `(step, scan_end, max_frame_samples)`.
+    ///
+    /// ONE definition, used by BOTH daemon decode arms. They had diverged — the uncoded arm scanned
+    /// and the coded arm did not — which cost every RS-coded frame on the on-air corpus (#1138). A
+    /// shared helper is the point: the geometry cannot drift apart again without both arms moving.
+    ///
+    /// The `4 x acquisition window` bound is inherited from the uncoded arm rather than re-derived.
+    /// Note it is not obviously the right bound: burst lead-in is set by the DCD tick and hold
+    /// window, not by acquisition geometry, and on the #1021 capture it cleared a 4032-sample
+    /// lead-in by only 64 samples. Widening it is a separate question that affects both arms and
+    /// wants its own measurement — this change deliberately does not answer it.
+    fn burst_onset_scan_bounds(&self, mode: &str, n: usize) -> (usize, usize, usize) {
+        let (step, acq_samples, min_frame_samples, max_frame_samples) =
+            self.frame_scan_geometry(mode, AudioConfig::default().sample_rate);
+        let scan_end = n
+            .saturating_sub(min_frame_samples)
+            .min(acq_samples.saturating_mul(4));
+        (step.max(1), scan_end, max_frame_samples)
+    }
+
     fn frame_scan_geometry(&self, mode: &str, sample_rate: u32) -> (usize, usize, usize, usize) {
         let geometry = self.plugins.get(mode).and_then(|p| {
             p.frame_geometry(&ModulationConfig {
@@ -2047,8 +2067,7 @@ impl ModemEngine {
         burst: &AudioSamples,
     ) -> Result<Vec<u8>, ModemError> {
         let sr = AudioConfig::default().sample_rate;
-        let (step, acq_samples, min_frame_samples, max_frame_samples) =
-            self.frame_scan_geometry(mode, sr);
+        let (_, _, min_frame_samples, max_frame_samples) = self.frame_scan_geometry(mode, sr);
         let n = burst.samples.len();
         if n < min_frame_samples {
             // Too short to hold a frame: one direct attempt for the error/SNR path.
@@ -2059,22 +2078,28 @@ impl ModemEngine {
                 },
             );
         }
-        let step = step.max(1);
-        // The carrier onset sits within the captured lead-in; scan up to a few
-        // acquisition windows past sample 0 (bounded so a noise burst can't spin).
-        let scan_end = (n - min_frame_samples).min(acq_samples.saturating_mul(4));
+        // The carrier onset sits within the captured lead-in; scan up to a few acquisition windows
+        // past sample 0 (bounded so a noise burst can't spin). Shared with the CODED arm via
+        // `burst_onset_scan_bounds` so the two cannot diverge again (#1138).
+        let (step, scan_end, _) = self.burst_onset_scan_bounds(mode, n);
         let mut start = 0usize;
         let last_err = loop {
             let end = (start + max_frame_samples).min(n);
             let afc_before = self.afc_correction_hz;
+            let slice = burst.samples[start..end].to_vec();
             match self.decode_attempt(
                 mode,
                 AudioSamples {
-                    samples: burst.samples[start..end].to_vec(),
+                    samples: slice.clone(),
                 },
                 FecMode::None,
             ) {
-                Ok(payload) => return Ok(payload),
+                Ok(payload) => {
+                    // E1 skipped the estimate on every attempt; the WINNING slice still needs one,
+                    // so the single `AfcUpdate` the wrapper emits carries a real correction.
+                    self.update_afc_estimate(mode, &slice);
+                    return Ok(payload);
+                }
                 Err(e) => {
                     self.afc_correction_hz = afc_before; // undo the failed attempt's AFC drift
                     if start >= scan_end {
@@ -2157,7 +2182,7 @@ impl ModemEngine {
         session_id: &str,
         fallback_mode: Option<&str>,
     ) -> Result<OtaDecodeOutcome, ModemError> {
-        let mut candidates: Vec<(SpeedLevel, String, FecMode)> = self
+        let candidates: Vec<(SpeedLevel, String, FecMode)> = self
             .ota
             .as_ref()
             .ok_or_else(|| ModemError::Configuration("no OTA session active".into()))?
@@ -2165,16 +2190,22 @@ impl ModemEngine {
             .into_iter()
             .map(|(l, m, f)| (l, m.to_string(), f))
             .collect();
-        // The sender opportunistically strengthens Rs → RsStrong when it costs no extra block
-        // (`free_rs_strengthening`). The receiver can't know the frame size before decoding, so for
-        // every Rs candidate it also tries RsStrong; whichever the sender used passes CRC and the
-        // other fails cleanly. One extra ~µs RS decode on the weak rungs, no wire-format change.
-        let strong: Vec<(SpeedLevel, String, FecMode)> = candidates
-            .iter()
-            .filter(|(_, _, f)| *f == FecMode::Rs)
-            .map(|(l, m, _)| (*l, m.clone(), FecMode::RsStrong))
-            .collect();
-        candidates.extend(strong);
+        // NO DUPLICATE RsStrong CANDIDATES. The sender opportunistically strengthens Rs → RsStrong
+        // when it costs no extra block (`free_rs_strengthening`), and this used to append a mirror
+        // RsStrong candidate for every Rs one so the receiver could try both.
+        //
+        // That is now dead work: the `Rs` candidate already covers it EVERYWHERE in this function.
+        // The standalone arm decodes via `rs_decode_prefix_free_strengthened`, which tries
+        // `FecCodec::strong()` after plain Rs; `decode_combined_llrs` is free-strengthened too; and
+        // the HARQ soft filter never listed `RsStrong` in the first place. The duplicates were the
+        // mechanism at #941 and became a strict subset when the free-strengthened arm landed —
+        // nobody removed them.
+        //
+        // The comment they carried said "one extra ~µs RS decode". Measured on a real filexfer
+        // burst, that was wrong by five orders of magnitude: each duplicate costs a full-slice
+        // DEMOD, not an RS decode, and they were HALF the candidate loop's 116 s. `FecCodec::strong`
+        // reaches the same wire bytes either way, so no frame that decoded before stops decoding.
+        // Gate: `free_rs_strengthening_ota`.
 
         // AFC accumulates across calls, so a failed wrong-mode candidate would
         // poison the correct candidate's correction. Isolate each attempt: reset to
@@ -2183,6 +2214,9 @@ impl ModemEngine {
         let afc_before = self.afc_correction_hz;
         let mut decoded: Option<(Vec<u8>, SpeedLevel, String)> = None;
         let mut last_err: Option<ModemError> = None;
+        // Offset 0 only, exactly as before #1138. The onset SCAN is deliberately NOT here — it
+        // runs after the uncoded fallback below, so its cost lands only on bursts nothing else
+        // could decode. See the scan block for why that ordering is the additive one.
         for (level, mode, fec) in &candidates {
             self.afc_correction_hz = afc_before;
             let slice = AudioSamples {
@@ -2237,6 +2271,73 @@ impl ModemEngine {
                 }
                 self.afc_correction_hz = afc_before;
             }
+        }
+
+        // ONSET SCAN (#1138) — the frame need not start at sample 0.
+        //
+        // `decode_burst_inner`, this arm's uncoded sibling, has always scanned; this arm made one
+        // attempt at offset 0 and so could not decode a frame a few thousand samples into a burst —
+        // the demodulator's timing search spans a single symbol period (32 samples at BPSK250).
+        // Real captures put the frame exactly there: replaying the on-air corpus through both
+        // receive paths measured CLI 5/7 versus daemon 1/7, with onsets of 4032 and 224 samples.
+        // With this scan the daemon reads 5/7, matching the CLI on every capture.
+        //
+        // WHY HERE, after the fallback rather than inside the candidate loop. An exhaustive
+        // decode-driven search pays its FULL cost exactly when there is nothing to find, because
+        // its exit condition is exhaustion — and the bursts with nothing to find are the peer's
+        // non-ladder traffic. Measured on a real filexfer fragment: scanning inside the candidate
+        // loop cost 116.5 s before the fallback (which then decoded it in 28 ms) and timed out
+        // `twin_daemon_bridge::a_file_crosses_the_bridge_with_ota_enabled`. Appending the scan is
+        // also the genuinely ADDITIVE change: the pre-#1138 order was candidates@0 → fallback →
+        // HARQ, and this adds a stage rather than inserting ~129 attempts ahead of traffic that
+        // decodes immediately.
+        //
+        // Placed BEFORE HARQ for the same reason the fallback is: HARQ retains this burst's LLRs on
+        // failure, and a scan running after it would have nothing to undo but would delay retention.
+        if decoded.is_none() {
+            let n = samples.samples.len();
+            'scan: for (level, mode, fec) in &candidates {
+                let (step, scan_end, max_frame_samples) = self.burst_onset_scan_bounds(mode, n);
+                if scan_end == 0 {
+                    continue; // nothing to search: attempt 0 already covered this candidate
+                }
+                let mut start = step;
+                loop {
+                    self.afc_correction_hz = afc_before;
+                    let end = (start + max_frame_samples).min(n);
+                    if start >= end {
+                        break;
+                    }
+                    let slice = samples.samples[start..end].to_vec();
+                    match self.decode_attempt(
+                        mode,
+                        AudioSamples {
+                            samples: slice.clone(),
+                        },
+                        *fec,
+                    ) {
+                        Ok(payload) => {
+                            // E1 skips the estimate on every attempt; the WINNING slice still needs
+                            // one so the wrapper's single `AfcUpdate` carries a real correction.
+                            self.update_afc_estimate(mode, &slice);
+                            decoded = Some((payload, *level, mode.clone()));
+                            break 'scan;
+                        }
+                        Err(e) => {
+                            last_err = Some(e);
+                            if start >= scan_end {
+                                break;
+                            }
+                            start = (start + step).min(scan_end);
+                        }
+                    }
+                }
+            }
+            self.afc_correction_hz = if decoded.is_some() {
+                self.afc_correction_hz
+            } else {
+                afc_before
+            };
         }
 
         // HARQ soft-combining across OTA retransmissions (additive — runs only when every
@@ -3795,7 +3896,21 @@ impl ModemEngine {
             self.rate_policy.record_rx_snr(snr_db);
         }
 
-        self.update_afc_estimate(mode, &samples.samples);
+        // SKIP THE AFC ESTIMATE INSIDE A SCAN — it is work whose result is thrown away.
+        //
+        // `suppress_afc_events` is raised by the scan wrappers, and those loops reset
+        // `afc_correction_hz` to the pre-attempt value at the top of EVERY iteration. So on a failed
+        // scan attempt this estimate is rolled back by design; the reset is the proof that nothing
+        // downstream can depend on it. Measured on a real filexfer burst it was 60.7 s of 116.5 s —
+        // 52% of the candidate loop spent computing corrections it then discarded.
+        //
+        // The successful attempt still needs one: the scan wrappers recompute it on the WINNING
+        // slice before emitting, so "keep only the successful update" stays literally true and a
+        // committed decode still reports exactly one `AfcUpdate` (gates: `afc_event_flood`,
+        // `engine_events`).
+        if !self.suppress_afc_events {
+            self.update_afc_estimate(mode, &samples.samples);
+        }
         self.emit_afc_update(mode);
 
         // Invariant (audit G-7): the demod above populates exactly one of `raw_wire` / `llrs`, keyed
