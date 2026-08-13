@@ -43,7 +43,13 @@ jobs:
     # it runs only on release PRs (head branch `release/**`, per release-checklist) or manual
     # dispatch — i.e. before a release tag is cut. Every OTHER PR is covered without a full compile
     # by: the pre-push hook (tests the touched crates), traceability.yml (trace/reachability/trailer),
-    # and docs.yml (frontmatter + doc constitution). On a non-release PR these jobs SKIP (free).
+    # and benchmark.yml (artifact validation + regression gate). On a non-release PR these jobs SKIP.
+    #
+    # Name only ACTIVE workflows here. This list used to name docs.yml, which is
+    # `disabled_manually` — a justification for skipping the full gate that pointed at a workflow
+    # that does not run (#1129). Same shape as the pre-push hook comment that deferred to a disabled
+    # CI job and cost #1074. Before adding one, check:
+    #     gh api repos/dc0sk/OpenPulseHF/actions/workflows --jq '.workflows[] | "\(.name) \(.state)"'
     if: ${{ startsWith(github.head_ref, 'release/') || github.event_name == 'workflow_dispatch' }}
 
     steps:
