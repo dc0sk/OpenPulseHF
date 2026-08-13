@@ -14,7 +14,7 @@ This file is the authoritative guide for any coding agent working in this reposi
 ## Build and test commands
 
 ```bash
-# Toolchain preflight (required: rustc >= 1.94.0)
+# Toolchain preflight (required: rustc >= 1.97.1)
 ./scripts/check-toolchain.sh
 
 # Full workspace build (requires libasound2-dev on Linux)

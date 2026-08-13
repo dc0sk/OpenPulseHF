@@ -719,7 +719,7 @@ pub fn draw_scatter_cell(ui: &mut Ui, label: &str, tap: &Tap, height: f32) {
                 plot_ui.points(
                     Points::new(pts)
                         .color(egui::Color32::from_rgba_unmultiplied(255, 220, 50, 180))
-                        .radius(1.5),
+                        .radius(1.5_f32),
                 );
             }
         });

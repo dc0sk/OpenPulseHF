@@ -336,7 +336,7 @@ detailed crossfade and ISI analysis.
 ## Quick start
 
 ```bash
-# Toolchain preflight (required: rustc >= 1.94.0)
+# Toolchain preflight (required: rustc >= 1.97.1)
 ./scripts/check-toolchain.sh
 
 # Build (requires libasound2-dev on Linux for the CPAL audio feature)

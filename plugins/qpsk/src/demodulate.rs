@@ -1006,7 +1006,7 @@ mod tests {
                     gray_map_decision(i, q)
                 });
 
-            let eq_syms: Vec<(f32, f32)> = i_eq.into_iter().zip(q_eq.into_iter()).collect();
+            let eq_syms: Vec<(f32, f32)> = i_eq.into_iter().zip(q_eq).collect();
             let data = &eq_syms[PREAMBLE_SYMS..(eq_syms.len() - TAIL_SYMS)];
             let rec = bits_to_bytes(&symbols_to_bits(data));
             if rec.len() < payload.len() {

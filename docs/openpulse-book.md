@@ -3404,7 +3404,7 @@ GPU acceleration deserves its own row of honesty: five plugins (BPSK, QPSK, 8PSK
 #### 3.6.2 The canonical gate set
 
 ```bash
-./scripts/check-toolchain.sh                                     # requires rustc >= 1.94.0
+./scripts/check-toolchain.sh                                     # requires rustc >= 1.97.1
 cargo build --workspace                                          # libasound2-dev on Linux
 cargo test  --workspace --no-default-features
 cargo clippy --workspace --no-default-features --all-targets -- -D warnings
@@ -3459,7 +3459,7 @@ the FEC, the rate ladder and the state machine on your machine before any cable 
 #### 4.1.1 Build
 
 ```sh
-./scripts/check-toolchain.sh          # requires rustc >= 1.94.0
+./scripts/check-toolchain.sh          # requires rustc >= 1.97.1
 cargo build --release -p openpulse-cli --no-default-features
 ```
 
