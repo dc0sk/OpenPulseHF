@@ -743,6 +743,15 @@ pub struct ModemEngine {
     /// the first did not, and doubles the cost of clearing each swept span. This knob exists to
     /// measure whether halving it is the cheaper alternative to a wire-format change (#1062).
     settle_failure_limit: Option<usize>,
+    /// Times `afc_mini_settle` was entered — a tripwire for the ACQUISITION CHAIN ITSELF (#1118).
+    ///
+    /// Distinct from the `rho_*` counters on purpose. Those record what the #1049 preamble veto
+    /// decided, so they only move on a mode publishing a template (BPSK250 alone today) and only
+    /// once the veto block is reached. This one increments at the chain's ENTRY, on every mode, so
+    /// "did this receive path run the acquisition chain?" has an answer that does not depend on the
+    /// veto being reachable. Added because a gate built on the `rho_*` counters alone stays green if
+    /// the chain is ever half-wired into the streaming path — gate and settle without the veto.
+    afc_settle_attempts: u64,
     /// Settles rejected because the preamble correlation did not corroborate them (#1049).
     ///
     /// A tripwire as much as a counter: it stays 0 when the mode publishes no template, so a test
@@ -890,6 +899,7 @@ impl ModemEngine {
             rx_mode: None,
             notch_blocks_processed: 0,
             settle_condemnations: 0,
+            afc_settle_attempts: 0,
             condemned_positions: Vec::new(),
             accepted_settle_positions: Vec::new(),
             sweep_attempt_inputs: Vec::new(),
@@ -984,6 +994,21 @@ impl ModemEngine {
     /// Zero has two meanings and a test must distinguish them: the gate ran and accepted
     /// everything, or the mode publishes no preamble template and the gate never ran at all. Pair
     /// this with a case that must reject.
+    /// Times the AFC settle was entered — acquisition-chain tripwire (#1118). See the field docs.
+    ///
+    /// DORMANT(#1118): no production caller by design. It is an instrument, like its four siblings
+    /// (`rho_accepted_settles`, `rho_rejected_settles`, `dcd_blocks_processed`,
+    /// `settle_condemnations`), which are all likewise unreferenced from production and baselined.
+    /// A tripwire whose value production consumed would be a feature, not a tripwire.
+    ///
+    /// It becomes reachable — and should leave `reachability-baseline.txt` — if the daemon seam is
+    /// closed and the acquisition chain gains a streaming-path home worth reporting in
+    /// `SessionDiagnostics`. Do NOT invent a production caller to satisfy the ratchet; that trades a
+    /// truthful "dormant" for a fictional "used".
+    pub fn afc_settle_attempts(&self) -> u64 {
+        self.afc_settle_attempts
+    }
+
     pub fn rho_rejected_settles(&self) -> u64 {
         self.rho_rejected_settles
     }
@@ -6131,6 +6156,7 @@ impl ModemEngine {
     }
 
     fn afc_mini_settle(&mut self, mode: &str, window: &[f32]) -> AfcSettleOutcome {
+        self.afc_settle_attempts = self.afc_settle_attempts.wrapping_add(1);
         let saved_step = self.afc_step;
         self.afc_step = 1.0;
         self.afc_correction_hz = 0.0;

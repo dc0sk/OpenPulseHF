@@ -188,6 +188,7 @@ ack_timeout_ms_for_snr	crates/openpulse-modem/src/harq.rs
 adaptive_params_for_mode	plugins/scfdma/src/lib.rs
 add_revoked	crates/openpulse-core/src/handshake.rs
 afc_estimate_hz_with_expected	plugins/bpsk/src/demodulate.rs
+afc_settle_attempts	crates/openpulse-modem/src/engine.rs
 agc_blocks_processed	crates/openpulse-modem/src/engine.rs
 agc_gain_db	crates/openpulse-modem/src/engine.rs
 append_session_log_entry_at	crates/openpulse-cli/src/state.rs

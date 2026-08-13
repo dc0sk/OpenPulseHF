@@ -22,6 +22,7 @@ serde_json        = { workspace = true }
 tokio             = { version = "1", default-features = false, features = ["sync"] }
 
 [dev-dependencies]
+openpulse-config = { path = "../openpulse-config" }
 js8-plugin = { workspace = true }
 mfsk16-plugin = { workspace = true }
 psk8-plugin = { workspace = true }
