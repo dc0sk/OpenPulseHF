@@ -1,3 +1,11 @@
+# Documentation checks. The benchmark jobs that used to live here moved to benchmark.yml (#1129):
+# they were not docs checks, and burying them under this name meant disabling "Docs Checks" silently
+# disabled the benchmark regression gate too.
+#
+# NOTE: this workflow is currently `disabled_manually` at the repository level. Do not cite it as
+# coverage for anything while that is true — that claim in ci.yml is what #1129 was filed about.
+#
+# Actions pinned to a full commit SHA with the tag as a trailing comment (see ci.yml for why).
 name: Docs Checks
 
 on:
@@ -31,28 +39,8 @@ jobs:
           chmod +x scripts/check-version-bump-docs.sh
           ./scripts/check-version-bump-docs.sh "${{ github.event.pull_request.base.sha }}" "${{ github.sha }}"
 
-  validate-benchmark-artifacts:
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout
-        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
-
-      - name: Validate benchmark artifacts
-        run: |
-          bash scripts/validate-benchmark-artifacts.sh
-
-  check-benchmark-regressions:
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout
-        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
-
-      - name: Compare benchmark aggregates against baselines
-        run: |
-          bash scripts/check-benchmark-regressions.sh benchmark/baselines benchmark/results/aggregate
-
   docs:
     runs-on: ubuntu-latest
-    needs: [validate-doc-frontmatter, check-version-bump-docs, validate-benchmark-artifacts, check-benchmark-regressions]
+    needs: [validate-doc-frontmatter, check-version-bump-docs]
     steps:
       - run: echo "All docs checks passed"

@@ -1,0 +1,41 @@
+# Benchmark gates. Split out of docs.yml (#1129), where they were unreachable: that workflow is
+# `disabled_manually`, so switching off "Docs Checks" had also switched off the BENCHMARK REGRESSION
+# GATE — the tooling traceability-matrix.md cites for CAP-53 and CAP-61, and what CLAUDE.md calls the
+# "CI benchmark regression gate". Nothing in the name "Docs Checks" said that, which is the whole
+# reason to separate them: a workflow's name is what a human reads when deciding what disabling it
+# costs.
+#
+# These need no compile — two shell scripts over committed JSON, seconds not minutes — so unlike the
+# full workspace gate in ci.yml they run on EVERY pull request rather than release-only.
+#
+# Actions pinned to a full commit SHA with the tag as a trailing comment (see ci.yml for why).
+name: Benchmark gates
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: bench-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate-benchmark-artifacts:
+    name: Validate benchmark artifacts
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: Validate benchmark artifacts
+        run: bash scripts/validate-benchmark-artifacts.sh
+
+  check-benchmark-regressions:
+    name: Compare benchmark aggregates against baselines
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: Compare benchmark aggregates against baselines
+        run: bash scripts/check-benchmark-regressions.sh benchmark/baselines benchmark/results/aggregate

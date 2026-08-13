@@ -60,5 +60,6 @@ jobs:
           printf '%s\n\n%s\n' "$PR_TITLE" "$PR_BODY" > "$RUNNER_TEMP/pr-message.txt"
           ./scripts/check-trailer.sh --message-file "$RUNNER_TEMP/pr-message.txt"
 
-      # R5's doc constitution (status: living legality + recursive frontmatter) runs in docs.yml,
-      # which calls the same scripts/validate-doc-frontmatter.sh.
+      # R5's doc constitution (status: living legality + recursive frontmatter) is NOT enforced in CI
+      # right now: it lives in docs.yml, which calls the same scripts/validate-doc-frontmatter.sh but
+      # is `disabled_manually` (#1129). Run it by hand until that is resolved.
