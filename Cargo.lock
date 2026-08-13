@@ -5190,6 +5190,7 @@ dependencies = [
  "ofdm-plugin",
  "openpulse-audio",
  "openpulse-channel",
+ "openpulse-config",
  "openpulse-core",
  "openpulse-dsp",
  "openpulse-filexfer",
