@@ -2461,6 +2461,25 @@ impl ModemEngine {
                     buf.drain(0..excess);
                 }
             }
+            // RESTORE THE AFC ON FAILURE, as every sibling arm does (#1139).
+            //
+            // `ota_demodulate_soft` ends in `update_afc_estimate`, so a HARQ trial mutates
+            // `afc_correction_hz` — and this was the ONLY failure path that never put it back. The
+            // candidates reset before each try, the uncoded fallback restores on both exits, and the
+            // onset scan restores when it gives up; HARQ leaked. The polluted value then became the
+            // NEXT burst's `afc_before`, the baseline every later attempt resets to, so one failed
+            // combine degraded every subsequent burst in the session.
+            //
+            // The estimate is junk precisely here: it is made on an offset-0 slice of a burst that
+            // already failed to decode, which on a lead-in burst is misframed by construction.
+            // Measured worth +0.025 on BPSK250+Rs at 4 dB — isolated by ablation, where restoring
+            // the AFC between bursts reproduced the fresh-engine baseline with ZERO per-trial diffs.
+            //
+            // Deliberately narrow: only the FAILURE path is restored. Cross-burst AFC tracking on a
+            // successful decode is the loop's purpose and is untouched.
+            if decoded.is_none() {
+                self.afc_correction_hz = afc_before;
+            }
         }
         if decoded.is_some() {
             self.ota_retained_llrs.clear();
