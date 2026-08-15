@@ -12,7 +12,15 @@ set -euo pipefail
 # Why a subset and not the full gate: the full gate takes ~15 minutes, and a hook that slow is a
 # hook people learn to `--no-verify` past. #1074 was caught in ~1 minute by testing only the crate
 # it touched, because `cargo build` and `cargo clippy` both passed and only a *test* run saw it.
-# The full gate belongs at merge (`scripts/gate.sh`), not on every push.
+#
+# What this hook does NOT cover, stated because an earlier version of this comment claimed the full
+# gate "runs at merge" and it does not (#1144):
+#   - `scripts/gate.sh` runs in CI only on a `release/**` head branch or manual dispatch (#1120).
+#     No workflow triggers on push to `main`, and no status check is required, so nothing runs the
+#     full gate at merge. Run it yourself before merging.
+#   - REVERSE DEPENDENTS. Only the crates OWNING changed files are tested, so a behavioural change
+#     in `openpulse-core` that breaks an `openpulse-modem` or plugin test passes here — workspace
+#     clippy catches compile breakage, not behaviour. This is #1074's exact shape.
 #
 # Escape hatch: `GATE_SKIP=1 git push`. Note `git push --no-verify` already bypasses this hook
 # silently, so this exists to make skipping deliberate and visible, not to prevent it.
@@ -62,4 +70,6 @@ for p in $pkgs; do args="$args -p $p"; done
 # shellcheck disable=SC2086
 cargo test $args --no-default-features
 
-echo "pre-push: touched-crate tests passed. The FULL gate (scripts/gate.sh) still runs at merge."
+echo "pre-push: touched-crate tests passed —$pkgs"
+echo "pre-push: NOT run: reverse dependents of those crates, and the full workspace gate."
+echo "pre-push: nothing runs scripts/gate.sh at merge on a non-release PR — run it yourself."
