@@ -765,8 +765,38 @@ closed it, in order:
 An **expected-failure baseline** was designed for the red tests and **rejected before implementation**:
 the failure set is load-dependent, so "a listed test that starts passing is also a failure" would
 flake in both directions and the file would not be portable between machines. Fixing the cause beat
-cataloguing the symptom. Note what remains true: `--no-verify` still bypasses the hook silently, so
-CI at the merge point — not the hook — is what actually enforces this.
+cataloguing the symptom.
+
+**Corrected 2026-08-15 — and the correction is the more useful lesson.** This section used to end
+"`--no-verify` still bypasses the hook silently, so CI at the merge point — not the hook — is what
+actually enforces this." That was **true when written** (#1076 put `scripts/gate.sh` on every PR)
+and was falsified four days later by **#1120**, which scoped every `ci.yml` job to
+`startsWith(github.head_ref, 'release/') || workflow_dispatch` — a deliberate, reasonable cost
+decision that swept neither this sentence nor the hook's own success message. So the 2026-08-05
+closure was not partial; a later narrowing re-opened the property without a blast-radius sweep.
+That is the same archetype #1074 was: **a true statement invalidated by a later config change**,
+which is why the sweep list matters more than the wording —
+`git grep -ln 'gate.sh' -- ':!scripts' ':!target'` names every artifact that describes the gate,
+and a change to *when* the gate runs must visit all of them. #1120 committed the shape twice in one
+change: its PR body also justified the narrowing by citing **docs.yml**, which is
+`disabled_manually` (#1129 caught that instance in the ci.yml comment; this one survived).
+
+What is actually true now, and what it costs:
+
+- `scripts/gate.sh` runs in CI **only** on a `release/**` head branch or manual dispatch. It does
+  **not** run at merge, and no workflow triggers on push to `main`.
+- **No status check is required anywhere** — neither classic protection nor the "protect main"
+  ruleset, whose `conditions.ref_name.include` is `[]`, so it targets no refs and
+  `gh api repos/dc0sk/OpenPulseHF/rules/branches/main` returns `[]`. Traceability and benchmark run
+  and are visible, but a red one blocks nothing.
+- The residual is **not** hook-skipping, which is the exotic path. The mundane one needs no skipping
+  at all: the hook tests **only the crates owning changed files**, so a behavioural change in
+  `openpulse-core` that breaks an `openpulse-modem` or plugin test passes a fully compliant push
+  (workspace clippy catches compile breakage, not behaviour) and stays invisible until the next
+  `release/**` PR. That is #1074's exact failure mode — "build and clippy passed, only a test run
+  saw it" — living in the gap between releases.
+
+So run `scripts/gate.sh` yourself before merging; nothing else will. Tracked in #1144.
 
 ---
 
