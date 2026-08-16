@@ -92,6 +92,9 @@ async fn the_event_forwarder_resumes_after_a_ring_overflow() {
     })
     .await
     .expect("forwarder delivered no events at all");
+    // Any loss at all proves the lap: this subscriber cannot itself have lost anything (`FLOOD` is
+    // under the 256-slot `ControlEvent` ring and it is drained to quiescence), so a shortfall can
+    // only be the engine ring lapping. Measured 65 of 200 — the 64-slot ring plus one in flight.
     assert!(
         forwarded < FLOOD,
         "the engine ring never lapped ({forwarded} of {FLOOD} events forwarded), so this test \
