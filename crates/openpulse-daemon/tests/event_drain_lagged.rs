@@ -94,7 +94,10 @@ async fn the_event_forwarder_resumes_after_a_ring_overflow() {
     .expect("forwarder delivered no events at all");
     // Any loss at all proves the lap: this subscriber cannot itself have lost anything (`FLOOD` is
     // under the 256-slot `ControlEvent` ring and it is drained to quiescence), so a shortfall can
-    // only be the engine ring lapping. Measured 65 of 200 — the 64-slot ring plus one in flight.
+    // only be the engine ring lapping. Measured 65 of 200 — the 64-slot ring exactly, plus one
+    // `Metrics` event the 1 Hz task puts on the same `ControlEvent` channel before `block_in_place`
+    // kills it on this current-thread runtime. The count is every `ControlEvent`, not only engine
+    // events, so extra non-engine events only make this assertion stricter.
     assert!(
         forwarded < FLOOD,
         "the engine ring never lapped ({forwarded} of {FLOOD} events forwarded), so this test \
@@ -105,18 +108,24 @@ async fn the_event_forwarder_resumes_after_a_ring_overflow() {
         .transmit(MARKER_PAYLOAD, MODE, None)
         .expect("marker transmit");
 
+    // Non-engine events (the 1 Hz metrics task shares this channel) are skipped rather than failed
+    // on: they say nothing about the forwarder, and failing on one would be a flake against a
+    // property that holds.
     let expected_bytes = MARKER_PAYLOAD.len() + 10; // frame envelope
-    let ev = timeout(Duration::from_secs(5), rx.recv())
-        .await
-        .expect("no event after the overflow — the forwarder froze on Lagged")
-        .expect("event channel closed");
-    match ev {
-        ControlEvent::EngineEvent {
-            event: EngineEvent::FrameTransmitted { bytes, .. },
-        } => assert_eq!(
-            bytes, expected_bytes,
-            "first post-overflow event is not the marker frame"
-        ),
-        other => panic!("unexpected event after the overflow: {other:?}"),
-    }
+    let bytes = timeout(Duration::from_secs(5), async {
+        loop {
+            match rx.recv().await.expect("event channel closed") {
+                ControlEvent::EngineEvent {
+                    event: EngineEvent::FrameTransmitted { bytes, .. },
+                } => return bytes,
+                _ => continue,
+            }
+        }
+    })
+    .await
+    .expect("no engine event after the overflow — the forwarder froze on Lagged");
+    assert_eq!(
+        bytes, expected_bytes,
+        "the post-overflow event is not the marker frame"
+    );
 }
