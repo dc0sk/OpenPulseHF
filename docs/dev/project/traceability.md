@@ -30,6 +30,52 @@ and the actually-observed results per change.
 - **Tests → results (actually run).** No test change. `cargo fmt --all -- --check` → ok;
   `cargo clippy -p openpulse-modem --no-default-features --all-targets -- -D warnings` → ok.
 
+## 2026-08-16 — #1125: a lagged event consumer must resume, and nothing asserted it
+
+- **Requirement/change.** #1125, split from #1123 / PR #1124. A `tokio::sync::broadcast` drain written
+  `while let Ok(ev) = rx.try_recv()` treats `Err(Lagged(n))` exactly like "no more events" and stops,
+  so a consumer that laps the 64-slot ring once stops draining and everything after the lap is
+  invisible to it.
+- **What the sweep found — the issue's premise does not hold.** All three consumers it names already
+  log the skipped count and continue: the daemon forwarder (`crates/openpulse-daemon/src/lib.rs:665`,
+  `18b9f24bd`, 2026-05-23), the audit recorder (`audit.rs:139`, `d1d96aade`, 2026-07-05) and the TUI
+  (`crates/openpulse-tui/src/events.rs:54`, `18b9f24bd`). `18b9f24bd`'s own message records that these
+  arms *continued silently* before it — that commit added the logging — so the fail-closed shape has
+  never existed at these sites in production. Widened sweep, all with the same arm: `lib.rs:901`,
+  `ws.rs:162`, ardop `data.rs:79` and `command.rs:129`, kiss `server.rs:82`, cli `monitor.rs:37`. Every
+  other production `while let Ok(.. try_recv())` is a `crossbeam_channel` or `std::sync::mpsc`
+  receiver (panel `connection.rs:123`, linksim GUI, the ardop and kiss bridge TX queues
+  `bridge.rs:257` / `kiss/bridge.rs:146`, the testbench stop signal), and neither channel type has a
+  `Lagged` condition.
+- **Design decision (+ rationale).** Gate the shared engine→`ControlEvent` forwarder rather than each
+  consumer: every control client, the WebSocket bridge and the audit recorder sit behind it, so if it
+  freezes they all do. No production change — the property already held; what was missing is the thing
+  the issue's last line asks for, falsifiability. What is asserted is **resumption, not losslessness**:
+  the lapped events are gone by design, which is what `warn!(lost = n)` records.
+- **Implementation.** `crates/openpulse-daemon/tests/event_drain_lagged.rs` (new, test-only).
+- **How the overflow is forced rather than hoped for.** `#[tokio::test]` runs a current-thread runtime,
+  so the forwarder task cannot be scheduled during a flood loop that contains no await point; 200
+  transmits against the 64-slot ring guarantee the lap.
+- **Tripwire against a vacuous pass.** The gate asserts the ring actually lapped before asserting
+  recovery: any shortfall between events emitted and events forwarded proves it, because the test's own
+  subscriber cannot have lost anything (200 < the 256-slot `ControlEvent` ring, and it is drained to
+  quiescence). Measured **65 of 200** — the 64-slot ring exactly, plus one `Metrics` event the 1 Hz
+  task puts on the same channel before `block_in_place` panics it on a current-thread runtime. An
+  earlier draft attributed the 65th to "one in flight"; instrumenting the drain by variant refuted
+  that, and the corrected mechanism is recorded in the test comment rather than only in the PR.
+- **Test results (actually run).** `cargo test -p openpulse-daemon --no-default-features --test
+  event_drain_lagged` → 1 passed, 0 failed. `cargo test -p openpulse-daemon --no-default-features
+  --lib` → 128 passed, 0 failed, three consecutive runs.
+- **Sabotage verification.** Replacing `continue` with `break` in the `Lagged` arm at `lib.rs:667`
+  fails the gate with the intended message — `no engine event after the overflow — the forwarder froze
+  on Lagged` — run twice, once for the first version and once after the marker check was restructured
+  to skip non-engine events. Restored between runs; tree clean.
+- **Found in passing → #1150.** The full-crate run that accompanied this work surfaced a load-dependent
+  failure in `server::discovery_tick_tests::discovery_tick_defers_a_due_beacon_when_the_channel_is_busy`.
+  It reproduces deterministically under single-core contention (0/10 versus 3/3 idle), and one of the
+  ten failed the *assertion* rather than the precondition — the DCD's 100 ms wall-clock hold expired
+  mid-test and the beacon keyed over a busy channel. Filed separately; not caused by this branch.
+
 ## 2026-08-10 — fix(daemon): an OTA-enabled daemon could not receive any uncoded frame (#1123)
 
 - **Requirement / change.** `Refactors: CAP-33` (over-the-air receiver-led rate controller). With
