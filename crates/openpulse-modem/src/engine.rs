@@ -1535,6 +1535,15 @@ impl ModemEngine {
     /// Pairs [`respond_arq_ota`](Self::respond_arq_ota) (data receiver, leads its
     /// direction) with [`apply_ota_ack`](Self::apply_ota_ack) +
     /// [`ota_tx_mode`](Self::ota_tx_mode) (data sender, follows the peer).
+    ///
+    /// **A profile with an empty or partial `fec_modes` table is a legal OTA profile** (#1126).
+    /// `SessionProfile::fec_for` yields `FecMode::None` for any rung the table does not populate, so
+    /// such a ladder transmits uncoded — deliberately, in `hpx_modcod`'s SL7. The consequence to know
+    /// before choosing one: on an uncoded rung whose mode equals the station's active mode, a ladder
+    /// frame and a non-ladder control frame (station ID, filexfer, handshake, QSY, relay) are
+    /// byte-identical on the wire, so the receive arm's candidates-first ordering is the only thing
+    /// separating them and control traffic can be counted as a ladder decode by the evidence-based
+    /// climb.
     pub fn start_ota_session(&mut self, profile: SessionProfile) {
         self.ota = Some(OtaRateController::new(profile));
         self.ota_retained_llrs.clear();

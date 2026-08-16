@@ -9,6 +9,27 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-08-16 — #1126: FEC-less OTA profiles are legal, recorded where one is accepted
+
+- **Requirement/change.** #1126, deferred from #1123 / PR #1124. `SessionProfile::fec_for` is
+  `fec_modes[level].unwrap_or(FecMode::None)` (`profile.rs:110`), so a profile that never populates
+  `fec_modes` yields an uncoded FEC for every rung. Only `hpx_modcod`, `hpx_hf` and `hpx_ofdm_hf`
+  populate it at all, and a populated table does not imply a coded ladder — `hpx_modcod`'s SL7 is a
+  literal `Some(FecMode::None)`. Either such profiles are legal OTA profiles, or `start_ota_session`
+  should reject them rather than half-work.
+- **Decision (maintainer, in-thread).** They are legal. Documented at `start_ota_session` rather than
+  rejected there.
+- **Rationale carried into the doc, not left in the issue.** On an uncoded rung whose mode equals the
+  station's active mode, a ladder frame and a non-ladder control frame (station ID, filexfer,
+  handshake, QSY, relay) are byte-identical on the wire. No receiver-side dispatch can separate them,
+  so #1124's candidates-first ordering is the only thing that keeps a ladder frame classified as one,
+  and control traffic can be counted as a ladder decode by the evidence-based climb. That is the
+  consequence an operator choosing a FEC-less profile needs to meet at the entry point.
+- **Implementation.** `crates/openpulse-modem/src/engine.rs` — doc comment on `start_ota_session`.
+  Doc-only; no behaviour change.
+- **Tests → results (actually run).** No test change. `cargo fmt --all -- --check` → ok;
+  `cargo clippy -p openpulse-modem --no-default-features --all-targets -- -D warnings` → ok.
+
 ## 2026-08-10 — fix(daemon): an OTA-enabled daemon could not receive any uncoded frame (#1123)
 
 - **Requirement / change.** `Refactors: CAP-33` (over-the-air receiver-led rate controller). With
