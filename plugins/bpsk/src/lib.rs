@@ -213,12 +213,16 @@ impl ModulationPlugin for BpskPlugin {
             return None;
         }
         let samples = modulate::bpsk_preamble_template(config).ok()?;
-        Some(PreambleTemplate::new(
-            DERIVED_FOR,
-            samples,
-            modulate::PREAMBLE_RHO_THRESHOLD,
-            modulate::PREAMBLE_RHO_GRID_HZ,
-        ))
+        Some(
+            PreambleTemplate::new(
+                DERIVED_FOR,
+                samples,
+                modulate::PREAMBLE_RHO_THRESHOLD,
+                modulate::PREAMBLE_RHO_GRID_HZ,
+            )
+            // VERIFIES: REQ-RX-03
+            .with_delivered_frame_bound(modulate::DELIVERED_FRAME_RHO_BOUND),
+        )
     }
 
     fn occupied_bandwidth_hz(&self, mode: &str) -> Option<f32> {

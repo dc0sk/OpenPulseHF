@@ -216,6 +216,28 @@ pub fn bpsk_modulate_iq(
 /// table per waveform family before extending the template beyond BPSK.
 pub const PREAMBLE_RHO_THRESHOLD: f32 = 0.40;
 
+/// The ρ a **delivered** BPSK250 frame is known to reach — the bound above which the runtime
+/// calibration stands the veto down instead of raising the threshold further (#1060, REQ-RX-03).
+///
+/// **Provisional, and marked as such deliberately.** Measured 2026-08-17 by
+/// `preamble_rho_fade_and_filter_probe::f9_decode_conditioned_rho_tail` with the veto disabled on
+/// the receiver (`F9_VETO=off`, so the conditioned set is the channel's choice and not the
+/// measurement's own subject — the arm #1088 recorded as missing, which made every earlier
+/// decoded-only column a tautology): through a 1250–1750 Hz mask on `moderate_f1`, 60 seeds at each
+/// of 5/10/20 dB, **no delivered frame scored below 0.50** and the lowest was 0.618.
+///
+/// It is set at the *measured floor of the delivered population*, not at that 0.618 minimum, because
+/// a min-of-60 is an extreme value whose size is set by the observation budget rather than by the
+/// signal.
+///
+/// **What would falsify it:** a delivered frame below 0.50 on any channel this mode runs on. The
+/// measurement behind it is one channel model, one band, one payload size, and a brick-wall mask
+/// sharper than a real receive filter. A decode-conditioned sweep across bands is tracked in #1059;
+/// until then a station whose noise pushes the derived threshold past this stands the veto down,
+/// which is the conservative direction — it reverts to energy-only detection rather than discarding
+/// frames.
+pub const DELIVERED_FRAME_RHO_BOUND: f32 = 0.50;
+
 /// Half-width of the residual-frequency grid the preamble correlation searches, in Hz.
 ///
 /// **Bounded from both sides, and the upper bound is the interesting one.**

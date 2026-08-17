@@ -14,6 +14,7 @@ pub mod harq;
 pub mod ofdm_sim;
 pub mod pipeline;
 mod rate_policy;
+pub mod rho_calibration;
 
 pub use engine::{ModemEngine, OtaRxResult};
 pub use event::EngineEvent;

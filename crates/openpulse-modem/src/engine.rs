@@ -351,6 +351,9 @@ struct PreambleVeto {
     filter: VetoCorrelator,
     rho_threshold: f32,
     rho_grid_hz: f32,
+    /// The ρ a delivered frame is known to reach (#1060). Bounds the runtime calibration from
+    /// above; `None` means the veto never stands down, which is where every mode starts.
+    delivered_frame_rho_bound: Option<f32>,
 }
 
 /// Passband for templates inside the budget; decimated baseband for the ones that are not.
@@ -402,6 +405,7 @@ impl PreambleVeto {
             filter,
             rho_threshold: t.rho_threshold,
             rho_grid_hz: t.rho_grid_hz,
+            delivered_frame_rho_bound: t.delivered_frame_rho_bound,
         }
     }
 }
@@ -782,6 +786,15 @@ pub struct ModemEngine {
     /// runs on the PRE-AGC level so the AGC's boost can't fool the squelch (stays 0 if a capture path
     /// skips the InputCapture seam).
     dcd_blocks_processed: u64,
+    /// Runtime calibration of the correlation threshold to this station's own noise (#1060,
+    /// REQ-RX-02). Fed from the veto's own query stream, so it costs no extra correlation.
+    rho_calibration: crate::rho_calibration::RhoCalibration,
+    /// Whether the veto is currently standing down because no threshold separates noise from
+    /// delivered frames (REQ-RX-03). Latched per transition so the log says it once.
+    rho_stand_down: bool,
+    /// Settles the veto let through *because* it was standing down — the count that distinguishes
+    /// "the veto agreed" from "the veto was not running".
+    rho_stand_down_settles: u64,
     /// Monotonic count of frames emitted at the single TX seam (`stage_emit_output`) — every
     /// transmit path (data, FEC, ACK, retransmit, QSY, ID) increments it once. A pollable
     /// TX-activity signal for the daemon's periodic station-ID timer (REQ-REG-10).
@@ -914,6 +927,9 @@ impl ModemEngine {
             agc_blocks_processed: 0,
             dc_blocks_processed: 0,
             dcd_blocks_processed: 0,
+            rho_calibration: crate::rho_calibration::RhoCalibration::new(),
+            rho_stand_down: false,
+            rho_stand_down_settles: 0,
             frames_transmitted: 0,
             raw_audio_frames_transmitted: 0,
         }
@@ -1022,6 +1038,26 @@ impl ModemEngine {
     /// PRE-AGC level, so an enabled AGC's boost can't push sub-squelch noise over the busy threshold.
     pub fn dcd_blocks_processed(&self) -> u64 {
         self.dcd_blocks_processed
+    }
+
+    /// How many correlation samples the runtime threshold calibration holds (#1060, REQ-RX-02).
+    ///
+    /// A tripwire, not a curiosity: a calibration that never runs on a receive path reads as a
+    /// working feature until this stays 0.
+    pub fn rho_calibration_samples(&self) -> usize {
+        self.rho_calibration.len()
+    }
+
+    /// The threshold the veto is actually comparing against for `mode`, published constant included.
+    pub fn rho_effective_threshold(&self, mode: &str) -> Option<f32> {
+        let veto = self.build_preamble_veto(mode, AudioConfig::default().sample_rate)?;
+        Some(self.rho_calibration.effective_threshold(veto.rho_threshold))
+    }
+
+    /// Whether the veto is standing down for want of a separating threshold (REQ-RX-03), and how
+    /// many settles it has let through in that state.
+    pub fn rho_stand_down(&self) -> (bool, u64) {
+        (self.rho_stand_down, self.rho_stand_down_settles)
     }
 
     /// Monotonic count of frames emitted at the TX seam. The daemon polls the delta to detect
@@ -3635,11 +3671,41 @@ impl ModemEngine {
                             if let Some((rho, _)) =
                                 self.preamble_rho(veto, &accumulated[onset..corr_end], settle.fine)
                             {
-                                if rho < veto.rho_threshold {
+                                // REQ-RX-02 / REQ-RX-03. Every query is a calibration sample: the
+                                // stream this compares against is the stream it is built from, which
+                                // is why it costs no extra correlation. See `rho_calibration`.
+                                self.rho_calibration.push_at(rho, onset);
+                                let threshold =
+                                    self.rho_calibration.effective_threshold(veto.rho_threshold);
+                                let stand_down = self.rho_calibration.stands_down(
+                                    veto.rho_threshold,
+                                    veto.delivered_frame_rho_bound,
+                                );
+                                if stand_down != self.rho_stand_down {
+                                    self.rho_stand_down = stand_down;
+                                    if stand_down {
+                                        warn!(
+                                            "preamble veto STANDING DOWN: derived threshold \
+                                             {threshold:.3} exceeds the delivered-frame bound \
+                                             {:.3} — no threshold separates this station's noise \
+                                             from a frame it could decode, so frame start falls \
+                                             back to energy alone",
+                                            veto.delivered_frame_rho_bound.unwrap_or(f32::NAN)
+                                        );
+                                    } else {
+                                        warn!(
+                                            "preamble veto re-engaged: derived threshold \
+                                             {threshold:.3} is back under the delivered-frame bound"
+                                        );
+                                    }
+                                }
+                                if stand_down {
+                                    self.rho_stand_down_settles += 1;
+                                } else if rho < threshold {
                                     debug!(
                                         "settle at onset={onset} rejected: preamble correlation \
-                                         rho={rho:.3} < {:.2} \
-                                         (correction={:.1}Hz) — energy without a preamble",
+                                         rho={rho:.3} < {threshold:.2} (published {:.2}, \
+                                         correction={:.1}Hz) — energy without a preamble",
                                         veto.rho_threshold, settle.fine
                                     );
                                     self.rho_rejected_settles += 1;
