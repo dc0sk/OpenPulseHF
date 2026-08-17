@@ -191,6 +191,15 @@ pub struct PreambleTemplate {
     /// bound sat *above* the first line. The shipped ±20 Hz is well inside it either way, but
     /// `fc ± baud/4` is where the interference that this veto cannot refuse actually lives (#1062).
     pub rho_grid_hz: f32,
+    /// The ρ a **delivered** frame is known to reach on this mode's own operating channel, or
+    /// `None` while unmeasured.
+    ///
+    /// It bounds the runtime calibration from above (#1060): a derived threshold that climbed past
+    /// this would discard frames the channel actually delivered, so the veto stands down to
+    /// energy-only detection instead. `None` means "never stand down", which is where every mode
+    /// starts — a bound must be *measured decode-conditioned on the channel the rung exists for*
+    /// before it can carry a decision, which is #1053's lesson in the type.
+    pub delivered_frame_rho_bound: Option<f32>,
 }
 
 impl PreambleTemplate {
@@ -206,7 +215,17 @@ impl PreambleTemplate {
             samples,
             rho_threshold,
             rho_grid_hz,
+            delivered_frame_rho_bound: None,
         }
+    }
+
+    /// Publish the delivered-frame ρ bound that lets the runtime calibration stand down (#1060).
+    ///
+    /// Additive by construction: a template without it never stands down, which is exactly the
+    /// behaviour of every mode before this existed.
+    pub fn with_delivered_frame_bound(mut self, bound: f32) -> Self {
+        self.delivered_frame_rho_bound = Some(bound);
+        self
     }
 }
 

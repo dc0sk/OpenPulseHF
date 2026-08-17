@@ -1025,6 +1025,15 @@ capabilities:
     - REQ-WSIG-01
     tests: []
     traceability: baseline
+  CAP-76:
+    code:
+    - crates/openpulse-modem/src/rho_calibration.rs
+    name: Preamble-correlation veto and its runtime calibration
+    satisfies:
+    - REQ-RX-02
+    - REQ-RX-03
+    tests:
+    - crates/openpulse-modem/tests/rho_calibration_receive.rs
 meta:
   bright_line: '2026-08-09'
   generated_by: scripts/trace.sh import
@@ -2103,6 +2112,23 @@ requirements:
     statement: Simultaneous multi-mode receive monitor, independent of the session decoder
     status: ratified
     traceability: baseline
+  REQ-RX-02:
+    category: Receive
+    covered_by:
+    - CAP-76
+    statement: When per-window correlation statistics are available, the receiver shall derive the
+      preamble-correlation threshold from them rather than using the published constant alone
+    status: draft
+    traceability: enforced
+  REQ-RX-03:
+    category: Receive
+    covered_by:
+    - CAP-76
+    statement: When the derived correlation threshold would exceed the mode's published
+      delivered-frame rho bound, the receiver shall stand down to energy-only frame detection rather
+      than veto
+    status: draft
+    traceability: enforced
   REQ-SEC-01:
     category: Security/Trust
     covered_by:
