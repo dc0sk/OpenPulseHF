@@ -9,6 +9,63 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-08-17 — #1060 confirmed on the rig, and #1142's lead-in bias measured
+
+- **Requirement / change.** Two open acquisition questions, each with a measurement named in its own
+  issue and never taken. #1060: does a real narrow receive filter lift idle ρ above BPSK250's shipped
+  `PREAMBLE_RHO_THRESHOLD = 0.40`? #1142: is the rate-control SNR's whole-burst measurement biased
+  enough to move a rung?
+- **Design decision (+ rationale).** Measure through the *shipped* correlator and the *shipped*
+  estimator, not reimplementations — #1060's own thread records that a probe which rebuilds the
+  correlation can drift from the deployed veto without either side visibly changing. So
+  `f8_rig_capture_idle_rho` reuses `preamble_rho_fade_and_filter_probe.rs`'s existing `rho_engine` /
+  `win_len` / `plugin_template`, and the #1142 harness calls `ModemEngine::rx_snr_db` and reads its
+  comparison scale from `SessionProfile::hpx_hf()` at run time rather than transcribing floors.
+- **Implementation.** `crates/openpulse-modem/tests/preamble_rho_fade_and_filter_probe.rs`
+  (`f8_rig_capture_idle_rho`), `crates/openpulse-modem/tests/snr_lead_in_bias.rs` (new), and three
+  corpus captures with provenance: `ic9700-idle-{wide-500hz-control,500hz,250hz}.wav`.
+- **Apparatus (#1060).** IC-9700 on `dc0sk-rpi51`, 144.600 MHz PKTUSB, no TX anywhere, 45 s per
+  width, 48 kHz → 8 kHz via `resample_poly` (the corpus's own method). Filter width set over CAT and
+  **verified from the audio**, because Hamlib reported width `0` before and after every change.
+- **Measurements (actually run).** BPSK250 peak ρ, threshold 0.40:
+
+  | capture | −20 dB band | ρ / 3 s | ρ / 45 s |
+  |---|---|---|---|
+  | corpus controls (SSB) | — | 0.159 / 0.211 | — |
+  | wide | 2470 Hz | 0.173 | 0.227 |
+  | 500 Hz | 554 Hz | 0.319 | **0.413** |
+  | 500 Hz, birdie notched | 554 Hz | — | **0.433** |
+  | 250 Hz | 309 Hz | **0.505** | **0.579** |
+
+  #1142, whole-burst vs frame-span `rx_snr_db` against a tightest `hpx_hf` floor gap of **0.5 dB**:
+  **1.04–8.19 dB** on the four real captures, **10.5–29.1 dB** in a clean-frame fixture. 800 samples
+  of *trailing* noise alone cost ~10 dB.
+- **What the measurements changed about the claims.** Three things, all found by adversarial review
+  and none of them cosmetic:
+  1. **Peak ρ is an extreme-value statistic**, so duration is a second variable. The corpus controls
+     are 3 s files; at 3 s the 500 Hz capture reads 0.319, below threshold. The shipped 0.40 was
+     therefore validated against captures that under-sample the ceiling by 0.05–0.07 ρ.
+  2. **The birdie confound was ablated, not argued away.** Notching this rig's ~1651 Hz conducted-RFI
+     line *raised* ρ (0.413 → 0.433), so the filter is the mechanism. The direction settles it either
+     way: a residual line inflates less than a full-strength one.
+  3. **"The fade decode column does not exist" was false** and is corrected on #1060:
+     `f8_faded_frame_rho_tail` already measures the detection-side ρ tail of real faded frames
+     (shipped template, `filter 1250-1750`: min 0.618, zero misses at θ = 0.50). What is missing is a
+     *decode-conditioned* column. The threshold conclusion those two columns invite is deliberately
+     **not** drawn — that is the shape #1053 had before its distributions turned out to overlap.
+- **An error corrected mid-run.** #1142's real-capture arm first used hand-typed burst spans for the
+  files the corpus README does not document, and on `none-whitened` the guessed span produced a bias
+  of the opposite sign (−5.75 vs +8.19 dB). Spans are now located by energy, positive-controlled
+  against the README's independently measured 10.3–18.6 s.
+- **Test results (run).** `f8_rig_capture_idle_rho` 1/1 (tables above); `snr_lead_in_bias` 2/2;
+  `capture_replay_corpus` 12/12 with the new fixtures present; `cargo fmt` and
+  `cargo clippy -p openpulse-modem --no-default-features --all-targets -D warnings` clean. Workspace
+  gate `GATE: PASS 81df6a26` (309 suites, 2370 passed) on the base commit.
+- **Docs.** `CLAUDE.md`'s narrow-filter paragraph now carries the measured figure instead of only the
+  brick-wall model, and its claim that "BPSK31/63/100 are no longer veto-exempt" is corrected: they
+  are no longer *length*-exempt, but `BpskPlugin::preamble_template` still publishes a template for
+  `BPSK250` alone, because a ±20 Hz grid is unsafe once baud/4 falls under it.
+
 ## 2026-08-16 — #1126: FEC-less OTA profiles are legal, recorded where one is accepted
 
 - **Requirement/change.** #1126, deferred from #1123 / PR #1124. `SessionProfile::fec_for` is
