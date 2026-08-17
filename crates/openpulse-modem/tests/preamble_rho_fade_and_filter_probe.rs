@@ -59,8 +59,11 @@
 
 use openpulse_channel::watterson::WattersonChannel;
 use openpulse_channel::{ChannelModel, WattersonConfig};
+use openpulse_core::error::ModemError;
 use openpulse_core::fec::FecMode;
-use openpulse_core::plugin::{ModulationConfig, ModulationPlugin};
+use openpulse_core::plugin::{
+    FrameGeometry, ModulationConfig, ModulationPlugin, PluginInfo, PreambleTemplate,
+};
 use openpulse_dsp::acquisition::IqMatchedFilter;
 use openpulse_modem::capture_replay::{load_corpus, load_wav};
 use openpulse_modem::channel_sim::ChannelSimHarness;
@@ -225,17 +228,42 @@ fn f2_noise_colour() {
 /// `rho_engine` every synthetic row above uses, so a rig number is directly comparable to F2's
 /// table rather than to a re-transcribed correlator.
 fn peak_rho_over_capture(mode: &str, samples: &[f32]) -> Option<f32> {
-    plugin_template(mode)?; // modes with no template are skipped, not panicked on
+    let v = rho_stream_over_capture(mode, samples);
+    v.iter().copied().fold(None, |a: Option<f32>, r| {
+        Some(a.map_or(r, |p: f32| p.max(r)))
+    })
+}
+
+/// Every per-window value of the statistic the veto actually compares — not its maximum.
+///
+/// The distinction is load-bearing. Peak-over-capture is an **extreme-value** statistic: it grows
+/// with how long you listen (measured: one 500 Hz capture reads 0.319 over 3 s and 0.413 over 45 s),
+/// which is why it cannot be compared against a per-window quantile. A runtime calibration works on
+/// this stream; the headline numbers in #1060 are its maxima.
+fn rho_stream_over_capture(mode: &str, samples: &[f32]) -> Vec<f32> {
+    let mut out = Vec::new();
+    if plugin_template(mode).is_none() {
+        return out; // modes with no template are skipped, not panicked on
+    }
     let w = win_len(mode);
-    let mut peak: Option<f32> = None;
     let mut s = 0usize;
     while s + w <= samples.len() {
         if let Some(r) = rho_engine(mode, &samples[s..s + w]) {
-            peak = Some(peak.map_or(r, |p: f32| p.max(r)));
+            out.push(r);
         }
         s += w / 4;
     }
-    peak
+    out
+}
+
+/// Quantile of an unsorted sample by nearest-rank; `q` in 0..=1.
+fn quantile(v: &mut [f32], q: f32) -> f32 {
+    if v.is_empty() {
+        return f32::NAN;
+    }
+    v.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    let i = ((q * (v.len() - 1) as f32).round() as usize).min(v.len() - 1);
+    v[i]
 }
 
 /// #1060's decisive measurement: does a REAL rig's narrow receive filter lift idle rho above the
@@ -320,6 +348,100 @@ fn f8_rig_capture_idle_rho() {
     println!(
         "(* = at or above that mode's published threshold — the veto would corroborate noise)"
     );
+}
+
+// ── F11: is the QUANTILE RATIO stable across bandwidth? (#1060 fix, shape C) ──
+
+/// The measurement that decides whether a CFAR-style calibration can work without a signal-free
+/// oracle.
+///
+/// A runtime calibration cannot assume it ever sees noise-only windows: in the hot-floor regime the
+/// energy gate fires continuously, which is exactly when the calibration is needed. Cell-averaging
+/// CFAR solves this by estimating a robust *location* of the statistic and reaching the decision
+/// quantile through an assumed distribution family — which works only if the family's shape, i.e.
+/// the **ratio** of a high quantile to a robust low one, is stable across the conditions that move
+/// the location.
+///
+/// Here the condition is receive bandwidth. If `p99/p50` holds roughly constant while `p50` moves
+/// with bandwidth, the location can be tracked poison-resistantly and the tail extrapolated. If the
+/// ratio moves as much as the location does, that extrapolation is a fitted constant in disguise and
+/// the design has to change.
+///
+/// Run:
+/// `cargo test -p openpulse-modem --no-default-features --test preamble_rho_fade_and_filter_probe \
+///   -- --ignored --nocapture f11_quantile_ratio`
+#[test]
+#[ignore = "verification"]
+fn f11_quantile_ratio_across_bandwidth() {
+    let mode = "BPSK250";
+    let Some((_, thr, _)) = plugin_template(mode) else {
+        println!("{mode} publishes no template at HEAD");
+        return;
+    };
+    println!(
+        "\nF11: per-window rho distribution vs receive bandwidth ({mode}, threshold {thr:.2})"
+    );
+    println!("recorded captures first, then synthetic bands as the mechanism control");
+    println!(
+        "{:<34} {:>7} {:>7} {:>7} {:>7} {:>7} {:>8} {:>8} {:>9}",
+        "source", "n", "p50", "p90", "p99", "max", "p99/p50", "p90/p50", ">=thr"
+    );
+
+    let mut rows: Vec<(String, Vec<f32>)> = Vec::new();
+    for name in [
+        "ft991a-idle.wav",
+        "ic9700-idle-hot.wav",
+        "ic9700-idle-wide-500hz-control.wav",
+        "ic9700-idle-500hz.wav",
+        "ic9700-idle-250hz.wav",
+    ] {
+        match load_corpus(name) {
+            Ok(c) => rows.push((
+                format!("corpus/{name}"),
+                rho_stream_over_capture(mode, &c.samples),
+            )),
+            Err(e) => println!("  (skipping {name}: {e})"),
+        }
+    }
+    // Synthetic bands: same masks as F2, so the mechanism can be read without rig-specific colour.
+    let n = 120_000; // 15 s
+    for (label, lo, hi) in [
+        ("synth white 0-4k", 0.0f32, 4_000.0f32),
+        ("synth ssb 300-2700", 300.0, 2_700.0),
+        ("synth 1250-1750", 1_250.0, 1_750.0),
+        ("synth 1400-1600", 1_400.0, 1_600.0),
+    ] {
+        rows.push((
+            label.into(),
+            rho_stream_over_capture(mode, &band_noise(n, lo, hi, 4_242)),
+        ));
+    }
+
+    for (name, mut v) in rows {
+        if v.is_empty() {
+            println!("{name:<34} (no windows)");
+            continue;
+        }
+        let n = v.len();
+        let p50 = quantile(&mut v, 0.50);
+        let p90 = quantile(&mut v, 0.90);
+        let p99 = quantile(&mut v, 0.99);
+        let max = quantile(&mut v, 1.0);
+        let short = name.rsplit('/').next().unwrap_or(&name).to_string();
+        // Windows at or above the SHIPPED constant: the false-corroboration rate the deployed veto
+        // runs at today, in the units a CFAR knob would be specified in.
+        let over = v.iter().filter(|&&r| r >= thr).count() as f32 / n as f32;
+        println!(
+            "{short:<34} {n:>7} {p50:>7.3} {p90:>7.3} {p99:>7.3} {max:>7.3} {:>8.2} {:>8.2} {:>8.2}%",
+            p99 / p50,
+            p90 / p50,
+            100.0 * over
+        );
+    }
+    println!(
+        "\nRead the RATIO columns: stable ratio + moving p50 = a location tracker plus a family"
+    );
+    println!("factor is sound. Ratio moving with bandwidth = the factor is a fitted constant.");
 }
 
 // ── F3: is the SEQUENCE the variable, or the bandwidth? (#1062) ───────────────
@@ -1143,6 +1265,57 @@ impl ChannelModel for FadeThenFilter {
     }
 }
 
+/// `BpskPlugin` with the preamble veto switched OFF — the arm #1088 named as the fix for f9's
+/// circularity and did not build.
+///
+/// f9's decoded-only column is a tautology while the shipped 0.40 veto runs inside the decode: a
+/// frame scoring under 0.40 is vetoed, fails, and leaves the conditioned set, so the miss rate at
+/// 0.40 among decoded frames is zero by construction. Its own tripwire proved that is live rather
+/// than theoretical (1010-1696 settle rejections per 30 seeds, none of which decoded). Returning
+/// `None` here makes `build_preamble_veto` yield `None`, so the decode verdict is the channel's
+/// alone and "would this threshold discard a delivered frame?" becomes answerable.
+struct NoVetoBpsk(bpsk_plugin::BpskPlugin);
+
+impl ModulationPlugin for NoVetoBpsk {
+    fn info(&self) -> &PluginInfo {
+        self.0.info()
+    }
+    fn modulate(&self, d: &[u8], c: &ModulationConfig) -> Result<Vec<f32>, ModemError> {
+        self.0.modulate(d, c)
+    }
+    fn demodulate(&self, s: &[f32], c: &ModulationConfig) -> Result<Vec<u8>, ModemError> {
+        self.0.demodulate(s, c)
+    }
+    fn demodulate_soft(&self, s: &[f32], c: &ModulationConfig) -> Result<Vec<f32>, ModemError> {
+        self.0.demodulate_soft(s, c)
+    }
+    fn frame_geometry(&self, c: &ModulationConfig) -> Option<FrameGeometry> {
+        self.0.frame_geometry(c)
+    }
+    fn estimate_snr_db(&self, s: &[f32], c: &ModulationConfig) -> Option<f32> {
+        self.0.estimate_snr_db(s, c)
+    }
+    fn supports_soft_demod(&self, m: &str) -> bool {
+        self.0.supports_soft_demod(m)
+    }
+    fn estimate_afc_hz(&self, s: &[f32], c: &ModulationConfig) -> Option<f32> {
+        self.0.estimate_afc_hz(s, c)
+    }
+    fn occupied_bandwidth_hz(&self, m: &str) -> Option<f32> {
+        self.0.occupied_bandwidth_hz(m)
+    }
+    fn modulate_iq(
+        &self,
+        d: &[u8],
+        c: &ModulationConfig,
+    ) -> Result<(Vec<f32>, Vec<f32>), ModemError> {
+        self.0.modulate_iq(d, c)
+    }
+    fn preamble_template(&self, _config: &ModulationConfig) -> Option<PreambleTemplate> {
+        None
+    }
+}
+
 /// The quantity #1060 actually turns on: among frames that **decode**, how many would a candidate
 /// threshold veto?
 ///
@@ -1182,10 +1355,26 @@ fn f9_decode_conditioned_rho_tail() {
     // timeout, so the bands are selectable: a single run of all nine cells exceeds any sane
     // wall-clock bound and gets truncated mid-table, which is worse than not running it.
     let want = std::env::var("F9_BAND").unwrap_or_else(|_| "all".into());
+    let veto_off = std::env::var("F9_VETO")
+        .map(|v| v == "off")
+        .unwrap_or(false);
+    println!(
+        "  receiver veto: {}",
+        if veto_off {
+            "OFF (F9_VETO=off) — the decoded-only column is sound"
+        } else {
+            "ON (shipped) — the decoded-only column is CIRCULAR, see the tripwire per cell"
+        }
+    );
     for (bname, lo, hi) in [
         ("unfiltered", 0.0f32, 4_000.0),
         ("ssb 300-2700", 300.0, 2_700.0),
         ("filter 1250-1750", 1_250.0, 1_750.0),
+        // The 250 Hz-class band. It is the cell that decides the stand-down question: at this width
+        // the measured noise ceiling (real rig, 45 s: p99 0.492, max 0.579) climbs into the region
+        // where a frame tail might no longer clear it, and a veto with no separation must stand down
+        // rather than reject everything.
+        ("filter 1400-1600", 1_400.0, 1_600.0),
     ] {
         if want != "all" && !bname.starts_with(&want) {
             continue;
@@ -1197,9 +1386,20 @@ fn f9_decode_conditioned_rho_tail() {
                 (0u64, 0u32, 0u32);
             for seed in 0..seeds {
                 let mut h = ChannelSimHarness::new();
-                for eng in [&mut h.tx_engine, &mut h.rx_engine] {
-                    eng.register_plugin(Box::new(bpsk_plugin::BpskPlugin::new()))
-                        .expect("register");
+                h.tx_engine
+                    .register_plugin(Box::new(bpsk_plugin::BpskPlugin::new()))
+                    .expect("register tx");
+                // F9_VETO=off registers the veto-disabled wrapper on the RECEIVER only, so the
+                // decoded set is chosen by the channel rather than partly by the subject of the
+                // measurement. The transmitter is untouched: the wire is identical either way.
+                if veto_off {
+                    h.rx_engine
+                        .register_plugin(Box::new(NoVetoBpsk(bpsk_plugin::BpskPlugin::new())))
+                        .expect("register rx (no veto)");
+                } else {
+                    h.rx_engine
+                        .register_plugin(Box::new(bpsk_plugin::BpskPlugin::new()))
+                        .expect("register rx");
                 }
                 // #1066: the receive scan's budget is WALL CLOCK unless these are set, and the
                 // determinism is opt-in. Left unset, a loaded machine truncates the retry passes —
