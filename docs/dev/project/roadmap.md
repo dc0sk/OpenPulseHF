@@ -1718,6 +1718,50 @@ These tasks address the failure modes identified in Watterson channel benchmarki
 | RF-4 | Memory-ARQ end-to-end in SC-FDMA HPX session (cross-reference BL-TP-5) | Done | #213 |
 | RF-5 | Preamble / acquisition sequence for HF channel entry (cross-reference BL-TP-6) | Done | #213 |
 | RF-6 | Make the `hpx_hf` adaptive link actually work on a fade (v0.13.0 → v0.14.1 arc) | Done | #928, #930–#933, #935–#938 |
+| RF-7 | Make the preamble-correlation veto work at any receive bandwidth (#1060) | Done | #1154, #1156, #1157 |
+
+### RF-7 — the receive-bandwidth arc (#1060), 2026-08-17
+
+The #1049 correlation veto shipped with a per-mode ρ threshold (BPSK250: 0.40) derived from that
+mode's decode cliff and validated against two SSB-bandwidth, **3-second** idle captures. #1060 asked
+what a *narrow* receive filter does to it. Measured on a real IC-9700 rather than modelled, the answer
+is a defect: idle ρ tracks receive bandwidth, so the threshold was calibrated for one regime and blind
+outside it.
+
+| receive filter (measured −20 dB band) | per-window p50 | p99 | windows ≥ 0.40 |
+|---|---|---|---|
+| wide (2470 Hz) | 0.131 | 0.197 | 0.00 % |
+| 500 Hz (554 Hz) | 0.236 | 0.334 | 0.07 % |
+| 250 Hz (309 Hz) | 0.351 | 0.492 | **18.8 %** |
+
+**The fix is CFAR, not a bandwidth estimator** (#1157). There is no honest signal-free sample source —
+in the hot-floor regime the energy gate fires continuously, which is exactly when calibration is
+needed — so the receiver estimates a robust *location* of the statistic the veto already computes and
+reaches the decision level through a measured shape factor (p99/p50 = 1.29–1.50 across a 4.3× move in
+p50). It can only ever **raise** the threshold, and where no threshold separates noise from a
+deliverable frame it **stands down** to energy-only detection rather than vetoing everything.
+Measured through the production receive path: 2470 Hz holds 0.400, 554 Hz derives 0.449, 309 Hz
+derives 0.618 and stands down.
+
+Four things this arc is worth remembering for:
+
+1. **Peak ρ is an extreme-value statistic.** The same 500 Hz capture reads 0.319 over 3 s and 0.413
+   over 45 s — and the shipped constant was validated against 3-second captures, which understate the
+   ceiling of their own audio by 0.05–0.07 ρ.
+2. **Ablate the confound.** The rig's USB audio carries a ~1651 Hz birdie, and a tone in the passband
+   is exactly what scores high ρ. Notching it *raised* ρ, which is what established the filter as the
+   mechanism rather than the interference.
+3. **A decoded-only column is a tautology while the veto runs inside the decode.** #1088 recorded that
+   and named the fix; #1157 built it (a plugin wrapper returning `None` from `preamble_template`,
+   receiver-side only). Tripwire: 0 settle rejections, against 1010–1696 per 30 seeds in the shipped
+   arm.
+4. **A retraction.** "BPSK250 cannot work through a 200 Hz filter at all" was drawn from 0/180 fading
+   trials and is false — it decodes cleanly noiseless (`narrow_mask_decode_check`). The 0/180 measured
+   margin erosion, and the retraction is what makes the stand-down state load-bearing rather than
+   vestigial: a 250 Hz-class station on a calm channel is a live configuration.
+
+Scope, stated because it is easy to over-book: this runs on the **engine-receive surface only** — the
+CLI `receive` path and the on-air tooling. The daemon never executes the veto (#1118).
 
 ### RF-6 — the HF-fade arc (v0.13.0 → v0.14.1), 2026-07-17
 
