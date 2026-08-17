@@ -249,6 +249,7 @@ mod tests {
     /// The poison case that matters, and it is not hypothetical: a station carrying heavy traffic
     /// that FAILS to decode is the #1060 user, and every one of those settle queries pushes a high
     /// rho. The median cannot hold there — what must hold is the DIRECTION of the failure.
+    // VERIFIES: REQ-RX-03
     #[test]
     fn heavy_undecodable_traffic_drives_stand_down_rather_than_over_vetoing() {
         let mut c = RhoCalibration::new();
@@ -269,6 +270,7 @@ mod tests {
         );
     }
 
+    // VERIFIES: REQ-RX-03
     #[test]
     fn the_stand_down_latch_has_hysteresis() {
         let mut c = RhoCalibration::new();
@@ -287,6 +289,7 @@ mod tests {
         assert!(!d.stands_down(0.40, Some(0.50)));
     }
 
+    // VERIFIES: REQ-RX-02, REQ-RX-03
     #[test]
     fn stand_down_engages_only_when_the_derived_level_passes_the_delivered_frame_bound() {
         let mut c = RhoCalibration::new();

@@ -2119,6 +2119,7 @@ requirements:
     statement: When per-window correlation statistics are available, the receiver shall derive the
       preamble-correlation threshold from them rather than using the published constant alone
     status: draft
+    traceability: enforced
   REQ-RX-03:
     category: Receive
     covered_by:
@@ -2127,6 +2128,7 @@ requirements:
       delivered-frame rho bound, the receiver shall stand down to energy-only frame detection rather
       than veto
     status: draft
+    traceability: enforced
   REQ-SEC-01:
     category: Security/Trust
     covered_by:

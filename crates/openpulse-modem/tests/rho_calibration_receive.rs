@@ -101,7 +101,16 @@ fn listen_full(
 // VERIFIES: REQ-RX-02
 #[test]
 fn the_calibration_is_fed_by_the_production_receive_path() {
-    let (samples, _, _) = listen("ic9700-idle-500hz.wav");
+    // A 5 s slice: this test asserts only that samples arrive, and paying the full 20 s replay for
+    // that would add minutes to every gate run. The narrow/wide comparison below is the expensive
+    // one and is worth its cost — do not "optimize" its slice down, it needs MIN_SAMPLES.
+    let (samples, _, _) = listen_full(
+        "ic9700-idle-500hz.wav",
+        1.0,
+        5,
+        5,
+        (SCAN_POSITIONS, MAX_ITERATIONS),
+    );
     assert!(
         samples > 0,
         "no correlation samples reached the calibration — it is not wired into the receive path"
@@ -114,7 +123,7 @@ fn the_calibration_is_fed_by_the_production_receive_path() {
 #[test]
 fn a_narrow_receive_filter_raises_the_threshold_above_the_published_constant() {
     let (n_wide, wide, _) = listen("ic9700-idle-wide-500hz-control.wav");
-    let (n_narrow, narrow, _) = listen("ic9700-idle-500hz.wav");
+    let (n_narrow, narrow, narrow_stood_down) = listen("ic9700-idle-500hz.wav");
     assert!(
         n_wide > 0 && n_narrow > 0,
         "both captures must feed samples"
@@ -127,18 +136,32 @@ fn a_narrow_receive_filter_raises_the_threshold_above_the_published_constant() {
         (wide - PUBLISHED).abs() < 1e-6,
         "wide-filter capture moved the threshold to {wide}; it must stay at the published {PUBLISHED}"
     );
+    // Both halves of the bracket. Asserting only the lower one would pass a regression that drove
+    // the threshold to 0.7 — over-veto on a band where the veto should still be WORKING.
+    //
+    // Margin, so a future re-record knows what it is walking into: clearing PUBLISHED needs a slice
+    // median above 0.40 / 1.8 = 0.222, and this capture's 20 s slice measures ≈ 0.249 — about 12 %
+    // of headroom. The full-capture p50 is 0.236 (f11), which derives 0.425; the slice and the
+    // budget move the point by ~6 %, not the conclusion.
     assert!(
         narrow > PUBLISHED,
         "500 Hz capture derived {narrow}, not above the published {PUBLISHED} — the measured \
          per-window noise ceiling there is 0.334 (p99) with a 45 s peak of 0.413, so a threshold at \
          {PUBLISHED} corroborates noise"
     );
+    assert!(
+        narrow < bpsk_plugin::modulate::DELIVERED_FRAME_RHO_BOUND && !narrow_stood_down.0,
+        "500 Hz capture derived {narrow} and stand_down={:?} — at this bandwidth a separating \
+         threshold EXISTS, so the veto must keep working rather than stand down",
+        narrow_stood_down
+    );
 }
 
-/// REQ-RX-03: when the derived threshold passes the delivered-frame bound, the veto stands down
-/// rather than rejecting every settle.
-///
-// VERIFIES: REQ-RX-03
+/// Corroboration for REQ-RX-03 on real recorded audio. **Deliberately unbound**: a `VERIFIES:`
+/// binding on an `#[ignore]`d test fails the trace checker's did-it-actually-run arm, and would be a
+/// citation to a run that never happened. The requirement is bound to the in-suite mechanism tests
+/// in `src/rho_calibration.rs`; this is the production-path evidence behind them, scheduled with the
+/// on-air campaign preflight rather than the unit gate.
 ///
 /// `#[ignore]`d for cost, and the cost is itself the finding: a station whose veto is already broken
 /// spends its scan budget **decoding the noise it wrongly corroborates**, so it makes far fewer

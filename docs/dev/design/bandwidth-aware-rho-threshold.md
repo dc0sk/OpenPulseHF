@@ -123,13 +123,26 @@ iteration closes.
 | F-1060-02 | Retroactive exclusion of samples belonging to spans that later decoded is specified in the design review but not implemented: with a median anchor, rare delivered frames cannot move the estimate. | deferred — revisit if a high-duty-cycle deployment appears (#1060) |
 | F-1060-01 | The delivered-frame ρ bound used for stand-down is a min-of-60 on one channel model with a brick-wall mask, at one band. | deferred — the bound ships marked provisional; a decode-conditioned measurement across bands is tracked in #1059 |
 
+## Requirement enforcement
+
+Both requirements are `status: draft`, `traceability: enforced`. Enforced is deliberate and was not
+the default: the checker treats an **absent** `traceability` field as warn-only, while
+`requirements.yaml`'s own note says new requirements default to enforced — so a requirement added
+without the field silently gets no MISSING-BINDING or CITED-BUT-DIDN'T-RUN enforcement at all. That
+contradiction predates this work and is a checker seam worth its own issue.
+
+REQ-RX-03 is bound to the **in-suite mechanism tests**, not to the `#[ignore]`d production-path one:
+a binding on an ignored test fails the did-it-actually-run arm, and would be a citation to a run that
+never happened. `draft` + shipped code will fail `trace.sh check --release` as DRAFT-SHIPPED, which is
+correct — ratification waits for the budget-fixed delivered-frame measurement.
+
 ## Verification
 
 | Objective | Gate | Result |
 |---|---|---|
 | The calibration is fed by the **production** receive path (tripwire) | `rho_calibration_receive::the_calibration_is_fed_by_the_production_receive_path` | pass — 98 samples from a 20 s replay of the 500 Hz capture |
 | A narrower receive filter raises the threshold, and a wide one does not | `rho_calibration_receive::a_narrow_receive_filter_raises_the_threshold_above_the_published_constant` | pass — 0.449 derived at 554 Hz, 0.400 held at 2470 Hz |
-| Stand-down engages on a real narrow-filter capture, and is observable | `rho_calibration_receive::the_veto_stands_down_when_no_threshold_separates` | pass, `#[ignore]`d for cost (628 s at a 12 000/4 000 budget — see F-1060-05): 96 samples, derived **0.618**, stood down, 146 settles let through in that state |
+| Stand-down engages on a real narrow-filter capture, and is observable (run by `scripts/onair-preflight.sh`, not the unit gate) | `rho_calibration_receive::the_veto_stands_down_when_no_threshold_separates` | pass, `#[ignore]`d for cost (628 s at a 12 000/4 000 budget — see F-1060-05): 96 samples, derived **0.618**, stood down, 146 settles let through in that state |
 | Below `MIN_SAMPLES` the published constant is returned unchanged | `rho_calibration::tests::below_min_samples_...` | pass |
 | A quiet station is never weakened below the published floor | `rho_calibration::tests::a_quiet_station_is_never_weakened...` | pass |
 | A narrow filter's derived level clears its measured noise ceiling | `rho_calibration::tests::a_narrow_filter_raises_the_threshold_above_its_measured_noise_ceiling` | pass |

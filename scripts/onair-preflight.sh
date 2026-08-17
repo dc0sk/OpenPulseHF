@@ -135,6 +135,22 @@ feature and will transmit NOTHING on air (rebuild: cargo build --release -p open
     fi
 fi
 
+# The #1060 threshold calibration's production-path proof (REQ-RX-03). It is `#[ignore]`d in the
+# unit gate because it costs ~10 minutes: a station whose veto is broken makes ~6x fewer settle
+# queries per second of audio, so reaching a calibrated state needs a large scan budget. The on-air
+# campaign is the surface the veto actually runs on, which makes this its proportionate home — an
+# ignored proof with no scheduled runner is a gate that never runs.
+if [[ ${SKIP_RHO_STANDDOWN:-0} -eq 0 ]]; then
+    if cargo test -p openpulse-modem --no-default-features --test rho_calibration_receive -- \
+        --ignored the_veto_stands_down >/dev/null 2>&1; then
+        ok "preamble-veto stand-down verified on the recorded narrow-filter capture (REQ-RX-03)"
+    else
+        msg="the #1060 stand-down proof failed on the recorded 250 Hz capture — the threshold \
+calibration is not behaving as measured (SKIP_RHO_STANDDOWN=1 to bypass)"
+        if [[ $STRICT -eq 1 ]]; then fail "$msg"; else warn "$msg"; fi
+    fi
+fi
+
 if git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
     SHA=$(git rev-parse --short HEAD)
     ok "git sha: $SHA"

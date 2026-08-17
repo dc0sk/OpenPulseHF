@@ -220,7 +220,6 @@ impl ModulationPlugin for BpskPlugin {
                 modulate::PREAMBLE_RHO_THRESHOLD,
                 modulate::PREAMBLE_RHO_GRID_HZ,
             )
-            // VERIFIES: REQ-RX-03
             .with_delivered_frame_bound(modulate::DELIVERED_FRAME_RHO_BOUND),
         )
     }
