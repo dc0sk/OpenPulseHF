@@ -62,6 +62,7 @@ use openpulse_channel::{ChannelModel, WattersonConfig};
 use openpulse_core::fec::FecMode;
 use openpulse_core::plugin::{ModulationConfig, ModulationPlugin};
 use openpulse_dsp::acquisition::IqMatchedFilter;
+use openpulse_modem::capture_replay::{load_corpus, load_wav};
 use openpulse_modem::channel_sim::ChannelSimHarness;
 use std::time::Duration;
 
@@ -216,6 +217,109 @@ fn f2_noise_colour() {
             None => println!("  {mode} publishes no template at HEAD"),
         }
     }
+}
+
+// ── F8: idle rho from a REAL rig capture (#1060) ──────────────────────────────
+
+/// Peak rho over a whole capture, using this file's engine window, grid and template — the same
+/// `rho_engine` every synthetic row above uses, so a rig number is directly comparable to F2's
+/// table rather than to a re-transcribed correlator.
+fn peak_rho_over_capture(mode: &str, samples: &[f32]) -> Option<f32> {
+    plugin_template(mode)?; // modes with no template are skipped, not panicked on
+    let w = win_len(mode);
+    let mut peak: Option<f32> = None;
+    let mut s = 0usize;
+    while s + w <= samples.len() {
+        if let Some(r) = rho_engine(mode, &samples[s..s + w]) {
+            peak = Some(peak.map_or(r, |p: f32| p.max(r)));
+        }
+        s += w / 4;
+    }
+    peak
+}
+
+/// #1060's decisive measurement: does a REAL rig's narrow receive filter lift idle rho above the
+/// shipped threshold, as the brick-wall model predicts (0.441) or as the SSB row suggests (0.196)?
+///
+/// Positive-controlled by construction: the two recorded corpus captures are measured in the same
+/// run with the same code path, and must reproduce the figures already on record (FT-991A ≈ 0.164,
+/// IC-9700 hot ≈ 0.205). A new number from a probe that cannot reproduce the old ones means nothing.
+///
+/// Extra captures come from `OPHF_IDLE_WAV` (comma-separated paths). They must be 8 kHz — the
+/// template geometry is sample-rate-specific, and a 48 kHz file would be measured against a template
+/// six times too short while looking like a valid result.
+///
+/// **Peak rho is an extreme-value statistic: it grows with capture DURATION.** The corpus controls
+/// are 3 s files; a 45 s capture of the same noise reads higher for that reason alone. Compare rows
+/// of equal duration, and say which duration a quoted number came from. Measured on one IC-9700
+/// 500 Hz capture: 0.319 over its first 3 s, 0.413 over the full 45 s.
+///
+/// **The BPSK31/63 columns are not deployed behaviour** if they ever publish templates: their raw
+/// templates exceed `MAX_PREAMBLE_CORRELATION_SAMPLES`, so the engine would correlate them through
+/// `DdcMatchedFilter` while this probe uses the full-rate `IqMatchedFilter`. Only the BPSK250 column
+/// is correlator-identical to the shipped veto.
+///
+/// Run:
+/// `OPHF_IDLE_WAV=/path/idle.wav cargo test -p openpulse-modem --no-default-features \
+///   --test preamble_rho_fade_and_filter_probe -- --ignored --nocapture f8_`
+#[test]
+#[ignore = "verification"]
+fn f8_rig_capture_idle_rho() {
+    let modes = ["BPSK250", "BPSK63", "BPSK31"];
+    println!("\nF8: peak rho over recorded rig idle audio, engine window/grid");
+    println!(
+        "{:<34} {:>10} {:>9} {:>9} {:>9}",
+        "capture", "mean_sq", modes[0], modes[1], modes[2]
+    );
+
+    let mut rows: Vec<(String, Vec<f32>)> = Vec::new();
+    for name in ["ft991a-idle.wav", "ic9700-idle-hot.wav"] {
+        let c = load_corpus(name).unwrap_or_else(|e| panic!("corpus {name}: {e}"));
+        rows.push((format!("corpus/{name}"), c.samples));
+    }
+    if let Ok(list) = std::env::var("OPHF_IDLE_WAV") {
+        for p in list.split(',').map(str::trim).filter(|p| !p.is_empty()) {
+            let c = load_wav(p).unwrap_or_else(|e| panic!("{p}: {e}"));
+            assert_eq!(
+                c.sample_rate, 8_000,
+                "{p}: capture must be 8 kHz; decimate it (resample_poly) as the corpus files are"
+            );
+            rows.push((p.to_string(), c.samples));
+        }
+    }
+
+    for (name, samples) in &rows {
+        let ms: f32 = samples.iter().map(|s| s * s).sum::<f32>() / samples.len() as f32;
+        let cells: Vec<String> = modes
+            .iter()
+            .map(
+                |m| match (plugin_template(m), peak_rho_over_capture(m, samples)) {
+                    (Some((_, thr, _)), Some(r)) => {
+                        format!("{r:.3}{}", if r >= thr { "*" } else { " " })
+                    }
+                    (None, _) => "no tmpl".into(),
+                    (_, None) => "short".into(),
+                },
+            )
+            .collect();
+        let short = name.rsplit('/').next().unwrap_or(name);
+        println!(
+            "{short:<34} {ms:>10.3e} {:>9} {:>9} {:>9}",
+            cells[0], cells[1], cells[2]
+        );
+    }
+    for m in modes {
+        match plugin_template(m) {
+            Some((t, thr, grid)) => println!(
+                "  {m}: threshold {thr:.2}, template {} samples, grid ±{grid:.0} Hz",
+                t.len()
+            ),
+            None => println!("  {m}: publishes no template at HEAD"),
+        }
+    }
+    println!(
+        "(* = at or above that mode's published threshold — the veto would corroborate noise)"
+    );
 }
 
 // ── F3: is the SEQUENCE the variable, or the bandwidth? (#1062) ───────────────
