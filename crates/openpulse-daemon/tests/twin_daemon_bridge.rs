@@ -35,6 +35,35 @@ fn clean_awgn(seed: u64) -> Box<AwgnChannel> {
     Box::new(AwgnChannel::new(AwgnConfig::new(40.0, Some(seed))).unwrap())
 }
 
+/// A clean channel with a **carrier offset** — the impairment two real rigs always have.
+///
+/// Composed rather than replacing the AWGN arm: the offset is the variable under test, and dropping
+/// the noise would make the test easier than the control it is compared against.
+struct OffsetChannel {
+    cfo: openpulse_channel::cfo::CfoChannel,
+    awgn: AwgnChannel,
+}
+
+impl openpulse_channel::ChannelModel for OffsetChannel {
+    fn apply(&mut self, input: &[f32]) -> Vec<f32> {
+        let shifted = self.cfo.apply(input);
+        self.awgn.apply(&shifted)
+    }
+    fn generate_noise(&mut self, length: usize) -> Vec<f32> {
+        self.awgn.generate_noise(length)
+    }
+}
+
+fn offset_channel(seed: u64, offset_hz: f32) -> Box<OffsetChannel> {
+    Box::new(OffsetChannel {
+        cfo: openpulse_channel::cfo::CfoChannel::new(openpulse_channel::cfo::CfoConfig::new(
+            offset_hz, 8_000.0,
+        ))
+        .expect("finite offset"),
+        awgn: AwgnChannel::new(AwgnConfig::new(40.0, Some(seed))).unwrap(),
+    })
+}
+
 /// Parse a `"SLn"` level name to its number (e.g. `"SL4"` → 4); 0 if unparseable.
 fn level_num(name: &str) -> u8 {
     name.trim_start_matches("SL").parse().unwrap_or(0)
@@ -509,5 +538,85 @@ async fn an_ota_receiver_does_not_key_ptt_at_a_peers_uncoded_traffic() {
         keyed.is_err(),
         "an OTA-enabled receiver keyed PTT at a peer's uncoded traffic ({keyed:?} assertions) — \
          that is the NACK-at-your-peer's-file-transfer defect #1123 closed"
+    );
+}
+
+/// Two real daemons whose rigs disagree on frequency still exchange traffic (#1118).
+///
+/// **What this does NOT gate, established by sabotage rather than assumed.** Disabling the #1118
+/// acquisition pass entirely leaves this test **passing** — at −64 Hz, at −200 Hz and at −400 Hz.
+/// This path (a plain, uncoded `SendMessage` over a 40 dB AWGN bridge with no lead-in noise)
+/// tolerates large offsets natively, so it cannot detect the defect and must not be cited as the
+/// gate for the fix. That role belongs to
+/// `openpulse-modem/tests/daemon_frequency_acquisition.rs`, whose REQ-PHY-03 gate goes red when the
+/// pass is disabled.
+///
+/// It is kept, and it is not vacuous: at **−800 Hz** — past `AFC_MAX_CORRECTION_HZ` — it fails, so it
+/// does measure the offset it applies. What it covers is the two-daemon *round trip* at a realistic
+/// inter-rig offset, including the ISS ACK listen (`receive_ota_ack_within`), which is its own
+/// accumulate loop with no acquisition and where FSK4-ACK's 100 Hz tone spacing makes an offset
+/// expensive. That chain has no other test.
+///
+/// −64 Hz is the one cleanly measured inter-rig offset on this project's hardware (IC-9700 <->
+/// FT-991A, both commanded to 144.600000 MHz, 2026-07-28; `openpulse-channel/src/cfo.rs`), and it is
+/// already past `REQ-PHY-03`'s ±50 Hz requirement. The offset is applied in BOTH directions, because
+/// two rigs that disagree disagree symmetrically.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_message_crosses_the_bridge_between_two_rigs_that_disagree_on_frequency() {
+    const MEASURED_INTER_RIG_OFFSET_HZ: f32 = -64.0;
+
+    let pair = spawn_bridged_pair(
+        cfg("OFFSETA", 19060, 19061),
+        cfg("OFFSETB", 19062, 19063),
+        offset_channel(1, MEASURED_INTER_RIG_OFFSET_HZ),
+        offset_channel(2, MEASURED_INTER_RIG_OFFSET_HZ),
+        Duration::from_millis(10),
+    )
+    .await;
+
+    let b = TcpStream::connect(pair.addr_b).await.unwrap();
+    let (b_read, _b_write) = b.into_split();
+    let mut b_reader = BufReader::new(b_read);
+
+    let a = TcpStream::connect(pair.addr_a).await.unwrap();
+    let (_a_read, mut a_write) = a.into_split();
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    let cmd = serde_json::to_string(&ControlCommand::SendMessage {
+        to: "OFFSETB".into(),
+        subject: "x".into(),
+        body: "offset round trip".into(),
+    })
+    .unwrap()
+        + "\n";
+    a_write.write_all(cmd.as_bytes()).await.unwrap();
+
+    let got = timeout(Duration::from_secs(60), async {
+        loop {
+            let mut buf = String::new();
+            if b_reader.read_line(&mut buf).await.unwrap() == 0 {
+                continue;
+            }
+            let line = buf.trim();
+            if line.is_empty() {
+                continue;
+            }
+            if let Ok(ControlEvent::EngineEvent {
+                event: openpulse_modem::EngineEvent::FrameReceived { bytes, .. },
+            }) = serde_json::from_str::<ControlEvent>(line)
+            {
+                if bytes > 0 {
+                    return true;
+                }
+            }
+        }
+    })
+    .await;
+
+    pair.shutdown();
+    assert!(
+        got.is_ok(),
+        "daemon B never decoded a frame across a -64 Hz inter-rig offset — REQ-PHY-03 requires \
+         tracking station-to-station offsets to ±50 Hz without operator intervention, and this is \
+         the shipping two-daemon surface"
     );
 }

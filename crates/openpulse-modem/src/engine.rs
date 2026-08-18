@@ -338,6 +338,24 @@ const AFC_SETTLE_DEADBAND_HZ: f32 = 2.0;
 /// not help them but because it was priced in the wrong domain. A template longer than this is now
 /// decimated to fit rather than refused: see [`DdcMatchedFilter`], whose equivalence to the
 /// passband correlator is measured exact to four decimals at decimation up to 32.
+/// Maximum AFC correction magnitude accepted after settling.
+///
+/// The Goertzel acquisition range is ±400 Hz (`range_hz = 800` in `estimate_carrier_hz_wide`), so
+/// this is that range plus a small margin. The convergence guard (`|change| > 5 Hz`) still rejects
+/// flat noise that produces a near-zero stable estimate.
+///
+/// **Corrected 2026-08-18**: this comment used to justify the bound with "on-air measurements show a
+/// consistent ~400 Hz carrier offset between the two rigs". That figure is unsupported — it traces to
+/// the two-station OTA notes, whose CFO readings are marked unreliable in the same paragraph (the
+/// spectral peak-picker was measuring dev-host birdies). The cleanly measured inter-rig offset is
+/// **−64 Hz** (`openpulse-channel/src/cfo.rs`). The bound itself is unchanged and is justified by the
+/// estimator's own range, which is what it was always really about.
+///
+/// Module-scoped rather than function-local since #1118: the daemon's burst scan applies the same
+/// guard, and a plausibility bound that two acquisition paths hold independently is one they can
+/// drift apart on.
+const AFC_MAX_CORRECTION_HZ: f32 = 450.0;
+
 const MAX_PREAMBLE_CORRELATION_SAMPLES: usize = 2_048;
 
 /// A mode's preamble matched filter together with the ρ constants its plugin measured for it.
@@ -2106,6 +2124,45 @@ impl ModemEngine {
         result
     }
 
+    /// [`decode_burst`](Self::decode_burst) without its acquisition pass — the onset scan only.
+    ///
+    /// For callers that own a phase-2 pass of their own and must not pay for a second one. The OTA
+    /// arm is the only such caller today (#1118).
+    fn decode_burst_phase1(
+        &mut self,
+        mode: &str,
+        burst: &AudioSamples,
+    ) -> Result<Vec<u8>, ModemError> {
+        let was_prerouted = self.input_prerouted;
+        self.input_prerouted = true;
+        let was_quiet = self.suppress_afc_events;
+        self.suppress_afc_events = true;
+        let sr = AudioConfig::default().sample_rate;
+        let (_, _, min_frame_samples, max_frame_samples) = self.frame_scan_geometry(mode, sr);
+        let n = burst.samples.len();
+        let result = if n < min_frame_samples {
+            self.receive_from_samples(
+                mode,
+                AudioSamples {
+                    samples: burst.samples.clone(),
+                },
+            )
+        } else {
+            let (step, scan_end, _) = self.burst_onset_scan_bounds(mode, n);
+            self.scan_burst_onsets(
+                mode,
+                &burst.samples,
+                step,
+                scan_end,
+                max_frame_samples,
+                false,
+            )
+        };
+        self.input_prerouted = was_prerouted;
+        self.suppress_afc_events = was_quiet;
+        result
+    }
+
     fn decode_burst_inner(
         &mut self,
         mode: &str,
@@ -2127,34 +2184,156 @@ impl ModemEngine {
         // past sample 0 (bounded so a noise burst can't spin). Shared with the CODED arm via
         // `burst_onset_scan_bounds` so the two cannot diverge again (#1138).
         let (step, scan_end, _) = self.burst_onset_scan_bounds(mode, n);
+        // PHASE 1 — today's path exactly: every onset at the current correction. Bit-identical to
+        // the behaviour before #1118, which is the whole reason the two-phase shape was chosen: a
+        // frame that decodes today still decodes here, and phase 2 cannot regress it.
+        match self.scan_burst_onsets(
+            mode,
+            &burst.samples,
+            step,
+            scan_end,
+            max_frame_samples,
+            false,
+        ) {
+            Ok(payload) => Ok(payload),
+            Err(phase1_err) => {
+                // PHASE 2 — acquire the carrier, then retry (#1118, REQ-PHY-03). Reached only when
+                // every onset failed at the current correction, which is the evidence that the
+                // burst may be off frequency. Measured: the daemon decodes 0 Hz and 20 Hz offsets
+                // without this and fails from 50 Hz up, while the same path handed a correct centre
+                // frequency decodes to 400 Hz.
+                //
+                // Phase 1's error is the one returned: it is the failure a caller expects, and
+                // phase 2's is an artefact of a rescue attempt that was never going to be reached
+                // on a healthy link.
+                self.scan_burst_onsets(
+                    mode,
+                    &burst.samples,
+                    step,
+                    scan_end,
+                    max_frame_samples,
+                    true,
+                )
+                .map_err(|_| phase1_err)
+            }
+        }
+    }
+
+    /// Acquire the carrier at `start`, and report whether a decode retry there is worth its cost.
+    ///
+    /// ONE definition, called by both daemon decode arms (#1118). They have diverged once already —
+    /// #1138 cost every RS-coded frame on the on-air corpus because the uncoded arm scanned onsets
+    /// and the coded arm did not — so the acquisition decision lives in a single place by
+    /// construction rather than by intention.
+    ///
+    /// Returns `false` (and leaves the correction for the caller to roll back) when:
+    /// * the onset's settle window is not fully inside the burst;
+    /// * the settle fails the CLI path's own two guards — converged (`last_delta < 5`,
+    ///   `|fine − anchor| ≤ 20`) and plausible (`|fine| ≤ AFC_MAX_CORRECTION_HZ`);
+    /// * the correction lands inside `AFC_SETTLE_DEADBAND_HZ`, i.e. it is not a correction at all —
+    ///   phase 1 already tried this onset at ~0 and failed, so a retry would buy nothing;
+    /// * a published preamble template says the window is not this waveform (#1049), unless the
+    ///   #1060 calibration has stood the veto down.
+    fn acquire_at_onset(
+        &mut self,
+        mode: &str,
+        samples: &[f32],
+        start: usize,
+        afc_window: usize,
+        veto: Option<&PreambleVeto>,
+    ) -> bool {
+        let n = samples.len();
+        let settle_end = (start + afc_window).min(n);
+        if settle_end.saturating_sub(start) < afc_window {
+            return false;
+        }
+        let outcome = self.afc_mini_settle(mode, &samples[start..settle_end]);
+        let converged = outcome.last_delta < 5.0 && (outcome.fine - outcome.anchor).abs() <= 20.0;
+        let plausible = outcome.fine.abs() <= AFC_MAX_CORRECTION_HZ;
+        let worth_retrying = outcome.fine.abs() >= AFC_SETTLE_DEADBAND_HZ;
+        if !(converged && plausible && worth_retrying) {
+            return false;
+        }
+        let Some(v) = veto else {
+            return true;
+        };
+        let Some((rho, _)) = self.preamble_rho(v, &samples[start..settle_end], outcome.fine) else {
+            return true;
+        };
+        // Feed the #1060 calibration from this call site too, or the threshold it derives stays
+        // CLI-fed and the `DORMANT(#1118)` note on the engine's `rho_*` getters never comes true.
+        self.rho_calibration.push_at(rho, start);
+        let threshold = self.rho_calibration.effective_threshold(v.rho_threshold);
+        let stand_down = self
+            .rho_calibration
+            .stands_down(v.rho_threshold, v.delivered_frame_rho_bound);
+        stand_down || rho >= threshold
+    }
+
+    /// One onset scan over a gathered burst, optionally acquiring the carrier at each onset.
+    ///
+    /// `settle = false` is the pre-#1118 scan. `settle = true` runs `afc_mini_settle` at each onset
+    /// under the same two guards the CLI path applies, and skips the decode retry where the settle
+    /// is not worth spending one on. Rollback discipline is the same in both: `afc_correction_hz` is
+    /// restored on every failed attempt and committed only on success (#1143).
+    #[allow(clippy::too_many_arguments)]
+    fn scan_burst_onsets(
+        &mut self,
+        mode: &str,
+        samples: &[f32],
+        step: usize,
+        scan_end: usize,
+        max_frame_samples: usize,
+        settle: bool,
+    ) -> Result<Vec<u8>, ModemError> {
+        let n = samples.len();
+        let sr = AudioConfig::default().sample_rate;
+        let (_, acq_samples, min_frame_samples, _) = self.frame_scan_geometry(mode, sr);
+        let afc_window = acq_samples.max(min_frame_samples);
+        let veto = if settle {
+            self.build_preamble_veto(mode, sr)
+        } else {
+            None
+        };
         let mut start = 0usize;
-        let last_err = loop {
+        let mut last_err = ModemError::Demodulation("no onset attempted".into());
+        loop {
             let end = (start + max_frame_samples).min(n);
             let afc_before = self.afc_correction_hz;
-            let slice = burst.samples[start..end].to_vec();
-            match self.decode_attempt(
-                mode,
-                AudioSamples {
-                    samples: slice.clone(),
-                },
-                FecMode::None,
-            ) {
-                Ok(payload) => {
-                    // E1 skipped the estimate on every attempt; the WINNING slice still needs one,
-                    // so the single `AfcUpdate` the wrapper emits carries a real correction.
-                    self.update_afc_estimate(mode, &slice);
-                    return Ok(payload);
-                }
-                Err(e) => {
-                    self.afc_correction_hz = afc_before; // undo the failed attempt's AFC drift
-                    if start >= scan_end {
-                        break e;
-                    }
-                    start = (start + step).min(scan_end);
+            let mut skip = false;
+            if settle {
+                skip = !self.acquire_at_onset(mode, samples, start, afc_window, veto.as_ref());
+                if skip {
+                    self.afc_correction_hz = afc_before;
                 }
             }
-        };
-        Err(last_err)
+            if !skip {
+                let slice = samples[start..end].to_vec();
+                match self.decode_attempt(
+                    mode,
+                    AudioSamples {
+                        samples: slice.clone(),
+                    },
+                    FecMode::None,
+                ) {
+                    Ok(payload) => {
+                        // E1 skipped the estimate on every attempt; the WINNING slice still needs
+                        // one, so the single `AfcUpdate` the wrapper emits carries a real
+                        // correction.
+                        self.update_afc_estimate(mode, &slice);
+                        return Ok(payload);
+                    }
+                    Err(e) => {
+                        self.afc_correction_hz = afc_before; // undo the failed attempt's AFC drift
+                        last_err = e;
+                    }
+                }
+            }
+            if start >= scan_end {
+                return Err(last_err);
+            }
+            start = (start + step).min(scan_end);
+        }
     }
 
     /// Decode a captured burst with the OTA candidate fallback and build the ACK to
@@ -2307,7 +2486,13 @@ impl ModemEngine {
                 // Same isolation every candidate gets: a failed attempt's AFC drift must not
                 // poison this one.
                 self.afc_correction_hz = afc_before;
-                if let Ok(payload) = self.decode_burst(mode, samples) {
+                // PHASE 1 ONLY here (#1118). `decode_burst` runs its own acquisition pass when its
+                // scan fails, and on a coded ladder burst that pass is pure cost: an RS frame will
+                // never decode uncoded, at any frequency. Measured before this split: an
+                // on-frequency coded burst spent 129 settles inside this fallback and changed no
+                // verdict. The fallback mode gets its acquisition pass with every other candidate,
+                // in the single phase-2 block below.
+                if let Ok(payload) = self.decode_burst_phase1(mode, samples) {
                     debug!(
                         "ota fallback decoded {} bytes of non-ladder traffic at {mode}",
                         payload.len()
@@ -2378,6 +2563,84 @@ impl ModemEngine {
                     }
                 }
             }
+            self.afc_correction_hz = if decoded.is_some() {
+                self.afc_correction_hz
+            } else {
+                afc_before
+            };
+        }
+
+        // PHASE 2 — the same candidate scan, acquiring the carrier at each onset (#1118,
+        // REQ-PHY-03).
+        //
+        // Reached only when every candidate failed at every onset at the current correction, which
+        // is the evidence that the burst may be OFF FREQUENCY. Measured before this existed: the
+        // daemon decodes 0 Hz and 20 Hz offsets and fails from 50 Hz up, while the same path handed
+        // a correct centre frequency decodes to 400 Hz — so the missing capability was frequency
+        // acquisition alone, and REQ-PHY-03 requires ±50 Hz without operator intervention.
+        //
+        // Ordered here, after the plain scan and before HARQ, for the same reason the plain scan
+        // sits where it does: its cost lands only on bursts nothing cheaper could decode, and HARQ
+        // must not retain LLRs for a burst this might still recover.
+        //
+        // `acquire_at_onset` is shared with the uncoded arm so the two cannot drift apart the way
+        // they did in #1138.
+        if decoded.is_none() {
+            let n = samples.samples.len();
+            // The fallback mode rides along as an uncoded candidate: non-ladder traffic (station ID,
+            // filexfer, handshake, QSY, relay) is exactly as likely to arrive off frequency as a
+            // ladder frame, and #1123 is the record of what happens when this arm forgets it.
+            let mut phase2: Vec<(SpeedLevel, String, FecMode)> = candidates.clone();
+            if let Some(m) = fallback_mode {
+                if !phase2
+                    .iter()
+                    .any(|(_, cm, cf)| cm == m && *cf == FecMode::None)
+                {
+                    phase2.push((SpeedLevel::Sl1, m.to_string(), FecMode::None));
+                }
+            }
+            'settle_scan: for (level, mode, fec) in &phase2 {
+                let (step, scan_end, max_frame_samples) = self.burst_onset_scan_bounds(mode, n);
+                let (_, acq_samples, min_frame_samples, _) =
+                    self.frame_scan_geometry(mode, AudioConfig::default().sample_rate);
+                let afc_window = acq_samples.max(min_frame_samples);
+                let veto = self.build_preamble_veto(mode, AudioConfig::default().sample_rate);
+                let mut start = 0usize;
+                loop {
+                    self.afc_correction_hz = afc_before;
+                    let end = (start + max_frame_samples).min(n);
+                    if start < end
+                        && self.acquire_at_onset(
+                            mode,
+                            &samples.samples,
+                            start,
+                            afc_window,
+                            veto.as_ref(),
+                        )
+                    {
+                        let slice = samples.samples[start..end].to_vec();
+                        match self.decode_attempt(
+                            mode,
+                            AudioSamples {
+                                samples: slice.clone(),
+                            },
+                            *fec,
+                        ) {
+                            Ok(payload) => {
+                                self.update_afc_estimate(mode, &slice);
+                                decoded = Some((payload, *level, mode.clone()));
+                                break 'settle_scan;
+                            }
+                            Err(e) => last_err = Some(e),
+                        }
+                    }
+                    if start >= scan_end {
+                        break;
+                    }
+                    start = (start + step).min(scan_end);
+                }
+            }
+            // Commit only on success — the rollback discipline every other arm follows (#1143).
             self.afc_correction_hz = if decoded.is_some() {
                 self.afc_correction_hz
             } else {
@@ -3206,16 +3469,6 @@ impl ModemEngine {
         let mut retry_cost_secs: f64 = 0.0;
         let mut retry_span_secs: f64 = 0.0;
         let mut retry_over_budget = false;
-        // Maximum AFC correction magnitude accepted after settling.
-        // The Goertzel acquisition range is ±400 Hz (range_hz = 800 in the
-        // estimate_carrier_hz_wide implementation).  On-air measurements between
-        // IC-9700 and FT-991A show a consistent ~400 Hz carrier offset between
-        // the two rigs at the same nominal dial frequency — reject anything
-        // beyond the full ±400 Hz Goertzel range plus a small margin.
-        // The convergence guard (|change| > 5 Hz) still rejects flat noise
-        // that produces a near-zero stable estimate.
-        const AFC_MAX_CORRECTION_HZ: f32 = 450.0;
-
         // Scan/retry policy state (see ScanPlanner).  On first signal
         // detection the engine runs fast AFC settling passes in-place (no
         // decode), then the planner resets the scan to that position so the
