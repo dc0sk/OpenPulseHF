@@ -354,6 +354,16 @@ const AFC_SETTLE_DEADBAND_HZ: f32 = 2.0;
 /// Module-scoped rather than function-local since #1118: the daemon's burst scan applies the same
 /// guard, and a plausibility bound that two acquisition paths hold independently is one they can
 /// drift apart on.
+/// Onset-step multiplier for the #1118 acquisition pass.
+///
+/// The pass settles on a coarser grid than the decode scan uses, because a settle needs only to land
+/// on signal while a decode needs the onset to a symbol period. 4 keeps the whole scan span reachable
+/// — the real #1021 lead-in is 126 symbol periods — while cutting the settle count to a quarter.
+///
+/// Derived from the cost that forced it, not tuned: at every onset, the pass turned a Watterson
+/// fading test from minutes into 98+ minutes without finishing.
+const PHASE2_STEP_MULTIPLIER: usize = 4;
+
 const AFC_MAX_CORRECTION_HZ: f32 = 450.0;
 
 const MAX_PREAMBLE_CORRELATION_SAMPLES: usize = 2_048;
@@ -2206,17 +2216,81 @@ impl ModemEngine {
                 // Phase 1's error is the one returned: it is the failure a caller expects, and
                 // phase 2's is an artefact of a rescue attempt that was never going to be reached
                 // on a healthy link.
-                self.scan_burst_onsets(
-                    mode,
-                    &burst.samples,
-                    step,
-                    scan_end,
-                    max_frame_samples,
-                    true,
-                )
-                .map_err(|_| phase1_err)
+                match self.acquire_burst_correction(mode, &burst.samples, step, scan_end) {
+                    Some(correction) => {
+                        self.afc_correction_hz = correction;
+                        let out = self.scan_burst_onsets(
+                            mode,
+                            &burst.samples,
+                            step,
+                            scan_end,
+                            max_frame_samples,
+                            false,
+                        );
+                        if out.is_err() {
+                            self.afc_correction_hz = 0.0;
+                        }
+                        out.map_err(|_| phase1_err)
+                    }
+                    None => Err(phase1_err),
+                }
             }
         }
+    }
+
+    /// Estimate one carrier correction for a whole burst, at bounded cost (#1118).
+    ///
+    /// **Why this is not "settle at every onset and retry there".** That was the first
+    /// implementation, and the workspace gate found what the design review had predicted: on a
+    /// fading fixture almost every burst fails phase 1, so phase 2 ran on all of them, at up to
+    /// ~129 onsets each with a decode retry apiece. `ota_channel_adaptation`'s Watterson test went
+    /// from minutes to **over 98 minutes without finishing**.
+    ///
+    /// A count cap alone cannot fix that: the real #1021 on-air lead-in is 4032 samples — 126 symbol
+    /// periods at BPSK250 — so a cap small enough to bound the cost is also small enough to put the
+    /// frame out of reach. The span has to stay; what changes is the density and what is done with
+    /// the result.
+    ///
+    /// * **settle on a COARSE grid** (`PHASE2_STEP_MULTIPLIER × step`) across the same span, so the
+    ///   cost is a bounded fraction of a scan rather than a multiple of one;
+    /// * take the **median** of the corrections that pass the guards. Settles that land on the frame
+    ///   agree near the true offset; settles on noise scatter, and a median is what a scattered
+    ///   minority cannot move — the same robustness argument the #1060 calibration rests on;
+    /// * hand that one correction to a single ordinary fine scan, which is where onset precision is
+    ///   actually needed.
+    ///
+    /// Worst case is therefore `span/coarse_step` settles plus **one** extra fine scan — the ~2×
+    /// bound the review asked for — instead of a settle and a decode at every onset.
+    fn acquire_burst_correction(
+        &mut self,
+        mode: &str,
+        samples: &[f32],
+        step: usize,
+        scan_end: usize,
+    ) -> Option<f32> {
+        let sr = AudioConfig::default().sample_rate;
+        let (_, acq_samples, min_frame_samples, _) = self.frame_scan_geometry(mode, sr);
+        let afc_window = acq_samples.max(min_frame_samples);
+        let veto = self.build_preamble_veto(mode, sr);
+        let coarse = step.saturating_mul(PHASE2_STEP_MULTIPLIER).max(1);
+        let entry = self.afc_correction_hz;
+        let mut corrections: Vec<f32> = Vec::new();
+        let mut start = 0usize;
+        loop {
+            if self.acquire_at_onset(mode, samples, start, afc_window, veto.as_ref()) {
+                corrections.push(self.afc_correction_hz);
+            }
+            self.afc_correction_hz = entry;
+            if start >= scan_end {
+                break;
+            }
+            start = (start + coarse).min(scan_end);
+        }
+        if corrections.is_empty() {
+            return None;
+        }
+        corrections.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+        Some(corrections[corrections.len() / 2])
     }
 
     /// Acquire the carrier at `start`, and report whether a decode retry there is worth its cost.
@@ -2601,23 +2675,21 @@ impl ModemEngine {
             }
             'settle_scan: for (level, mode, fec) in &phase2 {
                 let (step, scan_end, max_frame_samples) = self.burst_onset_scan_bounds(mode, n);
-                let (_, acq_samples, min_frame_samples, _) =
-                    self.frame_scan_geometry(mode, AudioConfig::default().sample_rate);
-                let afc_window = acq_samples.max(min_frame_samples);
-                let veto = self.build_preamble_veto(mode, AudioConfig::default().sample_rate);
+                // ONE bounded acquisition for the whole burst, then an ordinary fine scan at the
+                // correction it found. Settling at every onset and retrying there is what the
+                // workspace gate caught as a 98-minute non-terminating test; see
+                // `acquire_burst_correction` for why a count cap could not fix it.
+                self.afc_correction_hz = afc_before;
+                let Some(correction) =
+                    self.acquire_burst_correction(mode, &samples.samples, step, scan_end)
+                else {
+                    continue;
+                };
                 let mut start = 0usize;
                 loop {
-                    self.afc_correction_hz = afc_before;
+                    self.afc_correction_hz = correction;
                     let end = (start + max_frame_samples).min(n);
-                    if start < end
-                        && self.acquire_at_onset(
-                            mode,
-                            &samples.samples,
-                            start,
-                            afc_window,
-                            veto.as_ref(),
-                        )
-                    {
+                    if start < end {
                         let slice = samples.samples[start..end].to_vec();
                         match self.decode_attempt(
                             mode,
