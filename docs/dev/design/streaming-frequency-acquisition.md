@@ -1,7 +1,7 @@
 ---
 project: openpulsehf
 doc: docs/dev/design/streaming-frequency-acquisition.md
-status: living
+status: resolved
 last_updated: 2026-08-18
 ---
 
