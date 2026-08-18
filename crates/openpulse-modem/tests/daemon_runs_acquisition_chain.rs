@@ -1,44 +1,45 @@
-//! The daemon's streaming receive path does NOT run the acquisition chain (#1118).
+//! The daemon's streaming receive path RUNS the acquisition chain (#1118).
 //!
-//! `EnergyGate` -> refined onset -> `afc_mini_settle` -> the #1049 preamble-correlation veto live
-//! inside `receive_with_timeout_fec`, which the CLI listen path reaches. The shipping daemon's
-//! `rx_ticker` calls `accumulate_capture` and then one of two decode arms, and reaches none of it.
+//! **This file previously asserted the opposite**, and was named `daemon_skips_acquisition_chain`.
+//! It pinned the gap: `EnergyGate` → refined onset → `afc_mini_settle` → the #1049
+//! preamble-correlation veto lived inside `receive_with_timeout_fec`, which only the CLI listen path
+//! reaches, while the shipping daemon's `rx_ticker` called `accumulate_capture` and then one of two
+//! decode arms and reached none of it. Its header said: *"When it is resolved these tests SHOULD
+//! fail — that is the point. Change them deliberately."* #1118 resolved it, they failed, and this is
+//! that deliberate change: the same two arms, the same counters, the assertion inverted.
 //!
-//! **Why this file exists.** That claim was already written down in three places — `engine.rs`'s
-//! `update_dcd_at_seam` ("none of that path's machinery ... runs here"), the header of
-//! `preamble_veto_interference.rs` (explicitly a research harness with no asserts), and issue #1118
-//! — and asserted by NOTHING. A comment cannot fail, and this one is load-bearing: #1053, #1059,
-//! #1060 and #1062 are all refinements *of that chain*, so whether the daemon runs it decides
-//! whether that work reaches the shipping receiver.
+//! **What is pinned now.** Both daemon decode arms reach the acquisition chain on a burst phase 1
+//! cannot decode, and both reach the **veto**, not merely the settle. The two-counter structure is
+//! kept for the reason the original gave: `afc_settle_attempts()` increments at the chain's ENTRY on
+//! every mode, while the `rho_*` pair records what the veto DECIDED and moves only where a preamble
+//! template exists. A gate on the entry counter alone would stay green if phase 2 were half-wired —
+//! settle without veto — which is exactly what shipped in the first #1118 implementation: the veto
+//! ran and fed the #1157 calibration but reported nothing, so its decisions were unobservable.
 //!
-//! **It pins the CURRENT SPLIT, not a desired one.** Closing the gap is an open design question and
-//! is not attempted here. When it is resolved these tests SHOULD fail — that is the point. Change
-//! them deliberately; do not delete them to make a change go green.
+//! **The complement lives in `daemon_frequency_acquisition.rs`** and must not be merged into this
+//! file: there, an on-frequency burst that phase 1 decodes must spend **zero** settles. Together the
+//! two files pin the whole two-phase design — phase 2 runs when phase 1 failed, and never otherwise.
 //!
 //! **Both daemon decode arms are covered, because `server::run` has two.** It dispatches on
 //! `engine.ota_active()` (`server.rs:858`): with an OTA session it calls `ota_decode_burst`, and
 //! otherwise — the DEFAULT, since `ota_enabled` is opt-in — it calls `decode_burst`
-//! (`server.rs:930`). An earlier version of this file exercised NEITHER: it called
-//! `ota_decode_burst` with no session started, so the call returned
-//! `Err("no OTA session active")` before reaching any decode work, and `let _ =` swallowed it.
-//! The zero-counter assertion after it was therefore vacuous, and the gate was blind at exactly the
-//! point it exists to trip — a closure wiring the chain into the OTA decode path would not have
-//! failed it. Both arms now assert the shape of what they got back, so a silent no-op cannot recur.
+//! (`server.rs:930`). An early version of this file exercised NEITHER: it called `ota_decode_burst`
+//! with no session started, so the call returned `Err("no OTA session active")` before reaching any
+//! decode work, and `let _ =` swallowed it. Both arms still assert the shape of what they got back,
+//! so a silent no-op cannot recur.
 //!
-//! **Two counters, deliberately.** `afc_settle_attempts()` increments at the chain's ENTRY on every
-//! mode; the `rho_*` counters record what the veto DECIDED and only move where a preamble template
-//! exists. A gate on the `rho_*` pair alone would stay green if the chain were half-wired into the
-//! streaming path — energy gate and settle without the veto — which is a plausible closure, since
-//! every mode except BPSK250 has no template to check. The entry counter closes that hole.
-//!
-//! **Vacuity is the design problem here**, because "counters are 0" is also what a test that fed
-//! nothing decodable reports. Four validations rule it out: the same audio through the CLI path
-//! moves the counters (`the_cli_path_runs_the_chain`); each daemon arm asserts a burst actually
-//! flushed; each asserts `dcd_blocks_processed() > 0`, so the shared `InputCapture` seam ran; and
-//! each asserts the decode call returned a real outcome rather than erroring out early.
+//! **Vacuity is still the design problem**, in mirror image. "Counters moved" must not be reachable
+//! by feeding audio that drives the chain nowhere, and "phase 2 ran" must not depend on phase 1
+//! happening to fail for an incidental reason. So the frame is transmitted and then shifted by
+//! `OFFSET_HZ` with the shipped `CfoChannel`: at that offset phase 1 **cannot** decode (measured in
+//! `daemon_frequency_acquisition.rs`: the coded arm fails from 50 Hz), so phase 2 must run by
+//! construction. Each arm additionally asserts a burst actually flushed, that
+//! `dcd_blocks_processed() > 0` so the shared `InputCapture` seam ran, and that the decode call
+//! returned a real outcome rather than erroring out early.
 
 use bpsk_plugin::BpskPlugin;
 use openpulse_audio::loopback::LoopbackBackend;
+use openpulse_channel::ChannelModel;
 use openpulse_core::fec::FecMode;
 use openpulse_core::profile::SessionProfile;
 use openpulse_modem::engine::ModemEngine;
@@ -46,8 +47,9 @@ use openpulse_modem::pipeline::AudioSamples;
 use std::time::Duration;
 
 /// BPSK250 is the ONLY mode publishing a `preamble_template`, so it is the only mode where the veto
-/// can run at all. On a no-template mode both arms would read 0 rho and the gate would be vacuous by
-/// construction. (Verified: `BpskPlugin::preamble_template` returns `None` for every other mode.)
+/// can run at all. On a no-template mode both arms would read 0 rho and the rho half of this gate
+/// would be vacuous by construction. (Verified: `BpskPlugin::preamble_template` returns `None` for
+/// every other mode.)
 const MODE: &str = "BPSK250";
 const FEC: FecMode = FecMode::Rs;
 const PAYLOAD: &[u8] = b"daemon acquisition-chain seam probe";
@@ -56,16 +58,19 @@ const SAMPLE_RATE: u64 = 8_000;
 /// Lead-in silence. The frame must sit INSIDE a longer capture — a buffer that is exactly the frame
 /// is the easiest case that exists and cannot exercise frame location.
 const LEAD_SAMPLES: usize = 8_000;
-/// Bounded in WORK so the CLI arm's verdict comes from the audio, not from how much wall clock the
-/// machine had (#1066).
+/// Carrier offset applied to the frame. Well past REQ-PHY-03's ±50 Hz bound, so phase 1 fails at the
+/// current correction and phase 2 is *required* rather than incidental — the property this gate
+/// depends on, made explicit instead of inherited from a fixture that happened not to decode.
+const OFFSET_HZ: f32 = 200.0;
+/// Bounded in WORK so the verdict comes from the audio, not from how much wall clock the machine
+/// had (#1066).
 const SCAN_POSITIONS: usize = 3_000;
 const MAX_ITERATIONS: usize = 400;
 
 /// Samples per `accumulate_capture` call, derived from the daemon's configured tick rather than
 /// transcribed. An earlier version hard-coded 800 with the comment "the daemon's default receive
 /// tick is 100 ms" — the default is **50 ms** (`DaemonConfig::receive_tick_ms`), so the claim of
-/// fidelity was false. Three other test files still carry that same wrong 100 ms comment, which is
-/// how it reached this one: by copying. Bound to the config so it cannot drift again.
+/// fidelity was false. Bound to the config so it cannot drift again.
 fn tick_samples() -> usize {
     let tick_ms = openpulse_config::DaemonConfig::default().receive_tick_ms;
     assert!(
@@ -86,15 +91,21 @@ fn engine() -> (LoopbackBackend, ModemEngine) {
     (backend, e)
 }
 
-/// One transmitted frame embedded in silence. Built ONCE and handed to every arm, so the paths are
-/// compared on identical audio rather than on similar-looking generators.
+/// One transmitted frame, shifted off frequency, embedded in silence. Built ONCE and handed to every
+/// arm, so the paths are compared on identical audio rather than on similar-looking generators.
 fn signal_with_frame() -> Vec<f32> {
     let (backend, mut e) = engine();
     e.transmit_with_fec_mode(PAYLOAD, MODE, FEC, None)
         .expect("transmit");
     let tx = backend.drain_samples();
+    let mut cfo = openpulse_channel::cfo::CfoChannel::new(openpulse_channel::cfo::CfoConfig::new(
+        OFFSET_HZ,
+        SAMPLE_RATE as f32,
+    ))
+    .expect("finite offset");
+    let shifted = cfo.apply(&tx);
     let mut out = vec![0.0f32; LEAD_SAMPLES];
-    out.extend_from_slice(&tx);
+    out.extend_from_slice(&shifted);
     out.extend(std::iter::repeat_n(0.0f32, LEAD_SAMPLES));
     out
 }
@@ -134,21 +145,26 @@ fn assert_daemon_arm_did_work(e: &ModemEngine, flushed: &Option<AudioSamples>) {
     );
 }
 
-/// Message shared by both daemon arms, so they cannot drift apart.
-fn gap_msg(arm: &str, settles: u64, accepted: u64, rejected: u64) -> String {
-    format!(
-        "the daemon's {arm} arm reached the acquisition chain (settle_attempts={settles} \
-         rho_accepted={accepted} rho_rejected={rejected}), which #1118 records as unreachable from \
-         accumulate_capture.\n\n\
-         If you are CLOSING that seam this failure is the expected signal: update this test, and \
-         note that #1053, #1059, #1060 and #1062 now reach the shipping receiver.\n\
-         If you are NOT, something has wired the CLI acquisition chain into the streaming path, and \
-         the daemon has inherited its wall-clock-bounded retry regime (#1066)."
-    )
+/// Shared verdict for both daemon arms, so they cannot drift apart.
+fn assert_reached_chain(arm: &str, settles: u64, accepted: u64, rejected: u64) {
+    assert!(
+        settles > 0,
+        "the daemon's {arm} arm did NOT enter the acquisition chain on a burst {OFFSET_HZ} Hz off \
+         frequency (settle_attempts=0). Phase 1 cannot decode at that offset, so phase 2 was \
+         required and did not run — REQ-PHY-03 is unmet on the surface a station receives on, which \
+         is the #1118 defect returning."
+    );
+    assert!(
+        accepted + rejected > 0,
+        "the daemon's {arm} arm settled {settles} times but the preamble-correlation veto reported \
+         nothing (rho_accepted={accepted} rho_rejected={rejected}) on {MODE}, the one mode that \
+         publishes a template. That is the half-wired state: the settle runs, the veto's decision \
+         is invisible, and #1053/#1059/#1060 remain unobservable on the shipping receiver."
+    );
 }
 
-/// FILTER VALIDATION for both daemon arms: the same audio through the CLI listen path must move the
-/// counters. If this reads 0, the daemon arms' zeros prove nothing.
+/// FILTER VALIDATION: the same audio through the CLI listen path moves the counters. If this read 0,
+/// the daemon assertions would be measuring a fixture that drives the chain nowhere.
 #[test]
 fn the_cli_path_runs_the_chain() {
     let signal = signal_with_frame();
@@ -160,20 +176,21 @@ fn the_cli_path_runs_the_chain() {
     let rho = e.rho_accepted_settles() + e.rho_rejected_settles();
     assert!(
         settles > 0,
-        "the CLI path must enter afc_mini_settle on this audio (settle_attempts=0). A zero makes \
-         the daemon arms' zeros meaningless — they would no longer distinguish 'the daemon skips \
-         the chain' from 'this audio drives the chain nowhere'."
+        "the CLI path must enter afc_mini_settle on this audio (settle_attempts=0); a zero would \
+         make the daemon arms' counts meaningless as a comparison"
     );
     assert!(
         rho > 0,
         "the CLI path must exercise the preamble-correlation veto on {MODE} (rho total=0), else the \
-         rho half of the daemon assertions is vacuous"
+         rho half of the daemon assertions is not a shared property"
     );
 }
 
 /// THE CLAIM, default daemon config (`ota_enabled` off): `server::run` calls `decode_burst`.
+///
+// VERIFIES: REQ-PHY-03
 #[test]
-fn the_daemon_decode_burst_arm_never_runs_the_acquisition_chain() {
+fn the_daemon_decode_burst_arm_runs_the_acquisition_chain() {
     let signal = signal_with_frame();
     let (_backend, mut e) = engine();
     let flushed = capture_via_daemon_path(&mut e, &signal);
@@ -188,23 +205,25 @@ fn the_daemon_decode_burst_arm_never_runs_the_acquisition_chain() {
         "unreachable; the point is that the call is made and its result inspected"
     );
 
-    let (s, a, r) = (
+    assert_reached_chain(
+        "decode_burst",
         e.afc_settle_attempts(),
         e.rho_accepted_settles(),
         e.rho_rejected_settles(),
     );
-    assert_eq!((s, a, r), (0, 0, 0), "{}", gap_msg("decode_burst", s, a, r));
 }
 
 /// THE CLAIM, `ota_enabled` config: `server::run` calls `ota_decode_burst`.
 ///
 /// The OTA session MUST be started or the call returns `Err("no OTA session active")` before doing
-/// any decode work, and this test silently measures nothing — the defect this file was rewritten to
-/// fix. `server::run` starts the session at startup under `ota_enabled` (`server.rs:228-242`) and
-/// only reaches this arm when `engine.ota_active()`, so a session is a precondition of the arm
+/// any decode work, and this test silently measures nothing — the defect this file's first version
+/// carried. `server::run` starts the session at startup under `ota_enabled` (`server.rs:228-242`)
+/// and only reaches this arm when `engine.ota_active()`, so a session is a precondition of the arm
 /// existing at all.
+///
+// VERIFIES: REQ-PHY-03
 #[test]
-fn the_daemon_ota_arm_never_runs_the_acquisition_chain() {
+fn the_daemon_ota_arm_runs_the_acquisition_chain() {
     let signal = signal_with_frame();
     let (_backend, mut e) = engine();
     e.start_ota_session(SessionProfile::hpx_hf());
@@ -225,15 +244,10 @@ fn the_daemon_ota_arm_never_runs_the_acquisition_chain() {
          vacuous — this is exactly the defect that made the first version of this gate blind."
     );
 
-    let (s, a, r) = (
+    assert_reached_chain(
+        "ota_decode_burst",
         e.afc_settle_attempts(),
         e.rho_accepted_settles(),
         e.rho_rejected_settles(),
-    );
-    assert_eq!(
-        (s, a, r),
-        (0, 0, 0),
-        "{}",
-        gap_msg("ota_decode_burst", s, a, r)
     );
 }

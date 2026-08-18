@@ -77,12 +77,12 @@ The threshold is consumed on the settle path only. Traced top-down from the ship
 |---|---|---|
 | CLI `receive --listen-ms` → `receive_with_timeout_fec` | **yes** — the surface #1060 is about | `capture_replay_corpus`, `preamble_correlation_settle` |
 | on-air scripts (`run-onair-tests.sh`) | yes, via the CLI path | `scripts/run-onair-tests.sh:192` |
-| daemon `accumulate_capture` (`server::run` rx tick) | **no** — the daemon runs no acquisition chain at all | #1118, `daemon_skips_acquisition_chain` |
+| daemon `accumulate_capture` (`server::run` rx tick) | **yes, since #1118** — phase 2 settles and vetoes when phase 1 fails, feeding this calibration from that call site | `daemon_runs_acquisition_chain`, `daemon_frequency_acquisition` |
 | ARDOP / KISS bridges, TUI, monitor | no — same reason as the daemon | #1118 |
 
 So there is exactly **one** consumption site (`engine.rs`, the settle comparison), and the
-calibration is fed from that same site. No sibling path can silently miss it, and **no daemon
-benefit may be booked from this work** until #1118 lands.
+calibration is fed from that same site, and since #1118 from the daemon's phase-2 veto as well —
+so the daemon benefit this section deferred is now real.
 
 ### Observability
 

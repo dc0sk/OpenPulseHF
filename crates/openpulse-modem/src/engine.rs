@@ -2341,7 +2341,16 @@ impl ModemEngine {
         let stand_down = self
             .rho_calibration
             .stands_down(v.rho_threshold, v.delivered_frame_rho_bound);
-        stand_down || rho >= threshold
+        let accepted = stand_down || rho >= threshold;
+        // Report the decision on the same counters the CLI path uses. Without this the daemon's
+        // veto runs unobservably, and a gate on those counters cannot tell "the veto ran and
+        // accepted" from "the veto never ran" — the half-wiring hole the #1118 seam gate exists for.
+        if accepted {
+            self.rho_accepted_settles += 1;
+        } else {
+            self.rho_rejected_settles += 1;
+        }
+        accepted
     }
 
     /// One onset scan over a gathered burst, optionally acquiring the carrier at each onset.
