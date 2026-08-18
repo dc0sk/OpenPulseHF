@@ -1,7 +1,7 @@
 ---
 project: openpulsehf
 doc: docs/dev/design/bandwidth-aware-rho-threshold.md
-status: living
+status: resolved
 last_updated: 2026-08-17
 ---
 
