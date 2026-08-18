@@ -9,6 +9,56 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-08-17 — #1060: the correlation threshold is calibrated to the station's own noise
+
+- **Requirement / change.** `Implements: REQ-RX-02, REQ-RX-03` (both `draft`, `traceability:
+  enforced`). The veto's ρ threshold was a per-mode constant validated in one bandwidth regime; a real
+  500 Hz filter puts idle ρ above it and a 250 Hz filter puts 18.8 % of noise windows above it.
+- **Design decision (+ rationale).** CFAR against the station's own correlation statistics, chosen
+  over two alternatives that were worked out and rejected on measurement rather than taste:
+  predicting the ceiling from an estimated bandwidth (`k` would be fitted to three rig points, and it
+  is a property of the alternating preamble's time-bandwidth pathology, so a #1062 PN sequence would
+  orphan it), and calibrating in ρ units (the distribution's *width* scales with bandwidth as its
+  location does, so a fixed ρ margin is a different false-alarm rate at every bandwidth). Whitening
+  the statistic — the complete textbook answer — is recorded as **deferred, not rejected**: it
+  composes with this and nothing here blocks it.
+- **The sample-source problem, and why the design survives it.** The reviewed design fed the
+  calibration from idle windows the energy gate rejected. That source is dead in the regime the fix
+  exists for: at a hot floor the gate rejects nothing. The implementation feeds it from the veto's
+  **own query stream** instead — zero extra correlation (the cost trap #1138 fell into) and
+  population-matched by construction — anchored on a median, thinned to one sample per window length
+  because consecutive queries overlap ~87 % and are not independent draws.
+- **Implementation.** `crates/openpulse-modem/src/rho_calibration.rs` (new); the single settle-path
+  consumption site in `engine.rs`; `PreambleTemplate::with_delivered_frame_bound` (additive, so a
+  mode without a bound never stands down); BPSK250's provisional `DELIVERED_FRAME_RHO_BOUND = 0.50`.
+- **Measurements (actually run), production receive path.** Wide 2470 Hz → 123 samples, threshold
+  holds at 0.400. 500 Hz → 98 samples, derived **0.449** — above its 0.413 measured ceiling, below the
+  0.50 bound, veto still working. 250 Hz → 96 samples, derived **0.618**, **stands down**, 146 settles
+  let through in that state.
+- **Test results (run).** 8 unit tests; 2 in-suite production-path gates; 1 `#[ignore]`d
+  production-path stand-down proof (628 s at a 12 000/4 000 budget), scheduled instead by
+  `scripts/onair-preflight.sh`; `narrow_mask_decode_check`; 23 tests across the veto-adjacent binaries
+  unchanged. Full workspace gate on the rebased tree:
+  `GATE: PASS 6159d5645abec3117aa34f8dee64a5a1dba11322 clean` — 312 suites, 2381 passed, 0 failed,
+  with **trace check ok**, which is what turned REQ-RX-03's bindings from cited into observed.
+- **Sabotage verification.** `effective_threshold` neutered → 4 gates red; hysteresis removed → its
+  own gate red; thinning removed → its own gate red. Restored, 8/8 green.
+- **What review changed, recorded because the corrections are the value.**
+  1. My reading that a 200 Hz mask makes BPSK250 undecodable was **falsified** by a noiseless decode.
+     It is now a standing gate — whose 500 Hz control caught a bug in my own filter (FFT padding
+     lengthened the buffer) before the result could be published.
+  2. Both requirements were added **without** a `traceability` field, which `trace.py` treats as
+     warn-only while `requirements.yaml`'s own note claims new requirements default to enforced — so
+     the enforcement I believed I had set up was disengaged, and the `#[ignore]` split passed for the
+     wrong reason. Filed as #1158; fixed here by setting `enforced` and moving REQ-RX-03's bindings
+     off the ignored test (a citation to a run that never happened) and off production code (where the
+     scanner's next-`fn` heuristic bound it to an unrelated function).
+  3. A gate asserted only the lower half of its bracket, so a regression driving the threshold to 0.7
+     would have passed while over-vetoing a band where a separating threshold exists.
+- **Docs.** `docs/dev/design/bandwidth-aware-rho-threshold.md` (design, path inventory, alternatives,
+  findings ledger); roadmap **RF-7**; `DORMANT(#1118)` in the reachability baseline, with a reciprocal
+  pointer posted on #1118 because a note living only in the baseline rots when that issue is closed.
+
 ## 2026-08-17 — #1060 confirmed on the rig, and #1142's lead-in bias measured
 
 - **Requirement / change.** Two open acquisition questions, each with a measurement named in its own
