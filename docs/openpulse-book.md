@@ -1491,8 +1491,12 @@ correction that way.
 **`AFC_SETTLE_DEADBAND_HZ = 2.0`.** A settled correction below 2 Hz is snapped to zero: applying a
 spurious sub-Hz correction over-corrects a zero-offset frame and breaks modes that re-fit carrier
 phase from the preamble (8PSK's `carrier_phase_correct` enters a fragile drift-fit branch at
-≥ 0.5 Hz). Real HF offsets are tens to hundreds of hertz — the measured inter-rig offset on the
-project's hardware is ~400 Hz — so the deadband never suppresses a real one (`engine.rs`).
+≥ 0.5 Hz). Real HF offsets are tens of hertz and up — the one cleanly measured inter-rig offset on the
+project's hardware is **−64 Hz** (IC-9700 ↔ FT-991A, both commanded to 144.600000 MHz, 2026-07-28;
+`openpulse-channel/src/cfo.rs`) — so the deadband never suppresses a real one (`engine.rs`).
+**Corrected 2026-08-18**: this said "~400 Hz", a figure traceable to the two-station OTA notes whose
+CFO readings are marked unreliable in the same paragraph — the spectral peak-picker was measuring
+dev-host birdies rather than the carrier.
 
 #### 2A.5.2 Carrier-phase-insensitive matched filtering
 
