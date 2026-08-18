@@ -2,7 +2,7 @@
 project: openpulsehf
 doc: docs/dev/project/release-1.0-criteria.md
 status: living
-last_updated: 2026-08-03
+last_updated: 2026-08-18
 ---
 
 # What 1.0 means
@@ -268,3 +268,113 @@ Group 2 is the cheapest and is currently blocking nothing but itself. Group 1 se
    CEPT/EU, BNetzA and Ofcom. Claiming fewer is faster and more honest than claiming all four.
 4. **If an add-on cannot be proven on air by 1.0, does it ship off by default or get removed?**
    Off-by-default keeps the code path alive but makes 1.0's shipped configuration the bare modem.
+
+---
+
+## Status and sequencing — snapshot 2026-08-18
+
+Written after the maintainer asked three questions: are we going in circles, what is left, and does
+it make sense to keep building without testing against recordings and noise sources when other
+projects have less-tested software that is proven in practice. Adversarially reviewed; the review
+corrected the first draft in two load-bearing places, both marked below.
+
+### Are we going in circles?
+
+**No — a convergent spiral with an identified cause.** Between 11 % and 18 % of the last 60 days'
+commits touch acquisition (98 by subject keyword, 107 by file, 157 by a looser keyword set — the
+figure is methodology-dependent, the regime is not). Thirteen open issues sit in that thread. One
+subsystem, seven repairs.
+
+Two causes are on record, and the second was only named this week:
+
+1. **The energy gate was the wrong primitive** — five issues (#1020, #1021, #1039, #1040, #1045) were
+   one design choice, closed by #1049's correlation veto.
+2. **The tested surface was not the shipping surface** (#1118): the acquisition chain ran only on the
+   CLI listen path, so #1053/#1059/#1060/#1062 were refining a path a real station never executed.
+   Measured: the daemon could not acquire a station **50 Hz off frequency**, while `REQ-PHY-03`
+   requires ±50 Hz and the one clean inter-rig measurement on this hardware is **−64 Hz**.
+
+**Why "circles" undersells it.** That work produced the capture corpus, the regression gates and the
+runtime calibration — the ratchet that makes the *next* defect of this class cost no radio time. The
+loop has been closing, not repeating.
+
+### On the maintainer's doubt about testing versus shipping
+
+The comparison to projects that are "less tested but proven in practice" inverts on inspection:
+those projects have **more** real-world evidence, not less — operator field-hours substituting for a
+suite. This project has approximately **zero field hours**. So the comparison is an argument *for*
+the on-air campaign, not against the testing.
+
+And within testing, the split matters. Every synthetic-only conclusion in this thread that met
+reality was overturned: "the acquisition chain earns its keep", "a 200 Hz filter makes BPSK250
+undecodable", "~400 Hz inter-rig offsets". Recordings and rig captures are what has been *breaking*
+the loop. Simulation-first is what produced it.
+
+**Worth adopting from those projects, after the format freezes:** binaries in a handful of other
+operators' hands, labelled experimental. A small fleet is a rig-diversity and noise-source generator
+no corpus can replicate, and it is the only route to a "characterised across HF conditions" claim —
+which 1.0 explicitly does not make.
+
+### What remains
+
+| Group | Status |
+|---|---|
+| **A — On air** | A1 partly (one direction decoded 2026-07-30); A2 **not scoreable until #1081 attribution lands** — failed decodes are unobserved and that is open engineering, not radio time; A3 not started; A4/A5 unverified. Newest evidence bundle: 2026-07-30. **Lead item is a purchase**: G0 galvanic USB isolation blocks the campaign and is neither code nor radio time. |
+| **B — Bookkeeping** | 16 matrix rows, several bookkeeping-only; CI is `release/**`-only so some rows describe gates nothing runs (#1144, #1129). |
+| **C — Security honest** | Mostly there; C3 (no authenticated remote panel) to state or fix. |
+| **D — Test integrity** | Strong. D2 (coverage tooling) does not exist — days to weeks, from scratch. |
+| **E — Docs match code** | Repeat audit at the release commit. **E2 is a regulatory obligation** (§97.309(a)(4) third-party-implementable spec), not polish. |
+
+### Sequencing (corrected)
+
+An earlier draft said "park the acquisition backlog and go on air". **That contradicted a settled
+decision in this document** (*Decided by the maintainer*, item 2): the wire format may change freely
+until the tag, so **#1062 is on the critical path and lands before the campaign**, because a format
+break re-opens the on-air evidence and forces the corpus to be re-recorded.
+
+The correction is to split the backlog by kind:
+
+1. **Merge #1118** — the daemon's acquisition fix; everything downstream assumes it.
+2. **Decide the wire-format package**: #1062 (preamble sequence), #1147 (handshake binary encoding),
+   #1148 (whitening period). *Decide*, not defer — and declining the break is a legitimate outcome:
+   #1062's own `demod_parity` measurement found no resolvable decode gap between the shipped preamble
+   and PN/Barker candidates at n=96, and the break's justification was largely "make the veto work",
+   which #1157's calibration and #1118's seam have since reframed.
+3. **Park the threshold-tuning residue** — #1053, #1059, #1146, #1160 — under three conditions that
+   make it safe (verified in code): #1118 merged first; every evidence bundle **CAT-reads and records
+   the rig's filter width and frequency trim** (the preflight verifies stand-down but never reads the
+   rig, and `M PKTUSB 0` does not restore an IC-9700 width); and any A2 decode-failure anomaly at a
+   no-template rung is checked against the SDR capture before being booked as ladder evidence.
+4. **Land #1081 attribution** and the bundle filter/trim read-back — before the radio window, or the
+   window is wasted.
+5. **G0 hardware** (galvanic USB isolation).
+6. **A1–A3 with the SDR as trusted witness.**
+7. **B, D1, E at the release commit.**
+
+### The "acquire wide, decode narrow" idea
+
+The maintainer proposed acquiring on the unfiltered signal and decoding on the filtered one, as an
+answer to #1060's narrow-filter problem. **The instinct is the textbook architecture, and the decoder
+already implements it**: `plugins/bpsk/src/demodulate.rs` multiplies by I/Q reference carriers and
+matched-filters per symbol, and a per-symbol matched filter *is* a band-pass of ~baud width around
+`fc` — the optimal linear receiver for stationary noise. A software band-pass in front of it adds
+nothing to the decision statistic. The rig's narrow filter is a second, worse-shaped filter ahead of
+the good one.
+
+Three consequences:
+
+* **Not implementable as stated** — the software receives one already-filtered audio stream and
+  cannot un-narrow it. The remainder is operator behaviour.
+* **Not measurable from the current corpus** — the 500 Hz and 250 Hz captures are *idle noise only*;
+  no frame was recorded through a narrow rig filter. #1060 measured the acquisition side; the decode
+  side has no fixture.
+* **At the narrow end the premise inverts**: a 250 Hz filter is narrower than BPSK250's own mainlobe,
+  and #1160 records 0 of 180 decodes through that mask.
+
+What is worth doing, and is cheap: **(a)** operator guidance to run the receive filter wide (≥2.4 kHz)
+for these modes, stated conditionally because a narrow rig filter does one thing software cannot —
+protect the rig's AGC and ADC from a strong adjacent signal; **(b)** a noise-bandwidth estimator that
+*warns* the operator their filter appears narrow, validatable against the three same-session captures
+(measured −20 dB bands 2470 / 554 / 309 Hz) and belonging on the daemon control plane where #1157's
+`rho_*` getters already sit dormant awaiting #1118; **(c)** nothing else — the calibration half
+shipped as #1157.
