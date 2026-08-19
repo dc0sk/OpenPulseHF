@@ -10241,3 +10241,41 @@ The last mode still failing on the dual-card rig after the AGC misclassification
   costing detection; three of six replay gates go red, not all; six scramble tests, not four; nine
   `demodulate_soft` descramble call sites, not ten (the definition was counted as a caller); and the
   rendezvous codec was missing from the inventory.
+## 2026-08-19 — `ddc_mix` underflows in the dev profile; found by landing a stranded harness
+
+- **Requirement/change:** `openpulse_dsp::acquisition::ddc_mix` panics with "attempt to subtract with
+  overflow" on its first loop iteration in any dev-profile build. The guard read `n - ntap + 1` while
+  the loop starts at `n == ntap - 1`.
+- **How it surfaced:** a branch-lifecycle sweep found `derive/bpsk31-rho-constants` stranded (pushed
+  2026-08-04, no PR ever opened) carrying the `#[ignore]`d harness behind numbers already published
+  on #1062. Running one of its tests before landing it — the first dev-profile execution of this code
+  path in its life — panicked immediately.
+- **Severity, stated precisely (a review corrected two halves of my first reading):**
+  - **Release is bit-correct, not lossy.** Wrapping arithmetic makes `n - ntap + 1` equal
+    `n + 1 - ntap` exactly for every `n >= ntap - 1`, confirmed across decim ∈ {1,2,3,4,8,32} with
+    identical kept-index sets. So every number ever measured through the DDC stands. The defect is
+    that **the type has never been executable under the profile `cargo test` uses**.
+  - **The production arm is dead code today.** `VetoCorrelator::Ddc` (`engine.rs:424`) is built only
+    for templates over `MAX_PREAMBLE_CORRELATION_SAMPLES` (2048); the only trait impl of
+    `preamble_template` is BPSK250's at 992 samples. Zero production impact — and a hard blocker for
+    #1062's phase-0 follow-on, which exists precisely to give the long-template modes a veto.
+- **Why no gate caught it — three layers, not one:** the `ddc_correlation_equivalence` tests are all
+  `#[ignore]`d; they never construct `DdcMatchedFilter` at all, but **reimplement** the mixer locally
+  (carrying the same underflowing expression, born with it in `caa7e1ae` and copied into production
+  in `0eac1791`); and both copies have only ever run in release. Any one layer alone would have
+  hidden it.
+- **Implementation (files/functions):** `crates/openpulse-dsp/src/acquisition.rs` — `ddc_mix` guard;
+  `crates/openpulse-modem/src/engine.rs` — the `MAX_PREAMBLE_CORRELATION_SAMPLES` doc now carries the
+  provenance of its "exact to four decimals" claim, which was measured on the reimplementation, in
+  release, and is not machine-checked.
+- **Tests:** `openpulse_dsp::acquisition::tests::ddc_mix_keeps_the_first_sample_and_every_decim_th_one`
+  — a **unit** test, because `ddc_mix` is module-private and a probe needing private access is a unit
+  test, not an exported accessor. It asserts more than "does not panic": the first output sample (the
+  one the panic sat on) is present and the output count is `(len - ntap + 1).div_ceil(decim)`, across
+  four decimation factors.
+- **Test results (run):** `openpulse-dsp` 99 passed / 0 failed (plus 1 doc-ish suite, 1 ignored).
+  **Sabotage-verified:** restoring `n - ntap + 1` fails the new test with the exact underflow panic at
+  the guard line; the fix passes it.
+- **Residual, for #1062's ledger:** even fixed, the engine's `VetoCorrelator::Ddc` arm has no test
+  through `build_preamble_veto` — that needs a plugin publishing a >2048-sample template, and none
+  exists. The mode that first activates the arm should carry the production-entry test.

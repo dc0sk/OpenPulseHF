@@ -338,6 +338,15 @@ const AFC_SETTLE_DEADBAND_HZ: f32 = 2.0;
 /// not help them but because it was priced in the wrong domain. A template longer than this is now
 /// decimated to fit rather than refused: see [`DdcMatchedFilter`], whose equivalence to the
 /// passband correlator is measured exact to four decimals at decimation up to 32.
+///
+/// **Read that equivalence claim with its provenance.** It was measured in
+/// `tests/ddc_correlation_equivalence.rs`, which **reimplements** the mixer locally rather than
+/// calling `DdcMatchedFilter`, and whose tests are all `#[ignore]`d — so the number came from a
+/// copy, in the release profile, and nothing keeps the two copies in step. They diverged once
+/// already: both carried an underflowing loop guard, harmless under release wrapping and fatal in
+/// dev, and only the shipped one has been fixed. What is machine-checked today is
+/// `openpulse_dsp::acquisition::tests::ddc_mix_keeps_the_first_sample_and_every_decim_th_one`;
+/// the four-decimal figure itself is not.
 /// Maximum AFC correction magnitude accepted after settling.
 ///
 /// The Goertzel acquisition range is ±400 Hz (`range_hz = 800` in `estimate_carrier_hz_wide`), so

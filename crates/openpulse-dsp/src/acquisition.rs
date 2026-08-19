@@ -407,6 +407,40 @@ mod tests {
     use super::*;
     use std::f32::consts::PI;
 
+    /// `ddc_mix` must be executable in the dev profile — it was not, for its whole life.
+    ///
+    /// The guard read `n - ntap + 1` while the loop starts at `n == ntap - 1`, so the first
+    /// iteration underflowed. Release builds wrap and land on the correct value, so every number
+    /// ever measured through the DDC was right; the dev profile panics, and **no test in the
+    /// workspace built this type** — the `ddc_correlation_equivalence` harness reimplements the
+    /// mixer locally (carrying the same expression) and only ever ran `#[ignore]`d. Three layers,
+    /// each of which alone would have hidden it.
+    ///
+    /// Asserts more than "does not panic": the kept-sample set is what the expression decides, so
+    /// the first output sample (the one the panic sat on) must be present, and the count must be
+    /// the full `(len - ntap + 1)` positions thinned by `decim`.
+    #[test]
+    fn ddc_mix_keeps_the_first_sample_and_every_decim_th_one() {
+        let taps = lowpass_taps(1_000.0, 8_000.0, 129);
+        let ntap = taps.len();
+        // A ramp, so a dropped or shifted output is visible in the value and not only in the count.
+        let x: Vec<f32> = (0..1_024).map(|i| i as f32).collect();
+
+        for decim in [1usize, 2, 3, 8] {
+            let out = ddc_mix(&x, 1_500.0, 8_000.0, decim, &taps);
+            let positions = x.len() - ntap + 1;
+            assert_eq!(
+                out.len(),
+                positions.div_ceil(decim),
+                "decim {decim}: expected every {decim}th of {positions} filter positions"
+            );
+            assert!(
+                out[0].0.is_finite() && out[0].1.is_finite(),
+                "decim {decim}: the first output sample is where the underflow sat"
+            );
+        }
+    }
+
     fn chirp_template(len: usize) -> Vec<f32> {
         (0..len)
             .map(|i| {
@@ -943,7 +977,11 @@ fn ddc_mix(x: &[f32], f_hz: f32, sample_rate: f32, decim: usize, taps: &[f32]) -
     let ntap = taps.len();
     let mut out = Vec::with_capacity(mixed.len() / decim + 1);
     for n in (ntap - 1)..mixed.len() {
-        if !(n - ntap + 1).is_multiple_of(decim) {
+        // `n + 1 - ntap`, never `n - ntap + 1`: the first iteration has `n == ntap - 1`, so the
+        // latter underflows before the `+ 1` is applied. Under wrapping arithmetic it lands on the
+        // right answer anyway, which is why release builds were correct and only debug panicked —
+        // and why nothing noticed, since no gate ever built this type in the dev profile.
+        if !(n + 1 - ntap).is_multiple_of(decim) {
             continue;
         }
         let (mut i, mut q) = (0.0f32, 0.0f32);
