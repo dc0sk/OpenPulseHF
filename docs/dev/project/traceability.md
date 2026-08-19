@@ -10361,6 +10361,34 @@ The last mode still failing on the dual-card rig after the AGC misclassification
   costing detection; three of six replay gates go red, not all; six scramble tests, not four; nine
   `demodulate_soft` descramble call sites, not ten (the definition was counted as a caller); and the
   rendezvous codec was missing from the inventory.
+
+## 2026-08-19 — the two open rows of the wire-format package are decided
+
+- **Requirement/change:** the break package left two rows to the maintainer: whether the PQ handshake
+  is a 1.0 on-air feature, and keep-or-widen for `Frame`'s `u8` payload length. Both freeze at the
+  tag, so both had to be decided rather than inherited.
+- **Evidence put in front of the decision** (airtime uncoded at the default `active_mode`,
+  BPSK250 = 31.25 B/s): classical CONREQ 710 B ≈ 23 s, binary ≈ 7 s; **PQ Hybrid CONREQ 17 939 B ≈
+  9.6 min**, binary ≈ 2.7 min. And an inventory with a positive control — the classical
+  `ConReq::create_full` has three daemon callers, so the filter works, while the PQ handshake has
+  **zero** production callers (38 references in its own integration test, 6 in its own module).
+- **Decisions (maintainer, 2026-08-19):**
+  - **PQ is scoped into #1147.** Both handshakes get the binary encoding in this window. The honest
+    limit is recorded with it: 2.7 min is still unusable, so PQ needs cached identities or
+    out-of-band key distribution before it ships — a separate question, not part of 1.0. What the
+    decision buys is a finished format, so wiring PQ later is not a wire break.
+  - **`Frame` keeps `u8`** (#1167 closed). SAR carries objects to 64 005 B so the cap binds nothing
+    functional; overhead at 255 B is 3.9 %; a longer frame loses more per fade outage. Reopened only
+    by a measurement: a top wideband rung whose goodput is *turnaround-bound* rather than
+    payload-bound.
+- **Implementation (files):** `docs/dev/project/release-1.0-criteria.md` — package table rows for
+  #1147 and #1167 and the PQ rider; issue comments on #1147 and #1167 (closed).
+- **Tests:** none — decision record. #1147's implementation carries its own gates, and its riskiest
+  property is named there: re-encoding changes what is **signed** on both paths, because
+  `handshake.rs:307-322` and `pq_handshake.rs:254-257` both serialise in serde declaration order
+  ("canonical" is a label, not key-sorting).
+- **Test results (run):** n/a.
+
 ## 2026-08-19 — `ddc_mix` underflows in the dev profile; found by landing a stranded harness
 
 - **Requirement/change:** `openpulse_dsp::acquisition::ddc_mix` panics with "attempt to subtract with

@@ -342,25 +342,33 @@ re-opens the campaign.
 | item | what changes | why it cannot wait |
 |---|---|---|
 | **#1062** preamble | period-4 `--++` run → PN/chirp sync word | decision item 2 puts it on the critical path. It also reshapes the **unwhitened, pre-FEC** region — the only place a future format-epoch marker can live |
-| **#1147** handshake encoding | serde JSON (`Vec<u8>` as number arrays) → binary | 710 B CONREQ ≈ 24 s uncoded at `active_mode` (BPSK250), ~3.4× a binary layout (PR #1127) — and see the PQ rider below, ~25× that airtime |
+| **#1147** handshake encoding, **classical and PQ** | serde JSON (`Vec<u8>` as number arrays) → binary, on both handshakes | 710 B CONREQ ≈ 23 s uncoded at `active_mode` (BPSK250); the PQ Hybrid CONREQ is 17 939 B ≈ **9.6 min**. Maintainer decision 2026-08-19: PQ is scoped **in** — see the rider below |
 | **#1148** whitener | 21-bit effective period → the intended x⁹+x⁵+1, period 511 | one line, and permanent once tagged |
 | **QSY frames** (#1162) | add a version token | `openpulse-qsy/src/frame.rs` is versionless *and* magicless — plain CR-terminated text lines |
 | **rendezvous codec** (#1163) | add a version token | `openpulse-discovery/src/rendezvous.rs` ships on-air tokens over JS8 directed free text with no version. Its siblings have one (`FILEXFER_VERSION`, `HINT_VERSION`), so leaving it out would be oversight, not a ruling |
 | **`WireEnvelope`** (#1164) | make the version byte authoritative | today it is deliberately non-authoritative (`wire_query.rs:204`, forward-compat by intent): the byte is never bound and v1/v2 is resolved by trailer length. Make it authoritative before the tag, while that is free |
 | **`AckFrame`** (#1165) | reject non-zero reserved bits 7:5 on decode, in **both** `decode` and `decode_authenticated` | `ack.rs:129-158` never checks them and both encoders leave them zero, so this is **not a break** — and they are the clean version headroom a 5-byte frame has |
 | **negotiation fields** (#1166) | decide the fate of `supported_compression` / `supported_fec_modes` | the daemon sends them empty and hardcodes `None` in the CONACK (`openpulse-daemon/src/lib.rs:1548-1549, 1974-1975`) — the format's one negotiation mechanism is unwired |
-| **`Frame` payload length** (#1167) | keep `u8` or widen, deliberately | it caps a frame at three 128-byte FEC blocks and freezes at the tag |
+| ~~**`Frame` payload length** (#1167)~~ **decided: keep `u8`** | no change | SAR carries objects to 64 005 B, so the cap is not a functional limit; header overhead at 255 B is 3.9 %, and a longer frame loses more per fade outage. **Falsifier:** a top wideband rung whose goodput proves *turnaround-bound* rather than payload-bound reopens it — a linksim measurement, not an argument |
 
 #### Two items that carry more than their issue says
 
-* **#1147 must rule on the signature domain, and on the PQ handshake.** `encode_pq_conreq` is a bare
+* **#1147 covers the signature domain, and the PQ handshake is scoped in** (maintainer, 2026-08-19). `encode_pq_conreq` is a bare
   `serde_json::to_vec` — no magic, no version, no length prefix (`pq_handshake.rs:488-505`) — and
   ~5 KB of key material expands ~4× as JSON number arrays, on the order of 10+ minutes at BPSK250.
   Both handshakes sign **serde declaration order** (`handshake.rs:307-322`, `pq_handshake.rs:254-257`);
   "canonical" in those doc comments is a label, not key-sorting (only `pki-tooling` sorts). So
   re-encoding is a **signature-domain** change on the classical CONREQ/CONACK as much as on the PQ
-  path — treat it with that risk class, not as a codec swap. Either scope PQ in, or record explicitly
-  that the PQ handshake is not a 1.0 on-air feature.
+  path — treat it with that risk class, not as a codec swap.
+
+  **What scoping PQ in does not buy, so nobody reads it as more than it is.** Binary encoding takes
+  the PQ Hybrid CONREQ from 9.6 min to ~2.7 min at BPSK250, which is still unusable for a handshake:
+  PQ on this link needs cached identities or out-of-band key distribution, a separate design
+  question that is *not* part of 1.0. What the decision buys is that the **format is finished before
+  the tag**, so wiring PQ later is not a wire break. It is also low-risk work: verified with a
+  positive control (the classical `ConReq::create_full` has three daemon callers), the PQ handshake
+  has **zero production callers** — 38 references in its own integration test, 6 in its own module —
+  so the only consumer that must move with the format is that test.
 * **#1148 costs more than its one-line fix.** The **four recorded-frame** replay gates
   (`capture_replay_corpus.rs:211, 266, 320, 370`) decode real captures whitened with the 21-bit
   keystream and go red on the change; the synthesized-frame gates (`:145, 418, 500`) build both ends
