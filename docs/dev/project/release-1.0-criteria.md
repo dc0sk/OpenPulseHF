@@ -7,7 +7,7 @@ last_updated: 2026-08-18
 
 # What 1.0 means
 
-**Draft, except for the *Decided by the maintainer* section below — those three are settled.** This
+**Draft, except for the *Decided by the maintainer* section below — those four are settled.** This
 exists because "pre-1.x" was undefinable:
 the only reference to 1.x anywhere in the repo was backlog item 12 ("wide-channel, targeted at a
 future 1.x"), so there was no bar to plan against. This proposes one.
@@ -325,6 +325,98 @@ which 1.0 explicitly does not make.
 | **D — Test integrity** | Strong. D2 (coverage tooling) does not exist — days to weeks, from scratch. |
 | **E — Docs match code** | Repeat audit at the release commit. **E2 is a regulatory obligation** (§97.309(a)(4) third-party-implementable spec), not polish. |
 
+### The wire-format break package (proposed 2026-08-18)
+
+Decision-block item 2 above settles that a break happens and that **#1062 lands before the campaign**;
+that row therefore carries the maintainer's authority, and the rest of this section is this
+write-up's proposal awaiting ratification. What was open is *which* changes go in the one window.
+This answers it from an inventory of what actually goes on the air, rather than from the set of
+issues that happen to be filed — because item 1's consequence means a straggler after the campaign
+re-opens the campaign.
+
+**The window contains one break; each item ships as its own PR with its own gate.** Bundling the
+*decision* is what matters; bundling the *changes* would only make the diff unreviewable.
+
+#### In the package
+
+| item | what changes | why it cannot wait |
+|---|---|---|
+| **#1062** preamble | period-4 `--++` run → PN/chirp sync word | decision item 2 puts it on the critical path. It also reshapes the **unwhitened, pre-FEC** region — the only place a future format-epoch marker can live |
+| **#1147** handshake encoding | serde JSON (`Vec<u8>` as number arrays) → binary | 710 B CONREQ ≈ 24 s uncoded at `active_mode` (BPSK250), ~3.4× a binary layout (PR #1127) — and see the PQ rider below, ~25× that airtime |
+| **#1148** whitener | 21-bit effective period → the intended x⁹+x⁵+1, period 511 | one line, and permanent once tagged |
+| **QSY frames** (#1162) | add a version token | `openpulse-qsy/src/frame.rs` is versionless *and* magicless — plain CR-terminated text lines |
+| **rendezvous codec** (#1163) | add a version token | `openpulse-discovery/src/rendezvous.rs` ships on-air tokens over JS8 directed free text with no version. Its siblings have one (`FILEXFER_VERSION`, `HINT_VERSION`), so leaving it out would be oversight, not a ruling |
+| **`WireEnvelope`** (#1164) | make the version byte authoritative | today it is deliberately non-authoritative (`wire_query.rs:204`, forward-compat by intent): the byte is never bound and v1/v2 is resolved by trailer length. Make it authoritative before the tag, while that is free |
+| **`AckFrame`** (#1165) | reject non-zero reserved bits 7:5 on decode, in **both** `decode` and `decode_authenticated` | `ack.rs:129-158` never checks them and both encoders leave them zero, so this is **not a break** — and they are the clean version headroom a 5-byte frame has |
+| **negotiation fields** (#1166) | decide the fate of `supported_compression` / `supported_fec_modes` | the daemon sends them empty and hardcodes `None` in the CONACK (`openpulse-daemon/src/lib.rs:1548-1549, 1974-1975`) — the format's one negotiation mechanism is unwired |
+| **`Frame` payload length** (#1167) | keep `u8` or widen, deliberately | it caps a frame at three 128-byte FEC blocks and freezes at the tag |
+
+#### Two items that carry more than their issue says
+
+* **#1147 must rule on the signature domain, and on the PQ handshake.** `encode_pq_conreq` is a bare
+  `serde_json::to_vec` — no magic, no version, no length prefix (`pq_handshake.rs:488-505`) — and
+  ~5 KB of key material expands ~4× as JSON number arrays, on the order of 10+ minutes at BPSK250.
+  Both handshakes sign **serde declaration order** (`handshake.rs:307-322`, `pq_handshake.rs:254-257`);
+  "canonical" in those doc comments is a label, not key-sorting (only `pki-tooling` sorts). So
+  re-encoding is a **signature-domain** change on the classical CONREQ/CONACK as much as on the PQ
+  path — treat it with that risk class, not as a codec swap. Either scope PQ in, or record explicitly
+  that the PQ handshake is not a 1.0 on-air feature.
+* **#1148 costs more than its one-line fix.** The **three recorded-frame** replay gates
+  (`capture_replay_corpus.rs:211, 266, 320`) decode real captures whitened with the 21-bit keystream
+  and go red on the change; the synthesized-frame gates (`:145, 418, 500`) build both ends from the
+  same build and stay green. So: re-record those three, or carry a test-only legacy keystream for
+  replay. The change must also add a **period gate** — all six existing scramble tests
+  (`scramble.rs:142, 181, 224, 251, 264, 281`) pass on a 21-bit keystream because none measures
+  period (`the_keystream_is_not_degenerate` checks only non-constancy and ones-balance), so the next
+  tap typo would be equally invisible. Sabotage-verify that gate against the current taps.
+
+  Severity, stated honestly: #1148 is **not acutely broken**. The #1021 dead-carrier property holds
+  at period 21. The residuals are 21-byte-periodic payload content re-creating runs, spectral lines
+  in the whitening, and the #1139 onset aliasing. The reason to fix it is "free now, permanent
+  later", not breakage.
+
+#### Why #1062 stays in, against the two arguments for dropping it
+
+The *Sequencing* section below records two grounds for declining: #1062's own `demod_parity`
+measurement (no resolvable decode gap versus PN/Barker candidates at n = 96), and that "#1157's
+calibration and #1118's seam have since reframed" the break's justification. Both stand as
+statements; neither carries the decline.
+
+1. **`demod_parity` measures the benefit PN does not provide.** F7 is two-sided: only *duration*
+   buys noise-floor margin, while **PN buys onset placement (peak sidelobe 0.997 → 0.234) and
+   interferer refusal**. Those are the open defects — #1049 point 3 (onset placement is unresolvable
+   with a *periodic* preamble, in both fixture cases), #1049 point 2 (a tone on a spectral line
+   scores ρ ≈ 0.70 at any grid width), #1139 (HARQ needs an absolute onset). A decode-parity harness
+   at n = 96 measures none of them. A longer *periodic* preamble is not a cheaper substitute either:
+   its time-bandwidth product is O(1) however long it runs, so duration only pays for a PN template.
+2. **#1157's CFAR removes the veto where the noise floor is worst.** It can only raise the threshold,
+   and when the derived level passes the mode's delivered-frame bound it **stands down to
+   energy-only, with hysteresis** — measured at 309 Hz, deriving 0.618 and standing down. So at a
+   narrow filter the calibration does not cost detection; it costs *protection*, which is an argument
+   for the preamble work rather than against it.
+3. **#1118 reframes the seam in the opposite direction to the decline.** Before it, the acquisition
+   chain ran on almost no shipping surface (CLI `receive --listen-ms` only), which is why preamble
+   quality could be treated as a research concern. #1118 puts that chain on the daemon's streaming
+   path — the surface a station actually receives on — so preamble quality now matters in production.
+
+#### What this package does *not* buy
+
+There is **no backwards-compatibility mode for the data-plane wire format**, and this package does
+not create one. The mechanism that exists — `docs/dev/design/ladder-versioning.md`, wired as
+`profile_name` + `profile_fingerprint` in the signed CONREQ/CONACK, with a fingerprint mismatch
+dropping the receiver out of the OTA arm (`openpulse-daemon/src/lib.rs:1663-1683`, gate
+`server.rs:858`) — scopes only *what a SpeedLevel number means*. Every other versioned structure
+validates equality and rejects (`frame.rs:74`, `handshake.rs:349, 578`), and the `Frame` version byte
+is itself whitened, so a whitener or preamble change is never even reached by a version check. The
+ACK is whitened too, which is why the unwhitened pre-FEC region is the only real estate a format
+epoch could occupy.
+
+A post-1.0 change therefore remains possible but is not free: recovery would need dual-decode, and
+descrambling sits **before** FEC at nine `demodulate_soft` call sites plus the hard seam
+(`engine.rs:320, 6806`), with HARQ accumulators needing partitioning per keystream — inside the most
+budget-constrained subsystem in the repo. That is the argument for closing the whole inventory in one
+window rather than leaving stragglers.
+
 ### Sequencing (corrected)
 
 An earlier draft said "park the acquisition backlog and go on air". **That contradicted a settled
@@ -336,10 +428,13 @@ The correction is to split the backlog by kind:
 
 1. **Merge #1118** — the daemon's acquisition fix; everything downstream assumes it.
 2. **Decide the wire-format package**: #1062 (preamble sequence), #1147 (handshake binary encoding),
-   #1148 (whitening period). *Decide*, not defer — and declining the break is a legitimate outcome:
-   #1062's own `demod_parity` measurement found no resolvable decode gap between the shipped preamble
-   and PN/Barker candidates at n=96, and the break's justification was largely "make the veto work",
+   #1148 (whitening period). *Decide*, not defer. The grounds for declining were: #1062's own
+   `demod_parity` measurement found no resolvable decode gap between the shipped preamble and
+   PN/Barker candidates at n=96, and the break's justification was largely "make the veto work",
    which #1157's calibration and #1118's seam have since reframed.
+   **Status: decided — see *The wire-format break package* above.** Both grounds stand as
+   statements and neither carried the decline; the package section answers each in turn, and widens
+   the window from three issues to an inventory of nine.
 3. **Park the threshold-tuning residue** — #1053, #1059, #1146, #1160 — under three conditions that
    make it safe (verified in code): #1118 merged first; every evidence bundle **CAT-reads and records
    the rig's filter width and frequency trim** (the preflight verifies stand-down but never reads the

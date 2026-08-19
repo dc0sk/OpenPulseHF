@@ -10205,3 +10205,39 @@ The last mode still failing on the dual-card rig after the AGC misclassification
 - **Docs:** `scripts/onair-rx-level-check.sh` now records that its ceiling check never covered this
   band, that the gap was a decode gate, and that it is closed in code — so the script's remaining
   check is necessary and sufficient rather than silently partial.
+
+## 2026-08-18 — the wire-format break package is decided (proposal recorded)
+
+- **Requirement/change:** the pre-1.0 window contains one wire-format break (maintainer decision 2,
+  2026-08-03). What was open was *which* changes go in it. Left undecided, a straggler after the
+  on-air campaign re-opens the campaign (decision 1's consequence).
+- **Design decision (+ rationale):** assemble the package from an **inventory of what goes on the
+  air**, not from the set of filed issues — nine items, each shipping as its own PR and gate.
+  #1062 stays in (it carries the maintainer's decision, and it reshapes the only unwhitened, pre-FEC
+  region, where a format-epoch marker would have to live). Added by inventory and filed: rendezvous (#1163)
+  and QSY (#1162) version tokens, an authoritative `WireEnvelope` version byte (#1164),
+  `AckFrame` reserved-bit enforcement (#1165), a ruling on the unwired
+  `supported_compression`/`supported_fec_modes` fields (#1166), and a keep-or-widen decision on
+  `Frame`'s u8 payload length (#1167). Scoping notes posted on #1062, #1147 and #1148.
+- **Implementation (files):** `docs/dev/project/release-1.0-criteria.md` — new
+  *The wire-format break package* section; *Sequencing* step 2 amended in the same change so the
+  document does not carry live guidance ("declining the break is a legitimate outcome") that the
+  package supersedes, while keeping the `demod_parity` evidence that motivated it; the doc preamble's
+  "those three are settled" corrected to four (pre-existing rot — a fourth decision was added
+  2026-08-05).
+- **Tests:** none — this is a decision record, not code. The items it schedules carry their own gates,
+  two of which are specified here: a **period** gate for #1148 (all six existing `scramble.rs` tests
+  pass on the shipped 21-bit keystream because none measures period) and re-recording of the three
+  recorded-frame replay gates the whitener change turns red.
+- **Test results (run):** n/a. Verified mechanically instead: the citations in the new section were
+  re-checked against the code by an independent reviewer, which corrected five of them.
+- **Adversarial review:** two passes. The first rejected the headline recommendation — I proposed
+  declining #1062, quoting this document's decision block **two lines short of its ruling on #1062**,
+  and citing the F7 measurement for its null half (spreading buys no noise-floor margin) while
+  ignoring the two benefits it attributes to a PN template (onset placement, peak sidelobe
+  0.997 → 0.234, and interferer refusal). The second reviewed the write-up itself and corrected:
+  both handshakes sign serde declaration order (so #1147 is a signature-domain change on the
+  classical path too, not only PQ); #1157's CFAR **stands down** at narrow filters rather than
+  costing detection; three of six replay gates go red, not all; six scramble tests, not four; nine
+  `demodulate_soft` descramble call sites, not ten (the definition was counted as a caller); and the
+  rendezvous codec was missing from the inventory.
