@@ -10276,6 +10276,19 @@ The last mode still failing on the dual-card rig after the AGC misclassification
 - **Test results (run):** `openpulse-dsp` 99 passed / 0 failed (plus 1 doc-ish suite, 1 ignored).
   **Sabotage-verified:** restoring `n - ntap + 1` fails the new test with the exact underflow panic at
   the guard line; the fix passes it.
-- **Residual, for #1062's ledger:** even fixed, the engine's `VetoCorrelator::Ddc` arm has no test
-  through `build_preamble_veto` — that needs a plugin publishing a >2048-sample template, and none
+- **Wiring gate (#1170), added in the same change after review:**
+  `engine::ddc_veto_arm::an_oversized_template_builds_the_ddc_arm_within_the_budget` and
+  `::the_ddc_arm_correlates_its_own_template_through_the_engine` — a `#[cfg(test)]` module beside
+  `idle_rho_probe`, so `build_preamble_veto`, `preamble_rho` and the private `VetoCorrelator` are
+  reachable without exporting an instrument. It asserts the **arm variant directly** (no
+  `samples.len()` proxy), that the budget is honoured **after** decimation, and that the arm returns
+  near-unity rho for its own template through the engine's own grid plan. Sabotage-verified: both
+  fail with the exact underflow when `n - ntap + 1` is restored. Scope, stated in the module: it pins
+  **wiring and computation, never thresholds** — the stub's rho constants are arbitrary.
+  Review corrected two things here: I had proposed asserting through the full receive path
+  (`rho_accepted + rho_rejected > 0`), which couples a wiring gate to acquisition policy and rests on
+  an assertion nobody has ever watched pass; and I had accepted a false dilemma about private access,
+  when the repo's own `idle_rho_probe` is the precedent that dissolves it.
+- **Residual, for #1062's ledger:** the engine's `VetoCorrelator::Ddc` arm still has no test through
+  the full receive path — that needs a plugin publishing a >2048-sample template, and none
   exists. The mode that first activates the arm should carry the production-entry test.
