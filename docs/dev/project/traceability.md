@@ -10413,6 +10413,55 @@ The last mode still failing on the dual-card rig after the AGC misclassification
   the full receive path — that needs a plugin publishing a >2048-sample template, and none
   exists. The mode that first activates the arm should carry the production-entry test.
 
+## 2026-08-19 — the evidence bundle records rig state, and filter width is measured from audio
+
+- **Requirement/change:** `release-1.0-criteria.md` sequencing step 4 requires the bundle filter/trim
+  read-back before the radio window. #1060 established why: idle correlation ρ moves with receive
+  bandwidth (per-window p50 0.131 at 2470 Hz → 0.351 at 309 Hz), so a ρ number whose filter width is
+  unrecorded cannot be interpreted afterwards.
+- **What was actually wrong (my first diagnosis was false):** I reported that the campaign recorded
+  "no rig state at all". It reads *more* than I proposed — `run-onair-ic9700-ft991a.sh`'s
+  `preflight_check` batch-reads FREQ, MODE, PASSBAND, RFPOWER, COMP, NB/NR + their function
+  switches, SQL, VOX, RFGAIN (+ the raw Yaesu `RG0;`), PREAMP, SWR, STRENGTH and the PulseAudio
+  volumes — and **echoes every field to the console and discards it**, while the report JSON wrote
+  `rig_mode_a`/`freq_hz` from the *intended* env values. Intent stamped where a later reader takes
+  it for verification: the dual-card archetype, in the artifact rather than in the rig.
+- **Design decision (+ rationale):**
+  1. **The authoritative filter-width record is audio-derived; CAT is secondary.** Measured on the
+     real IC-9700 with hamlib 4.6.2 (2026-08-17): hamlib reports passband width **0 regardless**, and
+     `M PKTUSB 0` does not restore a width. Idle noise through a receive filter *is* the filter
+     shape, so the −20 dB occupied band measures what CAT cannot. Both are recorded; disagreement is
+     the #1060 tell.
+  2. **Read-only reads, split from the corrector.** `preflight_check` applies COMP/NB/NR/SQL/VOX
+     corrections *before* reading, so it cannot double as an evidence reader; `read_rig_state_a/b`
+     are pure reads.
+  3. **The post-run read happens before the EXIT trap.** `cleanup_all` calls `restore_rig_state_a/b`,
+     so a later read would record the *restored pre-test* state as the test's — a confidently wrong
+     record, worse than the absent one.
+  4. **Absent is recorded as absent, with a reason** — never defaulted.
+- **Implementation (files):** `scripts/run-onair-ic9700-ft991a.sh` — `read_rig_state_a/b`,
+  `record_rig_state`, a post-run read, and a `rig_state` block in the report carrying both reads,
+  their raw lines, and a `drift_between_reads` list; the intent fields renamed to
+  `intended_freq_hz` / `intended_rig_mode_a|b`. `scripts/onair-rx-idle-floor.py` —
+  `occupied_band_db()` plus `--self-test`.
+- **Tests:** `onair-rx-idle-floor.py --self-test` — five known-width cases (2400/500/250 Hz, two of
+  them with a strong birdie) and a negative control (unfiltered noise must read wide). The criterion
+  is two-sided deliberately: width within 15 % **and** the band contains the signal centre, because a
+  width alone can be right while the band sits on a birdie.
+- **Test results (run):** self-test 6/6, exit 0. **Sabotage-verified** with real exit codes (not a
+  pipeline): narrowing the smoothing kernel to 5 bins exits **1** with the two birdie cases reporting
+  3.9 Hz centred on the tone; restored, exit **0**. The rig_state builder was controlled separately
+  on fixture files — available/unavailable distinguished with reasons, and drift flagged on a
+  RFGAIN 0.145 → 0.037 change, which is the 2026-07-30 FT-991A episode's own signature.
+- **Two defects the controls caught in my own instrument**, both before it could be trusted: a global
+  percentile reference reported a 250 Hz band as 3999 Hz (at 250 Hz only ~6 % of bins are in-band, so
+  the percentile lands in the stopband), and a 5-bin kernel let one out-of-band birdie capture the
+  measurement. The first is why the reference is a peak-anchored contiguous run; the second is why
+  the kernel is ~50 Hz.
+- **Not done, stated rather than implied:** the occupied band is not yet computed from the run's own
+  RX captures into the report — that is the mid-run witness the design calls for, and it is the next
+  step. The bundle also does not yet carry the `rig-state-*.txt` files.
+
 ## 2026-08-19 — stranded branches: a backstop script, and the harness that was stranded
 
 - **Requirement/change:** three local branches had gone stale, all with one signature — pushed to

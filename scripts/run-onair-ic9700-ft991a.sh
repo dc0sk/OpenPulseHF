@@ -676,6 +676,98 @@ cleanup_all() {
     echo "  done"
 }
 
+# Read rig + audio state from a station, WITHOUT changing anything.
+#
+# Split out of `preflight_check` (which applies COMP/NB/NR/SQL/VOX corrections BEFORE reading, so it
+# cannot double as an evidence reader) so the same read can run again at end-of-run. Emits KEY:VALUE
+# lines; an unreachable rig yields empty output, which the caller records as such rather than
+# defaulting.
+#
+# **What the PASSBAND field is worth.** Measured on the real IC-9700 with hamlib 4.6.2 on 2026-08-17:
+# hamlib reports width 0 regardless of the physical filter, and `M PKTUSB 0` does not restore a
+# width. So this field is a SECONDARY record — the authoritative filter-width evidence is the
+# occupied bandwidth measured from the captured audio, which passed through the filter. Recording
+# both is the point: disagreement is the #1060 tell.
+read_rig_state_a() {
+    local rc_a="rigctl -m 2 -r ${A_RIGCTLD_ADDR}:${A_RIGCTLD_PORT}"
+    ssh_a "
+        _mode_out=\$(${rc_a} m 2>/dev/null | grep -v Hamlib || echo na)
+        _sink_vol=\$(pactl get-sink-volume @DEFAULT_SINK@ 2>/dev/null \
+            | grep -o '[0-9]*%' | head -n1 | tr -d '%' || echo na)
+        _sink_mute=\$(pactl get-sink-mute @DEFAULT_SINK@ 2>/dev/null \
+            | awk '{print \$2}' || echo na)
+        printf 'FREQ:%s\n'     \"\$(${rc_a} f        2>/dev/null | grep -v Hamlib | tail -n1 || echo na)\"
+        printf 'MODE:%s\n'     \"\$(printf '%s' \"\$_mode_out\" | head -n1)\"
+        printf 'PASSBAND:%s\n' \"\$(printf '%s' \"\$_mode_out\" | sed -n '2p')\"
+        printf 'RFPOWER:%s\n'  \"\$(${rc_a} l RFPOWER  2>/dev/null | grep -v Hamlib | tail -n1 || echo na)\"
+        printf 'COMP:%s\n'     \"\$(${rc_a} l COMP     2>/dev/null | grep -v Hamlib | tail -n1 || echo na)\"
+        printf 'NB:%s\n'       \"\$(${rc_a} l NB       2>/dev/null | grep -v Hamlib | tail -n1 || echo na)\"
+        printf 'NR:%s\n'       \"\$(${rc_a} l NR       2>/dev/null | grep -v Hamlib | tail -n1 || echo na)\"
+        printf 'NBSW:%s\n'     \"\$(${rc_a} u NB       2>/dev/null | grep -v Hamlib | tail -n1 || echo na)\"
+        printf 'NRSW:%s\n'     \"\$(${rc_a} u NR       2>/dev/null | grep -v Hamlib | tail -n1 || echo na)\"
+        printf 'SQL:%s\n'      \"\$(${rc_a} l SQL      2>/dev/null | grep -v Hamlib | tail -n1 || echo na)\"
+        printf 'VOX:%s\n'      \"\$(${rc_a} l VOX      2>/dev/null | grep -v Hamlib | tail -n1 || echo na)\"
+        printf 'RFGAIN:%s\n'   \"\$(${rc_a} l RFGAIN   2>/dev/null | grep -v Hamlib | tail -n1 || echo na)\"
+        printf 'RFGAINRAW:%s\n' \"\$(${rc_a} w 'RG0;' 2>/dev/null | tr -cd '[:print:]' | sed -n 's/.*RG0\\([0-9][0-9][0-9]\\);.*/\\1/p' | tail -n1 || echo na)\"
+        printf 'PREAMP:%s\n'   \"\$(${rc_a} l PREAMP   2>/dev/null | grep -v Hamlib | tail -n1 || echo na)\"
+        printf 'SWR:%s\n'      \"\$(${rc_a} l SWR      2>/dev/null | grep -v Hamlib | tail -n1 || echo na)\"
+        printf 'STRENGTH:%s\n' \"\$(${rc_a} l STRENGTH 2>/dev/null | grep -v Hamlib | tail -n1 || echo na)\"
+        printf 'SINKVOL:%s\n'  \"\${_sink_vol:-na}\"
+        printf 'SINKMUTE:%s\n' \"\${_sink_mute:-na}\"
+    " 2>/dev/null || echo ""
+}
+
+read_rig_state_b() {
+    local rc_b="rigctl -m 2 -r ${B_RIGCTLD_ADDR}:${B_RIGCTLD_PORT}"
+    ssh_b "
+        _mode_out=\$(${rc_b} m 2>/dev/null | grep -v Hamlib || echo na)
+        _src_vol=\$(pactl get-source-volume @DEFAULT_SOURCE@ 2>/dev/null \
+            | grep -o '[0-9]*%' | head -n1 | tr -d '%' || echo na)
+        _src_mute=\$(pactl get-source-mute @DEFAULT_SOURCE@ 2>/dev/null \
+            | awk '{print \$2}' || echo na)
+        printf 'FREQ:%s\n'     \"\$(${rc_b} f        2>/dev/null | grep -v Hamlib | tail -n1 || echo na)\"
+        printf 'MODE:%s\n'     \"\$(printf '%s' \"\$_mode_out\" | head -n1)\"
+        printf 'PASSBAND:%s\n' \"\$(printf '%s' \"\$_mode_out\" | sed -n '2p')\"
+        printf 'RFPOWER:%s\n'  \"\$(${rc_b} l RFPOWER  2>/dev/null | grep -v Hamlib | tail -n1 || echo na)\"
+        printf 'COMP:%s\n'     \"\$(${rc_b} l COMP     2>/dev/null | grep -v Hamlib | tail -n1 || echo na)\"
+        printf 'NB:%s\n'       \"\$(${rc_b} l NB       2>/dev/null | grep -v Hamlib | tail -n1 || echo na)\"
+        printf 'NR:%s\n'       \"\$(${rc_b} l NR       2>/dev/null | grep -v Hamlib | tail -n1 || echo na)\"
+        printf 'NBSW:%s\n'     \"\$(${rc_b} u NB       2>/dev/null | grep -v Hamlib | tail -n1 || echo na)\"
+        printf 'NRSW:%s\n'     \"\$(${rc_b} u NR       2>/dev/null | grep -v Hamlib | tail -n1 || echo na)\"
+        printf 'SQL:%s\n'      \"\$(${rc_b} l SQL      2>/dev/null | grep -v Hamlib | tail -n1 || echo na)\"
+        printf 'VOX:%s\n'      \"\$(${rc_b} l VOX      2>/dev/null | grep -v Hamlib | tail -n1 || echo na)\"
+        printf 'RFGAIN:%s\n'   \"\$(${rc_b} l RFGAIN   2>/dev/null | grep -v Hamlib | tail -n1 || echo na)\"
+        printf 'RFGAINRAW:%s\n' \"\$(${rc_b} w 'RG0;' 2>/dev/null | tr -cd '[:print:]' | sed -n 's/.*RG0\\([0-9][0-9][0-9]\\);.*/\\1/p' | tail -n1 || echo na)\"
+        printf 'PREAMP:%s\n'   \"\$(${rc_b} l PREAMP   2>/dev/null | grep -v Hamlib | tail -n1 || echo na)\"
+        printf 'SWR:%s\n'      \"\$(${rc_b} l SWR      2>/dev/null | grep -v Hamlib | tail -n1 || echo na)\"
+        printf 'STRENGTH:%s\n' \"\$(${rc_b} l STRENGTH 2>/dev/null | grep -v Hamlib | tail -n1 || echo na)\"
+        printf 'SRCVOL:%s\n'   \"\${_src_vol:-na}\"
+        printf 'SRCMUTE:%s\n'  \"\${_src_mute:-na}\"
+    " 2>/dev/null || echo ""
+}
+
+# Persist one station's state block as evidence, timestamped, alongside the report.
+#
+# Console output is not evidence: the pre-existing read echoed a dozen fields and discarded every
+# one, while the report recorded `rig_mode_a`/`freq_hz` from the INTENDED env values — intent stamped
+# where a later reader takes it for verification. These files are what the bundle carries.
+record_rig_state() {
+    local phase="$1" station="$2" blob="$3"
+    mkdir -p "$OUTPUT_DIR"
+    local f="${OUTPUT_DIR}/rig-state-${phase}-${station}.txt"
+    {
+        printf 'READ_AT_UTC:%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+        printf 'PHASE:%s\n' "${phase}"
+        printf 'STATION:%s\n' "${station}"
+        if [[ -z "$blob" ]]; then
+            printf 'UNAVAILABLE:%s\n' "rig unreachable or CAT not configured"
+        else
+            printf '%s\n' "$blob"
+        fi
+    } > "$f"
+    echo "$f"
+}
+
 preflight_check() {
     echo "==> Pre-flight rig check"
     local fail=0
@@ -707,58 +799,12 @@ preflight_check() {
     # Each line of output is KEY:VALUE so we can parse safely even if some
     # rigctl calls return empty or multi-line results.
     local a_raw
-    a_raw="$(ssh_a "
-        _mode_out=\$(${rc_a} m 2>/dev/null | grep -v Hamlib || echo na)
-        _sink_vol=\$(pactl get-sink-volume @DEFAULT_SINK@ 2>/dev/null \
-            | grep -o '[0-9]*%' | head -n1 | tr -d '%' || echo na)
-        _sink_mute=\$(pactl get-sink-mute @DEFAULT_SINK@ 2>/dev/null \
-            | awk '{print \$2}' || echo na)
-        printf 'FREQ:%s\n'     \"\$(${rc_a} f        2>/dev/null | grep -v Hamlib | tail -n1 || echo na)\"
-        printf 'MODE:%s\n'     \"\$(printf '%s' \"\$_mode_out\" | head -n1)\"
-        printf 'PASSBAND:%s\n' \"\$(printf '%s' \"\$_mode_out\" | sed -n '2p')\"
-        printf 'RFPOWER:%s\n'  \"\$(${rc_a} l RFPOWER  2>/dev/null | grep -v Hamlib | tail -n1 || echo na)\"
-        printf 'COMP:%s\n'     \"\$(${rc_a} l COMP     2>/dev/null | grep -v Hamlib | tail -n1 || echo na)\"
-        printf 'NB:%s\n'       \"\$(${rc_a} l NB       2>/dev/null | grep -v Hamlib | tail -n1 || echo na)\"
-        printf 'NR:%s\n'       \"\$(${rc_a} l NR       2>/dev/null | grep -v Hamlib | tail -n1 || echo na)\"
-        printf 'NBSW:%s\n'     \"\$(${rc_a} u NB       2>/dev/null | grep -v Hamlib | tail -n1 || echo na)\"
-        printf 'NRSW:%s\n'     \"\$(${rc_a} u NR       2>/dev/null | grep -v Hamlib | tail -n1 || echo na)\"
-        printf 'SQL:%s\n'      \"\$(${rc_a} l SQL      2>/dev/null | grep -v Hamlib | tail -n1 || echo na)\"
-        printf 'VOX:%s\n'      \"\$(${rc_a} l VOX      2>/dev/null | grep -v Hamlib | tail -n1 || echo na)\"
-        printf 'RFGAIN:%s\n'   \"\$(${rc_a} l RFGAIN   2>/dev/null | grep -v Hamlib | tail -n1 || echo na)\"
-        printf 'RFGAINRAW:%s\n' \"\$(${rc_a} w 'RG0;' 2>/dev/null | tr -cd '[:print:]' | sed -n 's/.*RG0\\([0-9][0-9][0-9]\\);.*/\\1/p' | tail -n1 || echo na)\"
-        printf 'PREAMP:%s\n'   \"\$(${rc_a} l PREAMP   2>/dev/null | grep -v Hamlib | tail -n1 || echo na)\"
-        printf 'SWR:%s\n'      \"\$(${rc_a} l SWR      2>/dev/null | grep -v Hamlib | tail -n1 || echo na)\"
-        printf 'STRENGTH:%s\n' \"\$(${rc_a} l STRENGTH 2>/dev/null | grep -v Hamlib | tail -n1 || echo na)\"
-        printf 'SINKVOL:%s\n'  \"\${_sink_vol:-na}\"
-        printf 'SINKMUTE:%s\n' \"\${_sink_mute:-na}\"
-    " 2>/dev/null || echo "")"
+    a_raw="$(read_rig_state_a)"
+    record_rig_state preflight a "$a_raw" >/dev/null
 
     local b_raw
-    b_raw="$(ssh_b "
-        _mode_out=\$(${rc_b} m 2>/dev/null | grep -v Hamlib || echo na)
-        _src_vol=\$(pactl get-source-volume @DEFAULT_SOURCE@ 2>/dev/null \
-            | grep -o '[0-9]*%' | head -n1 | tr -d '%' || echo na)
-        _src_mute=\$(pactl get-source-mute @DEFAULT_SOURCE@ 2>/dev/null \
-            | awk '{print \$2}' || echo na)
-        printf 'FREQ:%s\n'     \"\$(${rc_b} f        2>/dev/null | grep -v Hamlib | tail -n1 || echo na)\"
-        printf 'MODE:%s\n'     \"\$(printf '%s' \"\$_mode_out\" | head -n1)\"
-        printf 'PASSBAND:%s\n' \"\$(printf '%s' \"\$_mode_out\" | sed -n '2p')\"
-        printf 'RFPOWER:%s\n'  \"\$(${rc_b} l RFPOWER  2>/dev/null | grep -v Hamlib | tail -n1 || echo na)\"
-        printf 'COMP:%s\n'     \"\$(${rc_b} l COMP     2>/dev/null | grep -v Hamlib | tail -n1 || echo na)\"
-        printf 'NB:%s\n'       \"\$(${rc_b} l NB       2>/dev/null | grep -v Hamlib | tail -n1 || echo na)\"
-        printf 'NR:%s\n'       \"\$(${rc_b} l NR       2>/dev/null | grep -v Hamlib | tail -n1 || echo na)\"
-        printf 'NBSW:%s\n'     \"\$(${rc_b} u NB       2>/dev/null | grep -v Hamlib | tail -n1 || echo na)\"
-        printf 'NRSW:%s\n'     \"\$(${rc_b} u NR       2>/dev/null | grep -v Hamlib | tail -n1 || echo na)\"
-        printf 'SQL:%s\n'      \"\$(${rc_b} l SQL      2>/dev/null | grep -v Hamlib | tail -n1 || echo na)\"
-        printf 'VOX:%s\n'      \"\$(${rc_b} l VOX      2>/dev/null | grep -v Hamlib | tail -n1 || echo na)\"
-        printf 'RFGAIN:%s\n'   \"\$(${rc_b} l RFGAIN   2>/dev/null | grep -v Hamlib | tail -n1 || echo na)\"
-        printf 'RFGAINRAW:%s\n' \"\$(${rc_b} w 'RG0;' 2>/dev/null | tr -cd '[:print:]' | sed -n 's/.*RG0\\([0-9][0-9][0-9]\\);.*/\\1/p' | tail -n1 || echo na)\"
-        printf 'PREAMP:%s\n'   \"\$(${rc_b} l PREAMP   2>/dev/null | grep -v Hamlib | tail -n1 || echo na)\"
-        printf 'SWR:%s\n'      \"\$(${rc_b} l SWR      2>/dev/null | grep -v Hamlib | tail -n1 || echo na)\"
-        printf 'STRENGTH:%s\n' \"\$(${rc_b} l STRENGTH 2>/dev/null | grep -v Hamlib | tail -n1 || echo na)\"
-        printf 'SRCVOL:%s\n'   \"\${_src_vol:-na}\"
-        printf 'SRCMUTE:%s\n'  \"\${_src_mute:-na}\"
-    " 2>/dev/null || echo "")"
+    b_raw="$(read_rig_state_b)"
+    record_rig_state preflight b "$b_raw" >/dev/null
 
     # Extract KEY:VALUE from raw multi-line output.
     _pf_val() { printf '%s' "${1}" | sed -n "s/^${2}://p" | head -n1; }
@@ -1551,6 +1597,62 @@ run_matrix() {
     local results_json
     results_json="$(IFS=,; echo "${results[*]}")"
 
+    # Read the rigs again while they are still in their test configuration. `cleanup_all` runs on
+    # EXIT and calls `restore_rig_state_a/b`, so a read taken any later would record the RESTORED
+    # pre-test frequency and mode and stamp them into evidence as the test's state — a confidently
+    # wrong record, which is worse than the absent one this work exists to fix.
+    local a_post b_post a_pre_f b_pre_f a_post_f b_post_f
+    a_post="$(read_rig_state_a)"
+    b_post="$(read_rig_state_b)"
+    a_post_f="$(record_rig_state postrun a "$a_post")"
+    b_post_f="$(record_rig_state postrun b "$b_post")"
+    a_pre_f="${OUTPUT_DIR}/rig-state-preflight-a.txt"
+    b_pre_f="${OUTPUT_DIR}/rig-state-preflight-b.txt"
+
+    local rig_state_json
+    rig_state_json="$(RIG_A_PRE="$a_pre_f" RIG_B_PRE="$b_pre_f" RIG_A_POST="$a_post_f" \
+        RIG_B_POST="$b_post_f" python3 - <<'RIGPY'
+import json, os
+
+def block(path):
+    if not path or not os.path.exists(path):
+        return {"available": False, "reason": "no state file written"}
+    out, raw = {}, []
+    with open(path, encoding="utf-8", errors="replace") as f:
+        for line in f:
+            raw.append(line.rstrip("\n"))
+            if ":" in line:
+                k, v = line.rstrip("\n").split(":", 1)
+                out[k.lower()] = v
+    if "unavailable" in out:
+        return {"available": False, "reason": out["unavailable"], "raw": raw}
+    out["available"] = True
+    # Keep the raw lines: a later reader can re-parse rather than trust this extraction.
+    out["raw"] = raw
+    return out
+
+state = {s: {p: block(os.environ.get(f"RIG_{s.upper()}_{p.upper()}"))
+             for p in ("pre", "post")} for s in ("a", "b")}
+
+# Drift between the two reads is the thing a single read can never show. Reported, not judged:
+# some fields (STRENGTH, SWR) are expected to move; FREQ/MODE/PASSBAND/RFGAIN moving mid-run is
+# what would invalidate a per-run claim.
+WATCH = ("freq", "mode", "passband", "rfgain", "rfgainraw", "preamp", "sinkvol", "srcvol",
+         "nbsw", "nrsw", "sql", "vox")
+drift = []
+for s in ("a", "b"):
+    pre, post = state[s]["pre"], state[s]["post"]
+    if not (pre.get("available") and post.get("available")):
+        continue
+    for k in WATCH:
+        if k in pre and k in post and pre[k] != post[k]:
+            drift.append({"station": s, "field": k, "preflight": pre[k], "postrun": post[k]})
+
+print(json.dumps({"stations": state, "drift_between_reads": drift}, indent=2))
+RIGPY
+)"
+    rig_state_json="${rig_state_json:-{\"stations\":{},\"drift_between_reads\":[],\"error\":\"rig state block could not be built\"}}"
+
     cat > "${report}" <<JSON
 {
   "timestamp": "${ts}",
@@ -1560,9 +1662,10 @@ run_matrix() {
     "irs_station": "$(json_escape "${irs_station}")",
     "callsign_iss": "$(json_escape "${iss_callsign}")",
     "callsign_irs": "$(json_escape "${irs_callsign}")",
-  "freq_hz": ${TEST_FREQ_HZ},
-    "rig_mode_a": "$(json_escape "${TEST_MODE_RIG_A}")",
-    "rig_mode_b": "$(json_escape "${TEST_MODE_RIG_B}")",
+  "intended_freq_hz": ${TEST_FREQ_HZ},
+    "intended_rig_mode_a": "$(json_escape "${TEST_MODE_RIG_A}")",
+    "intended_rig_mode_b": "$(json_escape "${TEST_MODE_RIG_B}")",
+  "rig_state": ${rig_state_json},
   "first_pass_note": "$(json_escape "${ON_AIR_FIRST_PASS_NOTE:-}")",
   "total": ${total},
   "pass": ${pass},
