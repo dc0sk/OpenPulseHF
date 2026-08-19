@@ -338,6 +338,15 @@ const AFC_SETTLE_DEADBAND_HZ: f32 = 2.0;
 /// not help them but because it was priced in the wrong domain. A template longer than this is now
 /// decimated to fit rather than refused: see [`DdcMatchedFilter`], whose equivalence to the
 /// passband correlator is measured exact to four decimals at decimation up to 32.
+///
+/// **Read that equivalence claim with its provenance.** It was measured in
+/// `tests/ddc_correlation_equivalence.rs`, which **reimplements** the mixer locally rather than
+/// calling `DdcMatchedFilter`, and whose tests are all `#[ignore]`d — so the number came from a
+/// copy, in the release profile, and nothing keeps the two copies in step. They diverged once
+/// already: both carried an underflowing loop guard, harmless under release wrapping and fatal in
+/// dev, and only the shipped one has been fixed. What is machine-checked today is
+/// `openpulse_dsp::acquisition::tests::ddc_mix_keeps_the_first_sample_and_every_decim_th_one`;
+/// the four-decimal figure itself is not.
 /// Maximum AFC correction magnitude accepted after settling.
 ///
 /// The Goertzel acquisition range is ±400 Hz (`range_hz = 800` in `estimate_carrier_hz_wide`), so
@@ -7684,6 +7693,162 @@ mod tests {
 /// Record the filter width and rig with the number: ρ is normalised and level-insensitive, but the
 /// filter is the variable under test, and a capture whose filter setting is unrecorded measures
 /// nothing.
+/// The DDC veto arm, built and exercised through the engine's own seams.
+///
+/// `VetoCorrelator::Ddc` is chosen whenever a template exceeds `MAX_PREAMBLE_CORRELATION_SAMPLES`,
+/// and **no test in the workspace had ever built it** — which is how `ddc_mix` carried an
+/// unconditional `usize` underflow from `caa7e1ae` until 2026-08-19. Four independent layers hid it:
+/// the DDC equivalence tests are `#[ignore]`d; they never construct `DdcMatchedFilter` but
+/// reimplement the mixer locally, carrying the same expression; both copies had only ever run in
+/// release, where the wrap is exact; and `chain_veto_slow_rung::q1`, which *would* have built the
+/// arm, is `#[ignore]`d too.
+///
+/// **What this pins, exactly:** the engine builds the Ddc arm for an oversized template, honours the
+/// post-decimation budget, and its own grid plan plus Ddc dispatch return near-unity ρ for the
+/// template's own signal. It pins **wiring and computation, never thresholds** — no shipped mode
+/// reaches this arm (the only `preamble_template` impl is BPSK250's at 992 samples), so
+/// production-entry behaviour ships with the first mode that publishes a long template. Whether that
+/// day has come is guarded by `tests/veto_membership_pin.rs`.
+///
+/// A unit module rather than an integration test because `build_preamble_veto`, `preamble_rho` and
+/// `VetoCorrelator` are all private, and a probe needing private access is a unit test — not an
+/// exported accessor, which the reachability ratchet correctly refuses.
+#[cfg(test)]
+mod ddc_veto_arm {
+    use super::*;
+    use openpulse_audio::LoopbackBackend;
+    use openpulse_core::plugin::{
+        ModulationConfig, ModulationPlugin, PluginInfo, PreambleTemplate,
+    };
+
+    const MODE: &str = "LONGTMPL";
+    const FS: u32 = 8_000;
+    const FC: f32 = 1_500.0;
+    /// Longer than `MAX_PREAMBLE_CORRELATION_SAMPLES`, so the Ddc arm is the only possible choice.
+    /// Sized like BPSK31's real template (31 symbols x 256 sps) so the decimation maths is the same.
+    const TEMPLATE_SAMPLES: usize = 7_936;
+
+    /// A stub whose only real methods are the ones the veto path calls.
+    ///
+    /// Its ρ constants are **arbitrary** and `for_mode` is stamped to satisfy the engine's
+    /// derived-for check (`#1053`). That is legitimate here because nothing below asserts a
+    /// threshold — publishing invented constants to test a *threshold* would be the exact defect
+    /// that check exists to prevent.
+    struct LongTemplatePlugin(PluginInfo);
+
+    impl LongTemplatePlugin {
+        fn new() -> Self {
+            Self(PluginInfo {
+                name: "LONGTMPL".into(),
+                version: "0.1.0".into(),
+                description: "test-only plugin publishing an oversized preamble template".into(),
+                author: "tests".into(),
+                supported_modes: vec![MODE.into()],
+                trait_version_required: "3.0".into(),
+            })
+        }
+
+        /// A tone burst at the carrier: the correlation is against this exact signal, so its shape
+        /// only has to be in-band and non-degenerate.
+        fn template_samples(config: &ModulationConfig) -> Vec<f32> {
+            let fs = config.sample_rate as f32;
+            (0..TEMPLATE_SAMPLES)
+                .map(|n| {
+                    let t = n as f32 / fs;
+                    (2.0 * std::f32::consts::PI * config.center_frequency * t).sin() * 0.5
+                })
+                .collect()
+        }
+    }
+
+    impl ModulationPlugin for LongTemplatePlugin {
+        fn info(&self) -> &PluginInfo {
+            &self.0
+        }
+        fn modulate(&self, _d: &[u8], _c: &ModulationConfig) -> Result<Vec<f32>, ModemError> {
+            Err(ModemError::Modulation("stub: never modulates".into()))
+        }
+        fn demodulate(&self, _s: &[f32], _c: &ModulationConfig) -> Result<Vec<u8>, ModemError> {
+            Err(ModemError::Demodulation("stub: never demodulates".into()))
+        }
+        fn supports_mode(&self, mode: &str) -> bool {
+            mode == MODE
+        }
+        fn occupied_bandwidth_hz(&self, _mode: &str) -> Option<f32> {
+            Some(200.0)
+        }
+        fn preamble_template(&self, config: &ModulationConfig) -> Option<PreambleTemplate> {
+            Some(PreambleTemplate::new(
+                MODE,
+                Self::template_samples(config),
+                0.40,
+                20.0,
+            ))
+        }
+    }
+
+    fn engine_with_long_template() -> ModemEngine {
+        let mut e = ModemEngine::new(Box::new(LoopbackBackend::new()));
+        e.register_plugin(Box::new(LongTemplatePlugin::new()))
+            .expect("register stub");
+        e
+    }
+
+    /// Construction alone is the regression gate: pre-fix, `DdcMatchedFilter::new` runs `ddc_mix`
+    /// over the template and panics in the dev profile before any search happens.
+    #[test]
+    fn an_oversized_template_builds_the_ddc_arm_within_the_budget() {
+        let e = engine_with_long_template();
+        let veto = e
+            .build_preamble_veto(MODE, FS)
+            .expect("an oversized template must still yield a veto — via the Ddc arm");
+
+        let decimated = match &veto.filter {
+            VetoCorrelator::Ddc(f) => f.len(),
+            VetoCorrelator::Passband(_) => panic!(
+                "a {TEMPLATE_SAMPLES}-sample template took the Passband arm;                  MAX_PREAMBLE_CORRELATION_SAMPLES is {MAX_PREAMBLE_CORRELATION_SAMPLES}, so either                  the budget moved or the arm selection did"
+            ),
+        };
+        assert!(
+            decimated <= MAX_PREAMBLE_CORRELATION_SAMPLES,
+            "the point of the Ddc arm is that the budget is honoured AFTER decimation, and              {decimated} exceeds {MAX_PREAMBLE_CORRELATION_SAMPLES}"
+        );
+    }
+
+    /// Stronger than "the counters moved": the arm must compute a CORRECT ρ through the engine's own
+    /// grid plan and dispatch, for the template's own signal.
+    #[test]
+    fn the_ddc_arm_correlates_its_own_template_through_the_engine() {
+        let e = engine_with_long_template();
+        let veto = e.build_preamble_veto(MODE, FS).expect("veto");
+        let cfg = ModulationConfig {
+            sample_rate: FS,
+            mode: MODE.into(),
+            center_frequency: FC,
+            ..ModulationConfig::default()
+        };
+        let template = LongTemplatePlugin::template_samples(&cfg);
+
+        // WINDOW SIZE IS A TRAP. `preamble_search_plan` compares the window against the DECIMATED
+        // template length, but the DDC needs the window to survive decimation AND the filter's
+        // group delay: roughly `tlen * decim + ntap`. A window sized just above the decimated
+        // length passes the plan, then every grid frequency is skipped inside the search and the
+        // result is a silent `None` — "not measured" wearing the costume of "scored low". Sized
+        // well above the passband requirement, and a `None` fails loudly below.
+        let mut window = vec![0.0f32; 512];
+        window.extend_from_slice(&template);
+        window.extend(std::iter::repeat_n(0.0f32, 2_048));
+
+        let (rho, _offset) = e
+            .preamble_rho(&veto, &window, 0.0)
+            .expect("the Ddc arm returned None: it did not measure this window at all");
+        assert!(
+            rho >= 0.9,
+            "the Ddc correlator scored {rho:.3} against its OWN template; anything short of              near-unity means the mix, decimation or normalisation is wrong, not that the signal is"
+        );
+    }
+}
+
 #[cfg(test)]
 mod idle_rho_probe {
     use super::*;
