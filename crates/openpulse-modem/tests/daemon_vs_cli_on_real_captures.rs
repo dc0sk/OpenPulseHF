@@ -29,8 +29,15 @@
 //! re-scoping: on this corpus the daemon's own adaptive-squelch DCD located the frames perfectly
 //! well (verified — no burst was chopped; the failing bursts each contain the whole frame intact).
 //! What WOULD settle it is a capture with a real carrier offset: these are near-on-frequency, while
-//! the on-air notes record ~400 Hz inter-rig offsets, and a scan-only daemon would fail those. That
-//! is the argument for porting the settle, and this corpus structurally cannot make it.
+//! the one cleanly measured inter-rig offset on this project's hardware is **−64 Hz** (IC-9700 <->
+//! FT-991A, both commanded to 144.600000 MHz, 2026-07-28 — `openpulse-channel/src/cfo.rs`), which
+//! already exceeds **REQ-PHY-03**'s ±50 Hz requirement, and a scan-only daemon would fail it. That is
+//! the argument for porting the settle, and this corpus structurally cannot make it.
+//!
+//! (An earlier version of this sentence said "~400 Hz". That figure traces to the two-station OTA
+//! notes, whose CFO readings are marked unreliable **in the same paragraph** — the spectral
+//! peak-picker was measuring dev-host birdies rather than the carrier. −64 Hz is the trusted
+//! measurement and is all the argument needs.)
 //!
 //! Known limits, stated so the number is not over-read: n=7 and all from one rig pair on one band;
 //! the pre-whitening rows fail on both paths by design; and `decode_burst`'s 4x-acquisition-window
@@ -123,12 +130,28 @@ fn daemon_engine() -> ModemEngine {
 
 /// CLI arm: the path every existing corpus test uses.
 fn via_cli(c: &Capture, fec: FecMode) -> Option<String> {
+    via_cli_observed(c, fec).0
+}
+
+/// As `via_cli`, also reporting what the acquisition chain DID — settle attempts and the correction
+/// it ended on.
+///
+/// Attribution, not decoration: "the CLI decoded and the daemon did not" names a path, and the path
+/// contains four distinctive components. A settle count of zero and a correction of zero would mean
+/// the win came from something else, and the conclusion would be wrong.
+fn via_cli_observed(c: &Capture, fec: FecMode) -> (Option<String>, u64, f32) {
     let mut h = cli_engine();
     h.feed_capture(c);
-    h.rx_engine
+    let got = h
+        .rx_engine
         .receive_with_fec_mode_timeout(MODE, fec, None, Duration::from_millis(LISTEN_MS))
         .ok()
-        .map(|b| String::from_utf8_lossy(&b).to_string())
+        .map(|b| String::from_utf8_lossy(&b).to_string());
+    (
+        got,
+        h.rx_engine.afc_settle_attempts(),
+        h.rx_engine.afc_correction_hz(),
+    )
 }
 
 /// Daemon arm: `accumulate_capture` in tick-sized chunks, then the DEFAULT decode arm
@@ -137,7 +160,25 @@ fn via_cli(c: &Capture, fec: FecMode) -> Option<String> {
 /// Returns (payload, bursts_flushed, settle_attempts) so a "no decode" can be told apart from
 /// "nothing was ever gathered to decode".
 fn via_daemon(c: &Capture, fec: FecMode) -> (Option<String>, usize, u64) {
+    via_daemon_centred(c, fec, None)
+}
+
+/// As `via_daemon`, with the receiver's centre frequency optionally pre-corrected.
+///
+/// This is the positive control for M2's attribution. Setting the centre frequency to where the
+/// signal actually is hands the daemon a PERFECT frequency estimate and changes nothing else — no
+/// energy gate, no veto, no condemnation recovery. If it then decodes an offset it otherwise cannot,
+/// the missing capability is frequency acquisition specifically, and the rest of the chain is not
+/// implicated.
+fn via_daemon_centred(
+    c: &Capture,
+    fec: FecMode,
+    centre_hz: Option<f32>,
+) -> (Option<String>, usize, u64) {
     let mut e = daemon_engine();
+    if let Some(hz) = centre_hz {
+        e.set_center_frequency(hz);
+    }
     // `decode_burst` is FecMode::None-only, so a coded capture must go through the OTA arm, whose
     // candidates come from the profile. Without this the coded rows would measure "the default arm
     // cannot do RS", which is true but is NOT a fact about the acquisition chain.
@@ -257,4 +298,93 @@ fn m1_daemon_vs_cli_on_the_real_on_air_corpus() {
            \x20        bursts decode with the chain absent, once the candidate loop scans onsets.\n\
            \x20        bursts == 0 -> the daemon never gathered anything; the row says nothing.\n"
     );
+}
+
+// ── M2: the experiment this corpus structurally cannot make (#1118) ───────────
+
+/// Does the daemon's scan-only acquisition survive a REAL carrier offset, where the CLI arm's
+/// `afc_mini_settle` earns its keep?
+///
+/// This harness's own header states the limit that makes M1 unable to settle #1118: every capture in
+/// the corpus sits at +2 Hz to ~+12 Hz, well inside BPSK250's tolerance, so the settle was idle even
+/// on the CLI arm's wins — while the one cleanly measured inter-rig offset on this hardware is
+/// **−64 Hz**, already past **REQ-PHY-03**'s ±50 Hz requirement. A scan-only daemon should fail that.
+/// That is a prediction, and it is the one the design decision turns on, so it is measured here
+/// rather than argued.
+///
+/// Construction, and why each piece is what it is:
+/// * the frame is transmitted by a real `ModemEngine` (framing, whitening, modulation as on air);
+/// * the offset is applied by the shipped `CfoChannel`, not by a hand-rolled mixer;
+/// * the frame sits inside **real recorded idle noise** at a realistic lead-in, so the receiver has
+///   to locate it as well as acquire it — digital silence would let the daemon's DCD find the frame
+///   by construction and the comparison would measure nothing;
+/// * both arms see **bit-identical audio**.
+///
+/// Assert-free: it prints a table.
+#[test]
+#[ignore = "measurement"]
+fn m2_carrier_offset_sweep_cli_vs_daemon() {
+    const OFFSETS_HZ: [f32; 6] = [0.0, 20.0, 50.0, 100.0, 200.0, 400.0];
+    const LEAD: usize = 4_032; // the measured lead-in of the real #1021 capture
+    const TRAIL: usize = 1_600;
+    const FEC: FecMode = FecMode::Rs;
+    let payload = b"CFO SWEEP 1118".to_vec();
+
+    let idle = load_corpus("ic9700-idle-hot.wav").expect("corpus idle");
+
+    println!("\n=== #1118 M2: carrier-offset sweep, CLI path vs daemon path ===");
+    println!(
+        "{MODE}+Rs in real recorded idle, lead {LEAD} samples, offset by the shipped CfoChannel\n"
+    );
+    println!(
+        "{:>10} {:>12} {:>12} {:>14}   what each path did",
+        "offset Hz", "CLI", "daemon", "daemon+centred"
+    );
+
+    for offset in OFFSETS_HZ {
+        // One transmitted frame per row, shifted, embedded in real noise. Both arms get this buffer.
+        let mut tx = ChannelSimHarness::new();
+        tx.tx_engine
+            .register_plugin(Box::new(BpskPlugin::new()))
+            .expect("register");
+        tx.tx_engine
+            .transmit_with_fec_mode(&payload, MODE, FEC, None)
+            .expect("transmit");
+        let mut cfo = openpulse_channel::cfo::CfoChannel::new(
+            openpulse_channel::cfo::CfoConfig::new(offset, 8_000.0),
+        )
+        .expect("finite offset");
+        let (_, frame) = tx.route_tapped(&mut cfo);
+        let mut buf = Vec::with_capacity(LEAD + frame.len() + TRAIL);
+        buf.extend(idle.cycled(0, LEAD));
+        buf.extend_from_slice(&frame);
+        buf.extend(idle.cycled(LEAD, TRAIL));
+        let burst = Capture {
+            samples: buf,
+            sample_rate: SAMPLE_RATE as u32,
+        };
+
+        let (cli, cli_settles, cli_correction) = via_cli_observed(&burst, FEC);
+        let (daemon, bursts, settles) = via_daemon(&burst, FEC);
+        // Positive control: the same daemon path, handed a perfect frequency estimate.
+        let (daemon_centred, _, _) = via_daemon_centred(&burst, FEC, Some(1_500.0 + offset));
+        let ok = |o: &Option<String>| if o.is_some() { "decoded" } else { "-" };
+        println!(
+            "{offset:>10.0} {:>12} {:>12} {:>14}   CLI: {} settle(s), correction {:+.1} Hz | \
+             daemon: {} burst(s), {} settle(s)",
+            ok(&cli),
+            ok(&daemon),
+            ok(&daemon_centred),
+            cli_settles,
+            cli_correction,
+            bursts,
+            settles
+        );
+    }
+
+    println!(
+        "\nRead it as a DIFFERENCE, not as absolute rates: a row where the CLI decodes and the"
+    );
+    println!("daemon does not is the settle earning its port. Rows where both fail bound the");
+    println!("comparison rather than answering it — the CLI arm has to acquire the same offset.");
 }
