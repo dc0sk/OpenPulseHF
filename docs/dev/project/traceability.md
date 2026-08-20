@@ -10292,3 +10292,40 @@ The last mode still failing on the dual-card rig after the AGC misclassification
 - **Residual, for #1062's ledger:** the engine's `VetoCorrelator::Ddc` arm still has no test through
   the full receive path — that needs a plugin publishing a >2048-sample template, and none
   exists. The mode that first activates the arm should carry the production-entry test.
+
+## 2026-08-19 — stranded branches: a backstop script, and the harness that was stranded
+
+- **Requirement/change:** three local branches had gone stale, all with one signature — pushed to
+  origin, **no PR ever opened**, findings posted as issue comments, branch left behind.
+  `delete_branch_on_merge` was already `true` on the repo (read back, not assumed) and did nothing
+  for any of them, because none ever merged: delete-on-merge is a lifecycle *exit*.
+- **Design decision (+ rationale):** the sweep is a backstop, not a fix. Two causes were named — push
+  is not a tracked event (the gap between "pushed" and "PR opened" has no owner, and a session that
+  ends in it strands the branch), and a research harness has no home in the tree, because its
+  *findings* go into an issue comment while the harness needs an `#[ignore]` plus a runner decision
+  before it can land. The prevention (open a draft PR at first push) is a workflow policy and was
+  handed to the skills repo; what belongs here is the detector plus landing the stranded work.
+- **Implementation (files):** `scripts/branch-audit.sh` — classifies from **PR state** with a
+  **two-dot** diff as corroboration (three-dot diffs the merge-base and reports "not merged" for
+  every branch with commits), derives the default branch from `origin/HEAD`, distinguishes
+  never-pushed (live local work) from pushed-with-no-PR (the stale signature), never deletes, and
+  `--strict` **refuses** when `gh` is absent rather than exiting 0 having classified nothing.
+  `crates/openpulse-modem/tests/bpsk31_constant_derivation.rs` — the stranded harness, landed
+  `#[ignore = "verification"]`.
+- **Tests:** the script is controlled both ways rather than asserted: a branch whose content is in
+  `main` classifies as "already in main" (a classifier calling everything stale looks identical to a
+  correct one on a stale-only sample), and with `gh` hidden from `PATH`, `--strict` exits 2 with its
+  reason while a plain run still reports, marked `unknown`.
+- **Test results (run):** audit run on the live tree reproduces the pile exactly (three branches,
+  `UNTRACKED - pushed, no PR ever opened`); controls: `rc=2` without `gh`, `rc=1` with it.
+  Harness: 10 tests, all `#[ignore]`d, compiles and runs — `r1` executes at HEAD once the `ddc_mix`
+  fix is in, which is what this branch waits on.
+- **What landing it found:** running the harness for the first time since 2026-08-04 surfaced the
+  `ddc_mix` underflow (separate entry, same day). The apparatus behind numbers already published on
+  #1062 was unavailable for checking, and the moment it ran it found a live defect — which is the
+  argument for landing harnesses rather than stranding them, stated as evidence rather than as
+  principle.
+- **Disposition of the other two branches:** `investigate/1058-retry-budget-ablation` deleted, SHA
+  `a9f7af69` recorded on #1058 (its previous sweep had recorded "Left alone", which is not a terminal
+  state and cost another 16 days); `docs/archive-claude-md-history` deleted, SHA `eb6af1d5` recorded
+  on the issue filed to redo it (#1169), since it is the one branch whose content no longer applies.
