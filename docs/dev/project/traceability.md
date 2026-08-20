@@ -10329,3 +10329,28 @@ The last mode still failing on the dual-card rig after the AGC misclassification
   `a9f7af69` recorded on #1058 (its previous sweep had recorded "Left alone", which is not a terminal
   state and cost another 16 days); `docs/archive-claude-md-history` deleted, SHA `eb6af1d5` recorded
   on the issue filed to redo it (#1169), since it is the one branch whose content no longer applies.
+
+## 2026-08-20 — the twin-daemon offset gate had a load-dependent verdict
+
+- **Requirement/change:** `twin_daemon_bridge::a_message_crosses_the_bridge_between_two_rigs_that_disagree_on_frequency`
+  (added with #1118, REQ-PHY-03 at −64 Hz) **failed inside a full `gate.sh` run and passes alone in
+  4.37 s**. The gate log shows it ran 60.27 s against a 60 s timeout — the bound expired; nothing
+  about acquisition changed.
+- **Cause:** the verdict is wall-clock bounded, on a machine where every core was busy running the
+  rest of the workspace suite. This is #1066's archetype (same input, opposite verdicts by load) in a
+  test written the day before.
+- **Design decision (+ rationale):** the bound cannot be moved into *work* the way #1066 moved the
+  receive search — this is an end-to-end round trip between two real daemons whose receive ticks run
+  in real time, and there is no counter to bound on. So the bound is set from the **measured idle
+  cost** with a stated multiplier (4.4 s idle → 300 s, ~68×), and the failure is made
+  **self-diagnosing**: the loop counts control events, so zero events reads as a starved machine
+  while events-without-a-decode is the real defect this gate exists to catch. Both are named in the
+  assertion message.
+- **Implementation (files):** `crates/openpulse-daemon/tests/twin_daemon_bridge.rs`.
+- **Tests:** the test itself.
+- **Test results (run):** passes alone in 4.37 s; passes in 4.75 s with all 16 cores spinning.
+- **Honest limit on that evidence, stated rather than implied:** the synthetic load **did not
+  reproduce the failure**, so it does not verify the fix — sixteen busy loops are not a gate run,
+  where cargo runs many test binaries in parallel, each spawning daemons, threads and I/O. The only
+  verification that counts is a full `gate.sh` run, and that is n = 1 per run for a flake whose base
+  rate is unknown.

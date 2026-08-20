@@ -590,7 +590,17 @@ async fn a_message_crosses_the_bridge_between_two_rigs_that_disagree_on_frequenc
         + "\n";
     a_write.write_all(cmd.as_bytes()).await.unwrap();
 
-    let got = timeout(Duration::from_secs(60), async {
+    // This verdict is WALL-CLOCK bounded by construction — it is an end-to-end round trip between
+    // two real daemons whose receive ticks run in real time, so there is no work counter to bound it
+    // on the way #1066 bounded the receive search. The bound is therefore set from the MEASURED idle
+    // cost with a large multiplier: this test completes in ~4.4 s on an idle machine, and it failed
+    // at 60 s inside a full `gate.sh` run, where every core is busy. 300 s is ~68x idle.
+    //
+    // A timeout alone cannot say WHICH world it is in, so the loop counts what arrived: zero control
+    // events means the daemons were starved and the machine is the story, while events-without-a-
+    // decode is the real failure this gate exists to catch.
+    let mut events_seen = 0usize;
+    let got = timeout(Duration::from_secs(300), async {
         loop {
             let mut buf = String::new();
             if b_reader.read_line(&mut buf).await.unwrap() == 0 {
@@ -600,6 +610,7 @@ async fn a_message_crosses_the_bridge_between_two_rigs_that_disagree_on_frequenc
             if line.is_empty() {
                 continue;
             }
+            events_seen += 1;
             if let Ok(ControlEvent::EngineEvent {
                 event: openpulse_modem::EngineEvent::FrameReceived { bytes, .. },
             }) = serde_json::from_str::<ControlEvent>(line)
@@ -615,8 +626,10 @@ async fn a_message_crosses_the_bridge_between_two_rigs_that_disagree_on_frequenc
     pair.shutdown();
     assert!(
         got.is_ok(),
-        "daemon B never decoded a frame across a -64 Hz inter-rig offset — REQ-PHY-03 requires \
-         tracking station-to-station offsets to ±50 Hz without operator intervention, and this is \
-         the shipping two-daemon surface"
+        "daemon B never decoded a frame across a -64 Hz inter-rig offset in 300 s \
+         ({events_seen} control events seen). REQ-PHY-03 requires tracking station-to-station \
+         offsets to ±50 Hz without operator intervention, and this is the shipping two-daemon \
+         surface. NOTE: 0 events means the daemons never even reported — read that as a starved \
+         machine, not as an acquisition failure; a nonzero count with no decode is the real defect."
     );
 }
