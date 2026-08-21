@@ -552,10 +552,20 @@ async fn an_ota_receiver_does_not_key_ptt_at_a_peers_uncoded_traffic() {
 /// pass is disabled.
 ///
 /// It is kept, and it is not vacuous: at **−800 Hz** — past `AFC_MAX_CORRECTION_HZ` — it fails, so it
-/// does measure the offset it applies. What it covers is the two-daemon *round trip* at a realistic
-/// inter-rig offset, including the ISS ACK listen (`receive_ota_ack_within`), which is its own
-/// accumulate loop with no acquisition and where FSK4-ACK's 100 Hz tone spacing makes an offset
-/// expensive. That chain has no other test.
+/// does measure the offset it applies. What it covers is a **one-way** message crossing two real
+/// daemons at a realistic inter-rig offset: the control protocol, the transmit path, the bridge, and
+/// B's capture and decode.
+///
+/// **Corrected 2026-08-21 (#1177): it is NOT a round trip and does NOT reach the ISS ACK listen.**
+/// This comment claimed both, and claimed `receive_ota_ack_within` "has no other test" — which made
+/// the false claim load-bearing, since it was the stated reason to keep the test. At this test's
+/// config `modem.ota_enabled` is the default `false` (`openpulse-config/src/lib.rs:660`),
+/// `start_ota_session` is gated on it (`server.rs:228`), and the non-OTA `SendMessage` arm is a
+/// one-way fixed-mode transmit (`lib.rs:2031-2050`). B never keys; the reverse-offset channel this
+/// test installs is dead weight. **The FSK4-ACK-at-offset chain is covered by nothing**, which is
+/// the real finding — FSK4-ACK tone spacing is 100 Hz, so a ±50 Hz error is catastrophic there.
+/// Enabling OTA here would give that chain its first coverage, but that path carries its own
+/// wall-clock deadlines (`engine.rs:6023`, `:6189`) and must not be added while #1176 is open.
 ///
 /// −64 Hz is the one cleanly measured inter-rig offset on this project's hardware (IC-9700 <->
 /// FT-991A, both commanded to 144.600000 MHz, 2026-07-28; `openpulse-channel/src/cfo.rs`), and it is
