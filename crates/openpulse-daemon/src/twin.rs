@@ -45,6 +45,11 @@ pub struct BridgedPair {
 }
 
 /// What the rig was doing when a test gave up, so a timeout is attributable.
+///
+/// DORMANT(#1176): consumed by the twin integration tests, never by a production path — the same
+/// standing as `BridgedPair` beside it in the reachability baseline. It exists because the two
+/// halves of every failure this rig can have (the transmitter never produced audio; the receiver
+/// never consumed it) are otherwise indistinguishable from the far end.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct BridgeStats {
     /// Samples moved A→B.
