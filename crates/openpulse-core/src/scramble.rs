@@ -37,8 +37,15 @@ fn keystream(n: usize) -> Vec<u8> {
     for _ in 0..n {
         let mut byte = 0u8;
         for bit in 0..8 {
-            // x^9 + x^5 + 1: taps at bit 8 (x^9) and bit 4 (x^5) of a 9-bit register.
-            let fb = ((state >> 8) ^ (state >> 4)) & 1;
+            // x^9 + x^5 + 1, in the O.150 recurrence s[n+9] = s[n+5] ^ s[n]: with the register
+            // shifting right and bit 0 leaving as output, the bit entering bit 8 is `s0 ^ s5`.
+            //
+            // It read `(state >> 8) ^ (state >> 4)` until 2026-08-21 (#1148), which is
+            // s[n+9] = s[n+8] ^ s[n+4] — characteristic x^9+x^8+x^4 = x^4(x^5+x^4+1), and
+            // x^5+x^4+1 = (x^2+x+1)(x^3+x+1) is REDUCIBLE, so the period was lcm(3,7) = **21 bits**,
+            // not 511, with bits 0..3 a dead delay line that never reached the feedback. Every
+            // shipped test passed on it because none of them measured the period.
+            let fb = (state ^ (state >> 5)) & 1;
             byte |= ((state & 1) as u8) << bit;
             state = ((state >> 1) | (fb << 8)) & 0x1FF;
         }
@@ -161,6 +168,96 @@ mod tests {
     /// tap change without flagging, while staying far below the 17+ runs a genuinely weakened
     /// keystream produces.
     const MAX_DEAD_BITS: usize = 12;
+
+    /// THE PERIOD GATE: the keystream must be the sequence this format froze, not merely a
+    /// well-behaved one (#1148).
+    ///
+    /// The shipped taps ran at a **21-bit** period for the module's whole life while the docs
+    /// claimed 511, and all six tests here passed on it — because none of them measured period.
+    /// Non-constancy and ones-balance, which they did measure, are satisfied by a period-21
+    /// sequence.
+    ///
+    /// Four assertions, and the third is the one that is easy to leave out:
+    ///
+    /// 1. minimal **bit** period is exactly 511 — and "no period found" must fail, which is what
+    ///    the old taps produce from index 0 (their state map is 2-to-1, so there is a 4-bit
+    ///    transient before the 21-bit cycle);
+    /// 2. minimal **byte** period is exactly 511, pinning the gcd(8, 511) = 1 argument together
+    ///    with the LSB-first packing;
+    /// 3. a **known-answer vector** — because the reciprocal trinomial x^9+x^4+1 is *also*
+    ///    primitive with period 511 and would pass 1 and 2 while putting different bits on the air
+    ///    (`FF C1 FB E8 ...` against our `FF E1 1D 9A ...`). This is a format freeze: pin the
+    ///    sequence, not a property of it;
+    /// 4. longest zero run over a wrapped period is 8 = n-1, the maximal-LFSR property that is the
+    ///    module's whole reason for existing.
+    ///
+    /// Regenerating the vector (independent of this implementation — from the ITU-T O.150 PRBS9
+    /// recurrence, with only the LSB-first packing taken from our wire format):
+    ///
+    /// ```text
+    /// s = [1]*9
+    /// for n in range(4096): s.append(s[n+5] ^ s[n])
+    /// bytes = [sum(s[8*k+i] << i for i in range(8)) for k in range(16)]
+    /// ```
+    #[test]
+    fn the_keystream_is_the_frozen_prbs9_sequence() {
+        // Through the public seam: XOR against zeros yields the keystream itself, so this covers
+        // `scramble()` and the packing, not just the private generator.
+        let ks = scrambled(&[0u8; 1022]);
+
+        let bits: Vec<u8> = ks
+            .iter()
+            .flat_map(|b| (0..8).map(move |i| (b >> i) & 1))
+            .collect();
+        let bit_period = (1..=511usize)
+            .find(|p| bits.iter().zip(bits.iter().skip(*p)).all(|(a, b)| a == b))
+            .expect(
+                "the keystream has NO period within 511 bits — the shipped x^9+x^8+x^4 taps produce \
+                 exactly this from index 0, because their 2-to-1 state map leaves a transient",
+            );
+        assert_eq!(
+            bit_period, 511,
+            "minimal bit period is {bit_period}, not 511: this is not the primitive x^9+x^5+1 \
+             sequence the wire format froze"
+        );
+
+        let byte_period = (1..=511usize)
+            .find(|p| ks.iter().zip(ks.iter().skip(*p)).all(|(a, b)| a == b))
+            .expect("the keystream has no byte-domain period within 511 bytes");
+        assert_eq!(
+            byte_period, 511,
+            "minimal byte period is {byte_period}, not 511 — gcd(8, 511) = 1 is what makes the \
+             byte sequence repeat on the same period as the bits"
+        );
+
+        const KAT: [u8; 16] = [
+            0xFF, 0xE1, 0x1D, 0x9A, 0xED, 0x85, 0x33, 0x24, 0xEA, 0x7A, 0xD2, 0x39, 0x70, 0x97,
+            0x57, 0x0A,
+        ];
+        assert_eq!(
+            &ks[..16],
+            &KAT,
+            "keystream prefix does not match the frozen PRBS9 vector. Period alone cannot catch \
+             this: the reciprocal trinomial x^9+x^4+1 is also primitive with period 511 and starts \
+             FF C1 FB E8. A different seed also lands here while the period stays 511."
+        );
+
+        let longest_zero_run = {
+            let wrapped: Vec<u8> = bits.iter().copied().chain(bits.iter().copied()).collect();
+            let mut best = 0usize;
+            let mut run = 0usize;
+            for b in wrapped.iter().take(511 + 16) {
+                run = if *b == 0 { run + 1 } else { 0 };
+                best = best.max(run);
+            }
+            best
+        };
+        assert_eq!(
+            longest_zero_run, 8,
+            "longest zero run is {longest_zero_run}, not the n-1 = 8 of a maximal 9-bit LFSR — a \
+             longer run is dead carrier, which is the defect this module exists to prevent"
+        );
+    }
 
     /// THE GATE: the real on-air wire for the frame that failed in #1021 must carry no long run of
     /// zero bits.
