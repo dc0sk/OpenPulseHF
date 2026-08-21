@@ -57,6 +57,43 @@ Header is 8 bytes; min frame (empty payload) is 10 bytes; max is 265 bytes. A pa
 
 ---
 
+## 1a. Wire whitening (scrambler)
+
+Source: `crates/openpulse-core/src/scramble.rs` · frozen 2026-08-21 (#1148).
+
+Everything modulated is whitened first, and this layer was **undocumented until #1148** — a
+third-party implementer building from this spec would have produced a non-interoperable modem, since
+nothing above hints that the bytes on the air are not the bytes in the frame.
+
+| Property | Value |
+|---|---|
+| Polynomial | `x⁹ + x⁵ + 1` (ITU-T O.150 PRBS9), primitive |
+| Recurrence | `s[n+9] = s[n+5] ⊕ s[n]` |
+| Seed | all ones (`0x1FF`); the all-zero state is the degenerate fixed point and is unreachable |
+| Period | **511 bits**, and **511 bytes** — equal because `gcd(8, 511) = 1` |
+| Packing | LSB-first: bit *i* of keystream byte *k* is `s[8k + i]` |
+| Application | XOR, **additive** (not self-synchronising) — so it needs frame alignment, which the preamble supplies, and it does **not** multiply errors in front of the FEC |
+| Coverage | the post-FEC wire bytes; the **preamble is not whitened** |
+| Inverse | self-inverse — apply the same function to undo it |
+
+**Known-answer vector.** First 16 keystream bytes, i.e. the result of whitening 16 zero bytes:
+
+```
+FF E1 1D 9A ED 85 33 24 EA 7A D2 39 70 97 57 0A
+```
+
+An implementation that reproduces the period but not this vector is **not** interoperable: the
+reciprocal trinomial `x⁹ + x⁴ + 1` is also primitive with period 511 and produces
+`FF C1 FB E8 …` instead. Gated by
+`openpulse_core::scramble::tests::the_keystream_is_the_frozen_prbs9_sequence`.
+
+**History, because it bears on any capture predating this spec.** Until #1148 the implementation used
+taps `(state >> 8) ^ (state >> 4)`, i.e. `s[n+9] = s[n+8] ⊕ s[n+4]` — characteristic
+`x⁹+x⁸+x⁴ = x⁴(x⁵+x⁴+1)`, reducible, so the true period was **21 bits**. Recordings made before that
+date carry the 21-bit keystream and do not decode against this spec.
+
+---
+
 ## 2. Segmentation and reassembly (SAR)
 
 Source: `crates/openpulse-core/src/sar.rs` · CAP-07. Used to carry any PDU larger than one base

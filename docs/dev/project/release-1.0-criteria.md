@@ -361,11 +361,19 @@ re-opens the campaign.
   re-encoding is a **signature-domain** change on the classical CONREQ/CONACK as much as on the PQ
   path — treat it with that risk class, not as a codec swap. Either scope PQ in, or record explicitly
   that the PQ handshake is not a 1.0 on-air feature.
-* **#1148 costs more than its one-line fix.** The **three recorded-frame** replay gates
-  (`capture_replay_corpus.rs:211, 266, 320`) decode real captures whitened with the 21-bit keystream
-  and go red on the change; the synthesized-frame gates (`:145, 418, 500`) build both ends from the
-  same build and stay green. So: re-record those three, or carry a test-only legacy keystream for
-  replay. The change must also add a **period gate** — all six existing scramble tests
+* **#1148 costs more than its one-line fix.** The **four recorded-frame** replay gates
+  (`capture_replay_corpus.rs:211, 266, 320, 370`) decode real captures whitened with the 21-bit
+  keystream and go red on the change; the synthesized-frame gates (`:145, 418, 500`) build both ends
+  from the same build and stay green. **Corrected 2026-08-21: this said "three" and listed three —
+  `the_settle_recovery_reaches_the_frame_without_crawling` (`:370`) decodes a whitened capture too,
+  and the miscount was carried into the package section from here.** They are now `#[ignore]`d with
+  a tracking-and-epoch reason, and **un-ignoring them is part of the re-record's definition of
+  done**. The "test-only legacy keystream" alternative is **struck**: `#[cfg(test)]` cannot reach
+  integration tests, so it would require a cargo feature carrying a second wire format in production
+  source, and it would attest a build no station runs — the opposite of what a real-capture gate is
+  for. These captures also carry the pre-#1062 preamble, so anything that keeps them alive through
+  #1148 dies again at #1062 within the same window: land the break PRs in tight succession and
+  re-record **once**, against the final format. The change must also add a **period gate** — all six existing scramble tests
   (`scramble.rs:142, 181, 224, 251, 264, 281`) pass on a 21-bit keystream because none measures
   period (`the_keystream_is_not_degenerate` checks only non-constancy and ones-balance), so the next
   tap typo would be equally invisible. Sabotage-verify that gate against the current taps.

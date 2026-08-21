@@ -208,6 +208,7 @@ fn the_recorded_hot_floor_degrades_acquisition_as_it_did_on_air() {
 /// piece — the only thing that can assert a decode against audio a radio actually produced, rather
 /// than against a model of one.
 #[test]
+#[ignore = "#1148: this capture was whitened with the pre-#1148 21-bit keystream, and it also carries the pre-#1062 preamble; re-record after the wire-break package per release-1.0-criteria decision 1, then un-ignore"]
 fn a_real_on_air_frame_decodes_end_to_end() {
     let c = corpus("ic9700-frame-bpsk250-none-whitened.wav");
     assert!(
@@ -263,6 +264,7 @@ fn a_real_on_air_frame_decodes_end_to_end() {
 /// predecessor's 25 of 33 — but it was not the cause of the decode failure. Two defects, one
 /// symptom.
 #[test]
+#[ignore = "#1148: this capture was whitened with the pre-#1148 21-bit keystream, and it also carries the pre-#1062 preamble; re-record after the wire-break package per release-1.0-criteria decision 1, then un-ignore"]
 fn the_real_on_air_frame_decodes() {
     let c = corpus("ic9700-frame-bpsk250-rs-whitened.wav");
     // Guard the artifact itself: a capture that lost its burst would turn this into a test of
@@ -317,6 +319,7 @@ fn the_real_on_air_frame_decodes() {
 /// the gain matters). IQ demodulated to 8 kHz USB audio by keeping only positive baseband
 /// frequencies and taking twice the real part.
 #[test]
+#[ignore = "#1148: this capture was whitened with the pre-#1148 21-bit keystream, and it also carries the pre-#1062 preamble; re-record after the wire-break package per release-1.0-criteria decision 1, then un-ignore"]
 fn the_ic9700_transmit_chain_decodes_off_air_from_an_independent_receiver() {
     for (name, expected) in [
         ("sdr-ic9700tx-bpsk250-rs-1.wav", "RFGAINFIX RS TEST"),
@@ -367,6 +370,7 @@ fn the_ic9700_transmit_chain_decodes_off_air_from_an_independent_receiver() {
 /// is not free: each condemnation costs `SETTLE_FAILURE_LIMIT` (18) fully-buffered decodes, and a
 /// coded BPSK250 decode is a multi-second demodulation.
 #[test]
+#[ignore = "#1148: this capture was whitened with the pre-#1148 21-bit keystream, and it also carries the pre-#1062 preamble; re-record after the wire-break package per release-1.0-criteria decision 1, then un-ignore"]
 fn the_settle_recovery_reaches_the_frame_without_crawling() {
     let c = corpus("ic9700-frame-bpsk250-rs-whitened.wav");
     let mut h = harness();

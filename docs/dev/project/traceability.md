@@ -10474,3 +10474,43 @@ The last mode still failing on the dual-card rig after the AGC misclassification
   where cargo runs many test binaries in parallel, each spawning daemons, threads and I/O. The only
   verification that counts is a full `gate.sh` run, and that is n = 1 per run for a flake whose base
   rate is unknown.
+
+## 2026-08-21 — #1148: the whitener's period was 21 bits, and the gate that would have caught it
+
+- **Requirement/change:** `openpulse_core::scramble` documented a 511-byte period and delivered
+  **21 bits**. Part of the decided pre-1.0 wire-format break package.
+- **Measured, not inferred:** the shipped taps `((state >> 8) ^ (state >> 4))` give
+  `s[n+9] = s[n+8] ⊕ s[n+4]`, characteristic `x⁹+x⁸+x⁴ = x⁴(x⁵+x⁴+1)`, and `x⁵+x⁴+1` is reducible —
+  period lcm(3,7) = **21 bits**, with register bits 0..3 a dead delay line. The intended `x⁹+x⁵+1` is
+  `(state ^ (state >> 5))`: **511 bits and 511 bytes**, equal because `gcd(8, 511) = 1`. Verified by
+  two independent derivations (a direct simulation, and the ITU-T O.150 recurrence), which agree on
+  the same known-answer vector.
+- **Design decision (+ rationale):** the gate pins the **sequence**, not a property of it. Period
+  alone is insufficient: the reciprocal trinomial `x⁹+x⁴+1` is also primitive with period 511 and
+  puts different bits on the air. So four assertions — minimal bit period 511 (with "no period found"
+  a failure, which is what the old taps produce from index 0 because their state map is 2-to-1),
+  minimal byte period 511, a 16-byte known-answer vector, and the n−1 = 8 longest-zero-run property.
+- **Corpus decision — Option A (ignore until re-record), after review rejected the alternatives:**
+  a test-only legacy keystream is unreachable from integration tests without a cargo feature carrying
+  a second wire format in production source, and would attest a build no station runs; re-recording
+  now pays the rig session twice, because these captures also carry the **pre-#1062 preamble** and
+  die again inside the same window; asserting only the acquisition stages buys one PR window and
+  changes what the cost gate at `:370` means.
+- **Implementation (files):** `crates/openpulse-core/src/scramble.rs` (taps, gate, and the
+  `MAX_DEAD_BITS` comment that invited the next silent tap change);
+  `crates/openpulse-modem/tests/capture_replay_corpus.rs` (four `#[ignore]`s with tracking + epoch);
+  `docs/dev/design/protocol-wire-spec.md` (**§1a — the spec did not mention whitening at all**, so a
+  third-party implementer would have built a non-interoperable modem; now polynomial, seed, packing,
+  coverage, self-inverse, the KAT and the pre-#1148 history); `captures/README.md`; the acceptance
+  table; this ledger.
+- **Tests:** `scramble::tests::the_keystream_is_the_frozen_prbs9_sequence`.
+- **Test results (run):** `openpulse-core` scramble **7/7**. **Sabotage-verified in two rounds**,
+  because one could not distinguish them: old taps → the period search reports **no period** (rc 101);
+  correct taps with only `SEED` changed → the **KAT fails alone** while the period stays 511 (rc 101);
+  restored → pass. The second round is what proves the vector is load-bearing.
+- **Ablation that preceded the ignores** (required so the premise is proven, not assumed): running the
+  corpus against the new taps fails **exactly** the four recorded-frame tests and passes the other
+  **eight** — including every gate that synthesizes a frame inside real recorded noise. So the
+  captures do carry the old keystream, and the real-audio safety net largely survives the dark window.
+- **Correction carried from review:** it is **four** tests, not three. The criteria doc said three and
+  listed three; that miscount had already propagated into the package section.
