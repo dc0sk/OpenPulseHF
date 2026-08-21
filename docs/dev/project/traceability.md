@@ -10475,6 +10475,43 @@ The last mode still failing on the dual-card rig after the AGC misclassification
   verification that counts is a full `gate.sh` run, and that is n = 1 per run for a flake whose base
   rate is unknown.
 
+## 2026-08-21 — instrumenting #1176 rather than guessing at it again
+
+- **Requirement/change:** the REQ-PHY-03 twin-daemon gate fails intermittently (#1176). Two
+  diagnoses have now been wrong: "the bound expired" (#1175, falsified by its own diagnostic — it
+  fails identically at 300 s) and "the dev profile makes the DSP too slow to hold a 10 ms tick"
+  (falsified by review at mechanism level).
+- **Why the profile hypothesis is dead, stated so it is not re-proposed:** nothing on this path
+  couples *correctness* to time. A's frame is written in ONE `write()` (`engine.rs:6537` →
+  `loopback.rs:253-257`) and the bridge drains atomically (`channel_sim.rs:30-33`), so it cannot be
+  split; the loopback queues are unbounded with no expiry, so nothing rots while B is slow;
+  `accumulate_routed` gates on **content**, not arrival time (`engine.rs:2020-2052`); and
+  `decode_burst` (`engine.rs:2122-2245`) is work-bounded with no `Instant`. The wall-clock retry
+  budget I was pattern-matching on lives in `receive_with_timeout_fec_inner` — **the CLI
+  `--listen-ms` path this test never executes** — so citing #1058's debug/release margin here was a
+  category error. Slow DSP can delay `FrameReceived`; it cannot remove it.
+- **What the maintainer's argument establishes, now with a mechanism rather than an analogy:** he
+  objected that PACTOR modems run on microcontrollers and VARA HF runs on a Pi 4 under Wine, so CPU
+  starvation on a 16-core desktop is not a plausible statement about the modem. The code agrees and
+  goes further — every stage here is a non-expiring queue feeding a work-bounded decode, so **any**
+  load sensitivity in this test is a harness or observation defect by construction.
+- **Implementation (files):** `crates/openpulse-daemon/src/twin.rs` — `BridgeStats` (samples moved
+  each way, from the count `bridge_through` already returned and the harness discarded, plus daemon
+  thread liveness, which nothing reported before: a dead transmitter is indistinguishable from a deaf
+  receiver at the far end). `crates/openpulse-daemon/tests/twin_daemon_bridge.rs` — A's control
+  stream is watched (it was not), both streams' event **kinds** are tallied rather than counted, and
+  the pre-send fixed sleep is replaced by waiting for a real event from B.
+- **Tests:** the gate itself. On failure it now prints A's kinds, B's kinds and the rig stats, and
+  names the read order: no transmit event on A or a dead A ⇒ upstream of the channel; forward
+  samples ≈ 0 ⇒ the bridge; samples moved with no `DcdChange` ⇒ B's capture seam; `DcdChange`
+  without a decode ⇒ the acquisition failure the gate is for.
+- **Test results (run):** idle 5.1–5.4 s pass. **Reproduction attempts that did NOT reproduce, so
+  the record is not one-sided:** three runs with the sync gate removed under 16 rustc processes at
+  load 14.2 all passed, and one instrumented run under the same load passed. Standing tally is 3
+  failures (two `gate.sh` runs, one manual under compile load) against ~8 passes, **mechanism
+  unknown**. The instrumentation exists to partition the next one; no further hypothesis is recorded
+  until it does.
+
 ## 2026-08-21 — #1148: the whitener's period was 21 bits, and the gate that would have caught it
 
 - **Requirement/change:** `openpulse_core::scramble` documented a 511-byte period and delivered
