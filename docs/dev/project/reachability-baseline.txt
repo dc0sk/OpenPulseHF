@@ -39,6 +39,7 @@ bits_to_symbols	plugins/qpsk/src/modulate.rs
 bpsk_demodulate_with_expected	plugins/bpsk/src/demodulate.rs
 bpsk_modulate_with_preamble	plugins/bpsk/src/modulate.rs
 BridgedPair	crates/openpulse-daemon/src/twin.rs
+BridgeStats	crates/openpulse-daemon/src/twin.rs
 build_cat_controller	crates/openpulse-daemon/src/server.rs
 build_item8_lab_profiles	apps/openpulse-testmatrix/src/bench.rs
 build_snapshot	crates/openpulse-daemon/src/audit.rs

@@ -13,7 +13,7 @@
 //! directions live. See `examples/twin_station.rs`.
 
 use std::net::SocketAddr;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::thread::JoinHandle;
 use std::time::Duration;
@@ -33,13 +33,78 @@ pub struct BridgedPair {
     pub addr_b: SocketAddr,
     stop: Arc<AtomicBool>,
     threads: Vec<JoinHandle<()>>,
+    /// Samples the bridge has moved A→B and B→A.
+    ///
+    /// `bridge_through` already returns the count and the harness used to discard it. Without it, a
+    /// test that times out cannot distinguish "the transmitter never produced audio" from "the
+    /// receiver never consumed it" — the two halves of every failure this rig can have.
+    fwd_samples: Arc<AtomicUsize>,
+    rev_samples: Arc<AtomicUsize>,
+    daemon_a: Option<JoinHandle<()>>,
+    daemon_b: Option<JoinHandle<()>>,
+}
+
+/// What the rig was doing when a test gave up, so a timeout is attributable.
+///
+/// DORMANT(#1176): consumed by the twin integration tests, never by a production path — the same
+/// standing as `BridgedPair` beside it in the reachability baseline. It exists because the two
+/// halves of every failure this rig can have (the transmitter never produced audio; the receiver
+/// never consumed it) are otherwise indistinguishable from the far end.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct BridgeStats {
+    /// Samples moved A→B.
+    pub fwd_samples: usize,
+    /// Samples moved B→A.
+    pub rev_samples: usize,
+    /// Whether daemon A's thread has exited — a dead transmitter looks exactly like a deaf
+    /// receiver from the far end, and nothing else in this rig reports it.
+    pub daemon_a_exited: bool,
+    /// Whether daemon B's thread has exited.
+    pub daemon_b_exited: bool,
+}
+
+impl std::fmt::Display for BridgeStats {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "bridge moved {} samples A->B and {} B->A; daemon A {}, daemon B {}",
+            self.fwd_samples,
+            self.rev_samples,
+            if self.daemon_a_exited {
+                "EXITED"
+            } else {
+                "alive"
+            },
+            if self.daemon_b_exited {
+                "EXITED"
+            } else {
+                "alive"
+            },
+        )
+    }
 }
 
 impl BridgedPair {
+    /// What the rig has actually done — call it before asserting on a timeout.
+    pub fn stats(&self) -> BridgeStats {
+        BridgeStats {
+            fwd_samples: self.fwd_samples.load(Ordering::Relaxed),
+            rev_samples: self.rev_samples.load(Ordering::Relaxed),
+            daemon_a_exited: self.daemon_a.as_ref().is_some_and(|h| h.is_finished()),
+            daemon_b_exited: self.daemon_b.as_ref().is_some_and(|h| h.is_finished()),
+        }
+    }
+
     /// Stop the bridge and both daemons, joining their threads.
     pub fn shutdown(mut self) {
         self.stop.store(true, Ordering::Relaxed);
         for h in self.threads.drain(..) {
+            let _ = h.join();
+        }
+        for h in [self.daemon_a.take(), self.daemon_b.take()]
+            .into_iter()
+            .flatten()
+        {
             let _ = h.join();
         }
     }
@@ -85,10 +150,23 @@ pub async fn spawn_bridged_pair(
     let daemon_b = spawn_daemon_thread("B", cfg_b, Box::new(b_run), stop.clone());
 
     let stop_bridge = stop.clone();
+    let fwd_samples = Arc::new(AtomicUsize::new(0));
+    let rev_samples = Arc::new(AtomicUsize::new(0));
+    let fwd_count = fwd_samples.clone();
+    let rev_count = rev_samples.clone();
     let bridge = std::thread::spawn(move || {
         while !stop_bridge.load(Ordering::Relaxed) {
-            bridge_through(&a_lb, &b_lb, fwd.as_mut()); // A TX (playback) → B RX (capture)
-            bridge_through(&b_lb, &a_lb, rev.as_mut()); // B TX (playback) → A RX (capture)
+            // A TX (playback) → B RX (capture), and back. The counts are kept because a timeout
+            // with zero forward samples is a transmit-side failure and a timeout with samples
+            // moved is a receive-side one — a distinction no other signal in this rig makes.
+            fwd_count.fetch_add(
+                bridge_through(&a_lb, &b_lb, fwd.as_mut()),
+                Ordering::Relaxed,
+            );
+            rev_count.fetch_add(
+                bridge_through(&b_lb, &a_lb, rev.as_mut()),
+                Ordering::Relaxed,
+            );
             std::thread::sleep(bridge_tick);
         }
     });
@@ -100,7 +178,11 @@ pub async fn spawn_bridged_pair(
         addr_a,
         addr_b,
         stop,
-        threads: vec![daemon_a, daemon_b, bridge],
+        threads: vec![bridge],
+        fwd_samples,
+        rev_samples,
+        daemon_a: Some(daemon_a),
+        daemon_b: Some(daemon_b),
     }
 }
 

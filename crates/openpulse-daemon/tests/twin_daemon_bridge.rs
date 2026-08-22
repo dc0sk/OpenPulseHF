@@ -552,10 +552,20 @@ async fn an_ota_receiver_does_not_key_ptt_at_a_peers_uncoded_traffic() {
 /// pass is disabled.
 ///
 /// It is kept, and it is not vacuous: at **−800 Hz** — past `AFC_MAX_CORRECTION_HZ` — it fails, so it
-/// does measure the offset it applies. What it covers is the two-daemon *round trip* at a realistic
-/// inter-rig offset, including the ISS ACK listen (`receive_ota_ack_within`), which is its own
-/// accumulate loop with no acquisition and where FSK4-ACK's 100 Hz tone spacing makes an offset
-/// expensive. That chain has no other test.
+/// does measure the offset it applies. What it covers is a **one-way** message crossing two real
+/// daemons at a realistic inter-rig offset: the control protocol, the transmit path, the bridge, and
+/// B's capture and decode.
+///
+/// **Corrected 2026-08-21 (#1177): it is NOT a round trip and does NOT reach the ISS ACK listen.**
+/// This comment claimed both, and claimed `receive_ota_ack_within` "has no other test" — which made
+/// the false claim load-bearing, since it was the stated reason to keep the test. At this test's
+/// config `modem.ota_enabled` is the default `false` (`openpulse-config/src/lib.rs:660`),
+/// `start_ota_session` is gated on it (`server.rs:228`), and the non-OTA `SendMessage` arm is a
+/// one-way fixed-mode transmit (`lib.rs:2031-2050`). B never keys; the reverse-offset channel this
+/// test installs is dead weight. **The FSK4-ACK-at-offset chain is covered by nothing**, which is
+/// the real finding — FSK4-ACK tone spacing is 100 Hz, so a ±50 Hz error is catastrophic there.
+/// Enabling OTA here would give that chain its first coverage, but that path carries its own
+/// wall-clock deadlines (`engine.rs:6023`, `:6189`) and must not be added while #1176 is open.
 ///
 /// −64 Hz is the one cleanly measured inter-rig offset on this project's hardware (IC-9700 <->
 /// FT-991A, both commanded to 144.600000 MHz, 2026-07-28; `openpulse-channel/src/cfo.rs`), and it is
@@ -579,8 +589,56 @@ async fn a_message_crosses_the_bridge_between_two_rigs_that_disagree_on_frequenc
     let mut b_reader = BufReader::new(b_read);
 
     let a = TcpStream::connect(pair.addr_a).await.unwrap();
-    let (_a_read, mut a_write) = a.into_split();
-    tokio::time::sleep(Duration::from_millis(200)).await;
+    let (a_read, mut a_write) = a.into_split();
+    let mut a_reader = BufReader::new(a_read);
+
+    // A's stream is watched too. A transmitter that never keyed looks, from B, exactly like a
+    // receiver that never heard — and nothing in this rig could tell them apart: the test never
+    // read A, the daemon's `tracing::error!` on exit goes nowhere (no subscriber is installed),
+    // and `shutdown()` discarded join results.
+    let a_events = std::sync::Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
+    let a_sink = a_events.clone();
+    let a_watch = tokio::spawn(async move {
+        loop {
+            let mut buf = String::new();
+            match a_reader.read_line(&mut buf).await {
+                Ok(0) | Err(_) => break,
+                Ok(_) => {}
+            }
+            let line = buf.trim().to_string();
+            if !line.is_empty() {
+                if let Ok(mut v) = a_sink.lock() {
+                    if v.len() < 4_000 {
+                        v.push(line);
+                    }
+                }
+            }
+        }
+    });
+
+    // Both control stacks must be live and subscribed BEFORE the command, or an event lost to a
+    // late subscription is indistinguishable from a frame that never crossed. A fixed sleep
+    // asserts nothing: TCP connect succeeds on the listen backlog without the acceptor running,
+    // and a broadcast subscriber never sees what was published before it subscribed.
+    let synced = timeout(Duration::from_secs(30), async {
+        loop {
+            let mut buf = String::new();
+            match b_reader.read_line(&mut buf).await {
+                Ok(0) | Err(_) => return false,
+                Ok(_) => {}
+            }
+            if !buf.trim().is_empty() {
+                return true;
+            }
+        }
+    })
+    .await;
+    assert!(
+        matches!(synced, Ok(true)),
+        "daemon B published no control event within 30 s of connecting, so its control stack was \
+         never live and nothing measured below would be attributable"
+    );
+
     let cmd = serde_json::to_string(&ControlCommand::SendMessage {
         to: "OFFSETB".into(),
         subject: "x".into(),
@@ -600,6 +658,7 @@ async fn a_message_crosses_the_bridge_between_two_rigs_that_disagree_on_frequenc
     // events means the daemons were starved and the machine is the story, while events-without-a-
     // decode is the real failure this gate exists to catch.
     let mut events_seen = 0usize;
+    let mut b_kinds: std::collections::BTreeMap<String, usize> = Default::default();
     let got = timeout(Duration::from_secs(300), async {
         loop {
             let mut buf = String::new();
@@ -611,6 +670,22 @@ async fn a_message_crosses_the_bridge_between_two_rigs_that_disagree_on_frequenc
                 continue;
             }
             events_seen += 1;
+            *b_kinds
+                .entry(
+                    serde_json::from_str::<serde_json::Value>(line)
+                        .ok()
+                        .and_then(|v| {
+                            v.get("event")
+                                .and_then(|e| e.get("type"))
+                                .and_then(|t| t.as_str())
+                                .map(|t| format!("engine:{t}"))
+                                .or_else(|| {
+                                    v.get("type").and_then(|t| t.as_str()).map(str::to_string)
+                                })
+                        })
+                        .unwrap_or_else(|| "unparsed".into()),
+                )
+                .or_default() += 1;
             if let Ok(ControlEvent::EngineEvent {
                 event: openpulse_modem::EngineEvent::FrameReceived { bytes, .. },
             }) = serde_json::from_str::<ControlEvent>(line)
@@ -623,13 +698,44 @@ async fn a_message_crosses_the_bridge_between_two_rigs_that_disagree_on_frequenc
     })
     .await;
 
+    // Snapshot the rig BEFORE shutdown: `stats()` reads liveness from the daemon threads, so
+    // shutting down first would make every failure report "EXITED".
+    let stats = pair.stats();
+    let a_lines = a_events.lock().map(|v| v.clone()).unwrap_or_default();
+    a_watch.abort();
     pair.shutdown();
+
+    // A raw count cannot say what failed: both daemons publish a 2 Hz heartbeat regardless, so
+    // "600 events in 300 s" is exactly what a completely idle receive path looks like. Tally kinds.
+    let kind_of = |line: &String| -> String {
+        serde_json::from_str::<serde_json::Value>(line)
+            .ok()
+            .map(|v| match v.get("event").and_then(|e| e.get("type")) {
+                Some(t) => format!("engine:{}", t.as_str().unwrap_or("?")),
+                None => v
+                    .get("type")
+                    .and_then(|t| t.as_str())
+                    .unwrap_or("?")
+                    .to_string(),
+            })
+            .unwrap_or_else(|| "unparsed".into())
+    };
+    let mut a_kinds: std::collections::BTreeMap<String, usize> = Default::default();
+    for l in &a_lines {
+        *a_kinds.entry(kind_of(l)).or_default() += 1;
+    }
+    let a_len = a_lines.len();
+
     assert!(
         got.is_ok(),
-        "daemon B never decoded a frame across a -64 Hz inter-rig offset in 300 s \
-         ({events_seen} control events seen). REQ-PHY-03 requires tracking station-to-station \
-         offsets to ±50 Hz without operator intervention, and this is the shipping two-daemon \
-         surface. NOTE: 0 events means the daemons never even reported — read that as a starved \
-         machine, not as an acquisition failure; a nonzero count with no decode is the real defect."
+        "daemon B never decoded a frame across a -64 Hz inter-rig offset in 300 s.\n\
+         B: {events_seen} events, kinds {b_kinds:?}\n\
+         A: {a_len} events, kinds {a_kinds:?}\n\
+         rig: {stats}\n\
+         REQ-PHY-03 requires tracking station-to-station offsets to +/-50 Hz without operator \
+         intervention, and this is the shipping two-daemon surface. Read it in this order: no \
+         transmit event on A, or a dead A, puts the fault upstream of the channel; forward samples \
+         ~0 means the bridge; samples moved with no DcdChange on B means B's capture seam; a \
+         DcdChange without a decode is the acquisition failure this gate is actually for."
     );
 }
