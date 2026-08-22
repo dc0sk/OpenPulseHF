@@ -75,3 +75,28 @@ on the same sample. See `the_real_on_air_frame_decodes` for the full account.
 The lesson worth keeping: **every physical hypothesis was wrong** — frequency, level, margin,
 fading, frame location were each measured and refuted — and the artifact is what made measuring them
 cheap. The next defect of this class costs no radio, no second operator and no on-air window.
+
+## Wire-format epoch (added 2026-08-21, #1148)
+
+The `*-whitened.wav` frame captures were recorded against the **pre-#1148 wire format**, whose
+whitening LFSR ran at a 21-bit period (the taps implemented `x⁹+x⁸+x⁴`, not the documented
+`x⁹+x⁵+1`). They do **not** decode against the current format, and the four tests that decode them
+are `#[ignore]`d until the corpus is re-recorded:
+
+* `a_real_on_air_frame_decodes_end_to_end`
+* `the_real_on_air_frame_decodes`
+* `the_ic9700_transmit_chain_decodes_off_air_from_an_independent_receiver`
+* `the_settle_recovery_reaches_the_frame_without_crawling`
+
+They also carry the **pre-#1062 preamble**, so re-recording is worth doing **once**, after the whole
+wire-break package has landed, rather than after each PR in it.
+
+**Do not delete these files.** The corpus-integrity gates still run against them (levels, carrier
+placement, sample rate), and the idle and tone captures carry no wire content at all — they are
+unaffected by any format change and still back the #1060 ρ work, the squelch/noise-floor gates and
+every "synthesize a frame inside real recorded noise" test, all of which stay green.
+
+Any `#[ignore = "verification"]` harness that prints decode or condemnation columns from these
+frame captures (G9 in `preamble_veto_interference.rs`, `snr_lead_in_bias`, the H1/H2 probes in
+`sweep_cycle_idempotence`) is measuring the old format and its output should be read as historical
+until the re-record.

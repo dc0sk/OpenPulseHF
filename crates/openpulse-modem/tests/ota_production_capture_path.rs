@@ -30,7 +30,9 @@ const SESSION: &str = "prod-path";
 /// The daemon's default receive tick is 100 ms; at 8 kHz that is 800 samples per `accumulate_capture`
 /// call. Feeding one big slice would skip the very chunking this test exists to exercise.
 const TICK_SAMPLES: usize = 800;
-const TRIALS: u32 = 30;
+/// Trials per arm. 30 left the old rate-difference statistic flipping on ~10 % of re-rolls; the
+/// whole binary runs in ~12 s at 30, so 150 costs about a minute and buys a decisive margin.
+const TRIALS: u32 = 150;
 const ATTEMPTS: usize = 3;
 const SNR_DB: f32 = 10.0;
 
@@ -125,9 +127,10 @@ fn a_burst_gathered_by_accumulate_capture_decodes() {
 /// Returns (success_rate, no_flush_count). A burst the DCD never flushed is a genuine failed
 /// attempt — the daemon heard nothing — so it counts as failure rather than being skipped, but it is
 /// reported so this can never quietly become a test of nothing.
-fn run(tx: &[f32], retain: bool) -> (f32, u32) {
-    let (mut ok, mut no_flush) = (0u32, 0u32);
+fn run(tx: &[f32], retain: bool) -> (Vec<bool>, u32) {
+    let (mut per_trial, mut no_flush) = (Vec::with_capacity(TRIALS as usize), 0u32);
     for trial in 0..TRIALS {
+        let mut trial_ok = false;
         let mut held = retain.then(make);
         for attempt in 0..ATTEMPTS {
             let mut fresh = (!retain).then(make);
@@ -147,12 +150,13 @@ fn run(tx: &[f32], retain: bool) -> (f32, u32) {
                 .as_deref()
                 == Some(PAYLOAD)
             {
-                ok += 1;
+                trial_ok = true;
                 break;
             }
         }
+        per_trial.push(trial_ok);
     }
-    (ok as f32 / TRIALS as f32, no_flush)
+    (per_trial, no_flush)
 }
 
 /// The HARQ diversity gain must survive the production capture entry.
@@ -167,15 +171,43 @@ fn harq_combining_survives_the_production_capture_entry() {
     let tx = tx_samples();
     let (standalone, sa_no_flush) = run(&tx, false);
     let (combining, co_no_flush) = run(&tx, true);
+
+    // PAIRED, because the arms are paired by construction: both use seed
+    // `4_100 + trial*10 + attempt` on the same `tx`, and `ota_decode_and_ack_inner` only reaches the
+    // HARQ combine after every standalone candidate has failed (the #694 union), so per trial the
+    // combining arm is a near-superset of the standalone one. Differencing two independently-noisy
+    // rates threw that structure away and cost ~10 % of re-rolls in false failures.
+    let rescued = standalone
+        .iter()
+        .zip(&combining)
+        .filter(|(s, c)| !**s && **c)
+        .count();
+    let lost = standalone
+        .iter()
+        .zip(&combining)
+        .filter(|(s, c)| **s && !**c)
+        .count();
+    let sa_rate = standalone.iter().filter(|b| **b).count() as f32 / TRIALS as f32;
+    let co_rate = combining.iter().filter(|b| **b).count() as f32 / TRIALS as f32;
     println!(
-        "production path @{SNR_DB} dB: standalone={standalone:.3} combining={combining:.3} \
-         (delta {:+.3}) no_flush={sa_no_flush}/{co_no_flush}",
-        combining - standalone
+        "production path @{SNR_DB} dB, n={TRIALS}: standalone={sa_rate:.3} combining={co_rate:.3} \
+         (delta {:+.3}) rescued={rescued} lost={lost} no_flush={sa_no_flush}/{co_no_flush}",
+        co_rate - sa_rate
     );
+
+    // Power, stated where it can be read on a failure — libtest swallows stdout on a pass, so a
+    // margin recorded only in prose is unrecoverable. Measured 2026-08-21 against the #1148
+    // keystream: rescued 37, lost 0 of 150 (old keystream: 37 and 1). At these parameters the
+    // paired form flips on well under 1 % of re-rolls, where the old `delta > 0.15` at n=30 flipped
+    // on ~10 %. Re-measure when the wire format changes — a keystream re-roll moves the fixture,
+    // and this one is ~65 % keystream bytes.
     assert!(
-        combining > standalone + 0.15,
-        "moderate_f1 @{SNR_DB} dB, {ATTEMPTS} bursts through accumulate_capture: combining \
-         {combining:.3} vs standalone {standalone:.3} — the HARQ diversity gain must reach the \
-         daemon's real receive path, not just the direct ota_decode_burst seam"
+        rescued >= 10 && lost <= 1,
+        "moderate_f1 @{SNR_DB} dB, {ATTEMPTS} bursts through accumulate_capture, n={TRIALS}: \
+         combining rescued {rescued} trials that standalone lost and lost {lost} that it won \
+         (rates {sa_rate:.3} -> {co_rate:.3}). The HARQ diversity gain must reach the daemon's real \
+         receive path, not just the direct ota_decode_burst seam. NOTE: this is a PAIRED count, not \
+         a rate difference — a rate difference is capped at 1 - standalone, so a fixed delta bar \
+         gets harder as the modem improves and becomes unpassable above ~0.85."
     );
 }
