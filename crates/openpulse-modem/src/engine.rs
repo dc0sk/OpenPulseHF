@@ -724,6 +724,8 @@ pub struct ModemEngine {
     /// Count of capture blocks the notch processed — a tripwire: an enabled notch that never runs
     /// on a given path (e.g. a new capture path that skips the InputCapture seam) leaves this at 0.
     notch_blocks_processed: u64,
+    notch_freqs_seen: std::collections::BTreeSet<i32>,
+    notch_protect_extremes: Option<(f32, f32, f32, f32)>,
     /// Count of settle anchors condemned by the micro-sweep and handed back to the scan.
     ///
     /// A *count*, not a pass/fail: the settle recovery can succeed while re-anchoring dozens of
@@ -948,6 +950,8 @@ impl ModemEngine {
             notch_in_band_interferers: Vec::new(),
             rx_mode: None,
             notch_blocks_processed: 0,
+            notch_freqs_seen: std::collections::BTreeSet::new(),
+            notch_protect_extremes: None,
             settle_condemnations: 0,
             afc_settle_attempts: 0,
             condemned_positions: Vec::new(),
@@ -994,6 +998,40 @@ impl ModemEngine {
     /// the daemon runs, the receive path isn't reaching the front-end seam.
     pub fn notch_blocks_processed(&self) -> u64 {
         self.notch_blocks_processed
+    }
+
+    /// Every centre frequency (Hz, 10 Hz bins) the notch has placed since the engine was built.
+    ///
+    /// The union across blocks, not a snapshot: `notch_active_freqs` reports only the most recent
+    /// block, so on a capture whose interferer outlasts the frame it cannot answer "was the
+    /// interferer ever notched at all".
+    ///
+    /// DORMANT(#1148): consumed by the REQ-QRM-01 band probe while the notch's default-on evidence
+    /// is re-derived on the post-#1148 wire. Exit condition: the rewritten gate consumes this
+    /// permanently, or it is removed with the probe.
+    pub fn notch_freqs_seen(&self) -> Vec<f32> {
+        self.notch_freqs_seen
+            .iter()
+            .map(|&b| b as f32 * 10.0)
+            .collect()
+    }
+
+    /// Extremes of the protected passband over every block the notch processed:
+    /// `(lo_min, lo_max, hi_min, hi_max)`, or `None` if it never ran.
+    ///
+    /// An envelope rather than a snapshot, because the band is `center + afc_correction_hz ± bw/2`
+    /// and therefore MOVES with the AFC. A frequency `f` was protected in EVERY block iff
+    /// `f >= lo_max && f <= hi_min`; otherwise it was exposed in at least one block. A last-write
+    /// snapshot cannot distinguish those, which is the same defect `notch_freqs_seen` exists to
+    /// avoid for the placed frequencies.
+    ///
+    /// DORMANT(#1148): an interferer inside this band is structurally un-notchable
+    /// (`peaks_from_spectrum` skips the protected span), so a QRM test whose tone falls inside it
+    /// measures nothing about the notch — and that is not visible from the tone's frequency alone,
+    /// because `notch_fallback_bw_hz` is 4x BPSK250's real occupied width. Same exit condition as
+    /// [`Self::notch_freqs_seen`].
+    pub fn notch_protect_extremes(&self) -> Option<(f32, f32, f32, f32)> {
+        self.notch_protect_extremes
     }
 
     /// How many settle anchors the micro-sweep has condemned and returned to the scan.
@@ -1170,8 +1208,17 @@ impl ModemEngine {
             .and_then(|m| self.plugins.get(m).and_then(|p| p.occupied_bandwidth_hz(m)))
             .unwrap_or(self.notch_fallback_bw_hz);
         let half = bw / 2.0;
-        self.notch_bank
-            .set_protect_band((center - half).max(0.0), center + half);
+        let (lo, hi) = ((center - half).max(0.0), center + half);
+        self.notch_protect_extremes = Some(match self.notch_protect_extremes {
+            None => (lo, lo, hi, hi),
+            Some((lo_min, lo_max, hi_min, hi_max)) => (
+                lo_min.min(lo),
+                lo_max.max(lo),
+                hi_min.min(hi),
+                hi_max.max(hi),
+            ),
+        });
+        self.notch_bank.set_protect_band(lo, hi);
 
         // Persistence: the bank classifies the block (our wideband signal fills the protected
         // band; a lone CW tone does not), so it can tell an external interferer from our own lines.
@@ -3463,6 +3510,18 @@ impl ModemEngine {
             .audio
             .open_input(device.or(self.default_device.as_deref()), &audio_cfg)
             .map_err(|e| ModemError::Audio(e.to_string()))?;
+
+        // Record the mode for the receiver front end. Unlike `receive_with_fec`, this path reads
+        // the stream directly instead of going through `stage_capture_input`, so nothing else sets
+        // it — and the notch's protected band is `center ± bw/2` with `bw` falling back to
+        // `notch_fallback_bw_hz` (2000 Hz) when the mode is unknown. That fallback is 4x BPSK250's
+        // real occupied width, so it protected 500..2500 Hz and made every interferer in that span
+        // structurally un-notchable (`peaks_from_spectrum` skips the protected band). Measured on
+        // the REQ-QRM-01 fixture: without this line the 2200 Hz interferer is never notched at any
+        // amplitude; with it the band is 1250..1750 and the notch places 2199 Hz as its
+        // highest-prominence notch. Gated by `the_notch_rescues_a_decode_that_fails_without_it`
+        // (its ATTRIBUTION and CAUSATION legs), in `tests/notch_rescues_interferer.rs`.
+        self.rx_mode = Some(mode.to_string());
 
         let deadline = Instant::now() + listen_for;
         let start_time = Instant::now();
@@ -6909,6 +6968,9 @@ impl ModemEngine {
                 self.notch_blocks_processed = self.notch_blocks_processed.wrapping_add(1);
                 let mode = self.rx_mode.clone();
                 samples = self.apply_rx_notch(mode.as_deref(), samples);
+                for f in self.notch_bank.active_freqs() {
+                    self.notch_freqs_seen.insert((f / 10.0).round() as i32);
+                }
             }
             // Carrier detect BEFORE the AGC, on the true (pre-boost) level. The AGC only normalises the
             // level for the demodulator; the squelch/CSMA must see the real channel energy.

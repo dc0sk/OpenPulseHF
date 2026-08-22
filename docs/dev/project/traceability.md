@@ -9,6 +9,116 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-08-22 — fix(modem): the notch never saw its interferer; REQ-QRM-01's gate re-derived
+
+- **Change:** `receive_with_timeout_fec_inner` now records `rx_mode`. It read the audio stream
+  directly instead of via `stage_capture_input`, so nothing set it, and `apply_rx_notch` fell back to
+  `notch_fallback_bw_hz` (2000 Hz) — **4x BPSK250's real 500 Hz occupied width**. The protected band
+  was 500..2500 Hz, and `peaks_from_spectrum` skips the protected span, so the fixture's 2200 Hz
+  interferer was structurally un-notchable.
+- **Severity — LATENT, not shipping.** `enable_notch` has **two** non-test callers, both in the daemon
+  (`server.rs:189` startup wiring, `lib.rs:2356` the `SetNotch` control command), and it receives via
+  `accumulate_capture(Some(&mode))` and therefore always had the right band. The
+  CLI's `receive --listen-ms` uses the defective path but never enables the notch. No shipping binary
+  combined the two. (A first draft of this entry called it a shipping defect on the daemon path;
+  review falsified it in the opposite direction — see the correction note below.)
+- **How it was found:** the #1148 whitener change failed this gate, and the gate had no instrument
+  showing what the notch *did*. Adding one showed 2200 Hz was never notched at any amplitude, while
+  every frequency it ever placed (2570..3560) sat above the 2500 protect edge.
+- **Discriminator (mode-never-recorded vs plugin-lookup-failure):** priming `rx_mode` through
+  `accumulate_capture` collapses the band to 1250..1750 and the notch places a notch **on the
+  interferer** (2200 Hz, the instrument's 10 Hz bin; `notch_active_freqs` showed 2199.2 as the
+  highest-prominence entry). `BpskPlugin::occupied_bandwidth_hz("BPSK250")` → 500 Hz (2 × baud), so
+  the lookup was never at fault.
+- **What the old gate was actually measuring.** Its verdicts reproduce exactly (old keystream, 0.30:
+  on OK / off FAIL) with the interferer **never notched** — 17 distinct frequencies placed, all
+  within 2570..3560 Hz, i.e. precisely the span left between the wrongly-widened 2500 Hz protect edge
+  and `guard_hi_hz`. **What the rescue WAS is not established**; only that it was not the interferer.
+  Review measured the fixture: that span sits ~35 dB below the passband (300–2500 Hz +17.9 dB,
+  2570–3560 Hz −17.2 dB), in the rig's SSB stopband, where `peaks_from_spectrum`'s LOCAL-median
+  prominence test fires on ordinary noise ripple — so "it removed real birdies" is **not** a supported
+  reading either, and 17 wandering frequencies filling the whole permitted span is the signature of a
+  detector chasing noise. (The 2026-08-01 entry independently measured **exactly one** peak clearing
+  the bar in this capture, at 1675.8 Hz.) **True assertion, unknown mechanism, for its whole life** —
+  and a decode-outcome assertion cannot see that. That is why the rewrite asserts attribution and
+  causation, not just an outcome. To settle the mechanism: `prefilter(buf, &those_17_freqs)` with the
+  engine notch off, on the old keystream — it either decodes or it does not. Not run.
+- **Why it took the #1148 change to surface:** resting on incidental birdie removal left no margin,
+  so the gate was a single point on a decode cliff. Repairing the band restores the rescue on the new
+  keystream, for the documented reason.
+- **Design decisions (reviewed before implementing):**
+  - The rescue gate SEARCHES a short ladder and asserts a rescue EXISTS, never a pinned amplitude.
+    Measured: the rescue set is **not an interval** (0.30 yes, 0.40 no, 0.60 yes), because a louder
+    tone is easier for the detector to see and harder for the demodulator to survive at the same
+    time. A minimum-width criterion was therefore **rejected as ill-posed**, not merely hard to set.
+  - The ladder's LENGTH is the search cap, so the failure message cannot claim to have searched an
+    amplitude it never reached (a first draft had 6 entries behind `.take(3)`).
+  - `a_strong_enough_interferer_defeats_the_notch_too` **retired, not re-pinned**: it could only fire
+    on the notch improving (which it did) or on cliff drift — never on a defect.
+  - Its replacement asserts the structural limit with a **paired-tone positive control**, because
+    "nothing was notched near 1500 Hz" is otherwise an absence claimed through an unvalidated filter.
+- **An assertion that was BUILT, MEASURED and WITHDRAWN.** "No notch is ever placed near the in-band
+  tone" is a **false invariant**: on this path the `InputCapture` seam runs inside each decode attempt
+  with that attempt's *trial* `afc_correction_hz`, so `notch_freqs_seen`/`notch_protect_extremes`
+  union over hypotheses, not state — and paired tones pull trials to +324..+378 Hz, lifting the band's
+  lower edge past 1500 in attempts that are demodulating 300+ Hz off the signal and fail regardless.
+  Full measurement in `in_band_qrm_is_a_qsy_case_and_the_notch_does_not_worsen_it`'s doc comment.
+- **Harm ablation, run BEFORE proposing any fix** (a four-option fix menu had been drafted first,
+  which is the pattern the playbook bans): paired-tone buffer, notch ON → FAIL, OFF → FAIL. Equal,
+  so there is **nothing to fix** — in-band QRM is a QSY case that defeats both arms.
+- **Implementation (files):** `crates/openpulse-modem/src/engine.rs` (the `rx_mode` line;
+  `notch_freqs_seen` and `notch_protect_extremes` instruments, both `DORMANT(#1148)` with a stated
+  exit condition); `crates/openpulse-modem/tests/notch_rescues_interferer.rs` (rewritten gate + probe);
+  `crates/openpulse-config/src/lib.rs` (its doc asserted the band "tracks the active mode" — false on
+  that path for the default's entire life — and quoted the superseded 0.60 row);
+  `docs/dev/requirements.md`, `docs/dev/project/traceability-matrix.md`, the acceptance table.
+- **Tests:** `the_notch_rescues_a_decode_that_fails_without_it` (baseline → exists → attribution →
+  causation), `in_band_qrm_is_a_qsy_case_and_the_notch_does_not_worsen_it`,
+  `the_notch_costs_nothing_when_there_is_nothing_to_notch` (the no-harm half of default-on, asserted
+  in the config doc but measured by **no test** until now).
+- **Test results (run):** `notch_rescues_interferer` **3 passed, 0 failed, 1 ignored** in 2332.93 s,
+  on the **debug** profile — the one `scripts/gate.sh` actually uses, so this is the number the
+  workspace gate will see, not a release figure that would flatter it. Cost is comparable to the
+  file it replaces: the old version paid TWO full-budget failures (the rescue off-arm and the
+  retired defeat test); this pays one, plus an engagement-budget test and three fast successes. The
+  verdicts are profile-independent by construction — `deterministic_max_iterations` replaces the
+  wall-clock deadline outright, so the `Duration` argument is inert and this is not #1066 again.
+- **The design's own validation — it passes on BOTH keystreams with no re-derivation.** 3/3 in
+  2430.71 s on `main`'s (pre-#1148) keystream, and 3/3 in 2332.93 s on the post-#1148 one. That is
+  what the constant-free search buys and what the pinned-amplitude version could not do: the old
+  gate broke the moment the wire changed, and re-pinning it would have been the third derivation of
+  the same fitted number. A future wire change re-rolls the fixture again; this gate should survive
+  it, and if it does not, the failure message says re-derive the ladder rather than pin a level.
+- **Sabotage-verified** (release profile, for wall-time only — the verdicts are work-bounded):
+  removing the one-line fix gives rc 101 with **2 of 3 failing**, and the two failures are the two
+  independent detectors of this defect. `the_notch_rescues_a_decode_that_fails_without_it` fails at
+  its **EXISTS** leg — "the notch rescued at NONE of the 3 amplitudes tried ([0.3, 0.6, 0.35])" —
+  because with the interferer un-notchable no ladder amplitude rescues on this keystream; and
+  `in_band_qrm_is_a_qsy_case_and_the_notch_does_not_worsen_it` fails at its **positive control**,
+  which asks for a notch on the out-of-band tone the defect makes unreachable. Restored → pass.
+  (An earlier draft of this entry quoted a panic message that no longer exists in the tree, from the
+  test this work replaced, and named a leg that no longer runs first. Review caught it; the quote
+  above is from an actual run.)
+- **Apparatus defect found and fixed first:** the probe compared decodes against a hardcoded 18-byte
+  literal while `PROBE_PAYLOAD_LEN` varied the payload, so every other length reported FAIL by
+  construction. Swept the other env-driven test files; the shape was isolated to this one.
+- **Errors of my own in this investigation**, all found before the work landed: three apparatus
+  defects (expected bytes hardcoded while the payload length was a variable; a `.take(3)` cap behind
+  a 6-entry ladder, so three rungs read as searched and were not; an operating-band table written
+  from a PRIMED proxy rather than the real fix) and **two wrong severity calls** (a "shipping defect
+  on the daemon path" that was false in the opposite direction, and naming the birdie mechanism
+  above as established when it was inference by elimination). Two were caught by review, one by
+  widening an input.
+- **Corrections carried from review:** engagement PERCENTAGES were withdrawn (this path has no
+  streaming capture seam, so a "block" is a decode-attempt slice and the count is a property of the
+  scan schedule the amplitude itself changes — ratios over it compare incommensurable samples); a
+  `notch_protect_band` snapshot accessor was replaced by an envelope for the same reason its sibling
+  existed; a `notch_blocks_with_active_notch` accessor was **removed** after review found it had zero
+  consumers and a DORMANT note falsely claiming the probe consumed it; and an operating-band table
+  written from a PRIMED proxy rather than the real fix was deleted rather than corrected — the header
+  now carries dated prose and points at the probe, because a table of measured points is exactly the
+  artifact that rots on the next wire change.
+
 ## 2026-08-17 — #1060: the correlation threshold is calibrated to the station's own noise
 
 - **Requirement / change.** `Implements: REQ-RX-02, REQ-RX-03` (both `draft`, `traceability:
@@ -360,6 +470,16 @@ falsified both columns.
   code, and only the former would have caught this.
 
 ## 2026-08-01 — feat(config): enable the receiver notch by default, on measurement (REQ-QRM-01)
+> **CORRECTED 2026-08-22 — the verdicts below reproduce, the MECHANISM does not, and the default
+> stands.** The 2200 Hz interferer sat inside the receiver's protected band and was never notched:
+> `receive_with_timeout_fec_inner` did not record `rx_mode`, so the band fell back to 500..2500 Hz.
+> The rescue is real and reproduces exactly; what produced it was **not** the notching of the
+> interferer, and has not been established. Nothing shipping was affected — that path never enables
+> the notch. With the mode recorded the band is 1250..1750 and the notch does place a notch on the
+> interferer, so the default-on evidence is now attributable. See the 2026-08-22 entry. The amplitude
+> table below is also superseded: the rescue set is not an interval.
+
+
 
 - **Requirement/change:** the auto-notch was built, documented as "a clear win against out-of-band
   QRM", and left **opt-in** — so it was off in every recorded on-air failure. "We already harden
