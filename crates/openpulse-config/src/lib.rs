@@ -450,10 +450,19 @@ pub struct ModemConfig {
     ///
     /// It was opt-in and therefore off in every recorded on-air failure — built and never enabled,
     /// which is why "we already harden against interference" and "the station could not decode" were
-    /// both true at once. Measured on the recorded hot floor with a 2200 Hz interferer just outside
-    /// BPSK250's occupied band: at amplitude 0.30 the decode **fails with the notch off and succeeds
-    /// with it on**; at 0.05–0.15 it is unnecessary and at 0.60 the interferer wins either way. So it
-    /// buys a real band of conditions and costs nothing where there is nothing to notch.
+    /// both true at once. Measured on the recorded hot floor with a 2200 Hz interferer outside
+    /// BPSK250's occupied band, the decode **fails with the notch off and succeeds with it on** —
+    /// but not at every level, and the levels are deliberately not quoted here: re-derived
+    /// 2026-08-22, the rescue set is **not an interval**, because a louder tone is easier for the
+    /// detector to see and harder for the demodulator to survive at the same time. REQ-QRM-01 in
+    /// `docs/dev/requirements.md` records the measured amplitudes — the one place they live;
+    /// `notch_rescues_interferer` is the gate and its `probe_band_sweep` the instrument to re-run.
+    ///
+    /// The band-tracking sentence above is now true; it was NOT true for the whole life of this
+    /// default. `receive_with_timeout_fec_inner` did not record the receive mode, so the protected
+    /// band fell back to 2000 Hz — 4x BPSK250's real width — and any interferer between 500 and
+    /// 2500 Hz was structurally un-notchable. That path never enabled the notch, so no shipping
+    /// station was affected, but the evidence recorded for this default was measured through it.
     pub notch_enabled: bool,
     /// Max simultaneous notches.
     pub notch_max: usize,
@@ -1061,11 +1070,14 @@ dcd_squelch = 0.01
 # high-PAPR multicarrier modes (OFDM/SC-FDMA). No-op for single-carrier modes.
 cessb_enabled = true
 # Receiver-side automatic notch: removes out-of-band CW interference (QRM) before
-# demod. The protected band tracks the active mode, so the signal is never notched;
-# an in-band interferer can't be removed this way (that is a QSY case). Default ON:
-# measured against a 2200 Hz interferer just outside BPSK250's band on a recorded hot
-# floor, the decode fails with it off and succeeds with it on. Set false only if you
-# have a reason -- it costs nothing when there is nothing to notch.
+# demod. The protected band tracks the active mode, so the signal is never notched
+# (true since 2026-08-22 -- one receive path did not record the mode and protected a
+# band 4x too wide); an in-band interferer can't be removed this way (that is a QSY
+# case). Default ON: measured against a 2200 Hz interferer outside BPSK250's band on
+# a recorded hot floor, the decode fails with it off and succeeds with it on -- but
+# not at every level, and the levels are deliberately not quoted (the rescue set is
+# not an interval). Set false only if you have a reason -- it costs nothing when
+# there is nothing to notch.
 notch_enabled = true
 # Max simultaneous notches, and notch sharpness (bandwidth ~= f0 / notch_q).
 notch_max = 10
@@ -1374,9 +1386,10 @@ mod tests {
         assert_eq!(cfg.audio.backend, "default");
         assert_eq!(cfg.audio.device, "");
         // Receiver auto-notch is ON by default (REQ-QRM-01, 2026-08-01). It was opt-in and
-        // therefore off in every recorded on-air failure; measured, it turns a FAIL into a decode at
-        // a 2200 Hz out-of-band interferer of amplitude 0.30. Do not flip this back without
-        // re-measuring — `notch_rescues_interferer` is the gate that justified it.
+        // therefore off in every recorded on-air failure; measured, it turns a FAIL into a decode
+        // against a 2200 Hz out-of-band interferer. No amplitude is quoted: re-derived 2026-08-22,
+        // the rescue set is not an interval, so the gate asserts existence + attribution rather
+        // than a level. Do not flip this back without re-measuring — `notch_rescues_interferer`.
         assert!(cfg.modem.notch_enabled);
         assert_eq!(cfg.modem.notch_max, 10);
         assert_eq!(cfg.modem.notch_q, 25.0);

@@ -847,10 +847,13 @@ Requirement coverage stands at 118 of 141 covered, 16 gaps, 7 planned for 1.x.
 
 The **receiver auto-notch** (`[modem] notch_enabled`) left this list on 2026-08-01 and is now **on by
 default**. It had been opt-in since it was built, and was therefore switched off in every recorded
-on-air failure — measured against a 2200 Hz interferer just outside `BPSK250`'s occupied band on a
+on-air failure — measured against a 2200 Hz interferer outside `BPSK250`'s occupied band on a
 recorded hot noise floor, the decode fails with it off and succeeds with it on. It costs nothing
 where there is nothing to notch, and the protected band tracks the active mode so the wanted signal
-is never notched.
+is never notched. (Both claims were re-derived on 2026-08-22: one receive path did not record the
+active mode and protected a band four times too wide, so the notch could not reach the interferer
+the original measurement named. The default stands and its evidence is now attributable — see the
+ledger.)
 | ARDOP adaptive ARQ | `[ardop] enable_adaptive_arq` | `false` |
 | Auto-QSY on interference | `[qsy] auto_qsy_on_interference` | `false` |
 | Control-channel auth on loopback | `[control_security] require_auth` | `false` (mandatory on non-loopback regardless) |

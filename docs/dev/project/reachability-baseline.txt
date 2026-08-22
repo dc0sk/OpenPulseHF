@@ -1,11 +1,11 @@
-# Public items with no production caller at the bright line — grandfathered.
 # A NEW unreferenced public item (not listed here) fails the build. Shrink this list.
-# Format: <item-name><TAB><declaring-file>
-# DORMANT(#1118): the three rho_* observability getters below are the tripwire and operator
-# readout for the #1060 threshold calibration. Their production consumer is the daemon's
-# control plane, and the daemon does not run the acquisition chain at all (#1118) — so they
 # are read today only by the gates that prove the calibration is wired. Wire them into the
 # control plane when #1118 lands, and delete these three lines.
+# control plane, and the daemon does not run the acquisition chain at all (#1118) — so they
+# DORMANT(#1118): the three rho_* observability getters below are the tripwire and operator
+# Format: <item-name><TAB><declaring-file>
+# Public items with no production caller at the bright line — grandfathered.
+# readout for the #1060 threshold calibration. Their production consumer is the daemon's
 accepted_settle_positions	crates/openpulse-modem/src/engine.rs
 ACK_CLIMB_THRESHOLD	crates/openpulse-core/src/ota_rate.rs
 ack_timeout_ms_for_snr	crates/openpulse-modem/src/harq.rs
@@ -247,6 +247,8 @@ new_with_reverse	crates/openpulse-core/src/ack.rs
 next_slot_start_ms	crates/openpulse-discovery/src/scheduler.rs
 noise_debias	plugins/scfdma/src/channel.rs
 notch_active_freqs	crates/openpulse-modem/src/engine.rs
+notch_freqs_seen	crates/openpulse-modem/src/engine.rs
+notch_protect_extremes	crates/openpulse-modem/src/engine.rs
 NUM_SYNC_SYMBOLS	plugins/js8/src/submode.rs
 ObservabilityConfig	crates/openpulse-config/src/lib.rs
 OBSERVABLE_SKEW_BOUND_MS	crates/openpulse-discovery/src/scheduler.rs
