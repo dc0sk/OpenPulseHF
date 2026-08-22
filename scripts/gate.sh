@@ -111,6 +111,10 @@ if [ "$MODE" = "full" ]; then
     # trip it; `--quick` skips it with the rest. (The PR *body* half of this check — the squash
     # message that actually lands on main — can only run in CI, where the body exists.)
     run_step "requirements-trailer lint" scripts/check-trailer.sh || rc_total=1
+    # Ledger ordering. The file declares "Newest first" and had drifted into two regimes — 12 breaks
+    # across 359 entries — because the convention lived only in prose and nothing measured it. Cheap
+    # (no build, no I/O beyond one file), so it costs nothing to keep honest.
+    run_step "ledger ordering" scripts/check-ledger-order.sh || rc_total=1
 fi
 
 # Counts come from the LOG FILE, never from a pipe carrying the runner's output.
