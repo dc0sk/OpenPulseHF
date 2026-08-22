@@ -119,6 +119,331 @@ and the actually-observed results per change.
   now carries dated prose and points at the probe, because a table of measured points is exactly the
   artifact that rots on the next wire change.
 
+## 2026-08-21 — instrumenting #1176 rather than guessing at it again
+
+- **Requirement/change:** the REQ-PHY-03 twin-daemon gate fails intermittently (#1176). Two
+  diagnoses have now been wrong: "the bound expired" (#1175, falsified by its own diagnostic — it
+  fails identically at 300 s) and "the dev profile makes the DSP too slow to hold a 10 ms tick"
+  (falsified by review at mechanism level).
+- **Why the profile hypothesis is dead, stated so it is not re-proposed:** nothing on this path
+  couples *correctness* to time. A's frame is written in ONE `write()` (`engine.rs:6537` →
+  `loopback.rs:253-257`) and the bridge drains atomically (`channel_sim.rs:30-33`), so it cannot be
+  split; the loopback queues are unbounded with no expiry, so nothing rots while B is slow;
+  `accumulate_routed` gates on **content**, not arrival time (`engine.rs:2020-2052`); and
+  `decode_burst` (`engine.rs:2122-2245`) is work-bounded with no `Instant`. The wall-clock retry
+  budget I was pattern-matching on lives in `receive_with_timeout_fec_inner` — **the CLI
+  `--listen-ms` path this test never executes** — so citing #1058's debug/release margin here was a
+  category error. Slow DSP can delay `FrameReceived`; it cannot remove it.
+- **What the maintainer's argument establishes, now with a mechanism rather than an analogy:** he
+  objected that PACTOR modems run on microcontrollers and VARA HF runs on a Pi 4 under Wine, so CPU
+  starvation on a 16-core desktop is not a plausible statement about the modem. The code agrees and
+  goes further — every stage here is a non-expiring queue feeding a work-bounded decode, so **any**
+  load sensitivity in this test is a harness or observation defect by construction.
+- **Implementation (files):** `crates/openpulse-daemon/src/twin.rs` — `BridgeStats` (samples moved
+  each way, from the count `bridge_through` already returned and the harness discarded, plus daemon
+  thread liveness, which nothing reported before: a dead transmitter is indistinguishable from a deaf
+  receiver at the far end). `crates/openpulse-daemon/tests/twin_daemon_bridge.rs` — A's control
+  stream is watched (it was not), both streams' event **kinds** are tallied rather than counted, and
+  the pre-send fixed sleep is replaced by waiting for a real event from B.
+- **Tests:** the gate itself. On failure it now prints A's kinds, B's kinds and the rig stats, and
+  names the read order: no transmit event on A or a dead A ⇒ upstream of the channel; forward
+  samples ≈ 0 ⇒ the bridge; samples moved with no `DcdChange` ⇒ B's capture seam; `DcdChange`
+  without a decode ⇒ the acquisition failure the gate is for.
+- **Test results (run):** idle 5.1–5.4 s pass. **Reproduction attempts that did NOT reproduce, so
+  the record is not one-sided:** three runs with the sync gate removed under 16 rustc processes at
+  load 14.2 all passed, and one instrumented run under the same load passed. Standing tally is 3
+  failures (two `gate.sh` runs, one manual under compile load) against ~8 passes, **mechanism
+  unknown**. The instrumentation exists to partition the next one; no further hypothesis is recorded
+  until it does.
+
+## 2026-08-21 — #1148: the whitener's period was 21 bits, and the gate that would have caught it
+
+- **Requirement/change:** `openpulse_core::scramble` documented a 511-byte period and delivered
+  **21 bits**. Part of the decided pre-1.0 wire-format break package.
+- **Measured, not inferred:** the shipped taps `((state >> 8) ^ (state >> 4))` give
+  `s[n+9] = s[n+8] ⊕ s[n+4]`, characteristic `x⁹+x⁸+x⁴ = x⁴(x⁵+x⁴+1)`, and `x⁵+x⁴+1` is reducible —
+  period lcm(3,7) = **21 bits**, with register bits 0..3 a dead delay line. The intended `x⁹+x⁵+1` is
+  `(state ^ (state >> 5))`: **511 bits and 511 bytes**, equal because `gcd(8, 511) = 1`. Verified by
+  two independent derivations (a direct simulation, and the ITU-T O.150 recurrence), which agree on
+  the same known-answer vector.
+- **Design decision (+ rationale):** the gate pins the **sequence**, not a property of it. Period
+  alone is insufficient: the reciprocal trinomial `x⁹+x⁴+1` is also primitive with period 511 and
+  puts different bits on the air. So four assertions — minimal bit period 511 (with "no period found"
+  a failure, which is what the old taps produce from index 0 because their state map is 2-to-1),
+  minimal byte period 511, a 16-byte known-answer vector, and the n−1 = 8 longest-zero-run property.
+- **Corpus decision — Option A (ignore until re-record), after review rejected the alternatives:**
+  a test-only legacy keystream is unreachable from integration tests without a cargo feature carrying
+  a second wire format in production source, and would attest a build no station runs; re-recording
+  now pays the rig session twice, because these captures also carry the **pre-#1062 preamble** and
+  die again inside the same window; asserting only the acquisition stages buys one PR window and
+  changes what the cost gate at `:370` means.
+- **Implementation (files):** `crates/openpulse-core/src/scramble.rs` (taps, gate, and the
+  `MAX_DEAD_BITS` comment that invited the next silent tap change);
+  `crates/openpulse-modem/tests/capture_replay_corpus.rs` (four `#[ignore]`s with tracking + epoch);
+  `docs/dev/design/protocol-wire-spec.md` (**§1a — the spec did not mention whitening at all**, so a
+  third-party implementer would have built a non-interoperable modem; now polynomial, seed, packing,
+  coverage, self-inverse, the KAT and the pre-#1148 history); `captures/README.md`; the acceptance
+  table; this ledger.
+- **Tests:** `scramble::tests::the_keystream_is_the_frozen_prbs9_sequence`.
+- **Test results (run):** `openpulse-core` scramble **7/7**. **Sabotage-verified in two rounds**,
+  because one could not distinguish them: old taps → the period search reports **no period** (rc 101);
+  correct taps with only `SEED` changed → the **KAT fails alone** while the period stays 511 (rc 101);
+  restored → pass. The second round is what proves the vector is load-bearing.
+- **Ablation that preceded the ignores** (required so the premise is proven, not assumed): running the
+  corpus against the new taps fails **exactly** the four recorded-frame tests and passes the other
+  **eight** — including every gate that synthesizes a frame inside real recorded noise. So the
+  captures do carry the old keystream, and the real-audio safety net largely survives the dark window.
+- **Correction carried from review:** it is **four** tests, not three. The criteria doc said three and
+  listed three; that miscount had already propagated into the package section.
+
+## 2026-08-20 — the twin-daemon offset gate had a load-dependent verdict
+
+- **Requirement/change:** `twin_daemon_bridge::a_message_crosses_the_bridge_between_two_rigs_that_disagree_on_frequency`
+  (added with #1118, REQ-PHY-03 at −64 Hz) **failed inside a full `gate.sh` run and passes alone in
+  4.37 s**. The gate log shows it ran 60.27 s against a 60 s timeout — the bound expired; nothing
+  about acquisition changed.
+- **Cause:** the verdict is wall-clock bounded, on a machine where every core was busy running the
+  rest of the workspace suite. This is #1066's archetype (same input, opposite verdicts by load) in a
+  test written the day before.
+- **Design decision (+ rationale):** the bound cannot be moved into *work* the way #1066 moved the
+  receive search — this is an end-to-end round trip between two real daemons whose receive ticks run
+  in real time, and there is no counter to bound on. So the bound is set from the **measured idle
+  cost** with a stated multiplier (4.4 s idle → 300 s, ~68×), and the failure is made
+  **self-diagnosing**: the loop counts control events, so zero events reads as a starved machine
+  while events-without-a-decode is the real defect this gate exists to catch. Both are named in the
+  assertion message.
+- **Implementation (files):** `crates/openpulse-daemon/tests/twin_daemon_bridge.rs`.
+- **Tests:** the test itself.
+- **Test results (run):** passes alone in 4.37 s; passes in 4.75 s with all 16 cores spinning.
+- **Honest limit on that evidence, stated rather than implied:** the synthetic load **did not
+  reproduce the failure**, so it does not verify the fix — sixteen busy loops are not a gate run,
+  where cargo runs many test binaries in parallel, each spawning daemons, threads and I/O. The only
+  verification that counts is a full `gate.sh` run, and that is n = 1 per run for a flake whose base
+  rate is unknown.
+## 2026-08-20 — the branch detector misclassified its own author's branches
+
+- **Requirement/change:** `scripts/branch-audit.sh` (landed in #1174) reported
+  `docs/wire-format-decisions` as **"pushed, no PR ever opened"** — the stale signature — for a
+  branch that had never left the machine. Found by running the detector on its own repo minutes
+  after it merged.
+- **Cause:** it treated any non-empty `%(upstream:short)` as evidence of a push. But
+  `git checkout -b X origin/main` sets X's upstream to **origin/main**, so every branch cut that way
+  looked pushed. The check now requires the upstream to be the branch's *own* ref (`origin/$b`).
+- **Why it matters more than a cosmetic mislabel:** the whole point of separating never-pushed from
+  pushed-with-no-PR is that the first is live local work to leave alone. A detector that calls live
+  work stale is the one that eventually gets acted on.
+- **Implementation (files):** `scripts/branch-audit.sh` — upstream comparison, plus `--self-test`.
+- **Tests:** `--self-test` builds a throwaway repo with known-answer branches: one cut from
+  `origin/main` and never pushed, one whose tip is the default branch, and the default branch itself
+  (which must not be listed). Committed rather than run once, because the failure mode is silent — a
+  classifier that calls everything stale looks identical to a correct one on a stale-only sample,
+  which is exactly the sample you have when you go looking.
+- **Test results (run):** self-test 3/3, exit 0. **Sabotage-verified** with real exit codes:
+  restoring the any-upstream test exits **1** with `never-pushed` reported as
+  `UNTRACKED - pushed, no PR ever opened`; restored, exit **0**.
+
+
+## 2026-08-19 — the two open rows of the wire-format package are decided
+
+- **Requirement/change:** the break package left two rows to the maintainer: whether the PQ handshake
+  is a 1.0 on-air feature, and keep-or-widen for `Frame`'s `u8` payload length. Both freeze at the
+  tag, so both had to be decided rather than inherited.
+- **Evidence put in front of the decision** (airtime uncoded at the default `active_mode`,
+  BPSK250 = 31.25 B/s): classical CONREQ 710 B ≈ 23 s, binary ≈ 7 s; **PQ Hybrid CONREQ 17 939 B ≈
+  9.6 min**, binary ≈ 2.7 min. And an inventory with a positive control — the classical
+  `ConReq::create_full` has three daemon callers, so the filter works, while the PQ handshake has
+  **zero** production callers (38 references in its own integration test, 6 in its own module).
+- **Decisions (maintainer, 2026-08-19):**
+  - **PQ is scoped into #1147.** Both handshakes get the binary encoding in this window. The honest
+    limit is recorded with it: 2.7 min is still unusable, so PQ needs cached identities or
+    out-of-band key distribution before it ships — a separate question, not part of 1.0. What the
+    decision buys is a finished format, so wiring PQ later is not a wire break.
+  - **`Frame` keeps `u8`** (#1167 closed). SAR carries objects to 64 005 B so the cap binds nothing
+    functional; overhead at 255 B is 3.9 %; a longer frame loses more per fade outage. Reopened only
+    by a measurement: a top wideband rung whose goodput is *turnaround-bound* rather than
+    payload-bound.
+- **Implementation (files):** `docs/dev/project/release-1.0-criteria.md` — package table rows for
+  #1147 and #1167 and the PQ rider; issue comments on #1147 and #1167 (closed).
+- **Tests:** none — decision record. #1147's implementation carries its own gates, and its riskiest
+  property is named there: re-encoding changes what is **signed** on both paths, because
+  `handshake.rs:307-322` and `pq_handshake.rs:254-257` both serialise in serde declaration order
+  ("canonical" is a label, not key-sorting).
+- **Test results (run):** n/a.
+
+## 2026-08-19 — `ddc_mix` underflows in the dev profile; found by landing a stranded harness
+
+- **Requirement/change:** `openpulse_dsp::acquisition::ddc_mix` panics with "attempt to subtract with
+  overflow" on its first loop iteration in any dev-profile build. The guard read `n - ntap + 1` while
+  the loop starts at `n == ntap - 1`.
+- **How it surfaced:** a branch-lifecycle sweep found `derive/bpsk31-rho-constants` stranded (pushed
+  2026-08-04, no PR ever opened) carrying the `#[ignore]`d harness behind numbers already published
+  on #1062. Running one of its tests before landing it — the first dev-profile execution of this code
+  path in its life — panicked immediately.
+- **Severity, stated precisely (a review corrected two halves of my first reading):**
+  - **Release is bit-correct, not lossy.** Wrapping arithmetic makes `n - ntap + 1` equal
+    `n + 1 - ntap` exactly for every `n >= ntap - 1`, confirmed across decim ∈ {1,2,3,4,8,32} with
+    identical kept-index sets. So every number ever measured through the DDC stands. The defect is
+    that **the type has never been executable under the profile `cargo test` uses**.
+  - **The production arm is dead code today.** `VetoCorrelator::Ddc` (`engine.rs:424`) is built only
+    for templates over `MAX_PREAMBLE_CORRELATION_SAMPLES` (2048); the only trait impl of
+    `preamble_template` is BPSK250's at 992 samples. Zero production impact — and a hard blocker for
+    #1062's phase-0 follow-on, which exists precisely to give the long-template modes a veto.
+- **Why no gate caught it — three layers, not one:** the `ddc_correlation_equivalence` tests are all
+  `#[ignore]`d; they never construct `DdcMatchedFilter` at all, but **reimplement** the mixer locally
+  (carrying the same underflowing expression, born with it in `caa7e1ae` and copied into production
+  in `0eac1791`); and both copies have only ever run in release. Any one layer alone would have
+  hidden it.
+- **Implementation (files/functions):** `crates/openpulse-dsp/src/acquisition.rs` — `ddc_mix` guard;
+  `crates/openpulse-modem/src/engine.rs` — the `MAX_PREAMBLE_CORRELATION_SAMPLES` doc now carries the
+  provenance of its "exact to four decimals" claim, which was measured on the reimplementation, in
+  release, and is not machine-checked.
+- **Tests:** `openpulse_dsp::acquisition::tests::ddc_mix_keeps_the_first_sample_and_every_decim_th_one`
+  — a **unit** test, because `ddc_mix` is module-private and a probe needing private access is a unit
+  test, not an exported accessor. It asserts more than "does not panic": the first output sample (the
+  one the panic sat on) is present and the output count is `(len - ntap + 1).div_ceil(decim)`, across
+  four decimation factors.
+- **Test results (run):** `openpulse-dsp` 99 passed / 0 failed (plus 1 doc-ish suite, 1 ignored).
+  **Sabotage-verified:** restoring `n - ntap + 1` fails the new test with the exact underflow panic at
+  the guard line; the fix passes it.
+- **Wiring gate (#1170), added in the same change after review:**
+  `engine::ddc_veto_arm::an_oversized_template_builds_the_ddc_arm_within_the_budget` and
+  `::the_ddc_arm_correlates_its_own_template_through_the_engine` — a `#[cfg(test)]` module beside
+  `idle_rho_probe`, so `build_preamble_veto`, `preamble_rho` and the private `VetoCorrelator` are
+  reachable without exporting an instrument. It asserts the **arm variant directly** (no
+  `samples.len()` proxy), that the budget is honoured **after** decimation, and that the arm returns
+  near-unity rho for its own template through the engine's own grid plan. Sabotage-verified: both
+  fail with the exact underflow when `n - ntap + 1` is restored. Scope, stated in the module: it pins
+  **wiring and computation, never thresholds** — the stub's rho constants are arbitrary.
+  Review corrected two things here: I had proposed asserting through the full receive path
+  (`rho_accepted + rho_rejected > 0`), which couples a wiring gate to acquisition policy and rests on
+  an assertion nobody has ever watched pass; and I had accepted a false dilemma about private access,
+  when the repo's own `idle_rho_probe` is the precedent that dissolves it.
+- **Residual, for #1062's ledger:** the engine's `VetoCorrelator::Ddc` arm still has no test through
+  the full receive path — that needs a plugin publishing a >2048-sample template, and none
+  exists. The mode that first activates the arm should carry the production-entry test.
+
+## 2026-08-19 — the evidence bundle records rig state, and filter width is measured from audio
+
+- **Requirement/change:** `release-1.0-criteria.md` sequencing step 4 requires the bundle filter/trim
+  read-back before the radio window. #1060 established why: idle correlation ρ moves with receive
+  bandwidth (per-window p50 0.131 at 2470 Hz → 0.351 at 309 Hz), so a ρ number whose filter width is
+  unrecorded cannot be interpreted afterwards.
+- **What was actually wrong (my first diagnosis was false):** I reported that the campaign recorded
+  "no rig state at all". It reads *more* than I proposed — `run-onair-ic9700-ft991a.sh`'s
+  `preflight_check` batch-reads FREQ, MODE, PASSBAND, RFPOWER, COMP, NB/NR + their function
+  switches, SQL, VOX, RFGAIN (+ the raw Yaesu `RG0;`), PREAMP, SWR, STRENGTH and the PulseAudio
+  volumes — and **echoes every field to the console and discards it**, while the report JSON wrote
+  `rig_mode_a`/`freq_hz` from the *intended* env values. Intent stamped where a later reader takes
+  it for verification: the dual-card archetype, in the artifact rather than in the rig.
+- **Design decision (+ rationale):**
+  1. **The authoritative filter-width record is audio-derived; CAT is secondary.** Measured on the
+     real IC-9700 with hamlib 4.6.2 (2026-08-17): hamlib reports passband width **0 regardless**, and
+     `M PKTUSB 0` does not restore a width. Idle noise through a receive filter *is* the filter
+     shape, so the −20 dB occupied band measures what CAT cannot. Both are recorded; disagreement is
+     the #1060 tell.
+  2. **Read-only reads, split from the corrector.** `preflight_check` applies COMP/NB/NR/SQL/VOX
+     corrections *before* reading, so it cannot double as an evidence reader; `read_rig_state_a/b`
+     are pure reads.
+  3. **The post-run read happens before the EXIT trap.** `cleanup_all` calls `restore_rig_state_a/b`,
+     so a later read would record the *restored pre-test* state as the test's — a confidently wrong
+     record, worse than the absent one.
+  4. **Absent is recorded as absent, with a reason** — never defaulted.
+- **Implementation (files):** `scripts/run-onair-ic9700-ft991a.sh` — `read_rig_state_a/b`,
+  `record_rig_state`, a post-run read, and a `rig_state` block in the report carrying both reads,
+  their raw lines, and a `drift_between_reads` list; the intent fields renamed to
+  `intended_freq_hz` / `intended_rig_mode_a|b`. `scripts/onair-rx-idle-floor.py` —
+  `occupied_band_db()` plus `--self-test`.
+- **Tests:** `onair-rx-idle-floor.py --self-test` — five known-width cases (2400/500/250 Hz, two of
+  them with a strong birdie) and a negative control (unfiltered noise must read wide). The criterion
+  is two-sided deliberately: width within 15 % **and** the band contains the signal centre, because a
+  width alone can be right while the band sits on a birdie.
+- **Test results (run):** self-test 6/6, exit 0. **Sabotage-verified** with real exit codes (not a
+  pipeline): narrowing the smoothing kernel to 5 bins exits **1** with the two birdie cases reporting
+  3.9 Hz centred on the tone; restored, exit **0**. The rig_state builder was controlled separately
+  on fixture files — available/unavailable distinguished with reasons, and drift flagged on a
+  RFGAIN 0.145 → 0.037 change, which is the 2026-07-30 FT-991A episode's own signature.
+- **Two defects the controls caught in my own instrument**, both before it could be trusted: a global
+  percentile reference reported a 250 Hz band as 3999 Hz (at 250 Hz only ~6 % of bins are in-band, so
+  the percentile lands in the stopband), and a 5-bin kernel let one out-of-band birdie capture the
+  measurement. The first is why the reference is a peak-anchored contiguous run; the second is why
+  the kernel is ~50 Hz.
+- **Not done, stated rather than implied:** the occupied band is not yet computed from the run's own
+  RX captures into the report — that is the mid-run witness the design calls for, and it is the next
+  step. The bundle also does not yet carry the `rig-state-*.txt` files.
+
+## 2026-08-19 — stranded branches: a backstop script, and the harness that was stranded
+
+- **Requirement/change:** three local branches had gone stale, all with one signature — pushed to
+  origin, **no PR ever opened**, findings posted as issue comments, branch left behind.
+  `delete_branch_on_merge` was already `true` on the repo (read back, not assumed) and did nothing
+  for any of them, because none ever merged: delete-on-merge is a lifecycle *exit*.
+- **Design decision (+ rationale):** the sweep is a backstop, not a fix. Two causes were named — push
+  is not a tracked event (the gap between "pushed" and "PR opened" has no owner, and a session that
+  ends in it strands the branch), and a research harness has no home in the tree, because its
+  *findings* go into an issue comment while the harness needs an `#[ignore]` plus a runner decision
+  before it can land. The prevention (open a draft PR at first push) is a workflow policy and was
+  handed to the skills repo; what belongs here is the detector plus landing the stranded work.
+- **Implementation (files):** `scripts/branch-audit.sh` — classifies from **PR state** with a
+  **two-dot** diff as corroboration (three-dot diffs the merge-base and reports "not merged" for
+  every branch with commits), derives the default branch from `origin/HEAD`, distinguishes
+  never-pushed (live local work) from pushed-with-no-PR (the stale signature), never deletes, and
+  `--strict` **refuses** when `gh` is absent rather than exiting 0 having classified nothing.
+  `crates/openpulse-modem/tests/bpsk31_constant_derivation.rs` — the stranded harness, landed
+  `#[ignore = "verification"]`.
+- **Tests:** the script is controlled both ways rather than asserted: a branch whose content is in
+  `main` classifies as "already in main" (a classifier calling everything stale looks identical to a
+  correct one on a stale-only sample), and with `gh` hidden from `PATH`, `--strict` exits 2 with its
+  reason while a plain run still reports, marked `unknown`.
+- **Test results (run):** audit run on the live tree reproduces the pile exactly (three branches,
+  `UNTRACKED - pushed, no PR ever opened`); controls: `rc=2` without `gh`, `rc=1` with it.
+  Harness: 10 tests, all `#[ignore]`d, compiles and runs — `r1` executes at HEAD once the `ddc_mix`
+  fix is in, which is what this branch waits on.
+- **What landing it found:** running the harness for the first time since 2026-08-04 surfaced the
+  `ddc_mix` underflow (separate entry, same day). The apparatus behind numbers already published on
+  #1062 was unavailable for checking, and the moment it ran it found a live defect — which is the
+  argument for landing harnesses rather than stranding them, stated as evidence rather than as
+  principle.
+- **Disposition of the other two branches:** `investigate/1058-retry-budget-ablation` deleted, SHA
+  `a9f7af69` recorded on #1058 (its previous sweep had recorded "Left alone", which is not a terminal
+  state and cost another 16 days); `docs/archive-claude-md-history` deleted, SHA `eb6af1d5` recorded
+  on the issue filed to redo it (#1169), since it is the one branch whose content no longer applies.
+
+## 2026-08-18 — the wire-format break package is decided (proposal recorded)
+
+- **Requirement/change:** the pre-1.0 window contains one wire-format break (maintainer decision 2,
+  2026-08-03). What was open was *which* changes go in it. Left undecided, a straggler after the
+  on-air campaign re-opens the campaign (decision 1's consequence).
+- **Design decision (+ rationale):** assemble the package from an **inventory of what goes on the
+  air**, not from the set of filed issues — nine items, each shipping as its own PR and gate.
+  #1062 stays in (it carries the maintainer's decision, and it reshapes the only unwhitened, pre-FEC
+  region, where a format-epoch marker would have to live). Added by inventory and filed: rendezvous (#1163)
+  and QSY (#1162) version tokens, an authoritative `WireEnvelope` version byte (#1164),
+  `AckFrame` reserved-bit enforcement (#1165), a ruling on the unwired
+  `supported_compression`/`supported_fec_modes` fields (#1166), and a keep-or-widen decision on
+  `Frame`'s u8 payload length (#1167). Scoping notes posted on #1062, #1147 and #1148.
+- **Implementation (files):** `docs/dev/project/release-1.0-criteria.md` — new
+  *The wire-format break package* section; *Sequencing* step 2 amended in the same change so the
+  document does not carry live guidance ("declining the break is a legitimate outcome") that the
+  package supersedes, while keeping the `demod_parity` evidence that motivated it; the doc preamble's
+  "those three are settled" corrected to four (pre-existing rot — a fourth decision was added
+  2026-08-05).
+- **Tests:** none — this is a decision record, not code. The items it schedules carry their own gates,
+  two of which are specified here: a **period** gate for #1148 (all six existing `scramble.rs` tests
+  pass on the shipped 21-bit keystream because none measures period) and re-recording of the three
+  recorded-frame replay gates the whitener change turns red.
+- **Test results (run):** n/a. Verified mechanically instead: the citations in the new section were
+  re-checked against the code by an independent reviewer, which corrected five of them.
+- **Adversarial review:** two passes. The first rejected the headline recommendation — I proposed
+  declining #1062, quoting this document's decision block **two lines short of its ruling on #1062**,
+  and citing the F7 measurement for its null half (spreading buys no noise-floor margin) while
+  ignoring the two benefits it attributes to a PN template (onset placement, peak sidelobe
+  0.997 → 0.234, and interferer refusal). The second reviewed the write-up itself and corrected:
+  both handshakes sign serde declaration order (so #1147 is a signature-domain change on the
+  classical path too, not only PQ); #1157's CFAR **stands down** at narrow filters rather than
+  costing detection; three of six replay gates go red, not all; six scramble tests, not four; nine
+  `demodulate_soft` descramble call sites, not ten (the definition was counted as a caller); and the
+  rendezvous codec was missing from the inventory.
+
 ## 2026-08-17 — #1060: the correlation threshold is calibrated to the station's own noise
 
 - **Requirement / change.** `Implements: REQ-RX-02, REQ-RX-03` (both `draft`, `traceability:
@@ -986,6 +1311,307 @@ falsified both columns.
 
 ---
 
+## 2026-07-30 — #1021 CLOSED: the settle recovery was a livelock, not the signal
+
+- **Requirement / change:** a real coded on-air `BPSK250|rs` frame must decode. #1021 had survived
+  the whitening fix (#1027) and a reopening.
+- **How the cause was found — every physical hypothesis was wrong.** Two fresh dual captures were
+  taken on air 2026-07-29 from a whitening build. The coded one failed identically, which made it
+  reproducible offline. Then, instead of another signal hypothesis, the **exact transmitted wire was
+  reconstructed** (`Frame::encode` → `FecCodec` → `scramble`) and diffed against the demodulated
+  bytes:
+  - **0 byte errors in all 255.** The 8.3 s frame arrived off the air byte-perfect.
+  - It demodulates cleanly across a **±32 Hz** AFC acceptance window — acquisition is not fragile.
+  - Refuted by measurement: carrier **+2.42 Hz** drifting **−0.3 Hz** over the whole burst; margin
+    **7.2 dB** against the passing control's 7.3 dB; amplitude stable to 1.07; a tight ±0.5 s window
+    failing identically (so not the frame-location class).
+  - An intermediate hypothesis — that the transmitter's `free_rs_strengthening` upgrade to
+    `RsStrong` was not matched by the receiver — was **correct about the wire** (the diff only
+    matches against `FecCodec::strong()`, errors starting exactly at byte 191 = `255 − 64`) but
+    **not the cause**: the receive arms already dual-decode, and forcing `RsStrong` failed too.
+- **The actual defect.** The engine's trace showed `AFC settling done: correction=364.4Hz onset=96`
+  — settled on idle noise at sample 96, ~82 000 samples before the frame, on a correction 6× outside
+  BPSK250's ±62.5 Hz tracking range. `ScanPlanner::note_settle_failure` **correctly condemned** it —
+  and `unsettle` rewound `last_tried_end` to **0**, so the broad scan restarted at the beginning
+  where the same noise passed the same gate and re-settled at the same sample. Measured:
+  **78 settles, 77 condemnations, all at sample 96**, until the listen window expired. The recovery
+  #1022 added was *reachable* (#1028 made it so) and *ineffective*.
+- **Trigger.** `EnergyGate::threshold` returns a fixed `ABS_THRESHOLD = 1e-4` until it holds 32
+  windows of history. This station's idle floor is **4.1e-4**, four times that, so the first window
+  of pure noise passes. Note it also **passes `onair-rx-level-check.sh`**, which only checks the
+  floor against the clamp *ceiling* — the blind window `1e-4 .. 1.07e-3` is exactly where a
+  correctly configured station sits.
+- **Design decision (+ rationale):** `unsettle` resumes at `condemned + step` instead of 0. Sound by
+  the same argument the old comment already made for rewinding — *a premature noise anchor sits
+  before the real frame* — and the anchor has earned exclusion: `SETTLE_FAILURE_LIMIT` (18)
+  fully-buffered decodes across a 9-offset sweep already failed there. Deliberately **not** fixed by
+  tightening `AFC_MAX_CORRECTION_HZ` (a threshold tweak that would reject this particular noise
+  settle while noise converging to 50 Hz would still pass) nor by changing the gate's cold start
+  (which would break every buffer-is-the-frame fixture, whose first window is signal).
+- **Implementation:** `crates/openpulse-modem/src/engine.rs` — `ScanPlanner::unsettle`.
+- **Result after the fix:** 8 settles instead of 78; the receiver lands at **onset 82304 with a
+  +2.0 Hz correction**, matching the independently measured +2.42 Hz carrier.
+- **Whitening is retained and was a real fix**, verified on this capture: **0 of 33** dead-carrier
+  windows against the pre-whitening predecessor's 25 of 33. It removed 6.2 s of unmodulated carrier
+  and was not the cause of the decode failure. **Two defects, one symptom.**
+- **Tests:** `crates/openpulse-modem/tests/capture_replay_corpus.rs::the_real_on_air_frame_decodes`
+  (un-ignored) plus `a_real_on_air_frame_decodes_end_to_end` (uncoded control).
+- **Test results (run):** `capture_replay_corpus` **8 passed, 0 ignored**.
+- **Sabotage verification:** restoring the exact pre-fix `self.last_tried_end = 0` fails the test.
+## 2026-07-30 — Archetype scan finding 17: the whitening gate measured three wrong regimes
+
+- **Requirement / change:** the one unit test standing behind the #1021 wire-whitening fix
+  (`scramble::tests::an_all_zero_block_becomes_transition_rich`) must actually be able to detect the
+  defect it exists to prevent.
+- **Design decision (+ rationale):** the test had three simultaneous regime mismatches against the
+  wire it claims to measure — MSB-first bit order (the wire is LSB-first, per `bytes_to_bits` in
+  every modulator), runs of *identical* bits (only runs of **zero** are a dead carrier, because
+  `nrzi_encode` flips phase on a `1` and holds on a `0`), and keystream offset 0 (the real RS padding
+  starts at offset 28: 4 length + 10 frame header + 14 payload). The fix builds the **actual** on-air
+  wire with `Frame` + `FecCodec` rather than approximating it, which makes the offset correct by
+  construction instead of by a constant that can drift; and it asserts the *unwhitened* wire still
+  contains the defect before claiming whitening removes it, so the gate cannot pass on a fixture that
+  no longer reproduces #1021.
+- **Implementation:** `crates/openpulse-core/src/scramble.rs` — test module gains `wire_bits`
+  (LSB-first), `longest_zero_run`, `pack_wire_bits`, `ones_ratio`, and `MAX_DEAD_BITS = 12` (the
+  maximal-length 9-bit LFSR's longest zero run is `n - 1 = 8` by construction, so 12 leaves headroom
+  for a seed/tap change without flagging). `an_all_zero_block_becomes_transition_rich` is replaced by
+  `the_real_padded_wire_carries_no_dead_carrier_run`.
+- **Measurements (actually run):**
+  - Real wire for a 14-byte payload: **unwhitened longest zero run = 1561 bits**; whitened = 8 bits.
+  - Old gate's own numbers, re-measured: ratio 0.499, longest identical run 16.
+- **Tests:** `crates/openpulse-core/src/scramble.rs` — `the_real_padded_wire_carries_no_dead_carrier_run`
+  (the gate) and `the_dead_carrier_measurement_catches_a_balanced_but_dead_stream` (anti-vacuity: pins
+  that the measurement can fail, on the exact pattern the old one missed).
+- **Test results (run):** `cargo test -p openpulse-core --no-default-features --lib scramble` — **6
+  passed, 0 failed**.
+- **Sabotage verification (decisive, and it shows the blind spot rather than merely asserting it):**
+  replacing the LFSR with a *balanced but dead* keystream — 17 zeros then 17 ones, repeating — makes
+  the new gate **FAIL** (`a 17-bit run of zeros … unwhitened the same wire runs 1561 bits`). Under the
+  identical sabotage, the old assertions were re-run and both **PASS**: ratio 0.499 is inside
+  `0.4..=0.6`, and the MSB-first longest identical run is exactly 16, one below its own `<= 16` bound.
+  A wire carrying a 17-symbol dead carrier every 34 symbols was invisible to the only gate guarding
+  the fix. Note this is a blind spot, not a live regression: the property does hold for the shipped
+  LFSR (measured whitened run = 8 bits).
+
+---
+
+## 2026-07-30 — #1029: linksim accounted throughput against the requested FEC, not the transmitted one
+
+- **Requirement / change:** `FrameStep::net_bps` must reflect the code rate that was on the wire.
+- **Design decision (+ rationale):** the per-frame FEC is resolved from the profile
+  (`self.ota.tx_fec()`, falling back to the sim's knob only for unprotected rungs), but the
+  accounting used `self.params.fec`. The resolved value is now carried in `last_fec` alongside
+  `last_mode`/`last_level` and used for `net_bps`. Same archetype as cluster 2 — a proxy that tracked
+  the objective only while no profile assigned per-rung FEC, which was true of most profiles.
+- **Implementation:** `apps/openpulse-linksim/src/lib.rs` — `last_fec` added in `step()`, assigned
+  from the resolved per-attempt `fec`, and used in place of `self.params.fec` for `net_bps`.
+- **CORRECTION to the issue as filed.** #1029 states that `goodput_gate` "reads `effective_bps`,
+  which is derived from `net_bps`", and that the fix therefore moves the CI baseline. **That is
+  wrong, and both halves were checked.** `LinkResult::effective_bps` (lib.rs:992) is
+  `bytes_delivered * 8 / total_air_s` — measured from real airtime and delivered bytes, never
+  touching `fec_code_rate`. Measured confirmation: all three gate cases were run under the old and
+  the new accounting and returned **bit-identical** numbers (331.5 / 893.3 / 555.4 bps). The
+  corrected `net_bps` reaches the linksim GUI (`gui.rs:879`) and the panel feed
+  (`serve.rs:407` → `openpulse-panel`), which is where the ~2x overstatement was visible.
+- **Found while re-deriving:** the gate's baseline annotations had drifted in **both** directions,
+  and one mattered. `ofdm_ladder_goodput_floor_dispersive_fade` carried a `~414` annotation against a
+  floor of 280; the case now measures **555**, so the floor had silently become 50 % of baseline
+  against the module's own stated ~65 % rule — it would have passed a 40 % throughput regression on
+  the dispersive fade the OFDM ladder exists to survive. Floor re-derived to 360. The other two were
+  already at or tighter than the rule (331 → floor 250 = 75 %; 893 → floor 600 = 67 %) and are
+  unchanged; only their stale annotations were corrected.
+- **Tests:** `apps/openpulse-linksim/src/lib.rs` —
+  `tests::net_bps_is_accounted_against_the_fec_actually_transmitted`. Steps `hpx_hf` and asserts
+  `net_bps == gross_bps * fec_code_rate(profile-resolved FEC)` per frame. The **anti-vacuity guard**
+  is load-bearing: it requires at least one visited rung whose transmitted FEC differs from the
+  requested one, so the test cannot pass on a run where the question never arises.
+- **Test results (run):** `net_bps_is_accounted_against_the_fec_actually_transmitted` **1/1**;
+  `goodput_gate` **4/4** with the re-derived floor.
+- **Sabotage verification:** restoring the exact original line
+  (`fec_code_rate(self.params.fec)`) fails the new test — `SL7 (OFDM52) transmits SoftConcatenated
+  (r=0.437) but net_bps 2487.5 implies r=0.875`, the predicted ~2x overstatement.
+
+---
+
+## 2026-07-30 — Archetype scan finding 13: the frame-lock test discarded the field that shows mislocation
+
+- **Requirement / change:** `tests/waveform_lock_watterson.rs` claims to measure *frame lock
+  reliability*; it must not count a lock that landed on the wrong sample.
+- **Design decision (+ rationale):** `lock_rate_with_channel` read `res.rho` and discarded
+  `res.offset`, so a correlation peaking on the **delayed multipath ray** counted as a lock — the
+  #688 defect ("sync must lock ahead of the peak, never on it") reproduced inside the test written to
+  guard against it. The criterion added is `offset <= GUARD`, **not** equality: an early start begins
+  inside the symbol's own cyclic prefix (a removable circular shift), a late start pulls the next
+  symbol into the window and cannot be undone. Both rates are returned and asserted rather than the
+  correct one replacing the declared one — the declared-lock rate is a real property, and reporting
+  them separately is what makes the gap visible.
+- **Implementation:** `crates/openpulse-modem/tests/waveform_lock_watterson.rs` — `LockStats
+  { detected, correct }`, `GUARD` promoted to a named constant.
+- **Measurements (actually run, by instrumenting the real helper):**
+  - `good_f1` (all of 15/20/25 dB): 18/20 declared, **offsets {16: 11, 20: 7}**.
+  - `good_f2`: 19–20/20 declared, **offsets {16: 12, 24: 7–8}**.
+  - The mislocated offsets are exactly each profile's delay: 0.5 ms = 4 samples (16→20), 1 ms = 8
+    samples (16→24).
+  - AWGN 10/15/20/25 dB: **100/100 at offset 16** — no multipath, no delayed ray, so the offset
+    check costs nothing there. That is what makes the Watterson shortfall a channel effect rather
+    than a property of the detector.
+- **Tests:** declared-lock bars **unchanged** (AWGN ≥ 0.99, Watterson ≥ 0.85). New: correct-lock bar
+  ≥ 0.50 (measured 0.55/0.60); AWGN asserts `correct == detected`; and
+  `a_lock_on_the_delayed_ray_is_not_counted_as_a_correct_lock` pins that the offset check is live.
+- **Test results (run):** `waveform_lock_watterson` **10/10**.
+- **Sabotage verification:** restoring the exact pre-fix behaviour (increment `correct`
+  unconditionally, offset ignored) fails **1/10**. Note *which* one: the matrix test still passes
+  under that sabotage — the anti-vacuity test is the only thing that catches it, which is precisely
+  why a gate whose two rates could silently converge needs one.
+- **Docs:** `docs/dev/vara-parity-execution-board.md` — the ≥99 % AWGN claim is re-verified and
+  stands; the Watterson line now states both rates and that this is a bare-matched-filter property,
+  not a production-acquisition figure.
+
+---
+
+## 2026-07-30 — Archetype scan finding 12: `HarqPolicy` is inert, and two documents claimed otherwise
+
+- **Requirement / change:** the completion claim for Item 6 (SC-FDMA HARQ tuning) must match what
+  actually runs.
+- **Verification (done first, not taken from the scan):**
+  - `grep` for `HarqPolicy` across `crates`/`apps`/`plugins`: reached only via
+    `ModemEngine::select_harq_decision` (engine.rs:2028) and `select_harq_decision_for_mode`
+    (:2048). Callers of those: `tests/harq_rate_selection_watterson.rs` and
+    `tests/ldpc_engine_loopback.rs`. **No production caller.**
+  - The shipped ARQ takes FEC from `SessionProfile::fec_for` + `free_rs_strengthening`
+    (engine.rs:1323, :4605) and its ACK timeout from `ota_ack_timeout_ms` (:4890), which does not
+    share a numeric range with `HarqPolicy`'s curve. So the timeout tier is doubly inert.
+  - **Measured, not inferred:** instrumented `harq_watterson_f1_throughput_and_latency_gate` to count
+    decodes instead of discarding them (`let _ = policy_engine.receive_with_harq_attempt(...)`).
+    Result: **0 of 105 attempts decode**, and the gate passes. `policy_goodput_bps` is a closed-form
+    function of `decision.code_rate` and `decision.ack_timeout_ms`, so it cannot fail on a decode.
+- **Design decision (+ rationale):** **not** wiring the selector up. The per-rung MODCOD table is the
+  deliberate shipped design; the selector is an unused alternative. The defect is the completion
+  claim, so the fix is documentary — the code is left as it is.
+- **Implementation (docs + test rationale only, no behaviour change):**
+  - `docs/dev/vara-parity-execution-board.md` Item 6: status changed from
+    **"✅ FUNCTIONALLY COMPLETE"** to **"⚠️ SELECTOR BUILT, NOT WIRED"**, with the mechanism spelled
+    out. The old status sat four lines below a "Current State" bullet reading *"Retransmit on NACK
+    without rate change"* — both statements were true, and only because the selector never runs.
+    Criteria annotated: the latency tick is a **proxy**, and the throughput criterion is marked NOT
+    MEASURED rather than merely deferred.
+  - `docs/dev/project/traceability-matrix.md` CAP-36: scope note separating the LLR-combining retry
+    loop and rate policy (which do ship) from the `HarqPolicy` selector (which does not).
+  - `crates/openpulse-modem/tests/harq_rate_selection_watterson.rs`: module doc now states what the
+    file does not prove, including the measured 0/105.
+- **Test results (run):** `harq_rate_selection_watterson` **2/2** (unchanged — this change asserts
+  nothing new; it stops a passing test from being cited as evidence it cannot supply).
+
+---
+
+## 2026-07-30 — Archetype scan low tail: findings 10, 11, 14, 15
+
+- **Finding 10 — RX SNR recorded only on the soft-demod branch.**
+  - *Mechanism:* `record_rx_snr` sat inside the `plugin.supports_soft_demod(mode)` arm, so the
+    predicate gating it was the demodulator's **soft capability**, not whether an SNR estimate
+    exists. Unrelated properties: `QPSK250-D` implements `estimate_snr_db` and reports
+    `supports_soft_demod = false` by design (#923). All of `hpx_hf`'s hard-FEC lower half recorded
+    nothing.
+  - *Blast radius:* the rate ladder is unaffected (it reads a value computed in a separate call
+    path). `last_rx_snr_db()` feeds the QSY scan's candidate scoring — which scored every channel on
+    `unwrap_or(0.0)` — and the ADIF logbook's `rx_snr`.
+  - *Fix:* `crates/openpulse-modem/src/engine.rs` — `rx_snr_db` hoisted above the branch.
+  - *Test:* `tests/engine_events.rs::receive_populates_last_rx_snr_db_on_a_hard_only_mode`, with an
+    anti-vacuity assertion that the chosen mode really is hard-only. The pre-existing test named the
+    gap in its own assertion message ("a plugin that supports demodulate_soft") without it being
+    noticed as one.
+  - *Sabotage:* restoring `(wire, None)` on the hard arm fails the new test; **the pre-existing one
+    stays green**, which is the demonstration that it was blind to that branch.
+
+- **Finding 11 — non-OTA burst decode errors swallowed.** `crates/openpulse-daemon/src/server.rs`
+  used `.unwrap_or_default()` with no log while both sibling arms in the same `match` log theirs.
+  The callee emits partial diagnostics one layer down, so the arm was never fully silent — only the
+  terminal reason was lost. One-line mirror of the siblings.
+
+- **Finding 15 — the slice-factor table was measured on one plugin and 6 of 10 variants.**
+  - `tests/fec_slice_expansion.rs` hardcoded `MODE = "BPSK250"` and skipped `Ldpc`, `LdpcHighRate`,
+    `ShortRs`, `Turbo` — while the factor table's own doc quotes `LdpcHighRate 1.50` and `Ldpc 2.65`
+    as "measured". All ten now run and **all pass**: the factors were right, just unverified.
+  - The table's *justification* is a claim about plugin geometry, so it is now measured on a second
+    plugin. **Measured: `MFSK16 + Rs` emits 135 936 samples — exactly 1.00× its raw geometry —
+    against a 271 872-sample reserve.** Its geometry *is* one RS block with no margin, so the
+    "reserve covers the second block" premise does not hold and it carries a permanent 2× over-
+    allocation. Waste rather than defect: `frame_arrival_samples` already sizes settle recovery from
+    the raw geometry, so the reachability harm this would once have caused is closed. Pinned with
+    the numbers so a future mode-aware factor has a baseline.
+
+- **Finding 14 — two reproduction seams with no caller, one of them wrong.**
+  - `route_with_capture_agc` and `route_embedded_with_cfo` were built to reproduce the
+    hardware-diagnosed AGC (#1009/#1010) and carrier-offset defects, then left uncalled.
+  - **Measured cold-start transient:** a cold AGC peaks at **272× the input** over the first 200
+    samples — the preamble region — versus **5.9×** when primed with 1 s of idle noise, with the
+    **same settled gain (1.10×)** either way. So priming changes the transient and nothing else, and
+    the cold ramp is in the wrong causal direction (a real AGC settles *down* onto an arriving
+    signal). Uncorrected, the seam would have mis-measured the defect it exists for.
+  - *Fix:* `route_with_capture_agc` gains an `idle_secs` prime; both seams now have callers in
+    `tests/carrier_offset_acquisition.rs`.
+  - **Correction found by probing rather than assuming:** the first embedded+CFO test failed with
+    `invalid magic`, which reads as a carrier-tracking failure. It was not — at `noise_rms = 0.02`
+    the decode fails **at offset 0 too**; the idle floor alone defeats acquisition. Parameters moved
+    to 0.005 and a **zero-offset control** added so the noise level and the carrier offset stay
+    separable.
+- **Test results (run):** `fec_slice_expansion` **3/3**; `engine_events` **9/9**;
+  `carrier_offset_acquisition` **7/7**; clippy clean on `openpulse-modem` + `openpulse-daemon`.
+
+---
+
+## 2026-07-30 — The energy gate's cold-start blind window (the #1021 trigger) is closed
+
+- **Requirement / change:** `EnergyGate` must not pass a real receiver's idle noise floor. This was
+  the *trigger* for #1021; PR #1038 made it survivable (the scan walks past a condemned anchor) but
+  left the receiver still settling AFC on noise first.
+- **The blind window.** `threshold()` returned a fixed `ABS_THRESHOLD = 1e-4` until it held
+  `MIN_HISTORY = 32` windows. A real idle floor sits **above** that constant, so the first window of
+  pure noise passed. Measured: IC-9700 idle **4.1e-4**, four times the fallback. And that station
+  **passes `scripts/onair-rx-level-check.sh`**, which bounds the floor only from above (against the
+  clamp *ceiling*, 1.07e-3) — so `1e-4 … 1.07e-3` was covered by neither, and it is exactly the band
+  a correctly configured station occupies.
+- **Design decision (+ rationale).** The threshold is now derived from whatever history exists,
+  including a single window, and `passes` records the window **before** computing the threshold so
+  the first one is judged against a floor derived from itself.
+  - **What made the fallback look necessary, and why it was not.** The buffer-is-the-frame fixtures
+    have signal in window 1, so a self-derived threshold appears certain to gate them out. Measured,
+    the two regimes separate in *opposite* directions:
+
+    | first window is | `floor × 3` | after clamp | verdict |
+    |---|---|---|---|
+    | real idle noise, 4e-4 | 1.2e-3 | 1.2e-3 | **rejected** (correct) |
+    | fixture signal, **0.36** | 1.08 | `MAX_THRESHOLD` 3.2e-3 | **passes** (100× headroom) |
+
+  - `MAX_THRESHOLD` is what protects the fixtures. Note its own comment claimed loopback levels of
+    "1e-3 … 5e-3"; `route_clean` actually delivers ≈ **0.36** mean-square, so the clamp had two
+    orders of magnitude more headroom than it advertised. **Measuring the fixture regime is what
+    unblocked this** — the design was rejected on an assumed level in the previous session.
+- **Implementation:** `crates/openpulse-modem/src/engine.rs` — `EnergyGate::threshold` /
+  `EnergyGate::passes`; `MIN_HISTORY` removed.
+- **Measurements (actually run)** on `ic9700-frame-bpsk250-rs-whitened.wav`, composing with #1038:
+
+  | | settles | condemnations | where |
+  |---|---|---|---|
+  | before both fixes | 78 | 77 | all on noise at sample 96 |
+  | #1038 livelock fix only | 8 | 7 | walks from noise to the frame |
+  | **+ this fix** | **2** | **1** | **both at the frame** (82144, 82304); decodes in 0.72 s |
+
+- **Tests:** `energy_gate_rejects_a_real_idle_floor_from_the_very_first_window` (the #1021 regime,
+  at the measured 4.1e-4 floor, asserting the measured 1.97e-3 burst still passes) and
+  `energy_gate_passes_a_fixture_whose_first_window_is_signal` (the counterweight, at the measured
+  0.36). `energy_gate_uses_absolute_floor_until_history_fills` renamed to
+  `energy_gate_never_falls_below_the_absolute_floor` — its old name described the removed behaviour.
+- **Test results (run):** gate unit tests **4/4**; `capture_replay_corpus` **8/8**.
+- **Sabotage verification:** restoring the exact pre-fix cold-start fallback
+  (`if self.history.len() < 32 { return ABS_THRESHOLD }`) fails
+  `energy_gate_rejects_a_real_idle_floor_from_the_very_first_window` while the fixture counterweight
+  stays green — i.e. the sabotage reproduces the blind window and nothing else.
+- **Docs:** `scripts/onair-rx-level-check.sh` now records that its ceiling check never covered this
+  band, that the gap was a decode gate, and that it is closed in code — so the script's remaining
+  check is necessary and sufficient rather than silently partial.
+
 ## 2026-07-29 — test: `qam64_tolerates_realistic_sro` re-derived (100→50 ppm) — the 100 ppm bar was measuring the RS padding
 
 - **Requirement/change:** the first fully-complete workspace run (`--no-fail-fast`, 272 suites,
@@ -1113,6 +1739,1261 @@ falsified both columns.
   **1 FAILED** (`bpsk_snr_tracks_a_fade`, the #934 gate) — resolved in the follow-up entry below
   before this branch was finished. (An earlier revision of this entry claimed the workspace gate
   green before the run had completed; corrected.)
+
+## Loopback harness realism: capture-context impairments (2026-07-29)
+
+- **Requirement:** the 2026-07-28 on-air session produced four defects that no in-process test could
+  have found. Root observation: the channel models simulate the **signal path** (they degrade the
+  transmitted frame), while every one of those defects lived in the **capture context** — what the
+  receiver hears when nobody is transmitting, at what level, with what clock, delivered at what rate.
+- **Implementation (each impairment self-validating):**
+  - `crates/openpulse-channel/src/cfo.rs` — `CfoChannel`: shifts the whole audio band by a fixed
+    offset via the analytic signal (FFT → zero negative freqs → rotate → real part), with a phase
+    accumulator for block continuity. Distinct from `SroChannel` (sampling-clock, not carrier).
+  - `crates/openpulse-channel/src/agc.rs` — `AgcChannel`: fixed capture gain and/or a tracking AGC
+    with attack/decay. Covers both the absolute-level impairment and the gain-moves-during-a-frame
+    impairment that caused the "analog path" misclassification.
+  - `crates/openpulse-audio/src/loopback.rs` — `LoopbackBackend::with_pacing(hz)`: `read()` returns
+    only the samples that would have ARRIVED by now. The default drains the whole buffer instantly,
+    which is why read-cadence starvation was recorded as untestable in-process.
+  - `crates/openpulse-modem/src/channel_sim.rs` — `route_with_cfo`, `route_embedded_with_cfo`,
+    `route_embedded_at_level`, `route_with_capture_agc`.
+- **Tests (run):**
+  - `openpulse-channel` cfo 5/5 — including `a_tone_moves_by_exactly_the_requested_offset` (the
+    channel must move the spectrum by the requested amount, else every acquisition test built on it
+    is vacuous), power preservation, and zero-offset passthrough.
+  - `openpulse-channel` agc 5/5 — including `the_agc_gain_moves_when_the_level_jumps` and
+    `the_agc_compresses_amplitude_structure` (the mechanism that broke the amplitude-bearing modes).
+  - `openpulse-audio --test paced_loopback` 4/4 — progressive delivery, order/no-loss preservation,
+    an unpaced control, and a non-positive-rate fallback (a silent stall would be worse than no
+    pacing).
+  - `openpulse-modem --test carrier_offset_acquisition` 5/5, with a FALSIFIER (a 1600 Hz offset must
+    fail) so an inert channel cannot make the passing cases meaningless.
+  - `openpulse-modem --test capture_level_energy_gate` 3/3 — reproduces #1020 in process: at the
+    on-air idle floor (mean-square 0.0154, 4.8x the gate ceiling) acquisition degrades, while the
+    level that passed on air (0.00042) decodes. Includes the healthy-level CONTROL.
+  - Full workspace: **271 suites, 2192 passed, 0 failed**; clippy `-D warnings` and
+    `cargo fmt --check` clean.
+- **Measured finding (new capability figure):** sweeping the acquisition chain through `CfoChannel`
+  gives **BPSK250 ≤ 600 Hz** and **QPSK500 ≤ 400 Hz** before decode fails — roughly **ten times** the
+  ±baud/4 per-symbol tracking range. The per-symbol figure describes what the carrier *tracker*
+  holds; acquisition additionally has the coarse `afc_mini_settle` pass and the retry's per-position
+  re-acquisition. Quoting the tracking range as the system's offset budget understates it by an
+  order of magnitude — and it independently confirms the −64 Hz rig-to-rig offset measured on air was
+  never near the limit, corroborating that the coded failures were a capture-level/settle problem.
+- **A misattribution caught in progress:** the first version of the CFO test used the one-shot
+  `receive()`, which performs **no AFC settling at all** (the energy-gate → refine-onset →
+  `afc_mini_settle` chain exists only in the scanning loop). A 20 Hz offset "failing" there is the
+  wrong entry point, not a bug. Fixed to use the timeout receive.
+- **Still hardware-only:** rig DSP (NR/NB), analog nonlinearity, USB re-enumeration resetting mixer
+  state, and two genuinely independent oscillators. An emulation must also be validated against a
+  real capture, or the suite tests the model of the radio rather than the radio.
+
+## Capture-replay harness: real recorded radio audio as a test corpus (2026-07-29)
+
+- **Requirement:** the emulated capture-context impairments are each a *model* of a radio, and a
+  model can be wrong in exactly the way that hides a bug. Replay removes the model: a recording is
+  what the rig actually produced. Complements, does not replace, the emulations — a capture covers
+  only the conditions recorded, and goes stale as the DSP changes.
+- **Implementation:**
+  - `crates/openpulse-modem/src/capture_replay.rs`: `Capture` + `load_wav`/`load_corpus`, with a
+    minimal RIFF chunk-walking reader (no new dependency; a fixed 44-byte header offset would read
+    audio as metadata whenever a recorder interleaves LIST/fact chunks). `cycled()` lets a few
+    seconds of recorded idle pad an arbitrarily long capture.
+  - `crates/openpulse-modem/src/channel_sim.rs`: `route_embedded_in_capture` — a synthetic frame
+    embedded in REAL recorded idle audio, with a `signal_gain` so the signal-to-real-floor ratio can
+    be swept against a fixed genuine floor.
+  - `crates/openpulse-modem/tests/captures/` — corpus (8 kHz mono 16-bit) + README with provenance
+    and the measured property each file exists to preserve. Decimated 48→8 kHz with
+    `resample_poly`; naive decimation would alias the noise floor and destroy that property.
+  - `scripts/onair-record-capture.sh` — records and prepares new corpus entries (local or over SSH,
+    parecord or pw-record), and tells the operator to record provenance, since a capture with no
+    recorded expectation cannot be asserted against.
+- **Corpus (all real, 2026-07-28 on air):** `ic9700-idle-hot.wav` (mean-square ≈0.0158 — the level
+  that broke #1020, 4.9x the energy-gate ceiling); `ft991a-idle.wav` (≈3.7e-7 — the OPPOSITE
+  failure, below the gate's absolute floor, showing "just lower the level" is not a universal fix);
+  `ic9700-tone-1501hz.wav` (carrier ≈1501.5 Hz, independently measured on air after the +64 Hz trim).
+- **Tests (run):** `--test capture_replay_corpus` 6/6.
+  - Corpus integrity: files load, are 8 kHz, are not silent; the IC-9700 floor is still above the
+    gate ceiling; the FT-991A floor is still below the absolute threshold; the recorded carrier
+    still measures 1495–1510 Hz against the 1501.5 Hz taken off the radio (this pins our measurement
+    chain to a real-world truth).
+  - Behaviour: a frame at a healthy level decodes inside real recorded idle audio (**the control**),
+    while the same frame at the SAME signal gain inside the recorded hot floor is not reliably
+    acquired — an A/B by construction, where the only variable is the real recorded floor.
+  - Full workspace: **272 suites, 2198 passed, 0 failed**; clippy `-D warnings` + fmt clean.
+- **Known gap, recorded rather than glossed:** there is **no capture of a real modem frame** — the
+  on-air runs decoded inside `openpulse` on the remote host and the raw audio was never saved. That
+  is the highest-value slot in the corpus and it is empty; only a frame capture can assert an
+  end-to-end decode against real audio. `scripts/onair-record-capture.sh` exists to fill it on the
+  next on-air session.
+
+## Receive-side preconditions sized from the container, not the frame (2026-07-29)
+
+- **Requirement:** the 2026-07-29 defect-archetype scan
+  (`docs/dev/reviews/archetype-scan-2026-07-29.md`) hunted the repo by defect *shape* rather than by
+  symptom. Its dominant result was not any single bug but a cluster: **four** independent places
+  where a receive-side completeness or recovery precondition is sized from the *container* — a fixed
+  burst cap, a FEC slice reserve, a capture window — rather than from the frame that actually
+  arrived. Three of the four sit on `hpx_hf` SL2/SL3 (BPSK31/BPSK63), the entry rungs a session must
+  confirm before it can climb, so the cluster sat directly on the on-air critical path.
+- **Design decision:** fix the *shape*, in one change, using the repair pattern the repo had already
+  proven for two of the five affected consumers (`FecCodec::decode_prefix`) — rather than four
+  unrelated patches. Where a length genuinely could not be derived, name the decision in a function
+  so it has one home and a gate can be coupled to it (`frame_arrival_samples`).
+- **Implementation** (`crates/openpulse-modem/src/engine.rs`):
+  - `burst_cap_samples(mode)` replaces the flat `BURST_MAX_SAMPLES` (240 000 = 30 s at 8 kHz). The
+    cap is now derived from the mode's own `frame_geometry`, scaled by the worst FEC expansion, and
+    clamped between `BURST_MIN_CAP_SAMPLES` and `BURST_MAX_CAP_SAMPLES` so it remains a genuine
+    runaway guard. **Measured**: BPSK31+Rs transmits 532 480 samples (66.6 s) and BPSK63+Rs 266 240
+    (33.3 s) — both past the old cap, so the accumulator force-flushed mid-frame into two
+    preamble-less halves on *every* normal streaming capture.
+  - `decode_ldpc_llrs_prefix` for the scanning receive: stop at the first failed codeword instead of
+    aborting the frame. The scanning slice is the FEC reserve, so a real capture (which always
+    outlasts the frame) leaves whole codewords of trailing noise past the last real one. The
+    single-shot `receive_with_ldpc*` and the HARQ combiner keep strict `decode_ldpc_llrs` — they know
+    the frame extent.
+  - `rs_interleaved_decode_prefix`: deinterleave each candidate block-count prefix *at its own
+    length*. `Interleaver::deinterleave` derives its permutation from `data.len()`, so a
+    window-length buffer was unscrambled with a different permutation than the transmitter used;
+    `FecCodec::decode_prefix` cannot rescue that, because trimming after the wrong permutation has
+    already run recovers nothing.
+  - `frame_arrival_samples(raw, fec)` — deliberately **not** widened by `fec`, which is the whole
+    point of it being a named function. Arrival ("has the frame finished buffering") and slicing
+    ("how much window must an attempt cover") are different questions; conflating them demanded
+    149.2 s of post-onset audio for BPSK31, more than any configured harness listens for, which
+    disabled the #1021 settle recovery outright on the ladder's entry rung.
+- **Tests — all written failing-first and confirmed RED before the fix, then sabotage-verified
+  against the committed state:**
+  - `tests/burst_cap_frame_length.rs` (new, 4 tests). Asserts the cap against a **measured**
+    transmission rather than a restated constant, and drives the production `accumulate_capture`
+    streaming entry in 800-sample daemon-sized ticks — `receive()` and `ChannelSimHarness` hand the
+    receiver a whole buffer and cannot exercise the accumulator at all.
+  - `tests/fec_scan_long_capture.rs` — 4 new cases: `RsInterleaved` long **and tight** (the tight one
+    is the tell: it failed too, which is what proves the defect is the window-derived permutation and
+    not the capture length), plus `Ldpc` and `LdpcHighRate`. The suite previously covered only
+    `Rs`/`RsStrong` — the two arms that had already been fixed.
+  - `tests/coded_noise_settle_recovery.rs` — new `the_settle_recovery_threshold_is_reachable_for_the_slow_rungs`,
+    coupled to `frame_arrival_samples` (not to the geometry it happens to be derived from today) so
+    re-sizing arrival back to the reserve fails it. Also corrects a doc constant that a same-week
+    commit had already made stale (scan finding 16).
+- **Test results (actually run, 2026-07-29):**
+  - Failing-first: `fec_scan_long_capture` 4 passed / **4 failed**; `burst_cap_frame_length` 2 passed
+    / **2 failed** (`BPSK31+Rs transmits 532480 samples (66.6 s) but the burst cap is 240000 (30.0 s)`;
+    the streaming path flushed mid-frame at exactly 240 000).
+  - After the fix: `fec_scan_long_capture` **8/8**, `burst_cap_frame_length` **4/4**,
+    `coded_noise_settle_recovery` **4/4**.
+  - Sabotage verification (each defect reintroduced against the committed fix): arrival→reserve fails
+    1/4 in `coded_noise_settle_recovery`; LDPC-strict + straight-deinterleave fails **4/4** of the new
+    cases in `fec_scan_long_capture` while the 4 pre-existing `Rs`/`RsStrong` cases stay green;
+    flat burst cap fails 2/4 in `burst_cap_frame_length`. Restored: all green.
+- **Why the suite could not have caught any of it:** every test that reaches `accumulate_capture`
+  uses a fast mode (OFDM52-16QAM, QPSK500, BPSK250) whose frames are far under 30 s, so the burst cap
+  cannot fire for them; the long-capture gate covered only the two FEC arms already fixed; the
+  `RsInterleaved` gate used `route()`, the buffer-is-the-frame fixture that `route_embedded` exists
+  to close; and the settle-recovery gate pins BPSK250 exclusively — the one mode where the old
+  precondition was satisfiable. In each case the gate's own fixture sits on the side of the boundary
+  where the defect cannot fire. That is the archetype, and it is worth more than the four fixes.
+
+## Gates that measure a proxy instead of the objective (2026-07-29)
+
+- **Requirement:** cluster 2 of the defect-archetype scan
+  (`docs/dev/reviews/archetype-scan-2026-07-29.md`) — three gates that measure something *correlated*
+  with the real property under conditions where the correlation happens to be perfect, then silently
+  stop tracking it under the conditions the objective actually cares about. Unlike cluster 1 (where
+  the shipped code was wrong), here the shipped **evidence** was wrong; two of the three exposed a
+  real code defect only once the gate was fixed.
+- **Design decision:** fix the *gate* first and let it find the code defect, rather than fixing the
+  code from the audit's assertion. This is what narrowed the scope: the scan's first pass read as
+  "9 of 12 profiles assign no FEC", and measurement showed most of those are **self-consistent** —
+  their floors were derived uncoded and the code matches. Only one profile was actually defective.
+- **Implementation:**
+  - `crates/openpulse-modem/tests/channel_loopback.rs`:
+    `every_profile_rung_decodes_at_its_floor_with_its_fec` — AWGN at each rung's own declared floor,
+    fixed seeds (deterministic, not a sample). On failure it runs a same-SNR FEC A/B and names which
+    of two different problems it found: **UNDER-FEC'd** (succeeds with `SoftConcatenated`) vs
+    **FLOOR TOO OPTIMISTIC** (does not). The pre-existing clean gate is kept — it still has teeth for
+    the *wrong*-FEC half of the class; it was blind only to the *missing*-FEC half.
+    Note on units: floors are per-waveform-family (the SNR-scale-boundary sharp edge), so the gate
+    does **not** claim the AWGN SNR equals the quantity a floor is expressed in. It asserts the
+    profile's own promise — *at this number, with this FEC, this rung works* — and the failure-path
+    A/B is scale-independent because FEC is then the only variable.
+  - `crates/openpulse-core/src/profile.rs`: `hpx_wideband_hd` gains
+    `fec_modes = [Some(FecMode::SoftConcatenated); 21]`. It previously shipped `[None; 21]` **seven
+    lines below its own comment** stating these modes run under soft-concatenated FEC, so the ladder
+    never applied the FEC its floors and its hardware validation were measured with.
+  - `crates/openpulse-core/src/profile.rs`: `hpx_pilot_fast_rrc` SL2 floor 6.0 → 8.0 dB. It inherited
+    a floor from `hpx_pilot`, whose modes are 500-baud and not RRC-shaped.
+  - `crates/openpulse-modem/tests/afc_doppler_watterson.rs` → `doppler_tracker_units.rs`, header
+    corrected, headline assertion made reachable, anti-vacuity counter added.
+  - `docs/dev/vara-parity-execution-board.md`, `docs/dev/project/traceability-matrix.md`: two
+    acceptance boxes UNCHECKED with the reason, one reworded integration→unit, summary row done→partial.
+- **Measurements (actually run, AWGN at each rung's own declared floor, 8 trials, seeds 0..7):**
+
+  | rung | floor | uncoded | SoftConcatenated |
+  |---|---|---|---|
+  | `hpx_wideband_hd` SL9 SCFDMA26-8PSK | 9 dB | **2/8** | 8/8 |
+  | SL10 SCFDMA26-16QAM | 11 dB | **2/8** | 8/8 |
+  | SL11 SCFDMA26-32QAM | 13 dB | **0/8** | 8/8 |
+  | SL12 SCFDMA52-16QAM | 16 dB | **4/8** | 8/8 |
+  | SL13 / SL14 / SL15 | 20 / 28 / 35 dB | 8/8 | 8/8 |
+
+  The broken rungs are the **low** ones — the SCFDMA26 tier the profile's own comment calls "the
+  robust graceful-degradation path" was the least robust part of it.
+
+  `hpx_pilot_fast_rrc` SL2 floor sweep (12 trials/point, RRC vs the plain 1000-baud sibling):
+  6 dB **8/12** vs 11/12 · 7 dB 11/12 vs 11/12 · 8 dB 12/12 vs 12/12.
+
+  Not defects, confirmed by the same sweep: `hpx500`, `hpx_pilot`, `hpx_pilot_rrc`,
+  `hpx_pilot_fast`, `hpx_wideband`, `hpx_narrowband` all decode at their own floors uncoded.
+  `hpx_hf` SL7–14 and all of `hpx_ofdm_hf` decode 0–1/3 uncoded and 3/3 with their assigned FEC, so
+  those assignments are load-bearing. `hpx_hf` SL6 `QPSK250-D` scores 0/3 with `SoftConcatenated` and
+  3/3 with its assigned `Rs` — the documented "differential has no soft path", working as designed.
+- **Test results:** `channel_loopback every_profile_rung` **2/2**; `doppler_tracker_units` **5/5**;
+  `openpulse-core` 321 + 16 + 22 + … **0 failed**.
+- **Sabotage verification:** reverting `hpx_wideband_hd` to `[None; 21]` fails the new gate with
+  *"hpx_wideband_hd/Sl9 SCFDMA26-8PSK with its assigned None decodes only 1/4 at its own declared
+  floor of 9 dB. UNDER-FEC'd — SoftConcatenated decodes 4/4 at the same SNR"* — **while the old clean
+  gate stays green**, which is scan finding 6 demonstrated directly rather than asserted. Replacing
+  the Doppler test's `< 5.0` bound with an impossible `< -1.0` now **fails** (it passed before);
+  the estimator recovers 3.0000083 Hz against a true 3 Hz.
+- **Wire note:** `fingerprint()` covers `(level → mode, level → FEC)`, so `hpx_wideband_hd`'s
+  fingerprint changes. That is the mechanism working as designed — it exists to detect exactly this
+  kind of ladder divergence between builds.
+
+## Seam gaps — a transform wired at one caller, not the shared seam (2026-07-29)
+
+- **Requirement:** cluster 3 of the defect-archetype scan
+  (`docs/dev/reviews/archetype-scan-2026-07-29.md`). Both findings are cross-cutting behaviours that
+  the code **claimed in a comment** to apply everywhere and did not. This is the shape CLAUDE.md's
+  "cross-cutting RX/TX feature checklist" exists for; it recurred anyway, which is why the checklist's
+  rule 3 — *never claim "covers all paths" from a callers-grep; prove it with a test that FAILS
+  without the wiring* — is the operative one.
+- **Implementation:**
+  - `crates/openpulse-modem/src/engine.rs`: `wire_for_modulation()` is now the single source of the
+    bytes that go on the air, and the new `stage_modulate_payload_iq()` mirrors the audio stage for
+    the baseband path. `transmit_iq` goes through it instead of calling `plugin.modulate_iq()`.
+    **Design note:** deliberately *not* moved to `route_wire_stage(EncodeModulate)`, even though that
+    is the seam both paths already share — it has 13 call sites and whitening is XOR, so any path
+    reaching it twice would silently self-cancel. A cancelling transform is a worse failure mode than
+    the bug being fixed. Two stage functions are unavoidable because the plugin trait exposes
+    `modulate` and `modulate_iq` with different return types; one function can still own their bytes.
+  - `crates/openpulse-daemon/src/server.rs`: the multi-mode monitor (REQ-RX-01) is hoisted above the
+    receive tick's OTA/non-OTA dispatch so it runs on every captured burst.
+- **Measurements / reproduction (actually run):**
+  - Finding 8 reproduced before the fix: `BPSK100` and `QPSK250` both returned
+    **`frame encoding/decoding error: invalid magic`** through I/Q transmit → upconvert → audio
+    receive, while the audio-only control passed. That is the same signature that made #1021
+    undiagnosable, which is what makes it expensive rather than merely wrong.
+  - Finding 9's precondition verified directly: `grep` finds **no `end_ota_session` anywhere**, and
+    `start_ota_session` only ever assigns `self.ota = Some(..)`. So `ota_active()` is permanently true
+    once the daemon starts under `ota_enabled`, and the monitor's single emit site was unreachable for
+    the whole process lifetime.
+- **Tests:**
+  - `crates/openpulse-modem/tests/iq_decode_round_trip.rs` (new, 4 tests). Upconverts the baseband
+    I/Q to the real passband (`i·cos − q·sin`) and decodes through the normal receive path — what an
+    external upconverter/SDR does with these samples anyway. The pre-existing `tests/iq_output.rs`
+    asserts sample counts, Q-RMS, the attenuation ratio and the regulatory log: everything *about* the
+    samples, nothing requiring the bytes to survive, so no decode existed anywhere on the I/Q path.
+  - `crates/openpulse-daemon/tests/monitor_during_ota.rs` (new). Drives the real `server::run` receive
+    tick with **both** `ota_enabled` and the monitor on, and asserts a `MonitorFrame` reaches a control
+    client. REQ-RX-01's existing acceptance test calls `MonitorRuntime::decode_all` directly — the
+    monitor was never broken, the *dispatch around it* was, so that test passes whichever arm is taken.
+- **Test results (run):** `iq_decode_round_trip` **4/4**; `iq_output` **7/7** unchanged;
+  `monitor_during_ota` **1/1**.
+- **Sabotage verification:** reverting the I/Q path to `plugin.modulate_iq(&wire.bytes, ..)` fails
+  **2/4** with `invalid magic` while the control and fixture tests stay green. For the monitor, the
+  **exact pre-fix code** (the emit restored inside the non-OTA arm) fails the new test — which also
+  proves the fixture genuinely has an OTA session active, since otherwise the pre-fix placement would
+  have passed.
+
+---
+
+## On-air runner: per-side frequency offset + PipeWire routing preflight (2026-07-28)
+
+- **Change:** make the two things that brought up the IC-9700 ↔ FT-991A pair (all seven signal-chain
+  gates PASS, first OTA BPSK250 decode) reproducible by the runner instead of hand-set each session:
+  (1) a per-side dial trim for the real ~64 Hz rig-to-rig crystal offset, and (2) PipeWire default
+  sink/source routing to the rig CODEC at a non-clipping TX level.
+- **Design/rationale:**
+  - *Frequency:* two independent 2 m rigs differ by tens of Hz (~1 ppm = 145 Hz at 144.6 MHz), which
+    is at/over BPSK250's ±62.5 Hz AFC. Measured on air: both commanded to 144.600000 → received
+    carrier 1436 Hz (−64 Hz); trimming **Station B +64 Hz** → 1501.5 Hz. A single-side trim corrects
+    the actual crystal difference, so it aligns **both** directions. RF alignment is therefore
+    "each rig on `TEST_FREQ_HZ + its offset`", **not** "the two commanded frequencies equal".
+  - *Routing:* `--device pulse` follows the host DEFAULT sink/source; on a laptop the default sink is
+    the built-in speaker (TX never reaches the rig), and openpulse emits near-full-scale audio that
+    pins the rig ALC. Set the default sink/source to the CODEC at TX volume 0.15 (Gate-6-validated).
+    A script that SETS state must VERIFY it (dual-card AGC lesson) — the setup tool reads the routing
+    back, and the runner refuses to key if it is wrong (fail-closed).
+- **Implementation:**
+  - `scripts/run-onair-ic9700-ft991a.sh`: `A_FREQ_OFFSET_HZ`/`B_FREQ_OFFSET_HZ` → `A_FREQ_HZ`/
+    `B_FREQ_HZ`; band guard validates all three; `tune_a`/`tune_b` tune per-side; the CRITICAL freq
+    check compares each rig to its own expected value; new `verify_audio_routing` preflight (no-op
+    unless a side uses `pulse`) calls the setup tool `--verify` and `exit 1`s on failure.
+  - `scripts/onair-setup-audio-routing.sh` (new): resolves each host's CODEC sink+source from
+    `wpctl status` by description match, sets them default + TX sink volume, then reads back and
+    prints a `RESULT pass|fail` line; `--verify` mode checks without changing.
+  - `docs/config/onair-ic9700-ft991a.example.sh`: `A_FREQ_OFFSET_HZ=0`, `B_FREQ_OFFSET_HZ=64`,
+    `A_CODEC_MATCH`/`B_CODEC_MATCH="Codec"`, `A_TX_SINK_VOLUME`/`B_TX_SINK_VOLUME=0.15`, documented.
+  - `docs/dev/onair-execution-plan.md`: G1 "session bring-up" subsection documenting both steps and
+    the `pw-record --target` suspended-node trap (it produced a fake G3 fail during bring-up).
+- **Tests (run):**
+  - `bash -n` on the runner, the new setup script, and the config: all pass.
+  - Per-side offset arithmetic + band guard + per-side verify: unit-tested in isolation — with
+    `B_FREQ_OFFSET_HZ=64`, `A_FREQ_HZ=144600000`/`B_FREQ_HZ=144600064` (in band); verify passes when B
+    reads 144600064 and correctly flags when B reads 144600000.
+  - `onair-setup-audio-routing.sh` live against both hosts: **set → both `RESULT pass`** (rpi51
+    default sink 35 / source 46; dd2zm sink 58 / source 59; sink_vol 0.15); **sabotage** (dd2zm
+    default sink → 69) → `--verify` reports `RESULT fail default_sink=69` and overall FAIL; set-mode
+    restores both to PASS.
+  - Runner `verify_audio_routing` extracted and exercised: skips (rc 0) when both sides use `hw:`;
+    PASS (rc 0) with `pulse` + good routing; **exits rc 1** with `pulse` + sabotaged routing.
+- **Not yet run:** the runner end-to-end (build + transfer + loopback regression + keyed matrix) —
+  that is Phase A1/A2 and needs an agreed on-air window.
+
+## On-air A1: RX capture level is a decode gate (energy-gate clamp) — 2026-07-28
+
+- **Requirement/finding:** the first runner-driven A1 (`supervise --single-case 'BPSK250|none|64'
+  --reverse`, IC-9700 ↔ FT-991A, 2 m 144.600) **FAILED 0/1** with strong RF (IRS `strength_max=21`)
+  and `fail_reason: "IRS: payload not observed"`. Root cause is the **RX capture level**, not RF,
+  frequency, or the waveform.
+- **Diagnosis (measured, not inferred):**
+  - IRS log: `AFC settling done: correction=81.2Hz ... buf_len=1400` at 17:29:42, then
+    `AFC full-retry: pos=... FAILED: invalid magic` at every position at 17:29:54 — the AFC settled
+    **12 s before the frame arrived**.
+  - A Gate-5 style tone+FFT re-measurement showed the received carrier at **1501.2 Hz (+1.2 Hz)** —
+    the rigs were still correctly aligned, so the 81 Hz "correction" was damage, and the obvious fix
+    (re-trim `B_FREQ_OFFSET_HZ`) would have been **wrong**.
+  - `EnergyGate` (`crates/openpulse-modem/src/engine.rs`) sets
+    `threshold = clamp(idle_floor*3, ABS=0.0001, MAX=0.0032)`. Measured IC-9700 idle `mean_sq`
+    **0.0154** at PipeWire source volume 1.00 — **4.7× above the maximum threshold**, so the gate
+    could never shut and fired on noise; AFC then settled on that noise.
+  - A dial-frequency ablation (144.600 / 144.700 / 145.000) showed the strong lines move with the
+    dial (RF, not conducted RFI), and the official Welch-averaged G0 analyzer showed prominences of
+    only 2.5–8.4 dB — i.e. **not birdies**; the capture was simply far too hot. (My first ad-hoc
+    single-FFT script overstated peaks at ~16 dB — a periodogram of noise does that; the validated
+    instrument corrected it.)
+- **Fix (measured both directions):** lower the per-side RX capture level so the adaptive threshold
+  stays unclamped. IC-9700 source volume 1.00 → **0.55**: idle 0.00042, signal 0.0024, threshold
+  ~0.0013 sitting **between** them. FT-991A unchanged at 1.00 (idle 0.000125 — its USB AF output is
+  quieter). PipeWire volume is cubic, so capture power scales ≈ `v^6`.
+- **Implementation:**
+  - `scripts/onair-rx-level-check.sh` (new): captures idle on both stations (handles `parecord` and
+    `pw-record` hosts), computes `mean_sq`, and FAILs when `idle*3` would clamp; reports the
+    absolute-floor case too.
+  - `scripts/onair-setup-audio-routing.sh`: now also **sets and reads back** the RX source volume
+    (`A_RX_SOURCE_VOLUME`/`B_RX_SOURCE_VOLUME`), not just the TX sink volume.
+  - `scripts/run-onair-ic9700-ft991a.sh`: new `verify_rx_level` preflight (fail-closed) alongside
+    `verify_audio_routing`.
+  - `docs/config/onair-ic9700-ft991a.example.sh`: per-side RX levels with the measured rationale.
+  - `CLAUDE.md` sharp edge + `docs/dev/onair-execution-plan.md` G1 bring-up step.
+- **Tests (run):**
+  - **A1 re-run after the level fix: PASSED 1/1** — `docs/dev/test-reports/onair-2026-07-28T175040.json`
+    (`"result": "pass"`, BPSK250 `none` 64 B over the air, FT-991A TX → IC-9700 RX). The identical
+    invocation before the fix: `onair-2026-07-28T172924.json` (`"result": "fail"`).
+  - `onair-rx-level-check.sh` live: PASS at the configured levels (IC-9700 idle 0.000432 / thr
+    0.001297; FT-991A idle 0.000144 / thr 0.000432). **Sabotage** (IC-9700 source volume back to
+    1.00 — the A1-failing condition) → `idle mean_sq=0.015534 gate threshold=0.003200 CLAMPED`,
+    exit 1; restore → exit 0.
+  - `onair-setup-audio-routing.sh` set+verify with the new RX-volume check: both sides
+    `RESULT pass ... src_vol=0.55 / 1.00`; it also correctly FAILED the FT-991A while its source
+    volume was still an unconfigured 1.00 vs a 0.55 default before the per-side values were set.
+  - `bash -n` on all three scripts and the config.
+- **Note for later:** the engine's `AFC_MAX_CORRECTION_HZ` is a hardcoded 450 Hz const with no
+  runtime knob; the execution plan's older "cap it at 100" mitigation is not settable today. Not
+  changed here — the level fix addresses the observed failure, and a code change wants its own
+  measurement.
+
+## #1021 — coded receive could not recover from a noise settle (2026-07-28)
+
+- **Requirement/defect:** on air (IC-9700 ↔ FT-991A, 2 m 144.600), `BPSK250|none` decoded reliably
+  while `BPSK250|rs` and `BPSK250|soft_concatenated` never decoded — same session, same rigs,
+  `strength_max=21`, carrier alignment measured at +1.2 Hz. First quick matrix scored 1/3
+  (`docs/dev/test-reports/onair-2026-07-28T180257.json`).
+- **Root cause (two parts, both required):**
+  1. `EnergyGate::threshold()` returns the bare `ABS_THRESHOLD` (1e-4) until 32 windows of history
+     accumulate. A real idle floor above that (measured 4.2e-4) trips the gate within the first few
+     scan positions, and `afc_mini_settle` returns a confident, plausible correction from noise —
+     measured `AFC settling done: correction=-49.8Hz onset=240 buf_len=1600`, i.e. 0.2 s in, some
+     40 000 samples BEFORE the transmission started.
+  2. `ScanPlanner::note_settled` was permanent — no un-settle, no re-anchor. The first-energy
+     micro-sweep then re-decodes from that noise position forever; its reach is `fep + 8×(step/2)`,
+     about four symbols.
+  **Why coded failed and uncoded passed:** `frame_plan` widens a coded frame ×3, which moves
+  BPSK250 from 74 624 to 223 872 samples — across `LONG_FRAME_SAMPLES` (120 000). That flips
+  `long_frame`, and the gate `(!long_frame || !planner.is_settled())` then disables the full-buffer
+  retry, which the code's own comments call "the fallback for a bad settle". Uncoded stays under the
+  threshold, keeps the retry, and recovered in 115 attempts despite an equally bogus 136.7 Hz settle.
+- **Implementation:**
+  - `crates/openpulse-modem/src/engine.rs`: `ScanPlanner` gains `settle_failures`,
+    `note_settle_failure()` and `unsettle()`; the micro-sweep condemns a settled position after
+    `SETTLE_FAILURE_LIMIT` (18 = two full 9-offset sweeps) failures **against a fully buffered
+    window** (`accumulated.len() >= onset + max_frame_samples`), then re-opens the scan
+    (`last_tried_end` rewound) and resets the discredited AFC correction to 0. The
+    fully-buffered guard is what prevents abandoning a good settle on a slow frame.
+  - `crates/openpulse-modem/src/engine.rs`: `receive_from_samples_with_fec` split into a logging
+    wrapper + `_inner`; adds per-attempt `fec attempt OK/FAILED` and a pre-codec `fec demod` line.
+    The coded path previously had **zero** log statements vs three in the uncoded path, which is
+    why the on-air failure produced an empty log and could not be diagnosed.
+  - `crates/openpulse-modem/src/channel_sim.rs`: `route_embedded_noisy(lead, trail, noise_rms, seed)`
+    — `route_embedded` pads *silence*, so the idle level is exactly zero and the cold-start
+    absolute floor can never fire early; the whole noise-settle failure class was structurally
+    invisible to the suite.
+- **Tests (run):**
+  - `cargo test -p openpulse-modem --no-default-features --test coded_noise_settle_recovery` — 3/3.
+    `coded_bpsk250_is_long_frame_while_uncoded_is_not` independently confirms the classification
+    crux; `uncoded_bpsk250_recovers_from_a_noise_settle` is the control; 
+    `coded_bpsk250_recovers_from_a_noise_settle` is the defect.
+  - **A/B (the fix is what passes it):** with the identical capture and ONLY the re-anchor disabled
+    (`if false && window_complete && ...`), the coded test FAILS again and takes 50 s instead of
+    1 s (it burns the whole listen window re-decoding the condemned anchor). Restored → passes.
+  - `--test coded_receive_instrumentation` — 3/3, **sabotage-verified**: with both `debug!` calls
+    removed all three fail.
+  - Full modem crate: **99 suites, 436 passed, 0 failed**. Workspace gate + clippy
+    (`-D warnings`) + `cargo fmt --check`: all exit 0.
+- **Two reproduction errors worth recording (both caught by keeping the CONTROL honest):**
+  1. the first reproduction set the receive timeout to exactly `RETRY_START_SECS` (12 s), so the
+     retry that rescues the uncoded control never fired and the control failed — which would have
+     made the coded assertion meaningless;
+  2. the first fix attempt could never fire, because the test capture (116 864 samples) was shorter
+     than the widened window it must judge against (224 112). Matching the capture to the real
+     on-air buffer (~269 000) is what let the recovery engage.
+- **Still open (found by the Fable control-flow analysis, NOT fixed here):** the broad-scan decode
+  block at `engine.rs` (inside `if !accumulated.is_empty() && !planner.is_settled()`) is
+  unreachable — every inner path `continue`s or `break`s before it, so the broad scan can only
+  settle, never decode. Dead weight that misleadingly suggests otherwise.
+- **Not yet proven:** the on-air re-run. In-process reproduction + fix is not a substitute for the
+  radio link that produced the defect.
+
+## 2026-07-24 — second on-air pairing prepared: IC-9700 ↔ FT-818
+
+- **Requirement/change:** prepare a test setup for a new 2 m pairing — IC-9700 on rpi51 (stationary,
+  over VPN) ↔ FT-818 + SCU-17 + LDG Z817 on this laptop (portable), same 144.640 MHz as before, FT-818
+  on the rear antenna socket.
+- **Grounding (verified, not assumed):** frequency 144.640 MHz PKTUSB and the full IC-9700/rpi51
+  config taken verbatim from the working `onair-ic9700-ft991a.example.sh`; hamlib **FT-818 = 1041**,
+  IC-9700 = 3081 (`rigctl -l`); the runner `run-onair-ic9700-ft991a.sh` is fully Side-B-config-driven
+  (`B_LABEL`/`B_HAMLIB_MODEL`/`B_PTT_TYPE`/`B_SSH`), so this is a config+docs task with **no script
+  change**. The SCU-17 was **not connected** when writing (checked `arecord -l`/`/dev/serial/by-id`/
+  `lsusb`), so its device names are marked `TODO-CONFIRM` with the discovery commands rather than
+  fabricated.
+- **Implementation:** `docs/config/onair-ic9700-ft818.example.sh` (sources cleanly; sets freq/models/
+  SSH; Side B = `dc0sk@localhost`) + `docs/dev/onair-ic9700-ft818-setup.md` (FT-818 DIG/USER-U mode,
+  DIG GAIN, CAT rate, rear-antenna menu, PTT choice, the G0 idle-floor gate on the SCU-17 audio, and
+  the signal-chain gates). Linked from the execution plan.
+- **Two operator-facing flags raised (careful-colleague catches):**
+  (1) the **LDG Z817 is HF-only and inert on 2 m** — the antenna must be resonant on its own, the
+  tuner cannot correct it here (`ALLOW_TUNER_ON_HIGH_SWR=0`);
+  (2) the FT-818 **rear SO-239 at 2 m** is a lossier connector than the front BNC and is not the
+  factory default — set by menu, link budget slightly worse. Also carried forward the IC-9700's
+  unresolved USB-capture-during-TX caveat (Gate 3 covers it).
+- **Tests (run):** config `bash -n` + sources and sets the expected vars; doc frontmatter validates.
+  Not runnable further without the hardware connected (device names) and the two rigs on air.
+
+## 2026-07-23 — on-air tooling brought current + execution plan written
+
+- **Requirement/change:** produce a sequenced on-air execution plan (1.0 group-A evidence) and bring
+  the on-air scripts current with the CLI, which had drifted 6–8 weeks behind the
+  loopback-revalidation arc (#989–#1013).
+- **Currency audit (vs `openpulse modes` + live `--help`):** every mode *name* the scripts use still
+  exists; the drift was elsewhere. Highest-impact: `deploy-rpi-pair.sh` cross-builds
+  `--no-default-features`, so its deployed binaries have no audio backend and key nothing —
+  `run-onair-tests.sh` invoked those exact binaries and additionally called `openpulse send`
+  (nonexistent) and `openpulse-tnc --listen` (nonexistent flags). The two mature runners
+  (IC-9700/FT-991A, TX500/KX3) never passed `--fec`, so recorded evidence claimed a FEC that was
+  never applied. All three carried `IRS_STARTUP_WAIT=5` (corrected value 10) and a bare `sleep 2`
+  where the scanning decode needs ~12 s.
+- **Fixes (verified without a rig):**
+  - `deploy-rpi-pair.sh` refuses by default (`ALLOW_NO_AUDIO_DEPLOY=1` to override) and documents the
+    on-Pi cpal build.
+  - `run-onair-tests.sh` rewired to the real `transmit`/`receive` surface (`--backend cpal`, `--fec`,
+    `--device`, rigctld `--ptt`); pass criterion now checks the decoded payload; added the MFSK16 and
+    QPSK250-D fade rungs the test plan requires.
+  - both mature runners thread `--fec` on both ends; RX-invalid hard `concatenated` case dropped;
+    TX500's false "CLI does not expose FEC" note corrected.
+  - timings corrected across all three (startup 10 s, `KILL_WAIT=12`).
+  - `onair-preflight.sh` gains a `--backend cpal devices` probe — presence of the binary is not
+    capability; a loopback-only build passed the old file check and would transmit nothing.
+- **Tests (run):** every changed CLI invocation parses and runs on the loopback backend (BPSK250,
+  MFSK16, QPSK250-D each transmit with their FEC); all five scripts pass `bash -n`; the preflight
+  cpal probe correctly reports the in-repo (cpal-enabled) build as flight-ready. **Not verifiable
+  without two rigs:** an actual on-air QSO — that is Phase A1 of the plan.
+- **New doc:** `docs/dev/onair-execution-plan.md` — the sequenced campaign, grounded in the recorded
+  ground truth (modem/waveforms/transmitters SDR-proven; rig→rig blocked by conducted USB-audio RFI,
+  fix = galvanic isolation). Critical path: G0 kill the RX RFI → G1 seven signal-chain gates → A1 one
+  rig→rig decode → A2 ladder on a real fade → A3 Winlink over RF. Linked from `onair-status.md` and
+  `on-air_testplan.md`.
+
+## 2026-07-23 — Phase G0 idle-floor gate (runnable)
+
+- **Requirement/change:** the on-air execution plan's Phase G0 needs a runnable check that the
+  galvanic-USB-isolation fix cleared the conducted-RFI birdies from a rig's receive audio, before any
+  modem run. Previously described only as "capture and FFT".
+- **Implementation:** `scripts/onair-rx-idle-floor.py` (Welch PSD, Blackman-Harris window, robust
+  25th-percentile broadband floor; flags in-band narrow lines ≥15 dB prominence or ≥−40 dBFS) +
+  `scripts/onair-rx-idle-floor.sh` (arecord capture wrapper, idle-state warning, exit-code
+  propagation). Prominence-based so the verdict is independent of capture gain.
+- **Tests (run — "check your checker"):** validated against synthetic captures. Pure noise → PASS
+  (exit 0). Three injected lines at 1286/1394/1745 Hz → FAIL listing **exactly those three**. A single
+  −30 dBFS line → FAIL listing **exactly one**. Live `arecord`→analyze path exercised end-to-end on a
+  real host capture device (PASS on a silent floor). All exit codes propagate through the wrapper.
+- **A defect in the test found by the checker's checker:** the first synthetic "birdie" input summed
+  five ~0 dBFS sines, which clipped to full scale and generated intermodulation across the whole band
+  — the analyzer faithfully reported ~33 lines and looked broken. The analyzer was correct; the *test
+  input* was clipping. Fixed the test to inject non-clipping lines (asserted `peak < 0.999`), after
+  which the analyzer localized exactly the injected set. Also replaced a local-running-median floor
+  (which a birdie-dense band inflated by ~30 dB, manufacturing phantom peaks) with the global
+  percentile floor. Both are recorded so neither is reintroduced.
+- **Wired into:** the execution plan's Phase G0 (with the exact commands and the validation note).
+
+## 2026-07-22 — daemon holds only one capture stream (audit #917, finding #6)
+
+- **Requirement/change:** the last open item on the 2026-07-16 modem loose-ends audit, parked since
+  filing as "needs real audio hardware to verify".
+- **Design decision:** the defect was filed as "the OTA ACK-wait opens a second capture stream", and
+  that is real — `receive_ota_ack_within` opens its own stream while the receive tick's persistent
+  `rx_stream` stays open. But the *cause* is that a keyed transmit on the command arm blocks the
+  `select!` loop while nothing reads `rx_stream`, and the OTA path is only the sibling that got
+  noticed. So the fix is keyed on `engine.frames_transmitted()` advancing rather than on the command
+  variant, which also covers the file-transfer burst and anything `apply_command_to_engine` keys.
+  Non-transmitting commands keep their stream, so a status-poll flood cannot thrash the device.
+- **Rationale for not needing hardware:** the property is "how many capture streams are open at
+  once", which a backend can *report*. `LoopbackBackend` hides it because its streams clone a shared
+  buffer; a counting backend does not. The parking assumption — that this needed cpal — was wrong.
+- **Implementation:** `crates/openpulse-daemon/src/server.rs` — `rx_stream = None` before
+  `ota_send_with_ptt`, and again after the command arm when the transmit counter advanced.
+- **Tests:** `crates/openpulse-daemon/tests/ota_ack_capture_stream.rs` — `CountingBackend` records
+  the concurrent-input-stream high-water mark; both tests drive the real `server::run` over the real
+  control protocol.
+- **Test results (run):** 2 passed / 0 failed. Sabotage-verified — with both drops removed:
+  `an_ota_send_never_opens_a_second_concurrent_capture_stream` fails with peak **2** (expected 1),
+  and `the_capture_stream_is_reopened_after_a_keyed_transmit` fails with **1 open before, 1 after**.
+  Full workspace gate re-run before merge.
+## 2026-07-22 — 64QAM tracks the amplitude reference across the frame
+
+- **Requirement/change:** the deferred "64QAM mid-frame reference tracking" item. The single-carrier
+  64QAM modes fail on the dual-soundcard hardware loopback and pass on the virtual single-clock one;
+  the working hypothesis was untracked slow wander against a frame-static receiver.
+- **Ablation first, per repo culture.** Injected sinusoidal *gain* wander and sinusoidal *phase*
+  wander separately, with **no AWGN at all**, so no result could be a noise limitation. On
+  `64QAM500` at 0.5 Hz, 30 % depth: gain 0.341 byte error, phase 0.027 — an order of magnitude apart
+  at the slow rates a soundcard AGC produces. The carrier loop already tracks phase mid-frame;
+  **nothing tracked amplitude**. `normalize_to_constellation` fits one scalar from the 16-symbol
+  preamble and applies it to the whole frame. This relocated the item from carrier tracking (where
+  the `loop_bw` probe pointed) to the AGC, and matches the failure set: amplitude-carrying modes
+  fail, phase-only modes pass.
+- **Design decision:** blind (windowed power), not decision-directed; referenced to the frame mean,
+  not to nominal constellation power; every correction shrunk by the estimator's own standard error.
+  Each of the three was forced by a measured regression, recorded on `track_gain_across_frame`:
+  - **decision-directed was built and rejected** — it helps where decisions are already right and
+    amplifies error where they are not (`64QAM2000-RRC` 2 Hz/0.15: 0.012 → **0.102**);
+  - **an absolute reference was rejected** — it folds noise power into the estimate and shrinks the
+    constellation ~4.7 % at 10 dB, a third of the outer ring's margin, moving LLR calibration with it;
+  - **no shrinkage was rejected** — the estimator's own variance cost a *clean* noiseless frame one
+    byte in 255 (0.000 → 0.004);
+  - **re-anchoring after de-trending was built and rejected** — it fixes the 0.5 Hz/0.30 column but
+    broke `window_arq_engine_path_across_mode_families` with RS `TooManyErrors` on a **clean**
+    loopback, because the static fit is only approximately unity and applying it twice compounds.
+    That column is therefore explicitly *not* fixed, and is documented rather than quietly dropped.
+  - the level is read from **data symbols only** — the preamble is constant-modulus corners and sits
+    far off the 64QAM average power, so including it made the estimator read and "correct" a step at
+    each frame edge (`64QAM500` 2 Hz/0.15: 0.000 → 0.090).
+- **Implementation:** `plugins/64qam/src/demodulate.rs` — `track_gain_across_frame`, wired at all
+  three CPU demod entry points (hard, soft, soft-GPU), which the map flagged as prone to drift.
+- **Tests:** `plugins/64qam/tests/gain_wander_tracking.rs` — 4 tests. The wander cases assert a
+  bound; the clean and near-static controls assert **exactness**, which is what rejected three of the
+  four variants above.
+- **Test results (run):** measured before → after, noiseless, byte error rate:
+
+  | case | before | after |
+  |---|---|---|
+  | `64QAM500` 2 Hz / 0.15 | 0.102 | **0.000** |
+  | `64QAM500` 2 Hz / 0.30 | 0.318 | **0.094** |
+  | `64QAM1000` 2 Hz / 0.15 | 0.024 | **0.000** |
+  | `64QAM1000` 2 Hz / 0.30 | 0.337 | **0.051** |
+  | `64QAM2000-RRC` 2 Hz / 0.30 | 0.369 | 0.369 (unchanged) |
+  | all clean controls | 0.000 | 0.000 |
+
+  No cell regresses. `qam64-plugin` 14 + 1 + 4 passed / 0 failed, including `llr_reliability`.
+  Sabotage-verified: with the three call sites removed, both wander gates fail and both controls
+  correctly stay green. `sro_confirmation`, `llr_calibration`, `llr_convention_conformance`,
+  `acquisition_coverage`, `cessb_power_evm`, `window_arq_multimode`,
+  `harq_rate_selection_watterson` all pass. Full workspace gate re-run before merge.
+- **Not fixed, deliberately:** `64QAM2000-RRC` is unchanged — its frame is ~364 symbols, so the
+  smoothing window spans a quarter of it and there is too little data either side of each symbol to
+  read a local level. It needs a different mechanism.
+## 2026-07-22 — SCFDMA52-64QAM: the discriminating instrument, built and validated
+
+- **Requirement/change:** the "next step is instrumentation, not another probe" item closing the
+  2026-07-21 `SCFDMA52-64QAM` entry. Every measurement so far was taken *after* the DFT de-spread,
+  which averages all 52 subcarriers into every output symbol — past that point a single ruined
+  subcarrier and a uniformly degraded band are indistinguishable, which is why the mode's failure
+  stayed unattributed while `SCFDMA52-32QAM` decodes the same captured audio.
+- **Design decision:** a standalone diagnostic function rather than an `Option` field threaded
+  through `SoftDemodOutput`. The map found the pre-IDFT values are a local (`equalized`, consumed in
+  place one line later) in **five** near-identical loops; a new sibling of the existing shared front
+  end `equalized_data_symbols` adds no cost to any production receive and no field to a `Copy` struct.
+  Reference is the receiver's own hard decision re-spread by a forward DFT, so what it reports is
+  residual *after* equalization — what a channel-estimate or equalizer defect leaves behind — not raw
+  channel response. Absolute subcarrier indices are carried, not implied: spacing 5 gives 52 data
+  subcarriers and spacing 4 gives 49, so a bare vector would not be comparable against the `-P4`
+  variant it most needs comparing against.
+- **Implementation:** `plugins/scfdma/src/demodulate.rs` — `scfdma_subcarrier_evm_db`.
+- **Tests:** `plugins/scfdma/tests/subcarrier_evm.rs` — 4 tests, all about the *instrument*, because
+  a diagnostic that has not been checked against known inputs is not evidence. This repo has had four
+  invalid measurements in this investigation alone (the SRO estimator reading an injected 200 ppm as
+  −6.9 ppm; a capture recording a stray tone; a device probe mutating the enumeration it measured;
+  EVM against an assumed-square grid for a *cross*-32QAM mode), and every one looked plausible.
+- **Test results (run):** 4 passed / 0 failed.
+  - noiseless frame → **−75.9 dB** mean residual (gate: < −40), so the reconstruction is correctly
+    scaled and aligned;
+  - AWGN → mean tracks SNR monotonically (−29.8 / −20.2 / −16.8 dB at 30 / 20 / 14 dB) and **no
+    subcarrier stands more than 12 dB above the band mean**, so broadband reads as broadband;
+  - **the gate:** a notch injected at 1000 / 1500 / 2000 Hz peaks on subcarrier **32 / 48 / 64** —
+    exactly the subcarriers at those frequencies (8000/256 = 31.25 Hz spacing) — each ≥ 6 dB above the
+    band mean. The instrument localizes.
+  - index vector is absolute, strictly ascending, pilot-free, and the right length for both
+    `SCFDMA52-64QAM` (52) and `SCFDMA52-64QAM-P4` (49).
+- **NOT YET APPLIED to the failing capture.** The dual-soundcard rig's two USB adapters were not
+  connected during this session (`aplay -l` shows only snd-aloop, HDMI and the internal codec), and
+  the failure only reproduces there. The instrument is built and proven; running it on hardware audio
+  and reading off which subcarriers are damaged is the next step and needs the rig plugged in.
+  Recorded as pending rather than as a result — the conclusion this was built to reach has **not**
+  been reached.
+
+## 2026-07-22 — SCFDMA52-64QAM: the premise does not reproduce; the AGC does
+
+Run with the USB adapters connected, on the dual-card rig, after re-running
+`scripts/setup-dualcard-loopback.sh`.
+
+- **The inherited premise is wrong at HEAD.** `SCFDMA52-64QAM` **passes** on the dual-card rig with
+  `soft-concatenated` FEC: 3 of 4 invocations of `run-loopback-dualcard.sh` (each ≤3 attempts). The
+  2026-07-21 entry recorded 6/6 FAIL across `rs` / `soft-concatenated` / `ldpc`. It is *marginal* —
+  0/4 single-shot in a hand-rolled harness — but it is not the categorical failure the record claims.
+- **The capture-side AGC is a confirmed impairment — memory's "leading untested candidate", now
+  tested.** Clean two-direction ablation, 2 trials per cell, one variable (`amixer -c 4 cset name=
+  'Auto Gain Control'`):
+
+  | mode | AGC on | AGC off |
+  |---|---|---|
+  | `SCFDMA52-16QAM` | FAIL FAIL | **PASS PASS** |
+  | `SCFDMA52-32QAM` | FAIL FAIL | **PASS PASS** |
+
+  `setup-dualcard-loopback.sh` turns the AGC off, and the runner re-asserts it before every case — so
+  a session that did not re-run setup (the adapters had been unplugged, which resets mixer state)
+  measures a rig whose capture AGC is live. That produces exactly the pattern the record describes:
+  amplitude-carrying modes fail, phase-only modes pass. **This is the same mechanism as the
+  single-carrier 64QAM gain-wander finding** — a level that moves *during* a frame.
+- **Clipping/compression is dead — the number did not move.** SC-FDMA's ~10 dB PAPR puts peaks at
+  0.98 FS where the low-PAPR level-check waveform reads 0.79, which looked like a lead. But only
+  **2** samples in ~400k were near full scale, and EVM is **flat across a 3× level change**
+  (`SCFDMA52-64QAM` −6.5 / −6.5 / −6.4 dB at capture gain 16 / 10 / 6, peak 0.98 → 0.31).
+- **The instrument has a validity floor, found by using it.** `scfdma_subcarrier_evm_db`'s reference
+  is the receiver's own hard decisions, so localization holds to ≈ −11 dB mean EVM and is **lost by
+  −7.5 dB**. The hardware captures landed at −6.5 dB — *past* the floor — so their 24 dB spread and
+  +12 dB peak subcarrier are **not** readable as a narrowband defect, and were not reported as one.
+  Now documented on the function and pinned by `evm_localization_is_valid_only_above_its_measured_floor`.
+  The original validation only covered the mildly-impaired regime; a diagnostic must be checked in
+  the regime it will actually be used in.
+- **Two self-inflicted measurement errors, recorded.** (1) A hand-rolled harness gave
+  `SCFDMA52-64QAM` 0/5 because it keyed TX 2 s after starting the receiver (which needs ~6.4 s to
+  settle AFC) and killed it 3 s after TX instead of the runner's 12 s — cutting the scanning decode
+  short. **The failure was manufactured by the harness, not observed.** (2) The first captures were
+  recorded through `plughw:4,0` at 8 kHz, letting ALSA resample 48 k → 8 k; re-recording at the
+  native 48 kHz and downsampling with a polyphase filter offline is what made them measurable at all.
+## 2026-07-22 — the "analog path" failure set re-run on a correctly-normalised rig
+
+Every mode the record classified as **ANALOG PATH**, re-run on the dual-card rig after
+`scripts/setup-dualcard-loopback.sh` (which turns the capture-side AGC off and normalises both
+cards' mixers). `FEC=soft-concatenated`, on **`main`** — no fix from this session's PRs.
+
+| mode | recorded | re-run on `main` |
+|---|---|---|
+| `64QAM500` | FAIL | **PASS** — marginal (2/3 runs, often needs attempt 2) |
+| `64QAM1000` | FAIL | **PASS** 3/3 |
+| `64QAM2000-RRC` | FAIL | **PASS** 3/3 |
+| `SCFDMA52-16QAM` | FAIL | **PASS** |
+| `SCFDMA52-32QAM` | FAIL | **PASS** |
+| `SCFDMA52-64QAM` | FAIL | **PASS** — marginal (≈2/3–3/4) |
+| `SCFDMA52-64QAM-P4` | FAIL | FAIL 0/3 |
+| `PILOT-QPSK500` | FAIL | **PASS** (already resolved by #1005) |
+
+**Six of the eight pass with no code change at all.** The classification was measuring rig state, not
+the analog path: unplugging the USB adapters resets their mixers, and a session that did not re-run
+the setup script was capturing through a **live AGC**. That is a level that moves *during* a frame,
+which is why the failure set was exactly the amplitude-carrying modes.
+
+**What is actually left:** `SCFDMA52-64QAM-P4` (0/3), and two modes that are genuinely marginal
+rather than broken (`64QAM500`, `SCFDMA52-64QAM`). "Analog path" as a category should be retired —
+it never named a mechanism, and most of what it held was a mixer setting.
+
+### #1008 is NOT validated on this hardware
+
+The 64QAM gain-tracking fix was tested against `main` on the same rig, same session:
+
+| condition | mode | `main` | with #1008 |
+|---|---|---|---|
+| AGC off | `64QAM500` | 2/3 | 3/4 |
+| AGC off | `64QAM1000` | 3/3 | 4/4 |
+| AGC off | `64QAM2000-RRC` | 3/3 | 3/4 |
+| AGC **on** | `64QAM500` | 0/3 | 0/3 |
+| AGC **on** | `64QAM1000` | 0/3 | 0/3 |
+| AGC **on** | `64QAM2000-RRC` | 0/3 → **1/6** | 2/3 → **1/6** |
+
+With the AGC off there is nothing to correct — turning it off is precisely what removes the wander —
+and the differences are inside the noise of 3–4 reps. With the AGC on, an apparent 0/3 → 2/3 rescue
+**failed to replicate at 6 reps (1/6 vs 1/6)** and is withdrawn.
+
+So: #1008 stands on its in-process ablation, where it is unambiguous and regresses nothing, but its
+claim must be scoped to the *synthetic* sinusoidal level wander it was measured against. The real
+capture AGC is a harsher and differently-shaped impairment (attack/decay at burst onset, not a slow
+sinusoid) that the fix does **not** rescue. The mechanism class is right; the model of it is not
+representative of this hardware.
+## 2026-07-22 — the rig refuses to sweep with a live capture AGC
+
+- **Requirement/change:** prevent a recurrence of the misclassification recorded above, where eight
+  modes were attributed to the "analog path" while the rig's capture AGC was on.
+- **Why the existing normalisation was not enough.** `run-loopback-dualcard.sh`'s `_normalise` *sets*
+  the mixers but cannot tell whether it worked: it `continue`s past an unresolved card, and every
+  `amixer` call ends in `|| true`, so a wrong card index or a renamed control is silently a no-op.
+  `setup-dualcard-loopback.sh` likewise *announced* "AGC off" without reading it back. ALSA assigns
+  card indices in enumeration order and they shift on re-probe, which is precisely when the
+  resolution is wrong and the claim is false.
+- **Design decision — the guard must not trust the same resolution it is checking.** The runner's
+  preflight scans **every** card in `/proc/asound/cards` that exposes an `Auto Gain Control`, rather
+  than only the two it resolved. A guard keyed to `TX_CARD`/`RX_CARD` would read the wrong card in
+  exactly the scenario it exists for. Unresolved-card detection is kept as a separate check, since a
+  skipped normalisation makes a passing read luck rather than evidence. Override: `AGC_PREFLIGHT=0`.
+- **Implementation:** `scripts/run-loopback-dualcard.sh` — `_agc_state`, `_preflight_mixers`, run
+  once at startup after `_normalise`. `scripts/setup-dualcard-loopback.sh` — reads the AGC back and
+  exits non-zero rather than printing an unverified claim; the success line now says "verified".
+- **Tests (run):** sabotage-verified in both directions with a stub `amixer` that delegates to the
+  real binary but reports the AGC as permanently on:
+  - control, AGC genuinely off → runner proceeds, `SCFDMA16` PASS 1/1; setup prints "AGC off [verified]";
+  - AGC stuck on → setup exits 1 naming cards 5 and 4; runner refuses, naming the hot cards;
+  - card resolution lost (`TX_CARD`/`RX_CARD` unresolvable, so `_normalise` is skipped) with the AGC
+    left on → runner refuses and names card 4, proving the scan does not depend on the resolution.
+- **A defect in the first version of the guard, caught by its own control.** `_agc_state` matched
+  `values=` anywhere in `amixer cget` output. That output carries two such fields — `values=1` on the
+  *type* line is the number of values the control holds, not its state — so the guard read every card
+  as "on" and refused a correctly-configured rig. Found by running the control case first. A guard
+  that has only been tested in its firing direction is half-tested.
+
+## 2026-07-22 — SCFDMA52-64QAM-P4: not a separate defect, the same cliff with less margin
+
+The last mode still failing on the dual-card rig after the AGC misclassification was cleared.
+
+- **The phenomenon is real and robust.** 5 fresh runner reps on a verified-normalised rig:
+  `SCFDMA52-64QAM` **3/5**, `SCFDMA52-64QAM-P4` **0/5** (0/8 including earlier runs).
+- **It inverts in-process, which is what made it look like a defect.** `-P4` is the *dense-pilot*
+  variant (16 pilots at spacing 4 vs 13 at spacing 5) and is the **better** mode on the bench —
+  uncoded AWGN 8/8 vs 6/8 at 25 dB, clean EVM −78.3 vs −75.9 dB. More pilots helping in-process and
+  appearing to hurt on hardware is the signature this repo treats as a bug.
+- **Four mechanisms proposed and killed, each by measurement:**
+  - **band-edge extrapolation.** Real and structural: `-64QAM`'s last pilot sits *on* `last_sc` (80),
+    while `-P4`'s is at 79, so SC 80 is data the channel estimate must **extrapolate**. Visible in the
+    per-subcarrier EVM (SC 80 reads ~10 dB worse than its neighbours) — and **harmless**: under a
+    one-pole HF tilt at α = 0.7/0.5/0.35 both modes decode and mean EVM stays at −74 dB.
+  - **sample-rate offset.** Both modes decode to **100 ppm**; the rig measures 0.10 ppm.
+  - **frame location.** Both modes decode through the engine's *scanning* receive with the frame
+    embedded in a long capture (leads of 0/1 000/7 919/40 000 samples), on both `SoftConcatenated`
+    and `Rs`. The #995 class of defect is not present here.
+  - **a spectral difference.** The two modes' hardware captures are indistinguishable band by band.
+- **What the measurement actually says.** Hardware mean EVM: `-64QAM` **−7.4 dB**, `-P4` **−6.8 dB**
+  — 0.6 dB apart, both at the decode cliff, and both *below* `scfdma_subcarrier_evm_db`'s validity
+  floor, so neither profile is readable for attribution. That is consistent with `-P4` being the same
+  marginal case with slightly less margin (it carries 49 data subcarriers to `-64QAM`'s 52, so the
+  same payload needs a ~3 % longer frame), and **not** with a distinct defect.
+- **Conclusion, stated as a limit rather than a finding:** no mechanism was identified, and the
+  evidence now points away from there being a separate one to find. Both SC-FDMA 64QAM modes sit at
+  the edge of what this analog path supports for a DFT-spread 64QAM waveform; `-P4` sits slightly
+  further over it. Re-attempting this needs either a *better* instrument (one whose reference does not
+  degenerate at −7 dB EVM — the decision-directed reference is the binding limit) or a rig with more
+  margin, not another hypothesis.
+
+## 2026-07-22 — doc sweep: the "analog path" attribution retracted everywhere it was asserted
+
+- **Requirement/change:** the ledger recorded the correction, but the *living* docs still asserted the
+  refuted conclusion. Memory's own rule from the #948 sweep: after retracting a claim, grep the whole
+  tree — a retraction that lives only in the changelog is not a retraction.
+- **Corrected (claims that were false as written):**
+  - `docs/dev/virtual-loopback.md` — the three-rung classification table's **ANALOG PATH** verdict row,
+    now struck with the measured retraction and the reason the comparison was invalid.
+  - `docs/dev/dualcard-loopback.md` — two directly-false statements: *"The AGC hypothesis is dead"*
+    and AGC's presence in *"Eight mechanisms measured, all clean"*. Both struck in place with why the
+    elimination was invalid (inspection, not ablation; and read after a `_normalise`). New
+    `RESOLVED (2026-07-22)` section with the pass table, the ablation, the operational rule, and the
+    `-P4` finding.
+  - `docs/dev/loopback-revalidation-plan.md` — the *"These modes are analog-path limited"* conclusion
+    and the summary line at the top.
+  - `docs/openpulse-book.md` — the rung diagram still said the hardware rung "adds dual clocks"
+    (already refuted at +0.10 ppm).
+- **Updated (true but incomplete):**
+  - `crates/openpulse-core/src/profile.rs` — `hpx_wideband_hd`'s SL12–SL15 table gains a real-audio
+    status column; **SL14 (`SCFDMA52-64QAM`) is flagged marginal (3/5)**, with the note that its 28 dB
+    floor is necessary but not sufficient.
+  - `docs/mode-fec-ladder.md` — the ≥25 dB row flags SL14 as marginal, plus a measured 64QAM
+    real-audio block recommending `64QAM2000-RRC` over `SCFDMA52-64QAM` where bandwidth allows
+    (single-carrier, 3/3, and higher throughput).
+  - `docs/openpulse-manual.md` — operator-facing rule: **re-run the setup script after every replug**,
+    with why it matters and what the scripts now verify.
+  - `CLAUDE.md` — new *Known sharp edges* entry: "A rig setting you did not verify is a variable you
+    did not control."
+- **Deliberately not touched:** `docs/dev/reviews/*` and `docs/dev/archive/*` are dated records of what
+  was believed at the time; rewriting them would destroy the audit trail. The mode tables in
+  `README.md`, `docs/features.md` and `docs/openpulse-book.md` are factual mode listings and were
+  already correct — `SCFDMA52-64QAM-P4` is in no profile and is documented as a research variant.
+- **Tests (run):** `ladder_doc_matches_profile` 2 passed / 0 failed; `roadmap_profile_table` 2 passed /
+  0 failed (1 ignored) — the two gates that keep the ladder docs and `SessionProfile` in agreement.
+  Full workspace gate re-run before merge.
+
+## 2026-07-21 — fix(modem): budget the full-buffer retry by scan COST, not frame geometry
+
+- **Requirement/change:** `PILOT-QPSK500` was the last tractable mode of the "analog path" group. It is
+  the odd one out of its family — `PILOT-8PSK500`, `PILOT-16QAM500` and `PILOT-32APSK500` all pass, and
+  only the **least dense** mode failed. That inversion said software, not channel.
+- **Localisation, in order:** it passes **in-process** on every FEC, clean and embedded; its hardware
+  audio captured to WAV **decodes offline** through the same engine; and it fails **3/3 live** on the rig
+  while `PILOT-QPSK500-RRC` passes 3/3. So the audio is fine and the DSP is fine — the failure is the
+  live path. The live RX log shows the demodulator returning **0 bytes** at each of 1028 scan positions,
+  having reached only ~10.9 s of buffer.
+- **Root cause:** the full-buffer retry is O(buffer), and `PILOT-QPSK500` costs ~640 ms per decode
+  attempt — 1028 positions is **~11 minutes of CPU for a 45 s listen**, so the scan never reaches the
+  frame. `PILOT-QPSK500-RRC` costs *more* per attempt (~1150 ms, measured) but acquires early and stops.
+  **Cost starves the loop, not frame length.**
+- **The `long_frame` proxy is the wrong variable.** `PILOT-QPSK500` is 55 200 coded samples (classified
+  "short") and starves; `QPSK250` is 112 800 — twice as long — and passes comfortably. Confirmed by
+  ablation: forcing the retry off makes `PILOT-QPSK500` pass while `SCFDMA52`/`OFDM52` (which depend on
+  the retry for acquisition) still pass.
+- **Design decision:** budget each retry pass by the audio it covers — a scan that cannot walk its own
+  buffer in less than real time can never catch up, because the buffer keeps growing — and **enforce it
+  from inside the pass**. The first implementation measured the pass *after* it completed and was
+  **inert on hardware**: the pathological pass never completes, so it must be abandoned while running.
+  Checked every 16 positions (cheap check, expensive decode). `long_frame` is retained as the cheap
+  a-priori guard; the budget is the measured backstop.
+- **Implementation:** `crates/openpulse-modem/src/engine.rs` (`retry_budget` / `retry_over_budget` /
+  `retry_cost_secs` in `receive_with_fec_mode_timeout`).
+- **Tests:** `crates/openpulse-modem/tests/retry_budget.rs` — 4 tests pinning the policy arithmetic: a
+  slower-than-real-time pass is over budget, a cheap wideband pass is not, frame length does **not**
+  predict which modes starve (the case that refuted the proxy), and an empty buffer does not abandon the
+  first pass. In-process there is no read cadence to starve, so the failure cannot be reproduced through
+  `ChannelSimHarness`; the hardware evidence is recorded in `docs/dev/dualcard-loopback.md`.
+- **Test results:** **On the rig** `PILOT-QPSK500` now PASSES, with `PILOT-QPSK500-RRC`, `SCFDMA52`,
+  `OFDM52`, `SCFDMA52-8PSK`, `BPSK250`, `QPSK250-D`, `MFSK16` and `BPSK31` all still passing. Full
+  workspace gate 267 suites / 2221 passed / 0 failed.
+- **Net: the unexplained set is down to 2** — `SCFDMA52-64QAM` and `SCFDMA52-64QAM-P4`.
+
+## 2026-07-21 — SCFDMA52-64QAM: narrowed, not solved
+
+- **Requirement/change:** the last mode of the "analog path" group. Same localisation ladder that
+  resolved `PILOT-QPSK500`, `BPSK250-RRC`, `QPSK125`, `8PSK2000` and `SCFDMA52-LP`.
+- **Premise re-verified at HEAD first** (the retry-budget fix had just landed): `SCFDMA52-64QAM` and
+  `SCFDMA52-64QAM-P4` still FAIL with `rs`, `soft-concatenated` and `ldpc` — 6 runs.
+- **Established:**
+  - passes **in-process** on every FEC, clean and embedded → not the DSP core, not frame location;
+  - hardware audio **fails offline** while the clean control decodes → the captured audio is damaged;
+  - the same test for `SCFDMA52-32QAM` with soft FEC: **hardware audio decodes**. So 64QAM is below a
+    threshold that one constellation order down, on the same waveform and width, clears.
+- **The impairment is NOT noise-like.** An AWGN decode-threshold sweep (soft-concatenated, 3 seeds/point)
+  puts `SCFDMA52-64QAM` at **14 dB** and `-16QAM`/`-32QAM` at ≤10 dB, against a cable measured at **71 dB
+  SNR**. "It needs more margin" is the wrong description; additive noise is not the limiting quantity.
+- **Shape of the remainder (hypothesis, not measured):** `OFDM52-64QAM` passes on this rig — same order,
+  same 52 subcarriers, same analog path. The receivers differ: OFDM equalises per subcarrier, SC-FDMA's
+  DFT de-spread coherently combines all of them, smearing any per-subcarrier impairment across every
+  recovered symbol. Consistent with a frequency-selective impairment only the densest DFT-spread mode
+  cannot absorb — recorded as a hypothesis shaped by the evidence, explicitly **not** a mechanism.
+- **Next step is instrumentation, not another probe:** per-subcarrier EVM taken *before* the IDFT
+  (post-MMSE residual per bin) discriminates band-edge slope (filtering) from single-bin spikes (spurs)
+  from flat-and-high (broadband). Needs a scoped extension inside `demodulate_soft_with_params`.
+- **A fourth invalid measurement, recorded so it is not repeated.** Computing EVM from
+  `scfdma_constellation` against a snapped ideal grid gave clean-signal EVM of **10.9 dB for 32QAM vs
+  19.0 dB for 64QAM** — backwards, since 64QAM needs the *better* EVM. The snapping assumed a square
+  constellation; `SCFDMA52-32QAM` is **cross**-32QAM. Never measure EVM against an assumed grid — use the
+  plugin's own decisions or the known transmitted symbols.
+
+## 2026-07-20 — fix(modem): the scanning FEC receive can find a frame inside a long capture
+
+- **Requirement/change:** validating `hpx_hf`'s two load-bearing fade rungs on real audio
+  (loopback-revalidation task A) exposed a live defect: on the dual-card rig `QPSK250 + rs` **passed at a
+  ~7 s capture window and failed at the default 45 s one** — same mode, FEC, rig, level and payload, the
+  only variable being how much audio was captured around the frame. Every long coded frame failed on real
+  hardware, and `QPSK250-D` (SL6) could not complete at all.
+- **Root cause:** `receive_from_samples_with_fec` slices a **fixed-length** window,
+  `end = (start + max_frame_samples).min(accumulated.len())`, so the demodulated byte count is a function
+  of the *window* rather than the frame. `FecCodec::decode` requires an exact multiple of the 255-byte
+  block, so once the capture outlasted the frame the length gate rejected every attempt before
+  Reed–Solomon ever ran. The in-process suite was structurally blind to it: `ChannelSimHarness::route*`
+  fills the RX loopback with a buffer that *is* the frame.
+- **Design decision:** `FecCodec::decode_prefix` tries successively longer block prefixes (1..=N) and
+  returns the first that decodes. Safe without a new length field because `decode` already validates its
+  own 4-byte length prefix against the decoded size, so a wrong block count cannot silently succeed.
+  Wired into the `Rs` and `RsStrong` arms of the scanning receive only — the single-shot
+  `receive_with_fec_mode` and `decode_combined_llrs` keep strict `decode` (their input length is
+  frame-derived, not window-derived), and `RsInterleaved` is untouched because it deinterleaves before
+  decoding and genuinely needs the exact length. No wire-format change.
+- **Implementation:** `crates/openpulse-core/src/fec.rs` (`decode_prefix`);
+  `crates/openpulse-modem/src/engine.rs` (the two arms of `receive_from_samples_with_fec`);
+  `crates/openpulse-modem/src/channel_sim.rs` (`route_embedded(lead, trail)` — pads silence around the
+  frame so a test can exercise frame *location*, which no existing `route*` variant could).
+- **Tests:** `crates/openpulse-modem/tests/fec_scan_long_capture.rs` — 4 tests: the `Rs` and `RsStrong`
+  long-capture gates, a tight-capture control, and an anti-vacuity test asserting the capture really is
+  several times the frame length.
+- **Test results:** **Sabotage-verified** — reverting the two arms to strict `decode` turns the suite red
+  (3 of 4 fail) with the hardware error verbatim: `FEC data length 270 is not a non-zero multiple of 255`.
+  With the fix, 4/4 pass. **On the dual-card hardware rig:** `QPSK250-D + rs` PASS ×3 at the default 45 s
+  window plus PASS on a 200 B multi-block payload; `QPSK250 + rs` PASS. This is the **first real-audio
+  validation of `hpx_hf` SL6**; SL1 (`MFSK16`) was validated the day before. Full workspace gate below.
+- **Falsified along the way** (recorded so they are not re-attempted): sample-rate offset (coded and
+  uncoded tolerate the same 500 ppm — `sro_confirmation`), signal level, RS correction capacity
+  (`rs-strong` fails identically), TX buffer underrun (present in *passing* runs), sub-symbol scan
+  granularity, the LMS equalizer, frame airtime (a 4.16 s *uncoded* frame decodes perfectly), and
+  physical corruption (captured WAV shows a clean 4.20 s burst, zero interior dropouts). A ninth
+  hypothesis — that `QPSK250-D` had a *second*, differential-specific defect because it failed even at the
+  tight window — was also wrong: the tight window was a coin flip that coherent won. One defect, not two.
+
+## 2026-07-20 — fix(plugins): `supports_soft_demod` is per-mode, so `-D` stops advertising a refused capability
+
+- **Requirement/change:** validating `hpx_hf` SL6 on the dual-card rig left one failure: `QPSK250-D` +
+  `ldpc` errors with `differential QPSK has no soft-LLR path`. That refusal is *correct* (#923 — a
+  differential detector has no calibrated coherent LLR, and emitting miscalibrated ones is worse than
+  refusing), but `supports_soft_demod()` returned `true` for the whole QPSK plugin, so the engine
+  selected the soft path for `-D` and only discovered the refusal at demodulation. The advertisement was
+  the bug, not the refusal.
+- **Design decision:** the capability is a property of the **mode**, not the plugin, so the trait method
+  takes the mode: `supports_soft_demod(&self, mode: &str) -> bool`. Every call site in the engine already
+  had `mode` in scope. QPSK returns `!is_differential(mode)`; the other seven implementors are
+  unconditionally soft-capable and ignore the argument. Considered and rejected: keeping the plugin-level
+  signature and special-casing `-D` in the engine, which would put a waveform fact in the wrong layer and
+  leave the trait still able to lie.
+- **Implementation:** `crates/openpulse-core/src/plugin.rs` (trait default);
+  `plugins/{qpsk,bpsk,psk8,64qam,mfsk16,ofdm,scfdma,pilot}/src/lib.rs`;
+  `crates/openpulse-modem/src/engine.rs` (4 call sites — HARQ policy, retry-candidate selection, the
+  soft-demod preference in the capture path, and the soft-FEC mismatch warning).
+- **Tests:** `plugins/qpsk/tests/differential_soft_capability.rs` — 3 tests: a general invariant that
+  `supports_soft_demod(mode)` and `demodulate_soft(mode)` agree for **every** mode in the plugin's info
+  (with an anti-vacuity floor on the modes actually exercised), the named `-D` case, and a control that
+  the coherent modes still advertise soft demod so the fix did not disable the soft path wholesale.
+- **Test results:** **Sabotage-verified** — restoring the unconditional `true` turns the suite red (2 of
+  3) with `QPSK250-D: supports_soft_demod() says true but demodulate_soft() errored`. Full workspace gate
+  below.
+
+## 2026-07-20 — fix(audio+harness): a 60 s flush clamp made BPSK31 untransmittable; full coded sweep
+
+- **Requirement/change:** the first full 67-mode coded sweep on the dual-card rig (`FEC=rs`, so every
+  case exercises the scanning-receive path fixed in #995) returned 55/67. Triage of the 12 failures
+  found three defects and falsified one long-standing premise.
+- **Defect 1 — the flush clamp (real, blocking a ladder rung).** `CpalBackend::flush` computed its
+  drain deadline as `(queued_seconds + 3.0).clamp(5.0, 60.0)` under a comment reading "Timeout adapts to
+  queued audio length so slow modes can fully drain". The adaptation was correct; **the upper clamp made
+  it inert for exactly those slow modes.** RS pads any payload to a full 255-byte block, so a `BPSK31`
+  frame is 255×8÷31.25 = 65.3 s of audio: it requested 68.3 s, was clamped to 60 s, and failed 100 % of
+  the time with `output buffer did not drain within 60.0 s`. The mode could not transmit at all on real
+  hardware, and it is `hpx_hf` SL2.
+- **Design decision:** extract to `openpulse_audio::flush::flush_timeout_seconds` in an **ungated**
+  module (the `crate::fault` precedent from #979) — the workspace suite runs `--no-default-features`, so
+  logic inside the cpal module is untestable in the gate that actually runs, which is how this survived.
+  The missing invariant is now the gate: *the deadline must always exceed the audio it is waiting on.*
+  Timeout is `queued × 1.25 + 5 s`, floored at 5 s, with a 600 s runaway backstop chosen to sit well
+  above the slowest frame the ladder can emit (`BPSK31` at three blocks ≈ 196 s) so it never binds.
+- **Defect 2 — fixed harness windows.** `TX_TIMEOUT=60` / `IRS_LISTEN_MS=45000` are both shorter than a
+  `BPSK31` frame, so even with defect 1 fixed the sweep would still report a false failure. Windows are
+  now derived per mode from a new `openpulse modes --airtime`, which reads `frame_geometry` from the
+  plugin registry — the same registry-driven principle that replaced the frozen `FULL_CASES` list.
+  Explicit `TX_TIMEOUT=` / `IRS_LISTEN_MS=` still win.
+- **Defect 3 — the SKIP report was a syntax error.** `${#SKIPPED[@]:-0}` is invalid bash (`${#arr[@]}`
+  cannot take `:-`), so the line errored and all 6 skipped modes vanished from the summary — directly
+  contradicting the code's own comment, "Reported as SKIP, never silently dropped". The array was also
+  declared inside the `full` branch while being read unconditionally.
+- **Implementation:** `crates/openpulse-audio/src/{flush.rs (new),lib.rs,cpal_backend.rs}`;
+  `crates/openpulse-cli/src/{cli.rs,main.rs,commands/modes.rs}` (`modes --airtime`);
+  `scripts/run-loopback-dualcard.sh` (`airtime_for`/`size_windows_for`/`--sro-check`, SKIP fix);
+  `scripts/lib/sro_estimator.py` (new, with self-test).
+- **Tests:** `crates/openpulse-audio/src/flush.rs` — 6 unit tests: the `BPSK31` case by name, the
+  general "deadline exceeds queued audio" invariant across 0–400 s, the slowest-possible-frame case, the
+  short-queue floor, channel/rate scaling, and a zero-sample-rate guard.
+- **Test results:** **Sabotage-verified** — restoring `(queued + 3.0).clamp(5.0, 60.0)` turns the suite
+  red (3 of 6) with `a 65.3 s frame got a 60.0 s deadline`. **On hardware:** `BPSK31 + rs` now PASSes
+  with no manual override, which completes the ladder — **all 12 distinct `hpx_hf` waveforms decode on
+  real audio**. Full workspace gate below.
+- **Premise falsified — this rig has no meaningful SRO.** `--sro-check` measures **+0.10 ppm** (repeat:
+  +0.01). Both `dualcard-loopback.md` and `virtual-loopback.md` asserted from *topology* that two USB
+  cards give two independent clocks; they do not, as these adapters slave to the host's USB frame clock.
+  The 2026-06-13 conclusion that the `SCFDMA52-*`/`64QAM` hardware failures are "the two independent
+  soundcard clocks (sample-rate offset)" therefore **cannot hold on this rig**. That diagnosis offered a
+  disjunction (SRO *and/or* analog group-delay/phase); the first half is now eliminated and only the
+  second survives, untested. Docs corrected in four files. **Do not schedule SRO tracking in the wideband
+  demodulators on this rig's evidence.**
+  - The estimator has a self-test and `--sro-check` refuses to report a reading if it fails. The **first**
+    version wrapped phase above ~5 ppm and reported an injected 200 ppm as −6.9 ppm — it would have
+    certified a badly offset rig as clean. A device that cannot detect a known offset cannot measure an
+    unknown one.
+- **Remaining failures, characterised (not fixed):** `8PSK2000` is a **real software defect** — it fails
+  at 0 ppm in-process on a clean channel (the "fails at all inputs" signature), and is in no shipped
+  profile. `BPSK250-RRC` and `PILOT-QPSK500` pass in-process through 400–800 ppm of injected SRO, so
+  with the rig at 0.1 ppm their hardware failure is **unexplained**. The `64QAM`/`SCFDMA52-*` group was
+  additionally measured at hard-decision `rs` while those modes are designed around soft FEC (~+6 dB) —
+  read as *not disproven* rather than *failed*.
+
+## 2026-07-20 — fix(audio): cpal enumeration truncates when devices are retained; virtual rung at HEAD
+
+- **Requirement/change:** Task B of the loopback revalidation plan (virtual rung at HEAD). It could not
+  be started: every `aloop_*` device returned `device not found` from `transmit`, while
+  `openpulse devices` listed them and `aplay -D aloop_tx` worked.
+- **Root cause:** cpal's ALSA enumeration is **stateful** — holding `cpal::Device` values alive while
+  iterating silently truncates the list. Measured in one process, same moment: naming each device and
+  dropping it yields 39; naming and **retaining** it yields 18; collecting devices then naming yields 4.
+  Nothing errors; the entries simply never arrive. `select_cpal_device` collected
+  `Vec<(String, cpal::Device)>`, so the resolver operated on a truncated list. `openpulse devices` (which
+  drops as it iterates) therefore advertised devices that `--device` could not open. `hwloop_tx` fell
+  inside the surviving prefix, which is why the hardware rung worked and the virtual rung was unrunnable.
+- **Design decision:** enumerate twice — pass 1 takes names only and drops every device, pass 2
+  re-enumerates and retains just the single match. Resolution policy is unchanged and factored into
+  `resolve_name_from`, also exposed as `CpalBackend::resolve_{output,input}_name` so the property can be
+  tested **without opening a stream** (opening perturbs ALSA state; the first version of the test opened
+  all 32 devices and the count moved under it, 39 → 32 — it was measuring its own side effects).
+- **Implementation:** `crates/openpulse-audio/src/cpal_backend.rs` (`select_cpal_device`,
+  `resolve_name_from`, the two public resolvers, both call sites);
+  `scripts/run-loopback-virtual.sh` (`FEC=`/`fec_for`, airtime-derived windows, `skip_reason_for` parity
+  with the hardware runner).
+- **Tests:** `crates/openpulse-audio/tests/device_enumeration.rs` — every listed output device must
+  resolve by its own name, plus a direct test of the retention property. Gated on `cpal-backend` (needs a
+  real audio host), so it does not run in the `--no-default-features` workspace gate.
+- **Test results:** **Sabotage-verified** — restoring the retaining enumeration gives `7 retained vs 34
+  dropped` and `14 of 34 listed output devices could not be resolved by their own name`; both tests fail.
+  With the fix, all of `aloop_{tx,rx,a,b}` and `hwloop_{tx,rx}` open. Full workspace gate below, plus
+  `cargo clippy -p openpulse-audio --features cpal-backend --all-targets`.
+- **Sweep result (Task B):** 63 pass / 6 fail / 4 skip of 73, `FEC=rs`.
+- **What the virtual × hardware comparison settles.** With SRO eliminated by measurement (+0.10 ppm), a
+  mode passing virtual and failing dual-card leaves exactly one variable — the analog path.
+  `64QAM{500,1000,2000-RRC}`, `SCFDMA52-{16QAM,32QAM,64QAM,64QAM-P4}` and `PILOT-QPSK500` are
+  **analog-path limited**, confirming the surviving half of the 2026-06-13 disjunction ("SRO and/or
+  analog group-delay/phase") now that the clock half is gone. `8PSK2000`, `BPSK250-RRC` and
+  `SCFDMA52-LP` fail on **both** rungs and are software defects — `BPSK250-RRC` and `SCFDMA52-LP` are
+  reclassified out of the former "dual-clock" group. `QPSK125` fails virtual 3/3 while passing hardware,
+  with the demodulator recovering ~82 of 255 bytes; recorded, not diagnosed.
+- **Harness defect found in the plan itself:** `run-loopback-virtual.sh` never passed `--fec`, so the
+  revalidation plan's own `FEC=rs MODES="QPSK250-D QPSK500-D"` command was **inert** — and an uncoded
+  differential run decodes 0.00 by design, so following the plan verbatim would have manufactured a
+  regression two lines after the plan warned against exactly that.
+
+## 2026-07-20 — fix(psk8): the plain 8PSK pulse needs ≥8 samples/symbol; loopback revalidation closed
+
+- **Requirement/change:** triage of the three modes the virtual sweep left as "software defects", plus
+  Task E of the loopback revalidation plan.
+- **Finding — the classification in #998 was under-specified.** "Fails on both audio rungs" is not the
+  same as "the DSP is wrong". Re-running the three through the **in-process** `ChannelSimHarness` (no
+  cpal, no ALSA, no resampler) on a clean channel splits them: `8PSK2000` fails, while `BPSK250-RRC`,
+  `SCFDMA52-LP` and `QPSK125` all pass. Three rungs isolate three variables — DSP core, audio I/O path,
+  analog path — and only `8PSK2000` is a modem-DSP defect. The other three fail once real audio I/O is
+  in the path, which is a materially different place to look.
+- **Root cause (`8PSK2000`):** `samples_per_symbol` enforced a floor of 4, so `8PSK2000` at 8 kHz —
+  exactly 4 samples/symbol — was accepted, modulated and transmitted, and nothing could decode it. The
+  plain pulse blends adjacent symbols with a raised cosine and the demodulator integrates against the
+  squared window, leaving a residual ISI term that grows as `n` shrinks; at 4 sps it exceeds 8PSK's
+  ±22.5° margin. Measured on a clean channel: `8PSK500` (16 sps) and `8PSK1000` (8 sps) round-trip,
+  `8PSK2000` (4 sps) does not, `8PSK2000-RRC` at the same 4 sps does, and plain `QPSK2000` at 4 sps
+  does. **It is the phase margin that runs out, not the sample rate** — the same ordering as #923.
+- **Design decision:** `samples_per_symbol_for_pulse` enforces ≥5 for the plain pulse and keeps ≥4 for
+  the shaped ones, on both the transmit and receive paths, with an error naming the `-RRC` variant. The
+  mode stays advertised: at 48 kHz it is 24 sps and perfectly usable, so unlike #996 this is a
+  rate-specific refusal, not a capability the mode can never honour.
+  - **The floor is 5, and my first attempt used 8.** I generalised from the 4/8/16 samples the 8 kHz
+    modes happen to give, straight past the boundary. The **pre-existing** `psk8_9600_loopback_48k`
+    test — plain pulse at 5 sps — went red and refuted it. The gate now pins the floor from *both*
+    sides (a floor of 4 fails 2 tests, a floor of 8 fails 1, only 5 passes), so neither error can
+    return. Same shape as the `RsStrong is free` entry in CLAUDE.md: measure the boundary before
+    generalising.
+- **Implementation:** `plugins/psk8/src/{modulate.rs,demodulate.rs}`.
+- **Tests:** `plugins/psk8/tests/plain_pulse_sps_floor.rs` — 5 tests: the refusal with a usable message,
+  the receive-side refusal, and three controls (the working plain modes, the RRC variant at the same
+  rate, and the same mode accepted at 48 kHz).
+- **Test results:** **Sabotage-verified** — lowering the plain floor back to 4 turns the suite red (2 of
+  5). Full workspace gate below.
+- **Task E — resolved, and its own instruction was wrong.** Task E asked to mark the 2026-06-13
+  diagnostic superseded "*(the SRO reasoning it contains is still the right explanation for the modes
+  that do still fail)*". That parenthetical is false: the rig measures +0.10 ppm, and the modes tolerate
+  400–800 ppm injected. The 2026-06-13 note offered "SRO **and/or** analog group-delay/phase"; the clock
+  half is eliminated by measurement and the analog half confirmed by construction (in-process pass →
+  virtual pass → dual-card fail). `SCFDMA52-*`/`64QAM` are **analog-path limited**.
+- **Downstream closed:** `reference-mining` item **C1** was prioritized on that refuted premise. It is
+  closed twice over — the SRO channel model is *already implemented* (`openpulse_channel::sro`, 6 call
+  sites) and the failure it was meant to gate is not an SRO. Corrected in `reference-mining-plan.md`.
+- **Docs corrected:** `loopback-revalidation-plan.md` (Tasks A–E marked done; the "two independent
+  sample clocks" claim in §3 corrected), `reference-mining-plan.md`, `virtual-loopback.md`.
+
+  - **A downstream gate caught this, and it was itself weak.** `openpulse-testbench`'s
+    `all_modes_have_measured_rates` asserted every advertised mode yields a positive rate, and went red
+    when `8PSK2000` started refusing 8 kHz. But `measure_mode_rate` only calls `modulate` and compares
+    emitted sample counts — it never demodulates, so `8PSK2000` reported a healthy rate for as long as
+    it was emitting audio nothing could decode. The test now accepts a refusal **only when the plugin
+    states a sample-rate reason**, and prints which modes were excluded rather than dropping them
+    silently. (Same lesson as PR #978: when a change alters what a crate *advertises*, its own tests
+    are not the affected set — `-p psk8-plugin` was green throughout.)
+
+## 2026-07-20 — fix(modem): classify long-frame AFTER the FEC widening; analog path characterised
+
+- **Requirement/change:** diagnose the two open groups from the virtual sweep — the "audio I/O path"
+  defects (`BPSK250-RRC`, `SCFDMA52-LP`, `QPSK125`) and the "analog path" limit on the dense modes.
+- **Root cause (audio I/O path, 2 of 3):** `receive_with_fec_mode_timeout` skips a full-buffer retry
+  for long-frame modes because that retry re-scans the whole buffer every 2 s and outruns the capture
+  read cadence, starving it. The classification was computed from the **raw** geometry and the slice
+  was widened 3× for FEC only *afterwards*, so three modes whose coded frames run ~28 s were treated as
+  short and kept the starving retry: `BPSK250`, `BPSK250-RRC` (74 400 raw / 223 200 coded) and
+  `QPSK125` (75 200 / 225 600). Measured on the virtual rung: `BPSK250-RRC` reached at most **152 of
+  the 255 bytes** it needs across all 1042 scan positions, `QPSK125` at most 82 — starved mid-frame.
+- **Why only the audio rungs saw it:** in-process there is no read cadence to starve, so
+  `ChannelSimHarness` passes these modes either way. It took a real streaming capture to expose it.
+- **Design decision:** `frame_plan(raw, fec) -> (coded, long)` performs the widening and the
+  classification **in one function**, because splitting them is what let them drift out of order.
+  Verified against the whole registry that exactly these three modes reclassify — the SCFDMA/OFDM modes
+  that depend on the retry for acquisition are untouched.
+- **Implementation:** `crates/openpulse-modem/src/engine.rs` (`frame_plan`, `LONG_FRAME_SAMPLES`).
+- **Tests:** `crates/openpulse-modem/tests/long_frame_classification.rs` — 5 tests exercising the
+  engine's own `frame_plan` (not a copy of the rule, so an ordering regression must change the tested
+  function): the three affected modes, the same modes uncoded staying short, the wideband control set
+  keeping its retry, both sides of the threshold, and the returned widened length.
+- **Test results:** **Sabotage-verified** — classifying on the raw value inside `frame_plan` turns the
+  suite red. **On the virtual rung**, `BPSK250-RRC`, `QPSK125` and `BPSK250` all now PASS, and the
+  controls (`SCFDMA52`, `OFDM52`, `SCFDMA52-8PSK`, `BPSK63`) still pass. Workspace gate 265 suites /
+  2213 passed / 0 failed.
+- **`SCFDMA52-LP` is a separate defect, now reproducible without hardware:** it passes `route_clean`
+  but fails `route_embedded` (frame inside a long capture) with `RS correction failed at block 0:
+  TooManyErrors` — a frame-location/acquisition fault, not the starvation above. Not fixed.
+- **Analog path characterised — four mechanisms ELIMINATED, none explains the failures.** Magnitude
+  flat ±0.21 dB (306–3388 Hz); group delay ~1.04 ms spread with no systematic slope (inside SC-FDMA's
+  CP); SNR **71.1 dB**; and no clipping at the working level (PAPR 3.4–6.1 dB, peak ≤0.78 FS, 0 clipped
+  samples across `BPSK250`/`OFDM52`/`SCFDMA52-64QAM`/`64QAM1000`). The "analog path" attribution is a
+  **localisation, not an explanation**. Leading untested candidate: the C-Media **capture-side AGC**,
+  which this repo already records as drifting gain after strong frames — a time-varying gain is nearly
+  harmless to the phase-only modes that pass and destructive to the amplitude-carrying modes that fail.
+- **Measurement integrity:** two measurements were wrong before they were right, both caught by the
+  result looking too uniform rather than by tooling. The first SRO estimator wrapped phase above ~5 ppm
+  (reported an injected 200 ppm as −6.9 ppm). The first PAPR capture returned identical rms/peak/PAPR
+  to four decimals for four different waveforms — a stray `aplay` from the SNR test was still running
+  and every capture recorded that 1 kHz tone; an occupied-bandwidth check (0 Hz wide, exactly 1 kHz)
+  settled it in one step.
+
+## 2026-07-20 — fix(scfdma): enable the timing deramp for the localized (block-pilot) layout
+
+- **Requirement/change:** `SCFDMA52-LP` failed on both audio loopback rungs while passing every
+  in-process test. It was the last unfixed defect from the virtual sweep triage.
+- **Reproduction without hardware:** it passes `route_clean` but fails `route_embedded`. Sweeping the
+  lead offset showed the real shape — it decoded at **1 of 12** frame positions, the only success being
+  `lead = 0`, and a **one-sample** offset was enough to break it. `SCFDMA52` scored 12/12 on the same
+  sweep. A real receiver never has the frame at sample 0 (it listens for seconds and the frame arrives
+  somewhere inside), so the mode could not work on any real capture — which is precisely why it passed
+  in-process and failed on both audio rungs.
+- **Root cause:** `deramp_timing` returned early on `p.localized`, with the reasoning "the block-pilot
+  layout has no evenly-spaced pilots to fit a ramp". **That premise is false.** `pilot_positions`
+  returns a *contiguous* block for the localized layout (subcarriers 77–80), and contiguous is evenly
+  spaced with step 1 — which `pilot_spacing: 1` already records. The general slope fit was correct for
+  this layout all along; the guard was skipping a computation that works.
+- **Design decision:** remove the early return so the shared fit handles both layouts. The divisor was
+  verified to be genuinely correct rather than coincidental (adjacent-subcarrier step *is* 1 for a
+  contiguous block), and the `pilot_spacing` field comment — which called the value an "unused …
+  div-by-zero" placeholder — was corrected, since it is now a load-bearing value.
+  - **Two regressions along the way, each of which corrected the design.** (1) Enabling the per-symbol
+    fit for the localized layout fixed frame position but **broke `SCFDMA52-LP` on AWGN at 20 dB** (CRC
+    mismatch): 4 pilots give only 3 adjacent products, so the per-symbol slope is noisy enough that
+    de-rotating 65 subcarriers by it is worse than not correcting. (2) Fitting the slope frame-wide
+    instead then **decalibrated the interleaved modes** — `llr_reliability` fired on `SCFDMA52-16QAM`
+    ("wrong 6.6× more often than promised"). My premise that "the offset is constant across a frame"
+    was wrong, and the function's own docstring said so: under a sample-rate offset the ramp **grows
+    with symbol index**, which a per-symbol fit tracks and a frame-wide average destroys.
+  - **Final shape — the two layouts are fitted differently, for a physical reason.** Interleaved (13
+    pilots) keeps the **per-symbol** fit so it continues to track the growing SRO ramp. Localized (4
+    pilots) uses a **frame-wide** fit, trading that growing-ramp term for `sqrt(n_symbols)` less
+    estimator noise — the right trade for a flat-channel demonstrator that does not claim SRO tracking,
+    and the wrong one for the interleaved modes.
+- **Implementation:** `plugins/scfdma/src/channel.rs` (`deramp_timing`), `plugins/scfdma/src/params.rs`
+  (the `SCFDMA52_LP` docstring's timing-fragility claims and the `pilot_spacing` comment).
+- **Tests:** `crates/openpulse-modem/tests/scfdma_lp_frame_position.rs` — 4 tests: all 8 offsets decode,
+  the one-sample case by name, an `SCFDMA52` control proving the interleaved path is unchanged, and an
+  anti-vacuity check that the offset set spans more than the origin (so it cannot pass by testing only
+  the `lead = 0` case that used to be the sole success).
+- **Test results:** **Sabotage-verified** — restoring the early return fails 2 of 4 with
+  `failed at lead offsets [1, 2, 3, 5, 16, 40000, 40001]`. All 58 `scfdma-plugin` tests pass, including
+  the `papr_ablation` test that documents LP's low-PAPR tradeoff (the fix is receive-side only and does
+  not touch the modulator). **On the virtual loopback rung `SCFDMA52-LP` now PASSES**, with `SCFDMA52`
+  and `SCFDMA52-8PSK` unaffected. Full workspace gate below.
+- **Scope note:** this does not make `SCFDMA52-LP` generally robust. It stays a flat-channel
+  demonstrator registered in no adaptive profile — its single-tap CE still assumes flat gain/phase and
+  no passband tilt. Only the timing-offset fragility was a defect; the rest is by design.
+
+## 2026-07-20 — analog-path investigation: eight mechanisms eliminated, none identified
+
+- **Requirement/change:** identify the mechanism behind the dense-mode failures localised to the
+  "analog path" (`SCFDMA52-{16,32,64}QAM`, `64QAM{500,1000,2000-RRC}`, `PILOT-QPSK500` — pass the
+  virtual rung, fail the dual-card rig).
+- **First: the premise was re-verified.** The original failures were measured before #997–#1001, so
+  they were re-run at HEAD. All five still FAIL. The investigation is not chasing a stale result.
+- **Mechanisms eliminated by measurement** (adding to the four recorded earlier — magnitude ±0.21 dB,
+  group delay ~1.04 ms, SNR 71.1 dB, no clipping):
+  - **Capture-side AGC** — the leading hypothesis, and it fit the failure set well (amplitude-carrying
+    modes fail, phase-only pass). `amixer sget 'Auto Gain Control'` reports it **already off**.
+  - **Nonlinearity** — two-tone test at the working level measures **IMD3 −60…−62 dBc**, IMD5 −80 dBc.
+    A pure-tone SNR cannot see intermodulation; this can, and there is effectively none.
+  - **Short-term timing wander** — the +0.10 ppm SRO figure is a 58 s average that would hide wander.
+    With the constant slope removed: rms 0.115 modem samples, peak 0.48, **≤0.72 samples of drift
+    within a 4 s frame**.
+  - **The live streaming path** — see below.
+- **Decisive split — it is the audio content, not live streaming.** A frame captured to WAV at 8 kHz and
+  decoded **offline** through the same engine reproduces the failure: `BPSK250` decodes (proving the
+  capture/replay method sound), `64QAM1000` and `SCFDMA52-16QAM` fail with `RS correction failed at
+  block 0`. cpal/ALSA streaming, buffer scheduling and capture timing are therefore all ruled out.
+- **Status: no mechanism identified.** Eight measurements are clean while the failure is real and
+  reproducible, which means the impairment is **signal-dependent in a way none of the probe signals
+  (tone, two-tone, chirp) reproduce**. Recorded rather than guessed at.
+- **An invalid measurement, recorded so it is not repeated.** An attempt to quantify this as end-to-end
+  waveform SNR against the ideal transmitted samples reported **5.3 dB for `BPSK250` — which decodes
+  perfectly**. The metric was a time-domain cross-correlation with neither fractional-sample nor
+  carrier-phase alignment, so it measured its own alignment error. A valid version must compare
+  **recovered symbols** (post-demod, post-carrier-recovery EVM), not raw passband samples. This was the
+  third invalid measurement in this investigation, after the phase-wrapping SRO estimator and the PAPR
+  capture that recorded a stray tone — in each case the tell was a number that was too clean, too
+  uniform, or contradicted a known-good control.
+
+## 2026-07-20 — analog-path resolution: FEC operating point, plus untracked wander in 64QAM
+
+- **Requirement/change:** act on a second-opinion review (Fable) of the analog-path investigation. It
+  attacked the eight eliminations, found two unsound, and proposed three experiments. All three run.
+- **Experiment 1 — plugin-level vs engine-level decode (Fable's top hypothesis: the damage is the engine
+  path, not the waveform).** **Refuted.** A hardware capture of `SCFDMA52-16QAM` fails at *plugin* level
+  too, bypassing the engine entirely. The sliding-window probe was validated against a coded control
+  frame produced by the engine and embedded in silence — it decodes at offset 4608 while the hardware
+  capture does not — so the negative result is trustworthy. Engine AFC settling / `mix_to_nominal` is
+  ruled out for that group.
+- **Experiment 2 — re-run at the FEC each mode is designed for.** **Five of the eight "analog-path
+  limited" modes were never analog-path limited.** `SCFDMA52-16QAM`, `SCFDMA52-32QAM` (soft-concatenated
+  *and* ldpc) and `64QAM{500,1000,2000-RRC}` (soft-concatenated) all PASS on the rig. The sweep had
+  measured them at hard-decision `rs`, roughly 6 dB below their operating point. This document's own
+  sweep table already warned to read those rows as "not disproven rather than failed", and the June
+  record already had `SCFDMA52-16QAM` passing this rig — the warning was written and then not acted on.
+- **Experiment 3 — the 64QAM mechanism.** Elimination #8 (timing wander) was **unsound**: 0.72 samples
+  was judged against a symbol period and dismissed, but at a 1500 Hz carrier 0.48 samples is **32° of
+  carrier phase**, and the wander is concentrated at **0.1–2 Hz** — exactly where the 64QAM
+  decision-directed loop (natural frequency ≈0.4 Hz at `loop_bw = 0.01`) cannot track it. `plugins/64qam`
+  is the only receiver with **no mid-frame reference update** (scalar preamble AGC, absolute PAM-8
+  thresholds, preamble-only phase whose drift fit is gated on `afc_correction_hz >= 0.5` and so never
+  fires on a 0.1 ppm rig, fixed-stride sampling). Reproduced in-process and noiselessly: at the rig's
+  measured drift amplitude `64QAM500` takes 125 byte errors and `64QAM1000` 151, against RS's capacity of
+  16, while **every** OFDM/SCFDMA/PILOT mode takes 0. With pure sinc interpolation (drift, no resampler
+  comb) `64QAM500` still takes 99 — so the wander itself is the cause.
+  - The earlier "amplitude-carrying modes fail, phase-only pass" framing was the right observation on the
+    **wrong axis**; the axis is *frame-static reference vs tracked reference*.
+  - **Fix direction measured but NOT shipped.** Sweeping the DD loop bandwidth: `64QAM500` improves
+    125 → 15 errors at `loop_bw = 0.06` (under the RS threshold) and degrades by 0.12; `64QAM1000` shows
+    61 errors in the **static** case alone, so it needs timing interpolation as well. Not a one-constant
+    change, the modes pass with their intended FEC, and a speculative change to a shipped demodulator
+    needs its own evidence.
+- **Correction — the virtual rung does not exercise the resampler.** Verified: `hw:Loopback` reports
+  `RATE: [8000 768000]` (so `plug` is a pass-through at 8 kHz) while the C-Media cards report
+  `RATE: [44100 48000]` and always resample both ways. `virtual-loopback.md`'s rung table claimed the
+  virtual rung adds the resampler path; corrected. "Analog path" in the earlier analysis therefore means
+  *analog cable + double linear resample + inter-card wander*.
+- **Net:** the unexplained set drops from **8 modes to 3** — `SCFDMA52-64QAM`, `SCFDMA52-64QAM-P4` and
+  `PILOT-QPSK500` fail with every FEC tried.
 
 ## 2026-07-19 — test(hardware): MFSK16 validated on real audio; QPSK250-D blocked by FEC framing
 
@@ -3279,6 +5160,197 @@ falsified both columns.
   gaps on the ACK path + receive-side buffering + the union primitive + SL1 ladder placement + airtime-
   scaled timers — engine/daemon wiring into the regression-sensitive ARQ seam.
 
+## 2026-07-15 — fix(handshake): bind frame key to trusted key; dialed-peer CONACK check; fail-closed trust load
+
+- **Requirement/change:** adversarial audit of the signed RF handshake / session / trust subsystem
+  (`docs/dev/reviews/2026-07-15-handshake-trust-audit.md`) found three verified breaks.
+- **F1 [CRITICAL]:** classical `verify_conreq`/`verify_conack` verified the Ed25519 signature against the
+  frame's own `pubkey` and consulted `trust_level(station_id)` but never bound the frame key to the
+  trust store's key for that station → any station could impersonate any trusted callsign at Verified/Full
+  trust with its own key, defeating the file-transfer signature gate. The PQ path already bound the key.
+- **F2 [HIGH]:** the initiator gated an inbound CONACK on the (cleartext, guessable) session id only, not
+  the dialed callsign → an attacker could race a self-signed CONACK and be recorded as the dialed peer.
+- **T4 [LOW-MED]:** a configured trust store that failed to load silently started empty, dropping revocations.
+- **Design decision:** mirror the PQ path's binding in the classical path (`bind_frame_key`, new
+  `HandshakeError::PublicKeyMismatch`); compare `ack.station_id` to `pending.peer_callsign` before
+  recording; fail closed on a trust-store load **error** (missing/empty path stays empty-ok). Broader
+  enforcement gaps (handshake gates no non-filexfer RF action; relay/QSY/OTA act on unauthenticated
+  traffic when opt-in features are enabled) are architectural and documented in the review, not patched here.
+- **Implementation:** `crates/openpulse-core/src/handshake.rs` (`bind_frame_key`, `PublicKeyMismatch`,
+  calls in `verify_conreq`/`verify_conack`); `crates/openpulse-daemon/src/lib.rs`
+  (`handle_inbound_conack` dialed-peer check); `crates/openpulse-daemon/src/server.rs` (trust-store
+  load fails closed on error).
+- **Tests:** `crates/openpulse-core/tests/handshake_integration.rs`
+  (`conreq_rejects_impersonation_wrong_key_for_trusted_callsign`,
+  `conack_rejects_impersonation_wrong_key_for_trusted_callsign`);
+  `crates/openpulse-daemon/src/lib.rs` (`conack_from_undialed_station_is_ignored`).
+- **Test results:** core handshake_integration 22/22; daemon lib 117/117; full
+  `cargo test --workspace --no-default-features` pending final gate below.
+
+## 2026-07-15 — fix(daemon): handshake-audit enforcement pass — §97.119 TX-ID gate, QSY trust wiring, TNC store warning
+
+- **Requirement/change:** second (enforcement-lens) finder pass of the handshake/trust audit
+  (`docs/dev/reviews/2026-07-15-handshake-trust-audit.md`). The signed handshake is an identity label,
+  not an access gate; three enforcement findings had tractable fixes.
+- **E6 [MEDIUM, §97.119]:** auto-ID is disabled for an empty/N0CALL callsign, but the always-on
+  CONREQ→CONACK responder and the opt-in OTA-ACK / relay-forward / auto-QSY paths keyed the
+  transmitter with no per-transmission callsign gate → a daemon that merely heard a frame would
+  transmit unidentified. Fix = `RuntimeControlState::local_callsign_valid()`; every autonomous
+  responder refuses to key up without a valid MYID (RX/decode/peer-recording unaffected).
+- **E4 [MEDIUM]:** the RF QSY responder used a hardcoded `Unverified` peer trust, so
+  `qsy.allow_trustlevels` was inert (empty → no gate; non-empty → rejects everyone). Fix =
+  `RuntimeControlState::rf_peer_trust()` via `classify_connection_trust(OverAir)` (Reduced for a
+  trust-store key, Low first-seen, never Verified over RF).
+- **E2 [misleading]:** ARDOP/KISS TNCs load a trust store they never consult. Fix = loud startup warn.
+- **Deferred (architectural/protocol):** E1 (handshake as access gate — "front-ends don't drive
+  sessions" refactor), E3 (relay `min_trust_filter`/`auth_tag` unverified — needs trust threading +
+  key material), E5 (single-slot `verified_peer` — needs per-callsign map), E7 (unsigned OTA ACK).
+- **Implementation:** `crates/openpulse-daemon/src/lib.rs` (`local_callsign_valid`, `rf_peer_trust`,
+  gates in `handle_inbound_conreq` / QSY branch of `process_received_bytes` / `maybe_qsy_on_interference`
+  / `maybe_relay_forward`); `crates/openpulse-daemon/src/server.rs` (OTA-ACK keying gate);
+  `crates/openpulse-ardop/src/main.rs`, `crates/openpulse-kiss/src/main.rs` (unused-store warn).
+- **Tests:** `crates/openpulse-daemon/src/lib.rs` `handshake_rf_tests::{callsign_validity_and_rf_peer_trust,
+  responder_without_callsign_does_not_transmit_conack, responder_without_callsign_ignores_qsy_req}`;
+  4 existing QSY tests updated to set a valid MYID.
+- **Test results:** daemon lib 120/120, all daemon suites green (incl. twin_daemon_bridge 4/4); full
+  workspace gate below.
+
+## 2026-07-15 — fix: file-transfer / relay / discovery audit hardening (F-1 CRITICAL + F-5 SEVERE + more)
+
+- **Requirement/change:** six-finder adversarial sweep of the file-transfer subsystem, relay/wire-envelope
+  code, RX/TX pipeline seams, and control-surface parity
+  (`docs/dev/reviews/2026-07-15-filexfer-relay-seams-audit.md`). DSP-seam and parity lenses came back clean
+  (shared-seam + tripwire pattern holds); filexfer/relay/wire surfaced the findings below.
+- **F-1 [CRITICAL]:** received blocks were never bounded by the offer's declared size → a 1 KB-declared,
+  quota-approved offer could write up to ~4.2 GiB to disk. Fix = `BlockAssembler` rejects any block whose
+  decoded length ≠ its expected slot length (+ `reassemble_verify_write` refuses a payload ≠ `file_size`).
+- **F-5 [SEVERE]:** `poll_timeout` had zero daemon call sites and `cancel_transfer` only cleared `file_rx`,
+  so a `SendFile` to a silent peer pinned `file_tx` until restart. Fix = `filexfer::poll_timeouts` fired
+  each rx tick + `cancel_transfer` also cancels an outbound send.
+- **F-6 [MEDIUM]:** `block_count == 0xFFFF` collided the last block's SAR id with the control segment id.
+  Fix = cap `block_count` at `MAX_BLOCK_COUNT = 0xFFFE`.
+- **E5 [MEDIUM]:** single global `verified_peer` slot → offers verified against the wrong key. Fix =
+  per-callsign `verified_peers` map; `on_offer` binds to the offer's sender (trusting `sender_id` only
+  once the signature validates).
+- **F-3 [LOW]:** `unique_path` clobbered after 10 000 collisions. Fix = returns `Option`; `write_file`
+  errors instead of overwriting.
+- **F-4 [MEDIUM]:** `PeerQueryResponse::decode` pre-allocated from an unchecked `result_count`. Fix =
+  bound the capacity by bytes present (mirrors sibling decoders).
+- **discovery.group [dead config]:** deserialized but never applied (the `@OPULSE` group is baked into the
+  ground-truth-validated JS8 frame packing). Fix = marked RESERVED in schema + template, warn on a
+  non-default value; wiring the custom-group feature tracked separately.
+- **Deferred:** F-2 (unsigned offer metadata — widen the signed `ManifestBody`, a wire change), F-7 (NACK
+  path unreachable in the daemon), E3 (relay `auth_tag`/`min_trust_filter`). Documented in the review.
+- **Implementation:** `openpulse-filexfer/src/{blocks,lib}.rs`; `openpulse-daemon/src/{filexfer,lib,server}.rs`;
+  `openpulse-core/src/wire_query.rs`; `openpulse-config/src/lib.rs`.
+- **Tests:** `blocks::an_oversized_block_is_rejected`, `filexfer::block_count_math` (F-6),
+  `offer_is_verified_against_its_senders_key_not_the_last_handshook_peer` (E5),
+  `a_stuck_send_clears_on_offer_timeout` + `cancel_clears_an_outbound_send` (F-5),
+  `peer_query_response_rejects_oversized_result_count_without_over_allocating` (F-4).
+- **Test results:** filexfer 24, modem filexfer_loopback 2, daemon 123 lib + twin_daemon_bridge 4, core
+  wire_query 10, config 19 — all green; full workspace gate below.
+
+## 2026-07-15 — fix(filexfer): F-2 — sign the whole file offer, not just the content hash
+
+- **Requirement/change:** audit finding F-2 (`docs/dev/reviews/2026-07-15-filexfer-relay-seams-audit.md`),
+  deferred from PR #898: the offer's Ed25519 signature covered only the three `TransferManifest` fields
+  (payload_hash/payload_size/sender_id), leaving name/mime/block_size/block_count/transfer_id
+  unauthenticated → an on-path attacker could replay a signed offer with a spoofed filename under a
+  `signature_valid: true` badge (content stays protected by the signed hash; metadata did not).
+- **Design decision:** do NOT extend the general core `TransferManifest` (also used by CLI session
+  teardown) with file-transfer fields. Instead `FileOffer` carries its own signature over its whole body
+  — every field except the trailing signature, produced by `encode_signed_fields` which `encode_body`
+  also uses so the signed form and the wire form cannot drift. `from_manifest` now takes the signing seed
+  and signs the full offer; `verify_signature` verifies over the same bytes; `reassemble_verify_write`
+  uses `offer.verify_signature` + the existing payload-hash check. Wire-format change (what the signature
+  covers), acceptable pre-1.0 with file transfer off by default.
+- **Implementation:** `crates/openpulse-filexfer/src/offer.rs` (signing rewrite, `encode_signed_fields`,
+  `signing_bytes`, `verify_signature`; `to_manifest` removed), `crates/openpulse-filexfer/Cargo.toml`
+  (ed25519-dalek dev-dep → dep), `crates/openpulse-daemon/src/filexfer.rs` (send_file seed +
+  reassemble_verify_write), all `from_manifest` call sites (+seed).
+- **Tests:** `offer_signature_verifies_and_tamper_is_caught` extended (spoofed filename + tampered geometry
+  now fail); filexfer crate 28, modem filexfer_loopback 2, daemon filexfer 13 + twin_daemon_bridge 4
+  (`a_file_crosses`) green.
+- **Test results:** full workspace gate below.
+
+## 2026-07-15 — fix: protocol-bridge untrusted-input hardening (ARDOP OOM, gzip bomb, proposal flood)
+
+- **Requirement/change:** three-finder adversarial sweep of the network-facing protocol bridges
+  (`docs/dev/reviews/2026-07-15-protocol-bridge-audit.md`). KISS/AX.25 came back clean; ARDOP + B2F
+  surfaced three findings.
+- **A-1 [HIGH]:** the ARDOP command reader's `MAX_CMD_LINE` guard ran after `read_line` (which has no
+  internal cap), so a client streaming bytes with no newline grew the buffer without limit → OOM. Fix =
+  `read_capped_line` bounds the read with a `Take` at MAX_CMD_LINE+1.
+- **B-1 [HIGH]:** `decompress_gzip` (Type D, the format the real CMS uses) had no output cap, unlike the
+  16 MiB LZHUF path → decompression bomb. Fix = `Take` at MAX_UNCOMPRESSED+1 (constant generalized) +
+  reject over-cap.
+- **B-2 [MEDIUM]:** IRS auto-accepted unlimited FC proposals and the FF handler hardcoded Accept →
+  unbounded messages received/decompressed/retained per session. Fix = cap accepts at MAX_PROPOSALS=32,
+  reject the rest, and honor each proposal's recorded answer in FF.
+- **Implementation:** `crates/openpulse-ardop/src/command.rs`; `crates/openpulse-b2f/src/{compress,session}.rs`.
+- **Tests:** `oversized_command_line_drops_the_connection` (ardop_integration),
+  `gzip_decompression_bomb_over_the_cap_is_rejected` + `irs_caps_the_number_of_accepted_proposals` (b2f_integration).
+- **Test results:** ardop 24, b2f 17, kiss 8 green; full workspace gate below.
+
+## 2026-07-15 — feat(relay): E1 — operator originator allow-list for relay forwarding
+
+- **Requirement/change:** audit finding E1 (`docs/dev/reviews/2026-07-15-handshake-trust-audit.md`) — the
+  signed handshake gates no non-filexfer RF action. Study of the wire format showed the relay envelope
+  `auth_tag` has no key-distribution scheme, so `src_peer_id` is not cryptographically authenticated at
+  the relay; a strong cryptographic gate is blocked on envelope-authentication infrastructure (future).
+- **Design decision:** deliver the proportionate, honest increment — an operator-configured originator
+  ALLOW-list complementing the existing deny-list. `RelayForwarder::forward` already calls
+  `policy.allows(src_hex)`, so extending `RelayTrustPolicy::allows` to honour an optional allow-list
+  wires it with no `forward()` change. Empty allow-list = no restriction (backwards compatible).
+  Documented as defense-in-depth over an unauthenticated (spoofable) id, NOT strong auth — and gating on
+  "verified this session" would be wrong for a mesh (originator is many hops away, never handshook).
+- **Implementation:** `crates/openpulse-core/src/relay.rs` (`allowed_relays` field, `set_allow_list`,
+  `allows` honours it); `crates/openpulse-config/src/lib.rs` (`RelayConfig.allow_list` + template);
+  `crates/openpulse-daemon/src/server.rs`, `crates/openpulse-ardop/src/main.rs`,
+  `crates/openpulse-kiss/src/main.rs` (set the allow-list on the built policy).
+- **Tests:** `allow_list_forwards_only_listed_originators` (relay_integration — listed forwards,
+  unlisted rejected, empty unrestricted); config default asserts `allow_list.is_empty()`.
+- **Test results:** relay_integration 13, config 19 green; full workspace gate below.
+
+## 2026-07-15 — fix: RX decode-path DoS hardening (RS panic, length-prefix overflow, SAR cap)
+
+- **Requirement/change:** two-finder adversarial sweep of the RX decode path
+  (`docs/dev/reviews/2026-07-15-rx-decode-audit.md`) — a panic/OOM on untrusted RF-derived bytes is a
+  remote DoS. Both finders converged on RX-1.
+- **RX-1 [CRITICAL]:** `ShortFecCodec::decode` had no upper-length bound; the pinned reed-solomon 0.2.1
+  decoder (fixed [u8;256] buffer) PANICS on input ≥256 B, reachable from decode_fsk4_ack /
+  receive_with_short_fec_data on attacker-length-controlled demod output. Fix = reject len>255.
+- **RX-2 [HIGH]:** FecCodec::decode `PREFIX_LEN + orig_len` unchecked add → 32-bit/wasm overflow →
+  slice panic (systematic prefix = attacker-controlled). Fix = checked_add.
+- **RX-3 [HIGH]:** ConvCodec + SoftViterbiCodec `32 + orig_len*8` unchecked multiply → 32-bit overflow.
+  Fix = checked_mul/checked_add.
+- **RX-4 [MEDIUM]:** SarReassembler unbounded pending (incomplete) slots. Fix = MAX_PENDING_SLOTS=4096 +
+  SarError::TooManyPendingSegments.
+- **Implementation:** `crates/openpulse-core/src/{fec,conv,soft_viterbi,sar,error}.rs`.
+- **Tests:** `short_fec_decode_rejects_oversized_input_without_panicking`,
+  `ingest_caps_pending_incomplete_segments`. (RX-2/RX-3 are 32-bit-target manifestations; the checked-math
+  guards are verified by inspection and don't change 64-bit behavior.)
+- **Test results:** core suite green (18 groups); full workspace gate below.
+
+## 2026-07-15 — feat(mesh): SAR-fragment oversized envelopes (foundation for envelope authentication)
+
+- **Requirement/change:** prerequisite for E3 (envelope authentication). A 64-byte Ed25519 signature
+  grows the `WireEnvelope` overhead from 120 → 168 B, and the mesh sends peer-query / route-discovery
+  responses as a single ≤255-byte modem frame (the `Frame` payload length is a `u8`). A 1-result signed
+  response is 257 B and won't fit — the mesh must fragment/reassemble control responses > one frame.
+- **Design decision:** SAR at the mesh envelope seam, with a single-frame fast path so current (small,
+  unsigned) traffic is unchanged. TX: `MeshDaemon::transmit_bytes` sends envelopes ≤255 B as one frame,
+  else `sar_encode`s them across frames. RX: `step` tries `WireEnvelope::decode` first (the `OPHF`-magic
+  fast path); a frame that isn't a whole envelope is fed to a `SarReassembler` and dispatched once
+  complete. A valid SAR fragment can't collide with `OPHF` magic (it would require `frag_index ≥
+  frag_total`), so the disambiguation is safe.
+- **Implementation:** `crates/openpulse-mesh/src/lib.rs` (`transmit_bytes`, `rx_sar`/`tx_segment_id`
+  fields, `step` reassembly; all 11 `engine.transmit` sites routed through `transmit_bytes`).
+- **Tests:** `oversized_envelope_survives_sar_fragmentation` (a >255 B envelope fragments and B
+  reassembles + delivers it via the loopback frame queue); the 12 existing mesh loopback tests pass
+  unchanged (fast path).
+- **Test results:** mesh 13/13; full workspace gate below. No wire-format change in this PR.
+
 ## 2026-07-14 — research(plugin): MFSK16-ACK feasibility measured — ACK is the binding constraint (REQ-WSIG-01)
 
 - **Requirement/change:** the PR-C measure-first gate for the ARQ rung — measure whether a short
@@ -4284,6 +6356,321 @@ falsified both columns.
   test and the unchanged `automatic_tx_arms_the_watchdog…` beacon test); clippy + fmt clean.
 
 ---
+
+## 2026-07-13 — fix(js8/discovery): audit #2 — decode real off-air overs (time search)
+
+- **Requirement/change:** the Fable loose-ends audit found (finding #2, confirmed) that the JS8 discovery
+  decoder only ever searched slot-start offset 0, but a conforming over starts ~500 ms (`start_delay_ms`)
+  into the slot — so real off-air JS8 could not decode **at any SNR**; the RX-MVP acceptance test passed
+  only because it injected the signal at buffer offset 0. Regression links REQ-DISC-01/02, CAP-70.
+- **Design decision:** add a **two-stage acquisition** to `decode_window` — a coarse time×freq grid then a
+  per-candidate refine to full precision (`base_step_coarse` > `base_step` enables it; `0` keeps the old
+  single-pass behaviour byte-identical, so every other caller is unchanged). `DecodeCfg` gains
+  `base_step_coarse` + `min_offset`. Discovery's `decode_slot` now searches a ±0.75 s window around the
+  expected `start_delay` (NTP is required, D5) at coarse freq — a naive fine full-slack scan measured
+  ~19 s/decode (Pi-fatal); the two-stage version is ~1.4 s release / 3 s debug for the same decode.
+- **Implementation:** `plugins/js8/src/decoder.rs` (`refine_sync`, two-stage `decode_window`, `DecodeCfg`
+  fields), `crates/openpulse-discovery/src/runtime.rs` (`decode_slot` bounded window).
+- **Tests:** `hears_a_station_that_starts_partway_into_the_slot` (heartbeat at 500 ms offset — fails at
+  every SNR before the fix); the existing offset-0 decoder/discovery/daemon tests still pass unchanged.
+- **Test results:** `cargo test -p js8-plugin -p openpulse-discovery --no-default-features` green (81 + 51);
+  daemon discovery tests green; clippy + fmt clean.
+
+## 2026-07-13 — fix(discovery): audit #4 — rendezvous timing/RxOnly cluster (Phase F)
+
+- **Requirement/change:** the audit (finding #4, all three confirmed) found the shipped FF-15 Phase-F
+  rendezvous non-functional: (a) `RENDEZVOUS_TIMEOUT_SLOTS = 8` was shorter than the Propose+Accept
+  round-trip (the initiator aged during its own Propose TX and timed out before any reply could arrive);
+  (b) the responder emitted `RendezvousAgreed` at Propose-recognition while its Accept was still queued,
+  so the daemon's QSY schedule preempted and truncated the Accept's final frame; (c) `TxMode::RxOnly`
+  transmitted a Propose because `maybe_transmit` popped the rendezvous queue before the RxOnly gate.
+  Refs REQ-DISC-04/07, CAP-70.
+- **Design decision:** (a) age the initiator only once its Propose has drained (`rendezvous_tx` empty), so
+  the timeout counts genuine reply-wait slots; raise it to 16. (b) the responder withholds the agreement
+  (`pending_responder_agreement`) until its Accept over has fully transmitted, then emits it — aligning
+  the responder's QSY schedule with the initiator's Accept decode and never preempting the Accept. (c)
+  move the RxOnly gate before the rendezvous-queue pop, and refuse `start_rendezvous` in RxOnly.
+- **Implementation:** `crates/openpulse-discovery/src/runtime.rs`; `crates/openpulse-daemon/src/lib.rs`
+  (`RENDEZVOUS_TIMEOUT_SLOTS`).
+- **Tests:** new `rx_only_start_rendezvous_transmits_nothing` (c); `responder_accepts_a_proposal_and_agrees`
+  rewritten to assert the agreement is deferred until the Accept is sent (b); `initiator_times_out_without_a_reply`
+  now covers Propose-drain-then-wait (a); the two-runtime end-to-end updated for the deferred responder
+  agreement. The prior F-3c-iv test drained TX fully under a manual clock, which is why it missed all three.
+- **Test results:** `cargo test -p openpulse-discovery -p openpulse-daemon --no-default-features` green
+  (52 discovery lib + 2 e2e; daemon discovery/rendezvous suites); clippy + fmt clean.
+
+## 2026-07-13 — fix(js8): audit #3 — jsc_decompress u32 overflow on long high-group runs
+
+- **Requirement/change:** the audit (finding #3, confirmed) found `jsc_decompress`'s inner fold
+  (`j = j * C + …`) had no in-loop bound; ~11+ consecutive high JSC groups — reachable from the free-text
+  of any CRC-12-valid decoded frame, on the discovery RX library path — overflow `u32` and panic in
+  overflow-checks (debug/test/CI) builds, violating the no-panic-in-library-production-paths rule.
+- **Design decision:** saturate the multiply/add and break as soon as the running index exceeds `SIZE`
+  (an over-`SIZE` index is invalid and already handled after the loop). Byte-identical output for valid
+  inputs (their `j` stays far below `u32::MAX`); safe termination for crafted/garbage inputs.
+- **Implementation:** `plugins/js8/src/jsc.rs`.
+- **Tests:** `long_high_group_run_does_not_overflow` (256 all-ones bits → one long high-group run; panics
+  before the fix). Full JSC + ground-truth decode tests unchanged.
+- **Test results:** `cargo test -p js8-plugin --no-default-features --lib jsc::` green; clippy + fmt clean.
+
+## 2026-07-13 — fix(daemon): audit #5 — arm the PTT watchdog on every automatic TX path
+
+- **Requirement/change:** the audit (finding #5, confirmed) found `ptt_asserted_at` was set only by the
+  manual `PttAssert` command; the five automatic keying paths (station-ID, OTA ACK, OTA send, discovery
+  beacon, filexfer drain) asserted/released directly and only `warn!`ed on release failure — so a transient
+  rigctld/serial fault during any unattended transmission leaves the transmitter keyed with the software
+  watchdog permanently blind to it. Safety backstop; §97.221 automatic-control control-point relevance.
+- **Design decision:** arm `ptt_asserted_at` (the watchdog clock) at every automatic keying, and disarm it
+  only on a **successful** release — a failed release leaves it armed so the next `check_ptt_watchdog` tick
+  force-releases the still-keyed transmitter (the watchdog caller already re-releases hardware on fire). The
+  two keying helpers (`transmit_beacon_with_ptt`, `ota_send_with_ptt`) take the watchdog clock as a param;
+  the three inline sites use `runtime_state.ptt_asserted_at` directly.
+- **Implementation:** `crates/openpulse-daemon/src/server.rs`.
+- **Tests:** `automatic_tx_arms_the_watchdog_and_disarms_only_on_clean_release` with a `FlakyPtt` double
+  (a failing-release PTT — also closes the audit's "no failing-PTT test double" gap): a failed release keeps
+  the watchdog armed, a clean release disarms it.
+- **Test results:** `cargo test -p openpulse-daemon --no-default-features` → 83 lib + integration green;
+  clippy + fmt clean.
+
+## 2026-07-13 — fix(daemon): audit #7 — fail-closed WebSocket control port
+
+- **Requirement/change:** the audit (finding #7, confirmed) found the WebSocket control endpoint carries
+  the *same* command protocol as the TCP port (`PttAssert`/`SendMessage`/`EnableRepeater`/…) but with **no
+  authentication path**, and `spawn_ws` was called unconditionally — so with `require_auth = true` (or a
+  non-loopback WS bind) any client reaching the WS port bypassed the Noise/PSK gate the TCP port enforces.
+  The startup fail-closed check only inspected `tcp_bind_addr`. REQ-SEC-CTL-02.
+- **Design decision:** WS has no auth transport, so the fail-closed action is to **not spawn** the
+  unauthenticated WS listener whenever control auth is required for either bind (TCP needs auth, or the WS
+  bind is itself non-loopback), with a clear warning pointing the operator at the Noise/PSK TCP port.
+  Full Noise-over-WebSocket is a documented follow-up. Decision extracted to `ws_disabled_for_auth`.
+- **Implementation:** `crates/openpulse-daemon/src/server.rs`.
+- **Tests:** `ws_auth_gate_tests` — disabled when TCP requires auth (even if WS is loopback), disabled when
+  the WS bind is non-loopback, enabled only when both are loopback and no auth is configured.
+- **Test results:** `cargo test -p openpulse-daemon --no-default-features` green (86 lib); clippy + fmt clean.
+
+## 2026-07-13 — fix(repeater): audit #6 — station-ID the cross-band repeater's transmitting rig
+
+- **Requirement/change:** the audit (finding #6, confirmed) found the daemon's §97.119 station-ID timer
+  only watches the *main* engine's `frames_transmitted`; `CrossBandRepeater` builds and transmits from a
+  wholly separate `engine_tx`/rig-B pair with **zero ID logic** (PTT held for the whole full-duplex
+  session) — exactly the automatically-controlled-station case (§97.221) the regulatory doc calls out.
+  REQ-REG-04, CAP-70-adjacent regulatory.
+- **Design decision:** give `CrossBandRepeater` its own `StationIdTimer` keyed off rig-B transmits.
+  `RepeaterConfig` gains `callsign` + `id_interval_secs` (wired from `[station] callsign` /
+  `auto_id_interval_secs`); an empty callsign or 0 interval disables auto-ID. After each relayed frame the
+  timer is noted; when the interval elapses, `maybe_identify` transmits `DE <callsign>` on rig-B (keying
+  its own PTT in half-duplex; reusing the held session PTT in full-duplex), then marks identified. Clock is
+  injectable via `relay_one_frame_at(now_ms)` for deterministic tests.
+- **Implementation:** `crates/openpulse-repeater/{src/lib.rs,src/config.rs,Cargo.toml}` (adds
+  `openpulse-core` dep); `crates/openpulse-daemon/src/server.rs` + `lib.rs` build sites.
+- **Tests:** `transmitting_rig_is_station_identified_when_the_interval_elapses` — a plain relay keys once;
+  a relay after the interval keys a second time (the ID's own PTT). Existing repeater tests updated with
+  `..Default::default()` (empty callsign → no ID → behaviour unchanged).
+- **Test results:** `cargo test -p openpulse-repeater --no-default-features` → 7 green;
+  `cargo build --workspace --no-default-features` clean; clippy + fmt clean.
+
+## 2026-07-13 — fix(ardop): audit #8 — data port frame loss (backpressure + Lagged handling)
+
+- **Requirement/change:** the audit (finding #8, confirmed, both directions) found the ARDOP data port
+  silently dropped frames. **TX:** `try_send` on the 64-deep SyncSender dropped the frame with only a
+  server-side `warn!` (the client never learns), so any >64-frame burst (a normal Winlink message) lost
+  data. **RX:** the `Ok(data) = rx_data.recv()` select arm did not handle `Err(Lagged)`, so a broadcast
+  overflow stalled the receive loop until the client next sent, instead of skipping + warning.
+- **Design decision:** mirror the already-tested `openpulse-kiss` pattern. TX: replace `try_send` with a
+  blocking `SyncSender::send` on `spawn_blocking` — natural backpressure throttles the client's TCP reader
+  so the burst is delivered in full (worker-gone → close the client). RX: match `recv()` explicitly,
+  handling `RecvError::Lagged(n)` (log + continue) and `Closed` (return).
+- **Implementation:** `crates/openpulse-ardop/src/data.rs`.
+- **Tests:** `data_port_backpressure_burst_stays_connected_and_ordered` — a 128-frame burst (> queue depth)
+  produces no client-side write error and the frames that arrive are strictly in-order and intact (no
+  reordering/corruption; broadcast lag may thin the echo, which is by-design). Existing round-trip tests
+  unchanged.
+- **Test results:** `cargo test -p openpulse-ardop --no-default-features` → 23 green; clippy + fmt clean.
+
+## 2026-07-13 — fix(bpsk): audit #1 — cancel crossfade ISI on the differential demod
+
+- **Requirement/change:** the audit (finding #1, confirmed by verification here) found BPSK — the primary
+  weak-signal fallback family (SL2–SL4 on every HF ladder) — has the uncancelled crossfade-ISI defect
+  already fixed for QPSK (#695) and 8PSK (#696), never ported. The overlapping half-Hann modulator is a
+  crossfade, so the one-slot matched filter recovers `r_k = a_k + β·a_{k+1}` with β = Σ(w_head·w_tail)/
+  Σw_tail² = **1/3** (same integrals as rectangular QPSK). Because BPSK is NRZI-**differential**, that
+  `+β` term becomes a constant positive bias in the dot product `r_k·r_{k-1}` (a_k²=1), eroding the
+  flip-bit margin by several dB. Refs REQ-DISC-adjacent modem; primary fallback.
+- **Design decision:** port `cancel_crossfade_isi` (stable backward substitution `a_k = r_k − β·a_{k+1}`;
+  +0.5 dB noise enhancement, far less than the margin recovered) to the BPSK IQ stream *before*
+  differential detection, gated to the **crossfade (non-RRC) path only** — the `-RRC` modes use Gardner+LMS
+  and do not crossfade. Applied on both the hard `bpsk_demodulate` and the soft `bpsk_demodulate_soft`.
+- **Implementation:** `plugins/bpsk/src/demodulate.rs`.
+- **Tests:** `crossfade_cancellation_lowers_awgn_ber` — a deterministic fixed-seed AWGN BER measurement;
+  **A/B-verified during development: BER 3.33 % with the cancellation disabled → well under the 2 % guard
+  with it** (a genuine fail-without-fix guard). All existing BPSK plugin (25) + modem bpsk_hardening (18)
+  + fec_loopback (12) + channel_loopback (32) tests pass unchanged.
+- **Test results:** `cargo test -p bpsk-plugin --no-default-features` → 25 green; modem BPSK paths green;
+  clippy + fmt clean.
+
+## 2026-07-13 — fix(discovery): audit #9 — make the clock-skew TX gate live
+
+- **Requirement/change:** the audit (finding #9, confirmed) found `Js8Clock::set_drift_bias_ms` had **no
+  production caller** (the documented `clock_mut()` seam was never used), so `drift_bias_ms` was permanently
+  0 — the advertised "±2 s clock-skew" beacon-TX safety gate (D5) could never trip and the operator-facing
+  `DiscoveryStatus.drift_bias_ms` was always a false 0. Refs REQ-DISC-05.
+- **Design decision:** feed each decoded frame's timing error into an EWMA (`Js8Clock::observe_dt_ms`,
+  α=1/8). `dt = (start_delay − sample_offset)/8` ms: a conforming station starts `start_delay` into the
+  slot, so a decode placed later means our clock is fast (negative bias). Smoothing averages per-station
+  timing error + capture jitter, leaving our systematic offset; the magnitude drives `tx_allowed`. Small
+  values barely affect `corrected()` (15 s slots), so RX slot alignment is unaffected. **Documented
+  coupling:** the observable dt range is bounded by the decoder's ±0.75 s slot-start search window (the
+  #2 fix, Pi-CPU-bounded) — a skew beyond that yields no decodes rather than a reading; full ±2 s
+  detection would need a wider (Pi-costlier) search and is deferred.
+- **Implementation:** `crates/openpulse-discovery/src/scheduler.rs` (`observe_dt_ms`),
+  `crates/openpulse-discovery/src/runtime.rs` (`decode_slot` feeds it).
+- **Tests:** `observe_dt_converges_toward_the_offset_and_can_trip_the_gate` (EWMA converges to −600 ms and
+  a sustained >2 s skew trips the gate); the offset regression test now asserts the drift readout is live
+  and ~0 for an on-time station.
+- **Test results:** `cargo test -p openpulse-discovery --no-default-features` → 53 green; clippy + fmt clean.
+
+## 2026-07-13 — fix(daemon): audit #14 — validate SetMode/SetConfig before mutating shared state
+
+- **Requirement/change:** the audit (finding #14, confirmed) found `dispatch_command` (the per-client
+  TCP/WS handler) wrote `active_mode` **unconditionally** for `SetMode`/`SetConfig` and returned
+  `CommandResponse::ok()`; the only validation (`apply_command_to_engine`) ran later and merely logged a
+  `CommandError` without rollback. A typo'd mode string silently deafened RX + station-ID until a valid
+  `SetMode` arrived, with the client told its bad command succeeded.
+- **Design decision:** capture the registered plugin mode names once at `ControlServer::spawn` (from
+  `engine.plugins().list()`) as a read-only `ValidModes` set, thread it to `dispatch_command` (both the
+  TCP and WebSocket paths), and reject an unknown mode with `CommandResponse::err` **before** any shared
+  write and **before** forwarding the command. An empty set (tests with no registry) skips validation.
+- **Implementation:** `crates/openpulse-daemon/src/lib.rs` (`ValidModes`, `ClientCtx`,
+  `ControlServerHandle`, `dispatch_command`), `src/ws.rs` (`WsShared`/`WsClientCtx`), `src/server.rs`
+  (WsShared wiring).
+- **Tests:** `dispatch_rejects_unknown_mode_without_mutating_state` — an unknown mode returns an error and
+  leaves `active_mode` untouched; a registered mode applies. `control_port` mode-switch test's engine now
+  registers QPSK so it selects a genuinely-registered mode.
+- **Test results:** `cargo test -p openpulse-daemon --no-default-features` → all green (7 groups); clippy
+  + fmt clean.
+
+## 2026-07-13 — fix(daemon/filexfer): audit #13 — reject inconsistent offer geometry
+
+- **Requirement/change:** the audit (finding #13, confirmed) found the receive-side size gate + per-peer
+  quota key only on `offer.file_size`, while `offer.block_count` is a raw uncross-checked `u16`. A crafted
+  offer (e.g. `file_size = 100`, `block_count = 65535`) decouples the size/quota check from the bytes
+  actually reassembled and written. Feature is off by default (`require_verified_peer = true`), but the
+  geometry was never validated.
+- **Design decision:** validate the offer's block geometry up front in `on_offer`, before the quota check
+  and `decide()`: reject (`Reason::TooLarge`) unless `block_size` is within the protocol window
+  `[MIN_BLOCK_SIZE, MAX_BLOCK_SIZE]` and `block_count == block_count(file_size, block_size)` (the existing
+  helper). With geometry consistent, the `file_size` gate now also bounds the reassembled/written bytes.
+- **Implementation:** `crates/openpulse-daemon/src/filexfer.rs` (`offer_geometry_ok`, wired into the
+  decision chain).
+- **Tests:** `offer_geometry_check_rejects_inconsistent_block_count` — a well-formed offer passes; an
+  inflated `block_count` and a sub-minimum `block_size` are both rejected.
+- **Test results:** `cargo test -p openpulse-daemon --no-default-features filexfer` → green; twin +
+  filexfer suites unchanged; clippy + fmt clean.
+
+## 2026-07-13 — docs: audit #43/#46/#47 — fix documentation drift
+
+- **Requirement/change:** the audit flagged several stale docs. #47: `CLAUDE.md`'s audio-backend note gave
+  a failing flag (`--features cpal`) for `openpulse-cli` and an inverted default — the CLI's feature is
+  `cpal-backend`, **on by default**. #43: the root `CHANGELOG.md` is frozen at 0.2.0 (the v0.4.0 roll only
+  touched `docs/dev/project/changelog.md`), so two changelogs diverged. #46: the README repository-layout
+  table omitted 6 shipped crates (`openpulse-discovery`, `-filexfer`, `-keystore`, `-linksec`,
+  `-freedv-auth`, `apps/openpulse-linksim`) and 2 shipped plugins (`js8`, `pilot`).
+- **Design decision:** #47 correct the CLI exception in the sharp-edge note. #43 add a prominent
+  canonical-changelog pointer at the top of root `CHANGELOG.md` (directing to `docs/dev/project/changelog.md`
+  + `docs/releasenotes.md` for v0.2.1–v0.4.0) and mark its `[Unreleased]` as superseded, rather than
+  hand-reconciling four versions of diverged content. #46 add the missing crate/plugin rows.
+- **Implementation:** `CLAUDE.md`, `CHANGELOG.md`, `README.md`.
+- **Tests:** docs only — no code change. (#44 cli-guide daemon section + #45 README ladder nuance left as
+  lower-value follow-ups; the README feature text already reflects the SC-FDMA→OFDM re-seat.)
+
+## 2026-07-13 — fix(modem): audit #11 — don't re-apply the InputCapture seam per decode_burst slice
+
+- **Requirement/change:** the audit (finding #11, confirmed + A/B-verified) found `accumulate_routed`
+  already routes each captured window through the `InputCapture` front-end seam (DC-block / notch / DCD /
+  AGC) before appending to `rx_burst`; `decode_burst`'s per-offset `decode_attempt` → `receive_from_samples`
+  then routes the *already-processed* burst through the same seam **again per scan slice**. Harmless with
+  AGC/notch off (both default off), but with AGC on the stateful gain loop re-normalises already-normalised
+  audio each slice — distorting the noise-var-calibrated LLR scale QAM/OFDM/SC-FDMA depend on — and the DCD
+  re-latches from mid-burst slices.
+- **Design decision:** add an `input_prerouted` flag; `decode_burst` sets it around its scan (restored on
+  every exit via an inner helper) so the nested `route_audio_stage(InputCapture)` becomes a pass-through
+  (skips the DC/notch/DCD/AGC block). With AGC/notch off the behaviour is bit-identical.
+- **Implementation:** `crates/openpulse-modem/src/engine.rs` (`input_prerouted`, `decode_burst`/
+  `decode_burst_inner`, InputCapture guard).
+- **Tests:** `decode_burst_does_not_reapply_agc_per_scan_slice` (`agc_blocks_processed` stays flat across a
+  `decode_burst` scan on a pre-routed burst) — **A/B-verified: fails with the guard removed**.
+- **Test results:** `cargo test -p openpulse-modem --no-default-features` agc/notch/channel/fec loopbacks
+  green; clippy + fmt clean.
+
+## 2026-07-13 — fix(mesh): audit #10 (part) — refuse to run the mesh daemon as N0CALL
+
+- **Requirement/change:** the audit (finding #10, confirmed) found `openpulse-mesh` beacons + relays
+  automatically (60 s cadence) with **no N0CALL startup refusal** — unlike `openpulse-daemon` / `-tui`,
+  which exit if the configured callsign is the `N0CALL` placeholder. §97.119: a station must transmit its
+  own valid call sign.
+- **Design decision:** add the same N0CALL guard the daemon uses, after the `[mesh] enabled` check (only an
+  enabled mesh transmits) — `anyhow::bail!` before building the engine/daemon.
+- **Implementation:** `crates/openpulse-mesh/src/main.rs`.
+- **Scope note:** the finding's ARDOP/KISS half (transmit before `MYID` is set) is **deferred** — those
+  TNCs take their callsign from the host `MYID` command at runtime, so a hard config-time refusal risks
+  breaking legitimate Pat/Winlink workflows; enforcing MYID-before-TX belongs with the TNC session logic
+  (the "front-ends don't drive sessions" area).
+- **Test results:** `cargo build/clippy -p openpulse-mesh --no-default-features` clean (a `main()` startup
+  guard, consistent with the daemon's untested guard).
+
+## 2026-07-13 — fix(panel): audit (low tier) — panel mode list omitted 12 PILOT modes
+
+- **Requirement/change:** the audit found the panel's hardcoded `MODES` list carried only the 8 PILOT-500
+  variants while the `pilot` plugin registers 20 (adding the PILOT-{QPSK,8PSK,16QAM,32APSK}1000, -1000-RRC,
+  and -2000-RRC families) — so an operator could not select 12 registered modes. Same drift class as the
+  earlier mode-list fix (PR #321).
+- **Design decision:** add the 12 missing PILOT-1000/2000 mode strings to `apps/openpulse-panel/src/ui.rs`
+  `MODES`, matching the plugin's registration.
+- **Test results:** `cargo build/clippy -p openpulse-panel --no-default-features` clean.
+- **Scope note:** the `SetTxAttenuation { band }` drop is **deferred** — the command carries an optional
+  `band`, but the engine has only a single global `tx_attenuation_db` (no per-band store), so honoring it
+  is a feature, not a fix.
+
+## 2026-07-13 — chore(audit): low-tier cleanup batch (stubs / parity / doc honesty)
+
+- **Requirement/change:** a grouped pass over confirmed low-severity audit findings — dead/misleading APIs,
+  control-surface parity, and doc honesty — each too small for its own PR.
+- **Changes:**
+  - **Panel `ecc_rate` fabricated 0.00 %** — the daemon reports `ecc_rate = None` (computes none), but the
+    panel showed a fabricated `0.00 %`. Made `PanelState.ecc_rate` `Option<f32>`, render `"—"` when `None`,
+    and only push real samples into the trend sparkline. Test
+    `ecc_rate_none_is_not_fabricated_and_leaves_the_trend_empty`.
+  - **`queue_message_type_c` misleading doc** — the pub API's doc claimed "Winlink-compatible" while
+    `compress.rs` states external Type C compat is UNVERIFIED (LH5 vs FBB's Okumura LZHUF). Corrected the
+    doc to match reality and note it has no in-tree caller yet.
+  - **Config template stale mode list** — the `[modem]` "Available:" comment omitted OFDM52-HOM, PILOT-*,
+    RRC, and SC-FDMA-HOM families. Replaced the unmaintainable literal list with the mode families +
+    a pointer to `docs/mode-fec-ladder.md` (authoritative).
+  - **`[discovery]` reserved fields** — `query_new_stations` / `max_queries_per_10min` are accepted-but-
+    unused (directed INFO queries unimplemented); the template now says so.
+- **Test results:** `cargo test -p openpulse-panel -p openpulse-b2f -p openpulse-config
+  --no-default-features` green; clippy + fmt clean.
+- **Still deferred (feature-not-a-fix / substantial):** `SetTxAttenuation { band }` (no per-band engine
+  store); route-discovery wire codecs with no originator; `transmit_iq` seam bypass (test-only); discovery
+  `server::run`-level test (#15); cli-guide daemon section (#44).
+
+## 2026-07-13 — fix(bpsk): audit #1 follow-up — keep crossfade cancellation off the soft path
+
+- **Requirement/change:** the full-workspace test gate caught a regression from the #1 crossfade-ISI fix
+  (#821): `llr_calibration::a_deeply_faded_extra_attempt_does_not_hurt` failed (plus_faded −2.0 dB vs
+  two_good −3.0 dB, needs ≤ −2.5). #821 applied `cancel_crossfade_isi` to **both** the hard and the soft
+  BPSK demod. BPSK is *differential*, so on the soft path the backward-substitution recursion **inflates**
+  the noise LLRs of a deeply-faded attempt instead of suppressing them — breaking the 1/σ² LLR calibration
+  HARQ MAP combining depends on (`receive_with_llr_combining`).
+- **Design decision:** apply the cancellation on the **hard differential path only** (`bpsk_demodulate`),
+  where it restores the decision margin (the A/B-verified BER win in #821 uses that path), and **not** on
+  the soft path (`bpsk_demodulate_soft`), preserving the soft-LLR combining scale. (Contrast QPSK/8PSK,
+  which are coherent and correctly cancel on both paths.)
+- **Implementation:** `plugins/bpsk/src/demodulate.rs` (revert the soft-path `cancel_crossfade_isi` call).
+- **Tests:** `llr_calibration` (2/2) now green; the #1 hard-path `crossfade_cancellation_lowers_awgn_ber`
+  still passes; bpsk_hardening (18) / fec_loopback (12) / channel_loopback (32) green.
+- **Test results:** full `cargo test --workspace --no-default-features` now 0 failures (was 1); fmt +
+  clippy clean; benchmark gate `true` (10/10, mean_transitions 5.1).
 
 ## 2026-07-11 — test(discovery): FF-15 Phase F-3c-iv — two-runtime end-to-end rendezvous
 
@@ -8263,2390 +10650,3 @@ falsified both columns.
   the counter); auto-QSY daemon test asserts it too.
 - **Test results:** notch + QSY + loopback suites pass; single-application preserved on both paths;
   fmt/clippy clean. Prevention checklist added to `CLAUDE.md` → *Known sharp edges*.
-
-## 2026-07-13 — fix(js8/discovery): audit #2 — decode real off-air overs (time search)
-
-- **Requirement/change:** the Fable loose-ends audit found (finding #2, confirmed) that the JS8 discovery
-  decoder only ever searched slot-start offset 0, but a conforming over starts ~500 ms (`start_delay_ms`)
-  into the slot — so real off-air JS8 could not decode **at any SNR**; the RX-MVP acceptance test passed
-  only because it injected the signal at buffer offset 0. Regression links REQ-DISC-01/02, CAP-70.
-- **Design decision:** add a **two-stage acquisition** to `decode_window` — a coarse time×freq grid then a
-  per-candidate refine to full precision (`base_step_coarse` > `base_step` enables it; `0` keeps the old
-  single-pass behaviour byte-identical, so every other caller is unchanged). `DecodeCfg` gains
-  `base_step_coarse` + `min_offset`. Discovery's `decode_slot` now searches a ±0.75 s window around the
-  expected `start_delay` (NTP is required, D5) at coarse freq — a naive fine full-slack scan measured
-  ~19 s/decode (Pi-fatal); the two-stage version is ~1.4 s release / 3 s debug for the same decode.
-- **Implementation:** `plugins/js8/src/decoder.rs` (`refine_sync`, two-stage `decode_window`, `DecodeCfg`
-  fields), `crates/openpulse-discovery/src/runtime.rs` (`decode_slot` bounded window).
-- **Tests:** `hears_a_station_that_starts_partway_into_the_slot` (heartbeat at 500 ms offset — fails at
-  every SNR before the fix); the existing offset-0 decoder/discovery/daemon tests still pass unchanged.
-- **Test results:** `cargo test -p js8-plugin -p openpulse-discovery --no-default-features` green (81 + 51);
-  daemon discovery tests green; clippy + fmt clean.
-
-## 2026-07-13 — fix(discovery): audit #4 — rendezvous timing/RxOnly cluster (Phase F)
-
-- **Requirement/change:** the audit (finding #4, all three confirmed) found the shipped FF-15 Phase-F
-  rendezvous non-functional: (a) `RENDEZVOUS_TIMEOUT_SLOTS = 8` was shorter than the Propose+Accept
-  round-trip (the initiator aged during its own Propose TX and timed out before any reply could arrive);
-  (b) the responder emitted `RendezvousAgreed` at Propose-recognition while its Accept was still queued,
-  so the daemon's QSY schedule preempted and truncated the Accept's final frame; (c) `TxMode::RxOnly`
-  transmitted a Propose because `maybe_transmit` popped the rendezvous queue before the RxOnly gate.
-  Refs REQ-DISC-04/07, CAP-70.
-- **Design decision:** (a) age the initiator only once its Propose has drained (`rendezvous_tx` empty), so
-  the timeout counts genuine reply-wait slots; raise it to 16. (b) the responder withholds the agreement
-  (`pending_responder_agreement`) until its Accept over has fully transmitted, then emits it — aligning
-  the responder's QSY schedule with the initiator's Accept decode and never preempting the Accept. (c)
-  move the RxOnly gate before the rendezvous-queue pop, and refuse `start_rendezvous` in RxOnly.
-- **Implementation:** `crates/openpulse-discovery/src/runtime.rs`; `crates/openpulse-daemon/src/lib.rs`
-  (`RENDEZVOUS_TIMEOUT_SLOTS`).
-- **Tests:** new `rx_only_start_rendezvous_transmits_nothing` (c); `responder_accepts_a_proposal_and_agrees`
-  rewritten to assert the agreement is deferred until the Accept is sent (b); `initiator_times_out_without_a_reply`
-  now covers Propose-drain-then-wait (a); the two-runtime end-to-end updated for the deferred responder
-  agreement. The prior F-3c-iv test drained TX fully under a manual clock, which is why it missed all three.
-- **Test results:** `cargo test -p openpulse-discovery -p openpulse-daemon --no-default-features` green
-  (52 discovery lib + 2 e2e; daemon discovery/rendezvous suites); clippy + fmt clean.
-
-## 2026-07-13 — fix(js8): audit #3 — jsc_decompress u32 overflow on long high-group runs
-
-- **Requirement/change:** the audit (finding #3, confirmed) found `jsc_decompress`'s inner fold
-  (`j = j * C + …`) had no in-loop bound; ~11+ consecutive high JSC groups — reachable from the free-text
-  of any CRC-12-valid decoded frame, on the discovery RX library path — overflow `u32` and panic in
-  overflow-checks (debug/test/CI) builds, violating the no-panic-in-library-production-paths rule.
-- **Design decision:** saturate the multiply/add and break as soon as the running index exceeds `SIZE`
-  (an over-`SIZE` index is invalid and already handled after the loop). Byte-identical output for valid
-  inputs (their `j` stays far below `u32::MAX`); safe termination for crafted/garbage inputs.
-- **Implementation:** `plugins/js8/src/jsc.rs`.
-- **Tests:** `long_high_group_run_does_not_overflow` (256 all-ones bits → one long high-group run; panics
-  before the fix). Full JSC + ground-truth decode tests unchanged.
-- **Test results:** `cargo test -p js8-plugin --no-default-features --lib jsc::` green; clippy + fmt clean.
-
-## 2026-07-13 — fix(daemon): audit #5 — arm the PTT watchdog on every automatic TX path
-
-- **Requirement/change:** the audit (finding #5, confirmed) found `ptt_asserted_at` was set only by the
-  manual `PttAssert` command; the five automatic keying paths (station-ID, OTA ACK, OTA send, discovery
-  beacon, filexfer drain) asserted/released directly and only `warn!`ed on release failure — so a transient
-  rigctld/serial fault during any unattended transmission leaves the transmitter keyed with the software
-  watchdog permanently blind to it. Safety backstop; §97.221 automatic-control control-point relevance.
-- **Design decision:** arm `ptt_asserted_at` (the watchdog clock) at every automatic keying, and disarm it
-  only on a **successful** release — a failed release leaves it armed so the next `check_ptt_watchdog` tick
-  force-releases the still-keyed transmitter (the watchdog caller already re-releases hardware on fire). The
-  two keying helpers (`transmit_beacon_with_ptt`, `ota_send_with_ptt`) take the watchdog clock as a param;
-  the three inline sites use `runtime_state.ptt_asserted_at` directly.
-- **Implementation:** `crates/openpulse-daemon/src/server.rs`.
-- **Tests:** `automatic_tx_arms_the_watchdog_and_disarms_only_on_clean_release` with a `FlakyPtt` double
-  (a failing-release PTT — also closes the audit's "no failing-PTT test double" gap): a failed release keeps
-  the watchdog armed, a clean release disarms it.
-- **Test results:** `cargo test -p openpulse-daemon --no-default-features` → 83 lib + integration green;
-  clippy + fmt clean.
-
-## 2026-07-13 — fix(daemon): audit #7 — fail-closed WebSocket control port
-
-- **Requirement/change:** the audit (finding #7, confirmed) found the WebSocket control endpoint carries
-  the *same* command protocol as the TCP port (`PttAssert`/`SendMessage`/`EnableRepeater`/…) but with **no
-  authentication path**, and `spawn_ws` was called unconditionally — so with `require_auth = true` (or a
-  non-loopback WS bind) any client reaching the WS port bypassed the Noise/PSK gate the TCP port enforces.
-  The startup fail-closed check only inspected `tcp_bind_addr`. REQ-SEC-CTL-02.
-- **Design decision:** WS has no auth transport, so the fail-closed action is to **not spawn** the
-  unauthenticated WS listener whenever control auth is required for either bind (TCP needs auth, or the WS
-  bind is itself non-loopback), with a clear warning pointing the operator at the Noise/PSK TCP port.
-  Full Noise-over-WebSocket is a documented follow-up. Decision extracted to `ws_disabled_for_auth`.
-- **Implementation:** `crates/openpulse-daemon/src/server.rs`.
-- **Tests:** `ws_auth_gate_tests` — disabled when TCP requires auth (even if WS is loopback), disabled when
-  the WS bind is non-loopback, enabled only when both are loopback and no auth is configured.
-- **Test results:** `cargo test -p openpulse-daemon --no-default-features` green (86 lib); clippy + fmt clean.
-
-## 2026-07-13 — fix(repeater): audit #6 — station-ID the cross-band repeater's transmitting rig
-
-- **Requirement/change:** the audit (finding #6, confirmed) found the daemon's §97.119 station-ID timer
-  only watches the *main* engine's `frames_transmitted`; `CrossBandRepeater` builds and transmits from a
-  wholly separate `engine_tx`/rig-B pair with **zero ID logic** (PTT held for the whole full-duplex
-  session) — exactly the automatically-controlled-station case (§97.221) the regulatory doc calls out.
-  REQ-REG-04, CAP-70-adjacent regulatory.
-- **Design decision:** give `CrossBandRepeater` its own `StationIdTimer` keyed off rig-B transmits.
-  `RepeaterConfig` gains `callsign` + `id_interval_secs` (wired from `[station] callsign` /
-  `auto_id_interval_secs`); an empty callsign or 0 interval disables auto-ID. After each relayed frame the
-  timer is noted; when the interval elapses, `maybe_identify` transmits `DE <callsign>` on rig-B (keying
-  its own PTT in half-duplex; reusing the held session PTT in full-duplex), then marks identified. Clock is
-  injectable via `relay_one_frame_at(now_ms)` for deterministic tests.
-- **Implementation:** `crates/openpulse-repeater/{src/lib.rs,src/config.rs,Cargo.toml}` (adds
-  `openpulse-core` dep); `crates/openpulse-daemon/src/server.rs` + `lib.rs` build sites.
-- **Tests:** `transmitting_rig_is_station_identified_when_the_interval_elapses` — a plain relay keys once;
-  a relay after the interval keys a second time (the ID's own PTT). Existing repeater tests updated with
-  `..Default::default()` (empty callsign → no ID → behaviour unchanged).
-- **Test results:** `cargo test -p openpulse-repeater --no-default-features` → 7 green;
-  `cargo build --workspace --no-default-features` clean; clippy + fmt clean.
-
-## 2026-07-13 — fix(ardop): audit #8 — data port frame loss (backpressure + Lagged handling)
-
-- **Requirement/change:** the audit (finding #8, confirmed, both directions) found the ARDOP data port
-  silently dropped frames. **TX:** `try_send` on the 64-deep SyncSender dropped the frame with only a
-  server-side `warn!` (the client never learns), so any >64-frame burst (a normal Winlink message) lost
-  data. **RX:** the `Ok(data) = rx_data.recv()` select arm did not handle `Err(Lagged)`, so a broadcast
-  overflow stalled the receive loop until the client next sent, instead of skipping + warning.
-- **Design decision:** mirror the already-tested `openpulse-kiss` pattern. TX: replace `try_send` with a
-  blocking `SyncSender::send` on `spawn_blocking` — natural backpressure throttles the client's TCP reader
-  so the burst is delivered in full (worker-gone → close the client). RX: match `recv()` explicitly,
-  handling `RecvError::Lagged(n)` (log + continue) and `Closed` (return).
-- **Implementation:** `crates/openpulse-ardop/src/data.rs`.
-- **Tests:** `data_port_backpressure_burst_stays_connected_and_ordered` — a 128-frame burst (> queue depth)
-  produces no client-side write error and the frames that arrive are strictly in-order and intact (no
-  reordering/corruption; broadcast lag may thin the echo, which is by-design). Existing round-trip tests
-  unchanged.
-- **Test results:** `cargo test -p openpulse-ardop --no-default-features` → 23 green; clippy + fmt clean.
-
-## 2026-07-13 — fix(bpsk): audit #1 — cancel crossfade ISI on the differential demod
-
-- **Requirement/change:** the audit (finding #1, confirmed by verification here) found BPSK — the primary
-  weak-signal fallback family (SL2–SL4 on every HF ladder) — has the uncancelled crossfade-ISI defect
-  already fixed for QPSK (#695) and 8PSK (#696), never ported. The overlapping half-Hann modulator is a
-  crossfade, so the one-slot matched filter recovers `r_k = a_k + β·a_{k+1}` with β = Σ(w_head·w_tail)/
-  Σw_tail² = **1/3** (same integrals as rectangular QPSK). Because BPSK is NRZI-**differential**, that
-  `+β` term becomes a constant positive bias in the dot product `r_k·r_{k-1}` (a_k²=1), eroding the
-  flip-bit margin by several dB. Refs REQ-DISC-adjacent modem; primary fallback.
-- **Design decision:** port `cancel_crossfade_isi` (stable backward substitution `a_k = r_k − β·a_{k+1}`;
-  +0.5 dB noise enhancement, far less than the margin recovered) to the BPSK IQ stream *before*
-  differential detection, gated to the **crossfade (non-RRC) path only** — the `-RRC` modes use Gardner+LMS
-  and do not crossfade. Applied on both the hard `bpsk_demodulate` and the soft `bpsk_demodulate_soft`.
-- **Implementation:** `plugins/bpsk/src/demodulate.rs`.
-- **Tests:** `crossfade_cancellation_lowers_awgn_ber` — a deterministic fixed-seed AWGN BER measurement;
-  **A/B-verified during development: BER 3.33 % with the cancellation disabled → well under the 2 % guard
-  with it** (a genuine fail-without-fix guard). All existing BPSK plugin (25) + modem bpsk_hardening (18)
-  + fec_loopback (12) + channel_loopback (32) tests pass unchanged.
-- **Test results:** `cargo test -p bpsk-plugin --no-default-features` → 25 green; modem BPSK paths green;
-  clippy + fmt clean.
-
-## 2026-07-13 — fix(discovery): audit #9 — make the clock-skew TX gate live
-
-- **Requirement/change:** the audit (finding #9, confirmed) found `Js8Clock::set_drift_bias_ms` had **no
-  production caller** (the documented `clock_mut()` seam was never used), so `drift_bias_ms` was permanently
-  0 — the advertised "±2 s clock-skew" beacon-TX safety gate (D5) could never trip and the operator-facing
-  `DiscoveryStatus.drift_bias_ms` was always a false 0. Refs REQ-DISC-05.
-- **Design decision:** feed each decoded frame's timing error into an EWMA (`Js8Clock::observe_dt_ms`,
-  α=1/8). `dt = (start_delay − sample_offset)/8` ms: a conforming station starts `start_delay` into the
-  slot, so a decode placed later means our clock is fast (negative bias). Smoothing averages per-station
-  timing error + capture jitter, leaving our systematic offset; the magnitude drives `tx_allowed`. Small
-  values barely affect `corrected()` (15 s slots), so RX slot alignment is unaffected. **Documented
-  coupling:** the observable dt range is bounded by the decoder's ±0.75 s slot-start search window (the
-  #2 fix, Pi-CPU-bounded) — a skew beyond that yields no decodes rather than a reading; full ±2 s
-  detection would need a wider (Pi-costlier) search and is deferred.
-- **Implementation:** `crates/openpulse-discovery/src/scheduler.rs` (`observe_dt_ms`),
-  `crates/openpulse-discovery/src/runtime.rs` (`decode_slot` feeds it).
-- **Tests:** `observe_dt_converges_toward_the_offset_and_can_trip_the_gate` (EWMA converges to −600 ms and
-  a sustained >2 s skew trips the gate); the offset regression test now asserts the drift readout is live
-  and ~0 for an on-time station.
-- **Test results:** `cargo test -p openpulse-discovery --no-default-features` → 53 green; clippy + fmt clean.
-
-## 2026-07-13 — fix(daemon): audit #14 — validate SetMode/SetConfig before mutating shared state
-
-- **Requirement/change:** the audit (finding #14, confirmed) found `dispatch_command` (the per-client
-  TCP/WS handler) wrote `active_mode` **unconditionally** for `SetMode`/`SetConfig` and returned
-  `CommandResponse::ok()`; the only validation (`apply_command_to_engine`) ran later and merely logged a
-  `CommandError` without rollback. A typo'd mode string silently deafened RX + station-ID until a valid
-  `SetMode` arrived, with the client told its bad command succeeded.
-- **Design decision:** capture the registered plugin mode names once at `ControlServer::spawn` (from
-  `engine.plugins().list()`) as a read-only `ValidModes` set, thread it to `dispatch_command` (both the
-  TCP and WebSocket paths), and reject an unknown mode with `CommandResponse::err` **before** any shared
-  write and **before** forwarding the command. An empty set (tests with no registry) skips validation.
-- **Implementation:** `crates/openpulse-daemon/src/lib.rs` (`ValidModes`, `ClientCtx`,
-  `ControlServerHandle`, `dispatch_command`), `src/ws.rs` (`WsShared`/`WsClientCtx`), `src/server.rs`
-  (WsShared wiring).
-- **Tests:** `dispatch_rejects_unknown_mode_without_mutating_state` — an unknown mode returns an error and
-  leaves `active_mode` untouched; a registered mode applies. `control_port` mode-switch test's engine now
-  registers QPSK so it selects a genuinely-registered mode.
-- **Test results:** `cargo test -p openpulse-daemon --no-default-features` → all green (7 groups); clippy
-  + fmt clean.
-
-## 2026-07-13 — fix(daemon/filexfer): audit #13 — reject inconsistent offer geometry
-
-- **Requirement/change:** the audit (finding #13, confirmed) found the receive-side size gate + per-peer
-  quota key only on `offer.file_size`, while `offer.block_count` is a raw uncross-checked `u16`. A crafted
-  offer (e.g. `file_size = 100`, `block_count = 65535`) decouples the size/quota check from the bytes
-  actually reassembled and written. Feature is off by default (`require_verified_peer = true`), but the
-  geometry was never validated.
-- **Design decision:** validate the offer's block geometry up front in `on_offer`, before the quota check
-  and `decide()`: reject (`Reason::TooLarge`) unless `block_size` is within the protocol window
-  `[MIN_BLOCK_SIZE, MAX_BLOCK_SIZE]` and `block_count == block_count(file_size, block_size)` (the existing
-  helper). With geometry consistent, the `file_size` gate now also bounds the reassembled/written bytes.
-- **Implementation:** `crates/openpulse-daemon/src/filexfer.rs` (`offer_geometry_ok`, wired into the
-  decision chain).
-- **Tests:** `offer_geometry_check_rejects_inconsistent_block_count` — a well-formed offer passes; an
-  inflated `block_count` and a sub-minimum `block_size` are both rejected.
-- **Test results:** `cargo test -p openpulse-daemon --no-default-features filexfer` → green; twin +
-  filexfer suites unchanged; clippy + fmt clean.
-
-## 2026-07-13 — docs: audit #43/#46/#47 — fix documentation drift
-
-- **Requirement/change:** the audit flagged several stale docs. #47: `CLAUDE.md`'s audio-backend note gave
-  a failing flag (`--features cpal`) for `openpulse-cli` and an inverted default — the CLI's feature is
-  `cpal-backend`, **on by default**. #43: the root `CHANGELOG.md` is frozen at 0.2.0 (the v0.4.0 roll only
-  touched `docs/dev/project/changelog.md`), so two changelogs diverged. #46: the README repository-layout
-  table omitted 6 shipped crates (`openpulse-discovery`, `-filexfer`, `-keystore`, `-linksec`,
-  `-freedv-auth`, `apps/openpulse-linksim`) and 2 shipped plugins (`js8`, `pilot`).
-- **Design decision:** #47 correct the CLI exception in the sharp-edge note. #43 add a prominent
-  canonical-changelog pointer at the top of root `CHANGELOG.md` (directing to `docs/dev/project/changelog.md`
-  + `docs/releasenotes.md` for v0.2.1–v0.4.0) and mark its `[Unreleased]` as superseded, rather than
-  hand-reconciling four versions of diverged content. #46 add the missing crate/plugin rows.
-- **Implementation:** `CLAUDE.md`, `CHANGELOG.md`, `README.md`.
-- **Tests:** docs only — no code change. (#44 cli-guide daemon section + #45 README ladder nuance left as
-  lower-value follow-ups; the README feature text already reflects the SC-FDMA→OFDM re-seat.)
-
-## 2026-07-13 — fix(modem): audit #11 — don't re-apply the InputCapture seam per decode_burst slice
-
-- **Requirement/change:** the audit (finding #11, confirmed + A/B-verified) found `accumulate_routed`
-  already routes each captured window through the `InputCapture` front-end seam (DC-block / notch / DCD /
-  AGC) before appending to `rx_burst`; `decode_burst`'s per-offset `decode_attempt` → `receive_from_samples`
-  then routes the *already-processed* burst through the same seam **again per scan slice**. Harmless with
-  AGC/notch off (both default off), but with AGC on the stateful gain loop re-normalises already-normalised
-  audio each slice — distorting the noise-var-calibrated LLR scale QAM/OFDM/SC-FDMA depend on — and the DCD
-  re-latches from mid-burst slices.
-- **Design decision:** add an `input_prerouted` flag; `decode_burst` sets it around its scan (restored on
-  every exit via an inner helper) so the nested `route_audio_stage(InputCapture)` becomes a pass-through
-  (skips the DC/notch/DCD/AGC block). With AGC/notch off the behaviour is bit-identical.
-- **Implementation:** `crates/openpulse-modem/src/engine.rs` (`input_prerouted`, `decode_burst`/
-  `decode_burst_inner`, InputCapture guard).
-- **Tests:** `decode_burst_does_not_reapply_agc_per_scan_slice` (`agc_blocks_processed` stays flat across a
-  `decode_burst` scan on a pre-routed burst) — **A/B-verified: fails with the guard removed**.
-- **Test results:** `cargo test -p openpulse-modem --no-default-features` agc/notch/channel/fec loopbacks
-  green; clippy + fmt clean.
-
-## 2026-07-13 — fix(mesh): audit #10 (part) — refuse to run the mesh daemon as N0CALL
-
-- **Requirement/change:** the audit (finding #10, confirmed) found `openpulse-mesh` beacons + relays
-  automatically (60 s cadence) with **no N0CALL startup refusal** — unlike `openpulse-daemon` / `-tui`,
-  which exit if the configured callsign is the `N0CALL` placeholder. §97.119: a station must transmit its
-  own valid call sign.
-- **Design decision:** add the same N0CALL guard the daemon uses, after the `[mesh] enabled` check (only an
-  enabled mesh transmits) — `anyhow::bail!` before building the engine/daemon.
-- **Implementation:** `crates/openpulse-mesh/src/main.rs`.
-- **Scope note:** the finding's ARDOP/KISS half (transmit before `MYID` is set) is **deferred** — those
-  TNCs take their callsign from the host `MYID` command at runtime, so a hard config-time refusal risks
-  breaking legitimate Pat/Winlink workflows; enforcing MYID-before-TX belongs with the TNC session logic
-  (the "front-ends don't drive sessions" area).
-- **Test results:** `cargo build/clippy -p openpulse-mesh --no-default-features` clean (a `main()` startup
-  guard, consistent with the daemon's untested guard).
-
-## 2026-07-13 — fix(panel): audit (low tier) — panel mode list omitted 12 PILOT modes
-
-- **Requirement/change:** the audit found the panel's hardcoded `MODES` list carried only the 8 PILOT-500
-  variants while the `pilot` plugin registers 20 (adding the PILOT-{QPSK,8PSK,16QAM,32APSK}1000, -1000-RRC,
-  and -2000-RRC families) — so an operator could not select 12 registered modes. Same drift class as the
-  earlier mode-list fix (PR #321).
-- **Design decision:** add the 12 missing PILOT-1000/2000 mode strings to `apps/openpulse-panel/src/ui.rs`
-  `MODES`, matching the plugin's registration.
-- **Test results:** `cargo build/clippy -p openpulse-panel --no-default-features` clean.
-- **Scope note:** the `SetTxAttenuation { band }` drop is **deferred** — the command carries an optional
-  `band`, but the engine has only a single global `tx_attenuation_db` (no per-band store), so honoring it
-  is a feature, not a fix.
-
-## 2026-07-13 — chore(audit): low-tier cleanup batch (stubs / parity / doc honesty)
-
-- **Requirement/change:** a grouped pass over confirmed low-severity audit findings — dead/misleading APIs,
-  control-surface parity, and doc honesty — each too small for its own PR.
-- **Changes:**
-  - **Panel `ecc_rate` fabricated 0.00 %** — the daemon reports `ecc_rate = None` (computes none), but the
-    panel showed a fabricated `0.00 %`. Made `PanelState.ecc_rate` `Option<f32>`, render `"—"` when `None`,
-    and only push real samples into the trend sparkline. Test
-    `ecc_rate_none_is_not_fabricated_and_leaves_the_trend_empty`.
-  - **`queue_message_type_c` misleading doc** — the pub API's doc claimed "Winlink-compatible" while
-    `compress.rs` states external Type C compat is UNVERIFIED (LH5 vs FBB's Okumura LZHUF). Corrected the
-    doc to match reality and note it has no in-tree caller yet.
-  - **Config template stale mode list** — the `[modem]` "Available:" comment omitted OFDM52-HOM, PILOT-*,
-    RRC, and SC-FDMA-HOM families. Replaced the unmaintainable literal list with the mode families +
-    a pointer to `docs/mode-fec-ladder.md` (authoritative).
-  - **`[discovery]` reserved fields** — `query_new_stations` / `max_queries_per_10min` are accepted-but-
-    unused (directed INFO queries unimplemented); the template now says so.
-- **Test results:** `cargo test -p openpulse-panel -p openpulse-b2f -p openpulse-config
-  --no-default-features` green; clippy + fmt clean.
-- **Still deferred (feature-not-a-fix / substantial):** `SetTxAttenuation { band }` (no per-band engine
-  store); route-discovery wire codecs with no originator; `transmit_iq` seam bypass (test-only); discovery
-  `server::run`-level test (#15); cli-guide daemon section (#44).
-
-## 2026-07-13 — fix(bpsk): audit #1 follow-up — keep crossfade cancellation off the soft path
-
-- **Requirement/change:** the full-workspace test gate caught a regression from the #1 crossfade-ISI fix
-  (#821): `llr_calibration::a_deeply_faded_extra_attempt_does_not_hurt` failed (plus_faded −2.0 dB vs
-  two_good −3.0 dB, needs ≤ −2.5). #821 applied `cancel_crossfade_isi` to **both** the hard and the soft
-  BPSK demod. BPSK is *differential*, so on the soft path the backward-substitution recursion **inflates**
-  the noise LLRs of a deeply-faded attempt instead of suppressing them — breaking the 1/σ² LLR calibration
-  HARQ MAP combining depends on (`receive_with_llr_combining`).
-- **Design decision:** apply the cancellation on the **hard differential path only** (`bpsk_demodulate`),
-  where it restores the decision margin (the A/B-verified BER win in #821 uses that path), and **not** on
-  the soft path (`bpsk_demodulate_soft`), preserving the soft-LLR combining scale. (Contrast QPSK/8PSK,
-  which are coherent and correctly cancel on both paths.)
-- **Implementation:** `plugins/bpsk/src/demodulate.rs` (revert the soft-path `cancel_crossfade_isi` call).
-- **Tests:** `llr_calibration` (2/2) now green; the #1 hard-path `crossfade_cancellation_lowers_awgn_ber`
-  still passes; bpsk_hardening (18) / fec_loopback (12) / channel_loopback (32) green.
-- **Test results:** full `cargo test --workspace --no-default-features` now 0 failures (was 1); fmt +
-  clippy clean; benchmark gate `true` (10/10, mean_transitions 5.1).
-
-## 2026-07-15 — fix(handshake): bind frame key to trusted key; dialed-peer CONACK check; fail-closed trust load
-
-- **Requirement/change:** adversarial audit of the signed RF handshake / session / trust subsystem
-  (`docs/dev/reviews/2026-07-15-handshake-trust-audit.md`) found three verified breaks.
-- **F1 [CRITICAL]:** classical `verify_conreq`/`verify_conack` verified the Ed25519 signature against the
-  frame's own `pubkey` and consulted `trust_level(station_id)` but never bound the frame key to the
-  trust store's key for that station → any station could impersonate any trusted callsign at Verified/Full
-  trust with its own key, defeating the file-transfer signature gate. The PQ path already bound the key.
-- **F2 [HIGH]:** the initiator gated an inbound CONACK on the (cleartext, guessable) session id only, not
-  the dialed callsign → an attacker could race a self-signed CONACK and be recorded as the dialed peer.
-- **T4 [LOW-MED]:** a configured trust store that failed to load silently started empty, dropping revocations.
-- **Design decision:** mirror the PQ path's binding in the classical path (`bind_frame_key`, new
-  `HandshakeError::PublicKeyMismatch`); compare `ack.station_id` to `pending.peer_callsign` before
-  recording; fail closed on a trust-store load **error** (missing/empty path stays empty-ok). Broader
-  enforcement gaps (handshake gates no non-filexfer RF action; relay/QSY/OTA act on unauthenticated
-  traffic when opt-in features are enabled) are architectural and documented in the review, not patched here.
-- **Implementation:** `crates/openpulse-core/src/handshake.rs` (`bind_frame_key`, `PublicKeyMismatch`,
-  calls in `verify_conreq`/`verify_conack`); `crates/openpulse-daemon/src/lib.rs`
-  (`handle_inbound_conack` dialed-peer check); `crates/openpulse-daemon/src/server.rs` (trust-store
-  load fails closed on error).
-- **Tests:** `crates/openpulse-core/tests/handshake_integration.rs`
-  (`conreq_rejects_impersonation_wrong_key_for_trusted_callsign`,
-  `conack_rejects_impersonation_wrong_key_for_trusted_callsign`);
-  `crates/openpulse-daemon/src/lib.rs` (`conack_from_undialed_station_is_ignored`).
-- **Test results:** core handshake_integration 22/22; daemon lib 117/117; full
-  `cargo test --workspace --no-default-features` pending final gate below.
-
-## 2026-07-15 — fix(daemon): handshake-audit enforcement pass — §97.119 TX-ID gate, QSY trust wiring, TNC store warning
-
-- **Requirement/change:** second (enforcement-lens) finder pass of the handshake/trust audit
-  (`docs/dev/reviews/2026-07-15-handshake-trust-audit.md`). The signed handshake is an identity label,
-  not an access gate; three enforcement findings had tractable fixes.
-- **E6 [MEDIUM, §97.119]:** auto-ID is disabled for an empty/N0CALL callsign, but the always-on
-  CONREQ→CONACK responder and the opt-in OTA-ACK / relay-forward / auto-QSY paths keyed the
-  transmitter with no per-transmission callsign gate → a daemon that merely heard a frame would
-  transmit unidentified. Fix = `RuntimeControlState::local_callsign_valid()`; every autonomous
-  responder refuses to key up without a valid MYID (RX/decode/peer-recording unaffected).
-- **E4 [MEDIUM]:** the RF QSY responder used a hardcoded `Unverified` peer trust, so
-  `qsy.allow_trustlevels` was inert (empty → no gate; non-empty → rejects everyone). Fix =
-  `RuntimeControlState::rf_peer_trust()` via `classify_connection_trust(OverAir)` (Reduced for a
-  trust-store key, Low first-seen, never Verified over RF).
-- **E2 [misleading]:** ARDOP/KISS TNCs load a trust store they never consult. Fix = loud startup warn.
-- **Deferred (architectural/protocol):** E1 (handshake as access gate — "front-ends don't drive
-  sessions" refactor), E3 (relay `min_trust_filter`/`auth_tag` unverified — needs trust threading +
-  key material), E5 (single-slot `verified_peer` — needs per-callsign map), E7 (unsigned OTA ACK).
-- **Implementation:** `crates/openpulse-daemon/src/lib.rs` (`local_callsign_valid`, `rf_peer_trust`,
-  gates in `handle_inbound_conreq` / QSY branch of `process_received_bytes` / `maybe_qsy_on_interference`
-  / `maybe_relay_forward`); `crates/openpulse-daemon/src/server.rs` (OTA-ACK keying gate);
-  `crates/openpulse-ardop/src/main.rs`, `crates/openpulse-kiss/src/main.rs` (unused-store warn).
-- **Tests:** `crates/openpulse-daemon/src/lib.rs` `handshake_rf_tests::{callsign_validity_and_rf_peer_trust,
-  responder_without_callsign_does_not_transmit_conack, responder_without_callsign_ignores_qsy_req}`;
-  4 existing QSY tests updated to set a valid MYID.
-- **Test results:** daemon lib 120/120, all daemon suites green (incl. twin_daemon_bridge 4/4); full
-  workspace gate below.
-
-## 2026-07-15 — fix: file-transfer / relay / discovery audit hardening (F-1 CRITICAL + F-5 SEVERE + more)
-
-- **Requirement/change:** six-finder adversarial sweep of the file-transfer subsystem, relay/wire-envelope
-  code, RX/TX pipeline seams, and control-surface parity
-  (`docs/dev/reviews/2026-07-15-filexfer-relay-seams-audit.md`). DSP-seam and parity lenses came back clean
-  (shared-seam + tripwire pattern holds); filexfer/relay/wire surfaced the findings below.
-- **F-1 [CRITICAL]:** received blocks were never bounded by the offer's declared size → a 1 KB-declared,
-  quota-approved offer could write up to ~4.2 GiB to disk. Fix = `BlockAssembler` rejects any block whose
-  decoded length ≠ its expected slot length (+ `reassemble_verify_write` refuses a payload ≠ `file_size`).
-- **F-5 [SEVERE]:** `poll_timeout` had zero daemon call sites and `cancel_transfer` only cleared `file_rx`,
-  so a `SendFile` to a silent peer pinned `file_tx` until restart. Fix = `filexfer::poll_timeouts` fired
-  each rx tick + `cancel_transfer` also cancels an outbound send.
-- **F-6 [MEDIUM]:** `block_count == 0xFFFF` collided the last block's SAR id with the control segment id.
-  Fix = cap `block_count` at `MAX_BLOCK_COUNT = 0xFFFE`.
-- **E5 [MEDIUM]:** single global `verified_peer` slot → offers verified against the wrong key. Fix =
-  per-callsign `verified_peers` map; `on_offer` binds to the offer's sender (trusting `sender_id` only
-  once the signature validates).
-- **F-3 [LOW]:** `unique_path` clobbered after 10 000 collisions. Fix = returns `Option`; `write_file`
-  errors instead of overwriting.
-- **F-4 [MEDIUM]:** `PeerQueryResponse::decode` pre-allocated from an unchecked `result_count`. Fix =
-  bound the capacity by bytes present (mirrors sibling decoders).
-- **discovery.group [dead config]:** deserialized but never applied (the `@OPULSE` group is baked into the
-  ground-truth-validated JS8 frame packing). Fix = marked RESERVED in schema + template, warn on a
-  non-default value; wiring the custom-group feature tracked separately.
-- **Deferred:** F-2 (unsigned offer metadata — widen the signed `ManifestBody`, a wire change), F-7 (NACK
-  path unreachable in the daemon), E3 (relay `auth_tag`/`min_trust_filter`). Documented in the review.
-- **Implementation:** `openpulse-filexfer/src/{blocks,lib}.rs`; `openpulse-daemon/src/{filexfer,lib,server}.rs`;
-  `openpulse-core/src/wire_query.rs`; `openpulse-config/src/lib.rs`.
-- **Tests:** `blocks::an_oversized_block_is_rejected`, `filexfer::block_count_math` (F-6),
-  `offer_is_verified_against_its_senders_key_not_the_last_handshook_peer` (E5),
-  `a_stuck_send_clears_on_offer_timeout` + `cancel_clears_an_outbound_send` (F-5),
-  `peer_query_response_rejects_oversized_result_count_without_over_allocating` (F-4).
-- **Test results:** filexfer 24, modem filexfer_loopback 2, daemon 123 lib + twin_daemon_bridge 4, core
-  wire_query 10, config 19 — all green; full workspace gate below.
-
-## 2026-07-15 — fix(filexfer): F-2 — sign the whole file offer, not just the content hash
-
-- **Requirement/change:** audit finding F-2 (`docs/dev/reviews/2026-07-15-filexfer-relay-seams-audit.md`),
-  deferred from PR #898: the offer's Ed25519 signature covered only the three `TransferManifest` fields
-  (payload_hash/payload_size/sender_id), leaving name/mime/block_size/block_count/transfer_id
-  unauthenticated → an on-path attacker could replay a signed offer with a spoofed filename under a
-  `signature_valid: true` badge (content stays protected by the signed hash; metadata did not).
-- **Design decision:** do NOT extend the general core `TransferManifest` (also used by CLI session
-  teardown) with file-transfer fields. Instead `FileOffer` carries its own signature over its whole body
-  — every field except the trailing signature, produced by `encode_signed_fields` which `encode_body`
-  also uses so the signed form and the wire form cannot drift. `from_manifest` now takes the signing seed
-  and signs the full offer; `verify_signature` verifies over the same bytes; `reassemble_verify_write`
-  uses `offer.verify_signature` + the existing payload-hash check. Wire-format change (what the signature
-  covers), acceptable pre-1.0 with file transfer off by default.
-- **Implementation:** `crates/openpulse-filexfer/src/offer.rs` (signing rewrite, `encode_signed_fields`,
-  `signing_bytes`, `verify_signature`; `to_manifest` removed), `crates/openpulse-filexfer/Cargo.toml`
-  (ed25519-dalek dev-dep → dep), `crates/openpulse-daemon/src/filexfer.rs` (send_file seed +
-  reassemble_verify_write), all `from_manifest` call sites (+seed).
-- **Tests:** `offer_signature_verifies_and_tamper_is_caught` extended (spoofed filename + tampered geometry
-  now fail); filexfer crate 28, modem filexfer_loopback 2, daemon filexfer 13 + twin_daemon_bridge 4
-  (`a_file_crosses`) green.
-- **Test results:** full workspace gate below.
-
-## 2026-07-15 — fix: protocol-bridge untrusted-input hardening (ARDOP OOM, gzip bomb, proposal flood)
-
-- **Requirement/change:** three-finder adversarial sweep of the network-facing protocol bridges
-  (`docs/dev/reviews/2026-07-15-protocol-bridge-audit.md`). KISS/AX.25 came back clean; ARDOP + B2F
-  surfaced three findings.
-- **A-1 [HIGH]:** the ARDOP command reader's `MAX_CMD_LINE` guard ran after `read_line` (which has no
-  internal cap), so a client streaming bytes with no newline grew the buffer without limit → OOM. Fix =
-  `read_capped_line` bounds the read with a `Take` at MAX_CMD_LINE+1.
-- **B-1 [HIGH]:** `decompress_gzip` (Type D, the format the real CMS uses) had no output cap, unlike the
-  16 MiB LZHUF path → decompression bomb. Fix = `Take` at MAX_UNCOMPRESSED+1 (constant generalized) +
-  reject over-cap.
-- **B-2 [MEDIUM]:** IRS auto-accepted unlimited FC proposals and the FF handler hardcoded Accept →
-  unbounded messages received/decompressed/retained per session. Fix = cap accepts at MAX_PROPOSALS=32,
-  reject the rest, and honor each proposal's recorded answer in FF.
-- **Implementation:** `crates/openpulse-ardop/src/command.rs`; `crates/openpulse-b2f/src/{compress,session}.rs`.
-- **Tests:** `oversized_command_line_drops_the_connection` (ardop_integration),
-  `gzip_decompression_bomb_over_the_cap_is_rejected` + `irs_caps_the_number_of_accepted_proposals` (b2f_integration).
-- **Test results:** ardop 24, b2f 17, kiss 8 green; full workspace gate below.
-
-## 2026-07-15 — feat(relay): E1 — operator originator allow-list for relay forwarding
-
-- **Requirement/change:** audit finding E1 (`docs/dev/reviews/2026-07-15-handshake-trust-audit.md`) — the
-  signed handshake gates no non-filexfer RF action. Study of the wire format showed the relay envelope
-  `auth_tag` has no key-distribution scheme, so `src_peer_id` is not cryptographically authenticated at
-  the relay; a strong cryptographic gate is blocked on envelope-authentication infrastructure (future).
-- **Design decision:** deliver the proportionate, honest increment — an operator-configured originator
-  ALLOW-list complementing the existing deny-list. `RelayForwarder::forward` already calls
-  `policy.allows(src_hex)`, so extending `RelayTrustPolicy::allows` to honour an optional allow-list
-  wires it with no `forward()` change. Empty allow-list = no restriction (backwards compatible).
-  Documented as defense-in-depth over an unauthenticated (spoofable) id, NOT strong auth — and gating on
-  "verified this session" would be wrong for a mesh (originator is many hops away, never handshook).
-- **Implementation:** `crates/openpulse-core/src/relay.rs` (`allowed_relays` field, `set_allow_list`,
-  `allows` honours it); `crates/openpulse-config/src/lib.rs` (`RelayConfig.allow_list` + template);
-  `crates/openpulse-daemon/src/server.rs`, `crates/openpulse-ardop/src/main.rs`,
-  `crates/openpulse-kiss/src/main.rs` (set the allow-list on the built policy).
-- **Tests:** `allow_list_forwards_only_listed_originators` (relay_integration — listed forwards,
-  unlisted rejected, empty unrestricted); config default asserts `allow_list.is_empty()`.
-- **Test results:** relay_integration 13, config 19 green; full workspace gate below.
-
-## 2026-07-15 — fix: RX decode-path DoS hardening (RS panic, length-prefix overflow, SAR cap)
-
-- **Requirement/change:** two-finder adversarial sweep of the RX decode path
-  (`docs/dev/reviews/2026-07-15-rx-decode-audit.md`) — a panic/OOM on untrusted RF-derived bytes is a
-  remote DoS. Both finders converged on RX-1.
-- **RX-1 [CRITICAL]:** `ShortFecCodec::decode` had no upper-length bound; the pinned reed-solomon 0.2.1
-  decoder (fixed [u8;256] buffer) PANICS on input ≥256 B, reachable from decode_fsk4_ack /
-  receive_with_short_fec_data on attacker-length-controlled demod output. Fix = reject len>255.
-- **RX-2 [HIGH]:** FecCodec::decode `PREFIX_LEN + orig_len` unchecked add → 32-bit/wasm overflow →
-  slice panic (systematic prefix = attacker-controlled). Fix = checked_add.
-- **RX-3 [HIGH]:** ConvCodec + SoftViterbiCodec `32 + orig_len*8` unchecked multiply → 32-bit overflow.
-  Fix = checked_mul/checked_add.
-- **RX-4 [MEDIUM]:** SarReassembler unbounded pending (incomplete) slots. Fix = MAX_PENDING_SLOTS=4096 +
-  SarError::TooManyPendingSegments.
-- **Implementation:** `crates/openpulse-core/src/{fec,conv,soft_viterbi,sar,error}.rs`.
-- **Tests:** `short_fec_decode_rejects_oversized_input_without_panicking`,
-  `ingest_caps_pending_incomplete_segments`. (RX-2/RX-3 are 32-bit-target manifestations; the checked-math
-  guards are verified by inspection and don't change 64-bit behavior.)
-- **Test results:** core suite green (18 groups); full workspace gate below.
-
-## 2026-07-15 — feat(mesh): SAR-fragment oversized envelopes (foundation for envelope authentication)
-
-- **Requirement/change:** prerequisite for E3 (envelope authentication). A 64-byte Ed25519 signature
-  grows the `WireEnvelope` overhead from 120 → 168 B, and the mesh sends peer-query / route-discovery
-  responses as a single ≤255-byte modem frame (the `Frame` payload length is a `u8`). A 1-result signed
-  response is 257 B and won't fit — the mesh must fragment/reassemble control responses > one frame.
-- **Design decision:** SAR at the mesh envelope seam, with a single-frame fast path so current (small,
-  unsigned) traffic is unchanged. TX: `MeshDaemon::transmit_bytes` sends envelopes ≤255 B as one frame,
-  else `sar_encode`s them across frames. RX: `step` tries `WireEnvelope::decode` first (the `OPHF`-magic
-  fast path); a frame that isn't a whole envelope is fed to a `SarReassembler` and dispatched once
-  complete. A valid SAR fragment can't collide with `OPHF` magic (it would require `frag_index ≥
-  frag_total`), so the disambiguation is safe.
-- **Implementation:** `crates/openpulse-mesh/src/lib.rs` (`transmit_bytes`, `rx_sar`/`tx_segment_id`
-  fields, `step` reassembly; all 11 `engine.transmit` sites routed through `transmit_bytes`).
-- **Tests:** `oversized_envelope_survives_sar_fragmentation` (a >255 B envelope fragments and B
-  reassembles + delivers it via the loopback frame queue); the 12 existing mesh loopback tests pass
-  unchanged (fast path).
-- **Test results:** mesh 13/13; full workspace gate below. No wire-format change in this PR.
-
-## 2026-07-20 — fix(modem): the scanning FEC receive can find a frame inside a long capture
-
-- **Requirement/change:** validating `hpx_hf`'s two load-bearing fade rungs on real audio
-  (loopback-revalidation task A) exposed a live defect: on the dual-card rig `QPSK250 + rs` **passed at a
-  ~7 s capture window and failed at the default 45 s one** — same mode, FEC, rig, level and payload, the
-  only variable being how much audio was captured around the frame. Every long coded frame failed on real
-  hardware, and `QPSK250-D` (SL6) could not complete at all.
-- **Root cause:** `receive_from_samples_with_fec` slices a **fixed-length** window,
-  `end = (start + max_frame_samples).min(accumulated.len())`, so the demodulated byte count is a function
-  of the *window* rather than the frame. `FecCodec::decode` requires an exact multiple of the 255-byte
-  block, so once the capture outlasted the frame the length gate rejected every attempt before
-  Reed–Solomon ever ran. The in-process suite was structurally blind to it: `ChannelSimHarness::route*`
-  fills the RX loopback with a buffer that *is* the frame.
-- **Design decision:** `FecCodec::decode_prefix` tries successively longer block prefixes (1..=N) and
-  returns the first that decodes. Safe without a new length field because `decode` already validates its
-  own 4-byte length prefix against the decoded size, so a wrong block count cannot silently succeed.
-  Wired into the `Rs` and `RsStrong` arms of the scanning receive only — the single-shot
-  `receive_with_fec_mode` and `decode_combined_llrs` keep strict `decode` (their input length is
-  frame-derived, not window-derived), and `RsInterleaved` is untouched because it deinterleaves before
-  decoding and genuinely needs the exact length. No wire-format change.
-- **Implementation:** `crates/openpulse-core/src/fec.rs` (`decode_prefix`);
-  `crates/openpulse-modem/src/engine.rs` (the two arms of `receive_from_samples_with_fec`);
-  `crates/openpulse-modem/src/channel_sim.rs` (`route_embedded(lead, trail)` — pads silence around the
-  frame so a test can exercise frame *location*, which no existing `route*` variant could).
-- **Tests:** `crates/openpulse-modem/tests/fec_scan_long_capture.rs` — 4 tests: the `Rs` and `RsStrong`
-  long-capture gates, a tight-capture control, and an anti-vacuity test asserting the capture really is
-  several times the frame length.
-- **Test results:** **Sabotage-verified** — reverting the two arms to strict `decode` turns the suite red
-  (3 of 4 fail) with the hardware error verbatim: `FEC data length 270 is not a non-zero multiple of 255`.
-  With the fix, 4/4 pass. **On the dual-card hardware rig:** `QPSK250-D + rs` PASS ×3 at the default 45 s
-  window plus PASS on a 200 B multi-block payload; `QPSK250 + rs` PASS. This is the **first real-audio
-  validation of `hpx_hf` SL6**; SL1 (`MFSK16`) was validated the day before. Full workspace gate below.
-- **Falsified along the way** (recorded so they are not re-attempted): sample-rate offset (coded and
-  uncoded tolerate the same 500 ppm — `sro_confirmation`), signal level, RS correction capacity
-  (`rs-strong` fails identically), TX buffer underrun (present in *passing* runs), sub-symbol scan
-  granularity, the LMS equalizer, frame airtime (a 4.16 s *uncoded* frame decodes perfectly), and
-  physical corruption (captured WAV shows a clean 4.20 s burst, zero interior dropouts). A ninth
-  hypothesis — that `QPSK250-D` had a *second*, differential-specific defect because it failed even at the
-  tight window — was also wrong: the tight window was a coin flip that coherent won. One defect, not two.
-
-## 2026-07-20 — fix(plugins): `supports_soft_demod` is per-mode, so `-D` stops advertising a refused capability
-
-- **Requirement/change:** validating `hpx_hf` SL6 on the dual-card rig left one failure: `QPSK250-D` +
-  `ldpc` errors with `differential QPSK has no soft-LLR path`. That refusal is *correct* (#923 — a
-  differential detector has no calibrated coherent LLR, and emitting miscalibrated ones is worse than
-  refusing), but `supports_soft_demod()` returned `true` for the whole QPSK plugin, so the engine
-  selected the soft path for `-D` and only discovered the refusal at demodulation. The advertisement was
-  the bug, not the refusal.
-- **Design decision:** the capability is a property of the **mode**, not the plugin, so the trait method
-  takes the mode: `supports_soft_demod(&self, mode: &str) -> bool`. Every call site in the engine already
-  had `mode` in scope. QPSK returns `!is_differential(mode)`; the other seven implementors are
-  unconditionally soft-capable and ignore the argument. Considered and rejected: keeping the plugin-level
-  signature and special-casing `-D` in the engine, which would put a waveform fact in the wrong layer and
-  leave the trait still able to lie.
-- **Implementation:** `crates/openpulse-core/src/plugin.rs` (trait default);
-  `plugins/{qpsk,bpsk,psk8,64qam,mfsk16,ofdm,scfdma,pilot}/src/lib.rs`;
-  `crates/openpulse-modem/src/engine.rs` (4 call sites — HARQ policy, retry-candidate selection, the
-  soft-demod preference in the capture path, and the soft-FEC mismatch warning).
-- **Tests:** `plugins/qpsk/tests/differential_soft_capability.rs` — 3 tests: a general invariant that
-  `supports_soft_demod(mode)` and `demodulate_soft(mode)` agree for **every** mode in the plugin's info
-  (with an anti-vacuity floor on the modes actually exercised), the named `-D` case, and a control that
-  the coherent modes still advertise soft demod so the fix did not disable the soft path wholesale.
-- **Test results:** **Sabotage-verified** — restoring the unconditional `true` turns the suite red (2 of
-  3) with `QPSK250-D: supports_soft_demod() says true but demodulate_soft() errored`. Full workspace gate
-  below.
-
-## 2026-07-20 — fix(audio+harness): a 60 s flush clamp made BPSK31 untransmittable; full coded sweep
-
-- **Requirement/change:** the first full 67-mode coded sweep on the dual-card rig (`FEC=rs`, so every
-  case exercises the scanning-receive path fixed in #995) returned 55/67. Triage of the 12 failures
-  found three defects and falsified one long-standing premise.
-- **Defect 1 — the flush clamp (real, blocking a ladder rung).** `CpalBackend::flush` computed its
-  drain deadline as `(queued_seconds + 3.0).clamp(5.0, 60.0)` under a comment reading "Timeout adapts to
-  queued audio length so slow modes can fully drain". The adaptation was correct; **the upper clamp made
-  it inert for exactly those slow modes.** RS pads any payload to a full 255-byte block, so a `BPSK31`
-  frame is 255×8÷31.25 = 65.3 s of audio: it requested 68.3 s, was clamped to 60 s, and failed 100 % of
-  the time with `output buffer did not drain within 60.0 s`. The mode could not transmit at all on real
-  hardware, and it is `hpx_hf` SL2.
-- **Design decision:** extract to `openpulse_audio::flush::flush_timeout_seconds` in an **ungated**
-  module (the `crate::fault` precedent from #979) — the workspace suite runs `--no-default-features`, so
-  logic inside the cpal module is untestable in the gate that actually runs, which is how this survived.
-  The missing invariant is now the gate: *the deadline must always exceed the audio it is waiting on.*
-  Timeout is `queued × 1.25 + 5 s`, floored at 5 s, with a 600 s runaway backstop chosen to sit well
-  above the slowest frame the ladder can emit (`BPSK31` at three blocks ≈ 196 s) so it never binds.
-- **Defect 2 — fixed harness windows.** `TX_TIMEOUT=60` / `IRS_LISTEN_MS=45000` are both shorter than a
-  `BPSK31` frame, so even with defect 1 fixed the sweep would still report a false failure. Windows are
-  now derived per mode from a new `openpulse modes --airtime`, which reads `frame_geometry` from the
-  plugin registry — the same registry-driven principle that replaced the frozen `FULL_CASES` list.
-  Explicit `TX_TIMEOUT=` / `IRS_LISTEN_MS=` still win.
-- **Defect 3 — the SKIP report was a syntax error.** `${#SKIPPED[@]:-0}` is invalid bash (`${#arr[@]}`
-  cannot take `:-`), so the line errored and all 6 skipped modes vanished from the summary — directly
-  contradicting the code's own comment, "Reported as SKIP, never silently dropped". The array was also
-  declared inside the `full` branch while being read unconditionally.
-- **Implementation:** `crates/openpulse-audio/src/{flush.rs (new),lib.rs,cpal_backend.rs}`;
-  `crates/openpulse-cli/src/{cli.rs,main.rs,commands/modes.rs}` (`modes --airtime`);
-  `scripts/run-loopback-dualcard.sh` (`airtime_for`/`size_windows_for`/`--sro-check`, SKIP fix);
-  `scripts/lib/sro_estimator.py` (new, with self-test).
-- **Tests:** `crates/openpulse-audio/src/flush.rs` — 6 unit tests: the `BPSK31` case by name, the
-  general "deadline exceeds queued audio" invariant across 0–400 s, the slowest-possible-frame case, the
-  short-queue floor, channel/rate scaling, and a zero-sample-rate guard.
-- **Test results:** **Sabotage-verified** — restoring `(queued + 3.0).clamp(5.0, 60.0)` turns the suite
-  red (3 of 6) with `a 65.3 s frame got a 60.0 s deadline`. **On hardware:** `BPSK31 + rs` now PASSes
-  with no manual override, which completes the ladder — **all 12 distinct `hpx_hf` waveforms decode on
-  real audio**. Full workspace gate below.
-- **Premise falsified — this rig has no meaningful SRO.** `--sro-check` measures **+0.10 ppm** (repeat:
-  +0.01). Both `dualcard-loopback.md` and `virtual-loopback.md` asserted from *topology* that two USB
-  cards give two independent clocks; they do not, as these adapters slave to the host's USB frame clock.
-  The 2026-06-13 conclusion that the `SCFDMA52-*`/`64QAM` hardware failures are "the two independent
-  soundcard clocks (sample-rate offset)" therefore **cannot hold on this rig**. That diagnosis offered a
-  disjunction (SRO *and/or* analog group-delay/phase); the first half is now eliminated and only the
-  second survives, untested. Docs corrected in four files. **Do not schedule SRO tracking in the wideband
-  demodulators on this rig's evidence.**
-  - The estimator has a self-test and `--sro-check` refuses to report a reading if it fails. The **first**
-    version wrapped phase above ~5 ppm and reported an injected 200 ppm as −6.9 ppm — it would have
-    certified a badly offset rig as clean. A device that cannot detect a known offset cannot measure an
-    unknown one.
-- **Remaining failures, characterised (not fixed):** `8PSK2000` is a **real software defect** — it fails
-  at 0 ppm in-process on a clean channel (the "fails at all inputs" signature), and is in no shipped
-  profile. `BPSK250-RRC` and `PILOT-QPSK500` pass in-process through 400–800 ppm of injected SRO, so
-  with the rig at 0.1 ppm their hardware failure is **unexplained**. The `64QAM`/`SCFDMA52-*` group was
-  additionally measured at hard-decision `rs` while those modes are designed around soft FEC (~+6 dB) —
-  read as *not disproven* rather than *failed*.
-
-## 2026-07-20 — fix(audio): cpal enumeration truncates when devices are retained; virtual rung at HEAD
-
-- **Requirement/change:** Task B of the loopback revalidation plan (virtual rung at HEAD). It could not
-  be started: every `aloop_*` device returned `device not found` from `transmit`, while
-  `openpulse devices` listed them and `aplay -D aloop_tx` worked.
-- **Root cause:** cpal's ALSA enumeration is **stateful** — holding `cpal::Device` values alive while
-  iterating silently truncates the list. Measured in one process, same moment: naming each device and
-  dropping it yields 39; naming and **retaining** it yields 18; collecting devices then naming yields 4.
-  Nothing errors; the entries simply never arrive. `select_cpal_device` collected
-  `Vec<(String, cpal::Device)>`, so the resolver operated on a truncated list. `openpulse devices` (which
-  drops as it iterates) therefore advertised devices that `--device` could not open. `hwloop_tx` fell
-  inside the surviving prefix, which is why the hardware rung worked and the virtual rung was unrunnable.
-- **Design decision:** enumerate twice — pass 1 takes names only and drops every device, pass 2
-  re-enumerates and retains just the single match. Resolution policy is unchanged and factored into
-  `resolve_name_from`, also exposed as `CpalBackend::resolve_{output,input}_name` so the property can be
-  tested **without opening a stream** (opening perturbs ALSA state; the first version of the test opened
-  all 32 devices and the count moved under it, 39 → 32 — it was measuring its own side effects).
-- **Implementation:** `crates/openpulse-audio/src/cpal_backend.rs` (`select_cpal_device`,
-  `resolve_name_from`, the two public resolvers, both call sites);
-  `scripts/run-loopback-virtual.sh` (`FEC=`/`fec_for`, airtime-derived windows, `skip_reason_for` parity
-  with the hardware runner).
-- **Tests:** `crates/openpulse-audio/tests/device_enumeration.rs` — every listed output device must
-  resolve by its own name, plus a direct test of the retention property. Gated on `cpal-backend` (needs a
-  real audio host), so it does not run in the `--no-default-features` workspace gate.
-- **Test results:** **Sabotage-verified** — restoring the retaining enumeration gives `7 retained vs 34
-  dropped` and `14 of 34 listed output devices could not be resolved by their own name`; both tests fail.
-  With the fix, all of `aloop_{tx,rx,a,b}` and `hwloop_{tx,rx}` open. Full workspace gate below, plus
-  `cargo clippy -p openpulse-audio --features cpal-backend --all-targets`.
-- **Sweep result (Task B):** 63 pass / 6 fail / 4 skip of 73, `FEC=rs`.
-- **What the virtual × hardware comparison settles.** With SRO eliminated by measurement (+0.10 ppm), a
-  mode passing virtual and failing dual-card leaves exactly one variable — the analog path.
-  `64QAM{500,1000,2000-RRC}`, `SCFDMA52-{16QAM,32QAM,64QAM,64QAM-P4}` and `PILOT-QPSK500` are
-  **analog-path limited**, confirming the surviving half of the 2026-06-13 disjunction ("SRO and/or
-  analog group-delay/phase") now that the clock half is gone. `8PSK2000`, `BPSK250-RRC` and
-  `SCFDMA52-LP` fail on **both** rungs and are software defects — `BPSK250-RRC` and `SCFDMA52-LP` are
-  reclassified out of the former "dual-clock" group. `QPSK125` fails virtual 3/3 while passing hardware,
-  with the demodulator recovering ~82 of 255 bytes; recorded, not diagnosed.
-- **Harness defect found in the plan itself:** `run-loopback-virtual.sh` never passed `--fec`, so the
-  revalidation plan's own `FEC=rs MODES="QPSK250-D QPSK500-D"` command was **inert** — and an uncoded
-  differential run decodes 0.00 by design, so following the plan verbatim would have manufactured a
-  regression two lines after the plan warned against exactly that.
-
-## 2026-07-20 — fix(psk8): the plain 8PSK pulse needs ≥8 samples/symbol; loopback revalidation closed
-
-- **Requirement/change:** triage of the three modes the virtual sweep left as "software defects", plus
-  Task E of the loopback revalidation plan.
-- **Finding — the classification in #998 was under-specified.** "Fails on both audio rungs" is not the
-  same as "the DSP is wrong". Re-running the three through the **in-process** `ChannelSimHarness` (no
-  cpal, no ALSA, no resampler) on a clean channel splits them: `8PSK2000` fails, while `BPSK250-RRC`,
-  `SCFDMA52-LP` and `QPSK125` all pass. Three rungs isolate three variables — DSP core, audio I/O path,
-  analog path — and only `8PSK2000` is a modem-DSP defect. The other three fail once real audio I/O is
-  in the path, which is a materially different place to look.
-- **Root cause (`8PSK2000`):** `samples_per_symbol` enforced a floor of 4, so `8PSK2000` at 8 kHz —
-  exactly 4 samples/symbol — was accepted, modulated and transmitted, and nothing could decode it. The
-  plain pulse blends adjacent symbols with a raised cosine and the demodulator integrates against the
-  squared window, leaving a residual ISI term that grows as `n` shrinks; at 4 sps it exceeds 8PSK's
-  ±22.5° margin. Measured on a clean channel: `8PSK500` (16 sps) and `8PSK1000` (8 sps) round-trip,
-  `8PSK2000` (4 sps) does not, `8PSK2000-RRC` at the same 4 sps does, and plain `QPSK2000` at 4 sps
-  does. **It is the phase margin that runs out, not the sample rate** — the same ordering as #923.
-- **Design decision:** `samples_per_symbol_for_pulse` enforces ≥5 for the plain pulse and keeps ≥4 for
-  the shaped ones, on both the transmit and receive paths, with an error naming the `-RRC` variant. The
-  mode stays advertised: at 48 kHz it is 24 sps and perfectly usable, so unlike #996 this is a
-  rate-specific refusal, not a capability the mode can never honour.
-  - **The floor is 5, and my first attempt used 8.** I generalised from the 4/8/16 samples the 8 kHz
-    modes happen to give, straight past the boundary. The **pre-existing** `psk8_9600_loopback_48k`
-    test — plain pulse at 5 sps — went red and refuted it. The gate now pins the floor from *both*
-    sides (a floor of 4 fails 2 tests, a floor of 8 fails 1, only 5 passes), so neither error can
-    return. Same shape as the `RsStrong is free` entry in CLAUDE.md: measure the boundary before
-    generalising.
-- **Implementation:** `plugins/psk8/src/{modulate.rs,demodulate.rs}`.
-- **Tests:** `plugins/psk8/tests/plain_pulse_sps_floor.rs` — 5 tests: the refusal with a usable message,
-  the receive-side refusal, and three controls (the working plain modes, the RRC variant at the same
-  rate, and the same mode accepted at 48 kHz).
-- **Test results:** **Sabotage-verified** — lowering the plain floor back to 4 turns the suite red (2 of
-  5). Full workspace gate below.
-- **Task E — resolved, and its own instruction was wrong.** Task E asked to mark the 2026-06-13
-  diagnostic superseded "*(the SRO reasoning it contains is still the right explanation for the modes
-  that do still fail)*". That parenthetical is false: the rig measures +0.10 ppm, and the modes tolerate
-  400–800 ppm injected. The 2026-06-13 note offered "SRO **and/or** analog group-delay/phase"; the clock
-  half is eliminated by measurement and the analog half confirmed by construction (in-process pass →
-  virtual pass → dual-card fail). `SCFDMA52-*`/`64QAM` are **analog-path limited**.
-- **Downstream closed:** `reference-mining` item **C1** was prioritized on that refuted premise. It is
-  closed twice over — the SRO channel model is *already implemented* (`openpulse_channel::sro`, 6 call
-  sites) and the failure it was meant to gate is not an SRO. Corrected in `reference-mining-plan.md`.
-- **Docs corrected:** `loopback-revalidation-plan.md` (Tasks A–E marked done; the "two independent
-  sample clocks" claim in §3 corrected), `reference-mining-plan.md`, `virtual-loopback.md`.
-
-  - **A downstream gate caught this, and it was itself weak.** `openpulse-testbench`'s
-    `all_modes_have_measured_rates` asserted every advertised mode yields a positive rate, and went red
-    when `8PSK2000` started refusing 8 kHz. But `measure_mode_rate` only calls `modulate` and compares
-    emitted sample counts — it never demodulates, so `8PSK2000` reported a healthy rate for as long as
-    it was emitting audio nothing could decode. The test now accepts a refusal **only when the plugin
-    states a sample-rate reason**, and prints which modes were excluded rather than dropping them
-    silently. (Same lesson as PR #978: when a change alters what a crate *advertises*, its own tests
-    are not the affected set — `-p psk8-plugin` was green throughout.)
-
-## 2026-07-20 — fix(modem): classify long-frame AFTER the FEC widening; analog path characterised
-
-- **Requirement/change:** diagnose the two open groups from the virtual sweep — the "audio I/O path"
-  defects (`BPSK250-RRC`, `SCFDMA52-LP`, `QPSK125`) and the "analog path" limit on the dense modes.
-- **Root cause (audio I/O path, 2 of 3):** `receive_with_fec_mode_timeout` skips a full-buffer retry
-  for long-frame modes because that retry re-scans the whole buffer every 2 s and outruns the capture
-  read cadence, starving it. The classification was computed from the **raw** geometry and the slice
-  was widened 3× for FEC only *afterwards*, so three modes whose coded frames run ~28 s were treated as
-  short and kept the starving retry: `BPSK250`, `BPSK250-RRC` (74 400 raw / 223 200 coded) and
-  `QPSK125` (75 200 / 225 600). Measured on the virtual rung: `BPSK250-RRC` reached at most **152 of
-  the 255 bytes** it needs across all 1042 scan positions, `QPSK125` at most 82 — starved mid-frame.
-- **Why only the audio rungs saw it:** in-process there is no read cadence to starve, so
-  `ChannelSimHarness` passes these modes either way. It took a real streaming capture to expose it.
-- **Design decision:** `frame_plan(raw, fec) -> (coded, long)` performs the widening and the
-  classification **in one function**, because splitting them is what let them drift out of order.
-  Verified against the whole registry that exactly these three modes reclassify — the SCFDMA/OFDM modes
-  that depend on the retry for acquisition are untouched.
-- **Implementation:** `crates/openpulse-modem/src/engine.rs` (`frame_plan`, `LONG_FRAME_SAMPLES`).
-- **Tests:** `crates/openpulse-modem/tests/long_frame_classification.rs` — 5 tests exercising the
-  engine's own `frame_plan` (not a copy of the rule, so an ordering regression must change the tested
-  function): the three affected modes, the same modes uncoded staying short, the wideband control set
-  keeping its retry, both sides of the threshold, and the returned widened length.
-- **Test results:** **Sabotage-verified** — classifying on the raw value inside `frame_plan` turns the
-  suite red. **On the virtual rung**, `BPSK250-RRC`, `QPSK125` and `BPSK250` all now PASS, and the
-  controls (`SCFDMA52`, `OFDM52`, `SCFDMA52-8PSK`, `BPSK63`) still pass. Workspace gate 265 suites /
-  2213 passed / 0 failed.
-- **`SCFDMA52-LP` is a separate defect, now reproducible without hardware:** it passes `route_clean`
-  but fails `route_embedded` (frame inside a long capture) with `RS correction failed at block 0:
-  TooManyErrors` — a frame-location/acquisition fault, not the starvation above. Not fixed.
-- **Analog path characterised — four mechanisms ELIMINATED, none explains the failures.** Magnitude
-  flat ±0.21 dB (306–3388 Hz); group delay ~1.04 ms spread with no systematic slope (inside SC-FDMA's
-  CP); SNR **71.1 dB**; and no clipping at the working level (PAPR 3.4–6.1 dB, peak ≤0.78 FS, 0 clipped
-  samples across `BPSK250`/`OFDM52`/`SCFDMA52-64QAM`/`64QAM1000`). The "analog path" attribution is a
-  **localisation, not an explanation**. Leading untested candidate: the C-Media **capture-side AGC**,
-  which this repo already records as drifting gain after strong frames — a time-varying gain is nearly
-  harmless to the phase-only modes that pass and destructive to the amplitude-carrying modes that fail.
-- **Measurement integrity:** two measurements were wrong before they were right, both caught by the
-  result looking too uniform rather than by tooling. The first SRO estimator wrapped phase above ~5 ppm
-  (reported an injected 200 ppm as −6.9 ppm). The first PAPR capture returned identical rms/peak/PAPR
-  to four decimals for four different waveforms — a stray `aplay` from the SNR test was still running
-  and every capture recorded that 1 kHz tone; an occupied-bandwidth check (0 Hz wide, exactly 1 kHz)
-  settled it in one step.
-
-## 2026-07-20 — fix(scfdma): enable the timing deramp for the localized (block-pilot) layout
-
-- **Requirement/change:** `SCFDMA52-LP` failed on both audio loopback rungs while passing every
-  in-process test. It was the last unfixed defect from the virtual sweep triage.
-- **Reproduction without hardware:** it passes `route_clean` but fails `route_embedded`. Sweeping the
-  lead offset showed the real shape — it decoded at **1 of 12** frame positions, the only success being
-  `lead = 0`, and a **one-sample** offset was enough to break it. `SCFDMA52` scored 12/12 on the same
-  sweep. A real receiver never has the frame at sample 0 (it listens for seconds and the frame arrives
-  somewhere inside), so the mode could not work on any real capture — which is precisely why it passed
-  in-process and failed on both audio rungs.
-- **Root cause:** `deramp_timing` returned early on `p.localized`, with the reasoning "the block-pilot
-  layout has no evenly-spaced pilots to fit a ramp". **That premise is false.** `pilot_positions`
-  returns a *contiguous* block for the localized layout (subcarriers 77–80), and contiguous is evenly
-  spaced with step 1 — which `pilot_spacing: 1` already records. The general slope fit was correct for
-  this layout all along; the guard was skipping a computation that works.
-- **Design decision:** remove the early return so the shared fit handles both layouts. The divisor was
-  verified to be genuinely correct rather than coincidental (adjacent-subcarrier step *is* 1 for a
-  contiguous block), and the `pilot_spacing` field comment — which called the value an "unused …
-  div-by-zero" placeholder — was corrected, since it is now a load-bearing value.
-  - **Two regressions along the way, each of which corrected the design.** (1) Enabling the per-symbol
-    fit for the localized layout fixed frame position but **broke `SCFDMA52-LP` on AWGN at 20 dB** (CRC
-    mismatch): 4 pilots give only 3 adjacent products, so the per-symbol slope is noisy enough that
-    de-rotating 65 subcarriers by it is worse than not correcting. (2) Fitting the slope frame-wide
-    instead then **decalibrated the interleaved modes** — `llr_reliability` fired on `SCFDMA52-16QAM`
-    ("wrong 6.6× more often than promised"). My premise that "the offset is constant across a frame"
-    was wrong, and the function's own docstring said so: under a sample-rate offset the ramp **grows
-    with symbol index**, which a per-symbol fit tracks and a frame-wide average destroys.
-  - **Final shape — the two layouts are fitted differently, for a physical reason.** Interleaved (13
-    pilots) keeps the **per-symbol** fit so it continues to track the growing SRO ramp. Localized (4
-    pilots) uses a **frame-wide** fit, trading that growing-ramp term for `sqrt(n_symbols)` less
-    estimator noise — the right trade for a flat-channel demonstrator that does not claim SRO tracking,
-    and the wrong one for the interleaved modes.
-- **Implementation:** `plugins/scfdma/src/channel.rs` (`deramp_timing`), `plugins/scfdma/src/params.rs`
-  (the `SCFDMA52_LP` docstring's timing-fragility claims and the `pilot_spacing` comment).
-- **Tests:** `crates/openpulse-modem/tests/scfdma_lp_frame_position.rs` — 4 tests: all 8 offsets decode,
-  the one-sample case by name, an `SCFDMA52` control proving the interleaved path is unchanged, and an
-  anti-vacuity check that the offset set spans more than the origin (so it cannot pass by testing only
-  the `lead = 0` case that used to be the sole success).
-- **Test results:** **Sabotage-verified** — restoring the early return fails 2 of 4 with
-  `failed at lead offsets [1, 2, 3, 5, 16, 40000, 40001]`. All 58 `scfdma-plugin` tests pass, including
-  the `papr_ablation` test that documents LP's low-PAPR tradeoff (the fix is receive-side only and does
-  not touch the modulator). **On the virtual loopback rung `SCFDMA52-LP` now PASSES**, with `SCFDMA52`
-  and `SCFDMA52-8PSK` unaffected. Full workspace gate below.
-- **Scope note:** this does not make `SCFDMA52-LP` generally robust. It stays a flat-channel
-  demonstrator registered in no adaptive profile — its single-tap CE still assumes flat gain/phase and
-  no passband tilt. Only the timing-offset fragility was a defect; the rest is by design.
-
-## 2026-07-20 — analog-path investigation: eight mechanisms eliminated, none identified
-
-- **Requirement/change:** identify the mechanism behind the dense-mode failures localised to the
-  "analog path" (`SCFDMA52-{16,32,64}QAM`, `64QAM{500,1000,2000-RRC}`, `PILOT-QPSK500` — pass the
-  virtual rung, fail the dual-card rig).
-- **First: the premise was re-verified.** The original failures were measured before #997–#1001, so
-  they were re-run at HEAD. All five still FAIL. The investigation is not chasing a stale result.
-- **Mechanisms eliminated by measurement** (adding to the four recorded earlier — magnitude ±0.21 dB,
-  group delay ~1.04 ms, SNR 71.1 dB, no clipping):
-  - **Capture-side AGC** — the leading hypothesis, and it fit the failure set well (amplitude-carrying
-    modes fail, phase-only pass). `amixer sget 'Auto Gain Control'` reports it **already off**.
-  - **Nonlinearity** — two-tone test at the working level measures **IMD3 −60…−62 dBc**, IMD5 −80 dBc.
-    A pure-tone SNR cannot see intermodulation; this can, and there is effectively none.
-  - **Short-term timing wander** — the +0.10 ppm SRO figure is a 58 s average that would hide wander.
-    With the constant slope removed: rms 0.115 modem samples, peak 0.48, **≤0.72 samples of drift
-    within a 4 s frame**.
-  - **The live streaming path** — see below.
-- **Decisive split — it is the audio content, not live streaming.** A frame captured to WAV at 8 kHz and
-  decoded **offline** through the same engine reproduces the failure: `BPSK250` decodes (proving the
-  capture/replay method sound), `64QAM1000` and `SCFDMA52-16QAM` fail with `RS correction failed at
-  block 0`. cpal/ALSA streaming, buffer scheduling and capture timing are therefore all ruled out.
-- **Status: no mechanism identified.** Eight measurements are clean while the failure is real and
-  reproducible, which means the impairment is **signal-dependent in a way none of the probe signals
-  (tone, two-tone, chirp) reproduce**. Recorded rather than guessed at.
-- **An invalid measurement, recorded so it is not repeated.** An attempt to quantify this as end-to-end
-  waveform SNR against the ideal transmitted samples reported **5.3 dB for `BPSK250` — which decodes
-  perfectly**. The metric was a time-domain cross-correlation with neither fractional-sample nor
-  carrier-phase alignment, so it measured its own alignment error. A valid version must compare
-  **recovered symbols** (post-demod, post-carrier-recovery EVM), not raw passband samples. This was the
-  third invalid measurement in this investigation, after the phase-wrapping SRO estimator and the PAPR
-  capture that recorded a stray tone — in each case the tell was a number that was too clean, too
-  uniform, or contradicted a known-good control.
-
-## 2026-07-20 — analog-path resolution: FEC operating point, plus untracked wander in 64QAM
-
-- **Requirement/change:** act on a second-opinion review (Fable) of the analog-path investigation. It
-  attacked the eight eliminations, found two unsound, and proposed three experiments. All three run.
-- **Experiment 1 — plugin-level vs engine-level decode (Fable's top hypothesis: the damage is the engine
-  path, not the waveform).** **Refuted.** A hardware capture of `SCFDMA52-16QAM` fails at *plugin* level
-  too, bypassing the engine entirely. The sliding-window probe was validated against a coded control
-  frame produced by the engine and embedded in silence — it decodes at offset 4608 while the hardware
-  capture does not — so the negative result is trustworthy. Engine AFC settling / `mix_to_nominal` is
-  ruled out for that group.
-- **Experiment 2 — re-run at the FEC each mode is designed for.** **Five of the eight "analog-path
-  limited" modes were never analog-path limited.** `SCFDMA52-16QAM`, `SCFDMA52-32QAM` (soft-concatenated
-  *and* ldpc) and `64QAM{500,1000,2000-RRC}` (soft-concatenated) all PASS on the rig. The sweep had
-  measured them at hard-decision `rs`, roughly 6 dB below their operating point. This document's own
-  sweep table already warned to read those rows as "not disproven rather than failed", and the June
-  record already had `SCFDMA52-16QAM` passing this rig — the warning was written and then not acted on.
-- **Experiment 3 — the 64QAM mechanism.** Elimination #8 (timing wander) was **unsound**: 0.72 samples
-  was judged against a symbol period and dismissed, but at a 1500 Hz carrier 0.48 samples is **32° of
-  carrier phase**, and the wander is concentrated at **0.1–2 Hz** — exactly where the 64QAM
-  decision-directed loop (natural frequency ≈0.4 Hz at `loop_bw = 0.01`) cannot track it. `plugins/64qam`
-  is the only receiver with **no mid-frame reference update** (scalar preamble AGC, absolute PAM-8
-  thresholds, preamble-only phase whose drift fit is gated on `afc_correction_hz >= 0.5` and so never
-  fires on a 0.1 ppm rig, fixed-stride sampling). Reproduced in-process and noiselessly: at the rig's
-  measured drift amplitude `64QAM500` takes 125 byte errors and `64QAM1000` 151, against RS's capacity of
-  16, while **every** OFDM/SCFDMA/PILOT mode takes 0. With pure sinc interpolation (drift, no resampler
-  comb) `64QAM500` still takes 99 — so the wander itself is the cause.
-  - The earlier "amplitude-carrying modes fail, phase-only pass" framing was the right observation on the
-    **wrong axis**; the axis is *frame-static reference vs tracked reference*.
-  - **Fix direction measured but NOT shipped.** Sweeping the DD loop bandwidth: `64QAM500` improves
-    125 → 15 errors at `loop_bw = 0.06` (under the RS threshold) and degrades by 0.12; `64QAM1000` shows
-    61 errors in the **static** case alone, so it needs timing interpolation as well. Not a one-constant
-    change, the modes pass with their intended FEC, and a speculative change to a shipped demodulator
-    needs its own evidence.
-- **Correction — the virtual rung does not exercise the resampler.** Verified: `hw:Loopback` reports
-  `RATE: [8000 768000]` (so `plug` is a pass-through at 8 kHz) while the C-Media cards report
-  `RATE: [44100 48000]` and always resample both ways. `virtual-loopback.md`'s rung table claimed the
-  virtual rung adds the resampler path; corrected. "Analog path" in the earlier analysis therefore means
-  *analog cable + double linear resample + inter-card wander*.
-- **Net:** the unexplained set drops from **8 modes to 3** — `SCFDMA52-64QAM`, `SCFDMA52-64QAM-P4` and
-  `PILOT-QPSK500` fail with every FEC tried.
-
-## 2026-07-21 — fix(modem): budget the full-buffer retry by scan COST, not frame geometry
-
-- **Requirement/change:** `PILOT-QPSK500` was the last tractable mode of the "analog path" group. It is
-  the odd one out of its family — `PILOT-8PSK500`, `PILOT-16QAM500` and `PILOT-32APSK500` all pass, and
-  only the **least dense** mode failed. That inversion said software, not channel.
-- **Localisation, in order:** it passes **in-process** on every FEC, clean and embedded; its hardware
-  audio captured to WAV **decodes offline** through the same engine; and it fails **3/3 live** on the rig
-  while `PILOT-QPSK500-RRC` passes 3/3. So the audio is fine and the DSP is fine — the failure is the
-  live path. The live RX log shows the demodulator returning **0 bytes** at each of 1028 scan positions,
-  having reached only ~10.9 s of buffer.
-- **Root cause:** the full-buffer retry is O(buffer), and `PILOT-QPSK500` costs ~640 ms per decode
-  attempt — 1028 positions is **~11 minutes of CPU for a 45 s listen**, so the scan never reaches the
-  frame. `PILOT-QPSK500-RRC` costs *more* per attempt (~1150 ms, measured) but acquires early and stops.
-  **Cost starves the loop, not frame length.**
-- **The `long_frame` proxy is the wrong variable.** `PILOT-QPSK500` is 55 200 coded samples (classified
-  "short") and starves; `QPSK250` is 112 800 — twice as long — and passes comfortably. Confirmed by
-  ablation: forcing the retry off makes `PILOT-QPSK500` pass while `SCFDMA52`/`OFDM52` (which depend on
-  the retry for acquisition) still pass.
-- **Design decision:** budget each retry pass by the audio it covers — a scan that cannot walk its own
-  buffer in less than real time can never catch up, because the buffer keeps growing — and **enforce it
-  from inside the pass**. The first implementation measured the pass *after* it completed and was
-  **inert on hardware**: the pathological pass never completes, so it must be abandoned while running.
-  Checked every 16 positions (cheap check, expensive decode). `long_frame` is retained as the cheap
-  a-priori guard; the budget is the measured backstop.
-- **Implementation:** `crates/openpulse-modem/src/engine.rs` (`retry_budget` / `retry_over_budget` /
-  `retry_cost_secs` in `receive_with_fec_mode_timeout`).
-- **Tests:** `crates/openpulse-modem/tests/retry_budget.rs` — 4 tests pinning the policy arithmetic: a
-  slower-than-real-time pass is over budget, a cheap wideband pass is not, frame length does **not**
-  predict which modes starve (the case that refuted the proxy), and an empty buffer does not abandon the
-  first pass. In-process there is no read cadence to starve, so the failure cannot be reproduced through
-  `ChannelSimHarness`; the hardware evidence is recorded in `docs/dev/dualcard-loopback.md`.
-- **Test results:** **On the rig** `PILOT-QPSK500` now PASSES, with `PILOT-QPSK500-RRC`, `SCFDMA52`,
-  `OFDM52`, `SCFDMA52-8PSK`, `BPSK250`, `QPSK250-D`, `MFSK16` and `BPSK31` all still passing. Full
-  workspace gate 267 suites / 2221 passed / 0 failed.
-- **Net: the unexplained set is down to 2** — `SCFDMA52-64QAM` and `SCFDMA52-64QAM-P4`.
-
-## 2026-07-21 — SCFDMA52-64QAM: narrowed, not solved
-
-- **Requirement/change:** the last mode of the "analog path" group. Same localisation ladder that
-  resolved `PILOT-QPSK500`, `BPSK250-RRC`, `QPSK125`, `8PSK2000` and `SCFDMA52-LP`.
-- **Premise re-verified at HEAD first** (the retry-budget fix had just landed): `SCFDMA52-64QAM` and
-  `SCFDMA52-64QAM-P4` still FAIL with `rs`, `soft-concatenated` and `ldpc` — 6 runs.
-- **Established:**
-  - passes **in-process** on every FEC, clean and embedded → not the DSP core, not frame location;
-  - hardware audio **fails offline** while the clean control decodes → the captured audio is damaged;
-  - the same test for `SCFDMA52-32QAM` with soft FEC: **hardware audio decodes**. So 64QAM is below a
-    threshold that one constellation order down, on the same waveform and width, clears.
-- **The impairment is NOT noise-like.** An AWGN decode-threshold sweep (soft-concatenated, 3 seeds/point)
-  puts `SCFDMA52-64QAM` at **14 dB** and `-16QAM`/`-32QAM` at ≤10 dB, against a cable measured at **71 dB
-  SNR**. "It needs more margin" is the wrong description; additive noise is not the limiting quantity.
-- **Shape of the remainder (hypothesis, not measured):** `OFDM52-64QAM` passes on this rig — same order,
-  same 52 subcarriers, same analog path. The receivers differ: OFDM equalises per subcarrier, SC-FDMA's
-  DFT de-spread coherently combines all of them, smearing any per-subcarrier impairment across every
-  recovered symbol. Consistent with a frequency-selective impairment only the densest DFT-spread mode
-  cannot absorb — recorded as a hypothesis shaped by the evidence, explicitly **not** a mechanism.
-- **Next step is instrumentation, not another probe:** per-subcarrier EVM taken *before* the IDFT
-  (post-MMSE residual per bin) discriminates band-edge slope (filtering) from single-bin spikes (spurs)
-  from flat-and-high (broadband). Needs a scoped extension inside `demodulate_soft_with_params`.
-- **A fourth invalid measurement, recorded so it is not repeated.** Computing EVM from
-  `scfdma_constellation` against a snapped ideal grid gave clean-signal EVM of **10.9 dB for 32QAM vs
-  19.0 dB for 64QAM** — backwards, since 64QAM needs the *better* EVM. The snapping assumed a square
-  constellation; `SCFDMA52-32QAM` is **cross**-32QAM. Never measure EVM against an assumed grid — use the
-  plugin's own decisions or the known transmitted symbols.
-
-## 2026-07-22 — daemon holds only one capture stream (audit #917, finding #6)
-
-- **Requirement/change:** the last open item on the 2026-07-16 modem loose-ends audit, parked since
-  filing as "needs real audio hardware to verify".
-- **Design decision:** the defect was filed as "the OTA ACK-wait opens a second capture stream", and
-  that is real — `receive_ota_ack_within` opens its own stream while the receive tick's persistent
-  `rx_stream` stays open. But the *cause* is that a keyed transmit on the command arm blocks the
-  `select!` loop while nothing reads `rx_stream`, and the OTA path is only the sibling that got
-  noticed. So the fix is keyed on `engine.frames_transmitted()` advancing rather than on the command
-  variant, which also covers the file-transfer burst and anything `apply_command_to_engine` keys.
-  Non-transmitting commands keep their stream, so a status-poll flood cannot thrash the device.
-- **Rationale for not needing hardware:** the property is "how many capture streams are open at
-  once", which a backend can *report*. `LoopbackBackend` hides it because its streams clone a shared
-  buffer; a counting backend does not. The parking assumption — that this needed cpal — was wrong.
-- **Implementation:** `crates/openpulse-daemon/src/server.rs` — `rx_stream = None` before
-  `ota_send_with_ptt`, and again after the command arm when the transmit counter advanced.
-- **Tests:** `crates/openpulse-daemon/tests/ota_ack_capture_stream.rs` — `CountingBackend` records
-  the concurrent-input-stream high-water mark; both tests drive the real `server::run` over the real
-  control protocol.
-- **Test results (run):** 2 passed / 0 failed. Sabotage-verified — with both drops removed:
-  `an_ota_send_never_opens_a_second_concurrent_capture_stream` fails with peak **2** (expected 1),
-  and `the_capture_stream_is_reopened_after_a_keyed_transmit` fails with **1 open before, 1 after**.
-  Full workspace gate re-run before merge.
-## 2026-07-22 — 64QAM tracks the amplitude reference across the frame
-
-- **Requirement/change:** the deferred "64QAM mid-frame reference tracking" item. The single-carrier
-  64QAM modes fail on the dual-soundcard hardware loopback and pass on the virtual single-clock one;
-  the working hypothesis was untracked slow wander against a frame-static receiver.
-- **Ablation first, per repo culture.** Injected sinusoidal *gain* wander and sinusoidal *phase*
-  wander separately, with **no AWGN at all**, so no result could be a noise limitation. On
-  `64QAM500` at 0.5 Hz, 30 % depth: gain 0.341 byte error, phase 0.027 — an order of magnitude apart
-  at the slow rates a soundcard AGC produces. The carrier loop already tracks phase mid-frame;
-  **nothing tracked amplitude**. `normalize_to_constellation` fits one scalar from the 16-symbol
-  preamble and applies it to the whole frame. This relocated the item from carrier tracking (where
-  the `loop_bw` probe pointed) to the AGC, and matches the failure set: amplitude-carrying modes
-  fail, phase-only modes pass.
-- **Design decision:** blind (windowed power), not decision-directed; referenced to the frame mean,
-  not to nominal constellation power; every correction shrunk by the estimator's own standard error.
-  Each of the three was forced by a measured regression, recorded on `track_gain_across_frame`:
-  - **decision-directed was built and rejected** — it helps where decisions are already right and
-    amplifies error where they are not (`64QAM2000-RRC` 2 Hz/0.15: 0.012 → **0.102**);
-  - **an absolute reference was rejected** — it folds noise power into the estimate and shrinks the
-    constellation ~4.7 % at 10 dB, a third of the outer ring's margin, moving LLR calibration with it;
-  - **no shrinkage was rejected** — the estimator's own variance cost a *clean* noiseless frame one
-    byte in 255 (0.000 → 0.004);
-  - **re-anchoring after de-trending was built and rejected** — it fixes the 0.5 Hz/0.30 column but
-    broke `window_arq_engine_path_across_mode_families` with RS `TooManyErrors` on a **clean**
-    loopback, because the static fit is only approximately unity and applying it twice compounds.
-    That column is therefore explicitly *not* fixed, and is documented rather than quietly dropped.
-  - the level is read from **data symbols only** — the preamble is constant-modulus corners and sits
-    far off the 64QAM average power, so including it made the estimator read and "correct" a step at
-    each frame edge (`64QAM500` 2 Hz/0.15: 0.000 → 0.090).
-- **Implementation:** `plugins/64qam/src/demodulate.rs` — `track_gain_across_frame`, wired at all
-  three CPU demod entry points (hard, soft, soft-GPU), which the map flagged as prone to drift.
-- **Tests:** `plugins/64qam/tests/gain_wander_tracking.rs` — 4 tests. The wander cases assert a
-  bound; the clean and near-static controls assert **exactness**, which is what rejected three of the
-  four variants above.
-- **Test results (run):** measured before → after, noiseless, byte error rate:
-
-  | case | before | after |
-  |---|---|---|
-  | `64QAM500` 2 Hz / 0.15 | 0.102 | **0.000** |
-  | `64QAM500` 2 Hz / 0.30 | 0.318 | **0.094** |
-  | `64QAM1000` 2 Hz / 0.15 | 0.024 | **0.000** |
-  | `64QAM1000` 2 Hz / 0.30 | 0.337 | **0.051** |
-  | `64QAM2000-RRC` 2 Hz / 0.30 | 0.369 | 0.369 (unchanged) |
-  | all clean controls | 0.000 | 0.000 |
-
-  No cell regresses. `qam64-plugin` 14 + 1 + 4 passed / 0 failed, including `llr_reliability`.
-  Sabotage-verified: with the three call sites removed, both wander gates fail and both controls
-  correctly stay green. `sro_confirmation`, `llr_calibration`, `llr_convention_conformance`,
-  `acquisition_coverage`, `cessb_power_evm`, `window_arq_multimode`,
-  `harq_rate_selection_watterson` all pass. Full workspace gate re-run before merge.
-- **Not fixed, deliberately:** `64QAM2000-RRC` is unchanged — its frame is ~364 symbols, so the
-  smoothing window spans a quarter of it and there is too little data either side of each symbol to
-  read a local level. It needs a different mechanism.
-## 2026-07-22 — SCFDMA52-64QAM: the discriminating instrument, built and validated
-
-- **Requirement/change:** the "next step is instrumentation, not another probe" item closing the
-  2026-07-21 `SCFDMA52-64QAM` entry. Every measurement so far was taken *after* the DFT de-spread,
-  which averages all 52 subcarriers into every output symbol — past that point a single ruined
-  subcarrier and a uniformly degraded band are indistinguishable, which is why the mode's failure
-  stayed unattributed while `SCFDMA52-32QAM` decodes the same captured audio.
-- **Design decision:** a standalone diagnostic function rather than an `Option` field threaded
-  through `SoftDemodOutput`. The map found the pre-IDFT values are a local (`equalized`, consumed in
-  place one line later) in **five** near-identical loops; a new sibling of the existing shared front
-  end `equalized_data_symbols` adds no cost to any production receive and no field to a `Copy` struct.
-  Reference is the receiver's own hard decision re-spread by a forward DFT, so what it reports is
-  residual *after* equalization — what a channel-estimate or equalizer defect leaves behind — not raw
-  channel response. Absolute subcarrier indices are carried, not implied: spacing 5 gives 52 data
-  subcarriers and spacing 4 gives 49, so a bare vector would not be comparable against the `-P4`
-  variant it most needs comparing against.
-- **Implementation:** `plugins/scfdma/src/demodulate.rs` — `scfdma_subcarrier_evm_db`.
-- **Tests:** `plugins/scfdma/tests/subcarrier_evm.rs` — 4 tests, all about the *instrument*, because
-  a diagnostic that has not been checked against known inputs is not evidence. This repo has had four
-  invalid measurements in this investigation alone (the SRO estimator reading an injected 200 ppm as
-  −6.9 ppm; a capture recording a stray tone; a device probe mutating the enumeration it measured;
-  EVM against an assumed-square grid for a *cross*-32QAM mode), and every one looked plausible.
-- **Test results (run):** 4 passed / 0 failed.
-  - noiseless frame → **−75.9 dB** mean residual (gate: < −40), so the reconstruction is correctly
-    scaled and aligned;
-  - AWGN → mean tracks SNR monotonically (−29.8 / −20.2 / −16.8 dB at 30 / 20 / 14 dB) and **no
-    subcarrier stands more than 12 dB above the band mean**, so broadband reads as broadband;
-  - **the gate:** a notch injected at 1000 / 1500 / 2000 Hz peaks on subcarrier **32 / 48 / 64** —
-    exactly the subcarriers at those frequencies (8000/256 = 31.25 Hz spacing) — each ≥ 6 dB above the
-    band mean. The instrument localizes.
-  - index vector is absolute, strictly ascending, pilot-free, and the right length for both
-    `SCFDMA52-64QAM` (52) and `SCFDMA52-64QAM-P4` (49).
-- **NOT YET APPLIED to the failing capture.** The dual-soundcard rig's two USB adapters were not
-  connected during this session (`aplay -l` shows only snd-aloop, HDMI and the internal codec), and
-  the failure only reproduces there. The instrument is built and proven; running it on hardware audio
-  and reading off which subcarriers are damaged is the next step and needs the rig plugged in.
-  Recorded as pending rather than as a result — the conclusion this was built to reach has **not**
-  been reached.
-
-## 2026-07-22 — SCFDMA52-64QAM: the premise does not reproduce; the AGC does
-
-Run with the USB adapters connected, on the dual-card rig, after re-running
-`scripts/setup-dualcard-loopback.sh`.
-
-- **The inherited premise is wrong at HEAD.** `SCFDMA52-64QAM` **passes** on the dual-card rig with
-  `soft-concatenated` FEC: 3 of 4 invocations of `run-loopback-dualcard.sh` (each ≤3 attempts). The
-  2026-07-21 entry recorded 6/6 FAIL across `rs` / `soft-concatenated` / `ldpc`. It is *marginal* —
-  0/4 single-shot in a hand-rolled harness — but it is not the categorical failure the record claims.
-- **The capture-side AGC is a confirmed impairment — memory's "leading untested candidate", now
-  tested.** Clean two-direction ablation, 2 trials per cell, one variable (`amixer -c 4 cset name=
-  'Auto Gain Control'`):
-
-  | mode | AGC on | AGC off |
-  |---|---|---|
-  | `SCFDMA52-16QAM` | FAIL FAIL | **PASS PASS** |
-  | `SCFDMA52-32QAM` | FAIL FAIL | **PASS PASS** |
-
-  `setup-dualcard-loopback.sh` turns the AGC off, and the runner re-asserts it before every case — so
-  a session that did not re-run setup (the adapters had been unplugged, which resets mixer state)
-  measures a rig whose capture AGC is live. That produces exactly the pattern the record describes:
-  amplitude-carrying modes fail, phase-only modes pass. **This is the same mechanism as the
-  single-carrier 64QAM gain-wander finding** — a level that moves *during* a frame.
-- **Clipping/compression is dead — the number did not move.** SC-FDMA's ~10 dB PAPR puts peaks at
-  0.98 FS where the low-PAPR level-check waveform reads 0.79, which looked like a lead. But only
-  **2** samples in ~400k were near full scale, and EVM is **flat across a 3× level change**
-  (`SCFDMA52-64QAM` −6.5 / −6.5 / −6.4 dB at capture gain 16 / 10 / 6, peak 0.98 → 0.31).
-- **The instrument has a validity floor, found by using it.** `scfdma_subcarrier_evm_db`'s reference
-  is the receiver's own hard decisions, so localization holds to ≈ −11 dB mean EVM and is **lost by
-  −7.5 dB**. The hardware captures landed at −6.5 dB — *past* the floor — so their 24 dB spread and
-  +12 dB peak subcarrier are **not** readable as a narrowband defect, and were not reported as one.
-  Now documented on the function and pinned by `evm_localization_is_valid_only_above_its_measured_floor`.
-  The original validation only covered the mildly-impaired regime; a diagnostic must be checked in
-  the regime it will actually be used in.
-- **Two self-inflicted measurement errors, recorded.** (1) A hand-rolled harness gave
-  `SCFDMA52-64QAM` 0/5 because it keyed TX 2 s after starting the receiver (which needs ~6.4 s to
-  settle AFC) and killed it 3 s after TX instead of the runner's 12 s — cutting the scanning decode
-  short. **The failure was manufactured by the harness, not observed.** (2) The first captures were
-  recorded through `plughw:4,0` at 8 kHz, letting ALSA resample 48 k → 8 k; re-recording at the
-  native 48 kHz and downsampling with a polyphase filter offline is what made them measurable at all.
-## 2026-07-22 — the "analog path" failure set re-run on a correctly-normalised rig
-
-Every mode the record classified as **ANALOG PATH**, re-run on the dual-card rig after
-`scripts/setup-dualcard-loopback.sh` (which turns the capture-side AGC off and normalises both
-cards' mixers). `FEC=soft-concatenated`, on **`main`** — no fix from this session's PRs.
-
-| mode | recorded | re-run on `main` |
-|---|---|---|
-| `64QAM500` | FAIL | **PASS** — marginal (2/3 runs, often needs attempt 2) |
-| `64QAM1000` | FAIL | **PASS** 3/3 |
-| `64QAM2000-RRC` | FAIL | **PASS** 3/3 |
-| `SCFDMA52-16QAM` | FAIL | **PASS** |
-| `SCFDMA52-32QAM` | FAIL | **PASS** |
-| `SCFDMA52-64QAM` | FAIL | **PASS** — marginal (≈2/3–3/4) |
-| `SCFDMA52-64QAM-P4` | FAIL | FAIL 0/3 |
-| `PILOT-QPSK500` | FAIL | **PASS** (already resolved by #1005) |
-
-**Six of the eight pass with no code change at all.** The classification was measuring rig state, not
-the analog path: unplugging the USB adapters resets their mixers, and a session that did not re-run
-the setup script was capturing through a **live AGC**. That is a level that moves *during* a frame,
-which is why the failure set was exactly the amplitude-carrying modes.
-
-**What is actually left:** `SCFDMA52-64QAM-P4` (0/3), and two modes that are genuinely marginal
-rather than broken (`64QAM500`, `SCFDMA52-64QAM`). "Analog path" as a category should be retired —
-it never named a mechanism, and most of what it held was a mixer setting.
-
-### #1008 is NOT validated on this hardware
-
-The 64QAM gain-tracking fix was tested against `main` on the same rig, same session:
-
-| condition | mode | `main` | with #1008 |
-|---|---|---|---|
-| AGC off | `64QAM500` | 2/3 | 3/4 |
-| AGC off | `64QAM1000` | 3/3 | 4/4 |
-| AGC off | `64QAM2000-RRC` | 3/3 | 3/4 |
-| AGC **on** | `64QAM500` | 0/3 | 0/3 |
-| AGC **on** | `64QAM1000` | 0/3 | 0/3 |
-| AGC **on** | `64QAM2000-RRC` | 0/3 → **1/6** | 2/3 → **1/6** |
-
-With the AGC off there is nothing to correct — turning it off is precisely what removes the wander —
-and the differences are inside the noise of 3–4 reps. With the AGC on, an apparent 0/3 → 2/3 rescue
-**failed to replicate at 6 reps (1/6 vs 1/6)** and is withdrawn.
-
-So: #1008 stands on its in-process ablation, where it is unambiguous and regresses nothing, but its
-claim must be scoped to the *synthetic* sinusoidal level wander it was measured against. The real
-capture AGC is a harsher and differently-shaped impairment (attack/decay at burst onset, not a slow
-sinusoid) that the fix does **not** rescue. The mechanism class is right; the model of it is not
-representative of this hardware.
-## 2026-07-22 — the rig refuses to sweep with a live capture AGC
-
-- **Requirement/change:** prevent a recurrence of the misclassification recorded above, where eight
-  modes were attributed to the "analog path" while the rig's capture AGC was on.
-- **Why the existing normalisation was not enough.** `run-loopback-dualcard.sh`'s `_normalise` *sets*
-  the mixers but cannot tell whether it worked: it `continue`s past an unresolved card, and every
-  `amixer` call ends in `|| true`, so a wrong card index or a renamed control is silently a no-op.
-  `setup-dualcard-loopback.sh` likewise *announced* "AGC off" without reading it back. ALSA assigns
-  card indices in enumeration order and they shift on re-probe, which is precisely when the
-  resolution is wrong and the claim is false.
-- **Design decision — the guard must not trust the same resolution it is checking.** The runner's
-  preflight scans **every** card in `/proc/asound/cards` that exposes an `Auto Gain Control`, rather
-  than only the two it resolved. A guard keyed to `TX_CARD`/`RX_CARD` would read the wrong card in
-  exactly the scenario it exists for. Unresolved-card detection is kept as a separate check, since a
-  skipped normalisation makes a passing read luck rather than evidence. Override: `AGC_PREFLIGHT=0`.
-- **Implementation:** `scripts/run-loopback-dualcard.sh` — `_agc_state`, `_preflight_mixers`, run
-  once at startup after `_normalise`. `scripts/setup-dualcard-loopback.sh` — reads the AGC back and
-  exits non-zero rather than printing an unverified claim; the success line now says "verified".
-- **Tests (run):** sabotage-verified in both directions with a stub `amixer` that delegates to the
-  real binary but reports the AGC as permanently on:
-  - control, AGC genuinely off → runner proceeds, `SCFDMA16` PASS 1/1; setup prints "AGC off [verified]";
-  - AGC stuck on → setup exits 1 naming cards 5 and 4; runner refuses, naming the hot cards;
-  - card resolution lost (`TX_CARD`/`RX_CARD` unresolvable, so `_normalise` is skipped) with the AGC
-    left on → runner refuses and names card 4, proving the scan does not depend on the resolution.
-- **A defect in the first version of the guard, caught by its own control.** `_agc_state` matched
-  `values=` anywhere in `amixer cget` output. That output carries two such fields — `values=1` on the
-  *type* line is the number of values the control holds, not its state — so the guard read every card
-  as "on" and refused a correctly-configured rig. Found by running the control case first. A guard
-  that has only been tested in its firing direction is half-tested.
-
-## 2026-07-22 — SCFDMA52-64QAM-P4: not a separate defect, the same cliff with less margin
-
-The last mode still failing on the dual-card rig after the AGC misclassification was cleared.
-
-- **The phenomenon is real and robust.** 5 fresh runner reps on a verified-normalised rig:
-  `SCFDMA52-64QAM` **3/5**, `SCFDMA52-64QAM-P4` **0/5** (0/8 including earlier runs).
-- **It inverts in-process, which is what made it look like a defect.** `-P4` is the *dense-pilot*
-  variant (16 pilots at spacing 4 vs 13 at spacing 5) and is the **better** mode on the bench —
-  uncoded AWGN 8/8 vs 6/8 at 25 dB, clean EVM −78.3 vs −75.9 dB. More pilots helping in-process and
-  appearing to hurt on hardware is the signature this repo treats as a bug.
-- **Four mechanisms proposed and killed, each by measurement:**
-  - **band-edge extrapolation.** Real and structural: `-64QAM`'s last pilot sits *on* `last_sc` (80),
-    while `-P4`'s is at 79, so SC 80 is data the channel estimate must **extrapolate**. Visible in the
-    per-subcarrier EVM (SC 80 reads ~10 dB worse than its neighbours) — and **harmless**: under a
-    one-pole HF tilt at α = 0.7/0.5/0.35 both modes decode and mean EVM stays at −74 dB.
-  - **sample-rate offset.** Both modes decode to **100 ppm**; the rig measures 0.10 ppm.
-  - **frame location.** Both modes decode through the engine's *scanning* receive with the frame
-    embedded in a long capture (leads of 0/1 000/7 919/40 000 samples), on both `SoftConcatenated`
-    and `Rs`. The #995 class of defect is not present here.
-  - **a spectral difference.** The two modes' hardware captures are indistinguishable band by band.
-- **What the measurement actually says.** Hardware mean EVM: `-64QAM` **−7.4 dB**, `-P4` **−6.8 dB**
-  — 0.6 dB apart, both at the decode cliff, and both *below* `scfdma_subcarrier_evm_db`'s validity
-  floor, so neither profile is readable for attribution. That is consistent with `-P4` being the same
-  marginal case with slightly less margin (it carries 49 data subcarriers to `-64QAM`'s 52, so the
-  same payload needs a ~3 % longer frame), and **not** with a distinct defect.
-- **Conclusion, stated as a limit rather than a finding:** no mechanism was identified, and the
-  evidence now points away from there being a separate one to find. Both SC-FDMA 64QAM modes sit at
-  the edge of what this analog path supports for a DFT-spread 64QAM waveform; `-P4` sits slightly
-  further over it. Re-attempting this needs either a *better* instrument (one whose reference does not
-  degenerate at −7 dB EVM — the decision-directed reference is the binding limit) or a rig with more
-  margin, not another hypothesis.
-
-## 2026-07-22 — doc sweep: the "analog path" attribution retracted everywhere it was asserted
-
-- **Requirement/change:** the ledger recorded the correction, but the *living* docs still asserted the
-  refuted conclusion. Memory's own rule from the #948 sweep: after retracting a claim, grep the whole
-  tree — a retraction that lives only in the changelog is not a retraction.
-- **Corrected (claims that were false as written):**
-  - `docs/dev/virtual-loopback.md` — the three-rung classification table's **ANALOG PATH** verdict row,
-    now struck with the measured retraction and the reason the comparison was invalid.
-  - `docs/dev/dualcard-loopback.md` — two directly-false statements: *"The AGC hypothesis is dead"*
-    and AGC's presence in *"Eight mechanisms measured, all clean"*. Both struck in place with why the
-    elimination was invalid (inspection, not ablation; and read after a `_normalise`). New
-    `RESOLVED (2026-07-22)` section with the pass table, the ablation, the operational rule, and the
-    `-P4` finding.
-  - `docs/dev/loopback-revalidation-plan.md` — the *"These modes are analog-path limited"* conclusion
-    and the summary line at the top.
-  - `docs/openpulse-book.md` — the rung diagram still said the hardware rung "adds dual clocks"
-    (already refuted at +0.10 ppm).
-- **Updated (true but incomplete):**
-  - `crates/openpulse-core/src/profile.rs` — `hpx_wideband_hd`'s SL12–SL15 table gains a real-audio
-    status column; **SL14 (`SCFDMA52-64QAM`) is flagged marginal (3/5)**, with the note that its 28 dB
-    floor is necessary but not sufficient.
-  - `docs/mode-fec-ladder.md` — the ≥25 dB row flags SL14 as marginal, plus a measured 64QAM
-    real-audio block recommending `64QAM2000-RRC` over `SCFDMA52-64QAM` where bandwidth allows
-    (single-carrier, 3/3, and higher throughput).
-  - `docs/openpulse-manual.md` — operator-facing rule: **re-run the setup script after every replug**,
-    with why it matters and what the scripts now verify.
-  - `CLAUDE.md` — new *Known sharp edges* entry: "A rig setting you did not verify is a variable you
-    did not control."
-- **Deliberately not touched:** `docs/dev/reviews/*` and `docs/dev/archive/*` are dated records of what
-  was believed at the time; rewriting them would destroy the audit trail. The mode tables in
-  `README.md`, `docs/features.md` and `docs/openpulse-book.md` are factual mode listings and were
-  already correct — `SCFDMA52-64QAM-P4` is in no profile and is documented as a research variant.
-- **Tests (run):** `ladder_doc_matches_profile` 2 passed / 0 failed; `roadmap_profile_table` 2 passed /
-  0 failed (1 ignored) — the two gates that keep the ladder docs and `SessionProfile` in agreement.
-  Full workspace gate re-run before merge.
-
-## 2026-07-23 — on-air tooling brought current + execution plan written
-
-- **Requirement/change:** produce a sequenced on-air execution plan (1.0 group-A evidence) and bring
-  the on-air scripts current with the CLI, which had drifted 6–8 weeks behind the
-  loopback-revalidation arc (#989–#1013).
-- **Currency audit (vs `openpulse modes` + live `--help`):** every mode *name* the scripts use still
-  exists; the drift was elsewhere. Highest-impact: `deploy-rpi-pair.sh` cross-builds
-  `--no-default-features`, so its deployed binaries have no audio backend and key nothing —
-  `run-onair-tests.sh` invoked those exact binaries and additionally called `openpulse send`
-  (nonexistent) and `openpulse-tnc --listen` (nonexistent flags). The two mature runners
-  (IC-9700/FT-991A, TX500/KX3) never passed `--fec`, so recorded evidence claimed a FEC that was
-  never applied. All three carried `IRS_STARTUP_WAIT=5` (corrected value 10) and a bare `sleep 2`
-  where the scanning decode needs ~12 s.
-- **Fixes (verified without a rig):**
-  - `deploy-rpi-pair.sh` refuses by default (`ALLOW_NO_AUDIO_DEPLOY=1` to override) and documents the
-    on-Pi cpal build.
-  - `run-onair-tests.sh` rewired to the real `transmit`/`receive` surface (`--backend cpal`, `--fec`,
-    `--device`, rigctld `--ptt`); pass criterion now checks the decoded payload; added the MFSK16 and
-    QPSK250-D fade rungs the test plan requires.
-  - both mature runners thread `--fec` on both ends; RX-invalid hard `concatenated` case dropped;
-    TX500's false "CLI does not expose FEC" note corrected.
-  - timings corrected across all three (startup 10 s, `KILL_WAIT=12`).
-  - `onair-preflight.sh` gains a `--backend cpal devices` probe — presence of the binary is not
-    capability; a loopback-only build passed the old file check and would transmit nothing.
-- **Tests (run):** every changed CLI invocation parses and runs on the loopback backend (BPSK250,
-  MFSK16, QPSK250-D each transmit with their FEC); all five scripts pass `bash -n`; the preflight
-  cpal probe correctly reports the in-repo (cpal-enabled) build as flight-ready. **Not verifiable
-  without two rigs:** an actual on-air QSO — that is Phase A1 of the plan.
-- **New doc:** `docs/dev/onair-execution-plan.md` — the sequenced campaign, grounded in the recorded
-  ground truth (modem/waveforms/transmitters SDR-proven; rig→rig blocked by conducted USB-audio RFI,
-  fix = galvanic isolation). Critical path: G0 kill the RX RFI → G1 seven signal-chain gates → A1 one
-  rig→rig decode → A2 ladder on a real fade → A3 Winlink over RF. Linked from `onair-status.md` and
-  `on-air_testplan.md`.
-
-## 2026-07-23 — Phase G0 idle-floor gate (runnable)
-
-- **Requirement/change:** the on-air execution plan's Phase G0 needs a runnable check that the
-  galvanic-USB-isolation fix cleared the conducted-RFI birdies from a rig's receive audio, before any
-  modem run. Previously described only as "capture and FFT".
-- **Implementation:** `scripts/onair-rx-idle-floor.py` (Welch PSD, Blackman-Harris window, robust
-  25th-percentile broadband floor; flags in-band narrow lines ≥15 dB prominence or ≥−40 dBFS) +
-  `scripts/onair-rx-idle-floor.sh` (arecord capture wrapper, idle-state warning, exit-code
-  propagation). Prominence-based so the verdict is independent of capture gain.
-- **Tests (run — "check your checker"):** validated against synthetic captures. Pure noise → PASS
-  (exit 0). Three injected lines at 1286/1394/1745 Hz → FAIL listing **exactly those three**. A single
-  −30 dBFS line → FAIL listing **exactly one**. Live `arecord`→analyze path exercised end-to-end on a
-  real host capture device (PASS on a silent floor). All exit codes propagate through the wrapper.
-- **A defect in the test found by the checker's checker:** the first synthetic "birdie" input summed
-  five ~0 dBFS sines, which clipped to full scale and generated intermodulation across the whole band
-  — the analyzer faithfully reported ~33 lines and looked broken. The analyzer was correct; the *test
-  input* was clipping. Fixed the test to inject non-clipping lines (asserted `peak < 0.999`), after
-  which the analyzer localized exactly the injected set. Also replaced a local-running-median floor
-  (which a birdie-dense band inflated by ~30 dB, manufacturing phantom peaks) with the global
-  percentile floor. Both are recorded so neither is reintroduced.
-- **Wired into:** the execution plan's Phase G0 (with the exact commands and the validation note).
-
-## 2026-07-24 — second on-air pairing prepared: IC-9700 ↔ FT-818
-
-- **Requirement/change:** prepare a test setup for a new 2 m pairing — IC-9700 on rpi51 (stationary,
-  over VPN) ↔ FT-818 + SCU-17 + LDG Z817 on this laptop (portable), same 144.640 MHz as before, FT-818
-  on the rear antenna socket.
-- **Grounding (verified, not assumed):** frequency 144.640 MHz PKTUSB and the full IC-9700/rpi51
-  config taken verbatim from the working `onair-ic9700-ft991a.example.sh`; hamlib **FT-818 = 1041**,
-  IC-9700 = 3081 (`rigctl -l`); the runner `run-onair-ic9700-ft991a.sh` is fully Side-B-config-driven
-  (`B_LABEL`/`B_HAMLIB_MODEL`/`B_PTT_TYPE`/`B_SSH`), so this is a config+docs task with **no script
-  change**. The SCU-17 was **not connected** when writing (checked `arecord -l`/`/dev/serial/by-id`/
-  `lsusb`), so its device names are marked `TODO-CONFIRM` with the discovery commands rather than
-  fabricated.
-- **Implementation:** `docs/config/onair-ic9700-ft818.example.sh` (sources cleanly; sets freq/models/
-  SSH; Side B = `dc0sk@localhost`) + `docs/dev/onair-ic9700-ft818-setup.md` (FT-818 DIG/USER-U mode,
-  DIG GAIN, CAT rate, rear-antenna menu, PTT choice, the G0 idle-floor gate on the SCU-17 audio, and
-  the signal-chain gates). Linked from the execution plan.
-- **Two operator-facing flags raised (careful-colleague catches):**
-  (1) the **LDG Z817 is HF-only and inert on 2 m** — the antenna must be resonant on its own, the
-  tuner cannot correct it here (`ALLOW_TUNER_ON_HIGH_SWR=0`);
-  (2) the FT-818 **rear SO-239 at 2 m** is a lossier connector than the front BNC and is not the
-  factory default — set by menu, link budget slightly worse. Also carried forward the IC-9700's
-  unresolved USB-capture-during-TX caveat (Gate 3 covers it).
-- **Tests (run):** config `bash -n` + sources and sets the expected vars; doc frontmatter validates.
-  Not runnable further without the hardware connected (device names) and the two rigs on air.
-
-## On-air runner: per-side frequency offset + PipeWire routing preflight (2026-07-28)
-
-- **Change:** make the two things that brought up the IC-9700 ↔ FT-991A pair (all seven signal-chain
-  gates PASS, first OTA BPSK250 decode) reproducible by the runner instead of hand-set each session:
-  (1) a per-side dial trim for the real ~64 Hz rig-to-rig crystal offset, and (2) PipeWire default
-  sink/source routing to the rig CODEC at a non-clipping TX level.
-- **Design/rationale:**
-  - *Frequency:* two independent 2 m rigs differ by tens of Hz (~1 ppm = 145 Hz at 144.6 MHz), which
-    is at/over BPSK250's ±62.5 Hz AFC. Measured on air: both commanded to 144.600000 → received
-    carrier 1436 Hz (−64 Hz); trimming **Station B +64 Hz** → 1501.5 Hz. A single-side trim corrects
-    the actual crystal difference, so it aligns **both** directions. RF alignment is therefore
-    "each rig on `TEST_FREQ_HZ + its offset`", **not** "the two commanded frequencies equal".
-  - *Routing:* `--device pulse` follows the host DEFAULT sink/source; on a laptop the default sink is
-    the built-in speaker (TX never reaches the rig), and openpulse emits near-full-scale audio that
-    pins the rig ALC. Set the default sink/source to the CODEC at TX volume 0.15 (Gate-6-validated).
-    A script that SETS state must VERIFY it (dual-card AGC lesson) — the setup tool reads the routing
-    back, and the runner refuses to key if it is wrong (fail-closed).
-- **Implementation:**
-  - `scripts/run-onair-ic9700-ft991a.sh`: `A_FREQ_OFFSET_HZ`/`B_FREQ_OFFSET_HZ` → `A_FREQ_HZ`/
-    `B_FREQ_HZ`; band guard validates all three; `tune_a`/`tune_b` tune per-side; the CRITICAL freq
-    check compares each rig to its own expected value; new `verify_audio_routing` preflight (no-op
-    unless a side uses `pulse`) calls the setup tool `--verify` and `exit 1`s on failure.
-  - `scripts/onair-setup-audio-routing.sh` (new): resolves each host's CODEC sink+source from
-    `wpctl status` by description match, sets them default + TX sink volume, then reads back and
-    prints a `RESULT pass|fail` line; `--verify` mode checks without changing.
-  - `docs/config/onair-ic9700-ft991a.example.sh`: `A_FREQ_OFFSET_HZ=0`, `B_FREQ_OFFSET_HZ=64`,
-    `A_CODEC_MATCH`/`B_CODEC_MATCH="Codec"`, `A_TX_SINK_VOLUME`/`B_TX_SINK_VOLUME=0.15`, documented.
-  - `docs/dev/onair-execution-plan.md`: G1 "session bring-up" subsection documenting both steps and
-    the `pw-record --target` suspended-node trap (it produced a fake G3 fail during bring-up).
-- **Tests (run):**
-  - `bash -n` on the runner, the new setup script, and the config: all pass.
-  - Per-side offset arithmetic + band guard + per-side verify: unit-tested in isolation — with
-    `B_FREQ_OFFSET_HZ=64`, `A_FREQ_HZ=144600000`/`B_FREQ_HZ=144600064` (in band); verify passes when B
-    reads 144600064 and correctly flags when B reads 144600000.
-  - `onair-setup-audio-routing.sh` live against both hosts: **set → both `RESULT pass`** (rpi51
-    default sink 35 / source 46; dd2zm sink 58 / source 59; sink_vol 0.15); **sabotage** (dd2zm
-    default sink → 69) → `--verify` reports `RESULT fail default_sink=69` and overall FAIL; set-mode
-    restores both to PASS.
-  - Runner `verify_audio_routing` extracted and exercised: skips (rc 0) when both sides use `hw:`;
-    PASS (rc 0) with `pulse` + good routing; **exits rc 1** with `pulse` + sabotaged routing.
-- **Not yet run:** the runner end-to-end (build + transfer + loopback regression + keyed matrix) —
-  that is Phase A1/A2 and needs an agreed on-air window.
-
-## On-air A1: RX capture level is a decode gate (energy-gate clamp) — 2026-07-28
-
-- **Requirement/finding:** the first runner-driven A1 (`supervise --single-case 'BPSK250|none|64'
-  --reverse`, IC-9700 ↔ FT-991A, 2 m 144.600) **FAILED 0/1** with strong RF (IRS `strength_max=21`)
-  and `fail_reason: "IRS: payload not observed"`. Root cause is the **RX capture level**, not RF,
-  frequency, or the waveform.
-- **Diagnosis (measured, not inferred):**
-  - IRS log: `AFC settling done: correction=81.2Hz ... buf_len=1400` at 17:29:42, then
-    `AFC full-retry: pos=... FAILED: invalid magic` at every position at 17:29:54 — the AFC settled
-    **12 s before the frame arrived**.
-  - A Gate-5 style tone+FFT re-measurement showed the received carrier at **1501.2 Hz (+1.2 Hz)** —
-    the rigs were still correctly aligned, so the 81 Hz "correction" was damage, and the obvious fix
-    (re-trim `B_FREQ_OFFSET_HZ`) would have been **wrong**.
-  - `EnergyGate` (`crates/openpulse-modem/src/engine.rs`) sets
-    `threshold = clamp(idle_floor*3, ABS=0.0001, MAX=0.0032)`. Measured IC-9700 idle `mean_sq`
-    **0.0154** at PipeWire source volume 1.00 — **4.7× above the maximum threshold**, so the gate
-    could never shut and fired on noise; AFC then settled on that noise.
-  - A dial-frequency ablation (144.600 / 144.700 / 145.000) showed the strong lines move with the
-    dial (RF, not conducted RFI), and the official Welch-averaged G0 analyzer showed prominences of
-    only 2.5–8.4 dB — i.e. **not birdies**; the capture was simply far too hot. (My first ad-hoc
-    single-FFT script overstated peaks at ~16 dB — a periodogram of noise does that; the validated
-    instrument corrected it.)
-- **Fix (measured both directions):** lower the per-side RX capture level so the adaptive threshold
-  stays unclamped. IC-9700 source volume 1.00 → **0.55**: idle 0.00042, signal 0.0024, threshold
-  ~0.0013 sitting **between** them. FT-991A unchanged at 1.00 (idle 0.000125 — its USB AF output is
-  quieter). PipeWire volume is cubic, so capture power scales ≈ `v^6`.
-- **Implementation:**
-  - `scripts/onair-rx-level-check.sh` (new): captures idle on both stations (handles `parecord` and
-    `pw-record` hosts), computes `mean_sq`, and FAILs when `idle*3` would clamp; reports the
-    absolute-floor case too.
-  - `scripts/onair-setup-audio-routing.sh`: now also **sets and reads back** the RX source volume
-    (`A_RX_SOURCE_VOLUME`/`B_RX_SOURCE_VOLUME`), not just the TX sink volume.
-  - `scripts/run-onair-ic9700-ft991a.sh`: new `verify_rx_level` preflight (fail-closed) alongside
-    `verify_audio_routing`.
-  - `docs/config/onair-ic9700-ft991a.example.sh`: per-side RX levels with the measured rationale.
-  - `CLAUDE.md` sharp edge + `docs/dev/onair-execution-plan.md` G1 bring-up step.
-- **Tests (run):**
-  - **A1 re-run after the level fix: PASSED 1/1** — `docs/dev/test-reports/onair-2026-07-28T175040.json`
-    (`"result": "pass"`, BPSK250 `none` 64 B over the air, FT-991A TX → IC-9700 RX). The identical
-    invocation before the fix: `onair-2026-07-28T172924.json` (`"result": "fail"`).
-  - `onair-rx-level-check.sh` live: PASS at the configured levels (IC-9700 idle 0.000432 / thr
-    0.001297; FT-991A idle 0.000144 / thr 0.000432). **Sabotage** (IC-9700 source volume back to
-    1.00 — the A1-failing condition) → `idle mean_sq=0.015534 gate threshold=0.003200 CLAMPED`,
-    exit 1; restore → exit 0.
-  - `onair-setup-audio-routing.sh` set+verify with the new RX-volume check: both sides
-    `RESULT pass ... src_vol=0.55 / 1.00`; it also correctly FAILED the FT-991A while its source
-    volume was still an unconfigured 1.00 vs a 0.55 default before the per-side values were set.
-  - `bash -n` on all three scripts and the config.
-- **Note for later:** the engine's `AFC_MAX_CORRECTION_HZ` is a hardcoded 450 Hz const with no
-  runtime knob; the execution plan's older "cap it at 100" mitigation is not settable today. Not
-  changed here — the level fix addresses the observed failure, and a code change wants its own
-  measurement.
-
-## #1021 — coded receive could not recover from a noise settle (2026-07-28)
-
-- **Requirement/defect:** on air (IC-9700 ↔ FT-991A, 2 m 144.600), `BPSK250|none` decoded reliably
-  while `BPSK250|rs` and `BPSK250|soft_concatenated` never decoded — same session, same rigs,
-  `strength_max=21`, carrier alignment measured at +1.2 Hz. First quick matrix scored 1/3
-  (`docs/dev/test-reports/onair-2026-07-28T180257.json`).
-- **Root cause (two parts, both required):**
-  1. `EnergyGate::threshold()` returns the bare `ABS_THRESHOLD` (1e-4) until 32 windows of history
-     accumulate. A real idle floor above that (measured 4.2e-4) trips the gate within the first few
-     scan positions, and `afc_mini_settle` returns a confident, plausible correction from noise —
-     measured `AFC settling done: correction=-49.8Hz onset=240 buf_len=1600`, i.e. 0.2 s in, some
-     40 000 samples BEFORE the transmission started.
-  2. `ScanPlanner::note_settled` was permanent — no un-settle, no re-anchor. The first-energy
-     micro-sweep then re-decodes from that noise position forever; its reach is `fep + 8×(step/2)`,
-     about four symbols.
-  **Why coded failed and uncoded passed:** `frame_plan` widens a coded frame ×3, which moves
-  BPSK250 from 74 624 to 223 872 samples — across `LONG_FRAME_SAMPLES` (120 000). That flips
-  `long_frame`, and the gate `(!long_frame || !planner.is_settled())` then disables the full-buffer
-  retry, which the code's own comments call "the fallback for a bad settle". Uncoded stays under the
-  threshold, keeps the retry, and recovered in 115 attempts despite an equally bogus 136.7 Hz settle.
-- **Implementation:**
-  - `crates/openpulse-modem/src/engine.rs`: `ScanPlanner` gains `settle_failures`,
-    `note_settle_failure()` and `unsettle()`; the micro-sweep condemns a settled position after
-    `SETTLE_FAILURE_LIMIT` (18 = two full 9-offset sweeps) failures **against a fully buffered
-    window** (`accumulated.len() >= onset + max_frame_samples`), then re-opens the scan
-    (`last_tried_end` rewound) and resets the discredited AFC correction to 0. The
-    fully-buffered guard is what prevents abandoning a good settle on a slow frame.
-  - `crates/openpulse-modem/src/engine.rs`: `receive_from_samples_with_fec` split into a logging
-    wrapper + `_inner`; adds per-attempt `fec attempt OK/FAILED` and a pre-codec `fec demod` line.
-    The coded path previously had **zero** log statements vs three in the uncoded path, which is
-    why the on-air failure produced an empty log and could not be diagnosed.
-  - `crates/openpulse-modem/src/channel_sim.rs`: `route_embedded_noisy(lead, trail, noise_rms, seed)`
-    — `route_embedded` pads *silence*, so the idle level is exactly zero and the cold-start
-    absolute floor can never fire early; the whole noise-settle failure class was structurally
-    invisible to the suite.
-- **Tests (run):**
-  - `cargo test -p openpulse-modem --no-default-features --test coded_noise_settle_recovery` — 3/3.
-    `coded_bpsk250_is_long_frame_while_uncoded_is_not` independently confirms the classification
-    crux; `uncoded_bpsk250_recovers_from_a_noise_settle` is the control; 
-    `coded_bpsk250_recovers_from_a_noise_settle` is the defect.
-  - **A/B (the fix is what passes it):** with the identical capture and ONLY the re-anchor disabled
-    (`if false && window_complete && ...`), the coded test FAILS again and takes 50 s instead of
-    1 s (it burns the whole listen window re-decoding the condemned anchor). Restored → passes.
-  - `--test coded_receive_instrumentation` — 3/3, **sabotage-verified**: with both `debug!` calls
-    removed all three fail.
-  - Full modem crate: **99 suites, 436 passed, 0 failed**. Workspace gate + clippy
-    (`-D warnings`) + `cargo fmt --check`: all exit 0.
-- **Two reproduction errors worth recording (both caught by keeping the CONTROL honest):**
-  1. the first reproduction set the receive timeout to exactly `RETRY_START_SECS` (12 s), so the
-     retry that rescues the uncoded control never fired and the control failed — which would have
-     made the coded assertion meaningless;
-  2. the first fix attempt could never fire, because the test capture (116 864 samples) was shorter
-     than the widened window it must judge against (224 112). Matching the capture to the real
-     on-air buffer (~269 000) is what let the recovery engage.
-- **Still open (found by the Fable control-flow analysis, NOT fixed here):** the broad-scan decode
-  block at `engine.rs` (inside `if !accumulated.is_empty() && !planner.is_settled()`) is
-  unreachable — every inner path `continue`s or `break`s before it, so the broad scan can only
-  settle, never decode. Dead weight that misleadingly suggests otherwise.
-- **Not yet proven:** the on-air re-run. In-process reproduction + fix is not a substitute for the
-  radio link that produced the defect.
-
-## Loopback harness realism: capture-context impairments (2026-07-29)
-
-- **Requirement:** the 2026-07-28 on-air session produced four defects that no in-process test could
-  have found. Root observation: the channel models simulate the **signal path** (they degrade the
-  transmitted frame), while every one of those defects lived in the **capture context** — what the
-  receiver hears when nobody is transmitting, at what level, with what clock, delivered at what rate.
-- **Implementation (each impairment self-validating):**
-  - `crates/openpulse-channel/src/cfo.rs` — `CfoChannel`: shifts the whole audio band by a fixed
-    offset via the analytic signal (FFT → zero negative freqs → rotate → real part), with a phase
-    accumulator for block continuity. Distinct from `SroChannel` (sampling-clock, not carrier).
-  - `crates/openpulse-channel/src/agc.rs` — `AgcChannel`: fixed capture gain and/or a tracking AGC
-    with attack/decay. Covers both the absolute-level impairment and the gain-moves-during-a-frame
-    impairment that caused the "analog path" misclassification.
-  - `crates/openpulse-audio/src/loopback.rs` — `LoopbackBackend::with_pacing(hz)`: `read()` returns
-    only the samples that would have ARRIVED by now. The default drains the whole buffer instantly,
-    which is why read-cadence starvation was recorded as untestable in-process.
-  - `crates/openpulse-modem/src/channel_sim.rs` — `route_with_cfo`, `route_embedded_with_cfo`,
-    `route_embedded_at_level`, `route_with_capture_agc`.
-- **Tests (run):**
-  - `openpulse-channel` cfo 5/5 — including `a_tone_moves_by_exactly_the_requested_offset` (the
-    channel must move the spectrum by the requested amount, else every acquisition test built on it
-    is vacuous), power preservation, and zero-offset passthrough.
-  - `openpulse-channel` agc 5/5 — including `the_agc_gain_moves_when_the_level_jumps` and
-    `the_agc_compresses_amplitude_structure` (the mechanism that broke the amplitude-bearing modes).
-  - `openpulse-audio --test paced_loopback` 4/4 — progressive delivery, order/no-loss preservation,
-    an unpaced control, and a non-positive-rate fallback (a silent stall would be worse than no
-    pacing).
-  - `openpulse-modem --test carrier_offset_acquisition` 5/5, with a FALSIFIER (a 1600 Hz offset must
-    fail) so an inert channel cannot make the passing cases meaningless.
-  - `openpulse-modem --test capture_level_energy_gate` 3/3 — reproduces #1020 in process: at the
-    on-air idle floor (mean-square 0.0154, 4.8x the gate ceiling) acquisition degrades, while the
-    level that passed on air (0.00042) decodes. Includes the healthy-level CONTROL.
-  - Full workspace: **271 suites, 2192 passed, 0 failed**; clippy `-D warnings` and
-    `cargo fmt --check` clean.
-- **Measured finding (new capability figure):** sweeping the acquisition chain through `CfoChannel`
-  gives **BPSK250 ≤ 600 Hz** and **QPSK500 ≤ 400 Hz** before decode fails — roughly **ten times** the
-  ±baud/4 per-symbol tracking range. The per-symbol figure describes what the carrier *tracker*
-  holds; acquisition additionally has the coarse `afc_mini_settle` pass and the retry's per-position
-  re-acquisition. Quoting the tracking range as the system's offset budget understates it by an
-  order of magnitude — and it independently confirms the −64 Hz rig-to-rig offset measured on air was
-  never near the limit, corroborating that the coded failures were a capture-level/settle problem.
-- **A misattribution caught in progress:** the first version of the CFO test used the one-shot
-  `receive()`, which performs **no AFC settling at all** (the energy-gate → refine-onset →
-  `afc_mini_settle` chain exists only in the scanning loop). A 20 Hz offset "failing" there is the
-  wrong entry point, not a bug. Fixed to use the timeout receive.
-- **Still hardware-only:** rig DSP (NR/NB), analog nonlinearity, USB re-enumeration resetting mixer
-  state, and two genuinely independent oscillators. An emulation must also be validated against a
-  real capture, or the suite tests the model of the radio rather than the radio.
-
-## Capture-replay harness: real recorded radio audio as a test corpus (2026-07-29)
-
-- **Requirement:** the emulated capture-context impairments are each a *model* of a radio, and a
-  model can be wrong in exactly the way that hides a bug. Replay removes the model: a recording is
-  what the rig actually produced. Complements, does not replace, the emulations — a capture covers
-  only the conditions recorded, and goes stale as the DSP changes.
-- **Implementation:**
-  - `crates/openpulse-modem/src/capture_replay.rs`: `Capture` + `load_wav`/`load_corpus`, with a
-    minimal RIFF chunk-walking reader (no new dependency; a fixed 44-byte header offset would read
-    audio as metadata whenever a recorder interleaves LIST/fact chunks). `cycled()` lets a few
-    seconds of recorded idle pad an arbitrarily long capture.
-  - `crates/openpulse-modem/src/channel_sim.rs`: `route_embedded_in_capture` — a synthetic frame
-    embedded in REAL recorded idle audio, with a `signal_gain` so the signal-to-real-floor ratio can
-    be swept against a fixed genuine floor.
-  - `crates/openpulse-modem/tests/captures/` — corpus (8 kHz mono 16-bit) + README with provenance
-    and the measured property each file exists to preserve. Decimated 48→8 kHz with
-    `resample_poly`; naive decimation would alias the noise floor and destroy that property.
-  - `scripts/onair-record-capture.sh` — records and prepares new corpus entries (local or over SSH,
-    parecord or pw-record), and tells the operator to record provenance, since a capture with no
-    recorded expectation cannot be asserted against.
-- **Corpus (all real, 2026-07-28 on air):** `ic9700-idle-hot.wav` (mean-square ≈0.0158 — the level
-  that broke #1020, 4.9x the energy-gate ceiling); `ft991a-idle.wav` (≈3.7e-7 — the OPPOSITE
-  failure, below the gate's absolute floor, showing "just lower the level" is not a universal fix);
-  `ic9700-tone-1501hz.wav` (carrier ≈1501.5 Hz, independently measured on air after the +64 Hz trim).
-- **Tests (run):** `--test capture_replay_corpus` 6/6.
-  - Corpus integrity: files load, are 8 kHz, are not silent; the IC-9700 floor is still above the
-    gate ceiling; the FT-991A floor is still below the absolute threshold; the recorded carrier
-    still measures 1495–1510 Hz against the 1501.5 Hz taken off the radio (this pins our measurement
-    chain to a real-world truth).
-  - Behaviour: a frame at a healthy level decodes inside real recorded idle audio (**the control**),
-    while the same frame at the SAME signal gain inside the recorded hot floor is not reliably
-    acquired — an A/B by construction, where the only variable is the real recorded floor.
-  - Full workspace: **272 suites, 2198 passed, 0 failed**; clippy `-D warnings` + fmt clean.
-- **Known gap, recorded rather than glossed:** there is **no capture of a real modem frame** — the
-  on-air runs decoded inside `openpulse` on the remote host and the raw audio was never saved. That
-  is the highest-value slot in the corpus and it is empty; only a frame capture can assert an
-  end-to-end decode against real audio. `scripts/onair-record-capture.sh` exists to fill it on the
-  next on-air session.
-
-## Receive-side preconditions sized from the container, not the frame (2026-07-29)
-
-- **Requirement:** the 2026-07-29 defect-archetype scan
-  (`docs/dev/reviews/archetype-scan-2026-07-29.md`) hunted the repo by defect *shape* rather than by
-  symptom. Its dominant result was not any single bug but a cluster: **four** independent places
-  where a receive-side completeness or recovery precondition is sized from the *container* — a fixed
-  burst cap, a FEC slice reserve, a capture window — rather than from the frame that actually
-  arrived. Three of the four sit on `hpx_hf` SL2/SL3 (BPSK31/BPSK63), the entry rungs a session must
-  confirm before it can climb, so the cluster sat directly on the on-air critical path.
-- **Design decision:** fix the *shape*, in one change, using the repair pattern the repo had already
-  proven for two of the five affected consumers (`FecCodec::decode_prefix`) — rather than four
-  unrelated patches. Where a length genuinely could not be derived, name the decision in a function
-  so it has one home and a gate can be coupled to it (`frame_arrival_samples`).
-- **Implementation** (`crates/openpulse-modem/src/engine.rs`):
-  - `burst_cap_samples(mode)` replaces the flat `BURST_MAX_SAMPLES` (240 000 = 30 s at 8 kHz). The
-    cap is now derived from the mode's own `frame_geometry`, scaled by the worst FEC expansion, and
-    clamped between `BURST_MIN_CAP_SAMPLES` and `BURST_MAX_CAP_SAMPLES` so it remains a genuine
-    runaway guard. **Measured**: BPSK31+Rs transmits 532 480 samples (66.6 s) and BPSK63+Rs 266 240
-    (33.3 s) — both past the old cap, so the accumulator force-flushed mid-frame into two
-    preamble-less halves on *every* normal streaming capture.
-  - `decode_ldpc_llrs_prefix` for the scanning receive: stop at the first failed codeword instead of
-    aborting the frame. The scanning slice is the FEC reserve, so a real capture (which always
-    outlasts the frame) leaves whole codewords of trailing noise past the last real one. The
-    single-shot `receive_with_ldpc*` and the HARQ combiner keep strict `decode_ldpc_llrs` — they know
-    the frame extent.
-  - `rs_interleaved_decode_prefix`: deinterleave each candidate block-count prefix *at its own
-    length*. `Interleaver::deinterleave` derives its permutation from `data.len()`, so a
-    window-length buffer was unscrambled with a different permutation than the transmitter used;
-    `FecCodec::decode_prefix` cannot rescue that, because trimming after the wrong permutation has
-    already run recovers nothing.
-  - `frame_arrival_samples(raw, fec)` — deliberately **not** widened by `fec`, which is the whole
-    point of it being a named function. Arrival ("has the frame finished buffering") and slicing
-    ("how much window must an attempt cover") are different questions; conflating them demanded
-    149.2 s of post-onset audio for BPSK31, more than any configured harness listens for, which
-    disabled the #1021 settle recovery outright on the ladder's entry rung.
-- **Tests — all written failing-first and confirmed RED before the fix, then sabotage-verified
-  against the committed state:**
-  - `tests/burst_cap_frame_length.rs` (new, 4 tests). Asserts the cap against a **measured**
-    transmission rather than a restated constant, and drives the production `accumulate_capture`
-    streaming entry in 800-sample daemon-sized ticks — `receive()` and `ChannelSimHarness` hand the
-    receiver a whole buffer and cannot exercise the accumulator at all.
-  - `tests/fec_scan_long_capture.rs` — 4 new cases: `RsInterleaved` long **and tight** (the tight one
-    is the tell: it failed too, which is what proves the defect is the window-derived permutation and
-    not the capture length), plus `Ldpc` and `LdpcHighRate`. The suite previously covered only
-    `Rs`/`RsStrong` — the two arms that had already been fixed.
-  - `tests/coded_noise_settle_recovery.rs` — new `the_settle_recovery_threshold_is_reachable_for_the_slow_rungs`,
-    coupled to `frame_arrival_samples` (not to the geometry it happens to be derived from today) so
-    re-sizing arrival back to the reserve fails it. Also corrects a doc constant that a same-week
-    commit had already made stale (scan finding 16).
-- **Test results (actually run, 2026-07-29):**
-  - Failing-first: `fec_scan_long_capture` 4 passed / **4 failed**; `burst_cap_frame_length` 2 passed
-    / **2 failed** (`BPSK31+Rs transmits 532480 samples (66.6 s) but the burst cap is 240000 (30.0 s)`;
-    the streaming path flushed mid-frame at exactly 240 000).
-  - After the fix: `fec_scan_long_capture` **8/8**, `burst_cap_frame_length` **4/4**,
-    `coded_noise_settle_recovery` **4/4**.
-  - Sabotage verification (each defect reintroduced against the committed fix): arrival→reserve fails
-    1/4 in `coded_noise_settle_recovery`; LDPC-strict + straight-deinterleave fails **4/4** of the new
-    cases in `fec_scan_long_capture` while the 4 pre-existing `Rs`/`RsStrong` cases stay green;
-    flat burst cap fails 2/4 in `burst_cap_frame_length`. Restored: all green.
-- **Why the suite could not have caught any of it:** every test that reaches `accumulate_capture`
-  uses a fast mode (OFDM52-16QAM, QPSK500, BPSK250) whose frames are far under 30 s, so the burst cap
-  cannot fire for them; the long-capture gate covered only the two FEC arms already fixed; the
-  `RsInterleaved` gate used `route()`, the buffer-is-the-frame fixture that `route_embedded` exists
-  to close; and the settle-recovery gate pins BPSK250 exclusively — the one mode where the old
-  precondition was satisfiable. In each case the gate's own fixture sits on the side of the boundary
-  where the defect cannot fire. That is the archetype, and it is worth more than the four fixes.
-
-## Gates that measure a proxy instead of the objective (2026-07-29)
-
-- **Requirement:** cluster 2 of the defect-archetype scan
-  (`docs/dev/reviews/archetype-scan-2026-07-29.md`) — three gates that measure something *correlated*
-  with the real property under conditions where the correlation happens to be perfect, then silently
-  stop tracking it under the conditions the objective actually cares about. Unlike cluster 1 (where
-  the shipped code was wrong), here the shipped **evidence** was wrong; two of the three exposed a
-  real code defect only once the gate was fixed.
-- **Design decision:** fix the *gate* first and let it find the code defect, rather than fixing the
-  code from the audit's assertion. This is what narrowed the scope: the scan's first pass read as
-  "9 of 12 profiles assign no FEC", and measurement showed most of those are **self-consistent** —
-  their floors were derived uncoded and the code matches. Only one profile was actually defective.
-- **Implementation:**
-  - `crates/openpulse-modem/tests/channel_loopback.rs`:
-    `every_profile_rung_decodes_at_its_floor_with_its_fec` — AWGN at each rung's own declared floor,
-    fixed seeds (deterministic, not a sample). On failure it runs a same-SNR FEC A/B and names which
-    of two different problems it found: **UNDER-FEC'd** (succeeds with `SoftConcatenated`) vs
-    **FLOOR TOO OPTIMISTIC** (does not). The pre-existing clean gate is kept — it still has teeth for
-    the *wrong*-FEC half of the class; it was blind only to the *missing*-FEC half.
-    Note on units: floors are per-waveform-family (the SNR-scale-boundary sharp edge), so the gate
-    does **not** claim the AWGN SNR equals the quantity a floor is expressed in. It asserts the
-    profile's own promise — *at this number, with this FEC, this rung works* — and the failure-path
-    A/B is scale-independent because FEC is then the only variable.
-  - `crates/openpulse-core/src/profile.rs`: `hpx_wideband_hd` gains
-    `fec_modes = [Some(FecMode::SoftConcatenated); 21]`. It previously shipped `[None; 21]` **seven
-    lines below its own comment** stating these modes run under soft-concatenated FEC, so the ladder
-    never applied the FEC its floors and its hardware validation were measured with.
-  - `crates/openpulse-core/src/profile.rs`: `hpx_pilot_fast_rrc` SL2 floor 6.0 → 8.0 dB. It inherited
-    a floor from `hpx_pilot`, whose modes are 500-baud and not RRC-shaped.
-  - `crates/openpulse-modem/tests/afc_doppler_watterson.rs` → `doppler_tracker_units.rs`, header
-    corrected, headline assertion made reachable, anti-vacuity counter added.
-  - `docs/dev/vara-parity-execution-board.md`, `docs/dev/project/traceability-matrix.md`: two
-    acceptance boxes UNCHECKED with the reason, one reworded integration→unit, summary row done→partial.
-- **Measurements (actually run, AWGN at each rung's own declared floor, 8 trials, seeds 0..7):**
-
-  | rung | floor | uncoded | SoftConcatenated |
-  |---|---|---|---|
-  | `hpx_wideband_hd` SL9 SCFDMA26-8PSK | 9 dB | **2/8** | 8/8 |
-  | SL10 SCFDMA26-16QAM | 11 dB | **2/8** | 8/8 |
-  | SL11 SCFDMA26-32QAM | 13 dB | **0/8** | 8/8 |
-  | SL12 SCFDMA52-16QAM | 16 dB | **4/8** | 8/8 |
-  | SL13 / SL14 / SL15 | 20 / 28 / 35 dB | 8/8 | 8/8 |
-
-  The broken rungs are the **low** ones — the SCFDMA26 tier the profile's own comment calls "the
-  robust graceful-degradation path" was the least robust part of it.
-
-  `hpx_pilot_fast_rrc` SL2 floor sweep (12 trials/point, RRC vs the plain 1000-baud sibling):
-  6 dB **8/12** vs 11/12 · 7 dB 11/12 vs 11/12 · 8 dB 12/12 vs 12/12.
-
-  Not defects, confirmed by the same sweep: `hpx500`, `hpx_pilot`, `hpx_pilot_rrc`,
-  `hpx_pilot_fast`, `hpx_wideband`, `hpx_narrowband` all decode at their own floors uncoded.
-  `hpx_hf` SL7–14 and all of `hpx_ofdm_hf` decode 0–1/3 uncoded and 3/3 with their assigned FEC, so
-  those assignments are load-bearing. `hpx_hf` SL6 `QPSK250-D` scores 0/3 with `SoftConcatenated` and
-  3/3 with its assigned `Rs` — the documented "differential has no soft path", working as designed.
-- **Test results:** `channel_loopback every_profile_rung` **2/2**; `doppler_tracker_units` **5/5**;
-  `openpulse-core` 321 + 16 + 22 + … **0 failed**.
-- **Sabotage verification:** reverting `hpx_wideband_hd` to `[None; 21]` fails the new gate with
-  *"hpx_wideband_hd/Sl9 SCFDMA26-8PSK with its assigned None decodes only 1/4 at its own declared
-  floor of 9 dB. UNDER-FEC'd — SoftConcatenated decodes 4/4 at the same SNR"* — **while the old clean
-  gate stays green**, which is scan finding 6 demonstrated directly rather than asserted. Replacing
-  the Doppler test's `< 5.0` bound with an impossible `< -1.0` now **fails** (it passed before);
-  the estimator recovers 3.0000083 Hz against a true 3 Hz.
-- **Wire note:** `fingerprint()` covers `(level → mode, level → FEC)`, so `hpx_wideband_hd`'s
-  fingerprint changes. That is the mechanism working as designed — it exists to detect exactly this
-  kind of ladder divergence between builds.
-
-## Seam gaps — a transform wired at one caller, not the shared seam (2026-07-29)
-
-- **Requirement:** cluster 3 of the defect-archetype scan
-  (`docs/dev/reviews/archetype-scan-2026-07-29.md`). Both findings are cross-cutting behaviours that
-  the code **claimed in a comment** to apply everywhere and did not. This is the shape CLAUDE.md's
-  "cross-cutting RX/TX feature checklist" exists for; it recurred anyway, which is why the checklist's
-  rule 3 — *never claim "covers all paths" from a callers-grep; prove it with a test that FAILS
-  without the wiring* — is the operative one.
-- **Implementation:**
-  - `crates/openpulse-modem/src/engine.rs`: `wire_for_modulation()` is now the single source of the
-    bytes that go on the air, and the new `stage_modulate_payload_iq()` mirrors the audio stage for
-    the baseband path. `transmit_iq` goes through it instead of calling `plugin.modulate_iq()`.
-    **Design note:** deliberately *not* moved to `route_wire_stage(EncodeModulate)`, even though that
-    is the seam both paths already share — it has 13 call sites and whitening is XOR, so any path
-    reaching it twice would silently self-cancel. A cancelling transform is a worse failure mode than
-    the bug being fixed. Two stage functions are unavoidable because the plugin trait exposes
-    `modulate` and `modulate_iq` with different return types; one function can still own their bytes.
-  - `crates/openpulse-daemon/src/server.rs`: the multi-mode monitor (REQ-RX-01) is hoisted above the
-    receive tick's OTA/non-OTA dispatch so it runs on every captured burst.
-- **Measurements / reproduction (actually run):**
-  - Finding 8 reproduced before the fix: `BPSK100` and `QPSK250` both returned
-    **`frame encoding/decoding error: invalid magic`** through I/Q transmit → upconvert → audio
-    receive, while the audio-only control passed. That is the same signature that made #1021
-    undiagnosable, which is what makes it expensive rather than merely wrong.
-  - Finding 9's precondition verified directly: `grep` finds **no `end_ota_session` anywhere**, and
-    `start_ota_session` only ever assigns `self.ota = Some(..)`. So `ota_active()` is permanently true
-    once the daemon starts under `ota_enabled`, and the monitor's single emit site was unreachable for
-    the whole process lifetime.
-- **Tests:**
-  - `crates/openpulse-modem/tests/iq_decode_round_trip.rs` (new, 4 tests). Upconverts the baseband
-    I/Q to the real passband (`i·cos − q·sin`) and decodes through the normal receive path — what an
-    external upconverter/SDR does with these samples anyway. The pre-existing `tests/iq_output.rs`
-    asserts sample counts, Q-RMS, the attenuation ratio and the regulatory log: everything *about* the
-    samples, nothing requiring the bytes to survive, so no decode existed anywhere on the I/Q path.
-  - `crates/openpulse-daemon/tests/monitor_during_ota.rs` (new). Drives the real `server::run` receive
-    tick with **both** `ota_enabled` and the monitor on, and asserts a `MonitorFrame` reaches a control
-    client. REQ-RX-01's existing acceptance test calls `MonitorRuntime::decode_all` directly — the
-    monitor was never broken, the *dispatch around it* was, so that test passes whichever arm is taken.
-- **Test results (run):** `iq_decode_round_trip` **4/4**; `iq_output` **7/7** unchanged;
-  `monitor_during_ota` **1/1**.
-- **Sabotage verification:** reverting the I/Q path to `plugin.modulate_iq(&wire.bytes, ..)` fails
-  **2/4** with `invalid magic` while the control and fixture tests stay green. For the monitor, the
-  **exact pre-fix code** (the emit restored inside the non-OTA arm) fails the new test — which also
-  proves the fixture genuinely has an OTA session active, since otherwise the pre-fix placement would
-  have passed.
-
----
-
-## 2026-07-30 — #1021 CLOSED: the settle recovery was a livelock, not the signal
-
-- **Requirement / change:** a real coded on-air `BPSK250|rs` frame must decode. #1021 had survived
-  the whitening fix (#1027) and a reopening.
-- **How the cause was found — every physical hypothesis was wrong.** Two fresh dual captures were
-  taken on air 2026-07-29 from a whitening build. The coded one failed identically, which made it
-  reproducible offline. Then, instead of another signal hypothesis, the **exact transmitted wire was
-  reconstructed** (`Frame::encode` → `FecCodec` → `scramble`) and diffed against the demodulated
-  bytes:
-  - **0 byte errors in all 255.** The 8.3 s frame arrived off the air byte-perfect.
-  - It demodulates cleanly across a **±32 Hz** AFC acceptance window — acquisition is not fragile.
-  - Refuted by measurement: carrier **+2.42 Hz** drifting **−0.3 Hz** over the whole burst; margin
-    **7.2 dB** against the passing control's 7.3 dB; amplitude stable to 1.07; a tight ±0.5 s window
-    failing identically (so not the frame-location class).
-  - An intermediate hypothesis — that the transmitter's `free_rs_strengthening` upgrade to
-    `RsStrong` was not matched by the receiver — was **correct about the wire** (the diff only
-    matches against `FecCodec::strong()`, errors starting exactly at byte 191 = `255 − 64`) but
-    **not the cause**: the receive arms already dual-decode, and forcing `RsStrong` failed too.
-- **The actual defect.** The engine's trace showed `AFC settling done: correction=364.4Hz onset=96`
-  — settled on idle noise at sample 96, ~82 000 samples before the frame, on a correction 6× outside
-  BPSK250's ±62.5 Hz tracking range. `ScanPlanner::note_settle_failure` **correctly condemned** it —
-  and `unsettle` rewound `last_tried_end` to **0**, so the broad scan restarted at the beginning
-  where the same noise passed the same gate and re-settled at the same sample. Measured:
-  **78 settles, 77 condemnations, all at sample 96**, until the listen window expired. The recovery
-  #1022 added was *reachable* (#1028 made it so) and *ineffective*.
-- **Trigger.** `EnergyGate::threshold` returns a fixed `ABS_THRESHOLD = 1e-4` until it holds 32
-  windows of history. This station's idle floor is **4.1e-4**, four times that, so the first window
-  of pure noise passes. Note it also **passes `onair-rx-level-check.sh`**, which only checks the
-  floor against the clamp *ceiling* — the blind window `1e-4 .. 1.07e-3` is exactly where a
-  correctly configured station sits.
-- **Design decision (+ rationale):** `unsettle` resumes at `condemned + step` instead of 0. Sound by
-  the same argument the old comment already made for rewinding — *a premature noise anchor sits
-  before the real frame* — and the anchor has earned exclusion: `SETTLE_FAILURE_LIMIT` (18)
-  fully-buffered decodes across a 9-offset sweep already failed there. Deliberately **not** fixed by
-  tightening `AFC_MAX_CORRECTION_HZ` (a threshold tweak that would reject this particular noise
-  settle while noise converging to 50 Hz would still pass) nor by changing the gate's cold start
-  (which would break every buffer-is-the-frame fixture, whose first window is signal).
-- **Implementation:** `crates/openpulse-modem/src/engine.rs` — `ScanPlanner::unsettle`.
-- **Result after the fix:** 8 settles instead of 78; the receiver lands at **onset 82304 with a
-  +2.0 Hz correction**, matching the independently measured +2.42 Hz carrier.
-- **Whitening is retained and was a real fix**, verified on this capture: **0 of 33** dead-carrier
-  windows against the pre-whitening predecessor's 25 of 33. It removed 6.2 s of unmodulated carrier
-  and was not the cause of the decode failure. **Two defects, one symptom.**
-- **Tests:** `crates/openpulse-modem/tests/capture_replay_corpus.rs::the_real_on_air_frame_decodes`
-  (un-ignored) plus `a_real_on_air_frame_decodes_end_to_end` (uncoded control).
-- **Test results (run):** `capture_replay_corpus` **8 passed, 0 ignored**.
-- **Sabotage verification:** restoring the exact pre-fix `self.last_tried_end = 0` fails the test.
-## 2026-07-30 — Archetype scan finding 17: the whitening gate measured three wrong regimes
-
-- **Requirement / change:** the one unit test standing behind the #1021 wire-whitening fix
-  (`scramble::tests::an_all_zero_block_becomes_transition_rich`) must actually be able to detect the
-  defect it exists to prevent.
-- **Design decision (+ rationale):** the test had three simultaneous regime mismatches against the
-  wire it claims to measure — MSB-first bit order (the wire is LSB-first, per `bytes_to_bits` in
-  every modulator), runs of *identical* bits (only runs of **zero** are a dead carrier, because
-  `nrzi_encode` flips phase on a `1` and holds on a `0`), and keystream offset 0 (the real RS padding
-  starts at offset 28: 4 length + 10 frame header + 14 payload). The fix builds the **actual** on-air
-  wire with `Frame` + `FecCodec` rather than approximating it, which makes the offset correct by
-  construction instead of by a constant that can drift; and it asserts the *unwhitened* wire still
-  contains the defect before claiming whitening removes it, so the gate cannot pass on a fixture that
-  no longer reproduces #1021.
-- **Implementation:** `crates/openpulse-core/src/scramble.rs` — test module gains `wire_bits`
-  (LSB-first), `longest_zero_run`, `pack_wire_bits`, `ones_ratio`, and `MAX_DEAD_BITS = 12` (the
-  maximal-length 9-bit LFSR's longest zero run is `n - 1 = 8` by construction, so 12 leaves headroom
-  for a seed/tap change without flagging). `an_all_zero_block_becomes_transition_rich` is replaced by
-  `the_real_padded_wire_carries_no_dead_carrier_run`.
-- **Measurements (actually run):**
-  - Real wire for a 14-byte payload: **unwhitened longest zero run = 1561 bits**; whitened = 8 bits.
-  - Old gate's own numbers, re-measured: ratio 0.499, longest identical run 16.
-- **Tests:** `crates/openpulse-core/src/scramble.rs` — `the_real_padded_wire_carries_no_dead_carrier_run`
-  (the gate) and `the_dead_carrier_measurement_catches_a_balanced_but_dead_stream` (anti-vacuity: pins
-  that the measurement can fail, on the exact pattern the old one missed).
-- **Test results (run):** `cargo test -p openpulse-core --no-default-features --lib scramble` — **6
-  passed, 0 failed**.
-- **Sabotage verification (decisive, and it shows the blind spot rather than merely asserting it):**
-  replacing the LFSR with a *balanced but dead* keystream — 17 zeros then 17 ones, repeating — makes
-  the new gate **FAIL** (`a 17-bit run of zeros … unwhitened the same wire runs 1561 bits`). Under the
-  identical sabotage, the old assertions were re-run and both **PASS**: ratio 0.499 is inside
-  `0.4..=0.6`, and the MSB-first longest identical run is exactly 16, one below its own `<= 16` bound.
-  A wire carrying a 17-symbol dead carrier every 34 symbols was invisible to the only gate guarding
-  the fix. Note this is a blind spot, not a live regression: the property does hold for the shipped
-  LFSR (measured whitened run = 8 bits).
-
----
-
-## 2026-07-30 — #1029: linksim accounted throughput against the requested FEC, not the transmitted one
-
-- **Requirement / change:** `FrameStep::net_bps` must reflect the code rate that was on the wire.
-- **Design decision (+ rationale):** the per-frame FEC is resolved from the profile
-  (`self.ota.tx_fec()`, falling back to the sim's knob only for unprotected rungs), but the
-  accounting used `self.params.fec`. The resolved value is now carried in `last_fec` alongside
-  `last_mode`/`last_level` and used for `net_bps`. Same archetype as cluster 2 — a proxy that tracked
-  the objective only while no profile assigned per-rung FEC, which was true of most profiles.
-- **Implementation:** `apps/openpulse-linksim/src/lib.rs` — `last_fec` added in `step()`, assigned
-  from the resolved per-attempt `fec`, and used in place of `self.params.fec` for `net_bps`.
-- **CORRECTION to the issue as filed.** #1029 states that `goodput_gate` "reads `effective_bps`,
-  which is derived from `net_bps`", and that the fix therefore moves the CI baseline. **That is
-  wrong, and both halves were checked.** `LinkResult::effective_bps` (lib.rs:992) is
-  `bytes_delivered * 8 / total_air_s` — measured from real airtime and delivered bytes, never
-  touching `fec_code_rate`. Measured confirmation: all three gate cases were run under the old and
-  the new accounting and returned **bit-identical** numbers (331.5 / 893.3 / 555.4 bps). The
-  corrected `net_bps` reaches the linksim GUI (`gui.rs:879`) and the panel feed
-  (`serve.rs:407` → `openpulse-panel`), which is where the ~2x overstatement was visible.
-- **Found while re-deriving:** the gate's baseline annotations had drifted in **both** directions,
-  and one mattered. `ofdm_ladder_goodput_floor_dispersive_fade` carried a `~414` annotation against a
-  floor of 280; the case now measures **555**, so the floor had silently become 50 % of baseline
-  against the module's own stated ~65 % rule — it would have passed a 40 % throughput regression on
-  the dispersive fade the OFDM ladder exists to survive. Floor re-derived to 360. The other two were
-  already at or tighter than the rule (331 → floor 250 = 75 %; 893 → floor 600 = 67 %) and are
-  unchanged; only their stale annotations were corrected.
-- **Tests:** `apps/openpulse-linksim/src/lib.rs` —
-  `tests::net_bps_is_accounted_against_the_fec_actually_transmitted`. Steps `hpx_hf` and asserts
-  `net_bps == gross_bps * fec_code_rate(profile-resolved FEC)` per frame. The **anti-vacuity guard**
-  is load-bearing: it requires at least one visited rung whose transmitted FEC differs from the
-  requested one, so the test cannot pass on a run where the question never arises.
-- **Test results (run):** `net_bps_is_accounted_against_the_fec_actually_transmitted` **1/1**;
-  `goodput_gate` **4/4** with the re-derived floor.
-- **Sabotage verification:** restoring the exact original line
-  (`fec_code_rate(self.params.fec)`) fails the new test — `SL7 (OFDM52) transmits SoftConcatenated
-  (r=0.437) but net_bps 2487.5 implies r=0.875`, the predicted ~2x overstatement.
-
----
-
-## 2026-07-30 — Archetype scan finding 13: the frame-lock test discarded the field that shows mislocation
-
-- **Requirement / change:** `tests/waveform_lock_watterson.rs` claims to measure *frame lock
-  reliability*; it must not count a lock that landed on the wrong sample.
-- **Design decision (+ rationale):** `lock_rate_with_channel` read `res.rho` and discarded
-  `res.offset`, so a correlation peaking on the **delayed multipath ray** counted as a lock — the
-  #688 defect ("sync must lock ahead of the peak, never on it") reproduced inside the test written to
-  guard against it. The criterion added is `offset <= GUARD`, **not** equality: an early start begins
-  inside the symbol's own cyclic prefix (a removable circular shift), a late start pulls the next
-  symbol into the window and cannot be undone. Both rates are returned and asserted rather than the
-  correct one replacing the declared one — the declared-lock rate is a real property, and reporting
-  them separately is what makes the gap visible.
-- **Implementation:** `crates/openpulse-modem/tests/waveform_lock_watterson.rs` — `LockStats
-  { detected, correct }`, `GUARD` promoted to a named constant.
-- **Measurements (actually run, by instrumenting the real helper):**
-  - `good_f1` (all of 15/20/25 dB): 18/20 declared, **offsets {16: 11, 20: 7}**.
-  - `good_f2`: 19–20/20 declared, **offsets {16: 12, 24: 7–8}**.
-  - The mislocated offsets are exactly each profile's delay: 0.5 ms = 4 samples (16→20), 1 ms = 8
-    samples (16→24).
-  - AWGN 10/15/20/25 dB: **100/100 at offset 16** — no multipath, no delayed ray, so the offset
-    check costs nothing there. That is what makes the Watterson shortfall a channel effect rather
-    than a property of the detector.
-- **Tests:** declared-lock bars **unchanged** (AWGN ≥ 0.99, Watterson ≥ 0.85). New: correct-lock bar
-  ≥ 0.50 (measured 0.55/0.60); AWGN asserts `correct == detected`; and
-  `a_lock_on_the_delayed_ray_is_not_counted_as_a_correct_lock` pins that the offset check is live.
-- **Test results (run):** `waveform_lock_watterson` **10/10**.
-- **Sabotage verification:** restoring the exact pre-fix behaviour (increment `correct`
-  unconditionally, offset ignored) fails **1/10**. Note *which* one: the matrix test still passes
-  under that sabotage — the anti-vacuity test is the only thing that catches it, which is precisely
-  why a gate whose two rates could silently converge needs one.
-- **Docs:** `docs/dev/vara-parity-execution-board.md` — the ≥99 % AWGN claim is re-verified and
-  stands; the Watterson line now states both rates and that this is a bare-matched-filter property,
-  not a production-acquisition figure.
-
----
-
-## 2026-07-30 — Archetype scan finding 12: `HarqPolicy` is inert, and two documents claimed otherwise
-
-- **Requirement / change:** the completion claim for Item 6 (SC-FDMA HARQ tuning) must match what
-  actually runs.
-- **Verification (done first, not taken from the scan):**
-  - `grep` for `HarqPolicy` across `crates`/`apps`/`plugins`: reached only via
-    `ModemEngine::select_harq_decision` (engine.rs:2028) and `select_harq_decision_for_mode`
-    (:2048). Callers of those: `tests/harq_rate_selection_watterson.rs` and
-    `tests/ldpc_engine_loopback.rs`. **No production caller.**
-  - The shipped ARQ takes FEC from `SessionProfile::fec_for` + `free_rs_strengthening`
-    (engine.rs:1323, :4605) and its ACK timeout from `ota_ack_timeout_ms` (:4890), which does not
-    share a numeric range with `HarqPolicy`'s curve. So the timeout tier is doubly inert.
-  - **Measured, not inferred:** instrumented `harq_watterson_f1_throughput_and_latency_gate` to count
-    decodes instead of discarding them (`let _ = policy_engine.receive_with_harq_attempt(...)`).
-    Result: **0 of 105 attempts decode**, and the gate passes. `policy_goodput_bps` is a closed-form
-    function of `decision.code_rate` and `decision.ack_timeout_ms`, so it cannot fail on a decode.
-- **Design decision (+ rationale):** **not** wiring the selector up. The per-rung MODCOD table is the
-  deliberate shipped design; the selector is an unused alternative. The defect is the completion
-  claim, so the fix is documentary — the code is left as it is.
-- **Implementation (docs + test rationale only, no behaviour change):**
-  - `docs/dev/vara-parity-execution-board.md` Item 6: status changed from
-    **"✅ FUNCTIONALLY COMPLETE"** to **"⚠️ SELECTOR BUILT, NOT WIRED"**, with the mechanism spelled
-    out. The old status sat four lines below a "Current State" bullet reading *"Retransmit on NACK
-    without rate change"* — both statements were true, and only because the selector never runs.
-    Criteria annotated: the latency tick is a **proxy**, and the throughput criterion is marked NOT
-    MEASURED rather than merely deferred.
-  - `docs/dev/project/traceability-matrix.md` CAP-36: scope note separating the LLR-combining retry
-    loop and rate policy (which do ship) from the `HarqPolicy` selector (which does not).
-  - `crates/openpulse-modem/tests/harq_rate_selection_watterson.rs`: module doc now states what the
-    file does not prove, including the measured 0/105.
-- **Test results (run):** `harq_rate_selection_watterson` **2/2** (unchanged — this change asserts
-  nothing new; it stops a passing test from being cited as evidence it cannot supply).
-
----
-
-## 2026-07-30 — Archetype scan low tail: findings 10, 11, 14, 15
-
-- **Finding 10 — RX SNR recorded only on the soft-demod branch.**
-  - *Mechanism:* `record_rx_snr` sat inside the `plugin.supports_soft_demod(mode)` arm, so the
-    predicate gating it was the demodulator's **soft capability**, not whether an SNR estimate
-    exists. Unrelated properties: `QPSK250-D` implements `estimate_snr_db` and reports
-    `supports_soft_demod = false` by design (#923). All of `hpx_hf`'s hard-FEC lower half recorded
-    nothing.
-  - *Blast radius:* the rate ladder is unaffected (it reads a value computed in a separate call
-    path). `last_rx_snr_db()` feeds the QSY scan's candidate scoring — which scored every channel on
-    `unwrap_or(0.0)` — and the ADIF logbook's `rx_snr`.
-  - *Fix:* `crates/openpulse-modem/src/engine.rs` — `rx_snr_db` hoisted above the branch.
-  - *Test:* `tests/engine_events.rs::receive_populates_last_rx_snr_db_on_a_hard_only_mode`, with an
-    anti-vacuity assertion that the chosen mode really is hard-only. The pre-existing test named the
-    gap in its own assertion message ("a plugin that supports demodulate_soft") without it being
-    noticed as one.
-  - *Sabotage:* restoring `(wire, None)` on the hard arm fails the new test; **the pre-existing one
-    stays green**, which is the demonstration that it was blind to that branch.
-
-- **Finding 11 — non-OTA burst decode errors swallowed.** `crates/openpulse-daemon/src/server.rs`
-  used `.unwrap_or_default()` with no log while both sibling arms in the same `match` log theirs.
-  The callee emits partial diagnostics one layer down, so the arm was never fully silent — only the
-  terminal reason was lost. One-line mirror of the siblings.
-
-- **Finding 15 — the slice-factor table was measured on one plugin and 6 of 10 variants.**
-  - `tests/fec_slice_expansion.rs` hardcoded `MODE = "BPSK250"` and skipped `Ldpc`, `LdpcHighRate`,
-    `ShortRs`, `Turbo` — while the factor table's own doc quotes `LdpcHighRate 1.50` and `Ldpc 2.65`
-    as "measured". All ten now run and **all pass**: the factors were right, just unverified.
-  - The table's *justification* is a claim about plugin geometry, so it is now measured on a second
-    plugin. **Measured: `MFSK16 + Rs` emits 135 936 samples — exactly 1.00× its raw geometry —
-    against a 271 872-sample reserve.** Its geometry *is* one RS block with no margin, so the
-    "reserve covers the second block" premise does not hold and it carries a permanent 2× over-
-    allocation. Waste rather than defect: `frame_arrival_samples` already sizes settle recovery from
-    the raw geometry, so the reachability harm this would once have caused is closed. Pinned with
-    the numbers so a future mode-aware factor has a baseline.
-
-- **Finding 14 — two reproduction seams with no caller, one of them wrong.**
-  - `route_with_capture_agc` and `route_embedded_with_cfo` were built to reproduce the
-    hardware-diagnosed AGC (#1009/#1010) and carrier-offset defects, then left uncalled.
-  - **Measured cold-start transient:** a cold AGC peaks at **272× the input** over the first 200
-    samples — the preamble region — versus **5.9×** when primed with 1 s of idle noise, with the
-    **same settled gain (1.10×)** either way. So priming changes the transient and nothing else, and
-    the cold ramp is in the wrong causal direction (a real AGC settles *down* onto an arriving
-    signal). Uncorrected, the seam would have mis-measured the defect it exists for.
-  - *Fix:* `route_with_capture_agc` gains an `idle_secs` prime; both seams now have callers in
-    `tests/carrier_offset_acquisition.rs`.
-  - **Correction found by probing rather than assuming:** the first embedded+CFO test failed with
-    `invalid magic`, which reads as a carrier-tracking failure. It was not — at `noise_rms = 0.02`
-    the decode fails **at offset 0 too**; the idle floor alone defeats acquisition. Parameters moved
-    to 0.005 and a **zero-offset control** added so the noise level and the carrier offset stay
-    separable.
-- **Test results (run):** `fec_slice_expansion` **3/3**; `engine_events` **9/9**;
-  `carrier_offset_acquisition` **7/7**; clippy clean on `openpulse-modem` + `openpulse-daemon`.
-
----
-
-## 2026-07-30 — The energy gate's cold-start blind window (the #1021 trigger) is closed
-
-- **Requirement / change:** `EnergyGate` must not pass a real receiver's idle noise floor. This was
-  the *trigger* for #1021; PR #1038 made it survivable (the scan walks past a condemned anchor) but
-  left the receiver still settling AFC on noise first.
-- **The blind window.** `threshold()` returned a fixed `ABS_THRESHOLD = 1e-4` until it held
-  `MIN_HISTORY = 32` windows. A real idle floor sits **above** that constant, so the first window of
-  pure noise passed. Measured: IC-9700 idle **4.1e-4**, four times the fallback. And that station
-  **passes `scripts/onair-rx-level-check.sh`**, which bounds the floor only from above (against the
-  clamp *ceiling*, 1.07e-3) — so `1e-4 … 1.07e-3` was covered by neither, and it is exactly the band
-  a correctly configured station occupies.
-- **Design decision (+ rationale).** The threshold is now derived from whatever history exists,
-  including a single window, and `passes` records the window **before** computing the threshold so
-  the first one is judged against a floor derived from itself.
-  - **What made the fallback look necessary, and why it was not.** The buffer-is-the-frame fixtures
-    have signal in window 1, so a self-derived threshold appears certain to gate them out. Measured,
-    the two regimes separate in *opposite* directions:
-
-    | first window is | `floor × 3` | after clamp | verdict |
-    |---|---|---|---|
-    | real idle noise, 4e-4 | 1.2e-3 | 1.2e-3 | **rejected** (correct) |
-    | fixture signal, **0.36** | 1.08 | `MAX_THRESHOLD` 3.2e-3 | **passes** (100× headroom) |
-
-  - `MAX_THRESHOLD` is what protects the fixtures. Note its own comment claimed loopback levels of
-    "1e-3 … 5e-3"; `route_clean` actually delivers ≈ **0.36** mean-square, so the clamp had two
-    orders of magnitude more headroom than it advertised. **Measuring the fixture regime is what
-    unblocked this** — the design was rejected on an assumed level in the previous session.
-- **Implementation:** `crates/openpulse-modem/src/engine.rs` — `EnergyGate::threshold` /
-  `EnergyGate::passes`; `MIN_HISTORY` removed.
-- **Measurements (actually run)** on `ic9700-frame-bpsk250-rs-whitened.wav`, composing with #1038:
-
-  | | settles | condemnations | where |
-  |---|---|---|---|
-  | before both fixes | 78 | 77 | all on noise at sample 96 |
-  | #1038 livelock fix only | 8 | 7 | walks from noise to the frame |
-  | **+ this fix** | **2** | **1** | **both at the frame** (82144, 82304); decodes in 0.72 s |
-
-- **Tests:** `energy_gate_rejects_a_real_idle_floor_from_the_very_first_window` (the #1021 regime,
-  at the measured 4.1e-4 floor, asserting the measured 1.97e-3 burst still passes) and
-  `energy_gate_passes_a_fixture_whose_first_window_is_signal` (the counterweight, at the measured
-  0.36). `energy_gate_uses_absolute_floor_until_history_fills` renamed to
-  `energy_gate_never_falls_below_the_absolute_floor` — its old name described the removed behaviour.
-- **Test results (run):** gate unit tests **4/4**; `capture_replay_corpus` **8/8**.
-- **Sabotage verification:** restoring the exact pre-fix cold-start fallback
-  (`if self.history.len() < 32 { return ABS_THRESHOLD }`) fails
-  `energy_gate_rejects_a_real_idle_floor_from_the_very_first_window` while the fixture counterweight
-  stays green — i.e. the sabotage reproduces the blind window and nothing else.
-- **Docs:** `scripts/onair-rx-level-check.sh` now records that its ceiling check never covered this
-  band, that the gap was a decode gate, and that it is closed in code — so the script's remaining
-  check is necessary and sufficient rather than silently partial.
-
-## 2026-08-18 — the wire-format break package is decided (proposal recorded)
-
-- **Requirement/change:** the pre-1.0 window contains one wire-format break (maintainer decision 2,
-  2026-08-03). What was open was *which* changes go in it. Left undecided, a straggler after the
-  on-air campaign re-opens the campaign (decision 1's consequence).
-- **Design decision (+ rationale):** assemble the package from an **inventory of what goes on the
-  air**, not from the set of filed issues — nine items, each shipping as its own PR and gate.
-  #1062 stays in (it carries the maintainer's decision, and it reshapes the only unwhitened, pre-FEC
-  region, where a format-epoch marker would have to live). Added by inventory and filed: rendezvous (#1163)
-  and QSY (#1162) version tokens, an authoritative `WireEnvelope` version byte (#1164),
-  `AckFrame` reserved-bit enforcement (#1165), a ruling on the unwired
-  `supported_compression`/`supported_fec_modes` fields (#1166), and a keep-or-widen decision on
-  `Frame`'s u8 payload length (#1167). Scoping notes posted on #1062, #1147 and #1148.
-- **Implementation (files):** `docs/dev/project/release-1.0-criteria.md` — new
-  *The wire-format break package* section; *Sequencing* step 2 amended in the same change so the
-  document does not carry live guidance ("declining the break is a legitimate outcome") that the
-  package supersedes, while keeping the `demod_parity` evidence that motivated it; the doc preamble's
-  "those three are settled" corrected to four (pre-existing rot — a fourth decision was added
-  2026-08-05).
-- **Tests:** none — this is a decision record, not code. The items it schedules carry their own gates,
-  two of which are specified here: a **period** gate for #1148 (all six existing `scramble.rs` tests
-  pass on the shipped 21-bit keystream because none measures period) and re-recording of the three
-  recorded-frame replay gates the whitener change turns red.
-- **Test results (run):** n/a. Verified mechanically instead: the citations in the new section were
-  re-checked against the code by an independent reviewer, which corrected five of them.
-- **Adversarial review:** two passes. The first rejected the headline recommendation — I proposed
-  declining #1062, quoting this document's decision block **two lines short of its ruling on #1062**,
-  and citing the F7 measurement for its null half (spreading buys no noise-floor margin) while
-  ignoring the two benefits it attributes to a PN template (onset placement, peak sidelobe
-  0.997 → 0.234, and interferer refusal). The second reviewed the write-up itself and corrected:
-  both handshakes sign serde declaration order (so #1147 is a signature-domain change on the
-  classical path too, not only PQ); #1157's CFAR **stands down** at narrow filters rather than
-  costing detection; three of six replay gates go red, not all; six scramble tests, not four; nine
-  `demodulate_soft` descramble call sites, not ten (the definition was counted as a caller); and the
-  rendezvous codec was missing from the inventory.
-
-## 2026-08-19 — the two open rows of the wire-format package are decided
-
-- **Requirement/change:** the break package left two rows to the maintainer: whether the PQ handshake
-  is a 1.0 on-air feature, and keep-or-widen for `Frame`'s `u8` payload length. Both freeze at the
-  tag, so both had to be decided rather than inherited.
-- **Evidence put in front of the decision** (airtime uncoded at the default `active_mode`,
-  BPSK250 = 31.25 B/s): classical CONREQ 710 B ≈ 23 s, binary ≈ 7 s; **PQ Hybrid CONREQ 17 939 B ≈
-  9.6 min**, binary ≈ 2.7 min. And an inventory with a positive control — the classical
-  `ConReq::create_full` has three daemon callers, so the filter works, while the PQ handshake has
-  **zero** production callers (38 references in its own integration test, 6 in its own module).
-- **Decisions (maintainer, 2026-08-19):**
-  - **PQ is scoped into #1147.** Both handshakes get the binary encoding in this window. The honest
-    limit is recorded with it: 2.7 min is still unusable, so PQ needs cached identities or
-    out-of-band key distribution before it ships — a separate question, not part of 1.0. What the
-    decision buys is a finished format, so wiring PQ later is not a wire break.
-  - **`Frame` keeps `u8`** (#1167 closed). SAR carries objects to 64 005 B so the cap binds nothing
-    functional; overhead at 255 B is 3.9 %; a longer frame loses more per fade outage. Reopened only
-    by a measurement: a top wideband rung whose goodput is *turnaround-bound* rather than
-    payload-bound.
-- **Implementation (files):** `docs/dev/project/release-1.0-criteria.md` — package table rows for
-  #1147 and #1167 and the PQ rider; issue comments on #1147 and #1167 (closed).
-- **Tests:** none — decision record. #1147's implementation carries its own gates, and its riskiest
-  property is named there: re-encoding changes what is **signed** on both paths, because
-  `handshake.rs:307-322` and `pq_handshake.rs:254-257` both serialise in serde declaration order
-  ("canonical" is a label, not key-sorting).
-- **Test results (run):** n/a.
-
-## 2026-08-19 — `ddc_mix` underflows in the dev profile; found by landing a stranded harness
-
-- **Requirement/change:** `openpulse_dsp::acquisition::ddc_mix` panics with "attempt to subtract with
-  overflow" on its first loop iteration in any dev-profile build. The guard read `n - ntap + 1` while
-  the loop starts at `n == ntap - 1`.
-- **How it surfaced:** a branch-lifecycle sweep found `derive/bpsk31-rho-constants` stranded (pushed
-  2026-08-04, no PR ever opened) carrying the `#[ignore]`d harness behind numbers already published
-  on #1062. Running one of its tests before landing it — the first dev-profile execution of this code
-  path in its life — panicked immediately.
-- **Severity, stated precisely (a review corrected two halves of my first reading):**
-  - **Release is bit-correct, not lossy.** Wrapping arithmetic makes `n - ntap + 1` equal
-    `n + 1 - ntap` exactly for every `n >= ntap - 1`, confirmed across decim ∈ {1,2,3,4,8,32} with
-    identical kept-index sets. So every number ever measured through the DDC stands. The defect is
-    that **the type has never been executable under the profile `cargo test` uses**.
-  - **The production arm is dead code today.** `VetoCorrelator::Ddc` (`engine.rs:424`) is built only
-    for templates over `MAX_PREAMBLE_CORRELATION_SAMPLES` (2048); the only trait impl of
-    `preamble_template` is BPSK250's at 992 samples. Zero production impact — and a hard blocker for
-    #1062's phase-0 follow-on, which exists precisely to give the long-template modes a veto.
-- **Why no gate caught it — three layers, not one:** the `ddc_correlation_equivalence` tests are all
-  `#[ignore]`d; they never construct `DdcMatchedFilter` at all, but **reimplement** the mixer locally
-  (carrying the same underflowing expression, born with it in `caa7e1ae` and copied into production
-  in `0eac1791`); and both copies have only ever run in release. Any one layer alone would have
-  hidden it.
-- **Implementation (files/functions):** `crates/openpulse-dsp/src/acquisition.rs` — `ddc_mix` guard;
-  `crates/openpulse-modem/src/engine.rs` — the `MAX_PREAMBLE_CORRELATION_SAMPLES` doc now carries the
-  provenance of its "exact to four decimals" claim, which was measured on the reimplementation, in
-  release, and is not machine-checked.
-- **Tests:** `openpulse_dsp::acquisition::tests::ddc_mix_keeps_the_first_sample_and_every_decim_th_one`
-  — a **unit** test, because `ddc_mix` is module-private and a probe needing private access is a unit
-  test, not an exported accessor. It asserts more than "does not panic": the first output sample (the
-  one the panic sat on) is present and the output count is `(len - ntap + 1).div_ceil(decim)`, across
-  four decimation factors.
-- **Test results (run):** `openpulse-dsp` 99 passed / 0 failed (plus 1 doc-ish suite, 1 ignored).
-  **Sabotage-verified:** restoring `n - ntap + 1` fails the new test with the exact underflow panic at
-  the guard line; the fix passes it.
-- **Wiring gate (#1170), added in the same change after review:**
-  `engine::ddc_veto_arm::an_oversized_template_builds_the_ddc_arm_within_the_budget` and
-  `::the_ddc_arm_correlates_its_own_template_through_the_engine` — a `#[cfg(test)]` module beside
-  `idle_rho_probe`, so `build_preamble_veto`, `preamble_rho` and the private `VetoCorrelator` are
-  reachable without exporting an instrument. It asserts the **arm variant directly** (no
-  `samples.len()` proxy), that the budget is honoured **after** decimation, and that the arm returns
-  near-unity rho for its own template through the engine's own grid plan. Sabotage-verified: both
-  fail with the exact underflow when `n - ntap + 1` is restored. Scope, stated in the module: it pins
-  **wiring and computation, never thresholds** — the stub's rho constants are arbitrary.
-  Review corrected two things here: I had proposed asserting through the full receive path
-  (`rho_accepted + rho_rejected > 0`), which couples a wiring gate to acquisition policy and rests on
-  an assertion nobody has ever watched pass; and I had accepted a false dilemma about private access,
-  when the repo's own `idle_rho_probe` is the precedent that dissolves it.
-- **Residual, for #1062's ledger:** the engine's `VetoCorrelator::Ddc` arm still has no test through
-  the full receive path — that needs a plugin publishing a >2048-sample template, and none
-  exists. The mode that first activates the arm should carry the production-entry test.
-
-## 2026-08-19 — the evidence bundle records rig state, and filter width is measured from audio
-
-- **Requirement/change:** `release-1.0-criteria.md` sequencing step 4 requires the bundle filter/trim
-  read-back before the radio window. #1060 established why: idle correlation ρ moves with receive
-  bandwidth (per-window p50 0.131 at 2470 Hz → 0.351 at 309 Hz), so a ρ number whose filter width is
-  unrecorded cannot be interpreted afterwards.
-- **What was actually wrong (my first diagnosis was false):** I reported that the campaign recorded
-  "no rig state at all". It reads *more* than I proposed — `run-onair-ic9700-ft991a.sh`'s
-  `preflight_check` batch-reads FREQ, MODE, PASSBAND, RFPOWER, COMP, NB/NR + their function
-  switches, SQL, VOX, RFGAIN (+ the raw Yaesu `RG0;`), PREAMP, SWR, STRENGTH and the PulseAudio
-  volumes — and **echoes every field to the console and discards it**, while the report JSON wrote
-  `rig_mode_a`/`freq_hz` from the *intended* env values. Intent stamped where a later reader takes
-  it for verification: the dual-card archetype, in the artifact rather than in the rig.
-- **Design decision (+ rationale):**
-  1. **The authoritative filter-width record is audio-derived; CAT is secondary.** Measured on the
-     real IC-9700 with hamlib 4.6.2 (2026-08-17): hamlib reports passband width **0 regardless**, and
-     `M PKTUSB 0` does not restore a width. Idle noise through a receive filter *is* the filter
-     shape, so the −20 dB occupied band measures what CAT cannot. Both are recorded; disagreement is
-     the #1060 tell.
-  2. **Read-only reads, split from the corrector.** `preflight_check` applies COMP/NB/NR/SQL/VOX
-     corrections *before* reading, so it cannot double as an evidence reader; `read_rig_state_a/b`
-     are pure reads.
-  3. **The post-run read happens before the EXIT trap.** `cleanup_all` calls `restore_rig_state_a/b`,
-     so a later read would record the *restored pre-test* state as the test's — a confidently wrong
-     record, worse than the absent one.
-  4. **Absent is recorded as absent, with a reason** — never defaulted.
-- **Implementation (files):** `scripts/run-onair-ic9700-ft991a.sh` — `read_rig_state_a/b`,
-  `record_rig_state`, a post-run read, and a `rig_state` block in the report carrying both reads,
-  their raw lines, and a `drift_between_reads` list; the intent fields renamed to
-  `intended_freq_hz` / `intended_rig_mode_a|b`. `scripts/onair-rx-idle-floor.py` —
-  `occupied_band_db()` plus `--self-test`.
-- **Tests:** `onair-rx-idle-floor.py --self-test` — five known-width cases (2400/500/250 Hz, two of
-  them with a strong birdie) and a negative control (unfiltered noise must read wide). The criterion
-  is two-sided deliberately: width within 15 % **and** the band contains the signal centre, because a
-  width alone can be right while the band sits on a birdie.
-- **Test results (run):** self-test 6/6, exit 0. **Sabotage-verified** with real exit codes (not a
-  pipeline): narrowing the smoothing kernel to 5 bins exits **1** with the two birdie cases reporting
-  3.9 Hz centred on the tone; restored, exit **0**. The rig_state builder was controlled separately
-  on fixture files — available/unavailable distinguished with reasons, and drift flagged on a
-  RFGAIN 0.145 → 0.037 change, which is the 2026-07-30 FT-991A episode's own signature.
-- **Two defects the controls caught in my own instrument**, both before it could be trusted: a global
-  percentile reference reported a 250 Hz band as 3999 Hz (at 250 Hz only ~6 % of bins are in-band, so
-  the percentile lands in the stopband), and a 5-bin kernel let one out-of-band birdie capture the
-  measurement. The first is why the reference is a peak-anchored contiguous run; the second is why
-  the kernel is ~50 Hz.
-- **Not done, stated rather than implied:** the occupied band is not yet computed from the run's own
-  RX captures into the report — that is the mid-run witness the design calls for, and it is the next
-  step. The bundle also does not yet carry the `rig-state-*.txt` files.
-
-## 2026-08-19 — stranded branches: a backstop script, and the harness that was stranded
-
-- **Requirement/change:** three local branches had gone stale, all with one signature — pushed to
-  origin, **no PR ever opened**, findings posted as issue comments, branch left behind.
-  `delete_branch_on_merge` was already `true` on the repo (read back, not assumed) and did nothing
-  for any of them, because none ever merged: delete-on-merge is a lifecycle *exit*.
-- **Design decision (+ rationale):** the sweep is a backstop, not a fix. Two causes were named — push
-  is not a tracked event (the gap between "pushed" and "PR opened" has no owner, and a session that
-  ends in it strands the branch), and a research harness has no home in the tree, because its
-  *findings* go into an issue comment while the harness needs an `#[ignore]` plus a runner decision
-  before it can land. The prevention (open a draft PR at first push) is a workflow policy and was
-  handed to the skills repo; what belongs here is the detector plus landing the stranded work.
-- **Implementation (files):** `scripts/branch-audit.sh` — classifies from **PR state** with a
-  **two-dot** diff as corroboration (three-dot diffs the merge-base and reports "not merged" for
-  every branch with commits), derives the default branch from `origin/HEAD`, distinguishes
-  never-pushed (live local work) from pushed-with-no-PR (the stale signature), never deletes, and
-  `--strict` **refuses** when `gh` is absent rather than exiting 0 having classified nothing.
-  `crates/openpulse-modem/tests/bpsk31_constant_derivation.rs` — the stranded harness, landed
-  `#[ignore = "verification"]`.
-- **Tests:** the script is controlled both ways rather than asserted: a branch whose content is in
-  `main` classifies as "already in main" (a classifier calling everything stale looks identical to a
-  correct one on a stale-only sample), and with `gh` hidden from `PATH`, `--strict` exits 2 with its
-  reason while a plain run still reports, marked `unknown`.
-- **Test results (run):** audit run on the live tree reproduces the pile exactly (three branches,
-  `UNTRACKED - pushed, no PR ever opened`); controls: `rc=2` without `gh`, `rc=1` with it.
-  Harness: 10 tests, all `#[ignore]`d, compiles and runs — `r1` executes at HEAD once the `ddc_mix`
-  fix is in, which is what this branch waits on.
-- **What landing it found:** running the harness for the first time since 2026-08-04 surfaced the
-  `ddc_mix` underflow (separate entry, same day). The apparatus behind numbers already published on
-  #1062 was unavailable for checking, and the moment it ran it found a live defect — which is the
-  argument for landing harnesses rather than stranding them, stated as evidence rather than as
-  principle.
-- **Disposition of the other two branches:** `investigate/1058-retry-budget-ablation` deleted, SHA
-  `a9f7af69` recorded on #1058 (its previous sweep had recorded "Left alone", which is not a terminal
-  state and cost another 16 days); `docs/archive-claude-md-history` deleted, SHA `eb6af1d5` recorded
-  on the issue filed to redo it (#1169), since it is the one branch whose content no longer applies.
-
-## 2026-08-20 — the twin-daemon offset gate had a load-dependent verdict
-
-- **Requirement/change:** `twin_daemon_bridge::a_message_crosses_the_bridge_between_two_rigs_that_disagree_on_frequency`
-  (added with #1118, REQ-PHY-03 at −64 Hz) **failed inside a full `gate.sh` run and passes alone in
-  4.37 s**. The gate log shows it ran 60.27 s against a 60 s timeout — the bound expired; nothing
-  about acquisition changed.
-- **Cause:** the verdict is wall-clock bounded, on a machine where every core was busy running the
-  rest of the workspace suite. This is #1066's archetype (same input, opposite verdicts by load) in a
-  test written the day before.
-- **Design decision (+ rationale):** the bound cannot be moved into *work* the way #1066 moved the
-  receive search — this is an end-to-end round trip between two real daemons whose receive ticks run
-  in real time, and there is no counter to bound on. So the bound is set from the **measured idle
-  cost** with a stated multiplier (4.4 s idle → 300 s, ~68×), and the failure is made
-  **self-diagnosing**: the loop counts control events, so zero events reads as a starved machine
-  while events-without-a-decode is the real defect this gate exists to catch. Both are named in the
-  assertion message.
-- **Implementation (files):** `crates/openpulse-daemon/tests/twin_daemon_bridge.rs`.
-- **Tests:** the test itself.
-- **Test results (run):** passes alone in 4.37 s; passes in 4.75 s with all 16 cores spinning.
-- **Honest limit on that evidence, stated rather than implied:** the synthetic load **did not
-  reproduce the failure**, so it does not verify the fix — sixteen busy loops are not a gate run,
-  where cargo runs many test binaries in parallel, each spawning daemons, threads and I/O. The only
-  verification that counts is a full `gate.sh` run, and that is n = 1 per run for a flake whose base
-  rate is unknown.
-## 2026-08-20 — the branch detector misclassified its own author's branches
-
-- **Requirement/change:** `scripts/branch-audit.sh` (landed in #1174) reported
-  `docs/wire-format-decisions` as **"pushed, no PR ever opened"** — the stale signature — for a
-  branch that had never left the machine. Found by running the detector on its own repo minutes
-  after it merged.
-- **Cause:** it treated any non-empty `%(upstream:short)` as evidence of a push. But
-  `git checkout -b X origin/main` sets X's upstream to **origin/main**, so every branch cut that way
-  looked pushed. The check now requires the upstream to be the branch's *own* ref (`origin/$b`).
-- **Why it matters more than a cosmetic mislabel:** the whole point of separating never-pushed from
-  pushed-with-no-PR is that the first is live local work to leave alone. A detector that calls live
-  work stale is the one that eventually gets acted on.
-- **Implementation (files):** `scripts/branch-audit.sh` — upstream comparison, plus `--self-test`.
-- **Tests:** `--self-test` builds a throwaway repo with known-answer branches: one cut from
-  `origin/main` and never pushed, one whose tip is the default branch, and the default branch itself
-  (which must not be listed). Committed rather than run once, because the failure mode is silent — a
-  classifier that calls everything stale looks identical to a correct one on a stale-only sample,
-  which is exactly the sample you have when you go looking.
-- **Test results (run):** self-test 3/3, exit 0. **Sabotage-verified** with real exit codes:
-  restoring the any-upstream test exits **1** with `never-pushed` reported as
-  `UNTRACKED - pushed, no PR ever opened`; restored, exit **0**.
-
-
-## 2026-08-21 — instrumenting #1176 rather than guessing at it again
-
-- **Requirement/change:** the REQ-PHY-03 twin-daemon gate fails intermittently (#1176). Two
-  diagnoses have now been wrong: "the bound expired" (#1175, falsified by its own diagnostic — it
-  fails identically at 300 s) and "the dev profile makes the DSP too slow to hold a 10 ms tick"
-  (falsified by review at mechanism level).
-- **Why the profile hypothesis is dead, stated so it is not re-proposed:** nothing on this path
-  couples *correctness* to time. A's frame is written in ONE `write()` (`engine.rs:6537` →
-  `loopback.rs:253-257`) and the bridge drains atomically (`channel_sim.rs:30-33`), so it cannot be
-  split; the loopback queues are unbounded with no expiry, so nothing rots while B is slow;
-  `accumulate_routed` gates on **content**, not arrival time (`engine.rs:2020-2052`); and
-  `decode_burst` (`engine.rs:2122-2245`) is work-bounded with no `Instant`. The wall-clock retry
-  budget I was pattern-matching on lives in `receive_with_timeout_fec_inner` — **the CLI
-  `--listen-ms` path this test never executes** — so citing #1058's debug/release margin here was a
-  category error. Slow DSP can delay `FrameReceived`; it cannot remove it.
-- **What the maintainer's argument establishes, now with a mechanism rather than an analogy:** he
-  objected that PACTOR modems run on microcontrollers and VARA HF runs on a Pi 4 under Wine, so CPU
-  starvation on a 16-core desktop is not a plausible statement about the modem. The code agrees and
-  goes further — every stage here is a non-expiring queue feeding a work-bounded decode, so **any**
-  load sensitivity in this test is a harness or observation defect by construction.
-- **Implementation (files):** `crates/openpulse-daemon/src/twin.rs` — `BridgeStats` (samples moved
-  each way, from the count `bridge_through` already returned and the harness discarded, plus daemon
-  thread liveness, which nothing reported before: a dead transmitter is indistinguishable from a deaf
-  receiver at the far end). `crates/openpulse-daemon/tests/twin_daemon_bridge.rs` — A's control
-  stream is watched (it was not), both streams' event **kinds** are tallied rather than counted, and
-  the pre-send fixed sleep is replaced by waiting for a real event from B.
-- **Tests:** the gate itself. On failure it now prints A's kinds, B's kinds and the rig stats, and
-  names the read order: no transmit event on A or a dead A ⇒ upstream of the channel; forward
-  samples ≈ 0 ⇒ the bridge; samples moved with no `DcdChange` ⇒ B's capture seam; `DcdChange`
-  without a decode ⇒ the acquisition failure the gate is for.
-- **Test results (run):** idle 5.1–5.4 s pass. **Reproduction attempts that did NOT reproduce, so
-  the record is not one-sided:** three runs with the sync gate removed under 16 rustc processes at
-  load 14.2 all passed, and one instrumented run under the same load passed. Standing tally is 3
-  failures (two `gate.sh` runs, one manual under compile load) against ~8 passes, **mechanism
-  unknown**. The instrumentation exists to partition the next one; no further hypothesis is recorded
-  until it does.
-
-## 2026-08-21 — #1148: the whitener's period was 21 bits, and the gate that would have caught it
-
-- **Requirement/change:** `openpulse_core::scramble` documented a 511-byte period and delivered
-  **21 bits**. Part of the decided pre-1.0 wire-format break package.
-- **Measured, not inferred:** the shipped taps `((state >> 8) ^ (state >> 4))` give
-  `s[n+9] = s[n+8] ⊕ s[n+4]`, characteristic `x⁹+x⁸+x⁴ = x⁴(x⁵+x⁴+1)`, and `x⁵+x⁴+1` is reducible —
-  period lcm(3,7) = **21 bits**, with register bits 0..3 a dead delay line. The intended `x⁹+x⁵+1` is
-  `(state ^ (state >> 5))`: **511 bits and 511 bytes**, equal because `gcd(8, 511) = 1`. Verified by
-  two independent derivations (a direct simulation, and the ITU-T O.150 recurrence), which agree on
-  the same known-answer vector.
-- **Design decision (+ rationale):** the gate pins the **sequence**, not a property of it. Period
-  alone is insufficient: the reciprocal trinomial `x⁹+x⁴+1` is also primitive with period 511 and
-  puts different bits on the air. So four assertions — minimal bit period 511 (with "no period found"
-  a failure, which is what the old taps produce from index 0 because their state map is 2-to-1),
-  minimal byte period 511, a 16-byte known-answer vector, and the n−1 = 8 longest-zero-run property.
-- **Corpus decision — Option A (ignore until re-record), after review rejected the alternatives:**
-  a test-only legacy keystream is unreachable from integration tests without a cargo feature carrying
-  a second wire format in production source, and would attest a build no station runs; re-recording
-  now pays the rig session twice, because these captures also carry the **pre-#1062 preamble** and
-  die again inside the same window; asserting only the acquisition stages buys one PR window and
-  changes what the cost gate at `:370` means.
-- **Implementation (files):** `crates/openpulse-core/src/scramble.rs` (taps, gate, and the
-  `MAX_DEAD_BITS` comment that invited the next silent tap change);
-  `crates/openpulse-modem/tests/capture_replay_corpus.rs` (four `#[ignore]`s with tracking + epoch);
-  `docs/dev/design/protocol-wire-spec.md` (**§1a — the spec did not mention whitening at all**, so a
-  third-party implementer would have built a non-interoperable modem; now polynomial, seed, packing,
-  coverage, self-inverse, the KAT and the pre-#1148 history); `captures/README.md`; the acceptance
-  table; this ledger.
-- **Tests:** `scramble::tests::the_keystream_is_the_frozen_prbs9_sequence`.
-- **Test results (run):** `openpulse-core` scramble **7/7**. **Sabotage-verified in two rounds**,
-  because one could not distinguish them: old taps → the period search reports **no period** (rc 101);
-  correct taps with only `SEED` changed → the **KAT fails alone** while the period stays 511 (rc 101);
-  restored → pass. The second round is what proves the vector is load-bearing.
-- **Ablation that preceded the ignores** (required so the premise is proven, not assumed): running the
-  corpus against the new taps fails **exactly** the four recorded-frame tests and passes the other
-  **eight** — including every gate that synthesizes a frame inside real recorded noise. So the
-  captures do carry the old keystream, and the real-audio safety net largely survives the dark window.
-- **Correction carried from review:** it is **four** tests, not three. The criteria doc said three and
-  listed three; that miscount had already propagated into the package section.
