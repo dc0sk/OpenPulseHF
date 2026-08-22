@@ -10502,6 +10502,28 @@ The last mode still failing on the dual-card rig after the AGC misclassification
   where cargo runs many test binaries in parallel, each spawning daemons, threads and I/O. The only
   verification that counts is a full `gate.sh` run, and that is n = 1 per run for a flake whose base
   rate is unknown.
+## 2026-08-20 — the branch detector misclassified its own author's branches
+
+- **Requirement/change:** `scripts/branch-audit.sh` (landed in #1174) reported
+  `docs/wire-format-decisions` as **"pushed, no PR ever opened"** — the stale signature — for a
+  branch that had never left the machine. Found by running the detector on its own repo minutes
+  after it merged.
+- **Cause:** it treated any non-empty `%(upstream:short)` as evidence of a push. But
+  `git checkout -b X origin/main` sets X's upstream to **origin/main**, so every branch cut that way
+  looked pushed. The check now requires the upstream to be the branch's *own* ref (`origin/$b`).
+- **Why it matters more than a cosmetic mislabel:** the whole point of separating never-pushed from
+  pushed-with-no-PR is that the first is live local work to leave alone. A detector that calls live
+  work stale is the one that eventually gets acted on.
+- **Implementation (files):** `scripts/branch-audit.sh` — upstream comparison, plus `--self-test`.
+- **Tests:** `--self-test` builds a throwaway repo with known-answer branches: one cut from
+  `origin/main` and never pushed, one whose tip is the default branch, and the default branch itself
+  (which must not be listed). Committed rather than run once, because the failure mode is silent — a
+  classifier that calls everything stale looks identical to a correct one on a stale-only sample,
+  which is exactly the sample you have when you go looking.
+- **Test results (run):** self-test 3/3, exit 0. **Sabotage-verified** with real exit codes:
+  restoring the any-upstream test exits **1** with `never-pushed` reported as
+  `UNTRACKED - pushed, no PR ever opened`; restored, exit **0**.
+
 
 ## 2026-08-21 — #1148: the whitener's period was 21 bits, and the gate that would have caught it
 

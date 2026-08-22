@@ -15,13 +15,65 @@ set -uo pipefail
 
 DAYS=7
 STRICT=0
+SELFTEST=0
 while [ $# -gt 0 ]; do
   case "$1" in
     --days) DAYS="${2:?--days needs a number}"; shift 2 ;;
     --strict) STRICT=1; shift ;;
+    --self-test) SELFTEST=1; shift ;;
     *) echo "unknown argument: $1" >&2; exit 2 ;;
   esac
 done
+
+# Validate the classifier against a throwaway repo with known-answer branches.
+#
+# Committed rather than run once, because the failure mode is silent: a classifier that reports
+# every branch as stale looks identical to a correct one on a stale-only sample — which is exactly
+# the sample you have when you go looking. It has already earned its keep: the first version treated
+# any non-empty upstream as "pushed", and `git checkout -b X origin/main` sets X's upstream to
+# origin/main, so every branch cut that way was reported as "pushed, no PR ever opened" — the stale
+# signature, for work that had never left the machine.
+if [ "$SELFTEST" = 1 ]; then
+  tmp=$(mktemp -d)
+  trap 'rm -rf "$tmp"' EXIT
+  git init -q --bare "$tmp/remote.git"
+  git clone -q "$tmp/remote.git" "$tmp/work" 2>/dev/null
+  (
+    cd "$tmp/work" || exit 1
+    git config user.email t@t; git config user.name t
+    echo base > f.txt; git add f.txt; git -c commit.gpgsign=false commit -qm base
+    git push -q -u origin HEAD:main 2>/dev/null
+    git remote set-head origin main >/dev/null 2>&1
+    git checkout -q -B main
+    # (a) cut from the remote-tracking ref, never pushed: upstream is origin/main, not origin/<b>
+    git checkout -q -b never-pushed origin/main
+    echo x >> f.txt; git add f.txt; git -c commit.gpgsign=false commit -qm work
+    # (b) same tip as main: content absorbed
+    git checkout -q -b absorbed main
+    git checkout -q main
+  ) || { echo "self-test: could not build the fixture repo" >&2; exit 2; }
+
+  out=$(cd "$tmp/work" && "$OLDPWD/$0" --days 0 2>/dev/null)
+  fail=0
+  check() { # label, branch, expected substring
+    if printf '%s' "$out" | grep -E "^$2[[:space:]]" | grep -q "$3"; then
+      echo "  ok   $1"
+    else
+      echo "  FAIL $1 — expected '$3', got: $(printf '%s' "$out" | grep -E "^$2[[:space:]]" || echo '(no row)')"
+      fail=1
+    fi
+  }
+  echo "self-test: classifier against known-answer branches"
+  check "a branch cut from origin/main but never pushed is live work" never-pushed "never pushed"
+  check "a branch whose tip is the default branch is absorbed" absorbed "already in"
+  if printf '%s' "$out" | grep -qE "^main[[:space:]]"; then
+    echo "  FAIL the default branch must not be listed at all"; fail=1
+  else
+    echo "  ok   the default branch is excluded"
+  fi
+  [ "$fail" = 0 ] && echo "self-test: PASS" || echo "self-test: FAIL"
+  exit "$fail"
+fi
 
 cd "$(git rev-parse --show-toplevel)" || exit 2
 
@@ -58,7 +110,12 @@ for b in $(git for-each-ref --format='%(refname:short)' refs/heads/); do
 
   ts=$(git log -1 --format=%ct "$b")
   age=$(( (now - ts) / 86400 ))
+  # A non-empty upstream does NOT mean this branch was pushed: `git checkout -b X origin/main`
+  # sets X's upstream to origin/main, so every branch cut that way looked "pushed, no PR" — the
+  # exact stale signature, reported for work that had never left the machine. The question is
+  # whether a remote branch of THIS name exists, so compare against its own ref.
   upstream=$(git for-each-ref --format='%(upstream:short)' "refs/heads/$b")
+  if [ "$upstream" != "origin/$b" ]; then upstream=""; fi
 
   pr="-"
   if [ "$HAVE_GH" = 1 ]; then
