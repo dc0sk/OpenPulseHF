@@ -191,6 +191,22 @@ pub fn signed_prefix(magic: &[u8; 4], body: &[u8]) -> Result<Vec<u8>, ModemError
     Ok(out)
 }
 
+/// The three spans of a received frame: the signed prefix, the body inside it, and the signature.
+///
+/// Named rather than returned as a bare tuple so a caller cannot silently transpose two `&[u8]`
+/// of identical type — the prefix and the body differ only by seven leading bytes, and verifying
+/// the wrong one would still "work" on well-formed input and fail only on the attack it exists to
+/// stop.
+#[derive(Debug)]
+pub struct FrameSpans<'a> {
+    /// `magic || version || length || body` — exactly what the signature covers.
+    pub signed_prefix: &'a [u8],
+    /// The body region alone.
+    pub body: &'a [u8],
+    /// The trailing, unsigned Ed25519 signature.
+    pub signature: &'a [u8],
+}
+
 /// Split a received frame into its signed prefix, body and signature.
 ///
 /// Validates magic, version and declared length before anything downstream looks at the body. A v1
@@ -199,7 +215,7 @@ pub fn split_frame<'a>(
     bytes: &'a [u8],
     magic: &[u8; 4],
     what: &str,
-) -> Result<(&'a [u8], &'a [u8], &'a [u8]), ModemError> {
+) -> Result<FrameSpans<'a>, ModemError> {
     if bytes.len() < HEADER_LEN + SIG_LEN {
         return Err(ModemError::Frame(format!(
             "{what} too short: {} bytes, minimum {}",
@@ -226,10 +242,11 @@ pub fn split_frame<'a>(
             bytes.len()
         )));
     }
-    let prefix = &bytes[..HEADER_LEN + declared];
-    let body = &bytes[HEADER_LEN..HEADER_LEN + declared];
-    let signature = &bytes[HEADER_LEN + declared..];
-    Ok((prefix, body, signature))
+    Ok(FrameSpans {
+        signed_prefix: &bytes[..HEADER_LEN + declared],
+        body: &bytes[HEADER_LEN..HEADER_LEN + declared],
+        signature: &bytes[HEADER_LEN + declared..],
+    })
 }
 
 #[cfg(test)]

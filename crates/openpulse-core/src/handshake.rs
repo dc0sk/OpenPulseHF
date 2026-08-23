@@ -1,12 +1,9 @@
 use std::collections::HashMap;
 
 use ed25519_dalek::{Signature, Signer, SigningKey, Verifier, VerifyingKey};
-use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
-use crate::compression::CompressionAlgorithm;
 use crate::error::ModemError;
-use crate::fec::FecMode;
 use crate::handshake_wire::{
     caps, signed_prefix, split_frame, BodyReader, BodyWriter, CONREQ_HASH_LEN, KEX_PUBKEY_LEN,
     MAGIC_CONACK, MAGIC_CONREQ, PUBKEY_LEN,
@@ -258,7 +255,8 @@ impl ConReq {
 
     /// Parse a CONREQ frame. Does **not** verify the signature — see [`verify_conreq`].
     pub fn decode(bytes: &[u8]) -> Result<Self, ModemError> {
-        let (_prefix, body, signature) = split_frame(bytes, MAGIC_CONREQ, "CONREQ")?;
+        let spans = split_frame(bytes, MAGIC_CONREQ, "CONREQ")?;
+        let (body, signature) = (spans.body, spans.signature);
         let mut r = BodyReader::new(body);
         let station_id = r.str_capped("station_id", caps::STATION_ID)?;
         let dst_station = r.str_capped("dst_station", caps::STATION_ID)?;
@@ -314,39 +312,6 @@ impl ConReq {
 // ------------------------------------------------------------------
 // ConAck — connection acknowledgment frame
 // ------------------------------------------------------------------
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct ConAckBody {
-    station_id: String,
-    pubkey: Vec<u8>,
-    selected_mode: SigningMode,
-    session_id: String,
-    selected_compression: CompressionAlgorithm,
-    #[serde(default, skip_serializing_if = "fec_mode_is_none")]
-    selected_fec_mode: FecMode,
-    // Empty grid is skipped so legacy zero-grid frames (and their signatures) are byte-identical.
-    #[serde(default, skip_serializing_if = "String::is_empty")]
-    station_grid: String,
-    // Responder's active OTA rate-ladder identity; skipped when unset for signature compatibility.
-    #[serde(default, skip_serializing_if = "String::is_empty")]
-    profile_name: String,
-    #[serde(default, skip_serializing_if = "u64_is_zero")]
-    profile_fingerprint: u64,
-    // Unix-ms creation time, signed, for replay-freshness. Skipped when 0 for signature compatibility.
-    #[serde(default, skip_serializing_if = "u64_is_zero")]
-    timestamp_ms: u64,
-    // Ephemeral X25519 public key for OTA-ACK key agreement (E7). Skipped when empty.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    kex_pubkey: Vec<u8>,
-}
-
-fn fec_mode_is_none(m: &FecMode) -> bool {
-    *m == FecMode::None
-}
-
-fn u64_is_zero(v: &u64) -> bool {
-    *v == 0
-}
 
 /// Connection acknowledgment sent by the responder during Discovery.
 ///
@@ -443,7 +408,8 @@ impl ConAck {
 
     /// Parse a CONACK frame. Does **not** verify the signature — see [`verify_conack`].
     pub fn decode(bytes: &[u8]) -> Result<Self, ModemError> {
-        let (_prefix, body, signature) = split_frame(bytes, MAGIC_CONACK, "CONACK")?;
+        let spans = split_frame(bytes, MAGIC_CONACK, "CONACK")?;
+        let (body, signature) = (spans.body, spans.signature);
         let mut r = BodyReader::new(body);
         let station_id = r.str_capped("station_id", caps::STATION_ID)?;
         let dst_station = r.str_capped("dst_station", caps::STATION_ID)?;
@@ -493,11 +459,11 @@ pub fn verify_conreq(
     local_min_mode: SigningMode,
     freshness: Option<Freshness>,
 ) -> Result<(ConReq, HandshakeDecision), HandshakeError> {
-    let (prefix, _body, signature) = split_frame(bytes, MAGIC_CONREQ, "CONREQ")
+    let spans = split_frame(bytes, MAGIC_CONREQ, "CONREQ")
         .map_err(|e| HandshakeError::Encoding(e.to_string()))?;
     let req = ConReq::decode(bytes).map_err(|e| HandshakeError::Encoding(e.to_string()))?;
 
-    if !verify_ed25519(&req.pubkey, prefix, signature) {
+    if !verify_ed25519(&req.pubkey, spans.signed_prefix, spans.signature) {
         return Err(HandshakeError::InvalidSignature);
     }
 
@@ -547,11 +513,11 @@ pub fn verify_conack(
     local_min_mode: SigningMode,
     freshness: Option<Freshness>,
 ) -> Result<(ConAck, HandshakeDecision), HandshakeError> {
-    let (prefix, _body, signature) = split_frame(bytes, MAGIC_CONACK, "CONACK")
+    let spans = split_frame(bytes, MAGIC_CONACK, "CONACK")
         .map_err(|e| HandshakeError::Encoding(e.to_string()))?;
     let ack = ConAck::decode(bytes).map_err(|e| HandshakeError::Encoding(e.to_string()))?;
 
-    if !verify_ed25519(&ack.pubkey, prefix, signature) {
+    if !verify_ed25519(&ack.pubkey, spans.signed_prefix, spans.signature) {
         return Err(HandshakeError::InvalidSignature);
     }
 

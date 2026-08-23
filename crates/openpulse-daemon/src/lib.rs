@@ -43,7 +43,8 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use openpulse_channel::dsp::PowerSpectrum;
 #[cfg(not(target_arch = "wasm32"))]
 use openpulse_core::handshake::{
-    verify_conack, verify_conreq, ConAck, ConReq, Freshness, InMemoryTrustStore, TrustStore,
+    verify_conack, verify_conreq, ConAck, ConAckParams, ConReq, ConReqParams, Freshness,
+    InMemoryTrustStore, TrustStore,
 };
 #[cfg(not(target_arch = "wasm32"))]
 use openpulse_core::session_key::{derive_ack_key, generate_kex_ephemeral};
@@ -371,6 +372,15 @@ pub struct PendingHandshake {
     /// Ephemeral X25519 secret for OTA-ACK key agreement (E7); combined with the peer's CONACK
     /// `kex_pubkey` to derive the session ACK-MAC key. All-zero when key agreement is not in use.
     pub kex_secret: [u8; 32],
+    /// The CONREQ **exactly as transmitted**, so the CONACK can be bound to it by hash (#1147).
+    ///
+    /// Kept as bytes rather than as a precomputed hash so the binding is derived from the same
+    /// artifact the peer hashed, not from a value this side computed a second time and could
+    /// compute differently.
+    pub conreq_bytes: Vec<u8>,
+    /// Signing modes our CONREQ offered, so a CONACK selecting an unoffered one is refused
+    /// (F-1147-05).
+    pub offered_modes: Vec<SigningMode>,
 }
 
 /// A peer identity proven by a verified Ed25519 handshake signature.
@@ -1488,19 +1498,16 @@ fn handle_inbound_conreq(
     mode: &str,
     engine: &mut ModemEngine,
 ) {
-    let req = match ConReq::decode(bytes) {
-        Ok(r) => r,
-        Err(e) => {
-            tracing::warn!(error = %e, "handshake: CONREQ decode failed");
-            return;
-        }
-    };
     // Permissive policy: the signature proves key possession; trust classification is recorded
     // but an unknown (first-seen) peer is still allowed to connect, mirroring `ConnectPeer`.
     // Freshness (replay protection): reject a captured/replayed CONREQ outside the clock-skew window.
+    //
+    // Verified from the received BYTES: the signature covers the transmitted prefix, so re-encoding
+    // a decoded struct to recover the signed span would reintroduce the two-representation drift
+    // this format removes.
     let now_ms = unix_now_ms();
-    if let Err(e) = verify_conreq(
-        &req,
+    let req = match verify_conreq(
+        bytes,
         &runtime_state.trust_store,
         PolicyProfile::Permissive,
         SigningMode::Normal,
@@ -1509,7 +1516,24 @@ fn handle_inbound_conreq(
             max_skew_ms: HANDSHAKE_MAX_SKEW_MS,
         }),
     ) {
-        tracing::warn!(peer = %req.station_id, error = %e, "handshake: CONREQ verification rejected");
+        Ok((req, _decision)) => req,
+        Err(e) => {
+            tracing::warn!(error = %e, "handshake: CONREQ verification rejected");
+            return;
+        }
+    };
+
+    // #1178: answer only what is addressed to us. Without this a CONREQ had no destination, so
+    // EVERY daemon in range replied and spent RF before the initiator filtered the answers. Checked
+    // BEFORE the callsign gate below, because the cheapest refusal is the one that never considers
+    // keying the transmitter at all.
+    if !req.is_addressed_to(&runtime_state.local_callsign) {
+        tracing::debug!(
+            peer = %req.station_id,
+            dst = %req.dst_station,
+            local = %runtime_state.local_callsign,
+            "handshake: CONREQ addressed elsewhere; not answering"
+        );
         return;
     }
 
@@ -1540,23 +1564,22 @@ fn handle_inbound_conreq(
         .local_ota_ladder
         .clone()
         .unwrap_or_else(|| (String::new(), 0));
-    match ConAck::create_full(
-        &runtime_state.local_callsign,
-        &runtime_state.station_seed,
-        SigningMode::Normal,
-        &req.session_id,
-        openpulse_core::compression::CompressionAlgorithm::None,
-        openpulse_core::fec::FecMode::None,
-        &runtime_state.local_grid,
-        &ota_name,
-        ota_fp,
-        now_ms,
-        &kex_public,
-    ) {
-        Ok(ack) => match ack.encode() {
-            Ok(frame) => transmit_handshake_frame(engine, mode, &frame),
-            Err(e) => tracing::warn!(error = %e, "handshake: CONACK encode failed"),
+    match ConAck::create(
+        &ConAckParams {
+            station_id: &runtime_state.local_callsign,
+            dst_station: &req.station_id,
+            selected_mode: SigningMode::Normal,
+            // Transcript binding over the CONREQ exactly as received, signature included.
+            conreq_hash: openpulse_core::handshake::conreq_hash(bytes),
+            station_grid: &runtime_state.local_grid,
+            profile_name: &ota_name,
+            profile_fingerprint: ota_fp,
+            timestamp_ms: now_ms,
+            kex_pubkey: &kex_public,
         },
+        &runtime_state.station_seed,
+    ) {
+        Ok(frame) => transmit_handshake_frame(engine, mode, &frame),
         Err(e) => tracing::warn!(error = %e, "handshake: CONACK create failed"),
     }
 
@@ -1591,13 +1614,16 @@ fn handle_inbound_conack(
         tracing::debug!("handshake: CONACK received with no pending CONREQ; ignoring");
         return;
     };
-    // The CONACK must echo our CONREQ's session id. `verify_conack` also re-checks this, but
+    // The CONACK must be bound to the CONREQ we actually sent. `verify_conack` re-checks this, but
     // gating here avoids tearing down a pending handshake on an unrelated peer's CONACK.
-    if ack.session_id != pending.session_id {
+    //
+    // v2 binds by HASH OVER THE TRANSMITTED CONREQ rather than echoing the session id: the id is
+    // cleartext and time-based, so guessable inside the handshake window, while the hash covers the
+    // whole frame including our own `kex_pubkey`.
+    if ack.conreq_hash != openpulse_core::handshake::conreq_hash(&pending.conreq_bytes) {
         tracing::debug!(
-            got = %ack.session_id,
-            want = %pending.session_id,
-            "handshake: CONACK session id mismatch; ignoring"
+            peer = %ack.station_id,
+            "handshake: CONACK is not bound to our CONREQ; ignoring"
         );
         return;
     }
@@ -1613,10 +1639,9 @@ fn handle_inbound_conack(
         return;
     }
     if let Err(e) = verify_conack(
-        &ack,
-        &pending.session_id,
-        &[],
-        &[],
+        bytes,
+        &pending.conreq_bytes,
+        &pending.offered_modes,
         &runtime_state.trust_store,
         PolicyProfile::Permissive,
         SigningMode::Normal,
@@ -1966,31 +1991,34 @@ pub async fn apply_command_to_engine(
                     // Ephemeral X25519 for OTA-ACK key agreement (E7): advertise the public key in the
                     // signed CONREQ, keep the secret to derive the ACK-MAC key from the peer's CONACK.
                     let (kex_secret, kex_public) = generate_kex_ephemeral();
-                    match ConReq::create_full(
-                        &runtime_state.local_callsign,
-                        &runtime_state.station_seed,
-                        vec![SigningMode::Normal],
-                        &session_id,
-                        vec![],
-                        vec![],
-                        &runtime_state.local_grid,
-                        &ota_name,
-                        ota_fp,
-                        now_ms,
-                        &kex_public,
-                    ) {
-                        Ok(req) => match req.encode() {
-                            Ok(frame) => {
-                                transmit_handshake_frame(engine, &mode, &frame);
-                                runtime_state.pending_handshake = Some(PendingHandshake {
-                                    session_id,
-                                    peer_callsign: callsign.clone(),
-                                    started_at: Instant::now(),
-                                    kex_secret,
-                                });
-                            }
-                            Err(e) => tracing::warn!(error = %e, "handshake: CONREQ encode failed"),
+                    let offered_modes = vec![SigningMode::Normal];
+                    match ConReq::create(
+                        &ConReqParams {
+                            station_id: &runtime_state.local_callsign,
+                            // #1178: address the station we are dialling, so no other daemon in
+                            // range spends RF answering a request that was never for it.
+                            dst_station: callsign,
+                            signing_modes: offered_modes.clone(),
+                            session_id: &session_id,
+                            station_grid: &runtime_state.local_grid,
+                            profile_name: &ota_name,
+                            profile_fingerprint: ota_fp,
+                            timestamp_ms: now_ms,
+                            kex_pubkey: &kex_public,
                         },
+                        &runtime_state.station_seed,
+                    ) {
+                        Ok(frame) => {
+                            transmit_handshake_frame(engine, &mode, &frame);
+                            runtime_state.pending_handshake = Some(PendingHandshake {
+                                session_id,
+                                peer_callsign: callsign.clone(),
+                                started_at: Instant::now(),
+                                kex_secret,
+                                conreq_bytes: frame,
+                                offered_modes,
+                            });
+                        }
                         Err(e) => tracing::warn!(error = %e, "handshake: CONREQ create failed"),
                     }
                 }
