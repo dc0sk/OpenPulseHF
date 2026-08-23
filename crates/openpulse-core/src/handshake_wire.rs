@@ -17,7 +17,11 @@ use crate::error::ModemError;
 pub const MAGIC_CONREQ: &[u8; 4] = b"HSCQ";
 /// See [`MAGIC_CONREQ`].
 pub const MAGIC_CONACK: &[u8; 4] = b"HSAK";
-/// Wire version. `0x01` (the JSON format) is rejected outright — there is no dual decode, because
+/// Wire version.
+///
+/// DORMANT(#1147): part of the format's public contract — the wire spec and the known-answer vector
+/// cite it — but no production caller names it, because `split_frame` enforces it internally.
+/// `0x01` (the JSON format) is rejected outright — there is no dual decode, because
 /// there is no compatibility mode for the data plane and inventing one here would be the
 /// "legacy keystream" mistake in a different file.
 pub const WIRE_VERSION: u8 = 0x02;
@@ -25,8 +29,14 @@ pub const WIRE_VERSION: u8 = 0x02;
 /// `magic(4) + version(1) + length(2)`.
 pub const HEADER_LEN: usize = 7;
 /// Ed25519 signature, trailing and unsigned.
+///
+/// DORMANT(#1147): as [`WIRE_VERSION`] — contract surface, enforced internally.
 pub const SIG_LEN: usize = 64;
 /// One SAR fragment's data capacity — 255 B frame payload less the 4 B SAR header.
+///
+/// DORMANT(#1147): the budget every gate asserts against, and the number the whole change exists to
+/// stay under. Consumed by tests rather than by production, because nothing in the encode path
+/// needs to ask: the caps make the bound structural.
 pub const FRAGMENT_CAPACITY: usize = 251;
 
 /// Decoder-enforced caps. These are what make "one fragment" a property of the MAXIMAL LEGAL frame
@@ -191,7 +201,11 @@ pub fn signed_prefix(magic: &[u8; 4], body: &[u8]) -> Result<Vec<u8>, ModemError
     Ok(out)
 }
 
-/// The three spans of a received frame: the signed prefix, the body inside it, and the signature.
+/// The three spans of a received frame.
+///
+/// DORMANT(#1147): production consumes its FIELDS (`split_frame(..)?.signed_prefix`), never the type
+/// by name, so the reachability scan does not see it referenced.
+///: the signed prefix, the body inside it, and the signature.
 ///
 /// Named rather than returned as a bare tuple so a caller cannot silently transpose two `&[u8]`
 /// of identical type — the prefix and the body differ only by seven leading bytes, and verifying

@@ -110,6 +110,7 @@ fn valid_conreq_accepted_unknown_peer_permissive() {
 }
 
 /// BYTE tamper: flipping any byte of the signed prefix must break verification.
+// VERIFIES: REQ-FUN-10
 #[test]
 fn conreq_rejected_invalid_signature() {
     let req = conreq("W1AW", "K2XYZ", 1, vec![SigningMode::Normal]);
@@ -142,6 +143,7 @@ fn conreq_rejected_invalid_signature() {
     ));
 }
 
+// VERIFIES: REQ-FUN-12
 #[test]
 fn conreq_rejected_revoked_key() {
     let req = conreq("W1AW", "K2XYZ", 1, vec![SigningMode::Normal]);

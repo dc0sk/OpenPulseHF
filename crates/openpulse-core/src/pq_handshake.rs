@@ -377,6 +377,13 @@ fn canonical_ack_bytes(ack: &PqConAck) -> Result<Vec<u8>, PqHandshakeError> {
 }
 
 /// Verify a received PqConReq and evaluate trust.
+/// Verify a PQ CONREQ.
+///
+/// DORMANT(#1147): the PQ path has **zero production callers** — nothing constructs or dispatches a
+/// PQ frame yet, which is why #1147 scopes PQ into the format break (so wiring it later is not a
+/// second wire break). It was previously counted reachable only because `handshake.rs` mentioned it
+/// in a doc comment; the reachability scan treats a prose mention as a reference, and rewriting that
+/// comment exposed the truth. Its sibling `verify_pq_conack` has been in the baseline all along.
 pub fn verify_pq_conreq(
     req: &PqConReq,
     trust_store: &dyn TrustStore,

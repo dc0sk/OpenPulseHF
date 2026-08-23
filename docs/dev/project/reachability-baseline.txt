@@ -148,11 +148,13 @@ feed_capture	crates/openpulse-modem/src/channel_sim.rs
 FILEXFER_SAR_TIMEOUT	crates/openpulse-daemon/src/lib.rs
 find_timing_offset_with_expected	plugins/bpsk/src/demodulate.rs
 force_busy	crates/openpulse-core/src/dcd.rs
+FRAGMENT_CAPACITY	crates/openpulse-core/src/handshake_wire.rs
 frame_arrival_samples	crates/openpulse-modem/src/engine.rs
 frame_count	crates/openpulse-core/src/tx_metadata.rs
 frame_plan	crates/openpulse-modem/src/engine.rs
 FrameRecord	apps/openpulse-linksim/src/lib.rs
 frames_done	apps/openpulse-linksim/src/lib.rs
+FrameSpans	crates/openpulse-core/src/handshake_wire.rs
 freq_to_bin	crates/openpulse-channel/src/dsp.rs
 generate_ml_dsa_44_keypair	crates/openpulse-core/src/pq_handshake.rs
 generate_ml_kem_768_keypair	crates/openpulse-core/src/pq_handshake.rs
@@ -404,6 +406,7 @@ SharedVerdict	crates/openpulse-freedv-auth/src/verdict.rs
 SHORT_FEC_ECC_LEN	crates/openpulse-core/src/fec.rs
 should_accept_response	crates/openpulse-core/src/query_propagation.rs
 should_forward_query	crates/openpulse-core/src/query_propagation.rs
+SIG_LEN	crates/openpulse-core/src/handshake_wire.rs
 sign_line	crates/openpulse-qsy/src/frame.rs
 sign_route_response	crates/openpulse-core/src/route_discovery.rs
 sign_route_update	crates/openpulse-core/src/route_discovery.rs
@@ -463,10 +466,12 @@ verify_line	crates/openpulse-qsy/src/frame.rs
 verify_payload_hash	crates/openpulse-core/src/signed_envelope.rs
 verify_peer_descriptor	crates/openpulse-core/src/peer_descriptor.rs
 verify_pq_conack	crates/openpulse-core/src/pq_handshake.rs
+verify_pq_conreq	crates/openpulse-core/src/pq_handshake.rs
 verify_route_response	crates/openpulse-core/src/route_discovery.rs
 verify_route_update	crates/openpulse-core/src/route_discovery.rs
 WINDOW_ARQ_FEEDBACK_SIZE	crates/openpulse-core/src/fec.rs
 WINDOW_ARQ_MAX_RANGES	crates/openpulse-core/src/fec.rs
+WIRE_VERSION	crates/openpulse-core/src/handshake_wire.rs
 with_nlms	crates/openpulse-dsp/src/equalizer.rs
 with_pacing	crates/openpulse-audio/src/loopback.rs
 with_peg	crates/openpulse-core/src/ldpc.rs
