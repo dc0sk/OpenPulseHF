@@ -61,6 +61,36 @@ pub enum SigningMode {
     Hybrid,
 }
 
+impl SigningMode {
+    /// Wire discriminant (#1147). **Frozen**: these are on-air bytes, so the mapping is written out
+    /// explicitly rather than derived from declaration order, where inserting a variant would
+    /// silently renumber every later one and change what a peer understands a frame to mean.
+    pub fn to_wire(self) -> u8 {
+        match self {
+            SigningMode::Normal => 0x01,
+            SigningMode::Psk => 0x02,
+            SigningMode::Relaxed => 0x03,
+            SigningMode::Paranoid => 0x04,
+            SigningMode::Pq => 0x05,
+            SigningMode::Hybrid => 0x06,
+        }
+    }
+
+    /// Inverse of [`Self::to_wire`]. An unknown discriminant is `None` — a peer offering a mode this
+    /// build does not know is a negotiation outcome, not a parse error to guess at.
+    pub fn from_wire(v: u8) -> Option<Self> {
+        Some(match v {
+            0x01 => SigningMode::Normal,
+            0x02 => SigningMode::Psk,
+            0x03 => SigningMode::Relaxed,
+            0x04 => SigningMode::Paranoid,
+            0x05 => SigningMode::Pq,
+            0x06 => SigningMode::Hybrid,
+            _ => return None,
+        })
+    }
+}
+
 /// Station-level policy profile controlling which signing modes and trust levels are accepted.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -375,5 +405,44 @@ mod tests {
         .unwrap();
 
         assert_eq!(keys_a, keys_b);
+    }
+}
+
+#[cfg(test)]
+mod signing_mode_wire_tests {
+    use super::SigningMode;
+
+    /// THE FROZEN MAPPING. These bytes go on the air, so a change here changes what a peer believes
+    /// a frame says. Exhaustive over the enum: adding a variant fails to compile the match below
+    /// rather than silently acquiring a discriminant.
+    #[test]
+    fn the_signing_mode_wire_mapping_is_frozen_and_round_trips() {
+        let all = [
+            (SigningMode::Normal, 0x01u8),
+            (SigningMode::Psk, 0x02),
+            (SigningMode::Relaxed, 0x03),
+            (SigningMode::Paranoid, 0x04),
+            (SigningMode::Pq, 0x05),
+            (SigningMode::Hybrid, 0x06),
+        ];
+        for (mode, byte) in all {
+            assert_eq!(mode.to_wire(), byte, "{mode:?} changed its wire byte");
+            assert_eq!(SigningMode::from_wire(byte), Some(mode));
+        }
+        // Exhaustiveness: this match must be updated when a variant is added, which is what forces
+        // the table above to be updated too.
+        for (mode, _) in all {
+            match mode {
+                SigningMode::Normal
+                | SigningMode::Psk
+                | SigningMode::Relaxed
+                | SigningMode::Paranoid
+                | SigningMode::Pq
+                | SigningMode::Hybrid => {}
+            }
+        }
+        assert_eq!(SigningMode::from_wire(0x00), None);
+        assert_eq!(SigningMode::from_wire(0x07), None);
+        assert_eq!(SigningMode::from_wire(0xFF), None);
     }
 }

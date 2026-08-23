@@ -7,6 +7,10 @@ use sha2::{Digest, Sha256};
 use crate::compression::CompressionAlgorithm;
 use crate::error::ModemError;
 use crate::fec::FecMode;
+use crate::handshake_wire::{
+    caps, signed_prefix, split_frame, BodyReader, BodyWriter, CONREQ_HASH_LEN, KEX_PUBKEY_LEN,
+    MAGIC_CONACK, MAGIC_CONREQ, PUBKEY_LEN,
+};
 use crate::trust::{
     evaluate_handshake, CertificateSource, HandshakeDecision, PolicyProfile, PublicKeyTrustLevel,
     SigningMode, TrustError,
@@ -29,10 +33,13 @@ pub enum HandshakeError {
     TrustFailure(TrustError),
     #[error("encoding error: {0}")]
     Encoding(String),
-    #[error("responder selected a compression algorithm not offered by the initiator")]
-    UnsupportedCompression,
-    #[error("responder selected a FEC mode not offered by the initiator")]
-    UnsupportedFecMode,
+    /// The CONACK selected a signing mode the CONREQ never offered (F-1147-05).
+    ///
+    /// v1 evaluated `selected_mode` against LOCAL policy only, never against the offer, so a
+    /// responder could select a mode the initiator never proposed. The PQ path already checked
+    /// this and `protocol-wire-spec.md` claimed the classical path did too.
+    #[error("responder selected a signing mode the initiator never offered")]
+    UnofferedSigningMode,
     #[error("handshake timestamp is stale: {skew_ms} ms skew exceeds {max_skew_ms} ms")]
     StaleTimestamp { skew_ms: u64, max_skew_ms: u64 },
     #[error("handshake carries no timestamp but freshness is required")]
@@ -52,7 +59,12 @@ pub struct Freshness {
 }
 
 impl Freshness {
-    /// Reject a stale/future-dated frame, or a frame with no timestamp when freshness is required.
+    /// Reject a stale or future-dated frame.
+    ///
+    /// `0` is refused as [`HandshakeError::MissingTimestamp`]. In v1 that was a sentinel meaning
+    /// "no timestamp advertised"; in v2 the field is mandatory and fixed-width, so zero is a value —
+    /// but refusing it is still right (a station claiming the epoch), and the specific error is more
+    /// informative than reporting ~54 years of skew.
     fn check(&self, timestamp_ms: u64) -> Result<(), HandshakeError> {
         if timestamp_ms == 0 {
             return Err(HandshakeError::MissingTimestamp);
@@ -138,224 +150,164 @@ impl TrustStore for InMemoryTrustStore {
 // ConReq — connection request frame
 // ------------------------------------------------------------------
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct ConReqBody {
-    station_id: String,
-    pubkey: Vec<u8>,
-    signing_modes: Vec<SigningMode>,
-    session_id: String,
-    supported_compression: Vec<CompressionAlgorithm>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    supported_fec_modes: Vec<FecMode>,
-    // Empty grid is skipped so legacy zero-grid frames (and their signatures) are byte-identical.
-    #[serde(default, skip_serializing_if = "String::is_empty")]
-    station_grid: String,
-    // Active OTA rate-ladder identity (name + fingerprint of the level→mode/FEC mapping). Skipped
-    // when unset so legacy/no-OTA frames stay byte-identical for signature compatibility.
-    #[serde(default, skip_serializing_if = "String::is_empty")]
-    profile_name: String,
-    #[serde(default, skip_serializing_if = "u64_is_zero")]
-    profile_fingerprint: u64,
-    // Unix-ms creation time, signed, for replay-freshness. Skipped when 0 so legacy no-timestamp
-    // frames (and their signatures) stay byte-identical.
-    #[serde(default, skip_serializing_if = "u64_is_zero")]
-    timestamp_ms: u64,
-    // Ephemeral X25519 public key for OTA-ACK key agreement (E7); signed so a MITM can't substitute it.
-    // Skipped when empty so legacy frames stay byte-identical.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    kex_pubkey: Vec<u8>,
+/// Everything a CONREQ carries, so the constructor does not take eleven positional arguments.
+#[derive(Debug, Clone)]
+pub struct ConReqParams<'a> {
+    /// This station's callsign (cap 12).
+    pub station_id: &'a str,
+    /// Who the request is addressed to; `"*"` is the explicit wildcard (#1178).
+    ///
+    /// **Empty is invalid**, deliberately: "unaddressed" must not be spellable by omission, or the
+    /// field decays back into the state it was added to fix — where every daemon in range answers
+    /// and the RF is spent by every listener before the initiator filters.
+    pub dst_station: &'a str,
+    /// Signing modes offered, in preference order (cap 4 entries).
+    pub signing_modes: Vec<SigningMode>,
+    /// Session identifier (cap 24).
+    pub session_id: &'a str,
+    /// Maidenhead grid, empty if not advertised (cap 8).
+    pub station_grid: &'a str,
+    /// Active OTA ladder name, empty if none (cap 24).
+    pub profile_name: &'a str,
+    /// Fingerprint of the active ladder mapping (0 = none).
+    pub profile_fingerprint: u64,
+    /// Unix-ms creation time. **Mandatory** in v2 — the `0` sentinel and its
+    /// `skip_serializing_if` contortions existed only to keep v1 signatures byte-identical to
+    /// pre-#615 frames, and this break discards that.
+    pub timestamp_ms: u64,
+    /// Ephemeral X25519 public key (exactly 32 bytes) for OTA-ACK key agreement (E7).
+    pub kex_pubkey: &'a [u8],
 }
 
 /// Connection request sent by the initiating station during Discovery.
 ///
-/// The `signature` covers the canonical JSON of the body fields (excluding the
-/// signature itself), signed with the initiator's Ed25519 private key.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+/// v2 binary layout. The `signature` covers the **transmitted prefix**
+/// (`magic || version || length || body`) — see [`crate::handshake_wire`].
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ConReq {
+    /// Initiator callsign.
     pub station_id: String,
-    /// Ed25519 verifying-key bytes (32 bytes).
+    /// Addressee callsign, or `"*"` for a broadcast request (#1178).
+    pub dst_station: String,
+    /// Ed25519 verifying-key bytes (32).
     pub pubkey: Vec<u8>,
-    pub signing_modes: Vec<SigningMode>,
-    pub session_id: String,
-    /// Compression algorithms the initiator supports (empty = none).
-    pub supported_compression: Vec<CompressionAlgorithm>,
-    /// FEC modes the initiator supports (empty = none / raw).
-    #[serde(default)]
-    pub supported_fec_modes: Vec<FecMode>,
-    /// Maidenhead grid locator the initiator announces (empty = not advertised).
-    #[serde(default)]
-    pub station_grid: String,
-    /// Active OTA rate-ladder name (empty = no adaptive OTA advertised).
-    #[serde(default)]
-    pub profile_name: String,
-    /// Fingerprint of the active OTA ladder mapping (0 = none). See `SessionProfile::fingerprint`.
-    #[serde(default)]
-    pub profile_fingerprint: u64,
-    /// Unix-ms creation time, signed, for replay-freshness (0 = not advertised / legacy).
-    #[serde(default)]
-    pub timestamp_ms: u64,
-    /// Ephemeral X25519 public key (32 bytes) for OTA-ACK key agreement (E7); empty = not advertised.
-    #[serde(default)]
+    /// Ephemeral X25519 public key (32) for OTA-ACK key agreement.
     pub kex_pubkey: Vec<u8>,
-    /// Ed25519 signature over canonical JSON of the body fields (64 bytes).
+    /// Signing modes offered, in preference order.
+    pub signing_modes: Vec<SigningMode>,
+    /// Session identifier.
+    pub session_id: String,
+    /// Maidenhead grid (empty = not advertised).
+    pub station_grid: String,
+    /// Active OTA ladder name (empty = none advertised).
+    pub profile_name: String,
+    /// Fingerprint of the active ladder mapping (0 = none).
+    pub profile_fingerprint: u64,
+    /// Unix-ms creation time, signed, for replay freshness.
+    pub timestamp_ms: u64,
+    /// Ed25519 signature (64) over the transmitted prefix.
     pub signature: Vec<u8>,
 }
 
 impl ConReq {
-    /// Create and sign a new CONREQ (no grid advertised).
+    /// Build and sign a CONREQ, returning the frame **bytes**.
     ///
-    /// `signing_key_seed` is the 32-byte Ed25519 seed (private key scalar).
+    /// Returns the wire frame rather than a struct because the signature covers the transmitted
+    /// prefix: handing back a struct would invite a caller to re-encode and re-derive the signed
+    /// span, which is the drift this format exists to remove.
     pub fn create(
-        station_id: &str,
+        params: &ConReqParams<'_>,
         signing_key_seed: &[u8; 32],
-        signing_modes: Vec<SigningMode>,
-        session_id: &str,
-        supported_compression: Vec<CompressionAlgorithm>,
-        supported_fec_modes: Vec<FecMode>,
-    ) -> Result<Self, HandshakeError> {
-        Self::create_with_grid(
-            station_id,
-            signing_key_seed,
-            signing_modes,
-            session_id,
-            supported_compression,
-            supported_fec_modes,
-            "",
-        )
-    }
-
-    /// Create and sign a new CONREQ advertising a Maidenhead grid locator (no OTA profile).
-    #[allow(clippy::too_many_arguments)]
-    pub fn create_with_grid(
-        station_id: &str,
-        signing_key_seed: &[u8; 32],
-        signing_modes: Vec<SigningMode>,
-        session_id: &str,
-        supported_compression: Vec<CompressionAlgorithm>,
-        supported_fec_modes: Vec<FecMode>,
-        station_grid: &str,
-    ) -> Result<Self, HandshakeError> {
-        Self::create_full(
-            station_id,
-            signing_key_seed,
-            signing_modes,
-            session_id,
-            supported_compression,
-            supported_fec_modes,
-            station_grid,
-            "",
-            0,
-            0,
-            &[],
-        )
-    }
-
-    /// Create and sign a CONREQ advertising the grid AND the active OTA rate-ladder identity
-    /// (`profile_name` + `profile_fingerprint`), so the peer can detect a diverged ladder.
-    /// `timestamp_ms` is the signed Unix-ms creation time for replay-freshness (0 = not advertised);
-    /// `kex_pubkey` is the ephemeral X25519 public key for OTA-ACK key agreement (empty = none).
-    #[allow(clippy::too_many_arguments)]
-    pub fn create_full(
-        station_id: &str,
-        signing_key_seed: &[u8; 32],
-        signing_modes: Vec<SigningMode>,
-        session_id: &str,
-        supported_compression: Vec<CompressionAlgorithm>,
-        supported_fec_modes: Vec<FecMode>,
-        station_grid: &str,
-        profile_name: &str,
-        profile_fingerprint: u64,
-        timestamp_ms: u64,
-        kex_pubkey: &[u8],
-    ) -> Result<Self, HandshakeError> {
+    ) -> Result<Vec<u8>, ModemError> {
+        if params.dst_station.is_empty() {
+            return Err(ModemError::Frame(
+                "CONREQ dst_station is empty; use \"*\" for a broadcast request (#1178)".into(),
+            ));
+        }
+        if params.signing_modes.len() > caps::SIGNING_MODES {
+            return Err(ModemError::Frame(format!(
+                "CONREQ offers {} signing modes, over the {} cap",
+                params.signing_modes.len(),
+                caps::SIGNING_MODES
+            )));
+        }
         let signing_key = SigningKey::from_bytes(signing_key_seed);
-        let verifying_key = signing_key.verifying_key();
+        let pubkey = signing_key.verifying_key().to_bytes();
 
-        let body = ConReqBody {
-            station_id: station_id.to_string(),
-            pubkey: verifying_key.to_bytes().to_vec(),
-            signing_modes: signing_modes.clone(),
-            session_id: session_id.to_string(),
-            supported_compression: supported_compression.clone(),
-            supported_fec_modes: supported_fec_modes.clone(),
-            station_grid: station_grid.to_string(),
-            profile_name: profile_name.to_string(),
-            profile_fingerprint,
-            timestamp_ms,
-            kex_pubkey: kex_pubkey.to_vec(),
-        };
-        let canonical =
-            serde_json::to_vec(&body).map_err(|e| HandshakeError::Encoding(e.to_string()))?;
-        let sig: Signature = signing_key.sign(&canonical);
+        let mut w = BodyWriter::new();
+        w.str_capped("station_id", params.station_id, caps::STATION_ID)?;
+        w.str_capped("dst_station", params.dst_station, caps::STATION_ID)?;
+        w.fixed("pubkey", &pubkey, PUBKEY_LEN)?;
+        w.fixed("kex_pubkey", params.kex_pubkey, KEX_PUBKEY_LEN)?;
+        w.u8(params.signing_modes.len() as u8);
+        for m in &params.signing_modes {
+            w.u8(m.to_wire());
+        }
+        w.str_capped("session_id", params.session_id, caps::SESSION_ID)?;
+        w.str_capped("station_grid", params.station_grid, caps::GRID)?;
+        w.str_capped("profile_name", params.profile_name, caps::PROFILE_NAME)?;
+        w.u64(params.profile_fingerprint);
+        w.u64(params.timestamp_ms);
 
+        let prefix = signed_prefix(MAGIC_CONREQ, &w.finish())?;
+        let sig: Signature = signing_key.sign(&prefix);
+        let mut frame = prefix;
+        frame.extend_from_slice(&sig.to_bytes());
+        Ok(frame)
+    }
+
+    /// Parse a CONREQ frame. Does **not** verify the signature — see [`verify_conreq`].
+    pub fn decode(bytes: &[u8]) -> Result<Self, ModemError> {
+        let (_prefix, body, signature) = split_frame(bytes, MAGIC_CONREQ, "CONREQ")?;
+        let mut r = BodyReader::new(body);
+        let station_id = r.str_capped("station_id", caps::STATION_ID)?;
+        let dst_station = r.str_capped("dst_station", caps::STATION_ID)?;
+        let pubkey = r.fixed("pubkey", PUBKEY_LEN)?;
+        let kex_pubkey = r.fixed("kex_pubkey", KEX_PUBKEY_LEN)?;
+        let n = r.u8("signing_modes count")? as usize;
+        if n > caps::SIGNING_MODES {
+            return Err(ModemError::Frame(format!(
+                "CONREQ declares {n} signing modes, over the {} cap",
+                caps::SIGNING_MODES
+            )));
+        }
+        let mut signing_modes = Vec::with_capacity(n);
+        for _ in 0..n {
+            let b = r.u8("signing_mode")?;
+            signing_modes.push(SigningMode::from_wire(b).ok_or_else(|| {
+                ModemError::Frame(format!("CONREQ offers unknown signing mode {b:#04x}"))
+            })?);
+        }
+        let session_id = r.str_capped("session_id", caps::SESSION_ID)?;
+        let station_grid = r.str_capped("station_grid", caps::GRID)?;
+        let profile_name = r.str_capped("profile_name", caps::PROFILE_NAME)?;
+        let profile_fingerprint = r.u64("profile_fingerprint")?;
+        let timestamp_ms = r.u64("timestamp_ms")?;
+        r.finish("CONREQ")?;
+
+        if dst_station.is_empty() {
+            return Err(ModemError::Frame(
+                "CONREQ dst_station is empty; unaddressed cannot be spelled by omission".into(),
+            ));
+        }
         Ok(Self {
-            station_id: station_id.to_string(),
-            pubkey: verifying_key.to_bytes().to_vec(),
+            station_id,
+            dst_station,
+            pubkey,
+            kex_pubkey,
             signing_modes,
-            session_id: session_id.to_string(),
-            supported_compression,
-            supported_fec_modes,
-            station_grid: station_grid.to_string(),
-            profile_name: profile_name.to_string(),
+            session_id,
+            station_grid,
+            profile_name,
             profile_fingerprint,
             timestamp_ms,
-            kex_pubkey: kex_pubkey.to_vec(),
-            signature: sig.to_bytes().to_vec(),
+            signature: signature.to_vec(),
         })
     }
 
-    fn canonical_bytes(&self) -> Result<Vec<u8>, HandshakeError> {
-        let body = ConReqBody {
-            station_id: self.station_id.clone(),
-            pubkey: self.pubkey.clone(),
-            signing_modes: self.signing_modes.clone(),
-            session_id: self.session_id.clone(),
-            supported_compression: self.supported_compression.clone(),
-            supported_fec_modes: self.supported_fec_modes.clone(),
-            station_grid: self.station_grid.clone(),
-            profile_name: self.profile_name.clone(),
-            profile_fingerprint: self.profile_fingerprint,
-            timestamp_ms: self.timestamp_ms,
-            kex_pubkey: self.kex_pubkey.clone(),
-        };
-        serde_json::to_vec(&body).map_err(|e| HandshakeError::Encoding(e.to_string()))
-    }
-
-    /// Serialize to HSCQ wire frame: magic(4) + version(1) + length(4) + JSON.
-    pub fn encode(&self) -> Result<Vec<u8>, ModemError> {
-        let body = serde_json::to_vec(self)
-            .map_err(|e| ModemError::Frame(format!("CONREQ encode failed: {e}")))?;
-        let len = u32::try_from(body.len())
-            .map_err(|_| ModemError::Frame("CONREQ too large".to_string()))?;
-        let mut out = Vec::with_capacity(4 + 1 + 4 + body.len());
-        out.extend_from_slice(b"HSCQ");
-        out.push(1u8);
-        out.extend_from_slice(&len.to_be_bytes());
-        out.extend_from_slice(&body);
-        Ok(out)
-    }
-
-    /// Deserialize from a HSCQ wire frame.
-    pub fn decode(bytes: &[u8]) -> Result<Self, ModemError> {
-        let min = 9;
-        if bytes.len() < min {
-            return Err(ModemError::Frame("CONREQ too short".to_string()));
-        }
-        if &bytes[..4] != b"HSCQ" {
-            return Err(ModemError::Frame("invalid CONREQ magic".to_string()));
-        }
-        if bytes[4] != 1 {
-            return Err(ModemError::Frame(format!(
-                "unsupported CONREQ version {}",
-                bytes[4]
-            )));
-        }
-        let body_len = u32::from_be_bytes([bytes[5], bytes[6], bytes[7], bytes[8]]) as usize;
-        if bytes.len() != min + body_len {
-            return Err(ModemError::Frame("CONREQ length mismatch".to_string()));
-        }
-        serde_json::from_slice(&bytes[min..])
-            .map_err(|e| ModemError::Frame(format!("CONREQ decode failed: {e}")))
+    /// Whether this request is addressed to `callsign` (or broadcast).
+    pub fn is_addressed_to(&self, callsign: &str) -> bool {
+        self.dst_station == "*" || self.dst_station == callsign
     }
 }
 
@@ -400,197 +352,247 @@ fn u64_is_zero(v: &u64) -> bool {
 ///
 /// The `signature` covers the canonical JSON of the body fields, signed with
 /// the responder's Ed25519 private key.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ConAck {
-    pub station_id: String,
-    /// Ed25519 verifying-key bytes (32 bytes).
-    pub pubkey: Vec<u8>,
+/// Parameters for a CONACK.
+#[derive(Debug, Clone)]
+pub struct ConAckParams<'a> {
+    /// Responder callsign (cap 12).
+    pub station_id: &'a str,
+    /// The initiator this answers — never a wildcard, since a CONACK has exactly one addressee.
+    pub dst_station: &'a str,
+    /// The mode chosen from those the CONREQ offered.
     pub selected_mode: SigningMode,
-    /// Must echo the session_id from the corresponding ConReq.
-    pub session_id: String,
-    /// Compression algorithm selected for this session.
-    pub selected_compression: CompressionAlgorithm,
-    /// FEC mode selected for this session.
-    #[serde(default)]
-    pub selected_fec_mode: FecMode,
-    /// Maidenhead grid locator the responder announces (empty = not advertised).
-    #[serde(default)]
-    pub station_grid: String,
-    /// Responder's active OTA rate-ladder name (empty = no adaptive OTA advertised).
-    #[serde(default)]
-    pub profile_name: String,
-    /// Fingerprint of the responder's active OTA ladder mapping (0 = none).
-    #[serde(default)]
+    /// SHA-256 over the complete transmitted CONREQ frame; see [`conreq_hash`].
+    pub conreq_hash: [u8; 32],
+    /// Maidenhead grid, empty if not advertised (cap 8).
+    pub station_grid: &'a str,
+    /// Active OTA ladder name, empty if none (cap 24).
+    pub profile_name: &'a str,
+    /// Fingerprint of the active ladder mapping (0 = none).
     pub profile_fingerprint: u64,
-    /// Unix-ms creation time, signed, for replay-freshness (0 = not advertised / legacy).
-    #[serde(default)]
+    /// Unix-ms creation time; mandatory in v2.
     pub timestamp_ms: u64,
-    /// Ephemeral X25519 public key (32 bytes) for OTA-ACK key agreement (E7); empty = not advertised.
-    #[serde(default)]
+    /// Ephemeral X25519 public key (exactly 32 bytes).
+    pub kex_pubkey: &'a [u8],
+}
+
+/// Connection acknowledgement sent by the responding station.
+///
+/// **Carries no `session_id`.** Echoing it costs 25 B and pushes the maximal frame to 269 B, past
+/// the 251 B a single SAR fragment holds — and `conreq_hash` subsumes the echo while binding
+/// harder, since both endpoints already hold the id for `derive_session_keys`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ConAck {
+    /// Responder callsign.
+    pub station_id: String,
+    /// The initiator this answers.
+    pub dst_station: String,
+    /// Ed25519 verifying-key bytes (32).
+    pub pubkey: Vec<u8>,
+    /// Ephemeral X25519 public key (32).
     pub kex_pubkey: Vec<u8>,
-    /// Ed25519 signature over canonical JSON of the body fields (64 bytes).
+    /// Signing mode selected for this session.
+    pub selected_mode: SigningMode,
+    /// SHA-256 of the CONREQ this answers, as transmitted.
+    pub conreq_hash: [u8; 32],
+    /// Maidenhead grid (empty = not advertised).
+    pub station_grid: String,
+    /// Responder's active OTA ladder name (empty = none).
+    pub profile_name: String,
+    /// Fingerprint of the responder's ladder mapping (0 = none).
+    pub profile_fingerprint: u64,
+    /// Unix-ms creation time, signed, for replay freshness.
+    pub timestamp_ms: u64,
+    /// Ed25519 signature (64) over the transmitted prefix.
     pub signature: Vec<u8>,
 }
 
 impl ConAck {
-    /// Create and sign a new CONACK in response to `req` (no grid advertised).
+    /// Build and sign a CONACK, returning the frame **bytes**. See [`ConReq::create`] for why bytes.
     pub fn create(
-        station_id: &str,
+        params: &ConAckParams<'_>,
         signing_key_seed: &[u8; 32],
-        selected_mode: SigningMode,
-        session_id: &str,
-        selected_compression: CompressionAlgorithm,
-        selected_fec_mode: FecMode,
-    ) -> Result<Self, HandshakeError> {
-        Self::create_with_grid(
-            station_id,
-            signing_key_seed,
-            selected_mode,
-            session_id,
-            selected_compression,
-            selected_fec_mode,
-            "",
-        )
-    }
-
-    /// Create and sign a new CONACK advertising a Maidenhead grid locator (no OTA profile).
-    #[allow(clippy::too_many_arguments)]
-    pub fn create_with_grid(
-        station_id: &str,
-        signing_key_seed: &[u8; 32],
-        selected_mode: SigningMode,
-        session_id: &str,
-        selected_compression: CompressionAlgorithm,
-        selected_fec_mode: FecMode,
-        station_grid: &str,
-    ) -> Result<Self, HandshakeError> {
-        Self::create_full(
-            station_id,
-            signing_key_seed,
-            selected_mode,
-            session_id,
-            selected_compression,
-            selected_fec_mode,
-            station_grid,
-            "",
-            0,
-            0,
-            &[],
-        )
-    }
-
-    /// Create and sign a CONACK advertising the grid AND the responder's active OTA rate-ladder
-    /// identity (`profile_name` + `profile_fingerprint`). `timestamp_ms` is the signed Unix-ms
-    /// creation time for replay-freshness (0 = not advertised); `kex_pubkey` is the ephemeral X25519
-    /// public key for OTA-ACK key agreement (empty = none).
-    #[allow(clippy::too_many_arguments)]
-    pub fn create_full(
-        station_id: &str,
-        signing_key_seed: &[u8; 32],
-        selected_mode: SigningMode,
-        session_id: &str,
-        selected_compression: CompressionAlgorithm,
-        selected_fec_mode: FecMode,
-        station_grid: &str,
-        profile_name: &str,
-        profile_fingerprint: u64,
-        timestamp_ms: u64,
-        kex_pubkey: &[u8],
-    ) -> Result<Self, HandshakeError> {
+    ) -> Result<Vec<u8>, ModemError> {
+        if params.dst_station.is_empty() || params.dst_station == "*" {
+            return Err(ModemError::Frame(
+                "CONACK dst_station must be a specific callsign — an acknowledgement has exactly \
+                 one addressee, so a wildcard is meaningless here"
+                    .into(),
+            ));
+        }
         let signing_key = SigningKey::from_bytes(signing_key_seed);
-        let verifying_key = signing_key.verifying_key();
+        let pubkey = signing_key.verifying_key().to_bytes();
 
-        let body = ConAckBody {
-            station_id: station_id.to_string(),
-            pubkey: verifying_key.to_bytes().to_vec(),
-            selected_mode,
-            session_id: session_id.to_string(),
-            selected_compression,
-            selected_fec_mode,
-            station_grid: station_grid.to_string(),
-            profile_name: profile_name.to_string(),
-            profile_fingerprint,
-            timestamp_ms,
-            kex_pubkey: kex_pubkey.to_vec(),
-        };
-        let canonical =
-            serde_json::to_vec(&body).map_err(|e| HandshakeError::Encoding(e.to_string()))?;
-        let sig: Signature = signing_key.sign(&canonical);
+        let mut w = BodyWriter::new();
+        w.str_capped("station_id", params.station_id, caps::STATION_ID)?;
+        w.str_capped("dst_station", params.dst_station, caps::STATION_ID)?;
+        w.fixed("pubkey", &pubkey, PUBKEY_LEN)?;
+        w.fixed("kex_pubkey", params.kex_pubkey, KEX_PUBKEY_LEN)?;
+        w.u8(params.selected_mode.to_wire());
+        w.fixed("conreq_hash", &params.conreq_hash, CONREQ_HASH_LEN)?;
+        w.str_capped("station_grid", params.station_grid, caps::GRID)?;
+        w.str_capped("profile_name", params.profile_name, caps::PROFILE_NAME)?;
+        w.u64(params.profile_fingerprint);
+        w.u64(params.timestamp_ms);
 
-        Ok(Self {
-            station_id: station_id.to_string(),
-            pubkey: verifying_key.to_bytes().to_vec(),
-            selected_mode,
-            session_id: session_id.to_string(),
-            selected_compression,
-            selected_fec_mode,
-            station_grid: station_grid.to_string(),
-            profile_name: profile_name.to_string(),
-            profile_fingerprint,
-            timestamp_ms,
-            kex_pubkey: kex_pubkey.to_vec(),
-            signature: sig.to_bytes().to_vec(),
-        })
+        let prefix = signed_prefix(MAGIC_CONACK, &w.finish())?;
+        let sig: Signature = signing_key.sign(&prefix);
+        let mut frame = prefix;
+        frame.extend_from_slice(&sig.to_bytes());
+        Ok(frame)
     }
 
-    fn canonical_bytes(&self) -> Result<Vec<u8>, HandshakeError> {
-        let body = ConAckBody {
-            station_id: self.station_id.clone(),
-            pubkey: self.pubkey.clone(),
-            selected_mode: self.selected_mode,
-            session_id: self.session_id.clone(),
-            selected_compression: self.selected_compression,
-            selected_fec_mode: self.selected_fec_mode,
-            station_grid: self.station_grid.clone(),
-            profile_name: self.profile_name.clone(),
-            profile_fingerprint: self.profile_fingerprint,
-            timestamp_ms: self.timestamp_ms,
-            kex_pubkey: self.kex_pubkey.clone(),
-        };
-        serde_json::to_vec(&body).map_err(|e| HandshakeError::Encoding(e.to_string()))
-    }
-
-    /// Serialize to HSAK wire frame: magic(4) + version(1) + length(4) + JSON.
-    pub fn encode(&self) -> Result<Vec<u8>, ModemError> {
-        let body = serde_json::to_vec(self)
-            .map_err(|e| ModemError::Frame(format!("CONACK encode failed: {e}")))?;
-        let len = u32::try_from(body.len())
-            .map_err(|_| ModemError::Frame("CONACK too large".to_string()))?;
-        let mut out = Vec::with_capacity(4 + 1 + 4 + body.len());
-        out.extend_from_slice(b"HSAK");
-        out.push(1u8);
-        out.extend_from_slice(&len.to_be_bytes());
-        out.extend_from_slice(&body);
-        Ok(out)
-    }
-
-    /// Deserialize from a HSAK wire frame.
+    /// Parse a CONACK frame. Does **not** verify the signature — see [`verify_conack`].
     pub fn decode(bytes: &[u8]) -> Result<Self, ModemError> {
-        let min = 9;
-        if bytes.len() < min {
-            return Err(ModemError::Frame("CONACK too short".to_string()));
-        }
-        if &bytes[..4] != b"HSAK" {
-            return Err(ModemError::Frame("invalid CONACK magic".to_string()));
-        }
-        if bytes[4] != 1 {
-            return Err(ModemError::Frame(format!(
-                "unsupported CONACK version {}",
-                bytes[4]
-            )));
-        }
-        let body_len = u32::from_be_bytes([bytes[5], bytes[6], bytes[7], bytes[8]]) as usize;
-        if bytes.len() != min + body_len {
-            return Err(ModemError::Frame("CONACK length mismatch".to_string()));
-        }
-        serde_json::from_slice(&bytes[min..])
-            .map_err(|e| ModemError::Frame(format!("CONACK decode failed: {e}")))
+        let (_prefix, body, signature) = split_frame(bytes, MAGIC_CONACK, "CONACK")?;
+        let mut r = BodyReader::new(body);
+        let station_id = r.str_capped("station_id", caps::STATION_ID)?;
+        let dst_station = r.str_capped("dst_station", caps::STATION_ID)?;
+        let pubkey = r.fixed("pubkey", PUBKEY_LEN)?;
+        let kex_pubkey = r.fixed("kex_pubkey", KEX_PUBKEY_LEN)?;
+        let mode_byte = r.u8("selected_mode")?;
+        let selected_mode = SigningMode::from_wire(mode_byte).ok_or_else(|| {
+            ModemError::Frame(format!(
+                "CONACK selects unknown signing mode {mode_byte:#04x}"
+            ))
+        })?;
+        let hash_vec = r.fixed("conreq_hash", CONREQ_HASH_LEN)?;
+        let station_grid = r.str_capped("station_grid", caps::GRID)?;
+        let profile_name = r.str_capped("profile_name", caps::PROFILE_NAME)?;
+        let profile_fingerprint = r.u64("profile_fingerprint")?;
+        let timestamp_ms = r.u64("timestamp_ms")?;
+        r.finish("CONACK")?;
+
+        let mut conreq_hash = [0u8; CONREQ_HASH_LEN];
+        conreq_hash.copy_from_slice(&hash_vec);
+        Ok(Self {
+            station_id,
+            dst_station,
+            pubkey,
+            kex_pubkey,
+            selected_mode,
+            conreq_hash,
+            station_grid,
+            profile_name,
+            profile_fingerprint,
+            timestamp_ms,
+            signature: signature.to_vec(),
+        })
     }
 }
 
-// ------------------------------------------------------------------
-// Verification helpers
-// ------------------------------------------------------------------
+/// Verify a CONREQ from its transmitted **bytes**.
+///
+/// Takes bytes, not a decoded struct. The signature covers the transmitted prefix, so verifying a
+/// struct would mean re-encoding it to recover the signed span — a second representation that can
+/// drift from the first, which is exactly the v1 defect ("canonical" JSON that was not canonical).
+/// Here the verified span is the received bytes themselves.
+pub fn verify_conreq(
+    bytes: &[u8],
+    trust_store: &dyn TrustStore,
+    policy: PolicyProfile,
+    local_min_mode: SigningMode,
+    freshness: Option<Freshness>,
+) -> Result<(ConReq, HandshakeDecision), HandshakeError> {
+    let (prefix, _body, signature) = split_frame(bytes, MAGIC_CONREQ, "CONREQ")
+        .map_err(|e| HandshakeError::Encoding(e.to_string()))?;
+    let req = ConReq::decode(bytes).map_err(|e| HandshakeError::Encoding(e.to_string()))?;
+
+    if !verify_ed25519(&req.pubkey, prefix, signature) {
+        return Err(HandshakeError::InvalidSignature);
+    }
+
+    // Replay-freshness: the timestamp is inside the signed prefix, so this runs after signature
+    // verification (an attacker cannot alter it without breaking the signature).
+    if let Some(f) = freshness {
+        f.check(req.timestamp_ms)?;
+    }
+
+    // Bind the in-frame key to the trusted key for this station. The signature above only proves
+    // possession of the *frame's own* key; without this bind, an attacker self-signs a CONREQ
+    // claiming a trusted callsign with their own key and is classified at that callsign's level.
+    bind_frame_key(trust_store, &req.station_id, &req.pubkey)?;
+
+    let key_trust = trust_store.trust_level(&req.station_id);
+    let cert_source = cert_source_for_trust(key_trust);
+    let decision = evaluate_handshake(
+        policy,
+        local_min_mode,
+        &req.signing_modes,
+        key_trust,
+        cert_source,
+        false,
+    )?;
+    Ok((req, decision))
+}
+
+/// SHA-256 over the complete transmitted CONREQ frame, **including its signature**.
+///
+/// This is what a CONACK binds to. Binding to the whole frame — rather than echoing the session id —
+/// closes mix-and-match shapes generically: the daemon concedes the session id is cleartext and
+/// time-based, so guessable inside the handshake window, while this covers the initiator's
+/// `kex_pubkey` and every other field exactly as transmitted.
+pub fn conreq_hash(conreq_bytes: &[u8]) -> [u8; 32] {
+    sha256_bytes(conreq_bytes)
+}
+
+/// Verify a CONACK against the CONREQ it answers.
+///
+/// `conreq_bytes` is the CONREQ **as transmitted**; the binding is a hash over exactly those bytes.
+pub fn verify_conack(
+    bytes: &[u8],
+    conreq_bytes: &[u8],
+    offered_modes: &[SigningMode],
+    trust_store: &dyn TrustStore,
+    policy: PolicyProfile,
+    local_min_mode: SigningMode,
+    freshness: Option<Freshness>,
+) -> Result<(ConAck, HandshakeDecision), HandshakeError> {
+    let (prefix, _body, signature) = split_frame(bytes, MAGIC_CONACK, "CONACK")
+        .map_err(|e| HandshakeError::Encoding(e.to_string()))?;
+    let ack = ConAck::decode(bytes).map_err(|e| HandshakeError::Encoding(e.to_string()))?;
+
+    if !verify_ed25519(&ack.pubkey, prefix, signature) {
+        return Err(HandshakeError::InvalidSignature);
+    }
+
+    // Transcript binding replaces v1's session-id echo. The daemon concedes the session id is
+    // cleartext and time-based, so guessable inside the handshake window; hashing the whole
+    // transmitted CONREQ — including the initiator's `kex_pubkey` and the signature — closes
+    // mix-and-match shapes generically rather than one at a time.
+    let expected = conreq_hash(conreq_bytes);
+    if ack.conreq_hash != expected {
+        return Err(HandshakeError::SessionIdMismatch {
+            expected: hex_short(&expected),
+            got: hex_short(&ack.conreq_hash),
+        });
+    }
+
+    // F-1147-05: the selected mode must be one the CONREQ actually offered. v1 evaluated it against
+    // LOCAL policy only and never against the offer, so a responder could select a mode the
+    // initiator never proposed — the PQ path already checked this and the wire spec claimed the
+    // classical path did too.
+    if !offered_modes.contains(&ack.selected_mode) {
+        return Err(HandshakeError::UnofferedSigningMode);
+    }
+
+    if let Some(f) = freshness {
+        f.check(ack.timestamp_ms)?;
+    }
+
+    bind_frame_key(trust_store, &ack.station_id, &ack.pubkey)?;
+
+    let key_trust = trust_store.trust_level(&ack.station_id);
+    let cert_source = cert_source_for_trust(key_trust);
+    let decision = evaluate_handshake(
+        policy,
+        local_min_mode,
+        &[ack.selected_mode],
+        key_trust,
+        cert_source,
+        false,
+    )?;
+    Ok((ack, decision))
+}
 
 fn verify_ed25519(pubkey_bytes: &[u8], message: &[u8], sig_bytes: &[u8]) -> bool {
     let Ok(pubkey_arr): Result<[u8; 32], _> = pubkey_bytes.try_into() else {
@@ -605,56 +607,12 @@ fn verify_ed25519(pubkey_bytes: &[u8], message: &[u8], sig_bytes: &[u8]) -> bool
     let sig = Signature::from_bytes(&sig_arr);
     key.verify(message, &sig).is_ok()
 }
-
 fn cert_source_for_trust(trust_level: PublicKeyTrustLevel) -> CertificateSource {
     match trust_level {
         PublicKeyTrustLevel::Full => CertificateSource::OutOfBand,
         _ => CertificateSource::OverAir,
     }
 }
-
-/// Verify a received CONREQ and evaluate trust.
-///
-/// Returns `HandshakeDecision` on success.  Fails if the Ed25519 signature is
-/// invalid or if the trust policy rejects the peer.
-pub fn verify_conreq(
-    req: &ConReq,
-    trust_store: &dyn TrustStore,
-    policy: PolicyProfile,
-    local_min_mode: SigningMode,
-    freshness: Option<Freshness>,
-) -> Result<HandshakeDecision, HandshakeError> {
-    let canonical = req.canonical_bytes()?;
-    if !verify_ed25519(&req.pubkey, &canonical, &req.signature) {
-        return Err(HandshakeError::InvalidSignature);
-    }
-
-    // Replay-freshness: the timestamp is inside the signed body, so this check runs after signature
-    // verification (an attacker cannot alter it without breaking the signature).
-    if let Some(f) = freshness {
-        f.check(req.timestamp_ms)?;
-    }
-
-    // Bind the in-frame key to the trusted key for this station (mirrors `verify_pq_conreq`). The signature
-    // above only proves possession of the *frame's own* key; without this bind, an attacker self-signs a
-    // CONREQ claiming a trusted callsign with their own key and is classified at that callsign's trust level.
-    bind_frame_key(trust_store, &req.station_id, &req.pubkey)?;
-
-    let key_trust = trust_store.trust_level(&req.station_id);
-    let cert_source = cert_source_for_trust(key_trust);
-
-    let decision = evaluate_handshake(
-        policy,
-        local_min_mode,
-        &req.signing_modes,
-        key_trust,
-        cert_source,
-        false,
-    )?;
-
-    Ok(decision)
-}
-
 /// Require the frame's public key to equal the trust-store key bound to `station_id`, if any. An unknown
 /// station has no stored key, so it proceeds at `Unknown` trust (over-air TOFU) — the bind only rejects a
 /// frame that *claims a trusted callsign* under a key the operator did not trust for it.
@@ -674,72 +632,6 @@ fn bind_frame_key(
     Ok(())
 }
 
-/// Verify a received CONACK and evaluate trust.
-///
-/// `req_session_id` must match the session ID in the ConAck. `req_supported_compression`
-/// is the list advertised by the initiator; the responder's `selected_compression` must
-/// appear in that list (or be `None`, which is always allowed). `req_supported_fec_modes`
-/// is similarly checked for `selected_fec_mode`. Fails if the signature is invalid, the
-/// session ID does not match, compression or FEC mode is not mutually supported, or the
-/// trust policy rejects the responder.
-#[allow(clippy::too_many_arguments)]
-pub fn verify_conack(
-    ack: &ConAck,
-    req_session_id: &str,
-    req_supported_compression: &[CompressionAlgorithm],
-    req_supported_fec_modes: &[FecMode],
-    trust_store: &dyn TrustStore,
-    policy: PolicyProfile,
-    local_min_mode: SigningMode,
-    freshness: Option<Freshness>,
-) -> Result<HandshakeDecision, HandshakeError> {
-    if ack.session_id != req_session_id {
-        return Err(HandshakeError::SessionIdMismatch {
-            expected: req_session_id.to_string(),
-            got: ack.session_id.clone(),
-        });
-    }
-
-    if ack.selected_compression != CompressionAlgorithm::None
-        && !req_supported_compression.contains(&ack.selected_compression)
-    {
-        return Err(HandshakeError::UnsupportedCompression);
-    }
-
-    if ack.selected_fec_mode != FecMode::None
-        && !req_supported_fec_modes.contains(&ack.selected_fec_mode)
-    {
-        return Err(HandshakeError::UnsupportedFecMode);
-    }
-
-    let canonical = ack.canonical_bytes()?;
-    if !verify_ed25519(&ack.pubkey, &canonical, &ack.signature) {
-        return Err(HandshakeError::InvalidSignature);
-    }
-
-    // Replay-freshness (signed timestamp; checked after signature verification).
-    if let Some(f) = freshness {
-        f.check(ack.timestamp_ms)?;
-    }
-
-    // Bind the in-frame key to the trusted key for this station (see `verify_conreq`).
-    bind_frame_key(trust_store, &ack.station_id, &ack.pubkey)?;
-
-    let key_trust = trust_store.trust_level(&ack.station_id);
-    let cert_source = cert_source_for_trust(key_trust);
-
-    let decision = evaluate_handshake(
-        policy,
-        local_min_mode,
-        &[ack.selected_mode],
-        key_trust,
-        cert_source,
-        false,
-    )?;
-
-    Ok(decision)
-}
-
 // ------------------------------------------------------------------
 // SHA-256 helper (shared with manifest.rs via pub(crate))
 // ------------------------------------------------------------------
@@ -753,286 +645,88 @@ pub(crate) fn sha256_bytes(data: &[u8]) -> [u8; 32] {
     out
 }
 
+/// First 8 bytes of a hash, for error messages.
+fn hex_short(b: &[u8]) -> String {
+    b.iter().take(8).map(|x| format!("{x:02x}")).collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::compression::CompressionAlgorithm;
-    use crate::fec::FecMode;
 
     fn make_key(seed: u8) -> [u8; 32] {
         [seed; 32]
     }
 
     fn pubkey_for_seed(seed: u8) -> Vec<u8> {
-        let sk = SigningKey::from_bytes(&make_key(seed));
-        sk.verifying_key().to_bytes().to_vec()
+        SigningKey::from_bytes(&make_key(seed))
+            .verifying_key()
+            .to_bytes()
+            .to_vec()
+    }
+
+    fn req_params<'a>(ts: u64) -> ConReqParams<'a> {
+        ConReqParams {
+            station_id: "W1AW",
+            dst_station: "DL1ABC",
+            signing_modes: vec![SigningMode::Normal],
+            session_id: "S-1",
+            station_grid: "FN31pr",
+            profile_name: "hpx_hf",
+            profile_fingerprint: 42,
+            timestamp_ms: ts,
+            kex_pubkey: &[1u8; 32],
+        }
+    }
+
+    fn trusted(station: &str, seed: u8) -> InMemoryTrustStore {
+        let mut s = InMemoryTrustStore::new();
+        let mut k = [0u8; 32];
+        k.copy_from_slice(&pubkey_for_seed(seed));
+        s.add_entry(station, k, PublicKeyTrustLevel::Full);
+        s
     }
 
     #[test]
     fn conreq_round_trip() {
-        let req = ConReq::create(
-            "W1AW",
-            &make_key(1),
-            vec![SigningMode::Normal],
-            "session-abc",
-            vec![],
-            vec![],
-        )
-        .unwrap();
-        let encoded = req.encode().expect("encode");
-        let decoded = ConReq::decode(&encoded).expect("decode");
-        assert_eq!(decoded.station_id, req.station_id);
-        assert_eq!(decoded.pubkey, req.pubkey);
-        assert_eq!(decoded.signature, req.signature);
+        let f = ConReq::create(&req_params(1_700_000_000_000), &make_key(1)).unwrap();
+        let d = ConReq::decode(&f).unwrap();
+        assert_eq!(d.station_id, "W1AW");
+        assert_eq!(d.dst_station, "DL1ABC");
+        assert_eq!(d.station_grid, "FN31pr");
+        assert_eq!(d.pubkey, pubkey_for_seed(1));
+        assert_eq!(d.signature.len(), 64);
     }
 
     #[test]
-    fn conreq_signature_covers_content() {
-        let req = ConReq::create(
-            "W1AW",
-            &make_key(1),
-            vec![SigningMode::Normal],
-            "s1",
-            vec![],
-            vec![],
-        )
-        .unwrap();
-        let mut tampered = req.clone();
-        tampered.station_id = "EVIL".to_string();
-        let canonical = tampered.canonical_bytes().unwrap();
-        assert!(!verify_ed25519(&req.pubkey, &canonical, &req.signature));
-    }
-
-    #[test]
-    fn conreq_grid_round_trips_and_is_signature_covered() {
-        let req = ConReq::create_with_grid(
-            "W1AW",
-            &make_key(1),
-            vec![SigningMode::Normal],
-            "s-grid",
-            vec![],
-            vec![],
-            "FN31pr",
-        )
-        .unwrap();
-        // Survives the wire round-trip.
-        let decoded = ConReq::decode(&req.encode().unwrap()).unwrap();
-        assert_eq!(decoded.station_grid, "FN31pr");
-        // Self-verifies.
-        assert!(verify_ed25519(
-            &req.pubkey,
-            &req.canonical_bytes().unwrap(),
-            &req.signature
-        ));
-        // Tampering the grid breaks the signature (grid is covered).
-        let mut tampered = req.clone();
-        tampered.station_grid = "JO62".to_string();
-        assert!(!verify_ed25519(
-            &req.pubkey,
-            &tampered.canonical_bytes().unwrap(),
-            &req.signature
-        ));
-    }
-
-    #[test]
-    fn conack_grid_round_trips_and_is_signature_covered() {
-        let ack = ConAck::create_with_grid(
-            "KD9XYZ",
+    fn conack_round_trip_and_binds_its_conreq() {
+        let req_bytes = ConReq::create(&req_params(1_700_000_000_000), &make_key(1)).unwrap();
+        let ack_bytes = ConAck::create(
+            &ConAckParams {
+                station_id: "DL1ABC",
+                dst_station: "W1AW",
+                selected_mode: SigningMode::Normal,
+                conreq_hash: conreq_hash(&req_bytes),
+                station_grid: "JO62qm",
+                profile_name: "hpx_hf",
+                profile_fingerprint: 42,
+                timestamp_ms: 1_700_000_000_100,
+                kex_pubkey: &[2u8; 32],
+            },
             &make_key(2),
-            SigningMode::Normal,
-            "s-grid",
-            CompressionAlgorithm::None,
-            FecMode::None,
-            "EM69",
         )
         .unwrap();
-        let decoded = ConAck::decode(&ack.encode().unwrap()).unwrap();
-        assert_eq!(decoded.station_grid, "EM69");
-        let mut tampered = ack.clone();
-        tampered.station_grid = "AA00".to_string();
-        assert!(!verify_ed25519(
-            &ack.pubkey,
-            &tampered.canonical_bytes().unwrap(),
-            &ack.signature
-        ));
-    }
+        let d = ConAck::decode(&ack_bytes).unwrap();
+        assert_eq!(d.station_id, "DL1ABC");
+        assert_eq!(d.selected_mode, SigningMode::Normal);
+        assert_eq!(d.conreq_hash, conreq_hash(&req_bytes));
 
-    #[test]
-    fn empty_grid_conreq_is_byte_identical_to_legacy() {
-        // A default-grid frame must serialize identically to the pre-grid wire format
-        // so existing signatures and decoders are unaffected.
-        let with_helper = ConReq::create(
-            "W1AW",
-            &make_key(1),
-            vec![SigningMode::Normal],
-            "s1",
-            vec![],
-            vec![],
-        )
-        .unwrap();
-        let with_grid_empty = ConReq::create_with_grid(
-            "W1AW",
-            &make_key(1),
-            vec![SigningMode::Normal],
-            "s1",
-            vec![],
-            vec![],
-            "",
-        )
-        .unwrap();
-        assert_eq!(
-            with_helper.encode().unwrap(),
-            with_grid_empty.encode().unwrap()
-        );
-        assert_eq!(with_helper.signature, with_grid_empty.signature);
-    }
-
-    #[test]
-    fn conack_round_trip() {
-        let ack = ConAck::create(
-            "KD9XYZ",
-            &make_key(2),
-            SigningMode::Normal,
-            "session-abc",
-            CompressionAlgorithm::None,
-            FecMode::None,
-        )
-        .unwrap();
-        let encoded = ack.encode().expect("encode");
-        let decoded = ConAck::decode(&encoded).expect("decode");
-        assert_eq!(decoded.station_id, ack.station_id);
-        assert_eq!(decoded.pubkey, pubkey_for_seed(2));
-    }
-
-    #[test]
-    fn verify_conreq_rejects_wrong_pubkey() {
-        let mut req = ConReq::create(
-            "W1AW",
-            &make_key(1),
-            vec![SigningMode::Normal],
-            "s1",
-            vec![],
-            vec![],
-        )
-        .unwrap();
-        req.pubkey = pubkey_for_seed(99); // wrong key
-
-        let store = InMemoryTrustStore::new();
-        let result = verify_conreq(
-            &req,
-            &store,
-            PolicyProfile::Balanced,
-            SigningMode::Normal,
-            None,
-        );
-        assert!(matches!(result, Err(HandshakeError::InvalidSignature)));
-    }
-
-    fn conreq_at(timestamp_ms: u64) -> ConReq {
-        ConReq::create_full(
-            "W1AW",
-            &make_key(1),
-            vec![SigningMode::Normal],
-            "s-fresh",
-            vec![],
-            vec![],
-            "",
-            "",
-            0,
-            timestamp_ms,
-            &[],
-        )
-        .unwrap()
-    }
-
-    #[test]
-    fn fresh_conreq_within_window_is_accepted() {
-        let now = 1_700_000_000_000;
-        let req = conreq_at(now - 5_000); // 5 s old
-        let store = InMemoryTrustStore::new();
-        let f = Freshness {
-            now_ms: now,
-            max_skew_ms: 120_000,
-        };
-        assert!(verify_conreq(
-            &req,
-            &store,
-            PolicyProfile::Balanced,
-            SigningMode::Normal,
-            Some(f)
-        )
-        .is_ok());
-    }
-
-    #[test]
-    fn stale_conreq_is_rejected() {
-        let now = 1_700_000_000_000;
-        let req = conreq_at(now - 10 * 60_000); // 10 min old
-        let store = InMemoryTrustStore::new();
-        let f = Freshness {
-            now_ms: now,
-            max_skew_ms: 120_000,
-        };
-        assert!(matches!(
-            verify_conreq(
-                &req,
-                &store,
-                PolicyProfile::Balanced,
-                SigningMode::Normal,
-                Some(f)
-            ),
-            Err(HandshakeError::StaleTimestamp { .. })
-        ));
-    }
-
-    #[test]
-    fn future_dated_conreq_is_rejected() {
-        let now = 1_700_000_000_000;
-        let req = conreq_at(now + 10 * 60_000); // 10 min in the future
-        let store = InMemoryTrustStore::new();
-        let f = Freshness {
-            now_ms: now,
-            max_skew_ms: 120_000,
-        };
-        assert!(matches!(
-            verify_conreq(
-                &req,
-                &store,
-                PolicyProfile::Balanced,
-                SigningMode::Normal,
-                Some(f)
-            ),
-            Err(HandshakeError::StaleTimestamp { .. })
-        ));
-    }
-
-    #[test]
-    fn timestampless_conreq_rejected_when_freshness_required() {
-        let req = conreq_at(0); // legacy / no timestamp
-        let store = InMemoryTrustStore::new();
-        let f = Freshness {
-            now_ms: 1_700_000_000_000,
-            max_skew_ms: 120_000,
-        };
-        assert!(matches!(
-            verify_conreq(
-                &req,
-                &store,
-                PolicyProfile::Balanced,
-                SigningMode::Normal,
-                Some(f)
-            ),
-            Err(HandshakeError::MissingTimestamp)
-        ));
-    }
-
-    #[test]
-    fn none_freshness_skips_the_check() {
-        let req = conreq_at(0); // no timestamp — accepted when freshness is not enforced
-        let store = InMemoryTrustStore::new();
-        assert!(verify_conreq(
-            &req,
-            &store,
+        let st = trusted("DL1ABC", 2);
+        assert!(verify_conack(
+            &ack_bytes,
+            &req_bytes,
+            &[SigningMode::Normal],
+            &st,
             PolicyProfile::Balanced,
             SigningMode::Normal,
             None
@@ -1040,40 +734,344 @@ mod tests {
         .is_ok());
     }
 
+    /// A CONACK bound to a DIFFERENT CONREQ is refused — this is what replaces v1's session-id echo.
     #[test]
-    fn stale_conack_is_rejected() {
-        let now = 1_700_000_000_000;
-        let ack = ConAck::create_full(
-            "W1AW",
-            &make_key(1),
-            SigningMode::Normal,
-            "s-fresh",
-            CompressionAlgorithm::None,
-            FecMode::None,
-            "",
-            "",
-            0,
-            now - 10 * 60_000,
-            &[],
+    fn a_conack_bound_to_another_conreq_is_rejected() {
+        let req_a = ConReq::create(&req_params(1_700_000_000_000), &make_key(1)).unwrap();
+        let mut other = req_params(1_700_000_000_000);
+        other.session_id = "S-2";
+        let req_b = ConReq::create(&other, &make_key(1)).unwrap();
+        assert_ne!(conreq_hash(&req_a), conreq_hash(&req_b));
+
+        let ack = ConAck::create(
+            &ConAckParams {
+                station_id: "DL1ABC",
+                dst_station: "W1AW",
+                selected_mode: SigningMode::Normal,
+                conreq_hash: conreq_hash(&req_b),
+                station_grid: "",
+                profile_name: "",
+                profile_fingerprint: 0,
+                timestamp_ms: 1_700_000_000_100,
+                kex_pubkey: &[2u8; 32],
+            },
+            &make_key(2),
         )
         .unwrap();
-        let store = InMemoryTrustStore::new();
-        let f = Freshness {
+        let st = trusted("DL1ABC", 2);
+        let e = verify_conack(
+            &ack,
+            &req_a,
+            &[SigningMode::Normal],
+            &st,
+            PolicyProfile::Balanced,
+            SigningMode::Normal,
+            None,
+        );
+        assert!(matches!(e, Err(HandshakeError::SessionIdMismatch { .. })));
+    }
+
+    /// F-1147-05: a mode the CONREQ never offered is refused. v1 checked LOCAL policy only.
+    #[test]
+    fn a_conack_selecting_an_unoffered_mode_is_rejected() {
+        let req = ConReq::create(&req_params(1_700_000_000_000), &make_key(1)).unwrap();
+        let ack = ConAck::create(
+            &ConAckParams {
+                station_id: "DL1ABC",
+                dst_station: "W1AW",
+                selected_mode: SigningMode::Paranoid,
+                conreq_hash: conreq_hash(&req),
+                station_grid: "",
+                profile_name: "",
+                profile_fingerprint: 0,
+                timestamp_ms: 1_700_000_000_100,
+                kex_pubkey: &[2u8; 32],
+            },
+            &make_key(2),
+        )
+        .unwrap();
+        let st = trusted("DL1ABC", 2);
+        let e = verify_conack(
+            &ack,
+            &req,
+            &[SigningMode::Normal, SigningMode::Psk],
+            &st,
+            PolicyProfile::Balanced,
+            SigningMode::Normal,
+            None,
+        );
+        assert!(
+            matches!(e, Err(HandshakeError::UnofferedSigningMode)),
+            "expected the unoffered-mode refusal, got {e:?}"
+        );
+    }
+
+    #[test]
+    fn verify_conreq_rejects_a_key_that_is_not_the_stations_trusted_key() {
+        let f = ConReq::create(&req_params(1_700_000_000_000), &make_key(1)).unwrap();
+        // The station is trusted, but under a DIFFERENT key than the frame carries.
+        let st = trusted("W1AW", 9);
+        assert!(
+            verify_conreq(&f, &st, PolicyProfile::Balanced, SigningMode::Normal, None).is_err()
+        );
+    }
+
+    fn freshness_at(now: u64) -> Freshness {
+        Freshness {
             now_ms: now,
             max_skew_ms: 120_000,
-        };
-        assert!(matches!(
-            verify_conack(
-                &ack,
-                "s-fresh",
-                &[],
-                &[],
-                &store,
-                PolicyProfile::Balanced,
-                SigningMode::Normal,
-                Some(f)
-            ),
-            Err(HandshakeError::StaleTimestamp { .. })
-        ));
+        }
+    }
+
+    #[test]
+    fn fresh_conreq_within_window_is_accepted() {
+        let t = 1_700_000_000_000;
+        let f = ConReq::create(&req_params(t), &make_key(1)).unwrap();
+        let st = trusted("W1AW", 1);
+        assert!(verify_conreq(
+            &f,
+            &st,
+            PolicyProfile::Balanced,
+            SigningMode::Normal,
+            Some(freshness_at(t + 60_000))
+        )
+        .is_ok());
+    }
+
+    #[test]
+    fn stale_conreq_is_rejected() {
+        let t = 1_700_000_000_000;
+        let f = ConReq::create(&req_params(t), &make_key(1)).unwrap();
+        let st = trusted("W1AW", 1);
+        let e = verify_conreq(
+            &f,
+            &st,
+            PolicyProfile::Balanced,
+            SigningMode::Normal,
+            Some(freshness_at(t + 500_000)),
+        );
+        assert!(matches!(e, Err(HandshakeError::StaleTimestamp { .. })));
+    }
+
+    #[test]
+    fn future_dated_conreq_is_rejected() {
+        let t = 1_700_000_000_000;
+        let f = ConReq::create(&req_params(t), &make_key(1)).unwrap();
+        let st = trusted("W1AW", 1);
+        let e = verify_conreq(
+            &f,
+            &st,
+            PolicyProfile::Balanced,
+            SigningMode::Normal,
+            Some(freshness_at(t - 500_000)),
+        );
+        assert!(matches!(e, Err(HandshakeError::StaleTimestamp { .. })));
+    }
+
+    #[test]
+    fn none_freshness_skips_the_check() {
+        let f = ConReq::create(&req_params(1), &make_key(1)).unwrap();
+        let st = trusted("W1AW", 1);
+        assert!(verify_conreq(&f, &st, PolicyProfile::Balanced, SigningMode::Normal, None).is_ok());
+    }
+
+    /// v2 makes `timestamp_ms` a mandatory fixed-width field, so a frame carrying NO timestamp is
+    /// unconstructible — the v1 test for that asserted a state the format no longer admits.
+    ///
+    /// Zero is now a VALUE rather than a sentinel, and `Freshness::check` still refuses it as
+    /// `MissingTimestamp`. That is kept deliberately: a station claiming the epoch is refused
+    /// either way, and the specific error says more than "stale by 1.7e12 ms" would. Written after
+    /// this test asserted `StaleTimestamp` and failed — the assumption was mine, not a defect.
+    #[test]
+    fn a_zero_timestamp_is_refused_as_missing_not_merely_stale() {
+        let f = ConReq::create(&req_params(0), &make_key(1)).unwrap();
+        assert_eq!(ConReq::decode(&f).unwrap().timestamp_ms, 0);
+        let st = trusted("W1AW", 1);
+        let e = verify_conreq(
+            &f,
+            &st,
+            PolicyProfile::Balanced,
+            SigningMode::Normal,
+            Some(freshness_at(1_700_000_000_000)),
+        );
+        assert!(
+            matches!(e, Err(HandshakeError::MissingTimestamp)),
+            "expected MissingTimestamp for a zero timestamp, got {e:?}"
+        );
+    }
+}
+
+#[cfg(test)]
+mod conreq_v2_tests {
+    use super::*;
+    use crate::handshake_wire::{HEADER_LEN, SIG_LEN, WIRE_VERSION};
+
+    const SEED: [u8; 32] = [7u8; 32];
+
+    fn params<'a>(dst: &'a str) -> ConReqParams<'a> {
+        ConReqParams {
+            station_id: "DC0SK",
+            dst_station: dst,
+            signing_modes: vec![SigningMode::Normal, SigningMode::Psk],
+            session_id: "DC0SK-1755000000",
+            station_grid: "JO62qm",
+            profile_name: "hpx_hf",
+            profile_fingerprint: 0xDEAD_BEEF_CAFE_F00D,
+            timestamp_ms: 1_755_000_000_000,
+            kex_pubkey: &[3u8; 32],
+        }
+    }
+
+    fn store(req: &ConReq) -> InMemoryTrustStore {
+        let mut s = InMemoryTrustStore::new();
+        let mut k = [0u8; 32];
+        k.copy_from_slice(&req.pubkey);
+        s.add_entry("DC0SK", k, PublicKeyTrustLevel::Full);
+        s
+    }
+
+    fn verify(
+        bytes: &[u8],
+        st: &InMemoryTrustStore,
+    ) -> Result<(ConReq, HandshakeDecision), HandshakeError> {
+        verify_conreq(
+            bytes,
+            st,
+            PolicyProfile::Balanced,
+            SigningMode::Normal,
+            None,
+        )
+    }
+
+    #[test]
+    fn a_signed_conreq_round_trips_and_verifies() {
+        let f = ConReq::create(&params("*"), &SEED).unwrap();
+        let decoded = ConReq::decode(&f).unwrap();
+        assert_eq!(decoded.station_id, "DC0SK");
+        assert_eq!(decoded.dst_station, "*");
+        assert_eq!(
+            decoded.signing_modes,
+            vec![SigningMode::Normal, SigningMode::Psk]
+        );
+        assert_eq!(decoded.profile_fingerprint, 0xDEAD_BEEF_CAFE_F00D);
+        assert_eq!(decoded.timestamp_ms, 1_755_000_000_000);
+        let st = store(&decoded);
+        assert!(verify(&f, &st).is_ok());
+    }
+
+    /// A REAL CONREQ FITS ONE FRAGMENT — the whole point of #1147. The v1 JSON frame was 752 B on
+    /// the wire = 3 SAR fragments = three acquisitions, decoding at ~p^3 on a fading channel.
+    #[test]
+    fn a_realistic_conreq_fits_one_sar_fragment() {
+        let f = ConReq::create(&params("DL1ABC"), &SEED).unwrap();
+        assert!(
+            f.len() <= crate::handshake_wire::FRAGMENT_CAPACITY,
+            "a realistic CONREQ is {} B, over one fragment",
+            f.len()
+        );
+    }
+
+    /// BYTE TAMPER, one per mutable region. The old tests mutated STRUCT FIELDS and re-verified;
+    /// under a sign-the-bytes format that is vacuous, because re-encoding recomputes the signed span.
+    /// Each region here is mutated in the transmitted bytes and must break verification.
+    #[test]
+    fn tampering_with_any_signed_region_breaks_verification() {
+        let f = ConReq::create(&params("DL1ABC"), &SEED).unwrap();
+        let st = store(&ConReq::decode(&f).unwrap());
+        assert!(
+            verify(&f, &st).is_ok(),
+            "control: the untampered frame must verify"
+        );
+
+        // The magic, the version, the length field, and several body offsets. Body offsets are
+        // chosen across distinct fields rather than at one spot, so a signature that happened to
+        // cover only a prefix would still be caught.
+        let body_start = HEADER_LEN;
+        let body_len = f.len() - HEADER_LEN - SIG_LEN;
+        let mut regions = vec![("magic", 0usize), ("version", 4), ("length", 6)];
+        for (i, off) in [0usize, body_len / 4, body_len / 2, body_len - 1]
+            .iter()
+            .enumerate()
+        {
+            regions.push((
+                ["body@start", "body@quarter", "body@half", "body@end"][i],
+                body_start + off,
+            ));
+        }
+        for (what, idx) in regions {
+            let mut bad = f.clone();
+            bad[idx] ^= 0xFF;
+            assert!(
+                verify(&bad, &st).is_err(),
+                "flipping `{what}` (byte {idx}) still verified — that region is not covered by the \
+                 signature, so the signed span is not the transmitted prefix"
+            );
+        }
+    }
+
+    /// A frame cannot verify as another TYPE or VERSION: both are inside the signed prefix.
+    #[test]
+    fn a_frame_cannot_be_reinterpreted_as_another_type_or_version() {
+        let f = ConReq::create(&params("DL1ABC"), &SEED).unwrap();
+        let st = store(&ConReq::decode(&f).unwrap());
+
+        let mut wrong_version = f.clone();
+        wrong_version[4] = WIRE_VERSION + 1;
+        assert!(verify(&wrong_version, &st).is_err());
+
+        let mut as_conack = f.clone();
+        as_conack[..4].copy_from_slice(b"HSAK");
+        assert!(
+            verify(&as_conack, &st).is_err(),
+            "a CONACK-magicked frame verified as a CONREQ"
+        );
+    }
+
+    /// #1178: unaddressed must not be spellable by omission, at either end.
+    #[test]
+    fn an_empty_dst_station_is_refused_at_both_ends() {
+        let e = ConReq::create(&params(""), &SEED).unwrap_err().to_string();
+        assert!(
+            e.contains("dst_station"),
+            "expected a dst_station refusal, got: {e}"
+        );
+
+        // And a hand-built frame with an empty dst cannot be decoded either, so the encoder-side
+        // check is not the only thing standing between the wire and an unaddressed request.
+        let f = ConReq::create(&params("*"), &SEED).unwrap();
+        let mut hand = f.clone();
+        let dst_len_idx = HEADER_LEN + 1 + "DC0SK".len();
+        assert_eq!(
+            hand[dst_len_idx], 1,
+            "expected the 1-byte \"*\" length here"
+        );
+        hand[dst_len_idx] = 0;
+        assert!(ConReq::decode(&hand).is_err());
+    }
+
+    /// Addressing is what the daemon filters on (#1178).
+    #[test]
+    fn addressing_matches_the_wildcard_and_the_exact_callsign_only() {
+        let b = ConReq::decode(&ConReq::create(&params("*"), &SEED).unwrap()).unwrap();
+        assert!(b.is_addressed_to("DL1ABC") && b.is_addressed_to("DC0SK"));
+        let d = ConReq::decode(&ConReq::create(&params("DL1ABC"), &SEED).unwrap()).unwrap();
+        assert!(d.is_addressed_to("DL1ABC"));
+        assert!(!d.is_addressed_to("DL2XYZ"));
+    }
+
+    /// The hash a CONACK binds to covers the signature too, so two frames differing only there
+    /// bind differently.
+    #[test]
+    fn the_conreq_hash_covers_the_whole_transmitted_frame() {
+        let f = ConReq::create(&params("DL1ABC"), &SEED).unwrap();
+        let h = conreq_hash(&f);
+        let mut other = f.clone();
+        let last = other.len() - 1;
+        other[last] ^= 0x01;
+        assert_ne!(
+            h,
+            conreq_hash(&other),
+            "the hash ignores the signature region"
+        );
     }
 }
