@@ -2,15 +2,28 @@ use openpulse_core::compression::{
     compress, compress_if_smaller, decompress, CompressionAlgorithm, MAX_DECOMPRESSED_SIZE,
     ZSTD_DICT_ID,
 };
-use openpulse_core::fec::FecMode;
-use openpulse_core::handshake::{
-    verify_conack, verify_conreq, ConAck, ConReq, HandshakeError, InMemoryTrustStore,
-};
-use openpulse_core::trust::{PolicyProfile, SigningMode};
 
 // ------------------------------------------------------------------
 // Group 1: Codec correctness
 // ------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
+// #1166 / #1147: the handshake NEGOTIATION tests that lived here are GONE.
+//
+// `supported_compression` / `selected_compression` were deleted from the wire format because
+// nothing consumed the selection — the daemon sent the list empty and hardcoded `None`, so the
+// field was a capability claim the station could not back (the same reason Type C was removed in
+// PR #948).
+//
+// Note precisely what that does to coverage: these tests are not "temporarily unported". The
+// property they asserted — that a responder cannot select an algorithm, or a Zstd dict id, the
+// initiator never offered — DISSOLVES with the field, because there is no selection to police.
+// The codec tests below are unaffected and still cover compress/decompress including the Zstd
+// dictionary path.
+//
+// IF COMPRESSION IS EVER WIRED FOR REAL, the membership check must come back WITH it: the deleted
+// tests were `conreq_carries_supported_compression_in_signature`, `conack_carries_selected_compression_in_signature`, `full_negotiation_round_trip_with_lz4`, `compression_field_tampering_invalidates_signature`, `conack_rejected_when_compression_not_offered`, `zstd_dict_id_mismatch_rejected_in_negotiation`, `zstd_full_negotiation_round_trip`.
+// ---------------------------------------------------------------------------
 
 #[test]
 fn none_compress_decompress_is_identity() {
@@ -57,6 +70,7 @@ fn compress_if_smaller_picks_lz4_for_compressible_payload() {
 }
 
 // VERIFIES: REQ-CMP-01
+
 #[test]
 fn compress_if_smaller_keeps_original_when_incompressible() {
     // Single byte or already-dense data should not be re-compressed.
@@ -70,166 +84,6 @@ fn compress_if_smaller_keeps_original_when_incompressible() {
 // Group 3: Handshake negotiation
 // ------------------------------------------------------------------
 
-fn make_seed(b: u8) -> [u8; 32] {
-    [b; 32]
-}
-
-#[test]
-fn conreq_carries_supported_compression_in_signature() {
-    let req = ConReq::create(
-        "W1AW",
-        &make_seed(1),
-        vec![SigningMode::Normal],
-        "sess-comp-1",
-        vec![CompressionAlgorithm::Lz4],
-        vec![],
-    )
-    .unwrap();
-
-    assert_eq!(req.supported_compression, vec![CompressionAlgorithm::Lz4]);
-
-    // Verify the signature covers the compression list.
-    let store = InMemoryTrustStore::new();
-    verify_conreq(
-        &req,
-        &store,
-        PolicyProfile::Balanced,
-        SigningMode::Normal,
-        None,
-    )
-    .expect("request with Lz4 compression should verify");
-}
-
-#[test]
-fn conack_carries_selected_compression_in_signature() {
-    let ack = ConAck::create(
-        "KD9XYZ",
-        &make_seed(2),
-        SigningMode::Normal,
-        "sess-comp-2",
-        CompressionAlgorithm::Lz4,
-        FecMode::None,
-    )
-    .unwrap();
-
-    assert_eq!(ack.selected_compression, CompressionAlgorithm::Lz4);
-
-    let store = InMemoryTrustStore::new();
-    verify_conack(
-        &ack,
-        "sess-comp-2",
-        &[CompressionAlgorithm::Lz4],
-        &[],
-        &store,
-        PolicyProfile::Balanced,
-        SigningMode::Normal,
-        None,
-    )
-    .expect("ack with Lz4 compression should verify");
-}
-
-#[test]
-fn full_negotiation_round_trip_with_lz4() {
-    // Alice initiates, advertising Lz4 support.
-    let req = ConReq::create(
-        "W1AW",
-        &make_seed(3),
-        vec![SigningMode::Normal],
-        "sess-comp-3",
-        vec![CompressionAlgorithm::Lz4],
-        vec![],
-    )
-    .unwrap();
-
-    let mut bob_store = InMemoryTrustStore::new();
-    bob_store.add_trusted(
-        "W1AW",
-        ed25519_dalek::SigningKey::from_bytes(&make_seed(3))
-            .verifying_key()
-            .to_bytes(),
-    );
-
-    let req_decision = verify_conreq(
-        &req,
-        &bob_store,
-        PolicyProfile::Balanced,
-        SigningMode::Normal,
-        None,
-    )
-    .unwrap();
-
-    // Bob selects Lz4 (it was offered).
-    let selected_compression = if req
-        .supported_compression
-        .contains(&CompressionAlgorithm::Lz4)
-    {
-        CompressionAlgorithm::Lz4
-    } else {
-        CompressionAlgorithm::None
-    };
-
-    let ack = ConAck::create(
-        "KD9XYZ",
-        &make_seed(4),
-        req_decision.selected_mode,
-        &req.session_id,
-        selected_compression,
-        FecMode::None,
-    )
-    .unwrap();
-
-    assert_eq!(ack.selected_compression, CompressionAlgorithm::Lz4);
-
-    let mut alice_store = InMemoryTrustStore::new();
-    alice_store.add_trusted(
-        "KD9XYZ",
-        ed25519_dalek::SigningKey::from_bytes(&make_seed(4))
-            .verifying_key()
-            .to_bytes(),
-    );
-
-    verify_conack(
-        &ack,
-        &req.session_id,
-        &req.supported_compression,
-        &[],
-        &alice_store,
-        PolicyProfile::Balanced,
-        SigningMode::Normal,
-        None,
-    )
-    .expect("Alice should accept Bob's Lz4-enabled CONACK");
-}
-
-#[test]
-fn compression_field_tampering_invalidates_signature() {
-    let mut req = ConReq::create(
-        "W1AW",
-        &make_seed(5),
-        vec![SigningMode::Normal],
-        "sess-comp-4",
-        vec![],
-        vec![],
-    )
-    .unwrap();
-
-    // Attacker injects Lz4 after the fact — signature should fail.
-    req.supported_compression = vec![CompressionAlgorithm::Lz4];
-
-    let store = InMemoryTrustStore::new();
-    assert!(
-        verify_conreq(
-            &req,
-            &store,
-            PolicyProfile::Balanced,
-            SigningMode::Normal,
-            None
-        )
-        .is_err(),
-        "tampering with compression field must invalidate signature"
-    );
-}
-
 #[test]
 fn decompress_rejects_oversized_size_prefix() {
     // Build a byte stream whose 4-byte LE prefix claims MAX_DECOMPRESSED_SIZE + 1.
@@ -242,40 +96,6 @@ fn decompress_rejects_oversized_size_prefix() {
         "size prefix exceeding limit must be rejected before allocation"
     );
 }
-
-#[test]
-fn conack_rejected_when_compression_not_offered() {
-    // Initiator advertises no compression; responder picks Lz4 anyway.
-    let ack = ConAck::create(
-        "KD9XYZ",
-        &make_seed(6),
-        SigningMode::Normal,
-        "sess-comp-5",
-        CompressionAlgorithm::Lz4,
-        FecMode::None,
-    )
-    .unwrap();
-
-    let store = InMemoryTrustStore::new();
-    let result = verify_conack(
-        &ack,
-        "sess-comp-5",
-        &[], // initiator offered nothing
-        &[],
-        &store,
-        PolicyProfile::Balanced,
-        SigningMode::Normal,
-        None,
-    );
-    assert!(
-        matches!(result, Err(HandshakeError::UnsupportedCompression)),
-        "selecting an unoffered compression must be rejected"
-    );
-}
-
-// ------------------------------------------------------------------
-// Group 4: Zstd dictionary compression
-// ------------------------------------------------------------------
 
 #[test]
 fn zstd_round_trip() {
@@ -313,108 +133,4 @@ fn zstd_decompression_oom_guard() {
         ),
         "oversized size prefix must be rejected before allocation"
     );
-}
-
-#[test]
-fn zstd_dict_id_mismatch_rejected_in_negotiation() {
-    // Bob selects Zstd with a wrong dict ID — Alice only offered ZSTD_DICT_ID.
-    let wrong_id = ZSTD_DICT_ID.wrapping_add(1);
-    let req = ConReq::create(
-        "W1AW",
-        &make_seed(11),
-        vec![SigningMode::Normal],
-        "sess-zstd-mismatch",
-        vec![
-            CompressionAlgorithm::Lz4,
-            CompressionAlgorithm::Zstd(ZSTD_DICT_ID),
-        ],
-        vec![],
-    )
-    .unwrap();
-
-    let ack = ConAck::create(
-        "KD9XYZ",
-        &make_seed(12),
-        SigningMode::Normal,
-        "sess-zstd-mismatch",
-        CompressionAlgorithm::Zstd(wrong_id),
-        FecMode::None,
-    )
-    .unwrap();
-
-    let store = InMemoryTrustStore::new();
-    let result = verify_conack(
-        &ack,
-        "sess-zstd-mismatch",
-        &req.supported_compression,
-        &[],
-        &store,
-        PolicyProfile::Balanced,
-        SigningMode::Normal,
-        None,
-    );
-    assert!(
-        matches!(result, Err(HandshakeError::UnsupportedCompression)),
-        "wrong dict ID must be rejected as unsupported compression"
-    );
-}
-
-#[test]
-fn zstd_full_negotiation_round_trip() {
-    // Alice advertises [Lz4, Zstd(DICT_ID)]; Bob selects Zstd.
-    let req = ConReq::create(
-        "W1AW",
-        &make_seed(13),
-        vec![SigningMode::Normal],
-        "sess-zstd-ok",
-        vec![
-            CompressionAlgorithm::Lz4,
-            CompressionAlgorithm::Zstd(ZSTD_DICT_ID),
-        ],
-        vec![],
-    )
-    .unwrap();
-
-    let mut bob_store = InMemoryTrustStore::new();
-    bob_store.add_trusted(
-        "W1AW",
-        ed25519_dalek::SigningKey::from_bytes(&make_seed(13))
-            .verifying_key()
-            .to_bytes(),
-    );
-    verify_conreq(
-        &req,
-        &bob_store,
-        PolicyProfile::Balanced,
-        SigningMode::Normal,
-        None,
-    )
-    .unwrap();
-
-    let ack = ConAck::create(
-        "KD9XYZ",
-        &make_seed(14),
-        SigningMode::Normal,
-        "sess-zstd-ok",
-        CompressionAlgorithm::Zstd(ZSTD_DICT_ID),
-        FecMode::None,
-    )
-    .unwrap();
-    assert_eq!(
-        ack.selected_compression,
-        CompressionAlgorithm::Zstd(ZSTD_DICT_ID)
-    );
-
-    let alice_store = InMemoryTrustStore::new();
-    verify_conack(
-        &ack,
-        &req.session_id,
-        &req.supported_compression,
-        &[],
-        &alice_store,
-        PolicyProfile::Balanced,
-        SigningMode::Normal,
-        None,
-    )
-    .expect("Zstd negotiation should succeed");
 }

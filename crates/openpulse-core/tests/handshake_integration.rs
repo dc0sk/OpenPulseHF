@@ -1,9 +1,27 @@
+//! Handshake verification, on the #1147 binary wire format.
+//!
+//! **Every tamper test here mutates BYTES.** The v1 versions mutated struct fields and re-verified,
+//! which is vacuous under a sign-the-transmitted-prefix format: re-encoding recomputes the very span
+//! the test is trying to corrupt, so the assertion passes whatever the signature covers.
+//!
+//! **The FEC/compression negotiation tests are GONE, not unported** (#1166). `supported_fec_modes` /
+//! `selected_fec_mode` were deleted from the wire because nothing consumed the selection — the
+//! daemon sent them empty and hardcoded `None`. The property those tests asserted (a responder
+//! cannot select a mode the initiator never offered) dissolves with the field rather than becoming
+//! untested. Deleted: `conreq_carries_fec_modes_in_signature`, `negotiate_strongest_mutual_fec_mode`,
+//! `fec_no_overlap_falls_back_to_none`, `conack_rejected_when_fec_mode_not_offered`,
+//! `short_rs_negotiates_at_highest_strength`. If FEC negotiation is ever wired for real, the
+//! membership check must return with it.
+//!
+//! The signing-mode equivalent of that check is NEW here and does exist — see
+//! `conack_rejected_when_mode_not_offered` (F-1147-05).
+
 use ed25519_dalek::SigningKey;
-use openpulse_core::compression::CompressionAlgorithm;
-use openpulse_core::fec::FecMode;
 use openpulse_core::handshake::{
-    verify_conack, verify_conreq, ConAck, ConReq, HandshakeError, InMemoryTrustStore,
+    conreq_hash, verify_conack, verify_conreq, ConAck, ConAckParams, ConReq, ConReqParams,
+    HandshakeError, InMemoryTrustStore,
 };
+use openpulse_core::handshake_wire::FRAGMENT_CAPACITY;
 use openpulse_core::trust::{PolicyProfile, SigningMode};
 
 fn make_seed(b: u8) -> [u8; 32] {
@@ -16,26 +34,55 @@ fn pubkey_for(seed: u8) -> [u8; 32] {
         .to_bytes()
 }
 
+const TS: u64 = 1_700_000_000_000;
+
+fn conreq(station: &str, dst: &str, seed: u8, modes: Vec<SigningMode>) -> Vec<u8> {
+    ConReq::create(
+        &ConReqParams {
+            station_id: station,
+            dst_station: dst,
+            signing_modes: modes,
+            session_id: "sess-001",
+            station_grid: "FN31pr",
+            profile_name: "hpx_hf",
+            profile_fingerprint: 99,
+            timestamp_ms: TS,
+            kex_pubkey: &[5u8; 32],
+        },
+        &make_seed(seed),
+    )
+    .unwrap()
+}
+
+fn conack(station: &str, dst: &str, seed: u8, mode: SigningMode, req: &[u8]) -> Vec<u8> {
+    ConAck::create(
+        &ConAckParams {
+            station_id: station,
+            dst_station: dst,
+            selected_mode: mode,
+            conreq_hash: conreq_hash(req),
+            station_grid: "EM69",
+            profile_name: "hpx_hf",
+            profile_fingerprint: 99,
+            timestamp_ms: TS + 100,
+            kex_pubkey: &[6u8; 32],
+        },
+        &make_seed(seed),
+    )
+    .unwrap()
+}
+
 // ------------------------------------------------------------------
 // ConReq verification
 // ------------------------------------------------------------------
 
 #[test]
 fn valid_conreq_accepted_trusted_peer() {
-    let req = ConReq::create(
-        "W1AW",
-        &make_seed(1),
-        vec![SigningMode::Normal],
-        "sess-001",
-        vec![],
-        vec![],
-    )
-    .unwrap();
-
+    let req = conreq("W1AW", "K2XYZ", 1, vec![SigningMode::Normal]);
     let mut store = InMemoryTrustStore::new();
     store.add_trusted("W1AW", pubkey_for(1));
 
-    let decision = verify_conreq(
+    let (decoded, decision) = verify_conreq(
         &req,
         &store,
         PolicyProfile::Balanced,
@@ -44,115 +91,105 @@ fn valid_conreq_accepted_trusted_peer() {
     )
     .expect("should accept trusted peer");
     assert_eq!(decision.selected_mode, SigningMode::Normal);
+    assert_eq!(decoded.station_id, "W1AW");
+    assert_eq!(decoded.dst_station, "K2XYZ");
 }
 
 #[test]
 fn valid_conreq_accepted_unknown_peer_permissive() {
-    let req = ConReq::create(
-        "N0CALL",
-        &make_seed(2),
-        vec![SigningMode::Normal, SigningMode::Relaxed],
-        "sess-002",
-        vec![],
-        vec![],
-    )
-    .unwrap();
-
-    let store = InMemoryTrustStore::new(); // peer not in store → Unknown
-
-    let decision = verify_conreq(
+    let req = conreq("W1AW", "*", 1, vec![SigningMode::Normal]);
+    let store = InMemoryTrustStore::new();
+    assert!(verify_conreq(
         &req,
         &store,
         PolicyProfile::Permissive,
-        SigningMode::Relaxed,
-        None,
+        SigningMode::Normal,
+        None
     )
-    .expect("permissive policy allows unknown key");
-    assert_eq!(decision.selected_mode, SigningMode::Normal);
+    .is_ok());
 }
 
-// VERIFIES: REQ-FUN-10
+/// BYTE tamper: flipping any byte of the signed prefix must break verification.
 #[test]
 fn conreq_rejected_invalid_signature() {
-    let mut req = ConReq::create(
-        "W1AW",
-        &make_seed(1),
-        vec![SigningMode::Normal],
-        "sess-003",
-        vec![],
-        vec![],
-    )
-    .unwrap();
-    req.signature[0] ^= 0xff; // corrupt
-
-    let store = InMemoryTrustStore::new();
-    let result = verify_conreq(
-        &req,
-        &store,
-        PolicyProfile::Balanced,
-        SigningMode::Normal,
-        None,
-    );
+    let req = conreq("W1AW", "K2XYZ", 1, vec![SigningMode::Normal]);
+    let mut store = InMemoryTrustStore::new();
+    store.add_trusted("W1AW", pubkey_for(1));
     assert!(
-        matches!(result, Err(HandshakeError::InvalidSignature)),
-        "corrupted signature must be rejected"
+        verify_conreq(
+            &req,
+            &store,
+            PolicyProfile::Balanced,
+            SigningMode::Normal,
+            None
+        )
+        .is_ok(),
+        "control: the untampered frame must verify"
     );
+
+    let mut bad = req.clone();
+    let n = bad.len();
+    bad[n - 70] ^= 0xFF; // inside the body, before the 64-byte signature
+    assert!(matches!(
+        verify_conreq(
+            &bad,
+            &store,
+            PolicyProfile::Balanced,
+            SigningMode::Normal,
+            None
+        ),
+        Err(HandshakeError::InvalidSignature)
+    ));
 }
 
-// VERIFIES: REQ-FUN-12
 #[test]
 fn conreq_rejected_revoked_key() {
-    let req = ConReq::create(
-        "W1AW",
-        &make_seed(1),
-        vec![SigningMode::Normal],
-        "sess-004",
-        vec![],
-        vec![],
-    )
-    .unwrap();
-
+    let req = conreq("W1AW", "K2XYZ", 1, vec![SigningMode::Normal]);
     let mut store = InMemoryTrustStore::new();
     store.add_revoked("W1AW", pubkey_for(1));
-
-    let result = verify_conreq(
+    assert!(verify_conreq(
         &req,
         &store,
         PolicyProfile::Balanced,
         SigningMode::Normal,
-        None,
-    );
-    assert!(
-        matches!(result, Err(HandshakeError::TrustFailure(_))),
-        "revoked key must be rejected"
-    );
+        None
+    )
+    .is_err());
 }
 
 #[test]
 fn conreq_rejected_no_mutual_mode_strict() {
-    let req = ConReq::create(
-        "W1AW",
-        &make_seed(1),
-        vec![SigningMode::Relaxed], // only offers Relaxed
-        "sess-005",
-        vec![],
-        vec![],
-    )
-    .unwrap();
-
-    let store = InMemoryTrustStore::new();
-    // Strict policy only accepts Normal/Paranoid; Relaxed not allowed
-    let result = verify_conreq(
+    let req = conreq("W1AW", "K2XYZ", 1, vec![SigningMode::Relaxed]);
+    let mut store = InMemoryTrustStore::new();
+    store.add_trusted("W1AW", pubkey_for(1));
+    assert!(verify_conreq(
         &req,
         &store,
         PolicyProfile::Strict,
+        SigningMode::Paranoid,
+        None
+    )
+    .is_err());
+}
+
+/// A CONREQ addressed to another station still VERIFIES — addressing is a routing decision for the
+/// daemon, not a cryptographic one. Pinned so the two concerns are not conflated: the RF-saving
+/// refusal lives in the daemon (`a_conreq_addressed_elsewhere_does_not_key_the_transmitter`).
+#[test]
+fn addressing_is_not_a_verification_failure() {
+    let req = conreq("W1AW", "DL9ZZZ", 1, vec![SigningMode::Normal]);
+    let mut store = InMemoryTrustStore::new();
+    store.add_trusted("W1AW", pubkey_for(1));
+    let (decoded, _) = verify_conreq(
+        &req,
+        &store,
+        PolicyProfile::Balanced,
         SigningMode::Normal,
         None,
-    );
-    assert!(
-        matches!(result, Err(HandshakeError::TrustFailure(_))),
-        "strict policy must reject Relaxed-only peer"
-    );
+    )
+    .expect("a well-signed CONREQ verifies regardless of who it is addressed to");
+    assert!(!decoded.is_addressed_to("K2XYZ"));
+    assert!(decoded.is_addressed_to("DL9ZZZ"));
 }
 
 // ------------------------------------------------------------------
@@ -161,467 +198,201 @@ fn conreq_rejected_no_mutual_mode_strict() {
 
 #[test]
 fn valid_conack_accepted() {
-    let ack = ConAck::create(
-        "KD9XYZ",
-        &make_seed(2),
-        SigningMode::Normal,
-        "sess-010",
-        CompressionAlgorithm::None,
-        FecMode::None,
-    )
-    .unwrap();
-
+    let req = conreq("W1AW", "K2XYZ", 1, vec![SigningMode::Normal]);
+    let ack = conack("K2XYZ", "W1AW", 2, SigningMode::Normal, &req);
     let mut store = InMemoryTrustStore::new();
-    store.add_trusted("KD9XYZ", pubkey_for(2));
+    store.add_trusted("K2XYZ", pubkey_for(2));
 
-    let decision = verify_conack(
+    let (decoded, decision) = verify_conack(
         &ack,
-        "sess-010",
-        &[],
-        &[],
+        &req,
+        &[SigningMode::Normal],
         &store,
         PolicyProfile::Balanced,
         SigningMode::Normal,
         None,
     )
-    .expect("valid CONACK should be accepted");
+    .expect("should accept");
     assert_eq!(decision.selected_mode, SigningMode::Normal);
+    assert_eq!(decoded.conreq_hash, conreq_hash(&req));
 }
 
+/// Replaces `conack_rejected_session_id_mismatch`: v2 binds by hash over the transmitted CONREQ.
 #[test]
-fn conack_rejected_session_id_mismatch() {
-    let ack = ConAck::create(
-        "KD9XYZ",
-        &make_seed(2),
-        SigningMode::Normal,
-        "sess-010",
-        CompressionAlgorithm::None,
-        FecMode::None,
-    )
-    .unwrap();
-    let store = InMemoryTrustStore::new();
+fn conack_rejected_when_bound_to_a_different_conreq() {
+    let ours = conreq("W1AW", "K2XYZ", 1, vec![SigningMode::Normal]);
+    let theirs = conreq("W1AW", "DL9ZZZ", 1, vec![SigningMode::Normal]);
+    assert_ne!(conreq_hash(&ours), conreq_hash(&theirs));
 
-    let result = verify_conack(
-        &ack,
-        "sess-WRONG",
-        &[],
-        &[],
-        &store,
-        PolicyProfile::Balanced,
-        SigningMode::Normal,
-        None,
-    );
-    assert!(
-        matches!(result, Err(HandshakeError::SessionIdMismatch { .. })),
-        "mismatched session ID must be rejected"
-    );
+    let ack = conack("K2XYZ", "W1AW", 2, SigningMode::Normal, &theirs);
+    let mut store = InMemoryTrustStore::new();
+    store.add_trusted("K2XYZ", pubkey_for(2));
+    assert!(matches!(
+        verify_conack(
+            &ack,
+            &ours,
+            &[SigningMode::Normal],
+            &store,
+            PolicyProfile::Balanced,
+            SigningMode::Normal,
+            None
+        ),
+        Err(HandshakeError::SessionIdMismatch { .. })
+    ));
+}
+
+/// F-1147-05, the check v1 did not have: `selected_mode` must be one the CONREQ offered. v1
+/// evaluated it against LOCAL policy only, so a responder could select a mode never proposed.
+#[test]
+fn conack_rejected_when_mode_not_offered() {
+    let req = conreq("W1AW", "K2XYZ", 1, vec![SigningMode::Normal]);
+    let ack = conack("K2XYZ", "W1AW", 2, SigningMode::Paranoid, &req);
+    let mut store = InMemoryTrustStore::new();
+    store.add_trusted("K2XYZ", pubkey_for(2));
+    assert!(matches!(
+        verify_conack(
+            &ack,
+            &req,
+            &[SigningMode::Normal],
+            &store,
+            PolicyProfile::Balanced,
+            SigningMode::Normal,
+            None
+        ),
+        Err(HandshakeError::UnofferedSigningMode)
+    ));
 }
 
 #[test]
 fn conack_rejected_invalid_signature() {
-    let mut ack = ConAck::create(
-        "KD9XYZ",
-        &make_seed(2),
-        SigningMode::Normal,
-        "sess-010",
-        CompressionAlgorithm::None,
-        FecMode::None,
-    )
-    .unwrap();
-    ack.signature[63] ^= 0x01; // corrupt last byte
+    let req = conreq("W1AW", "K2XYZ", 1, vec![SigningMode::Normal]);
+    let ack = conack("K2XYZ", "W1AW", 2, SigningMode::Normal, &req);
+    let mut store = InMemoryTrustStore::new();
+    store.add_trusted("K2XYZ", pubkey_for(2));
 
-    let store = InMemoryTrustStore::new();
-    let result = verify_conack(
-        &ack,
-        "sess-010",
-        &[],
-        &[],
-        &store,
-        PolicyProfile::Balanced,
-        SigningMode::Normal,
-        None,
-    );
-    assert!(matches!(result, Err(HandshakeError::InvalidSignature)));
+    let mut bad = ack.clone();
+    let n = bad.len();
+    bad[n - 70] ^= 0xFF;
+    assert!(matches!(
+        verify_conack(
+            &bad,
+            &req,
+            &[SigningMode::Normal],
+            &store,
+            PolicyProfile::Balanced,
+            SigningMode::Normal,
+            None
+        ),
+        Err(HandshakeError::InvalidSignature)
+    ));
 }
 
 // ------------------------------------------------------------------
-// End-to-end handshake round-trip
+// Wire format
 // ------------------------------------------------------------------
 
 #[test]
 fn full_handshake_round_trip() {
-    // Alice initiates
-    let req = ConReq::create(
+    let req = conreq(
         "W1AW",
-        &make_seed(1),
-        vec![SigningMode::Normal, SigningMode::Paranoid],
-        "sess-100",
-        vec![],
-        vec![],
-    )
-    .unwrap();
+        "K2XYZ",
+        1,
+        vec![SigningMode::Normal, SigningMode::Psk],
+    );
+    let ack = conack("K2XYZ", "W1AW", 2, SigningMode::Psk, &req);
 
-    // Bob verifies CONREQ and responds
-    let mut bob_store = InMemoryTrustStore::new();
-    bob_store.add_trusted("W1AW", pubkey_for(1));
+    let mut store = InMemoryTrustStore::new();
+    store.add_trusted("W1AW", pubkey_for(1));
+    store.add_trusted("K2XYZ", pubkey_for(2));
 
-    let req_decision = verify_conreq(
+    let (r, _) = verify_conreq(
         &req,
-        &bob_store,
-        PolicyProfile::Strict,
+        &store,
+        PolicyProfile::Balanced,
         SigningMode::Normal,
         None,
-    )
-    .expect("Bob should accept Alice's CONREQ");
-
-    let ack = ConAck::create(
-        "KD9XYZ",
-        &make_seed(2),
-        req_decision.selected_mode,
-        &req.session_id,
-        CompressionAlgorithm::None,
-        FecMode::None,
     )
     .unwrap();
-
-    // Alice verifies CONACK
-    let mut alice_store = InMemoryTrustStore::new();
-    alice_store.add_trusted("KD9XYZ", pubkey_for(2));
-
-    let ack_decision = verify_conack(
+    let (a, _) = verify_conack(
         &ack,
-        &req.session_id,
-        &req.supported_compression,
-        &req.supported_fec_modes,
-        &alice_store,
-        PolicyProfile::Strict,
+        &req,
+        &r.signing_modes,
+        &store,
+        PolicyProfile::Balanced,
         SigningMode::Normal,
         None,
     )
-    .expect("Alice should accept Bob's CONACK");
-
-    assert_eq!(req_decision.selected_mode, ack_decision.selected_mode);
+    .unwrap();
+    assert_eq!(a.selected_mode, SigningMode::Psk);
+    assert!(r.signing_modes.contains(&a.selected_mode));
 }
-
-// ------------------------------------------------------------------
-// Wire encode/decode
-// ------------------------------------------------------------------
 
 #[test]
 fn conreq_encode_decode_round_trip() {
-    let req = ConReq::create(
-        "W1AW",
-        &make_seed(1),
-        vec![SigningMode::Normal],
-        "s1",
-        vec![],
-        vec![],
-    )
-    .unwrap();
-    let bytes = req.encode().expect("encode");
-    let decoded = ConReq::decode(&bytes).expect("decode");
-    assert_eq!(decoded.station_id, req.station_id);
-    assert_eq!(decoded.session_id, req.session_id);
-    assert_eq!(decoded.signature, req.signature);
+    let req = conreq("W1AW", "K2XYZ", 1, vec![SigningMode::Normal]);
+    let d = ConReq::decode(&req).unwrap();
+    assert_eq!(d.station_id, "W1AW");
+    assert_eq!(d.session_id, "sess-001");
+    assert_eq!(d.station_grid, "FN31pr");
+    assert_eq!(d.profile_name, "hpx_hf");
+    assert_eq!(d.profile_fingerprint, 99);
+    assert_eq!(d.timestamp_ms, TS);
+    assert_eq!(d.kex_pubkey, vec![5u8; 32]);
 }
 
 #[test]
 fn conack_encode_decode_round_trip() {
-    let ack = ConAck::create(
-        "KD9XYZ",
-        &make_seed(2),
-        SigningMode::Normal,
-        "s1",
-        CompressionAlgorithm::None,
-        FecMode::None,
-    )
-    .unwrap();
-    let bytes = ack.encode().expect("encode");
-    let decoded = ConAck::decode(&bytes).expect("decode");
-    assert_eq!(decoded.station_id, ack.station_id);
-    assert_eq!(decoded.selected_mode, ack.selected_mode);
-    assert_eq!(decoded.signature, ack.signature);
+    let req = conreq("W1AW", "K2XYZ", 1, vec![SigningMode::Normal]);
+    let d = ConAck::decode(&conack("K2XYZ", "W1AW", 2, SigningMode::Normal, &req)).unwrap();
+    assert_eq!(d.station_id, "K2XYZ");
+    assert_eq!(d.dst_station, "W1AW");
+    assert_eq!(d.station_grid, "EM69");
+    assert_eq!(d.timestamp_ms, TS + 100);
 }
 
 #[test]
 fn conreq_decode_rejects_wrong_magic() {
-    let req = ConReq::create(
+    let mut req = conreq("W1AW", "K2XYZ", 1, vec![SigningMode::Normal]);
+    req[0] = b'X';
+    assert!(ConReq::decode(&req).is_err());
+}
+
+/// The headline property of #1147: both frames fit ONE SAR fragment, so a handshake costs one
+/// acquisition rather than three. A v1 CONREQ was 752 B on the wire.
+#[test]
+fn both_handshake_frames_fit_one_sar_fragment() {
+    let req = conreq(
         "W1AW",
-        &make_seed(1),
-        vec![SigningMode::Normal],
-        "s1",
-        vec![],
-        vec![],
-    )
-    .unwrap();
-    let mut bytes = req.encode().expect("encode");
-    bytes[0] = b'X'; // corrupt magic
-    assert!(ConReq::decode(&bytes).is_err());
-}
-
-// ------------------------------------------------------------------
-// FecMode negotiation
-// ------------------------------------------------------------------
-
-#[test]
-fn conreq_carries_fec_modes_in_signature() {
-    let req = ConReq::create(
-        "W1AW",
-        &make_seed(20),
-        vec![SigningMode::Normal],
-        "sess-fec-1",
-        vec![],
-        vec![FecMode::Rs, FecMode::Concatenated],
-    )
-    .unwrap();
-
-    assert_eq!(
-        req.supported_fec_modes,
-        vec![FecMode::Rs, FecMode::Concatenated]
+        "K2XYZ",
+        1,
+        vec![SigningMode::Normal, SigningMode::Psk],
     );
-
-    let store = InMemoryTrustStore::new();
-    verify_conreq(
-        &req,
-        &store,
-        PolicyProfile::Balanced,
-        SigningMode::Normal,
-        None,
-    )
-    .expect("ConReq with FEC modes should verify");
-}
-
-#[test]
-fn negotiate_strongest_mutual_fec_mode() {
-    // Alice offers [Rs, Concatenated]; Bob accepts [RsInterleaved, Concatenated].
-    // Strongest mutual mode is Concatenated (strength 3).
-    let offered = [FecMode::Rs, FecMode::Concatenated];
-    let accepted = [FecMode::RsInterleaved, FecMode::Concatenated];
-    assert_eq!(
-        FecMode::negotiate(&offered, &accepted),
-        FecMode::Concatenated
-    );
-}
-
-#[test]
-fn fec_no_overlap_falls_back_to_none() {
-    // Alice offers [Rs]; Bob accepts [RsInterleaved] — no overlap.
-    let offered = [FecMode::Rs];
-    let accepted = [FecMode::RsInterleaved];
-    assert_eq!(FecMode::negotiate(&offered, &accepted), FecMode::None);
-}
-
-#[test]
-fn conack_rejected_when_fec_mode_not_offered() {
-    // Initiator advertises no FEC; responder selects Concatenated anyway.
-    let ack = ConAck::create(
-        "KD9XYZ",
-        &make_seed(30),
-        SigningMode::Normal,
-        "sess-fec-rej",
-        CompressionAlgorithm::None,
-        FecMode::Concatenated,
-    )
-    .unwrap();
-
-    let store = InMemoryTrustStore::new();
-    let result = verify_conack(
-        &ack,
-        "sess-fec-rej",
-        &[],
-        &[], // initiator offered no FEC modes
-        &store,
-        PolicyProfile::Balanced,
-        SigningMode::Normal,
-        None,
+    let ack = conack("K2XYZ", "W1AW", 2, SigningMode::Psk, &req);
+    assert!(
+        req.len() <= FRAGMENT_CAPACITY,
+        "CONREQ is {} B, over one fragment",
+        req.len()
     );
     assert!(
-        matches!(result, Err(HandshakeError::UnsupportedFecMode)),
-        "selecting an unoffered FEC mode must be rejected"
+        ack.len() <= FRAGMENT_CAPACITY,
+        "CONACK is {} B, over one fragment",
+        ack.len()
     );
 }
-
-#[test]
-fn short_rs_negotiates_at_highest_strength() {
-    // Both peers offer [Rs, ShortRs]; negotiate() must select ShortRs (strength 4).
-    let offered = [FecMode::Rs, FecMode::ShortRs];
-    let accepted = [FecMode::Rs, FecMode::ShortRs, FecMode::RsInterleaved];
-    let selected = FecMode::negotiate(&offered, &accepted);
-    assert_eq!(
-        selected,
-        FecMode::ShortRs,
-        "ShortRs (strength 4) should win negotiation over Rs (strength 1)"
-    );
-}
-
-// ------------------------------------------------------------------
-// OTA rate-ladder identity advertisement (backward-compat guard)
-// ------------------------------------------------------------------
 
 #[test]
 fn conreq_advertises_profile_and_survives_wire_roundtrip() {
-    let req = ConReq::create_full(
-        "W1AW",
-        &make_seed(1),
-        vec![SigningMode::Normal],
-        "sess-prof",
-        vec![],
-        vec![],
-        "",
-        "hpx_hf",
-        0xABCD_1234_5678_9F01,
-        0,
-        &[],
-    )
-    .unwrap();
-
-    // Wire round-trip preserves the advertised ladder identity.
-    let decoded = ConReq::decode(&req.encode().unwrap()).unwrap();
-    assert_eq!(decoded.profile_name, "hpx_hf");
-    assert_eq!(decoded.profile_fingerprint, 0xABCD_1234_5678_9F01);
-
-    // Signature (which covers the profile fields) still verifies.
+    let req = conreq("W1AW", "K2XYZ", 1, vec![SigningMode::Normal]);
     let mut store = InMemoryTrustStore::new();
     store.add_trusted("W1AW", pubkey_for(1));
-    verify_conreq(
-        &decoded,
-        &store,
-        PolicyProfile::Balanced,
-        SigningMode::Normal,
-        None,
-    )
-    .expect("advertised-profile CONREQ must verify");
-}
-
-#[test]
-fn tampering_the_advertised_fingerprint_invalidates_the_signature() {
-    let mut req = ConReq::create_full(
-        "W1AW",
-        &make_seed(1),
-        vec![SigningMode::Normal],
-        "sess-tamper",
-        vec![],
-        vec![],
-        "",
-        "hpx_hf",
-        0x1111_2222_3333_4444,
-        0,
-        &[],
-    )
-    .unwrap();
-
-    // A man-in-the-middle swaps the advertised ladder fingerprint after signing.
-    req.profile_fingerprint = 0x9999_8888_7777_6666;
-
-    let mut store = InMemoryTrustStore::new();
-    store.add_trusted("W1AW", pubkey_for(1));
-    let result = verify_conreq(
+    let (d, _) = verify_conreq(
         &req,
         &store,
         PolicyProfile::Balanced,
         SigningMode::Normal,
         None,
-    );
-    assert!(
-        matches!(result, Err(HandshakeError::InvalidSignature)),
-        "tampered profile fingerprint must fail signature verification, got {result:?}"
-    );
-}
-
-#[test]
-fn unadvertised_conreq_stays_signature_compatible_with_legacy() {
-    // A frame with no advertised profile (via the legacy `create`) must produce the SAME signed
-    // bytes as one built through `create_full` with empty/zero profile — proving the skip-serialized
-    // fields keep old and new peers byte-identical.
-    let legacy = ConReq::create(
-        "W1AW",
-        &make_seed(1),
-        vec![SigningMode::Normal],
-        "sess-compat",
-        vec![],
-        vec![],
     )
     .unwrap();
-    let explicit_empty = ConReq::create_full(
-        "W1AW",
-        &make_seed(1),
-        vec![SigningMode::Normal],
-        "sess-compat",
-        vec![],
-        vec![],
-        "",
-        "",
-        0,
-        0,
-        &[],
-    )
-    .unwrap();
-    assert_eq!(
-        legacy.signature, explicit_empty.signature,
-        "empty-profile frame must sign identically to a legacy frame"
-    );
-}
-
-// ------------------------------------------------------------------
-// Impersonation: trusted callsign asserted with an untrusted key (audit F1)
-// ------------------------------------------------------------------
-
-#[test]
-fn conreq_rejects_impersonation_wrong_key_for_trusted_callsign() {
-    // Attacker self-signs with their OWN key (seed 2) but claims the trusted callsign W1AW,
-    // whose trusted key is seed 1. The signature is self-consistent, so only the key-binding
-    // check (audit F1) can catch it.
-    let req = ConReq::create(
-        "W1AW",
-        &make_seed(2),
-        vec![SigningMode::Normal],
-        "sess-imp",
-        vec![],
-        vec![],
-    )
-    .unwrap();
-    let mut store = InMemoryTrustStore::new();
-    store.add_trusted("W1AW", pubkey_for(1));
-
-    let result = verify_conreq(
-        &req,
-        &store,
-        PolicyProfile::Balanced,
-        SigningMode::Normal,
-        None,
-    );
-    assert!(
-        matches!(result, Err(HandshakeError::PublicKeyMismatch)),
-        "a self-signed CONREQ claiming a trusted callsign with the wrong key must be rejected, got {result:?}"
-    );
-}
-
-#[test]
-fn conack_rejects_impersonation_wrong_key_for_trusted_callsign() {
-    let ack = ConAck::create(
-        "W1AW",
-        &make_seed(2), // attacker's key
-        SigningMode::Normal,
-        "sess-imp",
-        CompressionAlgorithm::None,
-        FecMode::None,
-    )
-    .unwrap();
-    let mut store = InMemoryTrustStore::new();
-    store.add_trusted("W1AW", pubkey_for(1)); // trusted key differs
-
-    let result = verify_conack(
-        &ack,
-        "sess-imp",
-        &[],
-        &[],
-        &store,
-        PolicyProfile::Balanced,
-        SigningMode::Normal,
-        None,
-    );
-    assert!(
-        matches!(result, Err(HandshakeError::PublicKeyMismatch)),
-        "a self-signed CONACK claiming a trusted callsign with the wrong key must be rejected, got {result:?}"
-    );
+    assert_eq!(d.profile_name, "hpx_hf");
+    assert_eq!(d.profile_fingerprint, 99);
 }
