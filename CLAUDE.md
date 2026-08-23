@@ -243,6 +243,13 @@ Full spec in `docs/dev/design/testbench-design.md` and `docs/dev/benchmark-harne
 - `crates/openpulse-core/src/handshake.rs`: `ConReq`, `ConAck` wire frames with Ed25519 sign/verify; `TrustStore` trait; `InMemoryTrustStore`; `verify_conreq()`, `verify_conack()`
   - CONREQ: MAGIC "HSCQ" + VERSION + LENGTH + JSON; signature covers canonical JSON of body fields
   - CONACK: MAGIC "HSAK" + VERSION + LENGTH + JSON; echoes CONREQ session_id; signature covers canonical JSON
+  - **SUPERSEDED by #1147 (v2, 2026-08-23):** both frames are now BINARY, version `0x02`, `u16`
+    length, and the signature covers the **transmitted prefix** rather than any "canonical" form —
+    the keys were never sorted, so canonical was a label, not a property. The CONACK no longer
+    echoes `session_id` (it binds by SHA-256 over the whole transmitted CONREQ), a `dst_station`
+    was added so only the addressed station answers (#1178), and `supported_compression` /
+    `supported_fec_modes` were deleted (#1166 — nothing consumed the selection). Both frames now
+    fit ONE SAR fragment (241 B / 244 B against 251 B) where v1 took three
   - Trust evaluation wired to existing `evaluate_handshake()` / `classify_connection_trust()` in `trust.rs`
   - Revoked key → `TrustError::RejectedTrustLevel`; no mutual mode → `TrustError::NoMutualSigningMode`
 - `crates/openpulse-core/src/manifest.rs`: `TransferManifest` with SHA-256 payload hash, sender ID, Ed25519 signature; `verify_manifest()` and `TransferManifest::sign()`
@@ -551,7 +558,11 @@ Each requirement below is done when the linked test passes. Add new links as tes
 | Every device the backend LISTS can also be selected by name (cpal's ALSA enumeration truncates when devices are retained — needs a real audio host, so not in the `--no-default-features` gate) | `cargo test -p openpulse-audio --features cpal-backend --test device_enumeration` |
 | CM108 / GPIO PTT backends (REQ-PTT-02/03) | `cargo test -p openpulse-radio --no-default-features -- cm108 gpio` |
 | Relay authenticates envelope origin — rejects forged/unsigned `src_peer_id` (audit E3) | `cargo test -p openpulse-core --lib relay::` + `cargo test -p openpulse-mesh --test mesh_loopback -- impersonated_origin_rejected_at_relay authenticated_relay_forwarding` |
-| Handshake replay-freshness — signed timestamp; stale/future/missing rejected | `cargo test -p openpulse-core --lib handshake::tests` (fresh/stale/future/missing/none/stale-conack) |
+| Handshake replay-freshness — signed timestamp; stale/future/zero rejected, on the PQ path too (it had NO timestamp before #1147) | `cargo test -p openpulse-core --no-default-features --lib handshake::tests` + `--test pq_handshake_integration a_stale_pq_conreq_is_rejected` |
+| The handshake signature covers the TRANSMITTED bytes, so a tamper test cannot recompute the span it is testing — every mutable region flipped as **bytes**, plus type/version confusion | `cargo test -p openpulse-core --no-default-features --lib conreq_v2_tests` + `--test handshake_integration` |
+| Both handshake frames fit ONE SAR fragment **by construction** — asserted on the MAXIMAL legal frame at every cap, not on an example (#1147: v1 was ~752 B = 3 fragments = ~p³ on a fade) | `cargo test -p openpulse-core --no-default-features --lib handshake_wire` + `--test handshake_integration both_handshake_frames_fit_one_sar_fragment` |
+| A CONREQ addressed to another station does not key the transmitter — measured on the TX counter, with a positive control, because the defect is spent RF (#1178) | `cargo test -p openpulse-daemon --no-default-features --lib a_conreq_addressed_elsewhere_does_not_key_the_transmitter` |
+| A CONACK cannot select a signing mode the CONREQ never offered (F-1147-05 — v1 checked local policy only) | `cargo test -p openpulse-core --no-default-features --test handshake_integration conack_rejected_when_mode_not_offered` |
 | SAR reassembly resists poison — conflicting fragment stream doesn't block the legit one | `cargo test -p openpulse-core --lib sar::tests` (poison/wrong-total/flood) + `cargo test -p openpulse-daemon --lib poison_fragment_does_not_block_conreq_verification` |
 | OTA rate ACK is authenticated — ECDH-derived keyed MAC; forged/foreign-key ACK rejected (audit E7) | `cargo test -p openpulse-core --lib -- session_key ack::tests` + `cargo test -p openpulse-modem --test ack_exchange_integration authenticated_ack_round_trips_and_forgery_is_rejected` |
 | Authenticated ACK composed with the **sub-floor K=3 union** return channel (E7 × REQ-WSIG-01) | `cargo test -p openpulse-modem --test mfsk16_arq_subfloor authenticated_k3_subfloor_ack_round_trips_and_forgery_is_rejected` |

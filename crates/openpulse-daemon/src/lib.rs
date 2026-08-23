@@ -1429,8 +1429,13 @@ pub async fn process_received_bytes(
 #[cfg(not(target_arch = "wasm32"))]
 const HANDSHAKE_SAR_SESSION: &str = "handshake";
 
-/// SAR-fragment a signed handshake frame (CONREQ/CONACK are ~500 B, over the 255 B modem-frame
-/// cap) and transmit each fragment. The receiver reassembles them in [`try_reassemble_handshake`].
+/// SAR-fragment a signed handshake frame and transmit it. The receiver reassembles in
+/// [`try_reassemble_handshake`].
+///
+/// Since #1147 a classical CONREQ/CONACK is ONE fragment (241/244 B against 251 B), so this is a
+/// single frame in practice — the path stays SAR-based because the PQ frames (~5 kB) still need it,
+/// and because "one fragment" is a property of the caps rather than something this function should
+/// assume.
 #[cfg(not(target_arch = "wasm32"))]
 fn transmit_handshake_frame(engine: &mut ModemEngine, mode: &str, frame: &[u8]) {
     let fragments = match sar_encode(0, frame) {

@@ -2398,37 +2398,48 @@ Both handshake frames share one outer envelope (`crates/openpulse-core/src/hands
   CONREQ magic = "HSCQ"      CONACK magic = "HSAK"
 ```
 
-`decode` rejects a buffer under 9 bytes, a wrong magic, a version other than 1, and any length
-field that does not *exactly* equal the remaining byte count — trailing garbage is a decode error,
-not silently ignored. A minimal CONREQ (callsign `W1AW`, one signing mode, empty session id, no
-compression or FEC lists, no optional fields) encodes to **591 bytes**; adding one compression
-algorithm, one FEC mode and a six-character session id takes it to **602**. Both measured
-in-process against `ConReq::create(...).encode()`. Expect a few bytes of variation run to run:
-`serde_json` renders `pubkey` and `signature` as arrays of decimal numbers, so the encoded length
-depends on the actual byte values of the key and signature. The wire spec's "~530 B" at
-`docs/dev/design/protocol-wire-spec.md:104` is low. That exceeds the 255-byte
-`Frame` payload limit, which is why the daemon transports handshakes via SAR fragmentation
-(§2B.6.4).
+`decode` rejects a buffer shorter than the header plus signature, a wrong magic, any version other
+than `0x02`, and any length field that does not *exactly* account for the frame — trailing garbage is
+a decode error, not silently ignored.
 
-The signed CONREQ body carries: `station_id`, the 32-byte Ed25519 `pubkey`, offered
-`signing_modes`, the cleartext `session_id`, `supported_compression`, `supported_fec_modes`,
-`station_grid`, the OTA-ladder `profile_name`/`profile_fingerprint`, a replay-freshness
-`timestamp_ms`, and an ephemeral X25519 `kex_pubkey` (§2B.5). The CONACK mirrors it with singular
-`selected_*` fields plus the echoed `session_id`. Every field except the trailing 64-byte
-`signature` is inside the signed region.
+**A CONREQ is one SAR fragment, and that is the whole point of the v2 format (#1147).** The maximal
+*legal* CONREQ is **241 bytes** and the maximal CONACK **244**, against the **251** bytes a fragment
+carries. That is a property of the worst case — every string at its decoder-enforced cap, four signing
+modes — not of a typical frame, which is what makes it a guarantee rather than an observation.
 
-Two details are load-bearing:
+The v1 JSON format was **~752 bytes on the wire**: three fragments, three preambles, three
+acquisitions, decoding at roughly p³ on a fading channel where a single acquisition decodes at p. The
+bytes went into `pubkey`, `kex_pubkey` and `signature`, which inflate about 3.4× as JSON arrays of
+decimal numbers — uniform bytes cost ~3.6 characters each. That inflation is also why v1's encoded
+length varied run to run with the actual key and signature values.
 
-- **The "canonical JSON" is deterministic, not key-sorted.** The wire spec and `docs/features.md`
-  say the signature covers JSON "with keys sorted recursively". The code does something simpler:
-  `ConReq::canonical_bytes` rebuilds a private body struct and calls `serde_json::to_vec`, which
-  emits fields in *declaration order*. Signer and verifier build the same struct, so the bytes are
-  identical — determinism is the property the security argument needs, and it holds. Recursive
-  key sorting exists only in the PKI service (§2B.8.4).
-- **Optional fields are omitted, not zero-filled.** `#[serde(skip_serializing_if = ...)]` on the
-  grid, timestamp, fingerprint and kex-key fields means a frame carrying none of them is
-  byte-identical to the pre-feature wire format, so old signatures still verify. Test:
-  `empty_grid_conreq_is_byte_identical_to_legacy` (`handshake.rs`).
+The signed CONREQ body carries: `station_id`, `dst_station`, the 32-byte Ed25519 `pubkey`, the
+ephemeral X25519 `kex_pubkey` (§2B.5), offered `signing_modes`, the cleartext `session_id`,
+`station_grid`, the OTA-ladder `profile_name`/`profile_fingerprint`, and a mandatory replay-freshness
+`timestamp_ms`. The CONACK mirrors it, minus `session_id` and plus `conreq_hash`. Every field except
+the trailing 64-byte `signature` is inside the signed region — and so are the magic, the version and
+the length.
+
+Three details are load-bearing:
+
+- **The signature covers the transmitted bytes, so there is nothing to canonicalise.** This is worth
+  dwelling on, because the previous format got it wrong in an instructive way. v1 signed "canonical
+  JSON", and both the wire spec and `docs/features.md` said the keys were "sorted recursively". They
+  were not: `canonical_bytes` rebuilt a private struct and called `serde_json::to_vec`, which emits
+  fields in *declaration order*. The security argument only needed determinism, and determinism held —
+  so the docs were wrong for a long time without anything breaking. That is exactly the shape of claim
+  that survives: false, load-bearing-sounding, and never contradicted by a test. v2 removes the
+  question by signing the bytes it sends.
+- **No domain-separation tags, for a concrete reason.** The natural tags (`OPHF-CONREQ-v2`) begin with
+  `OPHF` — the magic of `WireEnvelope`, which the *same station key* already signs. Those two contexts
+  would then be separated only by whichever byte differed first, which is precisely what tags exist to
+  prevent. The frame magic is already unique per type and sits inside the signed span.
+- **Nothing is optional any more.** v1 used `skip_serializing_if` on the grid, timestamp, fingerprint
+  and kex-key so that a frame carrying none of them stayed byte-identical to the pre-feature wire, and
+  old signatures still verified. v2 discards that compatibility deliberately — it is a wire break — so
+  every field is present and fixed-width or capped. The test that pinned the old property,
+  `empty_grid_conreq_is_byte_identical_to_legacy`, was deleted rather than ported: it asserted exactly
+  the thing this change gives up.
 
 #### 2B.3.2 Verification order, and the lesson inside it
 

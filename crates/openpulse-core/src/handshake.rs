@@ -313,10 +313,6 @@ impl ConReq {
 // ConAck — connection acknowledgment frame
 // ------------------------------------------------------------------
 
-/// Connection acknowledgment sent by the responder during Discovery.
-///
-/// The `signature` covers the canonical JSON of the body fields, signed with
-/// the responder's Ed25519 private key.
 /// Parameters for a CONACK.
 #[derive(Debug, Clone)]
 pub struct ConAckParams<'a> {

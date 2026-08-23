@@ -2,7 +2,7 @@
 project: openpulsehf
 doc: docs/dev/design/protocol-wire-spec.md
 status: living
-last_updated: 2026-06-29
+last_updated: 2026-08-23
 ---
 
 # Protocol & Handshake Wire Specification
@@ -128,57 +128,94 @@ frame (the signed handshakes below, multi-block objects).
 Source: `crates/openpulse-core/src/handshake.rs` · CAP-01 (+ CAP-05 signing, CAP-04 trust). Driven
 by the `discovery` state of the [HPX state machine](../hpx-session-state-machine.md).
 
-Both frames share an outer container, then a JSON body:
+Both frames share one binary container. **v2 (#1147)** — v1's JSON body is gone.
 
 ```
-┌────────┬─────────┬──────────────────┬──────────────────────────┐
-│ magic  │ version │ length (u32 BE)  │ JSON body (UTF-8)         │
-│ 4 B    │  0x01   │    4 bytes       │ `length` bytes            │
-└────────┴─────────┴──────────────────┴──────────────────────────┘
+┌────────┬─────────┬──────────────────┬───────────────┬────────────────┐
+│ magic  │ version │ length (u16 BE)  │ body          │ signature      │
+│ 4 B    │  0x02   │    2 bytes       │ `length` B    │ 64 B (Ed25519) │
+└────────┴─────────┴──────────────────┴───────────────┴────────────────┘
    CONREQ magic = "HSCQ"      CONACK magic = "HSAK"
 ```
 
-These frames exceed 255 bytes (~530 B with Ed25519 key + signature), so on the modem they are
-**SAR-fragmented** ([§2](#2-segmentation-and-reassembly-sar)) and reassembled before decode.
+**The signature covers the transmitted prefix** — `magic || version || length || body` — i.e. exactly
+the bytes on the air minus the trailing signature. There is no second representation, so verification
+is "check what you received" and cannot drift from the encoder. It also binds the **version**, which
+v1 did not.
+
+**Both frames fit ONE SAR fragment by construction.** The maximal legal CONREQ is **241 B** and CONACK
+**244 B**, against the 251 B a fragment holds — a property of the worst case at every cap, not of a
+typical frame. v1 was ~752 B on the wire = 3 fragments = three preambles and three acquisitions,
+decoding at roughly p³ on a fading channel.
+
+**Version 0x01 is rejected outright.** There is no dual decode: there is no compatibility mode for
+the data plane, and inventing one for the handshake alone would carry a second wire format in
+production source.
+
+### 3.0a Decoder caps
+
+Caps are what make "one fragment" a property of every legal frame rather than of an example, and they
+are enforced at **both** ends — a station cannot emit a frame its peer is obliged to reject, so the
+failure surfaces at the sender where it is actionable.
+
+| field | cap (bytes) |
+|---|---|
+| `station_id`, `dst_station` | 12 |
+| `session_id` | 24 |
+| `station_grid` | 8 |
+| `profile_name` | 24 |
+| `signing_modes` | 4 entries |
+
+Fixed-size fields (`pubkey` 32, `kex_pubkey` 32, `conreq_hash` 32) carry **no length prefix** — a
+length prefix on a constant-size field hands a parser decision to the sender — and a wrong length is a
+decode error, not a late verification failure.
 
 ### 3.1 CONREQ body (`HSCQ`)
 
-JSON object — initiator → responder:
+Fields in wire order. Strings are `u8`-length-prefixed and capped; integers are big-endian.
 
 | Field | Type | Meaning |
 |---|---|---|
-| `station_id` | string | initiator callsign |
+| `station_id` | string (≤12) | initiator callsign |
+| `dst_station` | string (≤12) | addressee; `"*"` = broadcast. **Empty is invalid** |
 | `pubkey` | bytes (32) | Ed25519 verifying key |
-| `signing_modes` | [SigningMode] | modes the initiator offers |
-| `session_id` | string | session identifier (responder must echo) |
-| `supported_compression` | [CompressionAlgorithm] | offered compression (empty = none) |
-| `supported_fec_modes` | [FecMode] | offered FEC (omitted/empty = none) |
-| `station_grid` | string | Maidenhead grid; **omitted when empty** (legacy frames stay byte-identical) |
-| `timestamp_ms` | u64 | signed Unix-ms creation time for replay-freshness; **omitted when 0** (legacy) |
-| `kex_pubkey` | bytes (32) | ephemeral X25519 public key for OTA-ACK key agreement (E7); **omitted when empty** |
-| `signature` | bytes (64) | Ed25519 signature over the canonical body |
+| `kex_pubkey` | bytes (32) | ephemeral X25519 key for OTA-ACK key agreement (E7) |
+| `signing_modes` | u8 count + u8 each | modes offered, in preference order |
+| `session_id` | string (≤24) | session identifier |
+| `station_grid` | string (≤8) | Maidenhead grid; empty = not advertised |
+| `profile_name` | string (≤24) | active OTA ladder name; empty = none |
+| `profile_fingerprint` | u64 | fingerprint of the ladder mapping; 0 = none |
+| `timestamp_ms` | u64 | signed creation time. **Mandatory** — no sentinel |
+
+`dst_station` exists because a v1 CONREQ had no destination, so **every daemon in range answered one**
+and spent RF before the initiator filtered. "Unaddressed" must not be spellable by omission, which is
+why empty is refused at both ends rather than treated as a wildcard.
 
 ### 3.2 CONACK body (`HSAK`)
 
-JSON object — responder → initiator:
-
 | Field | Type | Meaning |
 |---|---|---|
-| `station_id` | string | responder callsign |
+| `station_id` | string (≤12) | responder callsign |
+| `dst_station` | string (≤12) | the initiator; never a wildcard |
 | `pubkey` | bytes (32) | Ed25519 verifying key |
-| `selected_mode` | SigningMode | chosen from the initiator's offered modes |
-| `session_id` | string | **must equal** the CONREQ `session_id` |
-| `selected_compression` | CompressionAlgorithm | chosen algorithm |
-| `selected_fec_mode` | FecMode | chosen FEC (omitted when `None`) |
-| `station_grid` | string | responder grid; omitted when empty |
-| `timestamp_ms` | u64 | signed Unix-ms creation time for replay-freshness; **omitted when 0** (legacy) |
-| `kex_pubkey` | bytes (32) | ephemeral X25519 public key for OTA-ACK key agreement (E7); **omitted when empty** |
-| `signature` | bytes (64) | Ed25519 signature over the canonical body |
+| `kex_pubkey` | bytes (32) | ephemeral X25519 key |
+| `selected_mode` | u8 | chosen from the modes the CONREQ offered |
+| `conreq_hash` | bytes (32) | SHA-256 over the **complete transmitted CONREQ**, signature included |
+| `station_grid` | string (≤8) | responder grid; empty = not advertised |
+| `profile_name` | string (≤24) | responder's ladder name; empty = none |
+| `profile_fingerprint` | u64 | fingerprint; 0 = none |
+| `timestamp_ms` | u64 | signed creation time. **Mandatory** |
+
+**The CONACK carries no `session_id`.** Echoing it costs 25 B and pushes the maximal frame to 269 B,
+past what one fragment holds — and `conreq_hash` subsumes the echo while binding harder: the session
+id is cleartext and time-based, hence guessable inside the handshake window, whereas the hash covers
+the whole frame including the initiator's `kex_pubkey`. Both endpoints already hold the id for
+`derive_session_keys`.
 
 ### 3.2a OTA-ACK key agreement (E7)
 
-Both frames may carry an ephemeral **X25519** `kex_pubkey` inside the Ed25519-signed body. When both
-peers advertise one, each derives a shared 32-byte key via ECDH → HKDF-SHA256
+Both frames carry an ephemeral **X25519** `kex_pubkey` inside the signed body. When both peers
+advertise one, each derives a shared 32-byte key via ECDH → HKDF-SHA256
 (`session_key::derive_ack_key`). Because the ephemeral keys are covered by the identity signature, a
 MITM cannot substitute them. The key authenticates the tiny FSK4 **rate ACK**: the 5-byte ACK's
 `session_hash` (2 B) + CRC (1 B) fields are replaced by a **24-bit keyed HMAC-SHA256 tag** over the ACK
@@ -189,21 +226,25 @@ encryption** — the ACK content stays in the clear — so it is compatible with
 forbid obscuring meaning (see `docs/regulatory.md`). A residual: a *replayed* valid ACK carries stale
 but valid content within the session; the rate ladder is receiver-led and absolute, bounding the effect.
 
-### 3.3 Signing & canonical form
+### 3.3 Signing and verification
 
-- The signature covers the **canonical JSON** of the body fields (excluding `signature`), with keys
-  sorted recursively, so any post-signing field injection invalidates it.
-- Verification (`verify_conreq` / `verify_conack`): reconstruct canonical JSON → check Ed25519 →
-  **check replay-freshness** (optional; see below) → evaluate trust via `evaluate_handshake`. CONACK
-  additionally requires the echoed `session_id` to match and the selected compression/FEC to be one the
-  CONREQ offered.
-- Empty `station_grid` is `skip_serializing_if`-omitted, so a zero-grid frame and its signature are
-  byte-identical to the pre-grid format. The same holds for a zero `timestamp_ms`.
-- **Replay-freshness.** `timestamp_ms` is inside the signed body. A verifier that passes a `Freshness
-  { now_ms, max_skew_ms }` rejects a frame whose timestamp is outside `±max_skew_ms` of its clock, and
-  rejects a frame carrying no timestamp — bounding the capture-replay window to the clock-skew tolerance
-  (the daemon uses ±120 s). Because the timestamp is signed, an attacker cannot refresh a captured frame.
-  The freshness check runs *after* signature verification.
+- The signature covers the **transmitted prefix** (`magic || version || length || body`). There is no
+  canonicalisation step, because there is nothing to canonicalise: the signed bytes are the sent bytes.
+  **Corrected in v2** — this section previously said the signature covered "canonical JSON … with keys
+  sorted recursively". That was never true of the code, which used `serde_json::to_vec` in serde
+  declaration order with no sorting. "Canonical" was a label, not a property.
+- **No domain-separation tags.** The obvious ones (`OPHF-CONREQ-v2`) begin with `OPHF`, the magic of
+  `WireEnvelope`, which the *same station key* already signs — separating those contexts only by
+  whichever byte differs first, which is what tags exist to prevent. The magic is already unique per
+  frame type and is inside the signed span.
+- Verification takes **bytes**: split → check the signature over the prefix → replay-freshness →
+  trust evaluation. A CONACK additionally requires `conreq_hash` to match the CONREQ that was sent,
+  and `selected_mode` to be one the CONREQ **offered** — the latter is new in v2 (v1 evaluated it
+  against local policy only, though this document previously claimed otherwise).
+- **Replay-freshness.** `timestamp_ms` is inside the signed prefix and mandatory. A verifier passing
+  `Freshness { now_ms, max_skew_ms }` rejects a frame outside `±max_skew_ms` (the daemon uses ±120 s),
+  bounding the capture-replay window. Zero is refused as `MissingTimestamp`. The check runs *after*
+  signature verification, so an attacker cannot refresh a captured frame.
 
 ### 3.4 Daemon RF exchange
 
@@ -217,8 +258,31 @@ station key is the Ed25519 seed at `[station] identity_key_path`.
 ## 4. Post-quantum handshake
 
 Source: `crates/openpulse-core/src/pq_handshake.rs` · CAP-02. `PqConReq` / `PqConAck` carry classical
-+ PQ public keys, the KEM material, and dual signatures, serialized as JSON and SAR-transported
-(`encode_pq_conreq`/`decode_pq_conreq`, etc.). Component sizes:
++ PQ public keys, the KEM material, and dual signatures.
+
+**v2 (#1147)**: the same binary container and the same signing rule as §3 — magics `HPCQ` / `HPAK`,
+signature over the transmitted prefix. Previously these were bare JSON with **no magic at all**, and
+because the daemon routes by magic sniff (`HSCQ`/`HSAK`), a PQ frame would have been silently dropped
+even if something had sent one.
+
+They also gained what the classical path already had and these did not:
+
+- **`timestamp_ms`, mandatory.** The PQ bodies carried no timestamp, so the PQ path had **no replay
+  freshness at all**. `verify_pq_conreq`/`verify_pq_conack` now take a `Freshness` parameter.
+- **`dst_station`** (#1178) and **`conreq_hash`** transcript binding, replacing the session-id echo.
+
+**The classical-signature presence flag lives inside the signed body.** These frames carry two
+signatures and the Ed25519 one is optional (0 or 64 B), so the trailing region is not a constant.
+Outside the signed span, flipping one bit would change how many trailing bytes a verifier reads as
+the classical signature — and that bit would itself be unsigned. The decoder cross-checks the actual
+trailer length against the signed flag, so a truncated or padded frame cannot be re-split.
+
+**These frames do NOT fit one fragment, and are not expected to.** A PQ CONREQ is ~5 kB ≈ 2.7 min at
+BPSK250 — not deployable on this link. PQ is in the v2 format so that the format is **finished**, and
+wiring PQ later is not a second wire break; it is not a shipping feature, and the test suite asserts
+the multi-fragment property rather than letting a green run imply otherwise.
+
+Component sizes:
 
 | Component | Bytes | Used in |
 |---|---|---|
