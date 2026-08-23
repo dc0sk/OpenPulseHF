@@ -20,6 +20,42 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::TcpStream;
 use tokio::time::timeout;
 
+/// Hand out a control-port pair that no other test in this binary can be using.
+///
+/// **Ports were assigned by hand and collided twice.** `PTTA/PTTB` and `OFFSETA/OFFSETB` were both
+/// given 19060–19063; libtest runs these tests CONCURRENTLY in one process, so when their windows
+/// overlapped the second daemon to bind got `Address already in use`, `run()` returned `Err`, and
+/// that daemon exited — which presented as the #1176 intermittent "daemon B never decoded a frame".
+/// It was invisible to a filtered run, because a filter never starts the colliding test. An earlier
+/// occurrence had picked 19040–19043, already used by `subfloor_cfg`.
+///
+/// Allocating removes the class rather than the instance: a third careful hand-assignment would
+/// only be waiting for the fourth collision.
+fn alloc_ports() -> (u16, u16) {
+    use std::sync::atomic::{AtomicU16, Ordering};
+    // This binary's window. Sibling daemon test BINARIES hand-pick ports above it
+    // (`ota_ack_capture_stream` 19140–19143, `monitor_during_ota` 19160–19161) and run as separate
+    // processes concurrently under `cargo test`, so the cross-binary collision is real even though
+    // this allocator makes the within-binary one impossible. Fail LOUDLY on outgrowing the window
+    // rather than silently wandering into a sibling's ports and reintroducing #1176 one binary over.
+    const BASE: u16 = 19010;
+    const CEILING: u16 = 19140;
+    static NEXT: AtomicU16 = AtomicU16::new(BASE);
+    let base = NEXT.fetch_add(2, Ordering::Relaxed);
+    assert!(
+        base + 1 < CEILING,
+        "twin tests have outgrown their port window {BASE}..{CEILING}; the next allocation would \
+         reach {base}, which collides with another daemon test binary. Move this window rather \
+         than letting it overlap — that is exactly how #1176 happened."
+    );
+    (base, base + 1)
+}
+
+fn cfg_auto(callsign: &str) -> OpenpulseConfig {
+    let (tcp, ws) = alloc_ports();
+    cfg(callsign, tcp, ws)
+}
+
 fn cfg(callsign: &str, tcp_port: u16, ws_port: u16) -> OpenpulseConfig {
     let mut c = OpenpulseConfig::default();
     c.station.callsign = callsign.into();
@@ -72,8 +108,8 @@ fn level_num(name: &str) -> u8 {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn message_crosses_the_bridge_between_two_real_daemons() {
     let pair = spawn_bridged_pair(
-        cfg("DAEMONA", 19010, 19011),
-        cfg("DAEMONB", 19012, 19013),
+        cfg_auto("DAEMONA"),
+        cfg_auto("DAEMONB"),
         clean_awgn(1),
         clean_awgn(2),
         Duration::from_millis(10),
@@ -130,8 +166,8 @@ async fn message_crosses_the_bridge_between_two_real_daemons() {
     );
 }
 
-fn ota_cfg(callsign: &str, tcp_port: u16, ws_port: u16) -> OpenpulseConfig {
-    let mut c = cfg(callsign, tcp_port, ws_port);
+fn ota_cfg(callsign: &str) -> OpenpulseConfig {
+    let mut c = cfg_auto(callsign);
     c.modem.ota_enabled = true;
     c.modem.ota_profile = "hpx500".into();
     c
@@ -145,8 +181,8 @@ async fn ota_ladder_steps_under_traffic_between_two_real_daemons() {
     // recommendation). Over several frames A's TX level must climb above the SL2
     // floor — i.e. the rate ladder moves, which is what the panel renders.
     let pair = spawn_bridged_pair(
-        ota_cfg("OTAA", 19020, 19021),
-        ota_cfg("OTAB", 19022, 19023),
+        ota_cfg("OTAA"),
+        ota_cfg("OTAB"),
         clean_awgn(11),
         clean_awgn(12),
         Duration::from_millis(10),
@@ -209,13 +245,8 @@ async fn ota_ladder_steps_under_traffic_between_two_real_daemons() {
 }
 
 /// Config with direct file transfer enabled (receiver auto-accepts any size; no handshake required).
-fn ft_cfg(
-    callsign: &str,
-    tcp_port: u16,
-    ws_port: u16,
-    download_dir: &std::path::Path,
-) -> OpenpulseConfig {
-    let mut c = cfg(callsign, tcp_port, ws_port);
+fn ft_cfg(callsign: &str, download_dir: &std::path::Path) -> OpenpulseConfig {
+    let mut c = cfg_auto(callsign);
     c.file_transfer.enabled = true;
     c.file_transfer.require_verified_peer = false;
     c.file_transfer.auto_accept_max_bytes = 10_000_000;
@@ -239,8 +270,8 @@ async fn a_file_crosses_the_bridge_between_two_real_daemons() {
     std::fs::write(&src, &contents).unwrap();
 
     let pair = spawn_bridged_pair(
-        ft_cfg("STNA", 19030, 19031, &base.join("dl_a")),
-        ft_cfg("STNB", 19032, 19033, &recv_dir),
+        ft_cfg("STNA", &base.join("dl_a")),
+        ft_cfg("STNB", &recv_dir),
         clean_awgn(1),
         clean_awgn(2),
         Duration::from_millis(10),
@@ -290,8 +321,8 @@ async fn a_file_crosses_the_bridge_between_two_real_daemons() {
 }
 
 /// Config for a station pinned at the MFSK16 SL1 sub-floor rung on the `hpx_hf` profile.
-fn subfloor_cfg(callsign: &str, tcp_port: u16, ws_port: u16) -> OpenpulseConfig {
-    let mut c = cfg(callsign, tcp_port, ws_port);
+fn subfloor_cfg(callsign: &str) -> OpenpulseConfig {
+    let mut c = cfg_auto(callsign);
     c.modem.ota_enabled = true;
     c.modem.ota_profile = "hpx_hf".into(); // has SL1 = MFSK16
     c.modem.ota_lock_level = "SL1".into(); // pin at the sub-floor rung
@@ -311,8 +342,8 @@ fn subfloor_cfg(callsign: &str, tcp_port: u16, ws_port: u16) -> OpenpulseConfig 
 #[tokio::test(flavor = "multi_thread", worker_threads = 6)]
 async fn subfloor_sl1_message_crosses_with_k3_ack_between_two_real_daemons() {
     let pair = spawn_bridged_pair(
-        subfloor_cfg("SUBA", 19040, 19041),
-        subfloor_cfg("SUBB", 19042, 19043),
+        subfloor_cfg("SUBA"),
+        subfloor_cfg("SUBB"),
         clean_awgn(3),
         clean_awgn(4),
         Duration::from_millis(10),
@@ -417,15 +448,15 @@ async fn a_file_crosses_the_bridge_with_ota_enabled() {
     // have changed the mechanism under test: `hpx500` populates no FEC table, so `fec_for` returns
     // `FecMode::None` for every rung (profile.rs:110) and the failure would have been candidate-MODE
     // mismatch rather than the absence of an uncoded candidate.
-    let ota_ft = |call: &str, tcp: u16, ws: u16, dir: &std::path::Path| {
-        let mut c = ft_cfg(call, tcp, ws, dir);
+    let ota_ft = |call: &str, dir: &std::path::Path| {
+        let mut c = ft_cfg(call, dir);
         c.modem.ota_enabled = true;
         c
     };
 
     let pair = spawn_bridged_pair(
-        ota_ft("STNA", 19050, 19051, &base.join("dl_a")),
-        ota_ft("STNB", 19052, 19053, &recv_dir),
+        ota_ft("STNA", &base.join("dl_a")),
+        ota_ft("STNB", &recv_dir),
         clean_awgn(1),
         clean_awgn(2),
         Duration::from_millis(10),
@@ -486,10 +517,10 @@ async fn a_file_crosses_the_bridge_with_ota_enabled() {
 /// tuned threshold.
 #[tokio::test(flavor = "multi_thread", worker_threads = 6)]
 async fn an_ota_receiver_does_not_key_ptt_at_a_peers_uncoded_traffic() {
-    let mut b_cfg = cfg("PTTB", 19062, 19063);
+    let mut b_cfg = cfg_auto("PTTB");
     b_cfg.modem.ota_enabled = true;
     let pair = spawn_bridged_pair(
-        cfg("PTTA", 19060, 19061),
+        cfg_auto("PTTA"),
         b_cfg,
         clean_awgn(1),
         clean_awgn(2),
@@ -576,8 +607,8 @@ async fn a_message_crosses_the_bridge_between_two_rigs_that_disagree_on_frequenc
     const MEASURED_INTER_RIG_OFFSET_HZ: f32 = -64.0;
 
     let pair = spawn_bridged_pair(
-        cfg("OFFSETA", 19060, 19061),
-        cfg("OFFSETB", 19062, 19063),
+        cfg_auto("OFFSETA"),
+        cfg_auto("OFFSETB"),
         offset_channel(1, MEASURED_INTER_RIG_OFFSET_HZ),
         offset_channel(2, MEASURED_INTER_RIG_OFFSET_HZ),
         Duration::from_millis(10),

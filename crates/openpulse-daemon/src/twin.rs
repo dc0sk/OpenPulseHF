@@ -42,6 +42,14 @@ pub struct BridgedPair {
     rev_samples: Arc<AtomicUsize>,
     daemon_a: Option<JoinHandle<()>>,
     daemon_b: Option<JoinHandle<()>>,
+    /// Why each daemon's `run` returned, recorded by the thread itself.
+    ///
+    /// `spawn_daemon_thread` reported this via `tracing::error!` only, and the twin tests install NO
+    /// subscriber — so for #1176 the cause was written to nowhere on every failure, and a dead
+    /// daemon was indistinguishable from a deaf one. This is the same class as the boolean it sits
+    /// beside: knowing THAT it exited does not say why.
+    exit_a: Arc<std::sync::Mutex<Option<String>>>,
+    exit_b: Arc<std::sync::Mutex<Option<String>>>,
 }
 
 /// What the rig was doing when a test gave up, so a timeout is attributable.
@@ -50,7 +58,7 @@ pub struct BridgedPair {
 /// standing as `BridgedPair` beside it in the reachability baseline. It exists because the two
 /// halves of every failure this rig can have (the transmitter never produced audio; the receiver
 /// never consumed it) are otherwise indistinguishable from the far end.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BridgeStats {
     /// Samples moved A→B.
     pub fwd_samples: usize,
@@ -61,6 +69,12 @@ pub struct BridgeStats {
     pub daemon_a_exited: bool,
     /// Whether daemon B's thread has exited.
     pub daemon_b_exited: bool,
+    /// Why daemon A's `run` returned, if it has. `None` while it is still running — and `None`
+    /// ALONGSIDE `daemon_a_exited` means the thread died without recording an outcome, i.e. it
+    /// panicked, which is itself the diagnosis.
+    pub daemon_a_exit: Option<String>,
+    /// Why daemon B's `run` returned, if it has. See [`Self::daemon_a_exit`].
+    pub daemon_b_exit: Option<String>,
 }
 
 impl std::fmt::Display for BridgeStats {
@@ -80,7 +94,19 @@ impl std::fmt::Display for BridgeStats {
             } else {
                 "alive"
             },
-        )
+        )?;
+        for (label, exited, why) in [
+            ("A", self.daemon_a_exited, &self.daemon_a_exit),
+            ("B", self.daemon_b_exited, &self.daemon_b_exit),
+        ] {
+            match why {
+                Some(w) => write!(f, "; {label} exit: {w}")?,
+                // A thread that finished without recording an outcome unwound past the recorder.
+                None if exited => write!(f, "; {label} exit: PANICKED (no outcome recorded)")?,
+                None => {}
+            }
+        }
+        Ok(())
     }
 }
 
@@ -92,6 +118,8 @@ impl BridgedPair {
             rev_samples: self.rev_samples.load(Ordering::Relaxed),
             daemon_a_exited: self.daemon_a.as_ref().is_some_and(|h| h.is_finished()),
             daemon_b_exited: self.daemon_b.as_ref().is_some_and(|h| h.is_finished()),
+            daemon_a_exit: self.exit_a.lock().ok().and_then(|g| g.clone()),
+            daemon_b_exit: self.exit_b.lock().ok().and_then(|g| g.clone()),
         }
     }
 
@@ -146,8 +174,10 @@ pub async fn spawn_bridged_pair(
     // which needs a multi-thread runtime. `block_on` runs the `!Send` future on the
     // thread while the runtime stays multi-threaded — the same shape as the
     // `#[tokio::main]` binary. A stop flag races the run loop so we can join cleanly.
-    let daemon_a = spawn_daemon_thread("A", cfg_a, Box::new(a_run), stop.clone());
-    let daemon_b = spawn_daemon_thread("B", cfg_b, Box::new(b_run), stop.clone());
+    let exit_a: Arc<std::sync::Mutex<Option<String>>> = Arc::new(std::sync::Mutex::new(None));
+    let exit_b: Arc<std::sync::Mutex<Option<String>>> = Arc::new(std::sync::Mutex::new(None));
+    let daemon_a = spawn_daemon_thread("A", cfg_a, Box::new(a_run), stop.clone(), exit_a.clone());
+    let daemon_b = spawn_daemon_thread("B", cfg_b, Box::new(b_run), stop.clone(), exit_b.clone());
 
     let stop_bridge = stop.clone();
     let fwd_samples = Arc::new(AtomicUsize::new(0));
@@ -183,6 +213,8 @@ pub async fn spawn_bridged_pair(
         rev_samples,
         daemon_a: Some(daemon_a),
         daemon_b: Some(daemon_b),
+        exit_a,
+        exit_b,
     }
 }
 
@@ -193,8 +225,17 @@ fn spawn_daemon_thread(
     cfg: OpenpulseConfig,
     backend: Box<dyn openpulse_core::audio::AudioBackend>,
     stop: Arc<AtomicBool>,
+    exit: Arc<std::sync::Mutex<Option<String>>>,
 ) -> JoinHandle<()> {
     std::thread::spawn(move || {
+        // Record the outcome where a TEST can read it. These threads previously reported only via
+        // `tracing::error!`, and the twin integration tests install no subscriber, so every #1176
+        // failure discarded its own cause — the rig could say daemon B EXITED but never why.
+        let record = |slot: &Arc<std::sync::Mutex<Option<String>>>, why: String| {
+            if let Ok(mut g) = slot.lock() {
+                *g = Some(why);
+            }
+        };
         let rt = match tokio::runtime::Builder::new_multi_thread()
             .worker_threads(2)
             .enable_all()
@@ -203,17 +244,23 @@ fn spawn_daemon_thread(
             Ok(rt) => rt,
             Err(e) => {
                 tracing::error!(label, error = %e, "twin daemon runtime build failed");
+                record(&exit, format!("runtime build failed: {e}"));
                 return;
             }
         };
         rt.block_on(async move {
             tokio::select! {
                 r = run(cfg, backend) => {
-                    if let Err(e) = r {
-                        tracing::error!(label, error = %e, "twin daemon exited during startup");
+                    match r {
+                        // `run` loops forever, so reaching here at all is the anomaly, not just Err.
+                        Ok(()) => record(&exit, "run() returned Ok — it should loop forever".into()),
+                        Err(e) => {
+                            tracing::error!(label, error = %e, "twin daemon exited during startup");
+                            record(&exit, format!("run() error: {e}"));
+                        }
                     }
                 }
-                _ = poll_stop(stop) => {}
+                _ = poll_stop(stop) => record(&exit, "stopped via shutdown flag".into()),
             }
         });
     })
