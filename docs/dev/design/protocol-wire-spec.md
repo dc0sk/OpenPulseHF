@@ -246,6 +246,52 @@ but valid content within the session; the rate ladder is receiver-led and absolu
   bounding the capture-replay window. Zero is refused as `MissingTimestamp`. The check runs *after*
   signature verification, so an attacker cannot refresh a captured frame.
 
+### 3.3a Known-answer vector
+
+An independent implementer can check their encoder against this without building the crate. It is the
+frame **pre-SAR and pre-whitening** — deliberately, so a change to the wire scrambler (#1148) cannot
+invalidate a vector that has nothing to do with it.
+
+Inputs, all fixed:
+
+| field | value |
+|---|---|
+| signing seed | 32 × `0x01` |
+| `station_id` / `dst_station` | `W1AW` / `K2XYZ` |
+| `signing_modes` | `[Normal, Psk]` = `0x01, 0x02` |
+| `session_id` | `W1AW-1700000000000` |
+| `station_grid` / `profile_name` | `FN31pr` / `hpx_hf` |
+| `profile_fingerprint` | `0x0123456789ABCDEF` |
+| `timestamp_ms` | `1700000000000` |
+| `kex_pubkey` | 32 × `0x42` |
+
+Output — **198 bytes** (7 header + 127 body + 64 signature):
+
+```
+4853435102007f0457314157054b3258595a8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d941
+21bf3748801b40f6f5c4242424242424242424242424242424242424242424242424242424242424242
+020102125731415 72d3137303030303030303030303006464e33317072066870785f6866
+0123456789abcdef0000018bcfe56800b75f70d2987f3beb58227a42056b613fd5d0593c507bd86a748
+ac7e379c033f8356723f57bf41543278490cdd55ae5a3368fcdd4c346179b9f7d62031115e70a
+```
+
+(Line breaks are for reading only; the canonical form is the unbroken hex in
+`crates/openpulse-core/tests/handshake_kat.rs`, which is what the gate compares against.)
+
+**The signature pins too**, because Ed25519 signing is deterministic (RFC 8032) — no per-signature
+randomness, so the same key over the same message yields the same 64 bytes everywhere. The test
+asserts that property rather than only citing it.
+
+**Why this exists alongside the round-trip tests.** A round-trip proves the encoder and decoder agree
+with *each other*, so it passes just as happily when both drift together — which is exactly what a
+format change does. Verified by sabotage: swapping two body fields in **both** the encoder and the
+decoder leaves all 16 round-trip and tamper tests passing, and fails only here.
+
+**PQ**: the PQ CONREQ is pinned by digest (SHA-256 `015a1aa8…`, 5060 B) rather than inline hex.
+ML-DSA-44 signing in this build was **measured** deterministic, so the whole frame pins. The PQ
+**CONACK** has no vector and cannot have one: its `kem_ciphertext` comes from `encapsulate()`, which
+is randomised by design.
+
 ### 3.4 Daemon RF exchange
 
 The daemon (CAP-63) drives this over RF on `ConnectPeer`: initiator sends CONREQ (SAR), responder
