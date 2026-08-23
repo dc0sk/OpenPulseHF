@@ -62,7 +62,7 @@ impl Freshness {
     /// "no timestamp advertised"; in v2 the field is mandatory and fixed-width, so zero is a value —
     /// but refusing it is still right (a station claiming the epoch), and the specific error is more
     /// informative than reporting ~54 years of skew.
-    fn check(&self, timestamp_ms: u64) -> Result<(), HandshakeError> {
+    pub fn check(&self, timestamp_ms: u64) -> Result<(), HandshakeError> {
         if timestamp_ms == 0 {
             return Err(HandshakeError::MissingTimestamp);
         }

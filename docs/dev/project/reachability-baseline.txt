@@ -285,7 +285,9 @@ PLUGIN_TRAIT_VERSION	crates/openpulse-core/src/plugin.rs
 poll_ota_rx	crates/openpulse-modem/src/engine.rs
 poor_f2	crates/openpulse-channel/src/lib.rs
 PqConAck	crates/openpulse-core/src/pq_handshake.rs
+PqConAckParams	crates/openpulse-core/src/pq_handshake.rs
 PqConReq	crates/openpulse-core/src/pq_handshake.rs
+PqConReqParams	crates/openpulse-core/src/pq_handshake.rs
 PqHandshakeError	crates/openpulse-core/src/pq_handshake.rs
 pre_arm	crates/openpulse-dsp/src/timing.rs
 preamble_veto_active	crates/openpulse-modem/src/engine.rs

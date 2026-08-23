@@ -1,12 +1,16 @@
+use openpulse_core::handshake::conreq_hash;
+use openpulse_core::pq_handshake::{PqConAckParams, PqConReqParams};
 use openpulse_core::sar::{sar_encode, SarReassembler};
 use openpulse_core::{
-    create_pq_conack, create_pq_conreq, decode_pq_conack, decode_pq_conreq, encode_pq_conack,
-    encode_pq_conreq, generate_ml_dsa_44_keypair, generate_ml_kem_768_keypair, kem_decapsulate,
-    verify_pq_conack, verify_pq_conreq, InMemoryTrustStore, PolicyProfile, SigningMode,
-    ML_DSA_44_PUBKEY_SIZE, ML_DSA_44_SIG_SIZE, ML_KEM_768_CT_SIZE, ML_KEM_768_DK_SIZE,
-    ML_KEM_768_EK_SIZE, ML_KEM_768_SS_SIZE,
+    create_pq_conack, create_pq_conreq, decode_pq_conack, decode_pq_conreq,
+    generate_ml_dsa_44_keypair, generate_ml_kem_768_keypair, kem_decapsulate, verify_pq_conack,
+    verify_pq_conreq, InMemoryTrustStore, PolicyProfile, SigningMode, ML_DSA_44_PUBKEY_SIZE,
+    ML_DSA_44_SIG_SIZE, ML_KEM_768_CT_SIZE, ML_KEM_768_DK_SIZE, ML_KEM_768_EK_SIZE,
+    ML_KEM_768_SS_SIZE,
 };
 use std::time::Duration;
+
+const TS: u64 = 1_700_000_000_000;
 
 // ------------------------------------------------------------------
 // Group 1: Key generation and KEM
@@ -41,18 +45,22 @@ fn ml_kem_768_keypair_sizes_are_correct() {
 #[test]
 fn kem_shared_secret_matches_after_encapsulate_decapsulate() {
     let (dk, ek) = generate_ml_kem_768_keypair();
-    let classical_seed = [0u8; 32];
     let (pq_sk, _pq_vk) = generate_ml_dsa_44_keypair();
 
-    let (ack, ss_responder) = create_pq_conack(
-        "W1AW",
-        &classical_seed,
-        &pq_sk,
-        &ek,
-        SigningMode::Hybrid,
-        "session-kem-test",
+    let (ack_bytes, ss_responder) = create_pq_conack(
+        &PqConAckParams {
+            station_id: "W1AW",
+            dst_station: "K2XYZ",
+            pq_signing_key: &pq_sk,
+            req_kem_ek: &ek,
+            selected_mode: SigningMode::Hybrid,
+            conreq_hash: [0u8; 32],
+            timestamp_ms: TS,
+        },
+        &[0u8; 32],
     )
     .expect("create_pq_conack");
+    let ack = decode_pq_conack(&ack_bytes).expect("decode_pq_conack");
 
     let ss_initiator = kem_decapsulate(&dk, &ack.kem_ciphertext).expect("kem_decapsulate");
 
@@ -61,17 +69,9 @@ fn kem_shared_secret_matches_after_encapsulate_decapsulate() {
         ML_KEM_768_SS_SIZE,
         "shared secret must be 32 bytes"
     );
-    assert_eq!(
-        ack.kem_ciphertext.len(),
-        ML_KEM_768_CT_SIZE,
-        "ciphertext must be {ML_KEM_768_CT_SIZE} bytes"
-    );
+    assert_eq!(ack.kem_ciphertext.len(), ML_KEM_768_CT_SIZE);
     assert_eq!(ss_initiator, ss_responder, "shared secrets must match");
 }
-
-// ------------------------------------------------------------------
-// Group 2: Hybrid handshake round-trips
-// ------------------------------------------------------------------
 
 fn make_trust_store(_station_id: &str) -> InMemoryTrustStore {
     InMemoryTrustStore::new()
@@ -83,457 +83,354 @@ fn make_trusted_store(station_id: &str, pubkey: [u8; 32]) -> InMemoryTrustStore 
     store
 }
 
-#[test]
-fn pq_conreq_hybrid_creates_and_verifies() {
-    let classical_seed = [0x11u8; 32];
-    let (pq_sk, _pq_vk) = generate_ml_dsa_44_keypair();
-    let (_dk, kem_ek) = generate_ml_kem_768_keypair();
+/// A signed PQ CONREQ and the keys behind it.
+struct Req {
+    bytes: Vec<u8>,
+    kem_ek: Vec<u8>,
+    kem_dk: Vec<u8>,
+}
 
-    let req = create_pq_conreq(
-        "W1AW",
-        &classical_seed,
-        &pq_sk,
-        &kem_ek,
-        vec![SigningMode::Hybrid, SigningMode::Normal],
-        "session-1",
+fn make_req(seed: u8, modes: Vec<SigningMode>, dst: &str) -> Req {
+    let (pq_sk, _) = generate_ml_dsa_44_keypair();
+    let (kem_dk, kem_ek) = generate_ml_kem_768_keypair();
+    let bytes = create_pq_conreq(
+        &PqConReqParams {
+            station_id: "W1AW",
+            dst_station: dst,
+            pq_signing_key: &pq_sk,
+            kem_ek: &kem_ek,
+            signing_modes: modes,
+            session_id: "session-1",
+            timestamp_ms: TS,
+        },
+        &[seed; 32],
     )
     .expect("create_pq_conreq");
+    Req {
+        bytes,
+        kem_ek,
+        kem_dk,
+    }
+}
 
-    assert_eq!(req.pq_signature.len(), ML_DSA_44_SIG_SIZE);
-    assert_eq!(req.classical_signature.len(), 64);
+#[test]
+fn pq_conreq_hybrid_creates_and_verifies() {
+    let r = make_req(
+        0x11,
+        vec![SigningMode::Hybrid, SigningMode::Normal],
+        "K2XYZ",
+    );
+    let decoded = decode_pq_conreq(&r.bytes).expect("decode");
+    assert_eq!(decoded.pq_signature.len(), ML_DSA_44_SIG_SIZE);
+    assert_eq!(decoded.classical_signature.len(), 64);
+    assert_eq!(decoded.dst_station, "K2XYZ");
+    assert_eq!(decoded.timestamp_ms, TS);
 
     let store = make_trust_store("W1AW");
-    let decision = verify_pq_conreq(&req, &store, PolicyProfile::Balanced, SigningMode::Normal)
-        .expect("verify_pq_conreq");
+    let (_req, decision) = verify_pq_conreq(
+        &r.bytes,
+        &store,
+        PolicyProfile::Balanced,
+        SigningMode::Normal,
+        None,
+    )
+    .expect("verify_pq_conreq");
     assert_eq!(decision.selected_mode, SigningMode::Hybrid);
 }
 
 #[test]
 fn pq_conack_hybrid_creates_verifies_and_decapsulates() {
-    let initiator_classical = [0x22u8; 32];
-    let responder_classical = [0x33u8; 32];
-    let (initiator_pq_sk, _) = generate_ml_dsa_44_keypair();
-    let (responder_pq_sk, _) = generate_ml_dsa_44_keypair();
-    let (dk, kem_ek) = generate_ml_kem_768_keypair();
-
-    let req = create_pq_conreq(
-        "W1AW",
-        &initiator_classical,
-        &initiator_pq_sk,
-        &kem_ek,
-        vec![SigningMode::Hybrid],
-        "session-2",
-    )
-    .expect("create_pq_conreq");
-
-    let (ack, ss_resp) = create_pq_conack(
-        "KD9XYZ",
-        &responder_classical,
-        &responder_pq_sk,
-        &req.kem_pubkey,
-        SigningMode::Hybrid,
-        "session-2",
+    let r = make_req(
+        0x11,
+        vec![SigningMode::Hybrid, SigningMode::Normal],
+        "K2XYZ",
+    );
+    let (pq_sk_b, _) = generate_ml_dsa_44_keypair();
+    let (ack_bytes, ss_responder) = create_pq_conack(
+        &PqConAckParams {
+            station_id: "K2XYZ",
+            dst_station: "W1AW",
+            pq_signing_key: &pq_sk_b,
+            req_kem_ek: &r.kem_ek,
+            selected_mode: SigningMode::Hybrid,
+            conreq_hash: conreq_hash(&r.bytes),
+            timestamp_ms: TS + 100,
+        },
+        &[0x22; 32],
     )
     .expect("create_pq_conack");
 
-    let store = make_trust_store("KD9XYZ");
-    verify_pq_conack(
-        &ack,
-        "session-2",
-        &req.signing_modes,
+    let store = make_trust_store("K2XYZ");
+    let (ack, decision) = verify_pq_conack(
+        &ack_bytes,
+        &r.bytes,
+        &[SigningMode::Hybrid, SigningMode::Normal],
         &store,
         PolicyProfile::Balanced,
         SigningMode::Normal,
+        None,
     )
     .expect("verify_pq_conack");
+    assert_eq!(decision.selected_mode, SigningMode::Hybrid);
+    assert_eq!(ack.kem_ciphertext.len(), ML_KEM_768_CT_SIZE);
 
-    let ss_init = kem_decapsulate(&dk, &ack.kem_ciphertext).expect("kem_decapsulate");
-    assert_eq!(ss_init, ss_resp, "KEM shared secrets must match");
+    let ss_initiator = kem_decapsulate(&r.kem_dk, &ack.kem_ciphertext).expect("decapsulate");
+    assert_eq!(ss_initiator, ss_responder, "shared secrets must match");
 }
 
 #[test]
 fn pq_conreq_pq_only_mode() {
-    let classical_seed = [0x44u8; 32];
-    let (pq_sk, _) = generate_ml_dsa_44_keypair();
-    let (_dk, kem_ek) = generate_ml_kem_768_keypair();
-
-    let req = create_pq_conreq(
-        "W1AW",
-        &classical_seed,
-        &pq_sk,
-        &kem_ek,
-        vec![SigningMode::Pq],
-        "session-pq",
-    )
-    .expect("create_pq_conreq in Pq mode");
-
+    let r = make_req(0x33, vec![SigningMode::Pq], "K2XYZ");
+    let decoded = decode_pq_conreq(&r.bytes).expect("decode");
     assert!(
-        req.classical_signature.is_empty(),
-        "Pq-only mode must have empty classical_signature"
+        decoded.classical_signature.is_empty(),
+        "Pq-only must carry no classical signature"
     );
-    assert_eq!(req.pq_signature.len(), ML_DSA_44_SIG_SIZE);
-
     let store = make_trust_store("W1AW");
-    let decision = verify_pq_conreq(&req, &store, PolicyProfile::Balanced, SigningMode::Pq)
-        .expect("verify_pq_conreq Pq mode");
-    assert_eq!(decision.selected_mode, SigningMode::Pq);
+    assert!(verify_pq_conreq(
+        &r.bytes,
+        &store,
+        PolicyProfile::Balanced,
+        SigningMode::Pq,
+        None
+    )
+    .is_ok());
 }
 
+/// The classical-signature presence flag is INSIDE the signed body, and the trailer length is
+/// cross-checked against it. Flipping the trailer alone cannot re-split the signatures.
 #[test]
-fn hybrid_preferred_over_pq_in_mode_negotiation() {
-    let decision = openpulse_core::select_signing_mode(
-        PolicyProfile::Balanced,
-        SigningMode::Normal,
-        &[SigningMode::Pq, SigningMode::Hybrid, SigningMode::Normal],
-    )
-    .expect("select_signing_mode");
-    assert_eq!(
-        decision,
-        SigningMode::Hybrid,
-        "Hybrid has higher strength than Pq and should be selected"
+fn a_truncated_pq_signature_region_is_rejected() {
+    let r = make_req(0x44, vec![SigningMode::Hybrid], "K2XYZ");
+    let mut short = r.bytes.clone();
+    short.truncate(short.len() - 1);
+    assert!(
+        decode_pq_conreq(&short).is_err(),
+        "a frame whose trailer disagrees with its signed presence flag must be refused"
     );
 }
-
-// ------------------------------------------------------------------
-// Group 3: Security / rejection tests
-// ------------------------------------------------------------------
 
 #[test]
 fn pq_conreq_tampered_pq_signature_rejected() {
-    let classical_seed = [0x55u8; 32];
-    let (pq_sk, _) = generate_ml_dsa_44_keypair();
-    let (_dk, kem_ek) = generate_ml_kem_768_keypair();
-
-    let mut req = create_pq_conreq(
-        "W1AW",
-        &classical_seed,
-        &pq_sk,
-        &kem_ek,
-        vec![SigningMode::Hybrid],
-        "session-tamper",
-    )
-    .expect("create_pq_conreq");
-
-    req.pq_signature[0] ^= 0xFF;
-
+    let r = make_req(0x44, vec![SigningMode::Hybrid], "K2XYZ");
+    let mut bad = r.bytes.clone();
+    let n = bad.len();
+    bad[n - 10] ^= 0xFF;
     let store = make_trust_store("W1AW");
-    let result = verify_pq_conreq(&req, &store, PolicyProfile::Balanced, SigningMode::Normal);
-    assert!(result.is_err(), "tampered PQ signature must be rejected");
+    assert!(verify_pq_conreq(
+        &bad,
+        &store,
+        PolicyProfile::Balanced,
+        SigningMode::Normal,
+        None
+    )
+    .is_err());
 }
 
+/// BYTE tamper inside the signed body — the PQ equivalent of the classical gate.
 #[test]
-fn pq_conreq_tampered_classical_signature_rejected() {
-    let classical_seed = [0x66u8; 32];
-    let (pq_sk, _) = generate_ml_dsa_44_keypair();
-    let (_dk, kem_ek) = generate_ml_kem_768_keypair();
-
-    let mut req = create_pq_conreq(
-        "W1AW",
-        &classical_seed,
-        &pq_sk,
-        &kem_ek,
-        vec![SigningMode::Hybrid],
-        "session-tamper-ed",
-    )
-    .expect("create_pq_conreq");
-
-    req.classical_signature[0] ^= 0xFF;
-
+fn pq_conreq_tampered_body_rejected() {
+    let r = make_req(0x55, vec![SigningMode::Hybrid], "K2XYZ");
     let store = make_trust_store("W1AW");
-    let result = verify_pq_conreq(&req, &store, PolicyProfile::Balanced, SigningMode::Normal);
     assert!(
-        result.is_err(),
-        "tampered classical signature must be rejected"
+        verify_pq_conreq(
+            &r.bytes,
+            &store,
+            PolicyProfile::Balanced,
+            SigningMode::Normal,
+            None
+        )
+        .is_ok(),
+        "control: the untampered frame must verify"
     );
+    let mut bad = r.bytes.clone();
+    bad[10] ^= 0xFF; // inside station_id / dst_station
+    assert!(verify_pq_conreq(
+        &bad,
+        &store,
+        PolicyProfile::Balanced,
+        SigningMode::Normal,
+        None
+    )
+    .is_err());
 }
 
+/// Replaces the session-id mismatch test: v2 binds by hash over the transmitted CONREQ.
 #[test]
-fn pq_conack_session_id_mismatch_rejected() {
-    let classical_seed = [0x77u8; 32];
-    let (pq_sk, _) = generate_ml_dsa_44_keypair();
-    let (_dk, kem_ek) = generate_ml_kem_768_keypair();
-
-    let (ack, _ss) = create_pq_conack(
-        "KD9XYZ",
-        &classical_seed,
-        &pq_sk,
-        &kem_ek,
-        SigningMode::Hybrid,
-        "session-correct",
+fn pq_conack_bound_to_another_conreq_rejected() {
+    let ours = make_req(0x66, vec![SigningMode::Hybrid], "K2XYZ");
+    let theirs = make_req(0x67, vec![SigningMode::Hybrid], "K2XYZ");
+    let (pq_sk_b, _) = generate_ml_dsa_44_keypair();
+    let (ack_bytes, _) = create_pq_conack(
+        &PqConAckParams {
+            station_id: "K2XYZ",
+            dst_station: "W1AW",
+            pq_signing_key: &pq_sk_b,
+            req_kem_ek: &ours.kem_ek,
+            selected_mode: SigningMode::Hybrid,
+            conreq_hash: conreq_hash(&theirs.bytes),
+            timestamp_ms: TS + 100,
+        },
+        &[0x22; 32],
     )
-    .expect("create_pq_conack");
-
-    let store = make_trust_store("KD9XYZ");
-    let result = verify_pq_conack(
-        &ack,
-        "session-WRONG",
+    .unwrap();
+    let store = make_trust_store("K2XYZ");
+    assert!(verify_pq_conack(
+        &ack_bytes,
+        &ours.bytes,
         &[SigningMode::Hybrid],
         &store,
         PolicyProfile::Balanced,
         SigningMode::Normal,
-    );
-    assert!(result.is_err(), "mismatched session_id must be rejected");
+        None
+    )
+    .is_err());
 }
 
 #[test]
 fn pq_conreq_pubkey_mismatch_rejected() {
-    let classical_seed = [0xAAu8; 32];
-    let (pq_sk, _) = generate_ml_dsa_44_keypair();
-    let (_dk, kem_ek) = generate_ml_kem_768_keypair();
-
-    let req = create_pq_conreq(
-        "W1AW",
-        &classical_seed,
-        &pq_sk,
-        &kem_ek,
-        vec![SigningMode::Hybrid],
-        "session-pk-mismatch",
-    )
-    .expect("create_pq_conreq");
-
-    // Store a *different* pubkey for the same station ID.
-    let wrong_pubkey = [0xBBu8; 32];
-    let store = make_trusted_store("W1AW", wrong_pubkey);
-    let result = verify_pq_conreq(&req, &store, PolicyProfile::Balanced, SigningMode::Normal);
-    assert!(
-        result.is_err(),
-        "pubkey in frame must match stored trusted key"
-    );
-}
-
-#[test]
-fn pq_conack_pubkey_mismatch_rejected() {
-    let classical_seed = [0xCCu8; 32];
-    let (pq_sk, _) = generate_ml_dsa_44_keypair();
-    let (_dk, kem_ek) = generate_ml_kem_768_keypair();
-
-    let (ack, _ss) = create_pq_conack(
-        "KD9XYZ",
-        &classical_seed,
-        &pq_sk,
-        &kem_ek,
-        SigningMode::Hybrid,
-        "session-ack-pk-mismatch",
-    )
-    .expect("create_pq_conack");
-
-    let wrong_pubkey = [0xDDu8; 32];
-    let store = make_trusted_store("KD9XYZ", wrong_pubkey);
-    let result = verify_pq_conack(
-        &ack,
-        "session-ack-pk-mismatch",
-        &[SigningMode::Hybrid],
+    let r = make_req(0x77, vec![SigningMode::Hybrid], "K2XYZ");
+    // Trusted under a DIFFERENT key than the frame carries.
+    let store = make_trusted_store("W1AW", [0xAB; 32]);
+    assert!(verify_pq_conreq(
+        &r.bytes,
         &store,
         PolicyProfile::Balanced,
         SigningMode::Normal,
-    );
-    assert!(
-        result.is_err(),
-        "pubkey in ACK must match stored trusted key"
-    );
-}
-
-#[test]
-fn pq_conreq_invalid_kem_pubkey_rejected() {
-    let classical_seed = [0xEEu8; 32];
-    let (pq_sk, _) = generate_ml_dsa_44_keypair();
-    let (_dk, kem_ek) = generate_ml_kem_768_keypair();
-
-    let mut req = create_pq_conreq(
-        "W1AW",
-        &classical_seed,
-        &pq_sk,
-        &kem_ek,
-        vec![SigningMode::Hybrid],
-        "session-bad-kem",
+        None
     )
-    .expect("create_pq_conreq");
-
-    // Truncate the KEM pubkey to an invalid length.
-    req.kem_pubkey.truncate(16);
-
-    let store = make_trust_store("W1AW");
-    let result = verify_pq_conreq(&req, &store, PolicyProfile::Balanced, SigningMode::Normal);
-    assert!(result.is_err(), "malformed KEM pubkey must be rejected");
+    .is_err());
 }
 
 #[test]
 fn pq_conack_unauthorized_mode_rejected() {
-    let classical_seed = [0xFFu8; 32];
-    let (pq_sk, _) = generate_ml_dsa_44_keypair();
-    let (_dk, kem_ek) = generate_ml_kem_768_keypair();
-
-    // Responder selects Hybrid, but initiator only offered Pq.
-    let (ack, _ss) = create_pq_conack(
-        "KD9XYZ",
-        &classical_seed,
-        &pq_sk,
-        &kem_ek,
-        SigningMode::Hybrid,
-        "session-unauth-mode",
+    let r = make_req(0x88, vec![SigningMode::Normal], "K2XYZ");
+    let (pq_sk_b, _) = generate_ml_dsa_44_keypair();
+    let (ack_bytes, _) = create_pq_conack(
+        &PqConAckParams {
+            station_id: "K2XYZ",
+            dst_station: "W1AW",
+            pq_signing_key: &pq_sk_b,
+            req_kem_ek: &r.kem_ek,
+            selected_mode: SigningMode::Hybrid,
+            conreq_hash: conreq_hash(&r.bytes),
+            timestamp_ms: TS + 100,
+        },
+        &[0x22; 32],
     )
-    .expect("create_pq_conack");
-
-    let store = make_trust_store("KD9XYZ");
-    let result = verify_pq_conack(
-        &ack,
-        "session-unauth-mode",
-        &[SigningMode::Pq], // initiator only offered Pq, not Hybrid
+    .unwrap();
+    let store = make_trust_store("K2XYZ");
+    assert!(verify_pq_conack(
+        &ack_bytes,
+        &r.bytes,
+        &[SigningMode::Normal],
         &store,
         PolicyProfile::Balanced,
         SigningMode::Normal,
-    );
+        None
+    )
+    .is_err());
+}
+
+/// REPLAY FRESHNESS ON THE PQ PATH — a property that did not exist before #1147, because the PQ
+/// bodies carried no timestamp at all.
+#[test]
+fn a_stale_pq_conreq_is_rejected() {
+    let r = make_req(0x99, vec![SigningMode::Hybrid], "K2XYZ");
+    let store = make_trust_store("W1AW");
+    let fresh = openpulse_core::handshake::Freshness {
+        now_ms: TS + 60_000,
+        max_skew_ms: 120_000,
+    };
     assert!(
-        result.is_err(),
-        "mode not offered by initiator must be rejected"
+        verify_pq_conreq(
+            &r.bytes,
+            &store,
+            PolicyProfile::Balanced,
+            SigningMode::Normal,
+            Some(fresh)
+        )
+        .is_ok(),
+        "control: a fresh frame inside the window must verify"
+    );
+    let stale = openpulse_core::handshake::Freshness {
+        now_ms: TS + 500_000,
+        max_skew_ms: 120_000,
+    };
+    assert!(
+        verify_pq_conreq(
+            &r.bytes,
+            &store,
+            PolicyProfile::Balanced,
+            SigningMode::Normal,
+            Some(stale)
+        )
+        .is_err(),
+        "a stale PQ CONREQ must be rejected — before #1147 there was no timestamp to check"
     );
 }
 
-// ------------------------------------------------------------------
-// Group 4: SAR transport
-// ------------------------------------------------------------------
-
+/// #1178 on the PQ path too: unaddressed cannot be spelled by omission.
 #[test]
-fn pq_conreq_serialized_size_fits_in_sar_capacity() {
-    let classical_seed = [0x88u8; 32];
+fn an_empty_pq_dst_station_is_refused() {
     let (pq_sk, _) = generate_ml_dsa_44_keypair();
     let (_dk, kem_ek) = generate_ml_kem_768_keypair();
-
-    let req = create_pq_conreq(
-        "W1AW",
-        &classical_seed,
-        &pq_sk,
-        &kem_ek,
-        vec![SigningMode::Hybrid],
-        "session-sar",
+    assert!(create_pq_conreq(
+        &PqConReqParams {
+            station_id: "W1AW",
+            dst_station: "",
+            pq_signing_key: &pq_sk,
+            kem_ek: &kem_ek,
+            signing_modes: vec![SigningMode::Hybrid],
+            session_id: "s",
+            timestamp_ms: TS,
+        },
+        &[1u8; 32],
     )
-    .expect("create_pq_conreq");
+    .is_err());
+}
 
-    let encoded = encode_pq_conreq(&req).expect("encode_pq_conreq");
-    // SAR max = 64 005 bytes
+/// The PQ frames are far too large for one fragment — recorded honestly rather than implied away.
+/// ~5 kB is ~2.7 min at BPSK250. Scoping PQ into #1147 buys a FINISHED FORMAT (so wiring PQ later is
+/// not a second wire break), not a deployable feature.
+#[test]
+fn pq_conreq_is_multi_fragment_and_that_is_expected() {
+    let r = make_req(0xAA, vec![SigningMode::Hybrid], "K2XYZ");
     assert!(
-        encoded.len() < 64_005,
-        "PqConReq encoded size {} exceeds SAR capacity (64 005 B)",
-        encoded.len()
+        r.bytes.len() < 64_005,
+        "PQ CONREQ {} B exceeds SAR capacity",
+        r.bytes.len()
+    );
+    let frags = sar_encode(0, &r.bytes).expect("sar_encode");
+    assert!(
+        frags.len() > 1,
+        "a PQ CONREQ is expected to span fragments; if this ever becomes 1, the airtime claim in \
+         the #1147 design is out of date and should be re-derived"
     );
 }
 
 #[test]
 fn sar_roundtrip_of_pq_conreq() {
-    let classical_seed = [0x99u8; 32];
-    let (pq_sk, _) = generate_ml_dsa_44_keypair();
-    let (_dk, kem_ek) = generate_ml_kem_768_keypair();
-
-    let req = create_pq_conreq(
-        "W1AW",
-        &classical_seed,
-        &pq_sk,
-        &kem_ek,
-        vec![SigningMode::Hybrid],
-        "session-sar-rt",
-    )
-    .expect("create_pq_conreq");
-
-    let payload = encode_pq_conreq(&req).expect("encode_pq_conreq");
-
-    // SAR encode
-    let fragments = sar_encode(1, &payload).expect("sar_encode");
-    assert!(!fragments.is_empty());
-
-    // SAR reassemble
-    let mut reassembler = SarReassembler::new(Duration::from_secs(30));
-    let mut result = None;
-    for frag in fragments {
-        if let Some(data) = reassembler
-            .ingest("session-sar-rt", &frag)
-            .expect("ingest")
-            .into_iter()
-            .next()
-        {
-            result = Some(data);
-            break;
+    let r = make_req(0xBB, vec![SigningMode::Hybrid], "K2XYZ");
+    let frags = sar_encode(0, &r.bytes).expect("sar_encode");
+    let mut re = SarReassembler::new(Duration::from_secs(30));
+    let mut out = None;
+    for f in &frags {
+        if let Ok(done) = re.ingest("pq-sar", f) {
+            if let Some(d) = done.into_iter().next() {
+                out = Some(d);
+            }
         }
     }
-    let reassembled = result.expect("SAR reassembly must complete");
-
-    let decoded = decode_pq_conreq(&reassembled).expect("decode_pq_conreq");
-    assert_eq!(decoded.station_id, req.station_id);
-    assert_eq!(decoded.session_id, req.session_id);
-    assert_eq!(decoded.pq_pubkey, req.pq_pubkey);
-    assert_eq!(decoded.pq_signature, req.pq_signature);
-    assert_eq!(decoded.classical_signature, req.classical_signature);
-}
-
-/// The CONACK half of the codec must survive a round trip — including its signatures.
-///
-/// **The gap this closes.** `encode_pq_conack` had no caller anywhere, and `decode_pq_conack` was
-/// only ever fed deliberately malformed bytes (`""`, `"not json"`, `"{"`) to prove it rejects them.
-/// So nothing encoded a CONACK and decoded it back: a bug in the encoder, or any disagreement
-/// between the pair, was undetectable while every test passed. CONREQ has had this coverage all
-/// along — `pq_conreq_serialized_size_fits_in_sar_capacity` plus the SAR round trip — which is what
-/// made the asymmetry visible (orphan sweep, issue #1092).
-///
-/// Verifying the *signature* after the round trip is the part that matters. Comparing a few fields
-/// would pass even if serialisation corrupted a byte of the signature or the KEM ciphertext; making
-/// the decoded copy re-verify proves every signed byte survived intact.
-#[test]
-fn pq_conack_survives_encode_decode_with_signatures_intact() {
-    let classical_seed = [0x91u8; 32];
-    let (pq_sk, _pq_pk) = generate_ml_dsa_44_keypair();
-    let (dk, ek) = generate_ml_kem_768_keypair();
-
-    let (ack, ss_responder) = create_pq_conack(
-        "W1AW",
-        &classical_seed,
-        &pq_sk,
-        &ek,
-        SigningMode::Hybrid,
-        "session-conack-roundtrip",
-    )
-    .expect("create_pq_conack");
-
-    let encoded = encode_pq_conack(&ack).expect("encode_pq_conack");
-    // Same bound the CONREQ side asserts: the frame must fit one SAR object.
-    assert!(
-        encoded.len() < 64_005,
-        "PqConAck encoded size {} exceeds SAR capacity (64 005 B)",
-        encoded.len()
-    );
-
-    let decoded = decode_pq_conack(&encoded).expect("decode_pq_conack");
-
-    // The cryptographic payload must be byte-identical, or the shared secret will not agree.
-    assert_eq!(
-        decoded.kem_ciphertext, ack.kem_ciphertext,
-        "KEM ciphertext changed across the round trip"
-    );
-    assert_eq!(decoded.session_id, ack.session_id, "session_id changed");
-    assert_eq!(
-        decoded.pq_signature, ack.pq_signature,
-        "ML-DSA signature changed"
-    );
-    assert_eq!(
-        decoded.classical_signature, ack.classical_signature,
-        "Ed25519 signature changed"
-    );
-
-    // The strong check: the DECODED copy must still verify. A field-by-field comparison would miss
-    // a corrupted byte inside a field compared as a whole but signed over separately.
+    let reassembled = out.expect("reassembled");
+    assert_eq!(reassembled, r.bytes);
     let store = make_trust_store("W1AW");
-    verify_pq_conack(
-        &decoded,
-        "session-conack-roundtrip",
-        &[SigningMode::Hybrid],
+    assert!(verify_pq_conreq(
+        &reassembled,
         &store,
         PolicyProfile::Balanced,
         SigningMode::Normal,
+        None
     )
-    .expect("a round-tripped PqConAck must still verify");
-
-    // And the KEM must still decapsulate to the same secret through the decoded ciphertext.
-    let ss_initiator = kem_decapsulate(&dk, &decoded.kem_ciphertext).expect("kem_decapsulate");
-    assert_eq!(
-        ss_initiator, ss_responder,
-        "shared secret disagrees after the CONACK round trip"
-    );
+    .is_ok());
 }

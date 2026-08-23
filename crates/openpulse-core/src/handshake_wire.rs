@@ -26,6 +26,12 @@ pub const MAGIC_CONACK: &[u8; 4] = b"HSAK";
 /// "legacy keystream" mistake in a different file.
 pub const WIRE_VERSION: u8 = 0x02;
 
+/// PQ frame magics (#1147). The PQ frames were bare JSON with NO magic, and the daemon routes by
+/// magic sniff, so a PQ frame would have been silently dropped even if something sent one.
+pub const MAGIC_PQ_CONREQ: &[u8; 4] = b"HPCQ";
+/// See [`MAGIC_PQ_CONREQ`].
+pub const MAGIC_PQ_CONACK: &[u8; 4] = b"HPAK";
+
 /// `magic(4) + version(1) + length(2)`.
 pub const HEADER_LEN: usize = 7;
 /// Ed25519 signature, trailing and unsigned.
@@ -189,8 +195,60 @@ impl<'a> BodyReader<'a> {
     }
 }
 
+/// Split a frame whose trailing signature region is NOT a fixed 64 bytes.
+///
+/// The PQ frames carry TWO signatures and the classical one is optional (0 or 64 B), so the trailer
+/// length is a property of the body rather than a constant. This validates magic, version and the
+/// declared body length, then hands the caller whatever trails — which the caller must check against
+/// the presence flag it reads FROM THE BODY.
+///
+/// The flag lives inside the signed body deliberately: outside it, flipping one bit would change how
+/// many bytes a verifier treats as the classical signature, and that bit would itself be unsigned.
+pub fn split_frame_variable<'a>(
+    bytes: &'a [u8],
+    magic: &[u8; 4],
+    what: &str,
+) -> Result<(FrameSpans<'a>, &'a [u8]), ModemError> {
+    if bytes.len() < HEADER_LEN {
+        return Err(ModemError::Frame(format!(
+            "{what} too short: {} bytes, minimum {HEADER_LEN} for a header",
+            bytes.len()
+        )));
+    }
+    if &bytes[..4] != magic {
+        return Err(ModemError::Frame(format!("invalid {what} magic")));
+    }
+    let version = bytes[4];
+    if version != WIRE_VERSION {
+        return Err(ModemError::Frame(format!(
+            "{what} wire version {version:#04x} is not supported (this build speaks \
+             {WIRE_VERSION:#04x} only; there is no dual decode)"
+        )));
+    }
+    let declared = u16::from_be_bytes([bytes[5], bytes[6]]) as usize;
+    let body_end = HEADER_LEN
+        .checked_add(declared)
+        .ok_or_else(|| ModemError::Frame(format!("{what} declared length overflows")))?;
+    if bytes.len() < body_end {
+        return Err(ModemError::Frame(format!(
+            "{what} declares a {declared}-byte body but only {} bytes follow the header",
+            bytes.len().saturating_sub(HEADER_LEN)
+        )));
+    }
+    Ok((
+        FrameSpans {
+            signed_prefix: &bytes[..body_end],
+            body: &bytes[HEADER_LEN..body_end],
+            signature: &[],
+        },
+        &bytes[body_end..],
+    ))
+}
+
 /// Assemble `magic || version || length || body`, the exact bytes that get signed.
-pub fn signed_prefix(magic: &[u8; 4], body: &[u8]) -> Result<Vec<u8>, ModemError> {
+///
+/// Same rule for classical and PQ frames: one signed representation, and it is the transmitted one.
+pub fn signed_prefix_with_magic(magic: &[u8; 4], body: &[u8]) -> Result<Vec<u8>, ModemError> {
     let len = u16::try_from(body.len())
         .map_err(|_| ModemError::Frame("handshake body exceeds u16 length".into()))?;
     let mut out = Vec::with_capacity(HEADER_LEN + body.len());
@@ -261,6 +319,11 @@ pub fn split_frame<'a>(
         body: &bytes[HEADER_LEN..HEADER_LEN + declared],
         signature: &bytes[HEADER_LEN + declared..],
     })
+}
+
+/// Alias kept for the classical call sites; see [`signed_prefix_with_magic`].
+pub fn signed_prefix(magic: &[u8; 4], body: &[u8]) -> Result<Vec<u8>, ModemError> {
+    signed_prefix_with_magic(magic, body)
 }
 
 #[cfg(test)]
