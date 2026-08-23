@@ -156,36 +156,53 @@ HPX sessions begin with a two-message signed handshake that authenticates both p
 Sent by the initiating station at the start of the Discovery phase.
 
 ```
-MAGIC("HSCQ") | VERSION(0x01) | LENGTH(u32, BE) | JSON body
+MAGIC("HSCQ") | VERSION(0x02) | LENGTH(u16, BE) | body | SIGNATURE(64)
 ```
 
-JSON body fields:
+Binary body, fields in wire order (v2, #1147 — v1's JSON body is gone):
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `station_id` | string | Callsign of the initiating station |
-| `pubkey` | `[u8]` | Ed25519 verifying-key bytes (32 bytes) |
-| `signing_modes` | `[string]` | List of supported signing modes (subset of `normal`, `psk`, `relaxed`, `paranoid`) |
-| `session_id` | string | Randomly-generated session identifier |
-| `signature` | `[u8]` | Ed25519 signature (64 bytes) over canonical JSON of the above fields (excluding `signature`) |
+| `station_id` | string ≤12 | Callsign of the initiating station |
+| `dst_station` | string ≤12 | Station being addressed; `"*"` = broadcast. **Empty is invalid** |
+| `pubkey` | `[u8; 32]` | Ed25519 verifying key |
+| `kex_pubkey` | `[u8; 32]` | Ephemeral X25519 key for OTA-ACK key agreement |
+| `signing_modes` | u8 count + u8 each | Modes offered, ≤4 |
+| `session_id` | string ≤24 | Session identifier |
+| `station_grid` | string ≤8 | Maidenhead grid; empty = not advertised |
+| `profile_name` | string ≤24 | Active OTA ladder; empty = none |
+| `profile_fingerprint` | u64 BE | Ladder mapping fingerprint; 0 = none |
+| `timestamp_ms` | u64 BE | Signed creation time; **mandatory** |
 
 ### CONACK (connection acknowledgment)
 
-Sent by the responder in reply to a valid CONREQ.
+Sent by the responder in reply to a valid CONREQ **addressed to it**.
 
 ```
-MAGIC("HSAK") | VERSION(0x01) | LENGTH(u32, BE) | JSON body
+MAGIC("HSAK") | VERSION(0x02) | LENGTH(u16, BE) | body | SIGNATURE(64)
 ```
-
-JSON body fields:
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `station_id` | string | Callsign of the responding station |
-| `pubkey` | `[u8]` | Ed25519 verifying-key bytes (32 bytes) |
-| `selected_mode` | string | Chosen signing mode from the CONREQ offer list |
-| `session_id` | string | Must echo the `session_id` from the CONREQ |
-| `signature` | `[u8]` | Ed25519 signature (64 bytes) over canonical JSON of the above fields (excluding `signature`) |
+| `station_id` | string ≤12 | Callsign of the responding station |
+| `dst_station` | string ≤12 | The initiator; never a wildcard |
+| `pubkey` | `[u8; 32]` | Ed25519 verifying key |
+| `kex_pubkey` | `[u8; 32]` | Ephemeral X25519 key |
+| `selected_mode` | u8 | Chosen from the CONREQ's offer list — and **checked against it** |
+| `conreq_hash` | `[u8; 32]` | SHA-256 over the complete transmitted CONREQ |
+| `station_grid` | string ≤8 | Responder grid; empty = not advertised |
+| `profile_name` | string ≤24 | Responder's ladder; empty = none |
+| `profile_fingerprint` | u64 BE | Fingerprint; 0 = none |
+| `timestamp_ms` | u64 BE | Signed creation time; **mandatory** |
+
+**The signature covers `magic ‖ version ‖ length ‖ body`** — the transmitted bytes minus the
+signature — so there is no second representation to drift from the wire, and the version is bound.
+Both frames fit **one SAR fragment** by construction (241 B / 244 B against 251 B); v1's JSON frames
+were ~752 B and took three.
+
+The CONACK carries no `session_id`: echoing it would push the maximal frame past one fragment, and
+`conreq_hash` binds harder — the session id is cleartext and time-based, hence guessable within the
+handshake window.
 
 ### Handshake trust evaluation
 

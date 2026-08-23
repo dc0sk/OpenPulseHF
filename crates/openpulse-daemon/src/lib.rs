@@ -43,7 +43,8 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use openpulse_channel::dsp::PowerSpectrum;
 #[cfg(not(target_arch = "wasm32"))]
 use openpulse_core::handshake::{
-    verify_conack, verify_conreq, ConAck, ConReq, Freshness, InMemoryTrustStore, TrustStore,
+    verify_conack, verify_conreq, ConAck, ConAckParams, ConReq, ConReqParams, Freshness,
+    InMemoryTrustStore, TrustStore,
 };
 #[cfg(not(target_arch = "wasm32"))]
 use openpulse_core::session_key::{derive_ack_key, generate_kex_ephemeral};
@@ -371,6 +372,15 @@ pub struct PendingHandshake {
     /// Ephemeral X25519 secret for OTA-ACK key agreement (E7); combined with the peer's CONACK
     /// `kex_pubkey` to derive the session ACK-MAC key. All-zero when key agreement is not in use.
     pub kex_secret: [u8; 32],
+    /// The CONREQ **exactly as transmitted**, so the CONACK can be bound to it by hash (#1147).
+    ///
+    /// Kept as bytes rather than as a precomputed hash so the binding is derived from the same
+    /// artifact the peer hashed, not from a value this side computed a second time and could
+    /// compute differently.
+    pub conreq_bytes: Vec<u8>,
+    /// Signing modes our CONREQ offered, so a CONACK selecting an unoffered one is refused
+    /// (F-1147-05).
+    pub offered_modes: Vec<SigningMode>,
 }
 
 /// A peer identity proven by a verified Ed25519 handshake signature.
@@ -1419,8 +1429,13 @@ pub async fn process_received_bytes(
 #[cfg(not(target_arch = "wasm32"))]
 const HANDSHAKE_SAR_SESSION: &str = "handshake";
 
-/// SAR-fragment a signed handshake frame (CONREQ/CONACK are ~500 B, over the 255 B modem-frame
-/// cap) and transmit each fragment. The receiver reassembles them in [`try_reassemble_handshake`].
+/// SAR-fragment a signed handshake frame and transmit it. The receiver reassembles in
+/// [`try_reassemble_handshake`].
+///
+/// Since #1147 a classical CONREQ/CONACK is ONE fragment (241/244 B against 251 B), so this is a
+/// single frame in practice — the path stays SAR-based because the PQ frames (~5 kB) still need it,
+/// and because "one fragment" is a property of the caps rather than something this function should
+/// assume.
 #[cfg(not(target_arch = "wasm32"))]
 fn transmit_handshake_frame(engine: &mut ModemEngine, mode: &str, frame: &[u8]) {
     let fragments = match sar_encode(0, frame) {
@@ -1488,19 +1503,16 @@ fn handle_inbound_conreq(
     mode: &str,
     engine: &mut ModemEngine,
 ) {
-    let req = match ConReq::decode(bytes) {
-        Ok(r) => r,
-        Err(e) => {
-            tracing::warn!(error = %e, "handshake: CONREQ decode failed");
-            return;
-        }
-    };
     // Permissive policy: the signature proves key possession; trust classification is recorded
     // but an unknown (first-seen) peer is still allowed to connect, mirroring `ConnectPeer`.
     // Freshness (replay protection): reject a captured/replayed CONREQ outside the clock-skew window.
+    //
+    // Verified from the received BYTES: the signature covers the transmitted prefix, so re-encoding
+    // a decoded struct to recover the signed span would reintroduce the two-representation drift
+    // this format removes.
     let now_ms = unix_now_ms();
-    if let Err(e) = verify_conreq(
-        &req,
+    let req = match verify_conreq(
+        bytes,
         &runtime_state.trust_store,
         PolicyProfile::Permissive,
         SigningMode::Normal,
@@ -1509,7 +1521,24 @@ fn handle_inbound_conreq(
             max_skew_ms: HANDSHAKE_MAX_SKEW_MS,
         }),
     ) {
-        tracing::warn!(peer = %req.station_id, error = %e, "handshake: CONREQ verification rejected");
+        Ok((req, _decision)) => req,
+        Err(e) => {
+            tracing::warn!(error = %e, "handshake: CONREQ verification rejected");
+            return;
+        }
+    };
+
+    // #1178: answer only what is addressed to us. Without this a CONREQ had no destination, so
+    // EVERY daemon in range replied and spent RF before the initiator filtered the answers. Checked
+    // BEFORE the callsign gate below, because the cheapest refusal is the one that never considers
+    // keying the transmitter at all.
+    if !req.is_addressed_to(&runtime_state.local_callsign) {
+        tracing::debug!(
+            peer = %req.station_id,
+            dst = %req.dst_station,
+            local = %runtime_state.local_callsign,
+            "handshake: CONREQ addressed elsewhere; not answering"
+        );
         return;
     }
 
@@ -1540,23 +1569,22 @@ fn handle_inbound_conreq(
         .local_ota_ladder
         .clone()
         .unwrap_or_else(|| (String::new(), 0));
-    match ConAck::create_full(
-        &runtime_state.local_callsign,
-        &runtime_state.station_seed,
-        SigningMode::Normal,
-        &req.session_id,
-        openpulse_core::compression::CompressionAlgorithm::None,
-        openpulse_core::fec::FecMode::None,
-        &runtime_state.local_grid,
-        &ota_name,
-        ota_fp,
-        now_ms,
-        &kex_public,
-    ) {
-        Ok(ack) => match ack.encode() {
-            Ok(frame) => transmit_handshake_frame(engine, mode, &frame),
-            Err(e) => tracing::warn!(error = %e, "handshake: CONACK encode failed"),
+    match ConAck::create(
+        &ConAckParams {
+            station_id: &runtime_state.local_callsign,
+            dst_station: &req.station_id,
+            selected_mode: SigningMode::Normal,
+            // Transcript binding over the CONREQ exactly as received, signature included.
+            conreq_hash: openpulse_core::handshake::conreq_hash(bytes),
+            station_grid: &runtime_state.local_grid,
+            profile_name: &ota_name,
+            profile_fingerprint: ota_fp,
+            timestamp_ms: now_ms,
+            kex_pubkey: &kex_public,
         },
+        &runtime_state.station_seed,
+    ) {
+        Ok(frame) => transmit_handshake_frame(engine, mode, &frame),
         Err(e) => tracing::warn!(error = %e, "handshake: CONACK create failed"),
     }
 
@@ -1591,13 +1619,16 @@ fn handle_inbound_conack(
         tracing::debug!("handshake: CONACK received with no pending CONREQ; ignoring");
         return;
     };
-    // The CONACK must echo our CONREQ's session id. `verify_conack` also re-checks this, but
+    // The CONACK must be bound to the CONREQ we actually sent. `verify_conack` re-checks this, but
     // gating here avoids tearing down a pending handshake on an unrelated peer's CONACK.
-    if ack.session_id != pending.session_id {
+    //
+    // v2 binds by HASH OVER THE TRANSMITTED CONREQ rather than echoing the session id: the id is
+    // cleartext and time-based, so guessable inside the handshake window, while the hash covers the
+    // whole frame including our own `kex_pubkey`.
+    if ack.conreq_hash != openpulse_core::handshake::conreq_hash(&pending.conreq_bytes) {
         tracing::debug!(
-            got = %ack.session_id,
-            want = %pending.session_id,
-            "handshake: CONACK session id mismatch; ignoring"
+            peer = %ack.station_id,
+            "handshake: CONACK is not bound to our CONREQ; ignoring"
         );
         return;
     }
@@ -1613,10 +1644,9 @@ fn handle_inbound_conack(
         return;
     }
     if let Err(e) = verify_conack(
-        &ack,
-        &pending.session_id,
-        &[],
-        &[],
+        bytes,
+        &pending.conreq_bytes,
+        &pending.offered_modes,
         &runtime_state.trust_store,
         PolicyProfile::Permissive,
         SigningMode::Normal,
@@ -1966,31 +1996,34 @@ pub async fn apply_command_to_engine(
                     // Ephemeral X25519 for OTA-ACK key agreement (E7): advertise the public key in the
                     // signed CONREQ, keep the secret to derive the ACK-MAC key from the peer's CONACK.
                     let (kex_secret, kex_public) = generate_kex_ephemeral();
-                    match ConReq::create_full(
-                        &runtime_state.local_callsign,
-                        &runtime_state.station_seed,
-                        vec![SigningMode::Normal],
-                        &session_id,
-                        vec![],
-                        vec![],
-                        &runtime_state.local_grid,
-                        &ota_name,
-                        ota_fp,
-                        now_ms,
-                        &kex_public,
-                    ) {
-                        Ok(req) => match req.encode() {
-                            Ok(frame) => {
-                                transmit_handshake_frame(engine, &mode, &frame);
-                                runtime_state.pending_handshake = Some(PendingHandshake {
-                                    session_id,
-                                    peer_callsign: callsign.clone(),
-                                    started_at: Instant::now(),
-                                    kex_secret,
-                                });
-                            }
-                            Err(e) => tracing::warn!(error = %e, "handshake: CONREQ encode failed"),
+                    let offered_modes = vec![SigningMode::Normal];
+                    match ConReq::create(
+                        &ConReqParams {
+                            station_id: &runtime_state.local_callsign,
+                            // #1178: address the station we are dialling, so no other daemon in
+                            // range spends RF answering a request that was never for it.
+                            dst_station: callsign,
+                            signing_modes: offered_modes.clone(),
+                            session_id: &session_id,
+                            station_grid: &runtime_state.local_grid,
+                            profile_name: &ota_name,
+                            profile_fingerprint: ota_fp,
+                            timestamp_ms: now_ms,
+                            kex_pubkey: &kex_public,
                         },
+                        &runtime_state.station_seed,
+                    ) {
+                        Ok(frame) => {
+                            transmit_handshake_frame(engine, &mode, &frame);
+                            runtime_state.pending_handshake = Some(PendingHandshake {
+                                session_id,
+                                peer_callsign: callsign.clone(),
+                                started_at: Instant::now(),
+                                kex_secret,
+                                conreq_bytes: frame,
+                                offered_modes,
+                            });
+                        }
                         Err(e) => tracing::warn!(error = %e, "handshake: CONREQ create failed"),
                     }
                 }
@@ -4907,14 +4940,66 @@ mod handshake_rf_tests {
     use super::*;
     use bpsk_plugin::BpskPlugin;
     use openpulse_audio::LoopbackBackend;
-    use openpulse_core::compression::CompressionAlgorithm;
-    use openpulse_core::fec::FecMode;
     use tokio::sync::Mutex;
 
     fn bpsk_engine() -> ModemEngine {
         let mut e = ModemEngine::new(Box::new(LoopbackBackend::new()));
         e.register_plugin(Box::new(BpskPlugin::new())).unwrap();
         e
+    }
+
+    /// A signed CONREQ addressed to `dst`, as transmitted.
+    fn test_conreq(dst: &str) -> Vec<u8> {
+        ConReq::create(
+            &ConReqParams {
+                station_id: "W1AW",
+                dst_station: dst,
+                signing_modes: vec![SigningMode::Normal],
+                session_id: "W1AW-1700000000000",
+                station_grid: "FN31pr",
+                profile_name: "",
+                profile_fingerprint: 0,
+                timestamp_ms: unix_now_ms(),
+                kex_pubkey: &[0u8; 32],
+            },
+            &[1u8; 32],
+        )
+        .unwrap()
+    }
+
+    /// A signed CONACK from `K2XYZ` bound to `conreq`.
+    fn test_conack(conreq: &[u8], grid: &str) -> Vec<u8> {
+        ConAck::create(
+            &ConAckParams {
+                station_id: "K2XYZ",
+                dst_station: "W1AW",
+                selected_mode: SigningMode::Normal,
+                conreq_hash: openpulse_core::handshake::conreq_hash(conreq),
+                station_grid: grid,
+                profile_name: "",
+                profile_fingerprint: 0,
+                timestamp_ms: unix_now_ms(),
+                kex_pubkey: &[0u8; 32],
+            },
+            &[2u8; 32],
+        )
+        .unwrap()
+    }
+
+    thread_local! {
+        /// One CONREQ per test thread, so a CONACK can be bound to the exact bytes "we sent".
+        static CONREQ_FOR_INIT: Vec<u8> = test_conreq("K2XYZ");
+    }
+
+    fn pending_for(conreq: &[u8]) -> PendingHandshake {
+        PendingHandshake {
+            session_id: "W1AW-1700000000000".into(),
+            peer_callsign: "K2XYZ".into(),
+            started_at: Instant::now(),
+            kex_secret: [0u8; 32],
+            conreq_bytes: conreq.to_vec(),
+            offered_modes: vec![SigningMode::Normal],
+        }
     }
 
     fn mode() -> SharedMode {
@@ -4924,23 +5009,20 @@ mod handshake_rf_tests {
     /// The responder reassembles a fragmented, signed CONREQ from RF, records the proven peer
     /// identity (callsign + grid + pubkey), and emits `PeerVerified`.
     #[tokio::test]
-    async fn responder_verifies_conreq_fragments_and_records_peer() {
-        let conreq = ConReq::create_full(
-            "W1AW",
-            &[1u8; 32],
-            vec![SigningMode::Normal],
-            "W1AW-1700000000000",
-            vec![],
-            vec![],
-            "FN31pr",
-            "",
-            0,
-            unix_now_ms(),
-            &[],
-        )
-        .unwrap();
-        let frags = sar_encode(0, &conreq.encode().unwrap()).unwrap();
-        assert!(frags.len() > 1, "a CONREQ exceeds one modem frame");
+    async fn responder_verifies_a_single_fragment_conreq_and_records_peer() {
+        // This test used to assert `frags.len() > 1` — "a CONREQ exceeds one modem frame". #1147
+        // INVERTS that premise, and the inversion is the point of the change: a v1 CONREQ was 752 B
+        // = 3 SAR fragments = three preambles and three acquisitions, decoding at ~p^3 on a fading
+        // channel. The assertion is flipped rather than deleted so the property is pinned, not
+        // merely no longer contradicted.
+        let conreq = test_conreq("K2XYZ");
+        let frags = sar_encode(0, &conreq).unwrap();
+        assert_eq!(
+            frags.len(),
+            1,
+            "a v2 CONREQ must fit ONE modem frame; it took {} — the fragment budget has regressed",
+            frags.len()
+        );
 
         let mut eng = bpsk_engine();
         let mode = mode();
@@ -4953,23 +5035,17 @@ mod handshake_rf_tests {
             ..RuntimeControlState::default()
         };
 
-        for (i, frag) in frags.iter().enumerate() {
+        for frag in &frags {
             process_received_bytes(frag, &mut rs, None, &ev, &mode, &mut eng).await;
-            if i + 1 < frags.len() {
-                assert!(
-                    rs.last_verified_peer().is_none(),
-                    "must not verify before all fragments arrive"
-                );
-            }
         }
 
         let vp = rs
             .last_verified_peer()
             .cloned()
-            .expect("peer verified after final fragment");
+            .expect("peer verified from the single fragment");
         assert_eq!(vp.callsign, "W1AW");
         assert_eq!(vp.grid, "FN31pr");
-        assert_eq!(vp.pubkey, conreq.pubkey);
+        assert_eq!(vp.pubkey, ConReq::decode(&conreq).unwrap().pubkey);
         assert!(
             matches!(rx.try_recv(), Ok(ControlEvent::PeerVerified { callsign, grid })
                 if callsign == "W1AW" && grid == "FN31pr"),
@@ -4977,27 +5053,18 @@ mod handshake_rf_tests {
         );
     }
 
-    /// SAR-poison resilience: a crafted fragment sharing the constant handshake key must not block a
-    /// legitimate CONREQ from reassembling and verifying (the reassembler keeps conflicting streams
-    /// as separate candidates; the poison one fails verification and is dropped).
+    /// SAR-poison resilience: a crafted fragment sharing the constant handshake key must not block
+    /// a legitimate CONREQ from reassembling and verifying.
+    ///
+    /// **#1147 shrinks this attack surface rather than removing the test.** A v1 CONREQ spanned
+    /// three fragments, so a poisoner had a window in which the real frame was incomplete and could
+    /// be blocked by a conflicting stream on the same key. A v2 CONREQ is ONE fragment and
+    /// reassembles on arrival, so there is no incomplete window to occupy — but poison on the same
+    /// key is still possible, and must still fail to verify a peer on its own.
     #[tokio::test]
     async fn poison_fragment_does_not_block_conreq_verification() {
-        let conreq = ConReq::create_full(
-            "W1AW",
-            &[1u8; 32],
-            vec![SigningMode::Normal],
-            "W1AW-1700000000000",
-            vec![],
-            vec![],
-            "FN31pr",
-            "",
-            0,
-            unix_now_ms(),
-            &[],
-        )
-        .unwrap();
-        let frags = sar_encode(0, &conreq.encode().unwrap()).unwrap();
-        assert!(frags.len() > 1, "a CONREQ exceeds one modem frame");
+        let conreq = test_conreq("K2XYZ");
+        let frags = sar_encode(0, &conreq).unwrap();
 
         let mut eng = bpsk_engine();
         let mode = mode();
@@ -5011,10 +5078,10 @@ mod handshake_rf_tests {
         };
 
         // A poison fragment on the same handshake key (segment_id 0): a self-contained garbage
-        // "frame" (index 0 of 1) that reassembles immediately but has no HSCQ magic, plus a same-total
-        // index-0 conflict with the real CONREQ.
+        // "frame" that reassembles immediately but carries no HSCQ magic, plus a conflicting
+        // index-0 claim of a multi-fragment stream.
         let poison_solo = vec![0u8, 0, 0, 1, 0xDE, 0xAD, 0xBE, 0xEF];
-        let mut poison_conflict = vec![0u8, 0, 0, frags.len() as u8];
+        let mut poison_conflict = vec![0u8, 0, 0, 3];
         poison_conflict.extend(vec![0x99u8; 100]);
         process_received_bytes(&poison_solo, &mut rs, None, &ev, &mode, &mut eng).await;
         process_received_bytes(&poison_conflict, &mut rs, None, &ev, &mode, &mut eng).await;
@@ -5023,7 +5090,6 @@ mod handshake_rf_tests {
             "poison must not verify a peer on its own"
         );
 
-        // The legitimate CONREQ fragments still reassemble and verify.
         for frag in &frags {
             process_received_bytes(frag, &mut rs, None, &ev, &mode, &mut eng).await;
         }
@@ -5032,7 +5098,6 @@ mod handshake_rf_tests {
             .cloned()
             .expect("peer verified despite the poison fragments");
         assert_eq!(vp.callsign, "W1AW");
-        assert_eq!(vp.pubkey, conreq.pubkey);
     }
 
     /// Audit F6/F4 unit coverage: `local_callsign_valid` rejects the empty/`N0CALL` sentinels, and
@@ -5075,21 +5140,7 @@ mod handshake_rf_tests {
     /// sees completed.
     #[tokio::test]
     async fn responder_without_callsign_does_not_transmit_conack() {
-        let conreq = ConReq::create_full(
-            "W1AW",
-            &[1u8; 32],
-            vec![SigningMode::Normal],
-            "W1AW-1700000000000",
-            vec![],
-            vec![],
-            "FN31pr",
-            "",
-            0,
-            unix_now_ms(),
-            &[],
-        )
-        .unwrap();
-        let frags = sar_encode(0, &conreq.encode().unwrap()).unwrap();
+        let frags = sar_encode(0, &test_conreq("*")).unwrap();
 
         let mut eng = bpsk_engine();
         let mode = mode();
@@ -5113,6 +5164,49 @@ mod handshake_rf_tests {
         assert!(
             rs.last_verified_peer().is_none(),
             "a half-handshake must not be recorded when we cannot reply"
+        );
+    }
+
+    /// #1178 THROUGH THE TX PATH: a CONREQ addressed to another station is not answered.
+    ///
+    /// Asserted on the engine's transmit counter, not on the filter function, because the defect
+    /// being fixed is *spent RF* — a unit check on `is_addressed_to` would pass even if the daemon
+    /// went on to key up anyway. The positive control in the same test is what makes the negative
+    /// meaningful: the identical setup DOES transmit when the request is addressed to us.
+    #[tokio::test]
+    async fn a_conreq_addressed_elsewhere_does_not_key_the_transmitter() {
+        async fn transmits_for(dst: &str) -> u64 {
+            let mut eng = bpsk_engine();
+            let mode = mode();
+            let (tx, _rx) = broadcast::channel::<ControlEvent>(16);
+            let ev = Arc::new(tx);
+            let mut rs = RuntimeControlState {
+                local_callsign: "K2XYZ".into(),
+                local_grid: "EM69".into(),
+                station_seed: [2u8; 32],
+                ..RuntimeControlState::default()
+            };
+            let before = eng.frames_transmitted();
+            for frag in &sar_encode(0, &test_conreq(dst)).unwrap() {
+                process_received_bytes(frag, &mut rs, None, &ev, &mode, &mut eng).await;
+            }
+            eng.frames_transmitted() - before
+        }
+
+        assert!(
+            transmits_for("K2XYZ").await > 0,
+            "POSITIVE CONTROL FAILED: a CONREQ addressed to us produced no transmission, so the \
+             zero below would prove nothing about addressing"
+        );
+        assert!(
+            transmits_for("*").await > 0,
+            "a broadcast CONREQ must still be answered"
+        );
+        assert_eq!(
+            transmits_for("DL9ZZZ").await,
+            0,
+            "a CONREQ addressed to another station keyed the transmitter — every daemon in range \
+             spends RF on a request that was never for it (#1178)"
         );
     }
 
@@ -5158,12 +5252,7 @@ mod handshake_rf_tests {
             local_callsign: "W1AW".into(),
             local_grid: "FN31".into(),
             station_seed: [1u8; 32],
-            pending_handshake: Some(PendingHandshake {
-                session_id: "W1AW-1".into(),
-                peer_callsign: "K2XYZ".into(),
-                started_at: Instant::now(),
-                kex_secret: [0u8; 32],
-            }),
+            pending_handshake: Some(pending_for(&CONREQ_FOR_INIT.with(|c| c.clone()))),
             ..RuntimeControlState::default()
         };
         rs.logbook = crate::logbook::Logbook::new(
@@ -5176,21 +5265,8 @@ mod handshake_rf_tests {
         rs.logbook
             .begin_qso("K2XYZ", "BPSK250", Some(14_070_000), 1_700_000_000_000);
 
-        let conack = ConAck::create_full(
-            "K2XYZ",
-            &[2u8; 32],
-            SigningMode::Normal,
-            "W1AW-1",
-            CompressionAlgorithm::None,
-            FecMode::None,
-            "EM69",
-            "",
-            0,
-            unix_now_ms(),
-            &[],
-        )
-        .unwrap();
-        let frags = sar_encode(0, &conack.encode().unwrap()).unwrap();
+        let conack = test_conack(&CONREQ_FOR_INIT.with(|c| c.clone()), "EM69");
+        let frags = sar_encode(0, &conack).unwrap();
 
         let mut eng = bpsk_engine();
         let mode = mode();
@@ -5218,36 +5294,26 @@ mod handshake_rf_tests {
         let _ = std::fs::remove_file(&tmp);
     }
 
-    /// A CONACK whose session id doesn't match the in-flight CONREQ is ignored: no peer is
-    /// recorded and the pending handshake is preserved (so the real CONACK can still complete it).
+    /// A CONACK bound to a DIFFERENT CONREQ is ignored: no peer is recorded and the pending
+    /// handshake is preserved, so the real CONACK can still complete it.
+    ///
+    /// v1 matched on the session id echo. v2 matches on a hash over the whole transmitted CONREQ,
+    /// which is strictly harder to forge: the daemon's own comment conceded the session id is
+    /// cleartext and time-based, hence guessable inside the handshake window.
     #[tokio::test]
-    async fn conack_with_mismatched_session_is_ignored() {
+    async fn conack_bound_to_another_conreq_is_ignored() {
+        let ours = test_conreq("K2XYZ");
         let mut rs = RuntimeControlState {
             local_callsign: "W1AW".into(),
             station_seed: [1u8; 32],
-            pending_handshake: Some(PendingHandshake {
-                session_id: "W1AW-1".into(),
-                peer_callsign: "K2XYZ".into(),
-                started_at: Instant::now(),
-                kex_secret: [0u8; 32],
-            }),
+            pending_handshake: Some(pending_for(&ours)),
             ..RuntimeControlState::default()
         };
-        let conack = ConAck::create_full(
-            "K2XYZ",
-            &[2u8; 32],
-            SigningMode::Normal,
-            "SOME-OTHER-SESSION",
-            CompressionAlgorithm::None,
-            FecMode::None,
-            "",
-            "",
-            0,
-            unix_now_ms(),
-            &[],
-        )
-        .unwrap();
-        let frags = sar_encode(0, &conack.encode().unwrap()).unwrap();
+        // A CONACK bound to some other CONREQ entirely.
+        let mut other = test_conreq("K2XYZ");
+        other[7] ^= 0xFF;
+        let conack = test_conack(&other, "");
+        let frags = sar_encode(0, &conack).unwrap();
 
         let mut eng = bpsk_engine();
         let mode = mode();
@@ -5274,25 +5340,28 @@ mod handshake_rf_tests {
         let mut rs = RuntimeControlState {
             local_callsign: "W1AW".into(),
             station_seed: [1u8; 32],
-            pending_handshake: Some(PendingHandshake {
-                session_id: "W1AW-1".into(),
-                peer_callsign: "K2XYZ".into(),
-                started_at: Instant::now(),
-                kex_secret: [0u8; 32],
-            }),
+            pending_handshake: Some(pending_for(&test_conreq("K2XYZ"))),
             ..RuntimeControlState::default()
         };
-        // Attacker "N0EVL" signs a CONACK with its own key, correctly echoing the session id.
+        // Attacker "N0EVL" signs a CONACK with its own key, binding it CORRECTLY to our CONREQ —
+        // the hash is public, so binding is not a secret. What stops it is the dialed-station check.
+        let ours = test_conreq("K2XYZ");
         let conack = ConAck::create(
-            "N0EVL",
+            &ConAckParams {
+                station_id: "N0EVL",
+                dst_station: "W1AW",
+                selected_mode: SigningMode::Normal,
+                conreq_hash: openpulse_core::handshake::conreq_hash(&ours),
+                station_grid: "",
+                profile_name: "",
+                profile_fingerprint: 0,
+                timestamp_ms: unix_now_ms(),
+                kex_pubkey: &[0u8; 32],
+            },
             &[9u8; 32],
-            SigningMode::Normal,
-            "W1AW-1",
-            CompressionAlgorithm::None,
-            FecMode::None,
         )
         .unwrap();
-        let frags = sar_encode(0, &conack.encode().unwrap()).unwrap();
+        let frags = sar_encode(0, &conack).unwrap();
 
         let mut eng = bpsk_engine();
         let mode = mode();
@@ -5343,9 +5412,14 @@ mod handshake_rf_tests {
         assert!(p.session_id.starts_with("W1AW-"));
     }
 
-    /// A CONREQ SAR fragment (a full 255-byte modem frame) survives a real BPSK250 round trip.
+    /// A CONREQ survives a real BPSK250 round trip — as ONE fragment.
+    ///
+    /// This asserted a full 255-byte fragment, because a v1 CONREQ was large enough that its first
+    /// fragment was always maximal. A v2 CONREQ is 241 B, so it is one sub-maximal fragment. Both
+    /// facts are asserted: the single-fragment property (the #1147 win) and that the frame actually
+    /// crosses the modem, which is the thing the test was for.
     #[test]
-    fn max_size_handshake_fragment_survives_bpsk_round_trip() {
+    fn a_conreq_survives_a_bpsk_round_trip_as_one_fragment() {
         use openpulse_modem::channel_sim::ChannelSimHarness;
         let mut h = ChannelSimHarness::new();
         h.tx_engine
@@ -5354,25 +5428,19 @@ mod handshake_rf_tests {
         h.rx_engine
             .register_plugin(Box::new(BpskPlugin::new()))
             .unwrap();
-        let conreq = ConReq::create_full(
-            "W1AW",
-            &[1u8; 32],
-            vec![SigningMode::Normal],
-            "W1AW-1700000000000",
-            vec![],
-            vec![],
-            "FN31pr",
-            "",
-            0,
-            unix_now_ms(),
-            &[],
-        )
-        .unwrap();
-        let frag = sar_encode(0, &conreq.encode().unwrap()).unwrap().remove(0);
+        let conreq = test_conreq("K2XYZ");
+        let mut frags = sar_encode(0, &conreq).unwrap();
         assert_eq!(
-            frag.len(),
-            255,
-            "first fragment should be a full modem frame"
+            frags.len(),
+            1,
+            "a v2 CONREQ must be one SAR fragment; it took {}",
+            frags.len()
+        );
+        let frag = frags.remove(0);
+        assert!(
+            frag.len() <= 255,
+            "a fragment cannot exceed one modem frame; got {}",
+            frag.len()
         );
         h.tx_engine.transmit(&frag, "BPSK250", None).unwrap();
         h.route_clean();
@@ -5390,10 +5458,8 @@ mod handshake_rf_tests {
         let ev = Arc::new(tx);
         let mut rs = RuntimeControlState {
             pending_handshake: Some(PendingHandshake {
-                session_id: "s".into(),
-                peer_callsign: "K2XYZ".into(),
                 started_at: Instant::now() - HANDSHAKE_TIMEOUT - Duration::from_secs(1),
-                kex_secret: [0u8; 32],
+                ..pending_for(&test_conreq("K2XYZ"))
             }),
             ..RuntimeControlState::default()
         };

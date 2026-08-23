@@ -2,6 +2,7 @@ capabilities:
   CAP-01:
     code:
     - crates/openpulse-core/src/handshake.rs
+    - crates/openpulse-core/src/handshake_wire.rs
     - crates/openpulse-daemon/src/lib.rs
     - crates/openpulse-daemon/src/server.rs
     name: Signed classical handshake (Ed25519)

@@ -15,6 +15,7 @@ pub mod error;
 pub mod fec;
 pub mod frame;
 pub mod handshake;
+pub mod handshake_wire;
 pub mod hpx;
 pub mod iq;
 pub mod ldpc;

@@ -13,7 +13,12 @@ use ml_kem::{
 use rand::RngCore;
 use serde::{Deserialize, Serialize};
 
-use crate::handshake::TrustStore;
+use crate::error::ModemError;
+use crate::handshake::{Freshness, TrustStore};
+use crate::handshake_wire::{
+    caps, signed_prefix_with_magic, split_frame_variable, BodyReader, BodyWriter, CONREQ_HASH_LEN,
+    MAGIC_PQ_CONACK, MAGIC_PQ_CONREQ, PUBKEY_LEN, SIG_LEN,
+};
 use crate::trust::{
     evaluate_handshake, CertificateSource, HandshakeDecision, PolicyProfile, PublicKeyTrustLevel,
     SigningMode, TrustError,
@@ -71,24 +76,35 @@ impl From<TrustError> for PqHandshakeError {
 // Wire frame body structs (canonical — excludes signature fields)
 // ------------------------------------------------------------------
 
-#[derive(Serialize, Deserialize)]
-struct PqConReqBody {
-    station_id: String,
-    classical_pubkey: Vec<u8>,
-    pq_pubkey: Vec<u8>,
-    kem_pubkey: Vec<u8>,
-    signing_modes: Vec<SigningMode>,
-    session_id: String,
-}
-
-#[derive(Serialize, Deserialize)]
-struct PqConAckBody {
-    station_id: String,
-    classical_pubkey: Vec<u8>,
-    pq_pubkey: Vec<u8>,
-    kem_ciphertext: Vec<u8>,
-    selected_mode: SigningMode,
-    session_id: String,
+/// Encode a PQ CONREQ body. Layout mirrors the classical frame: capped strings, positional
+/// fixed-size keys, big-endian integers, and the classical-signature presence flag INSIDE the body
+/// so it is covered by both signatures.
+#[allow(clippy::too_many_arguments)]
+fn encode_pq_conreq_body(
+    station_id: &str,
+    dst_station: &str,
+    classical_pubkey: &[u8],
+    pq_pubkey: &[u8],
+    kem_pubkey: &[u8],
+    signing_modes: &[SigningMode],
+    session_id: &str,
+    timestamp_ms: u64,
+    has_classical_sig: bool,
+) -> Result<Vec<u8>, ModemError> {
+    let mut w = BodyWriter::new();
+    w.str_capped("station_id", station_id, caps::STATION_ID)?;
+    w.str_capped("dst_station", dst_station, caps::STATION_ID)?;
+    w.fixed("classical_pubkey", classical_pubkey, PUBKEY_LEN)?;
+    w.fixed("pq_pubkey", pq_pubkey, ML_DSA_44_PUBKEY_SIZE)?;
+    w.fixed("kem_pubkey", kem_pubkey, ML_KEM_768_EK_SIZE)?;
+    w.u8(signing_modes.len() as u8);
+    for m in signing_modes {
+        w.u8(m.to_wire());
+    }
+    w.str_capped("session_id", session_id, caps::SESSION_ID)?;
+    w.u64(timestamp_ms);
+    w.u8(u8::from(has_classical_sig));
+    Ok(w.finish())
 }
 
 // ------------------------------------------------------------------
@@ -99,6 +115,15 @@ struct PqConAckBody {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PqConReq {
     pub station_id: String,
+    /// Who the request is addressed to; `"*"` is the explicit wildcard (#1178). Empty is invalid.
+    pub dst_station: String,
+    /// Unix-ms creation time, signed, for replay freshness.
+    ///
+    /// **The PQ bodies had NO timestamp at all**, so the PQ path had none of the replay protection
+    /// the classical path gained in #615. Freezing that field-for-field into the new format would
+    /// have baked a known hole into the wire and voided the stated reason for scoping PQ into this
+    /// break — that the format be FINISHED, so wiring PQ later is not a second break.
+    pub timestamp_ms: u64,
     /// Ed25519 verifying key (32 B).
     pub classical_pubkey: Vec<u8>,
     /// ML-DSA-44 verifying key (1312 B).
@@ -117,6 +142,12 @@ pub struct PqConReq {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PqConAck {
     pub station_id: String,
+    /// The initiator this answers.
+    pub dst_station: String,
+    /// SHA-256 over the complete transmitted PQ CONREQ, replacing the session-id echo.
+    pub conreq_hash: [u8; 32],
+    /// Unix-ms creation time, signed, for replay freshness. See [`PqConReq::timestamp_ms`].
+    pub timestamp_ms: u64,
     /// Ed25519 verifying key (32 B).
     pub classical_pubkey: Vec<u8>,
     /// ML-DSA-44 verifying key (1312 B).
@@ -124,8 +155,6 @@ pub struct PqConAck {
     /// ML-KEM-768 ciphertext (1088 B).
     pub kem_ciphertext: Vec<u8>,
     pub selected_mode: SigningMode,
-    /// Must echo the session_id from the corresponding PqConReq.
-    pub session_id: String,
     /// Ed25519 signature (64 B); empty when mode is `Pq`.
     pub classical_signature: Vec<u8>,
     /// ML-DSA-44 signature (2420 B).
@@ -225,77 +254,204 @@ fn is_pq_only(modes: &[SigningMode]) -> bool {
 ///
 /// Hybrid mode: signs with both Ed25519 and ML-DSA-44.
 /// Pq-only mode: signs with ML-DSA-44 only; `classical_signature` is empty.
+/// Parameters for a PQ CONREQ.
+///
+/// DORMANT(#1147): the PQ path has zero production callers — nothing constructs or dispatches a PQ
+/// frame. That is the premise of scoping PQ into this format break rather than a gap: at ~5 kB
+/// (~2.7 min at BPSK250) a PQ handshake is not deployable on this link, so what the work buys is a
+/// FINISHED format, so that wiring PQ later is not a second wire break.
+pub struct PqConReqParams<'a> {
+    /// This station's callsign (cap 12).
+    pub station_id: &'a str,
+    /// Addressee, or `"*"` (#1178). Empty is invalid.
+    pub dst_station: &'a str,
+    /// ML-DSA-44 signing seed.
+    pub pq_signing_key: &'a [u8],
+    /// ML-KEM-768 encapsulation key.
+    pub kem_ek: &'a [u8],
+    /// Modes offered, in preference order.
+    pub signing_modes: Vec<SigningMode>,
+    /// Session identifier (cap 24).
+    pub session_id: &'a str,
+    /// Unix-ms creation time; mandatory.
+    pub timestamp_ms: u64,
+}
+
+/// Build and sign a PQ CONREQ, returning the frame **bytes**.
+///
+/// Both signatures cover the same transmitted prefix as the classical frames. The ML-DSA signature
+/// is always present; the Ed25519 one is present unless the offered modes are PQ-only, and its
+/// presence is a flag INSIDE the signed body — outside it, one flipped bit would change how many
+/// trailing bytes a verifier reads as the classical signature, and that bit would be unsigned.
 pub fn create_pq_conreq(
-    station_id: &str,
+    params: &PqConReqParams<'_>,
     classical_seed: &[u8; 32],
-    pq_signing_key: &[u8],
-    kem_ek: &[u8],
-    signing_modes: Vec<SigningMode>,
-    session_id: &str,
-) -> Result<PqConReq, PqHandshakeError> {
+) -> Result<Vec<u8>, PqHandshakeError> {
+    if params.dst_station.is_empty() {
+        return Err(PqHandshakeError::SerializationError(
+            "PQ CONREQ dst_station is empty; use \"*\" for a broadcast request (#1178)".into(),
+        ));
+    }
     let ed_sk = EdSigningKey::from_bytes(classical_seed);
     let classical_pubkey = ed_sk.verifying_key().to_bytes().to_vec();
 
-    let seed_arr: [u8; 32] = pq_signing_key
+    let seed_arr: [u8; 32] = params
+        .pq_signing_key
         .try_into()
         .map_err(|_| PqHandshakeError::InvalidPublicKey)?;
     let mldsa_sk = MlDsaSigningKey::<MlDsa44>::from_seed(&ml_dsa::Seed::from(seed_arr));
-    let pq_pubkey_encoded = mldsa_sk.verifying_key().encode();
-    let pq_pubkey: Vec<u8> = pq_pubkey_encoded.to_vec();
+    let pq_pubkey: Vec<u8> = mldsa_sk.verifying_key().encode().to_vec();
 
-    let body = PqConReqBody {
-        station_id: station_id.to_string(),
-        classical_pubkey: classical_pubkey.clone(),
-        pq_pubkey: pq_pubkey.clone(),
-        kem_pubkey: kem_ek.to_vec(),
-        signing_modes: signing_modes.clone(),
-        session_id: session_id.to_string(),
-    };
-    let canonical = serde_json::to_vec(&body)
+    let has_classical = !is_pq_only(&params.signing_modes);
+    let body = encode_pq_conreq_body(
+        params.station_id,
+        params.dst_station,
+        &classical_pubkey,
+        &pq_pubkey,
+        params.kem_ek,
+        &params.signing_modes,
+        params.session_id,
+        params.timestamp_ms,
+        has_classical,
+    )
+    .map_err(|e| PqHandshakeError::SerializationError(e.to_string()))?;
+
+    let prefix = signed_prefix_with_magic(MAGIC_PQ_CONREQ, &body)
         .map_err(|e| PqHandshakeError::SerializationError(e.to_string()))?;
 
-    let pq_signature = ml_dsa_sign(pq_signing_key, &canonical)?;
-    let classical_signature = if is_pq_only(&signing_modes) {
-        vec![]
-    } else {
-        ed25519_sign(classical_seed, &canonical)
-    };
+    let pq_signature = ml_dsa_sign(params.pq_signing_key, &prefix)?;
+    let mut frame = prefix.clone();
+    if has_classical {
+        frame.extend_from_slice(&ed25519_sign(classical_seed, &prefix));
+    }
+    frame.extend_from_slice(&pq_signature);
+    Ok(frame)
+}
 
+/// Parse a PQ CONREQ frame. Does **not** verify signatures — see [`verify_pq_conreq`].
+pub fn decode_pq_conreq(bytes: &[u8]) -> Result<PqConReq, PqHandshakeError> {
+    let (spans, trailer) = split_frame_variable(bytes, MAGIC_PQ_CONREQ, "PQ CONREQ")
+        .map_err(|e| PqHandshakeError::SerializationError(e.to_string()))?;
+    let mut r = BodyReader::new(spans.body);
+    let station_id = rd(r.str_capped("station_id", caps::STATION_ID))?;
+    let dst_station = rd(r.str_capped("dst_station", caps::STATION_ID))?;
+    let classical_pubkey = rd(r.fixed("classical_pubkey", PUBKEY_LEN))?;
+    let pq_pubkey = rd(r.fixed("pq_pubkey", ML_DSA_44_PUBKEY_SIZE))?;
+    let kem_pubkey = rd(r.fixed("kem_pubkey", ML_KEM_768_EK_SIZE))?;
+    let n = rd(r.u8("signing_modes count"))? as usize;
+    if n > caps::SIGNING_MODES {
+        return Err(PqHandshakeError::SerializationError(format!(
+            "PQ CONREQ declares {n} signing modes, over the {} cap",
+            caps::SIGNING_MODES
+        )));
+    }
+    let mut signing_modes = Vec::with_capacity(n);
+    for _ in 0..n {
+        let b = rd(r.u8("signing_mode"))?;
+        signing_modes.push(SigningMode::from_wire(b).ok_or_else(|| {
+            PqHandshakeError::SerializationError(format!("unknown signing mode {b:#04x}"))
+        })?);
+    }
+    let session_id = rd(r.str_capped("session_id", caps::SESSION_ID))?;
+    let timestamp_ms = rd(r.u64("timestamp_ms"))?;
+    let has_classical = rd(r.u8("has_classical_sig"))? != 0;
+    rd(r.finish("PQ CONREQ"))?;
+
+    if dst_station.is_empty() {
+        return Err(PqHandshakeError::SerializationError(
+            "PQ CONREQ dst_station is empty".into(),
+        ));
+    }
+    let (classical_signature, pq_signature) = split_pq_trailer(trailer, has_classical)?;
     Ok(PqConReq {
-        station_id: station_id.to_string(),
+        station_id,
+        dst_station,
+        timestamp_ms,
         classical_pubkey,
         pq_pubkey,
-        kem_pubkey: kem_ek.to_vec(),
+        kem_pubkey,
         signing_modes,
-        session_id: session_id.to_string(),
+        session_id,
         classical_signature,
         pq_signature,
     })
 }
 
-/// Build and sign a PqConAck; encapsulates the KEM key from `req_kem_ek`.
+/// Map a codec error into the PQ error type.
+fn rd<T>(r: Result<T, ModemError>) -> Result<T, PqHandshakeError> {
+    r.map_err(|e| PqHandshakeError::SerializationError(e.to_string()))
+}
+
+/// Split the trailing signature region, cross-checking it against the body's presence flag.
 ///
-/// Returns `(PqConAck, shared_secret_bytes [32 B])`.
+/// The flag is signed; the trailer length is not. Checking them against each other is what stops a
+/// truncated or padded frame from being reinterpreted with a different signature split.
+fn split_pq_trailer(
+    trailer: &[u8],
+    has_classical: bool,
+) -> Result<(Vec<u8>, Vec<u8>), PqHandshakeError> {
+    let expected = if has_classical {
+        SIG_LEN + ML_DSA_44_SIG_SIZE
+    } else {
+        ML_DSA_44_SIG_SIZE
+    };
+    if trailer.len() != expected {
+        return Err(PqHandshakeError::SerializationError(format!(
+            "PQ frame carries {} trailing signature bytes; the signed body says it should carry \
+             {expected} (classical signature {})",
+            trailer.len(),
+            if has_classical { "present" } else { "absent" }
+        )));
+    }
+    Ok(if has_classical {
+        (trailer[..SIG_LEN].to_vec(), trailer[SIG_LEN..].to_vec())
+    } else {
+        (Vec::new(), trailer.to_vec())
+    })
+}
+
+/// Build and sign a PqConAck; encapsulates the KEM key from `req_kem_ek`.
+/// Parameters for a PQ CONACK.
+///
+/// DORMANT(#1147): see [`PqConReqParams`].
+pub struct PqConAckParams<'a> {
+    /// Responder callsign (cap 12).
+    pub station_id: &'a str,
+    /// The initiator this answers; never a wildcard.
+    pub dst_station: &'a str,
+    /// ML-DSA-44 signing seed.
+    pub pq_signing_key: &'a [u8],
+    /// The initiator's ML-KEM encapsulation key, from its CONREQ.
+    pub req_kem_ek: &'a [u8],
+    /// Mode chosen from those the CONREQ offered.
+    pub selected_mode: SigningMode,
+    /// SHA-256 over the complete transmitted PQ CONREQ.
+    pub conreq_hash: [u8; 32],
+    /// Unix-ms creation time; mandatory.
+    pub timestamp_ms: u64,
+}
+
+/// Build and sign a PQ CONACK, returning `(frame_bytes, shared_secret)`.
 pub fn create_pq_conack(
-    station_id: &str,
+    params: &PqConAckParams<'_>,
     classical_seed: &[u8; 32],
-    pq_signing_key: &[u8],
-    req_kem_ek: &[u8],
-    selected_mode: SigningMode,
-    session_id: &str,
-) -> Result<(PqConAck, Vec<u8>), PqHandshakeError> {
+) -> Result<(Vec<u8>, Vec<u8>), PqHandshakeError> {
+    if params.dst_station.is_empty() || params.dst_station == "*" {
+        return Err(PqHandshakeError::SerializationError(
+            "PQ CONACK dst_station must be a specific callsign".into(),
+        ));
+    }
     let ed_sk = EdSigningKey::from_bytes(classical_seed);
     let classical_pubkey = ed_sk.verifying_key().to_bytes().to_vec();
 
-    let seed_arr: [u8; 32] = pq_signing_key
+    let seed_arr: [u8; 32] = params
+        .pq_signing_key
         .try_into()
         .map_err(|_| PqHandshakeError::InvalidPublicKey)?;
     let mldsa_sk = MlDsaSigningKey::<MlDsa44>::from_seed(&ml_dsa::Seed::from(seed_arr));
-    let pq_pubkey_encoded = mldsa_sk.verifying_key().encode();
-    let pq_pubkey: Vec<u8> = pq_pubkey_encoded.to_vec();
+    let pq_pubkey: Vec<u8> = mldsa_sk.verifying_key().encode().to_vec();
 
-    // KEM encapsulation
-    let ek_arr = Key::<EncapsulationKey<MlKem768>>::try_from(req_kem_ek)
+    let ek_arr = Key::<EncapsulationKey<MlKem768>>::try_from(params.req_kem_ek)
         .map_err(|_| PqHandshakeError::InvalidPublicKey)?;
     let ek = EncapsulationKey::<MlKem768>::new(&ek_arr)
         .map_err(|_| PqHandshakeError::InvalidPublicKey)?;
@@ -303,37 +459,66 @@ pub fn create_pq_conack(
     let kem_ciphertext: Vec<u8> = ct.to_vec();
     let shared_secret: Vec<u8> = ss.to_vec();
 
-    let body = PqConAckBody {
-        station_id: station_id.to_string(),
-        classical_pubkey: classical_pubkey.clone(),
-        pq_pubkey: pq_pubkey.clone(),
-        kem_ciphertext: kem_ciphertext.clone(),
-        selected_mode,
-        session_id: session_id.to_string(),
+    let has_classical = params.selected_mode != SigningMode::Pq;
+    let mut w = BodyWriter::new();
+    let e = |x: Result<(), ModemError>| {
+        x.map_err(|e| PqHandshakeError::SerializationError(e.to_string()))
     };
-    let canonical = serde_json::to_vec(&body)
+    e(w.str_capped("station_id", params.station_id, caps::STATION_ID))?;
+    e(w.str_capped("dst_station", params.dst_station, caps::STATION_ID))?;
+    e(w.fixed("classical_pubkey", &classical_pubkey, PUBKEY_LEN))?;
+    e(w.fixed("pq_pubkey", &pq_pubkey, ML_DSA_44_PUBKEY_SIZE))?;
+    e(w.fixed("kem_ciphertext", &kem_ciphertext, ML_KEM_768_CT_SIZE))?;
+    w.u8(params.selected_mode.to_wire());
+    e(w.fixed("conreq_hash", &params.conreq_hash, CONREQ_HASH_LEN))?;
+    w.u64(params.timestamp_ms);
+    w.u8(u8::from(has_classical));
+
+    let prefix = signed_prefix_with_magic(MAGIC_PQ_CONACK, &w.finish())
         .map_err(|e| PqHandshakeError::SerializationError(e.to_string()))?;
+    let pq_signature = ml_dsa_sign(params.pq_signing_key, &prefix)?;
+    let mut frame = prefix.clone();
+    if has_classical {
+        frame.extend_from_slice(&ed25519_sign(classical_seed, &prefix));
+    }
+    frame.extend_from_slice(&pq_signature);
+    Ok((frame, shared_secret))
+}
 
-    let pq_signature = ml_dsa_sign(pq_signing_key, &canonical)?;
-    let classical_signature = if selected_mode == SigningMode::Pq {
-        vec![]
-    } else {
-        ed25519_sign(classical_seed, &canonical)
-    };
+/// Parse a PQ CONACK frame. Does **not** verify signatures — see [`verify_pq_conack`].
+pub fn decode_pq_conack(bytes: &[u8]) -> Result<PqConAck, PqHandshakeError> {
+    let (spans, trailer) = split_frame_variable(bytes, MAGIC_PQ_CONACK, "PQ CONACK")
+        .map_err(|e| PqHandshakeError::SerializationError(e.to_string()))?;
+    let mut r = BodyReader::new(spans.body);
+    let station_id = rd(r.str_capped("station_id", caps::STATION_ID))?;
+    let dst_station = rd(r.str_capped("dst_station", caps::STATION_ID))?;
+    let classical_pubkey = rd(r.fixed("classical_pubkey", PUBKEY_LEN))?;
+    let pq_pubkey = rd(r.fixed("pq_pubkey", ML_DSA_44_PUBKEY_SIZE))?;
+    let kem_ciphertext = rd(r.fixed("kem_ciphertext", ML_KEM_768_CT_SIZE))?;
+    let mode_byte = rd(r.u8("selected_mode"))?;
+    let selected_mode = SigningMode::from_wire(mode_byte).ok_or_else(|| {
+        PqHandshakeError::SerializationError(format!("unknown signing mode {mode_byte:#04x}"))
+    })?;
+    let hash_vec = rd(r.fixed("conreq_hash", CONREQ_HASH_LEN))?;
+    let timestamp_ms = rd(r.u64("timestamp_ms"))?;
+    let has_classical = rd(r.u8("has_classical_sig"))? != 0;
+    rd(r.finish("PQ CONACK"))?;
 
-    Ok((
-        PqConAck {
-            station_id: station_id.to_string(),
-            classical_pubkey,
-            pq_pubkey,
-            kem_ciphertext,
-            selected_mode,
-            session_id: session_id.to_string(),
-            classical_signature,
-            pq_signature,
-        },
-        shared_secret,
-    ))
+    let (classical_signature, pq_signature) = split_pq_trailer(trailer, has_classical)?;
+    let mut conreq_hash = [0u8; CONREQ_HASH_LEN];
+    conreq_hash.copy_from_slice(&hash_vec);
+    Ok(PqConAck {
+        station_id,
+        dst_station,
+        conreq_hash,
+        timestamp_ms,
+        classical_pubkey,
+        pq_pubkey,
+        kem_ciphertext,
+        selected_mode,
+        classical_signature,
+        pq_signature,
+    })
 }
 
 /// Decapsulate the ML-KEM-768 ciphertext from `PqConAck` to recover the shared secret.
@@ -352,47 +537,42 @@ pub fn kem_decapsulate(dk: &[u8], ct: &[u8]) -> Result<Vec<u8>, PqHandshakeError
 // Verification
 // ------------------------------------------------------------------
 
-fn canonical_req_bytes(req: &PqConReq) -> Result<Vec<u8>, PqHandshakeError> {
-    let body = PqConReqBody {
-        station_id: req.station_id.clone(),
-        classical_pubkey: req.classical_pubkey.clone(),
-        pq_pubkey: req.pq_pubkey.clone(),
-        kem_pubkey: req.kem_pubkey.clone(),
-        signing_modes: req.signing_modes.clone(),
-        session_id: req.session_id.clone(),
-    };
-    serde_json::to_vec(&body).map_err(|e| PqHandshakeError::SerializationError(e.to_string()))
-}
-
-fn canonical_ack_bytes(ack: &PqConAck) -> Result<Vec<u8>, PqHandshakeError> {
-    let body = PqConAckBody {
-        station_id: ack.station_id.clone(),
-        classical_pubkey: ack.classical_pubkey.clone(),
-        pq_pubkey: ack.pq_pubkey.clone(),
-        kem_ciphertext: ack.kem_ciphertext.clone(),
-        selected_mode: ack.selected_mode,
-        session_id: ack.session_id.clone(),
-    };
-    serde_json::to_vec(&body).map_err(|e| PqHandshakeError::SerializationError(e.to_string()))
-}
-
 /// Verify a received PqConReq and evaluate trust.
+/// Verify a PQ CONREQ.
+///
+/// DORMANT(#1147): the PQ path has **zero production callers** — nothing constructs or dispatches a
+/// PQ frame yet, which is why #1147 scopes PQ into the format break (so wiring it later is not a
+/// second wire break). It was previously counted reachable only because `handshake.rs` mentioned it
+/// in a doc comment; the reachability scan treats a prose mention as a reference, and rewriting that
+/// comment exposed the truth. Its sibling `verify_pq_conack` has been in the baseline all along.
 pub fn verify_pq_conreq(
-    req: &PqConReq,
+    bytes: &[u8],
     trust_store: &dyn TrustStore,
     policy: PolicyProfile,
     local_min_mode: SigningMode,
-) -> Result<HandshakeDecision, PqHandshakeError> {
-    let canonical = canonical_req_bytes(req)?;
+    freshness: Option<Freshness>,
+) -> Result<(PqConReq, HandshakeDecision), PqHandshakeError> {
+    // Verified from the transmitted bytes, exactly as the classical path is.
+    let (spans, _trailer) = split_frame_variable(bytes, MAGIC_PQ_CONREQ, "PQ CONREQ")
+        .map_err(|e| PqHandshakeError::SerializationError(e.to_string()))?;
+    let req = decode_pq_conreq(bytes)?;
+    let canonical = spans.signed_prefix;
 
     // ML-DSA-44 signature always required
-    ml_dsa_verify(&req.pq_pubkey, &canonical, &req.pq_signature)?;
+    ml_dsa_verify(&req.pq_pubkey, canonical, &req.pq_signature)?;
 
     // Ed25519 signature required unless Pq-only
     if !is_pq_only(&req.signing_modes)
-        && !ed25519_verify(&req.classical_pubkey, &canonical, &req.classical_signature)
+        && !ed25519_verify(&req.classical_pubkey, canonical, &req.classical_signature)
     {
         return Err(PqHandshakeError::InvalidSignature);
+    }
+
+    // Replay freshness — the PQ bodies had NO timestamp before #1147, so this check had nothing to
+    // run on and the PQ path carried none of the protection the classical path gained in #615.
+    if let Some(f) = freshness {
+        f.check(req.timestamp_ms)
+            .map_err(|e| PqHandshakeError::SerializationError(e.to_string()))?;
     }
 
     // Bind the in-frame classical key to the stored trusted key, if any.
@@ -422,22 +602,39 @@ pub fn verify_pq_conreq(
         cert_source,
         false,
     )?;
-    Ok(decision)
+    Ok((req, decision))
 }
 
 /// Verify a received PqConAck, checking session_id, mode, pubkey binding, and signatures.
 pub fn verify_pq_conack(
-    ack: &PqConAck,
-    req_session_id: &str,
+    bytes: &[u8],
+    conreq_bytes: &[u8],
     req_signing_modes: &[SigningMode],
     trust_store: &dyn TrustStore,
     policy: PolicyProfile,
     local_min_mode: SigningMode,
-) -> Result<HandshakeDecision, PqHandshakeError> {
-    if ack.session_id != req_session_id {
+    freshness: Option<Freshness>,
+) -> Result<(PqConAck, HandshakeDecision), PqHandshakeError> {
+    let (spans, _trailer) = split_frame_variable(bytes, MAGIC_PQ_CONACK, "PQ CONACK")
+        .map_err(|e| PqHandshakeError::SerializationError(e.to_string()))?;
+    let ack = decode_pq_conack(bytes)?;
+
+    // Transcript binding, as on the classical path: a hash over the whole transmitted CONREQ rather
+    // than an echoed session id.
+    let expected = crate::handshake::conreq_hash(conreq_bytes);
+    if ack.conreq_hash != expected {
         return Err(PqHandshakeError::SessionIdMismatch {
-            expected: req_session_id.to_string(),
-            got: ack.session_id.clone(),
+            expected: expected
+                .iter()
+                .take(8)
+                .map(|b| format!("{b:02x}"))
+                .collect(),
+            got: ack
+                .conreq_hash
+                .iter()
+                .take(8)
+                .map(|b| format!("{b:02x}"))
+                .collect(),
         });
     }
 
@@ -445,14 +642,19 @@ pub fn verify_pq_conack(
         return Err(PqHandshakeError::UnauthorizedMode);
     }
 
-    let canonical = canonical_ack_bytes(ack)?;
+    let canonical = spans.signed_prefix;
 
-    ml_dsa_verify(&ack.pq_pubkey, &canonical, &ack.pq_signature)?;
+    ml_dsa_verify(&ack.pq_pubkey, canonical, &ack.pq_signature)?;
 
     if ack.selected_mode != SigningMode::Pq
-        && !ed25519_verify(&ack.classical_pubkey, &canonical, &ack.classical_signature)
+        && !ed25519_verify(&ack.classical_pubkey, canonical, &ack.classical_signature)
     {
         return Err(PqHandshakeError::InvalidSignature);
+    }
+
+    if let Some(f) = freshness {
+        f.check(ack.timestamp_ms)
+            .map_err(|e| PqHandshakeError::SerializationError(e.to_string()))?;
     }
 
     // Bind the in-frame classical key to the stored trusted key, if any.
@@ -477,32 +679,12 @@ pub fn verify_pq_conack(
         cert_source,
         false,
     )?;
-    Ok(decision)
+    Ok((ack, decision))
 }
 
 // ------------------------------------------------------------------
 // SAR serialization helpers
 // ------------------------------------------------------------------
-
-/// Serialize PqConReq to bytes for SAR transport.
-pub fn encode_pq_conreq(req: &PqConReq) -> Result<Vec<u8>, PqHandshakeError> {
-    serde_json::to_vec(req).map_err(|e| PqHandshakeError::SerializationError(e.to_string()))
-}
-
-/// Deserialize PqConReq from bytes after SAR reassembly.
-pub fn decode_pq_conreq(bytes: &[u8]) -> Result<PqConReq, PqHandshakeError> {
-    serde_json::from_slice(bytes).map_err(|e| PqHandshakeError::SerializationError(e.to_string()))
-}
-
-/// Serialize PqConAck to bytes for SAR transport.
-pub fn encode_pq_conack(ack: &PqConAck) -> Result<Vec<u8>, PqHandshakeError> {
-    serde_json::to_vec(ack).map_err(|e| PqHandshakeError::SerializationError(e.to_string()))
-}
-
-/// Deserialize PqConAck from bytes after SAR reassembly.
-pub fn decode_pq_conack(bytes: &[u8]) -> Result<PqConAck, PqHandshakeError> {
-    serde_json::from_slice(bytes).map_err(|e| PqHandshakeError::SerializationError(e.to_string()))
-}
 
 #[cfg(test)]
 mod decode_error_tests {

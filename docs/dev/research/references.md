@@ -370,7 +370,20 @@ public keys + app data + random blob + Ed25519 signature); **encrypted-and-verif
 establishment = 3 packets, 297 B total** (83 B request carrying an ephemeral X25519 key, 115 B
 proof carrying the identity signature over `(link_id, LKr)`); link keepalive 20 B ≈ 0.45 bps.
 
-**Our numbers (measured 2026-08-10 at HEAD, scratch harness against `openpulse-core`):**
+**Our numbers (measured 2026-08-10 at HEAD, scratch harness against `openpulse-core`).**
+
+> **SUPERSEDED for the classical frames 2026-08-23 by #1147 — kept because they are the MOTIVATION,
+> not an error.** The JSON handshake below is gone: a v2 CONREQ is **241 B** and a CONACK **244 B**,
+> both inside one 251 B SAR fragment, so a handshake is one acquisition rather than three.
+> The estimate in the very next paragraph — "~200–250 B a binary layout of the same fields would
+> need" — was **right**: the built layout is 241 B, inside the predicted range. The 3.4× JSON
+> inflation identified here was the whole defect, and removing it recovered what this analysis said
+> it would.
+>
+> The **PQ** figures below are NOT superseded in substance. A binary PQ CONREQ is ~5 kB ≈ 2.7 min at
+> BPSK250 — better than 17 939 B but still undeployable, exactly as this section concluded. PQ is in
+> the v2 format so the format is finished, not because it became usable.
+
 
 - **CONREQ 710 B / CONACK 718 B** (production `create_full` arguments) — the handshake encodes as
   serde JSON with every `Vec<u8>` field (pubkey, kex key, signature) as a *number array*, ~3.4×

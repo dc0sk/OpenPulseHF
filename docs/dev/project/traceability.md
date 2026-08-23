@@ -9,6 +9,88 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-08-23 — #1147: the handshake is binary, and fits one fragment
+
+- **Change:** CONREQ/CONACK — classical **and** PQ — re-laid as a binary format in the decided
+  pre-1.0 wire-format break window. Version `0x02`; `0x01` rejected outright, with no dual decode.
+- **Why, precisely:** not seconds — **fragments**. A v1 CONREQ was 710 B of payload = 752 B on the
+  wire = **3 SAR fragments**: three preambles, three acquisitions, decoding at ~p³ on a fading
+  channel against a recorded background where uncoded slow rungs decode ~0 on `moderate_f1`. A v2
+  CONREQ is **241 B ≤ 251 B = one fragment**, so one acquisition, p. Airtime is the smaller half
+  (24 s → 8 s at BPSK250). The bytes went into `pubkey`/`kex_pubkey`/`signature`, which inflate
+  ~3.4x as JSON number arrays.
+- **What gets signed — the transmitted prefix** `magic || version || length || body`. The signed
+  message is exactly the bytes on the air minus the trailing signature, so verification is "check
+  what you received" and cannot drift from the encoder. v1 signed `serde_json::to_vec` in serde
+  DECLARATION ORDER while the wire spec, `features.md` and the book all said "keys sorted
+  recursively" — **canonical was a label, not a property**, and it went unchallenged for years
+  because determinism (which did hold) was all the security argument needed.
+- **No domain-separation tags, and the reason is concrete.** The natural tags (`OPHF-CONREQ-v2`)
+  begin with `OPHF`, the magic of `WireEnvelope`, which the SAME station key already signs — so
+  those contexts would be separated only by whichever byte differs first, which is what tags exist
+  to prevent. Signing the transmitted prefix separates by the magic itself and additionally binds
+  the VERSION, which v1 did not bind at all.
+- **Caps make "one fragment" a property of the MAXIMAL legal frame**, not of an example: a
+  `u8`-prefixed string would otherwise admit a legal 300 B CONREQ. Enforced at BOTH ends, so a
+  station cannot emit a frame its peer must reject — the failure surfaces at the sender.
+- **A consequence found by doing the arithmetic rather than assuming it:** a CONACK that also echoes
+  `session_id` is 269 B worst-case and does NOT fit. So the CONACK carries no `session_id`;
+  `conreq_hash` (SHA-256 over the complete transmitted CONREQ, signature included) subsumes the echo
+  and binds harder — the daemon's own comment concedes the session id is "cleartext and time-based
+  (guessable within the handshake window)".
+- **Field changes:** `supported_compression`/`supported_fec_modes` DELETED (#1166 — nothing consumed
+  the selection; the daemon sent them empty and hardcoded None/None, so the field was a capability
+  claim the station could not back). `dst_station` ADDED (#1178 — a CONREQ had no destination, so
+  every daemon in range answered and spent RF before the initiator filtered; empty is invalid at both
+  ends so "unaddressed" cannot be spelled by omission). `timestamp_ms` mandatory — the 0-sentinel
+  existed only to keep v1 signatures byte-identical to pre-#615 frames.
+- **F-1147-05 fixed:** `verify_conack` now checks `selected_mode` against the modes the CONREQ
+  OFFERED. v1 evaluated it against local policy only; the PQ path already checked this and the spec
+  claimed the classical path did.
+- **PQ:** magics `HPCQ`/`HPAK` (they had NONE, and the daemon routes by magic sniff, so a PQ frame
+  would have been silently dropped), mandatory `timestamp_ms` (the PQ bodies had no timestamp at
+  all, so **no replay freshness existed on that path**), `dst_station`, `conreq_hash`. The
+  classical-signature presence flag lives INSIDE the signed body: the trailing region is 0-or-64
+  plus 2420, so outside the signed span one flipped bit would change how many bytes a verifier reads
+  as the classical signature — and that bit would itself be unsigned. The decoder cross-checks the
+  trailer length against the signed flag.
+- **Recorded, not implied away:** a PQ CONREQ is ~5 kB ≈ 2.7 min at BPSK250 and is **not
+  deployable**. `pq_conreq_is_multi_fragment_and_that_is_expected` asserts it SPANS fragments, with
+  a message saying that if it ever becomes one the design's airtime claim is stale. Scoping PQ in
+  buys a FINISHED FORMAT — wiring PQ later is not a second wire break — not a feature.
+- **Tests:** every v1 tamper test mutated STRUCT FIELDS and re-verified, which is vacuous here
+  because re-encoding recomputes the span under test. All are now BYTE tamper. Two premises were
+  INVERTED and flipped rather than deleted: `frags.len() > 1` ("a CONREQ exceeds one modem frame")
+  became `== 1`, and the "full 255-byte fragment" assertion became a sub-maximal single fragment.
+  `empty_grid_conreq_is_byte_identical_to_legacy` was DELETED, not ported — it asserted the v1
+  signature compatibility this break gives up.
+- **12 tests deleted with their reason named in-file**, because the property they asserted
+  DISSOLVES with the deleted fields rather than becoming untested: a responder cannot select an
+  algorithm, Zstd dict id, or FEC mode the initiator never offered. Both files record that if
+  negotiation is ever wired for real, the membership check must return with it.
+- **The #1178 gate goes through the TX path** (`a_conreq_addressed_elsewhere_does_not_key_the_transmitter`),
+  asserting on the engine's transmit counter rather than on `is_addressed_to`, because the defect is
+  SPENT RF — a filter-function check passes even if the daemon keys up anyway. It carries its own
+  positive control.
+- **Test results (run):** `openpulse-core` 339/339 lib, 16/16 handshake_integration, 16/16
+  pq_handshake_integration, 9/9 compression_integration; `openpulse-daemon` 129/129.
+  `GATE: PASS a97d76ea` at the pre-PQ checkpoint (315 suites, 2385 passed, 0 failed).
+- **What the gate caught that the tests could not:** the first run was `GATE: FAIL` on a commit where
+  all 2385 tests passed. Rewriting `handshake_integration.rs` wholesale preserved every assertion but
+  DELETED the `// VERIFIES:` markers for REQ-FUN-10 and REQ-FUN-12, so two enforced requirements
+  silently lost their only binding — coverage real, but unprovable.
+- **A finding about the reachability scanner**, worth knowing beyond this change: `verify_pq_conreq`
+  was never production-reachable. It counted as referenced only because `handshake.rs` carried the
+  phrase "mirrors `verify_pq_conreq`" in a doc comment — **the scan treats a prose mention as a
+  reference** — so an item can look reachable because someone described it, and stop looking
+  reachable when the description is reworded.
+- **Doc sweep:** `protocol-wire-spec.md` §3/§4 (the JSON layouts, the false "keys sorted recursively",
+  the "~530 B" figure), `docs/features.md`, `docs/openpulse-book.md` (which had correctly identified
+  the sorted-keys claim as false and is now rewritten for v2), `docs/dev/design/architecture.md`,
+  `references.md` (marked SUPERSEDED, not deleted — it is the motivation, and its "~200–250 B a
+  binary layout would need" estimate proved right at 241 B), the acceptance table, CLAUDE.md's
+  Phase 2.3 entry, and the stale "~500 B" comment in the daemon.
+
 ## 2026-08-22 — fix(modem): the notch never saw its interferer; REQ-QRM-01's gate re-derived
 
 - **Change:** `receive_with_timeout_fec_inner` now records `rx_mode`. It read the audio stream

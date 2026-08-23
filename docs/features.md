@@ -441,16 +441,28 @@ requires an SNR of approximately 20–25 dB for reliable operation.
 
 ### Ed25519 handshake
 
-The HPX session handshake uses two signed wire frames:
+The HPX session handshake uses two signed **binary** wire frames (v2, #1147):
 
-- **CONREQ** (`HSCQ` magic): Initiator sends its Ed25519 public key, supported signing
-  modes, session ID, and a timestamp.  The signature covers the canonical JSON of all
-  body fields.
-- **CONACK** (`HSAK` magic): Responder echoes the session ID, selects a signing mode,
-  and signs its own canonical JSON body.
+- **CONREQ** (`HSCQ` magic): initiator sends its Ed25519 public key, an ephemeral X25519
+  key, the modes it offers, a session ID, the station it is addressing, and a mandatory
+  timestamp.
+- **CONACK** (`HSAK` magic): responder selects a signing mode from those offered and binds
+  its reply to the CONREQ by SHA-256 over the complete transmitted request.
 
-The signature covers a deterministic canonical JSON serialisation (keys sorted
-recursively) to prevent malleability attacks.
+**The signature covers the transmitted prefix** — `magic || version || length || body`,
+i.e. exactly the bytes on the air minus the trailing signature. There is no separate
+"canonical" representation to disagree with the wire, which is what makes malleability a
+non-question rather than something to defend against.
+
+Both frames fit **one SAR fragment** by construction (maximal CONREQ 241 B, CONACK 244 B,
+against 251 B) — a handshake costs one acquisition instead of the three the previous
+~752 B JSON format needed.
+
+> **Corrected 2026-08-23.** This section previously said the signature covered "a
+> deterministic canonical JSON serialisation (keys sorted recursively)". The keys were
+> never sorted — the code emitted fields in serde declaration order. Determinism was the
+> property the security argument actually needed, and it held, which is why the wrong
+> claim went unchallenged for so long.
 
 ### Trust levels
 
