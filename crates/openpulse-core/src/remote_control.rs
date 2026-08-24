@@ -7,7 +7,7 @@
 
 use std::collections::HashMap;
 
-use ed25519_dalek::{Signature, Signer, SigningKey, Verifier, VerifyingKey};
+use ed25519_dalek::{SigningKey, VerifyingKey};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
@@ -144,12 +144,17 @@ pub fn create_rig_ctrl_cmd(
     let body_json =
         serde_json::to_vec(&body).map_err(|e| RemoteControlError::Encoding(e.to_string()))?;
     let signing_key = SigningKey::from_bytes(signing_key_seed);
-    let sig: Signature = signing_key.sign(&body_json);
+    let sig = crate::signing::sign_in_domain(
+        crate::signing_domain::SigningDomain::RigCtrlCmd,
+        signing_key_seed,
+        &body_json,
+    )
+    .map_err(|e| RemoteControlError::Encoding(e.to_string()))?;
     let sender_pubkey = signing_key.verifying_key().to_bytes();
     Ok(RigCtrlCmd {
         body,
         sender_pubkey,
-        signature: sig.to_bytes(),
+        signature: sig,
     })
 }
 
@@ -202,11 +207,16 @@ impl RemoteControlHandler {
         // 1 — Verify Ed25519 signature.
         let body_json = serde_json::to_vec(&cmd.body)
             .map_err(|e| RemoteControlError::Encoding(e.to_string()))?;
-        let vk = VerifyingKey::from_bytes(&cmd.sender_pubkey)
+        VerifyingKey::from_bytes(&cmd.sender_pubkey)
             .map_err(|_| RemoteControlError::InvalidSignature)?;
-        let sig = Signature::from_bytes(&cmd.signature);
-        vk.verify(&body_json, &sig)
-            .map_err(|_| RemoteControlError::InvalidSignature)?;
+        if !crate::signing::verify_in_domain(
+            crate::signing_domain::SigningDomain::RigCtrlCmd,
+            &cmd.sender_pubkey,
+            &body_json,
+            &cmd.signature,
+        ) {
+            return Err(RemoteControlError::InvalidSignature);
+        }
 
         // 2 — Sender must be in the trust store.
         let sender_id = &cmd.body.sender_id;

@@ -1,4 +1,4 @@
-use ed25519_dalek::{Signature, Signer, SigningKey, Verifier, VerifyingKey};
+use ed25519_dalek::{SigningKey, VerifyingKey};
 use serde::{Deserialize, Serialize};
 
 use crate::handshake::sha256_bytes;
@@ -67,14 +67,19 @@ impl PeerDescriptor {
         };
         let canonical =
             serde_json::to_vec(&body).map_err(|e| PeerDescriptorError::Encoding(e.to_string()))?;
-        let sig: Signature = signing_key.sign(&canonical);
+        let sig = crate::signing::sign_in_domain(
+            crate::signing_domain::SigningDomain::PeerDescriptor,
+            signing_key_seed,
+            &canonical,
+        )
+        .map_err(|e| PeerDescriptorError::Encoding(e.to_string()))?;
 
         Ok(Self {
             peer_id,
             callsign: callsign.to_string(),
             capability_mask,
             timestamp_ms,
-            signature: sig.to_bytes().to_vec(),
+            signature: sig.to_vec(),
         })
     }
 
@@ -98,17 +103,24 @@ impl PeerDescriptor {
 ///
 /// Returns `Ok(())` if the signature is valid.
 pub fn verify_peer_descriptor(desc: &PeerDescriptor) -> Result<(), PeerDescriptorError> {
-    let key = VerifyingKey::from_bytes(&desc.peer_id)
+    VerifyingKey::from_bytes(&desc.peer_id)
         .map_err(|e| PeerDescriptorError::InvalidKey(e.to_string()))?;
 
     let Ok(sig_arr): Result<[u8; 64], _> = desc.signature.as_slice().try_into() else {
         return Err(PeerDescriptorError::InvalidSignature);
     };
-    let sig = Signature::from_bytes(&sig_arr);
 
     let canonical = desc.canonical_bytes()?;
-    key.verify(&canonical, &sig)
-        .map_err(|_| PeerDescriptorError::InvalidSignature)
+    if crate::signing::verify_in_domain(
+        crate::signing_domain::SigningDomain::PeerDescriptor,
+        &desc.peer_id,
+        &canonical,
+        &sig_arr,
+    ) {
+        Ok(())
+    } else {
+        Err(PeerDescriptorError::InvalidSignature)
+    }
 }
 
 #[cfg(test)]

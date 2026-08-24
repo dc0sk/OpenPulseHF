@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use ed25519_dalek::{Signature, Signer, SigningKey, Verifier, VerifyingKey};
+use ed25519_dalek::SigningKey;
 use sha2::{Digest, Sha256};
 
 use crate::error::ModemError;
@@ -8,6 +8,7 @@ use crate::handshake_wire::{
     caps, signed_prefix, split_frame, BodyReader, BodyWriter, CONREQ_HASH_LEN, KEX_PUBKEY_LEN,
     MAGIC_CONACK, MAGIC_CONREQ, PUBKEY_LEN,
 };
+use crate::signing_domain::SigningDomain;
 use crate::trust::{
     evaluate_handshake, CertificateSource, HandshakeDecision, PolicyProfile, PublicKeyTrustLevel,
     SigningMode, TrustError,
@@ -257,9 +258,10 @@ impl ConReq {
         w.u64(params.timestamp_ms);
 
         let prefix = signed_prefix(MAGIC_CONREQ, &w.finish())?;
-        let sig: Signature = signing_key.sign(&prefix);
+        let sig = crate::signing::sign_in_band(SigningDomain::ConReq, signing_key_seed, &prefix)
+            .map_err(|e| ModemError::Frame(e.to_string()))?;
         let mut frame = prefix;
-        frame.extend_from_slice(&sig.to_bytes());
+        frame.extend_from_slice(&sig);
         Ok(frame)
     }
 
@@ -427,9 +429,10 @@ impl ConAck {
         w.u64(params.timestamp_ms);
 
         let prefix = signed_prefix(MAGIC_CONACK, &w.finish())?;
-        let sig: Signature = signing_key.sign(&prefix);
+        let sig = crate::signing::sign_in_band(SigningDomain::ConAck, signing_key_seed, &prefix)
+            .map_err(|e| ModemError::Frame(e.to_string()))?;
         let mut frame = prefix;
-        frame.extend_from_slice(&sig.to_bytes());
+        frame.extend_from_slice(&sig);
         Ok(frame)
     }
 
@@ -490,7 +493,12 @@ pub fn verify_conreq(
         .map_err(|e| HandshakeError::Encoding(e.to_string()))?;
     let req = ConReq::decode(bytes).map_err(|e| HandshakeError::Encoding(e.to_string()))?;
 
-    if !verify_ed25519(&req.pubkey, spans.signed_prefix, spans.signature) {
+    if !verify_ed25519(
+        SigningDomain::ConReq,
+        &req.pubkey,
+        spans.signed_prefix,
+        spans.signature,
+    ) {
         return Err(HandshakeError::InvalidSignature);
     }
 
@@ -544,7 +552,12 @@ pub fn verify_conack(
         .map_err(|e| HandshakeError::Encoding(e.to_string()))?;
     let ack = ConAck::decode(bytes).map_err(|e| HandshakeError::Encoding(e.to_string()))?;
 
-    if !verify_ed25519(&ack.pubkey, spans.signed_prefix, spans.signature) {
+    if !verify_ed25519(
+        SigningDomain::ConAck,
+        &ack.pubkey,
+        spans.signed_prefix,
+        spans.signature,
+    ) {
         return Err(HandshakeError::InvalidSignature);
     }
 
@@ -587,18 +600,19 @@ pub fn verify_conack(
     Ok((ack, decision))
 }
 
-fn verify_ed25519(pubkey_bytes: &[u8], message: &[u8], sig_bytes: &[u8]) -> bool {
+fn verify_ed25519(
+    domain: SigningDomain,
+    pubkey_bytes: &[u8],
+    message: &[u8],
+    sig_bytes: &[u8],
+) -> bool {
     let Ok(pubkey_arr): Result<[u8; 32], _> = pubkey_bytes.try_into() else {
         return false;
     };
     let Ok(sig_arr): Result<[u8; 64], _> = sig_bytes.try_into() else {
         return false;
     };
-    let Ok(key) = VerifyingKey::from_bytes(&pubkey_arr) else {
-        return false;
-    };
-    let sig = Signature::from_bytes(&sig_arr);
-    key.verify(message, &sig).is_ok()
+    crate::signing::verify_in_band(domain, &pubkey_arr, message, &sig_arr)
 }
 fn cert_source_for_trust(trust_level: PublicKeyTrustLevel) -> CertificateSource {
     match trust_level {

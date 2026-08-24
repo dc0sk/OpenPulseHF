@@ -1,8 +1,9 @@
 //! `FileOffer`: transfer metadata with the sender's signed manifest embedded inline, plus the pure
 //! accept/reject policy the receiver evaluates before a single data byte is accepted.
 
-use ed25519_dalek::{Signature, Signer, SigningKey, Verifier, VerifyingKey};
+use ed25519_dalek::VerifyingKey;
 use openpulse_core::manifest::{ManifestError, TransferManifest};
+use openpulse_core::signing_domain::SigningDomain;
 
 use crate::error::FxError;
 use crate::wire::{write_string, Reader, Reason};
@@ -71,8 +72,12 @@ impl FileOffer {
             mime: mime.to_string(),
             signature: [0u8; 64],
         };
-        let sk = SigningKey::from_bytes(signing_key_seed);
-        offer.signature = sk.sign(&offer.signing_bytes()).to_bytes();
+        offer.signature = openpulse_core::signing::sign_in_domain(
+            SigningDomain::FileOffer,
+            signing_key_seed,
+            &offer.signing_bytes(),
+        )
+        .ok()?;
         Some(offer)
     }
 
@@ -86,10 +91,17 @@ impl FileOffer {
 
     /// Verify the offer signature (over the full body) against the peer's Ed25519 public key.
     pub fn verify_signature(&self, peer_pubkey: &[u8; 32]) -> Result<(), ManifestError> {
-        let key = VerifyingKey::from_bytes(peer_pubkey).map_err(|_| ManifestError::InvalidKey)?;
-        let sig = Signature::from_bytes(&self.signature);
-        key.verify(&self.signing_bytes(), &sig)
-            .map_err(|_| ManifestError::InvalidSignature)
+        VerifyingKey::from_bytes(peer_pubkey).map_err(|_| ManifestError::InvalidKey)?;
+        if openpulse_core::signing::verify_in_domain(
+            SigningDomain::FileOffer,
+            peer_pubkey,
+            &self.signing_bytes(),
+            &self.signature,
+        ) {
+            Ok(())
+        } else {
+            Err(ManifestError::InvalidSignature)
+        }
     }
 
     /// Every field except the trailing signature — the exact prefix the signature covers, reused by

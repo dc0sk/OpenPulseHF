@@ -20,7 +20,7 @@
 use std::collections::HashMap;
 use std::collections::VecDeque;
 
-use ed25519_dalek::{Signature, Signer, SigningKey, Verifier, VerifyingKey};
+use ed25519_dalek::{SigningKey, VerifyingKey};
 use thiserror::Error;
 
 use crate::wire_query::{
@@ -220,8 +220,15 @@ pub fn sign_route_response(
     signing_key: &SigningKey,
 ) -> Vec<u8> {
     let canonical = route_response_canonical(query_id, route_id, hops);
-    let sig: Signature = signing_key.sign(&canonical);
-    sig.to_bytes().to_vec()
+    crate::signing::sign_in_domain(
+        crate::signing_domain::SigningDomain::RouteResponse,
+        &signing_key.to_bytes(),
+        &canonical,
+    )
+    .map(|s| s.to_vec())
+    // A placement error is static, not runtime. An empty signature verifies as false, so a
+    // mis-registered domain surfaces as "signatures never verify" rather than as a bypass.
+    .unwrap_or_default()
 }
 
 /// Verify a response's signature against `responder_peer_id` (the responder's peer id, which *is* its
@@ -230,16 +237,22 @@ pub fn verify_route_response(
     response: &RouteDiscoveryResponse,
     responder_peer_id: &[u8; 32],
 ) -> Result<(), RouteApplyError> {
-    let key =
-        VerifyingKey::from_bytes(responder_peer_id).map_err(|_| RouteApplyError::BadSignature)?;
+    VerifyingKey::from_bytes(responder_peer_id).map_err(|_| RouteApplyError::BadSignature)?;
     let Ok(sig_arr): Result<[u8; 64], _> = response.route_signature.as_slice().try_into() else {
         return Err(RouteApplyError::BadSignature);
     };
-    let sig = Signature::from_bytes(&sig_arr);
     let canonical =
         route_response_canonical(response.route_query_id, response.route_id, &response.hops);
-    key.verify(&canonical, &sig)
-        .map_err(|_| RouteApplyError::BadSignature)
+    if crate::signing::verify_in_domain(
+        crate::signing_domain::SigningDomain::RouteResponse,
+        responder_peer_id,
+        &canonical,
+        &sig_arr,
+    ) {
+        Ok(())
+    } else {
+        Err(RouteApplyError::BadSignature)
+    }
 }
 
 /// Canonical bytes signed by a route **update**: the route id, hop counts, change reason, and every
@@ -273,8 +286,15 @@ pub fn sign_route_update(
     signing_key: &SigningKey,
 ) -> Vec<u8> {
     let canonical = route_update_canonical(route_id, previous_hop_count, route_change_reason, hops);
-    let sig: Signature = signing_key.sign(&canonical);
-    sig.to_bytes().to_vec()
+    crate::signing::sign_in_domain(
+        crate::signing_domain::SigningDomain::RouteUpdate,
+        &signing_key.to_bytes(),
+        &canonical,
+    )
+    .map(|s| s.to_vec())
+    // A placement error is static, not runtime. An empty signature verifies as false, so a
+    // mis-registered domain surfaces as "signatures never verify" rather than as a bypass.
+    .unwrap_or_default()
 }
 
 /// Verify a `RelayRouteUpdate` signature against `emitter_peer_id` (the update envelope's `src_peer_id`).
@@ -282,21 +302,27 @@ pub fn verify_route_update(
     update: &RelayRouteUpdate,
     emitter_peer_id: &[u8; 32],
 ) -> Result<(), RouteApplyError> {
-    let key =
-        VerifyingKey::from_bytes(emitter_peer_id).map_err(|_| RouteApplyError::BadSignature)?;
+    VerifyingKey::from_bytes(emitter_peer_id).map_err(|_| RouteApplyError::BadSignature)?;
     let Ok(sig_arr): Result<[u8; 64], _> = update.route_update_signature.as_slice().try_into()
     else {
         return Err(RouteApplyError::BadSignature);
     };
-    let sig = Signature::from_bytes(&sig_arr);
     let canonical = route_update_canonical(
         update.route_id,
         update.previous_hop_count,
         update.route_change_reason,
         &update.replacement_hops,
     );
-    key.verify(&canonical, &sig)
-        .map_err(|_| RouteApplyError::BadSignature)
+    if crate::signing::verify_in_domain(
+        crate::signing_domain::SigningDomain::RouteUpdate,
+        emitter_peer_id,
+        &canonical,
+        &sig_arr,
+    ) {
+        Ok(())
+    } else {
+        Err(RouteApplyError::BadSignature)
+    }
 }
 
 /// Apply a signed route **update** (0x07): verify it against `emitter_peer_id` (the update envelope's

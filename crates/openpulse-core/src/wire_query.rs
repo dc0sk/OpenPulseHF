@@ -1,4 +1,4 @@
-use ed25519_dalek::{Signature, Signer, SigningKey, VerifyingKey};
+use ed25519_dalek::VerifyingKey;
 use thiserror::Error;
 
 /// Errors produced by wire envelope and payload codec.
@@ -173,9 +173,13 @@ impl WireEnvelope {
     /// signature. The seed's verifying key must equal `src_peer_id` for the signature to verify.
     pub fn sign(&mut self, signing_key_seed: &[u8; 32]) -> Result<(), WireQueryError> {
         let msg = self.signing_bytes()?;
-        let key = SigningKey::from_bytes(signing_key_seed);
-        let sig: Signature = key.sign(&msg);
-        self.signature = Some(sig.to_bytes());
+        let sig = crate::signing::sign_in_band(
+            crate::signing_domain::SigningDomain::WireEnvelope,
+            signing_key_seed,
+            &msg,
+        )
+        .map_err(|_| WireQueryError::InvalidSignature)?;
+        self.signature = Some(sig);
         Ok(())
     }
 
@@ -183,12 +187,18 @@ impl WireEnvelope {
     /// key). Self-authenticating: no external key store is needed. An unsigned envelope fails.
     pub fn verify_origin(&self) -> Result<(), WireQueryError> {
         let sig_bytes = self.signature.ok_or(WireQueryError::InvalidSignature)?;
-        let key = VerifyingKey::from_bytes(&self.src_peer_id)
-            .map_err(|_| WireQueryError::InvalidSrcKey)?;
-        let sig = Signature::from_bytes(&sig_bytes);
+        VerifyingKey::from_bytes(&self.src_peer_id).map_err(|_| WireQueryError::InvalidSrcKey)?;
         let msg = self.signing_bytes()?;
-        key.verify_strict(&msg, &sig)
-            .map_err(|_| WireQueryError::InvalidSignature)
+        if crate::signing::verify_in_band(
+            crate::signing_domain::SigningDomain::WireEnvelope,
+            &self.src_peer_id,
+            &msg,
+            &sig_bytes,
+        ) {
+            Ok(())
+        } else {
+            Err(WireQueryError::InvalidSignature)
+        }
     }
 
     /// Deserialize from `OPHF` wire format; checks magic, msg_type, and payload length. The signature
@@ -973,6 +983,7 @@ pub fn callsign_hash(callsign: &str) -> u32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ed25519_dalek::SigningKey;
 
     fn test_envelope(msg_type: WireMsgType, payload: Vec<u8>) -> WireEnvelope {
         WireEnvelope {
