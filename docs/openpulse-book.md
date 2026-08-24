@@ -2430,10 +2430,16 @@ Three details are load-bearing:
   so the docs were wrong for a long time without anything breaking. That is exactly the shape of claim
   that survives: false, load-bearing-sounding, and never contradicted by a test. v2 removes the
   question by signing the bytes it sends.
-- **No domain-separation tags, for a concrete reason.** The natural tags (`OPHF-CONREQ-v2`) begin with
-  `OPHF` — the magic of `WireEnvelope`, which the *same station key* already signs. Those two contexts
-  would then be separated only by whichever byte differed first, which is precisely what tags exist to
-  prevent. The frame magic is already unique per type and sits inside the signed span.
+- **Domain separation by registered tag — and the handshake frames already carry theirs.** Every
+  context the station key signs is registered, and every signed message begins with that context's
+  unique four-byte tag. For these frames the tag *is* the transmitted magic, already inside the
+  signed span, so nothing is prepended and the frames are byte-identical to v2 as first shipped.
+  **This corrects an earlier claim in this book (#1193)** that v2 used "no domain-separation tags",
+  on the grounds that a tag would separate contexts "only by whichever byte differed first, which is
+  precisely what tags exist to prevent". That argument does not hold up: *all* prefix separation is
+  byte-differs-first. What a tag buys is **guaranteed** distinctness; a magic buys it only if
+  somebody inventories the full set and checks it — and nobody had. The inventory found 13 signed
+  contexts where the issue that prompted it listed 5.
 - **Nothing is optional any more.** v1 used `skip_serializing_if` on the grid, timestamp, fingerprint
   and kex-key so that a frame carrying none of them stayed byte-identical to the pre-feature wire, and
   old signatures still verified. v2 discards that compatibility deliberately — it is a wire break — so

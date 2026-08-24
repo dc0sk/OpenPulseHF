@@ -169,6 +169,7 @@ mod tests {
     /// mint a transmitted magic equal to an existing tag.
     #[test]
     fn every_tag_and_reserved_magic_is_pairwise_distinct() {
+        // VERIFIES: REQ-SEC-12
         let mut seen: HashMap<&[u8; TAG_LEN], String> = HashMap::new();
         for d in SigningDomain::ALL {
             if let Some(prev) = seen.insert(d.tag(), format!("signing domain {d:?}")) {

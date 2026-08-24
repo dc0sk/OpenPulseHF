@@ -233,10 +233,23 @@ but valid content within the session; the rate ladder is receiver-led and absolu
   **Corrected in v2** — this section previously said the signature covered "canonical JSON … with keys
   sorted recursively". That was never true of the code, which used `serde_json::to_vec` in serde
   declaration order with no sorting. "Canonical" was a label, not a property.
-- **No domain-separation tags.** The obvious ones (`OPHF-CONREQ-v2`) begin with `OPHF`, the magic of
-  `WireEnvelope`, which the *same station key* already signs — separating those contexts only by
-  whichever byte differs first, which is what tags exist to prevent. The magic is already unique per
-  frame type and is inside the signed span.
+- **Domain separation is by registered tag, and these frames carry theirs in-band.** Every context
+  the station key signs is registered in `openpulse_core::signing_domain::SigningDomain`, and every
+  signed message begins with that context's unique four-byte tag. For the handshake frames the tag
+  *is* the transmitted magic (`HSCQ`/`HSAK`/`HPCQ`/`HPAK`), which is already inside the signed span —
+  so **nothing is prepended and these frames are byte-identical to v2 as first shipped**, which the
+  known-answer vector in §3.3a confirms. Contexts whose signed bytes have no fixed start (manifests,
+  peer descriptors, route responses/updates, file offers) get `tag || version` prefixed to the
+  *signed message only*; it is never transmitted, so it costs no airtime.
+  **Corrected (#1193)** — this section previously said "no domain-separation tags", arguing that a
+  tag would separate contexts "only by whichever byte differs first, which is what tags exist to
+  prevent". That reasoning is muddled: *all* prefix separation is byte-differs-first. What a tag
+  actually provides is **guaranteed** distinctness, where a magic provides it only if the full set is
+  inventoried and checked — which nothing did. The registry is that inventory, and
+  `every_tag_and_reserved_magic_is_pairwise_distinct` is that check.
+- **The registry is enforced, not documented.** A `clippy.toml` `disallowed-methods` wall refuses raw
+  `ed25519_dalek` sign/verify outside `openpulse_core::signing`, because one unregistered signing site
+  voids separation for every context rather than only its own.
 - Verification takes **bytes**: split → check the signature over the prefix → replay-freshness →
   trust evaluation. A CONACK additionally requires `conreq_hash` to match the CONREQ that was sent,
   and `selected_mode` to be one the CONREQ **offered** — the latter is new in v2 (v1 evaluated it

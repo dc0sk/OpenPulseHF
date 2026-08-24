@@ -162,6 +162,7 @@ mod tests {
     /// signatures that do not cross-verify.
     #[test]
     fn a_signature_does_not_cross_verify_into_another_domain() {
+        // VERIFIES: REQ-SEC-12
         let seed = [0x11u8; 32];
         let pk = pubkey_of(&seed);
         let payload = b"identical bytes in both contexts";

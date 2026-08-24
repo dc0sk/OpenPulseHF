@@ -9,6 +9,69 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-08-24 — #1193: every station-key signature bound to a registered signing domain
+
+**Requirement → design → implementation → tests → results.**
+
+- **Requirement.** #1193 (from the #1147 review): nothing asserts that every context the station
+  Ed25519 key signs has a distinct prefix. It proposed a ~10-line pairwise-distinctness test.
+
+- **What is NOT true, stated first.** There is **no reachable cross-context confusion on `main`**.
+  I could not construct one and neither could review. Route response (`17+37h`) and route update
+  (`12+37h`) can never collide — `37(a−b) = −5` has no integer solution — and the JSON contexts are
+  separated by their first field name under serde's deterministic order. This change replaces
+  **accidental** distinctness with a structural guarantee. It is not a vulnerability fix, and the
+  issue's framing ("distinct by the luck of their first bytes") overstates the exposure while
+  understating the scope.
+
+- **Why the issue's own fix was rejected.** A distinctness test is a hand-maintained list, and that
+  list rotted **three times before a line was written**: the issue inventoried 5 contexts, the
+  workspace has **13**; my own re-derivation missed `SignedEnvelope`/`OPSE`; review's reserved-magic
+  list then missed `OPSP`. Three misses, three authors, one archetype. A fourth list would rot too.
+  Worse, the issue's success criterion — "a new signed frame type either picks a distinct magic or
+  fails the build" — is **unachievable by any list-based test**, since a new signer in another crate
+  is invisible to it.
+
+- **Design decision (reviewed BEFORE implementation).**
+  1. **The tag is not transmitted.** Domain separation applies to the signed message only (TLS 1.3
+     context strings, BIP-340 tagged hashes). **Zero airtime cost**, which is load-bearing: #1147's
+     whole case was that 752 B is ~23 s at BPSK250. This is a **signature-compatibility break, not a
+     format break** — frame parsing, lengths and SAR fragment budgets are unchanged.
+  2. **Contexts already transmitting a unique magic need no change.** `HSCQ`/`HSAK`/`HPCQ`/`HPAK`/
+     `OPHF` already satisfied the invariant; they were merely unregistered. Blast radius fell from
+     13 signing sites to **5**.
+  3. **A version byte follows each prepended tag**, so a later serialization change cannot leave old
+     and new messages sharing one undifferentiated domain.
+  4. **ML-DSA keeps its own primitive** and signs the same tagged message as its classical partner —
+     the domain is the frame type, not the key. FIPS 204's `ctx` was considered and rejected: two
+     mechanisms, zero added coverage.
+
+- **The choke point is the load-bearing part, not the registry.** Review's condition for approval:
+  an enum plus a test governs only the sites that volunteer for it. All signing now routes through
+  `openpulse_core::signing`, and a `clippy.toml` `disallowed-methods` wall refuses raw `ed25519`
+  sign/verify elsewhere — one unregistered site voids separation for **every** domain, not its own.
+
+- **One silent semantics change, called out.** `wire_query` used `verify_strict` where others used
+  `verify`. One choke point forces one semantics; all contexts now get the stricter, which
+  additionally rejects small-order and torsion-component keys.
+
+- **Implementation.** New `crates/openpulse-core/src/signing_domain.rs` (registry, 13 domains + 5
+  reserved magics); rewritten `signing.rs` (choke point); migrated `handshake.rs`, `pq_handshake.rs`,
+  `manifest.rs`, `peer_descriptor.rs`, `route_discovery.rs`, `remote_control.rs`, `wire_query.rs`,
+  `filexfer/offer.rs`, `qsy/frame.rs`, `freedv-auth/beacon.rs`; new `clippy.toml`.
+
+- **Tests → results (actually run).** 636 passed / 0 failed across `openpulse-core`,
+  `-filexfer`, `-qsy`, `-freedv-auth`. Workspace clippy with the wall active: `rc=0`.
+  **Sabotage-verified both directions:** colliding two tags (Manifest → `OPFO`) fails naming both
+  claimants (`rc=101`), restore confirmed by re-grepping the file rather than by exit code; the wall
+  was verified against the **19 real unmigrated sites** as positive control rather than a planted
+  probe, and it caught the trait path `signature::Signer::sign` — which is why both paths are listed.
+  **The CONREQ known-answer vector still matches byte-for-byte**, which is the evidence for design
+  point 2: a KAT passing across a signing change is correct for the in-band family and nothing else.
+  `only_the_prepended_family_changes_the_signed_bytes` pins that asymmetry.
+
+---
+
 ## 2026-08-24 — #1147 follow-up: what adversarial review found in a merged change
 
 - **Process, first, because it is the cause.** #1147 went design → implement → **merge** with **no
@@ -104,6 +167,9 @@ and the actually-observed results per change.
   those contexts would be separated only by whichever byte differs first, which is what tags exist
   to prevent. Signing the transmitted prefix separates by the magic itself and additionally binds
   the VERSION, which v1 did not bind at all.
+  > **SUPERSEDED (#1193, 2026-08-24).** The decision stands; this reasoning does not. All prefix
+  > separation is byte-differs-first — tags provide *guaranteed* distinctness, magics provide it
+  > only if the full set is inventoried, and nothing inventoried it. See the #1193 entry above.
 - **Caps make "one fragment" a property of the MAXIMAL legal frame**, not of an example: a
   `u8`-prefixed string would otherwise admit a legal 300 B CONREQ. Enforced at BOTH ends, so a
   station cannot emit a frame its peer must reject — the failure surfaces at the sender.
