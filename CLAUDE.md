@@ -315,7 +315,7 @@ Full spec in `docs/dev/design/testbench-design.md` and `docs/dev/benchmark-harne
 **2.7 — Compression (session layer)** ✅ Done
 - `crates/openpulse-core/Cargo.toml`: added `lz4_flex 0.11` (pure-Rust LZ4 implementation, no C bindings)
 - `crates/openpulse-core/src/compression.rs`: new module — `CompressionAlgorithm` enum (`None`, `Lz4`), `compress()`, `decompress()`, `compress_if_smaller()` (compress-then-compare; returns original bytes with `None` if LZ4 is not smaller)
-- `crates/openpulse-core/src/handshake.rs`: added `supported_compression: Vec<CompressionAlgorithm>` to `ConReq` and `selected_compression: CompressionAlgorithm` to `ConAck`; both fields are included in the canonical JSON covered by the Ed25519 signature, so post-signing injection is detectable
+- `crates/openpulse-core/src/handshake.rs`: added `supported_compression: Vec<CompressionAlgorithm>` to `ConReq` and `selected_compression: CompressionAlgorithm` to `ConAck`; both fields are included in the canonical JSON covered by the Ed25519 signature, so post-signing injection is detectable. **REMOVED by #1166 in the #1147 wire break** — nothing consumed the selection, so the field was a capability claim the station could not back (the same reasoning that removed Type C in PR #948)
 - Integration tests: `tests/compression_integration.rs` (9 tests)
   - Codec round-trips (`None`, `Lz4`), decompression of garbage returns error
   - `compress_if_smaller` picks Lz4 for compressible data, keeps original for incompressible

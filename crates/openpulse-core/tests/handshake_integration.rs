@@ -493,6 +493,42 @@ fn a_frame_offering_only_unknown_modes_parses_then_fails_negotiation() {
     );
 }
 
+/// F5: an empty `station_id` is refused at both ends.
+///
+/// It would otherwise verify under a permissive policy — there is no stored key to bind against —
+/// and be recorded as a verified peer with an empty callsign: an identity that cannot be revoked,
+/// looked up, or usefully logged. `dst_station` was already refused for the sibling reason.
+#[test]
+fn an_empty_station_id_is_refused_at_both_ends() {
+    let e = ConReq::create(
+        &ConReqParams {
+            station_id: "",
+            dst_station: "K2XYZ",
+            signing_modes: vec![SigningMode::Normal],
+            session_id: 1,
+            station_grid: "",
+            profile_name: "",
+            profile_fingerprint: 0,
+            timestamp_ms: TS,
+            kex_pubkey: &[5u8; 32],
+        },
+        &make_seed(1),
+    )
+    .unwrap_err()
+    .to_string();
+    assert!(
+        e.contains("station_id"),
+        "expected a station_id refusal, got: {e}"
+    );
+
+    // And a hand-built frame with an empty station_id cannot be decoded either, so the sender-side
+    // check is not the only thing standing between the wire and an unnamed verified peer.
+    let good = conreq("W1AW", "K2XYZ", 1, vec![SigningMode::Normal]);
+    let mut hand = good.clone();
+    hand[7] = 0; // the station_id length prefix, first byte of the body
+    assert!(ConReq::decode(&hand).is_err());
+}
+
 #[test]
 fn conreq_advertises_profile_and_survives_wire_roundtrip() {
     let req = conreq("W1AW", "K2XYZ", 1, vec![SigningMode::Normal]);

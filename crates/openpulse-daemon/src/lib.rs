@@ -1585,7 +1585,14 @@ fn handle_inbound_conreq(
         &runtime_state.station_seed,
     ) {
         Ok(frame) => transmit_handshake_frame(engine, mode, &frame),
-        Err(e) => tracing::warn!(error = %e, "handshake: CONACK create failed"),
+        Err(e) => {
+            // F5: do NOT fall through to `record_verified_peer`. The §97.119 guard above refuses to
+            // record a half-handshake when we cannot reply — this arm is the same situation arrived
+            // at differently, and recording here would leave us treating a peer as verified while
+            // it never received a CONACK and will never consider the session established.
+            tracing::warn!(error = %e, "handshake: CONACK create failed; not recording the peer");
+            return;
+        }
     }
 
     record_verified_peer(

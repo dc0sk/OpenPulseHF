@@ -226,6 +226,11 @@ impl ConReq {
                 "CONREQ dst_station is empty; use \"*\" for a broadcast request (#1178)".into(),
             ));
         }
+        if params.station_id.is_empty() {
+            return Err(ModemError::Frame(
+                "CONREQ station_id is empty; an unnamed station cannot be a verified peer".into(),
+            ));
+        }
         if params.signing_modes.len() > caps::SIGNING_MODES {
             return Err(ModemError::Frame(format!(
                 "CONREQ offers {} signing modes, over the {} cap",
@@ -302,6 +307,15 @@ impl ConReq {
         if dst_station.is_empty() {
             return Err(ModemError::Frame(
                 "CONREQ dst_station is empty; unaddressed cannot be spelled by omission".into(),
+            ));
+        }
+        // F5: an empty station_id verifies under a permissive policy (there is no stored key to
+        // bind against) and would then be recorded as a verified peer with an empty callsign — an
+        // identity that cannot be revoked, looked up, or logged usefully. `dst_station` was already
+        // refused for the sibling reason; this closes the pair.
+        if station_id.is_empty() {
+            return Err(ModemError::Frame(
+                "CONREQ station_id is empty; an unnamed station cannot be a verified peer".into(),
             ));
         }
         Ok(Self {

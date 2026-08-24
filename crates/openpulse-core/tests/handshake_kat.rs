@@ -121,10 +121,14 @@ fn kat_pq_conreq() -> Vec<u8> {
             station_id: "W1AW",
             dst_station: "K2XYZ",
             pq_signing_key: &[0x02u8; 32],
-            // A fixed placeholder rather than a generated key: this vector pins the ENCODER, and
-            // `create` does not validate the KEM key (only its length). A frame built this way will
-            // not pass `verify_pq_conreq`, which does validate it — that is the classical vector's
-            // job above, and conflating the two would weaken both.
+            // A fixed byte pattern rather than a generated key, so the vector is reproducible.
+            //
+            // **CORRECTED.** This comment previously claimed such a frame "will not pass
+            // `verify_pq_conreq`, which does validate it". That is FALSE, and it was written
+            // without running it: 0x33 bytes unpack to 12-bit coefficients 0x333 = 819 < q = 3329,
+            // so the FIPS 203 modulus check passes and `EncapsulationKey::new` accepts the key. The
+            // frame verifies — see `the_pq_vector_is_a_frame_that_verifies` below, which now asserts
+            // it rather than leaving the claim as prose.
             kem_ek: &[0x33u8; 1184],
             signing_modes: vec![SigningMode::Hybrid],
             session_id: 1_700_000_000_000,
@@ -147,6 +151,22 @@ fn the_pq_conreq_matches_its_known_answer_vector() {
         PQ_CONREQ_KAT_SHA256,
         "the PQ CONREQ encoder no longer produces the recorded vector"
     );
+}
+
+/// The PQ vector is a frame that VERIFIES — asserted, after the comment above claimed the opposite
+/// without being run. A KAT over a frame no receiver would accept could pin an encoder bug forever.
+#[test]
+fn the_pq_vector_is_a_frame_that_verifies() {
+    let frame = kat_pq_conreq();
+    let store = InMemoryTrustStore::new();
+    openpulse_core::pq_handshake::verify_pq_conreq(
+        &frame,
+        &store,
+        PolicyProfile::Balanced,
+        SigningMode::Normal,
+        None,
+    )
+    .expect("the PQ KAT frame must verify");
 }
 
 #[test]

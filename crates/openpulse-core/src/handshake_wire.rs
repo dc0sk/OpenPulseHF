@@ -265,10 +265,7 @@ pub fn signed_prefix_with_magic(magic: &[u8; 4], body: &[u8]) -> Result<Vec<u8>,
     Ok(out)
 }
 
-/// The three spans of a received frame.
-///
-/// DORMANT(#1147): production consumes its FIELDS (`split_frame(..)?.signed_prefix`), never the type
-/// by name, so the reachability scan does not see it referenced.
+/// The three spans of a received frame: the signed prefix, the body inside it, and the signature.
 ///: the signed prefix, the body inside it, and the signature.
 ///
 /// Named rather than returned as a bare tuple so a caller cannot silently transpose two `&[u8]`
@@ -281,7 +278,11 @@ pub struct FrameSpans<'a> {
     pub signed_prefix: &'a [u8],
     /// The body region alone.
     pub body: &'a [u8],
-    /// The trailing, unsigned Ed25519 signature.
+    /// The trailing, unsigned signature.
+    ///
+    /// **Empty on the `split_frame_variable` path**, where the trailer is not a fixed 64 bytes and
+    /// is returned separately for the caller to split against the body's presence flag. Only
+    /// `split_frame` populates it.
     pub signature: &'a [u8],
 }
 
