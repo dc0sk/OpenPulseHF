@@ -9,6 +9,80 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-08-24 — #1147 follow-up: what adversarial review found in a merged change
+
+- **Process, first, because it is the cause.** #1147 went design → implement → **merge** with **no
+  Fable review**, against a standing rule that every design decision is reviewed BEFORE implementing
+  and every conclusion BEFORE it enters docs/commits/issues. The maintainer had to point it out. The
+  lapse was invisible from inside because every *other* discipline held — gates run, sabotage
+  verified, docs swept, ledger written — and a clean gate stood in for the missing review. They
+  catch different things. The trigger was a long autonomous run: the rule is easiest to honour
+  turn-by-turn and hardest across hours of "continue", which is exactly backwards.
+- **F1 — a SILENT SECURITY DOWNGRADE shipped in `main`.** `caps::SESSION_ID` was 24 B, sized from a
+  six-character callsign, while `caps::STATION_ID` allows 12 — and the daemon built the id as
+  `"{callsign}-{unix_ms}"`. An **eleven**-character compound callsign (`3DA0/DL1ABC`, legal)
+  produced 25 B, `ConReq::create` failed, and the daemon logged a warning and **carried on**: the
+  QSO proceeded with no signed handshake and never upgraded to verified. It failed **open**, with
+  no `CommandError` and nothing user-visible. The design's own caps table contained the
+  contradiction in adjacent rows. **Archetype: artifact-calibrated constant** — a cap justified
+  against an example rather than against its generator.
+  Fixed as a fixed `u64`, removing the cap rather than re-tuning it; `derive_session_keys` takes the
+  `u64` and hashes `to_be_bytes()`, because hashing a *rendering* would have let two stations format
+  it differently and derive different keys with nothing reporting why.
+- **F2 — the format was un-extendable in its one negotiable enum.** `SigningMode::from_wire`'s own
+  doc says an unknown discriminant is "a negotiation outcome, not a parse error to guess at"; both
+  decoders did the opposite. The day mode `0x07` exists, `[0x07, Normal]` would be unreadable by
+  every deployed v2 peer — a de-facto wire break inside the format whose purpose is to be finished.
+  Unknown modes in the OFFER list are now skipped (the bytes stay signed; only the struct view drops
+  them); the CONACK's SELECTED mode keeps its hard error.
+- **A1 — 64 bytes nothing verified.** `verify_pq_conreq` decided whether to check the classical
+  signature from `is_pq_only(modes)`, not from the signed presence flag, so `flag = 1` with PQ-only
+  modes split off 64 trailing bytes that no verifier looked at — attacker-mutable content inside a
+  frame reported as verified, and a malleable frame, which breaks `conreq_hash` determinism.
+- **An interaction I suspected and DISPROVED before writing it up:** F2's filtering could in
+  principle change what the modes "imply" for A1's flag. It cannot — `is_pq_only` inspects only `Pq`
+  and `Hybrid`, both known, so dropping unknown discriminants leaves it invariant.
+- **A6 — a FALSE claim I wrote in the voice of a measured one.** The KAT comment said a frame built
+  with an all-`0x33` KEM key "will not pass `verify_pq_conreq`, which does validate it". Review ran
+  it: **it verifies.** `0x33` unpacks to coefficients `0x333 = 819 < q = 3329`, so the FIPS 203 check
+  passes. Corrected, and the claim is now an assertion (`the_pq_vector_is_a_frame_that_verifies`)
+  rather than prose.
+- **A2 — published arithmetic that does not add up.** The #1147 commit message derived the CONACK's
+  244 B as `170 − 25 − 5 + 1 + 32 + 13`, which is **186, not 173**. The correct derivation is
+  `170 − 25 − 5 + 1 + 32 = 173`; `dst_station`'s 13 B is *already inside* the 170. The conclusion was
+  right and the equation double-counted — it reached 173 one term early. The commit message is
+  immutable, so the correction is recorded here. The inference itself was also overstated: a matching
+  byte sum is *consistent with* a field set, not proof of one.
+- **F3 — the doc sweep was incomplete INSIDE the files the previous entry named as swept.** Seven
+  live documents still asserted the deleted compression/FEC negotiation, including `README.md` (a
+  user-facing capability claim, false) and `traceability-matrix.md` (citing
+  `HandshakeError::UnsupportedFecMode`, a variant that no longer exists). This is the
+  retraction-only-in-the-ledger shape, third occurrence. `release-1.0-criteria.md` still listed
+  #1166 as an open decision after it had been decided and done.
+- **F5** — `record_verified_peer` ran even when the CONACK failed to create, recording the
+  half-handshake the adjacent §97.119 guard exists to prevent; and an empty `station_id` was accepted,
+  yielding a "verified peer" with an identity that cannot be revoked or looked up. Both closed, at
+  both ends.
+- **The self-criticism worth keeping (register uniformity).** The #1147 write-ups applied the house
+  style — "measured rather than assumed", "asserted rather than cited" — uniformly to claims that
+  were measured *and* claims that were not, so a reader cannot tell them apart. That is worse than
+  plain prose, because the style does credibility work the evidence did not. A6 is the proof: an
+  unexecuted claim about the code's own behaviour, written in the register of the executed ones.
+- **Budget:** maximal CONREQ 241 → **224 B**; CONACK unchanged at 244. Recorded for the open F1b
+  question (compound callsigns over the 12 B cap): widening `STATION_ID` to 16 costs +8 on **both**
+  frames, which the CONREQ absorbs (232) and the CONACK does **not** (252, over the 251 B fragment).
+  F1b needs its own budget decision and was deliberately not smuggled in here.
+- **Tests:** the KAT caught the wire change and failed, as designed — both vectors re-recorded
+  (CONREQ 198 → 187 B, PQ 5060 → 5049). A daemon test was **pinning the defect**
+  (`assert!(p.session_id.starts_with("W1AW-"))`) and was rewritten. Both new gates sabotage-verified.
+- **Test results (run):** `openpulse-core` 339/339 lib, 20/20 handshake_integration, 17/17
+  pq_handshake_integration, 7/7 handshake_kat, 9/9 compression_integration; workspace clippy
+  `--all-targets` clean.
+- **Still open, filed rather than fixed here:** the reachability scanner counts a **prose mention**
+  as a reference (comments and string literals are indexed), so the baseline's production-reachable
+  count is inflated by an unknown amount; and no test asserts that every context the station key
+  signs has a distinct fixed prefix (today `H…`, `O…`, `{` — distinct by luck, not by construction).
+
 ## 2026-08-23 — #1147: the handshake is binary, and fits one fragment
 
 - **Change:** CONREQ/CONACK — classical **and** PQ — re-laid as a binary format in the decided

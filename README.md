@@ -188,7 +188,7 @@ The mode/FEC selection ladder and which combinations are usable on HF is documen
 | **None** | Session (in-band) | Both | Binary payloads that are already compressed |
 | **Gzip** | B2F wire (Type D) | Both | `flate2`; Winlink Type D proposal |
 
-Compression algorithm negotiated at session setup via `supported_compression` / `selected_compression` fields in ConReq/ConAck, covered by Ed25519 signature — post-signing injection is detectable.
+Session compression is configured locally, not negotiated in the handshake. **Removed in #1166** (the #1147 wire-format break): nothing consumed the selection — the daemon sent the lists empty and hardcoded `None`/`None` — so the field was a capability claim the station could not back. Session compression itself is unchanged; only the *handshake negotiation of it* is gone.
 
 ### ARQ types
 

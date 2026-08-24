@@ -33,7 +33,7 @@ fn kat_conreq() -> Vec<u8> {
             station_id: "W1AW",
             dst_station: "K2XYZ",
             signing_modes: vec![SigningMode::Normal, SigningMode::Psk],
-            session_id: "W1AW-1700000000000",
+            session_id: 1_700_000_000_000,
             station_grid: "FN31pr",
             profile_name: "hpx_hf",
             profile_fingerprint: 0x0123_4567_89AB_CDEF,
@@ -48,11 +48,10 @@ fn kat_conreq() -> Vec<u8> {
 /// THE VECTOR. Also reproduced in `docs/dev/design/protocol-wire-spec.md` so an independent
 /// implementer can check their encoder without building this crate.
 const CONREQ_KAT: &str = "\
-4853435102007f0457314157054b3258595a8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5\
-c4242424242424242424242424242424242424242424242424242424242424242020102125731415\
-72d3137303030303030303030303006464e33317072066870785f68660123456789abcdef0000018bcfe56800b75f70d298\
-7f3beb58227a42056b613fd5d0593c507bd86a748ac7e379c033f8356723f57bf41543278490cdd55ae5a3368fcdd4c3461\
-79b9f7d62031115e70a";
+485343510200740457314157054b3258595a8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f\
+6f5c42424242424242424242424242424242424242424242424242424242424242420201020000018bcfe5680006464e\
+33317072066870785f68660123456789abcdef0000018bcfe56800c50c3ecbd52feef79ae5b6d04fa5025c03ecf2d2eb\
+b2b1e5ad1e5001905815f8de466cf513eb52849cd6863e98937d36239568835c1b432ee2435950beae290b";
 
 #[test]
 fn the_classical_conreq_matches_its_known_answer_vector() {
@@ -65,7 +64,7 @@ fn the_classical_conreq_matches_its_known_answer_vector() {
          copy in protocol-wire-spec.md updated). If it is not intentional, the wire format has \
          drifted and every deployed peer is now incompatible."
     );
-    assert_eq!(frame.len(), 198, "frame length changed");
+    assert_eq!(frame.len(), 187, "frame length changed");
 }
 
 /// The vector is not just bytes: it is a frame that actually verifies. Without this the KAT could
@@ -113,8 +112,8 @@ fn ed25519_signing_is_deterministic_in_this_build() {
 /// `kem_ciphertext` from `encapsulate()`, which is randomised by design, so only its encoder layout
 /// could be pinned and not its bytes.
 const PQ_CONREQ_KAT_SHA256: &str =
-    "015a1aa810762dd8e22d4dc3aeeac5a553352a4bebd349727af308452e18ab18";
-const PQ_CONREQ_KAT_LEN: usize = 5060;
+    "02792e953a55685b5d36582bc456af7efcfe70aec6592658cbfd8343deee2e7c";
+const PQ_CONREQ_KAT_LEN: usize = 5049;
 
 fn kat_pq_conreq() -> Vec<u8> {
     create_pq_conreq(
@@ -122,13 +121,17 @@ fn kat_pq_conreq() -> Vec<u8> {
             station_id: "W1AW",
             dst_station: "K2XYZ",
             pq_signing_key: &[0x02u8; 32],
-            // A fixed placeholder rather than a generated key: this vector pins the ENCODER, and
-            // `create` does not validate the KEM key (only its length). A frame built this way will
-            // not pass `verify_pq_conreq`, which does validate it — that is the classical vector's
-            // job above, and conflating the two would weaken both.
+            // A fixed byte pattern rather than a generated key, so the vector is reproducible.
+            //
+            // **CORRECTED.** This comment previously claimed such a frame "will not pass
+            // `verify_pq_conreq`, which does validate it". That is FALSE, and it was written
+            // without running it: 0x33 bytes unpack to 12-bit coefficients 0x333 = 819 < q = 3329,
+            // so the FIPS 203 modulus check passes and `EncapsulationKey::new` accepts the key. The
+            // frame verifies — see `the_pq_vector_is_a_frame_that_verifies` below, which now asserts
+            // it rather than leaving the claim as prose.
             kem_ek: &[0x33u8; 1184],
             signing_modes: vec![SigningMode::Hybrid],
-            session_id: "W1AW-1700000000000",
+            session_id: 1_700_000_000_000,
             timestamp_ms: 1_700_000_000_000,
         },
         &[0x01u8; 32],
@@ -148,6 +151,22 @@ fn the_pq_conreq_matches_its_known_answer_vector() {
         PQ_CONREQ_KAT_SHA256,
         "the PQ CONREQ encoder no longer produces the recorded vector"
     );
+}
+
+/// The PQ vector is a frame that VERIFIES — asserted, after the comment above claimed the opposite
+/// without being run. A KAT over a frame no receiver would accept could pin an encoder bug forever.
+#[test]
+fn the_pq_vector_is_a_frame_that_verifies() {
+    let frame = kat_pq_conreq();
+    let store = InMemoryTrustStore::new();
+    openpulse_core::pq_handshake::verify_pq_conreq(
+        &frame,
+        &store,
+        PolicyProfile::Balanced,
+        SigningMode::Normal,
+        None,
+    )
+    .expect("the PQ KAT frame must verify");
 }
 
 #[test]

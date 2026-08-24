@@ -87,7 +87,7 @@ fn encode_pq_conreq_body(
     pq_pubkey: &[u8],
     kem_pubkey: &[u8],
     signing_modes: &[SigningMode],
-    session_id: &str,
+    session_id: u64,
     timestamp_ms: u64,
     has_classical_sig: bool,
 ) -> Result<Vec<u8>, ModemError> {
@@ -101,7 +101,7 @@ fn encode_pq_conreq_body(
     for m in signing_modes {
         w.u8(m.to_wire());
     }
-    w.str_capped("session_id", session_id, caps::SESSION_ID)?;
+    w.u64(session_id);
     w.u64(timestamp_ms);
     w.u8(u8::from(has_classical_sig));
     Ok(w.finish())
@@ -131,7 +131,7 @@ pub struct PqConReq {
     /// ML-KEM-768 encapsulation key (1184 B).
     pub kem_pubkey: Vec<u8>,
     pub signing_modes: Vec<SigningMode>,
-    pub session_id: String,
+    pub session_id: u64,
     /// Ed25519 signature (64 B); empty when mode is `Pq`-only.
     pub classical_signature: Vec<u8>,
     /// ML-DSA-44 signature (2420 B).
@@ -271,8 +271,8 @@ pub struct PqConReqParams<'a> {
     pub kem_ek: &'a [u8],
     /// Modes offered, in preference order.
     pub signing_modes: Vec<SigningMode>,
-    /// Session identifier (cap 24).
-    pub session_id: &'a str,
+    /// Session identifier (fixed-width; see `ConReqParams::session_id`).
+    pub session_id: u64,
     /// Unix-ms creation time; mandatory.
     pub timestamp_ms: u64,
 }
@@ -345,14 +345,17 @@ pub fn decode_pq_conreq(bytes: &[u8]) -> Result<PqConReq, PqHandshakeError> {
             caps::SIGNING_MODES
         )));
     }
+    // Unknown modes in the OFFER list are skipped, not fatal — see `ConReq::decode` for why.
+    // Note `is_pq_only` is unaffected by this: it inspects only `Pq` and `Hybrid`, both known, so
+    // dropping unknown discriminants cannot change whether a classical signature is expected.
     let mut signing_modes = Vec::with_capacity(n);
     for _ in 0..n {
         let b = rd(r.u8("signing_mode"))?;
-        signing_modes.push(SigningMode::from_wire(b).ok_or_else(|| {
-            PqHandshakeError::SerializationError(format!("unknown signing mode {b:#04x}"))
-        })?);
+        if let Some(m) = SigningMode::from_wire(b) {
+            signing_modes.push(m);
+        }
     }
-    let session_id = rd(r.str_capped("session_id", caps::SESSION_ID))?;
+    let session_id = rd(r.u64("session_id"))?;
     let timestamp_ms = rd(r.u64("timestamp_ms"))?;
     let has_classical = rd(r.u8("has_classical_sig"))? != 0;
     rd(r.finish("PQ CONREQ"))?;
@@ -361,6 +364,23 @@ pub fn decode_pq_conreq(bytes: &[u8]) -> Result<PqConReq, PqHandshakeError> {
         return Err(PqHandshakeError::SerializationError(
             "PQ CONREQ dst_station is empty".into(),
         ));
+    }
+    // A1: the flag must agree with what the signed modes imply. `create` derives it exactly this
+    // way, so any frame where they disagree was hand-built — and the disagreement matters: the
+    // VERIFIER decides whether to check the classical signature from `is_pq_only(modes)`, not from
+    // the flag, so `flag = 1` with PQ-only modes would carry 64 trailing bytes that nothing ever
+    // verifies. That is a covert channel inside a frame the receiver calls verified, and it makes
+    // the frame malleable, which breaks `conreq_hash` determinism and hence CONACK binding.
+    if has_classical != !is_pq_only(&signing_modes) {
+        return Err(PqHandshakeError::SerializationError(format!(
+            "PQ CONREQ says classical signature {} but its signed modes imply {}",
+            if has_classical { "present" } else { "absent" },
+            if is_pq_only(&signing_modes) {
+                "absent"
+            } else {
+                "present"
+            }
+        )));
     }
     let (classical_signature, pq_signature) = split_pq_trailer(trailer, has_classical)?;
     Ok(PqConReq {
@@ -504,6 +524,14 @@ pub fn decode_pq_conack(bytes: &[u8]) -> Result<PqConAck, PqHandshakeError> {
     let has_classical = rd(r.u8("has_classical_sig"))? != 0;
     rd(r.finish("PQ CONACK"))?;
 
+    // A1, CONACK side: `create` sets the flag as `selected_mode != Pq`; enforce the same here.
+    if has_classical != (selected_mode != SigningMode::Pq) {
+        return Err(PqHandshakeError::SerializationError(format!(
+            "PQ CONACK says classical signature {} but its signed mode {selected_mode:?} implies \
+             otherwise",
+            if has_classical { "present" } else { "absent" }
+        )));
+    }
     let (classical_signature, pq_signature) = split_pq_trailer(trailer, has_classical)?;
     let mut conreq_hash = [0u8; CONREQ_HASH_LEN];
     conreq_hash.copy_from_slice(&hash_vec);

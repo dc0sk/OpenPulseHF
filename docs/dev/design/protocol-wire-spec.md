@@ -395,13 +395,13 @@ transfer (the `active_transfer` → completion gate).
 | `Lz4` | LZ4 block + 4-byte **little-endian** decompressed-size prefix |
 | `Zstd(dict_id: u32)` | Zstd with the shared HPX dictionary; `dict_id` catches version skew |
 
-Negotiated in the handshake (`supported_compression` → `selected_compression`). A compressed frame
+Configured locally, NOT negotiated in the handshake (**Removed in #1166** (the #1147 wire-format break): nothing consumed the selection — the daemon sent the lists empty and hardcoded `None`/`None` — so the field was a capability claim the station could not back. Session compression itself is unchanged; only the *handshake negotiation of it* is gone.). A compressed frame
 larger than the original is sent uncompressed (`compress_if_smaller`).
 
 ### 7.2 FEC modes (`FecMode`, CAP-26 and the soft-FEC caps)
 
 `None`, `Rs`, `RsInterleaved`, `Concatenated`, `ShortRs` (ACK-sized), `RsStrong`, `SoftConcatenated`,
-`Ldpc`, `LdpcHighRate`, `Turbo`. Negotiated as `supported_fec_modes` → `selected_fec_mode`. RS modes
+`Ldpc`, `LdpcHighRate`, `Turbo`. Configured locally, NOT negotiated in the handshake (see §3 and #1166). RS modes
 bundle a block interleaver into the codec path so every FEC-protected frame is de-bursted by
 construction. (Padded OFDM/SC-FDMA modes don't round-trip the hard 255-byte-block RS framing — see
 the testmatrix note in the traceability matrix.)

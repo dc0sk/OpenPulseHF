@@ -2466,7 +2466,7 @@ trust-on-first-use. The bind only rejects a frame claiming a callsign the operat
 bound to a *different* key.
 
 `verify_conack` additionally checks the session-id echo and that the responder's
-`selected_compression` and `selected_fec_mode` were actually offered in the CONREQ.
+`selected_compression` and `selected_fec_mode` were actually offered in the CONREQ. **Both fields were removed in #1166** — nothing consumed the selection — so this check no longer exists; its signing-mode analogue was added in its place (`UnofferedSigningMode`).
 
 #### 2B.3.3 Replay freshness
 

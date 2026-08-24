@@ -104,7 +104,7 @@ All Phase 2 items shipped.
 
 ### 2.7 — Compression (session layer) ✅ Done
 - `lz4_flex 0.11`; `compress_if_smaller()` — compress-then-compare, returns original if LZ4 not smaller.
-- `ConReq`/`ConAck` carry `supported_compression`/`selected_compression`; covered by Ed25519 signature.
+- `ConReq`/`ConAck` carry `supported_compression`/`selected_compression`; covered by Ed25519 signature. **Superseded by #1166** (in the #1147 wire break): both fields removed — nothing consumed the selection.
 - 9 compression integration tests.
 
 ---
