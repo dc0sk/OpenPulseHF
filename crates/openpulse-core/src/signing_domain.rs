@@ -151,6 +151,11 @@ impl fmt::Display for SigningDomain {
 ///
 /// Held here so the distinctness test runs over the union: a future context can neither adopt a
 /// reserved magic as a signing tag nor mint a transmitted magic equal to an existing tag.
+///
+/// Test-scoped because that test is its only consumer — the constraint it encodes is static, so
+/// there is nothing for production to check at runtime. Keeping it `pub` to satisfy the linter
+/// would be public API with no caller, which is what the reachability ratchet exists to refuse.
+#[cfg(test)]
 const RESERVED_MAGICS: &[(&[u8; TAG_LEN], &str)] = &[
     (b"OPLS", "openpulse-core frame envelope"),
     (b"OPSE", "openpulse-core SignedEnvelope container"),
