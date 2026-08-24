@@ -47,11 +47,17 @@ pub const FRAGMENT_CAPACITY: usize = 251;
 
 /// Decoder-enforced caps. These are what make "one fragment" a property of the MAXIMAL LEGAL frame
 /// rather than of one example: `u8`-prefixed strings would otherwise admit a legal 300 B CONREQ.
+///
+/// **A cap must be justified against the GENERATOR, not against an example.** `SESSION_ID` used to
+/// live here at 24 bytes, sized from a 6-character callsign — while `STATION_ID` allows 12. The
+/// daemon builds `"{callsign}-{unix_ms}"`, so an 11-character callsign (`3DA0/DL1ABC`, entirely
+/// legal) produced a 25-byte id, `ConReq::create` failed, and the daemon logged a warning and
+/// **carried on with no signed handshake** — a silent downgrade to unverified. The two rows
+/// contradicted each other adjacently in the design's own table. `session_id` is now a fixed `u64`,
+/// which removes the cap rather than re-tuning it.
 pub mod caps {
     /// `station_id` and `dst_station`. `DC0SK/P` is 7.
     pub const STATION_ID: usize = 12;
-    /// `session_id`. `"{callsign}-{now_ms}"` is ~20.
-    pub const SESSION_ID: usize = 24;
     /// `station_grid`. Six-character Maidenhead is the longest in use.
     pub const GRID: usize = 8;
     /// `profile_name`. `hpx_pilot_fast_rrc` is 18.
@@ -352,12 +358,7 @@ mod tests {
         for _ in 0..caps::SIGNING_MODES {
             w.u8(1);
         }
-        w.str_capped(
-            "session_id",
-            &"C".repeat(caps::SESSION_ID),
-            caps::SESSION_ID,
-        )
-        .unwrap();
+        w.u64(u64::MAX); // session_id — fixed-width since the #1147 follow-up
         w.str_capped("station_grid", &"D".repeat(caps::GRID), caps::GRID)
             .unwrap();
         w.str_capped(
@@ -380,9 +381,10 @@ mod tests {
     fn the_maximal_legal_conreq_fits_one_sar_fragment() {
         let frame = HEADER_LEN + maximal_conreq_body().len() + SIG_LEN;
         assert_eq!(
-            frame, 241,
-            "the maximal CONREQ is {frame} B, not the 241 B the design budgeted — the layout \
-             changed and the fragment arithmetic must be redone, not the assertion adjusted"
+            frame, 224,
+            "the maximal CONREQ is {frame} B, not the 224 B expected after `session_id` became a \
+             fixed u64 — the layout changed and the fragment arithmetic must be redone, not the \
+             assertion adjusted"
         );
         assert!(
             frame <= FRAGMENT_CAPACITY,

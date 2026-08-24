@@ -363,8 +363,8 @@ impl RuntimeControlState {
 /// An in-flight CONREQ the daemon sent and is awaiting a CONACK for.
 #[derive(Clone, Debug)]
 pub struct PendingHandshake {
-    /// Session id echoed by the peer's CONACK.
-    pub session_id: String,
+    /// Session id of the in-flight handshake.
+    pub session_id: u64,
     /// Callsign the operator asked to connect to.
     pub peer_callsign: String,
     /// When the CONREQ went out, for timeout expiry.
@@ -1988,7 +1988,13 @@ pub async fn apply_command_to_engine(
                     // Initiate the signed handshake over RF: send a CONREQ and await the
                     // peer's CONACK (verified in `process_received_bytes`). Additive to the
                     // local trust eval above — the connection upgrades to "verified" on CONACK.
-                    let session_id = format!("{}-{now_ms}", runtime_state.local_callsign);
+                    // A fixed-width id, NOT `"{callsign}-{now_ms}"`. That format coupled the id's
+                    // length to the callsign's, and the wire cap was sized from a 6-character
+                    // callsign while callsigns are capped at 12 — so a legal 11-character compound
+                    // callsign overflowed, `ConReq::create` failed, and the arm below merely logged
+                    // while the QSO carried on with NO signed handshake. The callsign is already in
+                    // the frame as `station_id`; repeating it in the id bought nothing.
+                    let session_id = now_ms;
                     let (ota_name, ota_fp) = runtime_state
                         .local_ota_ladder
                         .clone()
@@ -2004,7 +2010,7 @@ pub async fn apply_command_to_engine(
                             // range spends RF answering a request that was never for it.
                             dst_station: callsign,
                             signing_modes: offered_modes.clone(),
-                            session_id: &session_id,
+                            session_id,
                             station_grid: &runtime_state.local_grid,
                             profile_name: &ota_name,
                             profile_fingerprint: ota_fp,
@@ -4955,7 +4961,7 @@ mod handshake_rf_tests {
                 station_id: "W1AW",
                 dst_station: dst,
                 signing_modes: vec![SigningMode::Normal],
-                session_id: "W1AW-1700000000000",
+                session_id: 1_700_000_000_000,
                 station_grid: "FN31pr",
                 profile_name: "",
                 profile_fingerprint: 0,
@@ -4993,7 +4999,7 @@ mod handshake_rf_tests {
 
     fn pending_for(conreq: &[u8]) -> PendingHandshake {
         PendingHandshake {
-            session_id: "W1AW-1700000000000".into(),
+            session_id: 1_700_000_000_000,
             peer_callsign: "K2XYZ".into(),
             started_at: Instant::now(),
             kex_secret: [0u8; 32],
@@ -5409,7 +5415,19 @@ mod handshake_rf_tests {
             .pending_handshake
             .expect("pending handshake set by ConnectPeer");
         assert_eq!(p.peer_callsign, "K2XYZ");
-        assert!(p.session_id.starts_with("W1AW-"));
+        // Previously: `assert!(p.session_id.starts_with("W1AW-"))`. That pinned the very coupling
+        // that caused the silent-downgrade defect — the id embedded the local callsign, so its
+        // length tracked the callsign's and overflowed the wire cap for a legal 11-character
+        // compound call. The id is now a fixed u64 and carries no callsign; the callsign is already
+        // in the frame as `station_id`. What matters is that it is SET and non-degenerate.
+        assert_ne!(
+            p.session_id, 0,
+            "a pending handshake must carry a real session id"
+        );
+        assert!(
+            !p.conreq_bytes.is_empty(),
+            "the CONREQ must be retained for CONACK binding"
+        );
     }
 
     /// A CONREQ survives a real BPSK250 round trip — as ONE fragment.

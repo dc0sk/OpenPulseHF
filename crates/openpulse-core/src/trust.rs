@@ -267,7 +267,7 @@ pub fn evaluate_handshake(
 pub fn derive_session_keys(
     local_private_key: [u8; 32],
     remote_public_key: [u8; 32],
-    session_id: &str,
+    session_id: u64,
     local_peer_id: &str,
     remote_peer_id: &str,
     selected_mode: SigningMode,
@@ -278,7 +278,11 @@ pub fn derive_session_keys(
 
     let transcript_hash = {
         let mut hasher = Sha256::new();
-        hasher.update(session_id.as_bytes());
+        // The u64 itself, big-endian — NOT a rendering of it. If this hashed a string form, two
+        // stations that formatted the same id differently (decimal vs hex, padded vs not) would
+        // derive different keys and every authenticated ACK would fail, with nothing reporting why.
+        // Hashing the wire value removes that failure mode rather than documenting against it.
+        hasher.update(session_id.to_be_bytes());
         hasher.update(local_peer_id.as_bytes());
         hasher.update(remote_peer_id.as_bytes());
         hasher.update(format!("{:?}", selected_mode).as_bytes());
@@ -387,7 +391,7 @@ mod tests {
         let keys_a = derive_session_keys(
             local_private,
             remote_public.to_bytes(),
-            "session-1",
+            1_u64,
             "A",
             "B",
             SigningMode::Normal,
@@ -397,7 +401,7 @@ mod tests {
         let keys_b = derive_session_keys(
             local_private,
             remote_public.to_bytes(),
-            "session-1",
+            1_u64,
             "A",
             "B",
             SigningMode::Normal,

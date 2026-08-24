@@ -100,7 +100,7 @@ fn make_req(seed: u8, modes: Vec<SigningMode>, dst: &str) -> Req {
             pq_signing_key: &pq_sk,
             kem_ek: &kem_ek,
             signing_modes: modes,
-            session_id: "session-1",
+            session_id: 1,
             timestamp_ms: TS,
         },
         &[seed; 32],
@@ -382,7 +382,7 @@ fn an_empty_pq_dst_station_is_refused() {
             pq_signing_key: &pq_sk,
             kem_ek: &kem_ek,
             signing_modes: vec![SigningMode::Hybrid],
-            session_id: "s",
+            session_id: 1,
             timestamp_ms: TS,
         },
         &[1u8; 32],
@@ -406,6 +406,47 @@ fn pq_conreq_is_multi_fragment_and_that_is_expected() {
         frags.len() > 1,
         "a PQ CONREQ is expected to span fragments; if this ever becomes 1, the airtime claim in \
          the #1147 design is out of date and should be re-derived"
+    );
+}
+
+/// A1: the classical-signature presence flag must agree with what the signed modes imply.
+///
+/// The hazard is specific. `verify_pq_conreq` decides whether to CHECK the classical signature from
+/// `is_pq_only(modes)` — not from the flag. So a hand-built frame with `flag = 1` and PQ-only modes
+/// makes the decoder split 64 trailing bytes off as a "classical signature" that nothing ever
+/// verifies: attacker-mutable content inside a frame the receiver reports as verified, and a frame
+/// that is malleable, which breaks `conreq_hash` determinism and hence CONACK binding.
+///
+/// The flag is redundant with the modes by construction (`create` derives it), so enforcing the
+/// equality costs nothing and removes the disagreement entirely.
+#[test]
+fn a_pq_frame_whose_flag_disagrees_with_its_modes_is_rejected() {
+    // Pq-only: create emits NO classical signature, so the flag is 0.
+    let r = make_req(0xC1, vec![SigningMode::Pq], "K2XYZ");
+    assert!(
+        decode_pq_conreq(&r.bytes).is_ok(),
+        "control: the honest frame must decode"
+    );
+    let decoded = decode_pq_conreq(&r.bytes).unwrap();
+    assert!(
+        decoded.classical_signature.is_empty(),
+        "control: Pq-only must carry no classical signature"
+    );
+
+    // Flip the flag to 1 and append 64 bytes of attacker content, so the trailer length matches
+    // what the flipped flag claims. Before the fix this parsed, and those 64 bytes were never
+    // verified by anything.
+    let body_end = r.bytes.len() - 2420; // ML-DSA signature is the whole trailer here
+    let mut forged = r.bytes[..body_end].to_vec();
+    let flag_idx = body_end - 1;
+    forged[flag_idx] = 1;
+    forged.extend_from_slice(&[0xAAu8; 64]); // the bytes nothing would have checked
+    forged.extend_from_slice(&r.bytes[body_end..]);
+
+    assert!(
+        decode_pq_conreq(&forged).is_err(),
+        "a frame whose flag disagrees with its signed modes must be refused at decode, or it \
+         carries 64 bytes that no verifier ever looks at"
     );
 }
 

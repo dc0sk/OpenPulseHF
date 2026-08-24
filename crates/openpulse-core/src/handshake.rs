@@ -160,8 +160,13 @@ pub struct ConReqParams<'a> {
     pub dst_station: &'a str,
     /// Signing modes offered, in preference order (cap 4 entries).
     pub signing_modes: Vec<SigningMode>,
-    /// Session identifier (cap 24).
-    pub session_id: &'a str,
+    /// Session identifier.
+    ///
+    /// A fixed `u64`, not a string: the string form was capped at 24 bytes while the daemon built
+    /// it as `"{callsign}-{unix_ms}"` from a callsign capped at 12, so a legal 11-character
+    /// compound callsign overflowed the cap and silently dropped the station to an unverified
+    /// session. A fixed-width id removes the cap instead of re-tuning it.
+    pub session_id: u64,
     /// Maidenhead grid, empty if not advertised (cap 8).
     pub station_grid: &'a str,
     /// Active OTA ladder name, empty if none (cap 24).
@@ -193,7 +198,7 @@ pub struct ConReq {
     /// Signing modes offered, in preference order.
     pub signing_modes: Vec<SigningMode>,
     /// Session identifier.
-    pub session_id: String,
+    pub session_id: u64,
     /// Maidenhead grid (empty = not advertised).
     pub station_grid: String,
     /// Active OTA ladder name (empty = none advertised).
@@ -240,7 +245,7 @@ impl ConReq {
         for m in &params.signing_modes {
             w.u8(m.to_wire());
         }
-        w.str_capped("session_id", params.session_id, caps::SESSION_ID)?;
+        w.u64(params.session_id);
         w.str_capped("station_grid", params.station_grid, caps::GRID)?;
         w.str_capped("profile_name", params.profile_name, caps::PROFILE_NAME)?;
         w.u64(params.profile_fingerprint);
@@ -269,14 +274,25 @@ impl ConReq {
                 caps::SIGNING_MODES
             )));
         }
+        // An unknown mode in the OFFER list is skipped, not fatal — `SigningMode::from_wire`'s own
+        // contract says "a negotiation outcome, not a parse error to guess at", and rejecting the
+        // frame did the opposite. It also made the one negotiable enum in the format un-extendable:
+        // the day mode 0x07 exists, a station offering [0x07, Normal] would be unreadable by every
+        // deployed v2 peer — a de-facto wire break, which is exactly what a "finished format" is
+        // supposed to prevent.
+        //
+        // Only the STRUCT VIEW drops the byte. The signature covers the body, so the unknown
+        // discriminant is still signed and still bound; a peer simply cannot negotiate on it.
+        // (The CONACK's SELECTED mode keeps its hard error — a mode we cannot honour is not a
+        // negotiation outcome, it is an unusable session.)
         let mut signing_modes = Vec::with_capacity(n);
         for _ in 0..n {
             let b = r.u8("signing_mode")?;
-            signing_modes.push(SigningMode::from_wire(b).ok_or_else(|| {
-                ModemError::Frame(format!("CONREQ offers unknown signing mode {b:#04x}"))
-            })?);
+            if let Some(m) = SigningMode::from_wire(b) {
+                signing_modes.push(m);
+            }
         }
-        let session_id = r.str_capped("session_id", caps::SESSION_ID)?;
+        let session_id = r.u64("session_id")?;
         let station_grid = r.str_capped("station_grid", caps::GRID)?;
         let profile_name = r.str_capped("profile_name", caps::PROFILE_NAME)?;
         let profile_fingerprint = r.u64("profile_fingerprint")?;
@@ -338,9 +354,10 @@ pub struct ConAckParams<'a> {
 
 /// Connection acknowledgement sent by the responding station.
 ///
-/// **Carries no `session_id`.** Echoing it costs 25 B and pushes the maximal frame to 269 B, past
-/// the 251 B a single SAR fragment holds — and `conreq_hash` subsumes the echo while binding
-/// harder, since both endpoints already hold the id for `derive_session_keys`.
+/// **Carries no `session_id`.** `conreq_hash` subsumes the echo and binds harder — the session id is
+/// cleartext and time-based, hence guessable inside the handshake window, whereas the hash covers
+/// the whole transmitted CONREQ including the initiator's `kex_pubkey`. Both endpoints already hold
+/// the id: the responder from the CONREQ it verified, the initiator from the CONREQ it sent.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ConAck {
     /// Responder callsign.
@@ -632,7 +649,7 @@ mod tests {
             station_id: "W1AW",
             dst_station: "DL1ABC",
             signing_modes: vec![SigningMode::Normal],
-            session_id: "S-1",
+            session_id: 0x0000_0000_0000_0001,
             station_grid: "FN31pr",
             profile_name: "hpx_hf",
             profile_fingerprint: 42,
@@ -701,7 +718,7 @@ mod tests {
     fn a_conack_bound_to_another_conreq_is_rejected() {
         let req_a = ConReq::create(&req_params(1_700_000_000_000), &make_key(1)).unwrap();
         let mut other = req_params(1_700_000_000_000);
-        other.session_id = "S-2";
+        other.session_id = 0x0000_0000_0000_0002;
         let req_b = ConReq::create(&other, &make_key(1)).unwrap();
         assert_ne!(conreq_hash(&req_a), conreq_hash(&req_b));
 
@@ -875,7 +892,7 @@ mod conreq_v2_tests {
             station_id: "DC0SK",
             dst_station: dst,
             signing_modes: vec![SigningMode::Normal, SigningMode::Psk],
-            session_id: "DC0SK-1755000000",
+            session_id: 1_755_000_000,
             station_grid: "JO62qm",
             profile_name: "hpx_hf",
             profile_fingerprint: 0xDEAD_BEEF_CAFE_F00D,
