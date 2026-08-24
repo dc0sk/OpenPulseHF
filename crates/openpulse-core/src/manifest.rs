@@ -71,7 +71,7 @@ impl TransferManifest {
             signing_key_seed,
             &canonical,
         )
-        .map_err(|e| ManifestError::Encoding(e.to_string()))?;
+        .map_err(|e: crate::signing::SigningError| ManifestError::Encoding(e.to_string()))?;
 
         Ok(Self {
             payload_hash,

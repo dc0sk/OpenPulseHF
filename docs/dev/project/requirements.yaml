@@ -1035,6 +1035,17 @@ capabilities:
     - REQ-RX-03
     tests:
     - crates/openpulse-modem/tests/rho_calibration_receive.rs
+  CAP-77:
+    code:
+    - crates/openpulse-core/src/signing_domain.rs
+    - crates/openpulse-core/src/signing.rs
+    name: Signing-domain registry binding every station-key signature to a distinct context
+    satisfies:
+    - REQ-SEC-13
+    tests:
+    - crates/openpulse-core/src/signing_domain.rs
+    - crates/openpulse-core/src/signing.rs
+    traceability: enforced
 meta:
   bright_line: '2026-08-09'
   generated_by: scripts/trace.sh import
@@ -2225,6 +2236,14 @@ requirements:
     statement: Relay and query messages must include anti-replay fields and enforce loop-prevention semantics.
     status: ratified
     traceability: baseline
+  REQ-SEC-13:
+    category: Security/Trust
+    covered_by:
+    - CAP-77
+    statement: Every context the station identity key signs must be bound to a registered signing
+      domain, so a signature made for one context cannot verify as another. Signing outside the
+      registry must fail the build rather than the review.
+    traceability: enforced
   REQ-UX-01:
     category: Compatibility/UX
     covered_by:

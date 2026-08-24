@@ -12,7 +12,7 @@
 use core::fmt;
 
 /// Width of a domain tag, and of every wire magic in the workspace.
-pub const TAG_LEN: usize = 4;
+const TAG_LEN: usize = 4;
 
 /// A context the station identity key signs.
 ///
@@ -151,7 +151,7 @@ impl fmt::Display for SigningDomain {
 ///
 /// Held here so the distinctness test runs over the union: a future context can neither adopt a
 /// reserved magic as a signing tag nor mint a transmitted magic equal to an existing tag.
-pub const RESERVED_MAGICS: &[(&[u8; TAG_LEN], &str)] = &[
+const RESERVED_MAGICS: &[(&[u8; TAG_LEN], &str)] = &[
     (b"OPLS", "openpulse-core frame envelope"),
     (b"OPSE", "openpulse-core SignedEnvelope container"),
     (b"OPSP", "openpulse-daemon control protocol"),
@@ -169,7 +169,7 @@ mod tests {
     /// mint a transmitted magic equal to an existing tag.
     #[test]
     fn every_tag_and_reserved_magic_is_pairwise_distinct() {
-        // VERIFIES: REQ-SEC-12
+        // VERIFIES: REQ-SEC-13
         let mut seen: HashMap<&[u8; TAG_LEN], String> = HashMap::new();
         for d in SigningDomain::ALL {
             if let Some(prev) = seen.insert(d.tag(), format!("signing domain {d:?}")) {

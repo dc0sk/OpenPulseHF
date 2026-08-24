@@ -259,7 +259,7 @@ impl ConReq {
 
         let prefix = signed_prefix(MAGIC_CONREQ, &w.finish())?;
         let sig = crate::signing::sign_in_band(SigningDomain::ConReq, signing_key_seed, &prefix)
-            .map_err(|e| ModemError::Frame(e.to_string()))?;
+            .map_err(|e: crate::signing::SigningError| ModemError::Frame(e.to_string()))?;
         let mut frame = prefix;
         frame.extend_from_slice(&sig);
         Ok(frame)

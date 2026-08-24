@@ -34,7 +34,7 @@ pub enum SigningError {
 /// Build the signed message for a **prepended** domain: `tag || version || payload`.
 ///
 /// The prefix is never transmitted, so this costs no airtime — only the signature value changes.
-pub fn prepend_domain(domain: SigningDomain, payload: &[u8]) -> Result<Vec<u8>, SigningError> {
+fn prepend_domain(domain: SigningDomain, payload: &[u8]) -> Result<Vec<u8>, SigningError> {
     if domain.placement() != TagPlacement::Prepended {
         return Err(SigningError::WrongPlacement {
             domain,
@@ -49,7 +49,7 @@ pub fn prepend_domain(domain: SigningDomain, payload: &[u8]) -> Result<Vec<u8>, 
 }
 
 /// Confirm an **in-band** domain's message already begins with that domain's tag.
-pub fn check_in_band(domain: SigningDomain, message: &[u8]) -> Result<(), SigningError> {
+fn check_in_band(domain: SigningDomain, message: &[u8]) -> Result<(), SigningError> {
     if domain.placement() != TagPlacement::InBand {
         return Err(SigningError::WrongPlacement {
             domain,
@@ -162,7 +162,7 @@ mod tests {
     /// signatures that do not cross-verify.
     #[test]
     fn a_signature_does_not_cross_verify_into_another_domain() {
-        // VERIFIES: REQ-SEC-12
+        // VERIFIES: REQ-SEC-13
         let seed = [0x11u8; 32];
         let pk = pubkey_of(&seed);
         let payload = b"identical bytes in both contexts";
