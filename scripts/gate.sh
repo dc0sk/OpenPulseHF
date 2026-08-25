@@ -115,6 +115,10 @@ if [ "$MODE" = "full" ]; then
     # across 359 entries — because the convention lived only in prose and nothing measured it. Cheap
     # (no build, no I/O beyond one file), so it costs nothing to keep honest.
     run_step "ledger ordering" scripts/check-ledger-order.sh || rc_total=1
+    # Secondary host only. The PR-body lint in traceability.yml is what actually enforces the
+    # review trailer; this reports the classification locally so a design-class branch is known
+    # to need an artifact BEFORE the PR is opened.
+    run_step "review-trailer lint" scripts/check-review.sh --base "$(git merge-base HEAD origin/main 2>/dev/null || echo HEAD)" || rc_total=1
 fi
 
 # Counts come from the LOG FILE, never from a pipe carrying the runner's output.
