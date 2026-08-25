@@ -4,6 +4,31 @@ from slides import URL, FOOTER, USE_CASES, CONTENT_SLIDES
 W, H = 28.0, 15.75
 MATRIX = [[int(c) for c in ln.strip()] for ln in open("matrix.txt") if ln.strip()]
 
+import diagrams
+
+
+
+def check_bounds(xml):
+    """Refuse to write a deck whose shapes leave the page.
+
+    There is no LibreOffice on the build host, so nothing renders this and nobody sees an overflow
+    until it is on a projector. Two of the four diagrams overflowed on their first build; this is
+    the check that found them.
+    """
+    import re
+    bad = []
+    for page in re.split(r"<draw:page ", xml)[1:]:
+        name = re.search(r'draw:name="([^"]+)"', page)
+        name = name.group(1) if name else "?"
+        for m in re.finditer(r'svg:x="([\d.]+)cm" svg:y="([\d.]+)cm" '
+                             r'svg:width="([\d.]+)cm" svg:height="([\d.]+)cm"', page):
+            x, y, w, h = map(float, m.groups())
+            if x + w > W + 0.01 or y + h > H + 0.01:
+                bad.append(f"{name}: extends to x={x+w:.2f} y={y+h:.2f} (page {W}x{H})")
+    if bad:
+        raise SystemExit("slide geometry leaves the page:\n  " + "\n  ".join(bad))
+
+
 def esc(t): return html.escape(t, quote=False)
 
 def tbox(x, y, w, h, para, lines):
@@ -39,6 +64,13 @@ def band(h): return ('<draw:frame draw:style-name="band" svg:x="0cm" svg:y="0cm"
                      f'svg:width="{W}cm" svg:height="{h}cm"><draw:text-box/></draw:frame>')
 
 # Agenda leads, then the use cases, then the rest — motivation after structure.
+DIAGRAMS = {
+    "Where it sits": diagrams.stack_blocks,
+    "Difference 2 — the ladder adapts on EVIDENCE": diagrams.ladder_steps,
+    "Testing — six layers": diagrams.evidence_stack,
+    "Performance — measured on simulated channels": diagrams.fade_bars,
+}
+
 AGENDA, REST = CONTENT_SLIDES[0], CONTENT_SLIDES[1:]
 ALL = ([("c", *AGENDA)]
        + [("usecase", t, b) for t, b in USE_CASES]
@@ -61,11 +93,18 @@ pages.append("".join(cov))
 for i, (kind, title, body) in enumerate(ALL, start=2):
     head_style = "HeadAccent" if kind == "usecase" else "Head"
     band_style = "bandAccent" if kind == "usecase" else "band"
+    fig = DIAGRAMS.get(title)
     p = [f'<draw:page draw:name="S{i}" draw:master-page-name="Default">',
          f'<draw:frame draw:style-name="{band_style}" svg:x="0cm" svg:y="0cm" '
          f'svg:width="{W}cm" svg:height="2.15cm"><draw:text-box/></draw:frame>',
-         tbox(1.4, 0.42, W-2.8, 1.4, head_style, [title]),
-         tbox(1.6, 2.8, W-3.2, H-4.15, "Body", body),
+         tbox(1.4, 0.42, W-2.8, 1.4, head_style, [title])]
+    if fig:
+        # the figure replaces the bullets; body[0] survives as the one-line lede above it
+        p.append(tbox(1.6, 2.42, W-3.2, 1.0, "Lede", [body[0]]))
+        p.append(fig(tbox))
+    else:
+        p.append(tbox(1.6, 2.8, W-3.2, H-4.15, "Body", body))
+    p += [
          tbox(1.6, H-1.12, 18.5, 0.7, "Foot", [FOOTER]),
          tbox(W-4.0, H-1.12, 2.4, 0.7, "FootR", [f"{i} / {total}"]),
          '</draw:page>']
@@ -86,7 +125,7 @@ clo = [f'<draw:page draw:name="Closing" draw:master-page-name="Default">', band(
   '</draw:page>']
 pages.append("".join(clo))
 
-STYLES = '''
+STYLES = diagrams.DIAGRAM_STYLES + '''
 <style:style style:name="band" style:family="graphic"><style:graphic-properties
  draw:fill="solid" draw:fill-color="#12304a" draw:stroke="none"/></style:style>
 <style:style style:name="bandAccent" style:family="graphic"><style:graphic-properties
@@ -175,6 +214,7 @@ import os
 # repo-relative: this file lives in docs/presentations/src/
 out = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..",
                    "OpenPulseHF-Overview.odp")
+check_bounds(CONTENT)
 with zipfile.ZipFile(out, "w") as z:
     z.writestr(zipfile.ZipInfo("mimetype"),
                "application/vnd.oasis.opendocument.presentation", zipfile.ZIP_STORED)

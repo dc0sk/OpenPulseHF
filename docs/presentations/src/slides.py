@@ -76,11 +76,102 @@ USE_CASES = [
    "",
    "This is also why the project is strict about evidence: a platform whose",
    "measurements cannot be trusted is worse than no platform at all."]),
+    ("Use case 6 — one program replacing a shelf of them",
+     ["A typical HF data station runs several separate pieces. OpenPulseHF is one binary that covers "
+      "what most of them do — and talks the same protocols, so existing clients keep working.",
+      "",
+      "REPLACED BY THE DAEMON:",
+      "  · a soundcard TNC — ARDOP TCP and KISS/AX.25 ports, so Pat and any AX.25 client connect unchanged",
+      "  · the modem itself — 16 waveform plugins, BPSK31 through 64QAM, OFDM and SC-FDMA",
+      "  · a separate PTT tool — serial RTS/DTR, VOX, rigctld/CAT, CM108 and GPIO backends built in",
+      "  · a separate rig-control step — frequency and mode set over CAT from the same process",
+      "  · a Winlink transport — B2F session driver and a direct CMS gateway",
+      "  · a digipeater or relay box — repeater and mesh nodes are the same binary with a flag",
+      "",
+      "STILL NEEDED: the radio, the audio interface, and a Winlink client if you want a mailbox UI.",
+      "NOT A REPLACEMENT FOR: a hardware PACTOR modem (different, licensed waveforms) or VARA "
+      "(closed protocol — we do not interoperate with it and do not claim to)."]),
+
+    ("Use case 7 — relaying past a station you cannot hear",
+     ["Two stations that cannot work each other directly can go through a third. The relay layer "
+      "forwards signed envelopes, enforces a hop limit, suppresses duplicates, and refuses to carry "
+      "traffic from a peer its trust policy rejects.",
+      "",
+      "  · route scoring is trust-weighted, and uses the BOTTLENECK hop, not the average — one weak "
+      "hop is not averaged away by good ones",
+      "  · every hop verifies the ORIGIN signature, so a relay cannot forge the sender it claims to "
+      "be carrying for",
+      "  · duplicates are suppressed on (session, nonce) with a TTL, so a loop dies instead of "
+      "amplifying",
+      "",
+      "BE PRECISE ABOUT WHAT THIS IS: it forwards in real time. There is NO store-and-forward — no "
+      "queue, no persistence, no delivery to a station that is not on the air right now. If the next "
+      "hop is absent, the frame is dropped, not held. A real mailbox is a roadmap item, not a "
+      "feature."]),
+
+    ("Use case 8 — cross-band repeating",
+     ["One station bridges two bands: receive on one, retransmit on the other. Useful when a group "
+      "splits between an HF net and a local VHF/UHF simplex frequency, or when propagation favours "
+      "one band at one end of a path.",
+      "",
+      "  · CrossBandRepeater runs full-duplex in its own thread, enabled and disabled at runtime "
+      "over the daemon control port — no restart",
+      "  · a configurable filter and forwarding policy decide what is worth repeating, so the "
+      "repeater is not an unconditional amplifier",
+      "",
+      "OPERATOR RESPONSIBILITY: an automatically-keyed transmitter is a regulated thing. Station "
+      "identification, band privileges and unattended-operation rules are yours to satisfy — the "
+      "software emits periodic ID but cannot know your licence class or your jurisdiction."]),
+
+    ("Use case 9 — a mesh of beacons",
+     ["Mesh nodes re-broadcast signed beacons with a decrementing TTL, so a station several hops "
+      "away learns that you exist, on what frequency, and with what capabilities — without any "
+      "central server.",
+      "",
+      "  · beacons are Ed25519-signed and self-authenticating: the peer id IS the verifying key, so "
+      "no key server is needed to check one",
+      "  · TTL bounds the flood; duplicate suppression stops a beacon circling a loop",
+      "  · what a node learns feeds the shared peer cache, which the query and routing layers read",
+      "",
+      "SCOPE: this spreads REACHABILITY INFORMATION — who is out there and how to reach them. It is "
+      "not a data-carrying mesh network, and a beacon that arrives is evidence a path existed when "
+      "it was sent, not that one exists now."]),
+
+    ("Use case 10 — moving the QSO off a bad frequency",
+     ["A frequency that worked ten minutes ago can be ruined by a new signal or a change in "
+      "propagation. QSY lets two stations agree on a better one and move together, without either "
+      "operator guessing where the other went.",
+      "",
+      "  · the scanner measures candidate frequencies and dwells on each, so the proposal is based "
+      "on what was heard rather than on a guess",
+      "  · the exchange is Ed25519-signed, so a third party cannot walk a QSO onto a frequency of "
+      "their choosing",
+      "  · both ends switch on an agreed offset, so the move is scheduled rather than raced",
+      "",
+      "HONEST SCOPE: the state machine, the wire format and the scan are shipped and tested; the "
+      "change of frequency is proposed and accepted explicitly, not triggered automatically by a "
+      "link-quality threshold. Automatic initiation is a policy decision nobody should take from "
+      "the operator by default."]),
+
+    ("Use case 11 — knowing who is actually talking on FreeDV",
+     ["FreeDV carries digital voice, and a voice you recognise is not proof of identity. This shim "
+      "sends Ed25519-signed beacons through FreeDV's own data channel so a listener can verify which "
+      "station is transmitting.",
+      "",
+      "  · runs ALONGSIDE FreeDV over its UDP data port — FreeDV itself is not modified or patched",
+      "  · each beacon signs the callsign, a timestamp, a nonce, the frequency and the mode, so a "
+      "capture cannot be replayed onto another frequency or another moment",
+      "",
+      "WHAT IT IS NOT: it does not authenticate the AUDIO. It authenticates a beacon transmitted "
+      "alongside it. Somebody relaying your voice while sending their own beacons is not something "
+      "this detects, and the honest claim is 'this station is on frequency and signing', not "
+      "'these words came from that person'."]),
+
 ]
 
 CONTENT_SLIDES = [
  ("Agenda", [
-   "1.  Use cases — five things people actually do with an HF data link",
+   "1.  Use cases — eleven things people actually do with an HF data link",
    "2.  What OpenPulseHF is — and the problem it addresses",
    "3.  What makes it different from other software and hardware modems",
    "4.  How it is developed and implemented",
