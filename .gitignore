@@ -33,3 +33,6 @@ docs/TRX docs/
 # GATE line describes the committed tree. A shared `.claude/settings.json` stays trackable.
 .claude/settings.local.json
 .claude/worktrees/
+
+# LibreOffice writes a lock file beside any open document; it is never ours to commit.
+.~lock.*#
