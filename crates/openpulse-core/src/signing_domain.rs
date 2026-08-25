@@ -149,12 +149,18 @@ impl fmt::Display for SigningDomain {
 
 /// Four-byte wire magics that are **not** signing domains.
 ///
-/// Held here so the distinctness test runs over the union: a future context can neither adopt a
-/// reserved magic as a signing tag nor mint a transmitted magic equal to an existing tag.
+/// Held here so the distinctness test runs over the union, which stops a signing tag adopting a
+/// magic that is already in use.
 ///
-/// Test-scoped because that test is its only consumer — the constraint it encodes is static, so
-/// there is nothing for production to check at runtime. Keeping it `pub` to satisfy the linter
-/// would be public API with no caller, which is what the reachability ratchet exists to refuse.
+/// **What this does NOT guarantee.** It cannot stop a *future* magic being minted equal to an
+/// existing tag, because this is a hand-maintained list and a magic that never registers here is
+/// invisible to it. That is the exact rot this module's own history documents — the list was wrong
+/// on its first commit (`OPZ1` was missing). `every_magic_in_the_tree_is_registered` closes that
+/// by scanning the source, so the list is checked against reality rather than trusted.
+///
+/// Test-scoped because those tests are its only consumer — the constraint is static, so there is
+/// nothing for production to check at runtime. Keeping it `pub` to satisfy the linter would be
+/// public API with no caller, which the reachability ratchet exists to refuse.
 #[cfg(test)]
 const RESERVED_MAGICS: &[(&[u8; TAG_LEN], &str)] = &[
     (b"OPLS", "openpulse-core frame envelope"),
@@ -162,7 +168,16 @@ const RESERVED_MAGICS: &[(&[u8; TAG_LEN], &str)] = &[
     (b"OPSP", "openpulse-daemon control protocol"),
     (b"OPFX", "openpulse-filexfer wire"),
     (b"OPKS", "openpulse-keystore at-rest container"),
+    (b"OPZ1", "openpulse-core compression container"),
 ];
+
+/// Magics owned by external file formats, deliberately excluded from [`RESERVED_MAGICS`].
+///
+/// They are not OpenPulse wire magics and cannot collide with a signing tag in any context the
+/// station key signs; they are listed so the source scan below can tell "excluded on purpose"
+/// from "not yet registered".
+#[cfg(test)]
+const FOREIGN_MAGICS: &[&[u8; TAG_LEN]] = &[b"RIFF", b"WAVE"];
 
 #[cfg(test)]
 mod tests {
@@ -245,6 +260,25 @@ mod tests {
         );
     }
 
+    /// The in-band `version()` values are not free choices — they must equal the version byte the
+    /// frame actually transmits, or the doc claim that they track the frame is false. Without this
+    /// they rot silently at the next wire-version bump.
+    #[test]
+    fn in_band_versions_match_the_wire_version() {
+        for d in [
+            SigningDomain::ConReq,
+            SigningDomain::ConAck,
+            SigningDomain::PqConReq,
+            SigningDomain::PqConAck,
+        ] {
+            assert_eq!(
+                d.version(),
+                crate::handshake_wire::WIRE_VERSION,
+                "{d:?} version drifted from the handshake wire version"
+            );
+        }
+    }
+
     #[test]
     fn tags_are_printable_ascii_so_a_capture_is_readable() {
         for d in SigningDomain::ALL {
@@ -253,5 +287,116 @@ mod tests {
                 "{d:?} tag is not printable ASCII"
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod source_scan {
+    use super::*;
+
+    /// Every four-byte magic literal in the workspace is registered — as a signing tag, a reserved
+    /// magic, or an explicitly-foreign one.
+    ///
+    /// This exists because the hand list is not trustworthy and its own history proves it: the
+    /// inventory was wrong four times over (the issue that prompted it listed 7 contexts of 13, a
+    /// careful re-derivation missed `OPSE`, review's reserved list missed `OPSP`, and the list as
+    /// first committed missed `OPZ1`). A list nobody checks against the source rots; this checks it.
+    ///
+    /// **Limit, stated so it is not over-trusted:** it matches four-byte byte-string literals
+    /// only. A magic
+    /// assembled arithmetically, built from a `const` expression, or written as a byte array
+    /// evades it. It narrows the gap; it does not close it.
+    #[test]
+    fn every_magic_in_the_tree_is_registered() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .and_then(|p| p.parent())
+            .expect("workspace root");
+
+        let mut found: Vec<(String, String)> = Vec::new();
+        let mut stack = vec![root.to_path_buf()];
+        while let Some(dir) = stack.pop() {
+            let Ok(entries) = std::fs::read_dir(&dir) else {
+                continue;
+            };
+            for e in entries.flatten() {
+                let path = e.path();
+                let name = e.file_name();
+                let name = name.to_string_lossy();
+                if path.is_dir() {
+                    if !matches!(name.as_ref(), "target" | ".git" | "docs" | "node_modules") {
+                        stack.push(path);
+                    }
+                } else if path.extension().is_some_and(|x| x == "rs") {
+                    let Ok(text) = std::fs::read_to_string(&path) else {
+                        continue;
+                    };
+                    let bytes = text.as_bytes();
+                    for i in 0..bytes.len().saturating_sub(7) {
+                        // Skip doc/line comments: prose naming a magic is not a declaration.
+                        // Indexed on BYTES, not chars — the docs contain multi-byte punctuation and
+                        // slicing the &str by byte offset panics on a char boundary.
+                        let line_start = bytes[..i]
+                            .iter()
+                            .rposition(|&c| c == b'\n')
+                            .map_or(0, |n| n + 1);
+                        let head: Vec<u8> = bytes[line_start..i]
+                            .iter()
+                            .copied()
+                            .skip_while(|c| c.is_ascii_whitespace())
+                            .take(2)
+                            .collect();
+                        if head == b"//" {
+                            continue;
+                        }
+                        if &bytes[i..i + 2] == b"b\""
+                            && bytes[i + 6] == b'"'
+                            && bytes[i + 2..i + 6]
+                                .iter()
+                                .all(|c| c.is_ascii_uppercase() || c.is_ascii_digit())
+                        {
+                            let magic = String::from_utf8_lossy(&bytes[i + 2..i + 6]).to_string();
+                            found.push((magic, path.display().to_string()));
+                        }
+                    }
+                }
+            }
+        }
+
+        // The scan must actually find things; an empty sweep would pass vacuously.
+        assert!(
+            found.len() >= 10,
+            "the magic scan found only {} literals — the scan itself is broken, not the tree",
+            found.len()
+        );
+
+        let registered: Vec<String> = SigningDomain::ALL
+            .iter()
+            .map(|d| String::from_utf8_lossy(d.tag()).to_string())
+            .chain(
+                RESERVED_MAGICS
+                    .iter()
+                    .map(|(m, _)| String::from_utf8_lossy(*m).to_string()),
+            )
+            .chain(
+                FOREIGN_MAGICS
+                    .iter()
+                    .map(|m| String::from_utf8_lossy(*m).to_string()),
+            )
+            .collect();
+
+        let mut unregistered: Vec<(String, String)> = found
+            .into_iter()
+            .filter(|(m, _)| !registered.contains(m))
+            .collect();
+        unregistered.sort();
+        unregistered.dedup_by(|a, b| a.0 == b.0);
+
+        assert!(
+            unregistered.is_empty(),
+            "four-byte magic literals in the tree are registered nowhere — add each to \
+             RESERVED_MAGICS (an OpenPulse wire magic), to SigningDomain (a signed context), or to \
+             FOREIGN_MAGICS (an external format): {unregistered:?}"
+        );
     }
 }

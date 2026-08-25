@@ -2242,7 +2242,8 @@ requirements:
     - CAP-77
     statement: Every context the station identity key signs must be bound to a registered signing
       domain, so a signature made for one context cannot verify as another. Signing outside the
-      registry must fail the build rather than the review.
+      registry must fail the workspace clippy gate rather than the review.
+    status: ratified
     traceability: enforced
   REQ-UX-01:
     category: Compatibility/UX

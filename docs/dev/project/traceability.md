@@ -16,8 +16,12 @@ and the actually-observed results per change.
 - **Requirement.** #1193 (from the #1147 review): nothing asserts that every context the station
   Ed25519 key signs has a distinct prefix. It proposed a ~10-line pairwise-distinctness test.
 
-- **What is NOT true, stated first.** There is **no reachable cross-context confusion on `main`**.
-  I could not construct one and neither could review. Route response (`17+37h`) and route update
+- **What is NOT true, stated first.** **Neither I nor two rounds of review could construct a
+  reachable cross-context confusion on `main`** — which is the claim the evidence supports, and is
+  weaker than "there is none". The argument covers 2 of ~28 context pairs; the JSON-vs-packed,
+  ASCII-vs-packed and packed-vs-packed pairs rest on each format's parser rejecting the other, which
+  nobody has argued in full. "My filter found nothing" is a different sentence from "there is
+  nothing", and this is the former. Route response (`17+37h`) and route update
   (`12+37h`) can never collide — `37(a−b) = −5` has no integer solution — and the JSON contexts are
   separated by their first field name under serde's deterministic order. This change replaces
   **accidental** distinctness with a structural guarantee. It is not a vulnerability fix, and the
@@ -25,9 +29,14 @@ and the actually-observed results per change.
   understating the scope.
 
 - **Why the issue's own fix was rejected.** A distinctness test is a hand-maintained list, and that
-  list rotted **three times before a line was written**: the issue inventoried 5 contexts, the
-  workspace has **13**; my own re-derivation missed `SignedEnvelope`/`OPSE`; review's reserved-magic
-  list then missed `OPSP`. Three misses, three authors, one archetype. A fourth list would rot too.
+  list rotted **four times, three of them before a line was written**: the issue inventoried **7**
+  contexts (in 5 table rows, and hedged as "at least"), the workspace has **13**; my own
+  re-derivation missed `SignedEnvelope`/`OPSE`; review's reserved-magic list missed `OPSP`; and the
+  list AS FIRST COMMITTED missed `OPZ1`, a transmitted magic in the registry's own crate — found by
+  a one-line grep during review. Four misses, three authors, one archetype. So the list is no longer
+  trusted: `every_magic_in_the_tree_is_registered` scans the source for four-byte magic literals and
+  fails on any that is registered nowhere (literals only — an arithmetically-assembled magic still
+  evades it).
   Worse, the issue's success criterion — "a new signed frame type either picks a distinct magic or
   fails the build" — is **unachievable by any list-based test**, since a new signer in another crate
   is invisible to it.
@@ -35,11 +44,14 @@ and the actually-observed results per change.
 - **Design decision (reviewed BEFORE implementation).**
   1. **The tag is not transmitted.** Domain separation applies to the signed message only (TLS 1.3
      context strings, BIP-340 tagged hashes). **Zero airtime cost**, which is load-bearing: #1147's
-     whole case was that 752 B is ~23 s at BPSK250. This is a **signature-compatibility break, not a
+     case was that a v1 CONREQ at 752 B took **three SAR fragments** (≈ p³ on a fade) — #1147's own
+     entry says "not seconds — **fragments**", and attributing the seconds framing to it would
+     invert what it argued. This is a **signature-compatibility break, not a
      format break** — frame parsing, lengths and SAR fragment budgets are unchanged.
   2. **Contexts already transmitting a unique magic need no change.** `HSCQ`/`HSAK`/`HPCQ`/`HPAK`/
      `OPHF` already satisfied the invariant; they were merely unregistered. Blast radius fell from
-     13 signing sites to **5**.
+     13 contexts to the **8** prepended ones (5 of which are live; 3 are unwired), leaving the 5
+     in-band contexts untouched.
   3. **A version byte follows each prepended tag**, so a later serialization change cannot leave old
      and new messages sharing one undifferentiated domain.
   4. **ML-DSA keeps its own primitive** and signs the same tagged message as its classical partner —

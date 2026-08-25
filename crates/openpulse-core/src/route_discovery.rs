@@ -226,6 +226,9 @@ pub fn sign_route_response(
         &canonical,
     )
     .map(|s| s.to_vec())
+    .inspect_err(
+        |e| tracing::error!(error = %e, "route response signing failed; emitting an unsignable frame"),
+    )
     // A placement error is static, not runtime. An empty signature verifies as false, so a
     // mis-registered domain surfaces as "signatures never verify" rather than as a bypass.
     .unwrap_or_default()
@@ -292,6 +295,9 @@ pub fn sign_route_update(
         &canonical,
     )
     .map(|s| s.to_vec())
+    .inspect_err(
+        |e| tracing::error!(error = %e, "route update signing failed; emitting an unsignable frame"),
+    )
     // A placement error is static, not runtime. An empty signature verifies as false, so a
     // mis-registered domain surfaces as "signatures never verify" rather than as a bypass.
     .unwrap_or_default()

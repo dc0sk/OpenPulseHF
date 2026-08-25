@@ -2439,7 +2439,8 @@ Three details are load-bearing:
   precisely what tags exist to prevent". That argument does not hold up: *all* prefix separation is
   byte-differs-first. What a tag buys is **guaranteed** distinctness; a magic buys it only if
   somebody inventories the full set and checks it — and nobody had. The inventory found 13 signed
-  contexts where the issue that prompted it listed 5.
+  contexts where the issue that prompted it listed 7 — and the replacement list was itself wrong on
+  its first commit, missing `OPZ1`, which is why a source scan now checks it rather than trust.
 - **Nothing is optional any more.** v1 used `skip_serializing_if` on the grid, timestamp, fingerprint
   and kex-key so that a frame carrying none of them stayed byte-identical to the pre-feature wire, and
   old signatures still verified. v2 discards that compatibility deliberately — it is a wire break — so

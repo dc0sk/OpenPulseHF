@@ -108,7 +108,7 @@ last_updated: 2026-07-30
 - **REQ-SEC-07** — Cryptographic defaults should use Ed25519 signatures and SHA-256 or stronger hashing.
 - **REQ-SEC-13** — Every context the station identity key signs must be bound to a registered signing
   domain, so a signature made for one context cannot verify as another. Signing outside the registry
-  must fail the build rather than the review.
+  must fail the workspace clippy gate rather than the review.
 - **REQ-PQ-01** — A post-quantum-safe signature method must be supported for identity and transfer-signing workflows.
 - **REQ-PQ-02** — The implementation should support a hybrid signature mode (classical + post-quantum) during migration.
 - **REQ-PQ-03** — Initial post-quantum-safe default should target ML-DSA (FIPS 204) where available.

@@ -54,9 +54,11 @@ The conclusion (sign the transmitted prefix) was right and still stands; **the r
 muddled**, and #1193 corrected it. *All* prefix separation is byte-differs-first, tags included.
 What a tag actually provides is **guaranteed** distinctness, whereas a magic provides it only if the
 complete set of signed contexts is inventoried and checked. Nothing did that, and the inventory when
-finally taken found **13** contexts where the issue that prompted it listed 5 — three of which
+finally taken found **13** contexts where the issue that prompted it listed 7 — three of which
 (route response, route update, file offer) begin with a peer-influenced integer and had no fixed
-leading bytes at all.
+leading bytes at all. What a tag provides is not distinctness by itself: an ad-hoc tag scheme rots
+exactly as a magic does. The guarantee comes from the registry, the distinctness check, and the
+lint wall together.
 
 What shipped: a `SigningDomain` registry, a tag on every signed message, and a `clippy.toml` wall so
 an unregistered signing site cannot compile. These frames keep their magic as their tag, so they are

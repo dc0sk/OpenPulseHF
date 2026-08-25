@@ -63,6 +63,11 @@ fn check_in_band(domain: SigningDomain, message: &[u8]) -> Result<(), SigningErr
 }
 
 /// Sign `payload` in a **prepended** domain.
+///
+/// Callers that return `Result` propagate this; the few that cannot (their signatures predate the
+/// registry and return a bare value) log and emit an unsignable signature instead. That fails
+/// CLOSED — an empty or all-zero signature never verifies — but it fails **silently on the sender**,
+/// so those sites log at error level rather than discarding the cause.
 pub fn sign_in_domain(
     domain: SigningDomain,
     seed: &[u8; 32],
