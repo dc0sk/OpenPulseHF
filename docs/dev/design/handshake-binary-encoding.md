@@ -45,13 +45,24 @@ Today `canonical_bytes` (`handshake.rs:307-322`, and identically `pq_handshake.r
 `serde_json::to_vec` in **serde declaration order with no key sorting** — "canonical" is a label, not
 a property, and `protocol-wire-spec.md:194-195` states the opposite ("keys sorted recursively").
 
-**No domain-separation tags — corrected on review, and the reason matters.** The proposed tags
-(`OPHF-CONREQ-v2` …) begin with `OPHF`, the magic of `WireEnvelope`, which the **same station key
-already signs** (`wire_query.rs:156-160`, signing from its magic with no tag of its own). Those two
-contexts are separated today only by which byte differs first — separation by coincidence, the very
-property tags were meant to remove. Signing the transmitted prefix separates them by the magic
-itself, which is already unique per frame type, and binds the **version**, which the current format
-does not do at all (v1 signs only the JSON body).
+**Domain-separation tags — SUPERSEDED by #1193.** This section originally rejected tags because the
+proposed ones (`OPHF-CONREQ-v2` …) begin with `OPHF`, the magic of `WireEnvelope`, which the same
+station key already signs; it argued those contexts would then be "separated only by which byte
+differs first — separation by coincidence, the very property tags were meant to remove".
+
+The conclusion (sign the transmitted prefix) was right and still stands; **the reasoning was
+muddled**, and #1193 corrected it. *All* prefix separation is byte-differs-first, tags included.
+What a tag actually provides is **guaranteed** distinctness, whereas a magic provides it only if the
+complete set of signed contexts is inventoried and checked. Nothing did that, and the inventory when
+finally taken found **13** contexts where the issue that prompted it listed 7 — three of which
+(route response, route update, file offer) begin with a peer-influenced integer and had no fixed
+leading bytes at all. What a tag provides is not distinctness by itself: an ad-hoc tag scheme rots
+exactly as a magic does. The guarantee comes from the registry, the distinctness check, and the
+lint wall together.
+
+What shipped: a `SigningDomain` registry, a tag on every signed message, and a `clippy.toml` wall so
+an unregistered signing site cannot compile. These frames keep their magic as their tag, so they are
+unchanged on the wire — the known-answer vector still matches.
 
 ## Layout rules
 

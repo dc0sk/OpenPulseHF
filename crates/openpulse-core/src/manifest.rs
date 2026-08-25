@@ -1,4 +1,4 @@
-use ed25519_dalek::{Signature, Signer, SigningKey, Verifier, VerifyingKey};
+use ed25519_dalek::VerifyingKey;
 use serde::{Deserialize, Serialize};
 
 use crate::handshake::sha256_bytes;
@@ -66,14 +66,18 @@ impl TransferManifest {
         let canonical =
             serde_json::to_vec(&body).map_err(|e| ManifestError::Encoding(e.to_string()))?;
 
-        let signing_key = SigningKey::from_bytes(signing_key_seed);
-        let sig: Signature = signing_key.sign(&canonical);
+        let sig = crate::signing::sign_in_domain(
+            crate::signing_domain::SigningDomain::Manifest,
+            signing_key_seed,
+            &canonical,
+        )
+        .map_err(|e: crate::signing::SigningError| ManifestError::Encoding(e.to_string()))?;
 
         Ok(Self {
             payload_hash,
             payload_size,
             sender_id: sender_id.to_string(),
-            signature: sig.to_bytes().to_vec(),
+            signature: sig.to_vec(),
         })
     }
 
@@ -97,16 +101,23 @@ pub fn verify_manifest(
     manifest: &TransferManifest,
     pubkey_bytes: &[u8; 32],
 ) -> Result<(), ManifestError> {
-    let key = VerifyingKey::from_bytes(pubkey_bytes).map_err(|_| ManifestError::InvalidKey)?;
+    VerifyingKey::from_bytes(pubkey_bytes).map_err(|_| ManifestError::InvalidKey)?;
 
     let Ok(sig_arr): Result<[u8; 64], _> = manifest.signature.as_slice().try_into() else {
         return Err(ManifestError::InvalidSignature);
     };
-    let sig = Signature::from_bytes(&sig_arr);
 
     let canonical = manifest.canonical_bytes()?;
-    key.verify(&canonical, &sig)
-        .map_err(|_| ManifestError::InvalidSignature)
+    if crate::signing::verify_in_domain(
+        crate::signing_domain::SigningDomain::Manifest,
+        pubkey_bytes,
+        &canonical,
+        &sig_arr,
+    ) {
+        Ok(())
+    } else {
+        Err(ManifestError::InvalidSignature)
+    }
 }
 
 /// Verify a manifest's signature **and** check that `payload` hashes to the
@@ -130,6 +141,7 @@ pub fn verify_manifest_with_payload(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ed25519_dalek::SigningKey;
 
     fn make_seed(b: u8) -> [u8; 32] {
         [b; 32]

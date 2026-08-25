@@ -1,3 +1,9 @@
+// The PKI service signs with its OWN key (`PKI_SIGNING_KEY`), not the station identity key, so it
+// is outside the SigningDomain registry by construction: cross-context confusion with a station
+// signature is impossible when the keys differ. See `openpulse_core::signing_domain` — its scope is
+// station-key contexts only. Do NOT "complete" the registry by routing this through it.
+#![allow(clippy::disallowed_methods)]
+
 pub mod api;
 pub mod auth;
 pub mod startup_env;

@@ -1,6 +1,7 @@
 //! Signed authentication beacon transmitted via the FreeDV data channel.
 
-use openpulse_core::signing::{sign_bytes, verify_bytes};
+use openpulse_core::signing::{sign_in_domain, verify_in_domain};
+use openpulse_core::signing_domain::SigningDomain;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
@@ -75,7 +76,8 @@ impl AuthBeacon {
             pubkey: hex::encode(pubkey),
         };
         let canonical = serde_json::to_vec(&body).expect("beacon body serialisation");
-        let signature = sign_bytes(signing_seed, &canonical);
+        let signature = sign_in_domain(SigningDomain::AuthBeacon, signing_seed, &canonical)
+            .unwrap_or([0u8; 64]);
         Self {
             callsign,
             timestamp_utc,
@@ -100,7 +102,12 @@ impl AuthBeacon {
         let Ok(canonical) = serde_json::to_vec(&body) else {
             return false;
         };
-        verify_bytes(&self.pubkey, &canonical, &self.signature)
+        verify_in_domain(
+            SigningDomain::AuthBeacon,
+            &self.pubkey,
+            &canonical,
+            &self.signature,
+        )
     }
 
     /// Encode to length-prefixed JSON wire bytes: `[u16 BE len][JSON]`.

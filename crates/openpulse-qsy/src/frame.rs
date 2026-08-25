@@ -4,7 +4,8 @@
 //! `|SIG:<base64>` and cover the payload text that precedes the separator.
 
 use base64::{engine::general_purpose::STANDARD, Engine as _};
-use ed25519_dalek::{Signature, Signer, SigningKey, Verifier, VerifyingKey};
+use ed25519_dalek::{SigningKey, VerifyingKey};
+use openpulse_core::signing_domain::SigningDomain;
 use thiserror::Error;
 
 #[derive(Debug, Error)]
@@ -162,8 +163,13 @@ fn parse_pairs(s: &str) -> Result<Vec<(u64, f32)>, QsyFrameError> {
 
 /// Append an Ed25519 signature to a text line: `<line>|SIG:<base64>`.
 pub fn sign_line(line: &str, key: &SigningKey) -> String {
-    let sig: Signature = key.sign(line.as_bytes());
-    format!("{line}|SIG:{}", STANDARD.encode(sig.to_bytes()))
+    let sig = openpulse_core::signing::sign_in_domain(
+        SigningDomain::QsyLine,
+        &key.to_bytes(),
+        line.as_bytes(),
+    )
+    .unwrap_or([0u8; 64]);
+    format!("{line}|SIG:{}", STANDARD.encode(sig))
 }
 
 /// Verify the `|SIG:` suffix and return the payload (before the separator).
@@ -176,9 +182,14 @@ pub fn verify_line<'a>(line: &'a str, key: &VerifyingKey) -> Result<&'a str, Qsy
     let sig_array: [u8; 64] = sig_bytes
         .try_into()
         .map_err(|_| QsyFrameError::SignatureLength)?;
-    let sig = Signature::from_bytes(&sig_array);
-    key.verify(payload.as_bytes(), &sig)
-        .map_err(|_| QsyFrameError::InvalidSignature)?;
+    if !openpulse_core::signing::verify_in_domain(
+        SigningDomain::QsyLine,
+        &key.to_bytes(),
+        payload.as_bytes(),
+        &sig_array,
+    ) {
+        return Err(QsyFrameError::InvalidSignature);
+    }
     Ok(payload)
 }
 

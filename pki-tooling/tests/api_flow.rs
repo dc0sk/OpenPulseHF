@@ -1,3 +1,7 @@
+// The PKI service key is not the station identity key, so these fixtures are outside the
+// SigningDomain registry's scope. See pki-tooling/src/lib.rs for the rationale.
+#![allow(clippy::disallowed_methods)]
+
 //! PKI HTTP API integration tests.
 //!
 //! **DB-gated (audit H10):** these tests require a live Postgres via `PKI_TEST_DATABASE_URL`. When it

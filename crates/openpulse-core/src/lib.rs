@@ -37,6 +37,7 @@ pub mod scramble;
 pub mod session_key;
 pub mod signed_envelope;
 pub mod signing;
+pub mod signing_domain;
 pub mod snr_estimate;
 pub mod snr_hysteresis;
 pub mod soft_viterbi;

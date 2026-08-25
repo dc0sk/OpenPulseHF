@@ -1,7 +1,4 @@
-use ed25519_dalek::{
-    Signature as EdSig, Signer as EdSigner, SigningKey as EdSigningKey, Verifier as EdVerifier,
-    VerifyingKey as EdVerifyingKey,
-};
+use ed25519_dalek::SigningKey as EdSigningKey;
 use ml_dsa::{
     signature::{Keypair as MlDsaKeypair, Signer as MlSigner, Verifier as MlVerifier},
     EncodedVerifyingKey, MlDsa44, SigningKey as MlDsaSigningKey,
@@ -19,6 +16,7 @@ use crate::handshake_wire::{
     caps, signed_prefix_with_magic, split_frame_variable, BodyReader, BodyWriter, CONREQ_HASH_LEN,
     MAGIC_PQ_CONACK, MAGIC_PQ_CONREQ, PUBKEY_LEN, SIG_LEN,
 };
+use crate::signing_domain::SigningDomain;
 use crate::trust::{
     evaluate_handshake, CertificateSource, HandshakeDecision, PolicyProfile, PublicKeyTrustLevel,
     SigningMode, TrustError,
@@ -190,6 +188,10 @@ pub fn generate_ml_kem_768_keypair() -> (Vec<u8>, Vec<u8>) {
 // Internal signing/verification helpers
 // ------------------------------------------------------------------
 
+// ML-DSA, not Ed25519: a different algorithm, so the Ed25519 wall does not apply. It
+// signs the SAME domain-tagged message as its classical partner — the domain is the
+// frame type, not the key, so the hybrid needs one tag rather than one per algorithm.
+#[allow(clippy::disallowed_methods)]
 fn ml_dsa_sign(signing_key_seed: &[u8], message: &[u8]) -> Result<Vec<u8>, PqHandshakeError> {
     let seed_arr: [u8; 32] = signing_key_seed
         .try_into()
@@ -200,6 +202,10 @@ fn ml_dsa_sign(signing_key_seed: &[u8], message: &[u8]) -> Result<Vec<u8>, PqHan
     Ok(sig_encoded.to_vec())
 }
 
+// ML-DSA, not Ed25519: a different algorithm, so the Ed25519 wall does not apply. It
+// verifies the SAME domain-tagged message as its classical partner — the domain is the
+// frame type, not the key, so the hybrid needs one tag rather than one per algorithm.
+#[allow(clippy::disallowed_methods)]
 fn ml_dsa_verify(
     vk_bytes: &[u8],
     message: &[u8],
@@ -214,24 +220,25 @@ fn ml_dsa_verify(
         .map_err(|_| PqHandshakeError::InvalidSignature)
 }
 
-fn ed25519_sign(classical_seed: &[u8; 32], message: &[u8]) -> Vec<u8> {
-    let sk = EdSigningKey::from_bytes(classical_seed);
-    let sig: EdSig = sk.sign(message);
-    sig.to_bytes().to_vec()
+fn ed25519_sign(domain: SigningDomain, classical_seed: &[u8; 32], message: &[u8]) -> Vec<u8> {
+    crate::signing::sign_in_band(domain, classical_seed, message)
+        .map(|s| s.to_vec())
+        .unwrap_or_default()
 }
 
-fn ed25519_verify(vk_bytes: &[u8], message: &[u8], sig_bytes: &[u8]) -> bool {
-    let Ok(arr): Result<[u8; 32], _> = vk_bytes.try_into() else {
+fn ed25519_verify(
+    domain: SigningDomain,
+    vk_bytes: &[u8],
+    message: &[u8],
+    sig_bytes: &[u8],
+) -> bool {
+    let Ok(vk_arr): Result<[u8; 32], _> = vk_bytes.try_into() else {
         return false;
     };
     let Ok(sig_arr): Result<[u8; 64], _> = sig_bytes.try_into() else {
         return false;
     };
-    let Ok(vk) = EdVerifyingKey::from_bytes(&arr) else {
-        return false;
-    };
-    let sig = EdSig::from_bytes(&sig_arr);
-    vk.verify(message, &sig).is_ok()
+    crate::signing::verify_in_band(domain, &vk_arr, message, &sig_arr)
 }
 
 fn cert_source_for_trust(trust_level: PublicKeyTrustLevel) -> CertificateSource {
@@ -322,7 +329,11 @@ pub fn create_pq_conreq(
     let pq_signature = ml_dsa_sign(params.pq_signing_key, &prefix)?;
     let mut frame = prefix.clone();
     if has_classical {
-        frame.extend_from_slice(&ed25519_sign(classical_seed, &prefix));
+        frame.extend_from_slice(&ed25519_sign(
+            SigningDomain::PqConReq,
+            classical_seed,
+            &prefix,
+        ));
     }
     frame.extend_from_slice(&pq_signature);
     Ok(frame)
@@ -499,7 +510,11 @@ pub fn create_pq_conack(
     let pq_signature = ml_dsa_sign(params.pq_signing_key, &prefix)?;
     let mut frame = prefix.clone();
     if has_classical {
-        frame.extend_from_slice(&ed25519_sign(classical_seed, &prefix));
+        frame.extend_from_slice(&ed25519_sign(
+            SigningDomain::PqConAck,
+            classical_seed,
+            &prefix,
+        ));
     }
     frame.extend_from_slice(&pq_signature);
     Ok((frame, shared_secret))
@@ -591,7 +606,12 @@ pub fn verify_pq_conreq(
 
     // Ed25519 signature required unless Pq-only
     if !is_pq_only(&req.signing_modes)
-        && !ed25519_verify(&req.classical_pubkey, canonical, &req.classical_signature)
+        && !ed25519_verify(
+            SigningDomain::PqConReq,
+            &req.classical_pubkey,
+            canonical,
+            &req.classical_signature,
+        )
     {
         return Err(PqHandshakeError::InvalidSignature);
     }
@@ -675,7 +695,12 @@ pub fn verify_pq_conack(
     ml_dsa_verify(&ack.pq_pubkey, canonical, &ack.pq_signature)?;
 
     if ack.selected_mode != SigningMode::Pq
-        && !ed25519_verify(&ack.classical_pubkey, canonical, &ack.classical_signature)
+        && !ed25519_verify(
+            SigningDomain::PqConAck,
+            &ack.classical_pubkey,
+            canonical,
+            &ack.classical_signature,
+        )
     {
         return Err(PqHandshakeError::InvalidSignature);
     }

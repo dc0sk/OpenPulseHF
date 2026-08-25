@@ -1,0 +1,20 @@
+# The station identity key must sign only through `openpulse_core::signing`, which binds every
+# message to a `SigningDomain`. A raw Ed25519 sign/verify anywhere else silently voids domain
+# separation for EVERY context, not just its own — so this is a workspace-wide wall rather than a
+# convention. `signing.rs` and `pq_handshake.rs` carry a local `#[allow]` at the primitives.
+#
+# A registry plus a test governs only the sites that volunteer for it. This governs the rest.
+#
+# NOTE the `signature::` entries police TRAIT paths and are therefore ALGORITHM-AGNOSTIC: ML-DSA
+# reaches the same traits, which is why pq_handshake.rs carries its own scoped allow rather than
+# being exempt. A future non-Ed25519 signer will also trip these and be told to "sign through
+# openpulse_core::signing", which is the wrong advice for a different algorithm — read this comment,
+# not just the lint message.
+disallowed-methods = [
+    { path = "ed25519_dalek::SigningKey::sign", reason = "sign through openpulse_core::signing (SigningDomain-bound) instead" },
+    { path = "signature::Signer::try_sign", reason = "sign through openpulse_core::signing (SigningDomain-bound) instead — try_sign produces byte-identical signatures, so leaving it off this list is a hole, not an exemption" },
+    { path = "signature::Signer::sign", reason = "sign through openpulse_core::signing (SigningDomain-bound) instead" },
+    { path = "ed25519_dalek::VerifyingKey::verify", reason = "verify through openpulse_core::signing (SigningDomain-bound) instead" },
+    { path = "ed25519_dalek::VerifyingKey::verify_strict", reason = "verify through openpulse_core::signing (SigningDomain-bound) instead" },
+    { path = "signature::Verifier::verify", reason = "verify through openpulse_core::signing (SigningDomain-bound) instead" },
+]
