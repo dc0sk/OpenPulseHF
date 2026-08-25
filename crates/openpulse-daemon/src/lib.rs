@@ -1974,6 +1974,63 @@ pub async fn apply_command_to_engine(
                 psk_validated: false,
             };
 
+            // BUILD THE CONREQ BEFORE ANNOUNCING ANYTHING (#1199).
+            //
+            // This used to run last, after `begin_secure_session`, `RfConnectionChanged`, the
+            // logbook QSO and the QSY token — and its failure arm only logged. A station whose
+            // callsign exceeds `caps::STATION_ID`, a peer callsign that exceeds it, or an empty
+            // `dst_station` therefore produced a session that announced itself connected, opened a
+            // QSO, and could still key the transmitter, while NO CONREQ was ever sent. The peer
+            // never learned the session existed, and because `pending_handshake` was never set the
+            // handshake-timeout `CommandError` could not fire either: a lost CONACK reported
+            // "timed out" after 30 s, a create failure reported nothing, ever.
+            //
+            // Ordering is the fix, not a louder log: an error at the old position would still leave
+            // the announcement, the QSO and the token behind. Nothing is transmitted on failure, so
+            // the peer cannot participate — a "connection" the peer will never hear about is not a
+            // degraded mode worth keeping.
+            //
+            // A fixed-width session id, NOT `"{callsign}-{now_ms}"`: that format coupled the id's
+            // length to the callsign's and overflowed a cap sized from a 6-character callsign (F1).
+            // The callsign is already in the frame as `station_id`.
+            let session_id = now_ms;
+            let (ota_name_pre, ota_fp_pre) = runtime_state
+                .local_ota_ladder
+                .clone()
+                .unwrap_or_else(|| (String::new(), 0));
+            // Ephemeral X25519 for OTA-ACK key agreement (E7): advertise the public key in the
+            // signed CONREQ, keep the secret to derive the ACK-MAC key from the peer's CONACK.
+            let (kex_secret, kex_public) = generate_kex_ephemeral();
+            let offered_modes = vec![SigningMode::Normal];
+            let conreq_frame = match ConReq::create(
+                &ConReqParams {
+                    station_id: &runtime_state.local_callsign,
+                    // #1178: address the station we are dialling, so no other daemon in range
+                    // spends RF answering a request that was never for it.
+                    dst_station: callsign,
+                    signing_modes: offered_modes.clone(),
+                    session_id,
+                    station_grid: &runtime_state.local_grid,
+                    profile_name: &ota_name_pre,
+                    profile_fingerprint: ota_fp_pre,
+                    timestamp_ms: now_ms,
+                    kex_pubkey: &kex_public,
+                },
+                &runtime_state.station_seed,
+            ) {
+                Ok(frame) => frame,
+                Err(e) => {
+                    tracing::error!(error = %e, "connect_peer: CONREQ could not be built; not connecting");
+                    let _ = event_tx.send(ControlEvent::CommandError {
+                        command: "connect_peer".to_string(),
+                        reason: format!(
+                            "cannot build the signed handshake, so no connection was opened: {e}"
+                        ),
+                    });
+                    return;
+                }
+            };
+
             match engine.begin_secure_session(params, now_ms) {
                 Ok(_) => {
                     let _ = event_tx.send(ControlEvent::RfConnectionChanged {
@@ -1992,53 +2049,16 @@ pub async fn apply_command_to_engine(
                     runtime_state.qsy_pending_token = Some(token.clone());
                     let _ = event_tx.send(ControlEvent::QsyPending { token });
 
-                    // Initiate the signed handshake over RF: send a CONREQ and await the
-                    // peer's CONACK (verified in `process_received_bytes`). Additive to the
-                    // local trust eval above — the connection upgrades to "verified" on CONACK.
-                    // A fixed-width id, NOT `"{callsign}-{now_ms}"`. That format coupled the id's
-                    // length to the callsign's, and the wire cap was sized from a 6-character
-                    // callsign while callsigns are capped at 12 — so a legal 11-character compound
-                    // callsign overflowed, `ConReq::create` failed, and the arm below merely logged
-                    // while the QSO carried on with NO signed handshake. The callsign is already in
-                    // the frame as `station_id`; repeating it in the id bought nothing.
-                    let session_id = now_ms;
-                    let (ota_name, ota_fp) = runtime_state
-                        .local_ota_ladder
-                        .clone()
-                        .unwrap_or_else(|| (String::new(), 0));
-                    // Ephemeral X25519 for OTA-ACK key agreement (E7): advertise the public key in the
-                    // signed CONREQ, keep the secret to derive the ACK-MAC key from the peer's CONACK.
-                    let (kex_secret, kex_public) = generate_kex_ephemeral();
-                    let offered_modes = vec![SigningMode::Normal];
-                    match ConReq::create(
-                        &ConReqParams {
-                            station_id: &runtime_state.local_callsign,
-                            // #1178: address the station we are dialling, so no other daemon in
-                            // range spends RF answering a request that was never for it.
-                            dst_station: callsign,
-                            signing_modes: offered_modes.clone(),
-                            session_id,
-                            station_grid: &runtime_state.local_grid,
-                            profile_name: &ota_name,
-                            profile_fingerprint: ota_fp,
-                            timestamp_ms: now_ms,
-                            kex_pubkey: &kex_public,
-                        },
-                        &runtime_state.station_seed,
-                    ) {
-                        Ok(frame) => {
-                            transmit_handshake_frame(engine, &mode, &frame);
-                            runtime_state.pending_handshake = Some(PendingHandshake {
-                                session_id,
-                                peer_callsign: callsign.clone(),
-                                started_at: Instant::now(),
-                                kex_secret,
-                                conreq_bytes: frame,
-                                offered_modes,
-                            });
-                        }
-                        Err(e) => tracing::warn!(error = %e, "handshake: CONREQ create failed"),
-                    }
+                    // The frame was built above; transmit it and arm the handshake timeout.
+                    transmit_handshake_frame(engine, &mode, &conreq_frame);
+                    runtime_state.pending_handshake = Some(PendingHandshake {
+                        session_id,
+                        peer_callsign: callsign.clone(),
+                        started_at: Instant::now(),
+                        kex_secret,
+                        conreq_bytes: conreq_frame,
+                        offered_modes,
+                    });
                 }
                 Err(err) => {
                     let _ = event_tx.send(ControlEvent::CommandError {
@@ -4083,6 +4103,10 @@ mod command_apply_tests {
         let path = std::env::temp_dir().join(format!("opadif-it-{}.adi", std::process::id()));
         let _ = std::fs::remove_file(&path);
         let mut runtime_state = RuntimeControlState {
+            // A real callsign: production cannot reach the default's empty one (`main.rs` refuses
+            // to start without one), and since #1199 an unbuildable CONREQ opens nothing — so an
+            // empty local callsign now correctly writes no logbook record at all.
+            local_callsign: "DL0XYZ".into(),
             logbook: crate::logbook::Logbook::new(
                 true,
                 path.to_str().unwrap(),
@@ -4127,7 +4151,13 @@ mod command_apply_tests {
         let active_mode: SharedMode = Arc::new(Mutex::new("BPSK250".to_string()));
         let (tx, mut rx) = broadcast::channel::<ControlEvent>(32);
         let ev_tx = Arc::new(tx);
-        let mut runtime_state = RuntimeControlState::default();
+        let mut runtime_state = RuntimeControlState {
+            // A real callsign, because production cannot reach the default's empty one: `main.rs`
+            // refuses to start without one, and since #1199 an unbuildable CONREQ opens nothing at
+            // all. The empty default used to connect-and-not-handshake, which is the defect.
+            local_callsign: "K2XYZ".into(),
+            ..RuntimeControlState::default()
+        };
 
         apply_command_to_engine(
             &ControlCommand::ConnectPeer {
@@ -5186,6 +5216,110 @@ mod handshake_rf_tests {
     /// being fixed is *spent RF* — a unit check on `is_addressed_to` would pass even if the daemon
     /// went on to key up anyway. The positive control in the same test is what makes the negative
     /// meaningful: the identical setup DOES transmit when the request is addressed to us.
+    /// #1199: a `ConnectPeer` whose CONREQ cannot be built must announce NOTHING and say so.
+    ///
+    /// The defect this pins is not a missing log line — it is ordering. The handler used to run
+    /// `begin_secure_session`, emit `RfConnectionChanged { connected: true }`, open a logbook QSO
+    /// and set a QSY token BEFORE building the CONREQ, then only `warn!` if the build failed. The
+    /// result was a session that reported itself connected and could still key the transmitter
+    /// while no CONREQ was ever transmitted, so the peer never learned it existed — and since
+    /// `pending_handshake` was never set, the 30 s handshake-timeout `CommandError` could not fire
+    /// either. A lost CONACK reported a timeout; a build failure reported nothing, ever.
+    ///
+    /// Asserting only "a CommandError is emitted" would pass on the OLD code with a one-line
+    /// change, so this asserts the whole property: an error IS emitted, `RfConnectionChanged` is
+    /// NOT, no QSO is open, and no handshake is pending. The positive control in the same test —
+    /// an ordinary callsign, identical setup — is what makes the negative meaningful.
+    #[tokio::test]
+    async fn connect_peer_with_an_unbuildable_conreq_announces_nothing() {
+        async fn connect(local: &str, peer: &str) -> (Vec<ControlEvent>, bool, bool) {
+            let mut eng = bpsk_engine();
+            let mode = mode();
+            let (tx, mut rx) = broadcast::channel::<ControlEvent>(32);
+            let ev = Arc::new(tx);
+            let mut rs = RuntimeControlState {
+                local_callsign: local.into(),
+                local_grid: "EM69".into(),
+                station_seed: [3u8; 32],
+                ..RuntimeControlState::default()
+            };
+            apply_command_to_engine(
+                &ControlCommand::ConnectPeer {
+                    callsign: peer.to_string(),
+                },
+                &mut eng,
+                &mode,
+                &ev,
+                None,
+                &mut rs,
+            )
+            .await;
+            let mut events = Vec::new();
+            while let Ok(e) = rx.try_recv() {
+                events.push(e);
+            }
+            (
+                events,
+                rs.pending_handshake.is_some(),
+                rs.qsy_pending_token.is_some(),
+            )
+        }
+
+        // POSITIVE CONTROL: ordinary callsigns — the connection is announced and armed.
+        let (ok_events, ok_pending, ok_token) = connect("K2XYZ", "W1AW").await;
+        assert!(
+            ok_events.iter().any(|e| matches!(
+                e,
+                ControlEvent::RfConnectionChanged {
+                    connected: true,
+                    ..
+                }
+            )),
+            "control: an ordinary ConnectPeer must announce the connection"
+        );
+        assert!(
+            ok_pending,
+            "control: an ordinary ConnectPeer must arm the handshake"
+        );
+        assert!(
+            ok_token,
+            "control: an ordinary ConnectPeer must set the QSY token"
+        );
+
+        // Every route to an unbuildable CONREQ, per #1199.
+        for (local, peer, why) in [
+            (
+                "SV5/DL1ABCD/P",
+                "W1AW",
+                "local callsign over caps::STATION_ID",
+            ),
+            (
+                "K2XYZ",
+                "SV5/DL1ABCD/P",
+                "PEER callsign over the cap — config validation cannot catch this",
+            ),
+            ("K2XYZ", "", "empty dst_station"),
+        ] {
+            let (events, pending, token) = connect(local, peer).await;
+            assert!(
+                events.iter().any(|e| matches!(e, ControlEvent::CommandError { command, .. } if command == "connect_peer")),
+                "{why}: must emit a CommandError, not fail silently"
+            );
+            assert!(
+                !events.iter().any(|e| matches!(
+                    e,
+                    ControlEvent::RfConnectionChanged {
+                        connected: true,
+                        ..
+                    }
+                )),
+                "{why}: must NOT announce a connection it cannot transmit"
+            );
+            assert!(!pending, "{why}: must not arm a handshake");
+            assert!(!token, "{why}: must not set a QSY token");
+        }
+    }
+
     #[tokio::test]
     async fn a_conreq_addressed_elsewhere_does_not_key_the_transmitter() {
         async fn transmits_for(dst: &str) -> u64 {
