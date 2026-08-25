@@ -70,6 +70,22 @@ jobs:
           printf '%s\n\n%s\n' "$PR_TITLE" "$PR_BODY" > "$RUNNER_TEMP/pr-message.txt"
           ./scripts/check-trailer.sh --message-file "$RUNNER_TEMP/pr-message.txt"
 
+      # Same host, same reason, same injection discipline (body via env and a file, never inlined).
+      # This one asks whether the change was adversarially reviewed. Tier 1 is one line on every PR;
+      # tier 2 demands a real artifact when the diff touches a decision site, and is classified from
+      # the PR's own diff — hence the base SHA.
+      #
+      # It lives HERE and not in gate.sh because the workspace gate does not run at merge (#1144):
+      # every ci.yml job is release/**-scoped, so a gate-only check would fire weeks after the lapse.
+      - name: Adversarial-review trailer lint (PR body)
+        env:
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          PR_BODY: ${{ github.event.pull_request.body }}
+        run: |
+          printf '%s\n\n%s\n' "$PR_TITLE" "$PR_BODY" > "$RUNNER_TEMP/pr-review-message.txt"
+          ./scripts/check-review.sh --message-file "$RUNNER_TEMP/pr-review-message.txt" \
+                                    --base "${{ github.event.pull_request.base.sha }}"
+
       # R5's doc constitution (status: living legality + recursive frontmatter) is NOT enforced in CI
       # right now: it lives in docs.yml, which calls the same scripts/validate-doc-frontmatter.sh but
       # is `disabled_manually` (#1129). Run it by hand until that is resolved.
