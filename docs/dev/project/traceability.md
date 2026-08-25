@@ -9,6 +9,58 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-08-25 — #1192: the reachability scanner stops counting prose as a reference
+
+**Requirement/change → design → implementation → tests → results.**
+
+- **Change.** `scripts/lib/reachability.py` ran `IDENT.findall` over source with only
+  `#[cfg(test)]` stripped, so **comments and string literals were indexed as references**. An item
+  looked reachable because somebody DESCRIBED it, and stopped looking reachable when the description
+  was reworded — which is how it surfaced, on a comment rewrite during #1147 that made
+  `verify_pq_conreq` appear as a new orphan though the function had not changed.
+
+- **Two evasion classes, the first serious.** FALSE PASS: a new public item named in any sibling's
+  doc comment passed silently, and an item whose name is an ordinary English word was effectively
+  immune — `frequency` occurs **346** times and `invalid` **80** times inside comments and string
+  literals across production source, never as a reference. FALSE FAIL: rewording a comment minted
+  spurious "new orphans", which trains people to treat a gate as noise.
+
+- **Design (reviewed BEFORE implementation).** A regex cannot do this — Rust has nested block
+  comments, raw strings with arbitrary hash counts, and lifetimes indistinguishable from a char
+  literal at the opening quote. `_strip_rust` is a character scanner; removed bytes become spaces so
+  `PUB_ITEM`'s `^\s*pub` anchor survives. **The review caught a defect the probe missed:**
+  `_strip_cfg_test` assumed `#[cfg(test)]` precedes a brace block, and two counterexamples exist
+  here; stripping comments first makes a doc-comment brace stop balancing and the matcher then
+  swallows `mix_to_nominal` (items 2387 → 2386). So the obvious integration order is a measured
+  regression on its own, and `_strip_cfg_test` now cuts at the first `;` preceding the first `{`.
+
+- **Implementation.** `_strip_rust`, the `;`-aware `_strip_cfg_test`, `_self_check` (wired into
+  `reachability.sh self-check` and run first by `--self-test`), and `write_baseline` preserving
+  annotations.
+
+- **Tests → results (actually run).** `GATE: PASS e07cc8c7` — 316 suites, 2407 tests, 0 failed, 8
+  steps. `SELF-CHECK: PASS` (8 stripped, 7 preserved, no leftover delimiters across 315 files;
+  stripper proven WIRED — orphans 468 off vs 522 on, items 2387 both ways). Sabotage-verified three
+  ways: unwiring the stripper fails the self-check, breaking the lifetime rule fails it naming the
+  symbol, and an annotation reading "grandfathered pending #9999" now SURVIVES regeneration where
+  the first fix destroyed it silently.
+
+- **Baseline 474 → 522** (+54, −6 stale). The 54 are **not one population** — ~13 are live via a
+  same-file string dispatcher and deleting them breaks the build. Triaged in #1197.
+
+- **Found while applying, and worth its own line:** regenerating the baseline destroyed every
+  annotation in it, including a `DORMANT(#1118)` block. The first fix filtered by substring and
+  still destroyed annotations using the ratchet's own vocabulary; it now matches the emitted header
+  by full-line equality and prints anything dropped.
+
+- **Corrections the second review forced before push:** a LibreOffice lock file in the commit; a
+  wrong `Refactors: CAP-77` trailer (that capability is #1193's, untouched here); the `DORMANT`
+  block shipping scrambled; `self-check` being defined but unreachable from any entry point; two
+  wrong counts; and #1197 still quoting figures the commit message retracted. Also: the `[u8; N]`
+  edge in `_strip_cfg_test` is **live, not hypothetical**, and leaks in the false-PASS direction.
+
+---
+
 ## 2026-08-24 — #1193: every station-key signature bound to a registered signing domain
 
 **Requirement → design → implementation → tests → results.**
