@@ -67,20 +67,28 @@ def main(d):
     bad = []
     for f in files:
         w, h, lum = png_gray(os.path.join(d, f))
-        # The footer baseline sits at 14.63/15.75 of the height; anything below is spillover.
-        # Full-bleed dark slides (cover, closing) are dark everywhere BY DESIGN. Measuring absolute
-        # ink there flags them every time — the first version did, at 28 700 "overflow" pixels on the
-        # cover. Skip any slide that is mostly dark: the test is for ink where the background is pale.
-        dark_frac = sum(1 for y in range(0, h, 9) for x in range(0, w, 9) if lum(x, y) < 110) / \
-                    max(1, len(range(0, h, 9)) * len(range(0, w, 9)))
-        if dark_frac > 0.4:
-            continue
-        y0 = int(h * 14.95 / 15.75)
-        ink = sum(1 for y in range(y0, h) for x in range(0, w, 2) if lum(x, y) < 110)
+
+        # Polarity comes from a SAMPLE of the page background, not from how dark the slide is
+        # overall. Two earlier versions got this wrong in opposite directions: counting dark pixels
+        # flagged the full-bleed navy cover at 28 700; skipping dark slides then made the check blind
+        # on the closing slide, which shipped broken underneath a PASS; and inferring polarity from a
+        # global dark fraction flagged the block-diagram slide at 28 427, because its large dark
+        # blocks made it "look" dark while its background is white.
+        #
+        # The bottom-LEFT corner is empty on every slide in this deck — the footer starts at 1.6 cm —
+        # so it is the background, whatever colour that is.
+        bx1, by0 = max(1, int(w * 1.0 / 28.0)), int(h * 15.0 / 15.75)
+        samples = [lum(x, y) for y in range(by0, h, 2) for x in range(0, bx1, 2)]
+        bg = sorted(samples)[len(samples) // 2] if samples else 255
+
+        # Start BELOW the footer's own text (footer box is 14.63–15.33 cm), so the footer itself is
+        # never counted as spillover.
+        y0 = int(h * 15.36 / 15.75)
+        ink = sum(1 for y in range(y0, h) for x in range(0, w, 2) if abs(lum(x, y) - bg) > 60)
         if ink > 40:
             bad.append((f, ink))
     for f, ink in bad:
-        print(f"  OVERFLOW {f}: {ink} dark pixels below the footer baseline")
+        print(f"  OVERFLOW {f}: {ink} pixels of text below the footer")
     print(f"RENDER-CHECK: {'FAIL' if bad else 'PASS'} — {len(files)} slides, {len(bad)} overflowing")
     return 1 if bad else 0
 

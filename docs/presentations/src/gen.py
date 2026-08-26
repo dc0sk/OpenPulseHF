@@ -124,12 +124,15 @@ for i, (kind, title, body) in enumerate(ALL, start=2):
 
 clo = [f'<draw:page draw:name="Closing" draw:master-page-name="Default">', band(H),
   tbox(2.0, 3.0, 17.0, 2.4, "TitleBig", ["Thank you"]),
-  tbox(2.0, 5.9, 17.0, 4.8, "TitleSub",
-       ["OpenPulseHF — an open, plugin-based HF software modem", "",
-        "Source, issues, design documents and the traceability ledger:", URL, "",
-        "Questions welcome — including the awkward ones about what is not done."]),
-  tbox(2.0, 11.5, 17.0, 1.6, "CoverMeta",
-       ["Simon Keimer (DC0SK)   ·   v0.16.0 (pre-1.0)"]),
+  # 19 cm, not 17: at 18 pt the old width wrapped every line, and the last one then collided with
+  # the footer. Lines are kept short enough to sit on one line each at this width.
+  tbox(2.0, 5.7, 19.0, 5.6, "TitleSub",
+       ["An open, plugin-based HF software modem", "",
+        "Source, issues, design docs and the ledger:", URL, "",
+        "Questions welcome — including the awkward ones."]),
+  # No name/version line here: the footer below already reads "an open-source project by Simon
+  # Keimer (DC0SK)", so repeating it mid-slide was redundant. Removed by the maintainer directly in
+  # the .odp and folded back here, so the next regeneration keeps the change instead of undoing it.
   qr(21.4, 5.1, 4.9),
   tbox(21.4, 10.25, 4.9, 0.8, "QrCap", ["Project repository"]),
   tbox(1.6, H-1.12, 18.5, 0.7, "FootLight", [FOOTER]),
