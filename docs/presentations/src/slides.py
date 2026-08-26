@@ -1,4 +1,4 @@
-URL = "https://github.com/dc0sk/OpenPulseHF"
+URL = "https://dc0sk.github.io/OpenPulseHF"
 FOOTER = "OpenPulseHF — an open-source project by Simon Keimer (DC0SK)"
 
 USE_CASES = [
@@ -76,7 +76,7 @@ USE_CASES = [
    "",
    "This is also why the project is strict about evidence: a platform whose",
    "measurements cannot be trusted is worse than no platform at all."]),
-    ("Use case 6 — one program replacing a shelf of them",
+    ("Use case 6 — one program, not a shelf of them",
      ["A typical HF data station runs several separate pieces. OpenPulseHF is one binary that covers "
       "what most of them do — and talks the same protocols, so existing clients keep working.",
       "",
@@ -92,7 +92,7 @@ USE_CASES = [
       "NOT A REPLACEMENT FOR: a hardware PACTOR modem (different, licensed waveforms) or VARA "
       "(closed protocol — we do not interoperate with it and do not claim to)."]),
 
-    ("Use case 7 — relaying past a station you cannot hear",
+    ("Use case 7 — relaying past a station you cannot",
      ["Two stations that cannot work each other directly can go through a third. The relay layer "
       "forwards signed envelopes, enforces a hop limit, suppresses duplicates, and refuses to carry "
       "traffic from a peer its trust policy rejects.",
@@ -153,7 +153,7 @@ USE_CASES = [
       "link-quality threshold. Automatic initiation is a policy decision nobody should take from "
       "the operator by default."]),
 
-    ("Use case 11 — knowing who is actually talking on FreeDV",
+    ("Use case 11 — who is actually talking on FreeDV",
      ["FreeDV carries digital voice, and a voice you recognise is not proof of identity. This shim "
       "sends Ed25519-signed beacons through FreeDV's own data channel so a listener can verify which "
       "station is transmitting.",
@@ -322,7 +322,7 @@ CONTENT_SLIDES = [
    "   (no-fail-fast) → requirement trace → reachability ratchet →",
    "   commit-trailer lint → documentation-ordering check",
    "",
-   "Current: 316 suites · 2 396 tests · 0 failures",
+   "Current: 316 suites · 2 408 tests · 0 failures",
    "",
    "Every new gate is SABOTAGE-VERIFIED: break the code deliberately and watch",
    "the gate fail, before trusting it. A gate nobody has watched fail is the",
@@ -373,8 +373,24 @@ CONTENT_SLIDES = [
    "One acquisition instead of three. Airtime 24 s → 8 s at BPSK250.",
    "",
    "The cost was never speed. It was p³ versus p."]),
+ ("Regulatory — enforced, documented, deferred", [
+   "ENFORCED IN CODE",
+   "• Station ID on a timer, and at the end of a transmission series (§97.119)",
+   "• CW ID audio — decodable by any receiving operator, not only by us",
+   "• Relay / responder / QSY paths refuse to key without a configured callsign",
+   "• Bursts are duration-bounded, and the wire format is published in full",
+   "",
+   "DOCUMENTED — AND LEFT TO THE OPERATOR",
+   "• Symbol rate per band — BPSK31/63/100/250 under 300 baud; QPSK500+ is not",
+   "• Bandwidth, power, band segments — these vary by administration and licence",
+   "• §97.221 automatic control point, for unattended relay operation",
+   "• IARU band plans — recommendation rather than law, but widely observed",
+   "",
+   "The modem will generate a mode that is illegal on your frequency — a decision,",
+   "not an oversight: legality depends on band, jurisdiction and licence class.",
+   "Surveyed: FCC 97 · CEPT/ECC · BNetzA · Ofcom · IARU. On-air validation: deferred."]),
  ("Current status — and what is NOT done", [
-   "v0.16.0, pre-1.0 · 2 396 tests green · 361 recorded change entries",
+   "v0.16.0, pre-1.0 · 2 408 tests green · 361 recorded change entries",
    "",
    "Proven on simulation and on wired rigs. On air, a first real over-the-air",
    "decode between two stations has been achieved.",

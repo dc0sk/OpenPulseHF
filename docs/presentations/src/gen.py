@@ -1,11 +1,39 @@
+import os
 import zipfile, html
-from slides import URL, FOOTER, USE_CASES, CONTENT_SLIDES
+import sys
+
+# `python3 gen.py` builds the English deck; `python3 gen.py de` builds the German one from
+# slides_de.py. One generator, two content modules — the layout, diagrams and checks are shared, so
+# a fix to either applies to both and they cannot drift apart structurally.
+LANG = sys.argv[1] if len(sys.argv) > 1 else "en"
+if LANG == "de":
+    from slides_de import URL, FOOTER, USE_CASES, CONTENT_SLIDES
+else:
+    from slides import URL, FOOTER, USE_CASES, CONTENT_SLIDES
 
 W, H = 28.0, 15.75
-MATRIX = [[int(c) for c in ln.strip()] for ln in open("matrix.txt") if ln.strip()]
+# (The QR module matrix used to be read from matrix.txt here. It went with the vector QR —
+# the deck now embeds qr-provided.png, so qrencode is no longer part of the build.)
 
 import diagrams
 
+
+
+# Titles render at 26 pt bold in a 25.2 cm frame, which fits about 48 characters before the second
+# line falls outside the header band and is clipped. The render check cannot see this — it looks
+# BELOW the footer, and a clipped title is cut at the band edge near the top. So it is checked here,
+# at build time, from the one number that governs it.
+TITLE_MAX = 48
+
+
+def check_titles(slides):
+    over = [(len(t), t) for t, _ in slides if len(t) > TITLE_MAX]
+    if over:
+        lines = "\n  ".join(f"{n} chars: {t}" for n, t in sorted(over, reverse=True))
+        raise SystemExit(
+            f"slide titles longer than {TITLE_MAX} characters wrap out of the header band "
+            f"and are clipped:\n  {lines}"
+        )
 
 
 def check_bounds(xml):
@@ -41,34 +69,54 @@ def tbox(x, y, w, h, para, lines):
     return "".join(o)
 
 def qr(x, y, size):
-    """Vector QR from qrencode's matrix — sharp at any projector resolution,
-    with horizontal runs merged so the slide holds dozens of rects, not 450."""
-    n, quiet = len(MATRIX), 4
-    u = size / (n + 2 * quiet)
-    o = [f'<draw:rect draw:style-name="qrbg" svg:x="{x}cm" svg:y="{y}cm" '
-         f'svg:width="{size}cm" svg:height="{size}cm"/>']
-    for r, row in enumerate(MATRIX):
-        c = 0
-        while c < n:
-            if row[c]:
-                run = 1
-                while c + run < n and row[c + run]: run += 1
-                o.append(f'<draw:rect draw:style-name="qrfg" '
-                         f'svg:x="{x+(quiet+c)*u:.4f}cm" svg:y="{y+(quiet+r)*u:.4f}cm" '
-                         f'svg:width="{run*u:.4f}cm" svg:height="{u:.4f}cm"/>')
-                c += run
-            else: c += 1
-    return "".join(o)
+    """Place the maintainer's QR image.
+
+    This used to DRAW a vector QR from `qrencode`'s matrix. It is now the supplied
+    `qr-provided.png`, because that one is stylised and points at the project site — and because a
+    QR a room full of people will scan should be the one its owner validated, not one regenerated
+    from a URL string that could drift.
+
+    NOT independently verified here: the image is stylised (a coloured centre element) and no QR
+    decoder is installed on this host, so the payload is taken on the maintainer's validation. If a
+    decoder ever lands, check it against URL above rather than assuming.
+    """
+    return (f'<draw:frame draw:style-name="clear" svg:x="{x}cm" svg:y="{y}cm" '
+            f'svg:width="{size}cm" svg:height="{size}cm">'
+            f'<draw:image xlink:href="Pictures/qr.png" xlink:type="simple" '
+            f'xlink:show="embed" xlink:actuate="onLoad"/></draw:frame>')
+
 
 def band(h): return ('<draw:frame draw:style-name="band" svg:x="0cm" svg:y="0cm" '
                      f'svg:width="{W}cm" svg:height="{h}cm"><draw:text-box/></draw:frame>')
 
 # Agenda leads, then the use cases, then the rest — motivation after structure.
+LEDES = {
+    "Where it sits": "One binary, seven layers — and exactly one of them is a plugin boundary.",
+    "Difference 2 — the ladder adapts on EVIDENCE":
+        "Fourteen rungs. It climbs on decodes, not on an SNR estimate that a fade can flatten.",
+    "Testing — six layers":
+        "Each layer is cheaper than the one above it, and proves less. Both halves matter.",
+    "Performance — measured on simulated channels":
+        "Decode rate on a Watterson moderate_f1 fade. The zeros are the interesting part.",
+    "Wo es sitzt": "Ein Programm, sieben Ebenen — und genau eine davon ist eine Plugin-Grenze.",
+    "Unterschied 2 — die Leiter steigt nach BELEGEN":
+        "Vierzehn Stufen. Sie steigt nach Dekodierungen, nicht nach einer Schätzung.",
+    "Testen — sechs Ebenen":
+        "Jede Ebene ist billiger als die darüber — und belegt weniger. Beides zählt.",
+    "Leistung — im Kanalsimulator gemessen":
+        "Dekodierrate bei Watterson moderate_f1. Die Nullen sind das Interessante.",
+}
+
 DIAGRAMS = {
     "Where it sits": diagrams.stack_blocks,
     "Difference 2 — the ladder adapts on EVIDENCE": diagrams.ladder_steps,
     "Testing — six layers": diagrams.evidence_stack,
     "Performance — measured on simulated channels": diagrams.fade_bars,
+    # German titles map to the same functions — the diagram code is shared, only its strings differ.
+    "Wo es sitzt": diagrams.stack_blocks,
+    "Unterschied 2 — die Leiter steigt nach BELEGEN": diagrams.ladder_steps,
+    "Testen — sechs Ebenen": diagrams.evidence_stack,
+    "Leistung — im Kanalsimulator gemessen": diagrams.fade_bars,
 }
 
 AGENDA, REST = CONTENT_SLIDES[0], CONTENT_SLIDES[1:]
@@ -99,9 +147,11 @@ for i, (kind, title, body) in enumerate(ALL, start=2):
          f'svg:width="{W}cm" svg:height="2.15cm"><draw:text-box/></draw:frame>',
          tbox(1.4, 0.42, W-2.8, 1.4, head_style, [title])]
     if fig:
-        # the figure replaces the bullets; body[0] survives as the one-line lede above it
-        p.append(tbox(1.6, 2.42, W-3.2, 1.0, "Lede", [body[0]]))
-        p.append(fig(tbox))
+        # The figure replaces the bullets. body[0] is NOT a lede — on these slides it was the first
+        # LIST ITEM, and using it produced "1 Unit 183 files with inline tests" as an intro. Each
+        # diagram slide names its own one-line lede instead.
+        p.append(tbox(1.6, 2.42, W-3.2, 1.0, "Lede", [LEDES.get(title, "")]))
+        p.append(fig(tbox, LANG))
     else:
         p.append(tbox(1.6, 2.8, W-3.2, H-4.15, "Body", body))
     p += [
@@ -112,12 +162,15 @@ for i, (kind, title, body) in enumerate(ALL, start=2):
 
 clo = [f'<draw:page draw:name="Closing" draw:master-page-name="Default">', band(H),
   tbox(2.0, 3.0, 17.0, 2.4, "TitleBig", ["Thank you"]),
-  tbox(2.0, 5.9, 17.0, 4.8, "TitleSub",
-       ["OpenPulseHF — an open, plugin-based HF software modem", "",
-        "Source, issues, design documents and the traceability ledger:", URL, "",
-        "Questions welcome — including the awkward ones about what is not done."]),
-  tbox(2.0, 11.5, 17.0, 1.6, "CoverMeta",
-       ["Simon Keimer (DC0SK)   ·   v0.16.0 (pre-1.0)"]),
+  # 19 cm, not 17: at 18 pt the old width wrapped every line, and the last one then collided with
+  # the footer. Lines are kept short enough to sit on one line each at this width.
+  tbox(2.0, 5.7, 19.0, 5.6, "TitleSub",
+       ["An open, plugin-based HF software modem", "",
+        "Source, issues, design docs and the ledger:", URL, "",
+        "Questions welcome — including the awkward ones."]),
+  # No name/version line here: the footer below already reads "an open-source project by Simon
+  # Keimer (DC0SK)", so repeating it mid-slide was redundant. Removed by the maintainer directly in
+  # the .odp and folded back here, so the next regeneration keeps the change instead of undoing it.
   qr(21.4, 5.1, 4.9),
   tbox(21.4, 10.25, 4.9, 0.8, "QrCap", ["Project repository"]),
   tbox(1.6, H-1.12, 18.5, 0.7, "FootLight", [FOOTER]),
@@ -208,12 +261,15 @@ MANIFEST = ('<?xml version="1.0" encoding="UTF-8"?><manifest:manifest '
  '<manifest:file-entry manifest:full-path="content.xml" manifest:media-type="text/xml"/>'
  '<manifest:file-entry manifest:full-path="styles.xml" manifest:media-type="text/xml"/>'
  '<manifest:file-entry manifest:full-path="meta.xml" manifest:media-type="text/xml"/>'
+ '<manifest:file-entry manifest:full-path="Pictures/qr.png" manifest:media-type="image/png"/>'
  '</manifest:manifest>')
 
 import os
 # repo-relative: this file lives in docs/presentations/src/
 out = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..",
-                   "OpenPulseHF-Overview.odp")
+                   "OpenPulseHF-Overview.odp" if LANG == "en"
+                   else "OpenPulseHF-Overview-DE.odp")
+check_titles(list(USE_CASES) + list(CONTENT_SLIDES))
 check_bounds(CONTENT)
 with zipfile.ZipFile(out, "w") as z:
     z.writestr(zipfile.ZipInfo("mimetype"),
@@ -222,5 +278,8 @@ with zipfile.ZipFile(out, "w") as z:
     z.writestr("content.xml", CONTENT, zipfile.ZIP_DEFLATED)
     z.writestr("styles.xml", MASTER, zipfile.ZIP_DEFLATED)
     z.writestr("meta.xml", META, zipfile.ZIP_DEFLATED)
+    qr_png = os.path.join(os.path.dirname(os.path.abspath(__file__)), "qr-provided.png")
+    with open(qr_png, "rb") as f:
+        z.writestr("Pictures/qr.png", f.read(), zipfile.ZIP_STORED)
 print(f"wrote {out} — {total} slides "
       f"(cover + {len(USE_CASES)} use cases + {len(CONTENT_SLIDES)} content + closing)")
