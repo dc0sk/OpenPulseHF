@@ -1,4 +1,4 @@
-URL = "https://github.com/dc0sk/OpenPulseHF"
+URL = "https://dc0sk.github.io/OpenPulseHF"
 FOOTER = "OpenPulseHF — an open-source project by Simon Keimer (DC0SK)"
 
 USE_CASES = [
@@ -322,7 +322,7 @@ CONTENT_SLIDES = [
    "   (no-fail-fast) → requirement trace → reachability ratchet →",
    "   commit-trailer lint → documentation-ordering check",
    "",
-   "Current: 316 suites · 2 396 tests · 0 failures",
+   "Current: 316 suites · 2 408 tests · 0 failures",
    "",
    "Every new gate is SABOTAGE-VERIFIED: break the code deliberately and watch",
    "the gate fail, before trusting it. A gate nobody has watched fail is the",
@@ -373,8 +373,32 @@ CONTENT_SLIDES = [
    "One acquisition instead of three. Airtime 24 s → 8 s at BPSK250.",
    "",
    "The cost was never speed. It was p³ versus p."]),
+ ("Regulatory — what we considered, and what the software refuses to decide for you", [
+   "ENFORCED IN CODE",
+   "• Periodic station ID on a timer, and an ID at the end of a transmission series (§97.119)",
+   "• CW identification audio, so the ID is decodable by any receiving operator, not just by us",
+   "• Autonomous responder, relay and QSY paths refuse to transmit without a configured callsign",
+   "• Transmit bursts are duration-bounded, so an unexpected key-down is bounded rather than open-ended",
+   "• The wire format is published in full — §97.309(a)(4) permits a digital code whose technical",
+   "  characteristics are documented, and Germany's AFuV §12 requires emissions be determinable",
+   "",
+   "DOCUMENTED — AND DELIBERATELY LEFT TO THE OPERATOR",
+   "• Symbol rate per band: BPSK31/63/100/250 sit under 300 baud, QPSK500 and above do not, and",
+   "  docs/regulatory.md carries a per-mode table saying exactly which is which",
+   "• Occupied bandwidth, transmitter power, band-segment choice — all vary by administration",
+   "• §97.221 automatic control point, for unattended relay and repeater operation",
+   "• IARU band plans — recommendations rather than law, but widely observed",
+   "",
+   "The software will happily generate a mode that is illegal on your frequency. That is a decision,",
+   "not an oversight: legality depends on band, sub-band, jurisdiction and licence class, and the",
+   "modem knows none of them. REQ-REG-03 says it plainly — mode availability is not a claim of legality.",
+   "",
+   "SURVEYED: FCC Part 97 · CEPT/ECC · Germany BNetzA (AFuV) · UK Ofcom · IARU Regions 1 and 2",
+   "",
+   "NOT DONE: on-air regulatory validation is deferred — no station-ID audit or compliance report has",
+   "been run over the air, and the audio-to-PTT-drop bound (REQ-PHY-05) needs a real rig to measure."]),
  ("Current status — and what is NOT done", [
-   "v0.16.0, pre-1.0 · 2 396 tests green · 361 recorded change entries",
+   "v0.16.0, pre-1.0 · 2 408 tests green · 361 recorded change entries",
    "",
    "Proven on simulation and on wired rigs. On air, a first real over-the-air",
    "decode between two stations has been achieved.",

@@ -4,15 +4,10 @@
 
 ```sh
 cd docs/presentations/src
-qrencode -t ASCII -m 0 -l M "https://github.com/dc0sk/OpenPulseHF" > qr.txt
-python3 -c "
-lines=[l.rstrip('\n') for l in open('qr.txt') if l.strip('\n')]
-rows=[[1 if l[i]=='#' else 0 for i in range(0,len(l),2)] for l in lines]
-open('matrix.txt','w').write('\n'.join(''.join(str(v) for v in r) for r in rows))"
 python3 gen.py
 ```
 
-- `slides.py` — all slide text. Edit here.
+- `slides.py` — all slide text and the project URL. Edit here.
 - `diagrams.py` — the four native-ODF figures (evidence stack, fade bars, layer blocks, rate
   ladder) plus their styles. Every number in it is quoted from the repository, with the source
   named per diagram.
@@ -21,17 +16,15 @@ python3 gen.py
 
 ## Notes
 
-**The QR is vector, not an image.** `qrencode` produces the module matrix and `gen.py`
-draws it as native ODF rectangles with horizontal runs merged (~444 rects). It stays
-sharp at any projector resolution and carries no image-codec dependency.
+**The QR is the maintainer's own image**, embedded as `Pictures/qr.png` from `qr-provided.png`. It
+is stylised and points at the project site. It replaced a vector QR the generator used to draw from
+`qrencode` output — a QR a room full of people will scan should be the one its owner validated,
+not one regenerated from a URL string that can drift out of step with the slide text.
 
-`qr-provided.png` is a validated QR supplied by the maintainer, kept as an alternative
-asset. The generated deck does not reference it.
+**Its payload has not been verified on this host.** The image is stylised (a coloured centre
+element) which defeats naive matrix extraction, and no QR decoder is installed. If one ever is,
+check the payload against `URL` in `slides.py` rather than assuming they agree.
 
-**A hand-rolled QR encoder was written and discarded.** Round-tripping it showed its
-Reed-Solomon generator polynomial was coefficient-reversed: the payload decoded but the
-error-correction bytes were wrong, so a real scanner would have failed or mis-corrected.
-It had also assumed version 4 where `qrencode` correctly selects version 3. Use the tool.
 
 ## Editing by hand
 

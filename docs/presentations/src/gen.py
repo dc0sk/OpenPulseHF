@@ -1,8 +1,10 @@
+import os
 import zipfile, html
 from slides import URL, FOOTER, USE_CASES, CONTENT_SLIDES
 
 W, H = 28.0, 15.75
-MATRIX = [[int(c) for c in ln.strip()] for ln in open("matrix.txt") if ln.strip()]
+# (The QR module matrix used to be read from matrix.txt here. It went with the vector QR —
+# the deck now embeds qr-provided.png, so qrencode is no longer part of the build.)
 
 import diagrams
 
@@ -41,24 +43,22 @@ def tbox(x, y, w, h, para, lines):
     return "".join(o)
 
 def qr(x, y, size):
-    """Vector QR from qrencode's matrix — sharp at any projector resolution,
-    with horizontal runs merged so the slide holds dozens of rects, not 450."""
-    n, quiet = len(MATRIX), 4
-    u = size / (n + 2 * quiet)
-    o = [f'<draw:rect draw:style-name="qrbg" svg:x="{x}cm" svg:y="{y}cm" '
-         f'svg:width="{size}cm" svg:height="{size}cm"/>']
-    for r, row in enumerate(MATRIX):
-        c = 0
-        while c < n:
-            if row[c]:
-                run = 1
-                while c + run < n and row[c + run]: run += 1
-                o.append(f'<draw:rect draw:style-name="qrfg" '
-                         f'svg:x="{x+(quiet+c)*u:.4f}cm" svg:y="{y+(quiet+r)*u:.4f}cm" '
-                         f'svg:width="{run*u:.4f}cm" svg:height="{u:.4f}cm"/>')
-                c += run
-            else: c += 1
-    return "".join(o)
+    """Place the maintainer's QR image.
+
+    This used to DRAW a vector QR from `qrencode`'s matrix. It is now the supplied
+    `qr-provided.png`, because that one is stylised and points at the project site — and because a
+    QR a room full of people will scan should be the one its owner validated, not one regenerated
+    from a URL string that could drift.
+
+    NOT independently verified here: the image is stylised (a coloured centre element) and no QR
+    decoder is installed on this host, so the payload is taken on the maintainer's validation. If a
+    decoder ever lands, check it against URL above rather than assuming.
+    """
+    return (f'<draw:frame draw:style-name="clear" svg:x="{x}cm" svg:y="{y}cm" '
+            f'svg:width="{size}cm" svg:height="{size}cm">'
+            f'<draw:image xlink:href="Pictures/qr.png" xlink:type="simple" '
+            f'xlink:show="embed" xlink:actuate="onLoad"/></draw:frame>')
+
 
 def band(h): return ('<draw:frame draw:style-name="band" svg:x="0cm" svg:y="0cm" '
                      f'svg:width="{W}cm" svg:height="{h}cm"><draw:text-box/></draw:frame>')
@@ -208,6 +208,7 @@ MANIFEST = ('<?xml version="1.0" encoding="UTF-8"?><manifest:manifest '
  '<manifest:file-entry manifest:full-path="content.xml" manifest:media-type="text/xml"/>'
  '<manifest:file-entry manifest:full-path="styles.xml" manifest:media-type="text/xml"/>'
  '<manifest:file-entry manifest:full-path="meta.xml" manifest:media-type="text/xml"/>'
+ '<manifest:file-entry manifest:full-path="Pictures/qr.png" manifest:media-type="image/png"/>'
  '</manifest:manifest>')
 
 import os
@@ -222,5 +223,8 @@ with zipfile.ZipFile(out, "w") as z:
     z.writestr("content.xml", CONTENT, zipfile.ZIP_DEFLATED)
     z.writestr("styles.xml", MASTER, zipfile.ZIP_DEFLATED)
     z.writestr("meta.xml", META, zipfile.ZIP_DEFLATED)
+    qr_png = os.path.join(os.path.dirname(os.path.abspath(__file__)), "qr-provided.png")
+    with open(qr_png, "rb") as f:
+        z.writestr("Pictures/qr.png", f.read(), zipfile.ZIP_STORED)
 print(f"wrote {out} — {total} slides "
       f"(cover + {len(USE_CASES)} use cases + {len(CONTENT_SLIDES)} content + closing)")
