@@ -28,7 +28,7 @@ def _label(tbox, x, y, w, h, para, lines):
     return tbox(x, y, w, h, para, lines)
 
 
-def evidence_stack(tbox):
+def evidence_stack(tbox, lang="en"):
     """Slide 'Testing — six layers': the evidence tiers as a stack.
 
     Source: CLAUDE.md 'Acceptance criteria' + docs/dev/virtual-loopback.md. The ordering is the
@@ -36,14 +36,24 @@ def evidence_stack(tbox):
     conclusive at the top. The right-hand column is what each tier CANNOT prove, which is the part
     that makes the hierarchy load-bearing rather than decorative.
     """
-    rows = [
-        ("on-air",           "real RF, real rigs, real propagation", "slow, weather-dependent, hard to repeat"),
-        ("dual-card rig",    "two clocks, real analog path",         "rig state is a live variable"),
-        ("virtual loopback", "one clock, no analog path",            "cannot see sample-rate offset"),
-        ("channel sim",      "Watterson fade, Gilbert-Elliott burst", "the model is not the ionosphere"),
-        ("integration",      "crate boundaries, real seams",          "buffer IS the frame — no search"),
-        ("unit",             "2408 tests, seconds to run",            "nothing about the wire"),
-    ]
+    rows = {
+        "en": [
+            ("on-air",           "real RF, real rigs, real propagation", "slow, weather-dependent, hard to repeat"),
+            ("dual-card rig",    "two clocks, real analog path",         "rig state is a live variable"),
+            ("virtual loopback", "one clock, no analog path",            "cannot see sample-rate offset"),
+            ("channel sim",      "Watterson fade, Gilbert-Elliott burst", "the model is not the ionosphere"),
+            ("integration",      "crate boundaries, real seams",          "buffer IS the frame — no search"),
+            ("unit",             "2408 tests, seconds to run",            "nothing about the wire"),
+        ],
+        "de": [
+            ("On-Air",           "echtes HF, echte Geräte, echte Ausbreitung", "langsam, wetterabhängig, kaum wiederholbar"),
+            ("Zwei-Karten-Rig",  "zwei Taktquellen, echter Analogpfad",   "Gerätezustand ist eine lebende Variable"),
+            ("virtueller Loop",  "eine Taktquelle, kein Analogpfad",      "sieht keinen Abtastratenversatz"),
+            ("Kanalsimulation",  "Watterson-Schwund, Gilbert-Elliott",    "das Modell ist nicht die Ionosphäre"),
+            ("Integration",      "Crate-Grenzen, echte Nahtstellen",      "Puffer IST der Frame — keine Suche"),
+            ("Unit",             "2408 Tests, Sekunden Laufzeit",         "nichts über die Luftschnittstelle"),
+        ],
+    }[lang]
     x0, top, rw, rh, gap = 1.4, 3.55, 12.2, 1.42, 0.20
     out = []
     for i, (name, proves, cannot) in enumerate(rows):
@@ -55,13 +65,15 @@ def evidence_stack(tbox):
                          "tierTop" if i == 0 else ("tierMid" if i < 3 else "tierBase")))
         out.append(_label(tbox, x0 + 0.45, y + 0.14, 5.2, rh, "TierName", [name]))
         out.append(_label(tbox, x0 + 5.3, y + 0.22, 6.6, rh, "TierNote", [proves]))
-        out.append(_label(tbox, x0 + rw + 0.55, y + 0.22, 9.4, rh, "TierCannot", ["cannot prove: " + cannot]))
+        prefix = "belegt nicht: " if lang == "de" else "cannot prove: "
+        out.append(_label(tbox, x0 + rw + 0.55, y + 0.22, 9.4, rh, "TierCannot", [prefix + cannot]))
     out.append(_label(tbox, x0, top + len(rows) * (rh + gap) + 0.12, 13.0, 1.0, "TierAxis",
-                      ["▲  slower, costlier, closer to the air  —  ▼  faster, cheaper, proves less"]))
+                      [{"en": "▲  slower, costlier, closer to the air  —  ▼  faster, cheaper, proves less",
+                        "de": "▲  langsamer, teurer, näher an der Luft  —  ▼  schneller, billiger, belegt weniger"}[lang]]))
     return "".join(out)
 
 
-def fade_bars(tbox):
+def fade_bars(tbox, lang="en"):
     """Slide 'Performance': decode rate on a Watterson moderate_f1 fade.
 
     Source: CLAUDE.md → 'An HF ladder calibrated on AWGN is not an HF ladder' and the #923 entry.
@@ -69,14 +81,24 @@ def fade_bars(tbox):
     the ladder shipped with, and that the fix in each case was FEC or differential encoding rather
     than a better tracker.
     """
-    rows = [
-        ("BPSK31, uncoded",      0.00, "@3 dB — the rung every session STARTED on", False),
-        ("BPSK31 + Rs",          0.25, "@3 dB — coded", True),
-        ("BPSK31 + RsStrong",    1.00, "@3 dB — free below 191 B", True),
-        (None, None, None, None),
-        ("QPSK250, coherent",    0.00, "@20 dB — dead at EVERY SNR to 40 dB", False),
-        ("QPSK250-D",            0.65, "@20 dB — differential, hpx_hf SL6", True),
-    ]
+    rows = {
+        "en": [
+            ("BPSK31, uncoded",   0.00, "@3 dB — the rung every session STARTED on", False),
+            ("BPSK31 + Rs",       0.25, "@3 dB — coded", True),
+            ("BPSK31 + RsStrong", 1.00, "@3 dB — free below 191 B", True),
+            (None, None, None, None),
+            ("QPSK250, coherent", 0.00, "@20 dB — dead at EVERY SNR to 40 dB", False),
+            ("QPSK250-D",         0.65, "@20 dB — differential, hpx_hf SL6", True),
+        ],
+        "de": [
+            ("BPSK31, uncodiert", 0.00, "@3 dB — die Stufe, auf der JEDE Verbindung begann", False),
+            ("BPSK31 + Rs",       0.25, "@3 dB — codiert", True),
+            ("BPSK31 + RsStrong", 1.00, "@3 dB — unter 191 B kostenlos", True),
+            (None, None, None, None),
+            ("QPSK250, kohärent", 0.00, "@20 dB — tot bei JEDEM SNR bis 40 dB", False),
+            ("QPSK250-D",         0.65, "@20 dB — differenziell, hpx_hf SL6", True),
+        ],
+    }[lang]
     x0, top, barx, barw, rh = 1.4, 3.7, 9.6, 11.4, 1.30
     out = []
     y = top
@@ -96,25 +118,38 @@ def fade_bars(tbox):
         out.append(_label(tbox, barx, y + 1.00, barw, 0.8, "BarNote", [note]))
         y += rh + 0.30
     out.append(_label(tbox, x0, y + 0.15, 25.0, 1.0, "BarFoot",
-                      ["Fraction of frames decoded. Measured on the channel simulator; "
-                       "the zeros are what an AWGN-calibrated ladder could not see."]))
+                      [{"en": "Fraction of frames decoded. Measured on the channel simulator; "
+                               "the zeros are what an AWGN-calibrated ladder could not see.",
+                        "de": "Anteil dekodierter Frames, im Kanalsimulator gemessen. Die Nullen sind das, "
+                              "was eine auf AWGN kalibrierte Stufenleiter nicht sehen konnte."}[lang]]))
     return "".join(out)
 
 
-def stack_blocks(tbox):
+def stack_blocks(tbox, lang="en"):
     """Slide 'Where it sits': the layer stack, with what is pluggable marked.
 
     Source: CLAUDE.md crate map. Only the boxes that correspond to real crates are drawn.
     """
-    layers = [
-        ("Applications",  "Pat · Winlink · your own client",                    "ext"),
-        ("Protocol",      "ARDOP TNC · KISS/AX.25 · B2F · filexfer · QSY · JS8", "own"),
-        ("Session",       "HPX state machine · ARQ/HARQ · rate ladder · trust",  "own"),
-        ("Modem",         "ModemEngine · scheduler · CSMA/DCD · diagnostics",    "own"),
-        ("Waveform",      "16 plugins — BPSK … 64QAM, OFDM, SC-FDMA, MFSK16",    "plug"),
-        ("DSP",           "RRC · PLL · Gardner · LMS/DFE · noise floor",         "own"),
-        ("I/O",           "CPAL audio · PTT: serial, VOX, rigctld, CM108, GPIO", "own"),
-    ]
+    layers = {
+        "en": [
+            ("Applications", "Pat · Winlink · your own client",                     "ext"),
+            ("Protocol",     "ARDOP TNC · KISS/AX.25 · B2F · filexfer · QSY · JS8",  "own"),
+            ("Session",      "HPX state machine · ARQ/HARQ · rate ladder · trust",   "own"),
+            ("Modem",        "ModemEngine · scheduler · CSMA/DCD · diagnostics",     "own"),
+            ("Waveform",     "16 plugins — BPSK … 64QAM, OFDM, SC-FDMA, MFSK16",     "plug"),
+            ("DSP",          "RRC · PLL · Gardner · LMS/DFE · noise floor",          "own"),
+            ("I/O",          "CPAL audio · PTT: serial, VOX, rigctld, CM108, GPIO",  "own"),
+        ],
+        "de": [
+            ("Anwendungen",  "Pat · Winlink · eigener Client",                       "ext"),
+            ("Protokoll",    "ARDOP-TNC · KISS/AX.25 · B2F · Dateitransfer · QSY",    "own"),
+            ("Session",      "HPX-Zustandsautomat · ARQ/HARQ · Ratenleiter · Trust",  "own"),
+            ("Modem",        "ModemEngine · Scheduler · CSMA/DCD · Diagnose",         "own"),
+            ("Wellenform",   "16 Plugins — BPSK … 64QAM, OFDM, SC-FDMA, MFSK16",      "plug"),
+            ("DSP",          "RRC · PLL · Gardner · LMS/DFE · Rauschflur",            "own"),
+            ("E/A",          "CPAL-Audio · PTT: seriell, VOX, rigctld, CM108, GPIO",  "own"),
+        ],
+    }[lang]
     x0, top, bw, bh, gap = 3.2, 3.30, 21.6, 1.24, 0.16
     style = {"ext": "blkExt", "own": "blkOwn", "plug": "blkPlug"}
     out = []
@@ -125,12 +160,14 @@ def stack_blocks(tbox):
         out.append(_label(tbox, x0 + 6.6, y + 0.24, 14.4, bh, "BlkNote", [detail]))
     y = top + len(layers) * (bh + gap) + 0.06
     out.append(_label(tbox, x0, y, bw, 0.85, "BlkKey",
-                      ["Teal = the plugin boundary: a new waveform is a crate, not a fork.  "
-                       "Grey = someone else's software talking to us over a standard TNC port."]))
+                      [{"en": "Teal = the plugin boundary: a new waveform is a crate, not a fork.  "
+                               "Grey = someone else's software talking to us over a standard TNC port.",
+                        "de": "Türkis = die Plugin-Grenze: eine neue Wellenform ist ein Crate, kein Fork.  "
+                              "Grau = fremde Software an einem Standard-TNC-Port."}[lang]]))
     return "".join(out)
 
 
-def ladder_steps(tbox):
+def ladder_steps(tbox, lang="en"):
     """Slide 'the ladder adapts on EVIDENCE': hpx_hf as a staircase.
 
     Source: docs/mode-fec-ladder.md hpx_hf row + CLAUDE.md #934. Rungs are compressed to the
@@ -139,14 +176,18 @@ def ladder_steps(tbox):
     # SIX rungs, not seven. Seven gave 3.5 cm columns, and the two longest labels then ran into
     # their neighbours — visible only in a render. Widening the label boxes just moved the collision.
     # Fewer, wider columns is the fix; the caption says families are shown rather than all 14 rungs.
-    steps = [
-        ("SL1", "MFSK16", "non-coherent"),
-        ("SL2", "BPSK31 +FEC", "entry rung"),
-        ("SL6", "QPSK250-D", "differential"),
-        ("SL8", "OFDM52", "multicarrier"),
-        ("SL11", "OFDM52-16QAM", ""),
-        ("SL14", "64QAM r\u22488/9", "top rung"),
-    ]
+    steps = {
+        "en": [
+            ("SL1", "MFSK16", "non-coherent"), ("SL2", "BPSK31 +FEC", "entry rung"),
+            ("SL6", "QPSK250-D", "differential"), ("SL8", "OFDM52", "multicarrier"),
+            ("SL11", "OFDM52-16QAM", ""), ("SL14", "64QAM r\u22488/9", "top rung"),
+        ],
+        "de": [
+            ("SL1", "MFSK16", "nicht-kohärent"), ("SL2", "BPSK31 +FEC", "Einstiegsstufe"),
+            ("SL6", "QPSK250-D", "differenziell"), ("SL8", "OFDM52", "Mehrträger"),
+            ("SL11", "OFDM52-16QAM", ""), ("SL14", "64QAM r\u22488/9", "oberste Stufe"),
+        ],
+    }[lang]
     x0, base, sw, sh = 1.9, 11.4, 4.05, 1.85
     out = []
     for i, (sl, mode, note) in enumerate(steps):
@@ -159,10 +200,16 @@ def ladder_steps(tbox):
         if note:
             out.append(_label(tbox, x + 0.16, base + 0.76, sw, 0.8, "StepNote", [note]))
     out.append(_label(tbox, x0, base + 1.44, 24.5, 1.2, "StepFoot",
-                      ["Climbs on consecutive clean decodes, not only on an SNR estimate \u2014 and never "
-                       "demotes below a level that just decoded.",
-                       "A decode is an observation; the SNR is a model. The observation wins. "
-                       "(Families shown, not all 14 rungs.)"]))
+                      {"en": ["Climbs on consecutive clean decodes, not only on an SNR estimate \u2014 and "
+                              "never demotes below a level that just decoded.",
+                              "A decode is an observation; the SNR is a model. The observation wins. "
+                              "(Families shown, not all 14 rungs.)"],
+                       # Two lines that FIT. German runs longer than English, so the English wording
+                       # translated literally wrapped to three and ran through the footer.
+                       "de": ["Steigt nach mehreren sauberen Dekodierungen \u2014 und nie unter eine "
+                              "Stufe zurück, die gerade dekodiert hat.",
+                              "Eine Dekodierung ist eine Beobachtung, das SNR ein Modell. "
+                              "(Familien, nicht alle 14 Stufen.)"]}[lang]))
     return "".join(out)
 
 

@@ -6,7 +6,7 @@ WANT="$*"
 python3 - "$WANT" <<'PY'
 import zipfile, re, os, shutil, sys
 want = {int(x) for x in sys.argv[1].split()} if sys.argv[1].strip() else None
-SRC="docs/presentations/OpenPulseHF-Overview.odp"; OUTD="target/deckrender/single"
+SRC=os.environ.get("DECK", "docs/presentations/OpenPulseHF-Overview.odp"); OUTD="target/deckrender/single"
 shutil.rmtree(OUTD, ignore_errors=True); os.makedirs(OUTD)
 z=zipfile.ZipFile(SRC); parts={n:z.read(n) for n in z.namelist()}
 c=parts["content.xml"].decode(); head,tail=c.split("<draw:page ",1)
@@ -29,7 +29,7 @@ timeout 600 flatpak run --filesystem=/home/dc0sk/git/OpenPulseHF org.libreoffice
   --headless --convert-to 'png:impress_png_Export:{"PixelWidth":{"type":"long","value":1400},"PixelHeight":{"type":"long","value":788}}' \
   --outdir target/deckrender/out target/deckrender/single/*.odp >/dev/null 2>&1
 ls target/deckrender/out/
-deck=$(stat -c %Y docs/presentations/OpenPulseHF-Overview.odp)
+deck=$(stat -c %Y "${DECK:-docs/presentations/OpenPulseHF-Overview.odp}")
 for f in target/deckrender/out/*.png; do
   [ "$(stat -c %Y "$f")" -lt "$deck" ] && { echo "STALE: $f predates the deck"; exit 1; }
 done

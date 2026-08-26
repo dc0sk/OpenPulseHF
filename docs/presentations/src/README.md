@@ -4,8 +4,14 @@
 
 ```sh
 cd docs/presentations/src
-python3 gen.py
+python3 gen.py        # English -> ../OpenPulseHF-Overview.odp
+python3 gen.py de     # German  -> ../OpenPulseHF-Overview-DE.odp
 ```
+
+`slides.py` and `slides_de.py` hold the text; `gen.py`, `diagrams.py` and both checks are SHARED, so
+a layout fix applies to both languages and they cannot drift apart structurally. The diagrams carry
+their own strings per language and are keyed by slide title in `gen.py` — rename a title and its
+diagram silently detaches, which is why `check_titles` runs on every build.
 
 - `slides.py` — all slide text and the project URL. Edit here.
 - `diagrams.py` — the four native-ODF figures (evidence stack, fade bars, layer blocks, rate
@@ -32,6 +38,17 @@ Opening the `.odp` in LibreOffice and saving works fine — but the next `gen.py
 overwrites it. Either keep edits in `slides.py`, or stop regenerating once hand-editing
 starts.
 
+## Two guards, and why there are two
+
+`check_titles` (in `gen.py`) refuses a title over 48 characters. At 26 pt in a 25.2 cm frame a
+longer one wraps, and the second line falls outside the header band and is clipped. **The render
+check cannot see this** — it looks below the FOOTER, and a clipped title is cut near the top. Three
+English titles were shipping clipped before this guard existed, including one with "FreeDV" cut in
+half, and the render check had reported PASS over all of them.
+
+German runs 15–30 % longer than English, so it hit the same limit harder: eleven German titles
+needed shortening. Keep body lines under ~78 characters for the same reason.
+
 ## Checking it visually
 
 `gen.py`'s bounds guard proves no SHAPE leaves the page. **That is not the same property as "the
@@ -42,6 +59,7 @@ LibreOffice is available as a flatpak, so render and check:
 
 ```sh
 docs/presentations/src/render.sh          # all slides -> target/deckrender/out/*.png
+DECK=docs/presentations/OpenPulseHF-Overview-DE.odp docs/presentations/src/render.sh   # German
 docs/presentations/src/render.sh 18 31    # or just these
 python3 docs/presentations/src/check_render.py target/deckrender/out
 ```

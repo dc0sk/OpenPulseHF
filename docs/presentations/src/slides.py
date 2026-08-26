@@ -76,7 +76,7 @@ USE_CASES = [
    "",
    "This is also why the project is strict about evidence: a platform whose",
    "measurements cannot be trusted is worse than no platform at all."]),
-    ("Use case 6 — one program replacing a shelf of them",
+    ("Use case 6 — one program, not a shelf of them",
      ["A typical HF data station runs several separate pieces. OpenPulseHF is one binary that covers "
       "what most of them do — and talks the same protocols, so existing clients keep working.",
       "",
@@ -92,7 +92,7 @@ USE_CASES = [
       "NOT A REPLACEMENT FOR: a hardware PACTOR modem (different, licensed waveforms) or VARA "
       "(closed protocol — we do not interoperate with it and do not claim to)."]),
 
-    ("Use case 7 — relaying past a station you cannot hear",
+    ("Use case 7 — relaying past a station you cannot",
      ["Two stations that cannot work each other directly can go through a third. The relay layer "
       "forwards signed envelopes, enforces a hop limit, suppresses duplicates, and refuses to carry "
       "traffic from a peer its trust policy rejects.",
@@ -153,7 +153,7 @@ USE_CASES = [
       "link-quality threshold. Automatic initiation is a policy decision nobody should take from "
       "the operator by default."]),
 
-    ("Use case 11 — knowing who is actually talking on FreeDV",
+    ("Use case 11 — who is actually talking on FreeDV",
      ["FreeDV carries digital voice, and a voice you recognise is not proof of identity. This shim "
       "sends Ed25519-signed beacons through FreeDV's own data channel so a listener can verify which "
       "station is transmitting.",

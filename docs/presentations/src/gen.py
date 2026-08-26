@@ -1,6 +1,15 @@
 import os
 import zipfile, html
-from slides import URL, FOOTER, USE_CASES, CONTENT_SLIDES
+import sys
+
+# `python3 gen.py` builds the English deck; `python3 gen.py de` builds the German one from
+# slides_de.py. One generator, two content modules — the layout, diagrams and checks are shared, so
+# a fix to either applies to both and they cannot drift apart structurally.
+LANG = sys.argv[1] if len(sys.argv) > 1 else "en"
+if LANG == "de":
+    from slides_de import URL, FOOTER, USE_CASES, CONTENT_SLIDES
+else:
+    from slides import URL, FOOTER, USE_CASES, CONTENT_SLIDES
 
 W, H = 28.0, 15.75
 # (The QR module matrix used to be read from matrix.txt here. It went with the vector QR —
@@ -8,6 +17,23 @@ W, H = 28.0, 15.75
 
 import diagrams
 
+
+
+# Titles render at 26 pt bold in a 25.2 cm frame, which fits about 48 characters before the second
+# line falls outside the header band and is clipped. The render check cannot see this — it looks
+# BELOW the footer, and a clipped title is cut at the band edge near the top. So it is checked here,
+# at build time, from the one number that governs it.
+TITLE_MAX = 48
+
+
+def check_titles(slides):
+    over = [(len(t), t) for t, _ in slides if len(t) > TITLE_MAX]
+    if over:
+        lines = "\n  ".join(f"{n} chars: {t}" for n, t in sorted(over, reverse=True))
+        raise SystemExit(
+            f"slide titles longer than {TITLE_MAX} characters wrap out of the header band "
+            f"and are clipped:\n  {lines}"
+        )
 
 
 def check_bounds(xml):
@@ -72,6 +98,13 @@ LEDES = {
         "Each layer is cheaper than the one above it, and proves less. Both halves matter.",
     "Performance — measured on simulated channels":
         "Decode rate on a Watterson moderate_f1 fade. The zeros are the interesting part.",
+    "Wo es sitzt": "Ein Programm, sieben Ebenen — und genau eine davon ist eine Plugin-Grenze.",
+    "Unterschied 2 — die Leiter steigt nach BELEGEN":
+        "Vierzehn Stufen. Sie steigt nach Dekodierungen, nicht nach einer Schätzung.",
+    "Testen — sechs Ebenen":
+        "Jede Ebene ist billiger als die darüber — und belegt weniger. Beides zählt.",
+    "Leistung — im Kanalsimulator gemessen":
+        "Dekodierrate bei Watterson moderate_f1. Die Nullen sind das Interessante.",
 }
 
 DIAGRAMS = {
@@ -79,6 +112,11 @@ DIAGRAMS = {
     "Difference 2 — the ladder adapts on EVIDENCE": diagrams.ladder_steps,
     "Testing — six layers": diagrams.evidence_stack,
     "Performance — measured on simulated channels": diagrams.fade_bars,
+    # German titles map to the same functions — the diagram code is shared, only its strings differ.
+    "Wo es sitzt": diagrams.stack_blocks,
+    "Unterschied 2 — die Leiter steigt nach BELEGEN": diagrams.ladder_steps,
+    "Testen — sechs Ebenen": diagrams.evidence_stack,
+    "Leistung — im Kanalsimulator gemessen": diagrams.fade_bars,
 }
 
 AGENDA, REST = CONTENT_SLIDES[0], CONTENT_SLIDES[1:]
@@ -113,7 +151,7 @@ for i, (kind, title, body) in enumerate(ALL, start=2):
         # LIST ITEM, and using it produced "1 Unit 183 files with inline tests" as an intro. Each
         # diagram slide names its own one-line lede instead.
         p.append(tbox(1.6, 2.42, W-3.2, 1.0, "Lede", [LEDES.get(title, "")]))
-        p.append(fig(tbox))
+        p.append(fig(tbox, LANG))
     else:
         p.append(tbox(1.6, 2.8, W-3.2, H-4.15, "Body", body))
     p += [
@@ -229,7 +267,9 @@ MANIFEST = ('<?xml version="1.0" encoding="UTF-8"?><manifest:manifest '
 import os
 # repo-relative: this file lives in docs/presentations/src/
 out = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..",
-                   "OpenPulseHF-Overview.odp")
+                   "OpenPulseHF-Overview.odp" if LANG == "en"
+                   else "OpenPulseHF-Overview-DE.odp")
+check_titles(list(USE_CASES) + list(CONTENT_SLIDES))
 check_bounds(CONTENT)
 with zipfile.ZipFile(out, "w") as z:
     z.writestr(zipfile.ZipInfo("mimetype"),
