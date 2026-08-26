@@ -122,10 +122,15 @@ impl SigningDomain {
     /// domains carry their own version byte in the frame and this is that byte's current value.
     pub const fn version(self) -> u8 {
         match self {
+            // DERIVED, not written: these four carry their version in the frame, so the value is
+            // whatever the wire format says it is. It was hard-coded as 0x02 and went stale the
+            // moment #1191 reset WIRE_VERSION — caught by `in_band_versions_match_the_wire_version`,
+            // which exists for exactly that. Sharing the constant makes the test unfailable by
+            // construction, which is better than a test that catches the drift after the fact.
             SigningDomain::ConReq
             | SigningDomain::ConAck
             | SigningDomain::PqConReq
-            | SigningDomain::PqConAck => 0x02,
+            | SigningDomain::PqConAck => crate::handshake_wire::WIRE_VERSION,
             SigningDomain::WireEnvelope => 0x02,
             SigningDomain::Manifest
             | SigningDomain::PeerDescriptor

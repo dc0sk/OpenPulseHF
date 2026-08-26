@@ -141,7 +141,6 @@ pub struct PqConReq {
 pub struct PqConAck {
     pub station_id: String,
     /// The initiator this answers.
-    pub dst_station: String,
     /// SHA-256 over the complete transmitted PQ CONREQ, replacing the session-id echo.
     pub conreq_hash: [u8; 32],
     /// Unix-ms creation time, signed, for replay freshness. See [`PqConReq::timestamp_ms`].
@@ -449,7 +448,6 @@ pub struct PqConAckParams<'a> {
     /// Responder callsign (cap 12).
     pub station_id: &'a str,
     /// The initiator this answers; never a wildcard.
-    pub dst_station: &'a str,
     /// ML-DSA-44 signing seed.
     pub pq_signing_key: &'a [u8],
     /// The initiator's ML-KEM encapsulation key, from its CONREQ.
@@ -467,11 +465,6 @@ pub fn create_pq_conack(
     params: &PqConAckParams<'_>,
     classical_seed: &[u8; 32],
 ) -> Result<(Vec<u8>, Vec<u8>), PqHandshakeError> {
-    if params.dst_station.is_empty() || params.dst_station == "*" {
-        return Err(PqHandshakeError::SerializationError(
-            "PQ CONACK dst_station must be a specific callsign".into(),
-        ));
-    }
     let ed_sk = EdSigningKey::from_bytes(classical_seed);
     let classical_pubkey = ed_sk.verifying_key().to_bytes().to_vec();
 
@@ -496,7 +489,6 @@ pub fn create_pq_conack(
         x.map_err(|e| PqHandshakeError::SerializationError(e.to_string()))
     };
     e(w.str_capped("station_id", params.station_id, caps::STATION_ID))?;
-    e(w.str_capped("dst_station", params.dst_station, caps::STATION_ID))?;
     e(w.fixed("classical_pubkey", &classical_pubkey, PUBKEY_LEN))?;
     e(w.fixed("pq_pubkey", &pq_pubkey, ML_DSA_44_PUBKEY_SIZE))?;
     e(w.fixed("kem_ciphertext", &kem_ciphertext, ML_KEM_768_CT_SIZE))?;
@@ -526,7 +518,6 @@ pub fn decode_pq_conack(bytes: &[u8]) -> Result<PqConAck, PqHandshakeError> {
         .map_err(|e| PqHandshakeError::SerializationError(e.to_string()))?;
     let mut r = BodyReader::new(spans.body);
     let station_id = rd(r.str_capped("station_id", caps::STATION_ID))?;
-    let dst_station = rd(r.str_capped("dst_station", caps::STATION_ID))?;
     let classical_pubkey = rd(r.fixed("classical_pubkey", PUBKEY_LEN))?;
     let pq_pubkey = rd(r.fixed("pq_pubkey", ML_DSA_44_PUBKEY_SIZE))?;
     let kem_ciphertext = rd(r.fixed("kem_ciphertext", ML_KEM_768_CT_SIZE))?;
@@ -552,7 +543,6 @@ pub fn decode_pq_conack(bytes: &[u8]) -> Result<PqConAck, PqHandshakeError> {
     conreq_hash.copy_from_slice(&hash_vec);
     Ok(PqConAck {
         station_id,
-        dst_station,
         conreq_hash,
         timestamp_ms,
         classical_pubkey,

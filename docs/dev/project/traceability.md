@@ -9,6 +9,63 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-08-26 — #1191: station-id cap 18, `dst_station` off the CONACK, wire version frozen
+
+**Requirement → design → implementation → tests → results.**
+
+- **Change.** `caps::STATION_ID` was **12**, sized from the single example `DC0SK/P` — the
+  artifact-calibrated-constant archetype. A legal 13-character compound callsign
+  (`SV5/DL1ABCD/P`) could not handshake **in either direction**: the peer dialling such a station
+  fails at *their own* encoder on `dst_station`.
+
+- **There is no inventory to size it from, and that is the answer.** ITU RR Article 19 bounds an
+  ordinary amateur callsign at roughly seven characters but lets administrations authorise longer
+  special-event calls, and compound decoration stacks on top. So the cap is a **policy number**;
+  its justification is a documented inventory of what it covers, plus **loud refusal** of the rest
+  (config load and command boundary, #1199) — never a silent downgrade.
+
+- **Design (reviewed BEFORE implementation).** Cap 18 is reached by **removing `dst_station` from
+  the CONACK**, not by trimming `PROFILE_NAME`. A CONACK has exactly one consumer and it
+  self-selects by `conreq_hash` — a SHA-256 over the whole transmitted CONREQ, and a **strictly
+  stronger** filter than a callsign echo: it rejects a replayed CONACK between the *same two
+  stations*, which a callsign cannot. #1178's spent-RF rationale does not transfer, because nobody
+  transmits in response to a CONACK. Verified with a positive control that the field had no
+  production reader. Removed from the **PQ** CONACK too, so the eventual PQ wiring neither carries a
+  dead field nor pays a second wire break.
+
+- **`WIRE_VERSION` reset to `0x01` and FROZEN until 1.0** — a maintainer decision that overrode the
+  review's bump recommendation, on the grounds that nothing is deployed outside this project's test
+  rigs, so bumping per change is ceremony. **The cost is recorded rather than hidden:** two builds
+  from different points in the pre-1.0 window fail with a garbled decode instead of a clean version
+  rejection, and the mitigation is procedural — rebuild both ends in lockstep before any on-air
+  session. Written into `handshake_wire.rs` and the wire spec.
+
+- **Tests → results (actually run).** Both budget gates FIRED as designed and their arithmetic was
+  **redone, not adjusted**, as their own messages instruct: **CONREQ 236 B, CONACK 237 B** against
+  the 251 B fragment (headroom 15 / 14). Core + daemon suites green. KATs re-recorded from the
+  encoder, never retyped; the classical frame stays 187 B (this fixture's callsign is short, so the
+  wider cap costs it nothing) while the version byte and signature moved.
+
+- **A test that would have gone stale, fixed at the cause.** `a_v1_frame_is_rejected_by_version…`
+  hard-coded "v1 is rejected", which was true at `0x02` and became a FALSE TEST the moment the
+  constant was reset — it then asserted the *current* version is refused. Rewritten to derive the
+  wrong version from `WIRE_VERSION`, with a positive control that the current one parses.
+  `SigningDomain::version()` likewise now derives from the constant instead of repeating `0x02`;
+  `in_band_versions_match_the_wire_version` caught that drift, which is what it was added for.
+
+- **Pre-existing doc staleness swept up, found by the review.** `protocol-wire-spec.md` still typed
+  `session_id` as `string (≤24)` and claimed a 241 B maximal CONREQ; `CLAUDE.md` and
+  `architecture.md` carried the same numbers — all predating the `session_id` → `u64` change. The
+  spec's embedded known-answer vector had **also** drifted from the code in both length and content,
+  so its promise that an independent implementer can check their encoder against it was false. The
+  vector is now taken verbatim from the test and asserted byte-identical.
+
+- **Filed separately, found during the review:** `ConnectPeer` accepts `"*"` (#1203) — it transmits a
+  broadcast CONREQ every daemon in range answers, then rejects every reply, so the dial cannot
+  succeed and costs the channel.
+
+---
+
 ## 2026-08-25 — #1192: the reachability scanner stops counting prose as a reference
 
 **Requirement/change → design → implementation → tests → results.**

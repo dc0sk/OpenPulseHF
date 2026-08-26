@@ -21,10 +21,28 @@ pub const MAGIC_CONACK: &[u8; 4] = b"HSAK";
 ///
 /// DORMANT(#1147): part of the format's public contract — the wire spec and the known-answer vector
 /// cite it — but no production caller names it, because `split_frame` enforces it internally.
-/// `0x01` (the JSON format) is rejected outright — there is no dual decode, because
-/// there is no compatibility mode for the data plane and inventing one here would be the
-/// "legacy keystream" mistake in a different file.
-pub const WIRE_VERSION: u8 = 0x02;
+///
+/// Any value other than this one is rejected outright. There is no dual decode: there is no
+/// compatibility mode for the data plane, and inventing one here would be the "legacy keystream"
+/// mistake in a different file.
+///
+/// This comment used to say "`0x01` (the JSON format) is rejected outright", which was true while
+/// the constant was `0x02` and became false the moment it was reset. The rule it stated is the
+/// durable part; the specific value was not.
+// FROZEN AT 0x01 UNTIL 1.0 — a maintainer decision, not an oversight.
+//
+// The wire format changes freely in the pre-1.0 window, and nothing is deployed anywhere except
+// this project's own test rigs. Bumping the byte on each change would be ceremony: there is no
+// third party whose stale build the version could protect.
+//
+// THE COST, so it is not a surprise: two builds from different points in this window do not fail
+// cleanly. A stale peer gets a garbled `str_capped`/`finish` decode error rather than "version
+// rejected", which is an unattributable on-air symptom — the class this repo has paid for before.
+// The mitigation is procedural: REBUILD BOTH ENDS IN LOCKSTEP before any on-air session. If a
+// third party ever runs this, that trade stops being acceptable and the byte starts moving.
+//
+// At 1.0 this becomes a real version and every subsequent format change bumps it.
+pub const WIRE_VERSION: u8 = 0x01;
 
 /// PQ frame magics (#1147). The PQ frames were bare JSON with NO magic, and the daemon routes by
 /// magic sniff, so a PQ frame would have been silently dropped even if something sent one.
@@ -56,8 +74,26 @@ pub const FRAGMENT_CAPACITY: usize = 251;
 /// contradicted each other adjacently in the design's own table. `session_id` is now a fixed `u64`,
 /// which removes the cap rather than re-tuning it.
 pub mod caps {
-    /// `station_id` and `dst_station`. `DC0SK/P` is 7.
-    pub const STATION_ID: usize = 12;
+    /// `station_id` (and `dst_station` on the CONREQ).
+    ///
+    /// 18, and the number is a POLICY choice over an unbounded generator, not a measurement. There
+    /// is no authoritative maximum for a compound amateur callsign: ITU RR Article 19 bounds an
+    /// ordinary call at roughly seven characters but lets administrations authorise longer
+    /// special-event calls, and compound decoration (`prefix/` … `/suffix`) stacks on top of that.
+    ///
+    /// What 18 covers, which is the inventory this replaces the old example with:
+    ///   `DC0SK/P`             7   an ordinary call, portable
+    ///   `SV5/DL1ABCD/P`      13   ordinary call, foreign prefix and suffix
+    ///   `3DA0/DL1ABCD/QRP`   16   four-character prefix, seven-character base
+    ///   `3DA0/VI110ACT/QRP`  17   as above with an eight-character special-event base
+    ///
+    /// Longer forms remain constructible and are REFUSED LOUDLY — at config load, and at the
+    /// command boundary (#1199) — rather than silently downgrading the session. That refusal, not
+    /// the number, is what makes the cap honest.
+    ///
+    /// The previous value was 12, sized from the single example `DC0SK/P`, and a legal
+    /// 13-character callsign could not handshake in either direction.
+    pub const STATION_ID: usize = 18;
     /// `station_grid`. Six-character Maidenhead is the longest in use.
     pub const GRID: usize = 8;
     /// `profile_name`. `hpx_pilot_fast_rrc` is 18.
@@ -382,10 +418,9 @@ mod tests {
     fn the_maximal_legal_conreq_fits_one_sar_fragment() {
         let frame = HEADER_LEN + maximal_conreq_body().len() + SIG_LEN;
         assert_eq!(
-            frame, 224,
-            "the maximal CONREQ is {frame} B, not the 224 B expected after `session_id` became a \
-             fixed u64 — the layout changed and the fragment arithmetic must be redone, not the \
-             assertion adjusted"
+            frame, 236,
+            "the maximal CONREQ is {frame} B, not the budgeted 236 — redo the fragment \
+             arithmetic against the encoder, do not adjust this number to match"
         );
         assert!(
             frame <= FRAGMENT_CAPACITY,
@@ -405,12 +440,7 @@ mod tests {
             caps::STATION_ID,
         )
         .unwrap();
-        w.str_capped(
-            "dst_station",
-            &"B".repeat(caps::STATION_ID),
-            caps::STATION_ID,
-        )
-        .unwrap();
+        // No dst_station: a CONACK self-selects by conreq_hash (#1191).
         w.fixed("pubkey", &[7u8; PUBKEY_LEN], PUBKEY_LEN).unwrap();
         w.fixed("kex_pubkey", &[9u8; KEX_PUBKEY_LEN], KEX_PUBKEY_LEN)
             .unwrap();
@@ -428,23 +458,41 @@ mod tests {
         w.u64(u64::MAX);
         w.u64(u64::MAX);
         let frame = HEADER_LEN + w.finish().len() + SIG_LEN;
+        // Arithmetic redone for cap 18 with dst_station removed (#1191), not adjusted to match:
+        //   header 7 + station_id (1+18) + pubkey 32 + kex 32 + mode 1 + conreq_hash 32
+        //   + grid (1+8) + profile (1+24) + fingerprint 8 + timestamp 8 + signature 64 = 237
         assert_eq!(
-            frame, 244,
-            "the maximal CONACK is {frame} B, not the budgeted 244"
+            frame, 237,
+            "the maximal CONACK is {frame} B, not the budgeted 237 — redo the fragment \
+             arithmetic against the encoder, do not adjust this number to match"
         );
         assert!(frame <= FRAGMENT_CAPACITY);
     }
 
-    /// A v1 frame is refused by VERSION, which is why nothing downstream needs a dual-decode path.
+    /// A frame of the WRONG version is refused by version, not by parsing — which is why nothing
+    /// downstream needs a dual-decode path.
+    ///
+    /// The version to reject is derived from `WIRE_VERSION`, not written as a literal. This test
+    /// used to hard-code "a v1 frame is rejected", which was true while the constant was `0x02` and
+    /// became a FALSE TEST the moment #1191 reset it to `0x01` — it then asserted that the current
+    /// version is refused. A test naming a constant's value goes stale the moment the value moves.
     #[test]
-    fn a_v1_frame_is_rejected_by_version_not_by_parsing() {
+    fn a_frame_of_the_wrong_version_is_rejected_by_version_not_by_parsing() {
+        let wrong = WIRE_VERSION.wrapping_add(1);
         let mut f = signed_prefix(MAGIC_CONREQ, &[0u8; 8]).unwrap();
         f.extend_from_slice(&[0u8; SIG_LEN]);
-        f[4] = 0x01;
+        f[4] = wrong;
         let e = split_frame(&f, MAGIC_CONREQ, "CONREQ")
             .unwrap_err()
             .to_string();
-        assert!(e.contains("0x01"), "expected a version refusal, got: {e}");
+        assert!(
+            e.contains(&format!("{wrong:#04x}")) || e.contains("version"),
+            "expected a version refusal for {wrong:#04x}, got: {e}"
+        );
+        // Positive control: the CURRENT version must parse, or the test above passes vacuously.
+        let mut ok = signed_prefix(MAGIC_CONREQ, &[0u8; 8]).unwrap();
+        ok.extend_from_slice(&[0u8; SIG_LEN]);
+        assert!(split_frame(&ok, MAGIC_CONREQ, "CONREQ").is_ok());
     }
 
     /// A frame cannot verify as another TYPE: the magic is inside the signed prefix.

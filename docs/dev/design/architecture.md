@@ -168,7 +168,7 @@ Binary body, fields in wire order (v2, #1147 — v1's JSON body is gone):
 | `pubkey` | `[u8; 32]` | Ed25519 verifying key |
 | `kex_pubkey` | `[u8; 32]` | Ephemeral X25519 key for OTA-ACK key agreement |
 | `signing_modes` | u8 count + u8 each | Modes offered, ≤4 |
-| `session_id` | string ≤24 | Session identifier |
+| `session_id` | u64 | Session identifier (fixed-width since #1147's follow-up) |
 | `station_grid` | string ≤8 | Maidenhead grid; empty = not advertised |
 | `profile_name` | string ≤24 | Active OTA ladder; empty = none |
 | `profile_fingerprint` | u64 BE | Ladder mapping fingerprint; 0 = none |
@@ -197,7 +197,7 @@ MAGIC("HSAK") | VERSION(0x02) | LENGTH(u16, BE) | body | SIGNATURE(64)
 
 **The signature covers `magic ‖ version ‖ length ‖ body`** — the transmitted bytes minus the
 signature — so there is no second representation to drift from the wire, and the version is bound.
-Both frames fit **one SAR fragment** by construction (241 B / 244 B against 251 B); v1's JSON frames
+Both frames fit **one SAR fragment** by construction (236 B / 237 B against 251 B); v1's JSON frames
 were ~752 B and took three.
 
 The CONACK carries no `session_id`: echoing it would push the maximal frame past one fragment, and

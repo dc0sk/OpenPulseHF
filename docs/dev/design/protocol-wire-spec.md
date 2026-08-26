@@ -143,8 +143,8 @@ the bytes on the air minus the trailing signature. There is no second representa
 is "check what you received" and cannot drift from the encoder. It also binds the **version**, which
 v1 did not.
 
-**Both frames fit ONE SAR fragment by construction.** The maximal legal CONREQ is **241 B** and CONACK
-**244 B**, against the 251 B a fragment holds — a property of the worst case at every cap, not of a
+**Both frames fit ONE SAR fragment by construction.** The maximal legal CONREQ is **236 B** and CONACK
+**237 B**, against the 251 B a fragment holds — a property of the worst case at every cap, not of a
 typical frame. v1 was ~752 B on the wire = 3 fragments = three preambles and three acquisitions,
 decoding at roughly p³ on a fading channel.
 
@@ -160,7 +160,7 @@ failure surfaces at the sender where it is actionable.
 
 | field | cap (bytes) |
 |---|---|
-| `station_id`, `dst_station` | 12 |
+| `station_id`, `dst_station` | 18 |
 | `session_id` | 24 |
 | `station_grid` | 8 |
 | `profile_name` | 24 |
@@ -176,12 +176,12 @@ Fields in wire order. Strings are `u8`-length-prefixed and capped; integers are 
 
 | Field | Type | Meaning |
 |---|---|---|
-| `station_id` | string (≤12) | initiator callsign |
-| `dst_station` | string (≤12) | addressee; `"*"` = broadcast. **Empty is invalid** |
+| `station_id` | string (≤18) | initiator callsign |
+| `dst_station` | string (≤18) | addressee; `"*"` = broadcast. **Empty is invalid** |
 | `pubkey` | bytes (32) | Ed25519 verifying key |
 | `kex_pubkey` | bytes (32) | ephemeral X25519 key for OTA-ACK key agreement (E7) |
 | `signing_modes` | u8 count + u8 each | modes offered, in preference order |
-| `session_id` | string (≤24) | session identifier |
+| `session_id` | u64 | session identifier — fixed-width, not a string (F1) |
 | `station_grid` | string (≤8) | Maidenhead grid; empty = not advertised |
 | `profile_name` | string (≤24) | active OTA ladder name; empty = none |
 | `profile_fingerprint` | u64 | fingerprint of the ladder mapping; 0 = none |
@@ -195,8 +195,7 @@ why empty is refused at both ends rather than treated as a wildcard.
 
 | Field | Type | Meaning |
 |---|---|---|
-| `station_id` | string (≤12) | responder callsign |
-| `dst_station` | string (≤12) | the initiator; never a wildcard |
+| `station_id` | string (≤18) | responder callsign |
 | `pubkey` | bytes (32) | Ed25519 verifying key |
 | `kex_pubkey` | bytes (32) | ephemeral X25519 key |
 | `selected_mode` | u8 | chosen from the modes the CONREQ offered |
@@ -225,6 +224,27 @@ tag also serves anti-collision (a co-channel session has a different key). This 
 encryption** — the ACK content stays in the clear — so it is compatible with amateur-radio rules that
 forbid obscuring meaning (see `docs/regulatory.md`). A residual: a *replayed* valid ACK carries stale
 but valid content within the session; the rate ladder is receiver-led and absolute, bounding the effect.
+
+#### `station_id` cap, and why the CONACK has no `dst_station`
+
+`caps::STATION_ID` is **18 bytes**, a POLICY number over an unbounded generator — ITU RR Article 19
+bounds an ordinary amateur callsign at roughly seven characters but lets administrations authorise
+longer special-event calls, and compound decoration stacks on top. 18 covers `SV5/DL1ABCD/P` (13),
+`3DA0/DL1ABCD/QRP` (16) and `3DA0/VI110ACT/QRP` (17). Longer forms are refused **loudly**, at config
+load and at the command boundary (#1199), never by silently downgrading the session.
+
+**The CONACK carries no `dst_station`** (#1191). A CONACK has exactly one consumer and it
+self-selects by `conreq_hash` — a SHA-256 over the whole transmitted CONREQ, which is a strictly
+stronger filter than a callsign echo: it rejects a replayed CONACK between the *same two stations*,
+which a callsign cannot. #1178's spent-RF argument for addressing the CONREQ does not transfer,
+because nobody transmits in response to a CONACK. The same field is absent from the PQ CONACK for
+the same reason.
+
+**`WIRE_VERSION` is `0x01` and FROZEN until 1.0.** The format changes freely in the pre-1.0 window
+and nothing is deployed outside the project's own test rigs, so bumping the byte per change would be
+ceremony. The cost, stated so it is not a surprise: two builds from different points in this window
+fail with a garbled decode rather than a clean version rejection. The mitigation is procedural —
+rebuild both ends in lockstep before any on-air session. At 1.0 the byte starts moving.
 
 ### 3.3 Signing and verification
 
@@ -278,14 +298,17 @@ Inputs, all fixed:
 | `timestamp_ms` | `1700000000000` |
 | `kex_pubkey` | 32 × `0x42` |
 
-Output — **198 bytes** (7 header + 127 body + 64 signature):
+Output — **187 bytes** (7 header + 116 body + 64 signature).
+Taken verbatim from `CONREQ_KAT` in `crates/openpulse-core/tests/handshake_kat.rs`; that
+test fails if the encoder stops producing it, so this copy cannot drift silently — it had
+drifted before #1191 and disagreed with the code in both length and content.
 
 ```
-4853435102007f0457314157054b3258595a8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d941
-21bf3748801b40f6f5c4242424242424242424242424242424242424242424242424242424242424242
-020102125731415 72d3137303030303030303030303006464e33317072066870785f6866
-0123456789abcdef0000018bcfe56800b75f70d2987f3beb58227a42056b613fd5d0593c507bd86a748
-ac7e379c033f8356723f57bf41543278490cdd55ae5a3368fcdd4c346179b9f7d62031115e70a
+485343510100740457314157054b3258595a8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94
+121bf3748801b40f6f5c424242424242424242424242424242424242424242424242424242424242
+42420201020000018bcfe5680006464e33317072066870785f68660123456789abcdef0000018bcf
+e568003a2570b187d50bfd206bd9560e8cd85cae60496ad4765ea2577242a4f6b9e0d68c29b95f61
+566d07849a35738e810c85050d877b1977bbb6002a8b7f552fb20c
 ```
 
 (Line breaks are for reading only; the canonical form is the unbroken hex in

@@ -1572,7 +1572,6 @@ fn handle_inbound_conreq(
     match ConAck::create(
         &ConAckParams {
             station_id: &runtime_state.local_callsign,
-            dst_station: &req.station_id,
             selected_mode: SigningMode::Normal,
             // Transcript binding over the CONREQ exactly as received, signature included.
             conreq_hash: openpulse_core::handshake::conreq_hash(bytes),
@@ -5015,7 +5014,6 @@ mod handshake_rf_tests {
         ConAck::create(
             &ConAckParams {
                 station_id: "K2XYZ",
-                dst_station: "W1AW",
                 selected_mode: SigningMode::Normal,
                 conreq_hash: openpulse_core::handshake::conreq_hash(conreq),
                 station_grid: grid,
@@ -5287,15 +5285,22 @@ mod handshake_rf_tests {
         );
 
         // Every route to an unbuildable CONREQ, per #1199.
+        //
+        // The over-cap callsign is DERIVED from the cap, not written as a literal. This used to
+        // hard-code `SV5/DL1ABCD/P` (13 chars), which was over the cap at 12 and became LEGAL at 18
+        // (#1191) — the frame then encoded fine and this test failed for the right reason: there
+        // was nothing left to refuse. A fixture pinned to a constant's VALUE goes stale the moment
+        // the value moves; one derived from the constant cannot.
+        let over_cap = "A".repeat(openpulse_core::handshake_wire::caps::STATION_ID + 1);
         for (local, peer, why) in [
             (
-                "SV5/DL1ABCD/P",
+                over_cap.as_str(),
                 "W1AW",
                 "local callsign over caps::STATION_ID",
             ),
             (
                 "K2XYZ",
-                "SV5/DL1ABCD/P",
+                over_cap.as_str(),
                 "PEER callsign over the cap — config validation cannot catch this",
             ),
             ("K2XYZ", "", "empty dst_station"),
@@ -5496,7 +5501,6 @@ mod handshake_rf_tests {
         let conack = ConAck::create(
             &ConAckParams {
                 station_id: "N0EVL",
-                dst_station: "W1AW",
                 selected_mode: SigningMode::Normal,
                 conreq_hash: openpulse_core::handshake::conreq_hash(&ours),
                 station_grid: "",

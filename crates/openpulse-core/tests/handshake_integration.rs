@@ -54,11 +54,10 @@ fn conreq(station: &str, dst: &str, seed: u8, modes: Vec<SigningMode>) -> Vec<u8
     .unwrap()
 }
 
-fn conack(station: &str, dst: &str, seed: u8, mode: SigningMode, req: &[u8]) -> Vec<u8> {
+fn conack(station: &str, seed: u8, mode: SigningMode, req: &[u8]) -> Vec<u8> {
     ConAck::create(
         &ConAckParams {
             station_id: station,
-            dst_station: dst,
             selected_mode: mode,
             conreq_hash: conreq_hash(req),
             station_grid: "EM69",
@@ -201,7 +200,7 @@ fn addressing_is_not_a_verification_failure() {
 #[test]
 fn valid_conack_accepted() {
     let req = conreq("W1AW", "K2XYZ", 1, vec![SigningMode::Normal]);
-    let ack = conack("K2XYZ", "W1AW", 2, SigningMode::Normal, &req);
+    let ack = conack("K2XYZ", 2, SigningMode::Normal, &req);
     let mut store = InMemoryTrustStore::new();
     store.add_trusted("K2XYZ", pubkey_for(2));
 
@@ -226,7 +225,7 @@ fn conack_rejected_when_bound_to_a_different_conreq() {
     let theirs = conreq("W1AW", "DL9ZZZ", 1, vec![SigningMode::Normal]);
     assert_ne!(conreq_hash(&ours), conreq_hash(&theirs));
 
-    let ack = conack("K2XYZ", "W1AW", 2, SigningMode::Normal, &theirs);
+    let ack = conack("K2XYZ", 2, SigningMode::Normal, &theirs);
     let mut store = InMemoryTrustStore::new();
     store.add_trusted("K2XYZ", pubkey_for(2));
     assert!(matches!(
@@ -248,7 +247,7 @@ fn conack_rejected_when_bound_to_a_different_conreq() {
 #[test]
 fn conack_rejected_when_mode_not_offered() {
     let req = conreq("W1AW", "K2XYZ", 1, vec![SigningMode::Normal]);
-    let ack = conack("K2XYZ", "W1AW", 2, SigningMode::Paranoid, &req);
+    let ack = conack("K2XYZ", 2, SigningMode::Paranoid, &req);
     let mut store = InMemoryTrustStore::new();
     store.add_trusted("K2XYZ", pubkey_for(2));
     assert!(matches!(
@@ -268,7 +267,7 @@ fn conack_rejected_when_mode_not_offered() {
 #[test]
 fn conack_rejected_invalid_signature() {
     let req = conreq("W1AW", "K2XYZ", 1, vec![SigningMode::Normal]);
-    let ack = conack("K2XYZ", "W1AW", 2, SigningMode::Normal, &req);
+    let ack = conack("K2XYZ", 2, SigningMode::Normal, &req);
     let mut store = InMemoryTrustStore::new();
     store.add_trusted("K2XYZ", pubkey_for(2));
 
@@ -301,7 +300,7 @@ fn full_handshake_round_trip() {
         1,
         vec![SigningMode::Normal, SigningMode::Psk],
     );
-    let ack = conack("K2XYZ", "W1AW", 2, SigningMode::Psk, &req);
+    let ack = conack("K2XYZ", 2, SigningMode::Psk, &req);
 
     let mut store = InMemoryTrustStore::new();
     store.add_trusted("W1AW", pubkey_for(1));
@@ -345,9 +344,8 @@ fn conreq_encode_decode_round_trip() {
 #[test]
 fn conack_encode_decode_round_trip() {
     let req = conreq("W1AW", "K2XYZ", 1, vec![SigningMode::Normal]);
-    let d = ConAck::decode(&conack("K2XYZ", "W1AW", 2, SigningMode::Normal, &req)).unwrap();
+    let d = ConAck::decode(&conack("K2XYZ", 2, SigningMode::Normal, &req)).unwrap();
     assert_eq!(d.station_id, "K2XYZ");
-    assert_eq!(d.dst_station, "W1AW");
     assert_eq!(d.station_grid, "EM69");
     assert_eq!(d.timestamp_ms, TS + 100);
 }
@@ -369,7 +367,7 @@ fn both_handshake_frames_fit_one_sar_fragment() {
         1,
         vec![SigningMode::Normal, SigningMode::Psk],
     );
-    let ack = conack("K2XYZ", "W1AW", 2, SigningMode::Psk, &req);
+    let ack = conack("K2XYZ", 2, SigningMode::Psk, &req);
     assert!(
         req.len() <= FRAGMENT_CAPACITY,
         "CONREQ is {} B, over one fragment",

@@ -45,13 +45,18 @@ fn kat_conreq() -> Vec<u8> {
     .expect("KAT CONREQ must encode")
 }
 
-/// THE VECTOR. Also reproduced in `docs/dev/design/protocol-wire-spec.md` so an independent
+/// THE VECTOR.
+///
+/// RE-RECORDED 2026-08-26 (#1191): `caps::STATION_ID` 12 → 18, `dst_station` removed from the
+/// CONACK, and `WIRE_VERSION` reset to 0x01 and frozen until 1.0. The frame length is unchanged at
+/// 187 B — this fixture's callsign is short, so the wider cap costs it nothing — but the version
+/// byte and therefore the signature both moved. Also reproduced in `docs/dev/design/protocol-wire-spec.md` so an independent
 /// implementer can check their encoder without building this crate.
 const CONREQ_KAT: &str = "\
-485343510200740457314157054b3258595a8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f\
+485343510100740457314157054b3258595a8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f\
 6f5c42424242424242424242424242424242424242424242424242424242424242420201020000018bcfe5680006464e\
-33317072066870785f68660123456789abcdef0000018bcfe56800c50c3ecbd52feef79ae5b6d04fa5025c03ecf2d2eb\
-b2b1e5ad1e5001905815f8de466cf513eb52849cd6863e98937d36239568835c1b432ee2435950beae290b";
+33317072066870785f68660123456789abcdef0000018bcfe568003a2570b187d50bfd206bd9560e8cd85cae60496ad4\
+765ea2577242a4f6b9e0d68c29b95f61566d07849a35738e810c85050d877b1977bbb6002a8b7f552fb20c";
 
 #[test]
 fn the_classical_conreq_matches_its_known_answer_vector() {
@@ -112,7 +117,7 @@ fn ed25519_signing_is_deterministic_in_this_build() {
 /// `kem_ciphertext` from `encapsulate()`, which is randomised by design, so only its encoder layout
 /// could be pinned and not its bytes.
 const PQ_CONREQ_KAT_SHA256: &str =
-    "02792e953a55685b5d36582bc456af7efcfe70aec6592658cbfd8343deee2e7c";
+    "6281f74a0e15edb601a6f224e771fd7b9713eac336c8f4ce305fb1d74cb8f638";
 const PQ_CONREQ_KAT_LEN: usize = 5049;
 
 fn kat_pq_conreq() -> Vec<u8> {
