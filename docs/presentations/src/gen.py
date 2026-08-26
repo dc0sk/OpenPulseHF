@@ -64,6 +64,16 @@ def band(h): return ('<draw:frame draw:style-name="band" svg:x="0cm" svg:y="0cm"
                      f'svg:width="{W}cm" svg:height="{h}cm"><draw:text-box/></draw:frame>')
 
 # Agenda leads, then the use cases, then the rest — motivation after structure.
+LEDES = {
+    "Where it sits": "One binary, seven layers — and exactly one of them is a plugin boundary.",
+    "Difference 2 — the ladder adapts on EVIDENCE":
+        "Fourteen rungs. It climbs on decodes, not on an SNR estimate that a fade can flatten.",
+    "Testing — six layers":
+        "Each layer is cheaper than the one above it, and proves less. Both halves matter.",
+    "Performance — measured on simulated channels":
+        "Decode rate on a Watterson moderate_f1 fade. The zeros are the interesting part.",
+}
+
 DIAGRAMS = {
     "Where it sits": diagrams.stack_blocks,
     "Difference 2 — the ladder adapts on EVIDENCE": diagrams.ladder_steps,
@@ -99,8 +109,10 @@ for i, (kind, title, body) in enumerate(ALL, start=2):
          f'svg:width="{W}cm" svg:height="2.15cm"><draw:text-box/></draw:frame>',
          tbox(1.4, 0.42, W-2.8, 1.4, head_style, [title])]
     if fig:
-        # the figure replaces the bullets; body[0] survives as the one-line lede above it
-        p.append(tbox(1.6, 2.42, W-3.2, 1.0, "Lede", [body[0]]))
+        # The figure replaces the bullets. body[0] is NOT a lede — on these slides it was the first
+        # LIST ITEM, and using it produced "1 Unit 183 files with inline tests" as an intro. Each
+        # diagram slide names its own one-line lede instead.
+        p.append(tbox(1.6, 2.42, W-3.2, 1.0, "Lede", [LEDES.get(title, "")]))
         p.append(fig(tbox))
     else:
         p.append(tbox(1.6, 2.8, W-3.2, H-4.15, "Body", body))

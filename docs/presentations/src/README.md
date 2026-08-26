@@ -32,6 +32,29 @@ Opening the `.odp` in LibreOffice and saving works fine — but the next `gen.py
 overwrites it. Either keep edits in `slides.py`, or stop regenerating once hand-editing
 starts.
 
+## Checking it visually
+
+`gen.py`'s bounds guard proves no SHAPE leaves the page. **That is not the same property as "the
+slide is readable"** — a text box sits comfortably inside the page while its TEXT overflows the box,
+and LibreOffice then silently clips it. Three slides shipped that way and only a render showed it.
+
+LibreOffice is available as a flatpak, so render and check:
+
+```sh
+docs/presentations/src/render.sh          # all slides -> target/deckrender/out/*.png
+docs/presentations/src/render.sh 18 31    # or just these
+python3 docs/presentations/src/check_render.py target/deckrender/out
+```
+
+`check_render.py` looks for ink below the footer baseline, which is where clipped text lands. It
+skips full-bleed dark slides (cover, closing) — measuring absolute ink there flagged the cover at
+28 700 "overflow" pixels on the first attempt.
+
+Two traps the tooling now guards against, both of which produced a wrong verdict first:
+`render.sh` refuses to report on PNGs older than the deck (I read a stale image and concluded an
+edit had not worked), and the splitter cuts each page at its own closing tag (the last slide made a
+file LibreOffice would not load, so the check passed over 33 of 34 and said nothing).
+
 ## The bounds guard
 
 `gen.py` refuses to write a deck whose shapes leave the 28.0 x 15.75 cm page. This is not

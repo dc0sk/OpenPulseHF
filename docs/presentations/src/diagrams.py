@@ -42,15 +42,16 @@ def evidence_stack(tbox):
         ("virtual loopback", "one clock, no analog path",            "cannot see sample-rate offset"),
         ("channel sim",      "Watterson fade, Gilbert-Elliott burst", "the model is not the ionosphere"),
         ("integration",      "crate boundaries, real seams",          "buffer IS the frame — no search"),
-        ("unit",             "2405 tests, seconds to run",            "nothing about the wire"),
+        ("unit",             "2408 tests, seconds to run",            "nothing about the wire"),
     ]
     x0, top, rw, rh, gap = 1.4, 3.55, 12.2, 1.42, 0.20
     out = []
     for i, (name, proves, cannot) in enumerate(rows):
         y = top + i * (rh + gap)
-        # widen toward the base: the cheap tiers carry the bulk of the runs
-        inset = i * 0.34
-        out.append(_rect(x0 + (len(rows) - 1 - i) * 0.0, y, rw - inset, rh,
+        # Uniform width. An earlier version tapered the boxes, which narrowed the LOWER rows —
+        # exactly the ones with the longest labels — and clipped "real seams" and "seconds to run".
+        # A shape that cuts its own text off is worse than a plain rectangle.
+        out.append(_rect(x0, y, rw, rh,
                          "tierTop" if i == 0 else ("tierMid" if i < 3 else "tierBase")))
         out.append(_label(tbox, x0 + 0.45, y + 0.14, 5.2, rh, "TierName", [name]))
         out.append(_label(tbox, x0 + 5.3, y + 0.22, 6.6, rh, "TierNote", [proves]))
@@ -135,29 +136,31 @@ def ladder_steps(tbox):
     Source: docs/mode-fec-ladder.md hpx_hf row + CLAUDE.md #934. Rungs are compressed to the
     families that matter for the talk; the caption says so rather than implying all 14 are drawn.
     """
+    # SIX rungs, not seven. Seven gave 3.5 cm columns, and the two longest labels then ran into
+    # their neighbours — visible only in a render. Widening the label boxes just moved the collision.
+    # Fewer, wider columns is the fix; the caption says families are shown rather than all 14 rungs.
     steps = [
-        ("SL1",  "MFSK16",        "non-coherent, sub-floor"),
-        ("SL2",  "BPSK31 +FEC",   "entry rung"),
-        ("SL4",  "BPSK250",       ""),
-        ("SL6",  "QPSK250-D",     "differential — survives the fade"),
-        ("SL8",  "OFDM52",        "multicarrier"),
-        ("SL11", "OFDM52-16QAM",  ""),
-        ("SL14", "…-64QAM r≈8/9", "top rung"),
+        ("SL1", "MFSK16", "non-coherent"),
+        ("SL2", "BPSK31 +FEC", "entry rung"),
+        ("SL6", "QPSK250-D", "differential"),
+        ("SL8", "OFDM52", "multicarrier"),
+        ("SL11", "OFDM52-16QAM", ""),
+        ("SL14", "64QAM r\u22488/9", "top rung"),
     ]
-    x0, base, sw, sh = 1.7, 11.55, 3.35, 1.02
+    x0, base, sw, sh = 1.9, 11.4, 4.05, 1.85
     out = []
     for i, (sl, mode, note) in enumerate(steps):
         x = x0 + i * sw
         h = sh * (i + 1) * 0.52
         y = base - h
-        out.append(_rect(x, y, sw - 0.30, h, "stepTop" if i >= 5 else "step"))
+        out.append(_rect(x, y, sw - 0.35, h, "stepTop" if i >= 4 else "step"))
         out.append(_label(tbox, x + 0.16, y - 0.92, sw, 0.9, "StepSl", [sl]))
-        out.append(_label(tbox, x + 0.16, base + 0.12, sw + 0.2, 0.9, "StepMode", [mode]))
+        out.append(_label(tbox, x + 0.16, base + 0.10, sw, 0.8, "StepMode", [mode]))
         if note:
-            out.append(_label(tbox, x + 0.16, base + 0.78, sw + 0.9, 0.9, "StepNote", [note]))
-    out.append(_label(tbox, x0, base + 1.72, 25.0, 1.4, "StepFoot",
-                      ["Climbs on ACK_CLIMB_THRESHOLD consecutive clean decodes — not only on an SNR "
-                       "estimate — and never demotes below a level that just decoded.",
+            out.append(_label(tbox, x + 0.16, base + 0.76, sw, 0.8, "StepNote", [note]))
+    out.append(_label(tbox, x0, base + 1.44, 24.5, 1.2, "StepFoot",
+                      ["Climbs on consecutive clean decodes, not only on an SNR estimate \u2014 and never "
+                       "demotes below a level that just decoded.",
                        "A decode is an observation; the SNR is a model. The observation wins. "
                        "(Families shown, not all 14 rungs.)"]))
     return "".join(out)
