@@ -9,6 +9,58 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-08-26 — #1164: `WireEnvelope`'s version byte made authoritative
+
+**Requirement → design → implementation → tests → results.**
+
+- **Change.** The envelope wrote a version byte and never checked it, under a comment promising
+  "forward-compatible: parse but don't reject unknown versions here". The v1→v2 difference was
+  resolved by **trailer length** instead, so a genuine v1 frame failed as a corrupt trailer rather
+  than as a version — the forward compatibility the comment intended was never delivered.
+
+- **The review established it could not be delivered.** Forward compatibility is **structurally
+  impossible** in this format: the version byte is inside the Ed25519-signed span (`signing_bytes`
+  zeroes only `HOP_INDEX_OFFSET`), `decode` does not carry it into the struct, and a relay
+  re-encodes with its **own** `VERSION` — so a tolerated foreign envelope would be re-stamped on
+  forward and the originator's signature broken at the next hop. Rejection is forced, not chosen.
+
+- **`VERSION` kept at 2, not reset to 1** despite #1191 freezing the handshake at `0x01`. Version 1
+  has a historical meaning (16-byte `auth_tag`), and a v1-era build is trivially reconstructed
+  during a `git bisect` on the twin rigs. Reset to 1, such a frame would PASS the version check and
+  die in the trailer — reintroducing the garbled failure the check removes. The coherence with #1191
+  is its POLICY (frozen until 1.0, intra-window changes are lockstep rebuilds), not its numeral.
+
+- **THE BLIND SIBLING PATH, which is why this was not a one-line change.** I told the review there
+  was one production decoder. There are **four** — ardop, kiss, daemon, and `openpulse-mesh`, which
+  is not a probe: its `Err(_)` arm routes bytes into `SarReassembler::ingest` on the assumption that
+  a decode failure means "not an envelope". That assumption dies with this change. Without an
+  explicit arm, a foreign-version envelope is fed to the reassembler, where `"OPHF"` parses as a SAR
+  header and is dropped only because `'H' (0x48) >= 'F' (0x46)` trips `FragmentIndexOutOfRange` —
+  a coincidence, not a design. The mesh now matches `UnsupportedVersion` before the fall-through.
+
+- **The warn lives at the decode SEAM**, not in each caller: four decoders would be four copies, and
+  a fifth would inherit none. **Scope stated honestly:** this signals build divergence only on relay
+  and mesh stations, and only for control-plane traffic — ordinary sessions, handshakes and filexfer
+  never reach this decoder, so #1191's accepted garbled-decode cost stands for them.
+
+- **Implementation.** `UnsupportedVersion { got, expected }`; the check plus a `tracing::warn!` in
+  `decode`; the explicit mesh arm; the trailer error reported **by direction** (`BufferTooShort`
+  under 64, `MalformedPayload` over — a wholesale rename broke the truncation test, correctly, since
+  a cut-short signature genuinely is too short).
+
+- **Tests → results (actually run).** Two new integration tests — a foreign version (1, 3, 255) and a
+  full v1-era frame with its 16-byte `auth_tag` — each refused **by version**, with a positive
+  control that the current version decodes. 12/12 in the suite.
+  **Sabotage-verified:** removing the check makes a foreign-version frame decode as `Ok(...)`, which
+  is the defect verbatim; restored and re-verified.
+
+- **Doc self-contradiction resolved.** `peer-query-relay-wire.md` promised "strict schema version
+  handling" at line 22 and forward-compatible acceptance at 256–258; the decoder implemented
+  neither. Resolved in favour of line 22, with the impossibility reasoning recorded so it is not
+  re-proposed. The reason table had already reserved `0x0001: unsupported_version`.
+
+---
+
 ## 2026-08-26 — #1191: station-id cap 18, `dst_station` off the CONACK, wire version frozen
 
 **Requirement → design → implementation → tests → results.**

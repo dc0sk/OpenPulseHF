@@ -253,9 +253,21 @@ Supported algorithm families for initial draft:
 - Unknown msg_type values cause the decoder to return an error (`UnknownMsgType`). Callers
   that need forward-compatibility should check the msg_type field before decoding and discard
   envelopes with unrecognised types with diagnostic logging.
-- The version field is forward-compatible: the decoder parses and accepts higher version
-  values without rejection, to allow incremental protocol evolution. Receivers must not
-  rely on a specific version value for correctness.
+- **The version field is AUTHORITATIVE: a decoder rejects any version it does not speak**, with
+  `UnsupportedVersion { got, expected }`. This section previously promised the opposite — that the
+  decoder "parses and accepts higher version values without rejection" — while line 22 of this same
+  document promised "strict message type and schema version handling". The decoder implemented
+  neither: it parsed the byte and discarded it, so a genuine v1 frame failed as a corrupt trailer
+  rather than as a version.
+
+  Forward compatibility is not merely unimplemented here, it is **structurally impossible** in this
+  format (#1164): the version byte is inside the Ed25519-signed span, `decode` does not carry it
+  into the struct, and a relay re-encodes with its own `VERSION` — so a tolerated foreign envelope
+  would be re-stamped on forward and its originator's signature broken at the next hop. Delivering
+  real forward compatibility would require carrying the version through the struct and either
+  excluding it from the signed span or preserving it on re-encode.
+
+  The reason table above already reserved `0x0001: unsupported_version` for this rejection.
 - New payload fields are appended and identified by TLV extension blocks.
 
 ## TLV extension block registry (initial)
