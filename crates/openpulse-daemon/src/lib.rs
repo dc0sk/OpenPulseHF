@@ -1572,7 +1572,6 @@ fn handle_inbound_conreq(
     match ConAck::create(
         &ConAckParams {
             station_id: &runtime_state.local_callsign,
-            dst_station: &req.station_id,
             selected_mode: SigningMode::Normal,
             // Transcript binding over the CONREQ exactly as received, signature included.
             conreq_hash: openpulse_core::handshake::conreq_hash(bytes),
@@ -5015,7 +5014,6 @@ mod handshake_rf_tests {
         ConAck::create(
             &ConAckParams {
                 station_id: "K2XYZ",
-                dst_station: "W1AW",
                 selected_mode: SigningMode::Normal,
                 conreq_hash: openpulse_core::handshake::conreq_hash(conreq),
                 station_grid: grid,
@@ -5496,7 +5494,6 @@ mod handshake_rf_tests {
         let conack = ConAck::create(
             &ConAckParams {
                 station_id: "N0EVL",
-                dst_station: "W1AW",
                 selected_mode: SigningMode::Normal,
                 conreq_hash: openpulse_core::handshake::conreq_hash(&ours),
                 station_grid: "",

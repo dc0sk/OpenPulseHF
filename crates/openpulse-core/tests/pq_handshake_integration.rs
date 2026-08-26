@@ -50,7 +50,6 @@ fn kem_shared_secret_matches_after_encapsulate_decapsulate() {
     let (ack_bytes, ss_responder) = create_pq_conack(
         &PqConAckParams {
             station_id: "W1AW",
-            dst_station: "K2XYZ",
             pq_signing_key: &pq_sk,
             req_kem_ek: &ek,
             selected_mode: SigningMode::Hybrid,
@@ -149,7 +148,6 @@ fn pq_conack_hybrid_creates_verifies_and_decapsulates() {
     let (ack_bytes, ss_responder) = create_pq_conack(
         &PqConAckParams {
             station_id: "K2XYZ",
-            dst_station: "W1AW",
             pq_signing_key: &pq_sk_b,
             req_kem_ek: &r.kem_ek,
             selected_mode: SigningMode::Hybrid,
@@ -264,7 +262,6 @@ fn pq_conack_bound_to_another_conreq_rejected() {
     let (ack_bytes, _) = create_pq_conack(
         &PqConAckParams {
             station_id: "K2XYZ",
-            dst_station: "W1AW",
             pq_signing_key: &pq_sk_b,
             req_kem_ek: &ours.kem_ek,
             selected_mode: SigningMode::Hybrid,
@@ -309,7 +306,6 @@ fn pq_conack_unauthorized_mode_rejected() {
     let (ack_bytes, _) = create_pq_conack(
         &PqConAckParams {
             station_id: "K2XYZ",
-            dst_station: "W1AW",
             pq_signing_key: &pq_sk_b,
             req_kem_ek: &r.kem_ek,
             selected_mode: SigningMode::Hybrid,

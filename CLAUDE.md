@@ -249,7 +249,7 @@ Full spec in `docs/dev/design/testbench-design.md` and `docs/dev/benchmark-harne
     echoes `session_id` (it binds by SHA-256 over the whole transmitted CONREQ), a `dst_station`
     was added so only the addressed station answers (#1178), and `supported_compression` /
     `supported_fec_modes` were deleted (#1166 — nothing consumed the selection). Both frames now
-    fit ONE SAR fragment (241 B / 244 B against 251 B) where v1 took three
+    fit ONE SAR fragment (236 B / 237 B against 251 B) where v1 took three
   - Trust evaluation wired to existing `evaluate_handshake()` / `classify_connection_trust()` in `trust.rs`
   - Revoked key → `TrustError::RejectedTrustLevel`; no mutual mode → `TrustError::NoMutualSigningMode`
 - `crates/openpulse-core/src/manifest.rs`: `TransferManifest` with SHA-256 payload hash, sender ID, Ed25519 signature; `verify_manifest()` and `TransferManifest::sign()`

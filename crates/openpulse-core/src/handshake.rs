@@ -350,8 +350,6 @@ impl ConReq {
 pub struct ConAckParams<'a> {
     /// Responder callsign (cap 12).
     pub station_id: &'a str,
-    /// The initiator this answers — never a wildcard, since a CONACK has exactly one addressee.
-    pub dst_station: &'a str,
     /// The mode chosen from those the CONREQ offered.
     pub selected_mode: SigningMode,
     /// SHA-256 over the complete transmitted CONREQ frame; see [`conreq_hash`].
@@ -375,11 +373,19 @@ pub struct ConAckParams<'a> {
 /// the whole transmitted CONREQ including the initiator's `kex_pubkey`. Both endpoints already hold
 /// the id: the responder from the CONREQ it verified, the initiator from the CONREQ it sent.
 #[derive(Debug, Clone, PartialEq, Eq)]
+/// A signed CONACK.
+///
+/// THERE IS NO `dst_station` HERE, deliberately (#1191). A CONACK has exactly one consumer and it
+/// SELF-SELECTS by `conreq_hash`: the initiator matches it against the CONREQ it sent, which is a
+/// SHA-256 over the whole transmitted frame and therefore a strictly stronger filter than a
+/// callsign echo — it rejects a replayed CONACK between the SAME two stations, which a callsign
+/// cannot. #1178's spent-RF argument for addressing the CONREQ does not transfer: nobody transmits
+/// in response to a CONACK, so there is no wasted RF for an addressee to prevent. The field had no
+/// production reader, and removing it is what buys `caps::STATION_ID` the room to reach 18.
 pub struct ConAck {
     /// Responder callsign.
     pub station_id: String,
     /// The initiator this answers.
-    pub dst_station: String,
     /// Ed25519 verifying-key bytes (32).
     pub pubkey: Vec<u8>,
     /// Ephemeral X25519 public key (32).
@@ -406,19 +412,11 @@ impl ConAck {
         params: &ConAckParams<'_>,
         signing_key_seed: &[u8; 32],
     ) -> Result<Vec<u8>, ModemError> {
-        if params.dst_station.is_empty() || params.dst_station == "*" {
-            return Err(ModemError::Frame(
-                "CONACK dst_station must be a specific callsign — an acknowledgement has exactly \
-                 one addressee, so a wildcard is meaningless here"
-                    .into(),
-            ));
-        }
         let signing_key = SigningKey::from_bytes(signing_key_seed);
         let pubkey = signing_key.verifying_key().to_bytes();
 
         let mut w = BodyWriter::new();
         w.str_capped("station_id", params.station_id, caps::STATION_ID)?;
-        w.str_capped("dst_station", params.dst_station, caps::STATION_ID)?;
         w.fixed("pubkey", &pubkey, PUBKEY_LEN)?;
         w.fixed("kex_pubkey", params.kex_pubkey, KEX_PUBKEY_LEN)?;
         w.u8(params.selected_mode.to_wire());
@@ -442,7 +440,6 @@ impl ConAck {
         let (body, signature) = (spans.body, spans.signature);
         let mut r = BodyReader::new(body);
         let station_id = r.str_capped("station_id", caps::STATION_ID)?;
-        let dst_station = r.str_capped("dst_station", caps::STATION_ID)?;
         let pubkey = r.fixed("pubkey", PUBKEY_LEN)?;
         let kex_pubkey = r.fixed("kex_pubkey", KEX_PUBKEY_LEN)?;
         let mode_byte = r.u8("selected_mode")?;
@@ -462,7 +459,6 @@ impl ConAck {
         conreq_hash.copy_from_slice(&hash_vec);
         Ok(Self {
             station_id,
-            dst_station,
             pubkey,
             kex_pubkey,
             selected_mode,
@@ -699,7 +695,6 @@ mod tests {
         let f = ConReq::create(&req_params(1_700_000_000_000), &make_key(1)).unwrap();
         let d = ConReq::decode(&f).unwrap();
         assert_eq!(d.station_id, "W1AW");
-        assert_eq!(d.dst_station, "DL1ABC");
         assert_eq!(d.station_grid, "FN31pr");
         assert_eq!(d.pubkey, pubkey_for_seed(1));
         assert_eq!(d.signature.len(), 64);
@@ -711,7 +706,6 @@ mod tests {
         let ack_bytes = ConAck::create(
             &ConAckParams {
                 station_id: "DL1ABC",
-                dst_station: "W1AW",
                 selected_mode: SigningMode::Normal,
                 conreq_hash: conreq_hash(&req_bytes),
                 station_grid: "JO62qm",
@@ -753,7 +747,6 @@ mod tests {
         let ack = ConAck::create(
             &ConAckParams {
                 station_id: "DL1ABC",
-                dst_station: "W1AW",
                 selected_mode: SigningMode::Normal,
                 conreq_hash: conreq_hash(&req_b),
                 station_grid: "",
@@ -785,7 +778,6 @@ mod tests {
         let ack = ConAck::create(
             &ConAckParams {
                 station_id: "DL1ABC",
-                dst_station: "W1AW",
                 selected_mode: SigningMode::Paranoid,
                 conreq_hash: conreq_hash(&req),
                 station_grid: "",
