@@ -1337,12 +1337,21 @@ attacks and synthetic voice injection are undetectable at the FreeDV layer.
 **Implemented** in `crates/openpulse-freedv-auth`:
 
 - **Authentication model**: station-identity signing — `{callsign, timestamp_utc,
-  session_nonce, freq_hz, mode, pubkey}` as canonical JSON, signed with Ed25519.
+  session_nonce, freq_hz, mode, pubkey}` as JSON, signed with Ed25519 under the
+  `OPAB` signing domain. ("Canonical" here is serde **declaration order**, not key-sorting —
+  the same label-not-a-property that #1147 records for the handshakes.)
   Satisfies FCC Part 97 ID without per-frame audio signing overhead.
 - **Interface**: FreeDV Qt-GUI UDP data port (`127.0.0.1:10001`).  Pure-Rust, no
   C FFI, fully compatible with `--no-default-features`.
-- **`AuthBeacon`**: Ed25519-signed, length-prefixed JSON wire format (≈144 bytes).
-  `sign()`, `verify()`, `encode()`, `decode()` API.
+- **`AuthBeacon`**: Ed25519-signed JSON, framed as `[OPAB][version: u8][u16 BE len][JSON]`
+  since #1206 — the magic and version are read from `SigningDomain::AuthBeacon`, so the
+  transmitted byte and the signed byte are one value. `sign()`, `verify()`, `encode()`,
+  `decode()` API. **Corrected 2026-08-27: this said "≈144 bytes", which was the research
+  doc's binary-encoding *budget* (`research/freedv-auth-research.md:64`) quoted as if it
+  described the shipped format.** Measured: **356 B of JSON, 363 B on the wire** — the hex
+  nonce/pubkey/signature fields alone floor it near 341 B. That ~2.5× overrun is why a
+  JSON→binary re-encode is likely if FF-11 is ever wired, and why the version token (which
+  makes that a branch rather than a break) was worth taking in the pre-1.0 window.
 - **`BeaconScheduler`**: sends a beacon immediately then every configured interval.
 - **`FreeDvDataPort`**: async tokio UDP wrapper for beacon injection and receive.
 - **`TrustVerdict`**: `Verified / Unverified / Invalid` with Unix-socket server for

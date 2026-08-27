@@ -347,6 +347,7 @@ re-opens the campaign.
 | **QSY frames** (#1162) | add a version token | `openpulse-qsy/src/frame.rs` is versionless *and* magicless — plain CR-terminated text lines |
 | **rendezvous codec** (#1163) | add a version token | `openpulse-discovery/src/rendezvous.rs` ships on-air tokens over JS8 directed free text with no version. Its siblings have one (`FILEXFER_VERSION`, `HINT_VERSION`), so leaving it out would be oversight, not a ruling |
 | **`WireEnvelope`** (#1164) | make the version byte authoritative | today it is deliberately non-authoritative (`wire_query.rs:204`, forward-compat by intent): the byte is never bound and v1/v2 is resolved by trailer length. Make it authoritative before the tag, while that is free |
+| **FreeDV auth beacon** (#1206) | add a wire magic + version (`OPAB` + version byte) and move the signing domain in-band | `openpulse-freedv-auth/src/beacon.rs` had a `[u16 BE len]` prefix but no magic and no version — on the one message whose whole purpose is a verifiable identity claim. Missed from this table by oversight, not by ruling. The crate has **no in-repo dependent and no binary**, so the signature change is free exactly once; `docs/openpulse-manual.md:797-805` invites external companion processes, which are precisely the consumers that cannot be rebuilt in lockstep |
 | **`AckFrame`** (#1165) | reject non-zero reserved bits 7:5 on decode, in **both** `decode` and `decode_authenticated` | `ack.rs:129-158` never checks them and both encoders leave them zero, so this is **not a break** — and they are the clean version headroom a 5-byte frame has |
 | **negotiation fields** (#1166) | ~~decide the fate~~ **DECIDED and DONE** — both deleted in the #1147 wire break (PR #1189); the signing-mode membership check was added in their place | the daemon sends them empty and hardcodes `None` in the CONACK (`openpulse-daemon/src/lib.rs:1548-1549, 1974-1975`) — the format's one negotiation mechanism is unwired |
 | ~~**`Frame` payload length** (#1167)~~ **decided: keep `u8`** | no change | SAR carries objects to 64 005 B, so the cap is not a functional limit; header overhead at 255 B is 3.9 %, and a longer frame loses more per fade outage. **Falsifier:** a top wideband rung whose goodput proves *turnaround-bound* rather than payload-bound reopens it — a linksim measurement, not an argument |
@@ -390,6 +391,36 @@ re-opens the campaign.
   at period 21. The residuals are 21-byte-periodic payload content re-creating runs, spectral lines
   in the whitening, and the #1139 onset aliasing. The reason to fix it is "free now, permanent
   later", not breakage.
+
+* **#1206 ships the token, not the re-encode — recorded so the omission is a decision.** The beacon
+  is **356 B of JSON / 363 B on the wire** (measured, both callsign lengths) against the **144-byte binary** budget its own research doc
+  costed (`docs/dev/research/freedv-auth-research.md:64,72,220`) — roughly 30 s of FreeDV 1600 text
+  channel versus the 12 s designed for. So if FF-11 is ever wired, a JSON-to-binary re-encode of the
+  #1147 shape is close to inevitable, and it carries #1147's subtlety too: `beacon.rs`'s "canonical
+  JSON" is serde declaration order, a label rather than key-sorting. The version token is exactly
+  what turns that later migration into a **branch instead of a break**, which is why deferring the
+  re-encode is defensible and why the token is not.
+
+  **An explicit exemption was considered and declined.** It needs the premise "FF-11 is
+  documented-experimental", and that premise is already false in this repo: `roadmap.md:1331` marks
+  FF-11 ✅ Done, CLAUDE.md lists the FF series complete, and the manual presents it as a supported
+  integration path. Writing a defensible exemption therefore means **demoting FF-11 across roadmap,
+  manual and book** — more churn than the token, and a status downgrade outside #1206's scope. An
+  exemption is also a standing claim that must *remain* true, which is the #1120/#1144 archetype: a
+  true statement invalidated by a later change nobody sweeps. The token is fire-and-forget.
+  **Retiring the crate** was the one real alternative — it is incomplete against its own design (the
+  research doc specifies a binary that was never built) — but that contradicts the roadmap's ✅ and
+  is a product call above this issue's pay grade. Named here as considered-and-declined.
+
+* **The SAR 4-byte sub-header stays versionless, deliberately.** Raised by #1206's closing note and
+  recorded here so it does not stay absent-by-oversight the way the beacon did. `sar.rs`'s
+  `segment_id | fragment_index | fragment_total` header carries no version of its own and escapes
+  via the coarse `OPLS` `Frame` version byte, which every fragment already sits inside. That
+  containment is real — a `Frame` version bump re-labels the SAR layer with it — so the cost of a
+  dedicated token (4 bytes off a 251-byte fragment payload, ~1.6 %, on **every** fragment of every
+  multi-fragment object) is not worth buying a second version of the same fact. **Falsifier:** a
+  change that alters SAR framing *without* altering `Frame` reopens it, because then the `OPLS` byte
+  no longer moves when the SAR layer does.
 
 #### Why #1062 stays in, against the two arguments for dropping it
 

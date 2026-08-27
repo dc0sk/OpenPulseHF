@@ -9,6 +9,73 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-08-27 — #1206: the FreeDV auth beacon gains a wire magic and version token
+
+**Requirement → design → implementation → tests → results.**
+
+- **Change.** `AuthBeacon` transmitted no magic and no version, so a receiver had no field to branch
+  on — on the one message whose entire purpose is a verifiable identity claim. It was absent from
+  the wire-format break package table entirely, found by inventory while designing #1162/#1163
+  rather than by a failure.
+
+- **Two errors in the issue's own evidence, corrected against the source.** #1206 states the beacon
+  is sent as "bare JSON… no framing added", quoting `encode()` as returning canonical JSON. Neither
+  half holds: `encode()` already emitted a `[u16 BE len]` prefix, present since 453aaa20 (the
+  original FF-11 commit, #162), so the prefix predates the issue; and the `// canonical JSON`
+  annotation described `BeaconBody` (the *signed subset*) while `encode` serialises `BeaconWire`
+  (all fields plus the signature) — two different serialisations. The conclusion it drew (no magic,
+  no version) held, which is why the issue was still right to file.
+
+- **Design decision: include rather than exempt — reviewed before implementation.** The exemption
+  needs the premise "FF-11 is documented-experimental", and that premise is already false in-repo
+  (`roadmap.md:1331` ✅ Done; the manual presents it as a supported integration path), so a
+  defensible exemption would mean demoting FF-11 across roadmap, manual and book — more churn than
+  the token, and a status call outside this issue. An exemption is also a standing claim that must
+  *remain* true (the #1120/#1144 archetype); a token is fire-and-forget. Retiring the crate was
+  named as the one real alternative and declined as a product decision above this scope.
+
+- **"Unwired" argues FOR inclusion, not against it.** Two independent anchors agree the crate has no
+  in-repo dependent — every `Cargo.toml` in the tree, and `cargo metadata` over all 41 workspace
+  packages (0 dependents, against 27 for `openpulse-core` as the positive control) — and it has no
+  `[[bin]]`. That is the same state `signing_domain.rs` records for QsyLine at #1162: *the
+  conversion is free exactly once, and after 1.0 it becomes a signature break*. Unwired is the
+  window, not the excuse. Note the third sense that neither anchor covers: `openpulse-manual.md`
+  instructs operators to build companion processes around this crate, and an external consumer is
+  precisely the one that cannot be rebuilt in lockstep.
+
+- **Implementation.** Wire is `[OPAB][version: u8][u16 BE len][JSON]`. The magic and version are
+  read from `SigningDomain::AuthBeacon` rather than mirrored as local literals, so the transmitted
+  byte and the signed byte are **one value with no copy to drift** — possible here because the crate
+  already depends on `openpulse-core`, which QSY's text format could not do. `AuthBeacon` moves
+  `Prepended` → `InBand`: once a magic is transmitted, leaving the domain prepended would put two
+  version bytes in play, one signed-invisible and one on the wire.
+
+- **A design option killed by measurement.** Squatting the version on the length prefix's high byte
+  was considered and is dead on its own premise: a representative beacon is **356 B of JSON / 363 B on the wire**
+  (measured, both callsign lengths) and the hex nonce/pubkey/signature fields alone put the floor
+  near 341, so that byte is `0x01` and never `0x00`.
+
+- **Scope recorded, not omitted.** The token ships; the JSON→binary re-encode does not. The beacon
+  is **356 B of JSON / 363 B on the wire** against the **144 B** its own research doc costed
+  (~30 s vs 12 s of FreeDV-1600 text channel), so a re-encode is likely if FF-11 is ever wired — and the token is exactly what makes
+  that a branch rather than a break. The SAR 4-byte sub-header is separately recorded as
+  deliberately versionless (contained by the `OPLS` `Frame` byte every fragment sits inside —
+  verified: `transmit_handshake_frame` passes each fragment to `engine.transmit`), with the
+  falsifier stated.
+
+- **Tests.** `the_wire_header_comes_from_the_signing_registry`, `decode_rejects_a_foreign_magic`,
+  `decode_rejects_an_unknown_version` (wrong version **derived** from the constant, so it keeps
+  straddling the boundary after a bump), `the_signature_covers_the_magic_and_version` (with a
+  positive control), `decode_truncated_returns_error` (now asserts the *reason*, not `is_err()`).
+
+- **Test results.** `cargo test -p openpulse-core -p openpulse-freedv-auth --no-default-features
+  --lib` → 350 passed / 12 passed, 0 failed. **Sabotage-verified by observed failure, twice:**
+  deleting the decode version check fails `decode_rejects_an_unknown_version` (11 passed, 1 failed);
+  stripping the magic+version from the signed message fails three tests including the positive
+  control (9 passed, 3 failed). Tree restored and re-run clean at 12/12.
+
+---
+
 ## 2026-08-27 — #1163: the rendezvous codec gains the dialect version token
 
 **Requirement → design → implementation → tests → results.**
