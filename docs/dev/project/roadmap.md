@@ -1596,7 +1596,7 @@ recognized as a peer.
 
 **Phase F — rendezvous → HPX handoff complete** (PRs #798–#805). Decision D3's 2-message unauthenticated
 exchange over JS8 directed free text, handing off to the existing signed HPX CONREQ/CONACK after QSY:
-- F-1 (#798) `rendezvous.rs` — pure `RendezvousMsg` codec (`Propose`/`Accept`/`Reject` as `OPHF QSY?/QSY/NO`)
+- F-1 (#798) `rendezvous.rs` — pure `RendezvousMsg` codec (`Propose`/`Accept`/`Reject` as `OPHF1 QSY?/QSY/NO`)
   + `RendezvousInitiator` + `respond()`; channels are **indices** into a per-band table, not Hz; no signature
   (the post-QSY signed CONREQ is the auth).
 - F-2 (#799) config `rendezvous_channels_hz` per-band working-channel table + resolver.

@@ -860,6 +860,19 @@ mod tests {
 
     /// Modulate `text` as a directed over `sender: to <text>` and clock its frames through the dwelling
     /// runtime, one per slot from `start_ms`, collecting every outcome. `t` advances by one slot/frame.
+    /// A Propose message as it goes on the air, built through the CODEC rather than typed.
+    ///
+    /// These fixtures used to hold the wire text literally, so #1163's version token had to be
+    /// hand-edited into thirteen of them — the same staleness #1162 hit one issue earlier. Built
+    /// through `encode()`, the next format change updates every caller at once.
+    fn propose_line(token: &str, channels: &[u8]) -> String {
+        crate::rendezvous::RendezvousMsg::Propose {
+            token: token.to_string(),
+            channels: channels.to_vec(),
+        }
+        .encode()
+    }
+
     fn feed_over(
         rt: &mut DiscoveryRuntime,
         sender: &str,
@@ -884,7 +897,13 @@ mod tests {
         rt.set_rendezvous_channels(vec![3, 9, 2]);
         let mut t = 1000u64;
         // KN4CRD proposes channels 9 then 3; we have [3,9,2] so the highest-ranked common is 9.
-        let during = feed_over(&mut rt, "KN4CRD", "DC0SK", "OPHF QSY? R7 C9 C3", &mut t);
+        let during = feed_over(
+            &mut rt,
+            "KN4CRD",
+            "DC0SK",
+            &propose_line("R7", &[9, 3]),
+            &mut t,
+        );
         // The agreement is withheld while the Accept is still being sent — emitting it during receive is
         // what let the daemon preempt and truncate the Accept's final frame (audit #4b).
         assert!(
@@ -927,7 +946,13 @@ mod tests {
         let mut t = 1000u64;
 
         // First proposal: answered, as it should be.
-        feed_over(&mut rt, "KN4CRD", "DC0SK", "OPHF QSY? R7 C9 C3", &mut t);
+        feed_over(
+            &mut rt,
+            "KN4CRD",
+            "DC0SK",
+            &propose_line("R7", &[9, 3]),
+            &mut t,
+        );
         let queued_after_first = rt.rendezvous_tx.len();
         assert!(
             queued_after_first > 0,
@@ -938,7 +963,13 @@ mod tests {
         rt.rendezvous_tx.clear();
 
         // The same peer proposes again immediately — the flood case.
-        feed_over(&mut rt, "KN4CRD", "DC0SK", "OPHF QSY? R7 C9 C3", &mut t);
+        feed_over(
+            &mut rt,
+            "KN4CRD",
+            "DC0SK",
+            &propose_line("R7", &[9, 3]),
+            &mut t,
+        );
         assert_eq!(
             rt.rendezvous_tx.len(),
             0,
@@ -955,10 +986,22 @@ mod tests {
         rt.set_rendezvous_channels(vec![3, 9, 2]);
         let mut t = 1000u64;
 
-        feed_over(&mut rt, "KN4CRD", "DC0SK", "OPHF QSY? R7 C9 C3", &mut t);
+        feed_over(
+            &mut rt,
+            "KN4CRD",
+            "DC0SK",
+            &propose_line("R7", &[9, 3]),
+            &mut t,
+        );
         rt.rendezvous_tx.clear();
 
-        feed_over(&mut rt, "W1AW", "DC0SK", "OPHF QSY? R7 C9 C3", &mut t);
+        feed_over(
+            &mut rt,
+            "W1AW",
+            "DC0SK",
+            &propose_line("R7", &[9, 3]),
+            &mut t,
+        );
         assert!(
             !rt.rendezvous_tx.is_empty(),
             "a different peer must still get an answer — the cooldown is per peer, not global"
@@ -972,11 +1015,23 @@ mod tests {
         rt.set_rendezvous_channels(vec![3, 9, 2]);
         let mut t = 1000u64;
 
-        feed_over(&mut rt, "KN4CRD", "DC0SK", "OPHF QSY? R7 C9 C3", &mut t);
+        feed_over(
+            &mut rt,
+            "KN4CRD",
+            "DC0SK",
+            &propose_line("R7", &[9, 3]),
+            &mut t,
+        );
         rt.rendezvous_tx.clear();
 
         t += RESPONDER_COOLDOWN_MS + 1;
-        feed_over(&mut rt, "KN4CRD", "DC0SK", "OPHF QSY? R7 C9 C3", &mut t);
+        feed_over(
+            &mut rt,
+            "KN4CRD",
+            "DC0SK",
+            &propose_line("R7", &[9, 3]),
+            &mut t,
+        );
         assert!(
             !rt.rendezvous_tx.is_empty(),
             "past the cooldown the same peer must be answered again, or a lost Accept can never be \
@@ -1012,7 +1067,13 @@ mod tests {
         let mut rt = dwelling_rendezvous_runtime(TxMode::Full);
         rt.set_rendezvous_channels(vec![0, 1]); // we don't have 9 or 3
         let mut t = 1000u64;
-        let out = feed_over(&mut rt, "KN4CRD", "DC0SK", "OPHF QSY? R7 C9 C3", &mut t);
+        let out = feed_over(
+            &mut rt,
+            "KN4CRD",
+            "DC0SK",
+            &propose_line("R7", &[9, 3]),
+            &mut t,
+        );
         assert!(
             !out.iter()
                 .any(|o| matches!(o, DiscoveryOutcome::RendezvousAgreed { .. })),
@@ -1026,7 +1087,13 @@ mod tests {
         let mut rt = dwelling_rendezvous_runtime(TxMode::Beacon);
         rt.set_rendezvous_channels(vec![3, 9]);
         let mut t = 1000u64;
-        let out = feed_over(&mut rt, "KN4CRD", "DC0SK", "OPHF QSY? R7 C9 C3", &mut t);
+        let out = feed_over(
+            &mut rt,
+            "KN4CRD",
+            "DC0SK",
+            &propose_line("R7", &[9, 3]),
+            &mut t,
+        );
         assert!(
             !out.iter()
                 .any(|o| matches!(o, DiscoveryOutcome::RendezvousAgreed { .. })),
@@ -1051,7 +1118,18 @@ mod tests {
         }
         assert!(proposed, "the Propose over is transmitted");
         // KN4CRD accepts channel 9, switch in 4 slots.
-        let out = feed_over(&mut rt, "KN4CRD", "DC0SK", "OPHF QSY R7 C9 S4", &mut t);
+        let out = feed_over(
+            &mut rt,
+            "KN4CRD",
+            "DC0SK",
+            &crate::rendezvous::RendezvousMsg::Accept {
+                token: "R7".into(),
+                channel: 9,
+                switch_in_slots: 4,
+            }
+            .encode(),
+            &mut t,
+        );
         let agreed = out.iter().find_map(|o| match o {
             DiscoveryOutcome::RendezvousAgreed {
                 peer,
@@ -1073,7 +1151,17 @@ mod tests {
             t += 15_000;
             rt.tick(t, true); // drain the Propose
         }
-        let out = feed_over(&mut rt, "KN4CRD", "DC0SK", "OPHF NO R7 F", &mut t);
+        let out = feed_over(
+            &mut rt,
+            "KN4CRD",
+            "DC0SK",
+            &crate::rendezvous::RendezvousMsg::Reject {
+                token: "R7".into(),
+                reason: crate::rendezvous::RejectReason::NoCommonFreq,
+            }
+            .encode(),
+            &mut t,
+        );
         assert!(
             out.iter().any(|o| matches!(
                 o,

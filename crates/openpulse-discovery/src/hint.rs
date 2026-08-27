@@ -14,9 +14,12 @@
 //! *filter and initiate*; peer authentication happens after QSY via the signed CONREQ/CONACK.
 
 /// Hint magic prefix; the full token is `OPHF<version>`.
-pub const HINT_MAGIC: &str = "OPHF";
-/// Hint format version this codec emits.
-pub const HINT_VERSION: u8 = 1;
+///
+/// Re-exported from [`crate::dialect`] rather than defined here (#1163): the rendezvous codec emits
+/// the same token, and two definitions could drift into "OPHF1 hints / OPHF2 rendezvous".
+pub const HINT_MAGIC: &str = crate::dialect::MAGIC;
+/// Hint format version this codec emits. See [`HINT_MAGIC`] — one version for the whole dialect.
+pub const HINT_VERSION: u8 = crate::dialect::VERSION;
 /// The JS8 custom group the hint is addressed to.
 pub const OPULSE_GROUP: &str = "OPULSE";
 

@@ -9,9 +9,9 @@
 //! post-QSY signed CONREQ is the authentication (a spoof wastes ≤ one timeout and fails the handshake).
 //!
 //! ```text
-//! DC0SK:  KN4CRD OPHF QSY? R7 C3 C9 K2   # propose token R7, ranked channels 3, 9, 2
-//! KN4CRD: DC0SK  OPHF QSY  R7 C9 S4      # accept channel 9, switch in 4 slots
-//! KN4CRD: DC0SK  OPHF NO   R7 F          # or reject (F = no common frequency)
+//! DC0SK:  KN4CRD OPHF1 QSY? R7 C3 C9 K2   # propose token R7, ranked channels 3, 9, 2
+//! KN4CRD: DC0SK  OPHF1 QSY  R7 C9 S4      # accept channel 9, switch in 4 slots
+//! KN4CRD: DC0SK  OPHF1 NO   R7 F          # or reject (F = no common frequency)
 //! ```
 
 /// Why a rendezvous proposal was rejected (single-letter wire code).
@@ -74,6 +74,14 @@ pub enum RendezvousMsg {
     },
 }
 
+/// The wire token every rendezvous message starts with: the dialect magic plus its version.
+///
+/// Built from [`crate::dialect`], never typed here (#1163). `hint.rs` emits the same token from the
+/// same constants, so the two codecs cannot drift into different versions of one dialect.
+fn wire_token() -> String {
+    format!("{}{}", crate::dialect::MAGIC, crate::dialect::VERSION)
+}
+
 impl RendezvousMsg {
     /// The token this message carries.
     pub fn token(&self) -> &str {
@@ -88,7 +96,7 @@ impl RendezvousMsg {
     pub fn encode(&self) -> String {
         match self {
             RendezvousMsg::Propose { token, channels } => {
-                let mut s = format!("OPHF QSY? {token}");
+                let mut s = format!("{} QSY? {token}", wire_token());
                 for c in channels {
                     s.push_str(&format!(" C{c}"));
                 }
@@ -98,9 +106,9 @@ impl RendezvousMsg {
                 token,
                 channel,
                 switch_in_slots,
-            } => format!("OPHF QSY {token} C{channel} S{switch_in_slots}"),
+            } => format!("{} QSY {token} C{channel} S{switch_in_slots}", wire_token()),
             RendezvousMsg::Reject { token, reason } => {
-                format!("OPHF NO {token} {}", reason.code())
+                format!("{} NO {token} {}", wire_token(), reason.code())
             }
         }
     }
@@ -108,7 +116,15 @@ impl RendezvousMsg {
     /// Decode OPHF free text, or `None` if it is not a well-formed rendezvous message.
     pub fn decode(text: &str) -> Option<RendezvousMsg> {
         let mut it = text.split_whitespace();
-        if it.next()? != "OPHF" {
+
+        // The wire token carries the dialect version, and it is AUTHORITATIVE (#1163). The prefix
+        // used to be a bare `OPHF` with no version, so a receiver had nothing to branch on — the
+        // same gap #1162 closed for QSY. Mismatch returns `None` rather than an error, matching
+        // `hint.rs`: this is broadcast free text, so there is nobody to send an error to, and stray
+        // messages are ignored by design.
+        let tok = it.next()?;
+        let ver = tok.strip_prefix(crate::dialect::MAGIC)?;
+        if ver.parse::<u8>().ok()? != crate::dialect::VERSION {
             return None;
         }
         match it.next()? {
@@ -284,6 +300,117 @@ pub fn respond(
 mod tests {
     use super::*;
 
+    /// The version character does not cost an extra JS8 slot.
+    ///
+    /// #1163 asked for the airtime to be DECIDED, not assumed, and the review quantified it from
+    /// the Huffman table. That arithmetic — mine and the reviewer's — is a MODEL of the packer.
+    /// This measures the packer itself: it consumes the real message through `pack_huff_frame`
+    /// exactly as the transmit path does, and counts the frames.
+    ///
+    /// The bound is what matters, not the number: a rendezvous Propose must still fit the same
+    /// number of data frames it fitted before the token, or the version character costs a 15 s
+    /// NORMAL slot on every proposal.
+    #[test]
+    fn the_version_character_does_not_cost_an_extra_js8_frame() {
+        fn frames(text: &str) -> usize {
+            let mut rest = text;
+            let mut n = 0;
+            while !rest.is_empty() {
+                let (_, used) = js8_plugin::pack_huff_frame(rest);
+                assert!(used > 0, "packer consumed nothing from {rest:?}");
+                rest = &rest[used..];
+                n += 1;
+            }
+            n
+        }
+        let with = RendezvousMsg::Propose {
+            token: "R7".into(),
+            channels: vec![3, 9, 2],
+        }
+        .encode();
+        // The same message as it was BEFORE the token — the comparison the decision rests on.
+        let without = with.replacen(
+            &format!("{}{}", crate::dialect::MAGIC, crate::dialect::VERSION),
+            crate::dialect::MAGIC,
+            1,
+        );
+        assert_eq!(
+            frames(&with),
+            frames(&without),
+            "the version character pushed {with:?} into an extra data frame"
+        );
+    }
+
+    /// #1163: every message carries the dialect token, and it is DERIVED from the shared constants.
+    #[test]
+    fn every_message_carries_the_dialect_token() {
+        let expected = format!("{}{}", crate::dialect::MAGIC, crate::dialect::VERSION);
+        let msgs = [
+            RendezvousMsg::Propose {
+                token: "R7".into(),
+                channels: vec![3, 9],
+            },
+            RendezvousMsg::Accept {
+                token: "R7".into(),
+                channel: 9,
+                switch_in_slots: 4,
+            },
+            RendezvousMsg::Reject {
+                token: "R7".into(),
+                reason: RejectReason::Busy,
+            },
+        ];
+        for m in &msgs {
+            let line = m.encode();
+            assert!(
+                line.starts_with(&expected),
+                "{line:?} lacks the token {expected:?}"
+            );
+            assert_eq!(RendezvousMsg::decode(&line).as_ref(), Some(m), "round trip");
+        }
+    }
+
+    /// A message of another dialect version is IGNORED (`None`), matching `hint.rs`.
+    ///
+    /// `None` rather than an error is deliberate: this is broadcast free text, so there is nobody
+    /// to send an error to, and stray messages are already ignored by design.
+    #[test]
+    fn a_message_of_another_version_is_ignored() {
+        let current = crate::dialect::VERSION;
+
+        // Positive control, or the loop below passes vacuously.
+        let good = RendezvousMsg::Propose {
+            token: "R7".into(),
+            channels: vec![3],
+        }
+        .encode();
+        assert!(
+            RendezvousMsg::decode(&good).is_some(),
+            "control: current version must decode"
+        );
+
+        for other in [current.wrapping_add(1), current.wrapping_add(7), 0] {
+            let line = format!("{}{} QSY? R7 C3", crate::dialect::MAGIC, other);
+            assert!(
+                RendezvousMsg::decode(&line).is_none(),
+                "version {other} must be ignored, not decoded"
+            );
+        }
+        // And the pre-#1163 bare prefix, which carried no version at all.
+        assert!(RendezvousMsg::decode("OPHF QSY? R7 C3").is_none());
+    }
+
+    /// The hint and the rendezvous codec speak ONE dialect version — they cannot fork.
+    ///
+    /// `hint.rs` re-exports these constants rather than defining its own, so "OPHF1 hints talking
+    /// to OPHF2 rendezvous" is unrepresentable. This test is what makes that structural rather than
+    /// a comment.
+    #[test]
+    fn the_hint_and_rendezvous_share_one_dialect_version() {
+        assert_eq!(crate::hint::HINT_MAGIC, crate::dialect::MAGIC);
+        assert_eq!(crate::hint::HINT_VERSION, crate::dialect::VERSION);
+    }
+
     #[test]
     fn message_codec_round_trips() {
         let msgs = [
@@ -310,7 +437,7 @@ mod tests {
                 channels: vec![3, 9, 2]
             }
             .encode(),
-            "OPHF QSY? R7 C3 C9 C2"
+            "OPHF1 QSY? R7 C3 C9 C2"
         );
     }
 
@@ -319,7 +446,7 @@ mod tests {
         assert_eq!(RendezvousMsg::decode("HELLO WORLD"), None);
         assert_eq!(RendezvousMsg::decode("OPHF1 A1B2C3D4"), None); // the capability hint, not rendezvous
         assert_eq!(RendezvousMsg::decode("OPHF QSY?"), None); // no token/channels
-        assert_eq!(RendezvousMsg::decode("OPHF QSY? TOOLONG C3"), None); // bad token
+        assert_eq!(RendezvousMsg::decode("OPHF1 QSY? TOOLONG C3"), None); // bad token
     }
 
     #[test]

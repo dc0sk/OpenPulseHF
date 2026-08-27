@@ -9,6 +9,50 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-08-27 — #1163: the rendezvous codec gains the dialect version token
+
+**Requirement → design → implementation → tests → results.**
+
+- **Change.** `RendezvousMsg` emitted a bare `OPHF ` prefix with **no version**, while `hint.rs` —
+  in the SAME CRATE — already emitted `OPHF1`. So this was an inconsistency with its own neighbour,
+  and the fix was to adopt a convention that already existed rather than invent one.
+
+- **One dialect, one version, shared BY REFERENCE.** `MAGIC` and `VERSION` moved to a `dialect`
+  module at the crate root; `hint.rs` now re-exports them rather than defining its own. A receiver's
+  real question is "do I speak OPHF-dialect v1", and two definitions would make *"OPHF1 hints
+  talking to OPHF2 rendezvous"* representable with nothing to catch it. Pinned by
+  `the_hint_and_rendezvous_share_one_dialect_version`, which makes it structural rather than a
+  comment.
+
+- **Version mismatch returns `None`, not an error** — matching `hint.rs`. This is broadcast free
+  text: there is nobody to send an error to, and stray messages are ignored by design. (Contrast
+  #1162, where QSY runs over a point-to-point modem link and an unknown version reports itself.)
+
+- **The airtime was MEASURED, not asserted.** The issue asked for the cost to be decided. Computed
+  first from the real Huffman table — Propose 111 → **118 bits**, still **two** JS8 data frames —
+  and then pinned against the **actual packer**: `the_version_character_does_not_cost_an_extra_js8_frame`
+  feeds the real message through `pack_huff_frame` exactly as the transmit path does and asserts the
+  frame count is unchanged. The arithmetic was a MODEL of the packer; the test measures the packer.
+
+- **Tests → results (actually run).** Every message carries the token (checked against the shared
+  constants, with a round-trip); another version is ignored, with a positive control, including the
+  pre-#1163 bare prefix; the dialect-sharing invariant. **Sabotage-verified:** removing the version
+  check makes a foreign-version message decode. **226 passed, 0 failed** across
+  `openpulse-discovery` and `openpulse-daemon`.
+
+- **Twenty-two hardcoded wire strings**, inventoried before starting because #1162 had just produced
+  four stale fixtures and one vacuous pass from exactly this pattern. Nine state-machine feeds now
+  build through `RendezvousMsg::encode()` so the next format change updates every caller at once.
+  The four assembler fixtures stay **deliberately literal** — they assemble a message from JS8
+  overs, so the exact on-air characters are the subject, and building them through `encode()` would
+  test the codec against itself and hide a reassembly bug. That distinction is recorded in the file
+  rather than left as an inconsistency.
+
+- **Doc sweep:** the plan doc, the roadmap, and the module doc-comment in `rendezvous.rs` itself all
+  showed the pre-#1163 wire form — the file's own documentation contradicting its code.
+
+---
+
 ## 2026-08-27 — #1162: QSY lines gain a wire token, and their signing domain goes in-band
 
 **Requirement → design → implementation → tests → results.**

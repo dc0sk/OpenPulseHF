@@ -2740,7 +2740,7 @@ mod discovery_tick_tests {
         );
 
         // KN4CRD proposes channels 1 then 0; both are available → agree on index 1 = 14_103_000.
-        let frames = js8_plugin::directed("KN4CRD", "JN58", "DC0SK", "OPHF QSY? R7 C1 C0");
+        let frames = js8_plugin::directed("KN4CRD", "JN58", "DC0SK", "OPHF1 QSY? R7 C1 C0");
         let mut t = 1000u64;
         for f in &frames {
             discovery_tick(&mut rs, &engine, None, &ev, &directed_frame_audio(f), t);
