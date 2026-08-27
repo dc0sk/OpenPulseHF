@@ -18,6 +18,7 @@ use openpulse_core::route_discovery::{
     RouteTable,
 };
 use openpulse_core::sar::{sar_encode, SarReassembler};
+use openpulse_core::wire_query::WireQueryError;
 use openpulse_core::wire_query::{
     BroadcastFrame, PeerQueryRequest, PeerQueryResponse, PeerQueryResult, RelayRouteReject,
     RelayRouteUpdate, RouteDiscoveryRequest, RouteDiscoveryResponse, RouteHop, WireEnvelope,
@@ -436,6 +437,20 @@ impl MeshDaemon {
                 match WireEnvelope::decode(&bytes) {
                     // A whole envelope in one frame (the common, small case).
                     Ok(envelope) => self.dispatch(envelope, now_ms),
+                    // An envelope this build cannot speak. Matched EXPLICITLY, before the SAR
+                    // fall-through below (#1164): that arm assumes "decode failed" means "not an
+                    // envelope", which stopped being true once the version byte became
+                    // authoritative. Without this arm a foreign-version envelope is fed to the
+                    // reassembler as if it were a fragment — where `"OPHF"` parses as a SAR header
+                    // and survives only by the accident that `'H' (0x48) >= 'F' (0x46)` trips
+                    // `FragmentIndexOutOfRange`. It is dropped today by coincidence, not by design.
+                    Err(WireQueryError::UnsupportedVersion { got, expected }) => {
+                        tracing::warn!(
+                            got,
+                            expected,
+                            "mesh: dropping an envelope from a peer running a different build"
+                        );
+                    }
                     // Not a whole envelope (no `OPHF` magic) — treat it as a SAR fragment of an
                     // oversized envelope and dispatch once every fragment has arrived. A fragment can
                     // complete more than one candidate when streams collide on the reassembly key.

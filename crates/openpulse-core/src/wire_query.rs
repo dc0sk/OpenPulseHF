@@ -6,6 +6,13 @@ use thiserror::Error;
 pub enum WireQueryError {
     #[error("buffer too short")]
     BufferTooShort,
+    #[error("unsupported envelope version {got} (this build speaks {expected})")]
+    UnsupportedVersion {
+        /// The version byte the frame carried.
+        got: u8,
+        /// The version this build encodes and accepts.
+        expected: u8,
+    },
     #[error("invalid magic bytes")]
     InvalidMagic,
     #[error("unknown message type {0:#04x}")]
@@ -67,6 +74,16 @@ const MAGIC: &[u8; 4] = b"OPHF";
 /// Wire schema version. v2 replaced the unauthenticated fixed 16-byte `auth_tag` with an *optional*
 /// 64-byte Ed25519 origin `signature` verifiable against `src_peer_id` (E3): signed frames append 64
 /// bytes, unsigned frames append none.
+// FROZEN AT 2 UNTIL 1.0, matching #1191's policy for the handshake — intra-window format changes
+// are lockstep rebuilds, not version bumps, because nothing is deployed outside this project's rigs.
+//
+// KEPT AT 2 RATHER THAN RESET TO 1, and the reason is not aesthetic. Version 1 has a historical
+// meaning: an unauthenticated fixed 16-byte `auth_tag` where v2 has an optional 64-byte signature.
+// A v1-era build is trivially reconstructed during a `git bisect` on the twin rigs — precisely the
+// situation where an old build talks to a new one. Reset to 1, such a frame would PASS the version
+// check and then die in the trailer, reintroducing the garbled failure this check exists to remove.
+// Kept at 2, it is rejected by number with an attributable message. Matching #1191's numeral would
+// have been cargo cult; matching its POLICY is the part that transfers.
 const VERSION: u8 = 2;
 /// Byte count of fixed envelope fields excluding payload and the optional signature.
 const HEADER_SIZE: usize = 104;
@@ -211,7 +228,33 @@ impl WireEnvelope {
         if &bytes[0..4] != MAGIC {
             return Err(WireQueryError::InvalidMagic);
         }
-        // bytes[4] = version; forward-compatible: parse but don't reject unknown versions here
+        // The version byte is AUTHORITATIVE. It used to be parsed and ignored, under a comment
+        // promising forward compatibility — which this format cannot deliver, for three composing
+        // reasons (#1164):
+        //   1. the byte at offset 4 is INSIDE the Ed25519-signed span (`signing_bytes` zeroes only
+        //      `HOP_INDEX_OFFSET`), so it is covered by the originator's signature;
+        //   2. `decode` does not carry the version into the struct, so the value is destroyed here;
+        //   3. a relay re-encodes via `header_and_payload`, which stamps the LOCAL `VERSION`.
+        // So even a foreign envelope with identical layout would be re-stamped on forward and its
+        // signature broken at the next hop. "Parse but don't reject" was not weaker forward
+        // compatibility; it was none, plus a false comment. Every sibling format rejects (frame.rs,
+        // handshake_wire.rs), and the wire spec's own reason table already reserved
+        // `0x0001: unsupported_version` for the rejection this decoder never performed.
+        //
+        // The warning lives HERE, at the single shared seam, rather than in each caller: there are
+        // four production decoders (ardop, kiss, daemon, mesh) and per-caller warns would be four
+        // copies that a fifth caller would not inherit.
+        if bytes[4] != VERSION {
+            tracing::warn!(
+                got = bytes[4],
+                expected = VERSION,
+                "envelope rejected: unsupported version — the peer is running a different build"
+            );
+            return Err(WireQueryError::UnsupportedVersion {
+                got: bytes[4],
+                expected: VERSION,
+            });
+        }
         let msg_type =
             WireMsgType::from_u8(bytes[5]).ok_or(WireQueryError::UnknownMsgType(bytes[5]))?;
         let flags = read_u16(bytes, 6)?;
@@ -233,8 +276,10 @@ impl WireEnvelope {
         }
         let payload = bytes[payload_start..payload_end].to_vec();
 
-        // The signature is present iff exactly 64 bytes trail the payload; any other trailer length
-        // is a truncated or corrupt frame.
+        // The signature is present iff exactly 64 bytes trail the payload. This is NOT dead now that
+        // the version is authoritative: it still discriminates signed from unsigned within this
+        // version, which is a live feature (`signature: Option<_>`). What died is only the comment's
+        // cross-version claim — trailer length is no longer doing a version's job.
         let signature = match bytes.len() - payload_end {
             0 => None,
             SIGNATURE_SIZE => Some(
@@ -242,7 +287,12 @@ impl WireEnvelope {
                     .try_into()
                     .map_err(|_| WireQueryError::MalformedPayload)?,
             ),
-            _ => return Err(WireQueryError::BufferTooShort),
+            // A wrong-length trailer is reported by DIRECTION. `BufferTooShort` alone was wrong for
+            // an over-long trailer, and blanket-renaming it to `MalformedPayload` was wrong for a
+            // truncated one — a cut-short signature genuinely IS too short, which the existing
+            // truncation test asserts. Both names are right for one case each, so both are used.
+            n if n < SIGNATURE_SIZE => return Err(WireQueryError::BufferTooShort),
+            _ => return Err(WireQueryError::MalformedPayload),
         };
 
         Ok(Self {

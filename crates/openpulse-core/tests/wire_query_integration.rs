@@ -189,3 +189,73 @@ fn hop_limit_and_index_preserved() {
     assert_eq!(decoded.hop_limit, 5);
     assert_eq!(decoded.hop_index, 2);
 }
+
+/// #1164: the version byte is AUTHORITATIVE — a foreign version is rejected BY VERSION, not by
+/// whatever its trailer happens to look like.
+///
+/// Both directions are exercised because the interesting failure is asymmetric: a HIGHER version
+/// (a future build) and a LOWER one (a v1-era build reconstructed during a bisect) must both be
+/// refused by number. Before this change the low case died in the trailer as a "corrupt frame",
+/// which is the unattributable symptom the check exists to remove.
+#[test]
+fn an_envelope_of_a_foreign_version_is_rejected_by_version() {
+    let env = WireEnvelope {
+        msg_type: WireMsgType::PeerQueryRequest,
+        flags: 0,
+        session_id: 1,
+        src_peer_id: [1u8; 32],
+        dst_peer_id: [2u8; 32],
+        nonce: [3u8; 12],
+        timestamp_ms: 1_700_000_000_000,
+        hop_limit: 3,
+        hop_index: 0,
+        payload: vec![0u8; 17],
+        signature: None,
+    };
+    let good = env.encode().expect("encode");
+
+    // Positive control: the CURRENT version decodes, or every assertion below passes vacuously.
+    assert!(
+        WireEnvelope::decode(&good).is_ok(),
+        "control: a current-version envelope must decode"
+    );
+
+    for foreign in [1u8, 3u8, 255u8] {
+        let mut bad = good.clone();
+        bad[4] = foreign;
+        match WireEnvelope::decode(&bad) {
+            Err(WireQueryError::UnsupportedVersion { got, .. }) => assert_eq!(got, foreign),
+            other => panic!("version {foreign} must be refused by VERSION, got {other:?}"),
+        }
+    }
+}
+
+/// A v1-era frame — foreign version AND the 16-byte `auth_tag` trailer v1 actually carried — is
+/// refused by version rather than by trailer length. This is the bisect case: an old build on one
+/// rig talking to a new build on the other.
+#[test]
+fn a_v1_era_frame_is_refused_by_version_not_by_its_trailer() {
+    let env = WireEnvelope {
+        msg_type: WireMsgType::PeerQueryRequest,
+        flags: 0,
+        session_id: 1,
+        src_peer_id: [1u8; 32],
+        dst_peer_id: [2u8; 32],
+        nonce: [3u8; 12],
+        timestamp_ms: 1_700_000_000_000,
+        hop_limit: 3,
+        hop_index: 0,
+        payload: vec![0u8; 17],
+        signature: None,
+    };
+    let mut v1 = env.encode().expect("encode");
+    v1[4] = 1;
+    v1.extend_from_slice(&[0xAAu8; 16]); // the v1 auth_tag
+    assert!(
+        matches!(
+            WireEnvelope::decode(&v1),
+            Err(WireQueryError::UnsupportedVersion { got: 1, .. })
+        ),
+        "a v1 frame must be refused by version, not diagnosed as a corrupt trailer"
+    );
+}
