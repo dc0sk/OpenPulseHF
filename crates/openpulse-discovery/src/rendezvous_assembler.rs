@@ -180,11 +180,22 @@ mod tests {
         out
     }
 
+    // The wire text below is DELIBERATELY LITERAL. These tests assemble a message from JS8 overs,
+    // so the exact on-air characters are the subject — building them through `encode()` would test
+    // the codec against itself and hide a reassembly bug. They go stale on a format change by
+    // design, and #1163 updated them for exactly that reason.
     #[test]
     fn assembles_a_propose_directed_at_us() {
         let mut asm = RendezvousAssembler::new("DC0SK", 3.0, 8);
-        let r = run(&mut asm, "KN4CRD", "DC0SK", "OPHF QSY? R7 C3 C9", 1500.0, 0)
-            .expect("recognized a rendezvous over addressed to us");
+        let r = run(
+            &mut asm,
+            "KN4CRD",
+            "DC0SK",
+            "OPHF1 QSY? R7 C3 C9",
+            1500.0,
+            0,
+        )
+        .expect("recognized a rendezvous over addressed to us");
         assert_eq!(r.from, "KN4CRD");
         assert_eq!(r.grid.as_deref(), Some("JN58"));
         assert_eq!(
@@ -201,7 +212,7 @@ mod tests {
         let mut asm = RendezvousAssembler::new("DC0SK", 3.0, 8);
         // KN4CRD is talking to W1AW, not us.
         assert_eq!(
-            run(&mut asm, "KN4CRD", "W1AW", "OPHF QSY? R7 C3", 1500.0, 0),
+            run(&mut asm, "KN4CRD", "W1AW", "OPHF1 QSY? R7 C3", 1500.0, 0),
             None
         );
     }
@@ -209,7 +220,7 @@ mod tests {
     #[test]
     fn an_accept_and_a_reject_both_decode() {
         let mut asm = RendezvousAssembler::new("DC0SK", 3.0, 8);
-        let acc = run(&mut asm, "KN4CRD", "DC0SK", "OPHF QSY R7 C9 S4", 1000.0, 0)
+        let acc = run(&mut asm, "KN4CRD", "DC0SK", "OPHF1 QSY R7 C9 S4", 1000.0, 0)
             .expect("accept recognized");
         assert_eq!(
             acc.msg,
@@ -219,7 +230,7 @@ mod tests {
                 switch_in_slots: 4,
             }
         );
-        let rej = run(&mut asm, "KN4CRD", "DC0SK", "OPHF NO R7 F", 1000.0, 10)
+        let rej = run(&mut asm, "KN4CRD", "DC0SK", "OPHF1 NO R7 F", 1000.0, 10)
             .expect("reject recognized");
         assert_eq!(
             rej.msg,

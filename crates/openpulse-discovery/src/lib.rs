@@ -4,6 +4,19 @@
 //! OpenPulse station recognise another among ordinary JS8 traffic. The station table, wall-clock T/R
 //! scheduler, and the discovery/rendezvous state machines land in the following units (plan §4).
 
+/// The `@OPULSE` JS8 dialect these codecs speak: one magic and ONE version for the whole dialect.
+///
+/// Defined here, not in `hint.rs`, because the hint and the rendezvous codec both emit it (#1163).
+/// A receiver's real question is "do I speak OPHF-dialect v1" — one namespace, one answer. Separate
+/// per-codec constants would make "OPHF1 hints talking to OPHF2 rendezvous" representable, and
+/// nothing would catch it; sharing one definition makes that state unrepresentable instead.
+pub mod dialect {
+    /// Magic prefix; the full wire token is `OPHF<version>`.
+    pub const MAGIC: &str = "OPHF";
+    /// Version this build emits and accepts, for every codec in the dialect.
+    pub const VERSION: u8 = 1;
+}
+
 pub mod discovery_sm;
 pub mod hint;
 pub mod hint_assembler;

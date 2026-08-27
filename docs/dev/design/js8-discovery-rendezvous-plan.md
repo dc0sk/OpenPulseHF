@@ -351,9 +351,9 @@ Existing `PeerCache::query(capability_mask, min_quality, trust_filter, max_resul
 Carried as JS8 **directed free-text messages** (Data frames addressed to the peer, standard first/last chaining), compact grammar:
 
 ```
-DC0SK: KN4CRD OPHF QSY? R7 C3 C9 K2        # propose: token R7 (2 base-36 chars), ranked channels C3,C9,K2
-KN4CRD: DC0SK OPHF QSY R7 C9 S4            # accept: channel C9, switch at slot +4 (~60 s)
-KN4CRD: DC0SK OPHF NO R7 B                 # or reject: reason code (B=busy, T=trust, F=no common freq, ...)
+DC0SK: KN4CRD OPHF1 QSY? R7 C3 C9 K2        # propose: token R7 (2 base-36 chars), ranked channels C3,C9,K2
+KN4CRD: DC0SK OPHF1 QSY R7 C9 S4            # accept: channel C9, switch at slot +4 (~60 s)
+KN4CRD: DC0SK OPHF1 NO R7 B                 # or reject: reason code (B=busy, T=trust, F=no common freq, ...)
 ```
 
 - **Channel table**: candidate frequencies are indexed against a published per-band channel table (config `rendezvous_channels_hz`, validated through `BandplanPolicy` at load). 2 chars per channel instead of 7+ digits of Hz keeps the proposal in ~2 frames (~30 s round trip ≈ 45–60 s total).
