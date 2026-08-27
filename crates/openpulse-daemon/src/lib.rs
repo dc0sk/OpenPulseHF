@@ -1350,9 +1350,25 @@ pub async fn process_received_bytes(
 
     // QSY frames are ASCII; a non-QSY, non-relay binary frame is a candidate handshake SAR
     // fragment (CONREQ/CONACK exceed one 255-byte modem frame, so they arrive fragmented).
-    let qsy_frame = std::str::from_utf8(bytes)
-        .ok()
-        .and_then(|text| decode_qsy_frame(text.trim()).ok());
+    let text = std::str::from_utf8(bytes).ok().map(str::trim);
+
+    // A line that IDENTIFIES ITSELF as QSY never falls through to SAR (#1162). Before the format
+    // had a magic there was nothing to test, so any undecodable text dropped into the reassembly
+    // router below — where `sar_segment_id` of ASCII routes a non-zero first byte into FILEXFER
+    // fragment reassembly. That was survivable while QSY was unrecognisable; with a magic it would
+    // mean a future-epoch QSY line silently feeding the file assembler. Dispatch, not session
+    // semantics — #1162's scope note says leave the session alone, and this leaves it alone.
+    if let Some(t) = text {
+        if t.starts_with(qsy_wire_magic()) && decode_qsy_frame(t).is_err() {
+            tracing::warn!(
+                line = %t.chars().take(24).collect::<String>(),
+                "dropping a QSY line this build cannot decode; not routing it to reassembly"
+            );
+            return;
+        }
+    }
+
+    let qsy_frame = text.and_then(|t| decode_qsy_frame(t).ok());
     let Some(frame) = qsy_frame else {
         // Route the reassembly by SAR segment-id (the 4-byte header is public layout): 0 = handshake
         // (unchanged, bit-for-bit), any other id = file transfer. A malformed sub-header frame stays on
@@ -1883,6 +1899,12 @@ fn maybe_relay_forward(
 /// forwards commands to the caller. Commands without runtime support emit a
 /// [`ControlEvent::CommandError`] instead of failing silently.
 #[cfg(not(target_arch = "wasm32"))]
+/// The QSY wire magic, taken from the signing registry rather than typed here (#1162).
+fn qsy_wire_magic() -> &'static str {
+    std::str::from_utf8(openpulse_core::signing_domain::SigningDomain::QsyLine.tag())
+        .unwrap_or("OPQS")
+}
+
 pub async fn apply_command_to_engine(
     cmd: &ControlCommand,
     engine: &mut ModemEngine,
@@ -4586,7 +4608,11 @@ mod command_apply_tests {
         };
 
         // QSY_REQ frame: verb, token, n_candidates
-        let qsy_req = b"QSY_REQ tok-resp 2";
+        let qsy_req_line = encode_qsy_frame(&QsyFrame::Req {
+            token: "tok-resp".into(),
+            n_candidates: 2,
+        });
+        let qsy_req = qsy_req_line.as_bytes();
         process_received_bytes(
             qsy_req,
             &mut runtime_state,
@@ -4620,7 +4646,11 @@ mod command_apply_tests {
         // One spoofed inbound REQ. Nothing else happens: the "peer" never sends QSY_LIST, which is
         // exactly what an attacker who only wants to jam the anti-jam response would do.
         process_received_bytes(
-            b"QSY_REQ spoofed 2",
+            encode_qsy_frame(&QsyFrame::Req {
+                token: "spoofed".into(),
+                n_candidates: 2,
+            })
+            .as_bytes(),
             &mut runtime_state,
             None,
             &ev_tx,
@@ -4659,7 +4689,11 @@ mod command_apply_tests {
         };
 
         process_received_bytes(
-            b"QSY_REQ live 2",
+            encode_qsy_frame(&QsyFrame::Req {
+                token: "live".into(),
+                n_candidates: 2,
+            })
+            .as_bytes(),
             &mut runtime_state,
             None,
             &ev_tx,
@@ -4750,7 +4784,13 @@ mod command_apply_tests {
             .expect("initiator must produce SendFrame(Req) action");
 
         // Extract the token from the encoded line for assertion.
-        let token_from_line = req_text.split_whitespace().nth(1).unwrap().to_string();
+        // Decoded, not counted. This used to be `split_whitespace().nth(1)`, which read the token
+        // by POSITION — so #1162's wire token shifted every field by one and the assertion compared
+        // the verb against the token. Parsing through the codec cannot drift with the format.
+        let token_from_line = match decode_qsy_frame(req_text.trim()).expect("decode the REQ") {
+            QsyFrame::Req { token, .. } => token,
+            other => panic!("expected a QSY_REQ, got {other:?}"),
+        };
 
         // ── Responder: feed the frame ───────────────────────────────────────
         let mut engine = test_engine();
