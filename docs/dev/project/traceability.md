@@ -9,6 +9,53 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-08-27 — #1162: QSY lines gain a wire token, and their signing domain goes in-band
+
+**Requirement → design → implementation → tests → results.**
+
+- **Change.** QSY frames were CR-terminated ASCII verb lines with **no magic and no version**, so a
+  receiver had nothing to branch on and an unknown line was indistinguishable from corruption. Every
+  sibling on-air format has a version token (`FILEXFER_VERSION`, `HINT_VERSION`), so this was an
+  omission rather than a ruling. Free to add now; impossible to add cheaply after 1.0.
+
+- **The interaction with #1193.** `SigningDomain::QsyLine` was a **prepended** domain (tag `OPQS`,
+  never transmitted) precisely because the lines had no fixed leading bytes. Adding a transmitted
+  magic removes that premise, so the domain is now **in-band**: the transmitted `OPQS<version>` IS
+  the signing tag. The conversion was free **now and only now** — the signed path
+  (`sign_line`/`verify_line`) has no production caller, so no signature changed meaning. After 1.0,
+  or after that path gains a caller, it becomes a signing-domain break.
+
+- **Everything is by reference, nothing re-typed.** The transmitted prefix and the version both come
+  from `SigningDomain::QsyLine`. A literal `"OPQS1"` would also have been invisible to the
+  registry's source scan, which matches only `b"…"` byte-string literals.
+
+- **THE SITE I MISSED, and why it mattered.** I gave the review the two daemon *encode* sites and
+  omitted the RX site at `lib.rs:1355`, where a UTF-8 payload failing QSY decode **falls through to
+  SAR routing** — and `sar_segment_id` of ASCII routes a non-zero first byte into **filexfer**
+  reassembly. Harmless while QSY was unrecognisable; with a magic it would mean a future-epoch QSY
+  line silently feeding the file assembler. A line that identifies itself as QSY now never falls
+  through. Recorded as a deliberate scope call: this is transport dispatch, not the session
+  semantics #1162's scope note protects.
+
+- **Tests → results (actually run).** New: every encoded line carries the token (checked against the
+  registry, plus a round-trip); a foreign version is refused **by version** with a distinct variant,
+  with a positive control; a line with no token at all is refused.
+  **Sabotage-verified:** removing the version check makes a foreign-version line decode as
+  `Ok(Req{…})`. **764 passed, 0 failed** across `openpulse-qsy`, `-core`, `-daemon`.
+
+- **Four tests failed on the change and were right to** — they hardcoded the pre-#1162 wire text.
+  Rebuilt through the encoder rather than re-typed, including one that read the token by FIELD INDEX
+  (`split_whitespace().nth(1)`) and so compared the verb against the token once the prefix shifted
+  every field. A fifth kept passing **vacuously**: `token_too_long_rejected` hand-built its line, so
+  it now rejected at the missing-token check without reaching the length cap it is named for, and
+  `Malformed(_)` matched both reasons. It now asserts the message.
+
+- **Found by the review's inventory re-derivation, filed as #1206:** `AuthBeacon` transmits bare
+  JSON on-air with no magic and no version, and was absent from the break-package table entirely.
+  My "QSY and rendezvous are the last two" was the fourth wrong inventory claim of the session.
+
+---
+
 ## 2026-08-26 — #1164: `WireEnvelope`'s version byte made authoritative
 
 **Requirement → design → implementation → tests → results.**

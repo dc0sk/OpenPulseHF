@@ -103,14 +103,18 @@ impl SigningDomain {
             | SigningDomain::ConAck
             | SigningDomain::PqConReq
             | SigningDomain::PqConAck
-            | SigningDomain::WireEnvelope => TagPlacement::InBand,
+            | SigningDomain::WireEnvelope
+            // #1162 gave QSY lines a transmitted `OPQS<version>` token, so the magic IS the first
+            // bytes signed and nothing is prepended. It was `Prepended` only because the lines had
+            // no fixed leading bytes; that premise is gone. The conversion was free exactly once —
+            // the signed path had no production caller — and after 1.0 it becomes a signature break.
+            | SigningDomain::QsyLine => TagPlacement::InBand,
             SigningDomain::Manifest
             | SigningDomain::PeerDescriptor
             | SigningDomain::RouteResponse
             | SigningDomain::RouteUpdate
             | SigningDomain::FileOffer
             | SigningDomain::RigCtrlCmd
-            | SigningDomain::QsyLine
             | SigningDomain::AuthBeacon => TagPlacement::Prepended,
         }
     }
@@ -138,8 +142,11 @@ impl SigningDomain {
             | SigningDomain::RouteUpdate
             | SigningDomain::FileOffer
             | SigningDomain::RigCtrlCmd
-            | SigningDomain::QsyLine
             | SigningDomain::AuthBeacon => 0x01,
+            // Carried in the frame as an ASCII DIGIT ('1' = 0x31), not as the raw byte — this is a
+            // text format. The VALUE is mirrored here; `openpulse-qsy` binds the two with a test,
+            // because core cannot import that crate to assert it from this side.
+            SigningDomain::QsyLine => 0x01,
         }
     }
 }
