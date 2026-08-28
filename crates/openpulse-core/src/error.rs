@@ -71,6 +71,9 @@ pub enum AckError {
 
     #[error("ACK authentication tag mismatch")]
     MacMismatch,
+
+    #[error("reserved bits 7:5 set in ACK byte 0 (value {bits:#05b})")]
+    ReservedBitsSet { bits: u8 },
 }
 
 /// Errors produced by the SAR sub-layer.

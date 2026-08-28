@@ -84,6 +84,9 @@ pub struct AckFrame {
     pub recommended_level: Option<SpeedLevel>,
 }
 
+/// Byte 0 bits 7:5 — reserved, always zero on the wire.
+const B0_RESERVED_MASK: u8 = 0xE0;
+
 impl AckFrame {
     /// Create a frame with the session hash computed from `session_id`.
     pub fn new(ack_type: AckType, session_id: &str) -> Self {
@@ -111,6 +114,22 @@ impl AckFrame {
         self
     }
 
+    /// Byte 0 bits 7:5 are reserved and both encoders leave them zero.
+    ///
+    /// Rejecting non-zero is therefore **not a wire break** — no frame this project has ever
+    /// transmitted sets them — and it is what keeps them usable as capability/version headroom for
+    /// a 5-byte frame that has no version field. A decoder that ignores them cannot later be told
+    /// apart from one that understands them.
+    ///
+    /// Both decoders call this, so the two cannot drift apart.
+    fn check_b0_reserved(b0: u8) -> Result<(), AckError> {
+        let bits = (b0 & B0_RESERVED_MASK) >> 5;
+        if bits != 0 {
+            return Err(AckError::ReservedBitsSet { bits });
+        }
+        Ok(())
+    }
+
     /// Encode to the 5-byte wire representation.
     pub fn encode(&self) -> [u8; 5] {
         let has_rev = self.reverse_ack.is_some() as u8;
@@ -134,6 +153,7 @@ impl AckFrame {
                 got: b[4],
             });
         }
+        Self::check_b0_reserved(b[0])?;
         let ack_type = AckType::from_u8(b[0] & 0x07)?;
         let has_rev = (b[0] >> 3) & 1 != 0;
         let has_rec = (b[0] >> 4) & 1 != 0;
@@ -194,6 +214,9 @@ impl AckFrame {
         if [b[1], b[2], b[4]] != expected {
             return Err(AckError::MacMismatch);
         }
+        // After the MAC: authenticity first, then format. A tampered byte 0 fails the MAC anyway,
+        // so reaching here means the reserved bits were set by a peer that holds the session key.
+        Self::check_b0_reserved(b[0])?;
         let ack_type = AckType::from_u8(b[0] & 0x07)?;
         let has_rev = (b[0] >> 3) & 1 != 0;
         let has_rec = (b[0] >> 4) & 1 != 0;
@@ -572,5 +595,76 @@ mod tests {
             None
         );
         assert_eq!(decode_ack_from_llr_copies(&[]), None);
+    }
+    /// Neither encoder may set bits 7:5 — the premise that makes rejecting them free rather than a
+    /// wire break. Swept over every AckType and both optional fields, not spot-checked, because the
+    /// claim is about the encoders' whole output space.
+    #[test]
+    fn no_encoder_ever_sets_the_reserved_bits() {
+        let key = [0x5Au8; 32];
+        let levels = [None, SpeedLevel::from_u8(1), SpeedLevel::from_u8(20)];
+        // Swept from the type's own decoder rather than a hand-written list: from_u8 IS the closed
+        // source for this domain, so a new variant cannot slip past the sweep.
+        for t in (0..8).map(|v| AckType::from_u8(v).expect("0..8 are the whole domain")) {
+            for rev in [None, Some(AckType::AckOk)] {
+                for lvl in levels {
+                    let mut f = match rev {
+                        Some(r) => AckFrame::new_with_reverse(t, "S", r),
+                        None => AckFrame::new(t, "S"),
+                    };
+                    if let Some(l) = lvl {
+                        f = f.with_recommended_level(l);
+                    }
+                    for (label, bytes) in
+                        [("crc", f.encode()), ("auth", f.encode_authenticated(&key))]
+                    {
+                        assert_eq!(
+                            bytes[0] & B0_RESERVED_MASK,
+                            0,
+                            "{label} encoder set a reserved bit for {t:?}/{rev:?}/{lvl:?}"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    /// Every non-zero reserved pattern is rejected by BOTH decoders, with the positive control that
+    /// the same frame decodes when the bits are clear — so this cannot pass by breaking ordinary
+    /// ACKs. The CRC/MAC is recomputed over the tampered byte, or the frame would fail integrity
+    /// first and the reserved check would never be reached.
+    #[test]
+    fn both_decoders_reject_every_non_zero_reserved_pattern() {
+        let key = [0xA5u8; 32];
+        let frame = AckFrame::new(AckType::AckOk, "SESSION");
+
+        let clean = frame.encode();
+        assert!(AckFrame::decode(&clean).is_ok(), "positive control (crc)");
+        let clean_auth = frame.encode_authenticated(&key);
+        assert!(
+            AckFrame::decode_authenticated(&clean_auth, &key).is_ok(),
+            "positive control (auth)"
+        );
+
+        for pattern in 1u8..8 {
+            let mut b = clean;
+            b[0] |= pattern << 5;
+            b[4] = crc8(&b[..4]);
+            match AckFrame::decode(&b) {
+                Err(AckError::ReservedBitsSet { bits }) => assert_eq!(bits, pattern),
+                other => panic!("crc decoder accepted reserved {pattern:#05b}: {other:?}"),
+            }
+
+            let mut a = clean_auth;
+            a[0] |= pattern << 5;
+            let tag = mac24(&key, a[0], a[3]);
+            a[1] = tag[0];
+            a[2] = tag[1];
+            a[4] = tag[2];
+            match AckFrame::decode_authenticated(&a, &key) {
+                Err(AckError::ReservedBitsSet { bits }) => assert_eq!(bits, pattern),
+                other => panic!("auth decoder accepted reserved {pattern:#05b}: {other:?}"),
+            }
+        }
     }
 }
