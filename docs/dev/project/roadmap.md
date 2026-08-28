@@ -638,9 +638,14 @@ NACKs force both directions down even though B→A may be excellent.
 - `apply_ack()` updates only `tx_level` (our outgoing path quality as reported by the
   peer); a new `apply_remote_ack(ack: AckType)` updates `rx_level` when the peer's ACK
   includes a reverse-direction quality report.
-- Extend `AckFrame` with a 1-byte `reverse_ack: AckType` field (the sender's assessment
-  of the *incoming* path quality); backward-compatible via a version nibble already in
-  the frame header.
+- Extend `AckFrame` with a `reverse_ack: AckType` field (the sender's assessment of the
+  *incoming* path quality). **Corrected 2026-08-28 (#1165): there is no version nibble
+  in the frame header** — this line claimed one, and the plan it describes was already
+  built on a different mechanism. `reverse_ack` is 3 bits in byte 3, announced by a
+  presence flag at byte 0 bit 3, and it is those **presence-flag bits** that carry the
+  compatibility, not a version field. It is also not "1-byte": the frame is a fixed 5
+  bytes and has never grown. What version headroom exists is byte 0 bits 7:5, which
+  #1165 made enforceable by rejecting non-zero rather than ignoring them.
 - `ModemEngine::current_adaptive_mode()` returns `(tx_mode, rx_mode)` as a tuple;
   callers that assumed symmetric modes need updating.
 - `RigStatus` and `EngineEvent::RateChange` gain an optional `direction` field.

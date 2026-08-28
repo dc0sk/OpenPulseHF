@@ -9,6 +9,46 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-08-28 — #1165: ACK reserved bits 7:5 are enforced, not ignored
+
+**Requirement → design → implementation → tests → results.**
+
+- **Change.** `AckFrame`'s byte 0 bits 7:5 were decoded by nobody. Both encoders leave them zero, so
+  **rejecting non-zero is not a wire break** — no frame this project has ever transmitted sets them
+  — and it is what keeps them usable as capability/version headroom on a 5-byte frame that has no
+  version field. A decoder that *ignores* them cannot later be distinguished from one that
+  *understands* them, which is the whole value of the headroom.
+
+- **Design.** One shared `check_b0_reserved`, called by `decode` and `decode_authenticated`, rather
+  than the same three lines twice — this is the blind-sibling shape, and a shared helper makes
+  drift impossible instead of merely unlikely. In the authenticated path the check runs **after**
+  the MAC: authenticity first, then format. A tampered byte 0 fails the MAC anyway, so reaching the
+  reserved check means the bits were set by a peer that holds the session key.
+
+- **Tests.** `no_encoder_ever_sets_the_reserved_bits` sweeps **both** encoders over the whole
+  `AckType` domain × reverse-ack present/absent × three recommended-level cases, establishing the
+  premise that makes the tightening free rather than a break. The domain is swept via
+  `(0..8).map(AckType::from_u8)` — the type's own decoder is the closed source — rather than a
+  hand-written variant list, and rather than adding a `pub const ALL` the reachability ratchet would
+  correctly flag as uncalled. `both_decoders_reject_every_non_zero_reserved_pattern` walks all seven
+  non-zero patterns through both decoders, recomputing the CRC/MAC over the tampered byte so the
+  frame fails on the *reserved* check rather than on integrity, and carries positive controls
+  proving a clean frame still decodes in both modes.
+
+- **Test results.** `cargo test -p openpulse-core --no-default-features --lib ack::` → 19 passed, 0
+  failed. **Sabotage-verified per call site, independently:** removing the check from `decode` alone
+  fails with *"crc decoder accepted reserved 0b001"*; removing it from `decode_authenticated` alone
+  fails with *"auth decoder accepted reserved 0b001"*. Testing the shared helper once would not have
+  shown that both call sites are wired. Tree restored and re-run clean at 19/19.
+
+- **Doc correction.** `roadmap.md:641-642` claimed the planned `reverse_ack` extension was
+  "backward-compatible via a version nibble already in the frame header". **There is no version
+  nibble** — the mechanism is the byte 0 presence-flag bits, and the claim also called the field
+  "1-byte" when the frame is a fixed 5 bytes that has never grown. Corrected in place, with a
+  tree-wide sweep confirming no other occurrence of the phrase.
+
+---
+
 ## 2026-08-27 — #1206: the FreeDV auth beacon gains a wire magic and version token
 
 **Requirement → design → implementation → tests → results.**
