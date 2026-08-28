@@ -1,6 +1,6 @@
 //! Signed authentication beacon transmitted via the FreeDV data channel.
 
-use openpulse_core::signing::{sign_in_domain, verify_in_domain};
+use openpulse_core::signing::{sign_in_band, verify_in_band};
 use openpulse_core::signing_domain::SigningDomain;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -13,6 +13,36 @@ pub enum BeaconError {
     Hex(#[from] hex::FromHexError),
     #[error("invalid field length")]
     InvalidLength,
+    #[error("bad magic: expected {expected:?}")]
+    BadMagic { expected: &'static [u8; 4] },
+    #[error("unsupported beacon version {got:#04x} (expected {expected:#04x})")]
+    UnsupportedVersion { got: u8, expected: u8 },
+}
+
+/// Wire magic. Equals `SigningDomain::AuthBeacon.tag()`, which is what the signature covers.
+///
+/// Deliberately NOT `pub`: a consumer identifies a beacon by calling [`AuthBeacon::decode`], which
+/// checks both of these itself. Exporting them would add public API with no caller — on the
+/// speculation that some future companion process wants to hand-parse the header — and the
+/// reachability ratchet is right to refuse that.
+const BEACON_MAGIC: &[u8; 4] = SigningDomain::AuthBeacon.tag();
+
+/// Wire version, taken from the registry so the transmitted byte and the signed byte are one value.
+const BEACON_VERSION: u8 = SigningDomain::AuthBeacon.version();
+
+/// `OPAB` + version + `u16` length.
+const HEADER_LEN: usize = 7;
+
+/// The signed message: `OPAB || version || canonical body`.
+///
+/// It begins with the domain tag, which is what makes this an in-band domain — the bytes the
+/// signature covers are bytes the receiver actually has, not a prefix it must reconstruct.
+fn signed_message(canonical_body: &[u8]) -> Vec<u8> {
+    let mut msg = Vec::with_capacity(5 + canonical_body.len());
+    msg.extend_from_slice(BEACON_MAGIC);
+    msg.push(BEACON_VERSION);
+    msg.extend_from_slice(canonical_body);
+    msg
 }
 
 /// Canonical body covered by the Ed25519 signature (no signature field).
@@ -76,8 +106,12 @@ impl AuthBeacon {
             pubkey: hex::encode(pubkey),
         };
         let canonical = serde_json::to_vec(&body).expect("beacon body serialisation");
-        let signature = sign_in_domain(SigningDomain::AuthBeacon, signing_seed, &canonical)
-            .unwrap_or([0u8; 64]);
+        let signature = sign_in_band(
+            SigningDomain::AuthBeacon,
+            signing_seed,
+            &signed_message(&canonical),
+        )
+        .unwrap_or([0u8; 64]);
         Self {
             callsign,
             timestamp_utc,
@@ -102,15 +136,19 @@ impl AuthBeacon {
         let Ok(canonical) = serde_json::to_vec(&body) else {
             return false;
         };
-        verify_in_domain(
+        verify_in_band(
             SigningDomain::AuthBeacon,
             &self.pubkey,
-            &canonical,
+            &signed_message(&canonical),
             &self.signature,
         )
     }
 
-    /// Encode to length-prefixed JSON wire bytes: `[u16 BE len][JSON]`.
+    /// Encode to wire bytes: `[OPAB][version: u8][u16 BE len][JSON]`.
+    ///
+    /// The magic and version are what a receiver branches on. Before #1206 there was neither, so a
+    /// build could not tell which format it was looking at — on the one message whose entire
+    /// purpose is "you can verify who sent this".
     pub fn encode(&self) -> Vec<u8> {
         let wire = BeaconWire {
             callsign: self.callsign.clone(),
@@ -123,22 +161,38 @@ impl AuthBeacon {
         };
         let json = serde_json::to_vec(&wire).expect("beacon wire serialisation");
         let len = json.len() as u16;
-        let mut out = Vec::with_capacity(2 + json.len());
+        let mut out = Vec::with_capacity(HEADER_LEN + json.len());
+        out.extend_from_slice(BEACON_MAGIC);
+        out.push(BEACON_VERSION);
         out.extend_from_slice(&len.to_be_bytes());
         out.extend_from_slice(&json);
         out
     }
 
-    /// Decode from the length-prefixed wire format produced by [`encode`].
+    /// Decode from the wire format produced by [`encode`].
+    ///
+    /// Rejects an unknown magic or version rather than attempting the parse: a beacon from a
+    /// format this build does not know is not a beacon it can make an identity claim about.
     pub fn decode(bytes: &[u8]) -> Result<Self, BeaconError> {
-        if bytes.len() < 2 {
+        if bytes.len() < HEADER_LEN {
             return Err(BeaconError::InvalidLength);
         }
-        let len = u16::from_be_bytes([bytes[0], bytes[1]]) as usize;
-        if bytes.len() < 2 + len {
+        if &bytes[0..4] != BEACON_MAGIC.as_slice() {
+            return Err(BeaconError::BadMagic {
+                expected: BEACON_MAGIC,
+            });
+        }
+        if bytes[4] != BEACON_VERSION {
+            return Err(BeaconError::UnsupportedVersion {
+                got: bytes[4],
+                expected: BEACON_VERSION,
+            });
+        }
+        let len = u16::from_be_bytes([bytes[5], bytes[6]]) as usize;
+        if bytes.len() < HEADER_LEN + len {
             return Err(BeaconError::InvalidLength);
         }
-        let wire: BeaconWire = serde_json::from_slice(&bytes[2..2 + len])?;
+        let wire: BeaconWire = serde_json::from_slice(&bytes[HEADER_LEN..HEADER_LEN + len])?;
 
         let session_nonce: [u8; 16] = hex::decode(&wire.session_nonce)?
             .try_into()
@@ -224,7 +278,110 @@ mod tests {
 
     #[test]
     fn decode_truncated_returns_error() {
-        assert!(AuthBeacon::decode(&[0x01]).is_err());
-        assert!(AuthBeacon::decode(&[0x00, 0x10, 0xFF]).is_err());
+        assert!(matches!(
+            AuthBeacon::decode(&[0x01]),
+            Err(BeaconError::InvalidLength)
+        ));
+        // A well-formed header whose length field promises more body than is present.
+        let mut short = Vec::new();
+        short.extend_from_slice(BEACON_MAGIC);
+        short.push(BEACON_VERSION);
+        short.extend_from_slice(&999u16.to_be_bytes());
+        short.extend_from_slice(b"{}");
+        assert!(matches!(
+            AuthBeacon::decode(&short),
+            Err(BeaconError::InvalidLength)
+        ));
+    }
+
+    fn sample() -> AuthBeacon {
+        let (seed, pubkey) = make_key();
+        AuthBeacon::sign(
+            "W1AW",
+            1_746_800_000,
+            [0x07u8; 16],
+            14_236_000,
+            "FreeDV-1600",
+            &seed,
+            pubkey,
+        )
+    }
+
+    /// The transmitted header is the registry's, not a local literal — that is what makes the
+    /// signed byte and the wire byte one value rather than two that can drift.
+    #[test]
+    fn the_wire_header_comes_from_the_signing_registry() {
+        let bytes = sample().encode();
+        assert_eq!(&bytes[0..4], SigningDomain::AuthBeacon.tag().as_slice());
+        assert_eq!(bytes[4], SigningDomain::AuthBeacon.version());
+    }
+
+    #[test]
+    fn decode_rejects_a_foreign_magic() {
+        let mut bytes = sample().encode();
+        bytes[0..4].copy_from_slice(b"OPQS");
+        assert!(matches!(
+            AuthBeacon::decode(&bytes),
+            Err(BeaconError::BadMagic { .. })
+        ));
+    }
+
+    /// The wrong version is DERIVED from the constant, so this keeps straddling the boundary when
+    /// the version is bumped instead of silently testing the shipping value.
+    #[test]
+    fn decode_rejects_an_unknown_version() {
+        let mut bytes = sample().encode();
+        bytes[4] = BEACON_VERSION.wrapping_add(1);
+        match AuthBeacon::decode(&bytes) {
+            Err(BeaconError::UnsupportedVersion { got, expected }) => {
+                assert_eq!(got, BEACON_VERSION.wrapping_add(1));
+                assert_eq!(expected, BEACON_VERSION);
+            }
+            other => panic!("expected UnsupportedVersion, got {other:?}"),
+        }
+    }
+
+    /// The magic and version are inside the signature, not merely beside it — so a peer cannot
+    /// relabel a beacon's format and keep the identity claim attached to it.
+    #[test]
+    fn the_signature_covers_the_magic_and_version() {
+        let beacon = sample();
+        let body = BeaconBody {
+            callsign: beacon.callsign.clone(),
+            timestamp_utc: beacon.timestamp_utc,
+            session_nonce: hex::encode(beacon.session_nonce),
+            freq_hz: beacon.freq_hz,
+            mode: beacon.mode.clone(),
+            pubkey: hex::encode(beacon.pubkey),
+        };
+        let canonical = serde_json::to_vec(&body).unwrap();
+
+        // Positive control: the real signed message verifies.
+        assert!(verify_in_band(
+            SigningDomain::AuthBeacon,
+            &beacon.pubkey,
+            &signed_message(&canonical),
+            &beacon.signature,
+        ));
+
+        for (label, mut msg) in [
+            ("version", signed_message(&canonical)),
+            ("magic", signed_message(&canonical)),
+        ] {
+            if label == "version" {
+                msg[4] = msg[4].wrapping_add(1);
+            } else {
+                msg[0..4].copy_from_slice(b"OPQS");
+            }
+            assert!(
+                !verify_in_band(
+                    SigningDomain::AuthBeacon,
+                    &beacon.pubkey,
+                    &msg,
+                    &beacon.signature,
+                ),
+                "a tampered {label} still verified"
+            );
+        }
     }
 }

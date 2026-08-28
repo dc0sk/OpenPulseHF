@@ -108,14 +108,19 @@ impl SigningDomain {
             // bytes signed and nothing is prepended. It was `Prepended` only because the lines had
             // no fixed leading bytes; that premise is gone. The conversion was free exactly once —
             // the signed path had no production caller — and after 1.0 it becomes a signature break.
-            | SigningDomain::QsyLine => TagPlacement::InBand,
+            | SigningDomain::QsyLine
+            // #1206 gave the FreeDV auth beacon a transmitted `OPAB<version>` header, for the same
+            // reason and at the same price: the crate has no in-repo dependent and no binary, so
+            // the signature change costs nothing today and becomes a break once 1.0 is tagged.
+            // Leaving it `Prepended` after adding a transmitted magic would put TWO version bytes
+            // in play — one signed-invisible, one on the wire — free to drift apart.
+            | SigningDomain::AuthBeacon => TagPlacement::InBand,
             SigningDomain::Manifest
             | SigningDomain::PeerDescriptor
             | SigningDomain::RouteResponse
             | SigningDomain::RouteUpdate
             | SigningDomain::FileOffer
-            | SigningDomain::RigCtrlCmd
-            | SigningDomain::AuthBeacon => TagPlacement::Prepended,
+            | SigningDomain::RigCtrlCmd => TagPlacement::Prepended,
         }
     }
 
@@ -141,8 +146,12 @@ impl SigningDomain {
             | SigningDomain::RouteResponse
             | SigningDomain::RouteUpdate
             | SigningDomain::FileOffer
-            | SigningDomain::RigCtrlCmd
-            | SigningDomain::AuthBeacon => 0x01,
+            | SigningDomain::RigCtrlCmd => 0x01,
+            // Carried in the frame as this RAW byte. `openpulse-freedv-auth` depends on this crate,
+            // so its encoder transmits `SigningDomain::AuthBeacon.version()` itself rather than a
+            // mirrored literal — there is no second copy to drift, and so no binding test is needed
+            // (contrast `QsyLine` below, whose text format cannot share the constant).
+            SigningDomain::AuthBeacon => 0x01,
             // Carried in the frame as an ASCII DIGIT ('1' = 0x31), not as the raw byte — this is a
             // text format. The VALUE is mirrored here; `openpulse-qsy` binds the two with a test,
             // because core cannot import that crate to assert it from this side.
