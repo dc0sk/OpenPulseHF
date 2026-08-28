@@ -1974,6 +1974,30 @@ pub async fn apply_command_to_engine(
             let _ = event_tx.send(ControlEvent::PttChanged { active: false });
         }
         ControlCommand::ConnectPeer { callsign } => {
+            // REFUSE THE WILDCARD DIAL (#1203). `"*"` is legal in `dst_station` — it is the CONREQ's
+            // deliberate broadcast form, and `ConReq::is_addressed_to` matches every station — so
+            // without this guard one operator command broadcasts a CONREQ that EVERY daemon in
+            // range answers, which is the exact RF cost #1178 added `dst_station` to prevent.
+            //
+            // And the dial could never succeed anyway: the CONACK filter compares `ack.station_id`
+            // against the literal `pending.peer_callsign`, so every reply to a `"*"` dial is
+            // rejected and the operator waits out a 30 s timeout having already spent the channel.
+            // Unreachable by construction AND maximally expensive, so refusing removes nothing that
+            // works — verified: no production site sets `dst_station` to `"*"`; the wildcard is a
+            // receiver-side concept with no sender.
+            //
+            // A real broadcast/discovery dial is issue #1203 option (b) and a separate design pass:
+            // it would accept the first responder whose CONACK verifies, rather than matching a
+            // literal callsign. Refusing here does not foreclose it.
+            if callsign == "*" {
+                tracing::warn!("connect_peer: refusing the wildcard dial; not transmitting");
+                let _ = event_tx.send(ControlEvent::CommandError {
+                    command: "connect_peer".to_string(),
+                    reason: "cannot dial \"*\": a wildcard CONREQ is answered by every station in                              range and no reply can ever match it. Dial a specific callsign."
+                        .to_string(),
+                });
+                return;
+            }
             let now_ms = SystemTime::now()
                 .duration_since(UNIX_EPOCH)
                 .unwrap_or_default()
@@ -5254,6 +5278,87 @@ mod handshake_rf_tests {
     /// being fixed is *spent RF* — a unit check on `is_addressed_to` would pass even if the daemon
     /// went on to key up anyway. The positive control in the same test is what makes the negative
     /// meaningful: the identical setup DOES transmit when the request is addressed to us.
+    /// #1203: dialling the wildcard `"*"` must refuse, and must NOT key the transmitter.
+    ///
+    /// Asserted on the engine's transmit counter, like #1178, because the defect is *spent RF*: a
+    /// wildcard CONREQ is answered by EVERY daemon in range. Checking only that a `CommandError`
+    /// is emitted would pass on code that errored *after* transmitting, which is the failure this
+    /// pins. The positive control — an ordinary callsign, identical setup — is what makes the zero
+    /// meaningful; without it the assertion would also pass if `ConnectPeer` transmitted nothing
+    /// at all.
+    #[tokio::test]
+    async fn a_wildcard_connect_peer_refuses_and_does_not_key_the_transmitter() {
+        async fn dial(peer: &str) -> (u64, Vec<ControlEvent>, bool, bool) {
+            let mut eng = bpsk_engine();
+            let mode = mode();
+            let (tx, mut rx) = broadcast::channel::<ControlEvent>(32);
+            let ev = Arc::new(tx);
+            let mut rs = RuntimeControlState {
+                local_callsign: "K2XYZ".into(),
+                local_grid: "EM69".into(),
+                station_seed: [3u8; 32],
+                ..RuntimeControlState::default()
+            };
+            let before = eng.frames_transmitted();
+            apply_command_to_engine(
+                &ControlCommand::ConnectPeer {
+                    callsign: peer.to_string(),
+                },
+                &mut eng,
+                &mode,
+                &ev,
+                None,
+                &mut rs,
+            )
+            .await;
+            let sent = eng.frames_transmitted() - before;
+            let mut events = Vec::new();
+            while let Ok(e) = rx.try_recv() {
+                events.push(e);
+            }
+            (
+                sent,
+                events,
+                rs.pending_handshake.is_some(),
+                rs.qsy_pending_token.is_some(),
+            )
+        }
+
+        // POSITIVE CONTROL: an ordinary dial DOES key the transmitter.
+        let (ok_sent, _, ok_pending, _) = dial("W1AW").await;
+        assert!(
+            ok_sent > 0,
+            "control: an ordinary ConnectPeer must transmit a CONREQ"
+        );
+        assert!(ok_pending, "control: an ordinary dial arms the handshake");
+
+        // THE DEFECT: the wildcard dial spends no RF and announces nothing.
+        let (sent, events, pending, token) = dial("*").await;
+        assert_eq!(
+            sent, 0,
+            "a wildcard dial must not key the transmitter — every station in range answers it"
+        );
+        assert!(
+            events.iter().any(|e| matches!(
+                e,
+                ControlEvent::CommandError { command, .. } if command == "connect_peer"
+            )),
+            "a refused wildcard dial must say so"
+        );
+        assert!(
+            !events.iter().any(|e| matches!(
+                e,
+                ControlEvent::RfConnectionChanged {
+                    connected: true,
+                    ..
+                }
+            )),
+            "a refused dial must not announce a connection"
+        );
+        assert!(!pending, "a refused dial must not arm the handshake");
+        assert!(!token, "a refused dial must not set a QSY token");
+    }
+
     /// #1199: a `ConnectPeer` whose CONREQ cannot be built must announce NOTHING and say so.
     ///
     /// The defect this pins is not a missing log line — it is ordering. The handler used to run
