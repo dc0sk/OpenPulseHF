@@ -315,6 +315,40 @@ mod tests {
 mod source_scan {
     use super::*;
 
+    /// The crypto wall's TRAIT entries must stay in `clippy.toml`.
+    ///
+    /// This is a contract pin, so the literals are the point: `signature::Signer::sign` and
+    /// `signature::Verifier::verify` are the ONLY entries that actually fire on a raw Ed25519
+    /// call. #1210 removed two `ed25519_dalek::`-path entries that clippy could not resolve
+    /// (`does not refer to a reachable function`) and which therefore never fired — but their
+    /// presence made the list *look* like it policed those paths directly. Anyone pruning the
+    /// remaining entries as duplicates would leave a hole with the file still looking complete,
+    /// and nothing else in the tree would notice.
+    ///
+    /// A text check is weaker than behaviour: what proves the wall works is planting a raw
+    /// `sk.sign(..)` and watching clippy reject it (see the note in `clippy.toml`). This only
+    /// stops the silent deletion, which is the failure mode with no other detector.
+    #[test]
+    fn the_crypto_wall_keeps_its_load_bearing_trait_entries() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .and_then(|p| p.parent())
+            .expect("workspace root");
+        let toml = std::fs::read_to_string(root.join("clippy.toml")).expect("clippy.toml");
+        for path in [
+            "signature::Signer::sign",
+            "signature::Signer::try_sign",
+            "signature::Verifier::verify",
+        ] {
+            assert!(
+                toml.contains(path),
+                "clippy.toml no longer bans `{path}` — raw signing is unguarded. \
+                 The ed25519_dalek:: paths do NOT cover it: they are trait impls, not inherent \
+                 methods, and clippy cannot resolve them (that is why #1210 deleted them)."
+            );
+        }
+    }
+
     /// Every four-byte magic literal in the workspace is registered — as a signing tag, a reserved
     /// magic, or an explicitly-foreign one.
     ///
