@@ -20,10 +20,15 @@ pub enum BeaconError {
 }
 
 /// Wire magic. Equals `SigningDomain::AuthBeacon.tag()`, which is what the signature covers.
-pub const BEACON_MAGIC: &[u8; 4] = SigningDomain::AuthBeacon.tag();
+///
+/// Deliberately NOT `pub`: a consumer identifies a beacon by calling [`AuthBeacon::decode`], which
+/// checks both of these itself. Exporting them would add public API with no caller — on the
+/// speculation that some future companion process wants to hand-parse the header — and the
+/// reachability ratchet is right to refuse that.
+const BEACON_MAGIC: &[u8; 4] = SigningDomain::AuthBeacon.tag();
 
 /// Wire version, taken from the registry so the transmitted byte and the signed byte are one value.
-pub const BEACON_VERSION: u8 = SigningDomain::AuthBeacon.version();
+const BEACON_VERSION: u8 = SigningDomain::AuthBeacon.version();
 
 /// `OPAB` + version + `u16` length.
 const HEADER_LEN: usize = 7;
