@@ -412,6 +412,16 @@ re-opens the campaign.
   research doc specifies a binary that was never built) — but that contradicts the roadmap's ✅ and
   is a product call above this issue's pay grade. Named here as considered-and-declined.
 
+* **`AckFrame` byte 3 stays unenforced, deliberately** (#1211, ruled by the maintainer 2026-08-28).
+  #1165 enforced byte 0's reserved bits 7:5; the symmetric tightening of byte 3 was measured
+  (`b[3] = 0xFF` with both presence flags clear decodes fine) and then **declined**. Byte 3 is
+  payload rather than a reserved region — fully allocated when both flags are set — so an extension
+  must announce itself in byte 0, which is now enforced and already provides the detection.
+  Enforcing byte 3 would also convert benign CRC-8 collisions in those bits into lost ACKs on the
+  legacy path. Contract recorded in `protocol-wire-spec.md` §5.1: *must be zero on transmit, ignored
+  on receive.* **Falsifier:** an extension mutually exclusive with both `reverse_ack` and
+  `recommended_level` — an extended reason code on a `Nack` — reopens it.
+
 * **The SAR 4-byte sub-header stays versionless, deliberately.** Raised by #1206's closing note and
   recorded here so it does not stay absent-by-oversight the way the beacon did. `sar.rs`'s
   `segment_id | fragment_index | fragment_total` header carries no version of its own and escapes
