@@ -120,11 +120,35 @@ if [ "${1:-}" = "--self-test" ]; then
         rm -f "$tmp"; echo "SELF-TEST: FAIL — a trailerless PR body was accepted"; exit 1
     fi
     rm -f "$tmp"
-    echo "SELF-TEST: PASS — dangling id rejected, and a trailerless PR body rejected"; exit 0
+    # #1219: an unresolvable base must FAIL, never read as an empty (therefore clean) range.
+    # A well-formed 40-hex object NAME satisfies `rev-parse --verify`, so this needs `^{commit}`.
+    if "$REPO_ROOT/scripts/check-trailer.sh" "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef" >/dev/null 2>&1; then
+        echo "SELF-TEST: FAIL — an unresolvable base was read as a clean range"; exit 1
+    fi
+    if "$REPO_ROOT/scripts/check-trailer.sh" "origin/no-such-branch-for-self-test" >/dev/null 2>&1; then
+        echo "SELF-TEST: FAIL — a nonexistent base ref was read as a clean range"; exit 1
+    fi
+    # positive control: a resolvable base must still be lintable
+    if ! "$REPO_ROOT/scripts/check-trailer.sh" "HEAD" >/dev/null 2>&1; then
+        echo "SELF-TEST: FAIL — a resolvable base was rejected"; exit 1
+    fi
+    echo "SELF-TEST: PASS — dangling id rejected, trailerless PR body rejected, unresolvable base rejected"; exit 0
 fi
 
 base="${1:-}"
 if [ -z "$base" ]; then
     if git rev-parse --verify -q origin/main >/dev/null; then base="origin/main"; else base="main"; fi
+fi
+# FAIL CLOSED (#1219). `lint_range` reports "no commits in <range>" and returns 0 when the range is
+# empty — which is also what an unresolvable base produces, since `git rev-list` fails into
+# 2>/dev/null. So a bad base read exactly like a clean branch. Note `--verify` alone is not enough:
+# it returns 0 for any well-formed 40-hex object NAME whether or not the object exists, which is the
+# most likely bad input here (a stale base.sha). `^{commit}` is the check that actually fires.
+if ! git rev-parse --verify --quiet "${base}^{commit}" >/dev/null 2>&1; then
+    echo "trailer-lint: base '$base' does not resolve to a commit in this checkout." >&2
+    echo "              Refusing to lint: an unresolvable base yields an empty range, which is" >&2
+    echo "              indistinguishable from a compliant branch." >&2
+    echo "TRAILER-LINT: FAIL"
+    exit 2
 fi
 lint_range "$base"

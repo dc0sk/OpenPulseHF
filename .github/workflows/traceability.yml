@@ -51,9 +51,26 @@ jobs:
 
       # R4: requirements-trailer lint — production commits must carry Implements:/Refactors:/
       # Verification-objective:, IDs validated against requirements.yaml. Bright-line grandfathers
-      # history. Base is the PR base commit.
+      # history.
+      #
+      # BASE IS THE PR'S BASE BRANCH, NOT `base.sha` (#1219). Two values in the SAME event payload
+      # are refreshed on different schedules: `github.sha` — the test merge this job checks out —
+      # is minted per event and is fresh even on `edited`, while `pull_request.base.sha` was
+      # observed to refresh only on `synchronize`. When the merge is fresher, the range spans
+      # commits merged to the base by OTHER PRs, and an untouched PR is linted against work its
+      # author never wrote. Neither schedule is documented, so the fix is to stop reading payload
+      # freshness at all: `origin/<base.ref>` is resolved from this job's own fetch
+      # (`+refs/heads/*:refs/remotes/origin/*` under `fetch-depth: 0`, so every head is present, and
+      # an open PR's base branch cannot be deleted) and is therefore consistent with HEAD by
+      # construction. The ref name goes through `env:` for the same reason the title and body do —
+      # a git refname may legally contain `$`, `;`, `(`, `)`.
+      #
+      # If that fetch is ever narrowed to a shallow depth, `origin/<base.ref>` disappears; both
+      # scripts now exit 2 on an unresolvable base rather than silently reporting an empty range.
       - name: Requirements-trailer lint (branch commits)
-        run: ./scripts/check-trailer.sh "${{ github.event.pull_request.base.sha }}"
+        env:
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
+        run: ./scripts/check-trailer.sh "origin/$BASE_REF"
 
       # THE SQUASH BLIND SPOT. This repo squash-merges, so the commits linted above are DISCARDED
       # and what lands on main is the squash message — composed from the PR title + body. Without
@@ -73,7 +90,9 @@ jobs:
       # Same host, same reason, same injection discipline (body via env and a file, never inlined).
       # This one asks whether the change was adversarially reviewed. Tier 1 is one line on every PR;
       # tier 2 demands a real artifact when the diff touches a decision site, and is classified from
-      # the PR's own diff — hence the base SHA.
+      # the PR's own diff — hence the base ref (see #1219 above for why a ref and not `base.sha`).
+      # An unresolvable base used to classify as "ordinary change" and PASS, i.e. the check failed
+      # OPEN; it now exits 2.
       #
       # It lives HERE and not in gate.sh because the workspace gate does not run at merge (#1144):
       # every ci.yml job is release/**-scoped, so a gate-only check would fire weeks after the lapse.
@@ -81,10 +100,11 @@ jobs:
         env:
           PR_TITLE: ${{ github.event.pull_request.title }}
           PR_BODY: ${{ github.event.pull_request.body }}
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
         run: |
           printf '%s\n\n%s\n' "$PR_TITLE" "$PR_BODY" > "$RUNNER_TEMP/pr-review-message.txt"
           ./scripts/check-review.sh --message-file "$RUNNER_TEMP/pr-review-message.txt" \
-                                    --base "${{ github.event.pull_request.base.sha }}"
+                                    --base "origin/$BASE_REF"
 
       # R5's doc constitution (status: living legality + recursive frontmatter) is NOT enforced in CI
       # right now: it lives in docs.yml, which calls the same scripts/validate-doc-frontmatter.sh but

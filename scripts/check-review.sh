@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Adversarial-review trailer lint.
 #
-# Usage: scripts/check-review.sh --message-file FILE [--base SHA]   # lint a PR body (primary)
+# Usage: scripts/check-review.sh --message-file FILE --base REF     # lint a PR body (primary)
 #        scripts/check-review.sh --base SHA                         # lint the local branch's diff
 #        scripts/check-review.sh --self-test
 #
@@ -155,19 +155,58 @@ if [ "$SELF_TEST" -eq 1 ]; then
         echo "  ok: a structured artifact accepted on design-class (positive control)"
     else echo "SELF-TEST FAIL: a valid artifact was rejected"; rc=1; fi
 
+    # #1219: an unresolvable base must FAIL the lint, never classify as "ordinary change".
+    # All three shapes below passed before that fix. The middle one is the subtle one: a
+    # well-formed 40-hex object NAME satisfies `git rev-parse --verify`, so the pre-existing
+    # existence check did not fire and the failure fell through `git diff ... 2>/dev/null`.
+    printf 'body\n\nReview: none — probe\n' > "$tmp/m6"
+    for bad in "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef" "origin/no-such-branch-for-self-test" ""; do
+        if "$REPO_ROOT/scripts/check-review.sh" --message-file "$tmp/m6" --base "$bad" >/dev/null 2>&1; then
+            echo "SELF-TEST FAIL: unresolvable base '${bad:-<empty>}' was treated as non-design-class"; rc=1
+        else echo "  ok: unresolvable base rejected (${bad:-<empty>})"; fi
+    done
+
+    # positive control for the guard: a RESOLVABLE base must still classify and pass, or the
+    # rejections above prove only that the script exits non-zero on everything.
+    if "$REPO_ROOT/scripts/check-review.sh" --message-file "$tmp/m6" --base HEAD >/dev/null 2>&1; then
+        echo "  ok: a resolvable base still classifies (positive control)"
+    else echo "SELF-TEST FAIL: a resolvable base was rejected"; rc=1; fi
+
     [ "$rc" -eq 0 ] && echo "REVIEW-LINT-SELF-TEST: PASS" || echo "REVIEW-LINT-SELF-TEST: FAIL"
     exit "$rc"
 fi
 
-# Classify the change
+# Classify the change.
+#
+# FAIL CLOSED (#1219). Every step below used to degrade to "ordinary change" on failure, which is
+# the worst possible default for a check whose job is to demand a review artifact: an unresolvable
+# base silently waved design-class work through with `Review: none`, and nothing said so. Three
+# distinct ways it happened, all measured:
+#   - no --base at all               -> the `[ -n "$BASE" ]` guard skipped classification entirely;
+#   - a 40-hex SHA that does not exist -> `git rev-parse --verify` returns 0 for a well-formed
+#     object NAME, so the old existence check did not fire; `git diff` then failed into 2>/dev/null
+#     and an empty diff classified as ordinary. `^{commit}` is what actually checks existence;
+#   - any other diff failure          -> swallowed by the same 2>/dev/null.
+# A base that cannot be resolved is not evidence of anything, least of all of innocence.
 design=0
-if [ -n "$BASE" ]; then
-    if git rev-parse --verify --quiet "$BASE" >/dev/null 2>&1; then
-        if git diff --name-status "$BASE...HEAD" 2>/dev/null | is_design_class; then design=1; fi
-    else
-        echo "review-lint: base '$BASE' is not a known commit; treating as non-design-class"
-    fi
+if [ -z "$BASE" ]; then
+    echo "review-lint: no --base given, so the change cannot be classified." >&2
+    echo "             Pass the PR's base branch, e.g. --base origin/main." >&2
+    echo "REVIEW-LINT: FAIL"
+    exit 2
 fi
+if ! git rev-parse --verify --quiet "${BASE}^{commit}" >/dev/null 2>&1; then
+    echo "review-lint: base '$BASE' does not resolve to a commit in this checkout." >&2
+    echo "             Refusing to classify: an unresolvable base is not 'not design-class'." >&2
+    echo "REVIEW-LINT: FAIL"
+    exit 2
+fi
+if ! diff_out=$(git diff --name-status "$BASE...HEAD" 2>&1); then
+    echo "review-lint: 'git diff $BASE...HEAD' failed: $diff_out" >&2
+    echo "REVIEW-LINT: FAIL"
+    exit 2
+fi
+if printf '%s\n' "$diff_out" | is_design_class; then design=1; fi
 [ "$design" -eq 1 ] && echo "review-lint: DESIGN-CLASS change (touches a decision site)" \
                     || echo "review-lint: ordinary change"
 
