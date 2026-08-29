@@ -10,11 +10,27 @@
 # being exempt. A future non-Ed25519 signer will also trip these and be told to "sign through
 # openpulse_core::signing", which is the wrong advice for a different algorithm — read this comment,
 # not just the lint message.
+#
+# THE `signature::` TRAIT ENTRIES ARE THE LOAD-BEARING ONES — do not prune them as redundant.
+# `SigningKey::sign` and `VerifyingKey::verify` are trait impls, not inherent methods, so naming
+# them by their `ed25519_dalek::` paths does NOT create a second line of defence: clippy cannot
+# resolve those paths and reported `does not refer to a reachable function` on every target, which
+# means those two entries never fired. They were removed in #1210 because an entry that does
+# nothing still *looks* like coverage, and the next reader pruning "duplicates" could delete the
+# trait entries believing the ed25519 ones cover them — leaving a real hole with the file still
+# looking complete.
+#
+# `VerifyingKey::verify_strict` stays: it IS a genuine inherent method, resolves, and has no trait
+# path covering it.
+#
+# Verified by planting `sk.sign(b"probe")` + `vk.verify(b"probe", &sig)` in a covered crate:
+#   error: use of a disallowed method `signature::Signer::sign`
+#   error: use of a disallowed method `signature::Verifier::verify`
+# Re-run that check after ANY edit here — and note a `clippy.toml`-only change does not invalidate
+# cargo's cached lint fingerprints, so the probe must go in a crate that would otherwise recompile.
 disallowed-methods = [
-    { path = "ed25519_dalek::SigningKey::sign", reason = "sign through openpulse_core::signing (SigningDomain-bound) instead" },
     { path = "signature::Signer::try_sign", reason = "sign through openpulse_core::signing (SigningDomain-bound) instead — try_sign produces byte-identical signatures, so leaving it off this list is a hole, not an exemption" },
     { path = "signature::Signer::sign", reason = "sign through openpulse_core::signing (SigningDomain-bound) instead" },
-    { path = "ed25519_dalek::VerifyingKey::verify", reason = "verify through openpulse_core::signing (SigningDomain-bound) instead" },
     { path = "ed25519_dalek::VerifyingKey::verify_strict", reason = "verify through openpulse_core::signing (SigningDomain-bound) instead" },
     { path = "signature::Verifier::verify", reason = "verify through openpulse_core::signing (SigningDomain-bound) instead" },
 ]
