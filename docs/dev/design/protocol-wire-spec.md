@@ -387,9 +387,9 @@ Source: `crates/openpulse-core/src/ack.rs` · driven by the rate/ACK taxonomy (C
 **5-byte** frame, sent on the `FSK4-ACK` waveform (20 symbols @ 100 baud ≈ 200 ms on air).
 
 ```
-byte 0:  bits[2:0] ACK type │ bit[3] has_reverse_ack │ bit[4] has_recommended_level │ bits[7:5] reserved
+byte 0:  bits[2:0] ACK type │ bit[3] has_reverse_ack │ bit[4] has_recommended_level │ bits[7:5] reserved (MUST be 0; rejected)
 bytes 1–2: session_hash (u16 BE)  — 16-bit FNV-1a of session_id (anti-collision)
-byte 3:  reverse_ack / recommended_level low bits (backward-compatible; old RX ignores)
+byte 3:  bits[2:0] reverse_ack (iff bit[3] of byte 0) │ bits[7:3] recommended_level (iff bit[4])
 byte 4:  CRC-8/SMBUS over bytes 0–3
 ```
 
@@ -410,6 +410,57 @@ ACK types (byte 0 bits[2:0]):
 `reverse_ack` (peer's RX-direction quality, for bidirectional sessions) and `recommended_level`
 (receiver-led OTA rate control, CAP-33) — both gated by the byte-0 flag bits and ignored by older
 receivers while the CRC still validates.
+
+### 5.1 The two unused-bit regions are governed differently — deliberately
+
+**Byte 0 bits[7:5] are reserved and enforced.** Since #1165 both decoders **reject** a frame with any
+of them set, in `decode` and `decode_authenticated` alike (in the authenticated path the check runs
+*after* the MAC: authenticity first, then format). Both encoders have always written zero there, so
+the tightening was not a wire break. This is the frame's version/capability headroom, and **any
+future extension announces itself here** — enforcement is what lets an old receiver fail closed on a
+format it does not understand instead of silently misreading it.
+
+**Byte 3's bits are NOT reserved, and are deliberately NOT enforced** (#1211, ruled 2026-08-28).
+When a presence flag is clear its field is unused, encoders write zero, and decoders **ignore
+whatever arrives**. Contract: *must be zero on transmit, ignored on receive.* Three reasons the
+symmetric tightening was declined:
+
+1. **Byte 3 is payload, not a reserved region.** It is *fully allocated* when both flags are set
+   (3 + 5 = 8 bits), so it is not spare capacity — a future field that must coexist with both
+   existing options gets nothing from it. This is a statement about the format's capacity, not
+   about current traffic: production only ever emits `new(...).with_recommended_level(...)`, so
+   bits[2:0] are free in every ACK shipped today, but a peer may legally set both and the codec
+   must accept it.
+2. **Every channel on which an extension could announce itself is already fail-closed — byte 3
+   with its flags clear is the only one that is not.** That, not "byte 0 is the only place", is the
+   real argument, and it is broader:
+   - byte 0 bits[7:5] — rejected since #1165;
+   - the ACK type, bits[2:0] — **all eight codes are assigned** (`AckOk`…`Abort`), so there is no
+     spare code point to grow into;
+   - `recommended_level`, when its flag is set — the 5-bit field spans 0–31 but `SpeedLevel` is
+     1–20, so codes 0 and 21–31 are **rejected** by both decoders (`InvalidSpeedLevel`);
+   - the frame length — an extended ACK is not 5 bytes and is rejected before parsing.
+
+   So an extension can only hide in byte 3 *with the flags clear*, and enforcing byte 3 would add
+   detection for exactly that one design — which nobody should choose, precisely because it is the
+   only undetectable one.
+
+**Not a reason, recorded so it is not re-argued:** the tightening was initially declined partly on
+CRC robustness — that corruption landing in byte 3's ignored bits decodes correctly today and would
+become a lost ACK. That argument is backwards and was cut. **No corruption confined to byte 3 alone
+can pass the CRC**: an error polynomial of degree ≤ 7 cannot be a multiple of the degree-8
+generator, verified by enumerating all 256 byte-3 values over 200 random prefixes with a
+deliberately-weakened 4-bit CRC as the control. A CRC-passing corruption that reaches byte 3 must
+also corrupt the CRC byte in a matching pair, and almost all such frames are corrupt in bytes 0–2
+as well — i.e. they decode to the *wrong* ACK today. Enforcement would mostly reject frames that
+are already semantically wrong, which is a benefit, not a cost. The ruling stands on 1–2 alone.
+
+**Falsifier, and the standing price.** An extension genuinely mutually exclusive with *both*
+`reverse_ack` and `recommended_level` — an extended reason code on a `Nack` is the plausible
+candidate — would want those bits and reopens this. Note what "ignored on receive" costs until
+then: because a third-party transmitter writing junk there is undetectable forever, **these bits can
+never be reclaimed without spending one of byte 0's seven remaining non-zero patterns**. Byte-0
+headroom is scarce, and that scarcity is exactly what would tempt a future designer toward byte 3.
 
 ---
 
