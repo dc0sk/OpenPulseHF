@@ -11,9 +11,22 @@
 //! bytes 1–2: session_hash u16 big-endian  (anti-collision)
 //! byte 3: recommended_level [7:3] (SpeedLevel 1–20 when has_recommended_level=1, else 0),
 //!         reverse_ack [2:0] (when has_reverse_ack=1, else 0)
-//!         — backward-compatible: old receivers ignore this byte; CRC still validates
 //! byte 4: CRC-8/SMBUS over bytes 0–3
 //! ```
+//!
+//! ## Byte 3 is NOT reserved headroom — do not grow an extension into it
+//!
+//! Contract (#1211, ruled 2026-08-28; rationale in `docs/dev/design/protocol-wire-spec.md` §5.1):
+//! **must be zero on transmit, ignored on receive** when the corresponding byte-0 presence flag is
+//! clear. It is deliberately *not* enforced, unlike byte 0's bits 7:5, which both decoders reject.
+//!
+//! It reads like spare capacity in a plain ACK and is not: with both flags set the byte is fully
+//! allocated (3 + 5 bits). Every channel an extension could announce itself on is already
+//! fail-closed — byte 0's reserved bits, the ACK type (all eight codes assigned), an out-of-range
+//! `recommended_level`, and the frame length. Byte 3 with its flags clear is the only undetectable
+//! one, which is exactly why nothing should be built there. The standing price: because a
+//! third-party transmitter writing junk there can never be detected, these bits cannot be reclaimed
+//! without spending one of byte 0's seven remaining non-zero patterns.
 //!
 //! `recommended_level` is the receiver-led, absolute target the data receiver wants
 //! the sender to transmit at (OTA rate lockstep).  Absolute (not a relative step) so a
@@ -596,9 +609,18 @@ mod tests {
         );
         assert_eq!(decode_ack_from_llr_copies(&[]), None);
     }
-    /// Neither encoder may set bits 7:5 — the premise that makes rejecting them free rather than a
-    /// wire break. Swept over every AckType and both optional fields, not spot-checked, because the
-    /// claim is about the encoders' whole output space.
+    /// Byte 3's two fields, as they sit on the wire (the level mask is post-shift). Not reserved
+    /// bits — payload that must be zero when its byte-0 presence flag is clear (#1211). No receiver
+    /// checks them, so the sweep below is the only detector the transmit half will ever have; they
+    /// live here rather than beside the encoders because nothing in production reads them.
+    const B3_REVERSE_ACK_MASK: u8 = 0x07;
+    const B3_RECOMMENDED_LEVEL_MASK: u8 = 0xF8;
+
+    /// Neither encoder may set byte 0's bits 7:5 — the premise that makes rejecting them free
+    /// rather than a wire break — nor byte 3's field bits when the matching presence flag is clear
+    /// (#1211's transmit half, which no receiver checks). Swept over every AckType and both
+    /// optional fields, not spot-checked, because the claim is about the encoders' whole output
+    /// space.
     #[test]
     fn no_encoder_ever_sets_the_reserved_bits() {
         let key = [0x5Au8; 32];
@@ -623,6 +645,27 @@ mod tests {
                             0,
                             "{label} encoder set a reserved bit for {t:?}/{rev:?}/{lvl:?}"
                         );
+                        // The transmit half of #1211's byte-3 contract. Receivers IGNORE these
+                        // bits, so nothing on the wire can ever catch a transmitter that writes
+                        // junk into a flag-clear field — this assertion is the only detector there
+                        // will be. It covers the shape production actually emits (a recommended
+                        // level with no reverse ACK), which the older spot-checks did not.
+                        if rev.is_none() {
+                            assert_eq!(
+                                bytes[3] & B3_REVERSE_ACK_MASK,
+                                0,
+                                "{label} encoder set reverse_ack bits with the flag clear \
+                                 for {t:?}/{lvl:?}"
+                            );
+                        }
+                        if lvl.is_none() {
+                            assert_eq!(
+                                bytes[3] & B3_RECOMMENDED_LEVEL_MASK,
+                                0,
+                                "{label} encoder set recommended_level bits with the flag clear \
+                                 for {t:?}/{rev:?}"
+                            );
+                        }
                     }
                 }
             }
