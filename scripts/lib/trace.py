@@ -25,6 +25,7 @@ REQ_MD = ROOT / "docs/dev/requirements.md"
 MATRIX_MD = ROOT / "docs/dev/project/traceability-matrix.md"
 YAML = ROOT / "docs/dev/project/requirements.yaml"
 ORPHAN_BASELINE = ROOT / "docs/dev/project/trace-orphan-baseline.txt"
+GRANDFATHERED = ROOT / "docs/dev/project/trace-grandfathered-ids.txt"
 RENDER_OUT = ROOT / "docs/dev/project/traceability-matrix.generated.md"
 
 # Production source roots. A file here that no capability claims is an orphan.
@@ -225,10 +226,61 @@ def do_check(release=False):
                             if l.strip() and not l.startswith("#")}
     binds = _scan_verifies()
 
+    # The grandfathered set. `traceability: baseline` is legal ONLY for an id in this file, which
+    # is what makes requirements.yaml's "new requirements and new code default to enforced" a
+    # mechanism rather than a promise (#1158). The list only shrinks: removing an id enforces it,
+    # and nothing can add one, so a new entry cannot be grandfathered by copying a neighbour's
+    # `baseline` — which is how it would happen, since 221 of 232 entries say baseline.
+    grandfathered = set()
+    if GRANDFATHERED.exists():
+        grandfathered = {l.strip() for l in GRANDFATHERED.read_text().splitlines()
+                         if l.strip() and not l.startswith("#")}
+
     fails, warns = [], []
 
+    # Enforcement is decided HERE and nowhere else. It used to be decided by an inline
+    # `== "enforced"` at two separate sites, which is the fix-two-of-five-arms shape: a change at
+    # one site silently leaves the other on the old semantics.
+    def is_enforced(entry):
+        return entry.get("traceability") == "enforced"
+
     def flag(entry, msg):
-        (fails if entry.get("traceability") == "enforced" else warns).append(msg)
+        (fails if is_enforced(entry) else warns).append(msg)
+
+    # An absent or misspelled field is a HARD ERROR, not a silent downgrade to warn-only (#1158).
+    # The old code compared against the literal "enforced", so `traceability:` absent, `baseline`,
+    # `enforcd` and `Enforced` all took the same warn-only path — three of those four silently, and
+    # the note in requirements.yaml promised the opposite for exactly the entries it was about.
+    vocab_errors = []
+    for kind, table in (("requirement", reqs), ("capability", caps)):
+        for eid, entry in table.items():
+            if not isinstance(entry, dict):
+                continue
+            tr = entry.get("traceability")
+            if tr is None:
+                vocab_errors.append(
+                    f"{eid}: NO-TRACEABILITY — {kind} has no `traceability:` field. Say which you "
+                    f"mean: `enforced` (drift FAILS) or `baseline` (drift warns, grandfathered "
+                    f"only)."
+                )
+            elif tr not in ("enforced", "baseline"):
+                vocab_errors.append(
+                    f"{eid}: BAD-TRACEABILITY — `traceability: {tr}` is not one of "
+                    f"enforced|baseline."
+                )
+            elif tr == "baseline" and eid not in grandfathered:
+                vocab_errors.append(
+                    f"{eid}: NOT-GRANDFATHERED — `traceability: baseline` is reserved for ids in "
+                    f"{GRANDFATHERED.name}. A new {kind} is enforced; do not inherit `baseline` "
+                    f"by copying a neighbour."
+                )
+    if vocab_errors:
+        print("trace: traceability field errors — these are not warnings\n")
+        for m in vocab_errors:
+            print(f"  {m}")
+        print(f"\n  {len(vocab_errors)} error(s)")
+        print("\nTRACE: FAIL")
+        return 1
 
     # dangling code / tests, and CAP<->REQ bidirectional agreement
     for cid, cap in caps.items():
@@ -252,7 +304,7 @@ def do_check(release=False):
         for cid in cov:
             if cid in caps and rid not in caps[cid].get("satisfies", []):
                 flag(req, f"{rid}: BIDIR-DRIFT — covered_by {cid}, but {cid} does not satisfy {rid}")
-        enforced = req.get("traceability") == "enforced"
+        enforced = is_enforced(req)
         if enforced and rid not in binds:
             fails.append(f"{rid}: MISSING-BINDING — enforced requirement has no `// VERIFIES: {rid}` in code")
         # CITED-BUT-DIDN'T-RUN: an enforced binding's test must have PASSED in the last real run.
