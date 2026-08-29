@@ -426,22 +426,41 @@ whatever arrives**. Contract: *must be zero on transmit, ignored on receive.* Th
 symmetric tightening was declined:
 
 1. **Byte 3 is payload, not a reserved region.** It is *fully allocated* when both flags are set
-   (3 + 5 = 8 bits), so it is not spare capacity — it is free only in the plainest ACKs, and a
-   future field that must coexist with both existing options gets nothing from it.
-2. **Byte 0 already provides the detection.** Because byte 3 has no spare capacity in the
-   flags-set case, an extension *must* announce itself in byte 0 — there is nowhere else — and
-   byte 0 is enforced. Enforcing byte 3 would add detection only for an extension that used those
-   bits *without* setting a byte-0 bit, which is a design nobody should choose precisely because it
-   is undetectable by construction.
-3. **It would cost robustness on the legacy CRC path.** CRC-8 admits roughly 1 corrupted frame in
-   256. Today, corruption landing in byte 3's ignored bits still decodes correctly; enforcement
-   would **reject** it, turning a harmless undetected corruption into a lost ACK, a retransmit, and
-   possibly a rate downshift — and ACKs matter most exactly when the link is marginal. (Negligible
-   on the authenticated path, where a 24-bit MAC makes it ~1 in 16 M.)
+   (3 + 5 = 8 bits), so it is not spare capacity — a future field that must coexist with both
+   existing options gets nothing from it. This is a statement about the format's capacity, not
+   about current traffic: production only ever emits `new(...).with_recommended_level(...)`, so
+   bits[2:0] are free in every ACK shipped today, but a peer may legally set both and the codec
+   must accept it.
+2. **Every channel on which an extension could announce itself is already fail-closed — byte 3
+   with its flags clear is the only one that is not.** That, not "byte 0 is the only place", is the
+   real argument, and it is broader:
+   - byte 0 bits[7:5] — rejected since #1165;
+   - the ACK type, bits[2:0] — **all eight codes are assigned** (`AckOk`…`Abort`), so there is no
+     spare code point to grow into;
+   - `recommended_level`, when its flag is set — the 5-bit field spans 0–31 but `SpeedLevel` is
+     1–20, so codes 0 and 21–31 are **rejected** by both decoders (`InvalidSpeedLevel`);
+   - the frame length — an extended ACK is not 5 bytes and is rejected before parsing.
 
-**Falsifier:** an extension genuinely mutually exclusive with *both* `reverse_ack` and
-`recommended_level` — an extended reason code on a `Nack` is the plausible candidate — would want
-those bits, and would reopen the question before they could be relied on.
+   So an extension can only hide in byte 3 *with the flags clear*, and enforcing byte 3 would add
+   detection for exactly that one design — which nobody should choose, precisely because it is the
+   only undetectable one.
+
+**Not a reason, recorded so it is not re-argued:** the tightening was initially declined partly on
+CRC robustness — that corruption landing in byte 3's ignored bits decodes correctly today and would
+become a lost ACK. That argument is backwards and was cut. **No corruption confined to byte 3 alone
+can pass the CRC**: an error polynomial of degree ≤ 7 cannot be a multiple of the degree-8
+generator, verified by enumerating all 256 byte-3 values over 200 random prefixes with a
+deliberately-weakened 4-bit CRC as the control. A CRC-passing corruption that reaches byte 3 must
+also corrupt the CRC byte in a matching pair, and almost all such frames are corrupt in bytes 0–2
+as well — i.e. they decode to the *wrong* ACK today. Enforcement would mostly reject frames that
+are already semantically wrong, which is a benefit, not a cost. The ruling stands on 1–2 alone.
+
+**Falsifier, and the standing price.** An extension genuinely mutually exclusive with *both*
+`reverse_ack` and `recommended_level` — an extended reason code on a `Nack` is the plausible
+candidate — would want those bits and reopens this. Note what "ignored on receive" costs until
+then: because a third-party transmitter writing junk there is undetectable forever, **these bits can
+never be reclaimed without spending one of byte 0's seven remaining non-zero patterns**. Byte-0
+headroom is scarce, and that scarcity is exactly what would tempt a future designer toward byte 3.
 
 ---
 
