@@ -205,14 +205,25 @@ fn on_offer(
     // spoofed `sender_id` cannot carve out a fresh per-peer quota.
     let peer_pubkey = rs
         .verified_peers
-        .get(&offer.sender_id)
+        .get(offer.sender_id.as_str())
         .and_then(|vp| <[u8; 32]>::try_from(vp.pubkey.as_slice()).ok());
     let sig_valid = peer_pubkey
         .map(|pk| offer.verify_signature(&pk).is_ok())
         .unwrap_or(false);
     let from = if sig_valid {
-        offer.sender_id.clone()
+        offer.sender_id.as_str().to_string()
     } else {
+        // Name the claimed id when the lookup misses. Without this the operator sees only
+        // `signature_valid: false` and a possible UntrustedPeer reject, both of which point at
+        // trust — the #1201 defect presented exactly that way for a callsign the handshake had
+        // verified moments earlier, and the one datum that would have explained it (the id being
+        // looked up) appeared nowhere (#1201).
+        if peer_pubkey.is_none() {
+            tracing::debug!(
+                claimed_sender_id = %offer.sender_id,
+                "file offer: claimed sender is not in the verified-peer set for this session"
+            );
+        }
         String::new()
     };
 
@@ -742,7 +753,7 @@ fn reassemble_verify_write(
     }
 
     let countersig = if verified {
-        countersign(&payload, &fx.offer.sender_id, &rs.station_seed)
+        countersign(&payload, fx.offer.sender_id.as_str(), &rs.station_seed)
     } else {
         [0u8; 64]
     };
@@ -1143,6 +1154,62 @@ mod tests {
         assert!(
             rs.filexfer_frames_routed > before,
             "an identified station must still route inbound fragments"
+        );
+    }
+
+    /// #1201: a peer that completed the handshake must be recognised by its OWN callsign in a file
+    /// offer. This is the test the defect actually needed — a codec round-trip never touches the
+    /// trust binding, which is where the damage was: `sender_id` truncated to 16 bytes missed the
+    /// `verified_peers` lookup keyed by the full handshake id, `sig_valid` went false, and the
+    /// default policy (`require_verified_peer = true`) rejected the offer as UntrustedPeer between
+    /// two stations that had just verified each other. Nothing named truncation.
+    ///
+    /// 17 bytes is the reachable window: at or under 16 nothing truncated, and over
+    /// `caps::STATION_ID` (18) the handshake refuses loudly and the peer never reaches this map.
+    #[test]
+    fn a_verified_peer_with_a_long_callsign_is_recognised_by_its_own_id() {
+        let callsign = "A".repeat(17);
+        assert!(
+            callsign.len() > 16
+                && callsign.len() <= openpulse_core::handshake_wire::caps::STATION_ID,
+            "the fixture must sit in the window that was reachable and broken"
+        );
+
+        let mut seed = [0u8; 32];
+        seed[0] = 9;
+        let signing = ed25519_dalek::SigningKey::from_bytes(&seed);
+        let pubkey = signing.verifying_key().to_bytes().to_vec();
+
+        let manifest = TransferManifest::sign(b"payload", &callsign, &seed).unwrap();
+        let offer = FileOffer::from_manifest(
+            1,
+            &manifest,
+            "f.bin",
+            "application/octet-stream",
+            openpulse_filexfer::MIN_BLOCK_SIZE,
+            &seed,
+        )
+        .expect("a 17-byte callsign is nameable in an offer");
+
+        // The offer must carry the identity intact — the precondition for the lookup below.
+        assert_eq!(
+            offer.sender_id.as_str(),
+            callsign,
+            "the offer's identity must be the station's own, not a prefix"
+        );
+
+        // ...and that identity must be the key the verified-peer map is looked up by.
+        let verified: std::collections::HashMap<String, Vec<u8>> =
+            std::iter::once((callsign.clone(), pubkey.clone())).collect();
+        let found = verified.get(offer.sender_id.as_str());
+        assert!(
+            found.is_some(),
+            "a verified peer's own callsign must find its entry; this missed when the id truncated"
+        );
+        let pk: [u8; 32] = found.unwrap().as_slice().try_into().unwrap();
+        assert!(
+            offer.verify_signature(&pk).is_ok(),
+            "the signature must verify against the key registered for that callsign"
         );
     }
 

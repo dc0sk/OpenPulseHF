@@ -349,8 +349,19 @@ impl<'a> Reader<'a> {
     }
 }
 
-/// `len(u8) | UTF-8 bytes` writer, truncating over-long strings at the byte boundary `max`.
-pub(crate) fn write_string(out: &mut Vec<u8>, s: &str, max: usize) {
+/// `len(u8) | UTF-8 bytes` writer that TRUNCATES on a char boundary at `max`.
+///
+/// Named for the loss so it is visible at the call site. Only cosmetic fields may use it — the
+/// signature covers the truncated form consistently, so the wire stays self-consistent, and `name`
+/// is sanitized before any disk write.
+///
+/// **An identity field must never come through here.** `sender_id` did, and a station whose
+/// callsign exceeded the cap shipped a validly-signed identity that was not its own; the receiver
+/// missed it in the verified-peer map and rejected the offer as UntrustedPeer, with nothing in the
+/// chain naming truncation (#1201). Identity is now a validated newtype (`SenderId`) that cannot
+/// hold an over-cap value, which is why there is no Result-returning sibling of this function: a
+/// refusing writer would have had no reachable error path.
+pub(crate) fn write_string_truncating(out: &mut Vec<u8>, s: &str, max: usize) {
     let mut bytes = s.as_bytes();
     if bytes.len() > max {
         // Truncate on a char boundary so the field always decodes as valid UTF-8.

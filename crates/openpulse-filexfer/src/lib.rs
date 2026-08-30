@@ -20,7 +20,7 @@ mod wire;
 
 pub use blocks::{encode_block, split_blocks, BlockAssembler, BlockEvent};
 pub use error::FxError;
-pub use offer::{decide, FileOffer, OfferDecision, OfferPolicy};
+pub use offer::{decide, FileOffer, OfferDecision, OfferPolicy, SenderId};
 pub use receiver::ReceiverSession;
 pub use sanitize::sanitize_filename;
 pub use sender::SenderSession;
