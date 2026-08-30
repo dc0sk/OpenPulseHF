@@ -161,9 +161,17 @@ def _evidence_log():
     verdict = ROOT / "target" / "gate-verdict.json"
     if verdict.exists():
         try:
-            named = json.loads(verdict.read_text(encoding="utf-8")).get("log")
+            v = json.loads(verdict.read_text(encoding="utf-8"))
         except (ValueError, OSError):
-            named = None
+            v = {}
+        # A run the gate marked INVALID (#1151) had the tree or HEAD move under it, so its log is
+        # not attributable to any single state of the repo — completeness is not enough to make it
+        # evidence. Measured before the check existed: an INVALID verdict naming a COMPLETE log was
+        # accepted as proof the cited tests ran.
+        if v.get("result") == "INVALID":
+            return None, ("the last gate run was INVALID (tree or HEAD moved during it), so its "
+                          "log is not attributable evidence")
+        named = v.get("log")
         if named and os.path.exists(named) and _log_is_complete(named):
             return named, None
 
@@ -288,6 +296,34 @@ def do_evidence_selftest():
             ok("a completed run that did not include the cited test still reports it as not-run")
         else:
             bad(f"a completed run missing the cited test yielded {res!r} — the check is a no-op")
+
+    # F. An INVALID gate run (#1151: tree or HEAD moved under it) must not be evidence, even when
+    #    its log is complete. Measured before the check existed: it WAS accepted. The PASS control
+    #    is what stops this from being satisfied by refusing every verdict.
+    import json as _json, tempfile as _tf, os as _os
+    verdict = ROOT / "target" / "gate-verdict.json"
+    saved = verdict.read_text(encoding="utf-8") if verdict.exists() else None
+    complete = None
+    for cand in sorted(glob.glob(str(ROOT / "target" / "gate-*.log")), key=_os.path.getmtime):
+        if _log_is_complete(cand):
+            complete = cand
+    if complete is None:
+        bad("no complete gate log in target/ — run a full gate before trusting this probe")
+    else:
+        try:
+            for result, want_log in (("INVALID", False), ("PASS", True)):
+                verdict.write_text(_json.dumps({"result": result, "log": complete}), encoding="utf-8")
+                _os.environ.pop("GATE_LOG", None)
+                got, why = _evidence_log()
+                if (got == complete) is want_log:
+                    ok(f"a {result} verdict is {'accepted' if want_log else 'refused'} as evidence")
+                else:
+                    bad(f"a {result} verdict yielded {got or why!r}")
+        finally:
+            if saved is not None:
+                verdict.write_text(saved, encoding="utf-8")
+            elif verdict.exists():
+                verdict.unlink()
 
     print("EVIDENCE-SELF-TEST: " + ("PASS" if rc == 0 else "FAIL"))
     return rc

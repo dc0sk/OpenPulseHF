@@ -402,6 +402,11 @@ is visible in the transcript rather than indistinguishable from compliance.
    list **untruncated**, and writes `target/gate-verdict.json`. Quote gate results only from its
    `GATE:` line. `--no-fail-fast` is not optional discipline — without it cargo stops at the first
    failing *binary* and the count is a lower bound (this repo has been bitten twice, #1052 latest).
+   **`GATE: INVALID` (exit 3) is not a code failure — do not chase it.** It means the tree or HEAD
+   moved while the gate ran, so the verdict is not attributable to any single state of the repo
+   (#1151). Rerun on a quiet checkout; put concurrent work in a `git worktree`, never in the
+   checkout being gated. Note what it does NOT cover: the guard samples at step boundaries, so a
+   mutate-and-revert inside one step still hashes identically and passes unseen.
 3. **After editing `gate.sh`, sabotage-verify it** (`scripts/gate.sh --self-test`, which plants a
    failing test and requires `GATE: FAIL`). A gate nobody has watched fail is the self-consistent
    checker it exists to prevent.
