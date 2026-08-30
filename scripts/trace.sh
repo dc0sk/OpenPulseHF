@@ -12,7 +12,6 @@
 #
 # Usage:
 #   scripts/trace.sh check        # verify; exit 1 on enforced/new failures (the gate)
-#   scripts/trace.sh render       # regenerate the matrix from requirements.yaml
 #   scripts/trace.sh --self-test  # plant a failure, require check to catch it, revert
 #
 # SABOTAGE-VERIFY after every edit (--self-test does it): a checker nobody has watched fail is the
@@ -25,9 +24,8 @@ YAML="docs/dev/project/requirements.yaml"
 
 case "${1:-}" in
     check)  shift; $PY check "$@"; exit $? ;;   # e.g. `check --release` adds the draft-shipped gate
-    render) $PY render; exit $? ;;
     --self-test) ;;
-    *) echo "usage: scripts/trace.sh {check|render|--self-test}" >&2; exit 2 ;;
+    *) echo "usage: scripts/trace.sh {check|--self-test}" >&2; exit 2 ;;
 esac
 
 # --- self-test: prove `check` fails on planted defects, at LINE level ----------------------------
