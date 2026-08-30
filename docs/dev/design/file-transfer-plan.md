@@ -293,7 +293,7 @@ All integers big-endian (matches `frame.rs`/`sar.rs` convention). Strings are
 
 | type | name | body layout | size |
 |---|---|---|---|
-| 0x01 | `FileOffer` | `transfer_id u32 \| flags u8 \| file_size u64 \| sha256 [32] \| block_size u32 \| block_count u16 \| sender_id str≤16 \| name str≤48 \| mime str≤24 \| signature [64]` | ≤ 212 B → 1 fragment |
+| 0x01 | `FileOffer` | `transfer_id u32 \| flags u8 \| file_size u64 \| sha256 [32] \| block_size u32 \| block_count u16 \| sender_id str≤18 \| name str≤48 \| mime str≤24 \| signature [64]` | ≤ 214 B → 1 fragment |
 | 0x02 | `FileAccept` | `transfer_id u32 \| have_len u16 \| have_bitmap [have_len]` (bitmap of blocks already held; empty in v1, used for resume in phase E) | 7 B + bitmap |
 | 0x03 | `FileReject` | `transfer_id u32 \| reason u8` | 5 B |
 | 0x04 | `FileData` | `transfer_id u32 \| block_index u16 \| packed block bytes…` — this whole frame is one SAR segment (§4.4) | ≤ block_size + 12 |
@@ -313,6 +313,19 @@ one-transfer-per-link rule makes collisions moot.
 ### 4.3 Manifest exchange and verification order
 
 `FileOffer` **embeds the `TransferManifest` fields inline** (`sha256` = `payload_hash`, `file_size`
+
+**`sender_id` cap, re-derived (#1201).** It is `caps::STATION_ID` **by reference**, not a literal —
+it was 16 while the handshake accepted 18, so a 17–18 byte callsign truncated here, missed the
+receiver's verified-peer lookup, and was rejected as `UntrustedPeer` between two stations that had
+just verified each other. The single-fragment total is therefore recomputed rather than adjusted:
+
+    body   = 4 + 1 + 8 + 32 + 4 + 2 + (1+18) + (1+48) + (1+24) + 64 = 208
+    header = MAGIC(4) + ver(1) + type(1)                            =   6
+    frame  =                                                          214   (SAR payload = 251)
+
+Raising `caps::STATION_ID` changes this wire format too, and `a_maximal_offer_fits_one_sar_fragment`
+is what stops the next bump crossing 251 silently.
+
 = `payload_size`, `sender_id`, `signature` — the four fields of
 `crates/openpulse-core/src/manifest.rs::TransferManifest`), rather than shipping the serde-JSON
 struct, to fit one fragment. The daemon reconstructs the struct and calls the existing functions —

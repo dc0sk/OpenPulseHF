@@ -6,11 +6,63 @@ use openpulse_core::manifest::{ManifestError, TransferManifest};
 use openpulse_core::signing_domain::SigningDomain;
 
 use crate::error::FxError;
-use crate::wire::{write_string, Reader, Reason};
+use crate::wire::{write_string_truncating, Reader, Reason};
 use crate::{MAX_BLOCK_SIZE, MIN_BLOCK_SIZE};
 
 /// Maximum lengths of the offer's string fields (§4.2 wire layout).
-const SENDER_ID_MAX: usize = 16;
+/// The identity field must hold anything the handshake can verify, so it is defined BY REFERENCE to
+/// the handshake's cap rather than repeating a number (#1201). It was 16 while the handshake was 18,
+/// which made a 17-18 byte callsign — legal, verifiable, reachable — truncate here, miss the
+/// receiver's verified-peer lookup, and be rejected on air as UntrustedPeer between two stations
+/// that had just handshaken successfully. Nothing in that chain named truncation.
+///
+/// Raising `caps::STATION_ID` therefore changes THIS wire format too. That is the price of the
+/// alias, stated here so the next bump is not a silent one.
+const SENDER_ID_MAX: usize = openpulse_core::handshake_wire::caps::STATION_ID;
+
+/// The invariant, mechanically. "Keep these in sync" as a comment cannot fail.
+const _: () = assert!(SENDER_ID_MAX >= openpulse_core::handshake_wire::caps::STATION_ID);
+
+/// A station identity that is within the wire cap **by construction**.
+///
+/// The predecessor of this type was a `String` written through a silently-truncating helper, so an
+/// over-length callsign produced a validly-signed identity that was not the station's. Making the
+/// invalid state unrepresentable is what closes that: there are exactly two doors — this
+/// constructor and `Reader::string` on decode, which rejects above the same cap — so `write_to`
+/// below is honestly infallible rather than swallowing an error it can never see.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SenderId(String);
+
+impl SenderId {
+    /// The only construction door. Refuses rather than truncating.
+    pub fn new(id: &str) -> Result<Self, FxError> {
+        if id.len() > SENDER_ID_MAX {
+            return Err(FxError::FieldTooLong {
+                field: "sender_id",
+                len: id.len(),
+                max: SENDER_ID_MAX,
+            });
+        }
+        Ok(Self(id.to_string()))
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+
+    /// `len(u8) | UTF-8 bytes`. No `Result`: the type's domain contains no input that fails.
+    fn write_to(&self, out: &mut Vec<u8>) {
+        let bytes = self.0.as_bytes();
+        out.push(bytes.len() as u8);
+        out.extend_from_slice(bytes);
+    }
+}
+
+impl std::fmt::Display for SenderId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
 const NAME_MAX: usize = 48;
 const MIME_MAX: usize = 24;
 
@@ -31,7 +83,7 @@ pub struct FileOffer {
     /// Number of blocks the file splits into.
     pub block_count: u16,
     /// Sender callsign/id (= manifest `sender_id`).
-    pub sender_id: String,
+    pub sender_id: SenderId,
     /// Suggested filename (sanitized by the receiver before any disk write).
     pub name: String,
     /// MIME type hint (advisory).
@@ -67,7 +119,7 @@ impl FileOffer {
             sha256,
             block_size,
             block_count,
-            sender_id: manifest.sender_id.clone(),
+            sender_id: SenderId::new(&manifest.sender_id).ok()?,
             name: name.to_string(),
             mime: mime.to_string(),
             signature: [0u8; 64],
@@ -113,9 +165,13 @@ impl FileOffer {
         out.extend_from_slice(&self.sha256);
         out.extend_from_slice(&self.block_size.to_be_bytes());
         out.extend_from_slice(&self.block_count.to_be_bytes());
-        write_string(out, &self.sender_id, SENDER_ID_MAX);
-        write_string(out, &self.name, NAME_MAX);
-        write_string(out, &self.mime, MIME_MAX);
+        // sender_id is a SenderId, so it cannot be over-cap here — the refusal happened at
+        // construction. name/mime go through the TRUNCATING writer, named so the loss is visible at
+        // the call site: they are cosmetic, and the signature covers the truncated form
+        // consistently. An identity field must never use that writer.
+        self.sender_id.write_to(out);
+        write_string_truncating(out, &self.name, NAME_MAX);
+        write_string_truncating(out, &self.mime, MIME_MAX);
     }
 
     pub(crate) fn encode_body(&self, out: &mut Vec<u8>) {
@@ -133,7 +189,8 @@ impl FileOffer {
             return Err(FxError::BlockSizeOutOfRange(block_size));
         }
         let block_count = r.u16()?;
-        let sender_id = r.string("sender_id", SENDER_ID_MAX)?;
+        // The reader is the other door: it rejects above the same cap, so the value is in-domain.
+        let sender_id = SenderId::new(&r.string("sender_id", SENDER_ID_MAX)?)?;
         let name = r.string("name", NAME_MAX)?;
         let mime = r.string("mime", MIME_MAX)?;
         let signature = r.array::<64>()?;
