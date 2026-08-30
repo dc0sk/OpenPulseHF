@@ -1049,7 +1049,8 @@ capabilities:
     traceability: enforced
 meta:
   bright_line: '2026-08-09'
-  generated_by: scripts/trace.sh import
+  generated_by: 'hand-maintained; originally imported from the sources below, whose importer
+    was deleted in #1223 — this file is the source of truth and cannot be regenerated'
   note: 'baseline entries are grandfathered (checker WARNS on drift). Set traceability: enforced to make
     an entry FAIL the build on drift; an enforced requirement must carry an in-code // VERIFIES: REQ-x
     binding. New requirements and new code default to enforced.'
