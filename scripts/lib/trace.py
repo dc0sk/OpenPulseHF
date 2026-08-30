@@ -1,21 +1,27 @@
 #!/usr/bin/env python3
-"""Traceability as data — importer, checker, renderer.
+"""Traceability as data — checker and renderer.
 
 The hand-maintained matrix rotted because the record (prose) and the reality (files, tests)
 shared no join key, so no script could diff them. This tool makes the trace *data* and CHECKS
 it against the tree, on every run, inside the gate.
 
+`docs/dev/project/requirements.yaml` is the SOURCE OF TRUTH and is edited by hand. It was
+originally imported from `requirements.md` + `traceability-matrix.md`, but that importer was
+deleted in #1223: its sources went stale by construction at the bright line, so every re-run grew
+strictly more destructive, while it advertised itself as "safe to re-run". If the yaml is missing,
+restore it from git — it cannot be regenerated.
+
 Subcommands:
-  import   Build requirements.yaml from the existing requirements.md + traceability-matrix.md,
-           plus a baseline orphan allowlist. One-shot migration; safe to re-run.
   check    Verify requirements.yaml against the actual tree. WARNS on grandfathered `baseline`
            drift; FAILS (exit 1) on `enforced` entries and on NEW code orphans. This is the gate.
   render   Regenerate the matrix from requirements.yaml (a generated artifact, never hand-typed).
+  evidence-self-test
+           Probe the gate-log evidence channel that `check` reads for run-status (#1224).
 
-The join key going forward is an in-code `// VERIFIES: REQ-x` comment (greppable, language-general);
-the imported matrix `tests` column seeds the baseline REQ->test map. An `enforced` requirement must
-carry at least one `// VERIFIES:` binding, so promoting a requirement out of `baseline` forces a real,
-checked link.
+The join key is an in-code `// VERIFIES: REQ-x` comment (greppable, language-general); the baseline
+REQ->test map was seeded from the matrix `tests` column at import time. An `enforced` requirement
+must carry at least one `// VERIFIES:` binding, so promoting a requirement out of `baseline` forces
+a real, checked link.
 """
 from __future__ import annotations
 import sys, os, re, glob, json, pathlib
