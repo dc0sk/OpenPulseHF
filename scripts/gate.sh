@@ -15,7 +15,10 @@
 #     the only form that is shell-dialect-free
 #   * full output to a log file; the terminal gets a summary, but the FAILURE LIST IS NEVER
 #     TRUNCATED, because failures are the one thing that must not be cut
-#   * a machine-checkable last line (`GATE: PASS|FAIL ...`) and `target/gate-verdict.json`
+#   * a machine-checkable last line (`GATE: PASS|FAIL|PARTIAL|INVALID ...`) and
+#     `target/gate-verdict.json`. INVALID (exit 3) means the tree or HEAD moved during the
+#     run, so the verdict is not attributable to any single state of the repo — rerun it;
+#     it is NOT a code failure and must not be chased as one.
 #
 # SABOTAGE-VERIFY THIS SCRIPT AFTER EVERY EDIT. A gate nobody has watched fail is exactly the
 # self-consistent checker it exists to prevent — this repo's archetype #1 wearing a safety vest.
@@ -45,6 +48,11 @@ MODE="full"
 case "${1:-}" in
     --quick) MODE="quick" ;;
     --self-test) MODE="self-test" ;;
+    # Prints the drift fingerprint and exits. Exists so the primitive can be tested in seconds
+    # instead of only through a 2 h run — the properties everything else rests on (content edit
+    # changes it, mtime alone does not, writes under target/ do not, an untracked file's CONTENT
+    # does) are each one command with this.
+    --fingerprint) MODE="fingerprint" ;;
     "") ;;
     *) echo "unknown argument: $1" >&2; exit 2 ;;
 esac
@@ -72,6 +80,10 @@ run_step() {
 
 self_test() {
     scratch="crates/openpulse-core/tests/gate_self_test_sabotage.rs"
+    # Remove the fixture even if the run is interrupted. An abandoned sabotage file was left in the
+    # tree once by a Ctrl-C'd self-test, and a deliberately-failing test sitting in a source dir is
+    # exactly the thing nobody expects to find there.
+    trap 'rm -f "$scratch"' EXIT INT TERM
     echo "SELF-TEST: planting a deliberately failing test at $scratch"
     cat > "$scratch" <<'RS'
 // Temporary sabotage fixture written by scripts/gate.sh --self-test. Safe to delete.
@@ -95,37 +107,118 @@ RS
 
 if [ "$MODE" = "self-test" ]; then self_test; exit $?; fi
 
+# ---------------------------------------------------------------------------- drift guard (#1151)
+#
+# WHAT THIS DETECTS, AND WHAT IT DOES NOT. `COMMIT` and `DIRTY` above are read once, before step 1,
+# while every step resolves HEAD or scans the tree at ITS OWN step time — a ~2 h run gives HEAD and
+# the tree plenty of time to move, and one real verdict already named a commit made 39 minutes in on
+# a different branch. This guard samples the tree and HEAD at every step boundary and voids the run
+# on a change.
+#
+# It catches drift that PERSISTS to a sample point. It does NOT catch a mutate-and-revert inside a
+# single step: two of the incidents that motivated it were sub-second edits that would hash
+# identically at both boundaries. Detecting those needs a filesystem watcher whose own liveness is
+# verified — #1231. Do not write "the gate detects mid-run mutation" anywhere; it detects
+# PERSISTENT mid-run mutation.
+#
+# The fingerprint is a temp-index `write-tree`, NOT a hash of `git status` + `git diff`. Those are
+# blind to the CONTENT of untracked files — status prints `?? path` and diff prints nothing — and an
+# untracked file is the likeliest mutation (the self-test's own fixture is one). The real index is
+# copied first so stat-clean files reuse their cached hashes instead of re-hashing the tree. HEAD is
+# compared separately: `git commit` mid-run changes no working-tree content but moves HEAD, and the
+# trailer and review lints read commits.
+#
+# `target/` is gitignored, so the gate's own log writing does not register — verify that stays true
+# if .gitignore changes, because an unignored target/ would make this fire on every run.
+fingerprint() {
+    _idx=$(mktemp) || return 1
+    cp .git/index "$_idx" 2>/dev/null || :
+    GIT_INDEX_FILE="$_idx" git add -A >/dev/null 2>&1
+    GIT_INDEX_FILE="$_idx" git write-tree 2>/dev/null
+    rm -f "$_idx"
+}
+
+if [ "$MODE" = "fingerprint" ]; then fingerprint; exit 0; fi
+
+START_TREE=$(fingerprint)
+START_HEAD=$(git rev-parse HEAD 2>/dev/null || echo "unknown")
+
+# Called BEFORE each step and once after the last. Aborting at the next boundary rather than at the
+# end keeps a 2 h test step from being spent on a run that is already void — and it is what makes
+# the full-path sabotage cheap: mutate during the seconds-long fmt step and the gate aborts before
+# clippy starts. It lives here rather than inside run_step, whose contract is running ONE command;
+# drift policy is sequencing, not step execution.
+drift_check() {
+    _tree=$(fingerprint)
+    _head=$(git rev-parse HEAD 2>/dev/null || echo "unknown")
+    echo "=== tree $_tree head $_head ===" >> "$LOG"
+    [ "$_tree" = "$START_TREE" ] && [ "$_head" = "$START_HEAD" ] && return 0
+    _what=""
+    [ "$_tree" != "$START_TREE" ] && _what="working tree"
+    [ "$_head" != "$START_HEAD" ] && _what="${_what:+$_what and }HEAD"
+    _steps=$([ "${rc_total:-0}" -eq 0 ] && echo PASS || echo FAIL)
+    cat > "$VERDICT" <<JSON
+{
+  "result": "INVALID",
+  "reason": "$_what changed during the run",
+  "steps_result": "$_steps",
+  "commit": "$START_HEAD",
+  "commit_end": "$_head",
+  "tree_start": "$START_TREE",
+  "tree_end": "$_tree",
+  "timestamp": "$STAMP",
+  "log": "$LOG"
+}
+JSON
+    echo
+    echo "  The $_what changed while the gate was running, so this run proves nothing about any"
+    echo "  single state of the repo. Steps so far reported $_steps — not discarded, but not"
+    echo "  attributable either. Rerun on a quiet checkout; put concurrent work in a git worktree."
+    echo "GATE: INVALID $START_HEAD $_what $STAMP (steps reported $_steps)"
+    exit 3
+}
+
 echo "gate: commit $COMMIT ($DIRTY)  log $LOG"
 rc_total=0
+drift_check
 run_step "cargo fmt --check" cargo fmt --all -- --check || rc_total=1
+drift_check
 run_step "cargo clippy -D warnings" cargo clippy --workspace --no-default-features --all-targets -- -D warnings || rc_total=1
 
 TEST_CMD="none"
 if [ "$MODE" = "full" ]; then
     TEST_CMD="cargo test --workspace --no-default-features --no-fail-fast"
+    drift_check
     run_step "cargo test (workspace)" cargo test --workspace --no-default-features --no-fail-fast || rc_total=1
     # Traceability is checked INSIDE the gate, not a separately-disableable job: enforced
     # requirements with no in-code binding, cited code/tests that don't exist, REQ<->CAP
     # disagreement, and NEW code orphans beyond the grandfathered baseline.
+    drift_check
     run_step "trace check (requirements)" env GATE_LOG="$LOG" scripts/trace.sh check || rc_total=1
     # Reachability ratchet: a NEW public item no production code references (coverage would vouch
     # for it as "covered" if a test touches it). Grandfathered baseline; only growth fails.
+    drift_check
     run_step "reachability ratchet" scripts/reachability.sh check || rc_total=1
     # Requirements-trailer lint on this branch's commits. Here so a local `GATE: PASS` predicts CI:
     # traceability.yml runs the same check on every PR, and a gate that green-lights a push CI then
     # rejects has stopped meaning anything. Inspects COMMITS only, so a dirty tree mid-work does not
     # trip it; `--quick` skips it with the rest. (The PR *body* half of this check — the squash
     # message that actually lands on main — can only run in CI, where the body exists.)
+    drift_check
     run_step "requirements-trailer lint" scripts/check-trailer.sh || rc_total=1
     # Ledger ordering. The file declares "Newest first" and had drifted into two regimes — 12 breaks
     # across 359 entries — because the convention lived only in prose and nothing measured it. Cheap
     # (no build, no I/O beyond one file), so it costs nothing to keep honest.
+    drift_check
     run_step "ledger ordering" scripts/check-ledger-order.sh || rc_total=1
     # Secondary host only. The PR-body lint in traceability.yml is what actually enforces the
     # review trailer; this reports the classification locally so a design-class branch is known
     # to need an artifact BEFORE the PR is opened.
+    drift_check
     run_step "review-trailer lint" scripts/check-review.sh --base "$(git merge-base HEAD origin/main 2>/dev/null || echo HEAD)" || rc_total=1
 fi
+
+drift_check   # final boundary: nothing moved between the last step and the verdict
 
 # Counts come from the LOG FILE, never from a pipe carrying the runner's output.
 passed=$(awk '/^test result:/ {for(i=1;i<=NF;i++) if($i=="passed;") s+=$(i-1)} END {print s+0}' "$LOG")
@@ -149,6 +242,7 @@ echo "suites=$suites tests_passed=$passed tests_failed=$failed"
 
 if [ "$MODE" = "quick" ]; then
     echo "GATE: PARTIAL $COMMIT $DIRTY $STAMP (fmt+clippy only — NOT a gate, no token written)"
+    drift_check   # --quick shares the guard by reference; a drifted PARTIAL is quoted too
     exit $rc_total
 fi
 
