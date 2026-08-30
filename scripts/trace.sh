@@ -129,5 +129,11 @@ else
 fi
 
 rm -f "$out"
+
+# The gate-log evidence channel (#1224), probed in python because the fixtures are log files rather
+# than yaml. Included here so one command covers both halves of what `check` trusts: the yaml it
+# reads, and the run-evidence it reads.
+python3 scripts/lib/trace.py evidence-self-test || rc_all=1
+
 [ "$rc_all" -eq 0 ] && echo "SELF-TEST: PASS" || echo "SELF-TEST: FAIL"
 exit "$rc_all"

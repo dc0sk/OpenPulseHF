@@ -60,6 +60,12 @@ run_step() {
     echo "=== $step_name: $* ===" >> "$LOG"
     "$@" >> "$LOG" 2>&1
     rc=$?
+    # Completion marker (#1224). Without it a truncated log is indistinguishable from a finished one
+    # — a completed gate log simply ends with the last step's output — so `trace.py` read a
+    # half-written log as evidence and reported CITED-BUT-DIDN'T-RUN for tests that had not been
+    # reached yet. Written REGARDLESS of $rc: a test run with failures is still a completed run and
+    # is valid evidence about which tests passed; only truncation invalidates it.
+    echo "=== end $step_name: exit $rc ===" >> "$LOG"
     if [ "$rc" -eq 0 ]; then echo "ok"; else echo "FAILED (exit $rc)"; fi
     return $rc
 }
