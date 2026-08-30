@@ -1035,6 +1035,7 @@ capabilities:
     - REQ-RX-03
     tests:
     - crates/openpulse-modem/tests/rho_calibration_receive.rs
+    traceability: enforced
   CAP-77:
     code:
     - crates/openpulse-core/src/signing_domain.rs
