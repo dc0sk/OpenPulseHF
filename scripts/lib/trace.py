@@ -21,9 +21,10 @@ from __future__ import annotations
 import sys, os, re, glob, json, pathlib
 
 ROOT = pathlib.Path(__file__).resolve().parents[2]
-REQ_MD = ROOT / "docs/dev/requirements.md"
-MATRIX_MD = ROOT / "docs/dev/project/traceability-matrix.md"
 YAML = ROOT / "docs/dev/project/requirements.yaml"
+# Frozen baselines. Nothing writes these any more (#1223 deleted `import`, their only writer), which
+# is the intended end state: a baseline may SHRINK by hand as entries are paid down, and must never
+# grow back by regeneration.
 ORPHAN_BASELINE = ROOT / "docs/dev/project/trace-orphan-baseline.txt"
 GRANDFATHERED = ROOT / "docs/dev/project/trace-grandfathered-ids.txt"
 RENDER_OUT = ROOT / "docs/dev/project/traceability-matrix.generated.md"
@@ -35,8 +36,6 @@ SRC_GLOBS = [
 ]
 
 REQ_ID = re.compile(r"REQ-[A-Z]+-\d+")
-CAP_ID = re.compile(r"CAP-\d+")
-PATH_RS = re.compile(r"[\w./-]+\.rs")
 
 try:
     import yaml
@@ -45,92 +44,6 @@ except ImportError:
 
 
 # ----------------------------------------------------------------------------- import
-def _table_rows(text, first_col):
-    """Yield split cells for markdown rows whose first data cell matches first_col."""
-    for line in text.splitlines():
-        if not line.lstrip().startswith("|"):
-            continue
-        cells = [c.strip() for c in line.strip().strip("|").split("|")]
-        if cells and first_col.match(cells[0]):
-            yield cells
-
-
-def do_import():
-    reqmd = REQ_MD.read_text(encoding="utf-8")
-    matrix = MATRIX_MD.read_text(encoding="utf-8")
-
-    # statements from requirements.md bullets: - **REQ-X** — statement.
-    statements = {}
-    for m in re.finditer(r"^-\s+\*\*(REQ-[A-Z]+-\d+)\*\*\s*[—-]+\s*(.+?)\s*$", reqmd, re.M):
-        statements[m.group(1)] = m.group(2)
-
-    requirements = {}
-    for cells in _table_rows(matrix, REQ_ID):  # REQ-ID | Category | Requirement | Covered by | Status
-        rid = cells[0]
-        cat = cells[1] if len(cells) > 1 else ""
-        covered = CAP_ID.findall(cells[3]) if len(cells) > 3 else []
-        requirements[rid] = {
-            "statement": statements.get(rid, cells[2] if len(cells) > 2 else ""),
-            "category": cat,
-            "status": "ratified",          # the existing spec is the ratified intent
-            "traceability": "baseline",    # grandfathered; checker warns, does not fail
-            "covered_by": covered,
-        }
-    # requirements present in the prose spec but absent from the matrix table
-    for rid, st in statements.items():
-        requirements.setdefault(rid, {
-            "statement": st, "category": "", "status": "ratified",
-            "traceability": "baseline", "covered_by": [],
-        })
-
-    capabilities = {}
-    for cells in _table_rows(matrix, CAP_ID):
-        cid = cells[0]
-        satisfies = REQ_ID.findall(cells[2]) if len(cells) > 2 else []
-        code_cell = cells[4] if len(cells) > 4 else ""
-        test_cell = cells[5] if len(cells) > 5 else ""
-        # keep only real paths (contain a '/'); bare filenames in prose are not locations
-        code = sorted({p for p in PATH_RS.findall(code_cell) if "/" in p})
-        tests = sorted({p for p in PATH_RS.findall(test_cell) if "/" in p})
-        capabilities[cid] = {
-            "name": cells[1] if len(cells) > 1 else "",
-            "satisfies": satisfies,
-            "code": code,
-            "tests": tests,
-            "traceability": "baseline",
-        }
-
-    doc = {
-        "meta": {
-            "generated_by": "scripts/trace.sh import",
-            "sources": ["docs/dev/requirements.md", "docs/dev/project/traceability-matrix.md"],
-            "bright_line": "2026-08-09",
-            "note": ("baseline entries are grandfathered (checker WARNS on drift). Set "
-                     "traceability: enforced to make an entry FAIL the build on drift; an enforced "
-                     "requirement must carry an in-code // VERIFIES: REQ-x binding. New requirements "
-                     "and new code default to enforced."),
-        },
-        "requirements": requirements,
-        "capabilities": capabilities,
-    }
-    YAML.write_text(yaml.safe_dump(doc, sort_keys=True, allow_unicode=True, width=100), encoding="utf-8")
-
-    # baseline orphan allowlist: every production file no capability claims, TODAY. New orphans
-    # (files not in this list) fail the check — the ratchet.
-    claimed = _claimed_files(capabilities)
-    orphans = sorted(f for f in _src_files() if f not in claimed)
-    ORPHAN_BASELINE.write_text(
-        "# Production source files unclaimed by any capability at the bright line.\n"
-        "# Grandfathered: the checker warns on these. A file NOT listed here that is also\n"
-        "# unclaimed is a NEW orphan and fails the build. Shrink this list over time.\n"
-        + "\n".join(orphans) + "\n", encoding="utf-8")
-
-    print(f"import: {len(requirements)} requirements, {len(capabilities)} capabilities "
-          f"-> {YAML.relative_to(ROOT)}")
-    print(f"import: {len(orphans)} baseline orphans -> {ORPHAN_BASELINE.relative_to(ROOT)}")
-
-
-# ----------------------------------------------------------------------------- helpers
 def _src_files():
     out = set()
     for g in SRC_GLOBS:
@@ -379,7 +292,8 @@ def do_evidence_selftest():
 # ----------------------------------------------------------------------------- check
 def do_check(release=False):
     if not YAML.exists():
-        sys.stderr.write("trace: no requirements.yaml — run `scripts/trace.sh import` first\n"); return 2
+        sys.stderr.write("trace: no requirements.yaml — it is the hand-maintained source of\n"
+                         "truth and cannot be regenerated (#1223); restore it from git.\n"); return 2
     doc = yaml.safe_load(YAML.read_text(encoding="utf-8")) or {}
     reqs = doc.get("requirements", {})
     caps = doc.get("capabilities", {})
@@ -586,15 +500,13 @@ def main():
     cmd = sys.argv[1] if len(sys.argv) > 1 else ""
     if cmd == "scope":
         return do_scope(sys.argv[2]) if len(sys.argv) > 2 else 2
-    if cmd == "import":
-        do_import(); return 0
     if cmd == "check":
         return do_check(release="--release" in sys.argv[2:])
     if cmd == "evidence-self-test":
         return do_evidence_selftest()
     if cmd == "render":
         return do_render()
-    sys.stderr.write(f"usage: trace.py {{import|check|render}}\n"); return 2
+    sys.stderr.write(f"usage: trace.py {{check|render|evidence-self-test}}\n"); return 2
 
 
 if __name__ == "__main__":

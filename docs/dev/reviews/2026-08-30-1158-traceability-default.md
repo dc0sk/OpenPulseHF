@@ -72,7 +72,12 @@ The exhortation shape.
 
 **Three adjacent defects found while reading**, none of which were asked about:
 
-1. **`do_import` is destructive and its docstring lies.** `REQ-RX-02/03`, `CAP-76`, `CAP-77` appear
+1. **`do_import` is destructive and its docstring lies.** *(Corrected 2026-08-30 by the #1223
+   review, which measured it: the enforcement reset is 7 errors not "all nine", and is LOUD since
+   #1222, not silent; the REQ deletions are also loud via `DANGLING-BINDING`. The genuinely silent
+   damage is that import also rewrites `trace-orphan-baseline.txt`, laundering the deleted
+   capabilities' code into the orphan allowlist. See
+   `docs/dev/reviews/2026-08-30-1223-delete-import.md`. The command was deleted, not guarded.)* `REQ-RX-02/03`, `CAP-76`, `CAP-77` appear
    **zero** times in both import sources, so a re-run deletes them and silently resets all nine
    enforced requirements to `baseline`. "One-shot migration; safe to re-run" was true at migration
    and is false now.

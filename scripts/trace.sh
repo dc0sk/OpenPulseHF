@@ -3,13 +3,15 @@
 #
 # The hand-maintained matrix rotted because nothing could diff prose against reality. This wraps
 # scripts/lib/trace.py, which stores the trace as data (docs/dev/project/requirements.yaml) and
-# CHECKS it: dangling code/tests, REQ<->CAP disagreement, requirements with no coverage, and NEW
+# CHECKS it. requirements.yaml is now the SOURCE OF TRUTH, not a generated artifact: the
+# `import` migration was deleted in #1223 because its sources had gone stale by construction
+# (four live entries appeared in neither of them) while it still advertised itself as safe to
+# re-run, so re-running it would have silently deleted them. Checks performed: dangling code/tests, REQ<->CAP disagreement, requirements with no coverage, and NEW
 # code orphans (files no capability claims, beyond the grandfathered baseline). `check` runs INSIDE
 # scripts/gate.sh so it cannot be a separately-disableable job.
 #
 # Usage:
 #   scripts/trace.sh check        # verify; exit 1 on enforced/new failures (the gate)
-#   scripts/trace.sh import       # (re)generate requirements.yaml from the existing docs
 #   scripts/trace.sh render       # regenerate the matrix from requirements.yaml
 #   scripts/trace.sh --self-test  # plant a failure, require check to catch it, revert
 #
@@ -23,10 +25,9 @@ YAML="docs/dev/project/requirements.yaml"
 
 case "${1:-}" in
     check)  shift; $PY check "$@"; exit $? ;;   # e.g. `check --release` adds the draft-shipped gate
-    import) $PY import; exit $? ;;
     render) $PY render; exit $? ;;
     --self-test) ;;
-    *) echo "usage: scripts/trace.sh {check|import|render|--self-test}" >&2; exit 2 ;;
+    *) echo "usage: scripts/trace.sh {check|render|--self-test}" >&2; exit 2 ;;
 esac
 
 # --- self-test: prove `check` fails on planted defects, at LINE level ----------------------------
@@ -36,7 +37,7 @@ esac
 # `check` while a gate is in flight reads that gate's partial log and reports a false
 # CITED-BUT-DIDN'T-RUN. An rc-only assertion would have "passed" without any of the code below
 # working.
-[ -f "$YAML" ] || { echo "SELF-TEST: need $YAML (run import) first" >&2; exit 2; }
+[ -f "$YAML" ] || { echo "SELF-TEST: need $YAML — restore it from git" >&2; exit 2; }
 backup="$(mktemp)"; cp "$YAML" "$backup"
 # NOTE: restore must NOT delete the backup — it is called once per probe. Deleting it made every
 # probe after the first restore nothing, so the plants accumulated in the working tree. The
