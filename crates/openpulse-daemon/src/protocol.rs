@@ -53,7 +53,9 @@ pub fn decode_spectrum_frame(data: &[u8]) -> Result<(u32, Vec<f32>), String> {
         ));
     }
     let bins = data[10..expected]
-        .chunks_exact(4)
+        .as_chunks::<4>()
+        .0
+        .iter()
         .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
         .collect();
     Ok((sample_rate, bins))

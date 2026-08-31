@@ -94,7 +94,9 @@ impl PreambleSpec {
                     .take(2 * self.length_symbols)
                     .collect();
                 chips
-                    .chunks_exact(2)
+                    .as_chunks::<2>()
+                    .0
+                    .iter()
                     .map(|pair| (pair[0] * INV_SQRT2, pair[1] * INV_SQRT2))
                     .collect()
             }
