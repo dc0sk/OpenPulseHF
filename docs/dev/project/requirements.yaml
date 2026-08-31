@@ -1065,7 +1065,11 @@ meta:
     was deleted in #1223 — this file is the source of truth and cannot be regenerated'
   note: 'baseline entries are grandfathered (checker WARNS on drift). Set traceability: enforced to make
     an entry FAIL the build on drift; an enforced requirement must carry an in-code // VERIFIES: REQ-x
-    binding. New requirements and new code default to enforced.'
+    binding AND its binding must not sit in a workspace-dormant package (#1237). New requirements and
+    new code default to enforced. traceability: unwired is enforced-with-a-dormant-consumer: same
+    binding obligation, same FAIL-on-drift, but nothing consumes the capability yet — it must name
+    the tracking issue in its own statement, and it FAILS once its package reaches a binary, which
+    forces a deliberate reconciliation rather than a silent promotion.'
   sources:
   - docs/dev/requirements.md
   - docs/dev/project/traceability-matrix.md
@@ -1227,7 +1231,7 @@ requirements:
       password; a wrong password, a tampered file, or non-owner-only permissions are refused. No
       production consumer yet (#1234)
     status: ratified
-    traceability: enforced
+    traceability: unwired
   REQ-CTL-05:
     category: Control-channel security
     covered_by:

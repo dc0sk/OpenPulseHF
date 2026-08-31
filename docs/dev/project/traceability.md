@@ -9,6 +9,43 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-08-31 — #1237: `enforced` joined to whether anything consumes the capability
+
+- **Requirement/change:** `traceability: enforced` asserted exactly one thing — a `// VERIFIES:`
+  binding exists and its test passed in the last gate — while the registry was read as a claim of
+  product capability. Nothing joined the two, so a unit test of a module with no consumers
+  satisfied the letter completely. `REQ-CTL-04` shipped that way in #1229, and #1234 as filed
+  proposed a `--features keychain` gate job that would have manufactured a second instance.
+- **Design decision:** ban the construct — an `enforced` requirement's binding must not sit in a
+  workspace-dormant package — at **per-requirement granularity via its binding's file**, not per
+  capability (`CAP-68` mixes wired and unwired `code:` files, so a capability-level check would
+  pass and mask the motivating case). Add a third `traceability:` value, `unwired`, because
+  `baseline` is grandfathered-only and failing `REQ-CTL-04` otherwise leaves it no legal value.
+  Reviewed adversarially before implementation
+  (`docs/dev/reviews/2026-08-31-1237-dormancy-join.md`), which corrected three things: my proposed
+  **auto-promotion** on the reverse direction would have manufactured false claims (changed to
+  forced reconciliation); my measurement resolved crates by directory name, a false-FAIL machine
+  for all ten plugins whose package name differs; and it counted optional/dev edges as production
+  reach, which called `openpulse-gpu` reachable when it is depended on only through feature gates.
+- **Implementation:** `scripts/lib/trace.py` — `_workspace_graph`/`_package_of`/`_dormant_packages`
+  (manifest-path resolution, normal non-optional edges only), the join, `TRACEABILITY_VALUES`, drift
+  routing for `unwired`, a `CargoUnavailable` hard failure, and a docstring stating the join's claim
+  as *not workspace-dormant* rather than *reachable*; `scripts/trace.sh` two new self-test probes;
+  `requirements.yaml` (`REQ-CTL-04` → `unwired`, vocabulary note); `docs/dev/requirements.md`.
+  For #1234: `ControlSecurityConfig.psk_key_id` was deserialized, defaulted and written into two
+  shipped config templates while being read by nothing — now audible, via a testable
+  `inert_psk_key_id_warning`.
+- **Tests:** `scripts/trace.sh --self-test` gains `DORMANT-ENFORCED` and `UNWIRED-BUT-REACHED`
+  probes, each planting a real `// VERIFIES:` marker in a package of known dormancy (a yaml-only
+  plant has no binding and would prove nothing); `openpulse-daemon --lib inert_knob_tests`.
+- **Test results:** both new probes pass with the positive control intact (`SELF-TEST: PASS`); the
+  join fires on `REQ-CTL-04` alone across 162 requirements; `UNWIRED-WITHOUT-ISSUE`,
+  `UNWIRED-NOT-FOR-CAPABILITIES`, `BAD-TRACEABILITY` and both `cargo metadata` failure branches
+  verified by sabotage with controls, restores sha256-matched. The reverse check then fired on
+  **unplanted** work — the new `psk_key_id` test briefly gave `REQ-CTL-04` a live-package binding —
+  and the correct reconciliation was to remove the id, which is the outcome auto-promotion would
+  have destroyed.
+
 ## 2026-08-31 — #1235: the draft file-transfer ids reconciled, and two requirements I registered on grep evidence
 
 - **Requirement/change:** `docs/dev/design/file-transfer-plan.md` cited `REQ-FT-01..07`, a draft

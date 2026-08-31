@@ -141,6 +141,64 @@ else
     echo "  SELF-TEST FAIL: planted enforced defect was NOT caught (exit $rc)"; cat "$out"; rc_all=1
 fi
 
+# --- #1237 workspace-dormancy probes ------------------------------------------------------------
+#
+# These need a REAL `// VERIFIES:` marker, because the join resolves a requirement through its
+# binding's FILE to that file's package. A yaml-only plant has no binding and is skipped by
+# construction, so it would prove nothing. Each plants a scratch .rs (undeclared, so cargo ignores
+# it) in a package of known dormancy, and removes it in the same function that reads the result.
+# The probe ids are assembled from fragments for the same reason the #1229 probes are: the
+# id-conformance layer scans THIS file, so writing them out would trip the check they sit beside.
+plant_binding_and_expect() {
+    # $1 = label, $2 = expected check name, $3 = scratch .rs path, $4 = req id, $5 = yaml fragment
+    printf '// Temporary fixture written by scripts/trace.sh --self-test. Safe to delete.\n// VERIFIES: %s — self-test probe\n#[test]\nfn zz_trace_selftest_probe() {}\n' "$4" > "$3"
+    python3 - "$5" <<'PYEOF'
+import io, sys
+p = "docs/dev/project/requirements.yaml"
+s = io.open(p, encoding="utf-8").read()
+key = "\nrequirements:\n"
+i = s.index(key) + len(key)
+io.open(p, "w", encoding="utf-8").write(s[:i] + sys.argv[1] + s[i:])
+PYEOF
+    python3 scripts/lib/trace.py check > "$out" 2>&1
+    rc=$?
+    rm -f "$3"; restore
+    if [ "$rc" -ne 0 ] && grep -q "$2" "$out"; then
+        echo "  ok: $1 -> $2"
+    else
+        echo "  SELF-TEST FAIL: $1 did not produce $2 (exit $rc)"
+        rc_all=1
+    fi
+}
+
+# An `enforced` requirement bound inside a package nothing links to a binary. This is REQ-CTL-04's
+# exact shape — a passing test on a capability with no consumer, which satisfied `enforced`
+# completely before #1237.
+ZZA="RE""Q-ZZ""A-01"
+plant_binding_and_expect "enforced binding in a workspace-dormant package" "DORMANT-ENFORCED" \
+    "crates/openpulse-keystore/src/zz_trace_selftest.rs" "$ZZA" \
+"  $ZZA:
+    category: self-test
+    covered_by: []
+    statement: self-test probe
+    status: draft
+    traceability: enforced
+"
+
+# The reverse direction, which is what keeps `unwired` from being a resting place: a requirement
+# marked `unwired` whose package DOES reach a binary must be reconciled deliberately.
+ZZB="RE""Q-ZZ""B-01"
+plant_binding_and_expect "unwired binding in a package that reaches a binary" "UNWIRED-BUT-REACHED" \
+    "crates/openpulse-core/src/zz_trace_selftest.rs" "$ZZB" \
+"  $ZZB:
+    category: self-test
+    covered_by: []
+    statement: self-test probe (#1237)
+    status: draft
+    traceability: unwired
+"
+
+
 # POSITIVE CONTROL. Without this, every assertion above is satisfied by a checker that fails on
 # everything — including the empty-yaml refusal, which also exits non-zero.
 python3 scripts/lib/trace.py check > "$out" 2>&1

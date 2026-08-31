@@ -13,7 +13,7 @@ use crate::{
     process_received_bytes, ws, ControlServer, RuntimeControlState,
 };
 use openpulse_audio::LoopbackBackend;
-use openpulse_config::OpenpulseConfig;
+use openpulse_config::{ControlSecurityConfig, OpenpulseConfig};
 use openpulse_core::audio::{AudioBackend, AudioInputStream};
 use openpulse_core::relay::{RelayForwarder, RelayTrustPolicy};
 use openpulse_core::station_id::StationIdTimer;
@@ -384,6 +384,9 @@ pub async fn run(cfg: OpenpulseConfig, modem_backend: Box<dyn AudioBackend>) -> 
         Ok(psk) => psk,
         Err(e) => return Err(e),
     };
+    if let Some(msg) = inert_psk_key_id_warning(&cfg.control_security) {
+        tracing::warn!("{msg}");
+    }
     if require_auth && control_psk.is_none() {
         return Err(format!(
             "control channel requires authentication (bind {} / require_auth={}) but no PSK is set — \
@@ -1745,6 +1748,26 @@ fn ota_send_with_ptt(
 ///
 /// This is the initial, testable source; keystore-backed loading (`openpulse-keystore`) is the
 /// production follow-up. Returns `Ok(None)` when the variable is unset.
+/// The startup warning owed to an operator who set `psk_key_id`, or `None` if they did not.
+///
+/// `psk_key_id` is deserialized, defaulted, and written into the shipped config template — and
+/// read by nothing (#1234). Setting it was a SILENT no-op, so an operator could believe their PSK
+/// came from a keystore while it came from the environment or was absent entirely. This does not
+/// make the knob work; it makes its inertness audible until the keystore is wired or the field is
+/// removed. Split out of `run()` so the decision is testable without starting a daemon — the
+/// emission itself is not covered, only what is decided.
+fn inert_psk_key_id_warning(cfg: &ControlSecurityConfig) -> Option<String> {
+    if cfg.psk_key_id == ControlSecurityConfig::default().psk_key_id {
+        return None;
+    }
+    Some(format!(
+        "[control_security] psk_key_id = {:?} is set, but keystore-backed PSK loading is not \
+         implemented (#1234) — nothing reads this field; the PSK is taken from \
+         OPENPULSE_CONTROL_PSK only",
+        cfg.psk_key_id
+    ))
+}
+
 fn load_control_psk() -> Result<Option<[u8; openpulse_linksec::PSK_LEN]>, String> {
     let hex = match std::env::var("OPENPULSE_CONTROL_PSK") {
         Ok(h) => h,
@@ -2786,6 +2809,42 @@ mod discovery_tick_tests {
             rs.discovery.as_ref().unwrap().state(),
             DiscoveryState::Inactive,
             "discovery stood down for the QSO"
+        );
+    }
+}
+
+#[cfg(test)]
+mod inert_knob_tests {
+    use super::inert_psk_key_id_warning;
+    use openpulse_config::ControlSecurityConfig;
+
+    // Deliberately carries NO `VERIFIES:` id. It was first written as REQ-CTL-04's binding, and
+    // #1237's reverse check refused it: that would have moved the requirement out of `unwired` on
+    // the strength of a test asserting the daemon WARNS the knob is inert — close to the opposite
+    // of the statement's content, and the exact false-claim the reverse rule exists to stop. The
+    // keystore's own tests remain REQ-CTL-04's evidence; this covers the daemon's honesty about
+    // an unread config field (#1234).
+    #[test]
+    fn a_set_psk_key_id_is_not_silently_ignored() {
+        let dflt = ControlSecurityConfig::default();
+        assert!(
+            inert_psk_key_id_warning(&dflt).is_none(),
+            "an untouched default must not nag"
+        );
+
+        let set = ControlSecurityConfig {
+            psk_key_id: "my-radio-psk".into(),
+            ..ControlSecurityConfig::default()
+        };
+        let msg = inert_psk_key_id_warning(&set)
+            .expect("setting psk_key_id must produce a warning while nothing reads it");
+        assert!(
+            msg.contains("my-radio-psk") && msg.contains("#1234"),
+            "the warning must name the value and where the gap is tracked: {msg}"
+        );
+        assert!(
+            msg.contains("OPENPULSE_CONTROL_PSK"),
+            "and must say where the PSK actually comes from: {msg}"
         );
     }
 }

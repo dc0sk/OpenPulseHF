@@ -21,9 +21,52 @@ The join key is an in-code `// VERIFIES: REQ-x` comment (greppable, language-gen
 REQ->test map was seeded from the matrix `tests` column at import time. An `enforced` requirement
 must carry at least one `// VERIFIES:` binding, so promoting a requirement out of `baseline` forces
 a real, checked link.
+
+WHAT `enforced` MEANS, EXACTLY (#1237)
+--------------------------------------
+Written down because the gap between the code's meaning and the reader's meaning is what made the
+`REQ-CTL-04` error easy to make. Until #1237, `enforced` asserted ONE thing — a `// VERIFIES:`
+binding exists and its test passed in the last real gate run — while the registry was read as a
+statement of product capability. Nothing joined the two, so a unit test of a module nothing
+consumes satisfied the letter completely, and did: `REQ-CTL-04` shipped bound to a passing keystore
+test while `openpulse-keystore` had zero consumers and the daemon read its PSK from an env var.
+
+`enforced` now asserts both halves:
+
+  1. a `// VERIFIES:` binding exists, and its test PASSED in the last real gate run; and
+  2. at least one binding sits in a package that is NOT workspace-dormant.
+
+Read (2) literally. It says *not workspace-dormant* — some chain of normal, non-optional
+dependency edges reaches a package with a `bin` target — and NOTHING STRONGER. It is not
+"production-reachable":
+
+  * A dormant MODULE inside a live package passes it. `openpulse-core::pq_handshake` is exactly
+    that today: every entry point sits in the orphan baseline and its only reference outside its
+    own file is a `pub use` re-export, inside a crate that reaches every binary.
+    `scripts/lib/reachability.py` is the finer, item-level instrument — and it is blind to the case
+    THIS join catches, because a dead crate whose two files reference each other looks referenced
+    to it. The two are complements; neither subsumes the other.
+
+    The requirement sitting in that position is `REQ-PQ-05`, and it is deliberately left
+    `enforced`. Its statement is a SIZE claim — ML-DSA-44 signatures and ML-KEM-768 keys exceed
+    the 255-byte frame payload — and its binding (`sar_roundtrip.rs`) verifies exactly that, on
+    SAR, which IS wired. The binding is germane and the join's verdict is right. What a reader
+    may over-infer from it — "PQ artifacts cross the link today" — is not what the statement says,
+    and no machine here checks the distance between a statement and what it evokes.
+  * Only ONE binding has to be live. Whether a binding is *germane* to its requirement remains a
+    manual norm, unchecked by anything here.
+  * The 146 `baseline` entries are exempt from both halves by construction.
+
+Believing "passed the reachability join" means "production-reachable" would be the original
+over-read recursing one level up, which is why the claim is spelled out rather than named.
+
+`unwired` is enforced-with-a-dormant-consumer: obligation (1) in full, (2) deliberately absent,
+plus a tracking issue named in the statement. It FAILS the moment its package reaches a binary —
+a demand to reconcile, never an automatic promotion, because at package granularity "reaches a
+binary" does not imply "this requirement's capability is called".
 """
 from __future__ import annotations
-import sys, os, re, glob, json, pathlib
+import sys, os, re, glob, json, pathlib, subprocess
 
 ROOT = pathlib.Path(__file__).resolve().parents[2]
 YAML = ROOT / "docs/dev/project/requirements.yaml"
@@ -76,6 +119,11 @@ ID_VOCABULARY = {
 # weakens nothing — but it is a per-id allowlist, not a per-site one, and the only thing keeping it
 # honest is that it is bounded and shrink-only: a NEW off-convention id is not on this list and
 # fails.
+# The legal `traceability:` values. `enforced` and `unwired` differ ONLY in whether the bound
+# capability is workspace-dormant, and that difference is decided by the machine (#1237), not by
+# the author — the author's one degree of freedom is naming the tracking issue.
+TRACEABILITY_VALUES = ("enforced", "unwired", "baseline")
+
 RENAMED_IDS = {
     "REQ-SEC-CTL", "REQ-SEC-CTL-01", "REQ-SEC-CTL-02", "REQ-SEC-CTL-03",
     "REQ-SEC-CTL-04", "REQ-SEC-CTL-05", "REQ-SEC-CTL-06", "REQ-DCD-ADAPT",
@@ -153,6 +201,101 @@ def _scan_verifies():
                     binds.setdefault(rid, []).append(
                         {"file": os.path.relpath(p, ROOT), "fn": fname})
     return binds
+
+
+class CargoUnavailable(Exception):
+    """`cargo metadata` could not be run or parsed.
+
+    A LOUD error, never a skip. A checker that silently drops its newest rule on the one machine
+    where cargo is missing is the self-consistent-checker archetype this file exists to avoid.
+    """
+
+
+def _workspace_graph():
+    """Return `(pkg_of_dir, prod_rdeps, bin_pkgs)` from `cargo metadata`.
+
+    Two things here were wrong in the throwaway script that produced this rule's evidence, and
+    both were found by review rather than by the numbers, which reproduced either way:
+
+    1. **Package names are not directory names.** `plugins/bpsk` is package `bpsk-plugin` and
+       `plugins/64qam` is `qam64-plugin` — ten packages diverge. Resolving a file's crate by path
+       segment makes every plugin binding look unreachable: a false-FAIL machine for a whole
+       layer, invisible today only because all current bindings live where dir == package name.
+       Resolve by `manifest_path` instead, longest-prefix.
+    2. **Edge kind and `optional` must be filtered.** `openpulse-gpu` is depended on ONLY through
+       optional feature-gated edges; counting those as production reach would let a GPU
+       requirement bound to a CPU-fallback test pass this join while the GPU path never executes
+       in any gated build — the very laundering the rule exists to stop.
+    """
+    try:
+        out = subprocess.run(
+            ["cargo", "metadata", "--no-deps", "--format-version", "1"],
+            capture_output=True, text=True, cwd=str(ROOT), timeout=300,
+        )
+    except (OSError, subprocess.SubprocessError) as e:
+        raise CargoUnavailable(f"could not run `cargo metadata`: {e}")
+    if out.returncode != 0:
+        raise CargoUnavailable(
+            f"`cargo metadata` exited {out.returncode}: {out.stderr.strip()[:400]}")
+    try:
+        meta = json.loads(out.stdout)
+    except ValueError as e:
+        raise CargoUnavailable(f"could not parse `cargo metadata` output: {e}")
+
+    pkgs = meta.get("packages", [])
+    if not pkgs:
+        raise CargoUnavailable("`cargo metadata` reported no packages")
+
+    pkg_of_dir, bin_pkgs, rdeps = {}, set(), {}
+    for pkg in pkgs:
+        pkg_of_dir[os.path.dirname(pkg["manifest_path"])] = pkg["name"]
+        if any("bin" in t.get("kind", []) for t in pkg.get("targets", [])):
+            bin_pkgs.add(pkg["name"])
+    names = set(pkg_of_dir.values())
+    for pkg in pkgs:
+        for dep in pkg.get("dependencies", []):
+            # kind None == a normal dependency; "dev" and "build" edges do not ship.
+            if dep.get("kind") is not None or dep.get("optional"):
+                continue
+            if dep["name"] in names:
+                rdeps.setdefault(dep["name"], set()).add(pkg["name"])
+    return pkg_of_dir, rdeps, bin_pkgs
+
+
+def _package_of(rel, pkg_of_dir):
+    """The package owning source file `rel`, by longest manifest-directory prefix."""
+    full = os.path.abspath(str(ROOT / rel))
+    best = None
+    for d, name in pkg_of_dir.items():
+        if full.startswith(d + os.sep) and (best is None or len(d) > len(best[0])):
+            best = (d, name)
+    return best[1] if best else None
+
+
+def _dormant_packages(rdeps, bin_pkgs, all_pkgs):
+    """Packages no chain of normal, non-optional edges connects to a package with a `bin` target.
+
+    This is the ONLY claim the join makes, and the docstring says it in those words on purpose.
+    It is deliberately weaker than "production-reachable": a dormant MODULE inside a live package
+    passes it — `openpulse-core::pq_handshake` is exactly that today, every entry point sitting in
+    the orphan baseline inside a crate that reaches every binary. Reading this join as
+    reachability would be the original over-read recursing one level up.
+    """
+    dormant = set()
+    for name in all_pkgs:
+        seen, stack, live = set(), [name], False
+        while stack:
+            cur = stack.pop()
+            if cur in bin_pkgs:
+                live = True
+                break
+            if cur in seen:
+                continue
+            seen.add(cur)
+            stack.extend(rdeps.get(cur, ()))
+        if not live:
+            dormant.add(name)
+    return dormant
 
 
 class EvidenceChannelBroken(Exception):
@@ -423,7 +566,10 @@ def do_check(release=False):
     # `== "enforced"` at two separate sites, which is the fix-two-of-five-arms shape: a change at
     # one site silently leaves the other on the old semantics.
     def is_enforced(entry):
-        return entry.get("traceability") == "enforced"
+        # `unwired` is enforced-with-a-dormant-consumer: the binding must still exist and pass, so
+        # drift on it FAILS exactly as `enforced` does. Routing it to warns would have made the
+        # new state a way to soften an existing requirement, which is the opposite of the point.
+        return entry.get("traceability") in ("enforced", "unwired")
 
     def flag(entry, msg):
         (fails if is_enforced(entry) else warns).append(msg)
@@ -440,14 +586,28 @@ def do_check(release=False):
             tr = entry.get("traceability")
             if tr is None:
                 vocab_errors.append(
-                    f"{eid}: NO-TRACEABILITY — {kind} has no `traceability:` field. Say which you "
-                    f"mean: `enforced` (drift FAILS) or `baseline` (drift warns, grandfathered "
-                    f"only)."
+                    f"{eid}: NO-TRACEABILITY — {kind} has no `traceability:` field. Say which "
+                    f"you mean: `enforced` (drift FAILS; the bound capability must not be "
+                    f"workspace-dormant), `unwired` (bound and passing, but nothing consumes the "
+                    f"capability yet — must name a tracking issue), or `baseline` (drift warns, "
+                    f"grandfathered only)."
                 )
-            elif tr not in ("enforced", "baseline"):
+            elif tr not in TRACEABILITY_VALUES:
                 vocab_errors.append(
                     f"{eid}: BAD-TRACEABILITY — `traceability: {tr}` is not one of "
-                    f"enforced|baseline."
+                    f"{'|'.join(TRACEABILITY_VALUES)}."
+                )
+            elif tr == "unwired" and kind != "requirement":
+                vocab_errors.append(
+                    f"{eid}: UNWIRED-NOT-FOR-CAPABILITIES — `unwired` is a per-requirement state, "
+                    f"decided by the requirement's own binding. A capability's `code:` list mixes "
+                    f"wired and unwired files (CAP-68 does), so the state is not well-defined here."
+                )
+            elif tr == "unwired" and not re.search(r"#\d+", str(entry.get("statement", ""))):
+                vocab_errors.append(
+                    f"{eid}: UNWIRED-WITHOUT-ISSUE — `traceability: unwired` must name the issue "
+                    f"tracking the wiring in its own statement, so the state cannot be a quiet "
+                    f"resting place."
                 )
             elif tr == "baseline" and eid not in grandfathered:
                 vocab_errors.append(
@@ -462,6 +622,79 @@ def do_check(release=False):
         print(f"\n  {len(vocab_errors)} error(s)")
         print("\nTRACE: FAIL")
         return 1
+
+    # ---- workspace-dormancy join (#1237) -----------------------------------------------------
+    # `enforced` used to mean exactly "a binding exists and its test passed". Nothing joined that
+    # to whether anything CONSUMES the capability, so a unit test of a module with no callers
+    # satisfied the letter completely while the registry was read as a claim about the product.
+    # REQ-CTL-04 shipped that way. The rule bans the construct:
+    #
+    #     an `enforced` requirement's binding must not sit in a workspace-dormant package
+    #
+    # and the reverse direction keeps `unwired` from becoming a resting place. The reverse is a
+    # demand for RECONCILIATION, never an automatic promotion: at package granularity "the package
+    # reaches a binary" does NOT imply "this requirement's capability is wired", and wiring one
+    # function must not silently upgrade every sibling requirement's claim.
+    try:
+        pkg_of_dir, prod_rdeps, bin_pkgs = _workspace_graph()
+    except CargoUnavailable as e:
+        print(f"trace: {e}")
+        print("\n  The dormancy join cannot run without cargo metadata, and skipping it would")
+        print("  silently drop the newest rule on whichever machine lacks cargo.")
+        print("\nTRACE: FAIL")
+        return 1
+    dormant = _dormant_packages(prod_rdeps, bin_pkgs, set(pkg_of_dir.values()))
+
+    dormancy_errors, unwired_roster = [], []
+    for rid, entry in sorted(reqs.items()):
+        if not isinstance(entry, dict):
+            continue
+        tr = entry.get("traceability")
+        if tr not in ("enforced", "unwired"):
+            continue
+        pkgs_for = {}
+        for b in binds.get(rid, []):
+            pkgs_for[b["file"]] = _package_of(b["file"], pkg_of_dir)
+        if not pkgs_for:
+            continue  # a missing binding is already reported by the binding checks
+        live = {f: p for f, p in pkgs_for.items() if p is not None and p not in dormant}
+        if tr == "enforced" and not live:
+            where = "; ".join(f"{f} -> {p or 'UNRESOLVED'}" for f, p in sorted(pkgs_for.items()))
+            dormancy_errors.append(
+                f"{rid}: DORMANT-ENFORCED — every binding sits in a package no chain of normal, "
+                f"non-optional dependencies connects to a binary ({where}). A passing test on a "
+                f"capability nothing consumes is not enforcement. Wire it, rebind it to the "
+                f"capability that IS consumed, or mark it `unwired` naming the tracking issue."
+            )
+        elif tr == "unwired" and live:
+            where = "; ".join(f"{f} -> {p}" for f, p in sorted(live.items()))
+            dormancy_errors.append(
+                f"{rid}: UNWIRED-BUT-REACHED — marked `unwired`, but a binding's package now "
+                f"reaches a binary ({where}). Reconcile deliberately: promote to `enforced` if "
+                f"THIS requirement's capability is genuinely wired, or rebind/restate if the "
+                f"package went live for an unrelated reason. Reaching a binary is not proof that "
+                f"this capability is called."
+            )
+        elif tr == "unwired":
+            unwired_roster.append(
+                f"{rid}: {' '.join(str(entry.get('statement', '')).split())[:88]}")
+
+    if dormancy_errors:
+        print("trace: workspace-dormancy errors (#1237) — these are not warnings\n")
+        for m in dormancy_errors:
+            print(f"  {m}")
+        print(f"\n  {len(dormancy_errors)} error(s)")
+        print("\nTRACE: FAIL")
+        return 1
+
+    # Printed on EVERY run, passing included. The state is legal, so the only thing keeping it
+    # from being a quiet parking space is that it is loud.
+    if unwired_roster:
+        print(f"trace: {len(unwired_roster)} requirement(s) `unwired` — bound and passing, but "
+              f"nothing consumes the capability yet:")
+        for m in unwired_roster:
+            print(f"  {m}")
+        print()
 
     # ---- id conformance (#1229) -------------------------------------------------------------
     # Three layers, all by NEGATION: collect loosely, validate strictly, fail on the residue.
