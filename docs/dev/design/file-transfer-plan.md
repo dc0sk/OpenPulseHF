@@ -2,7 +2,7 @@
 project: openpulsehf
 doc: docs/dev/design/file-transfer-plan.md
 status: approved-plan (decisions D1–D5 locked 2026-07-10; Phases A–E shipped — crate + modem loopback + daemon SendFile/twin + panel Files tab + real-radio bursts + resume; only Phase F on-air validation remains, deferred)
-last_updated: 2026-07-10
+last_updated: 2026-08-31
 ---
 
 # Direct P2P file transfer — design & implementation plan
@@ -10,14 +10,37 @@ last_updated: 2026-07-10
 **Source requirement**: `docs/dev/research/varac-feature-gap-analysis.md` §4.1 (PR #729) ranked
 direct P2P file transfer (VarAC V9) as the highest value-to-effort missing feature and recommended
 it as the next build. This document is the engineering plan: the offer/accept/transfer/verify flow,
-the wire protocol, the crate/daemon/panel wiring, and PR-sized milestones. **Planning only —
-nothing here is implemented.**
+the wire protocol, the crate/daemon/panel wiring, and PR-sized milestones.
+
+> **Status, corrected 2026-08-31.** This document was written as a plan and still said "Planning
+> only — nothing here is implemented". That has been false since FF-16 Phases A–E shipped
+> (PRs #730–#743, #787). It is kept as the design record; the *shipped* state is CLAUDE.md's crate
+> map and the acceptance table in this repo's root contract.
 
 Proposed requirement IDs (for the acceptance table and `docs/dev/project/traceability.md` ledger):
-**REQ-FT-01** (offer/accept flow), **REQ-FT-02** (chunked reliable delivery), **REQ-FT-03**
-(cryptographic verification), **REQ-FT-04** (size-gated auto-accept + operator prompt),
-**REQ-FT-05** (progress reporting), **REQ-FT-06** (safe storage: sanitization/quota),
-**REQ-FT-07** (resume).
+> **Ids reconciled 2026-08-31 (#1235).** This plan was written before the requirements were
+> registered and used a draft `REQ-FT-*` scheme that existed in this file and nowhere else — not in
+> `requirements.yaml`, not in the matrix. The registered ids are `REQ-FX-*`:
+>
+> | draft | registered |
+> |---|---|
+> | `REQ-FT-01` | `REQ-FX-01` |
+> | `REQ-FT-02` | `REQ-FX-02` + `REQ-FX-05` (blocks, then reliable delivery) |
+> | `REQ-FT-03` | `REQ-FX-03` |
+> | `REQ-FT-04` | `REQ-FX-04` |
+> | `REQ-FT-05` | `REQ-FX-07` — **minted here**; no registered statement mentioned progress |
+> | `REQ-FT-06` | `REQ-FX-08` — **minted here**; `REQ-FX-04` covered the quota half, not sanitisation |
+> | `REQ-FT-07` | `REQ-FX-05` — which already states "with resume from the last completed block" |
+>
+> Found by the membership layer of the id-conformance check added in #1229: an id in living prose
+> that is absent from the source of truth. A shape check could not have found these — `REQ-FT-01`
+> is perfectly well-formed.
+
+**REQ-FX-01** (offer/accept flow), **REQ-FX-02/05** (chunked reliable delivery), **REQ-FX-03**
+(cryptographic verification), **REQ-FX-04** (size-gated auto-accept + operator prompt),
+**REQ-FX-07** (progress reporting), **REQ-FX-08** (safe storage: filename sanitisation) with
+**REQ-FX-04** carrying the size/quota half,
+**REQ-FX-05** (resume).
 
 ---
 
@@ -46,17 +69,19 @@ The gap analysis is right that ~90 % of the substrate exists. This plan is mostl
 **Goals**
 
 - G1: send/receive a file inside (or alongside) an established peer session, offer → accept →
-  transfer → verify, with progress events at both ends (REQ-FT-01/02/05).
+  transfer → verify, with progress events at both ends (REQ-FX-01/02/05/07).
 - G2: cryptographic verification of every received file: signature validity **and** payload-hash
-  match, bound to the handshake-verified peer key (REQ-FT-03).
+  match, bound to the handshake-verified peer key (REQ-FX-03).
 - G3: size-gated auto-accept with an operator prompt above the gate; reject/cancel/timeout paths
-  (REQ-FT-04).
-- G4: safe-by-construction storage: filename sanitization, size/quota limits, per-peer directories
-  (REQ-FT-06).
+  (REQ-FX-04).
+- G4: safe-by-construction storage: filename sanitization (REQ-FX-08), size/quota limits
+  (REQ-FX-04), per-peer directories (**registered by no requirement** — implemented at
+  `crates/openpulse-daemon/src/filexfer.rs:836`, and deliberately left unregistered rather than
+  back-derived into a statement to match the code).
 - G5: everything testable under `cargo test --workspace --no-default-features` (no audio hardware),
   including a full modem-loopback file round-trip and a tamper test.
 - G6 (post-MVP): resume after a dropped session; selective retransmission of missing chunks
-  (REQ-FT-07).
+  (REQ-FX-05).
 
 **Non-goals**
 
@@ -697,7 +722,7 @@ the frame is self-describing and passthrough-safe (worst case +5 B/block).
 
 ## 9. Security & integrity
 
-- **The differentiator (REQ-FT-03)**: every file is verified with
+- **The differentiator (REQ-FX-03)**: every file is verified with
   `verify_manifest_with_payload()` — Ed25519 signature *and* SHA-256 match, fail-closed — against
   the pubkey proven by the signed handshake, so the badge asserts *this exact content, from this
   exact key, which answered as this callsign*. VarAC offers none of this. The receiver's
@@ -802,13 +827,18 @@ twin daemon rig in `daemon/src/twin.rs`), not only the convenience seam:
 
 | Requirement | Acceptance test |
 |---|---|
-| File offer/accept/reject/timeout state machines (REQ-FT-01/04) | `cargo test -p openpulse-filexfer` |
-| File round-trip over simulated channel, small + multi-SAR-object (REQ-FT-02) | `cargo test -p openpulse-filexfer --test loopback_roundtrip` |
-| Tampered payload yields UNVERIFIED, never a false badge (REQ-FT-03) | `cargo test -p openpulse-filexfer --test integrity_failure` |
-| Twin-daemon end-to-end SendFile → FileReceived{verified} (REQ-FT-02/05) | `cargo test -p openpulse-daemon --test filexfer_twin` |
-| Filename sanitization blocks traversal (REQ-FT-06) | `cargo test -p openpulse-filexfer sanitize` |
-| Station ID transmitted during a long transfer (REQ-REG-10) | `cargo test -p openpulse-daemon --test filexfer_station_id` |
-| Resume skips already-held blocks (REQ-FT-07, phase E) | `cargo test -p openpulse-filexfer --test resume` |
+| File offer/accept/reject/timeout state machines (REQ-FX-01/04) | `cargo test -p openpulse-filexfer` |
+| File round-trip over the modem + tamper→verify-fail (REQ-FX-02/03/05) | `cargo test -p openpulse-modem --test filexfer_loopback` |
+| Multi-object >64 KB split/reassemble (REQ-FX-02) | `cargo test -p openpulse-filexfer --test blocks multi_object_over_64kb` |
+| Twin-daemon end-to-end SendFile → FileReceived{verified} + operator progress at both ends (REQ-FX-02/05/07) | `cargo test -p openpulse-daemon --test twin_daemon_bridge a_file_crosses` |
+| Filename sanitization holds at the writing seam (REQ-FX-08) | `cargo test -p openpulse-daemon --lib a_hostile_offer_name` |
+| Resume skips already-held blocks (REQ-FX-05, phase E) | `cargo test -p openpulse-filexfer --test resume` |
+
+**Not implemented**: a station-ID-during-a-long-transfer test for REQ-REG-10. The row that used to
+sit here named `--test filexfer_station_id`, which has never existed; REQ-REG-10's actual bindings
+are `openpulse-core --lib station_id` / `cw_id` and `openpulse-modem --test station_id_txcount`,
+none of which run a file transfer. Four of the seven commands in this table were unrunnable until
+2026-08-31 — a table refreshed column-by-column reads as current even where it is fiction.
 
 Traceability: each PR carries the requirement → design (this doc §) → implementation files → tests →
 actual run counts chain in the PR body and appends to `docs/dev/project/traceability.md`

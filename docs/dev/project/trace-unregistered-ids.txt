@@ -17,14 +17,3 @@ REQ-CTL-03
 # obligation a test can check. Retained here because the changelog mapping table names it.
 REQ-CTL-06
 
-# A superseded DRAFT scheme in docs/dev/design/file-transfer-plan.md. The registered file-transfer
-# requirements are REQ-FX-01..06; the plan doc still uses the pre-registration names. The mapping is
-# not 1:1 (seven draft ids against six registered), so it needs a per-id decision rather than a
-# rewrite. Tracked separately.
-REQ-FT-01
-REQ-FT-02
-REQ-FT-03
-REQ-FT-04
-REQ-FT-05
-REQ-FT-06
-REQ-FT-07

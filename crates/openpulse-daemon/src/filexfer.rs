@@ -1238,6 +1238,42 @@ mod tests {
         );
     }
 
+    /// VERIFIES: REQ-FX-08 — sanitisation is inside the function that writes, so no hostile
+    /// offer name or peer id can place bytes outside `download_dir`. Binding the requirement to
+    /// `sanitize_filename` alone leaves the "before any disk write" clause unattested: that test
+    /// stays green if a caller stops calling it.
+    #[test]
+    fn a_hostile_offer_name_and_peer_cannot_escape_the_download_dir() {
+        let dir = tmp_dir();
+        let rs = RuntimeControlState {
+            filexfer_policy: policy_with(dir.clone(), 0),
+            ..RuntimeControlState::default()
+        };
+        let root = dir.canonicalize().unwrap();
+
+        let hostile = write_file(&rs, "../../../etc", "../../../etc/passwd", b"x", true).unwrap();
+        let hostile = std::path::Path::new(&hostile).canonicalize().unwrap();
+        assert!(
+            hostile.starts_with(&root),
+            "a traversing offer name escaped the download dir: {hostile:?} outside {root:?}"
+        );
+
+        let ctrl = write_file(&rs, "W1AW", "re\u{0000}port\nA.txt", b"x", true).unwrap();
+        assert!(
+            !ctrl.contains('\n') && !ctrl.contains('\u{0000}'),
+            "control characters reached the written path: {ctrl:?}"
+        );
+
+        // Positive control: a benign name still lands under the peer's own directory, so the
+        // assertions above are not passing because nothing was written at all.
+        let benign = write_file(&rs, "W1AW", "payload.bin", b"x", true).unwrap();
+        let benign = std::path::Path::new(&benign).canonicalize().unwrap();
+        assert_eq!(benign.parent(), Some(root.join("W1AW").as_path()));
+        assert!(benign.is_file(), "benign write produced no file");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     #[test]
     fn dir_size_counts_the_partial_subtree_for_quota() {
         // The per-peer quota must include bytes held in the `.partial/` subtree (in-flight resumable

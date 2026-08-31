@@ -257,6 +257,9 @@ fn ft_cfg(callsign: &str, download_dir: &std::path::Path) -> OpenpulseConfig {
 
 /// FF-16 Phase C acceptance: a file sent from daemon A lands, reassembled byte-for-byte, on daemon B —
 /// across the real modem + a clean channel, driven entirely through the control protocol.
+///
+/// VERIFIES: REQ-FX-07 — block-level progress surfaced to the operator at BOTH ends, asserted on
+/// the two daemons' real control streams.
 #[tokio::test(flavor = "multi_thread", worker_threads = 6)]
 async fn a_file_crosses_the_bridge_between_two_real_daemons() {
     let base = std::env::temp_dir().join(format!("opfx_twin_{}", std::process::id()));
@@ -285,7 +288,33 @@ async fn a_file_crosses_the_bridge_between_two_real_daemons() {
 
     // Drive SendFile on daemon A.
     let a = TcpStream::connect(pair.addr_a).await.unwrap();
-    let (_a_read, mut a_write) = a.into_split();
+    let (a_read, mut a_write) = a.into_split();
+
+    // REQ-FX-07's "at both ends" clause: the SENDER's operator stream must carry tx-direction
+    // progress. Collected concurrently — this stream is live only while the transfer runs.
+    let tx_progress = tokio::spawn(async move {
+        let mut reader = BufReader::new(a_read);
+        let mut seen: Vec<(u16, u16)> = Vec::new();
+        loop {
+            let mut buf = String::new();
+            match reader.read_line(&mut buf).await {
+                Ok(0) | Err(_) => return seen,
+                Ok(_) => {}
+            }
+            if let Ok(ControlEvent::FileProgress {
+                direction,
+                blocks_done,
+                blocks_total,
+                ..
+            }) = serde_json::from_str::<ControlEvent>(buf.trim())
+            {
+                if direction == "tx" {
+                    seen.push((blocks_done, blocks_total));
+                }
+            }
+        }
+    });
+
     tokio::time::sleep(Duration::from_millis(200)).await;
     let cmd = serde_json::to_string(&ControlCommand::SendFile {
         to: "STNB".into(),
@@ -295,17 +324,24 @@ async fn a_file_crosses_the_bridge_between_two_real_daemons() {
         + "\n";
     a_write.write_all(cmd.as_bytes()).await.unwrap();
 
-    // Daemon B must emit FileReceived; capture the path it wrote to.
+    // Daemon B must emit FileReceived; capture the path it wrote to, and the rx-direction
+    // progress that preceded it (REQ-FX-07, receiving end).
+    let mut rx_progress: Vec<(u16, u16)> = Vec::new();
     let received = timeout(Duration::from_secs(90), async {
         loop {
             let mut buf = String::new();
             if b_reader.read_line(&mut buf).await.unwrap() == 0 {
                 continue;
             }
-            if let Ok(ControlEvent::FileReceived { path, name, .. }) =
-                serde_json::from_str::<ControlEvent>(buf.trim())
-            {
-                return (path, name);
+            match serde_json::from_str::<ControlEvent>(buf.trim()) {
+                Ok(ControlEvent::FileReceived { path, name, .. }) => return (path, name),
+                Ok(ControlEvent::FileProgress {
+                    direction,
+                    blocks_done,
+                    blocks_total,
+                    ..
+                }) if direction == "rx" => rx_progress.push((blocks_done, blocks_total)),
+                _ => {}
             }
         }
     })
@@ -317,6 +353,30 @@ async fn a_file_crosses_the_bridge_between_two_real_daemons() {
     assert!(name.contains("payload"), "unexpected file name {name}");
     let got = std::fs::read(&path).expect("received file must exist on disk");
     assert_eq!(got, contents, "reassembled file must match the sent bytes");
+
+    // REQ-FX-07: progress must reach the OPERATOR at both ends, not merely be emitted by the
+    // state machines. Bound here rather than on the sender unit test, whose assertions survive
+    // deleting the daemon's forwarding entirely.
+    let tx_progress = tx_progress.await.unwrap_or_default();
+    assert!(
+        !tx_progress.is_empty(),
+        "sending daemon never surfaced FileProgress to its control stream"
+    );
+    assert!(
+        !rx_progress.is_empty(),
+        "receiving daemon never surfaced FileProgress to its control stream"
+    );
+    for (done, total) in tx_progress.iter().chain(rx_progress.iter()) {
+        assert!(
+            *total > 0 && done <= total,
+            "nonsensical progress {done}/{total}"
+        );
+    }
+    // Deliberately NOT asserted: that the sender's LAST progress reads blocks_done == total.
+    // The terminal `progress(block_count)` (filexfer sender.rs:93,116) fires on completion, which
+    // races `pair.shutdown()` closing this stream — a load-dependent verdict of the kind #1066
+    // exists to remove. The requirement is that progress reaches the operator, not its final value.
+
     let _ = std::fs::remove_dir_all(&base);
 }
 

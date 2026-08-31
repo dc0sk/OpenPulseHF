@@ -9,6 +9,37 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-08-31 — #1235: the draft file-transfer ids reconciled, and two requirements I registered on grep evidence
+
+- **Requirement/change:** `docs/dev/design/file-transfer-plan.md` cited `REQ-FT-01..07`, a draft
+  scheme registered nowhere — found by the membership layer of the #1229 id-conformance check. The
+  mapping to the registered `REQ-FX-01..06` is not 1:1. Separately, `REQ-CTL-04` (registered by me
+  in #1229) asserted a "file keystore fallback" that no production path provides.
+- **Design decision:** map draft→registered per id rather than rewriting; **mint** `REQ-FX-07`
+  (progress) and `REQ-FX-08` (sanitisation) rather than widening `REQ-FX-04`, because widening a
+  `baseline` statement puts a new clause under warn-only drift; keep the old ids reachable via a
+  mapping table and `RENAMED_IDS` rather than deleting them. Reviewed adversarially
+  (`docs/dev/reviews/2026-08-31-1235-ft-fx-reconciliation.md`), which **held the first
+  implementation**: both minted requirements were `enforced` against tests that survive deleting
+  the daemon wiring their statements describe — the same defect the `REQ-CTL-04` half corrects.
+  Rebound each to a seam that can fail; `REQ-CTL-04` restated to what its four keystore tests hold
+  (the "Argon2id / ChaCha20-Poly1305" naming was verified by nothing) and marked as having no
+  production consumer (#1234).
+- **Implementation:** `docs/dev/project/requirements.yaml` (REQ-FX-07/08 minted, CAP-71 wired,
+  REQ-CTL-04 restated); `docs/dev/design/file-transfer-plan.md` (FT→FX with a mapping table, four
+  unrunnable acceptance commands corrected, stale "nothing here is implemented" banner);
+  `scripts/lib/trace.py` (`RENAMED_IDS` + two comment-vs-code corrections in the checker itself);
+  `docs/dev/project/trace-unregistered-ids.txt` 9 → 2 entries.
+- **Tests:** `openpulse-daemon --test twin_daemon_bridge a_file_crosses…` extended to assert
+  tx- and rx-direction `ControlEvent::FileProgress` on **both daemons' real control streams**
+  (REQ-FX-07); new `openpulse-daemon --lib filexfer::tests::a_hostile_offer_name_and_peer_cannot_escape_the_download_dir`
+  driving `write_file`, the function that writes (REQ-FX-08).
+- **Test results:** both bindings sabotage-verified before being trusted — neutralising the two
+  `event_tx.send(FileProgress)` forwards gives `rc=101` "sending daemon never surfaced
+  FileProgress"; replacing `sanitize_filename(name)` with `name.to_string()` gives `rc=101`. Both
+  sabotages reverted and the restore sha256-verified against the pre-sabotage copy. Full gate:
+  see the PR body.
+
 ## 2026-08-28 — #1165: ACK reserved bits 7:5 are enforced, not ignored
 
 **Requirement → design → implementation → tests → results.**
