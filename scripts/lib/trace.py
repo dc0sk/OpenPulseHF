@@ -67,13 +67,21 @@ ID_VOCABULARY = {
     "CAP-SELFTEST-SABOTAGE",  # the self-test's planted fixture in scripts/trace.sh
 }
 
-# Ids that were RENAMED or RETIRED and are deliberately still named in living text: the changelog
-# mapping table, and comments explaining why the rename happened. Allowed anywhere, because the
-# mapping is what makes leaving the old ids in frozen records safe — one grep finds both. Bounded
-# and shrink-only: a NEW off-convention id is not on this list and fails.
+# Ids that were RENAMED or RETIRED and are deliberately still named in living text: changelog
+# mapping tables, and comments explaining why the rename happened.
+#
+# SCOPE, stated exactly because the wording used to overclaim: these are allowed ANYWHERE, in any
+# living file, not only in a mapping table. A brand-new doc citing `REQ-FT-03` tomorrow passes
+# silently. That is the same permissiveness the unregistered baseline gave them, so moving ids here
+# weakens nothing — but it is a per-id allowlist, not a per-site one, and the only thing keeping it
+# honest is that it is bounded and shrink-only: a NEW off-convention id is not on this list and
+# fails.
 RENAMED_IDS = {
     "REQ-SEC-CTL", "REQ-SEC-CTL-01", "REQ-SEC-CTL-02", "REQ-SEC-CTL-03",
     "REQ-SEC-CTL-04", "REQ-SEC-CTL-05", "REQ-SEC-CTL-06", "REQ-DCD-ADAPT",
+    # the draft file-transfer scheme, reconciled to REQ-FX-* in #1235; the plan doc keeps a
+    # mapping table so an old id still leads somewhere.
+    "REQ-FT-01", "REQ-FT-02", "REQ-FT-03", "REQ-FT-04", "REQ-FT-05", "REQ-FT-06", "REQ-FT-07",
 }
 ID_VOCABULARY |= RENAMED_IDS
 
@@ -500,7 +508,11 @@ def do_check(release=False):
                 raw = m.group(0)
                 if raw in ID_VOCABULARY:
                     continue
-                # expand the `/NN` shorthand (`REQ-CTL-01/02`) against its own prefix
+                # Expand the `/NN` shorthand (`REQ-CTL-01/02`) against its own prefix.
+                # KNOWN BLIND SPOT: this validates each expanded id's EXISTENCE, never whether it
+                # is the id the sentence means. `REQ-FX-02/05/05` — a real slip in #1235, where a
+                # rename mapping was not 1:1 — expands to registered ids and passes. Membership
+                # cannot catch a wrong-but-registered citation; only reading can.
                 head, *rest = raw.split("/")
                 toks = [head] + [head.rsplit("-", 1)[0] + "-" + r for r in rest]
                 for tok in toks:

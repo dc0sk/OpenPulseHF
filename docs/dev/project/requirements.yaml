@@ -994,6 +994,8 @@ capabilities:
     - crates/openpulse-daemon/src/filexfer.rs
     name: Direct P2P file transfer with signed-manifest verification (FF-16)
     satisfies:
+    - REQ-FX-07
+    - REQ-FX-08
     - REQ-FX-01
     - REQ-FX-02
     - REQ-FX-03
@@ -1221,7 +1223,9 @@ requirements:
     category: Control-channel security
     covered_by:
     - CAP-68
-    statement: File keystore fallback, encrypted under an operator master password
+    statement: A file keystore holding named secrets encrypted at rest under an operator master
+      password; a wrong password, a tampered file, or non-owner-only permissions are refused. No
+      production consumer yet (#1234)
     status: ratified
     traceability: enforced
   REQ-CTL-05:
@@ -1571,6 +1575,22 @@ requirements:
       bursts
     status: ratified
     traceability: baseline
+  REQ-FX-07:
+    category: File transfer (FF-16)
+    covered_by:
+    - CAP-71
+    statement: 'Progress reporting at both ends: block-level progress events surfaced to the
+      operator'
+    status: ratified
+    traceability: enforced
+  REQ-FX-08:
+    category: File transfer (FF-16)
+    covered_by:
+    - CAP-71
+    statement: 'Safe storage: received filenames sanitised against traversal and control
+      characters before any disk write'
+    status: ratified
+    traceability: enforced
   REQ-MAC-01:
     category: Channel access
     covered_by:
