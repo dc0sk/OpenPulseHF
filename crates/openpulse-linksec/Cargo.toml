@@ -3,7 +3,7 @@ name = "openpulse-linksec"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "Control-channel link security for OpenPulse: a PSK-authenticated, encrypted Noise channel and the non-loopback auth gate (REQ-SEC-CTL-01/02)."
+description = "Control-channel link security for OpenPulse: a PSK-authenticated, encrypted Noise channel and the non-loopback auth gate (REQ-CTL-01/02)."
 
 [features]
 # `tokio` adds the async socket channel used by the daemon; the sync channel (panel) and the core

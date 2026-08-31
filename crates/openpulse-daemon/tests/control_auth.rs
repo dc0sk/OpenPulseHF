@@ -1,4 +1,4 @@
-//! Integration tests for the PSK-authenticated, encrypted control channel (REQ-SEC-CTL-01/02).
+//! Integration tests for the PSK-authenticated, encrypted control channel (REQ-CTL-01/02).
 //!
 //! A real `AsyncNoise` client connects to a real `ControlServer` configured with a PSK, over an
 //! actual TCP socket, and exchanges encrypted messages; a wrong-PSK client is dropped (fail closed).

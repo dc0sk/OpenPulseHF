@@ -1,4 +1,4 @@
-//! The DAEMON's carrier detector must square with the band it is listening to (REQ-DCD-ADAPT).
+//! The DAEMON's carrier detector must square with the band it is listening to (REQ-DCD-01).
 //!
 //! **Why this file exists, and why it is not about any mode.** The receive machinery hardened by
 //! #1020/#1021/#1039/#1040/#1045/#1049 — `EnergyGate`, the AFC settle, the preamble-correlation

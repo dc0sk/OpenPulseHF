@@ -2508,7 +2508,7 @@ The station's long-term identity is a 32-byte Ed25519 seed at `[station] identit
 (default `~/.config/openpulse/identity.key`). New keys come from `OsRng`, written with
 `create_new(true).mode(0o600)` — atomically, so the file never exists under a looser umask, with an
 `AlreadyExists` branch that re-reads a concurrent winner's file. Existing files are
-permission-validated (owner-only, REQ-SEC-CTL-05) and must be exactly 32 bytes. One posture wart:
+permission-validated (owner-only, REQ-CTL-05) and must be exactly 32 bytes. One posture wart:
 if the key *fails to load*, the daemon warns and falls back to a **random ephemeral seed**
 (`server.rs`) — failing open into an unrecognisable identity rather than refusing to start, the
 opposite of the trust store's fail-closed load (§2B.4.4).
@@ -2904,7 +2904,7 @@ key is derived from the operator's master password with `Argon2::default()` — 
 default, documented by that crate as Argon2id; the repo pins no explicit memory/time/parallelism
 parameters, so this book quotes none. `save()` draws a fresh random salt and nonce from `OsRng` on
 every write and writes owner-only (`0o600`); `open()` validates owner-only permissions *before*
-touching the content (REQ-SEC-CTL-05), and a wrong password or any tampering surfaces identically
+touching the content (REQ-CTL-05), and a wrong password or any tampering surfaces identically
 as an AEAD `Decrypt` failure.
 
 Above it, the `SecretStore` trait has two backends: `FileStore` (wraps `FileKeystore`) and
@@ -3752,7 +3752,7 @@ case-insensitive substring.
 On first run, a 32-byte Ed25519 identity seed is generated at
 `~/.config/openpulse/identity.key`, created atomically with mode `0600`. A group- or
 world-readable key file is refused at load (`ConfigError::InsecureSecretPermissions`,
-REQ-SEC-CTL-05; test: `load_identity_refuses_group_readable_key`).
+REQ-CTL-05; test: `load_identity_refuses_group_readable_key`).
 
 #### 4.2.4 Calibrate before you key
 

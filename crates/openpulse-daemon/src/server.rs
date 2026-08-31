@@ -39,7 +39,7 @@ use scfdma_plugin::ScFdmaPlugin;
 ///
 /// `load_identity_from` already handles first run internally — it generates the key, persists it with
 /// owner-only permissions, and returns `Ok` — so an `Err` here never means "no key yet". It means the
-/// key exists and is unusable: group/world-readable (REQ-SEC-CTL-05), the wrong length, or unreadable.
+/// key exists and is unusable: group/world-readable (REQ-CTL-05), the wrong length, or unreadable.
 ///
 /// The previous behaviour was to warn and substitute a **random ephemeral key**, which is a fail-open
 /// on identity: the station keeps transmitting, but signs handshake frames with a key no peer can
@@ -374,7 +374,7 @@ pub async fn run(cfg: OpenpulseConfig, modem_backend: Box<dyn AudioBackend>) -> 
     .parse()
     .map_err(|e| format!("invalid daemon.websocket_bind_addr/websocket_port: {e}"))?;
 
-    // Control-channel auth (REQ-SEC-CTL-01/02): required on a non-loopback bind, or when configured.
+    // Control-channel auth (REQ-CTL-01/02): required on a non-loopback bind, or when configured.
     // Fail closed — refuse to start if auth is required but no PSK is provided.
     let require_auth = openpulse_linksec::auth_required(
         &cfg.daemon.tcp_bind_addr,
@@ -417,7 +417,7 @@ pub async fn run(cfg: OpenpulseConfig, modem_backend: Box<dyn AudioBackend>) -> 
     // The WebSocket control endpoint carries the *same* command protocol as the TCP port (PttAssert,
     // SendMessage, EnableRepeater, …) but has no authentication path. Fail closed: if auth is required
     // for either bind, do NOT spawn the unauthenticated WS listener — otherwise it would bypass the auth
-    // the TCP port enforces (REQ-SEC-CTL-02). WS auth (Noise-over-WS) is a documented follow-up.
+    // the TCP port enforces (REQ-CTL-02). WS auth (Noise-over-WS) is a documented follow-up.
     let ws_auth_required = ws_disabled_for_auth(require_auth, &cfg.daemon.websocket_bind_addr);
     if ws_auth_required {
         tracing::warn!(

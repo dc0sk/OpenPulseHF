@@ -135,7 +135,7 @@ fn demux_message(pt: Vec<u8>) -> RecvMsg {
 }
 
 /// Raw TCP transport — matches the daemon's `TcpStream` connection loop. Encrypted with a PSK Noise
-/// channel when `OPENPULSE_CONTROL_PSK` is set (REQ-SEC-CTL-01/02); plaintext otherwise.
+/// channel when `OPENPULSE_CONTROL_PSK` is set (REQ-CTL-01/02); plaintext otherwise.
 #[cfg(not(target_arch = "wasm32"))]
 pub struct TcpTransport {
     reader: BufReader<TcpStream>,

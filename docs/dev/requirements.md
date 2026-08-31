@@ -141,31 +141,36 @@ plaintext with no authentication, bound to loopback by default. The reference is
 client. See `docs/dev/design/control-channel-security.md` for the design and threat model.
 
 - The control channel must support mutual authentication and on-the-wire encryption using a
-  pre-shared key (PSK). (REQ-SEC-CTL-01)
+  pre-shared key (PSK). (REQ-CTL-01)
 - When the daemon binds to any non-loopback address, an authenticated + encrypted channel must be
   required; unauthenticated plaintext is permitted only on a loopback (`127.0.0.1`/`::1`) bind.
   Transmitter-keying commands (PTT, transmit) must never be accepted from an unauthenticated client
-  on a non-loopback bind — fail closed. (REQ-SEC-CTL-02)
+  on a non-loopback bind — fail closed. (REQ-CTL-02)
 - Secrets (the control-channel PSK, station identity keys) should be storable in the operating
   system's secret store — Secret Service / GNOME Keyring / KWallet on Linux, Keychain on macOS,
   Credential Manager on Windows — as the preferred backend when available, for both the daemon
-  (server) and the clients. (REQ-SEC-CTL-03)
+  (server) and the clients. (REQ-CTL-03)
 - A file-based keystore must be available as a fallback for hosts without a usable system secret
   store, encrypting secrets at rest under an operator master password (memory-hard KDF, e.g.
   Argon2id, plus authenticated encryption). The master password must never be written to disk in
-  plaintext. (REQ-SEC-CTL-04)
+  plaintext. (REQ-CTL-04)
 - Any file holding key or secret material (identity key, trust store, keystore, PSK file) must be
   owner-only: `0600` for files, `0700` for the containing directory. Both the daemon (server) and the
   panel and other clients (client) must validate permissions when loading such a file and refuse to
   read one that is group- or world-accessible, and must set owner-only permissions on write. This
   generalises the existing `validate_trust_store_permissions` / `enforce_trust_store_permissions` in
-  `openpulse-cli` to every secret file on both sides. (REQ-SEC-CTL-05)
-- **Third-party protocol surfaces are exempt from REQ-SEC-CTL-01/02 and carry no authentication.**
+  `openpulse-cli` to every secret file on both sides. (REQ-CTL-05)
+- **Third-party protocol surfaces are exempt from REQ-CTL-01/02 and carry no authentication.**
   The ARDOP TCP interface (`openpulse-tnc`) and the KISS/AX.25 TCP interface (`openpulse-kisstnc`)
   implement externally-specified protocols — Pat, Winlink and APRS/AX.25 clients speak them as
   published. Neither specification has any notion of authentication, so adding one would make the
   interface non-compliant and defeat the compatibility that is the entire reason those crates exist.
-  These ports are therefore unauthenticated **by design**, not by omission. (REQ-SEC-CTL-06)
+  These ports are therefore unauthenticated **by design**, not by omission.
+
+  This exemption deliberately carries **no REQ id**. It imposes no obligation a test could check,
+  and every id in `requirements.yaml` must be `enforced` with a passing `// VERIFIES:` binding
+  since #1222 — so giving an exemption an id would mean binding it to a test that verifies
+  something else. Cite this section by name instead. (Was `REQ-CTL-06`, retired in #1229.)
 
   The controls that stand in for authentication here are:
   1. **Loopback by default** — `bind_addr` defaults to `127.0.0.1` for both TNCs (and for the
@@ -178,7 +183,7 @@ client. See `docs/dev/design/control-channel-security.md` for the design and thr
      or not, can hold the transmitter.
 
   This exemption covers *only* protocol surfaces defined by a third party. It does **not** extend to
-  OpenPulseHF's own control channel, which remains bound by REQ-SEC-CTL-01/02, nor to any new
+  OpenPulseHF's own control channel, which remains bound by REQ-CTL-01/02, nor to any new
   interface of our own design. (Recorded 2026-07-19 in response to audit finding #3, which reported
   the missing auth as a defect; the compatibility constraint makes it a deliberate trade instead.)
 - **REQ-PQ-07** — SAR must be designed and implemented before in-band PQ handshake requirements can be satisfied.
@@ -386,7 +391,7 @@ in the roadmap; each is a candidate, not a committed deliverable.
   Level, floor and interference are properties of the environment, not of the waveform, so this is
   deliberately mode-independent — frame *detection* remains per-waveform. Acceptance: recorded idle at
   0.126 RMS produces no burst, and a real frame in that same floor still produces one bounded burst
-  that ends on the carrier drop rather than at the cap. (REQ-DCD-ADAPT)
+  that ends on the carrier drop rather than at the cap. (REQ-DCD-01)
 - Every PTT-keyed transmit scope shall release the transmitter **deterministically on scope exit** —
   including on an early return or a panic/unwind — via an RAII guard, rather than relying solely on the
   max-duration watchdog (REQ-REG-10 / #863). This bounds an unexpected key-down to the current stack
