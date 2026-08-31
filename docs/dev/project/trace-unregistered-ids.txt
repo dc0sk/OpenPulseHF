@@ -1,0 +1,30 @@
+# Requirement/capability ids that appear in living docs but are NOT in requirements.yaml.
+#
+# Seeded 2026-08-31 (#1229) so the id-conformance check can FAIL on anything new from day one
+# instead of waiting for a backlog to clear. Same contract as trace-grandfathered-ids.txt and
+# trace-orphan-baseline.txt: THIS LIST ONLY SHRINKS. Nothing may be added — a new id in prose that
+# is not in the source of truth is the defect this check exists to catch.
+#
+# Each entry needs a reason, because "it is on the list" is not one.
+
+# Blocked, not deferred: `KeychainStore` is behind the `keychain` feature, which the gate's
+# `--no-default-features` drops, so no binding can ever be run-confirmed. Registering it would
+# require either binding it to the FILE store's test (attesting a different implementation) or
+# widening the gate. Tracked separately.
+REQ-CTL-03
+
+# Retired in #1229: an exemption ("ARDOP/KISS ports are unauthenticated by design") imposes no
+# obligation a test can check. Retained here because the changelog mapping table names it.
+REQ-CTL-06
+
+# A superseded DRAFT scheme in docs/dev/design/file-transfer-plan.md. The registered file-transfer
+# requirements are REQ-FX-01..06; the plan doc still uses the pre-registration names. The mapping is
+# not 1:1 (seven draft ids against six registered), so it needs a per-id decision rather than a
+# rewrite. Tracked separately.
+REQ-FT-01
+REQ-FT-02
+REQ-FT-03
+REQ-FT-04
+REQ-FT-05
+REQ-FT-06
+REQ-FT-07

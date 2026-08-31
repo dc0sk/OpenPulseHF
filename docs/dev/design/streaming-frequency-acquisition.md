@@ -122,7 +122,7 @@ because MFSK16 self-acquires, but it is an inconsistency worth its own look.
 
 * **`receive_with_timeout_fec`'s listen deadline and retry regime.** Only `afc_mini_settle` and its
   guards move. The daemon must not inherit a wall clock (#1066).
-* **The energy gate.** The daemon has its own noise-floor-relative carrier detect (REQ-DCD-ADAPT,
+* **The energy gate.** The daemon has its own noise-floor-relative carrier detect (REQ-DCD-01,
   #1055); M1 verified it located every corpus frame, and the M2 control decodes without the gate.
 * **The condemnation recovery** — *and this exclusion is pinned to phase 2 settling at **every**
   scanned onset*. The recovery exists to walk a scanning receiver past a bad anchor inside one long

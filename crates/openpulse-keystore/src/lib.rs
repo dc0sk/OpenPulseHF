@@ -1,4 +1,4 @@
-//! Secret storage for OpenPulse (REQ-SEC-CTL-04).
+//! Secret storage for OpenPulse (REQ-CTL-04).
 //!
 //! [`FileKeystore`] stores named secrets encrypted at rest under an operator master password
 //! (Argon2id KDF → ChaCha20-Poly1305 AEAD). The master password is held only in memory and is
@@ -67,7 +67,7 @@ impl FileKeystore {
     }
 
     /// Open and decrypt an existing keystore with `master`. Refuses a group/world-readable file
-    /// (REQ-SEC-CTL-05) and returns [`KeystoreError::Decrypt`] on a wrong password or tampering.
+    /// (REQ-CTL-05) and returns [`KeystoreError::Decrypt`] on a wrong password or tampering.
     pub fn open(path: impl Into<PathBuf>, master: &str) -> Result<Self, KeystoreError> {
         let path = path.into();
         openpulse_config::secret_file::validate_owner_only(&path)?;
@@ -176,6 +176,7 @@ mod tests {
         std::env::temp_dir().join(format!("openpulse-ks-{tag}-{}", std::process::id()))
     }
 
+    // VERIFIES: REQ-CTL-04 — file keystore encrypted under an operator master password
     #[test]
     fn round_trip_with_correct_master() {
         let p = tmp("rt");

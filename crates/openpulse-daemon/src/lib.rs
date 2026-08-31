@@ -517,7 +517,7 @@ pub struct ControlServerConfig {
     pub initial_bandplan_mode: String,
     pub initial_allow_tuner_on_high_swr: bool,
     /// Control-channel PSK: `Some` requires each client to complete a Noise handshake
-    /// (REQ-SEC-CTL-01/02); `None` runs the plaintext path (loopback default).
+    /// (REQ-CTL-01/02); `None` runs the plaintext path (loopback default).
     pub control_psk: Option<[u8; openpulse_linksec::PSK_LEN]>,
 }
 
@@ -872,7 +872,7 @@ async fn handle_client(
 ) {
     // When a PSK is configured (non-loopback bind or require_auth), the client must complete the
     // Noise handshake; a wrong/absent PSK drops the connection before any command is processed
-    // (fail closed, REQ-SEC-CTL-02). Otherwise the channel is plaintext (loopback default).
+    // (fail closed, REQ-CTL-02). Otherwise the channel is plaintext (loopback default).
     let (mut reader, mut write_half) = match control_psk {
         Some(psk) => {
             match openpulse_linksec::async_channel::AsyncNoise::responder(stream, &psk).await {

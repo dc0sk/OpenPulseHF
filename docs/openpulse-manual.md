@@ -1457,7 +1457,7 @@ openpulse-kisstnc --bind 127.0.0.1 --port 8100 --mode BPSK500 --backend cpal
 > **Binding a TNC off-loopback grants transmit control to the network.** Both interfaces implement
 > third-party protocols (ARDOP, KISS/AX.25) that have **no authentication in their specifications**,
 > so OpenPulseHF cannot add one without breaking the Pat/Winlink/APRS clients they exist to serve
-> (REQ-SEC-CTL-06). Anything that can reach the port can key your transmitter — the ARDOP command
+> (see "Third-party protocol surfaces are exempt" in `docs/dev/requirements.md`). Anything that can reach the port can key your transmitter — the ARDOP command
 > port accepts `PTT TRUE` and `MYID` from any connection.
 >
 > Both default to `127.0.0.1`. If a client genuinely runs on another machine, put the port on a

@@ -66,7 +66,7 @@ Closed by CAP-67 (2026-07-05): `[observability] audit_mode` → `events.ndjson` 
 `snapshot.json`, rotating file logging via `[logging] file`, and `openpulse audit-bundle`.
 Status detail lives in [traceability-matrix.md](traceability-matrix.md) (CAP-67).
 
-### 11 — Control-channel security (REQ-SEC-CTL-01..05) — ✅ shipped for TCP; two follow-ups open
+### 11 — Control-channel security (REQ-CTL-01..05) — ✅ shipped for TCP; two follow-ups open
 
 Closed by CAP-68 for the TCP control channel: `openpulse-linksec` Noise `NNpsk0`, the non-loopback
 `auth_required` fail-closed gate, `openpulse-keystore` (Argon2id + ChaCha20-Poly1305 file keystore and

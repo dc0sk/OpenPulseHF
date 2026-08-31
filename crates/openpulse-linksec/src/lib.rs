@@ -1,4 +1,4 @@
-//! Control-channel link security (REQ-SEC-CTL-01/02).
+//! Control-channel link security (REQ-CTL-01/02).
 //!
 //! A pre-shared-key authenticated, encrypted channel for the daemon ↔ client control link, plus the
 //! non-loopback auth gate. The channel uses the **Noise protocol** (`Noise_NNpsk0`, X25519 +
@@ -163,7 +163,7 @@ pub fn is_loopback_bind(bind_addr: &str) -> bool {
             .unwrap_or(false)
 }
 
-/// Whether the control channel must require authentication for a given bind address (REQ-SEC-CTL-02).
+/// Whether the control channel must require authentication for a given bind address (REQ-CTL-02).
 ///
 /// Auth is mandatory on any non-loopback bind, and may also be forced on loopback via config.
 pub fn auth_required(bind_addr: &str, configured_require_auth: bool) -> bool {

@@ -1,4 +1,4 @@
-//! The DAEMON's carrier detector must square with the band it is listening to (REQ-DCD-ADAPT).
+//! The DAEMON's carrier detector must square with the band it is listening to (REQ-DCD-01).
 //!
 //! **Why this file exists, and why it is not about any mode.** The receive machinery hardened by
 //! #1020/#1021/#1039/#1040/#1045/#1049 — `EnergyGate`, the AFC settle, the preamble-correlation
@@ -53,6 +53,7 @@ fn feed(e: &mut ModemEngine, mode: &str, samples: &[f32], block: usize) -> Vec<u
 /// This is the whole bug in one assertion. Nothing is transmitted — the input is 20 s of audio a
 /// radio actually produced while nobody was talking. A receiver that calls that a carrier has no
 /// squelch at all on that band, and every burst it hands the decoder is noise.
+// VERIFIES: REQ-DCD-01 — carrier detect tracks the band noise floor, not a fixed squelch
 #[test]
 fn a_recorded_idle_floor_is_not_mistaken_for_a_carrier() {
     let hot = corpus("ic9700-idle-hot.wav");

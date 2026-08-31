@@ -173,7 +173,7 @@ impl Default for DiscoveryConfig {
     }
 }
 
-/// Control-channel link security (REQ-SEC-CTL-01/02). Auth is always required on a non-loopback
+/// Control-channel link security (REQ-CTL-01/02). Auth is always required on a non-loopback
 /// daemon bind; `require_auth` forces it on loopback too.
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(default)]
@@ -860,7 +860,7 @@ pub fn load_or_generate_identity() -> Result<[u8; 32], ConfigError> {
 /// Load or generate an identity seed at an explicit path (useful in tests).
 pub fn load_identity_from(path: &Path) -> Result<[u8; 32], ConfigError> {
     if path.exists() {
-        // Refuse a group/world-readable identity key (REQ-SEC-CTL-05).
+        // Refuse a group/world-readable identity key (REQ-CTL-05).
         secret_file::validate_owner_only(path)?;
         let bytes = std::fs::read(path)?;
         if bytes.len() != 32 {
@@ -1165,7 +1165,7 @@ audit_mode = false
 archive_dir = "~/.local/share/openpulse/audit"
 
 [control_security]
-# Control-channel PSK auth + encryption (REQ-SEC-CTL-01/02). Auth is ALWAYS required when the
+# Control-channel PSK auth + encryption (REQ-CTL-01/02). Auth is ALWAYS required when the
 # daemon binds to a non-loopback address; `require_auth` forces it on loopback too. When auth is
 # required the daemon refuses to start without a PSK (fail closed). The 32-byte PSK is currently
 # supplied via the OPENPULSE_CONTROL_PSK env var (64 hex chars); keystore-backed loading under
@@ -1619,7 +1619,7 @@ mod tests {
                 load_identity_from(&key_path),
                 Err(ConfigError::InsecureSecretPermissions { .. })
             ),
-            "a group-readable identity key must be refused (REQ-SEC-CTL-05)"
+            "a group-readable identity key must be refused (REQ-CTL-05)"
         );
 
         let _ = std::fs::remove_file(&key_path);

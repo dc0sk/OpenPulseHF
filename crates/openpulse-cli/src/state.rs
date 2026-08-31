@@ -214,7 +214,7 @@ pub fn persist_trust_store_at(path: &Path, store: &LocalTrustStore) -> Result<()
 }
 
 fn validate_trust_store_permissions(path: &Path) -> Result<()> {
-    // Shared owner-only check used by both server and clients (REQ-SEC-CTL-05).
+    // Shared owner-only check used by both server and clients (REQ-CTL-05).
     openpulse_config::secret_file::validate_owner_only(path)
         .with_context(|| format!("unsafe trust store permissions on {}", path.display()))
 }

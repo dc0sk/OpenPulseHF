@@ -1,4 +1,4 @@
-//! Integration tests for the PSK-authenticated, encrypted control channel (REQ-SEC-CTL-01/02).
+//! Integration tests for the PSK-authenticated, encrypted control channel (REQ-CTL-01/02).
 //!
 //! A real `AsyncNoise` client connects to a real `ControlServer` configured with a PSK, over an
 //! actual TCP socket, and exchanges encrypted messages; a wrong-PSK client is dropped (fail closed).
@@ -45,6 +45,7 @@ async fn spawn_auth_server(
     (addr, handle)
 }
 
+// VERIFIES: REQ-CTL-01 — PSK mutual auth + on-wire encryption on the control channel
 #[tokio::test]
 async fn noise_client_exchanges_encrypted_messages() {
     let engine = make_engine();
@@ -70,6 +71,7 @@ async fn noise_client_exchanges_encrypted_messages() {
         serde_json::from_str(s.trim()).expect("decrypted message must be valid JSON");
 }
 
+// VERIFIES: REQ-CTL-02 — an unauthenticated client is dropped, so TX-keying fails closed
 #[tokio::test]
 async fn wrong_psk_client_is_dropped() {
     let engine = make_engine();

@@ -1,4 +1,4 @@
-//! Owner-only permission checks for files holding key/secret material (REQ-SEC-CTL-05).
+//! Owner-only permission checks for files holding key/secret material (REQ-CTL-05).
 //!
 //! Used by both the daemon (server) and the CLI/panel (clients) so every secret file —
 //! identity key, trust store, keystore, PSK — is validated on load and set owner-only on write.
@@ -57,6 +57,7 @@ mod tests {
         p
     }
 
+    // VERIFIES: REQ-CTL-05 — owner-only permissions validated on every secret file
     #[test]
     fn accepts_owner_only_and_rejects_group_or_world() {
         let p = tmp("perm");

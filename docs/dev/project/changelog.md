@@ -16,6 +16,33 @@ Merged to `main` since v0.16.0; not yet tagged. Two arcs dominate: the **transmi
 fix-down** (#971–#988) and the **loopback re-validation on real audio** (#989–#1012), which found
 several live defects and — at the end — retracted a long-standing misattribution.
 
+### Changed — requirement ids normalised to `REQ-<CAT>-NN` (#1229)
+
+Seven requirement ids violated the convention stated in `docs/dev/requirements.md`, and
+`scripts/lib/trace.py`'s id patterns were blind to that shape — which is why these seven never
+reached `requirements.yaml`, the enforced source of truth, and survived only in the hand-written
+traceability matrix.
+
+**Full old → new mapping.** Frozen records (`docs/dev/reviews/`, this file's released sections, the
+`traceability.md` ledger, generated artifacts such as the SBOM) deliberately keep the old ids —
+rewriting a dated audit would change what the auditor wrote. Grepping an old id therefore finds
+those records *and* this mapping together:
+
+| old | new |
+|---|---|
+| `REQ-SEC-CTL-01` | `REQ-CTL-01` |
+| `REQ-SEC-CTL-02` | `REQ-CTL-02` |
+| `REQ-SEC-CTL-03` | `REQ-CTL-03` |
+| `REQ-SEC-CTL-04` | `REQ-CTL-04` |
+| `REQ-SEC-CTL-05` | `REQ-CTL-05` |
+| `REQ-SEC-CTL-06` | **retired — not a requirement** |
+| `REQ-DCD-ADAPT` | `REQ-DCD-01` |
+
+`REQ-SEC-CTL-06` stated an *exemption* ("ARDOP/KISS TCP ports are unauthenticated by design"), which
+imposes no obligation a test can check. Since #1222 every id must be `enforced` with a passing
+`// VERIFIES:` binding, so keeping it would have meant binding an exemption to a test that verifies
+something else. The prose stays in `docs/dev/requirements.md` and is now cited by section name.
+
 ### Fixed — on-air tooling currency
 
 - **The on-air scripts were brought current with the CLI**, which had drifted 6–8 weeks behind the

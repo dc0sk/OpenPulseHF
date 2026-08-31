@@ -1,4 +1,4 @@
-//! A uniform secret-store interface (REQ-SEC-CTL-03) over two backends: the OS system secret
+//! A uniform secret-store interface (REQ-CTL-03) over two backends: the OS system secret
 //! store (keychain / Secret Service / Credential Manager, feature `keychain`) and the
 //! master-password [`FileKeystore`](crate::FileKeystore) fallback for headless hosts.
 

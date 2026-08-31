@@ -1,7 +1,8 @@
 //! Decoder robustness against malformed input (audit 2026-07-19, finding #15).
 //!
 //! Every decoder here parses bytes that arrive from an **unauthenticated** source — off the air, or
-//! off a TCP port with no authentication (REQ-SEC-CTL-06). A panic in any of them is a remote crash
+//! off a TCP port that is unauthenticated by design — see "Third-party protocol surfaces are
+//! exempt" in docs/dev/requirements.md. A panic in any of them is a remote crash
 //! of an unattended station, and prior hand-audits found real defects in exactly this code
 //! (unbounded allocations from wire-supplied lengths, index-out-of-range on truncated frames).
 //! There was no fuzzing, proptest or corpus anywhere in the tree.
