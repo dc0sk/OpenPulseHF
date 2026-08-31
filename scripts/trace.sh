@@ -94,6 +94,31 @@ plant_and_expect "baseline on an id that is not grandfathered" "NOT-GRANDFATHERE
     traceability: baseline
 '
 
+# #1229 id-conformance probes. The first plants THE DEFECT ITSELF — the two-category-segment shape
+# that went unregisterable for months because both of trace.py's id patterns were blind to it (the
+# id is assembled from fragments below; writing it out here would trip the very check it tests). The second
+# is the half a shape check cannot see — a well-formed id that is not in the source of truth, which
+# is how REQ-FT-01..07 were found. Both plant in a doc, so no source file is touched.
+probe_doc="docs/dev/project/backlog.md"
+doc_backup="$(mktemp)"; cp "$probe_doc" "$doc_backup"
+probe_id() {   # $1 = planted text, $2 = expected check name, $3 = label
+    printf '\n<!-- trace self-test probe --> %s\n' "$1" >> "$probe_doc"
+    python3 scripts/lib/trace.py check > "$out" 2>&1
+    rc=$?
+    cp "$doc_backup" "$probe_doc"
+    if [ "$rc" -ne 0 ] && grep -q "$2" "$out"; then
+        echo "  ok: $3 -> $2"
+    else
+        echo "  SELF-TEST FAIL: $3 did not produce $2 (exit $rc)"; rc_all=1
+    fi
+}
+# Assembled from fragments on purpose: this file is itself scanned, so a literal probe id here
+# would make the detector fail on its own fixture. Concatenation keeps the fixture honest without
+# widening the checker's vocabulary with a real-looking id.
+probe_id "REQ-SEC-""CTL-99 is a new off-convention id." "BAD-ID-SHAPE"    "an off-convention id in a doc"
+probe_id "REQ-""ZZZ-01 is well-shaped but unregistered." "UNREGISTERED-ID" "a conforming id absent from the yaml"
+rm -f "$doc_backup"
+
 # The original sabotage: an enforced entry citing a path that cannot exist. Kept because it proves
 # the ENFORCEMENT path still fails the build, which the three above do not (they stop at the
 # vocabulary gate before any check runs).

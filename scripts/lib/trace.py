@@ -39,7 +39,55 @@ SRC_GLOBS = [
     "apps/*/src/**/*.rs", "tools/*/src/**/*.rs", "pki-tooling/src/**/*.rs",
 ]
 
-REQ_ID = re.compile(r"REQ-[A-Z]+-\d+")
+# THE canonical id shapes, defined ONCE. Every consumer below is built from these by reference.
+# #1229: `REQ_ID` and the VERIFIES scanner used to carry the same pattern independently, and both
+# were blind to `REQ-SEC-CTL-01` (two category segments) and `REQ-DCD-ADAPT` (no numeric suffix) —
+# so seven shipped requirements could not be registered at all, and nothing said so. A second
+# hand-copy of an id pattern is the defect, not the typo in it.
+REQ_SHAPE = r"REQ-[A-Z]+-\d+"
+CAP_SHAPE = r"CAP-\d+"
+REQ_ID = re.compile(REQ_SHAPE)
+CANON_REQ = re.compile(REQ_SHAPE + r"$")
+CANON_CAP = re.compile(CAP_SHAPE + r"$")
+
+# Deliberately LOOSER than the canonical shapes: this is the tokenizer whose job is to over-collect
+# so that non-conforming ids become RESIDUE rather than silently falling outside the checked set.
+# That inversion is the whole fix — the old pattern was a SELECTOR (anything it missed vanished);
+# this one feeds a VALIDATOR (anything it collects and cannot validate FAILS). You cannot write a
+# regex with no blind spot; you can choose whether the blind spot fails loud or silent.
+ID_TOKEN = re.compile(r"\b(?:REQ|CAP)-[A-Za-z0-9]+(?:-[A-Za-z0-9]+)*(?:/\d+)*")
+
+# Notation, not ids: table headers and placeholders that legitimately look id-shaped. A MISSING
+# entry here is a loud false failure, fixed in one line — never a silent pass.
+ID_VOCABULARY = {
+    "REQ-ID", "REQ-IDs", "REQ-NN", "REQ-x", "REQ-y", "REQ-GAP",
+    "CAP-ID", "CAP-IDs", "CAP-NN", "CAP-x",
+    "REQ-DOES-NOT-EXIST-99",  # deliberate negative fixture in scripts/check-trailer.sh
+    "CAP-ORPHAN",             # a CHECK name, not an id
+    "CAP-SELFTEST-SABOTAGE",  # the self-test's planted fixture in scripts/trace.sh
+}
+
+# Ids that were RENAMED or RETIRED and are deliberately still named in living text: the changelog
+# mapping table, and comments explaining why the rename happened. Allowed anywhere, because the
+# mapping is what makes leaving the old ids in frozen records safe — one grep finds both. Bounded
+# and shrink-only: a NEW off-convention id is not on this list and fails.
+RENAMED_IDS = {
+    "REQ-SEC-CTL", "REQ-SEC-CTL-01", "REQ-SEC-CTL-02", "REQ-SEC-CTL-03",
+    "REQ-SEC-CTL-04", "REQ-SEC-CTL-05", "REQ-SEC-CTL-06", "REQ-DCD-ADAPT",
+}
+ID_VOCABULARY |= RENAMED_IDS
+
+# Corpora that record what was true at a past date. Excluded as a CLASS, by path — not per id — so
+# the exclusion cannot grow one incident at a time: rewriting a dated audit would change what the
+# auditor wrote. The old ids stay there, and the changelog carries the old->new mapping so one grep
+# finds both.
+FROZEN_PREFIXES = (
+    "docs/dev/reviews/",
+    "docs/dev/project/traceability.md",
+    "CHANGELOG.md",
+    "SBOM.spdx.json",
+)
+UNREGISTERED_BASELINE = ROOT / "docs/dev/project/trace-unregistered-ids.txt"
 
 try:
     import yaml
@@ -82,7 +130,7 @@ def _scan_verifies():
     after the comment — the test whose run status the checker can then confirm.
     """
     binds = {}
-    pat = re.compile(r"//\s*VERIFIES:\s*(REQ-[A-Z]+-\d+(?:\s*,\s*REQ-[A-Z]+-\d+)*)")
+    pat = re.compile(rf"//\s*VERIFIES:\s*({REQ_SHAPE}(?:\s*,\s*{REQ_SHAPE})*)")
     fnpat = re.compile(r"\bfn\s+([a-zA-Z0-9_]+)\s*[(<]")
     for base in ("crates", "plugins", "apps", "tools", "pki-tooling"):
         for p in glob.glob(str(ROOT / base / "**/*.rs"), recursive=True):
@@ -406,6 +454,75 @@ def do_check(release=False):
         print(f"\n  {len(vocab_errors)} error(s)")
         print("\nTRACE: FAIL")
         return 1
+
+    # ---- id conformance (#1229) -------------------------------------------------------------
+    # Three layers, all by NEGATION: collect loosely, validate strictly, fail on the residue.
+    #   1. the yaml's own keys and cross-references
+    #   2. `// VERIFIES:` bindings in source — an id the scanner cannot tokenize is unregisterable
+    #   3. living docs — shape AND membership, because an id that exists in prose but not in the
+    #      source of truth IS the defect, independent of whether its shape happens to conform
+    unregistered = set()
+    if UNREGISTERED_BASELINE.exists():
+        unregistered = {l.strip() for l in UNREGISTERED_BASELINE.read_text().splitlines()
+                        if l.strip() and not l.startswith("#")}
+
+    def bad_shape(tok):
+        rx = CANON_REQ if tok.startswith("REQ") else CANON_CAP
+        return not rx.match(tok)
+
+    id_errors = []
+    for kind, table, rx in (("requirement", reqs, CANON_REQ), ("capability", caps, CANON_CAP)):
+        for eid, entry in table.items():
+            if eid in ID_VOCABULARY:
+                continue  # a self-test's planted fixture, not a real entry
+            if not rx.match(eid):
+                id_errors.append(f"{eid}: BAD-ID-SHAPE — {kind} key does not match the convention "
+                                 f"in docs/dev/requirements.md")
+            if not isinstance(entry, dict):
+                continue
+            for field in ("covered_by", "satisfies"):
+                for ref in entry.get(field) or []:
+                    if bad_shape(ref):
+                        id_errors.append(f"{eid}: BAD-ID-SHAPE — `{field}` references `{ref}`")
+
+    for root in ("crates", "plugins", "apps", "tools", "pki-tooling", "docs", "scripts"):
+        for path in glob.glob(str(ROOT / root / "**/*"), recursive=True):
+            rel = os.path.relpath(path, ROOT)
+            if not os.path.isfile(path) or os.path.splitext(path)[1] not in (".rs", ".md", ".py", ".sh", ".toml"):
+                continue
+            if any(rel.startswith(f) for f in FROZEN_PREFIXES):
+                continue
+            try:
+                txt = pathlib.Path(path).read_text(encoding="utf-8", errors="ignore")
+            except OSError:
+                continue
+            for m in ID_TOKEN.finditer(txt):
+                raw = m.group(0)
+                if raw in ID_VOCABULARY:
+                    continue
+                # expand the `/NN` shorthand (`REQ-CTL-01/02`) against its own prefix
+                head, *rest = raw.split("/")
+                toks = [head] + [head.rsplit("-", 1)[0] + "-" + r for r in rest]
+                for tok in toks:
+                    if tok in ID_VOCABULARY:
+                        continue
+                    if tok.startswith("REQ") and tok.count("-") < 2:
+                        continue  # a bare category word ("REQ-SEC requirements")
+                    if bad_shape(tok):
+                        id_errors.append(f"{rel}: BAD-ID-SHAPE — `{tok}` is not `REQ-<CAT>-NN` / `CAP-NN`")
+                    elif tok not in reqs and tok not in caps and tok not in unregistered:
+                        id_errors.append(f"{rel}: UNREGISTERED-ID — `{tok}` is not in requirements.yaml")
+    if id_errors:
+        print("trace: requirement/capability id errors — these are not warnings\n")
+        for m in sorted(set(id_errors))[:40]:
+            print(f"  {m}")
+        extra = len(set(id_errors)) - 40
+        if extra > 0:
+            print(f"  ... and {extra} more")
+        print(f"\n  {len(set(id_errors))} error(s)")
+        print("\nTRACE: FAIL")
+        return 1
+
 
     # dangling code / tests, and CAP<->REQ bidirectional agreement
     for cid, cap in caps.items():
