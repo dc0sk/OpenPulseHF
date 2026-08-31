@@ -57,6 +57,7 @@ mod tests {
         p
     }
 
+    // VERIFIES: REQ-CTL-05 — owner-only permissions validated on every secret file
     #[test]
     fn accepts_owner_only_and_rejects_group_or_world() {
         let p = tmp("perm");

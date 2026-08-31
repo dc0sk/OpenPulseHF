@@ -56,12 +56,7 @@ crates/openpulse-filexfer/src/receiver.rs
 crates/openpulse-filexfer/src/sanitize.rs
 crates/openpulse-filexfer/src/sender.rs
 crates/openpulse-filexfer/src/wire.rs
-crates/openpulse-keystore/src/lib.rs
-crates/openpulse-keystore/src/store.rs
 crates/openpulse-kiss/src/error.rs
-crates/openpulse-linksec/src/async_channel.rs
-crates/openpulse-linksec/src/lib.rs
-crates/openpulse-linksec/src/sync_channel.rs
 crates/openpulse-modem/src/capture_replay.rs
 crates/openpulse-modem/src/lib.rs
 crates/openpulse-radio/src/cm108.rs

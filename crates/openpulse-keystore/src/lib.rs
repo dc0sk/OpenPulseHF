@@ -176,6 +176,7 @@ mod tests {
         std::env::temp_dir().join(format!("openpulse-ks-{tag}-{}", std::process::id()))
     }
 
+    // VERIFIES: REQ-CTL-04 — file keystore encrypted under an operator master password
     #[test]
     fn round_trip_with_correct_master() {
         let p = tmp("rt");

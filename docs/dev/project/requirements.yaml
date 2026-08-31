@@ -943,9 +943,18 @@ capabilities:
     traceability: baseline
   CAP-68:
     code:
-    - openpulse-config/src/secret_file.rs
+    - crates/openpulse-config/src/secret_file.rs
+    - crates/openpulse-keystore/src/lib.rs
+    - crates/openpulse-keystore/src/store.rs
+    - crates/openpulse-linksec/src/lib.rs
+    - crates/openpulse-linksec/src/async_channel.rs
+    - crates/openpulse-linksec/src/sync_channel.rs
     name: Control-channel security (auth/encryption + key storage)
-    satisfies: []
+    satisfies:
+    - REQ-CTL-01
+    - REQ-CTL-02
+    - REQ-CTL-04
+    - REQ-CTL-05
     tests: []
     traceability: baseline
   CAP-69:
@@ -998,6 +1007,7 @@ capabilities:
     code: []
     name: Receive front-end conditioning (AGC, notch, adaptive DCD)
     satisfies:
+    - REQ-DCD-01
     - REQ-AGC-01
     - REQ-QRM-01
     tests: []
@@ -1193,6 +1203,41 @@ requirements:
     statement: Decompression failure must be treated as a frame integrity error.
     status: ratified
     traceability: baseline
+  REQ-CTL-01:
+    category: Control-channel security
+    covered_by:
+    - CAP-68
+    statement: Control channel supports PSK mutual authentication and on-wire encryption
+    status: ratified
+    traceability: enforced
+  REQ-CTL-02:
+    category: Control-channel security
+    covered_by:
+    - CAP-68
+    statement: Auth+encryption required on non-loopback bind; TX-keying fails closed for unauthenticated clients
+    status: ratified
+    traceability: enforced
+  REQ-CTL-04:
+    category: Control-channel security
+    covered_by:
+    - CAP-68
+    statement: File keystore fallback, encrypted under an operator master password
+    status: ratified
+    traceability: enforced
+  REQ-CTL-05:
+    category: Control-channel security
+    covered_by:
+    - CAP-68
+    statement: Owner-only (0600/0700) permission validate+enforce on every secret file, server and client
+    status: ratified
+    traceability: enforced
+  REQ-DCD-01:
+    category: Channel access
+    covered_by:
+    - CAP-72
+    statement: Carrier detect tracks the band noise floor rather than a fixed squelch, at the shared InputCapture seam
+    status: ratified
+    traceability: enforced
   REQ-DEV-01:
     category: Devices
     covered_by:
