@@ -217,5 +217,9 @@ rm -f "$out"
 # reads, and the run-evidence it reads.
 python3 scripts/lib/trace.py evidence-self-test || rc_all=1
 
+# The dependency graph the #1237 dormancy join runs on. The yaml probes above cover the join's
+# VERDICTS; these cover the graph underneath, where the two defects actually were (#1240).
+python3 scripts/lib/trace.py graph-self-test || rc_all=1
+
 [ "$rc_all" -eq 0 ] && echo "SELF-TEST: PASS" || echo "SELF-TEST: FAIL"
 exit "$rc_all"
