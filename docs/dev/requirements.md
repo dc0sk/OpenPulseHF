@@ -168,9 +168,9 @@ client. See `docs/dev/design/control-channel-security.md` for the design and thr
   These ports are therefore unauthenticated **by design**, not by omission.
 
   This exemption deliberately carries **no REQ id**. It imposes no obligation a test could check,
-  and every id in `requirements.yaml` must be `enforced` with a passing `// VERIFIES:` binding
-  since #1222 — so giving an exemption an id would mean binding it to a test that verifies
-  something else. Cite this section by name instead. (Was `REQ-CTL-06`, retired in #1229.)
+  and every id in `requirements.yaml` must be `enforced` (or `unwired`) with a passing
+  `// VERIFIES:` binding since #1222 — so giving an exemption an id would mean binding it to a test
+  that verifies something else. Cite this section by name instead. (Was `REQ-CTL-06`, retired in #1229.)
 
   The controls that stand in for authentication here are:
   1. **Loopback by default** — `bind_addr` defaults to `127.0.0.1` for both TNCs (and for the

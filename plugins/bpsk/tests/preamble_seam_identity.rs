@@ -164,7 +164,7 @@ fn the_shipped_preamble_is_still_the_period_four_alternation() {
     // why the lines sit at baud/4 rather than baud/2.
     let syms = expected_preamble_symbols(PREAMBLE_SYMS);
     assert_eq!(syms.len(), PREAMBLE_SYMS);
-    for (i, w) in syms.chunks_exact(4).enumerate() {
+    for (i, w) in syms.as_chunks::<4>().0.iter().enumerate() {
         assert_eq!(
             w,
             &[-1.0, -1.0, 1.0, 1.0],

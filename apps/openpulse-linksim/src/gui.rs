@@ -766,7 +766,9 @@ impl LinkApp {
         let rgba = match info.color_type {
             png::ColorType::Rgba => buf[..info.buffer_size()].to_vec(),
             png::ColorType::Rgb => buf[..info.buffer_size()]
-                .chunks_exact(3)
+                .as_chunks::<3>()
+                .0
+                .iter()
                 .flat_map(|p| [p[0], p[1], p[2], 255])
                 .collect(),
             _ => return None, // QR is RGB/RGBA; other formats aren't expected

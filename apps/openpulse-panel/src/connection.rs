@@ -156,7 +156,9 @@ pub(crate) fn apply_spectrum(frame: &[u8], shared: &Arc<Mutex<PanelState>>) {
         return;
     }
     let bins: Vec<f32> = frame[10..expected]
-        .chunks_exact(4)
+        .as_chunks::<4>()
+        .0
+        .iter()
         .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
         .collect();
     let mut st = shared.lock().unwrap();

@@ -181,7 +181,11 @@ pub struct ControlSecurityConfig {
     /// Force PSK auth + encryption even on a loopback bind. On a non-loopback bind auth is
     /// mandatory regardless (see `openpulse_linksec::auth_required`).
     pub require_auth: bool,
-    /// Keystore key id holding the 32-byte control-channel PSK (see `openpulse-keystore`).
+    /// Keystore key id intended to hold the 32-byte control-channel PSK.
+    ///
+    /// **Currently inert (#1234)**: nothing reads it, and `openpulse-keystore` has no consumer.
+    /// The daemon warns at startup if it is set to a non-default value; the PSK comes from
+    /// `OPENPULSE_CONTROL_PSK`.
     pub psk_key_id: String,
 }
 
@@ -1169,7 +1173,8 @@ archive_dir = "~/.local/share/openpulse/audit"
 # daemon binds to a non-loopback address; `require_auth` forces it on loopback too. When auth is
 # required the daemon refuses to start without a PSK (fail closed). The 32-byte PSK is currently
 # supplied via the OPENPULSE_CONTROL_PSK env var (64 hex chars); keystore-backed loading under
-# `psk_key_id` is the follow-up.
+# `psk_key_id` is INERT today (#1234): nothing reads it, and the daemon warns at startup if
+# you set it to a non-default value. Keystore-backed loading is the follow-up.
 require_auth = false
 psk_key_id = "control-psk"
 
