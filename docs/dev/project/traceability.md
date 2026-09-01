@@ -9,6 +9,30 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-09-01 — #1240: the dormancy join's GRAPH gets the known-fail inputs its verdicts already had
+
+- **Requirement/change:** #1239 gave the join `DORMANT-ENFORCED`/`UNWIRED-BUT-REACHED` probes, which
+  exercise its **verdicts**. The two defects that were actually wrong in the instrument producing
+  #1237's evidence live one layer down, in the graph: crate resolved by directory name, and
+  optional/dev edges counted as production reach. Both were fixed with **no committed known-fail
+  input**, so a refactor could restore either while every probe stayed green — and neither was found
+  by running anything, because the headline numbers were identical before and after the fix.
+- **Design decision:** write both as **properties over the workspace**, not fixed examples, and have
+  each assert its own discriminating population is non-empty *first*. A fixed-example probe goes
+  quietly vacuous when the example changes — if every plugin were renamed to match its directory, a
+  `qam64-plugin` assertion would keep passing while testing nothing. Placed in `trace.py` as
+  `graph-self-test` rather than as yaml plants, because the property is about package resolution,
+  which a yaml fixture cannot reach.
+- **Implementation:** `scripts/lib/trace.py` — `do_graph_selftest()` and `_optional_only_packages()`;
+  `scripts/trace.sh --self-test` runs it after `evidence-self-test`.
+- **Tests:** the probes themselves, plus a sabotage of each.
+- **Test results:** `GRAPH-SELF-TEST: PASS` (10 divergent packages resolve correctly; 1 optional-only
+  package is dormant). Each defect was **reintroduced and watched to fail**: restoring
+  directory-name resolution → `10 package(s) resolved to the wrong name`; counting optional edges →
+  `optional-only edges conferred production reach on ['openpulse-gpu']`. Each sabotage tripped only
+  its own probe, so they are independent rather than one assertion twice. Both reverted, restore
+  sha256-verified. `SELF-TEST: PASS`, `TRACE: PASS`.
+
 ## 2026-09-01 — A gate verdict is attributable to (tree, HEAD, toolchain); only two were recorded
 
 - **Requirement/change:** `rustc` 1.98.0 landed on this host via a package upgrade and added

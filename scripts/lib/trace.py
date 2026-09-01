@@ -16,6 +16,10 @@ Subcommands:
            drift; FAILS (exit 1) on `enforced` entries and on NEW code orphans. This is the gate.
   evidence-self-test
            Probe the gate-log evidence channel that `check` reads for run-status (#1224).
+  graph-self-test
+           Probe the cargo dependency graph the dormancy join runs on (#1240) — crate resolution
+           and edge filtering, the two things that were wrong in the instrument that produced
+           #1237's evidence while reporting the correct headline numbers.
 
 The join key is an in-code `// VERIFIES: REQ-x` comment (greppable, language-general); the baseline
 REQ->test map was seeded from the matrix `tests` column at import time. An `enforced` requirement
@@ -260,6 +264,35 @@ def _workspace_graph():
             if dep["name"] in names:
                 rdeps.setdefault(dep["name"], set()).add(pkg["name"])
     return pkg_of_dir, rdeps, bin_pkgs
+
+
+def _optional_only_packages():
+    """Workspace packages every one of whose incoming normal edges is `optional = true`.
+
+    Kept separate from `_workspace_graph` because it is the *discriminating population* for the
+    edge-filtering probe, not an input to the join. A package here is reachable only when a feature
+    is enabled, so it must never confer production reach.
+    """
+    try:
+        out = subprocess.run(
+            ["cargo", "metadata", "--no-deps", "--format-version", "1"],
+            capture_output=True, text=True, cwd=str(ROOT), timeout=300,
+        )
+        meta = json.loads(out.stdout) if out.returncode == 0 else {}
+    except (OSError, subprocess.SubprocessError, ValueError):
+        return set()
+    pkgs = meta.get("packages", [])
+    names = {p["name"] for p in pkgs}
+    incoming, optional_incoming = {}, {}
+    for pkg in pkgs:
+        for dep in pkg.get("dependencies", []):
+            if dep.get("kind") is not None or dep["name"] not in names:
+                continue
+            incoming[dep["name"]] = incoming.get(dep["name"], 0) + 1
+            if dep.get("optional"):
+                optional_incoming[dep["name"]] = optional_incoming.get(dep["name"], 0) + 1
+    return {n for n, total in incoming.items()
+            if total > 0 and optional_incoming.get(n, 0) == total}
 
 
 def _package_of(rel, pkg_of_dir):
@@ -911,6 +944,76 @@ def do_scope(rid):
     return 0
 
 
+def do_graph_selftest():
+    """Probe the two resolution defects the dormancy join's evidence was produced WITH (#1240).
+
+    The join's other probes (`DORMANT-ENFORCED`, `UNWIRED-BUT-REACHED`) exercise its VERDICTS. These
+    two exercise the graph underneath them — the pair that was wrong in the throwaway script that
+    produced #1237's evidence, and that adversarial review caught by reading rather than running,
+    because the headline numbers were identical before and after the fix.
+
+    Both are written as PROPERTIES over the workspace, and each asserts its own discriminating
+    population is non-empty first. A probe that silently stops discriminating is the failure mode
+    here: if every plugin were renamed to match its directory, a fixed-example probe would keep
+    passing while testing nothing.
+    """
+    rc = 0
+
+    def ok(msg):
+        print(f"  ok: {msg}")
+
+    def bad(msg):
+        nonlocal rc
+        print(f"  GRAPH-SELF-TEST FAIL: {msg}")
+        rc = 1
+
+    try:
+        pkg_of_dir, rdeps, bin_pkgs = _workspace_graph()
+    except CargoUnavailable as e:
+        print(f"  GRAPH-SELF-TEST FAIL: {e}")
+        print("GRAPH-SELF-TEST: FAIL")
+        return 1
+
+    # ---- defect 1: a crate resolved by DIRECTORY name -----------------------------------------
+    # `plugins/64qam` is package `qam64-plugin`. Resolving by path segment made every plugin
+    # binding look unreachable — a false-FAIL machine for the whole layer, invisible only because
+    # all current bindings live where directory and package name coincide.
+    divergent = [(d, name) for d, name in pkg_of_dir.items()
+                 if os.path.basename(d) != name]
+    if not divergent:
+        bad("no package's directory differs from its name — this probe can no longer discriminate; "
+            "re-derive it or delete it rather than leaving it green")
+    else:
+        wrong = [(d, name) for d, name in divergent
+                 if _package_of(os.path.join(os.path.relpath(d, str(ROOT)), "src", "lib.rs"),
+                                pkg_of_dir) != name]
+        if wrong:
+            bad(f"{len(wrong)} package(s) resolved to the wrong name by path, e.g. {wrong[0]}")
+        else:
+            ok(f"{len(divergent)} package(s) whose directory != name still resolve correctly "
+               f"(e.g. {os.path.basename(divergent[0][0])} -> {divergent[0][1]})")
+
+    # ---- defect 2: optional / dev edges counted as production reach ----------------------------
+    # `openpulse-gpu` is depended on ONLY through `optional = true` edges. Counting those as reach
+    # would let a requirement bound to a CPU-fallback test pass this join while the real path never
+    # executes in any gated build.
+    dormant = _dormant_packages(rdeps, bin_pkgs, set(pkg_of_dir.values()))
+    optional_only = _optional_only_packages()
+    if not optional_only:
+        bad("no package is depended on only through optional edges — this probe can no longer "
+            "discriminate; re-derive it or delete it rather than leaving it green")
+    else:
+        leaked = sorted(p for p in optional_only if p not in dormant)
+        if leaked:
+            bad(f"optional-only edges conferred production reach on {leaked}")
+        else:
+            ok(f"{len(optional_only)} optional-only package(s) are dormant "
+               f"(e.g. {sorted(optional_only)[0]})")
+
+    print("GRAPH-SELF-TEST: " + ("PASS" if rc == 0 else "FAIL"))
+    return rc
+
+
 def main():
     cmd = sys.argv[1] if len(sys.argv) > 1 else ""
     if cmd == "scope":
@@ -919,7 +1022,10 @@ def main():
         return do_check(release="--release" in sys.argv[2:])
     if cmd == "evidence-self-test":
         return do_evidence_selftest()
-    sys.stderr.write(f"usage: trace.py {{check|evidence-self-test}}\n"); return 2
+    if cmd == "graph-self-test":
+        return do_graph_selftest()
+    sys.stderr.write(
+        f"usage: trace.py {{check|evidence-self-test|graph-self-test}}\n"); return 2
 
 
 if __name__ == "__main__":
