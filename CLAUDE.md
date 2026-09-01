@@ -407,9 +407,22 @@ is visible in the transcript rather than indistinguishable from compliance.
    (#1151). Rerun on a quiet checkout; put concurrent work in a `git worktree`, never in the
    checkout being gated. Note what it does NOT cover: the guard samples at step boundaries, so a
    mutate-and-revert inside one step still hashes identically and passes unseen.
-3. **After editing `gate.sh`, sabotage-verify it** (`scripts/gate.sh --self-test`, which plants a
-   failing test and requires `GATE: FAIL`). A gate nobody has watched fail is the self-consistent
-   checker it exists to prevent.
+3. **After editing `gate.sh`, sabotage-verify it** — but know what each probe reaches, because
+   this rule described behaviour the code does not have until 2026-09-01 (#1242). A gate nobody has
+   watched fail is the self-consistent checker it exists to prevent, and so is a *rule* nobody has
+   checked against the script.
+   - `scripts/gate.sh --self-test` plants a deliberately failing test and requires a non-zero
+     `cargo test` **with that test named in the output**. It calls `cargo test` directly and exits
+     before any verdict is written, so it emits **no `GATE:` line and no `gate-verdict.json`** —
+     the rule used to say it "requires `GATE: FAIL`", which it has never printed. It covers the
+     failure-detection path ONLY.
+   - `python3 scripts/lib/trace.py evidence-self-test` covers the **verdict** path — what a stored
+     verdict is trusted for, and when it is refused (INVALID, truncated log, foreign toolchain).
+     A change to the verdict schema is invisible to `--self-test` by construction; this is what
+     catches it.
+   - `python3 scripts/lib/trace.py graph-self-test` covers the dependency graph the dormancy join
+     runs on (#1240).
+   `scripts/trace.sh --self-test` runs the latter two plus the yaml probes.
 4. **A zero from a filter is a claim about the filter.** Before reporting any absence found through
    `grep`/`jq`/a log pattern — "0 occurrences", "never fires" — show the same filter matching a
    known-present instance, or write **"my filter found nothing"**, which is a different sentence
