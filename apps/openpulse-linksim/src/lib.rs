@@ -858,7 +858,7 @@ impl LinkSim {
             } else {
                 RxOutcome::Failed
             };
-            let rx_ack = self.ota.on_rx_frame(outcome, snr);
+            let rx_ack = self.ota.on_rx_frame(outcome, Some(snr));
             ack_sent = rx_ack.ack_type;
 
             // B→A ACK (real FSK4 frame through the reverse channel), carrying `recommended_level`.

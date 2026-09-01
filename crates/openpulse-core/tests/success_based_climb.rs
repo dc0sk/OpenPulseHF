@@ -39,7 +39,7 @@ fn a_rung_that_keeps_decoding_climbs_without_snr_evidence() {
     let mut recommended = start;
     for _ in 0..ACK_CLIMB_THRESHOLD {
         recommended = c
-            .on_rx_frame(RxOutcome::Decoded(start), FLAT_UNINFORMATIVE_SNR)
+            .on_rx_frame(RxOutcome::Decoded(start), Some(FLAT_UNINFORMATIVE_SNR))
             .recommended_level;
     }
     assert!(
@@ -55,7 +55,7 @@ fn a_rung_that_keeps_decoding_climbs_without_snr_evidence() {
 fn one_clean_decode_is_not_enough_to_climb() {
     let start = SessionProfile::hpx_hf().initial_level;
     let mut c = controller();
-    let ack = c.on_rx_frame(RxOutcome::Decoded(start), FLAT_UNINFORMATIVE_SNR);
+    let ack = c.on_rx_frame(RxOutcome::Decoded(start), Some(FLAT_UNINFORMATIVE_SNR));
     assert_eq!(
         ack.recommended_level, start,
         "a single decode is not evidence; the climb must need a streak or it is just optimism"
@@ -68,8 +68,8 @@ fn a_failure_restarts_the_streak() {
     let mut c = controller();
     // Alternating pass/fail must never accumulate into a climb.
     for _ in 0..6 {
-        c.on_rx_frame(RxOutcome::Decoded(start), FLAT_UNINFORMATIVE_SNR);
-        let ack = c.on_rx_frame(RxOutcome::Failed, FLAT_UNINFORMATIVE_SNR);
+        c.on_rx_frame(RxOutcome::Decoded(start), Some(FLAT_UNINFORMATIVE_SNR));
+        let ack = c.on_rx_frame(RxOutcome::Failed, Some(FLAT_UNINFORMATIVE_SNR));
         assert!(
             ack.recommended_level <= start,
             "a flapping rung must not be promoted; got {:?}",
@@ -92,7 +92,7 @@ fn a_decoded_frame_is_never_answered_with_a_demotion() {
     let mut level = p.initial_level;
     for _ in 0..40 {
         level = c
-            .on_rx_frame(RxOutcome::Decoded(level), 30.0)
+            .on_rx_frame(RxOutcome::Decoded(level), Some(30.0))
             .recommended_level;
     }
     assert!(
@@ -104,7 +104,7 @@ fn a_decoded_frame_is_never_answered_with_a_demotion() {
     // The decodes are proof the rung works; the estimate must not override them.
     for _ in 0..(ACK_CLIMB_THRESHOLD as usize + 3) {
         let got = c
-            .on_rx_frame(RxOutcome::Decoded(level), -20.0)
+            .on_rx_frame(RxOutcome::Decoded(level), Some(-20.0))
             .recommended_level;
         assert!(
             got >= level,
@@ -124,7 +124,7 @@ fn a_failed_frame_still_fast_downshifts_on_snr() {
     let mut level = p.initial_level;
     for _ in 0..40 {
         level = c
-            .on_rx_frame(RxOutcome::Decoded(level), 30.0)
+            .on_rx_frame(RxOutcome::Decoded(level), Some(30.0))
             .recommended_level;
     }
     assert!(
@@ -132,7 +132,9 @@ fn a_failed_frame_still_fast_downshifts_on_snr() {
         "setup: should have climbed on good SNR"
     );
 
-    let after = c.on_rx_frame(RxOutcome::Failed, -5.0).recommended_level;
+    let after = c
+        .on_rx_frame(RxOutcome::Failed, Some(-5.0))
+        .recommended_level;
     assert!(
         after < level,
         "a failure WITH a sub-floor SNR must fast-downshift (the estimate explains the failure): \
@@ -154,7 +156,7 @@ fn evidence_climb_advances_at_most_one_mapped_step() {
     let mut seen = start;
     for _ in 0..(ACK_CLIMB_THRESHOLD as usize * 8) {
         seen = c
-            .on_rx_frame(RxOutcome::Decoded(start), FLAT_UNINFORMATIVE_SNR)
+            .on_rx_frame(RxOutcome::Decoded(start), Some(FLAT_UNINFORMATIVE_SNR))
             .recommended_level;
         let confirmed_idx = levels
             .iter()

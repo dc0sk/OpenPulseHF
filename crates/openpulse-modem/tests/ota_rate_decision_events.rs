@@ -43,7 +43,7 @@ fn engine_with_ota_session() -> ModemEngine {
 /// Drain the decision events currently queued on a subscriber.
 fn drain_decisions(
     rx: &mut tokio::sync::broadcast::Receiver<EngineEvent>,
-) -> Vec<(Option<String>, f32, RateDecision)> {
+) -> Vec<(Option<String>, Option<f32>, RateDecision)> {
     let mut out = Vec::new();
     while let Ok(ev) = rx.try_recv() {
         if let EngineEvent::OtaRateDecision {
@@ -108,9 +108,24 @@ fn the_decision_event_carries_the_snr_it_acted_on() {
 
     let decisions = drain_decisions(&mut rx);
     assert!(!decisions.is_empty(), "expected a decision event");
+    // A reading that is PRESENT must be real — a NaN/inf placeholder would defeat the point.
     assert!(
-        decisions.iter().all(|(_, snr, _)| snr.is_finite()),
-        "snr_db must be a real reading, not NaN/inf: {decisions:?}"
+        decisions
+            .iter()
+            .all(|(_, snr, _)| snr.is_none_or(|v| v.is_finite())),
+        "a present snr_db must be a real reading, not NaN/inf: {decisions:?}"
+    );
+    // #1142: this burst is noise, so nothing decodes — and with nothing decoded there is no
+    // defensible window to measure over, because the frame's position is exactly what the failed
+    // decode could not establish. The controller must therefore act on NO reading. Before #1142 it
+    // acted on a measurement of the whole gathered burst, whose value is a deterministic function
+    // of an accidental sub-symbol misalignment (+5.35 to -8.39 dB against a true 5.82 dB), and a
+    // low draw drove FastDownshift to the bottom of the ladder on one failed decode.
+    assert!(
+        decisions
+            .iter()
+            .all(|(lvl, snr, _)| lvl.is_some() || snr.is_none()),
+        "a failed decode must report NO snr reading, not a guess: {decisions:?}"
     );
 }
 

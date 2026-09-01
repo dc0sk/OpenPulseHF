@@ -383,7 +383,19 @@ impl OtaRateController {
 
     /// Update RX state from a demodulation outcome and measured SNR, and return the
     /// ACK the receiver should send (type + absolute recommendation).
-    pub fn on_rx_frame(&mut self, outcome: RxOutcome, snr_db: f32) -> RxAck {
+    /// Apply one received frame to the receiver-side rate decision.
+    ///
+    /// `snr_db` is `None` when **no trustworthy reading exists** — which is the normal case on a
+    /// failed decode (#1142). The receiver's estimator locks sub-symbol timing by correlating the
+    /// burst's first 32 symbols against the preamble; once a lead-in pushes the frame past that
+    /// window the lock is a noise argmax, and the resulting reading is a deterministic function of
+    /// the accidental misalignment — measured swinging **+5.3 dB to −8.4 dB against a true 5.8 dB**,
+    /// with the position on that curve set by which noise the burst happened to contain.
+    ///
+    /// A value that is inconsistently wrong cannot be repaired by a calibration offset, so the
+    /// caller abstains instead of guessing, and `None` routes to the evidence-based paths that do
+    /// not need a reading.
+    pub fn on_rx_frame(&mut self, outcome: RxOutcome, snr_db: Option<f32>) -> RxAck {
         // While locked, keep both directions pinned and recommend the locked level.
         if let Some(l) = self.locked {
             let ack_type = match outcome {
@@ -407,10 +419,17 @@ impl OtaRateController {
                 // threshold — the "6 retries to find the step" symptom. `rx_confirmed` stays put
                 // as the fallback candidate so a lost downshift ACK can't desync the receiver
                 // (`rx_candidates` still covers whatever the sender is transmitting).
-                let snr_level = self.level_for_snr(snr_db);
-                let decision = if snr_level < self.rx_recommended {
+                // ABSTENTION IS NOT A LOW READING (#1142). With no trustworthy estimate this
+                // falls through to the NACK hysteresis below — the branch whose own comment says
+                // "a single blip can't drop the rate". Before this, a misframed reading reached
+                // `level_for_snr`, filtered out every rung whose floor exceeded it, and fell to
+                // `unwrap_or(lo)`: one failed decode crashed the recommendation to the bottom of
+                // the ladder, bypassing that hysteresis entirely. From SL10 that cost ~24 clean
+                // frames to undo, at 3 per rung.
+                let snr_level = snr_db.map(|s| self.level_for_snr(s));
+                let decision = if snr_level.is_some_and(|l| l < self.rx_recommended) {
                     self.rx_consecutive_nack = 0;
-                    self.rx_recommended = snr_level;
+                    self.rx_recommended = snr_level.expect("guarded by is_some_and above");
                     RateDecision::FastDownshift
                 } else {
                     // SNR doesn't explain the failure (a transient fade or collision at an
@@ -465,10 +484,14 @@ impl OtaRateController {
                 //    Slower, but it cannot lie, and it is the only path that works when the estimate
                 //    is uninformative *in principle* (see the module header).
                 // Both advance exactly one mapped step, preserving the lockstep invariant.
-                let snr_clears_ceiling = self
-                    .profile
-                    .snr_ceiling_for_level(self.rx_confirmed)
-                    .is_some_and(|c| snr_db >= c);
+                // No reading cannot clear a ceiling, so abstention leaves the decoded path on the
+                // evidence climb — which is #934's rule and is safe by construction: the cost is
+                // climb latency (ACK_CLIMB_THRESHOLD decodes per rung), never a wrong rung.
+                let snr_clears_ceiling = snr_db.is_some_and(|s| {
+                    self.profile
+                        .snr_ceiling_for_level(self.rx_confirmed)
+                        .is_some_and(|c| s >= c)
+                });
                 let proven_by_success = self.rx_consecutive_ok >= ACK_CLIMB_THRESHOLD;
                 // Precedence when BOTH fire: report `ClimbOnSnr`. The distinction that matters is
                 // whether the estimate was informative at all — a run of `ClimbOnEvidence` with no
@@ -561,13 +584,13 @@ mod tests {
 
         // Failure the SNR explains: jump straight to the SNR-adequate level.
         let mut c = ctrl();
-        let ack = c.on_rx_frame(RxOutcome::Failed, LOW_SNR);
+        let ack = c.on_rx_frame(RxOutcome::Failed, Some(LOW_SNR));
         assert_eq!(ack.decision, RateDecision::FastDownshift);
         note(ack.decision);
 
         // Failure the SNR does NOT explain: hysteresis counts, level holds until the threshold.
         let mut c = ctrl();
-        let ack = c.on_rx_frame(RxOutcome::Failed, HIGH_SNR);
+        let ack = c.on_rx_frame(RxOutcome::Failed, Some(HIGH_SNR));
         assert_eq!(ack.decision, RateDecision::NackHold);
         assert_eq!(
             c.rx_recommended_level(),
@@ -579,7 +602,7 @@ mod tests {
         // ...and at the threshold it steps down one rung.
         let mut last = ack.decision;
         for _ in 1..c.profile.nack_threshold {
-            last = c.on_rx_frame(RxOutcome::Failed, HIGH_SNR).decision;
+            last = c.on_rx_frame(RxOutcome::Failed, Some(HIGH_SNR)).decision;
         }
         assert_eq!(last, RateDecision::NackStepDown);
         note(last);
@@ -587,7 +610,7 @@ mod tests {
         // Decode with an SNR clearing the rung's ceiling: climb on the estimate.
         let mut c = ctrl();
         let start = c.rx_confirmed;
-        let ack = c.on_rx_frame(RxOutcome::Decoded(start), HIGH_SNR);
+        let ack = c.on_rx_frame(RxOutcome::Decoded(start), Some(HIGH_SNR));
         assert_eq!(ack.decision, RateDecision::ClimbOnSnr);
         note(ack.decision);
 
@@ -595,7 +618,7 @@ mod tests {
         // #934 used to answer with "drop a rung" while the frame had just decoded.
         let mut c = ctrl();
         let start = c.rx_confirmed;
-        let ack = c.on_rx_frame(RxOutcome::Decoded(start), LOW_SNR);
+        let ack = c.on_rx_frame(RxOutcome::Decoded(start), Some(LOW_SNR));
         assert_eq!(ack.decision, RateDecision::Hold);
         assert!(
             c.rx_recommended_level() >= start,
@@ -607,7 +630,9 @@ mod tests {
         // on evidence. This is the branch that works when the estimate carries no information.
         let mut last = ack.decision;
         for _ in 1..ACK_CLIMB_THRESHOLD {
-            last = c.on_rx_frame(RxOutcome::Decoded(start), LOW_SNR).decision;
+            last = c
+                .on_rx_frame(RxOutcome::Decoded(start), Some(LOW_SNR))
+                .decision;
         }
         assert_eq!(last, RateDecision::ClimbOnEvidence);
         note(last);
@@ -615,7 +640,7 @@ mod tests {
         // Locked pins both directions regardless of outcome.
         let mut c = ctrl();
         c.lock_level(c.rx_confirmed);
-        let ack = c.on_rx_frame(RxOutcome::Failed, LOW_SNR);
+        let ack = c.on_rx_frame(RxOutcome::Failed, Some(LOW_SNR));
         assert_eq!(ack.decision, RateDecision::Locked);
         note(ack.decision);
 
@@ -634,10 +659,10 @@ mod tests {
     fn subfloor_sl1_climbs_back_out_when_snr_recovers() {
         let mut c = ctrl();
         // Entry: one low-SNR failed frame fast-downshifts the recommendation to the SL1 sub-floor rung.
-        c.on_rx_frame(RxOutcome::Failed, -5.0);
+        c.on_rx_frame(RxOutcome::Failed, Some(-5.0));
         assert_eq!(c.rx_recommended_level(), SpeedLevel::Sl1);
         // Recovery: a decoded SL1 frame with SNR above SL1's 5 dB ceiling climbs the recommendation to SL2.
-        let ack = c.on_rx_frame(RxOutcome::Decoded(SpeedLevel::Sl1), 6.0);
+        let ack = c.on_rx_frame(RxOutcome::Decoded(SpeedLevel::Sl1), Some(6.0));
         assert_eq!(ack.ack_type, AckType::AckUp);
         assert_eq!(c.rx_recommended_level(), SpeedLevel::Sl2);
     }
@@ -660,7 +685,7 @@ mod tests {
         let mut c = ctrl();
         // Force a one-step-ahead recommendation via a confirmed decode at high SNR.
         let start = c.rx_confirmed;
-        let _ = c.on_rx_frame(RxOutcome::Decoded(start), HIGH_SNR);
+        let _ = c.on_rx_frame(RxOutcome::Decoded(start), Some(HIGH_SNR));
         let modes = c.rx_candidate_modes();
         assert!(modes.len() <= 2);
         assert_eq!(modes.first().copied(), c.profile.mode_for(c.rx_recommended));
@@ -675,7 +700,7 @@ mod tests {
         ];
         for &snr in snrs.iter().cycle().take(40) {
             // Sender transmits whatever it last adopted; model it as the confirmed level.
-            let _ = c.on_rx_frame(RxOutcome::Decoded(c.rx_confirmed), snr);
+            let _ = c.on_rx_frame(RxOutcome::Decoded(c.rx_confirmed), Some(snr));
             let conf = c.rx_confirmed;
             let rec = c.rx_recommended;
             // Cautious UP: never more than one mapped step above the confirmed anchor.
@@ -696,7 +721,7 @@ mod tests {
         // decodes at exactly what it recommended last round.
         let mut sender_tx = c.tx_level();
         for _ in 0..30 {
-            let ack = c.on_rx_frame(RxOutcome::Decoded(sender_tx), HIGH_SNR);
+            let ack = c.on_rx_frame(RxOutcome::Decoded(sender_tx), Some(HIGH_SNR));
             sender_tx = ack.recommended_level; // delivered, sender adopts
         }
         assert!(
@@ -723,7 +748,7 @@ mod tests {
                     c.rx_recommended_level(),
                     c.rx_confirmed_level()
                 );
-                let ack = c.on_rx_frame(RxOutcome::Decoded(sender_tx), HIGH_SNR);
+                let ack = c.on_rx_frame(RxOutcome::Decoded(sender_tx), Some(HIGH_SNR));
                 // Lose this ACK if the round is on the loss period; else sender adopts.
                 let lost = (round % period) == 0;
                 if !lost {
@@ -741,7 +766,7 @@ mod tests {
         let initial = c.rx_confirmed;
         let mut sender_tx = c.tx_level();
         for round in 0..80 {
-            let ack = c.on_rx_frame(RxOutcome::Decoded(sender_tx), HIGH_SNR);
+            let ack = c.on_rx_frame(RxOutcome::Decoded(sender_tx), Some(HIGH_SNR));
             // Deliver only every 3rd ACK.
             if round % 3 == 2 {
                 sender_tx = ack.recommended_level;
@@ -761,7 +786,7 @@ mod tests {
         let mut c = ctrl();
         let mut sender_tx = c.tx_level();
         for _ in 0..10 {
-            let ack = c.on_rx_frame(RxOutcome::Decoded(sender_tx), HIGH_SNR);
+            let ack = c.on_rx_frame(RxOutcome::Decoded(sender_tx), Some(HIGH_SNR));
             sender_tx = ack.recommended_level;
         }
         let before = c.rx_recommended;
@@ -769,7 +794,7 @@ mod tests {
             before > c.levels[0],
             "precondition: climbed above the floor"
         );
-        let ack = c.on_rx_frame(RxOutcome::Failed, LOW_SNR);
+        let ack = c.on_rx_frame(RxOutcome::Failed, Some(LOW_SNR));
         assert_eq!(ack.ack_type, AckType::Nack);
         assert_eq!(
             c.rx_recommended,
@@ -786,13 +811,13 @@ mod tests {
         let mut c = ctrl();
         let mut sender_tx = c.tx_level();
         for _ in 0..10 {
-            let ack = c.on_rx_frame(RxOutcome::Decoded(sender_tx), HIGH_SNR);
+            let ack = c.on_rx_frame(RxOutcome::Decoded(sender_tx), Some(HIGH_SNR));
             sender_tx = ack.recommended_level;
         }
         let before = c.rx_confirmed;
         assert!(before > c.levels[0]);
         for i in 0..c.profile.nack_threshold {
-            let ack = c.on_rx_frame(RxOutcome::Failed, HIGH_SNR);
+            let ack = c.on_rx_frame(RxOutcome::Failed, Some(HIGH_SNR));
             assert_eq!(ack.ack_type, AckType::Nack);
             if i + 1 < c.profile.nack_threshold {
                 assert_eq!(
@@ -813,7 +838,7 @@ mod tests {
         c.set_level_bounds(None, Some(SpeedLevel::Sl4));
         let mut sender_tx = c.tx_level();
         for _ in 0..30 {
-            let ack = c.on_rx_frame(RxOutcome::Decoded(sender_tx), HIGH_SNR);
+            let ack = c.on_rx_frame(RxOutcome::Decoded(sender_tx), Some(HIGH_SNR));
             sender_tx = ack.recommended_level;
         }
         assert!(
@@ -833,7 +858,7 @@ mod tests {
         // Climb up, then set a floor and hammer with failures.
         let mut sender_tx = c.tx_level();
         for _ in 0..10 {
-            let ack = c.on_rx_frame(RxOutcome::Decoded(sender_tx), HIGH_SNR);
+            let ack = c.on_rx_frame(RxOutcome::Decoded(sender_tx), Some(HIGH_SNR));
             sender_tx = ack.recommended_level;
         }
         c.set_level_bounds(Some(SpeedLevel::Sl4), None);
@@ -842,7 +867,7 @@ mod tests {
             "bounds snap current level up to the floor"
         );
         for _ in 0..30 {
-            let _ = c.on_rx_frame(RxOutcome::Failed, LOW_SNR);
+            let _ = c.on_rx_frame(RxOutcome::Failed, Some(LOW_SNR));
         }
         assert!(
             c.rx_recommended >= SpeedLevel::Sl4,
@@ -859,7 +884,7 @@ mod tests {
         assert_eq!(c.tx_level(), SpeedLevel::Sl4);
         assert_eq!(c.rx_recommended_level(), SpeedLevel::Sl4);
         // RX decisions stay pinned regardless of SNR.
-        let ack = c.on_rx_frame(RxOutcome::Decoded(SpeedLevel::Sl4), HIGH_SNR);
+        let ack = c.on_rx_frame(RxOutcome::Decoded(SpeedLevel::Sl4), Some(HIGH_SNR));
         assert_eq!(ack.recommended_level, SpeedLevel::Sl4);
         assert_eq!(c.rx_recommended_level(), SpeedLevel::Sl4);
         // Peer recommendations are ignored while locked.
@@ -878,7 +903,7 @@ mod tests {
         // Climb several steps so a multi-step drop is possible.
         let mut sender_tx = c.tx_level();
         for _ in 0..6 {
-            let ack = c.on_rx_frame(RxOutcome::Decoded(sender_tx), HIGH_SNR);
+            let ack = c.on_rx_frame(RxOutcome::Decoded(sender_tx), Some(HIGH_SNR));
             sender_tx = ack.recommended_level;
         }
         let conf = c.rx_confirmed;
@@ -896,7 +921,7 @@ mod tests {
         // "drop to the floor" and the link sat pinned at ~5 bps while delivering every frame. The
         // cost of waiting for the failure is one wasted frame per genuine collapse; the cost of not
         // waiting was a permanently pinned link. See `tests/success_based_climb.rs`.
-        let ack = c.on_rx_frame(RxOutcome::Failed, LOW_SNR);
+        let ack = c.on_rx_frame(RxOutcome::Failed, Some(LOW_SNR));
         assert_eq!(ack.ack_type, AckType::Nack);
         assert_eq!(
             ack.recommended_level,
@@ -915,12 +940,87 @@ mod tests {
         // most one mapped step per confirmed decode (never leaps to the SNR-adequate top).
         let mut c = ctrl();
         let conf = c.rx_confirmed;
-        let ack = c.on_rx_frame(RxOutcome::Decoded(conf), HIGH_SNR);
+        let ack = c.on_rx_frame(RxOutcome::Decoded(conf), Some(HIGH_SNR));
         assert_eq!(ack.ack_type, AckType::AckUp);
         assert_eq!(
             ack.recommended_level,
             c.next_mapped(conf),
             "up-shift is one proven step, not a jump to the SNR-adequate ceiling"
+        );
+    }
+}
+
+#[cfg(test)]
+mod abstention_tests {
+    use super::*;
+
+    fn ctl() -> OtaRateController {
+        let mut c = OtaRateController::new(SessionProfile::hpx_hf());
+        // Climb to a rung well above the floor so a downshift has somewhere to fall from.
+        for _ in 0..12 {
+            c.on_rx_frame(RxOutcome::Decoded(c.rx_recommended_level()), Some(40.0));
+        }
+        c
+    }
+
+    // Deliberately carries NO `VERIFIES:` id. #1229's id-conformance check refused the one I first
+    // wrote — an invented off-convention id, which is exactly what that check exists to catch, and
+    // it is not spelled out here because the checker scans this file too — and inventing an id to decorate a comment
+    // is backwards: registering a requirement is a deliberate act with its own obligations (#1235,
+    // #1237), not a side effect of writing a test. The behaviour is #1142's fix — a failed decode
+    // with no trustworthy SNR must not fast-downshift, but fall through to the NACK hysteresis.
+    #[test]
+    fn a_failed_decode_without_an_snr_reading_does_not_crash_the_ladder() {
+        // POSITIVE CONTROL FIRST: a genuinely low reading still fast-downshifts, so the None case
+        // below cannot pass merely because this controller never downshifts at all.
+        let mut with_reading = ctl();
+        let before = with_reading.rx_recommended_level();
+        let ack = with_reading.on_rx_frame(RxOutcome::Failed, Some(-20.0));
+        assert_eq!(
+            ack.decision,
+            RateDecision::FastDownshift,
+            "positive control failed: a low SNR must still explain a failure and downshift fast"
+        );
+        assert!(
+            (ack.recommended_level as u8) < (before as u8),
+            "positive control failed: FastDownshift must actually move the rung"
+        );
+
+        // THE FIX: with no reading, one failure must not move the recommendation at all — the
+        // hysteresis owns that decision, exactly as it does when the SNR does not explain the
+        // failure.
+        let mut abstaining = ctl();
+        let before = abstaining.rx_recommended_level();
+        let ack = abstaining.on_rx_frame(RxOutcome::Failed, None);
+        assert_ne!(
+            ack.decision,
+            RateDecision::FastDownshift,
+            "a failed decode with no SNR reading fast-downshifted — before #1142 this crashed the \
+             recommendation to the bottom of the ladder on a single blip"
+        );
+        assert_eq!(
+            ack.recommended_level, before,
+            "one failure with no reading must hold the rung; the NACK hysteresis decides"
+        );
+    }
+
+    // The other half: abstention must not silently freeze the ladder either — repeated failures
+    // still step it down through the hysteresis.
+    #[test]
+    fn abstention_still_steps_down_at_the_nack_threshold() {
+        let mut c = ctl();
+        let start = c.rx_recommended_level();
+        let mut moved = false;
+        for _ in 0..c.profile.nack_threshold {
+            let ack = c.on_rx_frame(RxOutcome::Failed, None);
+            if ack.recommended_level != start {
+                moved = true;
+            }
+        }
+        assert!(
+            moved,
+            "repeated failures with no reading must still step the rung down at the NACK threshold \
+             — abstaining must not mean never adapting"
         );
     }
 }
