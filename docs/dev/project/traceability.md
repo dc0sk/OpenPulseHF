@@ -9,6 +9,35 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-09-01 — A gate verdict is attributable to (tree, HEAD, toolchain); only two were recorded
+
+- **Requirement/change:** `rustc` 1.98.0 landed on this host via a package upgrade and added
+  `clippy::chunks_exact_to_as_chunks`; `main` went red at seven pre-existing sites while a
+  `GATE: PASS` from hours earlier still stood on record. The verdict was TRUE when taken — cargo
+  fingerprints include the compiler version, so the 0.92 s clippy replay in that run was a
+  legitimate same-toolchain cache hit, not the `clippy.toml` false-green class. What changed was an
+  input nothing recorded.
+- **Design decision:** record the toolchain rather than pin it — `rust-toolchain`'s pin is
+  unenforceable on this host (no rustup), so the record is the only thing that makes the drift
+  visible. Refuse a stale-toolchain verdict at the point where one is CITED, and refuse it
+  *immediately* rather than falling through to the mtime scan, which would find the same stale log.
+  Reviewed as a lesson before acting; the review **rejected** the two larger lessons offered
+  alongside it as existing rules that were simply not applied, and corrected the framing of this one
+  (the cache hit was a red herring; the #1232 drift guard governs mid-run attribution, not verdict
+  shelf-life, and has no gap here).
+- **Implementation:** `scripts/gate.sh` writes `"toolchain": "$(rustc -V)"` into
+  `gate-verdict.json`; `scripts/lib/trace.py` gains `_current_toolchain()` and refuses a verdict
+  whose recorded toolchain differs from the running one — **including one that records none**,
+  which is what every verdict written before this change looks like. One sentence in
+  `~/.claude/skills/evidence-tiers` now requires the toolchain in a validation record.
+- **Tests:** `trace.py evidence-self-test` gains two probes — a verdict from another toolchain, and
+  a verdict with none recorded — and its existing INVALID/PASS fixtures now carry the field.
+- **Test results:** `EVIDENCE-SELF-TEST: PASS` (7 probes), `SELF-TEST: PASS`. The coupling was
+  demonstrated rather than assumed: adding the refusal first turned the pre-existing "a PASS verdict
+  is accepted" probe RED, which is what proved the new rule reaches the path that probe covers.
+  `trace check` degrades to a NOTE naming the toolchain mismatch, not a FAIL — enforced bindings
+  report "unverified", never "did not run" (#1224).
+
 ## 2026-08-31 — #1237: `enforced` joined to whether anything consumes the capability
 
 - **Requirement/change:** `traceability: enforced` asserted exactly one thing — a `// VERIFIES:`

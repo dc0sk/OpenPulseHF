@@ -252,11 +252,18 @@ else
     result="FAIL"
 fi
 
+# The toolchain is part of what a verdict is attributable to, and it is the member that drifts
+# WITHOUT anyone performing an act: a distro package upgrade re-derives every cached lint verdict.
+# The pin in rust-toolchain is unenforceable on this host (no rustup), so this record is the only
+# thing that makes that drift visible to anything reading the verdict later.
+TOOLCHAIN=$(rustc -V 2>/dev/null || echo "unknown")
+
 cat > "$VERDICT" <<JSON
 {
   "result": "$result",
   "commit": "$COMMIT",
   "tree": "$DIRTY",
+  "toolchain": "$TOOLCHAIN",
   "timestamp": "$STAMP",
   "command": "$TEST_CMD",
   "suites": $suites,
