@@ -333,6 +333,19 @@ def _log_is_complete(path):
     return saw_result and complete
 
 
+def _current_toolchain():
+    """`rustc -V`, or None when it cannot be read.
+
+    Returns None rather than raising: this is used to EXPIRE evidence, and a host without rustc
+    should not be told its stored verdict is stale for that reason.
+    """
+    try:
+        out = subprocess.run(["rustc", "-V"], capture_output=True, text=True, timeout=30)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return out.stdout.strip() if out.returncode == 0 else None
+
+
 def _evidence_log():
     """The log whose test results may be trusted, or None.
 
@@ -370,6 +383,18 @@ def _evidence_log():
         if v.get("result") == "INVALID":
             return None, ("the last gate run was INVALID (tree or HEAD moved during it), so its "
                           "log is not attributable evidence")
+        # A verdict is attributable to (tree, HEAD, TOOLCHAIN). The third member drifts without
+        # anyone performing an act — a distro package upgrade — and it re-derives differently:
+        # rustc 1.98.0 landed on this host and `main` went red on a lint that did not exist when
+        # the standing PASS was taken. Refuse here rather than falling through to the mtime scan,
+        # which would find the SAME stale log. Returning None degrades to "no usable run", which
+        # the callers report rather than mistaking for "the cited test did not run".
+        want = _current_toolchain()
+        got_tc = v.get("toolchain")
+        if got_tc != want:
+            was = got_tc or "an unrecorded toolchain"
+            return None, (f"the last gate verdict was produced by {was} and this is {want} — a "
+                          f"verdict does not survive a toolchain change; run a full gate")
         named = v.get("log")
         if named and os.path.exists(named) and _log_is_complete(named):
             return named, None
@@ -510,14 +535,26 @@ def do_evidence_selftest():
         bad("no complete gate log in target/ — run a full gate before trusting this probe")
     else:
         try:
-            for result, want_log in (("INVALID", False), ("PASS", True)):
-                verdict.write_text(_json.dumps({"result": result, "log": complete}), encoding="utf-8")
+            here = _current_toolchain()
+            for label, fields, want_log in (
+                ("INVALID", {"result": "INVALID", "toolchain": here}, False),
+                ("PASS", {"result": "PASS", "toolchain": here}, True),
+                # A verdict is attributable to (tree, HEAD, TOOLCHAIN). These two probe the third
+                # member, which drifts with no act by anyone — a distro upgrade. The unrecorded
+                # case is not hypothetical: every verdict written before gate.sh recorded the
+                # toolchain looks exactly like this, and must not be trusted by default.
+                ("PASS from another toolchain",
+                 {"result": "PASS", "toolchain": "rustc 0.0.0 (not this host)"}, False),
+                ("PASS with no toolchain recorded", {"result": "PASS"}, False),
+            ):
+                fields["log"] = complete
+                verdict.write_text(_json.dumps(fields), encoding="utf-8")
                 _os.environ.pop("GATE_LOG", None)
                 got, why = _evidence_log()
                 if (got == complete) is want_log:
-                    ok(f"a {result} verdict is {'accepted' if want_log else 'refused'} as evidence")
+                    ok(f"a {label} verdict is {'accepted' if want_log else 'refused'} as evidence")
                 else:
-                    bad(f"a {result} verdict yielded {got or why!r}")
+                    bad(f"a {label} verdict yielded {got or why!r}")
         finally:
             if saved is not None:
                 verdict.write_text(saved, encoding="utf-8")
