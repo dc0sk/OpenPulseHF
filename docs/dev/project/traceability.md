@@ -9,6 +9,35 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-09-01 — #1242: two artifacts described a sabotage probe that has never printed what they claim
+
+- **Requirement/change:** CLAUDE.md rule 3 said `scripts/gate.sh --self-test` "plants a failing test
+  and requires `GATE: FAIL`", and `gate.sh`'s own header said `--self-test` "runs steps 1-4 for you".
+  Neither is true: `self_test` is invoked at `gate.sh:108` and exits there, while every `GATE:` echo
+  is downstream at 177 / 244 / 276. It calls `cargo test` directly and asserts on a non-zero status
+  with the planted test named. The cost is not cosmetic — a change to the VERDICT path is invisible
+  to `--self-test` by construction, so rule 3 followed literally after the #1243 toolchain change
+  would have spent ~2 h proving nothing about it.
+- **Design decision:** correct the artifacts rather than widen the probe. Naming what each probe
+  reaches is mechanical truth-telling; making `--self-test` emit a real verdict is a design decision
+  with a hazard (below) and is deferred with that hazard recorded on the issue.
+- **Implementation:** `CLAUDE.md` rule 3 now enumerates the three probes and what each covers
+  (`gate.sh --self-test` = failure detection; `trace.py evidence-self-test` = the verdict path;
+  `trace.py graph-self-test` = the dormancy graph). `scripts/gate.sh`'s header states that
+  `--self-test` automates a NARROWER version of the manual steps and prints no `GATE:` line.
+- **Tests:** none — the change is comment- and prose-only. Proven so mechanically: stripping comment
+  lines from `scripts/gate.sh` before and after yields the identical sha256 (`3c96b65e`), and the
+  diff has 0 non-comment changed lines.
+- **Test results:** sweep clean — `git grep 'self-test.*GATE: FAIL\|runs steps 1-4'` over living
+  artifacts returns nothing, against a control showing the phrase still present where it is correct
+  (the manual full-gate procedure). Full gate below.
+
+- **Deferred with its trap recorded (#1242 stays open):** making `--self-test` write a verdict would
+  hand `trace.py::_evidence_log` a verdict produced from a deliberately sabotaged tree. It refuses
+  `INVALID` and (since #1243) a foreign toolchain, but a `FAIL` verdict naming a complete log is
+  acceptable input today. `trace.py` already skips self-test *logs* in its glob fallback; there is no
+  equivalent for a self-test *verdict*, because none has ever existed.
+
 ## 2026-09-01 — #1240: the dormancy join's GRAPH gets the known-fail inputs its verdicts already had
 
 - **Requirement/change:** #1239 gave the join `DORMANT-ENFORCED`/`UNWIRED-BUT-REACHED` probes, which

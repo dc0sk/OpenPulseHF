@@ -26,7 +26,12 @@
 #   2. run this script
 #   3. require `GATE: FAIL` with that test named in the failure list
 #   4. revert
-# `--self-test` runs steps 1-4 for you against a scratch test file.
+# `--self-test` automates a NARROWER version of that against a scratch test file: it plants the
+# fixture, runs `cargo test` DIRECTLY, and requires a non-zero status with the planted test named.
+# It does not go through run_step and exits before any verdict is written, so it prints no `GATE:`
+# line and writes no gate-verdict.json — the failure-detection path only. CLAUDE.md rule 3 claimed
+# it "requires GATE: FAIL" until #1242; it has never printed one. A change to the VERDICT path is
+# therefore invisible to it: `python3 scripts/lib/trace.py evidence-self-test` is what covers that.
 #
 # Usage:
 #   scripts/gate.sh            # fmt + clippy + full workspace test
