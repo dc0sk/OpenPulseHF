@@ -2576,6 +2576,10 @@ impl ModemEngine {
         // Each candidate carries its own MODCOD FEC, applied via decode_attempt.
         let afc_before = self.afc_correction_hz;
         let mut decoded: Option<(Vec<u8>, SpeedLevel, String)> = None;
+        // The [start, end) span that actually decoded, for the SNR measurement (#1142). Set at
+        // EVERY site that sets `decoded` — a site that decodes without recording its span would
+        // silently fall back to abstention and cost the ladder its SNR climb on that path.
+        let mut decoded_span: Option<(usize, usize)> = None;
         let mut last_err: Option<ModemError> = None;
         // Offset 0 only, exactly as before #1138. The onset SCAN is deliberately NOT here — it
         // runs after the uncoded fallback below, so its cost lands only on bursts nothing else
@@ -2587,6 +2591,9 @@ impl ModemEngine {
             };
             match self.decode_attempt(mode, slice, *fec) {
                 Ok(payload) => {
+                    // Offset 0 decoded, so the frame genuinely starts there and the whole burst is
+                    // the right window — this is the one path where they coincide.
+                    decoded_span = Some((0, samples.samples.len()));
                     decoded = Some((payload, *level, mode.clone()));
                     break;
                 }
@@ -2689,6 +2696,10 @@ impl ModemEngine {
                             // E1 skips the estimate on every attempt; the WINNING slice still needs
                             // one so the wrapper's single `AfcUpdate` carries a real correction.
                             self.update_afc_estimate(mode, &slice);
+                            // The window that DECODED is the only defensible place to measure the
+                            // SNR (#1142) — measuring over the whole gathered burst hands the
+                            // estimator's timing search a lead-in it cannot see past.
+                            decoded_span = Some((start, end));
                             decoded = Some((payload, *level, mode.clone()));
                             break 'scan;
                         }
@@ -2765,6 +2776,7 @@ impl ModemEngine {
                         ) {
                             Ok(payload) => {
                                 self.update_afc_estimate(mode, &slice);
+                                decoded_span = Some((start, end));
                                 decoded = Some((payload, *level, mode.clone()));
                                 break 'settle_scan;
                             }
@@ -2892,6 +2904,11 @@ impl ModemEngine {
                         combine_llrs_map(&set)
                     };
                     if let Ok(payload) = self.decode_combined_llrs(mode, &combined, *fec) {
+                        // HARQ demodulates at offset 0 over the whole burst (#1139), so no better
+                        // window is known here. Recording the full span keeps the reading no worse
+                        // than before this change on the one path that cannot do better; when #1139
+                        // gives HARQ an onset, this span should follow it.
+                        decoded_span = Some((0, samples.samples.len()));
                         decoded = Some((payload, *level, mode.clone()));
                         break;
                     }
@@ -2930,28 +2947,30 @@ impl ModemEngine {
             self.ota_retained_llrs.clear();
         }
 
-        // SNR for the receiver decision: prefer an external estimate; else the active mode's
-        // calibrated symbol-domain SNR (falling back to M2M4 inside `rx_snr_db`). Measure it on the
-        // mode actually on air — the decoded candidate, else the top (recommended) candidate — so a
-        // wrong low-order fallback candidate can't understate the SNR. Works whether or not a
-        // candidate decoded.
-        let snr = self.rx_snr_estimate.unwrap_or_else(|| {
-            let snr_mode = decoded
-                .as_ref()
-                .map(|(_, _, m)| m.as_str())
-                .or_else(|| candidates.first().map(|(_, m, _)| m.as_str()));
-            match snr_mode {
-                Some(m) => self.rx_snr_db(m, &samples.samples),
-                None => {
-                    let fc = self.center_frequency + self.afc_correction_hz;
-                    let fs = AudioConfig::default().sample_rate as f32;
-                    openpulse_core::snr_estimate::m2m4_snr_db_gated_from_real(
-                        &samples.samples,
-                        fc,
-                        fs,
-                    )
-                }
-            }
+        // SNR for the receiver decision — measured on the span that DECODED, or not at all (#1142).
+        //
+        // This used to run over `samples.samples`, the whole gathered burst. `rx_snr_db` locks
+        // sub-symbol timing by correlating the buffer's first 32 symbols against the preamble over
+        // offsets 0..31; once a lead-in pushes the frame past that ~1056-sample window the
+        // correlation sees no preamble at any offset, the lock becomes a noise argmax, and the frame
+        // is demodulated at a wrong sub-symbol offset. The reading is then a deterministic function
+        // of `(chosen_offset - lead) mod 32` — swept measurement at one operating point: a smooth
+        // single-peaked curve from **+5.35 dB to −8.39 dB against a true 5.82 dB**, the same shape
+        // for every noise realization and merely ROTATED by it. So the error is deterministic in the
+        // misalignment and uniform-random in which misalignment a burst gets.
+        //
+        // Not a dilution effect: `additive_snr_db_windowed` sums signal and noise power linearly, so
+        // the few percent of noise-only symbols a lead-in adds are worth ~0.25 dB at most.
+        //
+        // When nothing decoded there is no defensible window — the frame's position is exactly what
+        // the failed decode could not establish — so the estimate is `None` and the controller falls
+        // through to its NACK hysteresis. Do NOT substitute the whole burst here "to have a number":
+        // a value that is wrong by a draw cannot be corrected by an offset, and it is precisely what
+        // drove FastDownshift to the bottom of the ladder on a single failed decode.
+        let snr = self.rx_snr_estimate.or_else(|| {
+            let (start, end) = decoded_span?;
+            let m = decoded.as_ref().map(|(_, _, m)| m.as_str())?;
+            Some(self.rx_snr_db(m, &samples.samples[start..end]))
         });
 
         let ota = self
@@ -4266,9 +4285,6 @@ impl ModemEngine {
                 (wire, Some(snr))
             }
         };
-        if let Some(snr) = snr_opt {
-            self.rate_policy.record_rx_snr(snr);
-        }
         let wire = self.route_wire_stage(PipelineStage::DemodulateDecode, wire)?;
         debug!("demodulated {} bytes", wire.bytes.len());
 
@@ -4278,6 +4294,21 @@ impl ModemEngine {
         let frame = self.stage_decode_frame(&wire)?;
         let frame = self.route_decoded_stage(PipelineStage::HpxStateUpdate, frame)?;
         info!("received frame seq={}", frame.sequence);
+
+        // RECORD THE SNR ONLY ON A VALIDATED FRAME (#1142).
+        //
+        // This used to run above, right after demodulation — before magic, CRC and sequence had
+        // been checked, and before the `?` on `stage_decode_frame` could return. During a scan that
+        // means every failed attempt overwrote `last_rx_snr_db()` with a reading taken on a
+        // MISFRAMED slice, and the last one to run is the value the QSY scan's candidate scoring
+        // and the ADIF logbook then read.
+        //
+        // The AFC directly below is rolled back on exactly this reasoning — the scan wrappers reset
+        // `afc_correction_hz` at the top of every iteration precisely so a failed attempt cannot
+        // leak. The SNR sat two lines away with no equivalent, which is the blind-sibling shape.
+        if let Some(snr) = snr_opt {
+            self.rate_policy.record_rx_snr(snr);
+        }
 
         let _ = self.event_tx.send(EngineEvent::FrameReceived {
             mode: mode.to_string(),
@@ -4384,13 +4415,13 @@ impl ModemEngine {
             llrs.as_ref().map_or(0, |l| l.len())
         );
 
-        // Feed the rate policy an absolute RX SNR whenever soft demod ran — same as the no-FEC
-        // path (`receive_from_samples`) and `receive_with_ack_hint`. Without this, an adaptive
-        // session that uses FEC got no SNR feedback (the FEC receive path skipped it).
-        if llrs.is_some() {
-            let snr_db = self.rx_snr_db(mode, &samples.samples);
-            self.rate_policy.record_rx_snr(snr_db);
-        }
+        // The SNR reading is COMPUTED here (soft demod has run and the samples are in hand) but
+        // RECORDED only once the frame validates, at the end of this function (#1142).
+        // `llrs.is_some()` means the demodulator mechanically produced LLRs, which is a long way
+        // from "this burst was a frame".
+        let pending_snr = llrs
+            .is_some()
+            .then(|| self.rx_snr_db(mode, &samples.samples));
 
         // SKIP THE AFC ESTIMATE INSIDE A SCAN — it is work whose result is thrown away.
         //
@@ -4482,6 +4513,15 @@ impl ModemEngine {
 
         let frame = self.stage_decode_frame(&corrected)?;
         let frame = self.route_decoded_stage(PipelineStage::HpxStateUpdate, frame)?;
+
+        // Success-gated (#1142): recorded only now that magic, CRC and sequence have passed.
+        // Recorded at demod time it survived every failed scan attempt, so a failed burst left
+        // `last_rx_snr_db()` holding the last MISFRAMED slice's value — which the QSY scan's
+        // candidate scoring and the ADIF logbook read as the SNR of the frame they heard. The AFC
+        // in this same function is rolled back on exactly this reasoning; the SNR was not.
+        if let Some(snr) = pending_snr {
+            self.rate_policy.record_rx_snr(snr);
+        }
         let _ = self.event_tx.send(EngineEvent::FrameReceived {
             mode: mode.to_string(),
             bytes: frame.payload.len(),
@@ -4534,7 +4574,6 @@ impl ModemEngine {
         // fallback inside `rx_snr_db`); the mean-|LLR| proxy reads ~-2 dB on a clean path and can't
         // drive the ladder.
         let snr_db = self.rx_snr_db(mode, &samples.samples);
-        self.rate_policy.record_rx_snr(snr_db);
 
         let wire_bytes: Vec<u8> = llrs
             .chunks(8)
@@ -4553,6 +4592,11 @@ impl ModemEngine {
             "receive_with_ack_hint: seq={} snr={:.1}dB",
             frame.sequence, snr_db
         );
+
+        // Success-gated (#1142). Recorded before `stage_decode_frame`, a reading taken on a slice
+        // that turned out not to be a frame still reached `last_rx_snr_db()` — the value the QSY
+        // scan scores candidates on and the ADIF logbook writes into the QSO record.
+        self.rate_policy.record_rx_snr(snr_db);
 
         let _ = self.event_tx.send(EngineEvent::FrameReceived {
             mode: mode.to_string(),

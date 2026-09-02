@@ -9,6 +9,68 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-09-02 — #1142 part 2: the RX SNR is recorded only for a frame that validated
+
+- **Requirement/change:** `record_rx_snr` fired per demodulation ATTEMPT, before magic, CRC and
+  sequence were checked — at three sites (`receive_from_samples`,
+  `receive_from_samples_with_fec_inner`, `receive_with_ack_hint`). During a scan every failed attempt
+  overwrote `last_rx_snr_db()`, so a failed burst ended holding the last MISFRAMED slice's reading,
+  which the QSY scan's candidate scoring and the ADIF logbook read as the SNR of the frame heard.
+- **Why it is the same class as part 1 but a distinct defect:** part 1 was *which span* the estimate
+  is taken over; this is *whether the estimate is kept at all* when the thing measured turned out not
+  to be a frame. The tell is a blind sibling: the AFC in these same functions IS rolled back on a
+  failed attempt — the scan wrappers reset `afc_correction_hz` at the top of every iteration, and the
+  comment there says "the reset is the proof that nothing downstream can depend on it". The SNR sat
+  two lines away with no equivalent.
+- **Design decision:** compute where the samples are in hand, record only after
+  `stage_decode_frame` + `route_decoded_stage` have both passed. Carried out of the same adversarial
+  review as part 1, which found this while checking the scope of the first fix.
+- **Implementation:** all three sites moved below frame validation; the FEC path holds the value in
+  `pending_snr` because its computation needs the LLRs that only exist earlier.
+- **Tests:** `engine_events::a_failed_decode_does_not_overwrite_the_recorded_rx_snr` — positive
+  control that a decoded frame DOES record, an assertion that the noise burst genuinely fails, then
+  the no-overwrite check. Uses a held `LoopbackBackend` rather than a test-only accessor on the
+  engine, since a probe needing private access is a test, not an exported API.
+- **Test results:** 13 passed / 0 failed across `engine_events` + `ota_rate_decision_events`; fmt and
+  workspace clippy clean. Sabotage-verified: restoring the pre-validation record at site 1 alone
+  turns the gate red with its intended message. Restore sha256-verified.
+
+## 2026-09-01 — #1142: the OTA rate-control SNR is measured on the span that decoded, or not at all
+
+- **Requirement/change:** `ota_decode_and_ack_inner` measured the SNR driving the receiver's rate
+  decision over the ENTIRE gathered burst, lead-in included. The issue framed this as dilution by
+  noise-only samples; that is not the mechanism. `additive_snr_db_windowed` sums signal and noise
+  power linearly, so a few percent of noise-only symbols are worth ~0.25 dB at most.
+- **The mechanism, measured:** `rx_snr_db` locks sub-symbol timing by correlating the buffer's first
+  32 symbols against the preamble over offsets 0..31. Once a lead-in pushes the frame past that
+  ~1056-sample window the correlation sees no preamble at any offset, the lock becomes a noise
+  argmax, and the frame is demodulated at a wrong sub-symbol offset. Sweeping the lead one sample at
+  a time over one symbol period, at a fixed operating point (true frame-span SNR 5.82 dB): a smooth
+  single-peaked curve, **peak +5.35 / +5.31 / +5.38 dB and trough −8.03 / −8.39 / −8.25 dB** for
+  three noise realizations — the same curve, merely ROTATED by the realization. The error is
+  deterministic in `(chosen_offset − lead) mod 32` and uniform-random in which offset a burst gets.
+- **Design decision:** measure on the window that actually decoded; when nothing decoded, **abstain**
+  rather than substitute the whole burst — a value wrong by a draw cannot be repaired by a
+  calibration offset. Reviewed adversarially before implementation. The review overturned three
+  things: my "dilution" mechanism (falsified from the code), my severity framing (the decoded path is
+  absorbed by #934's evidence climb; the damage is on the FAILED path, where `level_for_snr` →
+  `unwrap_or(lo)` → `FastDownshift` bypassed the 3-NACK hysteresis on a single failed decode), and my
+  claim that a non-symbol-aligned lead is rescued (it was one lucky draw versus one unlucky one —
+  the single-draw fallacy, committed twice in one investigation).
+- **Implementation:** `OtaRateController::on_rx_frame` takes `Option<f32>`; `None` falls through to
+  the NACK hysteresis on Failed and cannot clear a ceiling on Decoded. `engine.rs` tracks
+  `decoded_span` at ALL FOUR sites that set `decoded` and measures there.
+  `EngineEvent::OtaRateDecision::snr_db` is `Option<f32>`; the panel renders absence as "no SNR"
+  rather than a number.
+- **Tests:** `ota_rate::abstention_tests` (two: the fix, with a positive control that a genuinely low
+  reading still fast-downshifts; and that repeated failures still step down at the NACK threshold, so
+  abstaining is not freezing); strengthened `ota_rate_decision_events::the_decision_event_carries_the_snr_it_acted_on`.
+- **Test results:** `openpulse-core` 559 passed / 0 failed; the four affected modem test binaries 11
+  passed / 0 failed; fmt and workspace clippy clean. Both gates sabotage-verified: restoring the
+  pre-fix Failed path fails the controller gate with its intended message, and restoring the
+  whole-burst measurement fails the engine gate printing the fabricated pre-fix value —
+  **`Some(3.421926)` on a burst of pure noise**. Both restores sha256-verified.
+
 ## 2026-09-01 — #1242: two artifacts described a sabotage probe that has never printed what they claim
 
 - **Requirement/change:** CLAUDE.md rule 3 said `scripts/gate.sh --self-test` "plants a failing test

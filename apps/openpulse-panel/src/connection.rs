@@ -219,15 +219,23 @@ pub(crate) fn apply_event(line: &str, shared: &Arc<Mutex<PanelState>>) {
                     } else {
                         "FAIL"
                     };
+                    // "no reading" is shown as such, never as a number (#1142). An operator
+                    // watching the ladder needs to distinguish "the controller measured a low SNR"
+                    // from "the controller had nothing to measure" — they lead to different
+                    // diagnoses, and printing a placebo figure erases that difference.
+                    let snr = match snr_db {
+                        Some(v) => format!("{v:.1} dB"),
+                        None => "no SNR".to_string(),
+                    };
                     if from == to {
                         format!(
-                            "OTA {} hold @{} ({outcome}, {snr_db:.1} dB)",
+                            "OTA {} hold @{} ({outcome}, {snr})",
                             format!("{decision:?}").to_lowercase(),
                             to.name()
                         )
                     } else {
                         format!(
-                            "OTA {} {}->{} ({outcome}, {snr_db:.1} dB)",
+                            "OTA {} {}->{} ({outcome}, {snr})",
                             format!("{decision:?}").to_lowercase(),
                             from.name(),
                             to.name()

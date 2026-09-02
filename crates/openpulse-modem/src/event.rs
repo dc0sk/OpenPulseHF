@@ -49,9 +49,12 @@ pub enum EngineEvent {
         to: SpeedLevel,
         /// Whether the frame demodulated. `None` means no candidate mode decoded.
         decoded_level: Option<SpeedLevel>,
-        /// Measured SNR fed to the decision (dB). This is the reading the controller acted on,
-        /// which is not recoverable from any other event.
-        snr_db: f32,
+        /// Measured SNR fed to the decision (dB), or `None` when the controller acted on **no
+        /// reading** — the normal case on a failed decode since #1142, where the burst's frame
+        /// position is exactly what the failed decode could not establish. This is the reading the
+        /// controller acted on, which is not recoverable from any other event; `None` is itself
+        /// information, and must not be flattened to a number.
+        snr_db: Option<f32>,
         /// Which branch fired — the field that makes a transition attributable.
         decision: RateDecision,
     },
