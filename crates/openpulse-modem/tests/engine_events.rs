@@ -99,6 +99,57 @@ fn receive_populates_last_rx_snr_db_on_a_hard_only_mode() {
     );
 }
 
+/// #1142: a burst that does not decode must not overwrite `last_rx_snr_db()`.
+///
+/// The reading used to be recorded straight after demodulation — before magic, CRC and sequence
+/// were checked. During a scan every failed attempt therefore overwrote it, and the last attempt to
+/// run left its value behind: a reading taken on a MISFRAMED slice, which the QSY scan's candidate
+/// scoring and the ADIF logbook then read as "the SNR of the frame we heard".
+///
+/// The AFC in the same functions is rolled back on exactly this reasoning. The SNR was not, which is
+/// the blind-sibling shape: two adjacent pieces of per-attempt state, one restored, one leaked.
+#[test]
+fn a_failed_decode_does_not_overwrite_the_recorded_rx_snr() {
+    const MODE: &str = "BPSK250";
+    // Hold the backend so noise can be fed directly, rather than adding a test-only accessor to
+    // the engine: a probe that needs private access is a test, not an exported API.
+    let backend = LoopbackBackend::new();
+    let mut engine = ModemEngine::new(Box::new(backend.clone_shared()));
+    engine
+        .register_plugin(Box::new(bpsk_plugin::BpskPlugin::new()))
+        .unwrap();
+
+    // POSITIVE CONTROL FIRST: a real frame must record a reading. Without this, the assertion below
+    // would pass on an engine that never records anything at all.
+    engine.transmit(b"a real frame", MODE, None).unwrap();
+    engine.receive(MODE, None).unwrap();
+    let after_success = engine.last_rx_snr_db();
+    assert!(
+        after_success.is_some(),
+        "positive control failed: a decoded frame must record an RX SNR, otherwise the \
+         no-overwrite assertion below proves nothing"
+    );
+
+    // Now hand it audio that cannot decode. Anything the receive path computes on the way is a
+    // measurement of something that turned out not to be a frame.
+    let noise: Vec<f32> = (0..40_000)
+        .map(|i| (((i * 7919) % 2003) as f32 / 1001.0 - 1.0) * 0.05)
+        .collect();
+    backend.fill_samples(&noise);
+    let failed = engine.receive(MODE, None);
+    assert!(
+        failed.is_err(),
+        "this burst must NOT decode, or the assertion below is testing the success path"
+    );
+
+    assert_eq!(
+        engine.last_rx_snr_db(),
+        after_success,
+        "a burst that did not decode overwrote the recorded RX SNR — that value is what the QSY \
+         scan scores candidates on and what the ADIF logbook writes into the QSO record (#1142)"
+    );
+}
+
 #[test]
 fn emits_hpx_transition() {
     let mut engine = make_engine();

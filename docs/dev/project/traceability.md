@@ -9,6 +9,32 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-09-02 — #1142 part 2: the RX SNR is recorded only for a frame that validated
+
+- **Requirement/change:** `record_rx_snr` fired per demodulation ATTEMPT, before magic, CRC and
+  sequence were checked — at three sites (`receive_from_samples`,
+  `receive_from_samples_with_fec_inner`, `receive_with_ack_hint`). During a scan every failed attempt
+  overwrote `last_rx_snr_db()`, so a failed burst ended holding the last MISFRAMED slice's reading,
+  which the QSY scan's candidate scoring and the ADIF logbook read as the SNR of the frame heard.
+- **Why it is the same class as part 1 but a distinct defect:** part 1 was *which span* the estimate
+  is taken over; this is *whether the estimate is kept at all* when the thing measured turned out not
+  to be a frame. The tell is a blind sibling: the AFC in these same functions IS rolled back on a
+  failed attempt — the scan wrappers reset `afc_correction_hz` at the top of every iteration, and the
+  comment there says "the reset is the proof that nothing downstream can depend on it". The SNR sat
+  two lines away with no equivalent.
+- **Design decision:** compute where the samples are in hand, record only after
+  `stage_decode_frame` + `route_decoded_stage` have both passed. Carried out of the same adversarial
+  review as part 1, which found this while checking the scope of the first fix.
+- **Implementation:** all three sites moved below frame validation; the FEC path holds the value in
+  `pending_snr` because its computation needs the LLRs that only exist earlier.
+- **Tests:** `engine_events::a_failed_decode_does_not_overwrite_the_recorded_rx_snr` — positive
+  control that a decoded frame DOES record, an assertion that the noise burst genuinely fails, then
+  the no-overwrite check. Uses a held `LoopbackBackend` rather than a test-only accessor on the
+  engine, since a probe needing private access is a test, not an exported API.
+- **Test results:** 13 passed / 0 failed across `engine_events` + `ota_rate_decision_events`; fmt and
+  workspace clippy clean. Sabotage-verified: restoring the pre-validation record at site 1 alone
+  turns the gate red with its intended message. Restore sha256-verified.
+
 ## 2026-09-01 — #1142: the OTA rate-control SNR is measured on the span that decoded, or not at all
 
 - **Requirement/change:** `ota_decode_and_ack_inner` measured the SNR driving the receiver's rate
