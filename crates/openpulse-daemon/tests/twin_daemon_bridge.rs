@@ -653,10 +653,17 @@ async fn an_ota_receiver_does_not_key_ptt_at_a_peers_uncoded_traffic() {
 /// config `modem.ota_enabled` is the default `false` (`openpulse-config/src/lib.rs:660`),
 /// `start_ota_session` is gated on it (`server.rs:228`), and the non-OTA `SendMessage` arm is a
 /// one-way fixed-mode transmit (`lib.rs:2031-2050`). B never keys; the reverse-offset channel this
-/// test installs is dead weight. **The FSK4-ACK-at-offset chain is covered by nothing**, which is
-/// the real finding — FSK4-ACK tone spacing is 100 Hz, so a ±50 Hz error is catastrophic there.
-/// Enabling OTA here would give that chain its first coverage, but that path carries its own
-/// wall-clock deadlines (`engine.rs:6023`, `:6189`) and must not be added while #1176 is open.
+/// test installs is dead weight.
+///
+/// **Updated 2026-09-02 (#1177 closed):** the FSK4-ACK-at-offset gap that correction identified is
+/// now covered at the engine seam by `openpulse-modem/tests/fsk4_ack_in_noise.rs`, NOT here. Two
+/// reasons this test was the wrong home. Enabling `ota_enabled` was rejected because it would buy the
+/// coverage at the cost of a wall-clock-bounded verdict (#1150); the engine seam needs none, because
+/// `receive_ota_ack_within` reads before it checks its deadline and an unpaced loopback returns the
+/// whole capture in that first read (verified identical at 1, 300 and 4000 ms). And the offset was
+/// never the sharp end: chasing it found that the in-stream scan's window gate refused ~60 % of real
+/// ACKs in band noise at the ACK channel's operating point, which no offset test would have caught.
+/// The remaining ACK-path gap is the 2 s onset-scan cap against a 9 s listen window (#1247).
 ///
 /// −64 Hz is the one cleanly measured inter-rig offset on this project's hardware (IC-9700 <->
 /// FT-991A, both commanded to 144.600000 MHz, 2026-07-28; `openpulse-channel/src/cfo.rs`), and it is

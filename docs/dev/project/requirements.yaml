@@ -417,7 +417,9 @@ capabilities:
     - REQ-FUN-06
     tests:
     - crates/openpulse-core/tests/rate_adaptation.rs
+    - crates/openpulse-core/tests/silent_window_ack_rejection.rs
     - crates/openpulse-modem/tests/ack_exchange_integration.rs
+    - crates/openpulse-modem/tests/fsk4_ack_in_noise.rs
     traceability: baseline
   CAP-33:
     code:
