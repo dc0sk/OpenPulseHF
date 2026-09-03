@@ -9,6 +9,41 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-09-02 — The ISS ACK listen must find the ACK inside a noisy capture (#1177)
+
+- **Requirement/change:** #1177 recorded that the FSK4-ACK-at-offset chain had no coverage. Chasing
+  that found the sharper defect underneath it: `decode_fsk4_ack_in_stream` — the production path
+  whenever the ACK is not alone in the buffer — refused real ACKs in band noise. Its window gate
+  thresholded on `0.3 × peak` taken over the **whole buffer**, so an extreme-value statistic of the
+  noise was compared against a true ACK window's mean. Measured `rms/floor ≈ 0.98`: close to a coin
+  flip at the ACK channel's own operating point.
+- **Design decision:** delete the gate rather than retune it. Adversarial review established that its
+  stated justification — an all-zero window decoding degenerately past ShortFec+CRC as a valid
+  `AckOk` — was real when #894 added it and was **removed by wire whitening (#1027)**, which nobody
+  swept back to this call site. A silent window's zero bytes descramble to a non-codeword and RS
+  refuses them, deterministically (the mask is constant, so this is a property and not per-frame
+  luck). That makes the whitening load-bearing for a safety property it was not introduced for, and
+  the keystream has already changed once (#1148) — so the property is pinned by its own test rather
+  than left implicit. The `FSK4_ACK_SEARCH_SAMPLES` cap was deliberately left alone and filed as
+  #1247; changing it is a separate decision with its own cost.
+- **Implementation (PR pending):** `decode_fsk4_ack_in_stream` trial-decodes every window in its scan
+  range with no energy pre-filter (`crates/openpulse-modem/src/engine.rs`); stale coverage claim in
+  `crates/openpulse-daemon/tests/twin_daemon_bridge.rs` corrected.
+- **Tests:** `crates/openpulse-modem/tests/fsk4_ack_in_noise.rs` — the ACK is found inside a noisy
+  capture, the same across a +25 Hz carrier offset (a quarter of the FSK4 tone spacing, a full cell
+  inside the measured ~35 Hz knee), and a silent capture does not false-accept.
+  `crates/openpulse-core/tests/silent_window_ack_rejection.rs` pins the whitening property, with a
+  positive control proving the **unwhitened** zero word really does decode as a valid ACK — without
+  it the sibling test cannot show that whitening is what refuses it.
+- **Test results:** the two noisy gates **fail on the unfixed engine at 15/40 and 18/40** and pass
+  40/40 with the fix (watched, not assumed; the fix was stashed and restored, restore verified by
+  sha256 — `cmp` is absent on this host and returns 0 for different files). Silent-capture and
+  whitening pins 3/3. No regression: `mfsk16_arq_subfloor` 8/8, `ack_exchange_integration` 6/6,
+  `fsk4-plugin` 6/6. Full `scripts/gate.sh` verdict quoted in the PR.
+- **Not covered, deliberately:** the daemon's ISS wiring (`server.rs:1705`) and chunked/paced arrival
+  — the gates here use one unpaced `fill_samples`, where the verdict is fixed by the first read. The
+  daemon-level version is the twin harness and does carry a wall-clock term.
+
 ## 2026-09-02 — #1142 part 2: the RX SNR is recorded only for a frame that validated
 
 - **Requirement/change:** `record_rx_snr` fired per demodulation ATTEMPT, before magic, CRC and

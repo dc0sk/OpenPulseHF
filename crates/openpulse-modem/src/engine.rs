@@ -6208,21 +6208,18 @@ impl ModemEngine {
         let sps = (AudioConfig::default().sample_rate as usize / 100).max(1); // FSK4-ACK is 100 baud
         let step = (sps / 4).max(1);
         let search_end = (samples.len() - fsk4_len).min(Self::FSK4_ACK_SEARCH_SAMPLES);
-        // Skip near-silent windows: an all-zero window degenerately mis-decodes past ShortFec+CRC, so gate
-        // on energy relative to the buffer's peak (the constant-envelope FSK4/MFSK16 signal). A real-signal
-        // window that isn't the FSK4 copy still just fails the CRC.
-        let peak = samples.iter().fold(0.0f32, |m, &x| m.max(x.abs()));
-        let floor = 0.3 * peak;
+        // No energy gate here. #894 added one (`rms >= 0.3 * peak`) because an all-zero window then
+        // decoded degenerately past ShortFec+CRC as a valid AckOk. Wire whitening (#1027) removed that
+        // case — a silent window demodulates to 13 zero bytes, which descramble to a non-codeword and
+        // fail RS — so the gate's justification is gone while its cost is not: `peak` is taken over the
+        // WHOLE buffer, so in band noise the threshold lands within a few percent of a true ACK window's
+        // RMS and refuses the real frame about 60 % of the time at the ACK channel's operating point.
+        // The whitening property this relies on is pinned by `silent_window_is_not_a_valid_short_fec_ack`
+        // (a keystream change would otherwise re-open the degenerate case silently).
         let mut off = 0;
         while off <= search_end {
-            let w = &samples[off..off + fsk4_len];
-            // Full-window RMS gate: only try a window that is MOSTLY the (constant-envelope) FSK4 signal, so
-            // a mostly-silent window with a sliver of a copy can't degenerately mis-decode.
-            let rms = (w.iter().map(|x| x * x).sum::<f32>() / w.len() as f32).sqrt();
-            if rms >= floor {
-                if let Some(ack) = self.fsk4_ack_at(w) {
-                    return Some(ack);
-                }
+            if let Some(ack) = self.fsk4_ack_at(&samples[off..off + fsk4_len]) {
+                return Some(ack);
             }
             off += step;
         }
