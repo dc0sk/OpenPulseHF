@@ -33,7 +33,7 @@ use crate::RuntimeControlState;
 
 /// SAR segment-id carrying single-fragment `OPFX` control frames. Block-data frames use
 /// `block_index + 1` (1..=0xFFFE); handshake frames use 0. The ranges never overlap.
-pub const FX_CONTROL_SEGMENT_ID: u16 = 0xFFFF;
+pub(crate) const FX_CONTROL_SEGMENT_ID: u16 = 0xFFFF;
 
 /// SAR session key for reassembling `OPFX` control frames.
 const FX_CONTROL_SESSION: &str = "filexfer-ctrl";

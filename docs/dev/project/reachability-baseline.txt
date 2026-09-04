@@ -14,6 +14,23 @@
 # candidates.
 #
 #
+# TRIPWIRE(#1271), added 2026-09-04: the counters and enable-getters below exist ONLY so a gate can
+# assert that a cross-cutting RX transform actually ran on the PRODUCTION path — the checklist in
+# CLAUDE.md ("add a runtime tripwire and assert it increments on the production path") requires
+# exactly this, and the asserting test lives in another crate, so the accessor must be `pub`. That
+# collides with the project's own rule against exporting API for instruments; the collision is real
+# and is recorded here rather than resolved silently. Covered: agc_blocks_processed, agc_gain_db,
+# dc_blocks_processed, dcd_blocks_processed, notch_blocks_processed, is_agc_enabled,
+# is_notch_enabled (all crates/openpulse-modem/src/engine.rs). The first four were already
+# grandfathered with NO rationale; the last three became visible when #1270 fixed the cfg stripper,
+# which is the only reason they were not listed before.
+#
+# TEST-ONLY(#1271): add_trusted / add_revoked (crates/openpulse-core/src/handshake.rs) are
+# convenience constructors on a public type with no production caller — production populates the
+# trust store through `trust_store_file::add_entry`. 16 test call sites use them. Deleting them in
+# favour of `add_entry(.., Full)` is the cleaner end state and is tracked, not done here: it is
+# unrelated churn inside a gate fix.
+#
 # DORMANT(#1118): the three rho_* observability getters listed in this file are the tripwire and operator
 # readout for the #1060 threshold calibration. Their production consumer is the daemon's
 # control plane, and the daemon does not run the acquisition chain at all (#1118) — so they
@@ -48,7 +65,6 @@ ComparisonReport	apps/openpulse-testmatrix/src/compare.rs
 ComparisonSummary	apps/openpulse-testmatrix/src/compare.rs
 CompressionConfig	crates/openpulse-config/src/lib.rs
 CompressionError	crates/openpulse-core/src/compression.rs
-ControlSecurityConfig	crates/openpulse-config/src/lib.rs
 ControlServerHandle	crates/openpulse-daemon/src/lib.rs
 CpalInputStream	crates/openpulse-audio/src/cpal_backend.rs
 CpalOutputStream	crates/openpulse-audio/src/cpal_backend.rs
@@ -107,8 +123,6 @@ MAX_DECOMPRESSED_SIZE	crates/openpulse-core/src/compression.rs
 MAX_PENDING_SLOTS	crates/openpulse-core/src/sar.rs
 MAX_PLAINTEXT	crates/openpulse-linksec/src/lib.rs
 MAX_RECOVERY_ATTEMPTS	crates/openpulse-core/src/hpx.rs
-MIN_SAMPLES_PER_SYMBOL	plugins/psk8/src/modulate.rs
-MIN_SAMPLES_PER_SYMBOL_PLAIN	plugins/psk8/src/modulate.rs
 ML_DSA_44_PUBKEY_SIZE	crates/openpulse-core/src/pq_handshake.rs
 ML_DSA_44_SIG_SIZE	crates/openpulse-core/src/pq_handshake.rs
 ML_KEM_768_CT_SIZE	crates/openpulse-core/src/pq_handshake.rs
@@ -225,11 +239,11 @@ VerificationError	pki-tooling/src/verification.rs
 VerifiedPeer	crates/openpulse-daemon/src/lib.rs
 WINDOW_ARQ_FEEDBACK_SIZE	crates/openpulse-core/src/fec.rs
 WINDOW_ARQ_MAX_RANGES	crates/openpulse-core/src/fec.rs
-WIRE_VERSION	crates/openpulse-core/src/handshake_wire.rs
 accepted_settle_positions	crates/openpulse-modem/src/engine.rs
 ack_timeout_ms_for_snr	crates/openpulse-modem/src/harq.rs
 adaptive_params_for_mode	plugins/scfdma/src/lib.rs
 add_revoked	crates/openpulse-core/src/handshake.rs
+add_trusted	crates/openpulse-core/src/handshake.rs
 afc_estimate_hz_with_expected	plugins/bpsk/src/demodulate.rs
 afc_settle_attempts	crates/openpulse-modem/src/engine.rs
 agc_blocks_processed	crates/openpulse-modem/src/engine.rs
@@ -239,12 +253,10 @@ apply_band_attenuation	crates/openpulse-daemon/src/lib.rs
 apply_band_squelch	crates/openpulse-daemon/src/lib.rs
 apply_complex	crates/openpulse-channel/src/watterson.rs
 apply_once	crates/openpulse-dsp/src/filter.rs
-apply_spectrum	apps/openpulse-panel/src/connection.rs
 apply_update	crates/openpulse-core/src/route_discovery.rs
 attenuation	crates/openpulse-cli/src/commands/calibrate.rs
 bits_per_ofdm_symbol	crates/openpulse-modem/src/ofdm_sim.rs
 bits_per_sc_for_mode	plugins/pilot/src/modulate.rs
-bits_to_symbols	plugins/qpsk/src/modulate.rs
 bpsk_demodulate_with_expected	plugins/bpsk/src/demodulate.rs
 bpsk_modulate_with_preamble	plugins/bpsk/src/modulate.rs
 build_cat_controller	crates/openpulse-daemon/src/server.rs
@@ -294,12 +306,8 @@ default_depth	crates/openpulse-core/src/fec.rs
 demodulate_ofdm_frame	crates/openpulse-modem/src/ofdm_sim.rs
 derive_session_keys	crates/openpulse-core/src/trust.rs
 detect_freqs	crates/openpulse-dsp/src/notch.rs
-differential_encode	plugins/qpsk/src/modulate.rs
 discover_route	crates/openpulse-mesh/src/lib.rs
-discovery_state_label	crates/openpulse-daemon/src/lib.rs
 drain_iq_samples	crates/openpulse-audio/src/loopback.rs
-emit_file_list	crates/openpulse-daemon/src/lib.rs
-emit_peer_list	crates/openpulse-daemon/src/lib.rs
 enable_afc	crates/openpulse-modem/src/engine.rs
 encode_authenticated	crates/openpulse-core/src/ack.rs
 encode_freq_bcd4_be	crates/openpulse-radio/src/rig_definition.rs
@@ -352,14 +360,14 @@ hpx_pilot_rrc	crates/openpulse-core/src/profile.rs
 hpx_wideband_hd	crates/openpulse-core/src/profile.rs
 invalid	crates/openpulse-freedv-auth/src/verdict.rs
 iq_sequence	crates/openpulse-dsp/src/preamble.rs
-irs_receive	crates/openpulse-gateway/src/main.rs
+is_agc_enabled	crates/openpulse-modem/src/engine.rs
 is_complete	crates/openpulse-filexfer/src/blocks.rs
 is_csma_enabled	crates/openpulse-modem/src/engine.rs
 is_failure_path	crates/openpulse-core/src/ota_rate.rs
 is_faulted	crates/openpulse-audio/src/fault.rs
 is_loopback_bind	crates/openpulse-linksec/src/lib.rs
+is_notch_enabled	crates/openpulse-modem/src/engine.rs
 is_truncated	crates/openpulse-core/src/tx_metadata.rs
-iss_send	crates/openpulse-gateway/src/main.rs
 kem_decapsulate	crates/openpulse-core/src/pq_handshake.rs
 last_verified_peer	crates/openpulse-daemon/src/lib.rs
 load_corpus	crates/openpulse-modem/src/capture_replay.rs
@@ -389,12 +397,12 @@ new_with_reverse	crates/openpulse-core/src/ack.rs
 next_slot_start_ms	crates/openpulse-discovery/src/scheduler.rs
 noise_debias	plugins/scfdma/src/channel.rs
 notch_active_freqs	crates/openpulse-modem/src/engine.rs
+notch_blocks_processed	crates/openpulse-modem/src/engine.rs
 notch_freqs_seen	crates/openpulse-modem/src/engine.rs
 notch_protect_extremes	crates/openpulse-modem/src/engine.rs
 observations	crates/openpulse-discovery/src/scheduler.rs
 observe_channel	plugins/scfdma/src/lib.rs
 ota_profile_has_mfsk16	crates/openpulse-modem/src/engine.rs
-pam8_amplitude	plugins/64qam/src/modulate.rs
 parity_syndrome	plugins/js8/src/ldpc174.rs
 peer_cache_len	crates/openpulse-mesh/src/lib.rs
 pending_count	crates/openpulse-core/src/sar.rs
@@ -410,7 +418,6 @@ preamble_veto_active	crates/openpulse-modem/src/engine.rs
 process_sample	crates/openpulse-dsp/src/agc.rs
 push_frame	crates/openpulse-audio/src/loopback.rs
 raw_audio_frames_transmitted	crates/openpulse-modem/src/engine.rs
-receive_ack_with_short_fec	crates/openpulse-modem/src/engine.rs
 receive_ack_with_short_fec_within	crates/openpulse-modem/src/engine.rs
 receive_window_retransmit_packet	crates/openpulse-modem/src/engine.rs
 receive_with_harq_attempt	crates/openpulse-modem/src/engine.rs
@@ -439,8 +446,6 @@ rho_calibration_samples	crates/openpulse-modem/src/engine.rs
 rho_effective_threshold	crates/openpulse-modem/src/engine.rs
 rho_rejected_settles	crates/openpulse-modem/src/engine.rs
 rho_stand_down	crates/openpulse-modem/src/engine.rs
-rotation_index	plugins/qpsk/src/modulate.rs
-rotation_rad	plugins/qpsk/src/modulate.rs
 route_embedded	crates/openpulse-modem/src/channel_sim.rs
 route_embedded_at_level	crates/openpulse-modem/src/channel_sim.rs
 route_embedded_in_capture	crates/openpulse-modem/src/channel_sim.rs

@@ -9,6 +9,52 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-09-04 — The reachability ratchet counted test modules as production (#1270)
+
+- **Requirement/change:** #1270. `_strip_cfg_test` searched for the **literal** `#[cfg(test)]`, so
+  five modules using `#[cfg(all(test, ...))]` were treated as production. The false-PASS half is what
+  matters: their contents counted as production callers, and five public items were reported
+  reachable on a test-module reference alone (`FX_CONTROL_SEGMENT_ID`, `add_trusted`,
+  `is_agc_enabled`, `is_notch_enabled`, `notch_blocks_processed`). Same class as #1192 — an item
+  looks reached because something that is not production mentions it. Found by the false-FAIL half,
+  when it accused three `pub(super)` test helpers added by #1252.
+- **Why nothing caught it.** `self-check` and `--self-test` exercise `_strip_rust` only; the
+  `stripper is WIRED` line disables **that** lexer. `_strip_cfg_test` had neither a behavioural nor a
+  wiring probe, so a regression of it to the literal form passed both. It had already regressed and
+  nothing noticed. I then quoted that same WIRED line as evidence for this change in review, which is
+  the identical conflation — caught there, not here.
+- **Design decision — a predicate, not a regex.** "A bare `test` atom anywhere inside `all(...)`
+  except under `not(...)`" needs a variable-width lookbehind Python's `re` does not have. My first
+  attempt matched the bare form and **silently stopped matching every compound one** — the exact
+  failure being fixed, reintroduced while fixing it, and visible only because the probe ran both
+  directions. `_cfg_expr_is_test` parses the expression instead. `any(test, ...)` is deliberately not
+  stripped: it compiles in production whenever another arm holds.
+- **Second defect, exposed by the first.** `PUB_ITEM` matched `pub(crate)`/`pub(super)` alongside
+  bare `pub`, while the orphan test excludes an item's own declaring file — right for cross-crate
+  reachability, wrong for a restricted item whose whole scope may be that file.
+  `FX_CONTROL_SEGMENT_ID` is the case that needs it. Narrowed to bare `pub`; what is lost is stated
+  rather than waved away (rustc's `dead_code` covers unused restricted items under `-D warnings` —
+  **verified by planting one**, including the case where its only use is a `#[cfg(test)]` module in
+  another file — and does not cover `#[allow(dead_code)]` or uncompiled code; that set is empty
+  today, which is a fact about now, not a property).
+- **Implementation:** `_cfg_expr_is_test` + `_cfg_span` replace `_CFG_TEST_RE`; `PUB_ITEM` narrowed;
+  `FX_CONTROL_SEGMENT_ID` → `pub(crate)`; baseline regenerated.
+- **Tests:** six cfg strip cases and seven keep cases, plus a wiring probe for the cfg stripper
+  mirroring the lexer's. Sabotage: the predicate regressed to literal-only fails `self-check`, naming
+  all five compound forms. `--self-test` still detects a planted orphan.
+- **Test results:** `SELF-CHECK: PASS` (8 stripped / 7 preserved / 315 files; 6 cfg exprs recognised,
+  7 refused; lexer WIRED 458 off vs 511 on; cfg stripper WIRED 486 off vs 511 on),
+  `SELF-TEST: PASS`, `REACH: PASS` (2304 items, 1793 reachable, 511 unreferenced, 0 new),
+  `TRACE: PASS`, workspace clippy clean. Full `scripts/gate.sh` verdict in the PR.
+- **Baseline:** **16 stale entries removed, 4 added.** A prior claim of mine that "no baseline entry
+  went stale" was false, and was reached by grepping the check output for the word "stale" — which
+  the script never prints. A zero from a filter is a claim about the filter; this is the fourth time
+  that construct has produced a wrong statement here, and the first where the filter was mine and the
+  real measurement was one line away.
+- **Split out:** #1271 — the tripwire accessors are required to be `pub` by the cross-cutting
+  checklist and forbidden by the no-exported-instruments rule; four of them had sat in the baseline
+  with no rationale, so the contradiction was never decided. Plus retiring `add_trusted`/`add_revoked`.
+
 ## 2026-09-04 — openpulse-mesh has no route to real audio (#1251)
 
 - **Requirement/change:** #1251, from the 2026-09-02 gap audit. The mesh binary describes itself as
