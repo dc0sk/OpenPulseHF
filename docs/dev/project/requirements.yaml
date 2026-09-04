@@ -818,6 +818,7 @@ capabilities:
     - crates/openpulse-radio/src/noop.rs
     - crates/openpulse-radio/tests/generic_cat_integration.rs
     - crates/openpulse-radio/tests/rigctld_integration.rs
+    - crates/openpulse-ardop/tests/ptt_keys_every_transmit.rs
     traceability: baseline
   CAP-60:
     code:

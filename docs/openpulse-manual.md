@@ -1468,9 +1468,17 @@ openpulse-kisstnc --bind 127.0.0.1 --port 8100 --mode BPSK500 --backend cpal
 > ssh -N -L 8515:127.0.0.1:8515 -L 8516:127.0.0.1:8516 operator@radio-host
 > ```
 >
-> The transmit-safety guarantees are independent of the caller: the TNC releases PTT if a keyed
-> client disconnects, and the shared watchdog force-releases past the max keyed duration. Those bound
-> the damage; they are not a substitute for controlling who can reach the port.
+> The transmit-safety guarantees are independent of the caller: every emission the TNC makes is keyed
+> under an RAII guard that releases even on an early return or a panic, a manual `PTT TRUE` from a
+> host is dropped if that client disconnects, and the shared watchdog force-releases past the max
+> keyed duration. Those bound the damage; they are not a substitute for controlling who can reach the
+> port.
+>
+> **PTT ownership.** The TNC keys from `[modem] ptt_backend` and emits `PTT TRUE` / `PTT FALSE` as
+> asynchronous events for hosts that drive their own rig. If you let the TNC key, set Pat's
+> `ptt_ctrl` to `false` — otherwise both key the same device. `ptt_backend = "none"` with a
+> host-keyed rig is **not supported**: the TNC starts audio immediately after the edge, with no
+> leader delay, so the first ~50 ms of preamble would be clipped and the frame would not demodulate.
 
 #### `openpulse-gateway` (Winlink CMS, no radio)
 

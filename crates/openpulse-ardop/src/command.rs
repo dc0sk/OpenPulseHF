@@ -55,26 +55,40 @@ pub async fn serve(listener: TcpListener, bridge: Arc<ModemBridge>) -> Result<()
 /// No-op when PTT is already down, so a clean `PTT FALSE` is not followed by a redundant release
 /// and a client that never keyed never touches the hardware.
 async fn release_ptt_on_disconnect(bridge: &Arc<ModemBridge>, addr: std::net::SocketAddr) {
+    // Only a MANUAL host key may be dropped here. Worker bursts (data, ARQ, IRS ACK, relay, station
+    // ID) are released by their own RAII guard, so a monitor client disconnecting must not cut a
+    // station ID mid-emission — which an unconditional release would do.
+    if !bridge
+        .manual_keyed
+        .load(std::sync::atomic::Ordering::Relaxed)
+    {
+        return;
+    }
     let ptt = bridge.ptt.clone();
+    let observer = bridge.ptt_observer();
+    let manual = bridge.manual_keyed.clone();
     let outcome = tokio::task::spawn_blocking(move || {
-        let mut guard = ptt.lock().unwrap_or_else(|e| e.into_inner());
-        if !guard.is_asserted() {
+        // `unkey` releases the hardware before checking its own armed state, so the is-keyed check
+        // must come first or a client that never keyed still touches the rig.
+        if !ptt.is_keyed() {
             return None;
         }
-        Some(guard.release_ptt())
+        let o = ptt.unkey(Some(&observer));
+        manual.store(false, std::sync::atomic::Ordering::Relaxed);
+        Some(o)
     })
     .await;
 
     match outcome {
-        Ok(None) => {}
-        Ok(Some(Ok(()))) => {
+        Ok(None) | Ok(Some(openpulse_radio::UnkeyOutcome::NotKeyed)) => {}
+        Ok(Some(openpulse_radio::UnkeyOutcome::Released)) => {
             tracing::warn!("client {addr} disconnected while keyed — PTT released by the TNC")
         }
-        Ok(Some(Err(e))) => {
-            tracing::error!(error = %e, "client {addr} disconnected while keyed and PTT release FAILED — transmitter may be stuck")
+        Ok(Some(openpulse_radio::UnkeyOutcome::Failed)) => {
+            tracing::error!("client {addr} disconnected while keyed and PTT release FAILED — the watchdog stays armed and will force-release")
         }
         Err(_) => {
-            tracing::error!("client {addr} disconnected while keyed and the PTT release task panicked — transmitter may be stuck")
+            tracing::error!("client {addr} disconnected while keyed and the PTT release task panicked — the watchdog stays armed and will force-release")
         }
     }
 }
@@ -267,9 +281,21 @@ async fn dispatch(cmd: &str, bridge: &ModemBridge) -> Vec<String> {
 
         "PTT" => match parts.get(1).map(|s| s.to_uppercase()).as_deref() {
             Some("TRUE") => {
+                // Manual host key: assert the hardware and ARM the watchdog, so a host that keys and
+                // then hangs (without closing the socket) cannot hold the transmitter indefinitely.
+                // `manual_keyed` marks this as host-owned — see `release_ptt_on_disconnect`.
                 let ptt = bridge.ptt.clone();
+                let manual = bridge.manual_keyed.clone();
+                // No observer on the manual path: the async `PTT TRUE`/`PTT FALSE` edges exist to tell
+                // a host about keying it did NOT initiate (worker bursts, or a watchdog force-release).
+                // Emitting one here would duplicate this command's own response line on the same
+                // stream, and a host reading the next line as its response would read the event.
                 match tokio::task::spawn_blocking(move || {
-                    ptt.lock().unwrap_or_else(|e| e.into_inner()).assert_ptt()
+                    let r = ptt.key(None);
+                    if r.is_ok() {
+                        manual.store(true, std::sync::atomic::Ordering::Relaxed);
+                    }
+                    r
                 })
                 .await
                 {
@@ -283,16 +309,19 @@ async fn dispatch(cmd: &str, bridge: &ModemBridge) -> Vec<String> {
             }
             _ => {
                 let ptt = bridge.ptt.clone();
+                let manual = bridge.manual_keyed.clone();
                 match tokio::task::spawn_blocking(move || {
-                    ptt.lock().unwrap_or_else(|e| e.into_inner()).release_ptt()
+                    let outcome = ptt.unkey(None); // see the PTT TRUE arm: response line, not an event
+                    manual.store(false, std::sync::atomic::Ordering::Relaxed);
+                    outcome
                 })
                 .await
                 {
-                    Ok(Ok(())) => vec!["PTT FALSE".into()],
-                    Ok(Err(e)) => {
-                        tracing::error!(error = %e, "PTT release failed");
-                        vec![format!("FAULT PTT release failed: {e}")]
+                    Ok(openpulse_radio::UnkeyOutcome::Failed) => {
+                        tracing::error!("PTT release failed");
+                        vec!["FAULT PTT release failed".into()]
                     }
+                    Ok(_) => vec!["PTT FALSE".into()],
                     Err(_) => vec!["FAULT PTT task panicked".into()],
                 }
             }

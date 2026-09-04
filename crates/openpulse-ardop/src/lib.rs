@@ -104,6 +104,12 @@ impl ArdopServer {
             config.auto_id_signoff_idle_secs,
         );
         spawn_worker(bridge.clone(), tx_data_rx);
+        // Force-release a key that outlives DEFAULT_PTT_MAX. Without this the manual `PTT TRUE` path
+        // has no bound at all: `release_ptt_on_disconnect` only fires when the socket CLOSES, so a
+        // host that keys and then hangs while still connected holds the transmitter indefinitely.
+        // This is the ARDOP half of the #972 follow-up, which moved the watchdog core into
+        // `openpulse-radio` for these front-ends and never wired it.
+        let _ptt_watchdog = bridge.ptt.spawn_watchdog(Some(bridge.ptt_observer()));
         Self { bridge, config }
     }
 
