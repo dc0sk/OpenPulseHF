@@ -897,21 +897,24 @@ pub async fn run(cfg: OpenpulseConfig, modem_backend: Box<dyn AudioBackend>) -> 
                                     // Skipping is correct; skipping SILENTLY is not — receiver-led ARQ then
                                     // stalls with no diagnostic anywhere, and the operator sees a link that
                                     // simply stops (audit 2026-07-19, #8).
-                                    let ack_guard = ptt.keyed(Some(&handle.event_tx));
-                                    if ack_guard.is_err() {
-                                        tracing::warn!(
-                                            "OTA ACK skipped — PTT assert failed; the sender will \
-                                             see no ACK and the ARQ exchange will stall"
-                                        );
-                                    }
-                                    if let (Ok(_guard), Some(ack)) = (ack_guard, res.ack.as_ref()) {
+                                    if let Some(ack) = res.ack.as_ref() {
                                         // Mode-aware ACK: K=3 union MFSK16-ACK (with a leading FSK4 copy)
                                         // when recommending the sub-floor rung, else FSK4-ACK. The ISS
                                         // union-listens, so either is heard.
-                                        if let Err(e) = tokio::task::block_in_place(|| {
-                                            engine.transmit_ota_ack(ack, None)
-                                        }) {
-                                            tracing::warn!("OTA ACK transmit failed: {e}");
+                                        if let Err(crate::KeyedTxError::Assert) = crate::keyed_transmit(
+                                            &ptt,
+                                            Some(&handle.event_tx),
+                                            "ota-ack",
+                                            || {
+                                                tokio::task::block_in_place(|| {
+                                                    engine.transmit_ota_ack(ack, None)
+                                                })
+                                            },
+                                        ) {
+                                            tracing::warn!(
+                                                "OTA ACK skipped — PTT assert failed; the sender will \
+                                                 see no ACK and the ARQ exchange will stall"
+                                            );
                                         }
                                     }
                                 }
@@ -1086,29 +1089,32 @@ pub async fn run(cfg: OpenpulseConfig, modem_backend: Box<dyn AudioBackend>) -> 
                         // A skipped station ID is a §97.119 obligation not met, so it is logged at
                         // `error`: the operator has to know the station is transmitting without
                         // identifying, and this was previously silent (audit 2026-07-19, #8).
-                        let id_guard = ptt.keyed(Some(&handle.event_tx));
-                        if id_guard.is_err() {
-                            tracing::error!(
+                        match crate::keyed_transmit(
+                            &ptt,
+                            Some(&handle.event_tx),
+                            "station-id",
+                            || {
+                                tokio::task::block_in_place(|| {
+                                    engine.transmit(id_body.as_bytes(), &id_mode, None)
+                                })
+                            },
+                        ) {
+                            Ok(()) => tracing::info!(
+                                callsign = %id_callsign,
+                                mode = %id_mode,
+                                kind = reason,
+                                "transmitted station ID"
+                            ),
+                            // A refused assert is a §97.119 obligation NOT met — error, not warn.
+                            Err(crate::KeyedTxError::Assert) => tracing::error!(
                                 callsign = %id_callsign,
                                 kind = reason,
                                 "station ID NOT transmitted — PTT assert failed; §97.119 \
                                  identification has not gone out"
-                            );
-                        }
-                        if let Ok(_guard) = id_guard {
-                            match tokio::task::block_in_place(|| {
-                                engine.transmit(id_body.as_bytes(), &id_mode, None)
-                            }) {
-                                Ok(()) => tracing::info!(
-                                    callsign = %id_callsign,
-                                    mode = %id_mode,
-                                    kind = reason,
-                                    "transmitted station ID"
-                                ),
-                                Err(e) => tracing::warn!(
-                                    error = %e, mode = %id_mode, "station-ID transmit failed"
-                                ),
-                            }
+                            ),
+                            Err(crate::KeyedTxError::Transmit(e)) => tracing::warn!(
+                                error = %e, mode = %id_mode, "station-ID transmit failed"
+                            ),
                         }
                         // Advance regardless of PTT success (a persistent hardware fault is surfaced by
                         // the warning above, not by per-tick retry spam), and exclude the just-sent ID
@@ -1201,12 +1207,16 @@ fn drain_filexfer_tx(
         idx += count;
         // RAII guard (REQ-PTT-01) per burst: releases at block end / on unwind. On assert failure abort
         // the drain — the remaining queue was already taken, so those fragments are dropped this pass.
-        let Ok(_guard) = ptt.keyed(Some(event_tx)) else {
-            tracing::warn!("filexfer PTT assert failed");
+        // One keying for the whole burst, not per fragment.
+        if crate::keyed_transmit(ptt, Some(event_tx), "filexfer", || {
+            for (frag, mode) in burst {
+                tokio::task::block_in_place(|| engine.transmit(frag, mode, None))?;
+            }
+            Ok(())
+        })
+        .is_err()
+        {
             return;
-        };
-        for (frag, mode) in burst {
-            let _ = tokio::task::block_in_place(|| engine.transmit(frag, mode, None));
         }
     }
 }
@@ -1555,13 +1565,9 @@ fn transmit_beacon_with_ptt(
     mode: &str,
 ) {
     // RAII guard (REQ-PTT-01): releases at scope end, and on unwind if `transmit_raw_audio` panics.
-    let Ok(_guard) = ptt.keyed(None) else {
-        tracing::warn!("discovery beacon PTT assert failed");
-        return;
-    };
-    if let Err(e) = engine.transmit_raw_audio(audio, mode, None) {
-        tracing::warn!("discovery beacon transmit failed: {e}");
-    }
+    let _ = crate::keyed_transmit(ptt, None, "discovery-beacon", || {
+        engine.transmit_raw_audio(audio, mode, None)
+    });
 }
 
 /// Apply a manual `PttAssert`/`PttRelease` command to the PTT hardware, synchronously.
@@ -1681,17 +1687,22 @@ fn ota_send_with_ptt(
             body.len() + openpulse_core::frame::Frame::WIRE_OVERHEAD,
         );
 
-        // Key PTT for the data frame via an RAII guard (REQ-PTT-01). On assert failure abort (treat as
-        // delivered so the loop stops; the PTT failure is already surfaced as a warn + event).
-        let Ok(guard) = ptt.keyed(Some(event_tx)) else {
-            tracing::warn!("OTA send PTT assert failed");
-            return Some(OtaAttempt::Delivered);
+        // Key PTT for the data frame (REQ-PTT-01). The guard is owned by `keyed_transmit` and drops
+        // when it returns — i.e. BEFORE the ACK listen below, which is the half-duplex turnaround this
+        // path needs; on a panic inside the closure it releases during unwind rather than leaving the
+        // rig keyed.
+        //
+        // NOTE: the assert-failure arm returns `Delivered`, which stops the retry loop and drops the
+        // operator's message with only a log line. The comment here used to say "already surfaced as
+        // a warn + event"; that is false — `SharedPtt::key` emits no event on failure. Tracked
+        // separately rather than changed under a keying PR.
+        let tx = match crate::keyed_transmit(ptt, Some(event_tx), "ota-send", || {
+            tokio::task::block_in_place(|| engine.transmit_with_fec_mode(body, &mode, fec, None))
+        }) {
+            Ok(()) => Ok(()),
+            Err(crate::KeyedTxError::Assert) => return Some(OtaAttempt::Delivered),
+            Err(crate::KeyedTxError::Transmit(e)) => Err(e),
         };
-        let tx =
-            tokio::task::block_in_place(|| engine.transmit_with_fec_mode(body, &mode, fec, None));
-        // Release PTT before listening (half-duplex turnaround); if the transmit above panics, the
-        // guard's Drop releases during unwind instead of leaving the rig keyed.
-        guard.release();
 
         if let Err(e) = tx {
             tracing::warn!(error = %e, "OTA data transmit failed");

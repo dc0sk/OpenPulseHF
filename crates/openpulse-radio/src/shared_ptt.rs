@@ -267,6 +267,13 @@ pub struct PttKeyGuard {
 impl PttKeyGuard {
     /// Release now instead of at scope end — for the half-duplex turnaround where PTT must drop before
     /// listening. Idempotent; after this the `Drop` is a no-op. Returns the underlying unkey outcome.
+    ///
+    /// DORMANT(#1260): the daemon's OTA send was its last production caller until #1262 routed every
+    /// emission through a helper that owns the guard, so the drop now happens at the same point and
+    /// the explicit call became redundant *there*. It is kept rather than deleted because the
+    /// capability it provides — dropping PTT while the guard's scope continues — is exactly what the
+    /// cross-band repeater's half-duplex path needs when it is moved onto `SharedPtt` (#1260), and
+    /// what any future transmit-then-listen caller will need. `Drop` alone cannot express it.
     pub fn release(mut self) -> UnkeyOutcome {
         self.release_inner()
     }
