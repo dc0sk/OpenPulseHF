@@ -4,7 +4,7 @@ mod common;
 
 use ed25519_dalek::SigningKey;
 use openpulse_qsy::{
-    frame::{decode_signed, decode_unsigned, encode_signed, encode_unsigned},
+    frame::{decode_signed, encode_signed},
     scanner::QsyScanner,
     BandplanPolicy, ConnectionTrustLevel, QsyAction, QsyFrame, QsyFrameError, QsyPolicy,
     QsySession,
@@ -50,8 +50,17 @@ fn frame_round_trip() {
             reason: "qsy disabled".into(),
         },
     ];
+    // `decode_unsigned` is crate-private (#1252 — it has no production caller; only
+    // `encode_unsigned` does, for CLI display), so the unsigned round-trip is asserted in
+    // `frame.rs`'s unit tests. Here the same frames go through the SIGNED path, which is the wire.
     for f in frames {
-        assert_eq!(decode_unsigned(&encode_unsigned(&f, TS)).unwrap(), (f, TS));
+        let seed = [5u8; 32];
+        let key = SigningKey::from_bytes(&seed);
+        let line = encode_signed(&f, TS, &seed).expect("sign");
+        assert_eq!(
+            decode_signed(&line, &key.verifying_key().to_bytes(), fresh()).unwrap(),
+            f
+        );
     }
 }
 

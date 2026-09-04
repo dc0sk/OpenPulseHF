@@ -18,11 +18,10 @@
 
 use ed25519_dalek::SigningKey;
 use openpulse_audio::LoopbackBackend;
-use openpulse_core::frame::Frame;
 use openpulse_daemon::protocol::ControlEvent;
 use openpulse_daemon::{process_received_bytes, RuntimeControlState, VerifiedPeer};
 use openpulse_modem::ModemEngine;
-use openpulse_qsy::frame::{encode_signed, QsyFrame, MAX_QSY_LINE_BYTES};
+use openpulse_qsy::frame::{encode_signed, QsyFrame};
 use std::sync::Arc;
 use tokio::sync::{broadcast, Mutex};
 
@@ -200,24 +199,6 @@ fn a_maximal_line_fits_one_frame() {
             expected_max + 1
         );
     }
-}
-
-/// `MAX_QSY_LINE_BYTES` is the ceiling `Frame` actually enforces, not a number typed twice.
-///
-/// The encoder refuses above this; `Frame::new` refuses above its own limit. If either moves without
-/// the other, an over-long line would be accepted at encode and fail at transmit again — the exact
-/// wedge #1252 removed. Asserted from both sides so a drift in either direction fails here.
-#[test]
-fn the_line_ceiling_is_the_frame_ceiling() {
-    assert!(
-        Frame::new(0, vec![0u8; MAX_QSY_LINE_BYTES]).is_ok(),
-        "a line at MAX_QSY_LINE_BYTES must fit one Frame"
-    );
-    assert!(
-        Frame::new(0, vec![0u8; MAX_QSY_LINE_BYTES + 1]).is_err(),
-        "MAX_QSY_LINE_BYTES is below Frame's real limit — the encoder is refusing lines that would \
-         have fit, and the measured candidate ceilings are wrong"
-    );
 }
 
 /// An INITIATOR's negotiation is bound to the key that was the link peer when it opened.

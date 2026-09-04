@@ -5069,19 +5069,27 @@ mod command_apply_tests {
         // Decoded, not counted. This used to be `split_whitespace().nth(1)`, which read the token
         // by POSITION — so #1162's wire token shifted every field by one and the assertion compared
         // the verb against the token. Parsing through the codec cannot drift with the format.
-        // Strip the signature before reading the token back through the codec.
-        let payload = openpulse_qsy::frame::verify_line(
+        // Read it back the way a receiver does — `decode_signed`, which verifies against the
+        // expected key and checks freshness in one step. Using the unsigned codec here would have
+        // asserted on a line no receiver would accept.
+        let decoded = openpulse_qsy::frame::decode_signed(
             req_text.trim(),
             &ed25519_dalek::SigningKey::from_bytes(&INITIATOR_SEED)
                 .verifying_key()
                 .to_bytes(),
+            openpulse_core::handshake::Freshness {
+                now_ms: SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_millis() as u64,
+                max_skew_ms: HANDSHAKE_MAX_SKEW_MS,
+            },
         )
-        .expect("our own signature verifies");
-        let token_from_line =
-            match openpulse_qsy::frame::decode_unsigned(payload).expect("decode the REQ") {
-                (QsyFrame::Req { token, .. }, _ts) => token,
-                (other, _) => panic!("expected a QSY_REQ, got {other:?}"),
-            };
+        .expect("our own signed REQ verifies and is fresh");
+        let token_from_line = match decoded {
+            QsyFrame::Req { token, .. } => token,
+            other => panic!("expected a QSY_REQ, got {other:?}"),
+        };
 
         // ── Responder: feed the frame ───────────────────────────────────────
         let mut engine = test_engine();

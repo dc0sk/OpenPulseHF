@@ -121,7 +121,7 @@ pub fn encode_unsigned(frame: &QsyFrame, timestamp_ms: u64) -> String {
 }
 
 /// Decode a frame from an unsigned text line.
-pub fn decode_unsigned(line: &str) -> Result<(QsyFrame, u64), QsyFrameError> {
+fn decode_unsigned(line: &str) -> Result<(QsyFrame, u64), QsyFrameError> {
     let line = line.trim_end_matches('\r').trim_end_matches('\n');
 
     // The wire token is consumed FIRST and its version is authoritative (#1162). Before this the
@@ -325,10 +325,30 @@ pub fn decode_signed(
 }
 
 /// Largest signed QSY line that still fits one `Frame` payload (`Frame::new` refuses over 255).
-pub const MAX_QSY_LINE_BYTES: usize = 255;
+const MAX_QSY_LINE_BYTES: usize = 255;
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+
+    /// `MAX_QSY_LINE_BYTES` is the ceiling `Frame` actually enforces, not a number typed twice.
+    ///
+    /// The encoder refuses above this; `Frame::new` refuses above its own limit. If either moves
+    /// without the other, an over-long line would be accepted at encode and fail at transmit again —
+    /// the wedge #1252 removed. Asserted from both sides so a drift either way fails here.
+    #[test]
+    fn the_line_ceiling_is_the_frame_ceiling() {
+        assert!(
+            openpulse_core::frame::Frame::new(0, vec![0u8; MAX_QSY_LINE_BYTES]).is_ok(),
+            "a line at MAX_QSY_LINE_BYTES must fit one Frame"
+        );
+        assert!(
+            openpulse_core::frame::Frame::new(0, vec![0u8; MAX_QSY_LINE_BYTES + 1]).is_err(),
+            "MAX_QSY_LINE_BYTES is below Frame's real limit — the encoder is refusing lines that \
+             would have fit, and the measured candidate ceilings are wrong"
+        );
+    }
+
     /// A fixed, non-zero stamp: `Freshness::check` refuses 0 as "no timestamp".
     const TS: u64 = 1_760_000_000_000;
 
@@ -342,8 +362,6 @@ mod tests {
             max_skew_ms: 120_000,
         }
     }
-
-    use super::*;
 
     /// #1162: every encoded line starts with the wire token, and the token is DERIVED from the
     /// signing registry rather than typed here — so a change to either half fails this test rather
