@@ -7,7 +7,7 @@ use openpulse_core::handshake::InMemoryTrustStore;
 use openpulse_core::relay::RelayForwarder;
 use openpulse_core::station_id::StationIdTimer;
 use openpulse_modem::ModemEngine;
-use openpulse_radio::{NoOpPtt, PttController};
+use openpulse_radio::{NoOpPtt, PttController, PttObserver, SharedPtt, DEFAULT_PTT_MAX};
 
 use crate::state::TncState;
 
@@ -43,8 +43,14 @@ pub struct ModemBridge {
     pub trust_store: Arc<InMemoryTrustStore>,
     /// Present when relay is enabled in the config; enforces hop-limit and dedup.
     pub relay_forwarder: Option<Arc<std::sync::Mutex<RelayForwarder>>>,
-    /// PTT controller for hardware transmit gating; `NoOpPtt` when not configured.
-    pub ptt: Arc<std::sync::Mutex<Box<dyn PttController + Send>>>,
+    /// PTT hardware + watchdog deadline (REQ-PTT-01). Every keyed emission on this TNC goes through
+    /// [`keyed_transmit`], so a burst cannot outlive its guard, and `spawn_watchdog` force-releases a
+    /// key that outlives `DEFAULT_PTT_MAX` — the ARDOP half of the #972 follow-up.
+    pub ptt: SharedPtt,
+    /// Set while the transmitter is keyed by the host's manual `PTT TRUE` command rather than by a
+    /// worker burst. Only a manual key may be dropped on client disconnect: worker bursts are
+    /// guard-released, and a monitor client disconnecting must not cut a station ID mid-emission.
+    pub manual_keyed: Arc<AtomicBool>,
     /// Periodic auto-ID interval in seconds (REQ-REG-10); `0` disables auto-ID. Set via
     /// [`set_auto_id`](Self::set_auto_id) before the worker starts.
     pub auto_id_interval_secs: Arc<AtomicU64>,
@@ -103,7 +109,8 @@ impl ModemBridge {
             mesh_mode: Arc::new(AtomicBool::new(false)),
             trust_store: Arc::new(trust_store),
             relay_forwarder: relay_forwarder.map(|f| Arc::new(std::sync::Mutex::new(f))),
-            ptt: Arc::new(std::sync::Mutex::new(ptt)),
+            ptt: SharedPtt::new(Some(ptt), DEFAULT_PTT_MAX),
+            manual_keyed: Arc::new(AtomicBool::new(false)),
             auto_id_interval_secs: Arc::new(AtomicU64::new(0)),
             auto_id_signoff_idle_secs: Arc::new(AtomicU64::new(0)),
             id_requested: Arc::new(AtomicBool::new(false)),
@@ -125,6 +132,17 @@ impl ModemBridge {
     /// Push an unsolicited event line to all connected command clients.
     pub fn push_event(&self, msg: impl Into<String>) {
         let _ = self.event_tx.send(msg.into());
+    }
+
+    /// The PTT observer for this bridge: keyed/unkeyed edges become the `PTT TRUE` / `PTT FALSE`
+    /// lines the ARDOP host protocol owes its client.
+    ///
+    /// Reference TNCs emit these unconditionally *and* key their own hardware — ardopcf does both, and
+    /// Pat's client only ever RECEIVES the line (it never sends `PTT TRUE`; its `PTTControl` defaults
+    /// off). So the edges are protocol output, not a substitute for keying, which is why they are not
+    /// conditional on `ptt_backend`.
+    pub fn ptt_observer(&self) -> Arc<dyn PttObserver> {
+        Arc::new(ArdopPttEvents(self.event_tx.clone()))
     }
 
     /// Update TNC state.
@@ -285,29 +303,63 @@ fn worker_loop(bridge: Arc<ModemBridge>, tx_data_rx: std::sync::mpsc::Receiver<V
                 let adaptive = engine.current_tx_level().is_some();
 
                 if adaptive && !use_fec {
-                    // ISS adaptive path: transmit with ARQ retry (up to 3 retransmits).
-                    // FEC transmissions use their own reliability mechanism and skip ARQ.
-                    match engine.transmit_arq(&data, &mode, None, 3) {
-                        Ok(rate_event) => {
-                            tracing::debug!(rate_event = ?rate_event, "ARQ TX succeeded");
-                            last_activity = std::time::Instant::now();
+                    // ISS adaptive path: ARQ retry, keyed PER ATTEMPT.
+                    //
+                    // Deliberately NOT `engine.transmit_arq`, which transmits AND listens for the ACK
+                    // inside one call — keying across it would hold the transmitter up through the ACK
+                    // listen, so the peer's reply arrives while we are still keyed. The daemon avoids
+                    // this the same way (`ota_send_with_ptt` keys per attempt and releases before the
+                    // listen); this loop mirrors it over the engine's public pieces, so no PTT concept
+                    // has to leak into `ModemEngine`.
+                    let attempts = 1 + ARQ_RETRANSMITS;
+                    for attempt in 0..attempts {
+                        // Transmit at the ladder's current mode, exactly as `transmit_arq` does.
+                        let tx_mode = engine.current_adaptive_mode().unwrap_or(&mode).to_owned();
+                        let sent = keyed_transmit(&bridge, "arq", || {
+                            engine.transmit(&data, &tx_mode, None)
+                        })
+                        .is_some();
+                        // Guard dropped here: the transmitter is DOWN before the ACK listen begins.
+                        // That is the whole reason this loop exists instead of `engine.transmit_arq`.
+                        if !sent {
+                            break;
                         }
-                        Err(e) => {
-                            tracing::warn!("ARQ TX failed: {e}");
+                        match engine.receive_ack_with_short_fec(None) {
+                            Ok(ack) if ack.ack_type != AckType::Nack => {
+                                engine.apply_ack_frame(&ack);
+                                tracing::debug!(attempt, "ARQ: acked");
+                                last_activity = std::time::Instant::now();
+                                break;
+                            }
+                            // Nack or no ACK at all: step the TX rate down and retry, matching
+                            // `transmit_arq`'s treatment of a missing ACK as an implicit Nack.
+                            other => {
+                                let _ = engine.apply_ack(AckType::AckDown);
+                                if let Err(ref e) = other {
+                                    tracing::debug!(attempt, error = %e, "ARQ: no ACK, retrying");
+                                } else {
+                                    tracing::debug!(attempt, "ARQ: Nack, retrying");
+                                }
+                                if attempt + 1 == attempts {
+                                    tracing::warn!(
+                                        "ARQ TX failed: no ACK after {attempts} attempts"
+                                    );
+                                }
+                            }
                         }
                     }
                     drop(engine);
                 } else {
-                    let tx_result = if use_fec {
-                        engine.transmit_with_fec(&data, &mode, None)
-                    } else {
-                        engine.transmit(&data, &mode, None)
-                    };
+                    let tx_ok = keyed_transmit(&bridge, "data", || {
+                        if use_fec {
+                            engine.transmit_with_fec(&data, &mode, None)
+                        } else {
+                            engine.transmit(&data, &mode, None)
+                        }
+                    })
+                    .is_some();
                     drop(engine);
-                    if let Err(ref e) = tx_result {
-                        tracing::warn!("modem TX error: {e}");
-                    }
-                    if tx_result.is_ok() {
+                    if tx_ok {
                         if let Some(rx) = do_receive(&bridge, &mode) {
                             maybe_relay_forward(&bridge, &rx, &mode);
                             if !rx.is_empty() {
@@ -348,9 +400,9 @@ fn worker_loop(bridge: Arc<ModemBridge>, tx_data_rx: std::sync::mpsc::Receiver<V
                     Ok((payload, ack_type)) => {
                         if can_tx {
                             let ack_frame = AckFrame::new(ack_type, &mode);
-                            if let Err(e) = engine.transmit_ack_with_short_fec(&ack_frame, None) {
-                                tracing::warn!("IRS ACK transmit failed: {e}");
-                            }
+                            keyed_transmit(&bridge, "irs-ack", || {
+                                engine.transmit_ack_with_short_fec(&ack_frame, None)
+                            });
                         } else {
                             tracing::warn!("suppressing IRS ACK: no valid MYID callsign (§97.119)");
                         }
@@ -360,9 +412,9 @@ fn worker_loop(bridge: Arc<ModemBridge>, tx_data_rx: std::sync::mpsc::Receiver<V
                         tracing::debug!("IRS receive_with_ack_hint failed ({e}); sending Nack");
                         if can_tx {
                             let nack = AckFrame::new(AckType::Nack, &mode);
-                            if let Err(e) = engine.transmit_ack_with_short_fec(&nack, None) {
-                                tracing::warn!("IRS Nack transmit failed: {e}");
-                            }
+                            keyed_transmit(&bridge, "irs-nack", || {
+                                engine.transmit_ack_with_short_fec(&nack, None)
+                            });
                         } else {
                             tracing::warn!(
                                 "suppressing IRS Nack: no valid MYID callsign (§97.119)"
@@ -413,39 +465,84 @@ fn tx_callsign(bridge: &ModemBridge) -> Option<String> {
     openpulse_core::station_id::callsign_is_valid(&call).then_some(call)
 }
 
-/// Transmit a station identification: key PTT (worker-driven, unlike host-keyed data TX), send the
+/// ARQ retransmits after the first attempt, matching the value `transmit_arq` was called with.
+const ARQ_RETRANSMITS: usize = 3;
+
+/// Maps a keyed/unkeyed edge onto the ARDOP host event stream.
+struct ArdopPttEvents(broadcast::Sender<String>);
+
+impl PttObserver for ArdopPttEvents {
+    fn ptt_changed(&self, active: bool) {
+        let _ = self
+            .0
+            .send(if active { "PTT TRUE" } else { "PTT FALSE" }.to_string());
+    }
+}
+
+/// Run one keyed emission: key the transmitter, run `emit`, release on drop.
+///
+/// **Every** `engine.transmit*` call in this file goes through here — enforced by
+/// `every_transmit_is_keyed` in `tests/ptt_keys_every_transmit.rs`, which fails on a bare call.
+///
+/// The caller must already hold the engine lock and pass it in. That order is deliberate: keying
+/// first and then waiting for the engine leaves the rig keyed and silent for the duration of the
+/// wait, which is what `transmit_station_id` used to do. Declaring the guard after the lock also
+/// means Rust drops it first, so PTT falls before the engine mutex is released and the following RX
+/// poll never runs against a keyed rig.
+///
+/// `transmit` blocks to end-of-audio (`stage_emit_output` → `flush()`), so a guard dropped when it
+/// returns releases after the last sample — the same fact the daemon's send path relies on.
+fn keyed_transmit<T>(
+    bridge: &ModemBridge,
+    what: &str,
+    emit: impl FnOnce() -> Result<T, openpulse_core::error::ModemError>,
+) -> Option<T> {
+    let observer = bridge.ptt_observer();
+    let _guard = match bridge.ptt.keyed(Some(&observer)) {
+        Ok(g) => g,
+        Err(e) => {
+            tracing::warn!(what, error = %e, "PTT assert failed; skipping transmission");
+            bridge.push_event(format!("FAULT PTT assert failed: {e}"));
+            return None;
+        }
+    };
+    match emit() {
+        Ok(v) => Some(v),
+        Err(e) => {
+            tracing::warn!(what, error = %e, "transmit failed");
+            None
+        }
+    }
+}
+
+/// Transmit a station identification as ONE keyed burst: the digital `DE <callsign>` ID and, when
+/// `CWID` is on, the Morse ID.
+///
+/// The old doc here said data TX was "host-keyed". That described a model no ARDOP host implements:
+/// Pat's client never sends `PTT TRUE` (it only RECEIVES the line, and its `PTTControl` defaults
+/// off), and ardopcf keys its own hardware. Since #1250 every emission on this TNC is keyed by
+/// [`keyed_transmit`], and the `PTT TRUE`/`PTT FALSE` lines are emitted as async events for hosts
+/// that drive their own rig. Best-effort — failures are logged, not propagated, so the worker keeps
+/// running. Sends the
 /// digital `DE <callsign>` ID in the active mode, optionally append a Morse CW ID (`CWID`), release
 /// PTT. Best-effort — failures are logged, not propagated, so the worker keeps running.
 fn transmit_station_id(bridge: &ModemBridge, mode: &str, callsign: &str, cwid: bool) {
-    let keyed = bridge
-        .ptt
-        .lock()
-        .unwrap_or_else(|e| e.into_inner())
-        .assert_ptt()
-        .is_ok();
-    if !keyed {
-        tracing::warn!("station-ID PTT assert failed; skipping ID");
-        return;
-    }
-    {
-        let mut engine = bridge.engine.lock().unwrap_or_else(|e| e.into_inner());
+    // Engine lock FIRST, then key. The old order keyed before waiting for the engine, so contention
+    // (a CONNECT/DISCONNECT holding it) left the rig keyed and silent for the whole wait.
+    let mut engine = bridge.engine.lock().unwrap_or_else(|e| e.into_inner());
+    // The digital ID and the CW ID are ONE keyed burst — keying is a burst property, not a frame
+    // property, so they must not key/unkey twice.
+    let sent = keyed_transmit(bridge, "station-id", || {
         let body = format!("DE {callsign}");
-        if let Err(e) = engine.transmit(body.as_bytes(), mode, None) {
-            tracing::warn!("station-ID transmit failed: {e}");
-        }
+        engine.transmit(body.as_bytes(), mode, None)?;
         if cwid {
-            if let Err(e) = engine.emit_cw_id(callsign, None) {
-                tracing::warn!("station-ID CW transmit failed: {e}");
-            }
+            engine.emit_cw_id(callsign, None)?;
         }
-    }
-    if let Err(e) = bridge
-        .ptt
-        .lock()
-        .unwrap_or_else(|e| e.into_inner())
-        .release_ptt()
-    {
-        tracing::warn!("station-ID PTT release failed: {e}");
+        Ok(())
+    });
+    drop(engine);
+    if sent.is_none() {
+        return;
     }
     tracing::info!(callsign, mode, cwid, "transmitted station ID (ARDOP)");
 }
@@ -511,14 +608,9 @@ fn maybe_relay_forward(bridge: &ModemBridge, payload: &[u8], mode: &str) {
     match forwarded {
         Ok(out_envelope) => {
             if let Ok(out_bytes) = out_envelope.encode() {
-                if let Err(e) = bridge
-                    .engine
-                    .lock()
-                    .unwrap_or_else(|e| e.into_inner())
-                    .transmit(&out_bytes, mode, None)
-                {
-                    tracing::warn!("relay TX error: {e}");
-                }
+                let mut engine = bridge.engine.lock().unwrap_or_else(|e| e.into_inner());
+                keyed_transmit(bridge, "relay", || engine.transmit(&out_bytes, mode, None));
+                drop(engine);
                 tracing::debug!(
                     session_id = out_envelope.session_id,
                     hop_index = out_envelope.hop_index,

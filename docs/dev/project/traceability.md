@@ -9,6 +9,61 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-09-04 — Every ARDOP emission keys the transmitter (#1250)
+
+- **Requirement/change:** #1250, from the 2026-09-02 gap audit (found independently by two finders).
+  `assert_ptt` had two call sites in `openpulse-ardop` — the periodic station ID and the host's manual
+  `PTT TRUE` — while the ISS data path, the ARQ path, the IRS ACK/NACK and relay forwarding all
+  transmitted without touching `bridge.ptt`. With `ptt_backend = "rigctld"` the ID keyed the rig and
+  was heard while every data burst played into an unkeyed transceiver. REQ-PTT-01 / REQ-REG-10.
+- **Design decision:** the TNC keys everything **and** emits `PTT TRUE`/`PTT FALSE` as async events —
+  neither of the two options I proposed. Adversarial review settled it from the reference
+  implementations rather than from our code: Pat's client never SENDS `PTT TRUE` (it only receives
+  the line; `PTTControl` defaults off) and ardopcf keys its own hardware while still emitting the
+  edges. So the edges are protocol output owed to the host regardless, not a substitute for keying —
+  which is why gating them on `ptt_backend` was the wrong variable. The `bridge.rs` comment calling
+  data TX "host-keyed" described a model **no real host implements**; it was never true.
+- **Three implementation constraints the review imposed:** (1) engine lock FIRST, then key — the old
+  station-ID order keyed before waiting for the engine, leaving the rig keyed and silent for the wait;
+  declaring the guard after the lock also makes PTT fall before the mutex releases. (2) Do NOT key
+  across `transmit_arq`, which transmits and listens for the ACK in one call — the bridge now runs the
+  daemon's per-attempt shape over the engine's public pieces, so no PTT concept leaks into
+  `ModemEngine`. (3) REJECTED the seam-level hook that this repo's own "wire it at the seam" lesson
+  would suggest: the K=3 MFSK16 ACK emits three copies under ONE keying, so a per-emit hook would key
+  three times per ACK. **Keying is a burst property, not a frame property.**
+- **Found during implementation, not predicted by the review:** attaching the observer to the manual
+  `PTT TRUE` path made the TNC emit an async edge AND a command response on the same stream, so a host
+  reading the next line as its response read the event — caught by the existing
+  `explicit_ptt_false_releases_once_and_disconnect_does_not_double_release` control. Fixed
+  semantically: an edge reports keying the host did NOT initiate, so the manual path passes no
+  observer.
+- **Implementation (PR pending):** `ModemBridge.ptt` is now `openpulse_radio::SharedPtt` with
+  `spawn_watchdog` (the ARDOP half of #972, which relocated the core for these front-ends and never
+  wired it); a `keyed_transmit` helper wraps all six sites; `manual_keyed` scopes
+  `release_ptt_on_disconnect` to host keys so a disconnecting monitor cannot cut a station ID; the
+  false comments in `bridge.rs` and `docs/openpulse-manual.md` corrected.
+- **Tests:** `crates/openpulse-ardop/tests/ptt_keys_every_transmit.rs` — a data frame keys and
+  releases; the transmitter is DOWN during the ACK listen; and a **source scan** requiring every
+  `engine.transmit*` in `bridge.rs` to sit inside the helper, **validated against a planted bare
+  call** so it cannot pass by matching nothing.
+- **The scan needed a second pass, and the gate is what found it.** The first version tracked brace
+  depth; `cargo fmt` then collapsed the relay call onto one line, so the helper's span opened and
+  closed on the same line and the exemption was gone before the check ran — a FALSE POSITIVE on
+  correct code, caught by the full gate because `fmt` runs before the tests there. Replaced with
+  balanced-paren span blanking, which reformatting cannot disturb, and **sabotage-verified**: a real
+  bare `engine.transmit` planted in `bridge.rs` is detected and named by line, and the scan passes
+  again after restore (sha256-verified).
+- **Test results:** all three **fail without the fix** (data/ARQ time out waiting for a key; the scan
+  reports the bare calls) and pass with it. The data test clears its **positive control** — the ID
+  path, which keyed before the fix — before timing out, so the failure is attributable to the defect
+  rather than to an unwired spy. All 37 pre-existing ARDOP tests pass; the one that initially failed
+  found a real flaw in the change (above). Fix stashed and restored, restore verified by `sha256sum
+  -c`. Full `scripts/gate.sh` verdict in the PR.
+- **Split out rather than folded in:** #1257 (leader delay — without it host-keyed rigs clip the
+  preamble, so the edges do not make host keying supported), #1258 (`build_ptt` missing four
+  backends), #1259 (KISS: no PTT at all, silent, false comment), #1260 (repeater: needs `SharedPtt`
+  but its deliberate full-duplex hold rules out the default 180 s watchdog).
+
 ## 2026-09-03 — The RX burst cap must cover the rung the peer is sending (#1249)
 
 - **Requirement/change:** #1249, from the 2026-09-02 gap audit. `accumulate_routed` sized its runaway
