@@ -430,6 +430,7 @@ capabilities:
     - REQ-FUN-06
     tests:
     - crates/openpulse-core/src/ota_rate.rs
+    - crates/openpulse-modem/tests/burst_cap_tracks_the_ota_rung.rs
     - crates/openpulse-modem/tests/modcod_ladder.rs
     - crates/openpulse-modem/tests/ota_channel_adaptation.rs
     - crates/openpulse-modem/tests/ota_rate_lockstep.rs

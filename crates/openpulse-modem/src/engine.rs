@@ -876,6 +876,11 @@ const DCD_SQUELCH_MARGIN: f32 = 1.25;
 /// the FT-991A capture's floor is 0.0006 RMS, so this must stay well below anything real.
 const DCD_MIN_SQUELCH_THRESHOLD: f32 = 0.001;
 
+/// Floor for the per-mode cap, so a fast mode still accumulates a usable burst.
+///
+/// Note what the per-mode figure alone did NOT fix (#1249): it is derived from whatever mode is
+/// passed in, and the daemon passes its *configured* mode, not the OTA rung the peer is sending at.
+/// `ModemEngine::active_burst_cap_samples` is what closes that gap.
 const BURST_MIN_CAP_SAMPLES: usize = 240_000;
 
 /// Absolute ceiling on the burst accumulator (~320 s at 8 kHz, ≈10 MB of `f32`). The cap exists so a
@@ -1720,7 +1725,7 @@ impl ModemEngine {
     /// Whether a `body_len`-byte OTA data frame can ride the current TX rung. Only the fixed 255-byte MFSK16
     /// sub-floor frame is capacity-limited (one RS block); every other rung carries multi-block RS. A caller
     /// that gets `false` must NOT transmit — a body over the cap can't ride SL1, and bumping it to the next
-    /// rung is futile on `hpx_hf` (BPSK31 at >209 B exceeds the 30 s burst-accumulator window and the peer's
+    /// rung is futile on `hpx_hf` (the peer's
     /// SL1-settled candidate set never includes SL2), so it would only burn airtime on a doomed frame.
     pub fn ota_payload_fits_tx_rung(&self, body_len: usize) -> bool {
         match self.ota.as_ref().and_then(|o| o.tx_mode()) {
@@ -2039,6 +2044,36 @@ impl ModemEngine {
             .clamp(BURST_MIN_CAP_SAMPLES, BURST_MAX_CAP_SAMPLES)
     }
 
+    /// Burst cap for what this receiver may actually be sent, not just for the mode it is configured
+    /// with (#1249).
+    ///
+    /// `rx_mode` is the operator's configured mode; under an OTA session the peer transmits at
+    /// whatever rung the ladder selected, which is a different and often much slower mode. Sizing the
+    /// cap from `rx_mode` alone force-flushed every `hpx_hf` entry-rung frame mid-frame on the default
+    /// config (BPSK250's cap is 37.3 s; an SL2 BPSK31+Rs frame is 66.6 s, or 131.8 s at two RS
+    /// blocks).
+    ///
+    /// The bound is the **OTA candidate set**, not the whole profile: `rx_candidates` is what
+    /// `ota_decode_and_ack_inner` actually attempts (at most two rungs, plus the uncoded fallback,
+    /// which is `rx_mode`), so a frame at any other rung is discarded however long it was held.
+    /// Sizing from the profile would reserve buffer for frames the decode arm throws away by
+    /// construction. It also narrows as the link climbs, and `ota_lock_level` / `ota_set_level_bounds`
+    /// pin both candidate levels, so a locked session gets a correspondingly tighter cap for free.
+    ///
+    /// Deliberately does NOT set `rx_mode` from the rung: that field also aims the receiver notch's
+    /// protected band, where a wrong mode makes an interferer un-notchable.
+    fn active_burst_cap_samples(&self) -> usize {
+        let base = self.burst_cap_samples(self.rx_mode.as_deref());
+        match self.ota.as_ref() {
+            Some(ota) => ota
+                .rx_candidates()
+                .into_iter()
+                .map(|(_, mode, _)| self.burst_cap_samples(Some(mode)))
+                .fold(base, usize::max),
+            None => base,
+        }
+    }
+
     /// Burst-accumulate samples the CALLER already captured from a persistent input
     /// stream, returning a complete burst when the carrier drops (same contract as
     /// [`capture_burst`](Self::capture_burst)).
@@ -2079,8 +2114,9 @@ impl ModemEngine {
             // Carrier present: keep accumulating this burst.
             self.rx_burst.extend_from_slice(&samples.samples);
             self.rx_capturing = true;
-            // Per-mode, not a flat constant: a 30 s cap force-flushes BPSK31/BPSK63 mid-frame.
-            if self.rx_burst.len() >= self.burst_cap_samples(self.rx_mode.as_deref()) {
+            // Sized by what may ARRIVE (configured mode ∪ the OTA candidate rungs), not by the
+            // configured mode alone — see `active_burst_cap_samples` (#1249).
+            if self.rx_burst.len() >= self.active_burst_cap_samples() {
                 self.rx_capturing = false;
                 return Ok(Some(AudioSamples {
                     samples: std::mem::take(&mut self.rx_burst),

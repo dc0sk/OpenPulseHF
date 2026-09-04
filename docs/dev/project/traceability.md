@@ -9,6 +9,45 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-09-03 — The RX burst cap must cover the rung the peer is sending (#1249)
+
+- **Requirement/change:** #1249, from the 2026-09-02 gap audit. `accumulate_routed` sized its runaway
+  cap from `rx_mode`, and the daemon passes its *configured* mode (`server.rs` rx ticker), never the
+  OTA rung. Measured: `burst_cap_samples("BPSK250")` = 298 496 (37.3 s) against an `hpx_hf` SL2
+  BPSK31+Rs frame of 532 480 (66.6 s, one RS block) or 1 054 720 (131.8 s, two) — so the rung every
+  session STARTS on was force-flushed mid-frame on the default on-air config. SL3 splits too at two
+  blocks. REQ-FUN-06 / CAP-33.
+- **Design decision:** size from the **OTA candidate set**, not the whole profile. Adversarial review
+  overturned the profile-max proposal: `rx_candidates()` is at most two rungs and is exactly what
+  `ota_decode_and_ack_inner` attempts (plus the uncoded fallback, which *is* `rx_mode`), so a frame at
+  any other rung is discarded however long it was held — profile-max reserves buffer for frames the
+  decode arm throws away by construction. The candidate form also narrows as the link climbs, and
+  `ota_lock_level`/`ota_set_level_bounds` pin both candidate levels, so a locked session gets a
+  tighter cap without new accessors. `rx_mode` is deliberately NOT set from the rung: it also aims the
+  receiver notch's protected band.
+- **Measurement taken before merging** (the review asked for it, and it could have changed the fix):
+  `ota_decode_burst` on cap-length noise slabs, release build — 29.18 s / 30.84 s / 25.06 s at
+  298 496 / 1 193 984 / 2 387 968 samples. **Flat**: the pass is bounded by `burst_onset_scan_bounds`,
+  not by buffer length, so an 8× larger cap costs no decode time. (The absolute ~25-31 s on a slab
+  that decodes nothing is a separate defect, filed as #1255.)
+- **Implementation (PR pending):** `ModemEngine::active_burst_cap_samples`
+  (`crates/openpulse-modem/src/engine.rs`), used at the `accumulate_routed` cap check. Stale "30 s
+  burst-accumulator window" prose swept from `engine.rs` (two sites) and
+  `docs/dev/research/mfsk16-arq-seam-audit.md`.
+- **Tests:** `crates/openpulse-modem/tests/burst_cap_tracks_the_ota_rung.rs` — the entry-rung frame
+  survives as ONE burst under an OTA session; a **positive control in the same file** proves the cap
+  still splits it with no OTA session (so the gate cannot go vacuous if `BURST_MIN_CAP_SAMPLES` is
+  ever raised); and locking the ladder to a fast rung narrows the cap again, so the runaway guard
+  demonstrably still exists. Fed through `accumulate_capture` — the production entry — in 400-sample
+  daemon-sized ticks, at transmitted amplitude so the verdict does not depend on the noise-floor
+  tracker warming (#1254).
+- **Test results:** the new gate **fails on the unfixed engine — the frame arrives as 4 bursts, not
+  1** — and passes with the fix; both controls pass in BOTH states, which is what makes them controls.
+  Fix stashed and restored, restore verified by sha256. Full `scripts/gate.sh` verdict in the PR.
+- **Deliberately out of scope, stated not implied:** the multi-mode monitor decodes flushed bursts on
+  a separate engine at its own configured modes, so an operator listing BPSK31 there with no OTA
+  session still gets a split burst. This fix covers the OTA path only.
+
 ## 2026-09-02 — The ISS ACK listen must find the ACK inside a noisy capture (#1177)
 
 - **Requirement/change:** #1177 recorded that the FSK4-ACK-at-offset chain had no coverage. Chasing

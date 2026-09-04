@@ -33,7 +33,7 @@ each confirmed by ≥2 finders and by direct source/numeric verification.
   **Fix:** subtract the processing gain. Regression gate: `snr_estimate_intercept_is_on_the_channel_scale`.
 - **H1 — payload-capacity bump was futile (HIGH; confirmed by 3 finders).** A >209 B body at SL1 bumped to
   SL2/BPSK31, but the peer's SL1-settled candidate set never includes SL2, *and* a >209 B BPSK31 frame is
-  ~54 s > the 30 s burst-accumulator window — so the bump only burned airtime on a doomed frame, then
+  ~54 s > the burst-accumulator window as it was then sized (a flat 30 s; see #1249 for why the per-mode replacement still mis-sized it on the daemon) — so the bump only burned airtime on a doomed frame, then
   silently dropped. **Fix:** replace the bump with an honest capacity guard — the daemon surfaces a warning
   and skips (the sub-floor rung is for ≤209 B traffic; a larger body needs the link to climb off SL1).
 - **M1 — MFSK16 HARQ combining un-admitted (MEDIUM).** PR-2 admitted MFSK16+Rs to HARQ soft-combining, but
