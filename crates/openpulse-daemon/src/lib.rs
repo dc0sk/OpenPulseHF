@@ -76,7 +76,7 @@ use openpulse_modem::engine::SecureSessionParams;
 use openpulse_modem::ModemEngine;
 #[cfg(not(target_arch = "wasm32"))]
 use openpulse_qsy::frame::{
-    decode_unsigned as decode_qsy_frame, encode_unsigned as encode_qsy_frame, QsyFrame,
+    decode_signed as decode_qsy_frame, encode_signed as encode_qsy_frame, QsyFrame,
 };
 #[cfg(not(target_arch = "wasm32"))]
 use openpulse_qsy::session::{QsyAction, QsyPolicy, QsySession};
@@ -185,6 +185,18 @@ pub struct RuntimeControlState {
     pub qsy_session: Option<QsySession>,
     /// When the current QSY session was created, for TTL expiry. `None` whenever `qsy_session` is.
     pub qsy_session_started: Option<Instant>,
+    /// QSY lines refused for failing authentication or freshness — a tripwire, so a build where the
+    /// verification silently stopped running is visible rather than merely quiet.
+    pub qsy_lines_refused: u64,
+    /// Ed25519 key of the peer this QSY negotiation is bound to, pinned when the session is created
+    /// (#1252).
+    ///
+    /// Pinned rather than resolved per line. `handle_inbound_conreq` runs a permissive profile and
+    /// answers any CONREQ addressed to our (public) callsign, and `record_verified_peer` then
+    /// overwrites `last_verified_callsign` — so a third station can displace the link peer
+    /// mid-negotiation with one CONREQ, and a per-line lookup would start accepting the displacer's
+    /// signatures on an in-flight session.
+    pub qsy_peer_pubkey: Option<[u8; 32]>,
     /// Candidate frequencies (Hz) supplied from config for QSY scanning.
     pub qsy_candidate_freqs: Vec<u64>,
     /// QSY policy parsed from config; governs which requests are accepted.
@@ -317,6 +329,7 @@ impl RuntimeControlState {
             tracing::debug!(terminal, stale, "clearing QSY session");
             self.qsy_session = None;
             self.qsy_session_started = None;
+            self.qsy_peer_pubkey = None;
         }
     }
 
@@ -343,12 +356,17 @@ impl RuntimeControlState {
         !c.is_empty() && !c.eq_ignore_ascii_case("N0CALL")
     }
 
-    /// Over-air trust level of the last peer we verified this session, for gating the (unauthenticated)
-    /// QSY responder. RF certificates are `OverAir` without PSK, so this tops out at `Reduced` (a
-    /// trust-store key) or `Low` (first-seen) — never `Verified`, which requires an out-of-band cert.
-    /// Best-effort: a single global `verified_peer` slot is not bound to the QSY requester (the QSY
-    /// frame carries no signature), so `allow_trustlevels` means "only after such a handshake this
-    /// session," not a per-requester check.
+    /// Over-air trust level of the last peer we verified this session, for gating the QSY responder.
+    /// RF certificates are `OverAir` without PSK, so this tops out at `Reduced` (a trust-store key)
+    /// or `Low` (first-seen) — never `Verified`, which requires an out-of-band cert.
+    ///
+    /// Read once, at session creation, alongside the key pinned into `qsy_peer_pubkey` (#1252) — so
+    /// the level and the key describe the same station and a later CONREQ cannot displace either.
+    /// Before #1252 the QSY frame carried no signature at all and this was a "only after some
+    /// handshake this session" check rather than a per-requester one. The remaining gap is the
+    /// INITIATOR role, whose `QsySession::new_initiator()` still carries an empty policy: the key is
+    /// pinned there too, so a stranger cannot steer the negotiation, but no trust *level* is
+    /// consulted on that side.
     pub fn rf_peer_trust(&self) -> ConnectionTrustLevel {
         match self.last_verified_peer() {
             Some(p) => {
@@ -415,6 +433,8 @@ impl Default for RuntimeControlState {
             qsy_pending_token: None,
             qsy_session: None,
             qsy_session_started: None,
+            qsy_lines_refused: 0,
+            qsy_peer_pubkey: None,
             qsy_candidate_freqs: Vec::new(),
             qsy_policy: QsyPolicy::default(),
             qsy_scan_dwell_ms: 500,
@@ -1215,6 +1235,8 @@ async fn execute_qsy_actions(
     // Cloned, not borrowed out of `runtime_state`: at the QSY call sites the session is a live
     // `&mut` borrow out of the same struct. `SharedPtt` is an `Arc` clone, so this is free.
     ptt: &crate::ptt::SharedPtt,
+    // Station signing seed — every emitted QSY line is signed (#1252).
+    station_seed: &[u8; 32],
     mode: &str,
     scan_dwell_ms: u64,
 ) {
@@ -1226,10 +1248,18 @@ async fn execute_qsy_actions(
     for action in actions {
         match action {
             QsyAction::SendFrame(ref frame) => {
-                let line = encode_qsy_frame(frame);
-                let _ = keyed_transmit(ptt, Some(event_tx.as_ref()), "qsy", || {
-                    engine.transmit(line.as_bytes(), mode, None)
-                });
+                match encode_qsy_frame(frame, now_ms(), station_seed) {
+                    Ok(line) => {
+                        let _ = keyed_transmit(ptt, Some(event_tx.as_ref()), "qsy", || {
+                            engine.transmit(line.as_bytes(), mode, None)
+                        });
+                    }
+                    // Over the single-frame budget, or the seed could not sign. Both used to surface at
+                    // transmit — AFTER the REQ had gone out — wedging the peer until its session TTL.
+                    Err(e) => {
+                        tracing::warn!(error = %e, "qsy: not transmitting an unsignable frame")
+                    }
+                }
             }
             QsyAction::StartScan { candidates } => {
                 scan_freqs = Some(candidates);
@@ -1298,13 +1328,20 @@ async fn execute_qsy_actions(
                 for action in follow_up {
                     match action {
                         QsyAction::SendFrame(ref frame) => {
-                            let line = encode_qsy_frame(frame);
-                            let _ = keyed_transmit(
-                                ptt,
-                                Some(event_tx.as_ref()),
-                                "qsy-post-scan",
-                                || engine.transmit(line.as_bytes(), mode, None),
-                            );
+                            match encode_qsy_frame(frame, now_ms(), station_seed) {
+                                Ok(line) => {
+                                    let _ = keyed_transmit(
+                                        ptt,
+                                        Some(event_tx.as_ref()),
+                                        "qsy-post-scan",
+                                        || engine.transmit(line.as_bytes(), mode, None),
+                                    );
+                                }
+                                Err(e) => tracing::warn!(
+                                    error = %e,
+                                    "qsy: not transmitting an unsignable post-scan frame"
+                                ),
+                            }
                         }
                         QsyAction::QsyNow { freq_hz } => {
                             if let Some(ref mut rig) = rig_controller {
@@ -1368,18 +1405,41 @@ pub async fn process_received_bytes(
     // fragment reassembly. That was survivable while QSY was unrecognisable; with a magic it would
     // mean a future-epoch QSY line silently feeding the file assembler. Dispatch, not session
     // semantics — #1162's scope note says leave the session alone, and this leaves it alone.
+    // Which key must have signed this line (#1252). An in-flight session is bound to the peer it was
+    // created with; the first frame of a new one is bound to the peer verified by the handshake.
+    // No verified peer means no key, so the line cannot be authenticated and is refused — the
+    // signature is mandatory, which is also what stops `allow_trustlevels`' documented
+    // "empty list accepts any level" from admitting an unsigned stranger.
+    let qsy_expected_key: Option<[u8; 32]> = runtime_state.qsy_peer_pubkey.or_else(|| {
+        runtime_state
+            .last_verified_peer()
+            .and_then(|p| <[u8; 32]>::try_from(p.pubkey.as_slice()).ok())
+    });
+    let qsy_freshness = openpulse_core::handshake::Freshness {
+        now_ms: SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis() as u64,
+        max_skew_ms: HANDSHAKE_MAX_SKEW_MS,
+    };
+    let qsy_decoded: Option<QsyFrame> = text.and_then(|t| {
+        let key = qsy_expected_key.as_ref()?;
+        decode_qsy_frame(t, key, qsy_freshness).ok()
+    });
+
     if let Some(t) = text {
-        if t.starts_with(qsy_wire_magic()) && decode_qsy_frame(t).is_err() {
+        if t.starts_with(qsy_wire_magic()) && qsy_decoded.is_none() {
+            runtime_state.qsy_lines_refused = runtime_state.qsy_lines_refused.saturating_add(1);
             tracing::warn!(
                 line = %t.chars().take(24).collect::<String>(),
-                "dropping a QSY line this build cannot decode; not routing it to reassembly"
+                had_key = qsy_expected_key.is_some(),
+                "refusing a QSY line: unsigned, forged, stale, or a version this build cannot decode"
             );
             return;
         }
     }
 
-    let qsy_frame = text.and_then(|t| decode_qsy_frame(t).ok());
-    let Some(frame) = qsy_frame else {
+    let Some(frame) = qsy_decoded else {
         // Route the reassembly by SAR segment-id (the 4-byte header is public layout): 0 = handshake
         // (unchanged, bit-for-bit), any other id = file transfer. A malformed sub-header frame stays on
         // the handshake path, which ignores it exactly as before.
@@ -1414,6 +1474,8 @@ pub async fn process_received_bytes(
         // Stamp on creation so an abandoned negotiation can time out. Without this a single
         // unsigned inbound REQ blocks auto-QSY forever (audit 2026-07-19, #4).
         runtime_state.qsy_session_started = Some(Instant::now());
+        // Bind the negotiation to the key that signed its first frame — see `qsy_peer_pubkey`.
+        runtime_state.qsy_peer_pubkey = qsy_expected_key;
     }
     let session = runtime_state
         .qsy_session
@@ -1438,6 +1500,7 @@ pub async fn process_received_bytes(
             // Clone before the call: `runtime_state` is borrowed for the session across it.
             let qsy_ptt = runtime_state.ptt.clone();
             let qsy_dwell = runtime_state.qsy_scan_dwell_ms;
+            let qsy_seed = runtime_state.station_seed;
             execute_qsy_actions(
                 actions,
                 session,
@@ -1445,6 +1508,7 @@ pub async fn process_received_bytes(
                 rig_controller,
                 event_tx,
                 &qsy_ptt,
+                &qsy_seed,
                 &mode,
                 qsy_dwell,
             )
@@ -1483,6 +1547,14 @@ const HANDSHAKE_SAR_SESSION: &str = "handshake";
 /// * **No `block_in_place` in here.** `lib.rs` has 49 `#[tokio::test]`s on the default
 ///   current-thread flavor, where `block_in_place` panics. Callers that need it wrap the call.
 ///
+/// Unix milliseconds now — the stamp on every signed QSY line.
+fn now_ms() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64
+}
+
 /// Reports WHICH half failed. Several call sites log the two differently on purpose — a refused
 /// assert on the station ID is a §97.119 obligation not met (`error`), while a transmit error is a
 /// modem fault (`warn`) — so collapsing them into one `Option` would delete audit-derived
@@ -1923,6 +1995,7 @@ pub async fn maybe_qsy_on_interference(
     // Clone before the call: `runtime_state` is borrowed for the session across it.
     let qsy_ptt = runtime_state.ptt.clone();
     let qsy_dwell = runtime_state.qsy_scan_dwell_ms;
+    let qsy_seed = runtime_state.station_seed;
     execute_qsy_actions(
         actions,
         &mut session,
@@ -1930,10 +2003,17 @@ pub async fn maybe_qsy_on_interference(
         rig_controller,
         event_tx,
         &qsy_ptt,
+        &qsy_seed,
         &mode,
         qsy_dwell,
     )
     .await;
+    // #1252: pin the key on the INITIATOR side too. Without this the per-line fallback to
+    // `last_verified_peer()` lets a stranger's CONREQ displace the link peer mid-negotiation, after
+    // which their signed REJECT aborts our move and their signed VOTE steers it.
+    runtime_state.qsy_peer_pubkey = runtime_state
+        .last_verified_peer()
+        .and_then(|p| <[u8; 32]>::try_from(p.pubkey.as_slice()).ok());
     runtime_state.qsy_session = Some(session);
     runtime_state.qsy_session_started = Some(Instant::now());
     // The old interferer no longer applies once we move; start fresh so we don't re-trigger.
@@ -2371,6 +2451,7 @@ pub async fn apply_command_to_engine(
                     // Clone before the call: `runtime_state` is borrowed for the session across it.
                     let qsy_ptt = runtime_state.ptt.clone();
                     let qsy_dwell = runtime_state.qsy_scan_dwell_ms;
+                    let qsy_seed = runtime_state.station_seed;
                     execute_qsy_actions(
                         actions,
                         &mut session,
@@ -2378,11 +2459,15 @@ pub async fn apply_command_to_engine(
                         rig_controller,
                         event_tx,
                         &qsy_ptt,
+                        &qsy_seed,
                         &mode,
                         qsy_dwell,
                     )
                     .await;
 
+                    runtime_state.qsy_peer_pubkey = runtime_state
+                        .last_verified_peer()
+                        .and_then(|p| <[u8; 32]>::try_from(p.pubkey.as_slice()).ok());
                     runtime_state.qsy_session = Some(session);
                     runtime_state.qsy_session_started = Some(Instant::now());
                 }
@@ -2883,6 +2968,38 @@ mod command_apply_tests {
             r < 0.5,
             "repeated-byte payload should compress well, got {r}"
         );
+    }
+
+    /// Seed used by tests that play the QSY initiator.
+    pub(super) const INITIATOR_SEED: [u8; 32] = [21u8; 32];
+
+    /// A runtime state whose verified peer is `seed`'s public key, so a QSY line signed by that
+    /// seed authenticates (#1252).
+    pub(super) fn state_with_qsy_peer(seed: &[u8; 32]) -> RuntimeControlState {
+        let pubkey = ed25519_dalek::SigningKey::from_bytes(seed)
+            .verifying_key()
+            .to_bytes()
+            .to_vec();
+        let mut rs = RuntimeControlState {
+            local_callsign: "W1AW".into(), // valid MYID so the responder may key up (audit F6)
+            ..RuntimeControlState::default()
+        };
+        rs.verified_peers.insert(
+            "K1PEER".into(),
+            VerifiedPeer {
+                callsign: "K1PEER".into(),
+                grid: String::new(),
+                pubkey,
+                profile_compatible: None,
+            },
+        );
+        rs.last_verified_callsign = Some("K1PEER".into());
+        rs
+    }
+
+    /// A signed QSY line stamped now, as the peer would send it.
+    pub(super) fn signed_qsy_line(frame: &QsyFrame, seed: &[u8; 32]) -> String {
+        encode_qsy_frame(frame, now_ms(), seed).expect("sign a QSY line")
     }
 
     fn test_engine() -> ModemEngine {
@@ -4619,6 +4736,8 @@ mod command_apply_tests {
         let mut rs_a = RuntimeControlState {
             local_callsign: "W1AW".into(), // valid MYID so auto-QSY may key up (audit F6)
             qsy_candidate_freqs: vec![14_070_000, 14_077_000],
+            // A signs its QSY lines with this seed (#1252); B is bound to the matching key below.
+            station_seed: INITIATOR_SEED,
             ..RuntimeControlState::default()
         };
         maybe_qsy_on_interference(true, &mut rs_a, None, &ev_a, &mode_a, &mut h.tx_engine).await;
@@ -4637,10 +4756,10 @@ mod command_apply_tests {
         let mode_b: SharedMode = Arc::new(Mutex::new("BPSK250".to_string()));
         let (tx_b, mut rx_b) = broadcast::channel::<ControlEvent>(16);
         let ev_b = Arc::new(tx_b);
-        let mut rs_b = RuntimeControlState {
-            local_callsign: "K2XYZ".into(), // valid MYID so the responder may key up (audit F6)
-            ..RuntimeControlState::default()
-        };
+        // B has verified A through the handshake, so it holds A's key — which is the only key that
+        // can open a responder session on B since #1252.
+        let mut rs_b = state_with_qsy_peer(&INITIATOR_SEED);
+        rs_b.local_callsign = "K2XYZ".into(); // valid MYID so the responder may key up (audit F6)
         process_received_bytes(&bytes, &mut rs_b, None, &ev_b, &mode_b, &mut h.rx_engine).await;
         assert!(
             rs_b.qsy_session.is_some(),
@@ -4750,16 +4869,23 @@ mod command_apply_tests {
         let active_mode: SharedMode = Arc::new(Mutex::new("BPSK250".to_string()));
         let (tx, _rx) = broadcast::channel::<ControlEvent>(16);
         let ev_tx = Arc::new(tx);
-        let mut runtime_state = RuntimeControlState {
-            local_callsign: "W1AW".into(), // valid MYID so the responder may key up (audit F6)
-            ..RuntimeControlState::default()
-        };
 
-        // QSY_REQ frame: verb, token, n_candidates
-        let qsy_req_line = encode_qsy_frame(&QsyFrame::Req {
-            token: "tok-resp".into(),
-            n_candidates: 2,
-        });
+        // ADAPTED at #1252, not inverted — the assertion below is unchanged. Before #1252 this
+        // passed on an UNSIGNED REQ, which was the defect: any station in earshot could open a
+        // responder session. The fixture is now signed by the peer this station verified, because
+        // that is the only line that may. Note what this test therefore is and is not: it exercises
+        // responder-session creation, and it is NOT a guard on the authentication — a build that
+        // stopped verifying would still pass it. The guards are in
+        // `tests/qsy_lines_are_authenticated.rs`, each with its own negative control.
+        let seed = [7u8; 32];
+        let mut runtime_state = state_with_qsy_peer(&seed);
+        let qsy_req_line = signed_qsy_line(
+            &QsyFrame::Req {
+                token: "tok-resp".into(),
+                n_candidates: 2,
+            },
+            &seed,
+        );
         let qsy_req = qsy_req_line.as_bytes();
         process_received_bytes(
             qsy_req,
@@ -4786,18 +4912,22 @@ mod command_apply_tests {
         let active_mode: SharedMode = Arc::new(Mutex::new("BPSK250".to_string()));
         let (tx, _rx) = broadcast::channel::<ControlEvent>(16);
         let ev_tx = Arc::new(tx);
-        let mut runtime_state = RuntimeControlState {
-            local_callsign: "W1AW".into(),
-            ..RuntimeControlState::default()
-        };
 
         // One spoofed inbound REQ. Nothing else happens: the "peer" never sends QSY_LIST, which is
         // exactly what an attacker who only wants to jam the anti-jam response would do.
+        // Signed since #1252 — an unsigned REQ no longer creates a session at all, so the
+        // precondition below would fail for the wrong reason. The point of this test is the TTL, not
+        // the authentication: a negotiation whose peer walks away must still time out.
+        let seed = [9u8; 32];
+        let mut runtime_state = state_with_qsy_peer(&seed);
         process_received_bytes(
-            encode_qsy_frame(&QsyFrame::Req {
-                token: "spoofed".into(),
-                n_candidates: 2,
-            })
+            signed_qsy_line(
+                &QsyFrame::Req {
+                    token: "spoofed".into(),
+                    n_candidates: 2,
+                },
+                &seed,
+            )
             .as_bytes(),
             &mut runtime_state,
             None,
@@ -4831,16 +4961,18 @@ mod command_apply_tests {
         let active_mode: SharedMode = Arc::new(Mutex::new("BPSK250".to_string()));
         let (tx, _rx) = broadcast::channel::<ControlEvent>(16);
         let ev_tx = Arc::new(tx);
-        let mut runtime_state = RuntimeControlState {
-            local_callsign: "W1AW".into(),
-            ..RuntimeControlState::default()
-        };
 
+        // Signed since #1252; see `state_with_qsy_peer`.
+        let seed = [11u8; 32];
+        let mut runtime_state = state_with_qsy_peer(&seed);
         process_received_bytes(
-            encode_qsy_frame(&QsyFrame::Req {
-                token: "live".into(),
-                n_candidates: 2,
-            })
+            signed_qsy_line(
+                &QsyFrame::Req {
+                    token: "live".into(),
+                    n_candidates: 2,
+                },
+                &seed,
+            )
             .as_bytes(),
             &mut runtime_state,
             None,
@@ -4924,7 +5056,9 @@ mod command_apply_tests {
             .iter()
             .find_map(|a| {
                 if let QsyAction::SendFrame(frame @ QsyFrame::Req { .. }) = a {
-                    Some(encode_qsy_frame(frame))
+                    // Signed as the initiator would send it (#1252): an unsigned line is refused
+                    // before the responder looks at it, so feeding one would test nothing.
+                    Some(signed_qsy_line(frame, &INITIATOR_SEED))
                 } else {
                     None
                 }
@@ -4935,7 +5069,24 @@ mod command_apply_tests {
         // Decoded, not counted. This used to be `split_whitespace().nth(1)`, which read the token
         // by POSITION — so #1162's wire token shifted every field by one and the assertion compared
         // the verb against the token. Parsing through the codec cannot drift with the format.
-        let token_from_line = match decode_qsy_frame(req_text.trim()).expect("decode the REQ") {
+        // Read it back the way a receiver does — `decode_signed`, which verifies against the
+        // expected key and checks freshness in one step. Using the unsigned codec here would have
+        // asserted on a line no receiver would accept.
+        let decoded = openpulse_qsy::frame::decode_signed(
+            req_text.trim(),
+            &ed25519_dalek::SigningKey::from_bytes(&INITIATOR_SEED)
+                .verifying_key()
+                .to_bytes(),
+            openpulse_core::handshake::Freshness {
+                now_ms: SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_millis() as u64,
+                max_skew_ms: HANDSHAKE_MAX_SKEW_MS,
+            },
+        )
+        .expect("our own signed REQ verifies and is fresh");
+        let token_from_line = match decoded {
             QsyFrame::Req { token, .. } => token,
             other => panic!("expected a QSY_REQ, got {other:?}"),
         };
@@ -4945,10 +5096,9 @@ mod command_apply_tests {
         let active_mode: SharedMode = Arc::new(Mutex::new("BPSK250".to_string()));
         let (tx, mut rx) = broadcast::channel::<ControlEvent>(32);
         let ev_tx = Arc::new(tx);
-        let mut runtime_state = RuntimeControlState {
-            local_callsign: "W1AW".into(), // valid MYID so the responder may key up (audit F6)
-            ..RuntimeControlState::default()
-        };
+        // Bound to the initiator's key: since #1252 a responder opens a session only for a line
+        // signed by the peer it verified.
+        let mut runtime_state = state_with_qsy_peer(&INITIATOR_SEED);
 
         process_received_bytes(
             req_text.as_bytes(),
@@ -5167,6 +5317,7 @@ mod command_apply_tests {
 
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod handshake_rf_tests {
+    use super::command_apply_tests::{signed_qsy_line, state_with_qsy_peer};
     use super::*;
     use bpsk_plugin::BpskPlugin;
     use openpulse_audio::LoopbackBackend;
@@ -5640,19 +5791,25 @@ mod handshake_rf_tests {
     /// the QSY responder (which would key the transmitter for a reply, even a Reject).
     #[tokio::test]
     async fn responder_without_callsign_ignores_qsy_req() {
-        let req = encode_qsy_frame(&QsyFrame::Req {
-            token: "TOK123".into(),
-            n_candidates: 3,
-        });
+        // The line must be genuinely VALID, or this test passes for the wrong reason: since #1252 an
+        // unsigned line is refused before the callsign gate is ever reached, so an unsigned fixture
+        // would assert nothing about §97.119. Signed by a verified peer, the only thing left to stop
+        // the reply is the missing MYID — which is what this test is for.
+        let seed = [13u8; 32];
+        let req = signed_qsy_line(
+            &QsyFrame::Req {
+                token: "TOK123".into(),
+                n_candidates: 3,
+            },
+            &seed,
+        );
 
         let mut eng = bpsk_engine();
         let mode = mode();
         let (tx, _rx) = broadcast::channel::<ControlEvent>(16);
         let ev = Arc::new(tx);
-        let mut rs = RuntimeControlState {
-            local_callsign: "N0CALL".into(),
-            ..RuntimeControlState::default()
-        };
+        let mut rs = state_with_qsy_peer(&seed);
+        rs.local_callsign = "N0CALL".into();
 
         let before = eng.frames_transmitted();
         process_received_bytes(req.as_bytes(), &mut rs, None, &ev, &mode, &mut eng).await;

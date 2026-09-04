@@ -4,13 +4,23 @@ mod common;
 
 use ed25519_dalek::SigningKey;
 use openpulse_qsy::{
-    frame::{decode_signed, decode_unsigned, encode_signed, encode_unsigned},
+    frame::{decode_signed, encode_signed},
     scanner::QsyScanner,
     BandplanPolicy, ConnectionTrustLevel, QsyAction, QsyFrame, QsyFrameError, QsyPolicy,
     QsySession,
 };
 use openpulse_radio::RigctldController;
 use rand::rngs::OsRng;
+
+/// A fixed, non-zero stamp — `Freshness::check` refuses 0 as "no timestamp advertised".
+const TS: u64 = 1_760_000_000_000;
+
+fn fresh() -> openpulse_core::handshake::Freshness {
+    openpulse_core::handshake::Freshness {
+        now_ms: TS,
+        max_skew_ms: 120_000,
+    }
+}
 
 // ── Frame codec tests ────────────────────────────────────────────────────────
 
@@ -40,8 +50,17 @@ fn frame_round_trip() {
             reason: "qsy disabled".into(),
         },
     ];
+    // `decode_unsigned` is crate-private (#1252 — it has no production caller; only
+    // `encode_unsigned` does, for CLI display), so the unsigned round-trip is asserted in
+    // `frame.rs`'s unit tests. Here the same frames go through the SIGNED path, which is the wire.
     for f in frames {
-        assert_eq!(decode_unsigned(&encode_unsigned(&f)).unwrap(), f);
+        let seed = [5u8; 32];
+        let key = SigningKey::from_bytes(&seed);
+        let line = encode_signed(&f, TS, &seed).expect("sign");
+        assert_eq!(
+            decode_signed(&line, &key.verifying_key().to_bytes(), fresh()).unwrap(),
+            f
+        );
     }
 }
 
@@ -55,8 +74,9 @@ fn signed_round_trip_integration() {
         token: "deadbeef".into(),
         n_candidates: 2,
     };
-    let line = encode_signed(&f, &key);
-    let decoded = decode_signed(&line, &key.verifying_key()).unwrap();
+    let seed = key.to_bytes();
+    let line = encode_signed(&f, TS, &seed).expect("sign");
+    let decoded = decode_signed(&line, &key.verifying_key().to_bytes(), fresh()).unwrap();
     assert_eq!(decoded, f);
 }
 
@@ -68,13 +88,14 @@ fn signature_tamper() {
         token: "deadbeef".into(),
         n_candidates: 2,
     };
-    let mut line = encode_signed(&f, &key);
+    let seed = key.to_bytes();
+    let mut line = encode_signed(&f, TS, &seed).expect("sign");
     // Flip a character in the token field
     let idx = line.find("deadbeef").unwrap() + 2;
     let ch = line.as_bytes()[idx];
     line.replace_range(idx..idx + 1, if ch == b'd' { "X" } else { "d" });
     assert!(matches!(
-        decode_signed(&line, &key.verifying_key()),
+        decode_signed(&line, &key.verifying_key().to_bytes(), fresh()),
         Err(QsyFrameError::InvalidSignature)
     ));
 }

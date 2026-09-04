@@ -4,7 +4,6 @@
 //! `|SIG:<base64>` and cover the payload text that precedes the separator.
 
 use base64::{engine::general_purpose::STANDARD, Engine as _};
-use ed25519_dalek::{SigningKey, VerifyingKey};
 use openpulse_core::signing_domain::SigningDomain;
 use thiserror::Error;
 
@@ -72,24 +71,35 @@ fn wire_prefix() -> String {
 }
 
 /// Encode a frame as an unsigned text line (no signature).
-pub fn encode_unsigned(frame: &QsyFrame) -> String {
+pub fn encode_unsigned(frame: &QsyFrame, timestamp_ms: u64) -> String {
     match frame {
         QsyFrame::Req {
             token,
             n_candidates,
         } => {
-            format!("{} QSY_REQ {token} {n_candidates}", wire_prefix())
+            format!(
+                "{} QSY_REQ {token} {timestamp_ms} {n_candidates}",
+                wire_prefix()
+            )
         }
         QsyFrame::List { token, candidates } => {
             let pairs: Vec<String> = candidates
                 .iter()
                 .map(|(f, s)| format!("{f},{s:.2}"))
                 .collect();
-            format!("{} QSY_LIST {token} {}", wire_prefix(), pairs.join(" "))
+            format!(
+                "{} QSY_LIST {token} {timestamp_ms} {}",
+                wire_prefix(),
+                pairs.join(" ")
+            )
         }
         QsyFrame::Vote { token, votes } => {
             let pairs: Vec<String> = votes.iter().map(|(f, s)| format!("{f},{s:.2}")).collect();
-            format!("{} QSY_VOTE {token} {}", wire_prefix(), pairs.join(" "))
+            format!(
+                "{} QSY_VOTE {token} {timestamp_ms} {}",
+                wire_prefix(),
+                pairs.join(" ")
+            )
         }
         QsyFrame::Ack {
             token,
@@ -97,18 +107,21 @@ pub fn encode_unsigned(frame: &QsyFrame) -> String {
             switchover_offset_s,
         } => {
             format!(
-                "{} QSY_ACK {token} {agreed_freq_hz} {switchover_offset_s}",
+                "{} QSY_ACK {token} {timestamp_ms} {agreed_freq_hz} {switchover_offset_s}",
                 wire_prefix()
             )
         }
         QsyFrame::Reject { token, reason } => {
-            format!("{} QSY_REJECT {token} {reason}", wire_prefix())
+            format!(
+                "{} QSY_REJECT {token} {timestamp_ms} {reason}",
+                wire_prefix()
+            )
         }
     }
 }
 
 /// Decode a frame from an unsigned text line.
-pub fn decode_unsigned(line: &str) -> Result<QsyFrame, QsyFrameError> {
+fn decode_unsigned(line: &str) -> Result<(QsyFrame, u64), QsyFrameError> {
     let line = line.trim_end_matches('\r').trim_end_matches('\n');
 
     // The wire token is consumed FIRST and its version is authoritative (#1162). Before this the
@@ -134,7 +147,7 @@ pub fn decode_unsigned(line: &str) -> Result<QsyFrame, QsyFrameError> {
         });
     }
 
-    let mut parts = rest.splitn(3, ' ');
+    let mut parts = rest.splitn(4, ' ');
     let verb = parts
         .next()
         .ok_or_else(|| QsyFrameError::Malformed("empty line".into()))?;
@@ -148,6 +161,15 @@ pub fn decode_unsigned(line: &str) -> Result<QsyFrame, QsyFrameError> {
             token.len()
         )));
     }
+    // Freshness field (#1252). It sits after the token on every verb so the variant-specific tail
+    // parses unchanged, and inside the signed span so it cannot be edited in flight. `verify_line`
+    // proves authorship, not recency: without this a captured REQ/LIST/ACK transcript replays
+    // forever and retunes a station to a stale frequency.
+    let timestamp_ms: u64 = parts
+        .next()
+        .ok_or_else(|| QsyFrameError::Malformed("missing timestamp".into()))?
+        .parse()
+        .map_err(|_| QsyFrameError::Malformed("unparsable timestamp".into()))?;
     let rest = parts.next().unwrap_or("").trim();
 
     match verb {
@@ -155,19 +177,28 @@ pub fn decode_unsigned(line: &str) -> Result<QsyFrame, QsyFrameError> {
             let n: u32 = rest
                 .parse()
                 .map_err(|_| QsyFrameError::Malformed(format!("bad n_candidates: {rest}")))?;
-            Ok(QsyFrame::Req {
-                token,
-                n_candidates: n,
-            })
+            Ok((
+                QsyFrame::Req {
+                    token,
+                    n_candidates: n,
+                },
+                timestamp_ms,
+            ))
         }
-        "QSY_LIST" => Ok(QsyFrame::List {
-            token,
-            candidates: parse_pairs(rest)?,
-        }),
-        "QSY_VOTE" => Ok(QsyFrame::Vote {
-            token,
-            votes: parse_pairs(rest)?,
-        }),
+        "QSY_LIST" => Ok((
+            QsyFrame::List {
+                token,
+                candidates: parse_pairs(rest)?,
+            },
+            timestamp_ms,
+        )),
+        "QSY_VOTE" => Ok((
+            QsyFrame::Vote {
+                token,
+                votes: parse_pairs(rest)?,
+            },
+            timestamp_ms,
+        )),
         "QSY_ACK" => {
             let mut it = rest.splitn(2, ' ');
             let freq: u64 = it
@@ -180,16 +211,22 @@ pub fn decode_unsigned(line: &str) -> Result<QsyFrame, QsyFrameError> {
                 .ok_or_else(|| QsyFrameError::Malformed("missing switchover offset".into()))?
                 .parse()
                 .map_err(|_| QsyFrameError::Malformed(format!("bad offset: {rest}")))?;
-            Ok(QsyFrame::Ack {
-                token,
-                agreed_freq_hz: freq,
-                switchover_offset_s: offset,
-            })
+            Ok((
+                QsyFrame::Ack {
+                    token,
+                    agreed_freq_hz: freq,
+                    switchover_offset_s: offset,
+                },
+                timestamp_ms,
+            ))
         }
-        "QSY_REJECT" => Ok(QsyFrame::Reject {
-            token,
-            reason: rest.to_string(),
-        }),
+        "QSY_REJECT" => Ok((
+            QsyFrame::Reject {
+                token,
+                reason: rest.to_string(),
+            },
+            timestamp_ms,
+        )),
         other => Err(QsyFrameError::Malformed(format!("unknown verb: {other}"))),
     }
 }
@@ -215,18 +252,19 @@ fn parse_pairs(s: &str) -> Result<Vec<(u64, f32)>, QsyFrameError> {
 }
 
 /// Append an Ed25519 signature to a text line: `<line>|SIG:<base64>`.
-pub fn sign_line(line: &str, key: &SigningKey) -> String {
-    let sig = openpulse_core::signing::sign_in_band(
-        SigningDomain::QsyLine,
-        &key.to_bytes(),
-        line.as_bytes(),
-    )
-    .unwrap_or([0u8; 64]);
-    format!("{line}|SIG:{}", STANDARD.encode(sig))
+pub fn sign_line(line: &str, seed: &[u8; 32]) -> Result<String, QsyFrameError> {
+    // Returns Err rather than emitting a zero signature. The old form did
+    // `.unwrap_or([0u8; 64])`, so a signing failure produced a well-formed line the PEER rejected as
+    // "invalid signature" — a transmit-side fault reported only at the far end, attributable to
+    // nothing. Takes the raw seed because that is what `station_seed` and `VerifiedPeer.pubkey`
+    // already are; the dalek types were being taken only to call `.to_bytes()` on them.
+    let sig = openpulse_core::signing::sign_in_band(SigningDomain::QsyLine, seed, line.as_bytes())
+        .map_err(|e| QsyFrameError::Malformed(format!("QSY line signing failed: {e}")))?;
+    Ok(format!("{line}|SIG:{}", STANDARD.encode(sig)))
 }
 
 /// Verify the `|SIG:` suffix and return the payload (before the separator).
-pub fn verify_line<'a>(line: &'a str, key: &VerifyingKey) -> Result<&'a str, QsyFrameError> {
+pub fn verify_line<'a>(line: &'a str, pubkey: &[u8; 32]) -> Result<&'a str, QsyFrameError> {
     let line = line.trim_end_matches(['\r', '\n']);
     let (payload, sig_b64) = line
         .rsplit_once("|SIG:")
@@ -237,7 +275,7 @@ pub fn verify_line<'a>(line: &'a str, key: &VerifyingKey) -> Result<&'a str, Qsy
         .map_err(|_| QsyFrameError::SignatureLength)?;
     if !openpulse_core::signing::verify_in_band(
         SigningDomain::QsyLine,
-        &key.to_bytes(),
+        pubkey,
         payload.as_bytes(),
         &sig_array,
     ) {
@@ -246,20 +284,84 @@ pub fn verify_line<'a>(line: &'a str, key: &VerifyingKey) -> Result<&'a str, Qsy
     Ok(payload)
 }
 
-/// Encode a frame as a signed text line.
-pub fn encode_signed(frame: &QsyFrame, key: &SigningKey) -> String {
-    sign_line(&encode_unsigned(frame), key)
+/// Encode a frame as a signed, timestamped text line — the only form this protocol emits (#1252).
+pub fn encode_signed(
+    frame: &QsyFrame,
+    timestamp_ms: u64,
+    seed: &[u8; 32],
+) -> Result<String, QsyFrameError> {
+    let line = sign_line(&encode_unsigned(frame, timestamp_ms), seed)?;
+    // A QSY line goes out through `engine.transmit` with NO SAR, so it must fit one `Frame`
+    // (255-byte payload cap). The signature is 93 characters and the timestamp ~14, which lowers the
+    // candidate ceiling from roughly 14 to roughly 7 — and an over-long line today fails at transmit
+    // AFTER the REQ has gone out, wedging the peer until its session TTL. Refuse here instead, where
+    // the caller can see it, and pin the bound by construction in `a_maximal_line_fits_one_frame`.
+    if line.len() > MAX_QSY_LINE_BYTES {
+        return Err(QsyFrameError::Malformed(format!(
+            "QSY line is {} bytes, over the {MAX_QSY_LINE_BYTES}-byte single-frame budget — \
+             reduce [qsy] candidate_freqs_hz",
+            line.len()
+        )));
+    }
+    Ok(line)
 }
 
-/// Decode a signed text line, verifying the signature.
-pub fn decode_signed(line: &str, key: &VerifyingKey) -> Result<QsyFrame, QsyFrameError> {
-    let payload = verify_line(line, key)?;
-    decode_unsigned(payload)
+/// Decode a signed line: verify authorship against `pubkey`, then freshness against `freshness`.
+///
+/// Both checks are mandatory. `verify_line` proves only who wrote the line — a captured
+/// REQ/LIST/ACK transcript replays forever without the timestamp, and the last step of that replay
+/// retunes the victim to a stale frequency.
+pub fn decode_signed(
+    line: &str,
+    pubkey: &[u8; 32],
+    freshness: openpulse_core::handshake::Freshness,
+) -> Result<QsyFrame, QsyFrameError> {
+    let payload = verify_line(line, pubkey)?;
+    let (frame, timestamp_ms) = decode_unsigned(payload)?;
+    freshness
+        .check(timestamp_ms)
+        .map_err(|e| QsyFrameError::Malformed(format!("stale or future-dated QSY line: {e}")))?;
+    Ok(frame)
 }
+
+/// Largest signed QSY line that still fits one `Frame` payload (`Frame::new` refuses over 255).
+const MAX_QSY_LINE_BYTES: usize = 255;
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `MAX_QSY_LINE_BYTES` is the ceiling `Frame` actually enforces, not a number typed twice.
+    ///
+    /// The encoder refuses above this; `Frame::new` refuses above its own limit. If either moves
+    /// without the other, an over-long line would be accepted at encode and fail at transmit again —
+    /// the wedge #1252 removed. Asserted from both sides so a drift either way fails here.
+    #[test]
+    fn the_line_ceiling_is_the_frame_ceiling() {
+        assert!(
+            openpulse_core::frame::Frame::new(0, vec![0u8; MAX_QSY_LINE_BYTES]).is_ok(),
+            "a line at MAX_QSY_LINE_BYTES must fit one Frame"
+        );
+        assert!(
+            openpulse_core::frame::Frame::new(0, vec![0u8; MAX_QSY_LINE_BYTES + 1]).is_err(),
+            "MAX_QSY_LINE_BYTES is below Frame's real limit — the encoder is refusing lines that \
+             would have fit, and the measured candidate ceilings are wrong"
+        );
+    }
+
+    /// A fixed, non-zero stamp: `Freshness::check` refuses 0 as "no timestamp".
+    const TS: u64 = 1_760_000_000_000;
+
+    fn encode_unsigned_ts(f: &QsyFrame) -> String {
+        encode_unsigned(f, TS)
+    }
+
+    fn fresh_at(now_ms: u64) -> openpulse_core::handshake::Freshness {
+        openpulse_core::handshake::Freshness {
+            now_ms,
+            max_skew_ms: 120_000,
+        }
+    }
 
     /// #1162: every encoded line starts with the wire token, and the token is DERIVED from the
     /// signing registry rather than typed here — so a change to either half fails this test rather
@@ -295,13 +397,13 @@ mod tests {
             },
         ];
         for f in &frames {
-            let line = encode_unsigned(f);
+            let line = encode_unsigned(f, TS);
             assert!(
                 line.starts_with(&expected),
                 "{line:?} does not start with the wire token {expected:?}"
             );
             // and it must still round-trip through its own decoder
-            assert_eq!(&decode_unsigned(&line).expect("round trip"), f);
+            assert_eq!(&decode_unsigned(&line).expect("round trip").0, f);
         }
     }
 
@@ -317,7 +419,7 @@ mod tests {
         let current = SigningDomain::QsyLine.version();
 
         // Positive control: the current version decodes, or the assertions below pass vacuously.
-        let good = encode_unsigned(&QsyFrame::Req {
+        let good = encode_unsigned_ts(&QsyFrame::Req {
             token: "t".into(),
             n_candidates: 1,
         });
@@ -339,7 +441,7 @@ mod tests {
     #[test]
     fn a_line_without_the_wire_token_is_refused() {
         assert!(matches!(
-            decode_unsigned("QSY_REQ t 1"),
+            decode_unsigned("QSY_REQ t 1 1"),
             Err(QsyFrameError::Malformed(_))
         ));
     }
@@ -356,7 +458,7 @@ mod tests {
             token: "abc123ef".into(),
             n_candidates: 4,
         };
-        assert_eq!(decode_unsigned(&encode_unsigned(&f)).unwrap(), f);
+        assert_eq!(decode_unsigned(&encode_unsigned(&f, TS)).unwrap(), (f, TS));
     }
 
     #[test]
@@ -365,7 +467,7 @@ mod tests {
             token: "tok00001".into(),
             candidates: vec![(14074000, -87.5), (14070000, -91.0)],
         };
-        assert_eq!(decode_unsigned(&encode_unsigned(&f)).unwrap(), f);
+        assert_eq!(decode_unsigned(&encode_unsigned(&f, TS)).unwrap(), (f, TS));
     }
 
     #[test]
@@ -375,7 +477,7 @@ mod tests {
             agreed_freq_hz: 14074000,
             switchover_offset_s: 5,
         };
-        assert_eq!(decode_unsigned(&encode_unsigned(&f)).unwrap(), f);
+        assert_eq!(decode_unsigned(&encode_unsigned(&f, TS)).unwrap(), (f, TS));
     }
 
     #[test]
@@ -384,7 +486,7 @@ mod tests {
             token: "tok00003".into(),
             reason: "qsy disabled".into(),
         };
-        assert_eq!(decode_unsigned(&encode_unsigned(&f)).unwrap(), f);
+        assert_eq!(decode_unsigned(&encode_unsigned(&f, TS)).unwrap(), (f, TS));
     }
 
     #[test]
@@ -394,8 +496,9 @@ mod tests {
             token: "deadbeef".into(),
             n_candidates: 2,
         };
-        let line = encode_signed(&f, &key);
-        let decoded = decode_signed(&line, &key.verifying_key()).unwrap();
+        let seed = key.to_bytes();
+        let line = encode_signed(&f, TS, &seed).expect("sign");
+        let decoded = decode_signed(&line, &key.verifying_key().to_bytes(), fresh_at(TS)).unwrap();
         assert_eq!(decoded, f);
     }
 
@@ -406,13 +509,14 @@ mod tests {
             token: "deadbeef".into(),
             n_candidates: 2,
         };
-        let mut line = encode_signed(&f, &key);
+        let seed = key.to_bytes();
+        let mut line = encode_signed(&f, TS, &seed).expect("sign");
         // Flip one character in the payload
         let idx = line.find("QSY_REQ").unwrap() + 4;
         let ch = line.as_bytes()[idx];
         line.replace_range(idx..idx + 1, if ch == b'_' { "X" } else { "_" });
         assert!(matches!(
-            decode_signed(&line, &key.verifying_key()),
+            decode_signed(&line, &key.verifying_key().to_bytes(), fresh_at(TS)),
             Err(QsyFrameError::InvalidSignature)
         ));
     }
@@ -424,7 +528,7 @@ mod tests {
         // check, never reaching the length cap this test is named for. `Malformed(_)` matches both,
         // so the test passed while testing nothing. Assert on the MESSAGE to pin the mechanism.
         let long_token = "a".repeat(65);
-        let line = encode_unsigned(&QsyFrame::Req {
+        let line = encode_unsigned_ts(&QsyFrame::Req {
             token: long_token,
             n_candidates: 2,
         });
@@ -444,7 +548,7 @@ mod tests {
         // Built through the ENCODER: hand-typing the line pinned the pre-#1162 format and broke
         // when the wire token was added.
         let token = "a".repeat(64);
-        let line = encode_unsigned(&QsyFrame::Req {
+        let line = encode_unsigned_ts(&QsyFrame::Req {
             token,
             n_candidates: 2,
         });

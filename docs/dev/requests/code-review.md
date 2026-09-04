@@ -44,6 +44,12 @@ are merged.
   are fail-closed — i.e., no path produces a connection with a revoked peer.
 - **QSY protocol** (`openpulse-qsy`): Every QSY frame is Ed25519-signed. Verify that the
   `QsyScanner` rejects unsigned or forged frames before applying frequency changes.
+  > **CORRECTION (2026-09-04, #1252).** Two defects in this one bullet, and both are about
+  > the *request*, not the reviewer. It asserts the property as a premise ("Every QSY frame
+  > is Ed25519-signed") instead of asking whether it holds, and it scopes the search to the
+  > crate that implements signing — where the answer is yes. The daemon, the only consumer
+  > that acts on a QSY line, called `decode_unsigned`. Ask what verifies a property and
+  > name the CONSUMER, never the implementer.
 - **Manifest verification** (`manifest.rs`): Confirm that SHA-256 of the payload is verified
   before the data is passed to the caller — not after.
 - **ARDOP TCP interface**: The command port accepts ASCII over TCP with no authentication.

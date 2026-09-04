@@ -9,6 +9,89 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-09-04 — The daemon acted on unsigned QSY lines (#1252)
+
+- **Requirement/change:** #1252, from the 2026-09-02 gap audit. `openpulse-qsy` has shipped
+  `sign_line`/`verify_line` since it was written and tests its own tamper cases; the daemon — the
+  only consumer that *acts* on a QSY line — imported `decode`, the unsigned codec. `verify_line` had
+  **zero callers outside the crate**. So the QSY control plane was unauthenticated on air: a station
+  in earshot reads the cleartext token from a `QSY_REQ` and can forge a `QSY_ACK` that retunes the
+  peer's rig to any bandplan-permitted frequency, or a `QSY_REJECT` that aborts the move. New
+  REQ-SEC-14 / CAP-78 — the existing QSY capability satisfies REQ-REG-13/14, which are **band-plan**
+  requirements, so binding an authentication test to them would have been the membership join #1268
+  is about.
+- **Design decision — five corrections from adversarial review, all before implementation**
+  (`docs/dev/reviews/2026-09-04-1252-qsy-signing.md`): (1) verifying a signature is not the property
+  — `verify_line` checks whatever key the caller hands it, so the key must be **pinned from the
+  handshake** (`last_verified_peer()`) when the negotiation opens, not read from the line; (2) the
+  freshness timestamp goes **immediately after the token**, inside the signed span, so a v1 parse
+  fails on its first field rather than silently ignoring a trailing one; (3) `sign_line` must return
+  `Result`, because an infallible signer had nowhere to report the line-length ceiling; (4) the
+  security claim is bounded to what was actually bought, and the write-up went back for review before
+  posting, because the README already contained the sentence this fix makes true; (5) the doc sweep
+  is part of the fix.
+- **Version:** `SigningDomain::QsyLine` 1 → 2. Confirmed with the maintainer that the #1191
+  `WIRE_VERSION` freeze covers the **Frame** version only and per-domain versions may move. The
+  transmitted `OPQS2` magic and the signed domain version are one constant, shared by reference.
+- **Measured, not estimated:** a `QSY_LIST` holds **6** candidates at the daemon's 8-hex-char token
+  and **3** at the codec's 64-char maximum; the review had estimated ~7. `MAX_QSY_LINE_BYTES` is
+  enforced at encode and `server.rs` truncates `candidate_freqs_hz` to 6 at startup with a warning.
+- **Implementation:** `frame.rs` — `encode_unsigned`/`decode_unsigned` (CLI display only),
+  `sign_line`/`verify_line`, and `encode_signed`/`decode_signed` as the only wire path, taking a
+  `Freshness` and byte-array keys. `daemon/lib.rs` — imports the signed codec, pins
+  `qsy_peer_pubkey`, counts refusals in a `qsy_lines_refused` tripwire. `allow_trustlevels` gains
+  `"reduced"`, which is what a trust-store key proven over air earns and is exactly what this
+  signature demonstrates.
+- **Trust model, per the maintainer:** untrusted is the default for synchronized operation including
+  relay and mesh; operators restrict by *accepting* trust levels, not by the protocol refusing to
+  start. Authentication is the floor; the level is policy. REQ-SEC-14 is worded that way.
+- **Tests:** `crates/openpulse-daemon/tests/qsy_lines_are_authenticated.rs` — a stranger's signed
+  line opens no session and keys nothing (measured on the TX counter, with a positive control), an
+  unsigned line is refused, a valid signature outside the skew window is refused, a maximal line
+  fits one frame — asserted from BOTH sides against `Frame::new`, so a drift in either crate fails
+  there rather than at transmit — and a stranger who displaces the link peer cannot abort an
+  *initiated* negotiation. Six pre-existing tests **adapted** by signing their fixtures; none
+  inverted. `process_received_bytes_with_qsy_req_creates_responder_session` keeps its `is_some()`
+  assertion and is therefore not a guard on the authentication (a build that stopped verifying would
+  still pass it); its comment now says so. `responder_without_callsign_ignores_qsy_req` was kept
+  honest the same way, so it still isolates the §97.119 gate instead of passing because the line was
+  refused a step earlier.
+- **Test results:** qsy 31 + 18 pass, daemon lib 134 pass, the new file 6/6. **Three daemon-side
+  sabotages run, each restored by `sha256sum`:** reverting the initiator pin fails only the initiator
+  test (its positive-control arm — the pinned peer's identical REJECT — still passes, so the failure
+  is the pin and not a broken REJECT); widening `max_skew_ms` to `u64::MAX` fails only the stale-line
+  test; stripping `|SIG:` and decoding unsigned fails four of six. The earlier note that "reverting
+  the codec gives a compile error, so no behavioural sabotage is possible" was **excusing a missing
+  negative control** — it is true only of a wholesale `frame.rs` revert, and every sabotage that
+  matters is daemon-side and compiles. Caught by the pre-post review. Full `scripts/gate.sh` verdict
+  in the PR.
+- **Docs swept (9 carrying the false claim), and two of them are the more useful finding.**
+  `docs/dev/requests/code-review-output.md` **"Confirmed: signed QSY frames go through
+  `verify_line()` before decoding"** — with four citations, all inside `openpulse-qsy`. Its request
+  (`code-review.md`) had stated the property as a premise and scoped the search to the implementing
+  crate, so the confirmation was structurally unable to find the gap. Both carry a correction rather
+  than an edit: *a confirmation whose citations all sit inside the implementing module has verified
+  the module, not the system.* Ask what verifies a property and name the **consumer**.
+- **Corrected by the pre-post review of the write-up (the review caught a hole in the FIX, not in
+  the prose).** The responder path pinned `qsy_peer_pubkey`; both initiator paths — auto-QSY on
+  interference and the `AcceptQsy` command — stored the session without it, so for an initiated
+  negotiation the expected key fell back to `last_verified_peer()` **per line**. That slot is
+  displaceable by any station holding any Ed25519 key: `handle_inbound_conreq` runs a permissive
+  profile, `record_verified_peer` overwrites the slot, and neither guards a negotiation in flight.
+  Since our own `QSY_REQ` carries the token in cleartext, the attack needed nothing secret — hear the
+  REQ, send a CONREQ, become the link peer, sign a `QSY_REJECT`. Both sites now pin. This is the
+  general shape worth keeping: **the fix was applied at the seam where the defect was FOUND
+  (responder) and not at the sibling seam with the same shape** — the blind-sibling archetype, and
+  the same reason #1177's window gate and #1249's burst cap each had a second arm.
+- **Still true after the fix, and stated rather than implied:** `allow_trustlevels` is consulted on
+  the responder side only. `QsySession::apply` checks trust on `Req`; VOTE/ACK/REJECT have no trust
+  check, and `new_initiator()` carries an empty policy. Authentication now holds in both roles; the
+  trust *level* gate does not. And `apply(Reject)` ignores the token entirely, so the token is not
+  what bounds a replayed REJECT — the signed timestamp is.
+- **Split out:** a stranger's CONREQ re-arms the live session's OTA ACK-MAC key;
+  `QsySession::new_initiator()` never receives the configured policy (now a bound on the claim, not
+  a side issue — it is named in the PR's "what this buys" rather than listed as follow-up).
+
 ## 2026-09-04 — The reachability ratchet counted test modules as production (#1270)
 
 - **Requirement/change:** #1270. `_strip_cfg_test` searched for the **literal** `#[cfg(test)]`, so

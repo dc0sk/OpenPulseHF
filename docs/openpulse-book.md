@@ -681,7 +681,8 @@ bomb-capped.
 
 #### 1.6.4 QSY frequency agility (`openpulse-qsy`)
 
-Ed25519-signed `QSY_REQ`/`QSY_LIST`/`QSY_VOTE`/`QSY_ACK`/`QSY_REJECT` wire frames, a `QsySession`
+Ed25519-signed, freshness-stamped `QSY_REQ`/`QSY_LIST`/`QSY_VOTE`/`QSY_ACK`/`QSY_REJECT` wire
+frames verified against the handshake peer (#1252), a `QsySession`
 negotiation state machine,
 a `QsyScanner`, and a `BandplanPolicy` — the daemon validates candidate frequencies against the
 bandplan, can enforce maximum channel width and segment conventions, and (off by default) can

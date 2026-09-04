@@ -1141,7 +1141,8 @@ operator-enabled; it is never triggered automatically.
 
 **Operator prerequisites**
 - QSY must be explicitly enabled per trust level in `config.toml`
-  (`[qsy] allow_trustlevels = ["verified", "psk_verified"]` — untrusted is off by default
+  (`[qsy] allow_trustlevels = ["verified", "psk_verified", "reduced"]` — `reduced` is a trust-store
+  key proven over air, which is what the #1252 signature demonstrates; untrusted is off by default
   but can be enabled; the operator takes responsibility).
 - CAT control via hamlib must be configured and active (`[hamlib]` section).
 
@@ -1167,7 +1168,10 @@ operator-enabled; it is never triggered automatically.
   peer's current trust classification.
 - A station may reject `QSY_REQ` with `QSY_REJECT` if QSY is disabled or hamlib is
   unavailable; the session continues on the original frequency.
-- All QSY wire frames are signed with the session Ed25519 key to prevent spoofing.
+- All QSY wire frames are signed with the station Ed25519 key and carry a freshness timestamp
+  (#1252). Verified against the key the *handshake* established, pinned when the negotiation opens
+  — an unsigned, forged or stale line is refused and keys nothing. This was true of the crate from
+  the start and NOT of the daemon, which used the unsigned codec until #1252.
 
 **New wire frames** (all CR-terminated, carried over the existing B2F data channel)
 - `QSY_REQ <token> <n_candidates>` — initiate QSY scan

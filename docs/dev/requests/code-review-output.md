@@ -29,7 +29,7 @@ I did not run the compatibility checks that require external peers or services (
 - Major: `verify_manifest()` authenticates the manifest envelope but does not verify the received payload against `payload_hash`, so callers can treat a tampered transfer as valid if they forget the second check.
 - Major: `RelayForwarder` replay suppression is TTL-only with no capacity bound, so unique nonces can grow memory without limit inside the TTL window.
 - Major: dependency resolution for the PQ stack is still non-reproducible because `ml-kem` is not exactly pinned and [../../.gitignore](../../../.gitignore#L3) excludes `Cargo.lock`.
-- Several high-risk items from the brief checked out in current code and tests: PQ ACK session binding, SL2 fallback semantics, signed QSY frames, B2F timeout gating, and FEC layer ordering.
+- Several high-risk items from the brief checked out in current code and tests: PQ ACK session binding, SL2 fallback semantics, signed QSY frames (**wrong — see the correction below**), B2F timeout gating, and FEC layer ordering.
 
 ## Findings by topic
 
@@ -58,6 +58,14 @@ I did not run the compatibility checks that require external peers or services (
 - Confirmed: `verify_pq_conack()` rejects mismatched session IDs ([../../crates/openpulse-core/src/pq_handshake.rs](../../../crates/openpulse-core/src/pq_handshake.rs#L424), [../../crates/openpulse-core/src/pq_handshake.rs](../../../crates/openpulse-core/src/pq_handshake.rs#L432)), and the integration suite covers that case ([../../crates/openpulse-core/tests/pq_handshake_integration.rs](../../../crates/openpulse-core/tests/pq_handshake_integration.rs#L251)).
 - Confirmed: `AckDown` floors at SL2 and only the third consecutive NACK at SL2 falls back to SL1 ([../../crates/openpulse-core/src/rate.rs](../../../crates/openpulse-core/src/rate.rs#L204), [../../crates/openpulse-core/src/rate.rs](../../../crates/openpulse-core/src/rate.rs#L221), [../../crates/openpulse-core/src/rate.rs](../../../crates/openpulse-core/src/rate.rs#L237)), with explicit regression tests ([../../crates/openpulse-core/tests/rate_adaptation.rs](../../../crates/openpulse-core/tests/rate_adaptation.rs#L60), [../../crates/openpulse-core/tests/rate_adaptation.rs](../../../crates/openpulse-core/tests/rate_adaptation.rs#L98)).
 - Confirmed: signed QSY frames go through `verify_line()` before decoding ([../../crates/openpulse-qsy/src/frame.rs](../../../crates/openpulse-qsy/src/frame.rs#L164), [../../crates/openpulse-qsy/src/frame.rs](../../../crates/openpulse-qsy/src/frame.rs#L185), [../../crates/openpulse-qsy/src/frame.rs](../../../crates/openpulse-qsy/src/frame.rs#L186)), and the session suite covers signature tampering plus the no-overlap vote path ([../../crates/openpulse-qsy/tests/qsy_session.rs](../../../crates/openpulse-qsy/tests/qsy_session.rs#L49), [../../crates/openpulse-qsy/tests/qsy_session.rs](../../../crates/openpulse-qsy/tests/qsy_session.rs#L217)).
+
+> **CORRECTION (2026-09-04, #1252).** This confirmation was wrong, and the way it was wrong is
+> worth keeping. The request that produced it stated as a PREMISE that "every QSY frame is
+> Ed25519-signed"; the review confirmed it with four citations, **all inside
+> `openpulse-qsy`** — the crate that implements the signing and tests its own tampering. The
+> crate did sign. **The daemon never called it**: it imported `decode_unsigned`, and
+> `verify_line` had zero callers outside the crate until #1252 wired it. A confirmation whose
+> citations all sit inside the implementing module has verified the module, not the system.
 - Confirmed: the disjoint-candidate QSY path now sends an explicit reject instead of hanging the peer ([../../crates/openpulse-qsy/src/session.rs](../../../crates/openpulse-qsy/src/session.rs#L306), [../../crates/openpulse-qsy/src/session.rs](../../../crates/openpulse-qsy/src/session.rs#L327), [../../crates/openpulse-qsy/src/session.rs](../../../crates/openpulse-qsy/src/session.rs#L329)).
 
 ### 4. Performance and resource usage

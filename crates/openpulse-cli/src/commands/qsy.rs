@@ -59,9 +59,14 @@ fn run_init(rig_override: String) -> Result<()> {
         .with_switchover_offset_s(qsy_cfg.switchover_offset_s as u32);
     let actions = session.initiate(qsy_cfg.candidate_freqs_hz.clone())?;
 
+    // What is printed is the SIGNABLE PAYLOAD, not the wire form: since #1252 every QSY line the
+    // daemon emits carries a `|SIG:` trailer, and this command is a dry run that transmits nothing.
     for action in &actions {
         if let QsyAction::SendFrame(frame) = action {
-            println!("→ {}", openpulse_qsy::frame::encode_unsigned(frame));
+            println!(
+                "→ {}",
+                openpulse_qsy::frame::encode_unsigned(frame, now_ms())
+            );
         }
     }
 
@@ -80,7 +85,10 @@ fn run_init(rig_override: String) -> Result<()> {
     let actions = session.scan_complete(results)?;
     for action in &actions {
         if let QsyAction::SendFrame(frame) = action {
-            println!("→ {}", openpulse_qsy::frame::encode_unsigned(frame));
+            println!(
+                "→ {}",
+                openpulse_qsy::frame::encode_unsigned(frame, now_ms())
+            );
         }
     }
 
@@ -135,4 +143,12 @@ fn run_status() -> Result<()> {
     println!("Scan dwell:            {} ms", qsy_cfg.scan_dwell_ms);
     println!("Switchover offset:     {} s", qsy_cfg.switchover_offset_s);
     Ok(())
+}
+
+/// Unix milliseconds now — the freshness stamp a real QSY line carries.
+fn now_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64
 }
