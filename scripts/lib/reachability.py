@@ -23,7 +23,21 @@ BASELINE = ROOT / "docs/dev/project/reachability-baseline.txt"
 SRC_GLOBS = ["crates/*/src/**/*.rs", "plugins/*/src/**/*.rs",
              "apps/*/src/**/*.rs", "tools/*/src/**/*.rs", "pki-tooling/src/**/*.rs"]
 
-PUB_ITEM = re.compile(r"^\s*pub(?:\([^)]*\))?\s+(?:fn|struct|enum|trait|const|static|type)\s+([A-Za-z_][A-Za-z0-9_]+)", re.M)
+# Bare `pub` ONLY — not `pub(crate)`/`pub(super)`/`pub(in ...)`. The orphan test excludes an item's
+# own declaring file, which is the right rule for CROSS-CRATE reachability and the wrong one for a
+# restricted item, whose entire legitimate scope may be that file. The case that needs this is
+# `FX_CONTROL_SEGMENT_ID` (openpulse-daemon/src/filexfer.rs): production use in its own file plus
+# test use in other files of the same crate, so it MUST be `pub(crate)` and would be reported as
+# having no production caller however it is written.
+#
+# What is lost, stated rather than waved away: rustc's `dead_code` lint covers an unused restricted
+# item under the workspace's `-D warnings` — verified by planting one, including the case where its
+# only use is a `#[cfg(test)]` module in another file, because `--all-targets` still checks the
+# plain lib where no test module exists. It does NOT cover an item silenced by `#[allow(dead_code)]`
+# or one in code this gate's `--no-default-features` build never compiles. That set is EMPTY today
+# (9 allow sites in production src, none on a restricted item; all 41 packages under SRC_GLOBS are
+# workspace members), which is a fact about now, not a property — re-check it if allow sites grow.
+PUB_ITEM = re.compile(r"^\s*pub\s+(?:fn|struct|enum|trait|const|static|type)\s+([A-Za-z_][A-Za-z0-9_]+)", re.M)
 IDENT = re.compile(r"[A-Za-z_][A-Za-z0-9_]+")
 
 
@@ -105,14 +119,77 @@ def _strip_rust(text):
     return "".join(out)
 
 
+# `#[cfg(test)]` and the compound forms — `#[cfg(all(test, unix))]`,
+# `#[cfg(all(test, not(target_arch = "wasm32")))]`, `#[cfg(all(test, feature = "serial"))]`.
+# Matching only the bare form treated five test modules as PRODUCTION, which is the false-PASS
+# direction: their contents counted as production callers, and their own `pub(super)` helpers were
+# collected as public items with no caller. Found when the ratchet flagged three such helpers in
+# `openpulse-daemon` during #1252. `not(` is excluded so a `#[cfg(not(test))]` block — production
+# code that compiles only outside tests — is never stripped; there are none today, and stripping one
+# would delete real production text.
+_CFG_OPEN_RE = re.compile(r"#\[cfg\(")
+
+
+def _cfg_expr_is_test(expr):
+    """True when a `cfg(...)` expression selects TEST builds — `test`, or `all(...)` containing it.
+
+    A predicate rather than one regex, because "a bare `test` atom anywhere inside `all(...)` except
+    under `not(...)`" is not something a Python regex expresses (the `not(` guard needs a
+    variable-width lookbehind). Attempting it produced a pattern that matched the bare form and
+    silently stopped matching every compound one — the failure this function exists to prevent.
+
+    Deliberately FALSE for `any(test, ...)`: that compiles in production whenever another arm holds,
+    so stripping it would delete real production declarations and callers. Also false for
+    `not(test)`, which is production-only code.
+    """
+    expr = expr.strip()
+    if expr == "test":
+        return True
+    if not expr.startswith("all(") or not expr.endswith(")"):
+        return False
+    inner, depth, out = expr[4:-1], 0, []
+    for ch in inner:                       # blank out nested groups, keeping top-level atoms
+        if ch == "(":
+            depth += 1
+        elif ch == ")":
+            depth -= 1
+        elif depth == 0:
+            out.append(ch)
+        if depth < 0:
+            return False
+    return "test" in [a.strip() for a in "".join(out).split(",")]
+
+
+def _cfg_span(text, start):
+    """Given the index of `#[cfg(`, return (expr, index just past the closing `]`) or None."""
+    open_paren = text.index("(", start)
+    depth, i, n = 0, open_paren, len(text)
+    while i < n:
+        if text[i] == "(":
+            depth += 1
+        elif text[i] == ")":
+            depth -= 1
+            if depth == 0:
+                close = text.find("]", i)
+                return (None if close == -1 else (text[open_paren + 1 : i], close + 1))
+        i += 1
+    return None
+
+
 def _strip_cfg_test(text):
     """Remove `#[cfg(test)] mod ... { ... }` blocks so test-only use is not a production caller."""
     out, i, n = [], 0, len(text)
     while i < n:
-        m = re.search(r"#\[cfg\(test\)\]", text[i:])
+        m = _CFG_OPEN_RE.search(text[i:])
         if not m:
             out.append(text[i:]); break
         start = i + m.start()
+        span = _cfg_span(text, start)
+        if span is None or not _cfg_expr_is_test(span[0]):
+            # A cfg that is not a test cfg: keep it and resume PAST it, so its own parentheses
+            # cannot be mistaken for the next candidate's.
+            end = start + len("#[cfg(") if span is None else span[1]
+            out.append(text[i:end]); i = end; continue
         out.append(text[i:start])
         brace = text.find("{", start)
         semi = text.find(";", start)
@@ -165,7 +242,37 @@ def _self_check():
         (r"let e = '\''; after_call();", ["after_call"]),
         ("'outer: loop { labelled_call(); break 'outer; }", ["labelled_call"]),
     ]
+    # The CFG stripper is a SECOND stripper with a separate failure mode, and until #1270 it had no
+    # probe at all: the "stripper is WIRED" line below disables `_strip_rust`, so a regression of the
+    # cfg matcher back to the literal `#[cfg(test)]` form passed both self-tests. That regression had
+    # already shipped — five compound-cfg test modules were treated as production for the life of the
+    # ratchet. `any(test, ...)` is in the KEEP list on purpose: it compiles in production whenever
+    # another arm holds, so stripping it would delete real declarations.
+    cfg_strip_cases = [
+        "test",
+        "all(test, unix)",
+        'all(test, not(target_arch = "wasm32"))',
+        'all(test, feature = "serial")',
+        'all(feature = "x", test)',
+        'all(unix, test, feature = "y")',
+    ]
+    cfg_keep_cases = [
+        "not(test)",
+        "all(not(test), unix)",
+        'feature = "test-util"',
+        'any(test, feature = "x")',
+        'all(not(test), feature = "z")',
+        "test_util",
+        'all(feature = "test-util", unix)',
+    ]
+
     bad = []
+    for expr in cfg_strip_cases:
+        if not _cfg_expr_is_test(expr):
+            bad.append(f"cfg NOT recognised as test-only: {expr!r}")
+    for expr in cfg_keep_cases:
+        if _cfg_expr_is_test(expr):
+            bad.append(f"cfg WRONGLY recognised as test-only: {expr!r}")
     for src, sym in strip_cases:
         if sym in _strip_rust(src):
             bad.append(f"NOT stripped: {sym!r} survives {src!r}")
@@ -214,10 +321,29 @@ def _self_check():
         print("  It must never manufacture or destroy a declaration, only references.")
         return 1
 
+    # Same wiring probe for the cfg stripper. Unlike `_strip_rust` this one legitimately changes the
+    # ITEM count too — a `#[cfg(test)] pub fn` is a declaration that must not be surveyed — so only
+    # the orphan count is required to move.
+    real_cfg = globals()["_strip_cfg_test"]
+    globals()["_strip_cfg_test"] = lambda t: t
+    try:
+        _, _, orphans_cfg_off, _ = _analyze()
+    finally:
+        globals()["_strip_cfg_test"] = real_cfg
+    if len(orphans_cfg_off) == len(orphans_on):
+        print("SELF-CHECK: FAIL")
+        print(f"  disabling the CFG stripper did not change the orphan count ({len(orphans_on)}).")
+        print("  Either it is no longer wired into _analyze, or no test module in the tree")
+        print("  references a public item — check which before trusting this.")
+        return 1
+
     print(f"  ok: {len(strip_cases)} stripped, {sum(len(k[1]) for k in keep_cases)} preserved, "
           f"no leftover delimiters in {len(_src_files())} files")
-    print(f"  ok: stripper is WIRED — orphans {len(orphans_off)} (off) vs {len(orphans_on)} (on); "
+    print(f"  ok: {len(cfg_strip_cases)} cfg exprs recognised, {len(cfg_keep_cases)} refused")
+    print(f"  ok: lexer is WIRED — orphans {len(orphans_off)} (off) vs {len(orphans_on)} (on); "
           f"public items unchanged at {len(items_on)}")
+    print(f"  ok: cfg stripper is WIRED — orphans {len(orphans_cfg_off)} (off) vs "
+          f"{len(orphans_on)} (on)")
     print("SELF-CHECK: PASS")
     return 0
 
