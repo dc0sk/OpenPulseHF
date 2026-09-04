@@ -219,3 +219,104 @@ fn the_line_ceiling_is_the_frame_ceiling() {
          have fit, and the measured candidate ceilings are wrong"
     );
 }
+
+/// An INITIATOR's negotiation is bound to the key that was the link peer when it opened.
+///
+/// Found by the pre-post review of this change, and it was a hole in the fix, not in the write-up.
+/// The responder path pinned `qsy_peer_pubkey`; both initiator paths stored the session without it,
+/// so the expected key fell back to `last_verified_peer()` on *every inbound line*. That slot is
+/// displaceable: `handle_inbound_conreq` runs a permissive profile and answers any CONREQ addressed
+/// to our public callsign, and `record_verified_peer` then overwrites the slot — with no guard for a
+/// negotiation in flight. The token is cleartext in our own `QSY_REQ`, so the attack needed nothing
+/// secret: hear the REQ, send a CONREQ, become the link peer, sign a `QSY_REJECT`.
+///
+/// The displacement is modelled here by writing the slot directly. That is faithful to what the
+/// CONREQ does and keeps this test about the pin; the permissive-CONREQ behaviour itself is a
+/// separate finding, not something this test should be able to pass or fail on.
+#[tokio::test]
+async fn a_stranger_cannot_abort_an_initiated_negotiation_by_displacing_the_link_peer() {
+    // VERIFIES: REQ-SEC-14
+    for stranger_displaces in [true, false] {
+        let mut rs = station();
+        let mut eng = engine();
+        rs.qsy_candidate_freqs = vec![14_100_000, 14_102_000];
+        rs.qsy_pending_token = Some("tok-init".into());
+
+        let (tx, _rx) = broadcast::channel::<ControlEvent>(64);
+        let ev_tx = Arc::new(tx);
+        let mode: Arc<Mutex<String>> = Arc::new(Mutex::new("BPSK250".to_string()));
+        openpulse_daemon::apply_command_to_engine(
+            &openpulse_daemon::protocol::ControlCommand::AcceptQsy {
+                token: "tok-init".into(),
+            },
+            &mut eng,
+            &mode,
+            &ev_tx,
+            None,
+            &mut rs,
+        )
+        .await;
+        assert!(
+            rs.qsy_session.is_some(),
+            "precondition: AcceptQsy must open an initiator session"
+        );
+        assert!(
+            !rs.qsy_session.as_ref().expect("session").is_terminal(),
+            "precondition: a freshly initiated negotiation is not terminal"
+        );
+
+        // The attacker's CONREQ lands and takes the link-peer slot.
+        if stranger_displaces {
+            rs.verified_peers.insert(
+                "K9BAD".into(),
+                VerifiedPeer {
+                    callsign: "K9BAD".into(),
+                    grid: String::new(),
+                    pubkey: pubkey(&STRANGER_SEED),
+                    profile_compatible: None,
+                },
+            );
+            rs.last_verified_callsign = Some("K9BAD".into());
+        }
+
+        let seed = if stranger_displaces {
+            STRANGER_SEED
+        } else {
+            PEER_SEED
+        };
+        let reject = encode_signed(
+            &QsyFrame::Reject {
+                token: "tok-init".into(),
+                reason: "QRM".into(),
+            },
+            now_ms(),
+            &seed,
+        )
+        .expect("sign");
+        feed(&mut rs, &reject, &mut eng).await;
+
+        let terminal = rs
+            .qsy_session
+            .as_ref()
+            .map(|s| s.is_terminal())
+            .unwrap_or(true);
+        if stranger_displaces {
+            assert!(
+                !terminal,
+                "a stranger displaced the link peer and aborted our negotiation with a signed \
+                 REJECT — the initiator path is not pinned to the key it opened with"
+            );
+            assert_eq!(
+                rs.qsy_lines_refused, 1,
+                "the stranger's line must be counted as refused, not silently dropped"
+            );
+        } else {
+            // Positive control: the pinned peer's identical REJECT DOES end it. Without this the
+            // assertion above would also pass against a build where REJECT stopped working at all.
+            assert!(
+                terminal,
+                "control: the pinned peer's own signed REJECT must still end the negotiation"
+            );
+        }
+    }
+}

@@ -356,12 +356,17 @@ impl RuntimeControlState {
         !c.is_empty() && !c.eq_ignore_ascii_case("N0CALL")
     }
 
-    /// Over-air trust level of the last peer we verified this session, for gating the (unauthenticated)
-    /// QSY responder. RF certificates are `OverAir` without PSK, so this tops out at `Reduced` (a
-    /// trust-store key) or `Low` (first-seen) — never `Verified`, which requires an out-of-band cert.
-    /// Best-effort: a single global `verified_peer` slot is not bound to the QSY requester (the QSY
-    /// frame carries no signature), so `allow_trustlevels` means "only after such a handshake this
-    /// session," not a per-requester check.
+    /// Over-air trust level of the last peer we verified this session, for gating the QSY responder.
+    /// RF certificates are `OverAir` without PSK, so this tops out at `Reduced` (a trust-store key)
+    /// or `Low` (first-seen) — never `Verified`, which requires an out-of-band cert.
+    ///
+    /// Read once, at session creation, alongside the key pinned into `qsy_peer_pubkey` (#1252) — so
+    /// the level and the key describe the same station and a later CONREQ cannot displace either.
+    /// Before #1252 the QSY frame carried no signature at all and this was a "only after some
+    /// handshake this session" check rather than a per-requester one. The remaining gap is the
+    /// INITIATOR role, whose `QsySession::new_initiator()` still carries an empty policy: the key is
+    /// pinned there too, so a stranger cannot steer the negotiation, but no trust *level* is
+    /// consulted on that side.
     pub fn rf_peer_trust(&self) -> ConnectionTrustLevel {
         match self.last_verified_peer() {
             Some(p) => {
@@ -2003,6 +2008,12 @@ pub async fn maybe_qsy_on_interference(
         qsy_dwell,
     )
     .await;
+    // #1252: pin the key on the INITIATOR side too. Without this the per-line fallback to
+    // `last_verified_peer()` lets a stranger's CONREQ displace the link peer mid-negotiation, after
+    // which their signed REJECT aborts our move and their signed VOTE steers it.
+    runtime_state.qsy_peer_pubkey = runtime_state
+        .last_verified_peer()
+        .and_then(|p| <[u8; 32]>::try_from(p.pubkey.as_slice()).ok());
     runtime_state.qsy_session = Some(session);
     runtime_state.qsy_session_started = Some(Instant::now());
     // The old interferer no longer applies once we move; start fresh so we don't re-trigger.
@@ -2454,6 +2465,9 @@ pub async fn apply_command_to_engine(
                     )
                     .await;
 
+                    runtime_state.qsy_peer_pubkey = runtime_state
+                        .last_verified_peer()
+                        .and_then(|p| <[u8; 32]>::try_from(p.pubkey.as_slice()).ok());
                     runtime_state.qsy_session = Some(session);
                     runtime_state.qsy_session_started = Some(Instant::now());
                 }
@@ -4856,9 +4870,13 @@ mod command_apply_tests {
         let (tx, _rx) = broadcast::channel::<ControlEvent>(16);
         let ev_tx = Arc::new(tx);
 
-        // INVERTED at #1252. This test asserted that an UNSIGNED REQ creates a responder session —
-        // which was the defect: any station in earshot could open one. The line below is signed by
-        // the peer this station verified, which is now the only line that may.
+        // ADAPTED at #1252, not inverted — the assertion below is unchanged. Before #1252 this
+        // passed on an UNSIGNED REQ, which was the defect: any station in earshot could open a
+        // responder session. The fixture is now signed by the peer this station verified, because
+        // that is the only line that may. Note what this test therefore is and is not: it exercises
+        // responder-session creation, and it is NOT a guard on the authentication — a build that
+        // stopped verifying would still pass it. The guards are in
+        // `tests/qsy_lines_are_authenticated.rs`, each with its own negative control.
         let seed = [7u8; 32];
         let mut runtime_state = state_with_qsy_peer(&seed);
         let qsy_req_line = signed_qsy_line(
