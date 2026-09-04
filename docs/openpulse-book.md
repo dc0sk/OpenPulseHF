@@ -4009,9 +4009,12 @@ peer_cache_ttl_s = 3600
 ```
 
 ```sh
-cargo build --release -p openpulse-mesh --features cpal
-./target/release/openpulse-mesh --mode BPSK250 --max-hops 3 --backend cpal
+cargo build --release -p openpulse-mesh
+./target/release/openpulse-mesh --mode BPSK250 --max-hops 3 --backend loopback
 ```
+
+This binary is **loopback only** (#1251): it has no PTT controller, no carrier sense and no station-ID timer, and its beacon carries no callsign, so it is not an on-air station. `docs/regulatory.md` lists this project's automatically-controlled stations under §97.221 and mesh is deliberately not among them. For an on-air relay, run `openpulse-daemon` with relay enabled.
+
 
 The mesh daemon hard-fails on `[station] callsign = "N0CALL"` (its source cites §97.119 as
 the rationale), and exits with `mesh is disabled in config; set [mesh] enabled = true to

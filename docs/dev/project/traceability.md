@@ -9,6 +9,52 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-09-04 — openpulse-mesh has no route to real audio (#1251)
+
+- **Requirement/change:** #1251, from the 2026-09-02 gap audit. The mesh binary describes itself as
+  beaconing and relaying "automatically on air" while having no `PttController` (so `[modem]
+  ptt_backend` is unread and only VOX could key it), no carrier sense, and no `StationIdTimer` — and
+  its beacon carries **no callsign field of any kind** (verified three ways: the `WireEnvelope`
+  payload, the `Frame` envelope's 10-byte overhead, and `set_callsign`, which writes only the
+  in-memory session log). REQ-REG-10 / REQ-MAC-02.
+- **Design decision — the fix is REMOVAL, not wiring.** Adversarial review rejected the
+  mirror-the-daemon approach. Evidence gathered for it: mesh is documented as an on-air transmitter
+  (roadmap, README, CHANGELOG, literal `--features cpal` recipes in the book and manual) and has
+  **never been on air** (absent from every on-air doc and from `scripts/`; its capability row says
+  "Not separately run this session"). Decisively, `regulatory.md` lists this project's
+  automatically-controlled stations under §97.221 as the repeater and the JS8 beacon and **omits
+  mesh** — while stating that unattended relay nodes ARE such stations, and the JS8 beacon was
+  deliberately held until that document existed as its gate. **Mesh skipped a gate the project
+  already imposed on its own sibling**, and has no control point at all.
+- **Three corrections to the issue itself**, all from the review: (1) "the only front-end without a
+  `StationIdTimer`" was FALSE — the KISS match is a doc comment saying it deliberately has none,
+  because AX.25 carries the source call per frame; the true statement is that four surfaces had the
+  same hole, which became #1262. (2) The daemon's own relay path was unkeyed, so it was the wrong
+  template. (3) Engine CSMA would make mesh **drop** traffic, not defer it — `next_beacon` advances
+  `last_sent_ms` before transmitting and `RelayForwarder::forward` inserts its dedup key BEFORE
+  returning the envelope, so a `ChannelBusy` is a permanent drop; ~70 % loss on a clear channel.
+- **Implementation (PR pending):** the `cpal` feature removed from `crates/openpulse-mesh/Cargo.toml`
+  and both `#[cfg(feature = "cpal")]` arms from `src/main.rs`; `backend = "cpal"` now **bails with
+  the reason** rather than degrading silently to loopback (silent degradation is what made the
+  sibling defects hard to see). Two false "on air" comments corrected. Operator-facing sweep: the
+  manual's build-flag row and run recipe, the book's build+run recipe, and `regulatory.md` now states
+  mesh's exclusion explicitly rather than by omission.
+- **Tests:** `crates/openpulse-mesh/tests/no_real_audio.rs` — no `cpal` feature, no `CpalBackend`
+  reference, and a cpal request refused rather than downgraded. Each check is validated against a
+  **planted input**, so a scan whose pattern rotted would fail rather than pass by matching nothing.
+  There is no runtime fixture that can observe a `cfg` arm that no longer compiles.
+- **Test results:** all three **fail without the fix**, each past its planted-input control; restore
+  verified by `sha256sum -c`. Full `scripts/gate.sh` verdict in the PR.
+- **Hedges kept rather than resolved** (regulatory questions the review declined to answer
+  confidently): whether `DE CALL` in OpenPulse framing counts as a "specified digital code" under
+  §97.309 — for an unattended station the review would default CW ID on; and whether a
+  store-and-forward relay is a §97.219 message forwarding system, in which case the first forwarder
+  must authenticate the originating station — which is exactly what #1253 defeats, and why #1253
+  should land before any on-air mesh work.
+- **Split out:** #1267 (REQ-MAC-02 marked covered while carrier sense is enabled on one surface, and
+  not on the broadcast/relay modes the requirement names); on-air mesh as a design item whose first
+  deliverable is the §97.221 mapping, not PTT plumbing.
+
 ## 2026-09-04 — Every daemon emission keys the transmitter (#1262)
 
 - **Requirement/change:** #1262, surfaced by the design review of #1251 and then found broader than

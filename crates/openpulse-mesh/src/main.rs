@@ -12,9 +12,6 @@ use openpulse_modem::ModemEngine;
 use psk8_plugin::Psk8Plugin;
 use qpsk_plugin::QpskPlugin;
 
-#[cfg(feature = "cpal")]
-use openpulse_audio::CpalBackend;
-
 use openpulse_core::relay::RelayTrustPolicy;
 use openpulse_mesh::trust_filter_from_policy;
 
@@ -69,8 +66,10 @@ fn main() -> Result<()> {
         return Ok(());
     }
 
-    // The mesh daemon beacons + relays automatically on air; refuse to run as the placeholder callsign
+    // The mesh daemon beacons + relays automatically; refuse to run as the placeholder callsign
     // (matches openpulse-daemon / -tui). §97.119: a station must transmit its own valid call sign.
+    // NOTE: this binary cannot reach a sound card (#1251), so "on air" is not currently reachable —
+    // the callsign gate is kept because it is the right check for when it is.
     if cfg.station.callsign.trim().eq_ignore_ascii_case("N0CALL") {
         anyhow::bail!(
             "invalid callsign N0CALL in configuration; set [station].callsign before starting the mesh daemon"
@@ -81,18 +80,24 @@ fn main() -> Result<()> {
     let max_hops = cli.max_hops.unwrap_or(mesh_cfg.max_hops);
     let ttl_ms = mesh_cfg.store_forward_ttl_s * 1000;
 
+    // NO ROUTE TO REAL AUDIO (#1251). This binary has none of the transmit-safety machinery its
+    // siblings have — no PTT controller (so `[modem] ptt_backend` is unread and only VOX could key
+    // it), no carrier sense, and no `StationIdTimer`, while its beacon carries no callsign field of
+    // any kind. `docs/regulatory.md` accordingly lists the repeater and the JS8 beacon as this
+    // project's automatically-controlled stations and does NOT list mesh — which is the §97.221 gate
+    // the JS8 beacon was deliberately held for and mesh skipped.
+    //
+    // Rather than hand-write a fourth copy of a keying pattern that has been wrong four times
+    // (#1250 ARDOP, #1259 KISS, #1260 repeater, #1262 the daemon itself), the capability to reach a
+    // sound card is removed: a capability that does not exist cannot be mis-invoked. Wiring mesh for
+    // air starts at the regulatory mapping and the automatic-control sub-band question, not here.
     let audio: Box<dyn openpulse_core::audio::AudioBackend> = match cfg.audio.backend.as_str() {
         "loopback" => Box::new(LoopbackBackend::default()),
-        #[cfg(feature = "cpal")]
-        "cpal" | "default" => Box::new(CpalBackend::new()),
-        #[cfg(not(feature = "cpal"))]
         "cpal" => {
-            tracing::warn!(
-                "cpal backend not compiled in (build with --features cpal); using loopback"
-            );
-            Box::new(LoopbackBackend::default())
+            anyhow::bail!(
+                "openpulse-mesh cannot use a real audio backend (#1251): it has no PTT controller,                  no carrier sense and no station-ID timer, and its beacon carries no callsign. Use                  `backend = \"loopback\"`, or run the mesh relay inside openpulse-daemon."
+            )
         }
-        #[cfg(not(feature = "cpal"))]
         "default" => Box::new(LoopbackBackend::default()),
         name => {
             anyhow::bail!("unknown audio backend '{name}' — use 'default', 'cpal', or 'loopback'")
@@ -101,7 +106,9 @@ fn main() -> Result<()> {
 
     let mut engine = ModemEngine::new(audio);
     // Record the operator's identity + declared TX power in the §97 regulatory TX-metadata log (the
-    // mesh daemon beacons/relays on air; the callsign is already gated to non-N0CALL above).
+    // callsign is already gated to non-N0CALL above). Note the log itself is written only by the
+    // daemon — `set_tx_log_path` has one caller workspace-wide — so on this binary this records into
+    // the in-memory session log only.
     engine.set_callsign(cfg.station.callsign.clone());
     engine.set_max_power_watts(cfg.station.tx_power_watts);
     let _ = engine.register_plugin(Box::new(BpskPlugin::default()));

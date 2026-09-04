@@ -1345,7 +1345,7 @@ rig. Examples use real flags, subcommands, and environment variables only.
 | `openpulse-tnc` | openpulse-ardop | ARDOP-compatible TCP TNC (Pat/Winlink) | `--features cpal` |
 | `openpulse-kisstnc` | openpulse-kiss | KISS/AX.25 TCP TNC | `--features cpal` |
 | `openpulse-gateway` | openpulse-gateway | Direct TCP Winlink CMS gateway (no radio) | n/a |
-| `openpulse-mesh` | openpulse-mesh | Mesh broadcast/relay daemon | `--features cpal` |
+| `openpulse-mesh` | openpulse-mesh | Mesh broadcast/relay daemon | *(loopback only — see below)* |
 | `openpulse-panel` | openpulse-panel | iced operator panel (connects to the daemon) | n/a (control client) |
 | `openpulse-twinview` | openpulse-twinview | egui both-directions viewer over two daemons | n/a (control client) |
 | `openpulse-testbench` | openpulse-testbench | egui 4-column signal-path scope | `--features cpal` (live capture) |
@@ -1492,8 +1492,11 @@ openpulse-gateway --host cms.winlink.org --port 8772 --callsign N0CALL \
 
 ```bash
 # Requires [mesh] enabled = true in config.toml
-openpulse-mesh --mode BPSK500 --max-hops 5 --backend cpal
+openpulse-mesh --mode BPSK500 --max-hops 5 --backend loopback
 ```
+
+> **`openpulse-mesh` cannot use a real audio backend** (#1251). It has no PTT controller (so `[modem] ptt_backend` is unread), no carrier sense, and no station-ID timer, and its beacon carries no callsign field — so it is not an on-air station and `--backend cpal` is refused with that reason rather than degrading silently to loopback. To relay on air, run the relay inside `openpulse-daemon`, which keys, senses and identifies.
+
 
 #### `openpulse-panel`
 

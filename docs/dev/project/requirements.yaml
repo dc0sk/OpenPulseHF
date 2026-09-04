@@ -820,6 +820,7 @@ capabilities:
     - crates/openpulse-radio/tests/rigctld_integration.rs
     - crates/openpulse-ardop/tests/ptt_keys_every_transmit.rs
     - crates/openpulse-daemon/tests/ptt_keys_every_daemon_transmit.rs
+    - crates/openpulse-mesh/tests/no_real_audio.rs
     traceability: baseline
   CAP-60:
     code:
