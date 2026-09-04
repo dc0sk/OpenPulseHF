@@ -8,8 +8,9 @@ license.workspace = true
 name = "openpulse-mesh"
 path = "src/main.rs"
 
-[features]
-cpal = ["openpulse-audio/cpal-backend"]
+# No `cpal` feature (#1251): this binary has no PTT controller, no carrier sense and no station-ID
+# timer, and its beacon carries no callsign. A capability that does not exist cannot be mis-invoked,
+# so the route to a sound card is removed rather than guarded at runtime.
 
 [dependencies]
 openpulse-core.workspace = true
