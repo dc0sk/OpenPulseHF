@@ -837,7 +837,7 @@ ARDOP extension command directs `ModemEngine` into mesh mode.
 
 ### FF-1 — Operator-initiated QSY negotiation ✅ Done (PR #140, #141)
 
-Five-frame Ed25519-signed ASCII protocol (QSY_REQ / QSY_LIST / QSY_VOTE / QSY_ACK /
+Five-frame Ed25519-signed, freshness-stamped ASCII protocol (QSY_REQ / QSY_LIST / QSY_VOTE / QSY_ACK /
 QSY_REJECT); `QsySession` state machine and `QsyScanner` in `crates/openpulse-qsy`.
 Disabled by default; enabled per `[qsy]` config section.
 

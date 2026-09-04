@@ -789,7 +789,14 @@ impl Default for QsyConfig {
     fn default() -> Self {
         Self {
             enabled: false,
-            allow_trustlevels: vec!["verified".into(), "psk_verified".into()],
+            // "reduced" included since #1252 (maintainer decision). Without it inbound QSY was
+            // DEAD rather than gated: the over-air path tops out at `Reduced`
+            // (`classify_connection_trust(.., OverAir, false)`), while `Verified` needs an
+            // out-of-band certificate and `PskVerified` needs `psk_validated`, which the RF path
+            // never sets — so a station that enabled QSY and left this list rejected every request.
+            // Admitting `Reduced` is safe now that lines are signed: it means a key in the local
+            // trust store, proven over air, which is exactly what the signature demonstrates.
+            allow_trustlevels: vec!["verified".into(), "psk_verified".into(), "reduced".into()],
             bandplan_mode: "ham-iaru-r1".into(),
             bandplan_awareness_enabled: true,
             enforce_max_channel_width: true,
@@ -1227,7 +1234,7 @@ receive_tick_ms = 50
 # Enable QSY frequency-agility negotiation.  Requires hamlib rigctld configured in [radio].
 # enabled = false
 # Trust levels allowed to initiate QSY with this station.
-# allow_trustlevels = ["verified", "psk_verified"]
+# allow_trustlevels = ["verified", "psk_verified", "reduced"]
 # Bandplan-awareness mode: ham-iaru-r1 | ham-iaru-r2 | ham-iaru-r3
 # bandplan_mode = "ham-iaru-r1"
 # Enforce bandplan guardrails for QSY (enabled by default).

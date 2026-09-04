@@ -594,7 +594,24 @@ pub async fn run(cfg: OpenpulseConfig, modem_backend: Box<dyn AudioBackend>) -> 
         station_seed,
         local_callsign: cfg.station.callsign.clone(),
         local_grid: cfg.station.grid_square.clone(),
-        qsy_candidate_freqs: cfg.qsy.candidate_freqs_hz.clone(),
+        qsy_candidate_freqs: {
+            // A QSY_LIST is transmitted with no SAR, so it must fit one 255-byte frame. Since #1252
+            // the signature (93 chars) and freshness stamp cut the ceiling to SIX candidates at the
+            // daemon's 8-character token. `candidate_freqs_hz` is unbounded in config, and an
+            // over-long list used to fail at TRANSMIT — after the REQ had gone out — wedging the
+            // peer until its session TTL. Warn and truncate at startup, where the operator sees it.
+            const MAX_QSY_CANDIDATES: usize = 6;
+            let mut c = cfg.qsy.candidate_freqs_hz.clone();
+            if c.len() > MAX_QSY_CANDIDATES {
+                tracing::warn!(
+                    configured = c.len(),
+                    used = MAX_QSY_CANDIDATES,
+                    "[qsy] candidate_freqs_hz exceeds what one QSY_LIST frame can carry; using the                      first {MAX_QSY_CANDIDATES}"
+                );
+                c.truncate(MAX_QSY_CANDIDATES);
+            }
+            c
+        },
         qsy_switchover_offset_s: u32::try_from(cfg.qsy.switchover_offset_s).unwrap_or_else(|_| {
             tracing::warn!(
                 value = cfg.qsy.switchover_offset_s,

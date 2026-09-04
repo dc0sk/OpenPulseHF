@@ -1065,6 +1065,18 @@ capabilities:
     - crates/openpulse-core/src/signing_domain.rs
     - crates/openpulse-core/src/signing.rs
     traceability: enforced
+  CAP-78:
+    code:
+    - crates/openpulse-qsy/src/frame.rs
+    - crates/openpulse-daemon/src/lib.rs
+    - crates/openpulse-daemon/src/server.rs
+    name: QSY lines authenticated to the handshake peer, with a signed freshness bound
+    satisfies:
+    - REQ-SEC-14
+    tests:
+    - crates/openpulse-daemon/tests/qsy_lines_are_authenticated.rs
+    - crates/openpulse-qsy/src/frame.rs
+    traceability: enforced
 meta:
   bright_line: '2026-08-09'
   generated_by: 'hand-maintained; originally imported from the sources below, whose importer
@@ -2320,6 +2332,16 @@ requirements:
     statement: Every context the station identity key signs must be bound to a registered signing
       domain, so a signature made for one context cannot verify as another. Signing outside the
       registry must fail the workspace clippy gate rather than the review.
+    status: ratified
+    traceability: enforced
+  REQ-SEC-14:
+    category: Security/Trust
+    covered_by:
+    - CAP-78
+    statement: A control frame that steers the transmitter must be authenticated to the peer the
+      session handshake established and carry a signed freshness bound. An unsigned, forged or
+      stale frame must be refused without keying the transmitter or mutating session state.
+      Authentication is the floor; which trust levels an operator then accepts is policy.
     status: ratified
     traceability: enforced
   REQ-UX-01:

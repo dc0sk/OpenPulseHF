@@ -180,7 +180,8 @@ Security and trust layers include:
 
 ### 1.6 Advanced Feature Specification
 
-- QSY frequency agility (signed frame exchange, candidate scanning and switch coordination)
+- QSY frequency agility (signed, freshness-stamped frame exchange authenticated to the handshake
+  peer; candidate scanning and switch coordination)
 - Multi-hop relay and query propagation
 - Mesh daemon with peer discovery and cache
 - Cross-band repeater support with dual-rig model (`rig_a` receive side, `rig_b` transmit side)

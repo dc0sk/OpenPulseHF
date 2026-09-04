@@ -152,10 +152,19 @@ impl SigningDomain {
             // mirrored literal — there is no second copy to drift, and so no binding test is needed
             // (contrast `QsyLine` below, whose text format cannot share the constant).
             SigningDomain::AuthBeacon => 0x01,
-            // Carried in the frame as an ASCII DIGIT ('1' = 0x31), not as the raw byte — this is a
+            // Carried in the frame as an ASCII DIGIT ('2' = 0x32), not as the raw byte — this is a
             // text format. The VALUE is mirrored here; `openpulse-qsy` binds the two with a test,
             // because core cannot import that crate to assert it from this side.
-            SigningDomain::QsyLine => 0x01,
+            //
+            // 1 -> 2 at #1252: QSY lines became mandatorily signed and gained a freshness timestamp.
+            // The bump is what makes a mixed-version pair fail LOUDLY on all five verbs — without it
+            // four fail as `Malformed` (their tails are numeric) but QSY_REJECT is SILENT, because
+            // its `reason` is free text and absorbs a `|SIG:` suffix as part of the reason.
+            //
+            // This is a PER-DOMAIN signing version and is independent of the Frame `WIRE_VERSION`
+            // that #1191 froze at 0x01 — confirmed with the maintainer before the bump, because
+            // inferring the freeze covered it is exactly what would have shipped the silent case.
+            SigningDomain::QsyLine => 0x02,
         }
     }
 }

@@ -12,6 +12,16 @@ use openpulse_qsy::{
 use openpulse_radio::RigctldController;
 use rand::rngs::OsRng;
 
+/// A fixed, non-zero stamp — `Freshness::check` refuses 0 as "no timestamp advertised".
+const TS: u64 = 1_760_000_000_000;
+
+fn fresh() -> openpulse_core::handshake::Freshness {
+    openpulse_core::handshake::Freshness {
+        now_ms: TS,
+        max_skew_ms: 120_000,
+    }
+}
+
 // ── Frame codec tests ────────────────────────────────────────────────────────
 
 /// All five frame types survive encode → decode unchanged.
@@ -41,7 +51,7 @@ fn frame_round_trip() {
         },
     ];
     for f in frames {
-        assert_eq!(decode_unsigned(&encode_unsigned(&f)).unwrap(), f);
+        assert_eq!(decode_unsigned(&encode_unsigned(&f, TS)).unwrap(), (f, TS));
     }
 }
 
@@ -55,8 +65,9 @@ fn signed_round_trip_integration() {
         token: "deadbeef".into(),
         n_candidates: 2,
     };
-    let line = encode_signed(&f, &key);
-    let decoded = decode_signed(&line, &key.verifying_key()).unwrap();
+    let seed = key.to_bytes();
+    let line = encode_signed(&f, TS, &seed).expect("sign");
+    let decoded = decode_signed(&line, &key.verifying_key().to_bytes(), fresh()).unwrap();
     assert_eq!(decoded, f);
 }
 
@@ -68,13 +79,14 @@ fn signature_tamper() {
         token: "deadbeef".into(),
         n_candidates: 2,
     };
-    let mut line = encode_signed(&f, &key);
+    let seed = key.to_bytes();
+    let mut line = encode_signed(&f, TS, &seed).expect("sign");
     // Flip a character in the token field
     let idx = line.find("deadbeef").unwrap() + 2;
     let ch = line.as_bytes()[idx];
     line.replace_range(idx..idx + 1, if ch == b'd' { "X" } else { "d" });
     assert!(matches!(
-        decode_signed(&line, &key.verifying_key()),
+        decode_signed(&line, &key.verifying_key().to_bytes(), fresh()),
         Err(QsyFrameError::InvalidSignature)
     ));
 }
