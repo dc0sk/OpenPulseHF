@@ -632,6 +632,81 @@ async fn an_ota_receiver_does_not_key_ptt_at_a_peers_uncoded_traffic() {
     );
 }
 
+/// The handshake keys the transmitter — through `server::run`, not a unit seam (#1262).
+///
+/// The sibling above proves the daemon does NOT key at a peer's uncoded traffic; this proves it DOES
+/// key when it emits. Together they bracket the property, which matters because the naive fix for
+/// #1262 — one guard around the whole receive path — would pass this test and fail that one.
+///
+/// `ConnectPeer` on A transmits a CONREQ (`lib.rs`, previously unkeyed); B verifies it and replies
+/// with a CONACK (also previously unkeyed). Both stations must therefore report a keyed edge. This is
+/// the only #1262 test that goes through the real `server::run` dispatch.
+#[tokio::test(flavor = "multi_thread", worker_threads = 6)]
+async fn the_handshake_keys_the_transmitter_on_both_stations() {
+    // Auto-ID OFF on both stations. Without this the test is VACUOUS: the station-ID path keyed
+    // before #1262, so `saw_keyed` would report the periodic ID rather than the handshake and pass
+    // against the unfixed daemon. Verified — it did exactly that, taking 10.5 s (waiting for the ID)
+    // instead of 0.47 s. With auto-ID off, the handshake is the only thing that can key.
+    let mut a_cfg = cfg_auto("HSKA");
+    a_cfg.station.auto_id_interval_secs = 0;
+    let mut b_cfg = cfg_auto("HSKB");
+    b_cfg.station.auto_id_interval_secs = 0;
+    let pair = spawn_bridged_pair(
+        a_cfg,
+        b_cfg,
+        clean_awgn(1),
+        clean_awgn(2),
+        Duration::from_millis(10),
+    )
+    .await;
+
+    let a = TcpStream::connect(pair.addr_a).await.unwrap();
+    let (a_read, mut a_write) = a.into_split();
+    let mut a_reader = BufReader::new(a_read);
+    let b = TcpStream::connect(pair.addr_b).await.unwrap();
+    let (b_read, _b_write) = b.into_split();
+    let mut b_reader = BufReader::new(b_read);
+
+    tokio::time::sleep(Duration::from_millis(150)).await;
+    let cmd = serde_json::to_string(&ControlCommand::ConnectPeer {
+        callsign: "HSKB".into(),
+    })
+    .unwrap()
+        + "\n";
+    a_write.write_all(cmd.as_bytes()).await.unwrap();
+
+    async fn saw_keyed(reader: &mut BufReader<tokio::net::tcp::OwnedReadHalf>) -> bool {
+        timeout(Duration::from_secs(20), async {
+            loop {
+                let mut buf = String::new();
+                if reader.read_line(&mut buf).await.unwrap() == 0 {
+                    continue;
+                }
+                if let Ok(ControlEvent::PttChanged { active: true }) =
+                    serde_json::from_str::<ControlEvent>(buf.trim())
+                {
+                    return;
+                }
+            }
+        })
+        .await
+        .is_ok()
+    }
+
+    let a_keyed = saw_keyed(&mut a_reader).await;
+    let b_keyed = saw_keyed(&mut b_reader).await;
+    pair.shutdown();
+
+    assert!(
+        a_keyed,
+        "A transmitted a CONREQ without keying the transmitter (#1262)"
+    );
+    assert!(
+        b_keyed,
+        "B transmitted a CONACK without keying the transmitter (#1262)"
+    );
+}
+
 /// Two real daemons whose rigs disagree on frequency still exchange traffic (#1118).
 ///
 /// **What this does NOT gate, established by sabotage rather than assumed.** Disabling the #1118

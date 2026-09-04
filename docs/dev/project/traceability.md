@@ -9,6 +9,78 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-09-04 — Every daemon emission keys the transmitter (#1262)
+
+- **Requirement/change:** #1262, surfaced by the design review of #1251 and then found broader than
+  reported. The daemon held five `ptt.keyed` guards, all in `server.rs`, while `lib.rs` transmitted
+  from five further sites with none: both QSY lines, the handshake frame (CONREQ and CONACK), the
+  relay forward, and the non-OTA `SendMessage` fallback. Three comments already justified the §97.119
+  callsign gate by saying those paths "key the transmitter"; they did not. REQ-PTT-01 / REQ-REG-10.
+- **Severity relative to its siblings:** #1250 was an opt-in TNC and #1251 is behind four opt-ins and
+  a VOX-only rig; this is the shipping on-air daemon. The OTA data path WAS keyed, which is why
+  on-air OTA testing passed and this went unseen — the paths that failed are handshake, QSY, relay
+  and the non-OTA send.
+- **Design decision:** a synchronous `keyed_transmit` helper owning the guard, at every site.
+  Adversarial review **disqualified** my proposed alternative (one guard around
+  `process_received_bytes`) on three independent grounds, the decisive one being that it FAILS AN
+  EXISTING GATE: `twin_daemon_bridge.rs` `an_ota_receiver_does_not_key_ptt_at_a_peers_uncoded_traffic`
+  asserts exactly zero `PttChanged{true}`, and keying on arrival keys for every frame heard. It would
+  also have held PTT across the QSY scan's per-candidate `sleep`/`receive`, so the scan would read
+  the SNR a TRANSMITTING rig hears and pick a channel on it.
+- **Two of my premises were false.** `PttKeyGuard` IS `Send`, so the async question was moot — the
+  right rule is structural (no guard crosses an await) and the sync-helper shape makes that
+  unwriteable. And #1253 does not implicate the daemon: `RelayForwarder::forward` verifies the
+  Ed25519 origin signature by default (audit E3), so there was no authentication reason to withhold
+  keying — and NOT keying was worse, since the forward already reached the sound card and on a VOX
+  rig went on air outside the watchdog with no `PttChanged` edge.
+- **A failure mode the fix itself creates:** `transmit_handshake_frame` returned `()` and the CONACK
+  responder falls through to `record_verified_peer`. The F5 note there says a peer that never
+  received a CONACK must not be recorded — and a refused PTT assert is that situation by a third
+  route. The helper now returns whether anything went out and the responder skips the record.
+- **Implementation (PR pending):** `keyed_transmit` + `KeyedTxError::{Assert, Transmit}` in
+  `crates/openpulse-daemon/src/lib.rs`; all TEN sites migrated (the five new ones and the five
+  pre-existing `server.rs` guards, because a scan cannot verify an inline guard's scoping).
+  `KeyedTxError` distinguishes the two failures because four of those five sites log them
+  differently ON PURPOSE — the station ID at `error`, since a refused assert is a §97.119 obligation
+  unmet (audit 2026-07-19 #8); an `Option` return would have deleted that. `SharedPtt` threaded into
+  `execute_qsy_actions` and `transmit_handshake_frame` as a cloned `Arc` (the QSY session is a live
+  `&mut` borrow out of `runtime_state` across those calls). False comment on the OTA send path
+  corrected: it claimed a PTT failure was "already surfaced as a warn + event"; `SharedPtt::key`
+  emits no event on failure.
+- **Tests:** `crates/openpulse-daemon/tests/ptt_keys_every_daemon_transmit.rs` — the non-OTA send
+  keys, plus a source scan over ALL ten `src/*.rs` files (scoped per-file is how #1262 happened),
+  truncated at each `#[cfg(test)]`, with the pattern validated against a planted bare call AND the
+  truncation validated against eating production code. `twin_daemon_bridge.rs`
+  `the_handshake_keys_the_transmitter_on_both_stations` is the production-entry test through
+  `server::run`.
+- **No natural positive control exists**, unlike #1250 where the station-ID path keyed beforehand: no
+  `lib.rs` site keyed. Each unit test therefore keys the shared PTT **directly** first and asserts the
+  spy counted it, ruling out a spy-wired-to-nothing by another route.
+- **The production-entry test was VACUOUS as first written** and I caught it by running it against
+  the unfixed daemon: `cfg_auto` leaves auto-ID on and the station-ID path DID key, so the assertion
+  saw the periodic ID rather than the handshake. The tell was timing — 10.5 s pre-fix versus 0.47 s
+  post-fix. With auto-ID disabled it fails pre-fix with "A transmitted a CONREQ without keying the
+  transmitter". Its sibling (zero keying at a peer's uncoded traffic) brackets the property from the
+  other side, which is exactly what rules out the disqualified alternative.
+- **Test results:** all three fail without the fix and pass with it; 134 daemon unit tests + all
+  integration suites green. Two pre-existing tests initially failed because `PttChanged` edges now
+  arrive on paths that previously keyed silently — the fix working, not a regression; both were
+  updated to step over PTT edges with the reason recorded. Fix stashed and restored twice, restores
+  verified by `sha256sum -c`. Full `scripts/gate.sh` verdict in the PR.
+- **The reachability ratchet caught a consequence I had not considered**, and it was right:
+  `PttKeyGuard::release` lost its last production caller. The daemon's OTA send used it to drop PTT
+  before the ACK listen; the helper owns the guard and drops at the same point, so the explicit call
+  became redundant *there*. Kept rather than deleted — the capability (dropping PTT while the guard's
+  scope continues) is exactly what the repeater's half-duplex path needs when it moves onto
+  `SharedPtt`, and `Drop` alone cannot express it. Recorded `DORMANT(#1260)` with that rationale plus
+  a baseline entry, per the repo's retire-dormant-not-delete rule.
+- **Split out:** #1263 (`SharedPtt` has no nesting semantics — a second key adopts the first's
+  deadline and the first release drops a transmitter someone else holds; pre-existing, cross-crate,
+  needs a decision not a patch), #1264 (five sites block a tokio worker without `block_in_place`,
+  which cannot simply be added because 49 current-thread tests would panic), #1265 (`ConnectPeer`
+  announces before transmitting — the narrower half #1199 did not close, observable for the first
+  time now that a refused PTT is a real failure).
+
 ## 2026-09-04 — Every ARDOP emission keys the transmitter (#1250)
 
 - **Requirement/change:** #1250, from the 2026-09-02 gap audit (found independently by two finders).

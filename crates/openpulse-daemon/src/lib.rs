@@ -1205,24 +1205,31 @@ pub(crate) async fn dispatch_command(
 ///
 /// Used by both the initiator (`accept_qsy`) and responder (`process_received_bytes`) paths.
 #[cfg(not(target_arch = "wasm32"))]
+#[allow(clippy::too_many_arguments)]
 async fn execute_qsy_actions(
     actions: Vec<QsyAction>,
     session: &mut QsySession,
     engine: &mut ModemEngine,
     mut rig_controller: Option<&mut (dyn CatController + Send)>,
     event_tx: &Arc<broadcast::Sender<ControlEvent>>,
+    // Cloned, not borrowed out of `runtime_state`: at the QSY call sites the session is a live
+    // `&mut` borrow out of the same struct. `SharedPtt` is an `Arc` clone, so this is free.
+    ptt: &crate::ptt::SharedPtt,
     mode: &str,
     scan_dwell_ms: u64,
 ) {
+    // NOTE: eight parameters. The alternative — passing `runtime_state` and reading `ptt`/dwell from
+    // it — does not compile: at two of the three call sites the QSY session is a live `&mut` borrow
+    // out of that same struct across this call.
     let mut scan_freqs: Option<Vec<u64>> = None;
 
     for action in actions {
         match action {
             QsyAction::SendFrame(ref frame) => {
                 let line = encode_qsy_frame(frame);
-                if let Err(e) = engine.transmit(line.as_bytes(), mode, None) {
-                    tracing::warn!(error = %e, "qsy: frame transmit failed");
-                }
+                let _ = keyed_transmit(ptt, Some(event_tx.as_ref()), "qsy", || {
+                    engine.transmit(line.as_bytes(), mode, None)
+                });
             }
             QsyAction::StartScan { candidates } => {
                 scan_freqs = Some(candidates);
@@ -1292,9 +1299,12 @@ async fn execute_qsy_actions(
                     match action {
                         QsyAction::SendFrame(ref frame) => {
                             let line = encode_qsy_frame(frame);
-                            if let Err(e) = engine.transmit(line.as_bytes(), mode, None) {
-                                tracing::warn!(error = %e, "qsy: post-scan frame transmit failed");
-                            }
+                            let _ = keyed_transmit(
+                                ptt,
+                                Some(event_tx.as_ref()),
+                                "qsy-post-scan",
+                                || engine.transmit(line.as_bytes(), mode, None),
+                            );
                         }
                         QsyAction::QsyNow { freq_hz } => {
                             if let Some(ref mut rig) = rig_controller {
@@ -1346,7 +1356,7 @@ pub async fn process_received_bytes(
 
     // Attempt relay forwarding on the raw bytes before QSY parsing: WireEnvelope frames
     // are binary and would be dropped by the UTF-8 early return below.
-    maybe_relay_forward(bytes, &mode, runtime_state, engine);
+    maybe_relay_forward(bytes, &mode, runtime_state, engine, event_tx);
 
     // QSY frames are ASCII; a non-QSY, non-relay binary frame is a candidate handshake SAR
     // fragment (CONREQ/CONACK exceed one 255-byte modem frame, so they arrive fragmented).
@@ -1425,14 +1435,18 @@ pub async fn process_received_bytes(
 
     match session.apply(frame) {
         Ok(actions) => {
+            // Clone before the call: `runtime_state` is borrowed for the session across it.
+            let qsy_ptt = runtime_state.ptt.clone();
+            let qsy_dwell = runtime_state.qsy_scan_dwell_ms;
             execute_qsy_actions(
                 actions,
                 session,
                 engine,
                 rig_controller,
                 event_tx,
+                &qsy_ptt,
                 &mode,
-                runtime_state.qsy_scan_dwell_ms,
+                qsy_dwell,
             )
             .await;
         }
@@ -1453,19 +1467,81 @@ const HANDSHAKE_SAR_SESSION: &str = "handshake";
 /// and because "one fragment" is a property of the caps rather than something this function should
 /// assume.
 #[cfg(not(target_arch = "wasm32"))]
-fn transmit_handshake_frame(engine: &mut ModemEngine, mode: &str, frame: &[u8]) {
+/// Run one keyed emission: key the transmitter, run `emit`, release on drop.
+///
+/// **Every** `engine.transmit*` in this crate goes through here — enforced by
+/// `every_daemon_transmit_is_keyed` in `tests/ptt_keys_every_daemon_transmit.rs`, which fails on a
+/// bare call and is validated against a planted one.
+///
+/// Three rules the shape enforces rather than documents (#1262):
+///
+/// * **One key per BURST, not per frame.** A multi-fragment handshake or filexfer burst is one
+///   keying; the peer cannot reply between fragments. Keying per frame would key/unkey ~20 times for
+///   one PQ CONREQ.
+/// * **The guard never crosses an `.await`.** It is owned by this synchronous frame and cannot
+///   escape it, so an async caller must finish its awaits (mode locks, etc.) *before* calling in.
+/// * **No `block_in_place` in here.** `lib.rs` has 49 `#[tokio::test]`s on the default
+///   current-thread flavor, where `block_in_place` panics. Callers that need it wrap the call.
+///
+/// Reports WHICH half failed. Several call sites log the two differently on purpose — a refused
+/// assert on the station ID is a §97.119 obligation not met (`error`), while a transmit error is a
+/// modem fault (`warn`) — so collapsing them into one `Option` would delete audit-derived
+/// diagnostics (audit 2026-07-19, #8).
+pub(crate) enum KeyedTxError {
+    /// The transmitter could not be keyed; nothing was emitted. The underlying `PttError` is logged
+    /// at the failure site rather than carried — no caller branches on which PTT fault occurred, and
+    /// carrying it made the variant a dead field.
+    Assert,
+    /// Keyed successfully, but the emission itself failed.
+    Transmit(openpulse_core::error::ModemError),
+}
+
+pub(crate) fn keyed_transmit<T>(
+    ptt: &crate::ptt::SharedPtt,
+    event_tx: Option<&broadcast::Sender<ControlEvent>>,
+    what: &str,
+    emit: impl FnOnce() -> Result<T, openpulse_core::error::ModemError>,
+) -> Result<T, KeyedTxError> {
+    let _guard = match ptt.keyed(event_tx) {
+        Ok(g) => g,
+        Err(e) => {
+            tracing::warn!(what, error = %e, "PTT assert failed; emission skipped");
+            return Err(KeyedTxError::Assert);
+        }
+    };
+    emit().map_err(|e| {
+        tracing::warn!(what, error = %e, "transmit failed");
+        KeyedTxError::Transmit(e)
+    })
+}
+
+/// Transmit a handshake frame as ONE keyed burst over its SAR fragments.
+///
+/// Returns `false` when nothing went out. The caller must not record a verified peer on a CONACK
+/// that was never transmitted — see the F5 note at the call site.
+fn transmit_handshake_frame(
+    engine: &mut ModemEngine,
+    ptt: &crate::ptt::SharedPtt,
+    event_tx: Option<&broadcast::Sender<ControlEvent>>,
+    mode: &str,
+    frame: &[u8],
+) -> bool {
     let fragments = match sar_encode(0, frame) {
         Ok(f) => f,
         Err(e) => {
             tracing::warn!(error = %e, "handshake: SAR encode failed");
-            return;
+            return false;
         }
     };
-    for frag in fragments {
-        if let Err(e) = engine.transmit(&frag, mode, None) {
-            tracing::warn!(error = %e, "handshake: fragment transmit failed");
+    // ONE keying for the whole fragment burst: a PQ frame is ~20 contiguous fragments and the peer
+    // cannot reply mid-burst.
+    keyed_transmit(ptt, event_tx, "handshake", || {
+        for frag in fragments {
+            engine.transmit(&frag, mode, None)?;
         }
-    }
+        Ok(())
+    })
+    .is_ok()
 }
 
 /// Feed a non-QSY, non-relay frame into the handshake SAR reassembler; on a completed segment,
@@ -1599,7 +1675,15 @@ fn handle_inbound_conreq(
         },
         &runtime_state.station_seed,
     ) {
-        Ok(frame) => transmit_handshake_frame(engine, mode, &frame),
+        Ok(frame) => {
+            // F5, third route to the same situation (#1262): a refused PTT assert means the CONACK
+            // never went out, so recording the peer would treat it as verified while it never
+            // received our reply and will never consider the session established.
+            if !transmit_handshake_frame(engine, &runtime_state.ptt, Some(event_tx), mode, &frame) {
+                tracing::warn!("handshake: CONACK not transmitted; not recording the peer");
+                return;
+            }
+        }
         Err(e) => {
             // F5: do NOT fall through to `record_verified_peer`. The §97.119 guard above refuses to
             // record a half-handshake when we cannot reply — this arm is the same situation arrived
@@ -1836,14 +1920,18 @@ pub async fn maybe_qsy_on_interference(
         }
     };
     let mode = active_mode.lock().await.clone();
+    // Clone before the call: `runtime_state` is borrowed for the session across it.
+    let qsy_ptt = runtime_state.ptt.clone();
+    let qsy_dwell = runtime_state.qsy_scan_dwell_ms;
     execute_qsy_actions(
         actions,
         &mut session,
         engine,
         rig_controller,
         event_tx,
+        &qsy_ptt,
         &mode,
-        runtime_state.qsy_scan_dwell_ms,
+        qsy_dwell,
     )
     .await;
     runtime_state.qsy_session = Some(session);
@@ -1857,14 +1945,21 @@ fn maybe_relay_forward(
     mode: &str,
     runtime_state: &mut RuntimeControlState,
     engine: &mut ModemEngine,
+    event_tx: &broadcast::Sender<ControlEvent>,
 ) {
     use openpulse_core::wire_query::WireEnvelope;
 
-    // Audit F6 (§97.119): retransmitting keys the transmitter. Without a valid MYID the daemon can't
-    // auto-ID, so a relay must not forward (transmit) unidentified.
+    // Audit F6 (§97.119): retransmitting is an on-air emission of THIS station. Without a valid MYID
+    // the daemon can't auto-ID, so a relay must not forward unidentified.
+    //
+    // It now also keys the transmitter, which this comment claimed before #1262 and the code did not
+    // do: the forward reached the sound card unkeyed, so on a VOX rig it went on air outside the
+    // watchdog with no `PttChanged` edge.
     if !runtime_state.local_callsign_valid() {
         return;
     }
+    // Clone before the `&mut runtime_state.relay_forwarder` borrow below (Arc clone, free).
+    let ptt = runtime_state.ptt.clone();
     let Some(ref mut fwd) = runtime_state.relay_forwarder else {
         return;
     };
@@ -1885,9 +1980,9 @@ fn maybe_relay_forward(
                     bytes = out_bytes.len(),
                     "relay: forwarding envelope"
                 );
-                if let Err(e) = engine.transmit(&out_bytes, mode, None) {
-                    tracing::warn!(error = %e, "relay: retransmit failed");
-                }
+                let _ = keyed_transmit(&ptt, Some(event_tx), "relay", || {
+                    engine.transmit(&out_bytes, mode, None)
+                });
             }
             Err(e) => tracing::warn!(error = %e, "relay: envelope encode failed"),
         },
@@ -2095,7 +2190,13 @@ pub async fn apply_command_to_engine(
                     let _ = event_tx.send(ControlEvent::QsyPending { token });
 
                     // The frame was built above; transmit it and arm the handshake timeout.
-                    transmit_handshake_frame(engine, &mode, &conreq_frame);
+                    transmit_handshake_frame(
+                        engine,
+                        &runtime_state.ptt,
+                        Some(event_tx),
+                        &mode,
+                        &conreq_frame,
+                    );
                     runtime_state.pending_handshake = Some(PendingHandshake {
                         session_id,
                         peer_callsign: callsign.clone(),
@@ -2151,11 +2252,16 @@ pub async fn apply_command_to_engine(
             } else {
                 body.as_bytes().to_vec()
             };
-            if let Err(err) = engine.transmit(&payload, &mode, None) {
-                tracing::warn!(mode = %mode, error = %err, "daemon rf dispatch failed for SendMessage");
+            // The mode lock above is awaited BEFORE the guard is taken: the guard must not cross an
+            // await, and this shape makes that unwriteable rather than merely documented.
+            if keyed_transmit(&runtime_state.ptt, Some(event_tx), "send-message", || {
+                engine.transmit(&payload, &mode, None)
+            })
+            .is_err()
+            {
                 let _ = event_tx.send(ControlEvent::CommandError {
                     command: "send_message".to_string(),
-                    reason: format!("rf dispatch failed in mode '{mode}': {err}"),
+                    reason: format!("rf dispatch failed in mode '{mode}'"),
                 });
             }
         }
@@ -2262,14 +2368,18 @@ pub async fn apply_command_to_engine(
                     };
 
                     let mode = active_mode.lock().await.clone();
+                    // Clone before the call: `runtime_state` is borrowed for the session across it.
+                    let qsy_ptt = runtime_state.ptt.clone();
+                    let qsy_dwell = runtime_state.qsy_scan_dwell_ms;
                     execute_qsy_actions(
                         actions,
                         &mut session,
                         engine,
                         rig_controller,
                         event_tx,
+                        &qsy_ptt,
                         &mode,
-                        runtime_state.qsy_scan_dwell_ms,
+                        qsy_dwell,
                     )
                     .await;
 
@@ -4129,12 +4239,26 @@ mod command_apply_tests {
         .await;
         assert_eq!(runtime_state.qsy_decisions.get("tok-reject"), Some(&false));
         assert!(runtime_state.qsy_pending_token.is_none());
-        match rx.recv().await.expect("expected qsy event") {
+        match next_non_ptt(&mut rx).await {
             ControlEvent::QsyDecision { token, accepted } => {
                 assert_eq!(token, "tok-reject");
                 assert!(!accepted);
             }
             other => panic!("expected QsyDecision, got {other:?}"),
+        }
+    }
+
+    /// Next event that is not a PTT edge.
+    ///
+    /// Since #1262 every keyed emission reports `PttChanged`, including the QSY and handshake paths
+    /// that previously transmitted without keying at all. Tests asserting on the NEXT event have to
+    /// step over those edges — they are the fix working, not noise.
+    async fn next_non_ptt(rx: &mut broadcast::Receiver<ControlEvent>) -> ControlEvent {
+        loop {
+            match rx.recv().await.expect("expected an event") {
+                ControlEvent::PttChanged { .. } => continue,
+                other => return other,
+            }
         }
     }
 
@@ -5151,8 +5275,13 @@ mod handshake_rf_tests {
         assert_eq!(vp.callsign, "W1AW");
         assert_eq!(vp.grid, "FN31pr");
         assert_eq!(vp.pubkey, ConReq::decode(&conreq).unwrap().pubkey);
+        // Step over the PTT edges the CONACK's keying now emits (#1262).
+        let mut ev = rx.try_recv();
+        while matches!(ev, Ok(ControlEvent::PttChanged { .. })) {
+            ev = rx.try_recv();
+        }
         assert!(
-            matches!(rx.try_recv(), Ok(ControlEvent::PeerVerified { callsign, grid })
+            matches!(ev, Ok(ControlEvent::PeerVerified { callsign, grid })
                 if callsign == "W1AW" && grid == "FN31pr"),
             "PeerVerified event should be emitted"
         );

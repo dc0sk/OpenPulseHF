@@ -425,6 +425,7 @@ record_event	crates/openpulse-modem/src/diagnostics.rs
 redact_secrets	crates/openpulse-daemon/src/audit.rs
 relay_one_frame	crates/openpulse-repeater/src/lib.rs
 relay_one_frame_at	crates/openpulse-repeater/src/lib.rs
+release	crates/openpulse-radio/src/shared_ptt.rs
 rendezvous_channel_hz	crates/openpulse-config/src/lib.rs
 reset_arq_retry_counter	crates/openpulse-core/src/hpx.rs
 reset_nack_counter	crates/openpulse-core/src/rate.rs
