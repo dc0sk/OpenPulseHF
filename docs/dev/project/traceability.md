@@ -9,6 +9,43 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-09-05 — Two acceptance suites held out of the gate for runtime (#1274)
+
+- **Requirement/change:** #1274, at the maintainer's instruction. `notch_rescues_interferer` (2113 s)
+  and `ota_channel_adaptation` (2866 s) cost **~83 minutes of a ~2 h `scripts/gate.sh`** between them
+  — measured from gate log `20260904T180515Z`, not estimated. The gate must be run before every merge
+  because CI does not run it at the merge point (#1144), so that cost falls on every change including
+  one-line doc fixes.
+- **Design decision — `#[ignore]`, not a feature flag.** A default-off feature removes the code from
+  `--all-targets`, so it stops being compiled and linted and rots; the standing rule calls that
+  "decay wearing preservation's clothes". An `#[ignore]`d test still compiles and is still linted,
+  and only its *execution* is opt-in. This also matches the existing precedent
+  (`capture_replay_corpus`, ignored since #1148).
+- **Design decision — per SUITE, not per test.** The first version of `slow-tests.sh` looped one
+  `cargo test` per test to get per-test attribution, which **serialises** work cargo otherwise runs in
+  parallel inside the binary — roughly tripling the wall clock, since these suites are 35/48 minutes
+  precisely because their slowest test dominates while the others run alongside it. Caught by
+  watching the first run rather than by reasoning about it.
+- **Not a blanket `-- --ignored` runner.** `--ignored` runs *every* ignored test in a binary. The
+  notch binary also holds `probe_band_sweep`, a manual env-driven research harness that asserts
+  nothing, so the runner passes `--skip probe_band_sweep`. Elsewhere `capture_replay_corpus` holds two
+  tests ignored for a **different** reason (#1148, stale corpus) that would fail if swept in. Mixing
+  gates with non-gates produces a verdict that means nothing.
+- **The consequence, recorded in three places rather than one.** `GATE: PASS` no longer means
+  REQ-QRM-01 was re-proven. The acceptance row now says the row is proven by `scripts/slow-tests.sh`
+  and not by a green gate; the *what the gate does NOT cover* paragraph names both suites; and
+  `gate.sh` prints a `held-out (runtime, #1274):` line beside its verdict, so a green result read in
+  isolation still carries the caveat. This is the #1120 shape — a change to *when* the gate runs that
+  does not sweep the artifacts describing the gate — so `git grep -ln 'gate.sh'` was run and all of
+  them visited.
+- **Guard, and why it is needed:** an `--ignored` run that matches nothing **exits 0**. So the runner
+  fails on a `0 passed` result line as well as on a non-zero status. **Sabotage-verified**: skipping
+  every test makes cargo exit 0 with `0 passed; 0 failed; 4 filtered out`, and the script still
+  reports `SLOW-TESTS: FAIL`. Restored by `sha256sum`.
+- **Test results:** default runs of both suites report `0 passed; N ignored` in 0.00 s; the explicit
+  form runs them (`awgn_high_snr_climbs_above_floor ... ok`, `1 passed`, not `1 ignored`). Full
+  `scripts/slow-tests.sh` result and the `scripts/gate.sh` verdict in the PR.
+
 ## 2026-09-04 — The daemon acted on unsigned QSY lines (#1252)
 
 - **Requirement/change:** #1252, from the 2026-09-02 gap audit. `openpulse-qsy` has shipped

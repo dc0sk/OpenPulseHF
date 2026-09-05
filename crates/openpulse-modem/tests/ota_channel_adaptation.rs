@@ -114,6 +114,7 @@ fn run_awgn(frames: usize, snr_db: f32, seed: u64) -> Vec<FrameResult> {
 }
 
 #[test]
+#[ignore = "SLOW (~48 min): opt-in since #1274. Run with `scripts/slow-tests.sh`, or `cargo test -p openpulse-modem --no-default-features --test ota_channel_adaptation -- --ignored`."]
 fn awgn_high_snr_climbs_above_floor() {
     // High AWGN SNR: the M2M4 estimate clears the lower rungs, so the receiver-led
     // ladder climbs above the SL2 floor and the link keeps decoding.
@@ -131,6 +132,7 @@ fn awgn_high_snr_climbs_above_floor() {
 }
 
 #[test]
+#[ignore = "SLOW (~48 min): opt-in since #1274. Run with `scripts/slow-tests.sh`, or `cargo test -p openpulse-modem --no-default-features --test ota_channel_adaptation -- --ignored`."]
 fn awgn_low_snr_does_not_overclimb() {
     // Poor AWGN SNR: the receiver-led ladder must not run away into the dense high-throughput
     // rungs a poor channel cannot carry, and must keep delivering.
@@ -166,6 +168,7 @@ fn awgn_low_snr_does_not_overclimb() {
 }
 
 #[test]
+#[ignore = "SLOW (~48 min): opt-in since #1274. Run with `scripts/slow-tests.sh`, or `cargo test -p openpulse-modem --no-default-features --test ota_channel_adaptation -- --ignored`."]
 fn watterson_fading_never_desyncs_and_recovers() {
     // Moderate Watterson fading: individual frames may be lost in deep fades, but
     // the lockstep invariant means the link never desyncs — when a frame fails it

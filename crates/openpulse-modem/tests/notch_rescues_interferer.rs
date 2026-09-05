@@ -205,6 +205,7 @@ fn decodes_with(notch: bool, amplitude: f32) -> bool {
 ///     decode. Without this, 2+3 are still only correlation: the notch could be placing a notch on
 ///     the interferer while the rescue comes from the 17 birdies it removes at the same time.
 #[test]
+#[ignore = "SLOW (~35 min): opt-in since #1274. Run with `scripts/slow-tests.sh`, or `cargo test -p openpulse-modem --no-default-features --test notch_rescues_interferer -- --ignored`."]
 fn the_notch_rescues_a_decode_that_fails_without_it() {
     assert!(
         run_buffer(false, build_buffer(&[]), Budget::Full).decoded,
@@ -290,6 +291,7 @@ fn the_notch_rescues_a_decode_that_fails_without_it() {
 /// no-harm assertion is `the_notch_costs_nothing_when_there_is_nothing_to_notch`, where OFF
 /// genuinely succeeds and ON is therefore obliged to.
 #[test]
+#[ignore = "SLOW (~35 min): opt-in since #1274. Run with `scripts/slow-tests.sh`, or `cargo test -p openpulse-modem --no-default-features --test notch_rescues_interferer -- --ignored`."]
 fn in_band_qrm_is_a_qsy_case_and_the_notch_does_not_worsen_it() {
     // ENGAGEMENT budget: this asserts what the DETECTOR did, not whether the frame decoded, and a
     // decode verdict is not read from it. That keeps the test to ~1 min instead of two full-budget
@@ -318,6 +320,7 @@ fn in_band_qrm_is_a_qsy_case_and_the_notch_does_not_worsen_it() {
 /// claim was asserted in `openpulse-config`'s doc while being measured by no test — the notch is off
 /// by default on a bare `ModemEngine`, so the rest of the suite provides no incidental evidence.
 #[test]
+#[ignore = "SLOW (~35 min): opt-in since #1274. Run with `scripts/slow-tests.sh`, or `cargo test -p openpulse-modem --no-default-features --test notch_rescues_interferer -- --ignored`."]
 fn the_notch_costs_nothing_when_there_is_nothing_to_notch() {
     assert!(
         run_buffer(false, build_buffer(&[]), Budget::Full).decoded,
