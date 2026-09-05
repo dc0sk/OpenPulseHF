@@ -189,6 +189,17 @@ impl App {
         self.cmd_tx.is_some()
     }
 
+    /// Front-end toggle state as last reported by the daemon (#1276), for the view layer.
+    pub fn front_end_view(&self) -> Option<crate::state::PanelFrontEndState> {
+        self.front_end()
+    }
+
+    /// Front-end toggle state as last reported by the daemon (#1276), or `None` before the first
+    /// report. Callers fall back to the local optimistic value only until then.
+    fn front_end(&self) -> Option<crate::state::PanelFrontEndState> {
+        self.shared.lock().ok().and_then(|s| s.front_end)
+    }
+
     fn send(&self, cmd: ControlCommand) {
         if let Some(tx) = &self.cmd_tx {
             let _ = tx.try_send(cmd);
@@ -305,29 +316,29 @@ impl App {
                     ControlCommand::EnableRepeater
                 });
             }
+            // #1276: toggle against what the DAEMON last reported, not a local shadow. The
+            // shadows started at `false` while `notch_enabled` and `cessb_enabled` ship as `true`,
+            // so on a default install the first click sent the value already in force — a no-op
+            // that merely flipped the display to match. `Message::ToggleRepeater` above and the QSY
+            // toggle already read shared state; these four now do too.
             Message::ToggleCessb => {
-                self.cessb_on = !self.cessb_on;
-                self.send(ControlCommand::SetCessb {
-                    enabled: self.cessb_on,
-                });
+                let on = self.front_end().map(|f| f.cessb).unwrap_or(self.cessb_on);
+                self.send(ControlCommand::SetCessb { enabled: !on });
             }
             Message::ToggleNotch => {
-                self.notch_on = !self.notch_on;
-                self.send(ControlCommand::SetNotch {
-                    enabled: self.notch_on,
-                });
+                let on = self.front_end().map(|f| f.notch).unwrap_or(self.notch_on);
+                self.send(ControlCommand::SetNotch { enabled: !on });
             }
             Message::ToggleAgc => {
-                self.agc_on = !self.agc_on;
-                self.send(ControlCommand::SetAgc {
-                    enabled: self.agc_on,
-                });
+                let on = self.front_end().map(|f| f.agc).unwrap_or(self.agc_on);
+                self.send(ControlCommand::SetAgc { enabled: !on });
             }
             Message::ToggleLogbook => {
-                self.logbook_on = !self.logbook_on;
-                self.send(ControlCommand::SetLogbook {
-                    enabled: self.logbook_on,
-                });
+                let on = self
+                    .front_end()
+                    .map(|f| f.logbook)
+                    .unwrap_or(self.logbook_on);
+                self.send(ControlCommand::SetLogbook { enabled: !on });
             }
             Message::AttenChanged(db) => {
                 self.tx_atten_db = db;

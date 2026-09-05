@@ -19,6 +19,16 @@ pub struct RigSnapshot {
     pub swr: Option<f32>,
 }
 
+/// The five front-end toggles as reported by the daemon (#1276).
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub struct PanelFrontEndState {
+    pub notch: bool,
+    pub agc: bool,
+    pub cessb: bool,
+    pub logbook: bool,
+    pub dcd_squelch: f32,
+}
+
 /// Full panel state shared between the connection thread and the egui update loop.
 #[derive(Debug)]
 pub struct PanelState {
@@ -82,6 +92,13 @@ pub struct PanelState {
     pub rf_peer: Option<String>,
     /// Whether the daemon reports repeater runtime enabled.
     pub repeater_enabled: bool,
+    /// Front-end toggles as last reported BY THE DAEMON (#1276), not as this panel last set them.
+    ///
+    /// `None` until the first `FrontEndState` arrives — so the UI can show "unknown" rather than
+    /// asserting `false`, which is what made a default install paint Notch and CE-SSB as the
+    /// opposite of the truth. They ship enabled; the panel's shadow bools started at `false` and
+    /// were never seeded.
+    pub front_end: Option<PanelFrontEndState>,
     /// Most-recent daemon configuration snapshot (from `ConfigData` event).
     pub daemon_config: Option<DaemonConfig>,
     /// Inbox: summaries of all stored messages (from `MessageList` / `MessageReceived` events).
@@ -216,6 +233,7 @@ impl Default for PanelState {
             rf_connected: false,
             rf_peer: None,
             repeater_enabled: false,
+            front_end: None,
             daemon_config: None,
             inbox: Vec::new(),
             open_message_body: None,

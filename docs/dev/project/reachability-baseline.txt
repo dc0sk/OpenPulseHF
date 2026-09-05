@@ -14,7 +14,14 @@
 # candidates.
 #
 #
-# READOUT(#1276): `is_agc_enabled`, `is_notch_enabled` and `agc_gain_db` are NOT tripwires — they are
+# READOUT(#1276): `agc_gain_db` is NOT a tripwire — it is operator-facing state. Its two companions,
+# `is_agc_enabled` and `is_notch_enabled`, LEFT this file when #1276 wired them into the
+# `MetricsSnapshot` seam, which is the outcome #1271 predicted and the reason they were labelled
+# rather than filed with the counters. `agc_gain_db` stays because the readout reports the five
+# TOGGLES; the AGC's live gain is a meter, and adding it is a separate call about what the panel
+# shows, not about closing a write-only command. Original note follows.
+#
+# `is_agc_enabled`, `is_notch_enabled` and `agc_gain_db` are NOT tripwires — they are
 # operator-facing state, and they are here because five front-end toggles (SetNotch, SetAgc, SetCessb,
 # SetLogbook, SetDcdSquelch) are write-only: a client can set them and can never read them back.
 # `agc_gain_db`'s own docstring calls it "a readout of the active-span loop state" where the counters'
@@ -372,13 +379,11 @@ hpx_pilot_rrc	crates/openpulse-core/src/profile.rs
 hpx_wideband_hd	crates/openpulse-core/src/profile.rs
 invalid	crates/openpulse-freedv-auth/src/verdict.rs
 iq_sequence	crates/openpulse-dsp/src/preamble.rs
-is_agc_enabled	crates/openpulse-modem/src/engine.rs
 is_complete	crates/openpulse-filexfer/src/blocks.rs
 is_csma_enabled	crates/openpulse-modem/src/engine.rs
 is_failure_path	crates/openpulse-core/src/ota_rate.rs
 is_faulted	crates/openpulse-audio/src/fault.rs
 is_loopback_bind	crates/openpulse-linksec/src/lib.rs
-is_notch_enabled	crates/openpulse-modem/src/engine.rs
 is_truncated	crates/openpulse-core/src/tx_metadata.rs
 kem_decapsulate	crates/openpulse-core/src/pq_handshake.rs
 last_verified_peer	crates/openpulse-daemon/src/lib.rs
