@@ -18,6 +18,7 @@
 
 use openpulse_core::handshake::{verify_conreq, ConReq, ConReqParams, InMemoryTrustStore};
 use openpulse_core::pq_handshake::{create_pq_conreq, PqConReqParams};
+use openpulse_core::trust::PublicKeyTrustLevel;
 use openpulse_core::trust::{PolicyProfile, SigningMode};
 use sha2::{Digest, Sha256};
 
@@ -81,7 +82,7 @@ fn the_vector_is_a_frame_that_verifies() {
     let mut store = InMemoryTrustStore::new();
     let mut k = [0u8; 32];
     k.copy_from_slice(&decoded.pubkey);
-    store.add_trusted("W1AW", k);
+    store.add_entry("W1AW", k, PublicKeyTrustLevel::Full);
     let (req, _) = verify_conreq(
         &frame,
         &store,

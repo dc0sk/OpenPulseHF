@@ -22,7 +22,7 @@ use openpulse_core::handshake::{
     HandshakeError, InMemoryTrustStore,
 };
 use openpulse_core::handshake_wire::FRAGMENT_CAPACITY;
-use openpulse_core::trust::{PolicyProfile, SigningMode};
+use openpulse_core::trust::{PolicyProfile, PublicKeyTrustLevel, SigningMode};
 
 fn make_seed(b: u8) -> [u8; 32] {
     [b; 32]
@@ -79,7 +79,7 @@ fn conack(station: &str, seed: u8, mode: SigningMode, req: &[u8]) -> Vec<u8> {
 fn valid_conreq_accepted_trusted_peer() {
     let req = conreq("W1AW", "K2XYZ", 1, vec![SigningMode::Normal]);
     let mut store = InMemoryTrustStore::new();
-    store.add_trusted("W1AW", pubkey_for(1));
+    store.add_entry("W1AW", pubkey_for(1), PublicKeyTrustLevel::Full);
 
     let (decoded, decision) = verify_conreq(
         &req,
@@ -114,7 +114,7 @@ fn valid_conreq_accepted_unknown_peer_permissive() {
 fn conreq_rejected_invalid_signature() {
     let req = conreq("W1AW", "K2XYZ", 1, vec![SigningMode::Normal]);
     let mut store = InMemoryTrustStore::new();
-    store.add_trusted("W1AW", pubkey_for(1));
+    store.add_entry("W1AW", pubkey_for(1), PublicKeyTrustLevel::Full);
     assert!(
         verify_conreq(
             &req,
@@ -147,7 +147,7 @@ fn conreq_rejected_invalid_signature() {
 fn conreq_rejected_revoked_key() {
     let req = conreq("W1AW", "K2XYZ", 1, vec![SigningMode::Normal]);
     let mut store = InMemoryTrustStore::new();
-    store.add_revoked("W1AW", pubkey_for(1));
+    store.add_entry("W1AW", pubkey_for(1), PublicKeyTrustLevel::Revoked);
     assert!(verify_conreq(
         &req,
         &store,
@@ -162,7 +162,7 @@ fn conreq_rejected_revoked_key() {
 fn conreq_rejected_no_mutual_mode_strict() {
     let req = conreq("W1AW", "K2XYZ", 1, vec![SigningMode::Relaxed]);
     let mut store = InMemoryTrustStore::new();
-    store.add_trusted("W1AW", pubkey_for(1));
+    store.add_entry("W1AW", pubkey_for(1), PublicKeyTrustLevel::Full);
     assert!(verify_conreq(
         &req,
         &store,
@@ -180,7 +180,7 @@ fn conreq_rejected_no_mutual_mode_strict() {
 fn addressing_is_not_a_verification_failure() {
     let req = conreq("W1AW", "DL9ZZZ", 1, vec![SigningMode::Normal]);
     let mut store = InMemoryTrustStore::new();
-    store.add_trusted("W1AW", pubkey_for(1));
+    store.add_entry("W1AW", pubkey_for(1), PublicKeyTrustLevel::Full);
     let (decoded, _) = verify_conreq(
         &req,
         &store,
@@ -202,7 +202,7 @@ fn valid_conack_accepted() {
     let req = conreq("W1AW", "K2XYZ", 1, vec![SigningMode::Normal]);
     let ack = conack("K2XYZ", 2, SigningMode::Normal, &req);
     let mut store = InMemoryTrustStore::new();
-    store.add_trusted("K2XYZ", pubkey_for(2));
+    store.add_entry("K2XYZ", pubkey_for(2), PublicKeyTrustLevel::Full);
 
     let (decoded, decision) = verify_conack(
         &ack,
@@ -227,7 +227,7 @@ fn conack_rejected_when_bound_to_a_different_conreq() {
 
     let ack = conack("K2XYZ", 2, SigningMode::Normal, &theirs);
     let mut store = InMemoryTrustStore::new();
-    store.add_trusted("K2XYZ", pubkey_for(2));
+    store.add_entry("K2XYZ", pubkey_for(2), PublicKeyTrustLevel::Full);
     assert!(matches!(
         verify_conack(
             &ack,
@@ -249,7 +249,7 @@ fn conack_rejected_when_mode_not_offered() {
     let req = conreq("W1AW", "K2XYZ", 1, vec![SigningMode::Normal]);
     let ack = conack("K2XYZ", 2, SigningMode::Paranoid, &req);
     let mut store = InMemoryTrustStore::new();
-    store.add_trusted("K2XYZ", pubkey_for(2));
+    store.add_entry("K2XYZ", pubkey_for(2), PublicKeyTrustLevel::Full);
     assert!(matches!(
         verify_conack(
             &ack,
@@ -269,7 +269,7 @@ fn conack_rejected_invalid_signature() {
     let req = conreq("W1AW", "K2XYZ", 1, vec![SigningMode::Normal]);
     let ack = conack("K2XYZ", 2, SigningMode::Normal, &req);
     let mut store = InMemoryTrustStore::new();
-    store.add_trusted("K2XYZ", pubkey_for(2));
+    store.add_entry("K2XYZ", pubkey_for(2), PublicKeyTrustLevel::Full);
 
     let mut bad = ack.clone();
     let n = bad.len();
@@ -303,8 +303,8 @@ fn full_handshake_round_trip() {
     let ack = conack("K2XYZ", 2, SigningMode::Psk, &req);
 
     let mut store = InMemoryTrustStore::new();
-    store.add_trusted("W1AW", pubkey_for(1));
-    store.add_trusted("K2XYZ", pubkey_for(2));
+    store.add_entry("W1AW", pubkey_for(1), PublicKeyTrustLevel::Full);
+    store.add_entry("K2XYZ", pubkey_for(2), PublicKeyTrustLevel::Full);
 
     let (r, _) = verify_conreq(
         &req,
@@ -460,7 +460,7 @@ fn an_unknown_offered_signing_mode_is_skipped_not_fatal() {
     // signature over the ORIGINAL bytes no longer matches this mutated frame. That is correct: the
     // tolerance is about parsing, not about accepting unsigned content.
     let mut store = InMemoryTrustStore::new();
-    store.add_trusted("W1AW", pubkey_for(1));
+    store.add_entry("W1AW", pubkey_for(1), PublicKeyTrustLevel::Full);
     assert!(matches!(
         verify_conreq(
             &future,
@@ -531,7 +531,7 @@ fn an_empty_station_id_is_refused_at_both_ends() {
 fn conreq_advertises_profile_and_survives_wire_roundtrip() {
     let req = conreq("W1AW", "K2XYZ", 1, vec![SigningMode::Normal]);
     let mut store = InMemoryTrustStore::new();
-    store.add_trusted("W1AW", pubkey_for(1));
+    store.add_entry("W1AW", pubkey_for(1), PublicKeyTrustLevel::Full);
     let (d, _) = verify_conreq(
         &req,
         &store,

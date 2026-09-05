@@ -9,6 +9,55 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-09-05 — The tripwire-accessor collision, decided rather than left quiet (#1271)
+
+- **Requirement/change:** #1271. `CLAUDE.md`'s cross-cutting checklist REQUIRES a runtime tripwire
+  asserted from the production path; the standing rule forbids exporting API for an instrument. Seven
+  `ModemEngine` accessors sat in the reachability baseline because of that collision — four of them
+  with **no rationale at all** until #1272 — so the contradiction had never been decided, merely
+  gone quiet.
+- **Design decision — reviewed BEFORE implementing, and the review overturned the proposal.** I had
+  proposed wiring the notch/AGC state into the control plane via `GetConfig`, on the reasoning that
+  it would make the accessors production-reachable. **It would not**: `GetConfig` is handled on the
+  *client task*, whose `ClientCtx` holds `Arc<Mutex>` mirrors and **no engine**, so it would have
+  added a daemon-side shadow and paid none of the debt it claimed to. Only the main loop's
+  `MetricsSnapshot` seam reads the engine. That is now #1276, correctly scoped.
+- **Three claims in the issue body were wrong, and the corrections narrow it.** (1) "The asserting
+  test lives in another crate" — the other crate is *Cargo's integration-test model*, not the daemon,
+  so the collision is a **placement** fact, not a principle. (2) "The daemon assertion proves the
+  production path" — no such assertion exists: nothing in the tree asserts a tripwire through
+  `server::run`. (3) `agc_gain_db` is misclassified — its own docstring says "a readout of the
+  active-span loop state" where the counters' say "tripwire", and the tests calling it assert
+  behaviour (gain > 6 dB) while using `agc_blocks_processed` as the tripwire in the same test.
+- **Implementation:** the redundant `notch_blocks_processed() > 0` assertion in the daemon is
+  deleted — verified redundant by reading both sites: the counter increments on the line immediately
+  before `apply_rx_notch` is called, and `notch_in_band_interferers` is populated only *inside* it, so
+  a non-empty list strictly implies the counter moved. The baseline now separates four TRIPWIRE
+  counters from three READOUT items bound to #1276.
+- **`add_trusted`/`add_revoked` RETIRED, not baselined.** They were `add_entry(.., Full)` and
+  `(.., Revoked)` verbatim, with **17** call sites (13 `handshake_integration.rs`, one each in
+  `handshake_kat.rs`, `pq_handshake_integration.rs`, `remote_control_integration.rs`, and the
+  daemon's test module). A baseline label for a ten-minute change contradicts the file's own "shrink
+  this list" header.
+- **One thing the review got wrong, caught by doing it:** the disposition assumed the rewrite was
+  free. It is not quite — `PublicKeyTrustLevel` lives in `openpulse_core::trust`, not `::handshake`,
+  which the convenience methods had hidden from every call site. The build error read
+  "enum `PublicKeyTrustLevel` is private", and for a few minutes I believed the enum really was
+  private and that the two methods were therefore a deliberate façade over it — i.e. that the review
+  was wrong and the deletion should be reverted. It was my import path. **A misleading compiler
+  message nearly reversed a correct decision**; the check that settled it was asking how *other*
+  consumers name the type (`openpulse-ardop`, `openpulse-cli`), not re-reading the declaration.
+- **Test results:** core 355 + 9 + 5 + 6 + 20 + 7 + 2 + 6 pass; daemon lib 134 pass; workspace clippy
+  clean; `REACH: PASS` at 2301 items / 507 unreferenced / 0 new. The baseline lost **four** entries:
+  the two retired, plus `decode_signed`/`encode_signed`, which left by the better route — #1252 gave
+  them a real production caller. Full `scripts/gate.sh` verdict in the PR.
+- **Split out:** #1276 (five write-only front-end toggles; two make a default install display the
+  opposite of the truth at cold start, since `notch_enabled`/`cessb_enabled` default true while the
+  panel's shadow bools default false and are never seeded) and #1277 (the structural answer for the
+  ~65 test-only `engine.rs` exports: a Cargo `instruments` feature the compiler enforces, with
+  classifying the 65 as the first deliverable; `#[doc(hidden)] pub` plus a ratchet exemption was
+  considered and rejected — it converts a gate into a convention).
+
 ## 2026-09-05 — Mesh believed a peer's claim about its own trustworthiness (#1253)
 
 - **Requirement/change:** #1253, from the 2026-09-02 gap audit — found by a verifier while

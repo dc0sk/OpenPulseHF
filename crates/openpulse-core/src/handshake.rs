@@ -119,16 +119,6 @@ impl InMemoryTrustStore {
         self.entries
             .insert(station_id.to_string(), (pubkey, trust_level));
     }
-
-    /// Convenience: add a fully-trusted out-of-band entry.
-    pub fn add_trusted(&mut self, station_id: &str, pubkey: [u8; 32]) {
-        self.add_entry(station_id, pubkey, PublicKeyTrustLevel::Full);
-    }
-
-    /// Convenience: add a revoked entry.
-    pub fn add_revoked(&mut self, station_id: &str, pubkey: [u8; 32]) {
-        self.add_entry(station_id, pubkey, PublicKeyTrustLevel::Revoked);
-    }
 }
 
 impl TrustStore for InMemoryTrustStore {

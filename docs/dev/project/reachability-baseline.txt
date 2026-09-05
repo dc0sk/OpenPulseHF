@@ -14,22 +14,38 @@
 # candidates.
 #
 #
-# TRIPWIRE(#1271), added 2026-09-04: the counters and enable-getters below exist ONLY so a gate can
+# READOUT(#1276): `is_agc_enabled`, `is_notch_enabled` and `agc_gain_db` are NOT tripwires — they are
+# operator-facing state, and they are here because five front-end toggles (SetNotch, SetAgc, SetCessb,
+# SetLogbook, SetDcdSquelch) are write-only: a client can set them and can never read them back.
+# `agc_gain_db`'s own docstring calls it "a readout of the active-span loop state" where the counters'
+# say "tripwire", and the tests that call it assert BEHAVIOUR (gain > 6 dB on a quiet input) while
+# using `agc_blocks_processed` as the tripwire in the same test. Two of those toggles make a default
+# install display the OPPOSITE of the truth at cold start. These three leave this file when #1276
+# wires them into the `MetricsSnapshot` seam — the only one that reads the engine.
+#
+# TRIPWIRE(#1271), added 2026-09-04: the counters below exist ONLY so a gate can
 # assert that a cross-cutting RX transform actually ran on the PRODUCTION path — the checklist in
 # CLAUDE.md ("add a runtime tripwire and assert it increments on the production path") requires
 # exactly this, and the asserting test lives in another crate, so the accessor must be `pub`. That
 # collides with the project's own rule against exporting API for instruments; the collision is real
-# and is recorded here rather than resolved silently. Covered: agc_blocks_processed, agc_gain_db,
-# dc_blocks_processed, dcd_blocks_processed, notch_blocks_processed, is_agc_enabled,
-# is_notch_enabled (all crates/openpulse-modem/src/engine.rs). The first four were already
-# grandfathered with NO rationale; the last three became visible when #1270 fixed the cfg stripper,
-# which is the only reason they were not listed before.
+# and is recorded here rather than resolved silently. Covered: agc_blocks_processed,
+# dc_blocks_processed, dcd_blocks_processed, notch_blocks_processed (all
+# crates/openpulse-modem/src/engine.rs). They were grandfathered with NO rationale until #1271.
 #
-# TEST-ONLY(#1271): add_trusted / add_revoked (crates/openpulse-core/src/handshake.rs) are
-# convenience constructors on a public type with no production caller — production populates the
-# trust store through `trust_store_file::add_entry`. 16 test call sites use them. Deleting them in
-# favour of `add_entry(.., Full)` is the cleaner end state and is tracked, not done here: it is
-# unrelated churn inside a gate fix.
+# The collision is narrower than it first looked, and the correction is worth keeping: these are
+# `pub` because the asserting tests are INTEGRATION tests in crates/openpulse-modem/tests/, which
+# Cargo links as an external crate. That is a PLACEMENT fact, not a principle — and no test asserts
+# any tripwire through `server::run` at all, so the "daemon assertion that proves the production
+# path" this was justified by does not exist in that form. #1277 carries the structural answer for
+# the whole ~65-item class (a Cargo `instruments` feature the compiler enforces), for which
+# classifying the 65 is the first deliverable. The cfg-stripper fix that made these visible was
+# PR #1272, not issue #1270.
+#
+# (add_trusted / add_revoked were RETIRED in #1271, not baselined — they were `add_entry(.., Full)`
+# and `(.., Revoked)` verbatim, with 17 test call sites, and deleting them cost ten minutes. A
+# baseline label for a ten-minute change contradicts this file's own "shrink this list" header.
+# decode_signed / encode_signed also left this file, by the better route: #1252 gave them a real
+# production caller in the daemon.)
 #
 # DORMANT(#1118): the three rho_* observability getters listed in this file are the tripwire and operator
 # readout for the #1060 threshold calibration. Their production consumer is the daemon's
@@ -242,8 +258,6 @@ WINDOW_ARQ_MAX_RANGES	crates/openpulse-core/src/fec.rs
 accepted_settle_positions	crates/openpulse-modem/src/engine.rs
 ack_timeout_ms_for_snr	crates/openpulse-modem/src/harq.rs
 adaptive_params_for_mode	plugins/scfdma/src/lib.rs
-add_revoked	crates/openpulse-core/src/handshake.rs
-add_trusted	crates/openpulse-core/src/handshake.rs
 afc_estimate_hz_with_expected	plugins/bpsk/src/demodulate.rs
 afc_settle_attempts	crates/openpulse-modem/src/engine.rs
 agc_blocks_processed	crates/openpulse-modem/src/engine.rs
@@ -298,7 +312,6 @@ decode_authenticated	crates/openpulse-core/src/ack.rs
 decode_freq_bcd_le5	crates/openpulse-radio/src/rig_definition.rs
 decode_pq_conack	crates/openpulse-core/src/pq_handshake.rs
 decode_pq_conreq	crates/openpulse-core/src/pq_handshake.rs
-decode_signed	crates/openpulse-qsy/src/frame.rs
 decode_signed_envelope	crates/openpulse-modem/src/engine.rs
 decode_signed_payload	crates/openpulse-modem/src/envelope_codec.rs
 default_config_path	crates/openpulse-config/src/lib.rs
@@ -312,7 +325,6 @@ enable_afc	crates/openpulse-modem/src/engine.rs
 encode_authenticated	crates/openpulse-core/src/ack.rs
 encode_freq_bcd4_be	crates/openpulse-radio/src/rig_definition.rs
 encode_freq_bcd_le5	crates/openpulse-radio/src/rig_definition.rs
-encode_signed	crates/openpulse-qsy/src/frame.rs
 encode_signed_envelope	crates/openpulse-modem/src/engine.rs
 encode_signed_payload	crates/openpulse-modem/src/envelope_codec.rs
 entry_by_route_id	crates/openpulse-core/src/route_discovery.rs
