@@ -9,6 +9,42 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-09-05 — EMPTY-CAP: a capability may not claim a requirement without citing a test (#1268, PR B)
+
+- **Requirement/change:** #1268 part B — the checker half. `REQ-GAP` is cleared by a **non-empty
+  `covered_by`** and nothing asked what the covering capability contained, so an untested capability
+  cleared the gap exactly as well as a real one.
+- **The boundary is stated, not fitted — this is the correction that matters.** My original rule was
+  "no code AND no tests", which was fitted to the five capabilities that happened to be empty on both
+  fields when I counted. **Five more had `code` and `tests: []`**, covering 30 requirements between
+  them (CAP-58, 67, 68, 70, 71), and "no tests listed" is the same vacuity for a claim about
+  evidence. The shipped rule is therefore *satisfies something → must cite at least one test*.
+- **It fails nothing today, deliberately.** All ten were filled from suites that already existed,
+  each cited file verified present before citing it. A check wired up while it cannot pass is red on
+  arrival, and a permanently-red gate teaches people to skip it (#1074) — so the data went first
+  (PR A + the five here) and the rule second.
+- **Implementation:** `EMPTY-CAP` in `trace.py`'s `vocab_errors` — a hard error, level-independent,
+  not a warn-only downgrade.
+- **Tests:** a `scripts/trace.sh --self-test` probe planting a capability that satisfies `REQ-FUN-01`
+  with a non-empty `code:` and `tests: []`. It declares `traceability: enforced` on purpose so
+  `EMPTY-CAP` is the **only** error it can raise — under `baseline` it would also trip
+  `NOT-GRANDFATHERED`, and an assertion that greps for a name in a two-error output cannot say which
+  check caught it. The probe asserts on the **check name**, never the exit code alone.
+- **Test results:** `ok: capability satisfying a requirement with no test cited -> EMPTY-CAP`;
+  `SELF-TEST: PASS` with its own positive control (`the unmodified tree still PASSES`);
+  `TRACE: PASS`. Full `scripts/gate.sh` verdict in the PR.
+- **Doc sweep**, per the rule that a change to what a checker checks must visit the artifacts
+  describing it: `git grep -ln 'trace\.sh|trace\.py|trace check'` → `scripts/trace.sh`'s "Checks
+  performed" header, the `gate.sh` comment enumerating the trace step's checks, and `CLAUDE.md`'s
+  self-test passage. **Not** a `gate.sh` *semantics* change — nothing alters when the gate runs or
+  which step it calls — so the 14-file `gate.sh` sweep does not apply, and saying which sweep applies
+  is part of the discipline.
+- **Deferred to PR C, deliberately:** the hand matrix's status column and a per-requirement
+  `verification: test | inspection | analysis | demonstration` field. ~30 of the 120 membership-only
+  rows are process, platform, documentation or strategic posture, where a test binding is the wrong
+  instrument and no ratchet can ever retire them; classifying those is what would give the existing
+  grandfathered list a denominator that can move. That is the deferred half of #1229, not this.
+
 ## 2026-09-05 — Requirements data: gap rows made visible, vacuous capabilities filled (#1268, PR A)
 
 - **Requirement/change:** #1268 part A — the data half, mechanical and maintainer-specified. The

@@ -438,7 +438,12 @@ is visible in the transcript rather than indistinguishable from compliance.
      catches it.
    - `python3 scripts/lib/trace.py graph-self-test` covers the dependency graph the dormancy join
      runs on (#1240).
-   `scripts/trace.sh --self-test` runs the latter two plus the yaml probes.
+   `scripts/trace.sh --self-test` runs the latter two plus the yaml probes — which since #1268
+   include `EMPTY-CAP`: a capability that satisfies a requirement while citing no test. That one is
+   worth knowing about, because `REQ-GAP` is cleared by a **non-empty `covered_by`** and nothing
+   asked what the covering capability contained, so an untested capability laundered 16 requirements
+   into looking covered — one of them `enforced` with a passing binding while its capability listed
+   no code and no tests. The two layers could disagree about evidence with nothing noticing.
 4. **A zero from a filter is a claim about the filter.** Before reporting any absence found through
    `grep`/`jq`/a log pattern — "0 occurrences", "never fires" — show the same filter matching a
    known-present instance, or write **"my filter found nothing"**, which is a different sentence

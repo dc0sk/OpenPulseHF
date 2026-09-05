@@ -6,7 +6,9 @@
 # CHECKS it. requirements.yaml is now the SOURCE OF TRUTH, not a generated artifact: the
 # `import` migration was deleted in #1223 because its sources had gone stale by construction
 # (four live entries appeared in neither of them) while it still advertised itself as safe to
-# re-run, so re-running it would have silently deleted them. Checks performed: dangling code/tests, REQ<->CAP disagreement, requirements with no coverage, and NEW
+# re-run, so re-running it would have silently deleted them. Checks performed: dangling code/tests, REQ<->CAP disagreement, requirements with no coverage, a
+# capability that satisfies a requirement while citing NO test (EMPTY-CAP, #1268 — a non-empty
+# `covered_by` clears REQ-GAP regardless of what the capability contains), and NEW
 # code orphans (files no capability claims, beyond the grandfathered baseline). `check` runs INSIDE
 # scripts/gate.sh so it cannot be a separately-disableable job.
 #
@@ -92,6 +94,23 @@ plant_and_expect "baseline on an id that is not grandfathered" "NOT-GRANDFATHERE
     code: []
     tests: []
     traceability: baseline
+'
+
+# #1268 EMPTY-CAP probe. The plant is a capability that SATISFIES a real requirement while citing
+# no test — the exact shape that let five capabilities clear `REQ-GAP` for 16 requirements which had
+# no other coverage. Note the plant lists `code:` too: the rule deliberately fires on "no tests",
+# not on "no code and no tests", because the narrower version was fitted to the capabilities that
+# happened to be empty on both fields, and five more were vacuous in the same way with a non-empty
+# `code` list.
+plant_and_expect "capability satisfying a requirement with no test cited" "EMPTY-CAP" \
+'  ZZ-SELFTEST-4:
+    name: self-test probe
+    satisfies:
+    - REQ-FUN-01
+    code:
+    - crates/openpulse-core/src/lib.rs
+    tests: []
+    traceability: enforced
 '
 
 # #1229 id-conformance probes. The first plants THE DEFECT ITSELF — the two-category-segment shape

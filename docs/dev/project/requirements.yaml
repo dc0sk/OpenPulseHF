@@ -793,7 +793,9 @@ capabilities:
     - REQ-PLAT-06
     - REQ-FEC-04
     - REQ-MAC-05
-    tests: []
+    tests:
+    - crates/openpulse-config/src/lib.rs
+    - crates/openpulse-config/src/logging.rs
     traceability: baseline
   CAP-59:
     code:
@@ -944,7 +946,9 @@ capabilities:
     - REQ-OBS-01
     - REQ-OBS-02
     - REQ-OBS-03
-    tests: []
+    tests:
+    - crates/openpulse-config/src/logging.rs
+    - crates/openpulse-daemon/src/audit.rs
     traceability: baseline
   CAP-68:
     code:
@@ -960,7 +964,11 @@ capabilities:
     - REQ-CTL-02
     - REQ-CTL-04
     - REQ-CTL-05
-    tests: []
+    tests:
+    - crates/openpulse-linksec/src/lib.rs
+    - crates/openpulse-linksec/src/sync_channel.rs
+    - crates/openpulse-linksec/src/async_channel.rs
+    - crates/openpulse-keystore/src/store.rs
     traceability: baseline
   CAP-70:
     code:
@@ -979,7 +987,11 @@ capabilities:
     - REQ-FUN-13
     - REQ-FUN-14
     - REQ-REG-04
-    tests: []
+    tests:
+    - crates/openpulse-discovery/src/discovery_sm.rs
+    - crates/openpulse-discovery/src/rendezvous.rs
+    - crates/openpulse-discovery/src/runtime.rs
+    - plugins/js8/tests/snr_sweep.rs
     traceability: baseline
   CAP-71:
     code:
@@ -995,7 +1007,10 @@ capabilities:
     - REQ-FX-05
     - REQ-FX-06
     - REQ-FUN-11
-    tests: []
+    tests:
+    - crates/openpulse-filexfer/tests/filexfer.rs
+    - crates/openpulse-filexfer/tests/blocks.rs
+    - crates/openpulse-filexfer/tests/resume.rs
     traceability: baseline
   CAP-72:
     code:

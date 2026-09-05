@@ -197,7 +197,8 @@ if [ "$MODE" = "full" ]; then
     run_step "cargo test (workspace)" cargo test --workspace --no-default-features --no-fail-fast || rc_total=1
     # Traceability is checked INSIDE the gate, not a separately-disableable job: enforced
     # requirements with no in-code binding, cited code/tests that don't exist, REQ<->CAP
-    # disagreement, and NEW code orphans beyond the grandfathered baseline.
+    # disagreement, a capability that satisfies a requirement while citing no test (EMPTY-CAP,
+    # #1268), and NEW code orphans beyond the grandfathered baseline.
     drift_check
     run_step "trace check (requirements)" env GATE_LOG="$LOG" scripts/trace.sh check || rc_total=1
     # Reachability ratchet: a NEW public item no production code references (coverage would vouch
