@@ -164,6 +164,24 @@ pub enum ControlEvent {
     },
     /// Repeater runtime state changed.
     RepeaterChanged { enabled: bool },
+    /// Current state of the five front-end toggles (#1276).
+    ///
+    /// A NEW variant rather than fields on `Metrics`: the panel destructures `Metrics`
+    /// exhaustively (`connection.rs`), and `linksim/serve.rs` plus a panel test construct it, so
+    /// adding a field there is a breaking change while a new variant is absorbed by the wildcard
+    /// arms every consumer already has.
+    ///
+    /// Before this, `SetNotch`/`SetAgc`/`SetCessb`/`SetLogbook`/`SetDcdSquelch` were write-only: a
+    /// client could set them and never read them back. The panel therefore kept local shadow bools
+    /// initialised to `false`, while `notch_enabled` and `cessb_enabled` ship as `true` — so a
+    /// default install painted two controls as the OPPOSITE of the truth from the first frame.
+    FrontEndState {
+        notch: bool,
+        agc: bool,
+        cessb: bool,
+        logbook: bool,
+        dcd_squelch: f32,
+    },
     /// New pending QSY proposal token available for operator decision.
     QsyPending { token: String },
     /// QSY decision recorded by daemon runtime.

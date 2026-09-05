@@ -342,6 +342,25 @@ pub(crate) fn apply_event(line: &str, shared: &Arc<Mutex<PanelState>>) {
                 ));
             }
         }
+        // #1276: the daemon is the source of truth for the front-end toggles. Before this the panel
+        // kept local shadow bools initialised to `false` while `notch_enabled` and `cessb_enabled`
+        // ship as `true`, so a default install painted two of them as the OPPOSITE of the truth from
+        // the first frame, and the first click sent a no-op that flipped the display.
+        ControlEvent::FrontEndState {
+            notch,
+            agc,
+            cessb,
+            logbook,
+            dcd_squelch,
+        } => {
+            st.front_end = Some(crate::state::PanelFrontEndState {
+                notch,
+                agc,
+                cessb,
+                logbook,
+                dcd_squelch,
+            });
+        }
         ControlEvent::RepeaterChanged { enabled } => {
             st.repeater_enabled = enabled;
             st.push_log(format!(

@@ -9,6 +9,48 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-09-05 — Five front-end toggles were write-only; two displayed their opposite (#1276)
+
+- **Requirement/change:** #1276, split out of #1271's design review. `SetNotch`, `SetAgc`,
+  `SetCessb`, `SetLogbook` and `SetDcdSquelch` were **write-only** — a client could set them and
+  never read them back. Verified there was no reader anywhere: `DaemonConfig` has no front-end
+  field, `ControlEvent` had no variant, the CLI has only the setters, the TUI drives the engine
+  directly. The filter is not vacuous — the same search finds real production callers of sibling
+  accessors (`last_rx_snr_db`, `in_band_interferers`).
+- **The visible defect is a COLD START, not a reconnect.** `notch_enabled` and `cessb_enabled` ship
+  `true` and are applied at startup; the panel kept shadow bools initialised `false` and never seeded
+  them. So a **default install paints Notch and CE-SSB OFF while both are ON, from the first frame**,
+  and the first click sends the value already in force — a no-op that merely flips the display.
+  `agc_enabled` ships `false`, so its shadow was accidentally right: **two of five invert**, three are
+  merely unreadable. The test pins that split so the claim cannot inflate.
+- **Design decision — the seam, corrected by #1271's review before any of this was built.** The
+  obvious fix (answer from `GetConfig`) **does not read the engine**: `GetConfig` is handled on the
+  *client task*, whose `ClientCtx` holds `Arc<Mutex>` mirrors and no engine, so it would have added a
+  daemon-side shadow — correct for the panel, but restating what the client already believes and
+  unable to catch the engine disagreeing. The main loop's `MetricsSnapshot` is the one place that
+  reads the engine for clients; the 1 Hz metrics task broadcasts from it.
+- **A new `ControlEvent` variant, not fields on `Metrics`.** Additive variants are absorbed by the
+  wildcard arms every consumer has; `Metrics` is destructured exhaustively by the panel and
+  constructed by `linksim/serve.rs` and a panel test, so adding fields there is a breaking change.
+  `MetricsSnapshot` itself is daemon-internal and `Default`-constructed in one place, so extending
+  *it* is safe — the two look alike and are not.
+- **Implementation:** `FrontEndState` on `MetricsSnapshot`, filled by `front_end_state(&engine,
+  &runtime_state)` in the main loop; emitted every metrics tick so a client that missed a change
+  event is still corrected within a second. The panel stores the reported value and both renders and
+  *toggles* against it, falling back to its local optimistic value only until the first report —
+  which is the pattern `ToggleRepeater` and the QSY toggle already followed.
+- **Tests:** `mod front_end_readback_tests` in `server.rs` — unit tests, because `front_end_state` is
+  private and exporting it for an integration test is the #1271 shape. One pins the shipped defaults
+  (and that AGC is the odd one out); one asserts the report follows the **engine**, not the last
+  command.
+- **Test results:** 2/2 pass; the second **fails against a hardcoded shadow** — the design the review
+  rejected — with `the report must follow the engine`. Restored by `sha256sum`. Daemon lib 136 pass,
+  workspace clippy clean. Full `scripts/gate.sh` verdict in the PR.
+- **Baseline:** `is_agc_enabled` and `is_notch_enabled` **left** the reachability baseline, which is
+  the outcome #1271 predicted when it labelled them `READOUT` rather than filing them with the
+  tripwire counters. `agc_gain_db` stays: the readout reports the five *toggles*, and the AGC's live
+  gain is a meter — a separate call about what the panel shows.
+
 ## 2026-09-05 — EMPTY-CAP: a capability may not claim a requirement without citing a test (#1268, PR B)
 
 - **Requirement/change:** #1268 part B — the checker half. `REQ-GAP` is cleared by a **non-empty

@@ -1052,6 +1052,10 @@ pub async fn run(cfg: OpenpulseConfig, modem_backend: Box<dyn AudioBackend>) -> 
                 {
                     let mut m = handle.shared_metrics.lock().await;
                     m.afc_correction_hz = engine.last_afc_offset_hz().unwrap_or(0.0);
+                    // #1276: read the toggles FROM THE ENGINE here, the one place that holds it.
+                    // Answering from a daemon-side shadow of the commands sent would restate what
+                    // the client already believes and could not catch the engine disagreeing.
+                    m.front_end = front_end_state(&engine, &runtime_state);
                     m.total_rx_bytes += bytes.len() as u64;
                     // EWMA of decode latency, sampled only when a frame was actually decoded.
                     if !bytes.is_empty() {
@@ -1914,6 +1918,23 @@ pub fn build_cat_controller(radio: &openpulse_config::RadioConfig) -> Option<Cat
                 None
             }
         },
+    }
+}
+
+/// The five front-end toggles, read from the engine and runtime state rather than mirrored (#1276).
+///
+/// One function so every emitter reports the same source of truth. `logbook` lives in
+/// `RuntimeControlState`; the other four are engine state.
+fn front_end_state(
+    engine: &ModemEngine,
+    runtime_state: &RuntimeControlState,
+) -> crate::FrontEndState {
+    crate::FrontEndState {
+        notch: engine.is_notch_enabled(),
+        agc: engine.is_agc_enabled(),
+        cessb: engine.cessb_enabled(),
+        logbook: runtime_state.logbook.is_enabled(),
+        dcd_squelch: engine.dcd_squelch(),
     }
 }
 
@@ -2975,5 +2996,78 @@ mod station_identity_tests {
             "the persisted identity must be stable across loads"
         );
         let _ = std::fs::remove_dir_all(&dir);
+    }
+}
+
+/// The front-end toggles are readable, and their reported value is engine truth (#1276).
+///
+/// `SetNotch`, `SetAgc`, `SetCessb`, `SetLogbook` and `SetDcdSquelch` were write-only: a client
+/// could set them and never read them back. The panel therefore kept local shadow bools starting at
+/// `false`, while `notch_enabled` and `cessb_enabled` ship as `true` — so on a default install two
+/// controls painted the opposite of the truth from the first frame, and the first click sent the
+/// value already in force, a no-op that merely flipped the display.
+///
+/// Here rather than in `tests/`: `front_end_state` is private to this module and the property is
+/// about what it reads. Exporting it so an integration test could call it is the "public API for an
+/// instrument" shape (#1271).
+#[cfg(test)]
+mod front_end_readback_tests {
+    use super::front_end_state;
+    use crate::RuntimeControlState;
+    use openpulse_audio::LoopbackBackend;
+    use openpulse_modem::ModemEngine;
+
+    fn engine() -> ModemEngine {
+        let mut e = ModemEngine::new(Box::new(LoopbackBackend::new()));
+        e.register_plugin(Box::new(bpsk_plugin::BpskPlugin::default()))
+            .expect("register");
+        e
+    }
+
+    /// The defect in one assertion: a reader initialised to `false` is wrong about the shipped
+    /// defaults before anyone touches anything.
+    #[test]
+    fn two_of_the_five_ship_enabled_so_a_false_default_displays_their_opposite() {
+        let cfg = openpulse_config::ModemConfig::default();
+        assert!(
+            cfg.notch_enabled && cfg.cessb_enabled,
+            "notch and CE-SSB ship ENABLED — a panel shadow starting at false shows the opposite \
+             of the truth on a default install, which is what #1276 is"
+        );
+        assert!(
+            !cfg.agc_enabled,
+            "AGC ships DISABLED, so the false shadow was accidentally right for it. Two of the \
+             five inverted, not all five — the fix is still the class of five, but the claim must \
+             not be inflated"
+        );
+    }
+
+    /// `front_end_state` reports what the engine holds, not what was last commanded.
+    ///
+    /// This is the property that makes the readout worth having: a daemon-side shadow of the
+    /// commands sent would restate what the client already believes and could never catch the
+    /// engine disagreeing.
+    #[test]
+    fn the_report_follows_the_engine_not_the_command() {
+        let mut e = engine();
+        let mut rs = RuntimeControlState::default();
+
+        e.enable_notch();
+        e.disable_agc();
+        rs.logbook.set_enabled(true);
+        let s = front_end_state(&e, &rs);
+        assert!(s.notch, "engine has the notch on");
+        assert!(!s.agc, "engine has AGC off");
+        assert!(s.logbook, "logbook is runtime state, not engine state");
+
+        // Flip both on the engine only — no command, no shadow update.
+        e.disable_notch();
+        e.enable_agc();
+        let s = front_end_state(&e, &rs);
+        assert!(
+            !s.notch && s.agc,
+            "the report must follow the engine; a shadow of the last command would still say \
+             notch-on/agc-off here"
+        );
     }
 }

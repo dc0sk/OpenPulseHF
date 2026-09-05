@@ -669,28 +669,34 @@ fn controls_widget(app: &App, snap: &Snap, eff: EffectiveTheme) -> Element<'stat
         .push(toggle_btn(
             eff,
             "CE-SSB",
-            app.cessb_on,
+            app.front_end_view()
+                .map(|f| f.cessb)
+                .unwrap_or(app.cessb_on),
             Message::ToggleCessb,
             "CE-SSB TX envelope conditioning (multicarrier modes only)",
         ))
         .push(toggle_btn(
             eff,
             "Notch",
-            app.notch_on,
+            app.front_end_view()
+                .map(|f| f.notch)
+                .unwrap_or(app.notch_on),
             Message::ToggleNotch,
             "Receiver auto-notch: removes out-of-band CW interference before demod",
         ))
         .push(toggle_btn(
             eff,
             "AGC",
-            app.agc_on,
+            app.front_end_view().map(|f| f.agc).unwrap_or(app.agc_on),
             Message::ToggleAgc,
             "Receiver streaming AGC: normalises capture level before demod",
         ))
         .push(toggle_btn(
             eff,
             "Logbook",
-            app.logbook_on,
+            app.front_end_view()
+                .map(|f| f.logbook)
+                .unwrap_or(app.logbook_on),
             Message::ToggleLogbook,
             "Automatic ADIF logbook: one record per connect → disconnect",
         ))

@@ -117,6 +117,27 @@ pub struct MetricsSnapshot {
     /// including its framing overhead; never larger than raw). The ratio `compressed / raw` is the
     /// live compression figure reported in `ControlEvent::Metrics`.
     pub compressed_payload_bytes: u64,
+    /// Front-end toggle state, refreshed from the engine by the main loop (#1276).
+    ///
+    /// This struct is daemon-internal and `Default`-constructed in one place, so extending it is
+    /// safe — unlike the wire `ControlEvent::Metrics`, which the panel destructures exhaustively
+    /// and two other sites construct. The state has to travel through here because the periodic
+    /// metrics task holds no engine; the main loop does, and already writes this snapshot.
+    pub front_end: FrontEndState,
+}
+
+/// The five front-end toggles, as last read FROM THE ENGINE — not a shadow of the commands sent.
+///
+/// `dcd_squelch` is a threshold rather than a toggle, but it shares the write-only defect and the
+/// same fix, so it travels with them.
+#[cfg(not(target_arch = "wasm32"))]
+#[derive(Default, Clone, Copy, PartialEq)]
+pub struct FrontEndState {
+    pub notch: bool,
+    pub agc: bool,
+    pub cessb: bool,
+    pub logbook: bool,
+    pub dcd_squelch: f32,
 }
 
 /// Compression ratio (compressed / raw) of the measured payload stream, or `None` before any payload
@@ -720,7 +741,7 @@ impl ControlServer {
             let mut last_gpu_instant = std::time::Instant::now();
             loop {
                 interval.tick().await;
-                let (afc, new_bytes, decode_latency_ms, raw_bytes, compressed_bytes) = {
+                let (afc, new_bytes, decode_latency_ms, raw_bytes, compressed_bytes, front_end) = {
                     let m = metrics_snap.lock().await;
                     (
                         m.afc_correction_hz,
@@ -728,6 +749,7 @@ impl ControlServer {
                         m.decode_latency_ms,
                         m.raw_payload_bytes,
                         m.compressed_payload_bytes,
+                        m.front_end,
                     )
                 };
                 let effective_bps = (new_bytes.saturating_sub(last_bytes) * 8) as f32;
@@ -738,6 +760,17 @@ impl ControlServer {
                     compress_ratio: compression_ratio(raw_bytes, compressed_bytes),
                     afc_correction_hz: afc,
                     signal_strength_dbm: None,
+                });
+                // #1276: push the front-end state alongside the metrics, so a client that connects
+                // or reconnects is correct within a second without having to ask. Sent every tick
+                // rather than on change, for the same reason `Metrics` is: a client that missed the
+                // change event would otherwise stay wrong forever, and a bool costs nothing.
+                let _ = ev_metrics.send(ControlEvent::FrontEndState {
+                    notch: front_end.notch,
+                    agc: front_end.agc,
+                    cessb: front_end.cessb,
+                    logbook: front_end.logbook,
+                    dcd_squelch: front_end.dcd_squelch,
                 });
 
                 let (cpu_percent, ram_mb, ram_percent) = sample_process_resources(&mut sys, pid);
