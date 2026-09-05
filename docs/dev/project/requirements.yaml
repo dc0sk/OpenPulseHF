@@ -614,7 +614,6 @@ capabilities:
     satisfies:
     - REQ-FUN-15
     - REQ-FUN-16
-    - REQ-SEC-09
     - REQ-SEC-10
     - REQ-SEC-12
     - REQ-NFR-15
@@ -963,19 +962,6 @@ capabilities:
     - REQ-CTL-05
     tests: []
     traceability: baseline
-  CAP-69:
-    code: []
-    name: Wide-channel (VHF/UHF) 12.5/25 kHz support
-    satisfies:
-    - REQ-BW-01
-    - REQ-BW-02
-    - REQ-BW-03
-    - REQ-BW-04
-    - REQ-BW-05
-    - REQ-BW-06
-    - REQ-BW-07
-    tests: []
-    traceability: baseline
   CAP-70:
     code:
     - crates/openpulse-cli/src/commands/daemon.rs
@@ -1012,37 +998,56 @@ capabilities:
     tests: []
     traceability: baseline
   CAP-72:
-    code: []
+    code:
+    - crates/openpulse-modem/src/engine.rs
+    - crates/openpulse-dsp/src/noise_floor.rs
     name: Receive front-end conditioning (AGC, notch, adaptive DCD)
     satisfies:
     - REQ-DCD-01
     - REQ-AGC-01
     - REQ-QRM-01
-    tests: []
+    tests:
+    - crates/openpulse-modem/tests/agc_amplitude_sweep.rs
+    - crates/openpulse-modem/tests/notch_rescues_interferer.rs
+    - crates/openpulse-modem/tests/daemon_squelch_noise_floor.rs
+    - crates/openpulse-dsp/src/noise_floor.rs
     traceability: baseline
   CAP-73:
-    code: []
+    code:
+    - crates/openpulse-core/src/audio.rs
+    - crates/openpulse-daemon/src/monitor.rs
     name: Device resolution and multi-mode receive
     satisfies:
     - REQ-DEV-01
     - REQ-RX-01
-    tests: []
+    tests:
+    - crates/openpulse-core/src/audio.rs
+    - crates/openpulse-daemon/src/monitor.rs
     traceability: baseline
   CAP-74:
-    code: []
+    code:
+    - crates/openpulse-radio/src/cm108.rs
+    - crates/openpulse-radio/src/gpio.rs
+    - crates/openpulse-radio/src/rigctld.rs
     name: PTT backends
     satisfies:
     - REQ-PTT-01
     - REQ-PTT-02
     - REQ-PTT-03
-    tests: []
+    tests:
+    - crates/openpulse-radio/src/cm108.rs
+    - crates/openpulse-radio/src/gpio.rs
+    - crates/openpulse-radio/tests/rigctld_integration.rs
     traceability: baseline
   CAP-75:
-    code: []
+    code:
+    - plugins/mfsk16/src/lib.rs
     name: MFSK16 weak-signal sub-floor waveform
     satisfies:
     - REQ-WSIG-01
-    tests: []
+    tests:
+    - plugins/mfsk16/src/lib.rs
+    - crates/openpulse-modem/tests/mfsk16_engine.rs
     traceability: baseline
   CAP-76:
     code:
@@ -1101,50 +1106,43 @@ requirements:
     traceability: baseline
   REQ-BW-01:
     category: Wide channel (1.x)
-    covered_by:
-    - CAP-69
+    covered_by: []
     statement: RF-architecture decision (direct-IQ SDR / linear exciter / 4FSK) governs all wide work
     status: ratified
     traceability: baseline
   REQ-BW-02:
     category: Wide channel (1.x)
-    covered_by:
-    - CAP-69
+    covered_by: []
     statement: Configurable audio sample rate {8000,48000,96000}, engine off the hard-coded 8 kHz
     status: ratified
     traceability: baseline
   REQ-BW-03:
     category: Wide channel (1.x)
-    covered_by:
-    - CAP-69
+    covered_by: []
     statement: ~12.5 kHz wide modes at 48 kHz audio via the adaptive ladder
     status: ratified
     traceability: baseline
   REQ-BW-04:
     category: Wide channel (1.x)
-    covered_by:
-    - CAP-69
+    covered_by: []
     statement: ~25 kHz wide modes via 96 kHz real audio or 48 kHz complex IQ
     status: ratified
     traceability: baseline
   REQ-BW-05:
     category: Wide channel (1.x)
-    covered_by:
-    - CAP-69
+    covered_by: []
     statement: Direct-IQ receive path (complements the existing IQ transmit seam)
     status: ratified
     traceability: baseline
   REQ-BW-06:
     category: Wide channel (1.x)
-    covered_by:
-    - CAP-69
+    covered_by: []
     statement: VHF/UHF bandplan tables + occupied-BW limits + channel-raster QSY
     status: ratified
     traceability: baseline
   REQ-BW-07:
     category: Wide channel (1.x)
-    covered_by:
-    - CAP-69
+    covered_by: []
     statement: Wide-mode floors calibrated vs a VHF/UHF mobile-fading model, explicit SNR reference BW
     status: ratified
     traceability: baseline
@@ -2294,8 +2292,7 @@ requirements:
     traceability: baseline
   REQ-SEC-09:
     category: Security/Trust
-    covered_by:
-    - CAP-47
+    covered_by: []
     statement: Relay path admission must enforce trust policy on each intermediate hop.
     status: ratified
     traceability: baseline

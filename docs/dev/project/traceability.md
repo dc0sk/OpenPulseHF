@@ -9,6 +9,44 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-09-05 — Requirements data: gap rows made visible, vacuous capabilities filled (#1268, PR A)
+
+- **Requirement/change:** #1268 part A — the data half, mechanical and maintainer-specified. The
+  checker clears `REQ-GAP` for any requirement with a non-empty `covered_by`, so a capability with
+  **no code and no tests** cleared it just as well as a real one. Five capabilities were in that
+  state and between them "covered" 16 requirements that had no other coverage.
+- **Design decision — the proposal for this issue was REJECTED before implementation**
+  (`docs/dev/reviews/2026-09-05-1268-traceability-join.md`). I proposed a new ratchet baselining the
+  120 membership-only rows. Three findings killed it: (1) **the ratchet already exists** —
+  `trace-grandfathered-ids.txt` plus `NOT-GRANDFATHERED` already makes a *new* requirement unable to
+  claim coverage without a binding, and I proposed an imitation without looking; (2) **the premise
+  that a ratchet pays down is false here** — measured from git, `reachability-baseline.txt` grew
+  456 → 511 in four weeks with exactly one shrink; (3) **it catches 0 of the 3 motivating rows**,
+  because for REQ-MAC-02 and REQ-SEC-09 there is an existing test *named for the requirement* that a
+  marker lands on cleanly, and the QSY row is not the same defect at all (REQ-REG-13/14 never mention
+  signing — the false claim lived in a capability *description*, which no requirement-side check can
+  reach).
+- **REQ-SEC-09 → gap row**, per the maintainer's ruling, on **both sides of the join in one edit** —
+  `covered_by: []` and out of `CAP-47.satisfies` — because removing only one side trades `REQ-GAP` for
+  `BIDIR-DRIFT` and hides the same fact under a different name.
+- **CAP-72/73/74/75 filled** from the acceptance table, each cited file verified to exist first.
+  **CAP-69 deleted**: genuinely unimplemented (REQ-BW-* are 1.x wide-channel), so its seven
+  requirements are now honest gap rows — the matrix column already said "planned" while the yaml
+  asserted coverage, which is the join defect in one row.
+- **The sweep cost three rounds, and the checker caught each.** Deleting the capability block left
+  seven `covered_by` references, a summary line, a matrix column and an entry in the grandfathered id
+  list. And the first fix **re-created the dangling reference in prose** — I wrote the deleted id into
+  the explanatory cell text, and the id scanner reads prose (the #1192 lesson, met from the other
+  side). The note is now hoisted above the table and omits the id deliberately, saying why.
+- **Test results:** `TRACE: PASS`. Gap rows 25 → 33 (REQ-SEC-09 plus the seven REQ-BW). Capabilities
+  with empty `code` AND `tests`: 5 → **0**. Full `scripts/gate.sh` verdict in the PR.
+- **Left for PR B, with its boundary stated rather than assumed:** five capabilities still satisfy a
+  requirement while listing no tests (CAP-58, 67, 68, 70, 71). The `EMPTY-CAP` rule must say whether
+  it means "no code *and* no tests" (0 today) or "satisfies something and lists no test" (5 today) —
+  my original item 3 was fitted to the five I happened to count.
+- **Split out:** #1279 — `scripts/req-mutation.sh`, the project's only tier-2 instrument (does a bound
+  test *depend on* the bound code?), runs in no workflow at all.
+
 ## 2026-09-05 — The tripwire-accessor collision, decided rather than left quiet (#1271)
 
 - **Requirement/change:** #1271. `CLAUDE.md`'s cross-cutting checklist REQUIRES a runtime tripwire
