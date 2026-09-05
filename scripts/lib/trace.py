@@ -685,6 +685,30 @@ def do_check(release=False):
                     f"{GRANDFATHERED.name}. A new {kind} is enforced; do not inherit `baseline` "
                     f"by copying a neighbour."
                 )
+
+            # EMPTY-CAP (#1268). `REQ-GAP` is cleared by a NON-EMPTY `covered_by`, and nothing asked
+            # what the covering capability contains — so a capability with no tests cleared the gap
+            # exactly as well as a real one. Five did, over 16 requirements that had no other
+            # coverage, and one of those requirements was `enforced` with a passing binding while
+            # sitting under a capability listing no code and no tests: the two layers can disagree
+            # about evidence with nothing noticing.
+            #
+            # The boundary is stated, not fitted. The rule is "satisfies something -> must cite at
+            # least one test", NOT "empty code AND empty tests". The narrower version was fitted to
+            # the five capabilities that happened to be empty on both fields when the issue was
+            # written; five MORE had `code` and `tests: []`, covering 30 requirements between them,
+            # and "no tests listed" is the same vacuity for a claim about evidence. Both sets were
+            # filled from suites that already existed, so this fails nothing today — which is the
+            # point: a check wired up while it cannot pass is red on arrival, and a permanently-red
+            # gate teaches people to skip it (#1074).
+            if kind == "capability" and entry.get("satisfies") and not entry.get("tests"):
+                vocab_errors.append(
+                    f"{eid}: EMPTY-CAP — capability satisfies "
+                    f"{', '.join(entry['satisfies'])} but cites no test. A non-empty `covered_by` "
+                    f"clears `REQ-GAP` for every one of those requirements, so an untested "
+                    f"capability launders them into looking covered. Cite a test, or remove the "
+                    f"`satisfies` entries and let them read as the gaps they are."
+                )
     if vocab_errors:
         print("trace: traceability field errors — these are not warnings\n")
         for m in vocab_errors:
