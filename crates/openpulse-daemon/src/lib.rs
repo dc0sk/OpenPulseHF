@@ -4655,12 +4655,16 @@ mod command_apply_tests {
         for _ in 0..(min_hits + 1) {
             let _ = engine.accumulate_capture(Some("BPSK250"), tone.clone());
         }
+        // This subsumes the `notch_blocks_processed() > 0` tripwire that used to follow it (#1271):
+        // the counter increments on the line immediately before `apply_rx_notch` is called
+        // (engine.rs), and `notch_in_band_interferers` is populated only INSIDE that function — so a
+        // non-empty list strictly implies the counter moved, and the second assertion could not
+        // fail when this one passed.
         assert!(
             !engine.in_band_interferers().is_empty(),
-            "persistence should confirm the in-band tone"
+            "persistence should confirm the in-band tone — which also proves the notch ran on the \
+             daemon's streaming (accumulate_capture) path"
         );
-        // The notch must have actually run on the daemon's streaming (accumulate_capture) path.
-        assert!(engine.notch_blocks_processed() > 0);
         engine
     }
 
@@ -5516,7 +5520,8 @@ mod handshake_rf_tests {
         assert_eq!(rs.rf_peer_trust(), ConnectionTrustLevel::Low);
 
         // A trust-store (Full) key, but still over-air without PSK → Reduced, never Verified.
-        rs.trust_store.add_trusted("K2XYZ", [2u8; 32]);
+        rs.trust_store
+            .add_entry("K2XYZ", [2u8; 32], PublicKeyTrustLevel::Full);
         assert_eq!(rs.rf_peer_trust(), ConnectionTrustLevel::Reduced);
     }
 

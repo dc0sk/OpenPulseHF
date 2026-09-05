@@ -1,6 +1,7 @@
 use openpulse_core::handshake::conreq_hash;
 use openpulse_core::pq_handshake::{PqConAckParams, PqConReqParams};
 use openpulse_core::sar::{sar_encode, SarReassembler};
+use openpulse_core::trust::PublicKeyTrustLevel;
 use openpulse_core::{
     create_pq_conack, create_pq_conreq, decode_pq_conack, decode_pq_conreq,
     generate_ml_dsa_44_keypair, generate_ml_kem_768_keypair, kem_decapsulate, verify_pq_conack,
@@ -78,7 +79,7 @@ fn make_trust_store(_station_id: &str) -> InMemoryTrustStore {
 
 fn make_trusted_store(station_id: &str, pubkey: [u8; 32]) -> InMemoryTrustStore {
     let mut store = InMemoryTrustStore::new();
-    store.add_trusted(station_id, pubkey);
+    store.add_entry(station_id, pubkey, PublicKeyTrustLevel::Full);
     store
 }
 

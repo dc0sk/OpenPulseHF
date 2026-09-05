@@ -21,7 +21,7 @@ fn pubkey_for(seed_byte: u8) -> [u8; 32] {
 
 fn trusted_store(station_id: &str, seed_byte: u8) -> InMemoryTrustStore {
     let mut store = InMemoryTrustStore::new();
-    store.add_trusted(station_id, pubkey_for(seed_byte));
+    store.add_entry(station_id, pubkey_for(seed_byte), PublicKeyTrustLevel::Full);
     store
 }
 
