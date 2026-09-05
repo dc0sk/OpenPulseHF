@@ -9,6 +9,49 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-09-05 — Mesh believed a peer's claim about its own trustworthiness (#1253)
+
+- **Requirement/change:** #1253, from the 2026-09-02 gap audit — found by a verifier while
+  *refuting* a neighbouring finding about unknown-code catch-alls. `wire_trust_level` mapped a
+  `PeerQueryResponse`'s `trust_state = 0x00` to `TrustLevel::Verified` and wrote it straight into the
+  peer cache that `trust_filter_allows` consults. That byte is the responder's claim **about
+  itself**, in an envelope the node does not authenticate before importing — so a station could
+  assert its own trustworthiness and thereby satisfy the operator's `strict` relay policy, the
+  policy that exists precisely to decide whose third-party traffic this station retransmits.
+- **Design decision — import as `Unknown`, always, and delete the mapping.** There is no honest
+  mapping from a peer's self-assertion to a trust level, because **this crate has no local trust
+  store to resolve the claim against** — verified: no `TrustStore` reference and no such dependency
+  in its `Cargo.toml`. So `wire_trust_level` is deleted rather than corrected; a function whose only
+  possible answer is one constant is not a mapping.
+- **Consequence, and the maintainer's ruling on it.** With every import `Unknown`, `TrustedOnly`
+  can never be satisfied, so `strict` relays **nothing**. The node **warns loudly and still runs**
+  rather than refusing to start: untrusted is this project's default for synchronized operation
+  *including relay and mesh*, and operators restrict upward by ACCEPTING trust levels, not by the
+  protocol refusing to run. The operator asked for a restriction this crate cannot implement; the
+  honest response is to run, relay nothing, and say why.
+- **Implementation:** `wire_trust_level` deleted; the import site takes `TrustLevel::Unknown` with
+  the reason recorded at the site that had the bug; `main.rs` warns at startup when the resolved
+  filter is `TrustedOnly`, naming the fix (`balanced`, or the full daemon).
+- **Tests — UNIT tests, deliberately.** The properties are about `peer_cache` and
+  `trust_filter_allows`, both private. Exporting accessors so an integration test could reach them is
+  the "public API for an instrument" shape this project bans, and is the live subject of #1271 — so
+  the first draft of this file, which added `peer_trust_level`/`relay_allowed_for` to the public API,
+  was deleted rather than shipped. Three tests in `mod peer_asserted_trust_tests`: every claimed
+  state (including `0x00`) imports as `Unknown` with a positive control that the import path ran at
+  all; a self-vouching peer does not satisfy `TrustedOnly`; and `strict` refuses even a peer we
+  genuinely heard, with a `balanced` control so it cannot pass in a build where relaying is broken
+  outright.
+- **Test results:** 3/3 pass; **all three fail against the restored defect**, each on its own
+  assertion (`trust_state = 0x00 must import as Unknown`), restored by `sha256sum`. Whole crate
+  green (3 + 15 + 3). Full `scripts/gate.sh` verdict in the PR.
+- **Fixture note:** the response carries an EMPTY `descriptor_signature`, and that is part of the
+  point — the import path never verifies it, which is why the `trust_state` beside it cannot be
+  evidence. (A 64-byte one also pushes the envelope past one 255-byte frame.)
+- **Docs swept:** `architecture.md`'s `TrustFilter` table now says the filter is only as good as
+  where the cached level came from, and `openpulse-manual.md` warns that `strict` relays nothing in
+  this binary. Compounds with #1251 — same binary, and since that change `openpulse-mesh` has no
+  route to a sound card at all.
+
 ## 2026-09-05 — Two acceptance suites held out of the gate for runtime (#1274)
 
 - **Requirement/change:** #1274, at the maintainer's instruction. `notch_rescues_interferer` (2113 s)

@@ -350,6 +350,15 @@ Signed fields: `peer_id`, `callsign`, `capability_mask`, `timestamp_ms`.  Signat
 - `TrustedOrUnknown` (0x01) — any trust level except `Reduced`
 - `Any` (0x02) — no trust constraint
 
+**The filter is only as good as where the cached level came from (#1253).** A `trust_state` byte in
+a `PeerQueryResponse` is the responder's claim *about itself*, in an envelope the receiver does not
+authenticate before importing. `openpulse-mesh` used to map `0x00` to `Verified` and write it into
+the cache this filter reads, so a station could vouch for itself into an operator's `TrustedOnly`
+policy. It now imports every peer-asserted state as `Unknown`. Since that crate has no local trust
+store, **`TrustedOnly` there relays nothing at all**, and the binary warns loudly at startup rather
+than failing silently. A consumer that *does* hold local trust — the full daemon, via the signed
+handshake — is the place to resolve this filter meaningfully.
+
 `PeerRecord` now carries `capability_mask: u32`.
 
 ### Wire envelope and peer query payloads

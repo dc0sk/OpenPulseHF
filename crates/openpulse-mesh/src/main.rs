@@ -12,6 +12,7 @@ use openpulse_modem::ModemEngine;
 use psk8_plugin::Psk8Plugin;
 use qpsk_plugin::QpskPlugin;
 
+use openpulse_core::peer_cache::TrustFilter;
 use openpulse_core::relay::RelayTrustPolicy;
 use openpulse_mesh::trust_filter_from_policy;
 
@@ -124,6 +125,22 @@ fn main() -> Result<()> {
         .to_bytes();
 
     let trust_filter = trust_filter_from_policy(&mesh_cfg.relay_policy);
+    // #1253: `strict` cannot be satisfied by anything, and saying so loudly beats relaying nothing
+    // in silence. This crate has no local trust store, and since #1253 a peer's self-asserted trust
+    // byte is imported as `Unknown` rather than believed — so no cache entry can ever reach
+    // `Verified`. We do NOT refuse to start: untrusted is the project's default for synchronized
+    // operation including relay and mesh, and operators restrict upward by ACCEPTING trust levels,
+    // not by the node refusing to run. The operator asked for a restriction we cannot implement
+    // here; the honest response is to run, relay nothing, and say why.
+    if matches!(trust_filter, TrustFilter::TrustedOnly) {
+        tracing::warn!(
+            relay_policy = %mesh_cfg.relay_policy,
+            "[mesh] relay_policy = \"strict\" will relay NOTHING: this node has no local trust \
+             store, and a peer's self-asserted trust byte is no longer believed (#1253), so no peer \
+             can reach a trusted level. Use \"balanced\" to relay for peers of unknown trust, or \
+             run the full daemon, which resolves trust against the handshake."
+        );
+    }
     let policy = RelayTrustPolicy::with_trust_filter([] as [&str; 0], trust_filter);
 
     let mut daemon = MeshDaemon::new(

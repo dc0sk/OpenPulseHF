@@ -925,7 +925,15 @@ impl MeshDaemon {
                 peer_id: peer_id_str,
                 capability_mask: result.capability_mask,
                 route_quality,
-                trust_level: wire_trust_level(result.trust_state),
+                // #1253: ALWAYS `Unknown`, never `result.trust_state`. That byte is the
+                // responder's claim ABOUT ITSELF, carried in an envelope this node does not
+                // authenticate before importing, and `0x00` used to become `TrustLevel::Verified`
+                // — so a station could assert its own trustworthiness and thereby satisfy the
+                // `strict` relay policy that exists to decide whose third-party traffic we
+                // retransmit. There is no honest mapping here because this crate has no local
+                // trust store to resolve the claim against (no `TrustStore` dependency at all);
+                // the only truthful import is "we do not know".
+                trust_level: TrustLevel::Unknown,
                 revision: 0,
                 updated_at_ms: now_ms,
                 callsign_hash: result.callsign_hash,
@@ -986,14 +994,6 @@ fn wire_trust_filter(code: u8) -> TrustFilter {
     }
 }
 
-fn wire_trust_level(code: u8) -> TrustLevel {
-    match code {
-        0x00 => TrustLevel::Verified,
-        0x01 => TrustLevel::Unknown,
-        _ => TrustLevel::Reduced,
-    }
-}
-
 fn trust_level_to_wire(level: TrustLevel) -> u8 {
     match level {
         TrustLevel::Verified | TrustLevel::PskVerified => 0x00,
@@ -1036,5 +1036,177 @@ pub fn trust_filter_from_policy(policy: &str) -> TrustFilter {
         "strict" => TrustFilter::TrustedOnly,
         "balanced" => TrustFilter::TrustedOrUnknown,
         _ => TrustFilter::Any,
+    }
+}
+
+/// A peer cannot vouch for itself into this node's relay policy (#1253).
+///
+/// Unit tests, not an integration file, deliberately: the properties are about `peer_cache` and
+/// `trust_filter_allows`, both private, and exporting accessors so an external test could reach
+/// them is the "public API for an instrument" shape this project bans (see #1271).
+#[cfg(test)]
+mod peer_asserted_trust_tests {
+    use super::*;
+    use bpsk_plugin::BpskPlugin;
+    use ed25519_dalek::SigningKey;
+    use openpulse_audio::loopback::LoopbackBackend;
+    use openpulse_core::wire_query::{PeerQueryResponse, PeerQueryResult};
+
+    const MODE: &str = "BPSK250";
+
+    fn node(lb: &LoopbackBackend, seed: [u8; 32], filter: TrustFilter) -> MeshDaemon {
+        let peer_id = SigningKey::from_bytes(&seed).verifying_key().to_bytes();
+        let mut engine = ModemEngine::new(Box::new(lb.clone_shared()));
+        engine
+            .register_plugin(Box::new(BpskPlugin::default()))
+            .unwrap();
+        let policy = RelayTrustPolicy::with_trust_filter([] as [&str; 0], filter);
+        MeshDaemon::new(
+            engine, MODE, peer_id, 3, 0, 300_000, policy, 64, 3_600_000, seed, "N0CALL",
+        )
+    }
+
+    /// Put raw envelope bytes on the wire into `lb`, the way a neighbouring station would.
+    fn inject(lb: &LoopbackBackend, env: &WireEnvelope) {
+        let lb_tx = LoopbackBackend::new();
+        let mut tx = ModemEngine::new(Box::new(lb_tx.clone_shared()));
+        tx.register_plugin(Box::new(BpskPlugin::default())).unwrap();
+        tx.transmit(&env.encode().unwrap(), MODE, None).unwrap();
+        lb.fill_samples(&lb_tx.drain_samples());
+    }
+
+    /// A peer-query response in which `claimed` vouches for ITSELF at `trust_state`.
+    fn self_vouching_response(claimed: [u8; 32], trust_state: u8) -> WireEnvelope {
+        let resp = PeerQueryResponse {
+            query_id: 42,
+            results: vec![PeerQueryResult {
+                peer_id: claimed,
+                callsign_hash: [0u8; 32],
+                capability_mask: 0,
+                last_seen_ms: 1000,
+                trust_state,
+                // Empty on purpose, and it is part of the point: the import path never verifies
+                // this signature, which is exactly why the `trust_state` beside it cannot be
+                // treated as evidence. A 64-byte one also pushes the envelope past one frame.
+                descriptor_signature: Vec::new(),
+            }],
+        };
+        WireEnvelope {
+            msg_type: WireMsgType::PeerQueryResponse,
+            flags: 0,
+            session_id: 7,
+            src_peer_id: claimed,
+            dst_peer_id: [0u8; 32],
+            nonce: [0u8; 12],
+            timestamp_ms: 1000,
+            hop_limit: 2,
+            hop_index: 0,
+            payload: resp.encode().unwrap(),
+            signature: None,
+        }
+    }
+
+    /// Drive the real receive path until the claim has been imported.
+    fn import(node: &mut MeshDaemon, lb: &LoopbackBackend, claimed: [u8; 32], state: u8) {
+        inject(lb, &self_vouching_response(claimed, state));
+        for _ in 0..16 {
+            node.step(1000);
+            if node.peer_cache.peek(&peer_id_hex(&claimed)).is_some() {
+                break;
+            }
+        }
+    }
+
+    fn imported_level(state: u8) -> Option<TrustLevel> {
+        let lb = LoopbackBackend::new();
+        let mut n = node(&lb, [0xA1; 32], TrustFilter::Any);
+        let claimed = SigningKey::from_bytes(&[0xB2; 32])
+            .verifying_key()
+            .to_bytes();
+        import(&mut n, &lb, claimed, state);
+        n.peer_cache
+            .peek(&peer_id_hex(&claimed))
+            .map(|r| r.trust_level)
+    }
+
+    /// The defect: `trust_state = 0x00` imported as `Verified`.
+    #[test]
+    fn a_peer_cannot_vouch_for_itself() {
+        // Positive control FIRST: the import path must actually run, or the loop below passes
+        // because nothing was imported rather than because the claim was refused.
+        assert!(
+            imported_level(0x01).is_some(),
+            "control: the response must be imported at all — without this the real assertion \
+             cannot tell 'refused the claim' from 'never ran'"
+        );
+
+        for state in [0x00u8, 0x01, 0x02, 0x03, 0xFF] {
+            assert_eq!(
+                imported_level(state),
+                Some(TrustLevel::Unknown),
+                "trust_state = {state:#04x} must import as Unknown; a peer's claim about itself \
+                 is not evidence"
+            );
+        }
+    }
+
+    /// The consequence the defect had: a self-vouching peer satisfying the operator's `strict`.
+    #[test]
+    fn a_self_vouching_peer_does_not_satisfy_strict() {
+        let lb = LoopbackBackend::new();
+        let mut n = node(&lb, [0xA1; 32], TrustFilter::TrustedOnly);
+        let claimed = SigningKey::from_bytes(&[0xB2; 32])
+            .verifying_key()
+            .to_bytes();
+        import(&mut n, &lb, claimed, 0x00);
+
+        assert_eq!(
+            n.peer_cache
+                .peek(&peer_id_hex(&claimed))
+                .map(|r| r.trust_level),
+            Some(TrustLevel::Unknown),
+            "precondition: the self-vouching peer is in the cache, as Unknown"
+        );
+        assert!(
+            !trust_filter_allows(&n.peer_cache, &claimed, n.relay_trust_filter),
+            "a peer that vouched for itself must not satisfy TrustedOnly — the operator's strict \
+             policy was being enforced against a peer-supplied byte"
+        );
+    }
+
+    /// `strict` now relays NOTHING here, and that is a property of this crate, not of the peer.
+    ///
+    /// Pinned so the startup warning cannot drift from the behaviour it describes: there is no
+    /// local trust store, so nothing reaches `Verified` and `TrustedOnly` refuses every peer.
+    #[test]
+    fn strict_relays_nothing_because_this_crate_has_no_trust_store() {
+        assert!(matches!(
+            trust_filter_from_policy("strict"),
+            TrustFilter::TrustedOnly
+        ));
+
+        let heard = SigningKey::from_bytes(&[0xC3; 32])
+            .verifying_key()
+            .to_bytes();
+
+        let lb = LoopbackBackend::new();
+        let mut strict = node(&lb, [0xA1; 32], TrustFilter::TrustedOnly);
+        import(&mut strict, &lb, heard, 0x00);
+        assert!(!trust_filter_allows(
+            &strict.peer_cache,
+            &heard,
+            strict.relay_trust_filter
+        ));
+
+        // Control: `balanced` DOES relay for that same Unknown peer. Without it, the assertion
+        // above would also hold in a build where relaying was broken outright.
+        let lb2 = LoopbackBackend::new();
+        let mut balanced = node(&lb2, [0xA1; 32], TrustFilter::TrustedOrUnknown);
+        import(&mut balanced, &lb2, heard, 0x00);
+        assert!(
+            trust_filter_allows(&balanced.peer_cache, &heard, balanced.relay_trust_filter),
+            "control: `balanced` must relay for an Unknown peer, or this proves nothing about \
+             `strict` in particular"
+        );
     }
 }

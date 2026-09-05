@@ -661,12 +661,21 @@ Config example:
 [mesh]
 enabled = true
 max_hops = 3
-relay_policy = "balanced"
+relay_policy = "balanced"   # "strict" relays NOTHING in openpulse-mesh — see below
 store_forward_ttl_s = 300
 beacon_interval_s = 60
 peer_cache_capacity = 256
 peer_cache_ttl_s = 3600
 ```
+
+**`relay_policy` in `openpulse-mesh` (#1253).** `openpulse-mesh` has no local trust store, and
+since #1253 it imports a peer's self-asserted trust byte as `Unknown` rather than believing it — a
+station used to be able to claim `trusted` about itself and thereby satisfy your `strict` policy.
+The consequence is that **`strict` now relays nothing at all** in this binary; it warns loudly at
+startup instead of failing quietly. Use `"balanced"` to relay for peers of unknown trust, which is
+the project's default posture for synchronized operation, or run the full daemon, which resolves
+trust against the signed handshake. Note also that since #1251 `openpulse-mesh` has no route to a
+sound card at all.
 
 Operational pattern:
 - Each node performs periodic step cycles and emits mesh events
