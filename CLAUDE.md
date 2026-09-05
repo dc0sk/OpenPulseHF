@@ -23,6 +23,12 @@ cargo build --workspace
 # Full test suite (no audio hardware required)
 cargo test --workspace --no-default-features
 
+# The two acceptance suites held OUT of that run, for runtime (~83 min of the ~2 h gate between
+# them). `scripts/gate.sh` does NOT run them; run before any change to the receiver notch, the OTA
+# rate controller, or the acquisition chain, and before a release.
+scripts/slow-tests.sh              # both      (notch REQ-QRM-01 ~35 min, OTA CAP-33 ~48 min)
+scripts/slow-tests.sh notch        # one suite
+
 # Run a specific test file
 cargo test --package openpulse-modem --no-default-features --test fec_loopback
 
@@ -213,7 +219,7 @@ Each requirement below is done when the linked test passes. Add new links as tes
 | A coded frame decodes through a **saturating** noise floor at a realistic lead — a condemned settle raises the gate above the noise that produced it (#1045) | `cargo test -p openpulse-modem --no-default-features --test capture_replay_corpus a_coded_frame_decodes_through_a_saturating_floor` |
 | The AFC settle is corroborated by **preamble correlation**, so a saturating noise floor is never settled on (#1049) — and the frequency grid stays narrow enough that a **steady tone** is not mistaken for a preamble | `cargo test -p openpulse-modem --no-default-features --test preamble_correlation_settle` |
 | A preamble template cannot be published without the ρ constants measured for that waveform — they are one type, so no mode can inherit another's threshold (#1053) | `cargo test -p openpulse-core --no-default-features --lib plugin::` + `cargo test -p openpulse-modem --no-default-features --test preamble_correlation_settle the_gate_is_not_fooled_by_a_steady_tone` |
-| The receiver notch **earns its default-on status** — the rescue is real AND attributable to the interferer (not to whatever else the notch removed), it costs nothing when there is nothing to notch, and in-band QRM stays a QSY case it does not worsen (REQ-QRM-01) | `cargo test -p openpulse-modem --no-default-features --test notch_rescues_interferer` |
+| The receiver notch **earns its default-on status** — the rescue is real AND attributable to the interferer (not to whatever else the notch removed), it costs nothing when there is nothing to notch, and in-band QRM stays a QSY case it does not worsen (REQ-QRM-01). **`#[ignore]`d since #1274 for RUNTIME (~35 min), not staleness — `scripts/gate.sh` does not run it**, so this row is proven by `scripts/slow-tests.sh`, not by a green gate | `scripts/slow-tests.sh notch` (or `cargo test -p openpulse-modem --no-default-features --test notch_rescues_interferer -- --ignored`) |
 | The daemon's carrier detect tracks the **band noise floor** instead of a fixed squelch (REQ-DCD-01) — recorded idle at 0.126 RMS is not a carrier, and a real frame in that floor still flushes one bounded burst | `cargo test -p openpulse-modem --no-default-features --test daemon_squelch_noise_floor` + `cargo test -p openpulse-dsp --no-default-features --lib noise_floor` |
 | A mode with **no preamble template** (energy-only frame start) decodes through a saturating floor — the case #1045's condemnation-triggered floor raise made worse, and the veto cannot reach | `cargo test -p openpulse-modem --no-default-features --test capture_replay_corpus a_no_template_mode_decodes_through_a_saturating_floor` |
 | The energy gate rejects a **real idle noise floor on its first window** (the #1021 trigger; `onair-rx-level-check.sh` bounds the floor only from above and never covered `1e-4 … 1.07e-3`) while still passing a full-scale buffer-is-the-frame fixture | `cargo test -p openpulse-modem --no-default-features --lib energy_gate` |
@@ -412,7 +418,11 @@ is visible in the transcript rather than indistinguishable from compliance.
    moved while the gate ran, so the verdict is not attributable to any single state of the repo
    (#1151). Rerun on a quiet checkout; put concurrent work in a `git worktree`, never in the
    checkout being gated. Note what it does NOT cover: the guard samples at step boundaries, so a
-   mutate-and-revert inside one step still hashes identically and passes unseen.
+   mutate-and-revert inside one step still hashes identically and passes unseen — **and since #1274
+   it does not run the two `#[ignore]`d acceptance suites** (`notch_rescues_interferer`,
+   `ota_channel_adaptation`), which cost ~83 min of a ~2 h gate between them. `GATE: PASS` therefore
+   does NOT mean REQ-QRM-01 was re-proven; `scripts/slow-tests.sh` is what proves it, and the gate
+   prints a `held-out (runtime, #1274):` line so a green verdict cannot be read as covering them.
 3. **After editing `gate.sh`, sabotage-verify it** — but know what each probe reaches, because
    this rule described behaviour the code does not have until 2026-09-01 (#1242). A gate nobody has
    watched fail is the self-consistent checker it exists to prevent, and so is a *rule* nobody has

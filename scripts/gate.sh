@@ -244,6 +244,10 @@ fi
 
 echo ""
 echo "suites=$suites tests_passed=$passed tests_failed=$failed"
+# A green gate must not read as "everything passed". Two acceptance suites are held out for
+# runtime (#1274) — REQ-QRM-01's notch gate and the OTA rate-adaptation suite, ~83 min between
+# them — and nothing else in this output would say so.
+echo "held-out (runtime, #1274): notch_rescues_interferer, ota_channel_adaptation — run scripts/slow-tests.sh"
 
 if [ "$MODE" = "quick" ]; then
     echo "GATE: PARTIAL $COMMIT $DIRTY $STAMP (fmt+clippy only — NOT a gate, no token written)"
