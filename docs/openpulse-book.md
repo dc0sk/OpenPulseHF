@@ -2849,16 +2849,18 @@ the crypto material plus a few tens of bytes of framing — not the 3.6× the JS
 | Frame | Raw crypto material | Encoded | 251-byte SAR fragments |
 |---|---|---|---|
 | `PqConReq` (Hybrid, `W1AW`) | 5 012 B (Ed25519 key 32 + ML-DSA key 1 312 + KEM ek 1 184 + Ed25519 sig 64 + ML-DSA sig 2 420) | **5 049 B**, pinned | 21 |
-| `PqConAck` (Hybrid) | 4 916 B (32 + 1 312 + KEM ct 1 088 + 64 + 2 420) | no pinned vector; **4 970 B** derived | 20 |
+| `PqConAck` (Hybrid) | 4 916 B (32 + 1 312 + KEM ct 1 088 + 64 + 2 420) | **4 970 B**, length pinned | 20 |
 
 The CONREQ figure is not this book's own measurement: it is the known-answer vector in
 `crates/openpulse-core/tests/handshake_kat.rs`, which asserts both the length and a SHA-256 of the
 whole frame. That is only possible because ML-DSA-44 signing is **deterministic** in this build —
 itself asserted, by `pq_signing_is_deterministic_in_this_build`, rather than assumed. The CONACK
 deliberately has no vector: it carries a randomised ML-KEM encapsulation, so no fixed byte string
-exists to pin. Its *length* is fixed for a given callsign, though, and the 4 970 B above is derived
-from the encoder's field layout (`pq_handshake.rs`) rather than measured — a length-only KAT would
-turn it into a pinned number.
+exists to pin. Its *length* is another matter: every field but `station_id` is fixed-size, so the
+frame is exactly `4966 + station_id.len()` bytes and does not vary between builds despite the
+randomised ciphertext. `the_pq_conack_length_is_fixed_even_though_its_bytes_are_not` pins that across
+four callsign lengths and asserts two builds from identical inputs agree, which catches a field-size
+change on the CONACK path that the CONREQ vector cannot see.
 
 **This is still expensive, and the binary format did not change that.** A PQ CONREQ *would be* ~21
 acquisitions where a classical one is 1 — would, because no production path transmits a PQ frame at

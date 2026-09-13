@@ -17,7 +17,9 @@
 //! fixed seed rather than generating one.
 
 use openpulse_core::handshake::{verify_conreq, ConReq, ConReqParams, InMemoryTrustStore};
-use openpulse_core::pq_handshake::{create_pq_conreq, PqConReqParams};
+use openpulse_core::pq_handshake::{
+    create_pq_conack, create_pq_conreq, PqConAckParams, PqConReqParams,
+};
 use openpulse_core::trust::PublicKeyTrustLevel;
 use openpulse_core::trust::{PolicyProfile, SigningMode};
 use sha2::{Digest, Sha256};
@@ -186,7 +188,12 @@ fn pq_signing_is_deterministic_in_this_build() {
 }
 
 /// The PQ frame is far too large for one fragment, and that is expected — recorded here so the
-/// vector's existence is not read as evidence that PQ is deployable. 5060 B ≈ 2.7 min at BPSK250.
+/// vector's existence is not read as evidence that PQ is deployable. 5 049 B is **21 SAR fragments**
+/// at 251 B, against 1 for a classical CONREQ.
+///
+/// No airtime figure: this said "5060 B ≈ 2.7 min at BPSK250", where the size was 11 bytes stale and
+/// the duration was sourced from nothing — the repo records no measured PQ-handshake airtime, as
+/// `openpulse-book.md` §2B.7.3 says in as many words. Fragments are derivable; minutes are not.
 #[test]
 fn the_pq_vector_is_not_evidence_that_pq_is_deployable() {
     // Measured from the frame, not from the constant: comparing two `const`s is an assertion that
@@ -194,7 +201,60 @@ fn the_pq_vector_is_not_evidence_that_pq_is_deployable() {
     let measured = kat_pq_conreq().len();
     assert!(
         measured > 251 * 4,
-        "the PQ CONREQ is now small enough to question this note; re-derive the airtime claim in \
-         docs/dev/design/handshake-binary-encoding.md (measured {measured} B)"
+        "the PQ CONREQ is now small enough to question this note; re-derive the fragment claim \
+         against `docs/dev/design/protocol-wire-spec.md` §4 (measured {measured} B). NOT against \
+         `handshake-binary-encoding.md`, which is the design record and says of itself that it is \
+         not maintained field-for-field."
     );
+}
+
+/// The PQ **CONACK**'s length is pinned even though its bytes cannot be.
+///
+/// `encapsulate()` is randomised, so no fixed byte string exists to hash — which is why there is no
+/// byte vector for this frame. Its LENGTH is another matter: every field except `station_id` is
+/// fixed-size, so the frame is exactly `4966 + station_id.len()` bytes and does not vary between
+/// builds. Pinning that catches a field-size change on the PQ CONACK path, which the CONREQ vector
+/// cannot see, and it replaces a figure that until now was derived from the encoder by hand.
+#[test]
+fn the_pq_conack_length_is_fixed_even_though_its_bytes_are_not() {
+    let conreq = kat_pq_conreq();
+    let hash = openpulse_core::handshake::conreq_hash(&conreq);
+    let build = |station_id: &str| -> usize {
+        create_pq_conack(
+            &PqConAckParams {
+                station_id,
+                pq_signing_key: &[0x04u8; 32],
+                req_kem_ek: &[0x33u8; 1184],
+                selected_mode: SigningMode::Hybrid,
+                conreq_hash: hash,
+                timestamp_ms: 1_700_000_000_000,
+            },
+            &[0x05u8; 32],
+        )
+        .expect("KAT PQ CONACK must encode")
+        .0
+        .len()
+    };
+
+    // One byte per callsign character, and nothing else moving.
+    for id in ["W1AW", "K2XYZ", "3DA0/DL1ABC", "AAAAAAAAAAAAAAAAAA"] {
+        assert_eq!(
+            build(id),
+            4966 + id.len(),
+            "the PQ CONACK layout changed for station_id {:?} ({} chars)",
+            id,
+            id.len()
+        );
+    }
+
+    // The randomised KEM ciphertext must not change the LENGTH, or the pin above is luck.
+    assert_eq!(
+        build("W1AW"),
+        build("W1AW"),
+        "two CONACKs built from identical inputs differ in length, so the KEM ciphertext is not \
+         fixed-size and this pin cannot hold"
+    );
+
+    // And it is the frame this test claims: 20 fragments, one fewer than the CONREQ's 21.
+    assert_eq!(build("W1AW").div_ceil(251), 20);
 }

@@ -9,6 +9,38 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-09-13 — the PQ CONACK's length is pinned, and a test stopped pointing at a doc that disclaims itself
+
+- **Requirement/change:** #1353, filed out of the #1147 status review. Three follow-ups, all small.
+  `handshake_kat.rs` told a failing reader to re-derive its claim in
+  `docs/dev/design/handshake-binary-encoding.md` — the one doc that now says of itself that it is not
+  maintained field-for-field. It also carried "5060 B ≈ 2.7 min at BPSK250": the size was 11 bytes
+  stale against `PQ_CONREQ_KAT_LEN = 5049`, and the airtime was sourced from nothing, while the book
+  states in as many words that the repo records no measured PQ-handshake airtime.
+
+- **Design decision:** pin what is derivable and delete what is not. Fragments are arithmetic on a
+  pinned length (21 for the CONREQ, 20 for the CONACK); minutes are not, so the airtime claim is gone
+  rather than recomputed. And the CONACK, which has no byte vector because `encapsulate()` is
+  randomised, gets a **length** vector: every field but `station_id` is fixed-size.
+
+- **Implementation:** `crates/openpulse-core/tests/handshake_kat.rs` — the failure message now points
+  at `protocol-wire-spec.md` §4 and says why not the design doc; the airtime sentence is replaced by
+  the fragment count; and `the_pq_conack_length_is_fixed_even_though_its_bytes_are_not` asserts
+  `4966 + station_id.len()` across four callsign lengths, that two builds from identical inputs agree,
+  and that the frame is 20 fragments. `docs/openpulse-book.md` §2B.7.3 said 4 970 B was "derived from
+  the encoder's field layout rather than measured" — it is now measured and pinned.
+
+- **Tests:** `cargo test -p openpulse-core --no-default-features --test handshake_kat`.
+
+- **Test results:** **8 passed, 0 failed** (was 7 — the new pin is the eighth). Measured before
+  writing the constant, not after: 4 chars → 4970 B, 5 → 4971, 11 → 4977, 18 → 4984, and two builds
+  with identical inputs both 4970 despite the randomised KEM ciphertext. **Sabotage-verified**: with
+  the expected length shifted by one the test fails naming the station_id, and the restored file is
+  sha256-identical to the original.
+
+Review: none — mechanical. Two of the three items are corrections of stale text against measured
+values; the third pins a number the book already carried, and it was watched failing.
+
 ## 2026-09-13 — a calibration hunt that retracted two of its three findings
 
 - **Requirement/change:** the soft-demod sweep (#1360) closed convention coverage; review ranked LLR
