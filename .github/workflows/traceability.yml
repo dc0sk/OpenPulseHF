@@ -114,6 +114,22 @@ jobs:
           BASE_REF: ${{ github.event.pull_request.base.ref }}
         run: ./scripts/check-rehomed-docs.sh --base "origin/$BASE_REF"
 
-      # R5's doc constitution (status: living legality + recursive frontmatter) is NOT enforced in CI
-      # right now: it lives in docs.yml, which calls the same scripts/validate-doc-frontmatter.sh but
-      # is `disabled_manually` (#1129). Run it by hand until that is resolved.
+      # `last_updated` diff ratchet (#1349). A doc CHANGED in this branch must carry a stamp at or
+      # after the merge-base date; docs with no stamp are exempt, as docfront.py grandfathers them —
+      # otherwise every ledger edit would first demand a frontmatter block for traceability.md, and a
+      # check that blocks everything gets routed around. This replaces the retired stamper
+      # (`docs-last-updated-pr.yml`, whose trigger and push body the maintainer removed in 5c93ca29)
+      # with a check rather than a bot writing to contributors' branches.
+      #
+      # `if: always()` on purpose: this job is one sequence of steps, so without it a routine
+      # trailer-lint failure above would withhold the stamp verdict entirely and cost a round trip.
+      - name: Doc last_updated ratchet (branch diff)
+        if: always()
+        env:
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
+        run: ./scripts/check-doc-stamps.sh --base "origin/$BASE_REF"
+
+      # R5's doc constitution (status: living legality + recursive frontmatter) is enforced in two
+      # places as of 2026-09-13: `scripts/gate.sh` runs it locally, and `docs.yml` — the workflow
+      # that hosts it in CI — was re-enabled by maintainer decision on #1349 after sitting
+      # `disabled_manually` since 2026-06-24 with the reason recorded nowhere (#1129, #1134).

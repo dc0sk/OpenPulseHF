@@ -9,6 +9,104 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-09-13 — both held-out acceptance suites re-proven at `884d96ed`
+
+- **Requirement/change:** REQ-QRM-01 and CAP-33 are the two suites `scripts/gate.sh` does NOT run —
+  held out since #1274 for runtime, ~86 min between them. They were last proven at `8837af80`, five
+  merges back. A `GATE: PASS` says nothing about either, and the gate prints a `held-out` line so it
+  cannot be read as if it did.
+
+- **Design decision:** none — this is running an existing gate and reporting its output.
+
+- **Implementation:** none.
+
+- **Tests:** `scripts/slow-tests.sh all`, started with `HEAD=884d96ed clean=yes`.
+
+- **Test results:** `SLOW-TESTS: PASS`.
+  - `notch_rescues_interferer` → **3 passed, 0 failed**, 2183.05 s (1 filtered out — `probe_band_sweep`,
+    which `slow-tests.sh` skips by name because it asserts nothing and is ignored for an unrelated
+    reason).
+  - `ota_channel_adaptation` → **3 passed, 0 failed**, 2985.24 s.
+
+- **Attribution caveat, stated because nothing in the script guards it:** the checkout moved during
+  the run. It started at `884d96ed` clean, and by the end HEAD was the #1349 branch. `slow-tests.sh`
+  has no `drift_check` — that guard is `gate.sh`'s — so the verdict is attributable only because
+  `git diff 884d96ed HEAD -- '*.rs'` is **empty**: every file that changed under it is a workflow,
+  a script or a doc, so the compiled test binaries were identical throughout. Had one `.rs` file
+  moved, this entry could not honestly cite the result at all.
+
+## 2026-09-13 — the frontmatter check now runs somewhere, and two docs stopped calling it "enforced"
+
+- **Requirement/change:** #1349. `scripts/validate-doc-frontmatter.sh` ran in **no** workflow, no
+  script and no hook. Its only CI host, `.github/workflows/docs.yml`, has been `disabled_manually`
+  since **2026-06-24**, and `CLAUDE.md` told the reader to run it by hand — which nobody did, so 40
+  new offenders accumulated in the 19 days before anyone looked. #1350 and #1355 cleared that backlog;
+  the hole that produced it stayed open.
+
+- **Design decision:** take the local half now and escalate the CI half, which is not mine. The gate
+  gains a `run_step`, on the reasoning already written beside the review-trailer lint: a green local
+  gate should predict CI. Re-enabling `docs.yml` is the maintainer's call — it also carries
+  **REQ-DOC-01**'s version-bump gate, and *why* it was switched off is recorded nowhere. #1129 and
+  #1134 both escalated exactly this and neither got an answer, so inferring an answer now would be
+  the third guess rather than the first ask.
+
+  **Rejected: `traceability.yml`**, which was my own first choice. That workflow is a single job with
+  sequential steps and no `if: always()`, so a fifth step would sit behind two trailer lints and the
+  review lint — all of which fail routinely on body edits — and a PR failing the review trailer would
+  get no frontmatter verdict at all until the trailer was fixed. There is also a clean dividing line
+  it would break: everything in `traceability.yml` reads the **PR event** (body, title, or a diff
+  against the base ref), while `docfront.py` reads the **tree** and needs neither.
+
+- **Implementation:** `scripts/gate.sh` (one `run_step` in the full-mode lint block);
+  `docs/dev/project/release-1.0-criteria.md`, which called REQ-DOC-01 and REQ-DOC-02 **"enforced"**;
+  `docs/dev/project/traceability-matrix.md`, which said "doc frontmatter validation **in CI**"; and
+  `docs/dev/release-checklist.md`, whose §4 said the stamps are "auto-managed by CI" and gave a
+  command that **exits 1**.
+
+- **Tests:** the new step's script, watched failing and passing; `docfront`, ledger order and the
+  workspace gate.
+
+- **Test results:** with a planted frontmatter-less doc, `validate-doc-frontmatter.sh` → **rc=1**,
+  naming the file; with it removed → **rc=0**, `DOCFRONT: PASS` (170+ docs, 0 new, 71 grandfathered).
+  `bash -n scripts/gate.sh` clean. The `run_step … || rc_total=1` plumbing is textually identical to
+  the four neighbouring steps, so what was verified here is the new step's own verdict, not the
+  plumbing. Full gate below.
+
+- **Three claims in the tree were false, and they are the reason this went unnoticed:**
+  `release-1.0-criteria.md` said both REQ-DOC rows were "enforced" by scripts that ran nowhere;
+  `traceability-matrix.md` said the frontmatter check ran "in CI" and listed
+  `stamp-doc-last-updated.sh` as an enforcer, though the maintainer retired its automation in
+  `5c93ca29` and the script needs two refs; and `release-checklist.md` documented
+  `bash scripts/stamp-doc-last-updated.sh` as updating all docs, which exits 1 with a usage message.
+  Measured, not assumed — the script was run.
+
+- **Corrections to my own framing, from review:** I argued against re-enabling `docs.yml` partly
+  because "the maintainer disabled it deliberately in #1120". **False.** Both docs workflows were
+  disabled 2026-06-24; #1120 merged 2026-08-09 and its body *cites* `docs.yml` as live coverage. I
+  also called a CI step "the enforcing copy" — nothing is enforcing, since no status check is
+  required anywhere (#1144); both a workflow and the gate are advisory red Xs.
+
+- **Review:** `docs/dev/reviews/artifacts/1349-frontmatter-enforcement.md`.
+
+- **Maintainer decisions, taken 2026-09-13 after the options were put with their costs:**
+  **re-enable `docs.yml`**, so REQ-DOC-01's version-bump gate runs again — done here as the
+  `origin/$BASE_REF` fix to its stale `base.sha` (the #1219 field), with the workflow itself enabled
+  once this lands so the fixed version is the one that runs. And **`last_updated` becomes a diff
+  ratchet**: a doc changed in a PR must carry a date at or after the merge-base. That is the retired
+  stamper's effect without a bot pushing to branches, and being diff-based it belongs in
+  `traceability.yml` rather than here. **Implemented in this change after all**, because it turned
+  out to fail *this* branch: `scripts/check-doc-stamps.sh` + `scripts/lib/doc_stamps.py`, wired into
+  `traceability.yml` with `if: always()` so a routine trailer-lint failure above it cannot withhold
+  the stamp verdict. Scope is deliberately narrow — only docs that ALREADY carry a `last_updated`
+  are checked, so `docs/dev/project/traceability.md`, which has no frontmatter and is touched by
+  nearly every PR, stays exempt; a check that blocks everything is one people route around.
+
+  Self-test: a stale stamp is rejected, a current one accepted, an unstamped doc exempt — the third
+  is the case that keeps the ledger editable. Fail-closed on an unresolvable base (exit 2), the
+  #1219 discipline. It judges HEAD rather than the working tree, which is what CI needs and is now
+  said in the module docstring. Run against this branch it immediately caught three docs I had
+  edited today whose stamps read 2026-04-24, 2026-07-30 and 2026-08-18; they are stamped here.
+
 ## 2026-09-13 — the PQ CONACK's length is pinned, and a test stopped pointing at a doc that disclaims itself
 
 - **Requirement/change:** #1353, filed out of the #1147 status review. Three follow-ups, all small.

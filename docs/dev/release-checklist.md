@@ -2,7 +2,7 @@
 project: openpulsehf
 doc: docs/dev/release-checklist.md
 status: living
-last_updated: 2026-04-24
+last_updated: 2026-09-13
 ---
 
 # Release Checklist Template
@@ -153,12 +153,16 @@ Use this checklist when preparing a new release of OpenPulse. This guide covers 
 
 ### 4. Update Last-Updated Timestamps
 
-These are auto-managed by CI stamp script, but ensure the script runs:
+**Not auto-managed, and the command below used to be wrong.** `docs-last-updated-pr.yml` no longer
+stamps anything — the maintainer removed its `pull_request` trigger and its commit-and-push body in
+`5c93ca29`, leaving `workflow_dispatch` and an `echo` — and the script takes **two refs**, so the
+form previously documented here (`bash scripts/stamp-doc-last-updated.sh`, "updates all docs") exits
+1 with a usage message. Note also that `docfront.py` checks `last_updated` for **format only**
+(`^\d{4}-\d{2}-\d{2}$`), never currency, so a stale-but-well-formed date passes validation.
 
-- [ ] **Run stamp-doc script** (if not auto-running in CI)
+- [ ] **Stamp the docs this release touched** (optional; nothing enforces it)
   ```bash
-  bash scripts/stamp-doc-last-updated.sh
-  # Updates all docs/*/md files with current date
+  bash scripts/stamp-doc-last-updated.sh "$PREV_TAG" HEAD
   ```
 
 - [ ] **Verify timestamps updated**
