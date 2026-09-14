@@ -23,6 +23,10 @@ tokio             = { version = "1", default-features = false, features = ["sync
 
 [dev-dependencies]
 openpulse-config = { path = "../openpulse-config" }
+# Test-only: `tx_airtime.rs` asserts a frame's airtime against the REAL `DEFAULT_PTT_MAX` rather
+# than restating 180 s, so the gate cannot pass while the constant it guards has moved. No cycle:
+# `openpulse-radio` depends on no other workspace crate.
+openpulse-radio = { path = "../openpulse-radio", default-features = false }
 js8-plugin = { workspace = true }
 mfsk16-plugin = { workspace = true }
 psk8-plugin = { workspace = true }

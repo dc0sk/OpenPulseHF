@@ -23,7 +23,21 @@ use std::time::{Duration, Instant};
 
 use crate::{PttController, PttError};
 
-/// Default max continuous keyed time before the watchdog force-releases (Part 97 duty-cycle guidance).
+/// Default max continuous keyed time before the watchdog force-releases.
+///
+/// An **engineering bound, not a regulatory one.** This was documented as "Part 97 duty-cycle
+/// guidance" from `f0f64579` until 2026-09-14; no Part 97 provision setting a 180 s continuous-
+/// transmission limit was found when that citation was checked. §97.119 sets a 10-minute *station
+/// identification interval*, which is a different quantity and does not bound one transmission.
+/// The attribution was dropped rather than re-sourced: a false regulatory citation on a
+/// transmit-safety constant is exactly the claim that gets quoted back as settled fact.
+///
+/// What it is for: bounding a HANG — a transmit that blocks, or a release that never runs — so an
+/// unattended station cannot hold the key indefinitely. It is deliberately longer than any frame
+/// the ladder emits (the slowest, BPSK31 + two RS blocks, is 131.8 s) and shorter than a stuck
+/// carrier an operator would tolerate. It is **not** a duty-cycle limit and must not be cited as
+/// one; a caller whose legitimate emission could exceed it should refuse before keying rather than
+/// be force-released mid-frame (#1299).
 pub const DEFAULT_PTT_MAX: Duration = Duration::from_secs(180);
 
 /// How often the watchdog thread checks the deadline. Granularity is immaterial against a 180 s deadline.

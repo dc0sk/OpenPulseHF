@@ -12,6 +12,7 @@
 use anyhow::{anyhow, Result};
 use clap::Parser;
 use openpulse_core::fec::FecMode;
+use openpulse_radio::{SharedPtt, DEFAULT_PTT_MAX};
 use tracing::Level;
 
 use openpulse_audio::LoopbackBackend;
@@ -54,6 +55,16 @@ fn parse_fec(s: &str) -> Result<FecMode> {
 
 fn main() -> Result<()> {
     let cli = Cli::parse();
+
+    // Initialised HERE rather than after the short-circuit dispatches below, because `calibrate`
+    // returns from one of them (#1299). Its keying now goes through `SharedPtt`, whose only failure
+    // channel is `tracing::warn!`/`error!` — a release that fails, or a watchdog force-release on a
+    // stuck rig, was invisible on that path while the subscriber was installed afterwards.
+    let level: Level = cli.log.parse().unwrap_or(Level::INFO);
+    tracing_subscriber::fmt()
+        .with_max_level(level)
+        .with_target(false)
+        .init();
 
     // Short-circuit commands that need no hardware/network setup.
     if let Commands::Config { command } = &cli.command {
@@ -131,12 +142,6 @@ fn main() -> Result<()> {
         );
     }
 
-    let level: Level = cli.log.parse().unwrap_or(Level::INFO);
-    tracing_subscriber::fmt()
-        .with_max_level(level)
-        .with_target(false)
-        .init();
-
     let audio: Box<dyn openpulse_core::audio::AudioBackend> = match cli.backend.as_str() {
         "loopback" => Box::new(LoopbackBackend::new()),
         #[cfg(feature = "cpal-backend")]
@@ -155,7 +160,18 @@ fn main() -> Result<()> {
     engine.set_max_power_watts(cli.max_power);
 
     let pki = PkiClient::new(cli.pki_url.clone());
-    let mut ptt = radio::build_ptt_controller(&cli.ptt, &cli.rig, &cli.rig_file)?;
+    // One funnel for every keying path in the workspace (#1299): the CLI was the last front-end
+    // still calling `assert_ptt`/`release_ptt` by hand, so it had neither the RAII release on an
+    // unwind nor the watchdog that bounds a transmit which blocks.
+    let ptt = SharedPtt::new(
+        Some(radio::build_ptt_controller(
+            &cli.ptt,
+            &cli.rig,
+            &cli.rig_file,
+        )?),
+        DEFAULT_PTT_MAX,
+    );
+    let _ptt_watchdog = ptt.spawn_watchdog(None);
     let mut exit_code = 0;
 
     match cli.command {
@@ -170,14 +186,7 @@ fn main() -> Result<()> {
                 engine.set_center_frequency(center_frequency);
             }
             let fec = parse_fec(&fec)?;
-            commands::transmit::run(
-                &data,
-                &mode,
-                fec,
-                device.as_deref(),
-                &mut engine,
-                ptt.as_mut(),
-            )?;
+            commands::transmit::run(&data, &mode, fec, device.as_deref(), &mut engine, &ptt)?;
         }
         Commands::Receive {
             mode,

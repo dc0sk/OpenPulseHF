@@ -2,11 +2,16 @@ use anyhow::{bail, Context, Result};
 use openpulse_radio::{Cm108Ptt, GpioPtt, NoOpPtt, PttController, RigctldPtt, VoxPtt};
 
 /// Construct a `PttController` from CLI `--ptt`, `--rig`, and `--rig-file` args.
+///
+/// `+ Send` is required by [`openpulse_radio::SharedPtt::new`], which the CLI's keying paths go
+/// through (#1299): the watchdog thread holds an `Arc<Mutex<PttInner>>`, and `Mutex<T>: Sync` needs
+/// `T: Send`. Every production implementor already satisfies it; the bound is stated here rather
+/// than added as a supertrait of `PttController`, which has 20 implementors and no need of it.
 pub fn build_ptt_controller(
     ptt: &str,
     rig: &str,
     rig_file: &str,
-) -> Result<Box<dyn PttController>> {
+) -> Result<Box<dyn PttController + Send>> {
     match ptt {
         "none" => Ok(Box::new(NoOpPtt::new())),
         "vox" => Ok(Box::new(VoxPtt::new())),

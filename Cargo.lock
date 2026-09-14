@@ -5194,6 +5194,7 @@ dependencies = [
  "openpulse-core",
  "openpulse-dsp",
  "openpulse-filexfer",
+ "openpulse-radio",
  "pilot-plugin",
  "psk8-plugin",
  "qam64-plugin",
