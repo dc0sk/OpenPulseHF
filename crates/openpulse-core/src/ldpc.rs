@@ -278,7 +278,8 @@ impl IterativeDecoder for LdpcCodec {
             }
 
             // Check syndrome; return on convergence.
-            let bits: Vec<bool> = total.iter().map(|&l| l < 0.0).collect();
+            // `crate::fec::hard_bit`, not `l < 0.0`: one definition of the tie at ±0.0 (#1358).
+            let bits: Vec<bool> = total.iter().map(|&l| crate::fec::hard_bit(l)).collect();
             if syndrome_ok(&bits, &self.check_to_vars) {
                 return Ok(pack_bits(&bits[..k]));
             }

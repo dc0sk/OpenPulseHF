@@ -133,7 +133,7 @@ impl PilotFrame {
 
     /// Soft-decision decode: recover the carrier exactly as [`decode`](Self::decode),
     /// then emit per-bit max-log-MAP LLRs (positive = bit more likely 0) instead of
-    /// hard bytes. Hard-slicing the result (`bit = llr <= 0`, LSB-first) reproduces
+    /// hard bytes. Hard-slicing the result with `fec::hard_decide` (LSB-first) reproduces
     /// [`decode`](Self::decode)'s bytes, matching the cross-plugin LLR convention.
     pub fn decode_soft(&self, frame: &[(f32, f32)]) -> Vec<f32> {
         let (data_syms, pilot_noise_var) = self.recover_data_syms(frame);
@@ -259,7 +259,7 @@ fn symbols_to_bytes(syms: &[(f32, f32)], bits_per_sc: usize, apsk32: bool) -> Ve
 
 /// Soft counterpart of [`symbols_to_bytes`]: per-bit max-log-MAP LLRs (positive =
 /// bit more likely 0), in the same symbol-major, LSB-first-within-symbol order, so
-/// hard-slicing the LLRs (`bit = llr <= 0`) reproduces `symbols_to_bytes`'s bytes.
+/// hard-slicing the LLRs with `fec::hard_decide` reproduces `symbols_to_bytes`'s bytes.
 /// Calibrated so `|LLR|` scales with `1/σ²`: `symbol_llrs` is divided by the 2-D noise variance.
 ///
 /// The preferred `noise_var` is the pilot/preamble-residual estimate from [`recover_data_syms`]
@@ -446,15 +446,13 @@ mod tests {
         assert_prefix(&f.decode(&rxd), &payload());
     }
 
-    /// Hard-slice an LLR stream into bytes (`bit = llr <= 0`, LSB-first).
+    /// Hard-slice an LLR stream into bytes — through the PRODUCT's function, not a copy of it.
+    ///
+    /// This open-coded `l <= 0.0`, a third convention that disagreed with the engine at +0.0
+    /// (#1358). A harness that re-implements the decision it checks cannot notice the real one
+    /// changing, which is the point of calling `fec::hard_decide` instead.
     fn hard_slice(llrs: &[f32]) -> Vec<u8> {
-        llrs.chunks(8)
-            .map(|c| {
-                c.iter()
-                    .enumerate()
-                    .fold(0u8, |a, (i, &l)| a | (u8::from(l <= 0.0) << i))
-            })
-            .collect()
+        openpulse_core::fec::hard_decide(llrs)
     }
 
     #[test]
