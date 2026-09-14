@@ -6112,6 +6112,77 @@ impl ModemEngine {
         }
     }
 
+    /// Seconds of audio one [`transmit_with_fec_mode`](Self::transmit_with_fec_mode) call will
+    /// emit for `data`, WITHOUT transmitting or keying anything (#1299).
+    ///
+    /// A caller that keys the transmitter itself needs this **before** it keys: a single legitimate
+    /// frame can outlast the PTT watchdog's deadline (BPSK31 + `Concatenated` at 255 B is of order
+    /// 265 s against a 180 s `DEFAULT_PTT_MAX`), and being force-released mid-frame leaves the
+    /// engine writing audio into an unkeyed rig. Refusing before the key goes down is the answer;
+    /// this is how a caller knows.
+    ///
+    /// **Measured, not modelled.** It runs the real codecs and the real modulator, so it needs no
+    /// airtime formula and no per-mode constant to keep calibrated. Do not replace it with
+    /// `max_frame_samples * fec_slice_factor`: that is the engine's *receive* slice reserve, it
+    /// carries ~15 % headroom, and it is payload-independent — it would refuse every short message
+    /// on a slow rung. `burst_cap_samples` is wrong for the same reason plus its ×4 clamp.
+    ///
+    /// **It must not mutate.** `stage_encode_frame` bumps `self.sequence`, so this deliberately
+    /// does NOT call it: it builds the frame at the *current* sequence and takes `&self`, because a
+    /// measurement that burned a frame number would desync the wire.
+    ///
+    /// The `match` below mirrors `transmit_with_fec_mode`'s dispatch arm for arm and sits directly
+    /// beneath it so a new arm is added to both at one edit site. A comment cannot enforce that, so
+    /// `tx_airtime_matches_the_emitted_frame` asserts equality against what the engine actually
+    /// emits, for every `FecMode`, in the default test run.
+    pub fn tx_airtime_seconds(
+        &self,
+        data: &[u8],
+        mode: &str,
+        fec: FecMode,
+    ) -> Result<f64, ModemError> {
+        let frame = Frame::new(self.sequence, data.to_vec())
+            .map_err(|e| ModemError::Frame(e.to_string()))?
+            .encode();
+        let framed_len = data.len() + openpulse_core::frame::Frame::WIRE_OVERHEAD;
+
+        let wire: Vec<u8> = match fec {
+            FecMode::None => frame,
+            FecMode::Rs => {
+                match openpulse_core::fec::free_rs_strengthening(FecMode::Rs, framed_len) {
+                    FecMode::RsStrong => FecCodec::strong().encode(&frame),
+                    _ => FecCodec::new().encode(&frame),
+                }
+            }
+            FecMode::RsStrong => FecCodec::strong().encode(&frame),
+            FecMode::RsInterleaved => Interleaver::new(DEFAULT_INTERLEAVER_DEPTH)
+                .interleave(&FecCodec::new().encode(&frame)),
+            FecMode::Concatenated => ConvCodec::new().encode(&FecCodec::new().encode(&frame)),
+            FecMode::SoftConcatenated => soft_concat_encode(&FecCodec::new().encode(&frame)),
+            FecMode::ShortRs => {
+                ShortFecCodec::with_ecc_len(Self::SHORT_FEC_DATA_ECC_LEN).encode(&frame)?
+            }
+            FecMode::Ldpc => encode_ldpc_blocks(&LdpcCodec::new(), &frame),
+            FecMode::LdpcHighRate => encode_ldpc_blocks(&LdpcCodec::high_rate(), &frame),
+            FecMode::Turbo => turbo_encode(&frame)?,
+        };
+
+        let plugin = self
+            .plugins
+            .get(mode)
+            .ok_or_else(|| ModemError::PluginNotFound(mode.to_string()))?;
+        let mod_cfg = ModulationConfig {
+            mode: mode.to_string(),
+            center_frequency: self.center_frequency,
+            ..ModulationConfig::default()
+        };
+        let samples = plugin.modulate(
+            &self.wire_for_modulation(&WirePayload { bytes: wire }),
+            &mod_cfg,
+        )?;
+        Ok(samples.len() as f64 / f64::from(mod_cfg.sample_rate))
+    }
+
     /// Receive with the codec selected by `fec`.
     ///
     /// Mirror of [`transmit_with_fec_mode`](Self::transmit_with_fec_mode).

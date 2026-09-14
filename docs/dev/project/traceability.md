@@ -52,6 +52,77 @@ Review: none — mechanical application of a maintainer decision, closing a reco
 2026-07-16 audit had already made. The behaviour change is confined to ±0.0 and pinned by a test
 that was watched distinguishing the new rule from both old ones.
 
+## 2026-09-14 — the CLI was the last front-end keying the rig by hand (#1299)
+
+- **Requirement/change:** `openpulse-cli` called `assert_ptt`/`release_ptt` directly at **three**
+  sites in two files, outside the `SharedPtt` funnel every other front-end goes through. So it had
+  no RAII release on an unwind, no watchdog bounding a transmit that blocks, and it would have
+  silently ignored #1257's transmit leader, which lives in `SharedPtt::key_as`. The KISS half of
+  this issue shipped earlier (`kiss/src/lib.rs:77`); this is the CLI half.
+
+- **Design decision (Fable ×2, then the maintainer on the one question the tree could not settle):**
+  all three sites move — there is no exception. Round 1's verdict called the CLI "one caller"; round
+  2 corrected that to three, and **refuted my own premise** that `calibrate.rs:328` holds a long
+  tuning carrier a watchdog would cut off. It does not: `run_drive` keys, sends three uncoded OFDM52
+  frames, samples ALC, releases — about 3 s, re-keyed per iteration. I had inferred "long key" from
+  the function name and its `assert_ptt` without reading the body.
+
+- **The hazard the migration would have INTRODUCED, and its real mechanism.** A single legitimate
+  frame can outlast `DEFAULT_PTT_MAX` (180 s). Both review rounds derived "~265 s" from
+  `max_frame_samples × fec_slice_factor` — the *receive* slice reserve. That is the wrong mechanism,
+  and the first premise test failed because of it: at 200 B the same combination is **134 s**.
+  Measured over every BPSK rung × `FecMode`, the cause is the **RS block boundary** — 223 B +
+  `Frame::WIRE_OVERHEAD` needs a second 255-byte block. BPSK31 worst cases: `Concatenated` 264.7 s
+  and `SoftConcatenated` 265.0 s at 223 B, `Ldpc` 197.9 s and `Turbo` 296.2 s at 250 B; `Rs` peaks at
+  131.8 s and stays inside. Four combinations exceed the deadline, not one, and the worst is Turbo —
+  not the one the design was written around. Had the 265 s figure been taken on trust and the test
+  written at 200 B, the guard would have shipped **unreachable**.
+
+- **Scoping correction:** review said the daemon shares this hazard. It does not — its FEC comes
+  from `engine.ota_tx_fec()` (`server.rs:1961`), every profile pairs BPSK31/63 with `Rs` only
+  (`profile.rs:381-383,447`), and `grep -rn concatenated crates/openpulse-daemon/` is empty while the
+  same filter matches `cli/src/main.rs:41`. Worst case there is ~132 s. CLI-only.
+
+- **Implementation:** `ModemEngine::tx_airtime_seconds` (`engine.rs`, directly beneath
+  `transmit_with_fec_mode`, mirroring its dispatch arm for arm) — measured by running the real codecs
+  and the real modulator, so there is no airtime formula or per-mode constant to keep calibrated. It
+  takes `&self` and does NOT call `stage_encode_frame`, which bumps `self.sequence`: a measurement
+  that burned a frame number would desync the wire. `cli/src/radio.rs:9` returns
+  `Box<dyn PttController + Send>`; `cli/src/main.rs` builds one `SharedPtt` + watchdog and moved
+  `tracing` init above the short-circuit dispatches (calibrate returned before it, so `SharedPtt`'s
+  only failure channel was dark there); `commands/transmit.rs` refuses before keying and takes an
+  RAII guard; `commands/calibrate.rs` `run_ptt` and `run_drive` key through the funnel, the latter
+  over a second rigctld connection so `rigc` stays free for ALC (the shape `server.rs:555` uses).
+  `DEFAULT_PTT_MAX`'s doc comment dropped its "Part 97 duty-cycle guidance" attribution.
+
+- **Tests:** `openpulse-modem --test tx_airtime` — equality against the REAL transmit path for every
+  `FecMode` (a doc comment cannot keep two `match`es in step, and that construct is banned here), a
+  no-mutation test comparing the emitted frame after five predictions against one with none, and the
+  premise pinned with controls on both sides (`Rs` at 223 B must stay under; the same heavy FEC at
+  200 B must stay under, which is what pins the RS-boundary explanation).
+  `openpulse-cli --test ptt_goes_through_shared_ptt` — a flat construct ban, not an allowlist, since
+  an allowlist is what rots into the fourth hand-rolled path. `openpulse-cli --test
+  transmit_refuses_over_watchdog` — end-to-end through the real binary, with the control that the
+  same rung at 200 B still transmits.
+
+- **Sabotage-verified.** The first attempt did not validate anything: replacing the guard with
+  `ptt.assert_ptt()` fails to COMPILE, because `SharedPtt` has no such method — the type change
+  already blocks that regression at that site. A violation that compiles (a `&mut dyn PttController`
+  helper planted in `radio.rs`) is caught, naming both lines; green again on restore.
+
+- **Test results:** `cargo test -p openpulse-cli -p openpulse-radio --no-default-features` → 16
+  result groups, **0 failed**, including the pre-existing `ptt_wiring_integration` and
+  `calibrate_integration` suites that pin stderr strings these edits touch.
+  `--test tx_airtime` 3 passed. `clippy -p openpulse-cli -p openpulse-radio -p openpulse-modem
+  --all-targets -D warnings` rc=0. Gate below.
+
+- **Refused as scope creep, filed instead:** #1369 (`calibrate drive` registers only `OfdmPlugin`
+  and discards every transmit error, so a non-OFDM mode measures ALC on an unmodulated keyed rig).
+  Also left alone: the `ptt_builder` dedupe (#1258 leftover) and a `Send` supertrait on the public
+  trait (20 implementors).
+
+Review: `docs/dev/reviews/artifacts/1299-cli-shared-ptt.md`.
+
 ## 2026-09-14 — a selectable profile that could never transmit, and the five modes behind it (#1359)
 
 - **Requirement/change:** five modes were advertised in `PluginInfo::supported_modes` while refusing

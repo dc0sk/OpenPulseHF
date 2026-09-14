@@ -11,6 +11,7 @@ use openpulse_modem::ModemEngine;
 use serde::Serialize;
 
 use crate::radio::build_ptt_controller;
+use openpulse_radio::{SharedPtt, UnkeyOutcome, DEFAULT_PTT_MAX};
 
 #[derive(clap::Subcommand)]
 pub enum CalibrateCommands {
@@ -196,21 +197,36 @@ pub fn run_audio() -> Result<CalibrationResult> {
 
 /// Measure PTT assert/release round-trip latency against the 50 ms target.
 pub fn run_ptt(ptt_backend: &str, rig: &str, rig_file: &str) -> Result<CalibrationResult> {
-    let mut ptt = build_ptt_controller(ptt_backend, rig, rig_file)?;
+    // Through `SharedPtt` like every other keying path (#1299), even though this one is an
+    // INSTRUMENT: it measures the assert→release round trip against `PTT_TARGET_MS`. Two notes on
+    // why that is still safe to funnel:
+    //
+    //  * it builds its own `SharedPtt` and never sets a transmit leader, so a leader configured
+    //    elsewhere cannot inflate the number this reports (#1257). Pinned by
+    //    `calibrate_ptt_is_not_inflated_by_a_leader`.
+    //  * `unkey` reports `UnkeyOutcome`, which does not carry the underlying error the way
+    //    `release_ptt` did. The detail is not lost: `SharedPtt` logs it, and tracing is now
+    //    initialised before this dispatch runs (it was not, so those warnings were dark).
+    let ptt = SharedPtt::new(
+        Some(build_ptt_controller(ptt_backend, rig, rig_file)?),
+        DEFAULT_PTT_MAX,
+    );
     let t0 = Instant::now();
-    let assert_result = ptt.assert_ptt();
-    let release_result = ptt.release_ptt();
+    let assert_result = ptt.key(None);
+    let release_outcome = ptt.unkey(None);
     let elapsed_ms = t0.elapsed().as_secs_f32() * 1_000.0;
     let assert_ok = assert_result.is_ok();
-    let release_ok = release_result.is_ok();
+    let release_ok = release_outcome != UnkeyOutcome::Failed;
     let pass = assert_ok && release_ok && elapsed_ms < PTT_TARGET_MS;
     let message = if !pass {
         let mut parts = Vec::new();
         if let Err(e) = assert_result {
             parts.push(format!("assert error: {e}"));
         }
-        if let Err(e) = release_result {
-            parts.push(format!("release error: {e}"));
+        if !release_ok {
+            parts.push(
+                "release failed (the watchdog stays armed; see the logged error)".to_string(),
+            );
         }
         if elapsed_ms >= PTT_TARGET_MS {
             parts.push(format!(
@@ -308,11 +324,23 @@ pub fn run_drive(rig: &str, mode: &str, lo: f32, hi: f32) -> Result<DriveResult>
     use anyhow::Context;
     use ofdm_plugin::OfdmPlugin;
     use openpulse_audio::CpalBackend;
-    use openpulse_radio::{PttController, RigctldController};
+    use openpulse_radio::{RigctldController, RigctldPtt};
 
     let mut rigc = RigctldController::connect(rig).with_context(|| {
-        format!("calibrate drive needs rigctld for ALC/PTT at {rig} (start rigctld for your rig)")
+        format!("calibrate drive needs rigctld for ALC at {rig} (start rigctld for your rig)")
     })?;
+    // A SECOND rigctld connection, for keying only, so this path keys through `SharedPtt` like
+    // every other (#1299) while `rigc` stays free to poll ALC. Two connections to one rigctld is
+    // the shape the daemon already uses for exactly this reason (`server.rs:555`: a dedicated
+    // connection that "never contends with PTT/frequency commands"). Only one of them keys, so
+    // this is not the #1263 two-controllers-over-one-transmitter case.
+    let drive_ptt = SharedPtt::new(
+        Some(Box::new(RigctldPtt::connect(rig).with_context(|| {
+            format!("calibrate drive needs rigctld for PTT at {rig}")
+        })?)),
+        DEFAULT_PTT_MAX,
+    );
+    let _drive_watchdog = drive_ptt.spawn_watchdog(None);
     let mut engine = ModemEngine::new(Box::new(CpalBackend::new()));
     engine
         .register_plugin(Box::new(OfdmPlugin::new()))
@@ -325,7 +353,7 @@ pub fn run_drive(rig: &str, mode: &str, lo: f32, hi: f32) -> Result<DriveResult>
     let mut tuner = DriveTuner::new(lo, hi, 0.0);
     loop {
         engine.set_tx_attenuation_db(tuner.attenuation());
-        rigc.assert_ptt().context("PTT assert (rigctld)")?;
+        let burst = drive_ptt.keyed(None).context("PTT assert (rigctld)")?;
         // Drive a short burst, then sample ALC (peak over the burst).
         for _ in 0..3 {
             let _ = engine.transmit(&payload, mode, None);
@@ -340,7 +368,7 @@ pub fn run_drive(rig: &str, mode: &str, lo: f32, hi: f32) -> Result<DriveResult>
             }
             sleep(Duration::from_millis(80));
         }
-        let _ = rigc.release_ptt();
+        drop(burst);
         if !got {
             anyhow::bail!("no ALC reading from rigctld during TX (rig may not expose ALC)");
         }
