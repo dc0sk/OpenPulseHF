@@ -9,6 +9,49 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-09-14 — one definition of which bit an LLR means (#1358)
+
+- **Requirement/change:** three hard-slicing conventions disagreed at exactly ±0.0.
+  `fec::hard_decide` (the engine's four LLR→bytes sites) used `is_sign_negative`; `ldpc.rs` and
+  `turbo.rs` used `l < 0.0`; the dsp and pilot harnesses used `llr <= 0.0`. **The 2026-07-16
+  loose-ends audit found the first two — its finding 8 — and recommended routing every site through
+  one helper.** That sat two months only partly applied, which is how a third convention arrived.
+
+- **Design decision (maintainer):** unify on `fec::hard_decide`'s rule. `is_sign_negative` is the one
+  kept because the engine's shipped sites already used it, so unification changes no decode outside
+  the tie itself.
+
+- **Implementation:** `hard_decide` could not be dropped in directly — `ldpc` and `turbo` work in
+  per-bit values while it packs bytes — so the primitive is now
+  **`pub fn hard_bit(llr: f32) -> bool`** in `fec.rs`, and `hard_decide` is that rule applied
+  LSB-first rather than a second implementation of it. Routed: `ldpc.rs`, `turbo.rs` (production),
+  and pilot's test helper, whose local copy is deleted. Two pilot doc comments corrected.
+
+- **One site could not be unified, and says why.** `openpulse-dsp` is a sibling of `openpulse-core`
+  with no dependency on it, so `constellation.rs`'s test cannot call the shared function. It now
+  restates the canonical rule with the crate boundary named as the reason, rather than diverging
+  silently.
+
+- **Tests:** a pin at both zeros, plus the three affected crates.
+
+- **Test results:** `cargo test -p openpulse-core -p openpulse-dsp -p pilot-plugin
+  --no-default-features` → **37 result groups ok, 0 failed**. The pin passes.
+
+- **Why the pin asserts inequalities.** A test of this rule passes against **all three** old forms on
+  ordinary inputs, because they differ only at the zeros — so the zeros are the test, and it asserts
+  not just the rule but that it *differs* from what it replaced:
+  `assert_ne!(hard_bit(-0.0), -0.0 < 0.0)` and `assert_ne!(hard_bit(0.0), 0.0 <= 0.0)`. Without those
+  two lines the test could not distinguish the fix from the bug.
+
+- **Honest scope:** latent, not live. An exact zero is reachable in principle — `combine_llrs_map` of
+  two opposite LLRs is the arithmetic that makes one — but no plugin emits one on a clean loopback,
+  which `soft_demod_conformance` asserts. This makes a disagreement impossible rather than fixing an
+  observed failure.
+
+Review: none — mechanical application of a maintainer decision, closing a recommendation the
+2026-07-16 audit had already made. The behaviour change is confined to ±0.0 and pinned by a test
+that was watched distinguishing the new rule from both old ones.
+
 ## 2026-09-14 — a selectable profile that could never transmit, and the five modes behind it (#1359)
 
 - **Requirement/change:** five modes were advertised in `PluginInfo::supported_modes` while refusing

@@ -691,7 +691,11 @@ mod tests {
             assert_eq!(llrs.len(), 5);
             let mut decoded = 0u8;
             for (bit, &llr) in llrs.iter().enumerate() {
-                if llr <= 0.0 {
+                // `is_sign_negative`, the canonical rule (`openpulse_core::fec::hard_bit`), NOT the
+                // `llr <= 0.0` this used to write — they disagree at +0.0 (#1358). This crate is a
+                // sibling of `openpulse-core` and does not depend on it, so the rule is restated here
+                // rather than called; if it ever changes, this comment is the thread to pull.
+                if llr.is_sign_negative() {
                     decoded |= 1 << bit;
                 }
             }

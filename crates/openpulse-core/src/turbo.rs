@@ -336,9 +336,10 @@ impl TurboCodec {
             let llr_total: Vec<f32> = (0..k)
                 .map(|i| sys_llr[i] + ext1[i] + l_e2_deint[i])
                 .collect();
+            // `crate::fec::hard_bit`, not `l < 0.0`: one definition of the tie at ±0.0 (#1358).
             let hard_bits: Vec<u8> = llr_total
                 .iter()
-                .map(|&l| if l < 0.0 { 1 } else { 0 })
+                .map(|&l| u8::from(crate::fec::hard_bit(l)))
                 .collect();
             last_hard_bytes = bits_to_bytes(&hard_bits);
             if let Ok(data) = Self::decode_payload(&last_hard_bytes) {

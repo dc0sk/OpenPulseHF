@@ -675,13 +675,39 @@ pub fn combine_llrs_map(attempts: &[&[f32]]) -> Vec<f32> {
     out
 }
 
+/// The ONE definition of which bit an LLR means: a negative LLR is bit 1.
+///
+/// **Every hard decision in this workspace goes through here**, because until 2026-09-14 three
+/// conventions disagreed at exactly ±0.0 and each site had its own copy:
+///
+/// | form | site | `+0.0` | `-0.0` |
+/// |---|---|---|---|
+/// | `is_sign_negative` | the engine, via [`hard_decide`] | 0 | **1** |
+/// | `l < 0.0` | `ldpc.rs`, `turbo.rs` | 0 | 0 |
+/// | `llr <= 0.0` | dsp/pilot harnesses | **1** | 1 |
+///
+/// The 2026-07-16 loose-ends audit found the first two (its finding 8) and recommended routing every
+/// site through one helper; that recommendation sat only partly applied for two months (#1358). An
+/// exact zero is reachable in principle — `combine_llrs_map` of two opposite LLRs is the arithmetic
+/// that produces one — and no plugin emits one on a clean loopback, which
+/// `soft_demod_conformance` now asserts. So this is a latent disagreement made impossible rather
+/// than a live bug fixed.
+///
+/// `is_sign_negative` is the one kept because it is what the engine's four LLR→bytes sites already
+/// used, so unifying on it changes no shipped decode outside the ±0.0 tie.
+#[inline]
+pub fn hard_bit(llr: f32) -> bool {
+    llr.is_sign_negative()
+}
+
 /// Hard-decide a bit-LLR stream to bytes in the engine convention: LSB-first, a negative LLR is bit 1.
 pub fn hard_decide(llrs: &[f32]) -> Vec<u8> {
     llrs.chunks(8)
         .map(|chunk| {
-            chunk.iter().enumerate().fold(0u8, |acc, (i, &llr)| {
-                acc | ((llr.is_sign_negative() as u8) << i)
-            })
+            chunk
+                .iter()
+                .enumerate()
+                .fold(0u8, |acc, (i, &llr)| acc | ((hard_bit(llr) as u8) << i))
         })
         .collect()
 }
@@ -972,6 +998,42 @@ pub fn combine_llrs_weighted_in_ranges(
 }
 
 // ── Unit tests ────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod hard_bit_tests {
+    use super::{hard_bit, hard_decide};
+
+    /// The tie at ±0.0 is pinned, and so is the fact that it USED to be decided three ways.
+    ///
+    /// Without the last two assertions this test would pass against any of the three old forms on
+    /// ordinary inputs — the disagreement lives only at the zeros, so the zeros are the test.
+    #[test]
+    fn the_canonical_slicer_is_pinned_at_both_zeros() {
+        assert!(!hard_bit(0.0), "+0.0 is bit 0");
+        assert!(
+            hard_bit(-0.0),
+            "-0.0 is bit 1 — the sign bit is set, and that is the whole rule"
+        );
+        assert!(!hard_bit(1.5));
+        assert!(hard_bit(-1.5));
+
+        // `ldpc.rs` and `turbo.rs` used `l < 0.0`, which calls -0.0 bit 0. They no longer do.
+        assert_ne!(hard_bit(-0.0), -0.0_f32 < 0.0);
+        // The dsp/pilot harnesses used `llr <= 0.0`, which calls +0.0 bit 1. They no longer do.
+        assert_ne!(hard_bit(0.0), 0.0_f32 <= 0.0);
+    }
+
+    /// `hard_decide` is that rule applied LSB-first, not a second implementation of it.
+    #[test]
+    fn hard_decide_packs_the_same_decision_lsb_first() {
+        // bit i of the byte comes from llrs[i]; negative -> 1.
+        let llrs = [-1.0, 1.0, -1.0, 1.0, 1.0, 1.0, 1.0, -1.0];
+        assert_eq!(hard_decide(&llrs), vec![0b1000_0101]);
+        // and the zeros pack the same way the primitive decides them
+        let zeros = [-0.0, 0.0, -0.0, 0.0, 0.0, 0.0, 0.0, 0.0];
+        assert_eq!(hard_decide(&zeros), vec![0b0000_0101]);
+    }
+}
 
 #[cfg(test)]
 mod tests {
