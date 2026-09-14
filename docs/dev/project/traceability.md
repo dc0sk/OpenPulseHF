@@ -52,6 +52,53 @@ Review: none — mechanical application of a maintainer decision, closing a reco
 2026-07-16 audit had already made. The behaviour change is confined to ±0.0 and pinned by a test
 that was watched distinguishing the new rule from both old ones.
 
+## 2026-09-14 — three record corrections: a false coverage claim, an unfollowable note, an undiscoverable deferral
+
+Batched because each is a record fix with no behaviour change; CLAUDE.md permits batching the
+trivial record tail, and at ~2 h per gate three separate runs would buy nothing.
+
+- **#1267 — REQ-MAC-02 was marked ✅ covered and is not.** CAP-31's description read "0.3-persistence
+  CSMA at the `stage_emit_output` seam **so it gates all transmit paths uniformly**". It is AT the
+  seam and **inert** there: `csma_enabled` defaults false (`engine.rs:978`) and the only production
+  callers of `enable_csma()` are both KISS (`kiss/main.rs:103`, `kiss/bridge.rs:176`; the third hit
+  is inside `#[cfg(test)]`). The requirement names broadcast and relay — the surfaces that do not
+  sense. Dropped from `CAP-31.satisfies` and `REQ-MAC-02.covered_by` (both sides, or `BIDIR-DRIFT`
+  fires) and the description corrected.
+
+  **Verified before doing it, rather than inferred:** `trace.py:638-645` routes a non-enforced
+  entry's flags to **warnings**, and REQ-MAC-02 is `traceability: baseline` — so recording an honest
+  gap does not turn the gate red. Confirmed after: `REQ-MAC-02: REQ-GAP — no capability covers it`
+  appears among 17 other recorded gaps and `TRACE: PASS` holds. The capability gap itself is now
+  tracked as **#1376**, including why it is not a flag flip (`RelayForwarder::forward` commits its
+  dedup key before transmitting, so a `ChannelBusy` becomes a permanent drop, not a deferral).
+
+  **Twin check, done because fixing one of four identical-looking rows is how the others rot:**
+  REQ-MAC-01/03/04 are correctly covered and untouched. -01 is a negative requirement, -03 asserts
+  the algorithm exists (it does, at the seam), -04 asserts how DCD is derived (`dcd.rs`). Only -02
+  claims a surface actually senses.
+
+- **#1344 part 1 — the `DORMANT(#1118)` note instructed something that cannot be done.** It said
+  "the daemon does not run the acquisition chain at all (#1118) … wire them into the control plane
+  when #1118 lands, and delete these three lines". **#1118 landed** (closed 2026-08-19, fixed by
+  #1168) and the design doc now says the opposite, so the instruction is unfollowable as written.
+  Rewritten to point at #1344, to state that the missing piece is a control-plane **shape** decision
+  (maintainer 2026-09-14: the daemon polls the getters into status; no new `EngineEvent` variant),
+  and to keep two things straight that the old note blurred: do NOT delete the lines to satisfy the
+  ratchet, and only **three** of the five `rho_*` names are waiting on this — the other two are
+  #1049 counters dormant under the separate "instrument, not feature" rationale.
+
+- **#1351 — two acceptance rows cite `#[ignore]`d tests and named no owner.** Both now reference
+  #1351 and say plainly that until the corpus re-record lands the row is **not currently proven**.
+  The rows were already honest that the tests are ignored; what was missing was discoverability from
+  the acceptance table to the work that would restore them.
+
+- **Test results:** no code changed. `scripts/trace.sh check` → **TRACE: PASS** (REQ-MAC-02 now a
+  warning, as predicted from the source before the edit). `DOCFRONT: PASS`. `LEDGER-ORDER: PASS`.
+  Gate below.
+
+Review: none — record corrections applying decisions recorded on #1267, #1344 and #1351; no design
+is changed and no behaviour is affected.
+
 ## 2026-09-14 — a CONREQ that never reached the air announced a connection anyway (#1265)
 
 - **Requirement/change:** `ConnectPeer` sent `RfConnectionChanged { connected: true }`, opened a
