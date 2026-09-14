@@ -2509,13 +2509,50 @@ pub async fn apply_command_to_engine(
 
             match engine.begin_secure_session(params, now_ms) {
                 Ok(_) => {
+                    // TRANSMIT FIRST, then announce (#1265).
+                    //
+                    // `RfConnectionChanged { connected: true }` means "the CONREQ is on the air",
+                    // not "local session state exists". #1199 closed announce-before-BUILD; this is
+                    // announce-before-TRANSMIT, which only became observable once #1262 gave
+                    // `transmit_handshake_frame` a `bool` return — and that return was discarded
+                    // here. A refused PTT assert is a real, reachable way for the CONREQ never to
+                    // leave the station.
+                    //
+                    // The ordering matters for three client-visible things, not one: the event, the
+                    // QSY token, and a **logbook QSO** — an operator's record of a contact that
+                    // never happened. All three now wait for the transmit.
+                    //
+                    // This also makes the two ends of one handshake agree: since #1262 the
+                    // responder records a verified peer only when the CONACK actually went out.
+                    let mode = active_mode.lock().await.clone();
+                    let sent = transmit_handshake_frame(
+                        engine,
+                        &runtime_state.ptt,
+                        Some(event_tx),
+                        &mode,
+                        &conreq_frame,
+                    );
+                    if !sent {
+                        // Tear down the session state `begin_secure_session` just created, rather
+                        // than leaving it half-open with no peer able to answer it.
+                        if let Err(e) = engine.end_secure_session(now_ms) {
+                            tracing::warn!(error = %e, "connect_peer: could not end the session after an untransmitted CONREQ");
+                        }
+                        let _ = event_tx.send(ControlEvent::CommandError {
+                            command: "connect_peer".to_string(),
+                            reason: "the CONREQ was not transmitted (PTT refused or the emit \
+                                     failed), so no connection was opened"
+                                .to_string(),
+                        });
+                        return;
+                    }
+
                     let _ = event_tx.send(ControlEvent::RfConnectionChanged {
                         connected: true,
                         peer: Some(callsign.clone()),
                     });
 
                     // Open a logbook QSO (finalized + appended on disconnect).
-                    let mode = active_mode.lock().await.clone();
                     let freq = runtime_state.last_freq_hz;
                     runtime_state
                         .logbook
@@ -2525,14 +2562,6 @@ pub async fn apply_command_to_engine(
                     runtime_state.qsy_pending_token = Some(token.clone());
                     let _ = event_tx.send(ControlEvent::QsyPending { token });
 
-                    // The frame was built above; transmit it and arm the handshake timeout.
-                    transmit_handshake_frame(
-                        engine,
-                        &runtime_state.ptt,
-                        Some(event_tx),
-                        &mode,
-                        &conreq_frame,
-                    );
                     runtime_state.pending_handshake = Some(PendingHandshake {
                         session_id,
                         peer_callsign: callsign.clone(),
@@ -5225,7 +5254,15 @@ mod command_apply_tests {
 
     #[tokio::test]
     async fn connect_then_disconnect_writes_an_adif_logbook_record() {
+        // The engine must actually support the mode this drives, or the CONREQ cannot be
+        // transmitted — and since #1265 an untransmitted CONREQ opens no QSO, which is the whole
+        // point. This test used `test_engine()` (BPSK only) with QPSK500 and still asserted an ADIF
+        // record: it was asserting a logbook entry for a contact that never went on the air, which
+        // is the defect #1265 fixes, encoded as a passing test.
         let mut engine = test_engine();
+        engine
+            .register_plugin(Box::new(qpsk_plugin::QpskPlugin::new()))
+            .unwrap();
         let active_mode: SharedMode = Arc::new(Mutex::new("QPSK500".to_string()));
         let (tx, _rx) = broadcast::channel::<ControlEvent>(32);
         let ev_tx = Arc::new(tx);
@@ -5307,27 +5344,28 @@ mod command_apply_tests {
             .clone()
             .expect("connect should create pending qsy token");
 
-        let first = rx.recv().await.expect("expected event");
-        let second = rx.recv().await.expect("expected event");
-        let saw_connected = matches!(
-            (&first, &second),
-            (
-                ControlEvent::RfConnectionChanged {
-                    connected: true,
-                    peer: Some(_)
-                },
-                ControlEvent::QsyPending { .. }
-            ) | (
-                ControlEvent::QsyPending { .. },
+        // SCAN the stream rather than taking the first two events. Since #1265 the CONREQ is
+        // transmitted before the announce, so the keying's `PttChanged` legitimately arrives first;
+        // a positional match would pin this test to an event ORDER it does not care about.
+        let mut events = Vec::new();
+        while let Ok(e) = rx.try_recv() {
+            events.push(e);
+        }
+        let announced = events.iter().any(|e| {
+            matches!(
+                e,
                 ControlEvent::RfConnectionChanged {
                     connected: true,
                     peer: Some(_)
                 }
             )
-        );
+        });
+        let qsy_pending = events
+            .iter()
+            .any(|e| matches!(e, ControlEvent::QsyPending { .. }));
         assert!(
-            saw_connected,
-            "expected rf connected and qsy pending events"
+            announced && qsy_pending,
+            "expected rf connected and qsy pending events, got: {events:?}"
         );
 
         apply_command_to_engine(
@@ -6712,6 +6750,114 @@ mod handshake_rf_tests {
             assert!(!pending, "{why}: must not arm a handshake");
             assert!(!token, "{why}: must not set a QSY token");
         }
+    }
+
+    /// A CONREQ that never reached the air announces NOTHING (#1265).
+    ///
+    /// `RfConnectionChanged { connected: true }` means "the CONREQ is on the air". Before this,
+    /// `ConnectPeer` announced, opened a **logbook QSO** and armed a QSY token BEFORE transmitting,
+    /// and discarded `transmit_handshake_frame`'s `bool`. A refused PTT assert therefore left a
+    /// client told it was connected and an operator's log holding a contact that never happened.
+    ///
+    /// Three client-visible things are asserted, not one, because the announce was only the most
+    /// obvious of them. The positive control is the same command with a working PTT: without it
+    /// this passes on a build where `ConnectPeer` does nothing at all.
+    #[tokio::test]
+    async fn a_conreq_that_was_never_transmitted_announces_nothing() {
+        /// Minimal double: the assert fails the way a busy or unreachable rig fails.
+        #[derive(Default)]
+        struct RefusingPtt;
+        impl openpulse_radio::PttController for RefusingPtt {
+            fn assert_ptt(&mut self) -> Result<(), openpulse_radio::PttError> {
+                Err(openpulse_radio::PttError::Serial("refused".into()))
+            }
+            fn release_ptt(&mut self) -> Result<(), openpulse_radio::PttError> {
+                Ok(())
+            }
+            fn is_asserted(&self) -> bool {
+                false
+            }
+        }
+
+        async fn connect_with(ptt: crate::ptt::SharedPtt) -> (Vec<ControlEvent>, bool, bool) {
+            let mut eng = bpsk_engine();
+            let active_mode = mode();
+            let (tx, mut rx) = broadcast::channel::<ControlEvent>(64);
+            let ev = Arc::new(tx);
+            let mut rs = RuntimeControlState {
+                local_callsign: "K2XYZ".into(),
+                local_grid: "EM69".into(),
+                station_seed: [7u8; 32],
+                ptt,
+                ..RuntimeControlState::default()
+            };
+            apply_command_to_engine(
+                &ControlCommand::ConnectPeer {
+                    callsign: "W1AW".into(),
+                },
+                &mut eng,
+                &active_mode,
+                &ev,
+                None,
+                &mut rs,
+            )
+            .await;
+            let mut events = Vec::new();
+            while let Ok(e) = rx.try_recv() {
+                events.push(e);
+            }
+            (
+                events,
+                rs.qsy_pending_token.is_some(),
+                rs.logbook.has_pending(),
+            )
+        }
+
+        let refusing =
+            crate::ptt::SharedPtt::new(Some(Box::new(RefusingPtt)), crate::ptt::DEFAULT_PTT_MAX);
+        let (events, qsy_armed, qso_open) = connect_with(refusing).await;
+
+        let announced = events.iter().any(|e| {
+            matches!(
+                e,
+                ControlEvent::RfConnectionChanged {
+                    connected: true,
+                    ..
+                }
+            )
+        });
+        assert!(
+            !announced,
+            "announced a connection whose CONREQ was never transmitted: {events:?}"
+        );
+        assert!(!qsy_armed, "armed a QSY token for an untransmitted CONREQ");
+        assert!(
+            !qso_open,
+            "opened a logbook QSO for a contact that never went on the air"
+        );
+        assert!(
+            events
+                .iter()
+                .any(|e| matches!(e, ControlEvent::CommandError { .. })),
+            "refused to connect but told the client nothing: {events:?}"
+        );
+
+        // POSITIVE CONTROL: the identical command with a working PTT must do all three, or the
+        // assertions above would pass on a build where ConnectPeer is simply broken.
+        let working = crate::ptt::SharedPtt::default();
+        let (events, qsy_armed, qso_open) = connect_with(working).await;
+        assert!(
+            events.iter().any(|e| matches!(
+                e,
+                ControlEvent::RfConnectionChanged {
+                    connected: true,
+                    ..
+                }
+            )),
+            "the control did not announce, so the negative case proves nothing: {events:?}"
+        );
+        assert!(qsy_armed, "the control did not arm a QSY token");
+        assert!(qso_open, "the control did not open a logbook QSO");
     }
 
     /// #1178 THROUGH THE TX PATH: a CONREQ addressed to another station is not answered.

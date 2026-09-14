@@ -109,6 +109,19 @@ impl Logbook {
         }
     }
 
+    /// Whether a QSO is open but not yet written (#1265).
+    ///
+    /// Crate-internal, for the gate proving that a CONREQ which never reached the air opens no
+    /// logbook entry. Distinct from `end_qso() == Ok(false)`, which is also what a DISABLED logbook
+    /// returns — asserting on that would be a check that cannot fail.
+    /// `#[cfg(test)]`, not `#[allow(dead_code)]`: the compiler then enforces that this stays
+    /// test-only rather than a label asserting it (the distinction #1277 is about). It has no
+    /// production consumer by design — production asks `end_qso` to write, not whether one is open.
+    #[cfg(test)]
+    pub(crate) fn has_pending(&self) -> bool {
+        self.pending.is_some()
+    }
+
     /// Finalize the pending QSO (a disconnect) and append an ADIF record. `rx_snr_db` is the
     /// receiver's last SNR estimate, used to fill `RST_RCVD` + a `COMMENT`. Returns `Ok(true)` when
     /// a record was written, `Ok(false)` when there was nothing to write or the logbook is disabled.
