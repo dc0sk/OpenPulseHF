@@ -2,7 +2,7 @@
 project: openpulsehf
 doc: docs/dev/project/release-1.0-criteria.md
 status: living
-last_updated: 2026-08-18
+last_updated: 2026-09-13
 ---
 
 # What 1.0 means
@@ -115,10 +115,15 @@ session, or the events are broadcast but not retained.
 The matrix currently shows 16 gaps. **Several are bookkeeping, not engineering** — the capability
 exists and is enforced, but the row was never re-assessed. Verified while drafting this:
 
-- `REQ-DOC-01` (version bumps update changelog + release notes) — **enforced** by
-  `scripts/check-version-bump-docs.sh`; it was run and passed for the v0.15.0 cut.
-- `REQ-DOC-02` (docs pass frontmatter validation) — **enforced** by
-  `scripts/validate-doc-frontmatter.sh`; passes today.
+- `REQ-DOC-01` (version bumps update changelog + release notes) — a script exists,
+  `scripts/check-version-bump-docs.sh`, and it was run and passed for the v0.15.0 cut. **It is not
+  enforced**: its only caller is `.github/workflows/docs.yml`, which has been `disabled_manually`
+  since 2026-06-24, and no other workflow, script or hook invokes it (#1349).
+- `REQ-DOC-02` (docs pass frontmatter validation) — `scripts/validate-doc-frontmatter.sh` passes
+  today and, since 2026-09-13, runs as a step in `scripts/gate.sh`. **In CI it is still unenforced**
+  for the same reason: `docs.yml` is its only workflow host and is disabled. Corrected here after
+  both rows said "enforced" while the check ran nowhere — which is how 40 new offenders accumulated
+  in 19 days.
 - `REQ-PLAT-05` (ARM64 in regular compatibility testing) and `REQ-NFR-01` (Linux/macOS buildability)
   — the CI jobs exist and are correct (`cross-aarch64-linux`, `macos-build`), but the `CI` workflow
   is `disabled_manually`, so nothing runs them automatically.

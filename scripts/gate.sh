@@ -212,6 +212,18 @@ if [ "$MODE" = "full" ]; then
     # message that actually lands on main — can only run in CI, where the body exists.)
     drift_check
     run_step "requirements-trailer lint" scripts/check-trailer.sh || rc_total=1
+    # Doc frontmatter. The checker is grandfathered against `docs/.frontmatter-baseline.txt` and
+    # fails only on NEW offenders, which is sound — but until 2026-09-13 it ran in NO workflow at
+    # all: `docs.yml` is its only CI host and has been `disabled_manually` since 2026-06-24, and
+    # `CLAUDE.md` said to run it by hand, which nobody did. It accumulated 40 new offenders in the
+    # 19 days before anyone looked (#1349). Cheap (no build, ~0.2 s over the tree).
+    #
+    # This is the LOCAL half only, on the same reasoning as the review-trailer lint below: a green
+    # gate should predict CI. Re-enabling `docs.yml` is the other half and is the maintainer's call
+    # — the workflow also carries REQ-DOC-01's version-bump gate, and why it was switched off is
+    # recorded nowhere (#1129 and #1134 both escalated it and neither got an answer).
+    drift_check
+    run_step "doc frontmatter" scripts/validate-doc-frontmatter.sh || rc_total=1
     # Ledger ordering. The file declares "Newest first" and had drifted into two regimes — 12 breaks
     # across 359 entries — because the convention lived only in prose and nothing measured it. Cheap
     # (no build, no I/O beyond one file), so it costs nothing to keep honest.

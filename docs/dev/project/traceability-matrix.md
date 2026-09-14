@@ -2,7 +2,7 @@
 project: openpulsehf
 doc: docs/dev/project/traceability-matrix.md
 status: living
-last_updated: 2026-07-30
+last_updated: 2026-09-13
 ---
 
 # Traceability matrix
@@ -333,7 +333,7 @@ the testmatrix quick tier at commit `76de87e`, dated 2026-06-29 (555/555 pass, 0
 - **REQ-NFR-13** (RPi 4/5 performance measured and published in benchmark artifacts): no capability and no test/artifact evidences RPi-specific published perf numbers; on-air/hardware artifacts are informational only.
 - **REQ-REG-01/02/03/07/08/09/11/12** (regulatory compliance, 300-baud limit enforcement, operator frequency/mode selection, published decode spec, CEPT/national doc statements, HPX2300 occupied-bandwidth validation): documentation/operator-responsibility/on-air-validation requirements with no enforcing capability; Phase 5.5-reg on-air regulatory validation is deferred (no target date). (REQ-REG-05 decodable ID is met by the signed-handshake callsign, CAP-01; **REQ-REG-10 periodic-interval ID is now implemented** by the auto-ID timer, CAP-66 — no longer a gap. **REQ-REG-04 §97.221 automatic-control documentation is now covered by CAP-70 (FF-15)** — `docs/regulatory.md` "OpenPulse automatic-control design" maps the control-point/off-by-default/auto-ID/power safeguards to the rule; the on-air validation half joins the deferred Phase H / 5.5-reg batch.)
 - **REQ-PERF-05/06** (no proprietary-compatibility claims without evidence; legal review before VARA/PACTOR-4 compatibility work): policy/governance requirements with no implementable capability.
-- **REQ-DOC-01/02** (version-bump docs gate; doc frontmatter validation in CI): enforced by scripts (`check-version-bump-docs.sh`, `stamp-doc-last-updated.sh`, `validate-doc-frontmatter.sh`) rather than any capability — no CAP-ID covers them.
+- **REQ-DOC-01/02** (version-bump docs gate; doc frontmatter validation): scripts exist (`check-version-bump-docs.sh`, `validate-doc-frontmatter.sh`) but no CAP-ID covers them, and **"in CI" was false** — `docs.yml`, their only workflow host, has been `disabled_manually` since 2026-06-24 (#1349). Since 2026-09-13 the frontmatter check runs in `scripts/gate.sh`; the version-bump check still runs nowhere. `stamp-doc-last-updated.sh` was dropped from this list: the maintainer retired its automation in `5c93ca29` and the script needs two refs, so it enforces nothing.
 - **REQ-OBS-01/02/03** — ✅ **covered** by CAP-67 (all 4 slices shipped 2026-07-05): persistent file logging, `events.ndjson` capture, startup `snapshot.json`, and the `openpulse audit-bundle` command. No longer a gap.
 - **REQ-CTL-03/04/05** — ✅ **covered** (CAP-68 slices 1–3, 2026-07-06): shared owner-only secret-file checks, the `openpulse-keystore` Argon2id/ChaCha20-Poly1305 master-password file keystore, and the OS keychain `SecretStore` backend (file fallback).
 - **REQ-CTL-01/02** (control-channel auth + encryption): CAP-68, **partial** (slice 4): the `openpulse-linksec` Noise NNpsk0 core, the non-loopback `auth_required` gate, `[control_security]` config, and the `SyncNoise`/`AsyncNoise` socket channels (tested over real TCP, incl. wrong-PSK-fails-closed) are shipped. ✅ **Daemon + panel TCP both wired + tested** (daemon fails closed on unauthenticated/wrong-PSK + refuses to start without a PSK; the panel does the initiator handshake with a resumable frame reader; plaintext loopback path unbroken). Enabled by `OPENPULSE_CONTROL_PSK` on both sides. Remaining follow-ups: WebSocket (still plaintext), keystore-backed PSK loading. (Scheme pivoted from rustls-TLS-PSK to Noise/snow.)

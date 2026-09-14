@@ -2,8 +2,12 @@
 # they were not docs checks, and burying them under this name meant disabling "Docs Checks" silently
 # disabled the benchmark regression gate too.
 #
-# NOTE: this workflow is currently `disabled_manually` at the repository level. Do not cite it as
-# coverage for anything while that is true — that claim in ci.yml is what #1129 was filed about.
+# NOTE: this workflow was `disabled_manually` at the repository level from 2026-06-24 to 2026-09-13,
+# with the reason recorded nowhere — #1129 and #1134 both escalated it and neither got an answer, and
+# meanwhile ci.yml cited it as live coverage, which is the false claim #1129 was actually filed
+# about. Re-enabled 2026-09-13 by maintainer decision on #1349. It is coverage again, and it is the
+# ONLY place `check-version-bump-docs.sh` (REQ-DOC-01) runs. If it is ever disabled again, say why
+# here — a disabled workflow with no recorded reason cost this repo three months of REQ-DOC-01.
 #
 # Actions pinned to a full commit SHA with the tag as a trailing comment (see ci.yml for why).
 name: Docs Checks
@@ -34,10 +38,16 @@ jobs:
         with:
           fetch-depth: 0
 
+      # `base.sha` is the field #1219 was filed about: it names the base branch's tip as it was when
+      # the PR was OPENED, so on a PR whose base has moved it diffs against a stale commit. The
+      # trailer and review lints in `traceability.yml` all resolve `origin/$BASE_REF` instead, and
+      # this now matches them. (Not an injection vector either way — the interpolated value was hex.)
       - name: Check version bump companion files
+        env:
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
         run: |
           chmod +x scripts/check-version-bump-docs.sh
-          ./scripts/check-version-bump-docs.sh "${{ github.event.pull_request.base.sha }}" "${{ github.sha }}"
+          ./scripts/check-version-bump-docs.sh "origin/$BASE_REF" "${{ github.sha }}"
 
   docs:
     runs-on: ubuntu-latest
