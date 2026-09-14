@@ -67,9 +67,14 @@ impl QpskPlugin {
                 // ladders use -RRC).  Plain QPSK2000 is retained for direct / FEC-protected use.
                 "QPSK2000".to_string(),
                 "QPSK2000-RRC".to_string(),
-                // UHF/VHF — 12.5 kHz HD (requires 48 kHz audio, 9600 baud, ~13 kHz BW)
-                "QPSK9600".to_string(),
-                "QPSK9600-RRC".to_string(),
+                // NOT ADVERTISED (#1359, 2026-09-14). The 9600-baud HD modes need a 48 kHz audio
+                // path; the engine builds every `ModulationConfig` at `AudioConfig`'s 8 kHz and
+                // `sample_rate` is not in the TOML schema, so no operator can reach them. Listing
+                // them here offered the mode advisor and the CLI a mode that always fails at
+                // modulate. The DSP and its 48 kHz loopback tests are deliberately KEPT — retired
+                // dormant, not deleted — so nothing decays if a 48 kHz path ever lands; only the
+                // advertisement is gone. `hpx_narrowband_hd`, whose only two rungs these were, is
+                // retired in the same change.
             ],
             trait_version_required: "3.0".to_string(),
         }

@@ -283,10 +283,13 @@ fn ofdm52_8psk_rs_decodes_at_operating_snr_with_default_cessb() {
 
 /// Regression gate for the whole adaptive-profile FEC surface: every defined rung of every
 /// profile must decode a clean loopback with the FEC the profile assigns it — the gap that shipped
-/// as the `cli_adaptive` bug (hpx_ofdm_hf assigned no FEC to OFDM52-8PSK, which needs it). The only
-/// permitted exception is a rung that can't modulate at the engine's 8 kHz rate: hpx_narrowband_hd's
-/// 9600-baud rungs, which `profile.rs` documents as requiring a **48 kHz audio path** (a different
-/// pipeline, not the 8 kHz daemon). The count is pinned so a new unmodulatable rung trips this.
+/// as the `cli_adaptive` bug (hpx_ofdm_hf assigned no FEC to OFDM52-8PSK, which needs it).
+///
+/// **No rung may now be unmodulatable at 8 kHz.** There used to be a permitted exception for
+/// `hpx_narrowband_hd`'s two 9600-baud rungs, which needed a 48 kHz audio path the engine never
+/// builds — the profile was retired for exactly that reason (#1359, 2026-09-14), so the exception
+/// went with it. The count is pinned at zero: a profile that gains an unmodulatable rung trips this
+/// instead of quietly counting it as expected.
 #[test]
 fn every_profile_rung_decodes_clean_with_its_fec() {
     use openpulse_core::profile::SessionProfile;
@@ -353,11 +356,13 @@ fn every_profile_rung_decodes_clean_with_its_fec() {
             }
         }
     }
-    // hpx_narrowband_hd's QPSK9600-RRC + 8PSK9600-RRC — lock the count so a NEW unmodulatable rung
-    // (or a fix to these) trips this and gets a deliberate look.
+    // Zero since #1359 retired `hpx_narrowband_hd`, whose two 9600-baud rungs were the only entries
+    // this ever tolerated. Still pinned rather than deleted: a profile that gains a rung the engine
+    // cannot modulate should fail here, not be silently counted as a known exception.
     assert_eq!(
-        known_unmodulatable, 2,
-        "expected exactly the 2 known >8 kHz rungs (hpx_narrowband_hd 9600); got {known_unmodulatable}"
+        known_unmodulatable, 0,
+        "a profile rung cannot be modulated at the engine's 8 kHz rate; got {known_unmodulatable}. \
+         If a 48 kHz path now exists this needs a deliberate look, not a bumped count."
     );
 }
 

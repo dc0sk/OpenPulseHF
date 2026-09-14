@@ -2,7 +2,7 @@
 project: openpulsehf
 doc: docs/dev/design/wide-channel-extension.md
 status: living
-last_updated: 2026-07-08
+last_updated: 2026-09-14
 ---
 
 # Extending OpenPulseHF to 12.5 kHz and 25 kHz channels — design + action list
@@ -17,7 +17,7 @@ No code was changed.
 **Feasibility is good — much groundwork already exists.** The codebase already has (a) sample-rate-
 parameterized single-carrier plugins with 9600-baud modes explicitly designed for "UHF/VHF — 12.5 kHz
 HD (requires 48 kHz audio)" and tested at 48 kHz (`plugins/qpsk/src/lib.rs:68`, `plugins/psk8/src/lib.rs:66`);
-(b) session profiles for 12.5 kHz channels (`hpx_narrowband`, `hpx_narrowband_hd`); and (c) a TX
+(b) session profiles for 12.5 kHz channels (`hpx_narrowband`; `hpx_narrowband_hd` until its retirement in #1359); and (c) a TX
 I/Q-to-SDR seam (`ModulationPlugin::modulate_iq`, `AudioBackend::open_iq_output`, engine IQ transmit).
 The requirements doc already demands a 48 kHz-capable audio backend (`docs/dev/requirements.md:34`).
 
@@ -56,8 +56,12 @@ CEPT ≤2.7 kHz).
 
 **Existing "wideband" notions.** `hpx_wideband` (QPSK/8PSK1000, still ≤ ~3 kHz — an FM-voice-channel
 waveform, not channel-filling). `hpx_narrowband` = "12.5 kHz channel, 2.7 kHz-wide signal".
-**`hpx_narrowband_hd` (QPSK9600-RRC/8PSK9600-RRC, ≈13 kHz, "requires a 48 kHz audio path") cannot
-currently run** — the engine opens audio at `AudioConfig::default()` = 8 kHz.
+**`hpx_narrowband_hd` (QPSK9600-RRC/8PSK9600-RRC, ≈13 kHz, "requires a 48 kHz audio path") could
+not run** — the engine opens audio at `AudioConfig::default()` = 8 kHz, and `sample_rate` is not in
+the TOML schema, so no operator could change it. **The profile was retired on 2026-09-14 (#1359)**
+and the two waveforms were removed from `supported_modes`; their implementations and 48 kHz loopback
+tests are deliberately kept, so item 1.6 below is a matter of re-adding a profile once Phase 1
+lands, not of rewriting the DSP.
 
 **Channel model.** `WattersonConfig` presets pin `sample_rate: 8000` (the model itself is
 parameterized); AWGN is rate-agnostic. There is **no VHF/UHF mobile model** (flat Rayleigh/Rician +
@@ -84,7 +88,7 @@ vehicle Doppler). All `profile.rs` floors were calibrated at 8 kHz.
 | 1.3 | Fix stray hard-codes: DCD hold-time, daemon spectrum-frame rate (use engine fs so the panel axis is right), CLI on-air-seconds math. | S | Low |
 | 1.4 | Wire daemon/CLI/TUI/ARDOP to pass the configured rate into engine + backends. | M | Low |
 | 1.5 | Verify frame-geometry / preamble / energy-gate scaling at 48 kHz; add a 48 kHz engine loopback test per mode family. | M | Med |
-| 1.6 | **Unblock `hpx_narrowband_hd` end-to-end** (QPSK9600-RRC/8PSK9600-RRC, ~13 kHz, 19.2/28.8 kbps gross) + an ARQ integration test at 48 kHz. | S | Low |
+| 1.6 | **Re-add `hpx_narrowband_hd` and unblock it end-to-end** (the profile was retired in #1359 pending exactly this) (QPSK9600-RRC/8PSK9600-RRC, ~13 kHz, 19.2/28.8 kbps gross) + an ARQ integration test at 48 kHz. | S | Low |
 | 1.7 | Guard rate/mode compatibility (reject < 4 samples/symbol with a clear error + mode-advisor hint). | S | Low |
 
 ### Phase 2 — Wide modes (fill 12.5 kHz, then 25 kHz)

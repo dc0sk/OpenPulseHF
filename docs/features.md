@@ -2,7 +2,7 @@
 project: openpulsehf
 doc: docs/features.md
 status: living
-last_updated: 2026-06-24
+last_updated: 2026-09-14
 ---
 
 # OpenPulseHF — Feature Reference
@@ -44,8 +44,8 @@ OFDM/SC-FDMA higher-order ladders. The authoritative per-mode table — baud,
 bits/symbol, gross bps, occupied bandwidth — is the
 [README modulation-modes table](../README.md#modulation-types); the HF mode/FEC
 selection ladder is in [mode-fec-ladder.md](mode-fec-ladder.md). `openpulse modes`
-prints the live registry. (Plain rectangular `QPSK2000`/`8PSK2000` are registered but
-RRC-superseded — use `-RRC`.)
+prints the live registry. (Plain rectangular `QPSK2000` is registered but
+RRC-superseded; `8PSK2000` is no longer advertised at all since #1359 — use `-RRC`.)
 
 The **Pilot** family (`PILOT-{QPSK,8PSK,16QAM,32APSK}{500,1000}` plus their `-RRC`
 variants and `2000-RRC`, `plugins/pilot`) is a pilot-framed single-carrier waveform:
@@ -862,11 +862,18 @@ modes — `QPSK9600`, `QPSK9600-RRC`, `8PSK9600`, `8PSK9600-RRC` — occupy ~12�
 is retained for a post-v1.0 wideband transport (10 m HF, VHF/UHF FM channels). Scope:
 
 - A wideband transport (≥ 48 kHz audio device path) for loopback and on-air testing.
-- Test-matrix coverage for the 9600-baud modes at the higher sample rate (they are listed in
-  `WIDEBAND_POST_V1_MODES` in `apps/openpulse-testmatrix/src/cases.rs`, deferred and enforced
-  by the coverage regression test until then).
-- Revisit the `hpx_narrowband_hd` profile naming, which currently maps 9600-baud (wideband)
-  modes — see `crates/openpulse-core/src/profile.rs`.
+- Test-matrix coverage for the 9600-baud modes at the higher sample rate. They are no longer
+  excused by name in `apps/openpulse-testmatrix/src/cases.rs`: #1359 dropped them from
+  `supported_modes`, so the coverage gate — whose subject is what a plugin advertises — no longer
+  sees them at all, and `WIDEBAND_POST_V1_MODES` was deleted with them. The DSP and its 48 kHz
+  loopback tests are kept; re-advertising the modes is what would put them back under the gate.
+- ~~Revisit the `hpx_narrowband_hd` profile naming, which currently maps 9600-baud (wideband)
+  modes~~ — moot: the profile was **retired 2026-09-14 (#1359)**. Both its rungs need a 48 kHz audio
+  path, and the engine builds every config at 8 kHz with `sample_rate` absent from the TOML schema,
+  so it could never run. The waveforms keep their implementations and 48 kHz loopback tests; the
+  sample-rate generalization in the backlog is what would revive them.
 
 Related v1.0 known limitation: plain rectangular `8PSK2000` closes the eye at 4 samples/symbol
-on the 8 kHz path (use `8PSK2000-RRC`); tracked in `KNOWN_LIMITATION_MODES`.
+on the 8 kHz path (use `8PSK2000-RRC`). It is no longer advertised (#1359), so it is no longer
+tracked by the test matrix's excusal lists either — `KNOWN_LIMITATION_MODES` was deleted with it.
+The reason now lives with the mode, at `plugins/psk8/src/lib.rs`.

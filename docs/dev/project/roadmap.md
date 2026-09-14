@@ -2,7 +2,7 @@
 project: openpulsehf
 doc: docs/dev/project/roadmap.md
 status: living
-last_updated: 2026-07-17
+last_updated: 2026-09-14
 ---
 
 # Roadmap
@@ -1120,7 +1120,10 @@ HD tier (48 kHz audio required, fills 12.5 kHz channel, ~13 kHz BW):
 
 New session profiles:
 - `hpx_narrowband()`: SL8=QPSK500, SL9=QPSK1000, SL10=QPSK2000-RRC, SL11=8PSK2000-RRC
-- `hpx_narrowband_hd()`: SL8=QPSK9600-RRC, SL9=8PSK9600-RRC
+- `hpx_narrowband_hd()`: SL8=QPSK9600-RRC, SL9=8PSK9600-RRC — **retired 2026-09-14 (#1359)**: both
+  rungs need a 48 kHz audio path, and the engine builds every config at 8 kHz with `sample_rate`
+  absent from the TOML schema, so the profile could never run. The waveforms keep their
+  implementations and 48 kHz loopback tests; the profile and its advertisements are gone.
 
 **Note on 8PSK2000 non-RRC**: at n=4 the Hann crossfade ISI exceeds 8PSK's 22.5°
 decision margins (QPSK passes at n=4 because its margins are 45°).  The mode requires
@@ -1870,7 +1873,6 @@ regenerate after a profile change, run the printer named in that test.
 | `hpx_wideband` | SL8–SL11 | SL8 | 8PSK1000 |
 | `hpx_wideband_hd` | SL9–SL15 | SL12 | 64QAM2000-RRC |
 | `hpx_narrowband` | SL8–SL11 | SL8 | 8PSK2000-RRC |
-| `hpx_narrowband_hd` | SL8–SL9 | SL8 | 8PSK9600-RRC |
 
 ### Mode-to-plugin mapping
 
@@ -1887,10 +1889,8 @@ stable (a mode's owning plugin does not change).
 | QPSK250-D | qpsk-plugin | hpx_hf SL6 (differential — RF-6) |
 | QPSK500/1000 | qpsk-plugin | hpx500 SL6; hpx_modcod SL6–SL7; hpx_narrowband/hpx_wideband SL8–SL9 |
 | QPSK2000-RRC | qpsk-plugin | hpx_narrowband SL10 |
-| QPSK9600-RRC | qpsk-plugin | hpx_narrowband_hd SL8 |
 | 8PSK1000 | psk8-plugin | hpx_wideband SL11 |
 | 8PSK2000-RRC | psk8-plugin | hpx_narrowband SL11 |
-| 8PSK9600-RRC | psk8-plugin | hpx_narrowband_hd SL9 |
 | OFDM52/OFDM52-{8PSK,16QAM,32QAM,64QAM} | ofdm-plugin | hpx_hf SL7–SL14 (SC then high-rate LDPC — RF-6) |
 | OFDM16/OFDM52/OFDM52-{8PSK,16QAM,32QAM,64QAM} | ofdm-plugin | hpx_ofdm_hf SL5–SL10 |
 | PILOT-QPSK/8PSK/16QAM/32APSK500(/1000)(-RRC) | pilot-plugin | hpx_pilot / _rrc / _fast / _fast_rrc SL2–SL5 |

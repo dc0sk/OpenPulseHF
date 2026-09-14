@@ -181,8 +181,12 @@ pub fn fec_locked(mode: &str, engine_path: bool) -> bool {
     false
 }
 
-/// Every mode the testbench can drive at 8 kHz — the union of all registered plugins'
-/// `supported_modes`, excluding the 9600-baud modes (which need 48 kHz).
+/// Every mode the testbench can drive at 8 kHz. This is a SUPERSET of the registered
+/// `supported_modes`, not the union of them: it still lists `8PSK2000`, which #1359 unadvertised
+/// but kept as retired-dormant DSP. The testbench drives modes by name rather than through the
+/// registry, and being able to drive a dormant waveform is the point of a diagnostic tool — see
+/// `signal_path.rs`, which already handles a mode legitimately refusing this 8 kHz rate.
+/// The 9600-baud modes are excluded for a different reason: they need 48 kHz (see below).
 /// Keep in sync with plugins/{bpsk,qpsk,psk8,64qam,ofdm,scfdma,pilot,fsk4}/src/lib.rs.
 pub const ALL_MODES: &[&str] = &[
     // BPSK (bpsk-plugin)

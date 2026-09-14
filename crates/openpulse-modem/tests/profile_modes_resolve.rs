@@ -42,7 +42,7 @@ const PROFILE_NAMES: &[&str] = &[
     "hpx_wideband",
     "hpx_wideband_hd",
     "hpx_narrowband",
-    "hpx_narrowband_hd",
+    // "hpx_narrowband_hd" retired 2026-09-14 (#1359): unreachable at the engine's 8 kHz.
 ];
 
 #[test]

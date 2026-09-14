@@ -2,7 +2,7 @@
 project: openpulsehf
 doc: docs/openpulse-manual.md
 status: living
-last_updated: 2026-07-18
+last_updated: 2026-09-14
 ---
 
 # OpenPulseHF Complete Manual
@@ -80,7 +80,7 @@ The modulation catalog spans 10 plugin families:
 - **Pilot** (`pilot`) — `PILOT-{QPSK,8PSK,16QAM,32APSK}{500,1000}` plus their `-RRC` variants and `2000-RRC`; pilot-framed single-carrier with pilot-aided carrier recovery (cycle-slip-immune, sample-rate-offset-robust); soft-capable. Four ladders: `hpx_pilot` (500 rect), `hpx_pilot_rrc` (narrowband), `hpx_pilot_fast` (1000 baud), `hpx_pilot_fast_rrc` (fast + narrowband).
 - **JS8** (`js8`) — JS8-compatible 8-GFSK weak-signal waveform used by the station-discovery and rendezvous subsystem ([§4.9](#49-js8-station-discovery-and-rendezvous)), not by the data ladder. Registered in the daemon, not in the CLI's data-mode registry.
 
-The plain rectangular `QPSK2000`/`8PSK2000` are registered but **RRC-superseded** (use `-RRC`). For the authoritative per-mode table (baud, bits/symbol, gross bps, occupied bandwidth) see the [README modulation-modes table](../README.md#modulation-types); for the HF mode/FEC selection ladder see [mode-fec-ladder.md](mode-fec-ladder.md). `openpulse modes` prints the live registry.
+The plain rectangular `QPSK2000` is registered but **RRC-superseded**, and `8PSK2000` is no longer advertised at all (#1359) — use `-RRC` for both. For the authoritative per-mode table (baud, bits/symbol, gross bps, occupied bandwidth) see the [README modulation-modes table](../README.md#modulation-types); for the HF mode/FEC selection ladder see [mode-fec-ladder.md](mode-fec-ladder.md). `openpulse modes` prints the live registry.
 
 > **`PILOT-*` immunity is to carrier/sample-rate offset, not to fade.** Measured on Watterson
 > `moderate_f1`, `PILOT-QPSK500+Rs` decodes 0 % at 40 dB while being perfect on AWGN down to 10 dB.
