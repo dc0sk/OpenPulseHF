@@ -45,13 +45,12 @@ use openpulse_core::plugin::{ModulationConfig, ModulationPlugin, PluginInfo};
 /// the engine builds every `ModulationConfig` from `AudioConfig::default()` (8 kHz) and never sets
 /// `pulse_shape`, so no shipping binary can run them. Tracked separately; if one becomes drivable
 /// it must leave this list, and if a new mode starts refusing, this fails.
-const UNDRIVABLE_AT_8K: [&str; 5] = [
-    "8PSK2000",
-    "8PSK9600",
-    "8PSK9600-RRC",
-    "QPSK9600",
-    "QPSK9600-RRC",
-];
+/// Empty since #1359: the five modes that used to sit here were advertised while being impossible
+/// to modulate at the only sample rate the engine builds, so they are no longer in
+/// `supported_modes`. Their implementations and 48 kHz loopback tests are kept — retired dormant,
+/// not deleted. Keep this list, and keep it pinned: if a mode ever starts refusing at 8 kHz again,
+/// the assertion below fails instead of the sweep quietly skipping it.
+const UNDRIVABLE_AT_8K: [&str; 0] = [];
 
 /// The production sample rate — read from the default config the engine builds, never a literal,
 /// so a change to the shipped rate moves this sweep with it.

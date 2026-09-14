@@ -94,7 +94,8 @@ const PROFILES: &[&str] = &[
     "hpx_hf",
     "hpx_ofdm_hf",
     "hpx_narrowband",
-    "hpx_narrowband_hd",
+    // "hpx_narrowband_hd" removed 2026-09-14 (#1359): the daemon no longer
+    // resolves it, so offering it here would have produced a selection the station rejects.
     "hpx_wideband",
     "hpx_wideband_hd",
     "hpx_modcod",

@@ -2,7 +2,7 @@
 project: openpulsehf
 doc: README.md
 status: living
-last_updated: 2026-07-14
+last_updated: 2026-09-14
 ---
 
 # OpenPulseHF
@@ -111,8 +111,9 @@ single-carrier modes; SC-FDMA/OFDM are named by data-subcarrier count and span
 `total_SCs × 31.25 Hz`). The single-carrier modes also have `-RRC` (α = 0.35,
 ~+35 % bandwidth) and `-HF` tuning variants not all listed here. The `-RRC`
 variants are the operational, carrier-offset-robust ones at 2000 baud: the plain
-rectangular `QPSK2000`/`8PSK2000` are registered but **RRC-superseded** (their
-crossfade pulse is ISI-limited at 4 samples/symbol — use `-RRC`).
+rectangular `QPSK2000` is registered but **RRC-superseded**, and `8PSK2000` is no
+longer advertised at all (#1359) — their crossfade pulse is ISI-limited at 4
+samples/symbol, so use `-RRC`.
 The `PILOT-*` modes are a pilot-framed single-carrier family: known in-band pilot
 symbols drive carrier recovery (cycle-slip-immune, sample-rate-offset-robust)
 instead of a decision-directed Costas loop — see the
@@ -246,7 +247,6 @@ and per-level SNR floor/ceiling gates:
 | `hpx_pilot_fast_rrc` | SL2–SL5 | SL2 | PILOT-32APSK1000-RRC | Pilot, fast + narrowband |
 | `hpx_wideband` | SL8–SL11 | SL8 | 8PSK1000 | Wideband HF |
 | `hpx_narrowband` | SL8–SL11 | SL8 | 8PSK2000-RRC | Narrowband HF / VHF |
-| `hpx_narrowband_hd` | SL8–SL9 | SL8 | 8PSK9600-RRC | VHF/UHF narrowband |
 | `hpx_wideband_hd` | SL9–SL15 | SL12 | 64QAM2000-RRC | VHF/UHF FM / satellite |
 
 `hpx_wideband_hd` requires SNR ≥ 16 dB and is not suitable for HF ionospheric paths. The

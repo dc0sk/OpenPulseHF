@@ -1075,7 +1075,7 @@ device = ""
 mode = "BPSK250"
 # Adaptive session profile (SpeedLevel ladder) used by the rate controller and
 # `openpulse mode-advisor`. Available: hpx500, hpx_hf, hpx_ofdm_hf, hpx_wideband,
-# hpx_wideband_hd, hpx_narrowband, hpx_narrowband_hd. hpx_ofdm_hf is the OFDM
+# hpx_wideband_hd, hpx_narrowband. hpx_ofdm_hf is the OFDM
 # higher-order (high-throughput/high-reliability) HF ladder.
 profile = "hpx_hf"
 # PTT backend: none | rts | dtr | vox | rigctld | cm108

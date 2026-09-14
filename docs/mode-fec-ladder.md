@@ -2,7 +2,7 @@
 project: openpulsehf
 doc: docs/mode-fec-ladder.md
 status: living
-last_updated: 2026-07-17
+last_updated: 2026-09-14
 ---
 
 # Mode and FEC ladder — how the modem chooses a waveform and a code
@@ -182,7 +182,7 @@ ceiling *and* a positive ACK arrives.
 | `hpx_pilot_fast` | HF pilot, high-throughput | PILOT-{QPSK,8PSK,16QAM,32APSK}**1000** (SL2–5) | 2× bits/s at the same per-symbol floors; ~2× bandwidth |
 | `hpx_pilot_fast_rrc` | HF pilot, fast + narrowband | the 1000-baud ladder on `-RRC` | 2× throughput **and** ~half-band (~1350 Hz) |
 | `hpx_wideband_hd` | Wideband HD | SCFDMA26-{8PSK,16QAM,32QAM} (SL9–11 fallback) → SCFDMA52-{16QAM,32QAM,64QAM} → 64QAM2000-RRC (SL12–15) | >2700 Hz links; SL9–11 are the graceful-degradation rungs. **Every rung runs `SoftConcatenated`** — it shipped with no FEC assigned until 2026-07-29 despite its floors and its hardware validation both being measured with it; SL9–SL12 decoded 0–4 of 8 uncoded at their own declared floors |
-| `hpx_wideband` / `hpx_narrowband` / `hpx_narrowband_hd` | Wide / post-1.0 | QPSK/8PSK 1000, 2000-RRC, 9600-RRC | FM / VHF / UHF or wider-than-HF; deferred (§8) |
+| `hpx_wideband` / `hpx_narrowband` | Wide / post-1.0 | QPSK/8PSK 1000, 2000-RRC | FM / VHF / UHF or wider-than-HF; deferred (§8) |
 
 The four `hpx_pilot*` profiles share one carrier architecture and the same
 per-symbol (Es/N0) SNR floors; they trade **bandwidth** (rect vs `-RRC`) against
@@ -509,7 +509,9 @@ other 9600-baud modes are **physically impossible at 8 kHz** on *both* counts:
 So they need **two** things the HF path does not provide: a **higher sample rate**
 (native 48 kHz, no resample) **and** a **wider channel** than HF SSB allows (13 kHz fits
 a VHF/UHF FM data channel or a wideband 10 m segment, not a 2700 Hz HF slot). They are
-kept in the registry and in `hpx_narrowband_hd` for a future higher-Fs transport
-(post-1.0); the loopback and test-matrix runners **SKIP them with reason** rather than
-silently dropping them. They are not a defect — they are simply out of scope for an
+kept as implementations with their 48 kHz loopback tests for a future higher-Fs transport
+(post-1.0), but they are **no longer advertised in `supported_modes`**, and `hpx_narrowband_hd` —
+the profile that used to carry them — was **retired on 2026-09-14 (#1359)**, because a profile an
+operator can select and which then fails at every modulate is worse than no profile. The loopback
+and test-matrix runners **SKIP them with reason** rather than silently dropping them. They are not a defect — they are simply out of scope for an
 8 kHz / 2700 Hz HF modem.

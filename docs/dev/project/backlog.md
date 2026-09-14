@@ -2,7 +2,7 @@
 project: openpulsehf
 doc: docs/dev/project/backlog.md
 status: living
-last_updated: 2026-07-08
+last_updated: 2026-09-14
 ---
 
 # Backlog
@@ -85,7 +85,9 @@ Targeted at a future **1.x** release. Feasibility + phased action list in
 Phase 0 (decisions, blocking): pick the RF path (direct-IQ SDR vs linear wide exciter vs
 constant-envelope 4FSK), target sample rates, wideband strategy (clock-scaling vs new FFT layout),
 PAPR/PA-linearity, and AFC budget at VHF/UHF. Phase 1: sample-rate generalization (parameterize the
-engine off the hard-coded 8 kHz; unblocks `hpx_narrowband_hd`). Phase 2: wide modes (clock-scaled
+engine off the hard-coded 8 kHz; this is what would revive the 9600-baud HD waveforms, whose
+`hpx_narrowband_hd` profile was retired on 2026-09-14 because it could never run at 8 kHz — the
+implementations and their 48 kHz loopback tests are kept for exactly this phase, #1359). Phase 2: wide modes (clock-scaled
 OFDM/SC-FDMA at 48/96 kHz; RX-IQ path) + `hpx_wide12`/`hpx_wide25` ladders. Phase 3: VHF/UHF bandplan
 + regulatory + a mobile-fading channel model + recalibrated floors.
 

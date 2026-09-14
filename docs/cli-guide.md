@@ -2,7 +2,7 @@
 project: openpulsehf
 doc: docs/cli-guide.md
 status: living
-last_updated: 2026-07-18
+last_updated: 2026-09-14
 ---
 
 # CLI Guide - openpulse (v0.16.0)
@@ -47,7 +47,7 @@ cargo build --release
 - openpulse config init: print a fully-commented `config.toml` template to stdout.
 
 Notes:
-- `mode-advisor` and `adaptive` select the SpeedLevel ladder via `--profile` (overrides `[modem] profile` in config). Profiles: `hpx500`, `hpx_hf`, `hpx_ofdm_hf`, `hpx_pilot`, `hpx_pilot_rrc`, `hpx_pilot_fast`, `hpx_pilot_fast_rrc`, `hpx_wideband`, `hpx_wideband_hd`, `hpx_narrowband`, `hpx_narrowband_hd`.
+- `mode-advisor` and `adaptive` select the SpeedLevel ladder via `--profile` (overrides `[modem] profile` in config). Profiles: `hpx500`, `hpx_hf`, `hpx_ofdm_hf`, `hpx_pilot`, `hpx_pilot_rrc`, `hpx_pilot_fast`, `hpx_pilot_fast_rrc`, `hpx_wideband`, `hpx_wideband_hd`, `hpx_narrowband`.
 - `adaptive` runs a real rate-control session over a simulated channel (`clean`, `awgn` with `--snr`, `watterson-good-f1`, `watterson-poor-f1`) and reports each speed-level transition; no audio hardware required. Add `--json` for newline-delimited JSON.
 - `arq send` (ISS) / `arq listen` (IRS) run a reliable two-way exchange over the modem: data forward, FSK4 ACK return, retransmit on NACK. Run `listen` on one station and `send` on the other. Keying is per transmission — use a VOX or wired/full-duplex audio path.
 

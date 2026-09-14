@@ -9,6 +9,99 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-09-14 — a selectable profile that could never transmit, and the five modes behind it (#1359)
+
+- **Requirement/change:** five modes were advertised in `PluginInfo::supported_modes` while refusing
+  to modulate at 8 kHz with `ModemError::Configuration`. Two of them turned out to be the *entire*
+  `hpx_narrowband_hd` profile — selectable by name, listed by the operator panel, and documented in
+  the config template, CLI guide, ladder doc, features and the book. Selecting it built a station
+  whose every transmit failed at modulate.
+
+- **Verified, not inherited:** the premise came from a review, and the whole decision rests on it. No
+  production caller constructs `AudioConfig` with a non-default rate (the only hits are a test mock),
+  and **`sample_rate` is absent from the TOML schema**, so no operator can change it. The engine is
+  8 kHz always.
+
+- **Design decision (maintainer, twice):** stop advertising the five; then, once the profile
+  entanglement surfaced, retire `hpx_narrowband_hd` as well rather than refuse it at startup or
+  build a 48 kHz path.
+
+- **Narrowed against the decision's own wording, deliberately.** It said "remove … its two modes
+  together", reasoning "nothing loses a capability it actually had" — but both modes carry working
+  **48 kHz loopback tests** that round-trip at fc = 12 kHz. They are functioning DSP the engine
+  cannot reach. The repo's rule is that unreachable code is retired dormant, not deleted, and the
+  retention rationale is concrete: backlog item 12 Phase 1 and `wide-channel-extension.md` item 1.6
+  both name these waveforms as what sample-rate generalization unblocks. So: unadvertise the five,
+  retire the profile, **keep the DSP and its tests**. Full deletion remains a small follow-up; the
+  reverse would not have been.
+
+- **Implementation:** `plugins/{qpsk,psk8}/src/lib.rs` (five entries out of `supported_modes`, with
+  the reason in place); `crates/openpulse-core/src/profile.rs` (the constructor, its `by_name` arm,
+  and its `PROFILE_NAMES` entry); `apps/openpulse-panel/src/ui.rs` (the panel's own list);
+  `crates/openpulse-config/src/lib.rs` (the config template's comment); plus README, cli-guide,
+  mode-fec-ladder, features, roadmap (two tables), backlog, release-1.0-criteria,
+  traceability-matrix and `wide-channel-extension.md`.
+
+- **Tests:** `session_profile.rs`'s two mapping tests replaced by a retirement pin **with a control**
+  (`by_name("hpx_hf")` must still resolve, so it cannot pass by `by_name` being broken for
+  everything); `channel_loopback.rs`'s tolerated count of unmodulatable rungs moved 2 → **0**;
+  `profile_modes_resolve.rs`'s list; `soft_demod_conformance`'s `UNDRIVABLE_AT_8K` emptied.
+
+- **Test results:** `cargo test -p openpulse-core --no-default-features` → **26 result groups ok, 0
+  failed**. `--test soft_demod_conformance` → 5 passed with the pin **empty**, which is what confirms
+  all five are unadvertised and nothing else refuses at 8 kHz. `--test channel_loopback
+  --test profile_modes_resolve` → 13 + 1 passed. `cargo build --workspace --no-default-features` →
+  rc=0. `DOCFRONT: PASS`.
+
+- **What the machinery caught, rather than me:** `roadmap_profile_table_matches_profiles` failed the
+  moment the profile went, naming the drifted table; `channel_loopback.rs` was pinning a count of
+  **2** unmodulatable rungs that existed solely for this profile; and three separate name lists —
+  `PROFILE_NAMES`, the panel's `PROFILES`, `profile_modes_resolve.rs` — each had their own copy. The
+  `last_updated` ratchet added yesterday then required ten docs to be stamped, several of them
+  months stale (features.md 2026-06-24, README 2026-07-14).
+
+- **And a FOURTH copy the sweep missed, caught only by the full gate.** `openpulse-testmatrix`'s
+  coverage gate excuses registered-but-unswept modes through hand-written lists, and
+  `KNOWN_LIMITATION_MODES` + `WIDEBAND_POST_V1_MODES` held **exactly these five names**. Unadvertising
+  them made every entry reference a mode that is no longer registered, so
+  `cases::coverage_tests::excused_modes_exist_in_registry` failed — the one test on `GATE: FAIL`
+  (2541 passed, 1 failed, at `645ac0d8`). That is the list doing its job: it exists so an excusal
+  cannot rot into naming a removed mode. Both consts are deleted rather than emptied — an excusal for
+  an unadvertised mode is unreachable by a gate whose subject is what a plugin advertises, and two
+  empty report lines in `main.rs` would have read as "no known limitations" when the limitation is
+  real and merely unregistered. The reason is left in place as a comment so nobody re-adds them; the
+  DSP's retention rationale stays at the plugins, where the modes are. **The lesson is the count:
+  I swept three name lists and reported that as the census. It was four**, and the fourth lived in a
+  crate the change otherwise never touched — which is why the workspace gate, not the per-crate runs,
+  is what adjudicates a registry change.
+
+- **A SIXTH copy class, found by review after the gate: living docs asserting the old STATUS.** The
+  literal-name census — `git grep -nE '8PSK2000([^-]|$)|QPSK9600|8PSK9600|WIDEBAND_POST_V1_MODES|KNOWN_LIMITATION_MODES'`
+  over 39 files, filtered to lines claiming `registered|advertis|tracked in|listed` — found six lines
+  still false at HEAD: `README.md:114`, `docs/features.md:47`, `docs/openpulse-manual.md:83` (all
+  three saying plain `8PSK2000` "is registered"); `docs/features.md:866` and `:875`, which cite the
+  two testmatrix consts *this change deletes*; and `apps/openpulse-testbench/src/state.rs:184`, whose
+  `ALL_MODES` doc comment calls the list "the union of all registered plugins' `supported_modes`"
+  when it still contains `8PSK2000` and the 9600 modes are no longer in `supported_modes` at all.
+  `ALL_MODES` keeps `8PSK2000` deliberately — the testbench drives modes by name and being able to
+  drive a dormant waveform is what a diagnostic tool is for (`signal_path.rs:1449` already handles a
+  mode refusing 8 kHz) — so the comment is corrected to say SUPERSET rather than union.
+
+  Two lines review flagged are **not** defects and were left alone: `architecture.md:84` and
+  `hpx-waveform-design.md:21` say the plain modes are "RRC-superseded" and make no registration
+  claim. Confirmed is not correct in either direction.
+
+- **The census is pasted, not asserted.** Every count above is the output of the grep quoted with it.
+  This entry's earlier draft said "three separate name lists had their own copies"; that was recall,
+  and it was wrong by one — which is the whole reason the rule exists.
+
+- **Test results after the fix:** `cargo test -p openpulse-testmatrix --no-default-features` →
+  **12 + 6 passed, 0 failed**. Sabotage-verified not vacuous: dropping `SCFDMA52-LP` from
+  `DEMONSTRATOR_MODES` fails `every_registered_mode_is_covered_or_deferred` (rc=101) naming that mode,
+  while both excusal tests stay green; restored.
+
+Review: `docs/dev/reviews/artifacts/1359-retire-narrowband-hd.md`.
+
 ## 2026-09-13 — both held-out acceptance suites re-proven at `884d96ed`
 
 - **Requirement/change:** REQ-QRM-01 and CAP-33 are the two suites `scripts/gate.sh` does NOT run —

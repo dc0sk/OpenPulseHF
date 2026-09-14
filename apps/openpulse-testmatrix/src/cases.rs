@@ -100,13 +100,16 @@ const HF_FAST_MODES: &[&str] = &[
 /// Included for feature-presence tracking, but not in the AWGN sweep.
 const SMOKE_ONLY_MODES: &[&str] = &["QPSK2000", "QPSK1000", "8PSK1000", "8PSK2000-RRC"];
 
-/// Registered modes with a known decode limitation at the 8 kHz HF sample rate, kept in the
-/// codebase but not exercised (they cannot pass even a clean smoke case as-is).
-///
-/// 8PSK2000 (plain, rectangular pulse) closes the eye at 4 samples/symbol — use 8PSK2000-RRC
-/// for HF. Listed here so it is an explicit, tracked limitation rather than a silent omission
-/// (see the coverage regression test). Revisit post-v1.0.
-pub const KNOWN_LIMITATION_MODES: &[&str] = &["8PSK2000"];
+// KNOWN_LIMITATION_MODES and WIDEBAND_POST_V1_MODES were removed on 2026-09-14 (#1359), and the
+// reason is worth keeping: these lists excuse modes from the coverage gate, and the gate's subject
+// is what a plugin ADVERTISES. Their five entries — 8PSK2000 and the four 9600-baud HD modes — were
+// all dropped from `supported_modes` in that change because they refuse to modulate at the engine's
+// 8 kHz, so they are no longer registered and there is nothing left to excuse. Do not re-add an
+// excusal for an unadvertised mode: the gate cannot see it, and the entry would only rot.
+//
+// The retention rationale for the DSP itself (kept, retired dormant, with 48 kHz loopback tests)
+// lives where the modes do — `plugins/psk8/src/lib.rs` and `plugins/qpsk/src/lib.rs` — and the
+// wider-channel revival path is backlog item 12, Phase 1.
 
 /// Sub-floor modes excluded from the sweep matrix on runtime grounds, covered by dedicated tests.
 ///
@@ -121,17 +124,6 @@ pub const KNOWN_LIMITATION_MODES: &[&str] = &["8PSK2000"];
 /// reports for a ladder missing its weakest rung), so without an entry here the coverage gate below
 /// correctly reports it as unaccounted-for.
 pub const LONG_FRAME_MODES: &[&str] = &["MFSK16", "MFSK16-ACK"];
-
-/// Wideband modes deferred to a post-v1.0 release.
-///
-/// 9600-baud modes need a channel wider than the 3 kHz HF SSB passband (10 m HF, UHF, VHF)
-/// and ≥ 38.4 kHz audio Fs (≥ 4 samples/symbol), so they cannot run on the 8 kHz HF path.
-/// The mode code stays in the plugins; this list documents the deferral explicitly so the
-/// modes are NOT silently excluded (see the coverage regression test) and gives a single
-/// place to drop them once a wider-channel transport exists. Roadmap: V1.x wider-than-3 kHz
-/// channel support.
-pub const WIDEBAND_POST_V1_MODES: &[&str] =
-    &["QPSK9600", "QPSK9600-RRC", "8PSK9600", "8PSK9600-RRC"];
 
 /// SC-FDMA PAPR demonstrators: registered by `scfdma-plugin`, deliberately in NO adaptive profile,
 /// and therefore not swept by the channel matrix.
@@ -751,10 +743,8 @@ mod coverage_tests {
     #[test]
     fn every_registered_mode_is_covered_or_deferred() {
         let covered = raw_modem_modes();
-        let accounted: BTreeSet<String> = WIDEBAND_POST_V1_MODES
+        let accounted: BTreeSet<String> = PILOT_POST_V1_MODES
             .iter()
-            .chain(KNOWN_LIMITATION_MODES.iter())
-            .chain(PILOT_POST_V1_MODES.iter())
             .chain(DEMONSTRATOR_MODES.iter())
             .chain(LONG_FRAME_MODES.iter())
             .map(|s| s.to_string())
@@ -766,22 +756,16 @@ mod coverage_tests {
         assert!(
             missing.is_empty(),
             "registered modes with no matrix coverage and not explicitly accounted for \
-             (add to a mode list in cases.rs, or to WIDEBAND_POST_V1_MODES / \
-             KNOWN_LIMITATION_MODES / DEMONSTRATOR_MODES): {missing:?}"
+             (add to a mode list in cases.rs, or to PILOT_POST_V1_MODES / \
+             DEMONSTRATOR_MODES / LONG_FRAME_MODES): {missing:?}"
         );
     }
 
-    /// The deferred / known-limitation modes must really be excluded — never generated as
-    /// cases (wideband modes can't run at 8 kHz; the known-limitation mode can't decode).
+    /// The excused modes must really be excluded — never generated as cases.
     #[test]
-    fn deferred_and_known_limitation_modes_generate_no_cases() {
+    fn excused_modes_generate_no_cases() {
         let covered = raw_modem_modes();
-        for m in WIDEBAND_POST_V1_MODES
-            .iter()
-            .chain(KNOWN_LIMITATION_MODES.iter())
-            .chain(PILOT_POST_V1_MODES.iter())
-            .chain(DEMONSTRATOR_MODES.iter())
-        {
+        for m in PILOT_POST_V1_MODES.iter().chain(DEMONSTRATOR_MODES.iter()) {
             assert!(
                 !covered.contains(*m),
                 "excused mode {m} was unexpectedly generated as a test case"
@@ -794,12 +778,7 @@ mod coverage_tests {
     #[test]
     fn excused_modes_exist_in_registry() {
         let registered = registered_modes();
-        for m in WIDEBAND_POST_V1_MODES
-            .iter()
-            .chain(KNOWN_LIMITATION_MODES.iter())
-            .chain(PILOT_POST_V1_MODES.iter())
-            .chain(DEMONSTRATOR_MODES.iter())
-        {
+        for m in PILOT_POST_V1_MODES.iter().chain(DEMONSTRATOR_MODES.iter()) {
             assert!(
                 registered.contains(*m),
                 "excused-mode list references {m}, which is not a registered mode"

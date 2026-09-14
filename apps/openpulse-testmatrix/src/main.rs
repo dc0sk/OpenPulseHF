@@ -263,14 +263,6 @@ fn main() {
             elapsed.as_secs_f64()
         );
         println!(
-            "Deferred (post-v1.0, wider than 3 kHz HF channel): {}",
-            cases::WIDEBAND_POST_V1_MODES.join(", ")
-        );
-        println!(
-            "Known limitations (registered, not exercised): {}",
-            cases::KNOWN_LIMITATION_MODES.join(", ")
-        );
-        println!(
             "Deferred pilot variants (registered, not yet in quick matrix): {}",
             cases::PILOT_POST_V1_MODES.join(", ")
         );

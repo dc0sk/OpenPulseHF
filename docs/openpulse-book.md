@@ -2,7 +2,7 @@
 project: openpulsehf
 doc: docs/openpulse-book.md
 status: living
-last_updated: 2026-07-18
+last_updated: 2026-09-14
 ---
 
 # The OpenPulseHF Book
@@ -509,7 +509,7 @@ decide). Update both ends. Gates: `free_rs_strengthening` (core) and `free_rs_st
 A `SessionProfile` (`crates/openpulse-core/src/profile.rs`) maps each `SpeedLevel` (SL1–SL20) to a
 mode string, a per-level FEC, and per-level SNR floor/ceiling. Twelve named profiles ship:
 `hpx500`, `hpx_modcod`, `hpx_pilot`, `hpx_pilot_rrc`, `hpx_pilot_fast`, `hpx_pilot_fast_rrc`,
-`hpx_hf`, `hpx_ofdm_hf`, `hpx_wideband`, `hpx_wideband_hd`, `hpx_narrowband`, `hpx_narrowband_hd`.
+`hpx_hf`, `hpx_ofdm_hf`, `hpx_wideband`, `hpx_wideband_hd`, `hpx_narrowband`.
 The configured default is `[modem] profile = "hpx_hf"`.
 
 #### 1.4.1 `hpx_hf` — the primary HF ladder (SL1–SL14)
@@ -581,7 +581,6 @@ phase margin — MFSK16 (non-coherent) > BPSK (±90°) > QPSK (±45°) > 8PSK (�
 | `hpx_pilot{,_rrc,_fast,_fast_rrc}` | SL2–SL5: `PILOT-{QPSK,8PSK,16QAM,32APSK}` at 500 or 1000 baud | shared per-symbol floors 6/12/17/23 dB (Es/N0-set, baud-independent) |
 | `hpx_wideband` | SL8–SL11: `QPSK500` → `8PSK1000` | SL9+ exceed the 2 700 Hz HF channel width — FM/satellite/VHF-UHF only |
 | `hpx_narrowband` | SL8–SL11 up to `8PSK2000-RRC` | 12.5 kHz PMR/LMR at 8 kHz audio |
-| `hpx_narrowband_hd` | SL8–SL9: `QPSK9600-RRC`, `8PSK9600-RRC` | requires a 48 kHz audio path |
 | `hpx_wideband_hd` | SL9–SL15: SC-FDMA 26/52-carrier QAM up to `64QAM2000-RRC` | "Not suitable for HF ionospheric paths (Watterson fading breaks QAM coherence)"; the only profile with `nack_threshold = 2` |
 
 Interop safety across versions: `SessionProfile::fingerprint()` hashes only the (level → mode,
@@ -3582,7 +3581,7 @@ profile=hpx_hf snr_db=3.0 recommended_speed_level=SL2 recommended_mode=BPSK31 re
 
 The `--profile` help lists all twelve accepted values — `hpx500`, `hpx_modcod`, `hpx_pilot`,
 `hpx_pilot_rrc`, `hpx_pilot_fast`, `hpx_pilot_fast_rrc`, `hpx_hf`, `hpx_ofdm_hf`,
-`hpx_wideband`, `hpx_wideband_hd`, `hpx_narrowband`, `hpx_narrowband_hd` — because clap takes
+`hpx_wideband`, `hpx_wideband_hd`, `hpx_narrowband` — because clap takes
 them straight from `SessionProfile::PROFILE_NAMES`
 (`crates/openpulse-core/src/profile.rs`), so the help cannot drift from what `by_name`
 accepts. Profile names are case-insensitive and `-`/`_` interchangeable.

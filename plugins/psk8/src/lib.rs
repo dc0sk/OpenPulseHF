@@ -59,13 +59,19 @@ impl Psk8Plugin {
                 // dense 45° 8PSK grid ISI-limited (~5-13% raw BER even on short frames, with
                 // perfect AFC) — not an acquisition bug but a pulse-shaping limit that RRC's
                 // Nyquist shaping solves.  -RRC is carrier-offset-robust and is the operational
-                // 2000-baud mode (HPX rate ladders use it).  Plain 8PSK2000 is retained for
-                // compatibility but is not viable for engine / on-air decode.
-                "8PSK2000".to_string(),
+                // 2000-baud mode (HPX rate ladders use it).  Plain 8PSK2000 is NOT ADVERTISED
+                // (#1359): its own note already said it "is not viable for engine / on-air decode",
+                // and it refuses to modulate at 8 kHz, so advertising it only offered operators a
+                // mode that fails. Implementation and tests kept; see the note below.
                 "8PSK2000-RRC".to_string(),
-                // UHF/VHF — 12.5 kHz HD (requires 48 kHz audio, 9600 baud, ~13 kHz BW)
-                "8PSK9600".to_string(),
-                "8PSK9600-RRC".to_string(),
+                // NOT ADVERTISED (#1359, 2026-09-14). The 9600-baud HD modes need a 48 kHz audio
+                // path; the engine builds every `ModulationConfig` at `AudioConfig`'s 8 kHz and
+                // `sample_rate` is not in the TOML schema, so no operator can reach them. Listing
+                // them here offered the mode advisor and the CLI a mode that always fails at
+                // modulate. The DSP and its 48 kHz loopback tests are deliberately KEPT — retired
+                // dormant, not deleted — so nothing decays if a 48 kHz path ever lands; only the
+                // advertisement is gone. `hpx_narrowband_hd`, whose only two rungs these were, is
+                // retired in the same change.
             ],
             trait_version_required: "3.0".to_string(),
         }

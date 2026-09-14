@@ -137,7 +137,7 @@ impl SessionProfile {
         "hpx_wideband",
         "hpx_wideband_hd",
         "hpx_narrowband",
-        "hpx_narrowband_hd",
+        // "hpx_narrowband_hd" removed 2026-09-14 (#1359): unreachable at the engine's 8 kHz.
     ];
 
     /// Construct a profile by name (case-insensitive; `-` and `_` are interchangeable).
@@ -157,7 +157,6 @@ impl SessionProfile {
             "hpx_wideband" => Some(Self::hpx_wideband()),
             "hpx_wideband_hd" => Some(Self::hpx_wideband_hd()),
             "hpx_narrowband" => Some(Self::hpx_narrowband()),
-            "hpx_narrowband_hd" => Some(Self::hpx_narrowband_hd()),
             _ => None,
         }
     }
@@ -715,36 +714,13 @@ impl SessionProfile {
         }
     }
 
-    /// HPX Narrowband HD profile: 12.5 kHz channel at 48 kHz audio (fills the channel).
-    ///
-    /// Occupies the full 12.5 kHz channel at 9600 baud (α=0.35 RRC ≈ 13 kHz BW).
-    /// **Requires a 48 kHz audio path** — not available on standard PMR/LMR radios.
-    ///
-    /// | SL  | Mode           |
-    /// |-----|----------------|
-    /// | SL1–SL7 | — (fall-through to narrowband rungs) |
-    /// | SL8  | QPSK9600-RRC   |
-    /// | SL9  | 8PSK9600-RRC   |
-    pub fn hpx_narrowband_hd() -> Self {
-        let mut modes = [None; 21];
-        modes[SpeedLevel::Sl8 as usize] = Some("QPSK9600-RRC");
-        modes[SpeedLevel::Sl9 as usize] = Some("8PSK9600-RRC");
-        let mut snr_floors = [None; 21];
-        snr_floors[SpeedLevel::Sl8 as usize] = Some(17.0_f32);
-        snr_floors[SpeedLevel::Sl9 as usize] = Some(20.0_f32);
-        let mut snr_ceilings = [None; 21];
-        snr_ceilings[SpeedLevel::Sl8 as usize] = Some(24.0_f32);
-        // SL9 is the ceiling; no upgrade above it.
-        Self {
-            modes,
-            initial_level: SpeedLevel::Sl8,
-            nack_threshold: 3,
-            snr_floors,
-            snr_ceilings,
-            ack_up_requires_snr_candidate_at: None,
-            fec_modes: [None; 21],
-        }
-    }
+    // `hpx_narrowband_hd` was REMOVED here on 2026-09-14 (#1359). Its only two rungs were
+    // `QPSK9600-RRC` (SL8) and `8PSK9600-RRC` (SL9), both of which need a 48 kHz audio path — and
+    // the engine builds every `ModulationConfig` at `AudioConfig`'s 8 kHz, with `sample_rate` absent
+    // from the TOML schema, so no operator could reach it. Selecting it by name produced a station
+    // whose every transmit failed at modulate, on a profile the CLI guide, the ladder doc, features
+    // and the book all offered. The two waveforms keep their implementations and their 48 kHz
+    // loopback tests; only the profile and the advertisements are gone.
 
     /// HPX Wideband HD profile: SC-FDMA crossover ladder (SL12–SL15).
     ///

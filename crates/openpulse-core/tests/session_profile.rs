@@ -280,22 +280,22 @@ fn hpx_narrowband_initial_level() {
     assert_eq!(p.nack_threshold, 3);
 }
 
+/// `hpx_narrowband_hd` is gone (#1359) and must not come back by name alone.
+///
+/// Its two rungs needed a 48 kHz audio path the engine cannot produce, so selecting it built a
+/// station whose every transmit failed at modulate. This replaces its two mapping tests: what is
+/// worth pinning now is that the name no longer resolves, because the profile could otherwise be
+/// re-added without the sample-rate problem being solved.
 #[test]
-fn hpx_narrowband_hd_mode_mapping() {
-    let p = SessionProfile::hpx_narrowband_hd();
-    assert_eq!(p.mode_for(SpeedLevel::Sl1), None);
-    assert_eq!(p.mode_for(SpeedLevel::Sl7), None);
-    assert_eq!(p.mode_for(SpeedLevel::Sl8), Some("QPSK9600-RRC"));
-    assert_eq!(p.mode_for(SpeedLevel::Sl9), Some("8PSK9600-RRC"));
-    assert_eq!(p.mode_for(SpeedLevel::Sl10), None);
-    assert_eq!(p.mode_for(SpeedLevel::Sl11), None);
-}
-
-#[test]
-fn hpx_narrowband_hd_initial_level() {
-    let p = SessionProfile::hpx_narrowband_hd();
-    assert_eq!(p.initial_level, SpeedLevel::Sl8);
-    assert_eq!(p.nack_threshold, 3);
+fn hpx_narrowband_hd_is_retired_and_no_longer_resolves() {
+    assert!(
+        SessionProfile::by_name("hpx_narrowband_hd").is_none(),
+        "hpx_narrowband_hd resolves again — if a 48 kHz audio path now exists, say so in the \
+         profile's doc and re-point this test; if it does not, the profile is unusable (#1359)"
+    );
+    // The control: a profile that SHOULD resolve still does, so this cannot pass by from_name
+    // being broken for everything.
+    assert!(SessionProfile::by_name("hpx_hf").is_some());
 }
 
 #[test]

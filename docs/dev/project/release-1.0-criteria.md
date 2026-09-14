@@ -2,7 +2,7 @@
 project: openpulsehf
 doc: docs/dev/project/release-1.0-criteria.md
 status: living
-last_updated: 2026-09-13
+last_updated: 2026-09-14
 ---
 
 # What 1.0 means
@@ -185,8 +185,9 @@ regulatory obligation for US operators, not documentation polish.
 Naming these matters as much as the criteria — it is what stops 1.0 from receding.
 
 - **Wide-channel VHF/UHF (12.5/25 kHz, `REQ-BW-01..07`)** — backlog item 12, explicitly 1.x. Its
-  Phase 1 (sample-rate generalization off the hard-coded 8 kHz) is worth doing sooner because it also
-  unblocks `hpx_narrowband_hd`, but it is not a 1.0 gate.
+  Phase 1 (sample-rate generalization off the hard-coded 8 kHz) is worth doing sooner because it is
+  what would revive the 9600-baud HD waveforms — whose `hpx_narrowband_hd` profile was retired in
+  #1359 precisely because it could never run at 8 kHz — but it is not a 1.0 gate.
 - **On-air validation of FF-15 (JS8 discovery) Phase H and FF-16 (file transfer) Phase F** — both
   subsystems are off by default. 1.0 may ship them as documented-experimental rather than block on
   their on-air campaigns.
