@@ -52,6 +52,56 @@ Review: none — mechanical application of a maintainer decision, closing a reco
 2026-07-16 audit had already made. The behaviour change is confined to ±0.0 and pinned by a test
 that was watched distinguishing the new rule from both old ones.
 
+## 2026-09-14 — a CONREQ that never reached the air announced a connection anyway (#1265)
+
+- **Requirement/change:** `ConnectPeer` sent `RfConnectionChanged { connected: true }`, opened a
+  **logbook QSO** and armed a QSY token BEFORE transmitting the CONREQ — and discarded
+  `transmit_handshake_frame`'s `bool` return entirely (no `let _ =`, no branch). A refused PTT assert
+  therefore left a client told it was connected and an operator's ADIF log holding a contact that
+  never happened. #1199 closed announce-before-BUILD; this is announce-before-TRANSMIT, observable
+  only since #1262 gave that function a return value.
+
+- **Design decision (maintainer, 2026-09-14):** the event means **the CONREQ is on the air**, not
+  "local session state exists". The deciding argument is symmetry, not preference: since #1262 the
+  responder records a verified peer only when the CONACK actually went out, so the alternative would
+  leave the two ends of one handshake meaning different things by the same event name. Rejected: a
+  distinct `connecting` state — more informative, but a control-protocol change with exhaustive
+  matches across the app crates, and it need not ride along with a correctness fix.
+
+- **Implementation:** `daemon/lib.rs` `ConnectPeer` transmits first; on `!sent` it ends the session
+  `begin_secure_session` just created, emits `CommandError`, and returns — no announce, no QSO, no
+  QSY token. `logbook.rs` gains `has_pending()`, `#[cfg(test)]` rather than `#[allow(dead_code)]` so
+  the compiler enforces that it stays test-only (the distinction #1277 is about).
+
+- **Why not assert via `end_qso`:** it returns `Ok(false)` for BOTH "nothing pending" AND "logbook
+  disabled", and the default logbook is disabled — so that assertion could not have failed. Caught
+  while writing it, not after.
+
+- **THE FIX EXPOSED A TEST THAT ENCODED THE DEFECT.**
+  `connect_then_disconnect_writes_an_adif_logbook_record` drove `active_mode = "QPSK500"` against
+  `test_engine()`, which registers **only BPSK**. Its CONREQ could never be transmitted, yet it
+  asserted that an ADIF record was written — a logbook entry for a contact that never went on the
+  air, which is exactly this issue, institutionalised as a passing test. Repaired by registering the
+  QPSK plugin so the transmission it logs actually happens, rather than by relaxing the assertion.
+  Separately, `apply_connect_disconnect_drive_secure_session_and_pending_qsy` matched the FIRST TWO
+  events positionally; keying now precedes the announce, so `PttChanged` legitimately arrives first
+  and the test now scans the stream for the two events it actually cares about.
+
+- **Tests:** `a_conreq_that_was_never_transmitted_announces_nothing` asserts all THREE
+  client-visible effects (no announce, no QSY token, no QSO) plus a `CommandError`, with a positive
+  control — the identical command on a working PTT must do all three, or the negative case would
+  pass on a build where `ConnectPeer` is simply broken.
+
+- **Sabotage-verified:** neutralising the `if !sent` branch reproduces the defect exactly, the test
+  failing with `[RfConnectionChanged { connected: true, peer: Some("W1AW") }, QsyPending { .. }]`
+  for a CONREQ that never went out. Green again on restore.
+
+- **Test results:** `cargo test -p openpulse-daemon --no-default-features` → **154 passed, 0
+  failed** across all result groups. `clippy --all-targets -D warnings` rc=0, and lib-only clippy
+  rc=0 (which is what caught `has_pending` as dead code in a non-test build). Gate below.
+
+Review: maintainer decision recorded on #1265; no separate artifact — this applies a decided shape.
+
 ## 2026-09-14 — the CLI was the last front-end keying the rig by hand (#1299)
 
 - **Requirement/change:** `openpulse-cli` called `assert_ptt`/`release_ptt` directly at **three**
