@@ -16,11 +16,22 @@ set -u
 REPO_ROOT=$(cd "$(dirname "$0")/.." && pwd)
 cd "$REPO_ROOT" || exit 2
 
+# SKIPPED is a distinct outcome from PASS, and refusable (#1279).
+#
+# This used to print SKIPPED and `exit 0`, so a CI runner without the tool produced a GREEN job —
+# the header's own warning that "a release must not claim the vacuous-binding gate ran if it did
+# not" was exactly what the code did. Exit 0 is kept as the default because the header's other
+# intent is right (a missing tool on a dev box should not block), but the marker is now
+# machine-greppable and `REQ_MUTATION_REQUIRED=1` turns absence into a failure, which is what a
+# release or a scheduled job must set.
 if ! command -v cargo-mutants >/dev/null 2>&1; then
-    echo "req-mutation: cargo-mutants not installed — SKIPPED."
-    echo "  install: cargo install cargo-mutants ; then re-run. (This is a scheduled/release gate,"
-    echo "  not the per-push gate, so a missing tool skips rather than blocks — but a release must"
-    echo "  not claim the vacuous-binding gate ran if it did not.)"
+    echo "req-mutation: cargo-mutants not installed."
+    echo "  install: cargo install cargo-mutants ; then re-run."
+    echo "REQ-MUTATION: SKIPPED — the vacuous-binding gate did NOT run."
+    if [ "${REQ_MUTATION_REQUIRED:-0}" = "1" ]; then
+        echo "  REQ_MUTATION_REQUIRED=1, so a skip is a failure here." >&2
+        exit 2
+    fi
     exit 0
 fi
 
@@ -62,14 +73,32 @@ for rid in "${targets[@]}"; do
     out="target/mutants-$rid.log"
     echo "  mutating: ${files[*]}"
     echo "  bound tests: ${tests[*]}"
-    cargo mutants --no-shuffle "${fargs[@]}" -- $testfilter > "$out" 2>&1
+    # `--output target/` keeps cargo-mutants' `mutants.out/` (megabytes, plus a rotated
+    # `mutants.out.old/`) out of the repo ROOT, where it defaults. That directory is untracked, so
+    # in the repo root it trips `gate.sh`'s drift guard — which fingerprints untracked files — and
+    # is one `git add -A` away from being committed. `target/` is gitignored.
+    cargo mutants --no-shuffle --output target "${fargs[@]}" -- $testfilter > "$out" 2>&1
     mrc=$?
-    caught=$(awk '/caught/{for(i=1;i<=NF;i++) if($i ~ /caught/) print $(i-1)}' "$out" | tail -1)
     missed=$(grep -c '^MISSED' "$out" 2>/dev/null); missed=${missed:-0}
     total=$(grep -cE '^(MISSED|CAUGHT|UNVIABLE|TIMEOUT)' "$out" 2>/dev/null); total=${total:-0}
     killed=$(grep -c '^CAUGHT' "$out" 2>/dev/null); killed=${killed:-0}
     echo "  mutants=$total killed=$killed missed=$missed (log $out, exit $mrc)"
-    if [ "$total" -gt 0 ] && [ "$killed" -eq 0 ]; then
+
+    # DID IT RUN? (#1279) `total` used to be a PRECONDITION for judging — `total > 0 && killed == 0`
+    # — so a run that produced no mutant lines at all fell through every branch and the script
+    # printed PASS. A crashed build, a bad filter or an OOM kill therefore read as a clean verdict.
+    # `total == 0` is now a FAILURE TO RUN, which is a different thing from a clean run and must
+    # never be reported as one. cargo-mutants exits 0 when every mutant was caught and non-zero when
+    # some were missed, so `mrc` alone cannot carry this — it is checked only for the crash case,
+    # where it is non-zero AND nothing was parsed.
+    if [ "$total" -eq 0 ]; then
+        echo "  $rid: DID-NOT-RUN — cargo-mutants produced no mutant results (exit $mrc). This is"
+        echo "                     NOT a pass; see $out. Common causes: the baseline build failed,"
+        echo "                     the test filter matched nothing, or the run was killed."
+        rc=1
+        continue
+    fi
+    if [ "$killed" -eq 0 ]; then
         echo "  $rid: VACUOUS-BINDING — the bound tests killed ZERO mutants in the capability code."
         rc=1
     fi
