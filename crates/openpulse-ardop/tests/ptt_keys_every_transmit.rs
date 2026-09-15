@@ -55,6 +55,14 @@ fn rig() -> Rig {
     engine
         .register_plugin(Box::new(bpsk_plugin::BpskPlugin::new()))
         .expect("register BPSK");
+    // START THE ADAPTIVE SESSION, or the ARQ path this file claims to test does not exist (#1374).
+    //
+    // `bridge.rs:303` takes the ARQ branch only when `engine.current_tx_level().is_some()`, which is
+    // set by exactly this call. Without it `adaptive` is false, the ISS loop is never entered, and
+    // `the_transmitter_is_released_before_each_ack_listen` passed while reaching **no ACK listen at
+    // all** — it was observing the ordinary data burst's PTT drop, which is true on any build,
+    // including one that keys straight through its ACK listen.
+    engine.start_adaptive_session(openpulse_core::profile::SessionProfile::hpx500());
     let asserted = Arc::new(AtomicBool::new(false));
     let asserts = Arc::new(AtomicUsize::new(0));
     let releases = Arc::new(AtomicUsize::new(0));
@@ -147,6 +155,18 @@ fn the_transmitter_is_released_before_each_ack_listen() {
     wait_for(
         || !rig.asserted.load(Ordering::SeqCst),
         "PTT to drop before the ACK listen",
+    );
+
+    // TRIPWIRE: prove the ARQ path actually ran, rather than the ordinary data burst (#1374).
+    //
+    // The ISS adaptive loop keys PER ATTEMPT — `attempts = 1 + ARQ_RETRANSMITS` (bridge.rs:314,
+    // ARQ_RETRANSMITS = 3) — and no ACK ever arrives here, so every attempt runs. The non-adaptive
+    // path keys exactly ONCE. So the keying count discriminates the two, with no new engine API:
+    // measured before this fix the count was 1, and the assertion below fails at 1.
+    wait_for(
+        || rig.asserts.load(Ordering::SeqCst) >= 2,
+        "the ARQ loop to key a SECOND attempt — at 1 keying the adaptive path was never taken, so \
+         no ACK listen happened and this test would be asserting nothing",
     );
     assert!(
         rig.releases.load(Ordering::SeqCst) >= 1,
