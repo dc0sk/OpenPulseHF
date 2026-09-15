@@ -9,6 +9,38 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-09-15 — a PTT test that never reached the ACK listen it is named for (#1374)
+
+- **Requirement/change:** `the_transmitter_is_released_before_each_ack_listen`
+  (`ardop/tests/ptt_keys_every_transmit.rs`) asserts that the transmitter is DOWN while the ARQ path
+  listens for its ACK — the stated reason the bridge runs its own retry loop instead of
+  `engine.transmit_arq`. It reached **no ACK listen at all**.
+
+- **Mechanism:** `bridge.rs:303` takes the ARQ branch only when `engine.current_tx_level().is_some()`,
+  set exclusively by `start_adaptive_session`. `rig()` never called it, so `adaptive` was false and
+  the ISS loop was never entered. The test passed by observing the ordinary data burst's PTT drop —
+  true on any build, including one that keys straight through its ACK listen. The #1053 shape: a
+  gate passing for a reason unrelated to the property it names.
+
+- **Fix:** `rig()` starts an `hpx500` adaptive session, and the test gains a **tripwire** that the
+  ARQ path actually ran. No new engine API was needed: the ISS loop keys PER ATTEMPT
+  (`attempts = 1 + ARQ_RETRANSMITS`, `bridge.rs:314`, `ARQ_RETRANSMITS = 3`) while the non-adaptive
+  path keys exactly once, so the existing assert-counter discriminates the two by itself.
+
+- **Sabotage-verified.** With `start_adaptive_session` removed — the pre-fix state — the test FAILS
+  at 1 keying with the message naming the cause, rather than passing silently. Green on restore.
+  That A/B is what makes the tripwire evidence rather than decoration.
+
+- **Test results:** `cargo test -p openpulse-ardop --no-default-features --test
+  ptt_keys_every_transmit` → 3 passed, 0 failed. Sabotaged: 1 failed at the tripwire, 20.04 s
+  (the wait_for timeout). `clippy --all-targets -D warnings` rc=0.
+
+- **Scope:** the ARQ arm is opt-in (`[ardop] enable_adaptive_arq`, default false), so this was never
+  a live on-air exposure — it was a false coverage claim about a path that ships off. The path's
+  own inability to receive on hardware is #1315, unchanged by this.
+
+Review: none — repairs a test that did not exercise its named path; no design decision and no
+production behaviour change.
 ## 2026-09-15 — the vacuous-binding gate could report PASS without running (#1279)
 
 - **Requirement/change:** `scripts/req-mutation.sh` is the repo's only tier-2 instrument — the one
