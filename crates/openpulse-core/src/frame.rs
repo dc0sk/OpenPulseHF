@@ -148,10 +148,45 @@ mod tests {
     // VERIFIES: REQ-FUN-05
     #[test]
     fn corrupted_crc_is_rejected() {
-        let mut bytes = Frame::new(0, b"test".to_vec()).unwrap().encode();
-        let last = bytes.len() - 1;
-        bytes[last] ^= 0xFF;
-        assert!(Frame::decode(&bytes).is_err());
+        // The POSITIVE CONTROL is what makes the rejection mean anything (#1279).
+        //
+        // This test used to assert only `decode(corrupted).is_err()`, which is satisfied by ANY
+        // mutation that breaks encoding — replace `Frame::encode` with `vec![0]` and the corrupted
+        // buffer still fails to decode, so the test still passes. Requirement-scoped mutation
+        // measured exactly that: **65 mutants, 0 killed**. The assertion could not distinguish "the
+        // CRC caught the corruption" from "encode is broken", which is the whole property it names.
+        let payload = b"test".to_vec();
+        let clean = Frame::new(0, payload.clone()).unwrap().encode();
+
+        // 1. An UNCORRUPTED frame must round-trip, payload intact. Without this, every assertion
+        //    below is satisfiable by a codec that produces garbage.
+        let decoded = Frame::decode(&clean).expect("an uncorrupted frame must decode");
+        assert_eq!(decoded.payload, payload, "round-trip changed the payload");
+        assert_eq!(decoded.sequence, 0, "round-trip changed the sequence");
+
+        // 2. Flipping the CRC's own bits must be rejected.
+        let mut corrupt = clean.clone();
+        let last = corrupt.len() - 1;
+        corrupt[last] ^= 0xFF;
+        assert!(
+            Frame::decode(&corrupt).is_err(),
+            "a frame with a corrupted CRC decoded successfully"
+        );
+
+        // 3. And corrupting the PAYLOAD must be rejected too — that is what a CRC is for. A test
+        //    that only flips the checksum bytes cannot tell a real CRC from one that merely
+        //    round-trips its own field.
+        // Indexed from the END, not from `WIRE_OVERHEAD`: the existing assertion above establishes
+        // that the CRC is the final two bytes, so `len - 3` is the last PAYLOAD byte whatever the
+        // header layout is. Indexing from the front would encode an assumption about field order
+        // that nothing here checks.
+        let mut tampered = clean;
+        let last_payload = tampered.len() - 3;
+        tampered[last_payload] ^= 0xFF;
+        assert!(
+            Frame::decode(&tampered).is_err(),
+            "a frame with a corrupted payload decoded successfully — the CRC does not cover it"
+        );
     }
 
     #[test]
