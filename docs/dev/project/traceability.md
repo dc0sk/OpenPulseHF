@@ -9,6 +9,60 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-09-15 — the vacuous-binding gate could report PASS without running (#1279)
+
+- **Requirement/change:** `scripts/req-mutation.sh` is the repo's only tier-2 instrument — the one
+  check that asks whether a bound test *depends on* the code it cites. It had never produced a
+  verdict, and read as green in two different ways when it had not run.
+
+- **Found by running it, which is what #1279 asked for first** (wiring a failing job in would be the
+  #1074 mistake). The inverse turned out to be the live risk: wired in as-is it would have been
+  **green on arrival, permanently, without ever running**.
+
+- **Two fail-opens, both fixed:**
+  1. `cargo mutants`' exit status was captured into `mrc` and never used, and `total > 0` was a
+     *precondition for judging* rather than evidence a run happened. A crashed build, bad filter or
+     OOM kill yields an empty log → `total=0` → every branch skipped → `REQ-MUTATION: PASS`. Now
+     `total == 0` is `DID-NOT-RUN`, a failure distinct from a clean run.
+  2. A missing `cargo-mutants` printed SKIPPED and exited 0, so a CI runner without the tool
+     produced a green job — exactly what the script's own header warned must not happen. `SKIPPED`
+     is now a distinct marker, and `REQ_MUTATION_REQUIRED=1` makes absence an error (exit 2) for a
+     release or scheduled job.
+  Also removed a dead `caught=$(awk …)` left behind by an earlier parse revision.
+
+- **And it was littering the repo root:** cargo-mutants writes `mutants.out/` (plus a rotated
+  `.old/`, 16 MB here) to the workspace root by default. Untracked, so it trips `gate.sh`'s drift
+  guard — which fingerprints untracked files — and is one `git add -A` from being committed. Now
+  `--output target`, which is gitignored.
+
+- **Verification — five branches, each watched, plus the A/B that gives them meaning.** Missing tool
+  → SKIPPED rc=0; missing tool + REQUIRED → rc=2; crashed run → DID-NOT-RUN rc=1; 65 mutants 0
+  killed → VACUOUS-BINDING rc=1; 65 mutants 5 killed → PASS rc=0. **The pre-fix script, given the
+  identical crashed-run input, printed `REQ-MUTATION: PASS` (rc=0)** — without that A/B, "I fixed a
+  fail-open" would be a claim rather than a measurement.
+
+- **Method note worth keeping.** The first sabotage attempt did not sabotage anything: a stub
+  `cargo-mutants` placed on `PATH` is bypassed because cargo resolves subcommands from
+  `$CARGO_HOME/bin` **first**, so the real tool ran for two minutes while the test appeared to be
+  exercising a stub. Shimming `cargo` itself works. A sabotage that does not take effect is
+  indistinguishable from a fix that works.
+
+- **The verdict branches are tested with stubbed logs rather than end-to-end**, deliberately: the
+  diff is the verdict logic, and cargo-mutants itself is unchanged and independently exercised by
+  the real run below. Stubs also exercise both the fail and pass ends in seconds, where a real run
+  takes ~4 minutes and was killed six times by this host's low-memory watchdog.
+
+- **The instrument's first real finding, recorded for #1279 and not fixed here:** REQ-FUN-05
+  (`traceability: enforced`) is **VACUOUS-BINDING** — 65 mutants, 0 killed. Its bound test
+  `corrupted_crc_is_rejected` asserts only `is_err()`, so mutating `Frame::encode` to `vec![0]`
+  still leaves a corrupted buffer failing to decode and the test passing. Nothing asserts that an
+  *uncorrupted* frame round-trips, so the test cannot distinguish "the CRC caught corruption" from
+  "encode is broken". That must be fixed before the scheduled job is switched on, or its first run
+  is red on arrival.
+
+Review: none — repairs a measurement instrument's verdict logic to the shape #1279 specifies; no
+design decision, and the behaviour change is confined to reporting a non-run as a non-run.
+
 ## 2026-09-14 — one definition of which bit an LLR means (#1358)
 
 - **Requirement/change:** three hard-slicing conventions disagreed at exactly ±0.0.
