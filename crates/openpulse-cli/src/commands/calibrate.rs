@@ -322,7 +322,6 @@ pub fn run_drive(rig: &str, mode: &str, lo: f32, hi: f32) -> Result<DriveResult>
     use std::time::Duration;
 
     use anyhow::Context;
-    use ofdm_plugin::OfdmPlugin;
     use openpulse_audio::CpalBackend;
     use openpulse_radio::{RigctldController, RigctldPtt};
 
@@ -342,9 +341,13 @@ pub fn run_drive(rig: &str, mode: &str, lo: f32, hi: f32) -> Result<DriveResult>
     );
     let _drive_watchdog = drive_ptt.spawn_watchdog(None);
     let mut engine = ModemEngine::new(Box::new(CpalBackend::new()));
-    engine
-        .register_plugin(Box::new(OfdmPlugin::new()))
-        .map_err(anyhow::Error::new)?;
+    // The SAME plugin set the rest of the CLI registers (#1369). This registered `OfdmPlugin`
+    // ALONE, so for any other mode — BPSK250, QPSK500, anything on the HF ladder — every
+    // `engine.transmit` below returned `PluginNotFound`, the error was discarded, and the loop went
+    // on to sample ALC on a **keyed but unmodulated** rig. That reading was then reported as a
+    // drive measurement, or blamed on the rig ("may not expose ALC") for what was a mode/plugin
+    // mismatch in our own code.
+    crate::plugins::register_all(&mut engine)?;
     engine.disable_csma();
     let payload: Vec<u8> = (0..255u16)
         .map(|i| (i.wrapping_mul(37).wrapping_add(11)) as u8)
@@ -355,8 +358,15 @@ pub fn run_drive(rig: &str, mode: &str, lo: f32, hi: f32) -> Result<DriveResult>
         engine.set_tx_attenuation_db(tuner.attenuation());
         let burst = drive_ptt.keyed(None).context("PTT assert (rigctld)")?;
         // Drive a short burst, then sample ALC (peak over the burst).
+        //
+        // The transmit result is CHECKED (#1369): a failed transmit must abort with that error
+        // rather than fall through to an ALC sample, because an ALC reading taken while nothing was
+        // modulated is not a drive measurement — it is the rig's response to a bare carrier, and it
+        // looks exactly like a real one.
         for _ in 0..3 {
-            let _ = engine.transmit(&payload, mode, None);
+            engine
+                .transmit(&payload, mode, None)
+                .with_context(|| format!("calibrate drive: transmit failed in {mode}"))?;
         }
         sleep(Duration::from_millis(150));
         let mut alc = 0.0f32;
