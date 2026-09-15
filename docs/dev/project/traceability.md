@@ -9,6 +9,55 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-09-15 — REQ-FUN-05's bound test could not tell a working CRC from a broken encoder (#1279)
+
+- **Requirement/change:** REQ-FUN-05 ("validate frame integrity … with CRC checks") is
+  `traceability: enforced`, and its bound test `corrupted_crc_is_rejected` was **VACUOUS-BINDING** —
+  requirement-scoped mutation measured **65 mutants, 0 killed**. The test asserted only
+  `decode(corrupted).is_err()`, which any mutation that breaks encoding satisfies: replace
+  `Frame::encode` with `vec![0]` and the corrupted buffer still fails to decode, so the test still
+  passes. It could not distinguish "the CRC caught the corruption" from "encode is broken", which
+  is the entire property it names.
+
+- **Fix:** three assertions where there was one. (1) A **positive control** — an uncorrupted frame
+  must decode with payload and sequence intact; without it every other assertion is satisfiable by a
+  codec producing garbage. (2) The original CRC-corruption rejection. (3) **Payload** corruption must
+  also be rejected — a test that only flips the checksum bytes cannot tell a real CRC from one that
+  merely round-trips its own field.
+
+- **Layout independence, deliberately:** the payload byte is indexed from the END (`len - 3`) rather
+  than by `WIRE_OVERHEAD`. The existing CRC assertion already establishes that the checksum is the
+  final two bytes; indexing from the front would encode an assumption about field order that nothing
+  here checks.
+
+- **A/B on the identical planted mutant** (`Frame::encode -> vec![0]`, one cargo-mutants applied and
+  the old test survived):
+
+  | test version | result | meaning |
+  |---|---|---|
+  | old (`is_err()` only) | **passes**, rc=0 | mutant survives — the defect |
+  | new (with positive control) | **fails**, rc=101 | mutant killed |
+
+  The new test fails precisely at the positive control (`an uncorrupted frame must decode: Frame("frame
+  too short")`), so the improvement is attributable to that assertion rather than to the change in
+  general.
+
+- **Why a targeted mutant rather than the full sweep:** the sweep reports an aggregate; this
+  identifies the specific mutant class that drove 65/65 survival and attributes the fix to one line.
+  The full re-measurement is still wanted for the new ratio, but four attempts were killed mid-run by
+  this host's low-memory watchdog (eight such kills tonight), and the fix does not depend on it — the
+  mechanism is directly demonstrable.
+
+- **Test results:** `cargo test -p openpulse-core --no-default-features` → **26 result groups ok, 0
+  failed**. `clippy --all-targets -D warnings` rc=0. Planted-mutant A/B as tabled above.
+
+- **Consequence for #1279:** this was the blocker on switching the mutation job on — the first
+  scheduled run would otherwise have been red on arrival, the #1074 mistake that issue warns against.
+  The cadence question remains open there.
+
+Review: none — repairs a test that could not fail for its stated reason; no design decision and no
+production behaviour change.
+
 ## 2026-09-15 — a PTT test that never reached the ACK listen it is named for (#1374)
 
 - **Requirement/change:** `the_transmitter_is_released_before_each_ack_listen`
