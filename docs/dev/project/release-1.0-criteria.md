@@ -2,7 +2,7 @@
 project: openpulsehf
 doc: docs/dev/project/release-1.0-criteria.md
 status: living
-last_updated: 2026-09-14
+last_updated: 2026-09-16
 ---
 
 # What 1.0 means
@@ -125,8 +125,13 @@ exists and is enforced, but the row was never re-assessed. Verified while drafti
   both rows said "enforced" while the check ran nowhere — which is how 40 new offenders accumulated
   in 19 days.
 - `REQ-PLAT-05` (ARM64 in regular compatibility testing) and `REQ-NFR-01` (Linux/macOS buildability)
-  — the CI jobs exist and are correct (`cross-aarch64-linux`, `macos-build`), but the `CI` workflow
-  is `disabled_manually`, so nothing runs them automatically.
+  — the CI jobs exist and are correct (`cross-aarch64-linux`, `macos-build`), and nothing runs them
+  on an ordinary PR. **Corrected 2026-09-16**: this used to say the `CI` workflow is
+  `disabled_manually`, which was true when written and is now false — the workflow is `active`
+  (`gh api repos/dc0sk/OpenPulseHF/actions/workflows`). The *reason* changed, not the outcome: both
+  jobs carry the `release/**`-or-dispatch `if:` from #1120, so they SKIP on every non-release PR.
+  #1144's post-merge gate does not cover them either — it runs `scripts/gate.sh` only, which is the
+  native-Linux workspace gate and compiles for neither target.
 
 | # | Criterion | How it is scored |
 |---|---|---|
@@ -326,7 +331,7 @@ which 1.0 explicitly does not make.
 | Group | Status |
 |---|---|
 | **A — On air** | A1 partly (one direction decoded 2026-07-30); A2 **not scoreable until #1081 attribution lands** — failed decodes are unobserved and that is open engineering, not radio time; A3 not started; A4/A5 unverified. Newest evidence bundle: 2026-07-30. **Lead item is a purchase**: G0 galvanic USB isolation blocks the campaign and is neither code nor radio time. |
-| **B — Bookkeeping** | 16 matrix rows, several bookkeeping-only; CI is `release/**`-only so some rows describe gates nothing runs (#1144, #1129). |
+| **B — Bookkeeping** | 16 matrix rows, several bookkeeping-only. CI's heavy jobs are still `release/**`-only, so some rows describe gates that do not run per-PR (#1129). Narrowed 2026-09-16 by #1144: the workspace gate now runs post-merge on `main`, and traceability + benchmark are required status checks — so "nothing runs them" is no longer accurate for the gate itself, only for the platform jobs. |
 | **C — Security honest** | Mostly there; C3 (no authenticated remote panel) to state or fix. |
 | **D — Test integrity** | Strong. D2 (coverage tooling) does not exist — days to weeks, from scratch. |
 | **E — Docs match code** | Repeat audit at the release commit. **E2 is a regulatory obligation** (§97.309(a)(4) third-party-implementable spec), not polish. |

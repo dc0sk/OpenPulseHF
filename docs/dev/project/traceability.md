@@ -15,6 +15,96 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-09-16 — the workspace gate now runs post-merge on `main`, and two status checks are required
+
+**Change.** #1144 Part 3, applied as a maintainer decision (2026-09-16): the full package, not a
+subset.
+
+**The defect, restated because the fix is easy to over-read.** `scripts/gate.sh` ran in CI only on a
+`release/**` head branch (#1120), no workflow triggered on push to `main`, and the "protect main"
+ruleset had `conditions.ref_name.include: []` — so it targeted no refs and enforced nothing, while
+appearing `active` in the API listing. Meanwhile the pre-push hook tests only the crates **owning**
+changed files, so a behavioural change in `openpulse-core` that breaks an `openpulse-modem` test
+passes a fully compliant push and stays invisible until the next release PR. That is #1074's exact
+failure mode living in the gap between releases, and it needs no `--no-verify` to happen.
+
+**Design decision, and what was deliberately NOT done.** The residual is a **detection** failure, not
+a prevention one, so the fix targets detection:
+
+- `.github/workflows/post-merge-gate.yml` — `push: branches: [main]` running `scripts/gate.sh`, with
+  `cancel-in-progress` so a burst of merges gates only the tip (the state anyone cares about), at
+  zero merge latency. It opens an issue on failure, deduplicated by title prefix, because a
+  default-branch failure email goes unread. **This does not stop bad code landing**; it bounds how
+  long it sits unnoticed at one merge instead of one release.
+- The ruleset now targets `~DEFAULT_BRANCH`, with **traceability + benchmark's two jobs as required
+  status checks** and `strict_required_status_checks_policy: false`. Applied via the REST API and
+  **verified by readback, not by the PUT's exit code** — `gh api repos/dc0sk/OpenPulseHF/rules/
+  branches/main` returns `deletion`, `non_fast_forward`, `pull_request`, `required_status_checks`
+  with the three contexts. `pr-hook-long-runner` is deliberately **not** required, for two reasons:
+  a job skipped by an `if:` counts as success (vacuously green on code PRs), and a workflow skipped
+  by `ci.yml`'s workflow-level `paths-ignore` leaves its check **Pending and blocking** (it would
+  permanently block docs-only PRs). Both failure directions argue for excluding it. Verified that
+  neither `traceability.yml` nor `benchmark.yml` carries a `paths-ignore`, so neither can skip.
+- **The ruleset's `code_quality` rule was DELETED rather than activated.** It covers seven languages,
+  none of them Rust; it blocks when analysis "fails for any reason"; and code scanning is
+  `not-configured` on this repo. Pointing the ruleset at a real ref would have made live a rule that
+  cannot pass and that no one chose as a gate.
+- **Rejected:** a weekly cron gate (dominated by the post-merge job, which bounds rot at one merge
+  rather than seven days), and testing reverse dependents in the pre-push hook — that recreates the
+  slow hook #1074's own postmortem says people skip past.
+
+**Implementation.** `.github/workflows/post-merge-gate.yml` (new); `.cargo-husky/hooks/pre-push`
+(names the reverse dependents it did not test, computed from `cargo metadata`, never blocking the
+push — dev-dependencies kept on purpose, since a dev-dependent's TESTS are where a behavioural break
+surfaces); ruleset `15468033` via the REST API.
+
+**The sweep, which is the part that matters more than the wording.** `CLAUDE.md` mandates
+`git grep -ln 'gate.sh' -- ':!scripts' ':!target'` on any change to *when* the gate runs, because
+#1120 committed exactly this shape — a config narrowing that left true sentences elsewhere false.
+Twenty-one files matched; the living-guidance ones were corrected in this change:
+`CLAUDE.md`, `.cargo-husky/hooks/pre-push`, `.github/workflows/ci.yml`,
+`.github/workflows/traceability.yml`, `docs/dev/project/release-1.0-criteria.md`. Review artifacts
+and older ledger entries were left alone: they record what was true when written.
+
+**The sweep also found a live falsehood outside this change's scope**, which is what the sweep is
+for: `release-1.0-criteria.md` said the `CI` workflow is `disabled_manually`. It is `active`
+(`gh api repos/dc0sk/OpenPulseHF/actions/workflows`). The outcome it described was still right and
+the reason was wrong — both `cross-aarch64-linux` and `macos-build` skip on non-release PRs because
+of #1120's `if:`, not because the workflow is off. Corrected in place with the date, per the standing
+rule that a retraction living only in the ledger is not a retraction.
+
+**Tests → results.** `python3 -c 'import yaml; yaml.safe_load(...)'` on all three workflow files —
+parses, jobs and triggers as intended. `bash -n .cargo-husky/hooks/pre-push` — syntax OK. The
+reverse-dependent computation was checked against known answers rather than assumed:
+`openpulse-core` → 31 downstream crates, `openpulse-modem` → 15, `openpulse-panel` (a leaf GUI app)
+→ none. Workspace members: 41.
+
+**Stated limit, so a green `main` is not over-read.** The post-merge gate proves the tip of `main`
+passed `scripts/gate.sh` — it does **not** mean the gate passed before the merge, and it does not
+run the two `#[ignore]`d acceptance suites (#1274). Nothing blocks a merge on the gate; run it
+yourself.
+
+**Blast radius, corrected by review — it is much smaller than the first draft claimed.** Three of
+the four ruleset rules were ALREADY enforced by classic branch protection on `main`
+(`enforce_admins: true`, a required PR at 0 approvals, no force-pushes, no deletions), so they do not
+become live for the first time. `code_quality` was deleted. What is genuinely new is the required
+status checks, plus one parameter the first draft did not list:
+`require_extra_approval_for_unattributed_changes: true`, which asks for an extra approval on PRs
+opened by Copilot without human attribution — the Copilot cloud agent is active on this repo, so
+Copilot-opened PRs will need the owner; human-authored PRs are unaffected.
+
+**Record correction, and it is the finding that matters most here.** The first draft of this entry,
+the commit message and `CLAUDE.md` all stated the ruleset change as DONE while
+`gh api .../rules/branches/main` still returned `[]`. That is the #1120 archetype — a record written
+ahead of the configuration it describes — committed inside the very sweep whose purpose is to prevent
+it, and caught by adversarial review rather than by any check. A ruleset lives outside git and can be
+silently undone (this one sat "active" with an empty `include` for five months), so the honest form
+is a readback quoted next to the claim, which is what this entry now carries. A machine-checked
+version — a `traceability.yml` step asserting the rule exists — is the obvious follow-up and is NOT
+in this change.
+
+---
+
 ## 2026-09-16 — an `unsafe`/UB tripwire, and three records that contradicted the code
 
 Four changes, all gate/record work, batched because none alters product behaviour.

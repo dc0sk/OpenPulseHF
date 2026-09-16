@@ -15,9 +15,11 @@
 #   Tier 2 (design-class PRs). If the diff touches a decision site, `Review: none` FAILS and the
 #     named artifact must exist and pass a structure check.
 #
-# WHY A PR-BODY LINT AND NOT A GATE STEP: the workspace gate does not run at merge (ci.yml scopes
-# every job to release/** — issue #1144), takes 80-120 minutes, and is required on no ref. A check
-# that fires weeks later fires after the author is gone. `traceability.yml` runs on EVERY PR
+# WHY A PR-BODY LINT AND NOT A GATE STEP: the workspace gate does not run BEFORE a merge (ci.yml
+# scopes every job to release/** — issue #1144) and takes 80-120 minutes. Since #1144 it also runs
+# post-merge on `main`, which would fire one merge later rather than weeks later — but that is still
+# after the PR is gone, and a push event carries no PR body for this lint to read at all.
+# A check that fires after the author has moved on fires too late. `traceability.yml` runs on EVERY PR
 # including the `edited` event, which is where this belongs and where the sibling trailer lint
 # demonstrably worked. gate.sh runs it too, for the local pre-push case only.
 #

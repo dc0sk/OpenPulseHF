@@ -1,0 +1,129 @@
+# The full workspace gate, run on `main` AFTER a merge (#1144).
+#
+# Why this exists, and what it is NOT. `ci.yml`'s gate job is scoped to `release/**` head branches
+# (#1120), and no status check is required anywhere, so between releases nothing ran the gate at all.
+# The residual #1144 names is a DETECTION failure, not a prevention one: the pre-push hook tests only
+# the crates owning changed files, so a behavioural change in `openpulse-core` that breaks an
+# `openpulse-modem` test passes a fully compliant push and stays invisible until the next release PR.
+# That is #1074's exact failure mode living in the gap between releases.
+#
+# So this does not stop bad code landing. It bounds how long it sits unnoticed at one merge instead
+# of one release, and it is the cheapest thing that targets the actual gap.
+#
+# `cancel-in-progress: false`, and the reasoning that first said `true` was wrong. Adversarial review
+# measured this repo's cadence (60 merges, 2026-09-05..09-16: median gap 156 min, 11/59 gaps under an
+# hour) against the gate's runtime (44 min on ubuntu-latest for the one real runner execution on
+# record; 76-79 min locally), so cancelling would throw away a run at minute 79 on roughly a fifth to
+# a third of merges. The dichotomy that justified `true` -- "cancel, or queue every merge" -- is
+# false: a concurrency group holds at most ONE running and ONE pending run, and a newer push replaces
+# the pending one. So `false` still gives the tip verdict after every burst, never discards a
+# near-complete run, and caps concurrency at two. Attribution improves for free, because an in-flight
+# run completes against its own SHA.
+#
+# Actions are pinned to a full commit SHA with the tag as a trailing comment, per `ci.yml`'s header.
+
+name: Post-merge gate
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+# Deliberately NO paths-ignore, and `ci.yml`'s justification for having one does not transfer. That
+# one rests on "no crate pulls a .md into the build" — true, and beside the point, because
+# `scripts/gate.sh` is not only compile+test: doc frontmatter, ledger ordering, the review-trailer
+# lint and the re-homed-docs lint are all steps a DOCS-ONLY merge can turn red. A docs-only tip needs
+# its own verdict as much as any other.
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+  REQUIRED_RUST: 1.97.1
+
+concurrency:
+  group: post-merge-gate-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  gate:
+    name: Workspace gate on main
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
+        with:
+          toolchain: ${{ env.REQUIRED_RUST }}
+
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+        with:
+          shared-key: ${{ github.job }}
+          # The gate is EXPECTED to go red here sometimes — that is the job's purpose — and without
+          # this a red run saves nothing, so the next one also pays a cold build.
+          cache-on-failure: true
+
+      # One verdict path — `scripts/gate.sh`, never an open-coded `cargo test`. Without
+      # `--no-fail-fast` cargo stops at the first failing binary and the count is a lower bound
+      # (CLAUDE.md verification rule 2); the script is what guarantees the flag and the `GATE:` line.
+      - name: Workspace gate (fmt + clippy + tests)
+        id: gate
+        run: ./scripts/gate.sh
+
+      - name: Publish the gate verdict
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: post-merge-gate-verdict-${{ github.sha }}
+          path: |
+            target/gate-verdict.json
+            target/gate-*.log
+          if-no-files-found: warn
+
+      # A failure on the default branch must not depend on someone reading a notification email.
+      # Deduplicated by title prefix so a run of red merges files one issue, not seven — and the
+      # existing issue is commented on instead, so the tip SHA is still recorded.
+      - name: Open or update an issue on failure
+        if: failure() && steps.gate.outcome == 'failure'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SHA: ${{ github.sha }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -uo pipefail
+          TITLE_PREFIX="Post-merge gate is RED on main"
+
+          # The gate's OWN verdict line and its untruncated failure list go in the ISSUE BODY, not
+          # only in the uploaded artifact. Actions artifacts expire (90 days by default); issues do
+          # not, and an expired artifact turns this issue into a pointer at nothing. Read straight
+          # from the log file rather than from a pipe, per the repo's verdict rules.
+          gate_line="$(grep -h '^GATE:' target/gate-*.log 2>/dev/null | tail -1)"
+          [ -n "$gate_line" ] || gate_line="(no GATE: line was produced — the gate died before writing a verdict)"
+          failures="$(sed -n '/FAILURES (complete, untruncated)/,$p' target/gate-*.log 2>/dev/null | head -200)"
+          [ -n "$failures" ] || failures="(no failure block in the log)"
+
+          {
+            printf '`scripts/gate.sh` failed on `main` at `%s`.\n\n' "$SHA"
+            printf '```\n%s\n```\n\n' "$gate_line"
+            printf 'Run: %s\n\n' "$RUN_URL"
+            printf '<details><summary>Failure list from the gate log</summary>\n\n```\n%s\n```\n</details>\n\n' "$failures"
+            printf 'This is a DETECTION signal (#1144): the code is already on `main`. The pre-push\n'
+            printf 'hook tests only the crates owning changed files, so a cross-crate behavioural\n'
+            printf 'break passes a fully compliant push — that is the gap this job exists to close.\n'
+          } > /tmp/gate-issue-body.md
+
+          # Scope the dedup search to issues THIS BOT opened. Without `--author` any user could open
+          # an issue with this title and silently capture every future failure report. A zero from
+          # this search is a claim about the search, so creating is the fallback, never the
+          # assumption — and a duplicate issue is a far cheaper failure than a lost report.
+          existing="$(gh issue list --state open --limit 1 --author app/github-actions \
+            --search "in:title \"$TITLE_PREFIX\"" --json number --jq '.[0].number // empty')"
+          if [ -n "$existing" ]; then
+            gh issue comment "$existing" --body-file /tmp/gate-issue-body.md
+          else
+            gh issue create --title "$TITLE_PREFIX" --body-file /tmp/gate-issue-body.md
+          fi
