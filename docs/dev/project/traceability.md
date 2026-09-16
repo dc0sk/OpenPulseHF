@@ -3,11 +3,67 @@
 Running record of substantive changes as a full chain:
 **requirement/change → architecture/design decision → implementation → tests → test results.**
 
-Newest first. See `CLAUDE.md` → *PR hygiene → Traceability* for the standing rule. The per-feature
+Newest first — and **insert at the very top even when a related entry sits lower**; cross-link it
+from there instead. Placing an entry beside its topic produced an out-of-date-order file twice in
+one session, both caught by `scripts/check-ledger-order.sh`. Note also that this file is a
+serialisation point by construction: every concurrent PR appends here, so two of them always
+conflict. Resolve by keeping both entries in date order, never by dropping one.
+
+See `CLAUDE.md` → *PR hygiene → Traceability* for the standing rule. The per-feature
 acceptance gates live in `CLAUDE.md` → *Acceptance criteria*; this ledger adds the design rationale
 and the actually-observed results per change.
 
 ---
+
+## 2026-09-16 — an `unsafe`/UB tripwire, and three records that contradicted the code
+
+Four changes, all gate/record work, batched because none alters product behaviour.
+
+- **`scripts/check-unsafe.sh` + a `gate.sh` step (maintainer decision).** Asked where Miri belongs —
+  a hook or a skill — the answer was **neither**. Measured first: this workspace has **zero**
+  `unsafe` constructs (`grep -rnE 'unsafe (\{|fn |impl |trait )'` over the production tree), no FFI,
+  no `transmute`, no raw pointers; and `rustup` is absent, so `cargo miri` cannot run here at all. A
+  Miri step would therefore be a gate that cannot fail, and the `code-quality-gates` skill already
+  says a workspace with no `unsafe` "skips the step honestly". So: the honest skip, made
+  **self-arming** — it passes while there is no `unsafe` and fails the moment any appears without a
+  Miri step wired. A tripwire, not a ban: `unsafe` WITH Miri wired passes, pinned by its own
+  self-test case.
+
+  **Six committed fixtures**, two of which exist because testing contradicted reading: the word in a
+  **string** (the shape that made a hand count of this repo read "8 unsafe" when the truth was 0 —
+  `"unsafe trust store permissions"` is a log message) and an identifier **ending** in the keyword
+  (`if is_unsafe {` MATCHED before a word boundary was added). Stated limit: the scan is line-based,
+  which is safe only because `gate.sh` runs `cargo fmt --check` first and rustfmt collapses
+  `unsafe\n{` — verified, not assumed.
+
+  **Verification note:** the first sabotage reported PASS with a real `unsafe` block planted, because
+  the script was run from the scratchpad and derives its root from `$0`, so it scanned the wrong
+  tree. `UNSAFE_GATE_ROOT` now exists for that, with the reason inline.
+
+- **A probe header that had contradicted its own code for a month.**
+  `preamble_rho_fade_and_filter_probe.rs` said a veto-disabled arm was still *needed* ("Until then,
+  treat the decoded-only column as a tautology"), written 2026-08-07 (#1088), while `F9_VETO=off`
+  landed 2026-08-17 (#1156) ~1350 lines below and never updated it. The file disagreed with itself
+  and **the stale claim sat at the top**, where a reader meets it first. It cost a design comment on
+  #1337 prescribing that the arm be built. Corrected, with the cost recorded.
+
+- **`check-review.sh` now refuses a NEGATED closing keyword.** A PR body reading "Does NOT close
+  #1279" **closed #1279**: GitHub matches the substring and ignores the negation. Banned as a
+  construct rather than discouraged, since there is no way to say "not closing" while naming the
+  keyword. Self-tested both ways — a negated keyword is refused, and a genuine `Closes #N` still
+  passes, because a guard that blocked real closing trailers would be worse than the bug.
+
+- **`traceability.md`'s header** now says to insert at the very top even when a related entry sits
+  lower, and records that the file is a serialisation point by construction — every concurrent PR
+  appends here, so two of them always conflict; resolve by keeping both in date order. Placing an
+  entry beside its topic produced an out-of-date-order file twice in one session.
+
+- **Test results:** `check-unsafe.sh --self-test` PASS (6 cases) and a live sabotage FAIL/restore
+  cycle against the real tree; `check-review.sh --self-test` PASS including the two new cases;
+  `check-ledger-order.sh`, `check-rehomed-docs.sh`, `validate-doc-frontmatter.sh` all rc=0. Gate
+  below.
+
+Review: `docs/dev/reviews/artifacts/unsafe-ub-tripwire.md`.
 
 ## 2026-09-15 — `calibrate drive` measured ALC on an unmodulated keyed rig (#1369)
 

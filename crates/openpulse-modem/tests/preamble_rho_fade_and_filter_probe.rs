@@ -32,11 +32,23 @@
 //! 1010–1696 settle rejections per 30 seeds, and **0 of the seeds carrying a rejection ever
 //! decoded**, in every cell measured.
 //!
-//! So the numbers it prints are not evidence about the channel. Making it sound needs a
-//! veto-disabled arm — a plugin wrapper returning `None` from `preamble_template`, so
-//! `build_preamble_veto` yields `None` and the decode runs ungated. Until then, treat the
-//! decoded-only column as a tautology and the all-frames column as unconditioned (it counts frames
-//! lost in fade nulls against the threshold, which overstates a threshold's cost).
+//! So the numbers it prints are not evidence about the channel **in the default arm**.
+//!
+//! THE VETO-DISABLED ARM NOW EXISTS: run with `F9_VETO=off` and `f9_decode_conditioned_rho_tail`
+//! builds the receiver with the veto suppressed, printing which arm it is in
+//! (`"OFF (F9_VETO=off) — the decoded-only column is sound"` versus
+//! `"ON (shipped) — the decoded-only column is CIRCULAR"`). `DELIVERED_FRAME_RHO_BOUND`'s
+//! supporting measurement was taken in that arm (see `plugins/bpsk/src/modulate.rs`).
+//!
+//! This paragraph said the arm was still needed from 2026-08-07 (#1088) until 2026-09-16, while
+//! `F9_VETO` landed 2026-08-17 (#1156) ~1350 lines below and did not update it — so the file
+//! contradicted itself, with the stale claim at the top where a reader meets it first. It cost a
+//! design comment on #1337 that prescribed building the arm that already existed. A header is a
+//! claim that cannot fail; grep for the artifact before trusting one.
+//!
+//! WITHOUT `F9_VETO=off`, the caveat stands: treat the decoded-only column as a tautology and the
+//! all-frames column as unconditioned (it counts frames lost in fade nulls against the threshold,
+//! which overstates a threshold's cost).
 //!
 //! Second known contaminant, unresolved: the decode verdict is **wall-clock bounded** unless
 //! `set_deterministic_scan_positions`/`_max_iterations` are set (#1066 — the determinism is

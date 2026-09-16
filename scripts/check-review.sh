@@ -116,6 +116,21 @@ artifact_ok() {   # $1 = path ; echoes the reason it is bad, empty when good
 
 lint_message() {   # $1 = message text, $2 = design-class (0/1)
     msg="$1"; design="$2"
+
+    # NEGATED CLOSING KEYWORD. GitHub matches `close|fix|resolve` + `#N` as a SUBSTRING and ignores
+    # any negation in front of it, so a body saying "Does NOT close #1279" closed #1279 on merge.
+    # There is no way to say "not closing" while naming the keyword, so the construct is banned
+    # rather than discouraged: write "#N stays open" or "see #N".
+    negated=$(printf '%s\n' "$msg" |
+        grep -inE '(not|never|n.t|non-|without)[^.]{0,40}(clos(e|es|ed|ing)|fix(es|ed)?|resolv(e|es|ed))[[:space:]:]+#[0-9]+' || true)
+    if [ -n "$negated" ]; then
+        echo "  FAIL: a closing keyword is NEGATED in prose — GitHub will still close the issue."
+        printf '%s\n' "$negated" | sed 's/^/        /'
+        echo "        GitHub matches the substring and ignores the negation. Rewrite without the"
+        echo "        keyword, e.g. '#N stays open' or 'see #N'."
+        return 1
+    fi
+
     review=$(printf '%s\n' "$msg" | sed -n 's/^Review:[[:space:]]*//p' | head -1)
 
     if [ -z "$review" ]; then
@@ -175,6 +190,20 @@ if [ "$SELF_TEST" -eq 1 ]; then
     if lint_message "$(cat "$tmp/m3")" 1 >/dev/null 2>&1; then
         echo "SELF-TEST FAIL: a STUB artifact was accepted"; rc=1
     else echo "  ok: stub artifact rejected"; fi
+
+    # #1279: a NEGATED closing keyword must be refused. Committed because the failure is silent —
+    # GitHub matches the substring, closes the issue two seconds after merge, and nothing says why.
+    printf 'body\n\nDoes NOT close #1279: still open.\n\nReview: none — mechanical\n' > "$tmp/m5"
+    if lint_message "$(cat "$tmp/m5")" 0 >/dev/null 2>&1; then
+        echo "SELF-TEST FAIL: a NEGATED closing keyword was accepted"; rc=1
+    else echo "  ok: negated closing keyword rejected"; fi
+
+    # ...and the guard bans NEGATION, not closing: a genuine trailer must still pass, or it would be
+    # worse than the bug it fixes.
+    printf 'body\n\nCloses #1279\n\nReview: none — mechanical\n' > "$tmp/m6"
+    if lint_message "$(cat "$tmp/m6")" 0 >/dev/null 2>&1; then
+        echo "  ok: a genuine 'Closes #N' still accepted (positive control)"
+    else echo "SELF-TEST FAIL: a genuine 'Closes #N' was rejected"; rc=1; fi
 
     # positive control: the checker must ACCEPT a good message, or it is vacuously strict
     printf 'body\n\nReview: none — applies a verdict already given\n' > "$tmp/m4"
