@@ -15,6 +15,65 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-09-16 — `decode_burst` was uncoded-only, and its slices were raw-sized; #1310 PR1b
+
+**Change.** #1310 PR1b, the second of the three-PR split adversarial review imposed on that issue.
+
+**Defect, in two halves.** `scan_burst_onsets` passed a hardcoded `FecMode::None` to
+`decode_attempt`, so `decode_burst` could not decode a coded burst at all. And its per-attempt slice
+came from `frame_scan_geometry`, which returns the plugin's **raw** `max_frame_samples` — sized for
+one RS block plus envelope — with no FEC widening, so even with the FEC threaded the scan would look
+at windows too short to hold a two-block frame.
+
+**Design decision, and the correction review forced.** The plan on the issue proposed a NEW
+`decode_burst_with_fec` entry point. Review established that the coded onset scan already exists
+inline in the OTA arm, twice, so a new decoder would have been a fourth copy; the right edit is a
+**parameterisation** — `fec` threaded through `decode_burst_inner` and `scan_burst_onsets`, with
+`decode_burst` becoming the `FecMode::None` case. `ota_decode_burst` was rejected as the alternative
+for front-end callers: it requires an active OTA session and moves the rate controller and HARQ state
+on success, which `a_control_frame_does_not_touch_the_rate_controller` exists to forbid.
+
+**Review also corrected my justification, and the correction is the useful part.** I claimed a raw
+slice "cannot hold a coded frame". That is true only **above 213 B of payload** — wire = payload +
+`WIRE_OVERHEAD` (10), and RS(255,223) is one block iff wire ≤ 223. Below it the raw slice already
+holds the coded frame, which is what the shipped OTA coded arm relies on today. The widening is still
+right (over-reserving is benign, because `decode_prefix` rescues a slice longer than the frame and
+never one shorter), but the GATE had to be built at the boundary or it would have been vacuous.
+
+**Implementation.** `engine.rs`: `decode_burst_with_fec` (new public entry, the parameterised form);
+`decode_burst` delegates with `FecMode::None`; `decode_burst_inner` takes `fec`, sizes through
+`frame_plan(raw, fec).0`, and its short-burst fallback moved to `receive_from_samples_with_fec`;
+`scan_burst_onsets` takes `fec` and the `FecMode::None` literal is gone. `decode_burst_phase1` stays
+`None`-only **with the reason written down**: its only caller is the OTA arm's #1123 uncoded
+fall-through.
+
+**Tests → results.** `engine.rs`'s `burst_decode_sizes_for_the_fec` unit module (new, 3 tests), all
+passing. Boundary computed rather than assumed: payload 200 → wire 210 → 1 block; 213 → 223 → 1;
+**214 → 224 → 2**; 255 → 265 → 2.
+
+**The reachability ratchet rejected the first attempt, and it was right.** `decode_burst_with_fec`
+was written `pub`, and the gate failed with `NEW public items with no production caller (1)` — its
+only intended caller is the ARDOP bridge, which lands in PR1c. That is a real consequence of
+splitting a producer from its sole consumer, and neither the plan nor its review anticipated it.
+Resolved by scoping it `pub(crate)` until PR1c promotes it in the same diff that adds the call, and
+moving the gate in-crate as a unit module — this repo's own rule for a probe needing non-public
+access. **The two alternatives were rejected for stated reasons:** baselining it as `DORMANT` would
+record a *promise* ("the caller is coming") where every other `DORMANT` here records a *rationale*
+(a wire contract that exists whether or not it is dispatched, #1147), and a promise is what becomes
+permanent when the next PR slips; and having KISS pass `FecMode::None` through it to manufacture a
+caller would be gaming the check. Ratchet after the change: 0 new, no baseline growth.
+
+**Sabotage, twice, each failing a DISTINCT set** — which is what shows the two halves are separately
+gated rather than one gate and a passenger:
+- slices re-sized raw: the 255 B case FAILS, the 200 B control PASSES, uncoded passes.
+- `FecMode::None` re-hardcoded at the decode: BOTH coded cases FAIL, uncoded passes.
+
+**Related finding, filed not fixed.** `burst_onset_scan_bounds` still returns the raw max, and the
+OTA coded arm still slices with it at every non-zero onset — the same shape, one caller over.
+Filed as #1384, **code-read and not measured**, with the measurement stated there.
+
+---
+
 ## 2026-09-16 — the KISS TNC could not receive on real audio; #1310 PR1a
 
 **Change.** #1310 PR1a, the first of the three-PR split adversarial review imposed on that issue's

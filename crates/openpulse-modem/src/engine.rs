@@ -2305,6 +2305,35 @@ impl ModemEngine {
         mode: &str,
         burst: &AudioSamples,
     ) -> Result<Vec<u8>, ModemError> {
+        self.decode_burst_with_fec(mode, FecMode::None, burst)
+    }
+
+    /// [`decode_burst`](Self::decode_burst) for a burst carrying `fec`.
+    ///
+    /// **Why a parameter and not a fourth burst decoder (#1310).** The coded onset scan already
+    /// exists — inline in the OTA arm, twice — so a new entry point would have been a copy of
+    /// something shipped. This is the same shape `decode_attempt` already uses: one scan, the FEC
+    /// threaded through, and `FecMode::None` byte-identical to the behaviour before this change.
+    ///
+    /// `ota_decode_burst` is NOT the alternative for a caller like the ARDOP bridge: it requires an
+    /// active OTA session, takes its candidates from the session profile, and on success moves the
+    /// rate controller and HARQ state — which `a_control_frame_does_not_touch_the_rate_controller`
+    /// exists to forbid for exactly this kind of traffic.
+    ///
+    /// **`pub(crate)` until its cross-crate caller exists (#1310 PR1c).** This is intended public
+    /// API — the ARDOP bridge is in another crate — but exporting it now would add a `pub` item with
+    /// no production caller, which the reachability ratchet correctly rejects. The alternatives were
+    /// worse: baselining it as `DORMANT` would record a PROMISE ("the caller is coming") where every
+    /// other `DORMANT` here records a RATIONALE (a wire contract that must exist whether or not it is
+    /// dispatched, #1147), and a promise is exactly what becomes permanent when the next PR slips;
+    /// and having KISS pass `FecMode::None` through it purely to manufacture a caller would be gaming
+    /// the check. It becomes `pub` in the same diff that adds the ARDOP call.
+    pub(crate) fn decode_burst_with_fec(
+        &mut self,
+        mode: &str,
+        fec: FecMode,
+        burst: &AudioSamples,
+    ) -> Result<Vec<u8>, ModemError> {
         // The burst was already front-end-processed by `accumulate_routed`; suppress the InputCapture
         // seam for the per-slice decode below so the AGC/DCD are not re-applied per scan slice (audit
         // #11). Restore the flag on every exit.
@@ -2314,7 +2343,7 @@ impl ModemEngine {
         // attempt, so those events narrate hypotheses, not state (see `suppress_afc_events`).
         let was_quiet = self.suppress_afc_events;
         self.suppress_afc_events = true;
-        let result = self.decode_burst_inner(mode, burst);
+        let result = self.decode_burst_inner(mode, fec, burst);
         self.input_prerouted = was_prerouted;
         self.suppress_afc_events = was_quiet;
         // A successful scan's correction IS committed — emit exactly one for it.
@@ -2349,6 +2378,11 @@ impl ModemEngine {
             )
         } else {
             let (step, scan_end, _) = self.burst_onset_scan_bounds(mode, n);
+            // DELIBERATELY `FecMode::None`, and it stays that way (#1310). This helper's only caller
+            // is the OTA arm's #1123 uncoded fall-through — the arm that recovers station ID,
+            // filexfer, handshake, QSY and relay traffic, none of which is ladder-coded. Threading a
+            // FEC here would widen the slice for a frame that carries none, and there is no coded
+            // caller to want it: the coded onset scan lives inline in the OTA arm.
             self.scan_burst_onsets(
                 mode,
                 &burst.samples,
@@ -2356,6 +2390,7 @@ impl ModemEngine {
                 scan_end,
                 max_frame_samples,
                 false,
+                FecMode::None,
             )
         };
         self.input_prerouted = was_prerouted;
@@ -2366,18 +2401,33 @@ impl ModemEngine {
     fn decode_burst_inner(
         &mut self,
         mode: &str,
+        fec: FecMode,
         burst: &AudioSamples,
     ) -> Result<Vec<u8>, ModemError> {
         let sr = AudioConfig::default().sample_rate;
-        let (_, _, min_frame_samples, max_frame_samples) = self.frame_scan_geometry(mode, sr);
+        let (_, _, min_frame_samples, raw_max_frame_samples) = self.frame_scan_geometry(mode, sr);
+        // SIZE THE SLICE FOR THE CODED FRAME, not the raw geometry (#1310). `frame_scan_geometry`
+        // returns the plugin's RAW `max_frame_samples`, and a plugin sizes that for ONE RS block
+        // plus envelope. The boundary is exact: wire = payload + `Frame::WIRE_OVERHEAD` (10), and
+        // RS(255,223) is one block iff wire <= 223, i.e. payload <= 213 B. Above that the coded
+        // frame is two blocks and a raw-sized slice truncates it at every onset except zero — which
+        // is why the shipped OTA coded arm gets away with the raw value today (#1384).
+        //
+        // Long ENOUGH is what matters, not exact: `decode_prefix` rescues a slice longer than the
+        // frame and never one shorter, so over-reserving is benign. Only `.0` is used; the
+        // long-frame flag belongs to a retry loop this path does not have.
+        let (max_frame_samples, _) = frame_plan(raw_max_frame_samples, fec);
         let n = burst.samples.len();
         if n < min_frame_samples {
-            // Too short to hold a frame: one direct attempt for the error/SNR path.
-            return self.receive_from_samples(
+            // Too short to hold a frame: one direct attempt for the error/SNR path. It must be the
+            // FEC-aware receive, or a burst just under `min_frame_samples` decodes as uncoded and
+            // reports a channel error for what is really a framing mismatch.
+            return self.receive_from_samples_with_fec(
                 mode,
                 AudioSamples {
                     samples: burst.samples.clone(),
                 },
+                fec,
             );
         }
         // The carrier onset sits within the captured lead-in; scan up to a few acquisition windows
@@ -2394,6 +2444,7 @@ impl ModemEngine {
             scan_end,
             max_frame_samples,
             false,
+            fec,
         ) {
             Ok(payload) => Ok(payload),
             Err(phase1_err) => {
@@ -2416,6 +2467,7 @@ impl ModemEngine {
                             scan_end,
                             max_frame_samples,
                             false,
+                            fec,
                         );
                         if out.is_err() {
                             self.afc_correction_hz = 0.0;
@@ -2537,6 +2589,13 @@ impl ModemEngine {
     /// under the same two guards the CLI path applies, and skips the decode retry where the settle
     /// is not worth spending one on. Rollback discipline is the same in both: `afc_correction_hz` is
     /// restored on every failed attempt and committed only on success (#1143).
+    ///
+    /// `fec` is the coding of the burst being scanned (#1310). It was a hardcoded `FecMode::None`
+    /// here, which is what made `decode_burst` an uncoded-only entry point and left the ARDOP and
+    /// KISS front ends with no coded burst path at all. The CALLER must size `max_frame_samples`
+    /// through `frame_plan` for the same `fec`: passing a coded mode with a raw-sized slice scans
+    /// windows too short to hold the frame, which fails as a channel error rather than as a
+    /// geometry one.
     #[allow(clippy::too_many_arguments)]
     fn scan_burst_onsets(
         &mut self,
@@ -2546,6 +2605,7 @@ impl ModemEngine {
         scan_end: usize,
         max_frame_samples: usize,
         settle: bool,
+        fec: FecMode,
     ) -> Result<Vec<u8>, ModemError> {
         let n = samples.len();
         let sr = AudioConfig::default().sample_rate;
@@ -2575,7 +2635,7 @@ impl ModemEngine {
                     AudioSamples {
                         samples: slice.clone(),
                     },
-                    FecMode::None,
+                    fec,
                 ) {
                     Ok(payload) => {
                         // E1 skipped the estimate on every attempt; the WINNING slice still needs
@@ -8711,5 +8771,115 @@ mod idle_rho_probe {
             }
         );
         println!("  Scope: one capture, one rig, one filter setting.\n");
+    }
+}
+
+#[cfg(test)]
+mod burst_decode_sizes_for_the_fec {
+    //! THE #1310 PR1b GATE: a CODED burst is scanned with slices sized for the CODED frame.
+    //!
+    //! `decode_burst` took its per-attempt slice from `frame_scan_geometry`, which returns the
+    //! plugin's **raw** `max_frame_samples` — sized for ONE RS block plus envelope — and hardcoded
+    //! `FecMode::None` at the decode. So it was an uncoded-only entry point, which is why the ARDOP
+    //! and KISS front ends have no coded burst path.
+    //!
+    //! **The boundary is exact, and it is what these payload sizes are chosen against.** The wire
+    //! form is `payload + Frame::WIRE_OVERHEAD` (10 B), and RS(255,223) is a single block iff the
+    //! wire form is ≤ 223 — i.e. **payload ≤ 213 B**. At 213 B or below the coded frame still fits a
+    //! raw-sized slice, so a gate written there passes with the widening deleted and proves nothing.
+    //! At 214 B and above the coded frame is TWO blocks and a raw slice truncates it.
+    //!
+    //! Hence the discriminating pair: a **255 B** payload (two blocks, must decode) against a
+    //! **200 B control** (one block, must also decode). The control is load-bearing — it passes with
+    //! the widening deleted, which is what proves a failure of the 255 B case is about SIZING rather
+    //! than about coded bursts in general.
+    //!
+    //! Both sit at a **non-zero onset**: offset 0 is exempt by construction, because the scan's first
+    //! slice starts at sample 0 and holds the whole frame.
+    //!
+    //! **This lives in-crate on purpose.** `decode_burst_with_fec` is `pub(crate)` until its
+    //! cross-crate caller lands (PR1c), and this repo's rule is that a probe needing non-public
+    //! access is a unit test rather than an exported accessor.
+    use super::*;
+    use bpsk_plugin::BpskPlugin;
+    use openpulse_audio::LoopbackBackend;
+
+    const MODE: &str = "BPSK250";
+    /// Lead-in silence, so the frame does NOT start at sample 0.
+    const LEAD_IN: usize = 4_000;
+
+    fn coded_burst(len: usize) -> (Vec<u8>, AudioSamples) {
+        let payload: Vec<u8> = (0..len).map(|i| (i % 251) as u8).collect();
+        let lb = LoopbackBackend::new();
+        let mut tx = ModemEngine::new(Box::new(lb.clone_shared()));
+        tx.register_plugin(Box::new(BpskPlugin::new()))
+            .expect("register bpsk");
+        tx.transmit_with_fec_mode(&payload, MODE, FecMode::Rs, None)
+            .expect("transmit coded");
+        let mut samples = lb.drain_samples();
+        assert!(!samples.is_empty(), "fixture frame is empty");
+        let mut buf = vec![0.0f32; LEAD_IN];
+        buf.append(&mut samples);
+        (payload, AudioSamples { samples: buf })
+    }
+
+    fn rx() -> ModemEngine {
+        let mut e = ModemEngine::new(Box::new(LoopbackBackend::new()));
+        e.register_plugin(Box::new(BpskPlugin::new()))
+            .expect("register bpsk");
+        e
+    }
+
+    /// The case the widening exists for: a payload past the one-RS-block boundary.
+    #[test]
+    fn a_two_block_coded_burst_decodes_at_a_non_zero_onset() {
+        // 255 B payload -> 265 B wire -> TWO RS blocks. A raw-sized slice cannot hold it.
+        let (payload, burst) = coded_burst(255);
+        let got = rx()
+            .decode_burst_with_fec(MODE, FecMode::Rs, &burst)
+            .expect("a two-block coded frame must decode when the slice is sized via frame_plan");
+        assert_eq!(
+            got, payload,
+            "decoded payload differs from the transmitted one"
+        );
+    }
+
+    /// The control: one RS block fits a RAW-sized slice, so this passes either way.
+    #[test]
+    fn a_one_block_coded_burst_decodes_too() {
+        // 200 B payload -> 210 B wire -> ONE RS block.
+        let (payload, burst) = coded_burst(200);
+        let got = rx()
+            .decode_burst_with_fec(MODE, FecMode::Rs, &burst)
+            .expect("a one-block coded frame must decode");
+        assert_eq!(
+            got, payload,
+            "decoded payload differs from the transmitted one"
+        );
+    }
+
+    /// `decode_burst` must stay exactly what it was: the `FecMode::None` case.
+    #[test]
+    fn the_uncoded_entry_point_is_unchanged() {
+        let payload = b"uncoded, as before".to_vec();
+        let lb = LoopbackBackend::new();
+        let mut tx = ModemEngine::new(Box::new(lb.clone_shared()));
+        tx.register_plugin(Box::new(BpskPlugin::new()))
+            .expect("register bpsk");
+        tx.transmit(&payload, MODE, None).expect("transmit");
+        let mut samples = lb.drain_samples();
+        let mut buf = vec![0.0f32; LEAD_IN];
+        buf.append(&mut samples);
+        let burst = AudioSamples { samples: buf };
+
+        let via_plain = rx().decode_burst(MODE, &burst).expect("decode_burst");
+        let via_fec = rx()
+            .decode_burst_with_fec(MODE, FecMode::None, &burst)
+            .expect("decode_burst_with_fec(None)");
+        assert_eq!(via_plain, payload);
+        assert_eq!(
+            via_plain, via_fec,
+            "decode_burst must be exactly the FecMode::None case of decode_burst_with_fec"
+        );
     }
 }
