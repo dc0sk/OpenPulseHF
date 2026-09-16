@@ -7,10 +7,19 @@
 #
 # Each entry needs a reason, because "it is on the list" is not one.
 
-# Blocked, not deferred: `KeychainStore` is behind the `keychain` feature, which the gate's
-# `--no-default-features` drops, so no binding can ever be run-confirmed. Registering it would
-# require either binding it to the FILE store's test (attesting a different implementation) or
-# widening the gate. Tracked separately.
+# RETIRED 2026-09-16 (#1234), the way REQ-CTL-06 was retired in #1229: the id leaves the registry
+# and the REQUIREMENT STAYS, in `requirements.md` cited by section. `KeychainStore` is behind the
+# `keychain` feature, which the gate's `--no-default-features` drops, so no binding here can be
+# run-confirmed by any tier this repo has. The two ways to register it were both refused:
+#   * bind it to the FILE store's test    -> attests a different implementation (refused in #1229);
+#   * bind it to a backend SELECTOR       -> the selector's only real input is a fabricated boolean,
+#     and the code joining it to the OS store sits behind the feature the gate never compiles, so a
+#     green mark would rest on a truth table over two enums. Strictly LESS evidence than the first.
+# A `--features keychain` CI job was also refused: with no secret service on the runner the binding
+# reads CITED-BUT-DIDN'T-RUN, i.e. permanently red, which is what teaches people to skip gates.
+# The OS-keychain surface is therefore MANUAL-ONLY; its sole evidence is the `#[ignore]`d
+# `keychain_round_trip`. Re-register with a real binding the day a runner with a platform secret
+# service exists — nothing here is irreversible.
 REQ-CTL-03
 
 # Retired in #1229: an exemption ("ARDOP/KISS ports are unauthenticated by design") imposes no

@@ -2,7 +2,7 @@
 project: openpulsehf
 doc: docs/dev/requirements.md
 status: living
-last_updated: 2026-07-30
+last_updated: 2026-09-16
 ---
 
 # Requirements
@@ -149,7 +149,10 @@ client. See `docs/dev/design/control-channel-security.md` for the design and thr
 - Secrets (the control-channel PSK, station identity keys) should be storable in the operating
   system's secret store — Secret Service / GNOME Keyring / KWallet on Linux, Keychain on macOS,
   Credential Manager on Windows — as the preferred backend when available, for both the daemon
-  (server) and the clients. (REQ-CTL-03)
+  (server) and the clients. (REQ-CTL-03 — **requirement retained, id retired from the registry
+  2026-09-16 (#1234)**: the `keychain` feature is dropped by the gate's `--no-default-features`, so
+  no binding can be run-confirmed here. Evidence is the `#[ignore]`d `keychain_round_trip` only,
+  i.e. manual. The *fallback selection* half is REQ-CTL-04.)
 - A file-based keystore must be available as a fallback for hosts without a usable system secret
   store, encrypting secrets at rest under an operator master password (memory-hard KDF, e.g.
   Argon2id, plus authenticated encryption). The master password must never be written to disk in
