@@ -7,6 +7,7 @@ use tokio::sync::broadcast;
 
 use openpulse_core::handshake::InMemoryTrustStore;
 use openpulse_core::relay::RelayForwarder;
+use openpulse_modem::capture_ticker::CaptureTicker;
 use openpulse_modem::ModemEngine;
 use openpulse_radio::shared_ptt::{SharedPtt, DEFAULT_PTT_MAX};
 use openpulse_radio::PttController;
@@ -201,7 +202,35 @@ pub fn spawn_worker(bridge: Arc<KissBridge>, tx_data_rx: std::sync::mpsc::Receiv
         .expect("failed to spawn kiss-modem-worker thread");
 }
 
+/// Tick the held capture stream once and decode a burst if the accumulator flushed one.
+///
+/// Returns the decoded payload, or `None` when this tick produced no burst or the burst did not
+/// decode. A failed decode is DEBUG, not a fault: on a live band most flushes are noise.
+fn tick_and_decode(bridge: &KissBridge, ticker: &mut CaptureTicker, mode: &str) -> Option<Vec<u8>> {
+    let mut engine = bridge.engine.lock().unwrap_or_else(|e| e.into_inner());
+    let burst = ticker.tick(&mut engine, mode).burst?;
+    match engine.decode_burst(mode, &burst) {
+        Ok(payload) => Some(payload),
+        Err(e) => {
+            tracing::debug!(error = %e, "KISS: flushed burst did not decode");
+            None
+        }
+    }
+}
+
 fn worker_loop(bridge: Arc<KissBridge>, tx_data_rx: std::sync::mpsc::Receiver<Vec<u8>>) {
+    // ONE capture stream, held across ticks (#1310, the shape from #1297).
+    //
+    // This crate used to call `engine.receive(&mode, None)` twice per iteration. `receive` opens an
+    // input stream, reads ONCE and drops it, so on a callback backend each call saw a fresh buffer
+    // covering one 5 ms poll against a frame that lasts seconds — this TNC could not receive on real
+    // audio at all, however long it ran. `LoopbackBackend::read` drains the whole buffer, so the
+    // buffer WAS the frame and the entire suite stayed green over the defect.
+    //
+    // The device is `None` on purpose: the ticker calls `engine.open_capture_stream(device)`, which
+    // resolves `device.or(self.default_device)`, and `main.rs` pins `[audio] device` as the engine
+    // default (#1311). Passing a device here would duplicate that pin and let the two drift.
+    let mut ticker = CaptureTicker::new(None);
     loop {
         let mode = bridge
             .mode
@@ -224,23 +253,20 @@ fn worker_loop(bridge: Arc<KissBridge>, tx_data_rx: std::sync::mpsc::Receiver<Ve
                     "refusing on-air TX: AX.25 source callsign missing or invalid (§97.119)"
                 );
             } else {
+                // Close the held capture stream BEFORE keying (#1007, #1319). Holding it across an
+                // emission leaves it unread for the whole transmit, so its buffer fills with this
+                // station's OWN audio and the next tick hands that blob to `accumulate_capture`; on
+                // an exclusive device a concurrent open fails outright. The next tick reopens.
+                ticker.drop_stream();
                 {
                     // Scoped so the guard inside `keyed_transmit` — and this lock — are both
-                    // released before the RX poll below.
+                    // released before the loop's RX tick.
                     let mut engine = bridge.engine.lock().unwrap_or_else(|e| e.into_inner());
                     keyed_transmit(&bridge.ptt, &mut engine, "data", &data, &mode);
                 }
-                if let Ok(received) = bridge
-                    .engine
-                    .lock()
-                    .unwrap_or_else(|e| e.into_inner())
-                    .receive(&mode, None)
-                {
-                    maybe_relay_forward(&bridge, &received, &mode);
-                    if !received.is_empty() {
-                        let _ = bridge.rx_data_tx.send(received);
-                    }
-                }
+                // No post-transmit receive here any more: with a stream held across ticks the loop
+                // below is already listening continuously, so a second one-shot `receive` would add
+                // nothing and would re-open a competing stream.
             }
             bridge.tx_pending.fetch_sub(
                 len.min(bridge.tx_pending.load(Ordering::Relaxed)),
@@ -249,12 +275,7 @@ fn worker_loop(bridge: Arc<KissBridge>, tx_data_rx: std::sync::mpsc::Receiver<Ve
         }
 
         if !bridge.loopback {
-            if let Ok(received) = bridge
-                .engine
-                .lock()
-                .unwrap_or_else(|e| e.into_inner())
-                .receive(&mode, None)
-            {
+            if let Some(received) = tick_and_decode(&bridge, &mut ticker, &mode) {
                 maybe_relay_forward(&bridge, &received, &mode);
                 if !received.is_empty() {
                     let _ = bridge.rx_data_tx.send(received);

@@ -22,13 +22,17 @@
 //! reporting the first failure at WARN, because a station that cannot hear is off the air and
 //! `receive`'s error path made that indistinguishable from a quiet band.
 //!
-//! **Twin copies that should adopt this.** `server.rs`'s `rx_ticker` (`:886-1030`) is the original,
-//! open-coded, and still carries its own `block_in_place` wrapper, discovery tee and logging — it is
-//! left alone here because refactoring a working receive path inside a PR that fixes a broken one
-//! trades risk for tidiness. `openpulse-ardop` (`bridge.rs:430,437,557,564`) and `openpulse-kiss`
-//! (`bridge.rs:237,256`) call `receive` in free-running loops and have the SAME structural defect
-//! this fixes — the assumption that their TCP-driven shape makes a per-call window correct is false;
-//! both poll continuously. Tracked as a follow-up rather than fixed blind.
+//! **Twin copies.** `server.rs`'s `rx_ticker` is the original, open-coded, and still carries its own
+//! `block_in_place` wrapper, discovery tee and logging — left alone because refactoring a working
+//! receive path inside a PR that fixes a broken one trades risk for tidiness. `openpulse-kiss`
+//! adopted this in #1310 PR1a. **`openpulse-ardop` has not**, and its list is longer than this
+//! comment used to claim: besides the non-adaptive IRS arms and `do_receive`, the ADAPTIVE IRS arm
+//! (`receive_with_ack_hint`) and the ISS ARQ ACK listen (`receive_ack_with_short_fec`) both call
+//! `stage_capture_input`, which opens a stream of its own. Adopting a held stream there without
+//! dropping it around every keyed emission would make those concurrent — #1007 — which is why
+//! [`drop_stream`](CaptureTicker::drop_stream) exists and why the ARDOP half is its own PR.
+//! Deliberately no line numbers here: the previous version carried four that had drifted, and a
+//! stale citation reads as fact.
 
 use openpulse_core::audio::AudioInputStream;
 use openpulse_core::error::ModemError;
@@ -67,6 +71,23 @@ impl CaptureTicker {
     /// Whether the stream is currently faulted; the next tick will try to reopen.
     pub fn is_faulted(&self) -> bool {
         self.failed
+    }
+
+    /// Close the held stream so the next [`tick`](Self::tick) reopens it.
+    ///
+    /// **This is what makes a held stream safe around a transmit (#1007, #1319, #1310).** A caller
+    /// that keys the transmitter while this ticker owns an open stream leaves that stream UNREAD for
+    /// the whole emission, so its buffer accumulates the station's own transmitted audio and hands
+    /// the blob to the next `accumulate_capture`. Worse on an exclusive device, a second `open_input`
+    /// during the hold simply fails. The daemon already drops its stream before keying
+    /// (`server.rs`); this is the same move, owned here.
+    ///
+    /// **Deliberately does NOT set the fault flag.** A deliberate close is not a capture failure, and
+    /// [`is_faulted`](Self::is_faulted) is read as evidence that the station cannot hear — the
+    /// cross-band repeater does exactly that. Marking this as a fault would make a healthy,
+    /// correctly-behaving transmit look like a dead receiver.
+    pub fn drop_stream(&mut self) {
+        self.stream = None;
     }
 
     /// Read one tick and fold it into `engine`'s burst accumulator.
