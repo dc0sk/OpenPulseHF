@@ -15,6 +15,53 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-09-16 — the KISS TNC could not receive on real audio; #1310 PR1a
+
+**Change.** #1310 PR1a, the first of the three-PR split adversarial review imposed on that issue's
+original five-edit plan.
+
+**Requirement/defect.** `openpulse-kiss`'s `worker_loop` called `engine.receive(&mode, None)` twice
+per iteration. `receive` opens an input stream, reads ONCE and drops the stream, so on a callback
+backend each call saw a fresh buffer covering one 5 ms poll against a frame lasting seconds. The TNC
+could not receive on real audio at all, however long it ran. `LoopbackBackend::read` drains its whole
+buffer, so in every existing fixture the buffer IS the frame — the defect was structurally invisible
+to a green suite.
+
+**Design decision, and what review changed.** The plan on #1310 had ARDOP and KISS in one PR, with a
+new `decode_burst_with_fec` entry point and a post-transmit drop keyed on `frames_transmitted()`.
+Adversarial review (2026-09-16) reordered it: **KISS first and alone** — one receive shape, no FEC, no
+ACK path, no adaptive session, one keyed site — because it validates the ticker-plus-drop shape and
+the replay fixture before ARDOP adds FEC and a third IRS arm. It also established that a held stream
+makes ARDOP's ACK listen and its adaptive IRS arm concurrent with the ticker (#1007), which is why
+`drop_stream` exists and why ARDOP is a separate PR. #1315 does **not** need to land first.
+
+**Implementation.** `CaptureTicker::drop_stream` (new; deliberately does NOT set the fault flag,
+because `is_faulted` is read as evidence that a station cannot hear and the cross-band repeater does
+exactly that); `openpulse-kiss/src/bridge.rs` holds one `CaptureTicker` across ticks, drops it before
+keying, and decodes flushed bursts through `tick_and_decode`. The redundant post-transmit `receive`
+was removed rather than ported: with a stream held across ticks the loop is already listening, and a
+second one-shot receive would re-open a competing stream. The `capture_ticker` module doc was
+corrected — its twin list carried four stale line numbers and omitted both ARDOP arms that open a
+stream of their own.
+
+**Tests → results.** `crates/openpulse-kiss/tests/receives_a_chunked_capture.rs` (new, 2 tests).
+`cargo test -p openpulse-kiss --no-default-features` → 6 binaries, all ok (3+0+9+3+2+0 passed, 0
+failed).
+
+**Sabotage, both directions, each failing its OWN case only** — which is what distinguishes two gates
+from one gate and a passenger:
+- RX tick reverted to the one-shot `receive()`: `a_frame_delivered_in_chunks_is_received` FAILS with
+  "no frame received within 30 s after **3925 reads**"; the drop test passes.
+- `ticker.drop_stream()` deleted before keying: `a_transmit_drops_the_held_capture_stream` FAILS on
+  the open count; the chunked test passes.
+
+**Stated limit, so the claim is not over-read.** This proves accumulation across reads and a flush on
+carrier drop **with a silent fixture**. It is not evidence that the TNC receives on hardware — cpal
+warm-up, a live noise floor and DCD calibration against real band noise are all absent, and that tier
+is on-air (#1112's shape). The PR body carries the same narrowing.
+
+---
+
 ## 2026-09-16 — the workspace gate now runs post-merge on `main`, and two status checks are required
 
 **Change.** #1144 Part 3, applied as a maintainer decision (2026-09-16): the full package, not a
