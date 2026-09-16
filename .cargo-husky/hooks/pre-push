@@ -147,14 +147,14 @@ print(len(members), *sorted(downstream))
         total="$1"; shift
         names="$*"; count=$#
         if [ "$count" -eq 0 ]; then
-            echo "pre-push: no workspace crate depends on$pkgs — nothing downstream was skipped."
+            echo "pre-push: no workspace crate depends on $pkgs— nothing downstream was skipped."
         elif [ "$count" -ge $(( total / 2 )) ]; then
             # Naming 31 of 40 crates is "the workspace", and a wall of names trains people to skip
             # the hook's output entirely. Say so, and point at the one command that covers it.
-            echo "pre-push: NOT run — $count of $total workspace crates depend on$pkgs."
+            echo "pre-push: NOT run — $count of $total workspace crates depend on $pkgs"
             echo "pre-push:   that is effectively the whole workspace: run scripts/gate.sh."
         else
-            echo "pre-push: NOT run — $count reverse dependent(s) of$pkgs. To cover them:"
+            echo "pre-push: NOT run — $count reverse dependent(s) of $pkgs— to cover them:"
             echo "pre-push:   cargo test --no-default-features$(printf ' -p %s' $names)"
         fi
     fi
