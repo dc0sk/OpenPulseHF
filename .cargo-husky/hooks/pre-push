@@ -15,12 +15,14 @@ set -euo pipefail
 #
 # What this hook does NOT cover, stated because an earlier version of this comment claimed the full
 # gate "runs at merge" and it does not (#1144):
-#   - `scripts/gate.sh` runs in CI only on a `release/**` head branch or manual dispatch (#1120).
-#     No workflow triggers on push to `main`, and no status check is required, so nothing runs the
-#     full gate at merge. Run it yourself before merging.
+#   - `scripts/gate.sh` still does not run BEFORE a merge. In CI it runs on a `release/**` head
+#     branch or manual dispatch (#1120), and since #1144 also on a push to `main`
+#     (`.github/workflows/post-merge-gate.yml`) — which is DETECTION, on a tip that is already
+#     shared, not prevention. No status check requires the gate. Run it yourself before merging.
 #   - REVERSE DEPENDENTS. Only the crates OWNING changed files are tested, so a behavioural change
 #     in `openpulse-core` that breaks an `openpulse-modem` or plugin test passes here — workspace
-#     clippy catches compile breakage, not behaviour. This is #1074's exact shape.
+#     clippy catches compile breakage, not behaviour. This is #1074's exact shape. Since #1144 the
+#     hook NAMES them after the test run; naming is all it does, deliberately (see that block).
 #
 # Escape hatch: `GATE_SKIP=1 git push`. Note `git push --no-verify` already bypasses this hook
 # silently, so this exists to make skipping deliberate and visible, not to prevent it.
@@ -84,5 +86,82 @@ for p in $pkgs; do args="$args -p $p"; done
 cargo test $args --no-default-features
 
 echo "pre-push: touched-crate tests passed —$pkgs"
-echo "pre-push: NOT run: reverse dependents of those crates, and the full workspace gate."
-echo "pre-push: nothing runs scripts/gate.sh at merge on a non-release PR — run it yourself."
+
+# NAME the reverse dependents this hook did not test (#1144 part 3, item 4).
+#
+# The hook tests only the crates OWNING changed files. A behavioural change in a library crate that
+# breaks a DOWNSTREAM crate's test therefore passes a fully compliant push — workspace clippy catches
+# compile breakage, never behaviour. That is #1074's failure mode exactly, and it needs no
+# `--no-verify` to happen.
+#
+# This prints the gap instead of closing it, on purpose. Testing the reverse dependents here would
+# recreate the slow hook that #1074's own postmortem says people skip past, and a hook too slow to
+# tolerate enforces nothing. Naming the crates turns "something downstream may be untested" into a
+# list you can act on.
+#
+# `cargo metadata`'s `dependencies` includes DEV-dependencies, and they are kept on purpose: a
+# dev-dependent's TESTS are exactly what a behavioural break shows up in, which is the whole point.
+# So this list is wider than a pure build-graph reverse-dependency set, and that is the correct
+# width for the question being asked.
+#
+# Never allowed to block the push: this is a message, not a verdict. But it must not be a message
+# that CONFLATES STATES either — the first draft printed "none found, or cargo metadata failed" for
+# three different situations (metadata failed, the closure computation failed, genuinely nothing
+# downstream), which is the construct this repo bans: silence is not a verdict, and a zero from a
+# filter is a claim about the filter. Each state gets its own sentence, from its own exit status.
+metadata_err="$(mktemp)"
+meta="$(cargo metadata --format-version 1 --no-deps 2>"$metadata_err")"; meta_rc=$?
+
+if [ $meta_rc -ne 0 ]; then
+    echo "pre-push: reverse dependents UNKNOWN — cargo metadata exited $meta_rc: $(head -1 "$metadata_err")"
+else
+    # The pipe here SHAPES INPUT; the verdict comes from python's own status in $py_rc, never from
+    # the pipeline. Python exits 2 on any parse failure so it can never be mistaken for "no results".
+    revdeps="$(printf '%s' "$meta" | python3 -c '
+import json, sys
+try:
+    meta = json.load(sys.stdin)
+except Exception as e:
+    print(f"closure: {e}", file=sys.stderr)
+    sys.exit(2)
+touched = set(sys.argv[1].split())
+members = {p["name"]: {d["name"] for d in p.get("dependencies", [])} for p in meta.get("packages", [])}
+# Transitive closure: a break travels more than one hop (openpulse-dsp -> plugin -> modem -> daemon
+# is the common case, and direct-only would name 10 of the 23 crates it can reach).
+downstream, frontier = set(), set(touched)
+while frontier:
+    nxt = {name for name, deps in members.items() if deps & frontier} - downstream - touched
+    downstream |= nxt
+    frontier = nxt
+# ONE line: the member count, then the names. Two lines would not survive — `$(...)` strips
+# trailing newlines, so an empty name list collapses into the count and `tail -1` hands back the
+# number as if it were a crate. Measured: that printed `cargo test -p 41`.
+print(len(members), *sorted(downstream))
+' "$pkgs")"; py_rc=$?
+
+    if [ $py_rc -ne 0 ]; then
+        echo "pre-push: reverse dependents UNKNOWN — the closure computation exited $py_rc"
+    else
+        # First field is the member count; everything after it is the downstream set.
+        set -- $revdeps
+        total="$1"; shift
+        names="$*"; count=$#
+        if [ "$count" -eq 0 ]; then
+            echo "pre-push: no workspace crate depends on$pkgs — nothing downstream was skipped."
+        elif [ "$count" -ge $(( total / 2 )) ]; then
+            # Naming 31 of 40 crates is "the workspace", and a wall of names trains people to skip
+            # the hook's output entirely. Say so, and point at the one command that covers it.
+            echo "pre-push: NOT run — $count of $total workspace crates depend on$pkgs."
+            echo "pre-push:   that is effectively the whole workspace: run scripts/gate.sh."
+        else
+            echo "pre-push: NOT run — $count reverse dependent(s) of$pkgs. To cover them:"
+            echo "pre-push:   cargo test --no-default-features$(printf ' -p %s' $names)"
+        fi
+    fi
+fi
+rm -f "$metadata_err"
+echo "pre-push: NOT run: the full workspace gate."
+# `scripts/gate.sh` now runs on a push to `main` (.github/workflows/post-merge-gate.yml, #1144), so
+# a break IS detected — AFTER the merge, on a tip that is already shared. It is still not a
+# pre-merge check and no status check requires it, so run the gate yourself before merging.
+echo "pre-push: the gate runs post-merge on main (detection, not prevention) — run it yourself before merging."

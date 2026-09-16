@@ -526,27 +526,56 @@ decision that swept neither this sentence nor the hook's own success message. So
 closure was not partial; a later narrowing re-opened the property without a blast-radius sweep.
 That is the same archetype #1074 was: **a true statement invalidated by a later config change**,
 which is why the sweep list matters more than the wording —
-`git grep -ln 'gate.sh' -- ':!scripts' ':!target'` names every artifact that describes the gate,
-and a change to *when* the gate runs must visit all of them. #1120 committed the shape twice in one
+`git grep -ln 'gate.sh' -- ':!scripts/gate.sh' ':!target'` names every artifact that describes the
+gate, and a change to *when* the gate runs must visit all of them. **Narrowed 2026-09-16 from
+`':!scripts'`, which excluded every script's own COMMENTS** — `scripts/check-review.sh`'s header
+justifies itself by when the gate runs, went stale under #1144's change, and the old sweep was
+structurally unable to see it. Excluding `gate.sh` alone is the intent: the gate need not describe
+itself. #1120 committed the shape twice in one
 change: its PR body also justified the narrowing by citing **docs.yml**, which is
 `disabled_manually` (#1129 caught that instance in the ci.yml comment; this one survived).
 
-What is actually true now, and what it costs:
+**Narrowed again 2026-09-16 by #1144's Part 3, which is a maintainer decision, not a silent drift.**
+What is actually true now, and what it still costs:
 
-- `scripts/gate.sh` runs in CI **only** on a `release/**` head branch or manual dispatch. It does
-  **not** run at merge, and no workflow triggers on push to `main`.
-- **No status check is required anywhere** — neither classic protection nor the "protect main"
-  ruleset, whose `conditions.ref_name.include` is `[]`, so it targets no refs and
-  `gh api repos/dc0sk/OpenPulseHF/rules/branches/main` returns `[]`. Traceability and benchmark run
-  and are visible, but a red one blocks nothing.
+- `scripts/gate.sh` runs in CI on a `release/**` head branch, on manual dispatch, and — since
+  #1144 — **on a push to `main`** (`.github/workflows/post-merge-gate.yml`, `cancel-in-progress`, so
+  a burst of merges gates only the tip). It still does **not** run before a merge.
+- **That post-merge job is DETECTION, not prevention, and the distinction is the whole point.** Bad
+  code still lands; what changed is that it is flagged within one merge instead of surviving to the
+  next `release/**` PR. The job opens an issue on failure, because a default-branch failure email
+  goes unread. Do not read a green `main` as "the gate passed before this merged".
+- **Three status checks are now required** — traceability plus benchmark's two jobs — via the
+  "protect main" ruleset, which until #1144 had `conditions.ref_name.include: []` and therefore
+  targeted no refs and enforced nothing at all. Verified by readback, not by the PUT's exit code:
+  `gh api repos/dc0sk/OpenPulseHF/rules/branches/main` now returns the four rules.
+  `strict_required_status_checks_policy` is **false** — strict would demand an up-to-date branch
+  before every merge, a rebase-and-rerun tax on every PR at this repo's merge rate.
+- **`pr-hook-long-runner` is deliberately NOT required, for two reasons rather than one.** GitHub
+  treats a job skipped by an `if:` as satisfying a required check, so it would be vacuously green on
+  a code PR — a required check that cannot fail is the defect this file exists to ban. And `ci.yml`
+  also carries a workflow-level `paths-ignore`; a workflow skipped by *path filtering* leaves its
+  check **Pending and blocking**, so requiring it would permanently block every docs-only PR. The
+  two cases fail in opposite directions and both argue for excluding it.
+- **The ruleset's `code_quality` rule was DELETED rather than activated.** GitHub's rule-based code
+  quality covers C#, Go, Java, JavaScript, Python, Ruby and TypeScript — not Rust — and the rule
+  blocks when analysis "fails for any reason", with GitHub warning it "could block the merging of
+  all pull requests". Code scanning is `not-configured` here, so pointing the ruleset at a real ref
+  would have made a rule live that cannot pass and was never chosen as a gate.
+- **Note what was already enforced, because this file previously said otherwise.** Classic branch
+  protection on `main` has long carried `enforce_admins: true`, a required PR at 0 approvals, and no
+  force-pushes or deletions. The claim that "no status check is required anywhere" was true; the
+  claim that neither classic protection nor the ruleset existed was not.
 - The residual is **not** hook-skipping, which is the exotic path. The mundane one needs no skipping
   at all: the hook tests **only the crates owning changed files**, so a behavioural change in
   `openpulse-core` that breaks an `openpulse-modem` or plugin test passes a fully compliant push
-  (workspace clippy catches compile breakage, not behaviour) and stays invisible until the next
-  `release/**` PR. That is #1074's exact failure mode — "build and clippy passed, only a test run
-  saw it" — living in the gap between releases.
+  (workspace clippy catches compile breakage, not behaviour). That is #1074's exact failure mode —
+  "build and clippy passed, only a test run saw it". Since #1144 the hook **names** the reverse
+  dependents it did not test, computed from `cargo metadata`; naming is all it does, because a hook
+  slow enough to test them is one people `--no-verify` past.
 
-So run `scripts/gate.sh` yourself before merging; nothing else will. Tracked in #1144.
+So still run `scripts/gate.sh` yourself before merging — nothing blocks a merge on it. What is new is
+that if you do not, `main` tells you within one merge rather than within one release. Tracked in #1144.
 
 ---
 

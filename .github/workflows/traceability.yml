@@ -94,8 +94,11 @@ jobs:
       # An unresolvable base used to classify as "ordinary change" and PASS, i.e. the check failed
       # OPEN; it now exits 2.
       #
-      # It lives HERE and not in gate.sh because the workspace gate does not run at merge (#1144):
-      # every ci.yml job is release/**-scoped, so a gate-only check would fire weeks after the lapse.
+      # It lives HERE and not in gate.sh because the workspace gate does not run BEFORE a merge
+      # (#1144): every ci.yml job is release/**-scoped. Since #1144 the gate does run on a push to
+      # `main` (post-merge-gate.yml), which would catch a lapse one merge later rather than weeks —
+      # but this check reads the PR BODY, which a post-merge push event does not carry at all, so it
+      # could not move there even if the timing were acceptable.
       - name: Adversarial-review trailer lint (PR body)
         env:
           PR_TITLE: ${{ github.event.pull_request.title }}
