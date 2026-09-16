@@ -15,6 +15,67 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-09-16 — REQ-CTL-03 retired from the registry; REQ-CTL-04 gains its fallback clause back
+
+**Change.** #1234, as a **reversal** of this session's earlier decision on the same issue.
+
+**The reversal, and why it was taken.** The earlier call was "test the seam, restate REQ-CTL-03 to
+match". Adversarial review showed that to be laundering: `select_backend`'s only non-enum input is a
+boolean the test fabricates, and the code joining it to the OS store must sit behind
+`cfg(feature = "keychain")`, which the gate's `--no-default-features` never compiles — so a green
+REQ-CTL-03 would have rested on a truth table over two enums. That is **strictly less evidence** than
+the `file_store_get_set_delete_round_trip` binding #1229 already refused for this same id.
+
+**My own framing error, recorded because it shaped the options offered.** I cited #1112 (REQ-PHY-05)
+as the precedent for restating-and-binding. It is the opposite: REQ-PHY-05 is `baseline`,
+grandfathered, binds **nothing**, and `CLAUDE.md` says in words that the existing test is not evidence
+for it. Its shape is *keep the requirement, bind nothing, name the gap*.
+
+**What retirement does.** Exactly what #1229 did to REQ-CTL-06: the **requirement stays** (prose in
+`requirements.md`, cited by section), the `keychain` code stays, and the surface is recorded as
+manual-only with the `#[ignore]`d `keychain_round_trip` as its sole evidence.
+`trace-unregistered-ids.txt` moves from "blocked … tracked separately" — which implies a plan to
+unblock — to "retired", with both refused registrations spelled out. Reversible the day a runner with
+a platform secret service exists.
+
+**Two false claims corrected in the matrix**, which were the live harm: `REQ-CTL-03` read
+"✅ covered — `KeychainStore` (keyring) + `FileStore` fallback". Nothing gate-proved the keychain
+backend, **and the fallback it named did not exist as code** — `KeychainStore::available()` had
+exactly one caller in the tree, a test in its own crate.
+
+**A second divergence found while checking the decision's premise, and it changed the mechanics.**
+Review said the fallback property "is REQ-CTL-04's statement verbatim". True of the PROSE
+(`requirements.md:153-156`), false of the REGISTRY: the yaml statement had kept the encryption half
+and **dropped the fallback clause**. Binding a selection test to it as registered would have been the
+same laundering one id over. The clause is therefore **restored** to the registered statement — a
+restoration from the requirement's own prose, not a narrowing to fit a test. This is a second
+instance of the class #1234 is about: `trace.py:56-63` says outright that germaneness is "a manual
+norm, unchecked by anything here".
+
+**Implementation.** `openpulse-keystore/src/store.rs`: `Backend`, `KeychainProbe` (three states),
+`select_backend`, `fallback_reason`, `probe_keychain` — all **unconditionally compiled**, with the
+feature arm inside `probe_keychain`, modelled on the daemon's `build_audio_backend`. A selector
+compiled only when the feature is on is never type-checked by the gate, which is #1380's shape.
+
+**Tests → results.** `store::selection`, 4 tests; `cargo test -p openpulse-keystore
+--no-default-features` → 9 passed, 0 failed. Sabotage-verified three ways: `NotCompiledIn` made to
+prefer the keychain fails the fallback test AND the gate's-own-build test; a `None` reason, and two
+identical reasons, each fail the reason test.
+
+**Limits, stated rather than discovered later.**
+- The `KeychainStore` body (`new`, `available`) is still never type-checked under the gate. #1380 is
+  **contained, not closed**.
+- The `keychain`-on build could **not be verified on this host at all**: `libdbus-sys`'s build script
+  fails at `pkg-config` before any of our code compiles. That is environmental and pre-existing, and
+  it is precisely why the absent-feature path had to be a value the code returns rather than a
+  function that vanishes.
+- `openpulse-keystore` is workspace-dormant, so REQ-CTL-04 stays `unwired` until the daemon depends
+  on it — at which point `UNWIRED-BUT-REACHED` fires and must be reconciled in the same change.
+- There is still **no writer** (`no openpulse-cli keystore set`, nothing in the panel), so wiring a
+  reader alone would leave the path operator-unreachable. That belongs with the wiring PR.
+
+---
+
 ## 2026-09-16 — the ARDOP TNC could not receive on real audio; #1310 PR1c
 
 **Change.** #1310 PR1c, the last of the three-PR split, and the one the split existed to de-risk.

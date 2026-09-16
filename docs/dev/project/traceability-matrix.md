@@ -2,7 +2,7 @@
 project: openpulsehf
 doc: docs/dev/project/traceability-matrix.md
 status: living
-last_updated: 2026-09-14
+last_updated: 2026-09-16
 ---
 
 # Traceability matrix
@@ -164,7 +164,7 @@ the testmatrix quick tier at commit `76de87e`, dated 2026-06-29 (555/555 pass, 0
 | REQ-OBS-03 | Observability | Single command to collect a redacted diagnostic bundle for developer handoff | CAP-67 | ✅ covered — `openpulse audit-bundle` packages the archive + logs into a `.tar.gz` |
 | REQ-CTL-01 | Control-channel security | Control channel supports PSK mutual auth + on-wire encryption | CAP-68 | ✅ covered (TCP) — daemon + panel both wired to the Noise channel; tested. WebSocket + keystore-PSK are follow-ups |
 | REQ-CTL-02 | Control-channel security | Auth+encryption required on non-loopback bind; TX-keying fails closed for unauthenticated clients | CAP-68 | ✅ covered (TCP) — daemon fails closed (drops unauthenticated/wrong-PSK, refuses to start without a PSK); panel connects with the PSK. WS remaining |
-| REQ-CTL-03 | Control-channel security | Secrets storable in the OS system secret store (server + client) | CAP-68 | ✅ covered — `openpulse-keystore` `SecretStore`: `KeychainStore` (keyring) + `FileStore` fallback |
+| REQ-CTL-03 | Control-channel security | Secrets storable in the OS system secret store (server + client) | CAP-68 | ⚠️ **RETIRED from the registry 2026-09-16 (#1234) — the requirement stands, the id does not.** `KeychainStore` exists but is behind the `keychain` feature the gate never compiles, so no gate tier here can verify it; its only evidence is the `#[ignore]`d `keychain_round_trip`. **This cell previously read "✅ covered" and named a `FileStore` fallback — both false**: nothing gate-proved the keychain backend, and no selection/fallback code existed at all (`KeychainStore::available()` had one caller, a test in its own crate) |
 | REQ-CTL-04 | Control-channel security | File keystore fallback, encrypted under an operator master password | CAP-68 | ✅ covered — `openpulse-keystore` `FileKeystore` (Argon2id + ChaCha20-Poly1305) |
 | REQ-CTL-05 | Control-channel security | Owner-only (0600/0700) permission validate+enforce on every secret file, server + client | CAP-68 | ✅ covered — shared `openpulse_config::secret_file` (validate/enforce) wired into the identity key (daemon + CLI) + trust store |
 > **Note (#1268).** The wide-channel capability that used to fill this column was deleted: it had
@@ -335,7 +335,7 @@ the testmatrix quick tier at commit `76de87e`, dated 2026-06-29 (555/555 pass, 0
 - **REQ-PERF-05/06** (no proprietary-compatibility claims without evidence; legal review before VARA/PACTOR-4 compatibility work): policy/governance requirements with no implementable capability.
 - **REQ-DOC-01/02** (version-bump docs gate; doc frontmatter validation): scripts exist (`check-version-bump-docs.sh`, `validate-doc-frontmatter.sh`) but no CAP-ID covers them, and **"in CI" was false** — `docs.yml`, their only workflow host, has been `disabled_manually` since 2026-06-24 (#1349). Since 2026-09-13 the frontmatter check runs in `scripts/gate.sh`; the version-bump check still runs nowhere. `stamp-doc-last-updated.sh` was dropped from this list: the maintainer retired its automation in `5c93ca29` and the script needs two refs, so it enforces nothing.
 - **REQ-OBS-01/02/03** — ✅ **covered** by CAP-67 (all 4 slices shipped 2026-07-05): persistent file logging, `events.ndjson` capture, startup `snapshot.json`, and the `openpulse audit-bundle` command. No longer a gap.
-- **REQ-CTL-03/04/05** — ✅ **covered** (CAP-68 slices 1–3, 2026-07-06): shared owner-only secret-file checks, the `openpulse-keystore` Argon2id/ChaCha20-Poly1305 master-password file keystore, and the OS keychain `SecretStore` backend (file fallback).
+- **REQ-CTL-04/05** — ✅ **covered** (CAP-68 slices 1–2, 2026-07-06): shared owner-only secret-file checks and the `openpulse-keystore` Argon2id/ChaCha20-Poly1305 master-password file keystore. **REQ-CTL-03 was retired from the registry 2026-09-16 (#1234)** and this line used to include it, claiming the OS keychain backend as covered "(file fallback)" — the backend is real but gate-unverifiable, and the fallback it named was not implemented.
 - **REQ-CTL-01/02** (control-channel auth + encryption): CAP-68, **partial** (slice 4): the `openpulse-linksec` Noise NNpsk0 core, the non-loopback `auth_required` gate, `[control_security]` config, and the `SyncNoise`/`AsyncNoise` socket channels (tested over real TCP, incl. wrong-PSK-fails-closed) are shipped. ✅ **Daemon + panel TCP both wired + tested** (daemon fails closed on unauthenticated/wrong-PSK + refuses to start without a PSK; the panel does the initiator handshake with a resumable frame reader; plaintext loopback path unbroken). Enabled by `OPENPULSE_CONTROL_PSK` on both sides. Remaining follow-ups: WebSocket (still plaintext), keystore-backed PSK loading. (Scheme pivoted from rustls-TLS-PSK to Noise/snow.)
 - **REQ-BW-01..07** (wide-channel 12.5/25 kHz, VHF/UHF): no capability (see the note above), **planned for release 1.x** (backlog item 12), design in `docs/dev/design/wide-channel-extension.md`. Not started; gated on the RF-architecture decision (REQ-BW-01). Out of scope for the current line.
 

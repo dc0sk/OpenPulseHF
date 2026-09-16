@@ -47,7 +47,9 @@ pub enum KeystoreError {
 mod store;
 #[cfg(feature = "keychain")]
 pub use store::KeychainStore;
-pub use store::{FileStore, SecretStore};
+pub use store::{
+    fallback_reason, probe_keychain, select_backend, Backend, FileStore, KeychainProbe, SecretStore,
+};
 
 /// A master-password-encrypted store of named secrets, persisted to a single file.
 pub struct FileKeystore {
