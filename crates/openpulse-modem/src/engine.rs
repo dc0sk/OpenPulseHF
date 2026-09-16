@@ -2320,15 +2320,11 @@ impl ModemEngine {
     /// rate controller and HARQ state — which `a_control_frame_does_not_touch_the_rate_controller`
     /// exists to forbid for exactly this kind of traffic.
     ///
-    /// **`pub(crate)` until its cross-crate caller exists (#1310 PR1c).** This is intended public
-    /// API — the ARDOP bridge is in another crate — but exporting it now would add a `pub` item with
-    /// no production caller, which the reachability ratchet correctly rejects. The alternatives were
-    /// worse: baselining it as `DORMANT` would record a PROMISE ("the caller is coming") where every
-    /// other `DORMANT` here records a RATIONALE (a wire contract that must exist whether or not it is
-    /// dispatched, #1147), and a promise is exactly what becomes permanent when the next PR slips;
-    /// and having KISS pass `FecMode::None` through it purely to manufacture a caller would be gaming
-    /// the check. It becomes `pub` in the same diff that adds the ARDOP call.
-    pub(crate) fn decode_burst_with_fec(
+    /// **Public since #1310 PR1c, which added its cross-crate caller** — the ARDOP bridge's
+    /// `tick_and_decode`. It shipped as `pub(crate)` in PR1b precisely so it would not sit exported
+    /// with no production caller, which the reachability ratchet rejects and which a `DORMANT`
+    /// baseline entry would have papered over with a promise rather than a rationale.
+    pub fn decode_burst_with_fec(
         &mut self,
         mode: &str,
         fec: FecMode,

@@ -3,9 +3,11 @@ use std::sync::{Arc, RwLock as StdRwLock};
 use tokio::sync::{broadcast, RwLock};
 
 use openpulse_core::ack::{AckFrame, AckType};
+use openpulse_core::fec::FecMode;
 use openpulse_core::handshake::InMemoryTrustStore;
 use openpulse_core::relay::RelayForwarder;
 use openpulse_core::station_id::StationIdTimer;
+use openpulse_modem::capture_ticker::CaptureTicker;
 use openpulse_modem::ModemEngine;
 use openpulse_radio::{NoOpPtt, PttController, PttObserver, SharedPtt, DEFAULT_PTT_MAX};
 
@@ -159,7 +161,23 @@ pub fn spawn_worker(bridge: Arc<ModemBridge>, tx_data_rx: std::sync::mpsc::Recei
         .expect("failed to spawn ardop-modem-worker thread");
 }
 
+/// Close the held capture stream, if one is held, before keying (#1007, #1319, #1310).
+///
+/// A held stream left open across an emission is unread for its whole duration, so its buffer fills
+/// with this station's own transmitted audio and the next tick hands that blob to
+/// `accumulate_capture`; on an exclusive device a concurrent open fails outright. `None` is the
+/// adaptive case, where no stream is held at all and there is nothing to release.
+fn release_capture(ticker: &mut Option<CaptureTicker>) {
+    if let Some(t) = ticker.as_mut() {
+        t.drop_stream();
+    }
+}
+
 fn worker_loop(bridge: Arc<ModemBridge>, tx_data_rx: std::sync::mpsc::Receiver<Vec<u8>>) {
+    // ONE capture stream, held across ticks (#1310 PR1c, the shape from #1297) — but ONLY while
+    // adaptive ARQ is inactive. See the per-iteration decision below for why.
+    let mut ticker: Option<CaptureTicker> = None;
+    let mut warned_adaptive = false;
     // Last successful ARQ exchange, for the ARQTIMEOUT inactivity disconnect.
     let mut last_activity = std::time::Instant::now();
     // Last applied ARQBW cap (Hz); 0 = none applied yet, so the first real value always applies.
@@ -194,6 +212,43 @@ fn worker_loop(bridge: Arc<ModemBridge>, tx_data_rx: std::sync::mpsc::Receiver<V
             .unwrap_or_else(|e| e.into_inner())
             .clone();
 
+        // ADAPTIVE ARQ IS NOT CONVERTED, and the operator is told so once (#1310 PR1c).
+        //
+        // Two receives in this loop open a capture stream of their OWN through
+        // `stage_capture_input`: the ISS ARQ ACK listen (`receive_ack_with_short_fec`) and the
+        // ADAPTIVE IRS arm (`receive_with_ack_hint`). A held stream concurrent with either is #1007,
+        // so the adaptive path keeps its old one-shot behaviour — still unable to accumulate a frame
+        // across reads on a callback backend, exactly as before this change.
+        //
+        // That is not a silent exemption: `enable_adaptive_arq` defaults to FALSE
+        // (`openpulse-config`), so what this change fixes is the SHIPPED default.
+        //
+        // **There is deliberately no guard nulling the ticker here.** `tick_and_decode` has exactly
+        // ONE call site — the non-adaptive `else` branch below — so under adaptive the ticker is
+        // never ticked and opens nothing. A guard would be redundant with that branch, could not be
+        // shown to fire by any sabotage, and would turn a future conversion of the adaptive arm into
+        // a SILENT no-receive (a nulled ticker returns `None`) instead of the loud
+        // two-streams-at-once the gate catches. The property is enforced by
+        // `no_two_capture_streams_are_ever_open_at_once_under_adaptive_arq`, which is validated by
+        // sabotaging the adaptive branch into ticking.
+        let adaptive = {
+            let engine = bridge.engine.lock().unwrap_or_else(|e| e.into_inner());
+            engine.current_tx_level().is_some()
+        };
+        if adaptive && !warned_adaptive {
+            warned_adaptive = true;
+            tracing::warn!(
+                "adaptive ARQ is active: the ARDOP receive path stays one-shot and cannot \
+                 accumulate a frame across reads on a callback backend (#1310, #1315)"
+            );
+        }
+        if ticker.is_none() {
+            // Device `None` on purpose: the ticker calls `engine.open_capture_stream(device)`, which
+            // resolves `device.or(self.default_device)`, and `main.rs` pins `[audio] device` as the
+            // engine default (#1311). A second pin here could drift from it.
+            ticker = Some(CaptureTicker::new(None));
+        }
+
         // Station ID at a frame boundary: only on the real RF path and only when nothing is queued
         // for TX (so an ID never splits an in-progress transfer). A host `SENDID` is a one-shot; the
         // interval and sign-off timers arm from the engine's TX-frame delta.
@@ -222,7 +277,7 @@ fn worker_loop(bridge: Arc<ModemBridge>, tx_data_rx: std::sync::mpsc::Receiver<V
                     }
                     Some(callsign) => {
                         let cwid = bridge.cwid_enabled.load(Ordering::Relaxed);
-                        transmit_station_id(&bridge, &mode, &callsign, cwid);
+                        transmit_station_id(&bridge, &mut ticker, &mode, &callsign, cwid);
                         // Advance regardless of TX success (a persistent PTT fault is logged, not
                         // retried per-tick), and re-baseline so the ID frame(s) don't re-arm the timer.
                         id_timer.mark_identified(now_ms);
@@ -315,6 +370,7 @@ fn worker_loop(bridge: Arc<ModemBridge>, tx_data_rx: std::sync::mpsc::Receiver<V
                     for attempt in 0..attempts {
                         // Transmit at the ladder's current mode, exactly as `transmit_arq` does.
                         let tx_mode = engine.current_adaptive_mode().unwrap_or(&mode).to_owned();
+                        release_capture(&mut ticker);
                         let sent = keyed_transmit(&bridge, "arq", || {
                             engine.transmit(&data, &tx_mode, None)
                         })
@@ -350,6 +406,7 @@ fn worker_loop(bridge: Arc<ModemBridge>, tx_data_rx: std::sync::mpsc::Receiver<V
                     }
                     drop(engine);
                 } else {
+                    release_capture(&mut ticker);
                     let tx_ok = keyed_transmit(&bridge, "data", || {
                         if use_fec {
                             engine.transmit_with_fec(&data, &mode, None)
@@ -359,14 +416,10 @@ fn worker_loop(bridge: Arc<ModemBridge>, tx_data_rx: std::sync::mpsc::Receiver<V
                     })
                     .is_some();
                     drop(engine);
-                    if tx_ok {
-                        if let Some(rx) = do_receive(&bridge, &mode) {
-                            maybe_relay_forward(&bridge, &rx, &mode);
-                            if !rx.is_empty() {
-                                let _ = bridge.rx_data_tx.send(rx);
-                            }
-                        }
-                    }
+                    // No post-transmit one-shot receive any more (#1310). With a stream held
+                    // across ticks the loop below is already listening continuously, so a second
+                    // `receive` here would add nothing and would open a competing stream.
+                    let _ = tx_ok;
                 }
             }
             bridge.tx_pending.fetch_sub(
@@ -400,6 +453,7 @@ fn worker_loop(bridge: Arc<ModemBridge>, tx_data_rx: std::sync::mpsc::Receiver<V
                     Ok((payload, ack_type)) => {
                         if can_tx {
                             let ack_frame = AckFrame::new(ack_type, &mode);
+                            release_capture(&mut ticker);
                             keyed_transmit(&bridge, "irs-ack", || {
                                 engine.transmit_ack_with_short_fec(&ack_frame, None)
                             });
@@ -412,6 +466,7 @@ fn worker_loop(bridge: Arc<ModemBridge>, tx_data_rx: std::sync::mpsc::Receiver<V
                         tracing::debug!("IRS receive_with_ack_hint failed ({e}); sending Nack");
                         if can_tx {
                             let nack = AckFrame::new(AckType::Nack, &mode);
+                            release_capture(&mut ticker);
                             keyed_transmit(&bridge, "irs-nack", || {
                                 engine.transmit_ack_with_short_fec(&nack, None)
                             });
@@ -424,25 +479,14 @@ fn worker_loop(bridge: Arc<ModemBridge>, tx_data_rx: std::sync::mpsc::Receiver<V
                     }
                 }
             } else {
-                let use_fec_rx = bridge.fec_rx.load(Ordering::Relaxed);
-                if use_fec_rx {
-                    engine
-                        .receive_with_fec(&mode, None)
-                        .inspect_err(|e| {
-                            tracing::debug!("non-adaptive IRS receive_with_fec failed: {e}")
-                        })
-                        .ok()
-                } else {
-                    engine
-                        .receive(&mode, None)
-                        .inspect_err(|e| tracing::debug!("non-adaptive IRS receive failed: {e}"))
-                        .ok()
-                }
+                // NON-ADAPTIVE IRS: the held stream, not a one-shot `receive` (#1310). Dropping the
+                // engine lock first is required, because `tick_and_decode` takes it itself.
+                drop(engine);
+                tick_and_decode(&bridge, &mut ticker, &mode)
             };
-            drop(engine);
             if let Some(rx) = received {
                 last_activity = std::time::Instant::now();
-                maybe_relay_forward(&bridge, &rx, &mode);
+                maybe_relay_forward(&bridge, &mut ticker, &rx, &mode);
                 if !rx.is_empty() {
                     let _ = bridge.rx_data_tx.send(rx);
                 }
@@ -526,12 +570,19 @@ fn keyed_transmit<T>(
 /// running. Sends the
 /// digital `DE <callsign>` ID in the active mode, optionally append a Morse CW ID (`CWID`), release
 /// PTT. Best-effort — failures are logged, not propagated, so the worker keeps running.
-fn transmit_station_id(bridge: &ModemBridge, mode: &str, callsign: &str, cwid: bool) {
+fn transmit_station_id(
+    bridge: &ModemBridge,
+    ticker: &mut Option<CaptureTicker>,
+    mode: &str,
+    callsign: &str,
+    cwid: bool,
+) {
     // Engine lock FIRST, then key. The old order keyed before waiting for the engine, so contention
     // (a CONNECT/DISCONNECT holding it) left the rig keyed and silent for the whole wait.
     let mut engine = bridge.engine.lock().unwrap_or_else(|e| e.into_inner());
     // The digital ID and the CW ID are ONE keyed burst — keying is a burst property, not a frame
     // property, so they must not key/unkey twice.
+    release_capture(ticker);
     let sent = keyed_transmit(bridge, "station-id", || {
         let body = format!("DE {callsign}");
         engine.transmit(body.as_bytes(), mode, None)?;
@@ -547,23 +598,37 @@ fn transmit_station_id(bridge: &ModemBridge, mode: &str, callsign: &str, cwid: b
     tracing::info!(callsign, mode, cwid, "transmitted station ID (ARDOP)");
 }
 
-fn do_receive(bridge: &ModemBridge, mode: &str) -> Option<Vec<u8>> {
-    let use_fec_rx = bridge.fec_rx.load(Ordering::Relaxed);
-    if use_fec_rx {
-        bridge
-            .engine
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .receive_with_fec(mode, None)
-            .ok()
-    } else {
-        bridge
-            .engine
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .receive(mode, None)
-            .ok()
+/// Tick the held capture stream once and decode a burst if the accumulator flushed one.
+///
+/// Returns `None` when no stream is held (adaptive ARQ active — see `worker_loop`), when the tick
+/// produced no burst, or when the burst did not decode. A failed decode is DEBUG, not a fault: on a
+/// live band most flushes are noise.
+///
+/// **`fec_rx` is tried first and `None` second, rather than either/or.** `FECRCV` STORES `true` and
+/// nothing ever clears it (`command.rs`), while `FECSEND` is a per-frame one-shot — so under the old
+/// either/or a station that received a single `FECRCV` decoded ONLY coded frames from then on, and
+/// silently lost every uncoded one: the peer's `DE <call>` station ID and any relay envelope. With
+/// the burst already in hand the second candidate is one extra bounded scan, not a second capture.
+fn tick_and_decode(
+    bridge: &ModemBridge,
+    ticker: &mut Option<CaptureTicker>,
+    mode: &str,
+) -> Option<Vec<u8>> {
+    let t = ticker.as_mut()?;
+    let mut engine = bridge.engine.lock().unwrap_or_else(|e| e.into_inner());
+    let burst = t.tick(&mut engine, mode).burst?;
+    let mut candidates: Vec<FecMode> = Vec::with_capacity(2);
+    if bridge.fec_rx.load(Ordering::Relaxed) {
+        candidates.push(FecMode::Rs);
     }
+    candidates.push(FecMode::None);
+    for fec in candidates {
+        if let Ok(payload) = engine.decode_burst_with_fec(mode, fec, &burst) {
+            return Some(payload);
+        }
+    }
+    tracing::debug!("ARDOP: flushed burst did not decode on any candidate");
+    None
 }
 
 /// Attempt to forward `payload` as a relay `WireEnvelope` when relay is enabled.
@@ -577,7 +642,12 @@ fn do_receive(bridge: &ModemBridge, mode: &str) -> Option<Vec<u8>> {
 /// The probe is cheap: `decode` checks the 4-byte `OPHF` magic first and
 /// returns `Err(InvalidMagic)` immediately for ordinary user-data payloads.
 /// When the magic matches the forwarder increments `hop_index` and re-transmits.
-fn maybe_relay_forward(bridge: &ModemBridge, payload: &[u8], mode: &str) {
+fn maybe_relay_forward(
+    bridge: &ModemBridge,
+    ticker: &mut Option<CaptureTicker>,
+    payload: &[u8],
+    mode: &str,
+) {
     use openpulse_core::wire_query::WireEnvelope;
 
     let Some(ref fwd_arc) = bridge.relay_forwarder else {
@@ -609,6 +679,7 @@ fn maybe_relay_forward(bridge: &ModemBridge, payload: &[u8], mode: &str) {
         Ok(out_envelope) => {
             if let Ok(out_bytes) = out_envelope.encode() {
                 let mut engine = bridge.engine.lock().unwrap_or_else(|e| e.into_inner());
+                release_capture(ticker);
                 keyed_transmit(bridge, "relay", || engine.transmit(&out_bytes, mode, None));
                 drop(engine);
                 tracing::debug!(
