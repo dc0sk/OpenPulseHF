@@ -9,6 +9,40 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-09-15 — `calibrate drive` measured ALC on an unmodulated keyed rig (#1369)
+
+- **Requirement/change:** `openpulse calibrate drive` searches for a TX attenuation that puts the
+  rig's ALC in a target band. It registered **only** `OfdmPlugin` (`calibrate.rs:318`) while `mode`
+  is operator-supplied, and discarded every transmit result (`let _ = engine.transmit(...)`). For any
+  non-OFDM mode — BPSK250, QPSK500, anything on the HF ladder — all three transmits returned
+  `PluginNotFound`, the errors vanished, and the loop sampled ALC on a **keyed but unmodulated** rig.
+  That reading was then reported as a drive measurement, or blamed on the rig ("may not expose ALC")
+  for what was a mode/plugin mismatch in our own code.
+
+- **Why it matters beyond a wrong number:** `calibrate drive` exists so an operator can set TX drive
+  correctly, and its output is used to configure a real station. A plausible-looking figure derived
+  from a bare carrier is the "instrument that lied" shape — worse than an error, because it is acted
+  on.
+
+- **Implementation:** `crate::plugins::register_all(&mut engine)` — the same set the CLI's main path
+  registers — and the transmit result is now checked with context naming the mode, so a failure
+  aborts instead of falling through to an ALC sample.
+
+- **VERIFICATION IS PARTIAL, AND THE GAP IS THE POINT.** `run_drive` is
+  `#[cfg(feature = "cpal-backend")]`, while `scripts/gate.sh` and the pre-push hook both build
+  `--no-default-features` — so **the gate never type-checks this function**. Verified with
+  `cargo check -p openpulse-cli --features cpal-backend` (rc=0) and
+  `cargo clippy -p openpulse-cli --features cpal-backend --all-targets -- -D warnings` (rc=0), which
+  are the only automated checks that reach it. It also needs a live rigctld and a real audio device,
+  so no in-process test can exercise it.
+
+- **That gap is now filed as #1380**, measured rather than asserted: a planted *type* error in
+  `run_drive` gives gate clippy **rc=0** and is caught only under `--features cpal-backend`. Note the
+  correction in that issue — a planted *syntax* error IS caught, because `#[cfg]`-disabled code must
+  still parse, so the exposure is type/borrow errors and API drift, not malformed code.
+
+Review: none — applies the fix shape stated on #1369; no design decision. The verification gap it
+exposed is filed separately rather than fixed here.
 ## 2026-09-15 — REQ-FUN-05's bound test could not tell a working CRC from a broken encoder (#1279)
 
 - **Requirement/change:** REQ-FUN-05 ("validate frame integrity … with CRC checks") is
