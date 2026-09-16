@@ -15,6 +15,63 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-09-16 — the ARDOP TNC could not receive on real audio; #1310 PR1c
+
+**Change.** #1310 PR1c, the last of the three-PR split, and the one the split existed to de-risk.
+
+**Defect.** `worker_loop` called `engine.receive`/`receive_with_fec` in a free-running poll loop.
+`receive` opens a stream, reads ONCE, drops it — one 5 ms poll against a seconds-long frame. Green
+suite throughout, because `LoopbackBackend::read` drains its whole buffer.
+
+**Implementation.** One `CaptureTicker` held across ticks; `tick_and_decode` replaces both
+non-adaptive IRS arms and `do_receive`; the redundant post-transmit `receive` removed (the loop
+already listens). `release_capture` before all **six** keyed emissions — ARQ, data, IRS ACK, IRS
+Nack, station ID, relay forward — with the ticker threaded into `transmit_station_id` and
+`maybe_relay_forward` so the release sits NEXT TO the keying rather than at the call site, which is
+one refactor away from being lost. `decode_burst_with_fec` promoted `pub(crate)` → `pub` here, in the
+same diff that adds its cross-crate caller, as PR1b said it would be.
+
+**`fec_rx` is `[Rs, None]`, not either/or.** `FECRCV` stores `true` and nothing ever clears it, while
+`FECSEND` is a per-frame one-shot — so one `FECRCV` made a station decode only coded frames for the
+rest of the session, silently losing the peer's uncoded station ID and any relay envelope. The burst
+is already in hand, so the second candidate is one extra bounded scan rather than a second capture.
+
+**The adaptive path is deliberately not converted, and that is stated rather than implied.** The ISS
+ARQ ACK listen and the adaptive IRS arm both reach `stage_capture_input`, which opens a stream per
+call; a held stream concurrent with either is #1007. `enable_adaptive_arq` defaults to **false**, so
+the path this fixes is the shipped default and the opt-in path is left exactly as it was — which the
+worker now says once at WARN.
+
+**Two of my own errors, caught by sabotage rather than by review or reading:**
+
+1. **The adaptive guard was redundant and was removed.** I wrote `if adaptive { ticker.take() }`.
+   `tick_and_decode` has exactly ONE call site — the non-adaptive branch — so under adaptive the
+   ticker is never ticked and opens nothing. No sabotage could make the guard matter. Worse, it would
+   turn a future conversion of the adaptive arm into a SILENT no-receive (a nulled ticker returns
+   `None`) instead of the loud two-streams-at-once the gate catches. The warning stays; the guard is
+   gone, with the reasoning written at the site.
+2. **The concurrency gate's first draft was VACUOUS.** It counted `open_input` calls, and the
+   adaptive arm reopens per call whether or not a stream is held — measured: with the guard sabotaged
+   to `if false`, the count-based test still passed. Rewritten onto the high-water mark of
+   SIMULTANEOUSLY live streams, which is what #1007 actually is, with a `Drop` impl decrementing the
+   counter because the engine's one-shot receives drop their stream rather than closing it.
+
+**Tests → results.** `crates/openpulse-ardop/tests/receives_a_chunked_capture.rs` (new, 3 tests);
+`cargo test -p openpulse-ardop --no-default-features` → 7 binaries, 40 passed, 0 failed, including
+`ptt_keys_every_transmit`'s source scan, which still holds with the release calls inserted.
+
+**Sabotage, three ways, each failing its OWN case:**
+- IRS arm reverted to one-shot `receive`: both receive tests FAIL, concurrency passes.
+- `fec_rx` back to either/or: ONLY the uncoded-with-`FECRCV` test fails.
+- the adaptive branch made to tick: ONLY the concurrency test fails, at
+  "2 capture streams were open at once across 8 reads".
+
+**Scope, stated narrowly.** Accumulation across reads and a flush on carrier drop, silent fixture.
+Not evidence the TNC receives on hardware — cpal warm-up, a live noise floor and DCD calibration
+against real band noise are absent, and that tier is on-air (#1112's shape).
+
+---
+
 ## 2026-09-16 — `decode_burst` was uncoded-only, and its slices were raw-sized; #1310 PR1b
 
 **Change.** #1310 PR1b, the second of the three-PR split adversarial review imposed on that issue.
