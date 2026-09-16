@@ -224,6 +224,20 @@ if [ "$MODE" = "full" ]; then
     # recorded nowhere (#1129 and #1134 both escalated it and neither got an answer).
     drift_check
     run_step "doc frontmatter" scripts/validate-doc-frontmatter.sh || rc_total=1
+    # `unsafe` must arrive WITH a UB check (#1380 follow-up; maintainer decision 2026-09-15).
+    #
+    # Miri itself is NOT run here, deliberately: the workspace has zero `unsafe`, so a Miri step
+    # would be a gate that cannot fail — and `rustup` is absent on this host, so `cargo miri` does
+    # not exist. The `code-quality-gates` skill's rule is that a workspace with no unsafe "skips the
+    # step honestly"; this is that skip, made SELF-ARMING so the obligation cannot be lost by
+    # whoever first writes `unsafe`. It passes while there is none, and fails the moment any appears
+    # without a Miri step wired alongside it.
+    #
+    # Cheap (no build, one grep over the tree). Placed AFTER `cargo fmt --check`, which it depends
+    # on: the scan is line-based, and rustfmt is what guarantees `unsafe {` is not split across two
+    # lines. `scripts/check-unsafe.sh --self-test` is the committed sabotage.
+    drift_check
+    run_step "unsafe/UB tripwire" scripts/check-unsafe.sh || rc_total=1
     # Ledger ordering. The file declares "Newest first" and had drifted into two regimes — 12 breaks
     # across 359 entries — because the convention lived only in prose and nothing measured it. Cheap
     # (no build, no I/O beyond one file), so it costs nothing to keep honest.
