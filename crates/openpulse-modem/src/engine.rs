@@ -1049,6 +1049,7 @@ impl ModemEngine {
     /// Number of capture blocks the notch has processed. A tripwire for the "feature wired at a
     /// seam the runtime path skips" class of gap: if the notch is enabled but this stays 0 while
     /// the daemon runs, the receive path isn't reaching the front-end seam.
+    #[cfg(feature = "instruments")]
     pub fn notch_blocks_processed(&self) -> u64 {
         self.notch_blocks_processed
     }
@@ -1062,6 +1063,7 @@ impl ModemEngine {
     /// DORMANT(#1148): consumed by the REQ-QRM-01 band probe while the notch's default-on evidence
     /// is re-derived on the post-#1148 wire. Exit condition: the rewritten gate consumes this
     /// permanently, or it is removed with the probe.
+    #[cfg(feature = "instruments")]
     pub fn notch_freqs_seen(&self) -> Vec<f32> {
         self.notch_freqs_seen
             .iter()
@@ -1083,6 +1085,7 @@ impl ModemEngine {
     /// measures nothing about the notch — and that is not visible from the tone's frequency alone,
     /// because `notch_fallback_bw_hz` is 4x BPSK250's real occupied width. Same exit condition as
     /// [`Self::notch_freqs_seen`].
+    #[cfg(feature = "instruments")]
     pub fn notch_protect_extremes(&self) -> Option<(f32, f32, f32, f32)> {
         self.notch_protect_extremes
     }
@@ -1093,21 +1096,25 @@ impl ModemEngine {
     /// eventually worked. `the_real_on_air_frame_decodes` passed throughout the period when
     /// recovery re-anchored 78 times (#1021) and again when it crawled 15 times (#1040): a
     /// decode-or-not assertion cannot see the difference.
+    #[cfg(feature = "instruments")]
     pub fn settle_condemnations(&self) -> u64 {
         self.settle_condemnations
     }
 
     /// Sample positions of condemned settle anchors, oldest first (bounded).
+    #[cfg(feature = "instruments")]
     pub fn condemned_positions(&self) -> &[usize] {
         &self.condemned_positions
     }
 
     /// Sample positions of settles the correlation accepted, oldest first (bounded).
+    #[cfg(feature = "instruments")]
     pub fn accepted_settle_positions(&self) -> &[usize] {
         &self.accepted_settle_positions
     }
 
     /// Per-attempt micro-sweep inputs: `(attempt_index, onset, window_len, afc_before)`.
+    #[cfg(feature = "instruments")]
     pub fn sweep_attempt_inputs(&self) -> &[(usize, usize, usize, f32)] {
         &self.sweep_attempt_inputs
     }
@@ -1116,6 +1123,7 @@ impl ModemEngine {
     ///
     /// For reproducible measurement only; `None` (the default) keeps production behaviour. See
     /// the field docs for why the wall-clock budget makes decode outcomes machine-dependent.
+    #[cfg(feature = "instruments")]
     pub fn set_deterministic_scan_positions(&mut self, positions: Option<usize>) {
         self.deterministic_scan_positions = positions;
     }
@@ -1124,11 +1132,13 @@ impl ModemEngine {
     ///
     /// Pair with [`Self::set_deterministic_scan_positions`]; bounding one without the other still
     /// leaves the verdict machine-dependent. Measurement only — `None` keeps production behaviour.
+    #[cfg(feature = "instruments")]
     pub fn set_deterministic_max_iterations(&mut self, iterations: Option<usize>) {
         self.deterministic_max_iterations = iterations;
     }
 
     /// Override the anchor-condemnation threshold. `None` = the shipped `2 * SWEEP_OFFSETS`.
+    #[cfg(feature = "instruments")]
     pub fn set_settle_failure_limit(&mut self, limit: Option<usize>) {
         self.settle_failure_limit = limit;
     }
@@ -1144,6 +1154,7 @@ impl ModemEngine {
     /// closed and the acquisition chain gains a streaming-path home worth reporting in
     /// `SessionDiagnostics`. Do NOT invent a production caller to satisfy the ratchet; that trades a
     /// truthful "dormant" for a fictional "used".
+    #[cfg(feature = "instruments")]
     pub fn afc_settle_attempts(&self) -> u64 {
         self.afc_settle_attempts
     }
@@ -1153,17 +1164,20 @@ impl ModemEngine {
     /// Zero has two meanings and a test must distinguish them: the gate ran and accepted
     /// everything, or the mode publishes no preamble template and the gate never ran at all. Pair
     /// this with a case that must reject.
+    #[cfg(feature = "instruments")]
     pub fn rho_rejected_settles(&self) -> u64 {
         self.rho_rejected_settles
     }
 
     /// Settles the preamble correlation accepted. See [`Self::rho_rejected_settles`].
+    #[cfg(feature = "instruments")]
     pub fn rho_accepted_settles(&self) -> u64 {
         self.rho_accepted_settles
     }
 
     /// Tripwire count of capture blocks the DCD carrier detector processed at the seam. DCD runs on the
     /// PRE-AGC level, so an enabled AGC's boost can't push sub-squelch noise over the busy threshold.
+    #[cfg(feature = "instruments")]
     pub fn dcd_blocks_processed(&self) -> u64 {
         self.dcd_blocks_processed
     }
@@ -1172,11 +1186,13 @@ impl ModemEngine {
     ///
     /// A tripwire, not a curiosity: a calibration that never runs on a receive path reads as a
     /// working feature until this stays 0.
+    #[cfg(feature = "instruments")]
     pub fn rho_calibration_samples(&self) -> usize {
         self.rho_calibration.len()
     }
 
     /// The threshold the veto is actually comparing against for `mode`, published constant included.
+    #[cfg(feature = "instruments")]
     pub fn rho_effective_threshold(&self, mode: &str) -> Option<f32> {
         let veto = self.build_preamble_veto(mode, AudioConfig::default().sample_rate)?;
         Some(self.rho_calibration.effective_threshold(veto.rho_threshold))
@@ -1184,6 +1200,7 @@ impl ModemEngine {
 
     /// Whether the veto is standing down for want of a separating threshold (REQ-RX-03), and how
     /// many settles it has let through in that state.
+    #[cfg(feature = "instruments")]
     pub fn rho_stand_down(&self) -> (bool, u64) {
         (self.rho_stand_down, self.rho_stand_down_settles)
     }
@@ -1310,17 +1327,20 @@ impl ModemEngine {
 
     /// Number of capture blocks the AGC has processed — a tripwire for the "feature wired at a seam
     /// the runtime path skips" class of gap (see [`Self::notch_blocks_processed`]).
+    #[cfg(feature = "instruments")]
     pub fn agc_blocks_processed(&self) -> u64 {
         self.agc_blocks_processed
     }
 
     /// Number of capture blocks the DC block (REQ-PHY-02) has processed — a tripwire that the
     /// always-on DC removal runs on every receive path (it lives at the single InputCapture seam).
+    #[cfg(feature = "instruments")]
     pub fn dc_blocks_processed(&self) -> u64 {
         self.dc_blocks_processed
     }
 
     /// Current AGC gain in dB (0 dB = unity). A readout of the active-span loop state.
+    #[cfg(feature = "instruments")]
     pub fn agc_gain_db(&self) -> f32 {
         self.agc.gain_db()
     }
@@ -1543,6 +1563,7 @@ impl ModemEngine {
     }
 
     /// Whether CSMA channel-access deferral is currently enabled.
+    #[cfg(feature = "instruments")]
     pub fn is_csma_enabled(&self) -> bool {
         self.csma_enabled
     }
@@ -1730,6 +1751,7 @@ impl ModemEngine {
     }
 
     /// Whether an OTA-ACK MAC key is currently set (test/observability).
+    #[cfg(feature = "instruments")]
     pub fn has_ack_mac_key(&self) -> bool {
         self.ack_mac_key.is_some()
     }
@@ -1798,6 +1820,7 @@ impl ModemEngine {
     ///
     /// A channel-sim harness that knows the true SNR can feed it here to bypass
     /// the on-air estimate; otherwise the M2M4 estimate drives the rate ladder.
+    #[cfg(feature = "instruments")]
     pub fn set_rx_snr_estimate(&mut self, snr_db: Option<f32>) {
         self.rx_snr_estimate = snr_db;
     }
@@ -1852,6 +1875,7 @@ impl ModemEngine {
     /// adopted TX [`SpeedLevel`] on success, or [`ModemError::ArqMaxRetries`] after
     /// `1 + max_retries` attempts. Always adopts a `recommended_level` carried by any
     /// ACK (even a Nack) so the absolute target can never drift.
+    #[cfg(feature = "instruments")]
     pub fn transmit_arq_ota(
         &mut self,
         data: &[u8],
@@ -1918,6 +1942,7 @@ impl ModemEngine {
     /// recommendation (lost ACK) is still decoded at the confirmed level. On total
     /// decode failure it replies `Nack` (still carrying the current recommendation)
     /// and returns the decode error.
+    #[cfg(feature = "instruments")]
     pub fn respond_arq_ota(
         &mut self,
         session_id: &str,
@@ -1961,6 +1986,7 @@ impl ModemEngine {
     /// released and only keys to answer. The idle gate uses the immediate-window
     /// RMS (not the held DCD busy flag) so the trailing DCD hold after a burst does
     /// not trigger a spurious ACK on silence.
+    #[cfg(feature = "instruments")]
     pub fn poll_ota_rx(
         &mut self,
         session_id: &str,
@@ -3323,6 +3349,7 @@ impl ModemEngine {
     ///
     /// This deterministic mapping is the Item 6 policy hook for choosing
     /// retry FEC mode and ACK timeout without mutating engine state.
+    #[cfg(feature = "instruments")]
     pub fn select_harq_decision(
         &self,
         snr_db: f32,
@@ -3613,6 +3640,7 @@ impl ModemEngine {
     /// only seam transforms it still omits are the **audio-envelope-domain** CE-SSB conditioner and the
     /// `tanh` peak limiter, which have no IQ-domain equivalent yet — a hardware/PA limiter or SDR
     /// headroom is the caller's responsibility on this path.
+    #[cfg(feature = "instruments")]
     pub fn transmit_iq(
         &mut self,
         data: &[u8],
@@ -3684,6 +3712,7 @@ impl ModemEngine {
 
     /// Receive a frame by listening on the input stream until a decode succeeds
     /// or the timeout elapses (no FEC).
+    #[cfg(feature = "instruments")]
     pub fn receive_with_timeout(
         &mut self,
         mode: &str,
@@ -4946,6 +4975,7 @@ impl ModemEngine {
     }
 
     /// Return reference to the transmission session log for regulatory compliance.
+    #[cfg(feature = "instruments")]
     pub fn tx_session_log(&self) -> &TxSessionLog {
         &self.tx_session_log
     }
@@ -5001,6 +5031,7 @@ impl ModemEngine {
 
     /// Whether the TX-log spill has given up (a write failed). Tripwire: a compliance record that
     /// silently stopped being written is the failure mode worth surfacing.
+    #[cfg(feature = "instruments")]
     pub fn tx_log_failed(&self) -> bool {
         self.tx_log_failed
     }
@@ -5710,6 +5741,7 @@ impl ModemEngine {
     /// Decodes using the standard RS codec (t=16).  For frames transmitted with
     /// [`transmit_with_strong_fec`](Self::transmit_with_strong_fec) use
     /// [`receive_with_strong_fec`](Self::receive_with_strong_fec) instead.
+    #[cfg(feature = "instruments")]
     pub fn receive_with_soft_combining(
         &mut self,
         mode: &str,
@@ -5783,6 +5815,7 @@ impl ModemEngine {
     ///
     /// TX chain: `transmit_with_fec` (RS-protected).  For Conv+RS frames use
     /// `receive_with_soft_viterbi_fec` on the combined samples instead.
+    #[cfg(feature = "instruments")]
     pub fn receive_with_llr_combining(
         &mut self,
         mode: &str,
@@ -5907,6 +5940,7 @@ impl ModemEngine {
     ///
     /// This path is mode-agnostic and works for any registered plugin that
     /// implements `demodulate_soft`.
+    #[cfg(feature = "instruments")]
     pub fn receive_with_window_arq(
         &mut self,
         mode: &str,
@@ -5996,6 +6030,7 @@ impl ModemEngine {
     /// emitted, reducing retry airtime compared to full-frame retransmit.
     ///
     /// Returns the encoded retransmit packet bytes that were emitted.
+    #[cfg(feature = "instruments")]
     pub fn transmit_window_retransmit_packet(
         &mut self,
         protected_frame: &[u8],
@@ -6062,6 +6097,7 @@ impl ModemEngine {
     /// Applies `n_packets` retransmit packets to `protected_frame` using
     /// `apply_window_retransmit`, then RS-decodes and frame-decodes the repaired
     /// buffer.
+    #[cfg(feature = "instruments")]
     pub fn receive_with_window_arq_selective(
         &mut self,
         mode: &str,
@@ -6093,6 +6129,7 @@ impl ModemEngine {
     /// Transmit one HARQ attempt selected from SNR/fading state.
     ///
     /// Returns the [`HarqDecision`] that was applied for this attempt.
+    #[cfg(feature = "instruments")]
     pub fn transmit_with_harq_attempt(
         &mut self,
         data: &[u8],
@@ -6112,6 +6149,7 @@ impl ModemEngine {
     ///
     /// Returns `(payload, decision)` where `decision` is the FEC/timeout policy
     /// that was applied to decode this attempt.
+    #[cfg(feature = "instruments")]
     pub fn receive_with_harq_attempt(
         &mut self,
         mode: &str,
@@ -6935,6 +6973,7 @@ impl ModemEngine {
 
     /// Tripwire: number of raw-audio frames emitted via [`transmit_raw_audio`] (stays 0 if the JS8
     /// beacon path never runs on a station).
+    #[cfg(feature = "instruments")]
     pub fn raw_audio_frames_transmitted(&self) -> u64 {
         self.raw_audio_frames_transmitted
     }
@@ -7121,6 +7160,7 @@ impl ModemEngine {
     /// have it grows silently the day the limit moves — and every new member arrives wearing
     /// whatever constants the old members were using. Pinning the membership, not just the
     /// behaviour of current members, is what turns that into a test failure.
+    #[cfg(feature = "instruments")]
     pub fn preamble_veto_active(&self, mode: &str) -> bool {
         self.build_preamble_veto(mode, AudioConfig::default().sample_rate)
             .is_some()

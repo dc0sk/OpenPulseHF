@@ -130,8 +130,21 @@ def _strip_rust(text):
 _CFG_OPEN_RE = re.compile(r"#\[cfg\(")
 
 
+#: The ONE feature whose items are, by construction, absent from every production build (#1277).
+#: Narrow on purpose: a plain `feature = "..."` cfg is production code and stays in the KEEP list —
+#: `feature = "test-util"` is in `_self_check`'s keep cases for exactly that reason. Widening this to
+#: "any feature" would delete real declarations and callers from the survey.
+NONPRODUCTION_FEATURE = "instruments"
+
+
 def _cfg_expr_is_test(expr):
     """True when a `cfg(...)` expression selects TEST builds — `test`, or `all(...)` containing it.
+
+    **`feature = "instruments"` is deliberately NOT handled here (#1277).** That selector also names
+    non-production code, but this stripper removes text, and its own invariant — asserted in
+    `_self_check` — is that stripping may destroy REFERENCES and never DECLARATIONS. An instruments
+    accessor is a `pub fn` declaration, so stripping it here changes the public-item count and trips
+    that invariant. It is excluded at declaration-collection time instead, in `_analyze`.
 
     A predicate rather than one regex, because "a bare `test` atom anywhere inside `all(...)` except
     under `not(...)`" is not something a Python regex expresses (the `not(` guard needs a
@@ -158,6 +171,15 @@ def _cfg_expr_is_test(expr):
         if depth < 0:
             return False
     return "test" in [a.strip() for a in "".join(out).split(",")]
+
+
+def _is_nonproduction_feature_atom(atom):
+    """True for exactly `feature = "instruments"`, whitespace- and quote-style-insensitive."""
+    a = atom.strip()
+    if not a.startswith("feature"):
+        return False
+    _, _, rhs = a.partition("=")
+    return rhs.strip().strip('"').strip("'") == NONPRODUCTION_FEATURE
 
 
 def _cfg_span(text, start):
@@ -257,6 +279,14 @@ def _self_check():
         'all(unix, test, feature = "y")',
     ]
     cfg_keep_cases = [
+        # #1277: the instruments feature is non-production, but it is NOT this stripper's business —
+        # see `_cfg_expr_is_test`. It must stay in KEEP here, or declarations vanish from the survey.
+        'feature = "instruments"',
+        'all(feature = "instruments", unix)',
+        'feature = "instrumentation"',
+        'feature = "instruments-extra"',
+        'any(feature = "instruments", unix)',
+        'not(feature = "instruments")',
         "not(test)",
         "all(not(test), unix)",
         'feature = "test-util"',
@@ -359,6 +389,59 @@ def _src_files():
     return sorted(seen)
 
 
+def _nonproduction_decl_names(raw):
+    """Names of `pub` items carrying `#[cfg(feature = "instruments")]` (#1277).
+
+    **Reads the RAW source, before `_strip_rust`.** That is not a detail: the stripper blanks STRING
+    LITERALS, so on stripped text `#[cfg(feature = "instruments")]` has its feature name erased and
+    the attribute is unreadable. A first version of this filter ran on the stripped text and so fired
+    only when the stripper was disabled, which changed the public-item count between the two halves
+    of `_self_check` and tripped its invariant. The self-check caught it; reading the raw text is the
+    fix.
+
+    Such an item does not exist in any production build — the feature is enabled only through the
+    crate's own dev-dependency — so demanding a production caller for it is incoherent. It is
+    dropped as an ORPHAN CANDIDATE only; its references still count normally.
+
+    This does not weaken the ratchet. The COMPILER enforces the same rule earlier and harder: a
+    production caller of a cfg-d-out item fails with E0599, verified by planting one (#1277).
+    """
+    names, lines = set(), raw.splitlines()
+    for idx, line in enumerate(lines):
+        stripped = line.strip()
+        if not stripped.startswith("#[cfg("):
+            continue
+        span = _cfg_span(stripped, stripped.index("#[cfg("))
+        if not span or not any(_is_nonproduction_feature_atom(a) for a in _cfg_atoms(span[0])):
+            continue
+        # Walk forward past any further attributes / doc comments to the declaration itself.
+        for nxt in lines[idx + 1:]:
+            t = nxt.strip()
+            if not t or t.startswith("#[") or t.startswith("//"):
+                continue
+            m = PUB_ITEM.match(nxt)
+            if m:
+                names.add(m.group(1))
+            break
+    return names
+
+
+def _cfg_atoms(expr):
+    """Top-level atoms of a cfg expression: `x` -> [x]; `all(a, b)` -> [a, b]."""
+    e = expr.strip()
+    if not e.startswith("all(") or not e.endswith(")"):
+        return [e]
+    inner, depth, out = e[4:-1], 0, []
+    for ch in inner:
+        if ch == "(":
+            depth += 1
+        elif ch == ")":
+            depth -= 1
+        elif depth == 0:
+            out.append(ch)
+    return [a.strip() for a in "".join(out).split(",")]
+
+
 def _analyze():
     files = _src_files()
     ident_files: dict[str, set] = {}
@@ -368,10 +451,13 @@ def _analyze():
             raw = (ROOT / rel).read_text(encoding="utf-8", errors="ignore")
         except OSError:
             continue
+        nonprod = _nonproduction_decl_names(raw)
         prod = _strip_cfg_test(_strip_rust(raw))
         for tok in set(IDENT.findall(prod)):
             ident_files.setdefault(tok, set()).add(rel)
         for m in PUB_ITEM.finditer(prod):
+            if m.group(1) in nonprod:
+                continue
             pub_items.append((m.group(1), rel))
     orphans = sorted({f"{name}\t{rel}" for name, rel in pub_items
                       if ident_files.get(name, set()) - {rel} == set()})

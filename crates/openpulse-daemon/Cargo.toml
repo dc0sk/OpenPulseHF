@@ -85,6 +85,11 @@ sysinfo          = { version = "0.30", default-features = false }
 openpulse-gpu    = { workspace = true, optional = true }
 
 [dev-dependencies]
+# Enable `openpulse-modem`'s `instruments` feature for THIS crate's tests (#1277).
+# A dev-dependency feature declared on openpulse-modem itself does NOT reach another crate's
+# `#[cfg(test)]` module — this crate has its own dependency edge, and features are per-edge. Without
+# this line the in-`src` test module below fails to compile with E0599 on the accessor it uses.
+openpulse-modem = { workspace = true, features = ["instruments"] }
 openpulse-audio  = { workspace = true }
 js8-plugin       = { workspace = true }
 bpsk-plugin      = { workspace = true }
