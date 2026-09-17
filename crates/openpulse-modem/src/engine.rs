@@ -2851,7 +2851,14 @@ impl ModemEngine {
         if decoded.is_none() {
             let n = samples.samples.len();
             'scan: for (level, mode, fec) in &candidates {
-                let (step, scan_end, max_frame_samples) = self.burst_onset_scan_bounds(mode, n);
+                let (step, scan_end, raw_max) = self.burst_onset_scan_bounds(mode, n);
+                // SIZE THE SLICE FOR THE CODED FRAME (#1384). `burst_onset_scan_bounds` returns the
+                // plugin's RAW geometry. MEASURED on BPSK250: raw is 74 624 samples, while a coded
+                // frame past the one-RS-block boundary is 131 840 — so every onset except zero
+                // sliced it short and the frame was simply unreachable here. Offset 0 is exempt
+                // because the attempt before this scan decodes the whole burst, which is why the
+                // defect could sit unseen.
+                let (max_frame_samples, _) = frame_plan(raw_max, *fec);
                 if scan_end == 0 {
                     continue; // nothing to search: attempt 0 already covered this candidate
                 }
@@ -2928,7 +2935,10 @@ impl ModemEngine {
                 }
             }
             'settle_scan: for (level, mode, fec) in &phase2 {
-                let (step, scan_end, max_frame_samples) = self.burst_onset_scan_bounds(mode, n);
+                let (step, scan_end, raw_max) = self.burst_onset_scan_bounds(mode, n);
+                // Coded sizing here too (#1384) — phase 2 starts its scan at onset 0, but walks past
+                // it, so every later slice has the same raw-truncation exposure as phase 1's.
+                let (max_frame_samples, _) = frame_plan(raw_max, *fec);
                 // ONE bounded acquisition for the whole burst, then an ordinary fine scan at the
                 // correction it found. Settling at every onset and retrying there is what the
                 // workspace gate caught as a 98-minute non-terminating test; see

@@ -15,6 +15,48 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-09-17 — the OTA coded arm was slicing at raw geometry; #1384, measured then fixed
+
+**Change.** #1384, filed out of #1310 PR1b's review as a **code read, explicitly not measured**. The
+measurement was run first, and it both confirmed the defect and corrected the arithmetic the filing
+rested on.
+
+**Measured before the fix** (BPSK250, `hpx_hf` locked to SL5 so `rx_candidates()` is `(BPSK250, Rs)`,
+coded frame at a non-zero onset, through `ota_decode_burst`):
+
+| payload | RS input `4+p+10` | blocks | frame samples | raw geometry | decoded |
+|---|---|---|---|---|---|
+| 200 B | 214 | 1 | 66 560 | 74 624 | yes |
+| 205 B | 219 | 1 | 66 560 | 74 624 | yes |
+| 210 B | 224 | **2** | **131 840** | 74 624 | **no** |
+| 255 B | 269 | 2 | 131 840 | 74 624 | **no** |
+
+So the claim holds: past the one-block boundary the coded frame is 1.77× the raw geometry, every
+onset except zero sliced it short, and the frame was unreachable. Offset 0 is exempt because the
+attempt before the scan decodes the whole burst — which is exactly why a green suite never saw it.
+
+**The measurement corrected the boundary, and the error was mine and already published.** #1310
+PR1b's records state the one-block boundary as **213 B**, computed as `payload + WIRE_OVERHEAD(10)
+≤ 223`. That omits `FecCodec::encode`'s **4-byte length prefix** (`PREFIX_LEN`), which is prepended
+BEFORE blocking. The RS input is `4 + payload + 10`, so the boundary is **209 B**, and 213 B is on
+the two-block side. `CLAUDE.md` and PR1b's ledger entry are corrected in this change. **No gate
+changed**: 200 B and 255 B sit on opposite sides of 209 as well as of 213, so both fixtures keep
+their discriminating power — the number was wrong, the tests were not.
+
+**Implementation.** `engine.rs`: both OTA scan sites (the candidate scan and the phase-2 settle scan)
+now size through `frame_plan(raw, *fec).0`, matching `decode_burst_inner`.
+
+**Tests → results.** `crates/openpulse-modem/tests/ota_burst_sizes_for_the_fec.rs` (new, 2 tests),
+both passing. Sabotage: reverting both sites to raw sizing fails ONLY the two-block case while the
+200 B control passes — the control is what shows the failure is about SIZING rather than about coded
+OTA bursts in general.
+
+**What this does not touch.** `burst_onset_scan_bounds` still returns the raw value; its two other
+callers (`decode_burst_phase1` and `decode_burst_inner`'s step/scan_end use) want it. Changing the
+helper's return would push a FEC parameter into a function whose other callers have none.
+
+---
+
 ## 2026-09-16 — REQ-CTL-03 retired from the registry; REQ-CTL-04 gains its fallback clause back
 
 **Change.** #1234, as a **reversal** of this session's earlier decision on the same issue.
@@ -152,9 +194,11 @@ for front-end callers: it requires an active OTA session and moves the rate cont
 on success, which `a_control_frame_does_not_touch_the_rate_controller` exists to forbid.
 
 **Review also corrected my justification, and the correction is the useful part.** I claimed a raw
-slice "cannot hold a coded frame". That is true only **above 213 B of payload** — wire = payload +
-`WIRE_OVERHEAD` (10), and RS(255,223) is one block iff wire ≤ 223. Below it the raw slice already
-holds the coded frame, which is what the shipped OTA coded arm relies on today. The widening is still
+slice "cannot hold a coded frame". That is true only **above 209 B of payload** (**corrected
+2026-09-17 from 213 B** — see the #1384 entry: `FecCodec::encode` prepends a 4-byte length prefix
+before blocking, so the RS input is `4 + payload + WIRE_OVERHEAD(10)` against a 223-byte block, and
+the omission put the boundary 4 bytes too high). Below it the raw slice already holds the coded
+frame, which is what the shipped OTA coded arm relied on — until #1384 measured that it does not. The widening is still
 right (over-reserving is benign, because `decode_prefix` rescues a slice longer than the frame and
 never one shorter), but the GATE had to be built at the boundary or it would have been vacuous.
 
@@ -166,8 +210,12 @@ never one shorter), but the GATE had to be built at the boundary or it would hav
 fall-through.
 
 **Tests → results.** `engine.rs`'s `burst_decode_sizes_for_the_fec` unit module (new, 3 tests), all
-passing. Boundary computed rather than assumed: payload 200 → wire 210 → 1 block; 213 → 223 → 1;
-**214 → 224 → 2**; 255 → 265 → 2.
+passing. Boundary computed rather than assumed — **and computed WRONG, corrected by #1384's
+measurement on 2026-09-17**: the arithmetic omitted `FecCodec::encode`'s 4-byte length prefix, so it
+read `payload + 10` against 223 and put the boundary at 213 B. The RS input is
+`4 + payload + 10`, so the boundary is **209 B**: 200 → 214 → 1 block; **210 → 224 → 2**;
+255 → 269 → 2. Both gates keep their discriminating power (200 B and 255 B are on opposite sides of
+209 as well as of 213), so no test changed — only the stated number, here and in `CLAUDE.md`.
 
 **The reachability ratchet rejected the first attempt, and it was right.** `decode_burst_with_fec`
 was written `pub`, and the gate failed with `NEW public items with no production caller (1)` — its
