@@ -60,27 +60,21 @@
 # decode_signed / encode_signed also left this file, by the better route: #1252 gave them a real
 # production caller in the daemon.)
 #
-# DORMANT(#1344): the three rho_* observability getters listed in this file are the tripwire and
-# operator readout for the #1060 threshold calibration. Their intended production consumer is the
-# daemon's control plane, and they still have none — every reader is a test.
+# RESOLVED(#1344), 2026-09-17: the three rho_* observability getters now HAVE a production reader —
+# the daemon polls them into its metrics snapshot each tick and emits `ControlEvent::VetoState`, so
+# `rho_calibration_samples`, `rho_effective_threshold` and `rho_stand_down` are production-reachable
+# and left the `instruments` feature they had briefly been gated behind (#1277).
 #
-# The note used to point at #1118 and say "the daemon does not run the acquisition chain at all
-# (#1118) ... wire them into the control plane when #1118 lands". **#1118 landed** (closed
-# 2026-08-19, fixed by #1168), and the design doc now says the opposite, so that instruction can no
-# longer be followed as written — which is why this points at #1344 instead. What is still missing is
-# a decision on the control-plane SHAPE (an event, a status field, or the daemon polling these), and
-# that is a design question, not a wiring job: a new `EngineEvent` variant is a workspace-wide change
-# with exhaustive matches in the app crates.
-#
-# Do NOT delete these lines to satisfy the ratchet: they have no production reader, so removing them
-# would make the ratchet fail, and inventing a caller to clear it would trade a truthful "dormant"
-# for a fictional "used".
-#
-# SCOPE, because this file lists FIVE rho_* names and the note's "three" is not all of them: the
-# three with an intended consumer are #1157's getters (rho_calibration_samples,
-# rho_effective_threshold, rho_stand_down). The other two — rho_accepted_settles and
-# rho_rejected_settles — are #1049 counters, dormant under the separate "instrument, not feature"
-# rationale in `afc_settle_attempts`' doc comment, and are NOT waiting on a control plane.
+# This note used to say "the three rho_* observability getters listed in this file", and it pointed
+# first at #1118 and then at #1344. Two corrections, both worth keeping because the note outlived
+# each of its own referents:
+#   * #1118 landed on 2026-08-19 (fixed by #1168) while the note still said "wire them when #1118
+#     lands" — a note whose condition had already been met;
+#   * #1277 then gated all five rho_* names behind `instruments` and they LEFT this file, so the
+#     note described entries that were no longer here at all.
+# The other two — rho_accepted_settles and rho_rejected_settles — are #1049 counters and remain
+# instruments: they have no intended production consumer, which is the distinction the old note drew
+# and the one thing about it that was always right.
 ACK_CLIMB_THRESHOLD	crates/openpulse-core/src/ota_rate.rs
 AckStatus	crates/openpulse-core/src/wire_query.rs
 Acquisition	crates/openpulse-dsp/src/freq_acquire.rs

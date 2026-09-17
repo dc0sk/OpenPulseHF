@@ -1186,13 +1186,11 @@ impl ModemEngine {
     ///
     /// A tripwire, not a curiosity: a calibration that never runs on a receive path reads as a
     /// working feature until this stays 0.
-    #[cfg(feature = "instruments")]
     pub fn rho_calibration_samples(&self) -> usize {
         self.rho_calibration.len()
     }
 
     /// The threshold the veto is actually comparing against for `mode`, published constant included.
-    #[cfg(feature = "instruments")]
     pub fn rho_effective_threshold(&self, mode: &str) -> Option<f32> {
         let veto = self.build_preamble_veto(mode, AudioConfig::default().sample_rate)?;
         Some(self.rho_calibration.effective_threshold(veto.rho_threshold))
@@ -1200,7 +1198,6 @@ impl ModemEngine {
 
     /// Whether the veto is standing down for want of a separating threshold (REQ-RX-03), and how
     /// many settles it has let through in that state.
-    #[cfg(feature = "instruments")]
     pub fn rho_stand_down(&self) -> (bool, u64) {
         (self.rho_stand_down, self.rho_stand_down_settles)
     }

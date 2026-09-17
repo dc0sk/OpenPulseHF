@@ -182,6 +182,20 @@ pub enum ControlEvent {
         logbook: bool,
         dcd_squelch: f32,
     },
+    /// Correlation-veto observability, polled from the engine each metrics tick (#1344).
+    ///
+    /// A NEW variant, for the reason `FrontEndState` records: the panel destructures `Metrics`
+    /// exhaustively and two other sites construct it, so adding a field there is a breaking change
+    /// while a new variant is absorbed by the wildcard arms every consumer already has.
+    ///
+    /// `effective_threshold` is `None` when the active mode publishes no preamble template — which
+    /// is every mode except BPSK250 today (#1053), and is normal rather than an error.
+    VetoState {
+        calibration_samples: usize,
+        effective_threshold: Option<f32>,
+        stand_down_active: bool,
+        stand_down_count: u64,
+    },
     /// New pending QSY proposal token available for operator decision.
     QsyPending { token: String },
     /// QSY decision recorded by daemon runtime.
