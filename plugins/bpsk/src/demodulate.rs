@@ -1401,3 +1401,319 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+mod carrier_dip_tiebreak {
+    //! #1363 MEASUREMENT — is the harm from `cancel_crossfade_isi` a carrier-dip TIE-BREAK?
+    //!
+    //! **The issue body's hypothesis is dead and this does not test it.** The body proposes that
+    //! preamble-locked timing "sits a quarter symbol off for stretches"; the thread retired that on
+    //! 2026-09-13, and the structural reason is decisive — this path has NO timing tracking. One lock
+    //! per frame (`find_timing_offset_with_expected`), then fixed slicing at `offset + k*n`. The
+    //! channel moves under a fixed lock; nothing drifts.
+    //!
+    //! **The live mechanism is a tie-break.** Where the composite response at the carrier collapses,
+    //! the symbol response loses its DC term, so every NO-FLIP pair yields `r_k ~ 0` — an exact
+    //! decision tie — while flips still yield large `r`. The backward substitution fills each tied
+    //! slot with `-beta * a'_{k+1}`, so consecutive fills ALTERNATE IN SIGN and a differential
+    //! detector reads alternation as flips. Every no-flip bit inside the dip decodes as 1.
+    //!
+    //! **Prediction:** in dips the hard path's errors concentrate on true bit 0 (-> 1.0) and sit at
+    //! **1/3 on bit 1** — a flip decodes correctly only when the NEXT bit is also a flip, so
+    //! err|b1 = 1/2 * 2/3 = 1/3. The soft path (no cancellation) is symmetric.
+    //!
+    //! An earlier version of this comment said "~0.0 on bit 1", which is wrong and would have made a
+    //! measured 0.35 read as a MISS when it is the prediction hit. Corrected in review.
+    //! **Falsifier:** in-dip hard errors NOT concentrated on bit 0.
+    //!
+    //! In-crate because `demodulate_iq`, `cancel_crossfade_isi` and `differential_decode` are private.
+    //! A probe needing non-public access is a unit test, never an exported accessor — and it must not
+    //! RE-IMPLEMENT the chain, so `the_composed_arm_matches_the_shipped_demodulator` asserts byte
+    //! identity against `bpsk_demodulate` in the DEFAULT run.
+    use super::*;
+    use crate::modulate::bpsk_modulate;
+    use openpulse_channel::{watterson::WattersonChannel, ChannelModel, WattersonConfig};
+
+    const MODE: &str = "BPSK250";
+    const FC: f32 = 1500.0;
+    const FS: f32 = 8000.0;
+    const BAUD: f32 = 250.0;
+
+    fn cfg() -> ModulationConfig {
+        ModulationConfig {
+            mode: MODE.to_string(),
+            sample_rate: FS as u32,
+            center_frequency: FC,
+            ..ModulationConfig::default()
+        }
+    }
+
+    /// The two arms, composed from the SHIPPED private pieces. `cancel` is the ONLY difference.
+    fn arm_bits(samples: &[f32], n: usize, offset: usize, cancel: bool) -> Vec<bool> {
+        let (mut iv, mut qv) = demodulate_iq(samples, n, FC, FS, offset);
+        if cancel {
+            cancel_crossfade_isi(&mut iv, &mut qv);
+        }
+        let iq: Vec<(f32, f32)> = iv.iter().copied().zip(qv.iter().copied()).collect();
+        differential_decode(&iq)
+    }
+
+    /// FIDELITY, in the DEFAULT run: the composed hard arm must reproduce `bpsk_demodulate` exactly.
+    /// Without this the probe measures its own chain rather than the product's — the defect that put
+    /// a wire-format argument on a template that did not exist (CLAUDE.md verification rule 5).
+    #[test]
+    fn the_composed_arm_matches_the_shipped_demodulator() {
+        let payload: Vec<u8> = (0..48u8).map(|i| i.wrapping_mul(7)).collect();
+        let c = cfg();
+        let tx = bpsk_modulate(&payload, &c).expect("modulate");
+        let n = samples_per_symbol(FS, BAUD).expect("sps");
+        let offset = find_timing_offset_with_expected(
+            &tx,
+            n,
+            FC,
+            FS,
+            &expected_preamble_symbols(PREAMBLE_SYMS),
+        );
+        let bits = arm_bits(&tx, n, offset, true);
+        assert!(
+            bits.len() > PREAMBLE_SYMS + TAIL_SYMS,
+            "composed arm produced too few symbols to compare"
+        );
+        let composed = bits_to_bytes(&bits[PREAMBLE_SYMS - 1..bits.len() - TAIL_SYMS]);
+        let shipped = bpsk_demodulate(&tx, &c).expect("shipped demodulator");
+        let k = shipped.len().min(composed.len());
+        assert!(k > 0, "nothing to compare");
+        assert_eq!(
+            &composed[..k],
+            &shipped[..k],
+            "the composed hard arm has DRIFTED from the shipped demodulator — every number this \
+             module reports would be about a chain the product does not run"
+        );
+    }
+
+    /// INSTRUMENT CHECK for the |H(fc,t)| recovery, which the whole measurement rests on.
+    ///
+    /// The method (from the issue thread) is to push a pure carrier through a SECOND `WattersonChannel`
+    /// built from the same seed with noise off, and read its envelope. That is only valid if the same
+    /// seed really does reproduce the same fading realisation — an assumption nobody had tested. This
+    /// asserts it directly, and it is why the measurement below can be believed at all.
+    #[test]
+    fn the_same_seed_reproduces_the_same_fading_realisation() {
+        let probe: Vec<f32> = (0..8000)
+            .map(|k| (2.0 * std::f32::consts::PI * FC * k as f32 / FS).cos())
+            .collect();
+        let mk = |snr: f32| {
+            let mut c = WattersonConfig::moderate_f1(Some(20260917));
+            c.snr_db = snr;
+            WattersonChannel::new(c).expect("watterson")
+        };
+        let a = mk(200.0).apply(&probe);
+        let b = mk(200.0).apply(&probe);
+        assert_eq!(
+            a.len(),
+            b.len(),
+            "same seed produced different lengths — the recovery method is void"
+        );
+        let worst = a
+            .iter()
+            .zip(b.iter())
+            .map(|(x, y)| (x - y).abs())
+            .fold(0.0f32, f32::max);
+        assert!(
+            worst < 1e-6,
+            "the same seed did NOT reproduce the same realisation (worst sample delta {worst:.3e}) — \
+             the |H(fc,t)| recovery this measurement depends on cannot work"
+        );
+
+        // AND the invariance the recovery ACTUALLY relies on, which the above does not test: the
+        // FADING must not depend on `snr_db`. The probe reads the envelope at snr 200 and applies it
+        // to a frame faded at snr 16; if the noise draw perturbed the envelope, the two would be
+        // different realisations and every bin would be mis-assigned. Flagged in review — the first
+        // version asserted same-config determinism and called it the recovery's premise.
+        let noisy = mk(16.0).apply(&probe);
+        let sig: f32 = (a.iter().map(|x| x * x).sum::<f32>() / a.len() as f32).sqrt();
+        let diff: f32 = (noisy
+            .iter()
+            .zip(a.iter())
+            .map(|(x, y)| (x - y) * (x - y))
+            .sum::<f32>()
+            / a.len() as f32)
+            .sqrt();
+        let in_rms: f32 = (probe.iter().map(|x| x * x).sum::<f32>() / probe.len() as f32).sqrt();
+        let expected_noise = in_rms / 10f32.powf(16.0 / 20.0);
+        assert!(
+            (diff / expected_noise - 1.0).abs() < 0.25,
+            "the difference between a noisy and a noise-free pass ({diff:.4}) is not the expected \
+             additive noise ({expected_noise:.4}) — the envelope is NOT independent of `snr_db`, so \
+             reading it at snr 200 and applying it to a snr-16 frame mis-assigns every bin \
+             (signal rms {sig:.4})"
+        );
+    }
+
+    /// Per-symbol |H(fc,t)|, recovered by pushing a pure carrier through the SAME fading
+    /// realisation with noise off — validated by `the_same_seed_reproduces_the_same_fading_realisation`.
+    ///
+    /// Envelope by windowed RMS over one symbol period, scaled by sqrt(2) for a sinusoid. Stated
+    /// plainly because it is an approximation: it is adequate for BINNING BY DEPTH, which is all the
+    /// tabulation needs, and it avoids a Hilbert transform whose own correctness would then need
+    /// establishing before any number here could be read.
+    fn carrier_envelope(seed: u64, len: usize, n: usize, offset: usize) -> Vec<f32> {
+        let probe: Vec<f32> = (0..len)
+            .map(|k| (2.0 * std::f32::consts::PI * FC * k as f32 / FS).cos())
+            .collect();
+        let mut c = WattersonConfig::moderate_f1(Some(seed));
+        c.snr_db = 200.0;
+        let faded = WattersonChannel::new(c).expect("watterson").apply(&probe);
+        let mut out = Vec::new();
+        let mut start = offset;
+        while start + n <= faded.len() {
+            let ms: f32 = faded[start..start + n].iter().map(|s| s * s).sum::<f32>() / n as f32;
+            out.push(ms.sqrt() * std::f32::consts::SQRT_2);
+            start += n;
+        }
+        out
+    }
+
+    /// THE MEASUREMENT. `#[ignore]`d: it is a research harness that prints a table rather than
+    /// asserting a threshold, and its runtime is seconds per seed.
+    ///
+    ///   cargo test -p bpsk-plugin --no-default-features --lib \
+    ///       carrier_dip_tiebreak::measure -- --ignored --nocapture
+    ///
+    /// Truth comes from the CLEAN channel, and the run asserts the two arms agree there — if they
+    /// disagree with no channel at all, the reference is not truth and nothing below means anything.
+    #[test]
+    #[ignore = "research harness: prints a table, asserts no threshold (#1363)"]
+    fn measure_in_dip_error_by_true_bit() {
+        const SEEDS: u64 = 96;
+        let payload: Vec<u8> = (0..200u32)
+            .map(|i| (i.wrapping_mul(2654435761) >> 13) as u8)
+            .collect();
+        let c = cfg();
+        let tx = bpsk_modulate(&payload, &c).expect("modulate");
+        let n = samples_per_symbol(FS, BAUD).expect("sps");
+        let expected = expected_preamble_symbols(PREAMBLE_SYMS);
+
+        // Truth from the clean channel, with both arms required to agree.
+        let off0 = find_timing_offset_with_expected(&tx, n, FC, FS, &expected);
+        let truth = arm_bits(&tx, n, off0, false);
+        let truth_hard = arm_bits(&tx, n, off0, true);
+        let k = truth.len().min(truth_hard.len());
+        let clean_disagree = (0..k).filter(|&i| truth[i] != truth_hard[i]).count();
+        assert_eq!(
+            clean_disagree, 0,
+            "the arms disagree on a CLEAN channel ({clean_disagree} of {k} bits) — the reference is \
+             not truth and every number below would be meaningless"
+        );
+        // Arm agreement alone is a SELF-CONSISTENT reference: both could agree and both be wrong.
+        // Tie it to the payload the modulator was handed. Flagged in review as archetype A.
+        assert_eq!(off0, 0, "a clean frame should lock at offset 0; got {off0}");
+        let recovered = bits_to_bytes(&truth[PREAMBLE_SYMS - 1..truth.len() - TAIL_SYMS]);
+        assert_eq!(
+            &recovered[..payload.len().min(recovered.len())],
+            &payload[..payload.len().min(recovered.len())],
+            "the clean reference does not reproduce the TRANSMITTED payload — it is a decode that \
+             agrees with itself, not truth"
+        );
+
+        // Bins of ABSOLUTE |H|. A per-seed MEDIAN normalisation was used first and dropped in
+        // review: `doppler_envelope` normalises to unit mean-square, so E|H|^2 = 1 by construction
+        // and absolute values are already comparable across seeds — while a per-seed median jitters
+        // 10-15 % and, worse, is a THIRD normalisation in this issue ("of a ray", "peak", "median")
+        // that nothing converts between. The FIRST attempt used
+        // [0.15, 0.30, 0.50] and its deepest bin came back EMPTY — the envelope never dropped that
+        // far in 24 seeds, so the regime where the prediction is sharpest was never sampled and the
+        // signature was averaged away. That is the dilution error the thread already made and
+        // corrected once (its dip window was 3x too wide); these edges reach the bottom.
+        let edges = [0.0f32, 0.02, 0.05, 0.10, 0.20, 0.35, 1.0e9];
+        let mut errs = [[[0u64; 2]; 2]; 6]; // [bin][arm 0=soft 1=hard][bit]
+        let mut tot = [[[0u64; 2]; 2]; 6];
+        let mut locks: Vec<usize> = Vec::new();
+        // BITS, not bytes — this probe has no byte or frame metric, and the thread's
+        // instruction was to count bytes. Naming it honestly rather than implying one.
+        let mut bits_soft = 0u64;
+        let mut bits_hard = 0u64;
+
+        for seed in 0..SEEDS {
+            let mut ch = WattersonConfig::moderate_f1(Some(seed));
+            ch.snr_db = 16.0;
+            let faded = WattersonChannel::new(ch).expect("watterson").apply(&tx);
+            let off = find_timing_offset_with_expected(&faded, n, FC, FS, &expected);
+            locks.push(off);
+            let env = carrier_envelope(seed, tx.len(), n, off);
+            if env.is_empty() {
+                continue;
+            }
+            for (arm_i, cancel) in [(0usize, false), (1usize, true)] {
+                let bits = arm_bits(&faded, n, off, cancel);
+                let m = bits.len().min(truth.len());
+                let mut bad_bits = 0u64;
+                for i in 0..m {
+                    // symbol index of bit i is i+1 (differential pairs); clamp into the envelope
+                    let si = (i + 1).min(env.len().saturating_sub(1));
+                    let d = env[si]; // absolute; see the binning note
+                    let b = edges
+                        .iter()
+                        .position(|&e| d < e)
+                        .unwrap_or(5)
+                        .saturating_sub(1)
+                        .min(5);
+                    let bit = usize::from(truth[i]);
+                    tot[b][arm_i][bit] += 1;
+                    if bits[i] != truth[i] {
+                        errs[b][arm_i][bit] += 1;
+                        bad_bits += 1;
+                    }
+                }
+                if arm_i == 0 {
+                    bits_soft += bad_bits
+                } else {
+                    bits_hard += bad_bits
+                }
+            }
+        }
+
+        println!("\nPROBE-1363  moderate_f1, 16 dB, {SEEDS} seeds, BPSK250, no FEC");
+        println!("  timing locks observed: {:?}", {
+            let mut l = locks.clone();
+            l.sort_unstable();
+            l.dedup();
+            l
+        });
+        println!("  |H| (absolute)        soft b0   soft b1   HARD b0   HARD b1      n");
+        let names = [
+            "[0.00,0.02)",
+            "[0.02,0.05)",
+            "[0.05,0.10)",
+            "[0.10,0.20)",
+            "[0.20,0.35)",
+            "[0.35,inf)",
+        ];
+        for b in 0..6 {
+            let r = |a: usize, bit: usize| {
+                if tot[b][a][bit] == 0 {
+                    f64::NAN
+                } else {
+                    errs[b][a][bit] as f64 / tot[b][a][bit] as f64
+                }
+            };
+            println!(
+                "  {:<20}  {:7.3}   {:7.3}   {:7.3}   {:7.3}  {:6}",
+                names[b],
+                r(0, 0),
+                r(0, 1),
+                r(1, 0),
+                r(1, 1),
+                tot[b][0][0] + tot[b][0][1]
+            );
+        }
+        println!(
+            "  wrong-BIT totals (no byte/frame metric here): soft {bits_soft}, hard {bits_hard}"
+        );
+        println!(
+            "  PREDICTION (tie-break): HARD b0 -> 1.0, HARD b1 -> 1/3 (a flip survives only if"
+        );
+        println!("  the next bit also flips); soft symmetric. FALSIFIED if hard errors are NOT");
+        println!("  concentrated on bit 0.\n");
+    }
+}
