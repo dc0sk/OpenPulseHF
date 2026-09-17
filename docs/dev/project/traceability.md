@@ -15,6 +15,61 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-09-17 — #1363's mechanism MEASURED on the real chain; the falsifier did not occur
+
+**Change.** A probe, not a fix. The maintainer's decision was "measure the mechanism before touching
+the code", and this is that measurement, reviewed before it was written anywhere.
+
+**What was measured.** Shipped BPSK250 crossfade chain, `moderate_f1` at 16 dB, 96 seeds, 200 B, no
+FEC, errors binned by absolute `|H(fc,t)|` recovered from the same seed. With `cancel_crossfade_isi`
+ON, in-dip errors concentrate on true bit 0 — b0/b1 = 0.745/0.385, 0.539/0.296, 0.250/0.152 at
+`|H|` ∈ [0.02,0.05), [0.05,0.10), [0.10,0.20), n = 412/1421/4729. The same bits through the same
+chain with cancellation OFF are symmetric — 0.377/0.365, 0.263/0.247, 0.130/0.144. **The falsifier
+set on the issue ("in-dip hard errors NOT concentrated on bit 0") did not occur**, which refutes
+amplification, resonance and the timing story together: none of them predicts a bit-value asymmetry.
+
+`err|b1` ≈ 0.29–0.39 matches the tie-break's predicted **1/3** (a flip decodes correctly only when
+the next bit also flips, so 1/2 × 2/3).
+
+**What the review corrected, including my reading of my own numbers.**
+- I read `err|b1 ≈ 0.35` as a DEVIATION. It is the prediction *hit*; the probe's docstring said
+  "~0.0" and was simply wrong.
+- The shortfall of `err|b0` from 1.0 is **not attributable to the mechanism at this SNR**: symbol
+  noise σ ≈ 0.039 against a tie-break fill of ≈ 0.053, only 1.4×, so noise breaks ties about as often
+  as the recursion does. An SNR axis is required before any "graded onset" claim.
+- I over-claimed the reproduction: the probe counts BITS and has no byte/frame metric, so it
+  reproduces "895 fewer bit errors" (here 537: hard 3605 vs soft 4142, while worse in every dip bin)
+  and **not** the "decoded fewer frames" half.
+- The deepest bin is uninformative (n = 77; Fisher p ≈ 0.09 on the first run) and is cited for
+  neither arm.
+
+**Three apparatus defects fixed before posting.**
+1. The seed test asserted same-config determinism and called it the recovery's premise. The recovery
+   actually relies on the envelope being independent of `snr_db` — it reads the envelope at snr 200
+   and applies it to a frame faded at 16. Now asserted against the expected additive-noise rms.
+2. Truth was arm agreement, a self-consistent reference. Now tied to the transmitted payload, with
+   the clean lock asserted to be 0.
+3. Per-seed median normalisation replaced by absolute `|H|` — `doppler_envelope` normalises to unit
+   mean-square, and a median was a THIRD normalisation in the thread with nothing converting between
+   them.
+
+**And a dilution error worth recording, because the thread already made it once.** The first run used
+24 seeds with coarser edges; its deepest bin came back EMPTY and the signature averaged away. Visible
+only because the table prints bin counts.
+
+**Tests → results.** `plugins/bpsk/src/demodulate.rs`, module `carrier_dip_tiebreak`. Two assertions
+run by DEFAULT — byte identity against `bpsk_demodulate`, and the two envelope invariances — so the
+probe cannot drift into measuring its own chain. The measurement itself is `#[ignore]`d: it prints a
+table and asserts no threshold. `cargo test -p bpsk-plugin --no-default-features --lib
+carrier_dip_tiebreak` → 2 passed, 1 ignored.
+
+**NOT established, and not to be cited as if it were:** the deterministic deep-null limit (needs the
+SNR axis); which tap dominates (`moderate_f1` draws complex rays per seed — both cases are sampled,
+neither controlled; `apply_complex` at delay 0 and 1.0 on one seed splits it, and that is the next
+measurement); and anything about the fix.
+
+---
+
 ## 2026-09-17 — test-only instruments are a Cargo feature the compiler enforces; #1277
 
 **Change.** #1277, as decided: a `instruments` Cargo feature rather than a baseline label, so "no
