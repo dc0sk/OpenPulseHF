@@ -117,6 +117,10 @@ pub struct MetricsSnapshot {
     /// including its framing overhead; never larger than raw). The ratio `compressed / raw` is the
     /// live compression figure reported in `ControlEvent::Metrics`.
     pub compressed_payload_bytes: u64,
+    /// Correlation-veto observability, refreshed from the engine by the main loop (#1344).
+    ///
+    /// Same route and same reason as `front_end` below: the periodic metrics task holds no engine.
+    pub veto: VetoState,
     /// Front-end toggle state, refreshed from the engine by the main loop (#1276).
     ///
     /// This struct is daemon-internal and `Default`-constructed in one place, so extending it is
@@ -138,6 +142,30 @@ pub struct FrontEndState {
     pub cessb: bool,
     pub logbook: bool,
     pub dcd_squelch: f32,
+}
+
+/// What the correlation veto is doing, as last read FROM THE ENGINE (#1344).
+///
+/// #1157 added these three getters so "an operator can see which regime a station is in", and they
+/// had no production reader at all — every caller was a test. #1342 then made a stand-down log at
+/// `warn` on both acquisition paths, but a log line is not an operator surface: the panel and the
+/// CLI still could not show whether a station's veto was standing down, which is the state #1157
+/// exists to make visible.
+///
+/// Carried here rather than emitted as an `EngineEvent` (maintainer decision, 2026-09-14): a new
+/// `EngineEvent` variant is a workspace-wide change with exhaustive matches in the app crates —
+/// which is exactly why #1342 deferred it — and the operator surfaces already consume status.
+#[cfg(not(target_arch = "wasm32"))]
+#[derive(Default, Clone, Copy, PartialEq)]
+pub struct VetoState {
+    /// ρ samples the CFAR calibration has accumulated (#1060's derived threshold needs a quorum).
+    pub calibration_samples: usize,
+    /// The threshold actually in force for the active mode, or `None` when that mode publishes no
+    /// preamble template — which is every mode except BPSK250 today, and is NOT an error.
+    pub effective_threshold: Option<f32>,
+    /// Whether the veto is currently standing down, and how many stand-downs have been recorded.
+    pub stand_down_active: bool,
+    pub stand_down_count: u64,
 }
 
 /// Compression ratio (compressed / raw) of the measured payload stream, or `None` before any payload
@@ -757,7 +785,15 @@ impl ControlServer {
             let mut last_gpu_instant = std::time::Instant::now();
             loop {
                 interval.tick().await;
-                let (afc, new_bytes, decode_latency_ms, raw_bytes, compressed_bytes, front_end) = {
+                let (
+                    afc,
+                    new_bytes,
+                    decode_latency_ms,
+                    raw_bytes,
+                    compressed_bytes,
+                    front_end,
+                    veto,
+                ) = {
                     let m = metrics_snap.lock().await;
                     (
                         m.afc_correction_hz,
@@ -766,6 +802,7 @@ impl ControlServer {
                         m.raw_payload_bytes,
                         m.compressed_payload_bytes,
                         m.front_end,
+                        m.veto,
                     )
                 };
                 let effective_bps = (new_bytes.saturating_sub(last_bytes) * 8) as f32;
@@ -787,6 +824,15 @@ impl ControlServer {
                     cessb: front_end.cessb,
                     logbook: front_end.logbook,
                     dcd_squelch: front_end.dcd_squelch,
+                });
+                // #1344: the veto's state, on the same tick and by the same route. Sent every
+                // tick rather than on change, matching `FrontEndState` — a client that connects or
+                // reconnects is then correct within one interval without having to ask.
+                let _ = ev_metrics.send(ControlEvent::VetoState {
+                    calibration_samples: veto.calibration_samples,
+                    effective_threshold: veto.effective_threshold,
+                    stand_down_active: veto.stand_down_active,
+                    stand_down_count: veto.stand_down_count,
                 });
 
                 let (cpu_percent, ram_mb, ram_percent) = sample_process_resources(&mut sys, pid);

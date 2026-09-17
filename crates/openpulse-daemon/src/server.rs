@@ -1206,6 +1206,13 @@ pub async fn run(cfg: OpenpulseConfig, modem_backend: Box<dyn AudioBackend>) -> 
                     // Answering from a daemon-side shadow of the commands sent would restate what
                     // the client already believes and could not catch the engine disagreeing.
                     m.front_end = front_end_state(&engine, &runtime_state);
+                    // #1344: the veto's own state, read here for the same reason — this is the one
+                    // place holding the engine. It refreshes EVERY tick rather than only on a
+                    // decode, which matters: a stand-down is precisely the state in which frames are
+                    // NOT decoding, so a decode-gated read would go stale exactly when an operator
+                    // needs it. (Checked: the enclosing `match burst` has an `Ok(None) => Vec::new()`
+                    // arm, so this line is reached on a silent tick.)
+                    m.veto = veto_state(&engine, &mode);
                     m.total_rx_bytes += bytes.len() as u64;
                     // EWMA of decode latency, sampled only when a frame was actually decoded.
                     if !bytes.is_empty() {
@@ -2213,6 +2220,22 @@ fn front_end_state(
         cessb: engine.cessb_enabled(),
         logbook: runtime_state.logbook.is_enabled(),
         dcd_squelch: engine.dcd_squelch(),
+    }
+}
+
+/// The correlation veto's observable state, read from the engine (#1344).
+///
+/// One function beside `front_end_state` for the same reason: every emitter reports one source of
+/// truth. `mode` is the ACTIVE session mode, because `rho_effective_threshold` is per-mode — a
+/// threshold travels with its template (#1053), so asking for the wrong mode's would report a
+/// number no acquisition on this station is using.
+fn veto_state(engine: &ModemEngine, mode: &str) -> crate::VetoState {
+    let (stand_down_active, stand_down_count) = engine.rho_stand_down();
+    crate::VetoState {
+        calibration_samples: engine.rho_calibration_samples(),
+        effective_threshold: engine.rho_effective_threshold(mode),
+        stand_down_active,
+        stand_down_count,
     }
 }
 
@@ -3539,6 +3562,81 @@ mod front_end_readback_tests {
             !s.notch && s.agc,
             "the report must follow the engine; a shadow of the last command would still say \
              notch-on/agc-off here"
+        );
+    }
+}
+
+/// #1344 — the correlation veto's state reaches an operator surface.
+///
+/// #1157 added `rho_calibration_samples` / `rho_effective_threshold` / `rho_stand_down` so "an
+/// operator can see which regime a station is in", and they had **no production reader**: every
+/// caller was a test. #1342 then made a stand-down log at `warn` on both acquisition paths, but a
+/// log line is not an operator surface — the panel and CLI still could not show it.
+///
+/// Here rather than in `tests/`: `veto_state` is private to this module and the property is about
+/// what it reads. Exporting it so an integration test could call it is the "public API for an
+/// instrument" shape (#1271) — the same reason `front_end_readback_tests` lives here.
+#[cfg(test)]
+mod veto_readback_tests {
+    use super::veto_state;
+    use openpulse_audio::LoopbackBackend;
+    use openpulse_modem::ModemEngine;
+
+    const TEMPLATED: &str = "BPSK250"; // the one mode publishing a preamble template (#1053)
+    const NO_TEMPLATE: &str = "QPSK500";
+
+    fn engine() -> ModemEngine {
+        let mut e = ModemEngine::new(Box::new(LoopbackBackend::new()));
+        e.register_plugin(Box::new(bpsk_plugin::BpskPlugin::default()))
+            .expect("register bpsk");
+        e.register_plugin(Box::new(qpsk_plugin::QpskPlugin::default()))
+            .expect("register qpsk");
+        e
+    }
+
+    /// The report follows the ENGINE — the property that makes the readout worth having at all.
+    ///
+    /// Each field is compared against the engine's own getter rather than a literal, so this cannot
+    /// pass by restating a constant the builder also hardcodes.
+    ///
+    /// **STATED LIMIT, because a silent one is worse than a known gap.** On a fresh engine
+    /// `rho_stand_down()` is `(false, 0)`, so the two stand-down fields are compared only at their
+    /// DEFAULT — measured, a builder that hardcodes `stand_down_active: false` still passes this.
+    /// Priming a real stand-down needs a recorded idle corpus plus the deterministic scan setters,
+    /// which are `#[cfg(feature = "instruments")]` since #1277 and not reachable from this crate.
+    /// The stand-down BEHAVIOUR is covered where it belongs, in
+    /// `openpulse-modem/tests/rho_calibration_receive.rs` and the engine's
+    /// `stand_down_is_recorded_on_every_path`; what is covered HERE is that the daemon reads the
+    /// engine rather than a shadow, and the mode-dependent field below is what actually discriminates.
+    #[test]
+    fn the_report_follows_the_engine() {
+        let e = engine();
+        let s = veto_state(&e, TEMPLATED);
+        let (active, count) = e.rho_stand_down();
+        assert_eq!(s.calibration_samples, e.rho_calibration_samples());
+        assert_eq!(s.effective_threshold, e.rho_effective_threshold(TEMPLATED));
+        assert_eq!(s.stand_down_active, active);
+        assert_eq!(s.stand_down_count, count);
+    }
+
+    /// `effective_threshold` is per-MODE, and a mode with no template reports `None` rather than
+    /// borrowing another mode's number.
+    ///
+    /// This is the #1053 rule in one assertion: a threshold travels WITH its template, so no mode
+    /// may inherit another's. A builder that ignored its `mode` argument — the easy mistake here,
+    /// since every other field is mode-independent — would report BPSK250's threshold for a mode
+    /// that publishes none, and this is what catches it.
+    #[test]
+    fn a_mode_with_no_template_reports_no_threshold() {
+        let e = engine();
+        assert!(
+            veto_state(&e, TEMPLATED).effective_threshold.is_some(),
+            "BPSK250 publishes a template, so it must report a threshold — without this the test \
+             below passes vacuously on a builder that always returns None"
+        );
+        assert!(
+            veto_state(&e, NO_TEMPLATE).effective_threshold.is_none(),
+            "a mode with no preamble template must report NO threshold, not another mode's (#1053)"
         );
     }
 }

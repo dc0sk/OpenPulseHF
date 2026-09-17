@@ -15,6 +15,58 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-09-17 — the correlation veto's state reaches an operator surface; #1344
+
+**Change.** #1344, as decided 2026-09-14: the daemon POLLS the three `rho_*` getters into its status
+rather than the engine emitting a new `EngineEvent`.
+
+**Defect.** #1157 added `rho_calibration_samples`, `rho_effective_threshold` and `rho_stand_down` so
+"an operator can see which regime a station is in". They had **no production reader** — every caller
+was a test. #1342 then made a stand-down log at `warn` on both acquisition paths, but a log line is
+not an operator surface: the panel and the CLI still could not show whether a station's veto was
+standing down, which is the state #1157 exists to make visible.
+
+**Design, taken from #1276's precedent rather than invented.** Three facts in the code decided it:
+- the read happens in the **main loop**, because `MetricsSnapshot`'s own doc records that the
+  periodic metrics task holds no engine — the #1271 trap, already solved once here;
+- `MetricsSnapshot` is daemon-internal and `Default`-constructed in one place, so extending it is
+  safe, unlike the wire `ControlEvent::Metrics` which the panel destructures exhaustively;
+- so the wire surface is a **new** `ControlEvent::VetoState` variant, absorbed by the wildcard arms
+  every consumer already has.
+
+**Verified rather than assumed: the refresh runs EVERY TICK, not only on a decode.** That matters
+here more than for #1276's toggles — a stand-down is precisely the state in which frames are NOT
+decoding, so a decode-gated read would go stale exactly when an operator needs it. Checked by reading
+the enclosing `match burst`, which has an `Ok(None) => Vec::new()` arm, so the metrics write is
+reached on a silent tick.
+
+**The #1277 interaction, resolved in the right direction.** All five `rho_*` getters had been gated
+behind `#[cfg(feature = "instruments")]` two hours earlier. Giving three of them a production
+consumer required deliberately removing that gate from exactly those three — a visible change in the
+diff — while the two #1049 counters stay gated, having no intended consumer. That is the friction
+#1277 was built to create, on its first real test.
+
+**Tests → results.** `veto_readback_tests` in `server.rs` (in-crate, because `veto_state` is private
+and exporting it for an integration test is the "public API for an instrument" shape #1271 bans),
+2 tests, passing. Sabotage: a builder that ignores its `mode` argument — the easy mistake, since
+every other field is mode-independent — FAILS, because a mode with no preamble template must report
+`None` rather than borrow BPSK250's threshold (#1053).
+
+**A stated limit, because a silent one is worse than a known gap.** A second sabotage —
+hardcoding `stand_down_active: false` — **did NOT fail**: on a fresh engine `rho_stand_down()` is
+`(false, 0)`, so those two fields are compared only at their default. Priming a real stand-down needs
+a recorded idle corpus plus the deterministic scan setters, which are themselves `instruments` since
+#1277 and unreachable from this crate. The limit is written into the test, and the stand-down
+BEHAVIOUR is covered where it belongs — `openpulse-modem/tests/rho_calibration_receive.rs` and the
+engine's `stand_down_is_recorded_on_every_path`.
+
+**Baseline note corrected — it had outlived two referents.** It said "wire them into the control
+plane when #1118 lands"; #1118 landed 2026-08-19. It then said "the three rho_* getters listed in
+this file"; #1277 gated them and they left the file. Now records the resolution and keeps the one
+thing the old note always had right: the other two are #1049 counters with no intended consumer.
+
+---
+
 ## 2026-09-17 — #1363's mechanism MEASURED on the real chain; the falsifier did not occur
 
 **Change.** A probe, not a fix. The maintainer's decision was "measure the mechanism before touching
