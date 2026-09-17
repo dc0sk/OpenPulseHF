@@ -21,7 +21,24 @@ serde             = { workspace = true, features = ["derive"] }
 serde_json        = { workspace = true }
 tokio             = { version = "1", default-features = false, features = ["sync"] }
 
+[features]
+# Test-only instruments (#1277). Accessors that exist ONLY so a test can observe internal state are
+# `#[cfg(feature = "instruments")]`, and this crate enables the feature on ITSELF as a dev-dependency
+# below. That turns "no production caller" from a list somebody maintains into a COMPILER guarantee:
+# a production call cannot compile without a visible `Cargo.toml` diff.
+#
+# They stay `pub` because the asserting tests are integration tests in `tests/`, which Cargo links as
+# an external crate. Relocating ~1187 lines of tests under `src/` to make them private is the wrong
+# trade; this makes the export honest instead.
+#
+# The workspace is `resolver = "2"`, so a dev-dependency feature does NOT leak into `cargo build` or
+# `cross check` — confirmed, not cited.
+instruments = []
+
 [dev-dependencies]
+# Enable this crate's own `instruments` feature for its tests (#1277). This is what makes the
+# accessors exist for `tests/` while staying absent from every production build.
+openpulse-modem = { path = ".", features = ["instruments"] }
 openpulse-config = { path = "../openpulse-config" }
 # Test-only: `tx_airtime.rs` asserts a frame's airtime against the REAL `DEFAULT_PTT_MAX` rather
 # than restating 180 s, so the gate cannot pass while the constant it guards has moved. No cycle:

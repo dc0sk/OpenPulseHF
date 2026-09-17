@@ -15,6 +15,68 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-09-17 — test-only instruments are a Cargo feature the compiler enforces; #1277
+
+**Change.** #1277, as decided: a `instruments` Cargo feature rather than a baseline label, so "no
+production caller" stops being a list somebody maintains and becomes a compiler guarantee.
+
+**The triage was wrong twice before it was right, and both corrections are the substance.** The issue
+says "~65 test-only exports". `engine.rs` has **62** baseline entries, and they are three classes:
+
+| class | count | disposition |
+|---|---|---|
+| test-only instruments | **40** | `#[cfg(feature = "instruments")]`, out of the baseline |
+| `pub` but with a real in-file production caller | **9** | left alone — not instruments |
+| unreferenced anywhere (orphans) | **13** | left in the baseline; #1197's business |
+
+- **First error: I excluded the declaring file from the production index**, mirroring the scanner's
+  orphan rule (`ident_files - {rel}`). But "no caller in ANOTHER file" is not "no caller": nine items
+  — `frame_plan`, `burst_cap_samples`, `combine_and_decode_llrs`, `LONG_FRAME_SAMPLES` among them —
+  are called from production code inside `engine.rs` itself. Feature-gating them broke the build, which
+  is how it was caught.
+- **Second error: the correction over-corrected, to 23.** Counting bare name occurrences made every
+  counter accessor look used, because an accessor and its backing field share a name and
+  `self.agc_blocks_processed` is a FIELD READ, not a call. Counting call-shaped uses (`name(`) for
+  `fn` items gives the 40 above. 40 + 9 + 13 = 62 reconciles.
+
+**The mechanism, verified rather than assumed.** A production call to a gated item fails with
+**E0599** — watched failing inside `openpulse-modem` and, separately, from `openpulse-daemon`, a
+different crate — and the identical call compiles under `--features instruments`, so the failure is
+the cfg and not a typo. `cargo build --workspace --no-default-features` stays green, confirming the
+resolver-2 claim that a dev-dependency feature does not leak into a production build.
+
+**Cross-crate consumers needed their own edge, exactly as review predicted.** `openpulse-kiss` and
+`openpulse-daemon` use two of these accessors from `#[cfg(test)]` modules inside their own `src/`.
+Features are per-dependency-edge, so a feature declared on `openpulse-modem`'s self dev-dependency
+does not reach them; both crates now carry
+`openpulse-modem = { workspace = true, features = ["instruments"] }` in their `[dev-dependencies]`.
+Verified by watching the E0599 before adding it.
+
+**The ratchet change, and the two ways the self-check caught it being wrong.** The decision called for
+the scanner to strip the instruments cfg "with the same justification it strips `cfg(test)`". That is
+not implementable in the stripper: `_self_check` asserts the stripper may destroy REFERENCES and never
+DECLARATIONS, and an instruments accessor is a `pub fn` declaration. So the exclusion happens at
+declaration-collection time in `_analyze` instead.
+
+1. The first version read the cfg from the STRIPPED text and fired only when the stripper was
+   disabled — because `_strip_rust` blanks string literals, so `feature = "instruments"` loses its
+   name. The public-item count moved between the two halves of `_self_check` and it failed.
+2. It now reads the RAW source. Self-check passes, and reports the cfg stripper still wired
+   (480 orphans off / 503 on).
+
+**This does not weaken the ratchet**, because the compiler enforces the same rule earlier and harder
+than any checker could — which is the whole argument for the feature over a label.
+
+**Baseline.** 507 → 464 entries; `engine.rs` 62 → 22. Three of the 43 removed are NOT instruments —
+`hpx_narrowband_hd` (deleted from the code in #1359), `is_faulted` and `release` (cleared by the
+scanner's name-based reachability). Checked individually: none carries the instruments cfg, so none
+was removed by this change; they are pre-existing staleness a regeneration sweeps.
+
+**Tests → results.** Full gate below. No test changed: the accessors' callers are tests, and they
+still see them.
+
+---
+
 ## 2026-09-17 — the OTA coded arm was slicing at raw geometry; #1384, measured then fixed
 
 **Change.** #1384, filed out of #1310 PR1b's review as a **code read, explicitly not measured**. The
