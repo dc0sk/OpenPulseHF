@@ -100,6 +100,7 @@ capabilities:
   CAP-08:
     code:
     - crates/openpulse-core/src/compression.rs
+    - tools/openpulse-dict-trainer/src/main.rs
     name: Session-layer compression
     satisfies:
     - REQ-CMP-01
@@ -122,6 +123,7 @@ capabilities:
   CAP-10:
     code:
     - crates/openpulse-core/src/frame.rs
+    - crates/openpulse-core/src/scramble.rs
     name: Frame format and CRC-16
     satisfies:
     - REQ-FUN-05
@@ -209,6 +211,7 @@ capabilities:
     - plugins/ofdm/src/lib.rs
     - plugins/ofdm/src/modulate.rs
     - plugins/ofdm/src/params.rs
+    - plugins/ofdm/src/scramble.rs
     name: OFDM multicarrier plugin
     satisfies:
     - REQ-FUN-06
@@ -411,6 +414,7 @@ capabilities:
     code:
     - crates/openpulse-core/src/ack.rs
     - crates/openpulse-core/src/rate.rs
+    - crates/openpulse-core/src/session_key.rs
     name: ACK taxonomy and adaptive rate control
     satisfies:
     - REQ-FUN-06
@@ -511,6 +515,7 @@ capabilities:
     traceability: baseline
   CAP-39:
     code:
+    - apps/openpulse-testmatrix/src/runners/ardop.rs
     - crates/openpulse-ardop/src/bridge.rs
     - crates/openpulse-ardop/src/command.rs
     - crates/openpulse-ardop/src/data.rs
@@ -525,6 +530,7 @@ capabilities:
     traceability: baseline
   CAP-40:
     code:
+    - apps/openpulse-testmatrix/src/runners/kiss.rs
     - crates/openpulse-kiss/src/ax25.rs
     - crates/openpulse-kiss/src/bridge.rs
     - crates/openpulse-kiss/src/kiss.rs
@@ -538,6 +544,7 @@ capabilities:
     traceability: baseline
   CAP-41:
     code:
+    - apps/openpulse-testmatrix/src/runners/b2f.rs
     - crates/openpulse-b2f/src/banner.rs
     - crates/openpulse-b2f/src/compress.rs
     - crates/openpulse-b2f/src/frame.rs
@@ -551,6 +558,7 @@ capabilities:
     traceability: baseline
   CAP-42:
     code:
+    - apps/openpulse-testmatrix/src/runners/b2f.rs
     - crates/openpulse-b2f-driver/src/cmd.rs
     - crates/openpulse-b2f-driver/src/data.rs
     - crates/openpulse-b2f-driver/src/lib.rs
@@ -581,6 +589,10 @@ capabilities:
     traceability: baseline
   CAP-45:
     code:
+    - crates/openpulse-cli/src/commands/bandplan_guard.rs
+    - crates/openpulse-cli/src/commands/qsy.rs
+    - crates/openpulse-daemon/src/lib.rs
+    - crates/openpulse-daemon/src/server.rs
     - crates/openpulse-qsy/src/bandplan.rs
     - crates/openpulse-qsy/src/frame.rs
     - crates/openpulse-qsy/src/lib.rs
@@ -627,6 +639,7 @@ capabilities:
     code:
     - crates/openpulse-core/src/peer_cache.rs
     - crates/openpulse-core/src/query_propagation.rs
+    - crates/openpulse-core/src/route_discovery.rs
     - crates/openpulse-core/src/wire_query.rs
     name: Network query propagation and peer query
     satisfies:
@@ -704,6 +717,12 @@ capabilities:
     - apps/openpulse-testmatrix/src/main.rs
     - apps/openpulse-testmatrix/src/matrix.rs
     - apps/openpulse-testmatrix/src/report.rs
+    - apps/openpulse-testmatrix/src/runners/adaptive.rs
+    - apps/openpulse-testmatrix/src/runners/ardop.rs
+    - apps/openpulse-testmatrix/src/runners/b2f.rs
+    - apps/openpulse-testmatrix/src/runners/kiss.rs
+    - apps/openpulse-testmatrix/src/runners/mod.rs
+    - apps/openpulse-testmatrix/src/runners/raw_modem.rs
     name: Mode × channel test matrix runner
     satisfies:
     - REQ-NFR-05
@@ -748,13 +767,28 @@ capabilities:
     - crates/openpulse-cli/src/cli.rs
     - crates/openpulse-cli/src/commands/adaptive.rs
     - crates/openpulse-cli/src/commands/arq.rs
+    - crates/openpulse-cli/src/commands/bandplan_guard.rs
+    - crates/openpulse-cli/src/commands/beacon.rs
     - crates/openpulse-cli/src/commands/benchmark.rs
+    - crates/openpulse-cli/src/commands/broadcast.rs
+    - crates/openpulse-cli/src/commands/calibrate.rs
+    - crates/openpulse-cli/src/commands/config.rs
+    - crates/openpulse-cli/src/commands/devices.rs
     - crates/openpulse-cli/src/commands/mod.rs
+    - crates/openpulse-cli/src/commands/mode_advisor.rs
+    - crates/openpulse-cli/src/commands/modes.rs
     - crates/openpulse-cli/src/commands/monitor.rs
     - crates/openpulse-cli/src/commands/qsy.rs
     - crates/openpulse-cli/src/commands/receive.rs
+    - crates/openpulse-cli/src/commands/session.rs
+    - crates/openpulse-cli/src/commands/session_metrics.rs
     - crates/openpulse-cli/src/commands/transmit.rs
+    - crates/openpulse-cli/src/commands/trust.rs
     - crates/openpulse-cli/src/main.rs
+    - crates/openpulse-cli/src/output.rs
+    - crates/openpulse-cli/src/pki.rs
+    - crates/openpulse-cli/src/radio.rs
+    - crates/openpulse-cli/src/state.rs
     name: CLI binary and subcommands
     satisfies:
     - REQ-FUN-01
@@ -772,6 +806,7 @@ capabilities:
     code:
     - pki-tooling/src/api/handlers.rs
     - pki-tooling/src/auth.rs
+    - pki-tooling/src/bin/migrate.rs
     - pki-tooling/src/lib.rs
     - pki-tooling/src/main.rs
     - pki-tooling/src/startup_env.rs
@@ -800,6 +835,9 @@ capabilities:
     traceability: baseline
   CAP-59:
     code:
+    - crates/openpulse-cli/src/commands/calibrate.rs
+    - crates/openpulse-cli/src/radio.rs
+    - crates/openpulse-daemon/src/ptt.rs
     - crates/openpulse-radio/src/band_levels.rs
     - crates/openpulse-radio/src/cat_controller.rs
     - crates/openpulse-radio/src/generic_cat.rs
@@ -810,6 +848,7 @@ capabilities:
     - crates/openpulse-radio/src/rig_mode.rs
     - crates/openpulse-radio/src/rigctld.rs
     - crates/openpulse-radio/src/serial.rs
+    - crates/openpulse-radio/src/shared_ptt.rs
     - crates/openpulse-radio/src/vox.rs
     name: Radio interface, PTT, and CAT control
     satisfies:
@@ -826,7 +865,9 @@ capabilities:
     traceability: baseline
   CAP-60:
     code:
+    - crates/openpulse-channel/src/agc.rs
     - crates/openpulse-channel/src/awgn.rs
+    - crates/openpulse-channel/src/cfo.rs
     - crates/openpulse-channel/src/chirp.rs
     - crates/openpulse-channel/src/composite.rs
     - crates/openpulse-channel/src/dsp.rs
@@ -851,6 +892,7 @@ capabilities:
   CAP-61:
     code:
     - crates/openpulse-modem/src/benchmark.rs
+    - crates/openpulse-modem/src/capture_replay.rs
     - crates/openpulse-modem/src/channel_sim.rs
     - crates/openpulse-modem/src/ofdm_sim.rs
     name: Benchmark and channel-sim harness
@@ -872,6 +914,8 @@ capabilities:
   CAP-62:
     code:
     - crates/openpulse-audio/src/cpal_backend.rs
+    - crates/openpulse-audio/src/fault.rs
+    - crates/openpulse-audio/src/flush.rs
     - crates/openpulse-audio/src/lib.rs
     - crates/openpulse-audio/src/loopback.rs
     name: Audio backends (loopback + CPAL)
@@ -975,7 +1019,33 @@ capabilities:
     code:
     - crates/openpulse-cli/src/commands/daemon.rs
     - crates/openpulse-daemon/src/server.rs
-    - src/lib.rs
+    - crates/openpulse-discovery/src/discovery_sm.rs
+    - crates/openpulse-discovery/src/hint.rs
+    - crates/openpulse-discovery/src/hint_assembler.rs
+    - crates/openpulse-discovery/src/peer_map.rs
+    - crates/openpulse-discovery/src/rendezvous.rs
+    - crates/openpulse-discovery/src/rendezvous_assembler.rs
+    - crates/openpulse-discovery/src/runtime.rs
+    - crates/openpulse-discovery/src/scheduler.rs
+    - crates/openpulse-discovery/src/station.rs
+    - plugins/js8/src/beacon.rs
+    - plugins/js8/src/costas.rs
+    - plugins/js8/src/crc.rs
+    - plugins/js8/src/decoder.rs
+    - plugins/js8/src/demodulate.rs
+    - plugins/js8/src/encode.rs
+    - plugins/js8/src/frame.rs
+    - plugins/js8/src/grammar.rs
+    - plugins/js8/src/jsc.rs
+    - plugins/js8/src/ldpc174.rs
+    - plugins/js8/src/message.rs
+    - plugins/js8/src/modulate.rs
+    - plugins/js8/src/plugin.rs
+    - plugins/js8/src/submode.rs
+    - plugins/js8/src/sync.rs
+    - plugins/js8/src/tones.rs
+    - plugins/js8/src/varicode.rs
+    - crates/openpulse-discovery/src/lib.rs
     name: JS8-based station discovery + rendezvous (FF-15)
     satisfies:
     - REQ-DISC-01
@@ -997,6 +1067,13 @@ capabilities:
   CAP-71:
     code:
     - crates/openpulse-daemon/src/filexfer.rs
+    - crates/openpulse-filexfer/src/blocks.rs
+    - crates/openpulse-filexfer/src/lib.rs
+    - crates/openpulse-filexfer/src/offer.rs
+    - crates/openpulse-filexfer/src/receiver.rs
+    - crates/openpulse-filexfer/src/sanitize.rs
+    - crates/openpulse-filexfer/src/sender.rs
+    - crates/openpulse-filexfer/src/wire.rs
     name: Direct P2P file transfer with signed-manifest verification (FF-16)
     satisfies:
     - REQ-FX-07

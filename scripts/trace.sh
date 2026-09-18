@@ -142,15 +142,27 @@ rm -f "$doc_backup"
 # the ENFORCEMENT path still fails the build, which the three above do not (they stop at the
 # vocabulary gate before any check runs).
 cp "$backup" "$YAML"
-cat >> "$YAML" <<'YML'
-  CAP-SELFTEST-SABOTAGE:
-    name: deliberate self-test sabotage (safe to see only during --self-test)
-    satisfies: []
-    code:
-    - crates/this/path/does/not/exist.rs
-    tests: []
-    traceability: enforced
-YML
+# The sabotage must land INSIDE `capabilities:`, and appending to the file does not do that —
+# `requirements:` is the last top-level key, so `cat >>` planted this as a REQUIREMENT. Requirements
+# carry no `code:`, so the planted entry could never produce DANGLING-CODE, and this probe passed on
+# an unrelated REAL defect instead: CAP-70 listed `src/lib.rs`, which matched no file, so every run
+# emitted a DANGLING-CODE line for the grep to find. Repairing CAP-70 (#1371) is what exposed it —
+# archetype #1, a checker satisfied by something other than the thing it claims to test.
+python3 - "$YAML" <<'SABOTAGE'
+import sys, re
+path = sys.argv[1]
+lines = open(path, encoding="utf-8").read().split("\n")
+start = next(i for i, l in enumerate(lines) if l.startswith("capabilities:"))
+end = next(i for i in range(start + 1, len(lines)) if re.match(r"^[A-Za-z_]+:", lines[i]))
+block = ["  CAP-SELFTEST-SABOTAGE:",
+         "    name: deliberate self-test sabotage (safe to see only during --self-test)",
+         "    satisfies: []",
+         "    code:",
+         "    - crates/this/path/does/not/exist.rs",
+         "    tests: []",
+         "    traceability: enforced"]
+open(path, "w", encoding="utf-8").write("\n".join(lines[:end] + block + lines[end:]))
+SABOTAGE
 python3 scripts/lib/trace.py check > "$out" 2>&1
 rc=$?
 restore
