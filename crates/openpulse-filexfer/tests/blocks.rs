@@ -72,6 +72,12 @@ fn an_oversized_block_is_rejected() {
     );
 }
 
+// VERIFIES: REQ-FUN-11
+//
+// The requirement's only other binding lives in `openpulse-core`, which cannot link this crate —
+// so 401 of REQ-FUN-11's 408 mutants were unkillable by construction (#1405). This binds the
+// positive direction where the code actually is: a signed manifest survives a real split/reassemble
+// round-trip through the block layer.
 #[test]
 fn single_block_roundtrips_and_verifies() {
     let s = seed(9);
@@ -118,6 +124,12 @@ fn multi_object_over_64kb_roundtrips_out_of_order() {
     verify_manifest_with_payload(&manifest, &pubkey(&s), &got).expect("verify");
 }
 
+// VERIFIES: REQ-FUN-11
+//
+// The negative direction, and the one that can actually fail: a flipped data byte must make
+// `verify_manifest_with_payload` reject. Checked that this is not vacuous — replacing the `None`
+// arm below with `panic!` leaves the test passing, so reassembly always returns `Some` here and
+// the `is_err()` assertion is genuinely reached.
 #[test]
 fn tampered_fragment_fails_verification() {
     let s = seed(9);
