@@ -962,9 +962,23 @@ def do_scope(rid):
             files.update(_matches(c))
     for f in sorted(files):
         print(f"CODE\t{f}")
+    # TESTPKG is not decoration: cargo-mutants runs a mutant's tests in the MUTATED file's package
+    # only (`lab.rs` builds `PackageSelection::Explicit(vec![mutant.source_file.package])`), so a
+    # requirement whose capability code and whose bound tests live in DIFFERENT crates runs zero
+    # tests and every mutant survives — a false VACUOUS-BINDING, not a finding. REQ-CTL-01/02 are
+    # exactly that shape (code in config/keystore/linksec, tests in openpulse-daemon), and
+    # REQ-DCD-01, REQ-FUN-10, REQ-FUN-11 and REQ-SEC-14 are partially so. The caller turns these
+    # into `--test-package`. The join already existed here; it just was not emitted.
+    pkg_of_dir, _rdeps, _bins = _workspace_graph()
+    test_pkgs = set()
     for b in _scan_verifies().get(rid, []):
         if b.get("fn"):
             print(f"TEST\t{b['fn']}")
+        pkg = _package_of(b["file"], pkg_of_dir)
+        if pkg:
+            test_pkgs.add(pkg)
+    for pkg in sorted(test_pkgs):
+        print(f"TESTPKG\t{pkg}")
     return 0
 
 
