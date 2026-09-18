@@ -15,6 +15,83 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-09-18 — the vacuous-binding gate could not produce a true verdict; #1279
+
+**Change.** `scripts/req-mutation.sh` rewritten to derive its verdict from cargo-mutants' own outcome
+files, and `scripts/lib/trace.py`'s `scope` command extended to emit `TESTPKG`. No workflow is added:
+#1279's scheduled job is NOT part of this change and remains unbuilt pending a cadence decision.
+
+**Defect — the gate this repo built to catch vacuous verdicts was producing one.** The script scraped
+outcome counts from cargo-mutants' stdout with `grep -c '^CAUGHT'` and `grep -c '^MISSED'`. Measured
+against cargo-mutants 27.1.0, three independent reasons that could not work:
+- `CAUGHT` is never printed unless asked: `console.rs:80` returns early on
+  `outcome.mutant_caught() && !options.print_caught`, a default `NEWS.md` records flipping in
+  **0.2.0**. So `killed` was structurally 0. This is not version drift — the code was wrong when
+  written, and pinning a version would not have fixed it.
+- `--caught` would not have helped: `console.rs:615` renders the label lowercase (`style("caught")`).
+- On the CI runner `^MISSED` fails too, because `CARGO_TERM_COLOR: always` makes the line begin
+  `\033[31m\033[1mMISSED`.
+
+The two verdict arms therefore covered every possible run: all-caught (the BEST outcome) gave
+`total=0` → `DID-NOT-RUN`; any survivor gave `killed=0` → `VACUOUS-BINDING`. **No real run could reach
+`REQ-MUTATION: PASS`.** The only PASS it could emit was a fail-open: `mapfile -t targets < <(python3
+…)` discards the producer's status (measured: `mapfile rc=0 count=0` on a producer exiting 1), so a
+PyYAML traceback yielded an empty target list, an unentered loop, and `PASS` with no work done.
+
+**Results, actually run.** On REQ-SEC-13, the first true verdict this script has produced:
+
+```
+mutants=26 viable=23 killed=10 missed=13 timeout=0 unviable=3  ->  REQ-MUTATION: PASS
+```
+
+The old parser applied to that same log gives `total=13 killed=0` → `VACUOUS-BINDING`, i.e. it would
+have falsely accused a test that demonstrably kills 10 mutants. Fail-closed arms, with the pre-fix
+control run in the same environment (`cargo-mutants -> ~/.cargo/bin/cargo-mutants`, `python3 -> a stub
+exiting 1`): PRE-FIX `rc=0` / `REQ-MUTATION: PASS`; POST-FIX `rc=2` / `FAIL`.
+
+**A cross-crate binding was a false VACUOUS-BINDING, and the join already existed.** cargo-mutants
+runs each mutant's tests in the MUTATED file's package alone (`lab.rs` → `PackageSelection::Explicit`),
+so REQ-CTL-01/02 — capability code in `openpulse-config`/`keystore`/`linksec`, bound test in
+`openpulse-daemon` — would have built 303 mutants, run zero tests, and recorded all of them MISSED.
+`trace.py` already computed the owning package at `_package_of`; `scope` simply never printed it. A
+bounded `--shard 1/150` probe, reading each per-mutant log:
+
+```
+CONTROL (no --test-package)   every mutant -> --package=openpulse-config   tests_run=0
+FIXED   (--test-package)      every mutant -> --package=openpulse-daemon   tests_run=1
+```
+
+**The BASELINE ignores `--test-package`** — in both runs it tested `openpulse-config` and logged
+`running 0 tests` twice while reporting `ok` — so the tool validates nothing about whether the filter
+selects a test. `FILTER-MATCHED-NOTHING` is therefore a distinct outcome from `VACUOUS-BINDING`,
+decided on the per-mutant logs; verified against real data from both regimes above.
+
+**Also repaired, each measured:** an INCOMPLETE outcome gated on `outcomes.json`'s `end_time`, because
+outcome files are appended per mutant and a killed run leaves a well-formed PARTIAL record that scored
+as a complete PASS; `count_lines`, which on a blank-only file emitted `0\n0` and made the arithmetic a
+syntax error that under `set -u` exits bash with no `REQ-MUTATION:` line at all; `$rid` reaching
+`rm -rf` unvalidated; a `TMPDIR` that defaulted to the 15 GB tmpfs, now under `target/` with an
+override refused if it points elsewhere inside the repo (cargo-mutants excludes the scratch by
+TOP-LEVEL NAME — `copy_tree.rs`'s `is_top_level_target` — **not** because `target/` is gitignored, and
+any other in-repo path recurses to `File name too long`); one output directory per requirement, since
+`--output target` rotated and then deleted earlier requirements' evidence; the installed-tool probe,
+which tested `PATH` while cargo resolves subcommands from `$CARGO_HOME/bin` first; and
+`--no-default-features`, absent where every other gate in this repo sets it.
+
+**Known limitation, stated rather than fixed.** libtest filters are substring matches, so REQ-SEC-13's
+two bound names actually selected FIVE tests and 4 of its 10 kills belong to
+`wire_query::tests::tampered_payload_fails_verification` rather than the bound
+`signing::tests::tampered_payload_fails` — true bound kills are 6. It inflates a PASS and cannot
+manufacture one, so the verdict stands, but a broad-named sibling could mask a vacuous binding
+elsewhere. `-- --exact` fixes it and needs module-qualified paths `_scan_verifies` does not record.
+
+**Review.** `docs/dev/reviews/review-1279-mutation-verdict-parser.md`. The review corrected this
+change's own headline mechanism (I wrote the parser defect up as a TTY property; it is a default-off
+flag, and has been since 0.2.0), refused an unsupported claim about CI timeouts, and found six defects
+in the repair, four fixed here and one recorded above.
+
+---
+
 ## 2026-09-17 — the correlation veto's state reaches an operator surface; #1344
 
 **Change.** #1344, as decided 2026-09-14: the daemon POLLS the three `rho_*` getters into its status
