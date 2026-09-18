@@ -2,7 +2,7 @@
 project: openpulsehf
 doc: docs/dev/project/traceability-matrix.md
 status: living
-last_updated: 2026-09-16
+last_updated: 2026-09-18
 ---
 
 # Traceability matrix
