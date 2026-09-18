@@ -15,6 +15,64 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-09-18 — the scheduled mutation job is NOT built, and the measurement says why; #1279
+
+**Change.** A review artifact only. No workflow, no script change. The cadence chosen this morning —
+early-exit + `--in-place`, nightly — was designed, reviewed BEFORE implementation, and did not
+survive measurement. `ci/1279-scheduled-mutation` (`648dfdb8`, never pushed) is deleted.
+
+**The design rested on one requirement, and it was the best-shaped one in the set.** Three are now
+measured end-to-end through the repaired script, outcome vectors preserved:
+
+| requirement | viable | killed | p(kill\|viable) | first kill |
+|---|---|---|---|---|
+| REQ-SEC-13 | 23 | 6 *(bound kills; 10 counting a sibling's)* | 0.26 | position 1 |
+| REQ-PQ-05 | 134 | 23 | 0.172 | **position 93** |
+| REQ-FUN-12 | 39 | **1** | **0.026** | position 28 |
+
+The 0.43 that justified sampling was the top of the distribution, and inflated by the script's own
+substring-filter limitation crediting a sibling test's kills.
+
+**Why sample-then-confirm fails.** REQ-FUN-12's non-vacuity rests on a **single** mutant
+(`trust.rs:255 replace == with != in evaluate_handshake`); a random 20-sample survives **57 %** of
+the time, so the design would escalate it most nights to a sweep ending "killed 1 of 39" — a PASS by
+this gate's own rule that nobody would act on. REQ-PQ-05 shows the order problem is real rather than
+theoretical: all 23 kills are in `sar.rs` while `pq_handshake.rs` is 0/90, and file order puts the
+latter first, so `--shard`'s default *slice* mode takes 21 mutants and finds **zero** on a healthy
+binding. The tool has no random-sample option at all — `--shuffle` runs after sharding, unseeded.
+
+**And early exit would have silently broken #1398.** Interrupting on first kill leaves
+`end_time: null`, which the repaired script correctly reports as INCOMPLETE. The sampler would have
+invalidated its own verdict arm.
+
+**The free finding that outranks the workflow.** A mutant in a package outside the bound test's
+dependency closure cannot be killed — the test binary cannot link it. From `cargo metadata`, no
+mutants run: REQ-FUN-11 **7/408 reachable (0.02)**, REQ-CTL-05 **8/303 (0.03)**, REQ-FUN-10 205/674,
+REQ-CTL-01/02 246/303. For **six of sixteen** enforced requirements a PASS would be bounded by SCOPE
+rather than by test quality — the same class as #1399's 2 960-mutant hole, one level deeper, and
+diagnosable for free. It belongs in `trace.py` as a scope finding, not in a nightly job.
+
+**Costs that foreclose the job today.** REQ-RX-02's bound test binary takes **395 s**, so each of its
+mutants pays ~400 s on top of the build: a 20-mutant sample ≈ 2.4 h locally, the escalation ≈ 6.8
+days. The per-requirement sum is **7 846** — not the 6 914 cited earlier, which predated this week's
+curation — against a **3 167**-mutant union, i.e. 2.48× overlap, `engine.rs` being mutated three
+times. Dedup is possible (attribute kills from module-qualified test names in the per-mutant logs,
+with `--no-fail-fast`) but pays only on full sweeps.
+
+**What would change the answer:** round-robin 20-shard timing and first-kill position on DCD-01,
+RX-03 and CTL-01, *after* intersecting each requirement's scope with its bound test's package
+closure.
+
+**Correction to the interim plan.** "Run it by hand when a binding changes" is the wrong trigger:
+`// VERIFIES` lines changed in 9 commits over 60 days, but `requirements.yaml` — which sets the
+mutation SCOPE — changed in **26**, against 129 merges in 30 days. The trigger is "when
+`trace.py scope` output changes", ~3×/week, scoped to the changed requirements, never
+`--all-enforced`.
+
+**Review.** `docs/dev/reviews/review-1279-mutation-cadence.md`.
+
+---
+
 ## 2026-09-18 — the trailer-relevance lint is enforced, on the path that guards main; #1371
 
 **Change.** `scripts/check-trailer.sh` gains the relevance rule (a named capability must own at
