@@ -15,6 +15,63 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-09-18 — the trailer-relevance lint is enforced, on the path that guards main; #1371
+
+**Change.** `scripts/check-trailer.sh` gains the relevance rule (a named capability must own at
+least one file the change touched), and — the part that matters — the **PR-body** path gains it too,
+with `traceability.yml` passing `--diff-base origin/$BASE_REF`.
+
+**The gate was aimed at the wrong artifact.** `lint_range` checked relevance on branch commits, which
+this repo SQUASH-merges and therefore discards; `lint_message` checked the PR body — the text that
+actually becomes the commit on `main` — for id EXISTENCE only, because it "cannot inspect a diff".
+**All seven mislabels on `main` are squash messages.** Enforcing the commit path alone would have
+policed commits that never land.
+
+**ANY, not ALL — and the reason the refinement was rejected is the useful part.** I proposed failing
+only when EVERY named capability is irrelevant, to absorb the corpus's one apparent false positive,
+`09048b84`. Review showed it is not a rule error at all: CAP-33 was semantically right ("without
+feeding the rate controller") and merely does not own the engine's OTA arm — a **map gap**, whose
+remedy the 2026-09-15 decision already names as curation. ALL would have been a second, silent
+relaxation layered on that gap, and the bypass is measured rather than theoretical: CAP-66 owns a
+touched file in **49 %** of production commits and six ids bless every `engine.rs` commit, so
+appending one broad id turns a copy-pasted template into a permanent pass. Replay: ANY 8 FAIL /
+14 PASS, ALL 7 / 15 — a 1-in-22 difference bought at that price.
+
+**A predicate nobody had watched fire.** Every existing probe passes identically under ANY and ALL,
+so none of them pinned the choice. Added: `irrelevant_caps "CAP-59 CAP-38"` on a commit touching only
+`engine.rs` must return exactly `CAP-59` (CAP-38 owns it, CAP-59 does not). Demonstrated end-to-end
+on a throwaway branch touching only that file — `good` (CAP-38) PASS, `bad` (CAP-59) FAIL,
+**`mixed` (CAP-59 + CAP-38) FAIL**, which is precisely what ALL would have let through.
+
+**A live bug found by sabotage-verifying my own change.** `is_prod` is a PREDICATE — it reads stdin
+and exits 0/1 without printing — and I wrote `files=$(git diff … | is_prod)`, which yields the empty
+string on every input. The relevance branch therefore never ran and the check reported PASS on a
+body naming a capability that owned nothing. It passed its first three test cases for that reason.
+Split into one shared `PROD_RE` with `is_prod` (predicate) and `prod_files` (filter) so the two
+cannot drift and the misreading cannot recur.
+
+**Scope, unchanged from the 2026-09-14 decision.** Production files only; `SKIP` when no capability
+owns any touched file, so a docs-only or test-only change is never forced to name a capability.
+Measured against the curated map: **0 of 101** production commits would SKIP, so the escape is not a
+practical bypass — it is reachable only by a change touching nothing but the 11 baseline orphans.
+Enforcement is also **not retroactive**: the lint runs on a PR's `base..HEAD` and on its body, never
+on `main` history, so none of the 8 historical failures blocks anything.
+
+**Known, and deliberately not fixed here.** `09048b84` still fails, as a map gap rather than a
+mislabel — widening CAP-33 to `engine.rs` would add 1 335 mutants to that capability and belongs in
+a curation change. Relevance is checked on `Refactors:` only: 22 of 101 production commits. The other
+51 carry `Implements:` and are never relevance-checked; five repeater commits carry
+`Implements: REQ-FUN-11` ("signed transfer manifests") which is systematically wrong. Filed
+separately rather than widening this change.
+
+**Gates.** trailer self-test ok · trailer (branch) ok · trace check ok · trace self-test ok ·
+reachability ok · doc stamps ok · doc frontmatter ok · ledger order ok · re-homed docs ok ·
+review lint ok.
+
+**Review.** `docs/dev/reviews/review-1371-split-and-enforce.md` (questions B and C).
+
+---
+
 ## 2026-09-18 — the JS8 waveform gets its own capability; #1371
 
 **Change.** New **CAP-79 "JS8 waveform plugin"** owning the 17 `plugins/js8/src/*` files and
