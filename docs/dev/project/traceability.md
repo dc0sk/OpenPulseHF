@@ -15,6 +15,57 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-09-19 — the keystore wiring is DEFERRED, and the design was forbidden by its own requirement; #1234
+
+**Change.** A review artifact and this entry. No code. #1234's wiring half stays unbuilt and
+`inert_psk_key_id_warning` stays as the honest surface.
+
+**What I proposed.** Option 1 of #1234's blocker comment: a CLI writer (`keystore set|get|list|
+delete`) plus a daemon reader, so `psk_key_id` stops being inert. The design went to review before
+implementation and did not survive it.
+
+**Rejected for three reasons, two of them documents already in this repo.**
+1. **My preferred master-password source is forbidden by REQ-CTL-04.** I proposed an owner-only
+   master-password file. The requirement's bullet ends *"The master password must never be written
+   to disk in plaintext"* — **one line below the text I quoted in the design's own Prior art**.
+   `control-channel-security.md:59` agrees: the master is prompted, or a one-shot env var.
+2. **The env-var variant is a lateral move, and this issue's thread had already said so.** Its
+   second comment: *"env→env buys nothing … the keystore earns its place only via REQ-CTL-03 (an OS
+   keychain) or multi-secret storage."* Neither holds. Third occurrence of designing from the issue
+   body rather than the thread.
+3. **The threat model does not support it.** "Environment" is a delivery mechanism already backed by
+   a 0600 file; `/proc/<pid>/environ` is 0400 and ptrace-scoped — the same tier as a 0600 master
+   file. And the **Ed25519 station seed, which signs all 13 registered domains, already sits in
+   plaintext at 0600** (`config/src/lib.rs:910-955`). AEAD-wrapping the PSK beside a plaintext
+   identity key protects nothing.
+
+**Costs the design had not listed.** It **un-deflates audit finding B4** — `FileKeystore::save`
+truncates without temp+rename or fsync, and B4 was deflated precisely *because nothing consumes the
+keystore*; with a consumer, an interrupted `keystore set` on a Pi's SD card leaves a file `open`
+rejects and the daemon refuses to start with the PSK gone. An env var cannot be half-written. B3 (no
+zeroize) un-deflates identically. A **C library** (`keyring` → `dbus-secret-service` → `libdbus-sys`)
+would enter the release binaries, which the same design doc rejected OpenSSL for. Argon2 costs 19 MiB
+at daemon start. And **no deployment has ever set the PSK** — every on-air rig binds loopback, where
+it is discarded by policy.
+
+**Two defects in my own design, worth recording.** It had **no activation rule**: `psk_key_id`
+defaults to `"control-psk"` so it is always set, and `FileStore::open` creates an empty in-memory
+store when the path is absent — fail-open by construction. And it **re-opened a resolved decision**:
+`control-channel-security.md:93` already settles the panel's path as OS-keychain-first.
+
+**What would reopen it, and it is not a keystore.** REQ-CTL-05 already names a *"PSK file"* among
+secret files. `[control_security] psk_file = "<path>"`, read once through `validate_owner_only`, is
+~20 lines at the same security tier with the moving parts removed, and composes with systemd
+`LoadCredential=`. A new proposal, needing its own review.
+
+**Correction owed to #1405.** A daemon→keystore dependency would have helped CTL-01/02 only, not
+CTL-05 (bound in `openpulse-config`), and even then those mutants would become "reachable and
+MISSED" rather than killed, since `control_auth.rs` never calls the keystore.
+
+**Review.** `docs/dev/reviews/review-1234-keystore-writer.md`.
+
+---
+
 ## 2026-09-19 — two misplaced bindings: REQ-FUN-10 0.30 -> 1.00, REQ-FUN-11 0.02 -> 0.74; #1405
 
 **Change.** Three `// VERIFIES:` lines. No production code, no schema, no gate.
