@@ -15,6 +15,45 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-09-18 — the JS8 waveform gets its own capability; #1371
+
+**Change.** New **CAP-79 "JS8 waveform plugin"** owning the 17 `plugins/js8/src/*` files and
+satisfying REQ-DISC-01; CAP-70 keeps discovery/rendezvous (12 files, 9 requirements). Data and docs
+only. **The lint is still not enforced** — that lands separately, per the review's ordering verdict.
+
+**Why.** Yesterday's curation put all 17 plugin files under CAP-70, making it the largest capability
+(29 files, ~1 763 mutants) and the only waveform without its own — CAP-12…19 and CAP-75 each have
+one. `Refactors: CAP-70` therefore could not distinguish an LDPC-decoder change from a rendezvous
+change, which is exactly the attribution the relevance lint is meant to enforce. Demonstrated
+against the parked rule:
+
+```
+CAP-79 vs plugins/js8/src/ldpc174.rs -> []         (relevant)
+CAP-70 vs plugins/js8/src/ldpc174.rs -> [CAP-70]   (now correctly rejected)
+```
+
+**Three defects in the proposal, caught before implementation because the design was reviewed
+first.** (1) `traceability: baseline` fails `NOT-GRANDFATHERED` — the grandfathered list only
+shrinks, and every capability created since the 2026-08-30 freeze is `enforced`. (2) A
+`plugins/js8/src/*` glob breaks both consumers in opposite directions: `trace.py` expands it and
+also claims `lib.rs`, tripping the day-old `STALE-BASELINE`; the lint's `owns()` does prefix
+matching and no globbing, so the entire plugin would have read as unowned and the rule would have
+stood down. No existing `code:` entry uses a glob. (3) The two cited suites are js8→js8
+self-loopback; the JS8Call-validated vectors live in the src test regions of `crc.rs`, `encode.rs`
+and `frame.rs`, so those are cited too — otherwise `EMPTY-CAP` clears on evidence that does not test
+the interoperability clause the requirement is about.
+
+**Sweep.** `traceability-matrix.md` REQ-DISC-01 row re-pointed to CAP-79, CAP-70's row trimmed, a
+CAP-79 row added. The historical ledger cross-reference at the #1142 entry is **annotated, not
+rewritten** — the record of what was done then is unchanged.
+
+**Gates.** `trace.sh check` ok · `trace.sh --self-test` ok · `reachability.sh check` ok ·
+`validate-doc-frontmatter.sh` ok · `check-ledger-order.sh` ok · `check-rehomed-docs.sh` ok.
+
+**Review.** `docs/dev/reviews/review-1371-split-and-enforce.md`.
+
+---
+
 ## 2026-09-18 — capability ownership curated, and a self-test that was never testing itself; #1371
 
 **Change.** `requirements.yaml` (77 `code:` entries added, 70 distinct paths, 6 shared by two
@@ -11262,7 +11301,7 @@ The last mode still failing on the dual-card rig after the AGC misclassification
 - **Requirement/change:** the Fable loose-ends audit found (finding #2, confirmed) that the JS8 discovery
   decoder only ever searched slot-start offset 0, but a conforming over starts ~500 ms (`start_delay_ms`)
   into the slot — so real off-air JS8 could not decode **at any SNR**; the RX-MVP acceptance test passed
-  only because it injected the signal at buffer offset 0. Regression links REQ-DISC-01/02, CAP-70.
+  only because it injected the signal at buffer offset 0. Regression links REQ-DISC-01/02, CAP-70. (REQ-DISC-01 moved to CAP-79 on 2026-09-18 when the JS8 waveform was split out; the record of what was done here is unchanged.)
 - **Design decision:** add a **two-stage acquisition** to `decode_window` — a coarse time×freq grid then a
   per-candidate refine to full precision (`base_step_coarse` > `base_step` enables it; `0` keeps the old
   single-pass behaviour byte-identical, so every other caller is unchanged). `DecodeCfg` gains
