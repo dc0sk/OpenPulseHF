@@ -15,6 +15,59 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-09-18 — capability ownership curated; 2 960 mutants were invisible; #1371
+
+**Change.** `requirements.yaml` only: 75 `code:` paths added across 19 capabilities. No lint is
+enabled — `scripts/check-trailer.sh` is untouched and #1371's relevance check stays parked.
+
+**Why the data first (maintainer decision, 2026-09-15).** `code:` is read by three consumers, and
+the weakest one was silent: `scripts/req-mutation.sh` mutates exactly what `trace.py scope` returns,
+so a file owned by no capability is a file no mutation run can ever reach. Measured before the
+change: **79 of 317 production `*/src/*.rs` files were unowned, carrying 2 960 mutants that were
+structurally invisible to the vacuous-binding gate.** After: **12 unowned, 0 mutants invisible.**
+
+**The assignment rule is measured, not conventional.** A file is assigned if it carries behaviour and
+left unowned if `cargo mutants --list` reports **zero** mutants — owning a zero-mutant file adds
+nothing to mutation scope, the dormancy join, or the lint, while diluting the map. All 12 remaining
+unowned files are zero-mutant. Naming would have got this wrong: 14 files are `lib.rs`/`error.rs`/
+`mod.rs`/`main.rs` but only 12 are inert — `filexfer/src/lib.rs` (7), `dict-trainer/src/main.rs` (16)
+and `testmatrix/src/runners/mod.rs` (2) carry real behaviour.
+
+**Consumer extension, per the 2026-09-17 decision, applied NARROWLY — and the first attempt was
+wrong.** Extending a capability to every crate that imports its root crate is unusable: CAP-38
+"Modem engine" would gain **45** consumer files, i.e. the workspace. Restricting to feature (not
+infrastructure) capabilities still over-reached: extending CAP-59 to all 19 importers of
+`openpulse-radio` turned two probable mislabels — `68a033ba` and `44e3de97`, both ARDOP/KISS
+*receive* fixes labelled with the PTT capability — into passes, because `bridge.rs` imports the radio
+crate for keying. **File-level overlap cannot separate two concerns inside one file.** CAP-59 was
+narrowed to the files whose subject IS radio control (`shared_ptt.rs`, `daemon/ptt.rs`, `cli/radio.rs`,
+`cli/commands/calibrate.rs` — the last verified by reading it: it imports `SharedPtt`, builds a PTT
+controller and keys the rig).
+
+**A/B replay over 32 trailer-carrying commits, old map vs new.** Exactly three verdicts changed, each
+attributable, each a false positive repaired: `657b09a2` FAIL→PASS (the census adjudicates it
+**correct**; CAP-45 listed only `openpulse-qsy` while the fix lives in `daemon/lib.rs`), `ad2f2ccd`
+FAIL→PASS (genuinely PTT, via `shared_ptt.rs`), `73333c98` SKIP→PASS (genuinely radio drive
+calibration). Eleven PASS→PASS, ten SKIP→SKIP, eight FAIL→FAIL.
+
+**Stated limit, and it bears on whether the lint should ever be enforced.** Against the issue's eight
+adjudicated commits the rule scores 5/8, and the three it misses are its own headline cases: the
+#1062 probe commits `a7412113`, `54418b25`, `b8e34294`, labelled CAP-33 when CAP-76 was right. All
+three touch **only** `tests/` files, so no capability's `code:` owns anything and the rule stands
+down. Catching them needs the `tests:` map curated too, which is sparser still — neither probe file
+is listed by any capability. So a `code:`-only relevance rule cannot catch test-only mislabels by
+construction. The mutation-coverage gain above stands on its own; enforcement remains undecided.
+
+**Cost accepted.** Union of files in enforced-requirement mutation scope 25 → 34. CAP-45's daemon
+extension adds 469 mutants to that capability but **no enforced requirement is covered by CAP-45**,
+so it does not reach the nightly job.
+
+**Gates.** `trace.sh check` ok, `trace.sh --self-test` ok, `reachability.sh check` ok,
+`check-trailer.sh` ok. The parked relevance check's own three-direction self-test — which FAILED on
+2026-09-15 because `shared_ptt.rs` was unowned — now PASSES against this map, which is the unblock.
+
+---
+
 ## 2026-09-18 — the vacuous-binding gate could not produce a true verdict; #1279
 
 **Change.** `scripts/req-mutation.sh` rewritten to derive its verdict from cargo-mutants' own outcome
