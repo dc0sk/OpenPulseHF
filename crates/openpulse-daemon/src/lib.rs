@@ -6442,6 +6442,12 @@ mod handshake_rf_tests {
     /// The responder reassembles a fragmented, signed CONREQ from RF, records the proven peer
     /// identity (callsign + grid + pubkey), and emits `PeerVerified`.
     #[tokio::test]
+    // VERIFIES: REQ-FUN-10
+    //
+    // The requirement's only other binding is in `openpulse-core`, which cannot link the daemon —
+    // so the 469 mutants in `daemon/{lib,server}.rs` were unkillable by construction (#1405). This
+    // binds the path the daemon actually runs: `process_received_bytes` -> `handle_inbound_conreq`
+    // -> `verify_conreq`, i.e. the signed handshake as driven, not as unit-tested in core.
     async fn responder_verifies_a_single_fragment_conreq_and_records_peer() {
         // This test used to assert `frags.len() > 1` — "a CONREQ exceeds one modem frame". #1147
         // INVERTS that premise, and the inversion is the point of the change: a v1 CONREQ was 752 B

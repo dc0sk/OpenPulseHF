@@ -15,6 +15,50 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-09-19 — two misplaced bindings: REQ-FUN-10 0.30 -> 1.00, REQ-FUN-11 0.02 -> 0.74; #1405
+
+**Change.** Three `// VERIFIES:` lines. No production code, no schema, no gate.
+
+**What was wrong.** A test binary cannot link code outside its own package dependency closure, so a
+mutant in a package the bound test does not depend on can only ever be recorded MISSED (#1405).
+Both of these requirements were bound **only** in `openpulse-core` while most of their capability
+code lives elsewhere:
+
+| requirement | before | after | where the code actually is |
+|---|---|---|---|
+| REQ-FUN-10 "signed transfer handshake" | 205/674 (0.30) | **674/674 (1.00)** | `daemon/{lib,server}.rs` |
+| REQ-FUN-11 "signed transfer manifests" | 7/408 (0.02) | **301/408 (0.74)** | `openpulse-filexfer` |
+
+**Each binding was checked for vacuity before it was added, not after.**
+- `single_block_roundtrips_and_verifies` (filexfer) — unconditional: signs, reassembles, and
+  `verify_manifest_with_payload(...).expect("verify")`.
+- `tampered_fragment_fails_verification` (filexfer) — the direction that can actually fail. It has a
+  `None` arm that asserts nothing, so it was probed: replacing that arm with `panic!` leaves the test
+  **passing**, which proves reassembly always returns `Some` here and the `is_err()` assertion is
+  genuinely reached.
+- `responder_verifies_a_single_fragment_conreq_and_records_peer` (daemon) — drives
+  `process_received_bytes` -> `handle_inbound_conreq` -> `verify_conreq`, i.e. the handshake as the
+  daemon runs it rather than as core unit-tests it.
+
+**REQ-FUN-11 stops at 0.74 deliberately.** The remaining 107 mutants are all
+`crates/openpulse-daemon/src/filexfer.rs`, and `openpulse-filexfer` cannot reach them — the
+dependency runs the other way. The obvious move would be a third binding on
+`a_file_crosses_the_bridge_between_two_real_daemons`, and that was **rejected after reading it**:
+7 assertions, **zero** mentions of `manifest` or `signature`. It asserts the file arrives, not that
+the manifest was verified, so binding it would take the ratio to 1.00 while asserting nothing about
+the requirement — the vacuous binding this whole area exists to catch. **The residue is a missing
+test, not a misplaced binding**, and is recorded as such rather than papered over.
+
+**Not fixed here, and why:** REQ-CTL-01/02/05 cannot be repaired by binding placement at all —
+nothing depends on `openpulse-keystore` (#1234), and a binding there would trip `DORMANT-ENFORCED`.
+REQ-CMP-01's residue is `dict-trainer/src/main.rs`, a binary with no tests that no binding can reach.
+Triage for all six is on #1405.
+
+**Gates.** filexfer `blocks` 7 passed · daemon `responder_verifies…` 1 passed · trace check ok ·
+trace self-test ok · reachability ok · fmt ok · re-homed docs ok.
+
+---
+
 ## 2026-09-18 — the scheduled mutation job is NOT built, and the measurement says why; #1279
 
 **Change.** A review artifact only. No workflow, no script change. The cadence chosen this morning —
