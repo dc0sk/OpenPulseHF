@@ -15,56 +15,118 @@ and the actually-observed results per change.
 
 ---
 
-## 2026-09-18 — capability ownership curated; 2 960 mutants were invisible; #1371
+## 2026-09-18 — capability ownership curated, and a self-test that was never testing itself; #1371
 
-**Change.** `requirements.yaml` only: 75 `code:` paths added across 19 capabilities. No lint is
-enabled — `scripts/check-trailer.sh` is untouched and #1371's relevance check stays parked.
+**Change.** `requirements.yaml` (77 `code:` entries added, 70 distinct paths, 6 shared by two
+capabilities), the orphan baseline pruned 86 → 11, and two new ratchets in `trace.py`. No lint is
+enforced in this change; that lands separately.
 
-**Why the data first (maintainer decision, 2026-09-15).** `code:` is read by three consumers, and
-the weakest one was silent: `scripts/req-mutation.sh` mutates exactly what `trace.py scope` returns,
-so a file owned by no capability is a file no mutation run can ever reach. Measured before the
-change: **79 of 317 production `*/src/*.rs` files were unowned, carrying 2 960 mutants that were
-structurally invisible to the vacuous-binding gate.** After: **12 unowned, 0 mutants invisible.**
+**Why the data first (maintainer decision, 2026-09-15).** `code:` is read by three consumers wanting
+different things — `req-mutation.sh` (via `trace.py scope`) wants COMPLETE coverage, the dormancy
+join wants crate accuracy, and #1371's parked relevance check wants NARROW precision. Before this,
+**79 of 317 production `*/src/*.rs` files were owned by no capability**. After: **11**.
 
-**The assignment rule is measured, not conventional.** A file is assigned if it carries behaviour and
-left unowned if `cargo mutants --list` reports **zero** mutants — owning a zero-mutant file adds
-nothing to mutation scope, the dormancy join, or the lint, while diluting the map. All 12 remaining
-unowned files are zero-mutant. Naming would have got this wrong: 14 files are `lib.rs`/`error.rs`/
-`mod.rs`/`main.rs` but only 12 are inert — `filexfer/src/lib.rs` (7), `dict-trainer/src/main.rs` (16)
-and `testmatrix/src/runners/mod.rs` (2) carry real behaviour.
+**The headline number, stated correctly after review overturned my first version.** The 79 unowned
+files carry **2 960** mutants. It is NOT true that this change makes them all reachable:
+`req-mutation.sh` scopes to `traceability: enforced` requirements, and only CAP-08, CAP-10 and
+CAP-71 of the 19 capabilities touched cover one. So **9 files / 344 mutants** became reachable by the
+requirement-scoped gate, and **2 616 (88 %) are exactly as unreachable as before** — `plugins/js8`
+alone is 1 398, all under a `baseline` capability. My first draft of this entry claimed "0 mutants
+invisible", which was false on its own definition and contradicted its own last paragraph. There is
+also **no nightly mutation job**: `mutation.yml` exists only on the unmerged #1279 branch, so any
+sentence about what does or does not "reach the nightly job" was describing a consumer that does not
+exist. Of the 344 now visible, **~50 are unkillable by construction** — REQ-CMP-01's single bound
+test cannot execute the dict-trainer binary and REQ-FUN-05's never calls `scramble` — so they will
+report as permanent survivors. That does not flip any verdict (the rule is `killed == 0`), but
+"made visible" here means "added guaranteed survivors to a report".
 
-**Consumer extension, per the 2026-09-17 decision, applied NARROWLY — and the first attempt was
-wrong.** Extending a capability to every crate that imports its root crate is unusable: CAP-38
-"Modem engine" would gain **45** consumer files, i.e. the workspace. Restricting to feature (not
-infrastructure) capabilities still over-reached: extending CAP-59 to all 19 importers of
-`openpulse-radio` turned two probable mislabels — `68a033ba` and `44e3de97`, both ARDOP/KISS
-*receive* fixes labelled with the PTT capability — into passes, because `bridge.rs` imports the radio
-crate for keying. **File-level overlap cannot separate two concerns inside one file.** CAP-59 was
-narrowed to the files whose subject IS radio control (`shared_ptt.rs`, `daemon/ptt.rs`, `cli/radio.rs`,
-`cli/commands/calibrate.rs` — the last verified by reading it: it imports `SharedPtt`, builds a PTT
-controller and keys the rig).
+**The assignment rule is measured, not conventional.** Assign a file if it carries behaviour; leave
+it unowned if `cargo mutants --list` reports zero mutants. Naming would have been worse: 14 files
+are `lib.rs`/`error.rs`/`mod.rs`/`main.rs` but only 12 are inert — `filexfer/src/lib.rs` (7),
+`dict-trainer/src/main.rs` (16) and `testmatrix/runners/mod.rs` (2) carry real behaviour. **Of the
+files left unowned, eleven have zero `fn` items at all; the twelfth,
+`plugins/mfsk16/src/robust_ack.rs`, is 387 lines and 17 fns and reports zero mutants only because
+`lib.rs` declares it `#[cfg(test)] mod` — it is TEST code living in a `src/` path.** Correctly
+unowned, different reason.
 
-**A/B replay over 32 trailer-carrying commits, old map vs new.** Exactly three verdicts changed, each
-attributable, each a false positive repaired: `657b09a2` FAIL→PASS (the census adjudicates it
-**correct**; CAP-45 listed only `openpulse-qsy` while the fix lives in `daemon/lib.rs`), `ad2f2ccd`
-FAIL→PASS (genuinely PTT, via `shared_ptt.rs`), `73333c98` SKIP→PASS (genuinely radio drive
-calibration). Eleven PASS→PASS, ten SKIP→SKIP, eight FAIL→FAIL.
+**Consumer extension (decision of 2026-09-17), and where it is JUDGEMENT rather than a rule.**
+Extending by "every crate importing the root crate" is unusable — CAP-38 "Modem engine" would gain
+45 files, i.e. the workspace. Restricting to feature-rather-than-infrastructure capabilities still
+over-reached: CAP-59 across all 19 importers of `openpulse-radio` turned two probable mislabels
+(`68a033ba`, `44e3de97` — ARDOP/KISS **receive** fixes) into passes, because `bridge.rs` imports the
+radio crate for keying. **File-level overlap cannot separate two concerns inside one file.**
 
-**Stated limit, and it bears on whether the lint should ever be enforced.** Against the issue's eight
-adjudicated commits the rule scores 5/8, and the three it misses are its own headline cases: the
-#1062 probe commits `a7412113`, `54418b25`, `b8e34294`, labelled CAP-33 when CAP-76 was right. All
-three touch **only** `tests/` files, so no capability's `code:` owns anything and the rule stands
-down. Catching them needs the `tests:` map curated too, which is sparser still — neither probe file
-is listed by any capability. So a `code:`-only relevance rule cannot catch test-only mislabels by
-construction. The mutation-coverage gain above stands on its own; enforcement remains undecided.
+Review then refuted the criterion I used to stop. There is **no mechanical rule** that puts
+`cli/commands/calibrate.rs` in CAP-59 and `cli/commands/transmit.rs` out: both key a transmitter,
+both import `openpulse_radio`, and "24 radio references" is a count threshold, not a principle.
+Recorded as deliberate calls, per the maintainer's note that these are not clerical:
+- `radio/shared_ptt.rs` → **CAP-59** over CAP-74: it is the shared keying funnel and watchdog, i.e.
+  interface and control, not a backend.
+- `cli/commands/calibrate.rs` → **CAP-59**: it builds a PTT controller and keys the rig for drive
+  calibration. `transmit.rs` was left out, and that boundary is judgement, not derivation.
+- `cli/radio.rs` → **CAP-59** while its functional twin `openpulse-radio/src/ptt_builder.rs` (#1258,
+  "the one place a ptt_backend string becomes a PttController") stays in **CAP-74**. The two PTT
+  builders are now in different capabilities; flagged rather than resolved.
 
-**Cost accepted.** Union of files in enforced-requirement mutation scope 25 → 34. CAP-45's daemon
-extension adds 469 mutants to that capability but **no enforced requirement is covered by CAP-45**,
-so it does not reach the nightly job.
+**A/B replay over the trailer-carrying commits, old map vs new.** Using `irrelevant_caps()` extracted
+from the parked branch rather than a reimplementation. Exactly three verdicts changed, each a false
+positive repaired: `657b09a2` FAIL→PASS (census adjudicates it **correct**; CAP-45 listed only
+`openpulse-qsy` while the fix lives in `daemon/lib.rs`), `ad2f2ccd` FAIL→PASS (genuinely PTT),
+`73333c98` SKIP→PASS (genuinely drive calibration). **Correction:** my first replay reported 10
+SKIP→SKIP, which only appear if the branch's `is_prod` filter is omitted — the real lint drops those
+commits before parsing a trailer. Under the real selection: 25 commits, 8 FAIL→FAIL, 2 FAIL→PASS,
+11 PASS→PASS, 1 SKIP→PASS.
 
-**Gates.** `trace.sh check` ok, `trace.sh --self-test` ok, `reachability.sh check` ok,
-`check-trailer.sh` ok. The parked relevance check's own three-direction self-test — which FAILED on
-2026-09-15 because `shared_ptt.rs` was unowned — now PASSES against this map, which is the unblock.
+**Enforcement decision (maintainer, 2026-09-18): enforce on src-touching commits.** I had recommended
+against it, on the grounds that the rule misses the issue's three headline cases. That reasoning was
+wrong: those are test-only commits, which the 2026-09-14 decision explicitly excluded from scope, and
+they are dropped by `is_prod` before the rule runs — so curating `tests:` would not fix them either.
+On the class it IS scoped to, adjudication of the 8 remaining failures gives **7 true mislabels and
+≤1 false positive in 22 src-touching commits**, four of the seven landing *after* the issue was filed.
+A trailer lint is also not retroactive, so no historical commit is blocked. Refinement adopted: fail
+only when EVERY named capability is irrelevant, which takes the one false positive (`09048b84`, which
+named CAP-33 and CAP-38 where CAP-38 was right) to zero.
+
+**A stale allowlist nobody was checking — 74 of 86 entries.** `trace.py` already failed a NEW-ORPHAN,
+grandfathered against `trace-orphan-baseline.txt`, whose own header said "shrink this list over
+time". Nothing enforced that. The curation gave 67 listed files an owner without removing them, and
+7 more had been owned since long before. A covered file sitting in the allowlist hides a later
+re-orphan: NEW-ORPHAN stays quiet because the entry is still there. Baseline pruned to exactly the
+11 remaining orphans, and two ratchets added — **STALE-BASELINE** (an entry that is now claimed) and
+**DEAD-BASELINE** (an entry that is not a production source file). Both sabotage-verified: planting
+`core/scramble.rs` and a non-existent path each fail with a self-describing message, and the tree
+restores clean.
+
+**CAP-70 cited `src/lib.rs`, which matched no file — and that defect was propping up a vacuous
+self-test.** The path was repo-relative and had been wrong since the substrate commit `1da27abd`;
+it meant `crates/openpulse-discovery/src/lib.rs`. `trace.py` DID detect it (`DANGLING-CODE`), but
+CAP-70 is `baseline`, so `flag()` routed it to warnings and it never failed a build.
+
+Repairing it broke `scripts/trace.sh --self-test`, which is how the real problem surfaced. That
+self-test plants a capability citing a missing path and asserts `DANGLING-CODE` appears — but it
+planted the block with `cat >> "$YAML"`, and **`requirements:` is the last top-level key**, so the
+entry landed under *requirements*, which carry no `code:` and can never produce that diagnostic. The
+probe had been passing on CAP-70's unrelated real defect, which put a `DANGLING-CODE` line in every
+run for the grep to find. Archetype #1, a checker satisfied by something other than the thing it
+claims to test. The sabotage is now inserted inside the `capabilities:` block, and the probe is
+non-vacuous by construction: an ordinary `trace check` now emits **zero** `DANGLING-CODE` lines, so
+the only possible source is the plant.
+
+**Gates.** `trace.sh check` ok · `trace.sh --self-test` ok · `reachability.sh check` ok ·
+`check-trailer.sh` ok · `check-ledger-order.sh` ok · `validate-doc-frontmatter.sh` ok ·
+`check-review.sh` ok · `check-rehomed-docs.sh` ok.
+
+**Follow-up, not taken here.** All 18 `plugins/js8` files went to CAP-70, making it the largest
+capability (29 files, ~1 763 mutants) and the only waveform without its own capability — every other
+one has one (CAP-12…19, CAP-75). A `Refactors: CAP-70` on an LDPC-decoder change and on a rendezvous
+change are therefore indistinguishable to the join, which is exactly the precision the lint wants.
+Splitting it costs one new capability entry.
+
+**Review.** `docs/dev/reviews/review-1371-capability-ownership.md`. The review refuted the headline
+framing, refuted my stop-criterion as a rule, refuted my recommendation against enforcement, and
+corrected the replay methodology. Its one incorrect claim — that `trace.py` has no dead-path check
+for `code:` — was checked and is wrong: `DANGLING-CODE` sits one line above `DANGLING-TEST`, and the
+real defect was that it only warns for a `baseline` capability.
 
 ---
 

@@ -1045,7 +1045,7 @@ capabilities:
     - plugins/js8/src/sync.rs
     - plugins/js8/src/tones.rs
     - plugins/js8/src/varicode.rs
-    - src/lib.rs
+    - crates/openpulse-discovery/src/lib.rs
     name: JS8-based station discovery + rendezvous (FF-15)
     satisfies:
     - REQ-DISC-01

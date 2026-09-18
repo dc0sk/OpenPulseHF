@@ -923,6 +923,19 @@ def do_check(release=False):
     for f in new_orphans:
         fails.append(f"orphan: NEW-ORPHAN — `{f}` is claimed by no capability and is not in the baseline allowlist")
 
+    # A baseline entry that is now CLAIMED is a ratchet that has stopped ratcheting (#1371). The file
+    # is covered today, so NEW-ORPHAN stays quiet — but nothing notices if it is later dropped from a
+    # `code:` list, and it would silently re-orphan under its own stale allowlist entry. The header
+    # said "shrink this list over time" and nothing enforced it: the #1371 curation found **74** of
+    # 86 entries stale in one pass, 7 of which had been covered since long before that change. Same
+    # shape as NOT-GRANDFATHERED, and the reason the list is now exactly the orphan set.
+    for f in sorted(baseline_orphans & claimed):
+        fails.append(f"orphan: STALE-BASELINE — `{f}` is claimed by a capability but is still listed in "
+                     f"{ORPHAN_BASELINE.name}; remove it (an allowlist entry for a covered file hides a later re-orphan)")
+    for f in sorted(x for x in baseline_orphans if x not in src):
+        fails.append(f"orphan: DEAD-BASELINE — `{f}` is listed in {ORPHAN_BASELINE.name} but is not a "
+                     f"production source file; remove it")
+
     # ---- report (failure list never truncated; matches gate.sh discipline) ----
     print(f"trace check: {len(reqs)} requirements, {len(caps)} capabilities, "
           f"{len(binds)} in-code bindings, {len(orphans)} code orphans "
