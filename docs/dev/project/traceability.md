@@ -15,6 +15,58 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-09-19 — the gate's `--all-targets` hid the shipped configuration; #1418
+
+**Change.** `scripts/gate.sh` and `.cargo-husky/hooks/pre-push` each ran exactly one clippy pass,
+`--workspace --no-default-features --all-targets -- -D warnings`. `--all-targets` puts dev units in
+scope and resolver 2 then unifies dev-dependency features into the normal build, so the
+`openpulse-modem` lib was always linted with `instruments` **on** — while
+`cargo build --release --no-default-features` (`release.yml:60`) links it **off**. No pass anywhere
+linted the shipped configuration.
+
+**Design decision (reviewed by Fable, `docs/dev/reviews/review-1418-shipped-config-lint.md`).** Add a
+second pass rather than change the flag, and keep it `--workspace`. Dropping `--all-targets` would
+stop linting test code — the rot that put an unused binding in `session_key.rs`. Narrowing to
+`-p openpulse-modem --lib` would miss a *downstream* crate's production code calling an instruments
+item, because that crate's lib builds against the ON modem. The review corrected three things in my
+framing: the feature has **three** enabling dev-deps (`openpulse-modem/Cargo.toml:41`,
+`openpulse-daemon:92`, `openpulse-kiss:59`), not just #1277's self dev-dep, so removing that one
+would not have closed it; the trigger is *dev units in scope*, for which `--all-targets` is only a
+proxy (`--tests` alone flips it, `--bins`/`--lib` do not); and during a gate run downstream crates
+link the **ON** lib, so the claim is about the shipped binaries, not about downstream crates.
+
+**Severity, corrected.** Filed first as two cosmetic warnings; it is a build-break class. An ungated
+production caller of an instruments-only accessor is invisible to both automated checks and breaks
+the release build. Corollary: #1277's "a production call cannot compile without a visible
+`Cargo.toml` diff" was enforced by **release builds alone**, not by the gate or the hook.
+
+**Implementation.** `scripts/gate.sh:192` adds
+`run_step "cargo clippy (shipped cfg) -D warns" cargo clippy --workspace --no-default-features -- -D warnings`;
+`.cargo-husky/hooks/pre-push:76` adds the same command (it is the only check on every push, #1144, and
+costs ~1 s warm). `crates/openpulse-modem/src/engine.rs` gates the two items the new pass then found:
+five `openpulse_core::fec` imports moved to an `#[cfg(feature = "instruments")]` `use`, and
+`stage_modulate_payload_iq` (:6930, whose only caller `transmit_iq` is instruments-only) given the
+same cfg.
+
+**Tests → results (actually run, at `8b5896fa` + this branch).**
+
+- *Sabotage, the discriminating one* — planted `pub fn zz_probe_1418(e: &ModemEngine) -> u64 { e.notch_blocks_processed() }`
+  in `engine.rs`, then `scripts/gate.sh --quick`: the OLD step printed
+  `cargo clippy -D warnings  ok` and the NEW step printed
+  `cargo clippy (shipped cfg) -D warns  FAILED (exit 101)`. The old step passing is what makes the
+  failure attributable to the new pass rather than to the probe being loud.
+- Pre-fix, both live instances under the new pass: `cargo clippy --workspace --no-default-features`
+  → 2 warnings (`--all-targets` → 0). Post-fix: both passes rc=0.
+- Per-unit features read from cargo's `--message-format=json` `compiler-artifact` records:
+  `--all-targets` and `--tests` → `['instruments']`; `--bins`, `--lib`, no-target-flag → `[]`.
+- Full gate: see the `GATE:` line recorded on PR #1419.
+
+**Scope, stated narrowly.** This makes the shipped configuration *linted*; it was already
+*type-checked* in `ci.yml`'s macOS build, `cross check` and `release.yml` — all release-scoped. Do not
+read this entry as "the OFF configuration was never compiled".
+
+---
+
 ## 2026-09-19 — CAP-33 does not own the engine's OTA arm, and should not; #1403
 
 **Decision (maintainer, 2026-09-19): no map change.** `Refactors:` is **structural** — #1402

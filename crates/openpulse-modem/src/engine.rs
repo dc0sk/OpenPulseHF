@@ -14,9 +14,16 @@ use openpulse_core::conv::ConvCodec;
 use openpulse_core::dcd::DcdState;
 use openpulse_core::error::{ModemError, PluginError};
 use openpulse_core::fec::{
-    apply_window_retransmit, combine_llrs_map, combine_llrs_map_in_ranges,
-    encode_window_retransmit, hard_decide, FecCodec, FecMode, Interleaver, ShortFecCodec,
-    SoftCombiner, WindowArqFeedback, DEFAULT_INTERLEAVER_DEPTH,
+    combine_llrs_map, hard_decide, FecCodec, FecMode, Interleaver, ShortFecCodec,
+    DEFAULT_INTERLEAVER_DEPTH,
+};
+// Reached only from `#[cfg(feature = "instruments")]` methods, so the shipped library does not use
+// them (#1418). They must carry the same cfg or the feature-off build warns — which no lint pass saw
+// until #1418 added one, because `--all-targets` turns `instruments` on.
+#[cfg(feature = "instruments")]
+use openpulse_core::fec::{
+    apply_window_retransmit, combine_llrs_map_in_ranges, encode_window_retransmit, SoftCombiner,
+    WindowArqFeedback,
 };
 use openpulse_core::frame::Frame;
 use openpulse_core::hpx::{HpxEvent, HpxSession, HpxState, HpxTransition};
@@ -6927,6 +6934,10 @@ impl ModemEngine {
     }
 
     /// Baseband-I/Q counterpart of [`stage_modulate_payload`](Self::stage_modulate_payload).
+    ///
+    /// Its only caller is [`transmit_iq`](Self::transmit_iq), which is itself instruments-only, so
+    /// this carries the same cfg (#1418).
+    #[cfg(feature = "instruments")]
     fn stage_modulate_payload_iq(
         &self,
         plugin: &dyn openpulse_core::plugin::ModulationPlugin,

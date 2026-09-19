@@ -74,6 +74,14 @@ scripts/check-rehomed-docs.sh --base "${upstream:-origin/main}"
 
 cargo clippy --workspace --no-default-features --all-targets -- -D warnings
 
+# The shipped (feature-off) configuration — see scripts/gate.sh for the full why (#1418). The line
+# above cannot see it: `--all-targets` pulls dev units in, and dev-dep features then unify into the
+# normal build, so the lib is linted with `instruments` ON while the release binary links it OFF.
+# It belongs here and not only in the gate because this hook is the only check that runs on EVERY
+# push (#1144), and the pass costs ~1 s warm. Measured: without it, this hook returns 0 on a planted
+# E0599 that breaks `cargo build --release --no-default-features`.
+cargo clippy --workspace --no-default-features -- -D warnings
+
 if [ -z "${pkgs// /}" ]; then
     echo "pre-push: no crate-owned changes detected; fmt + clippy only."
     exit 0
