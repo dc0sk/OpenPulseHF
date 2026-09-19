@@ -136,6 +136,12 @@ async fn a_non_ota_send_message_keys_the_transmitter() {
 /// truncates each at its first `#[cfg(test)]`, since test modules legitimately transmit bare. Both
 /// the truncation and the pattern are validated against planted inputs, so a scan that matched
 /// nothing would fail rather than pass.
+// VERIFIES: REQ-PTT-04
+//
+// The property had no id until #1411: REQ-PHY-07/08 say which PTT backends must EXIST, and
+// nothing said the configured one is USED on every emission. It shipped broken independently in
+// three front-ends with the same silent symptom — audio emitted with the transmitter unkeyed —
+// which is why the binding lives in each front-end rather than only at the SharedPtt seam.
 #[test]
 fn every_daemon_transmit_is_keyed() {
     let files: Vec<(&str, &str)> = vec![

@@ -855,13 +855,16 @@ capabilities:
     - REQ-PHY-05
     - REQ-PHY-07
     - REQ-PHY-08
+    - REQ-PTT-01
+    - REQ-PTT-04
     tests:
+    - crates/openpulse-ardop/tests/ptt_keys_every_transmit.rs
+    - crates/openpulse-daemon/tests/ptt_keys_every_daemon_transmit.rs
+    - crates/openpulse-kiss/tests/ptt_keys_every_transmit.rs
+    - crates/openpulse-mesh/tests/no_real_audio.rs
     - crates/openpulse-radio/src/noop.rs
     - crates/openpulse-radio/tests/generic_cat_integration.rs
     - crates/openpulse-radio/tests/rigctld_integration.rs
-    - crates/openpulse-ardop/tests/ptt_keys_every_transmit.rs
-    - crates/openpulse-daemon/tests/ptt_keys_every_daemon_transmit.rs
-    - crates/openpulse-mesh/tests/no_real_audio.rs
     traceability: baseline
   CAP-60:
     code:
@@ -1108,7 +1111,6 @@ capabilities:
     - crates/openpulse-radio/src/rigctld.rs
     name: PTT backends
     satisfies:
-    - REQ-PTT-01
     - REQ-PTT-02
     - REQ-PTT-03
     tests:
@@ -2150,8 +2152,8 @@ requirements:
   REQ-PTT-01:
     category: PTT
     covered_by:
-    - CAP-74
-    statement: PTT assert/release within 50 ms
+    - CAP-59
+    statement: Every PTT-keyed transmit scope releases the transmitter deterministically on scope exit - early return, error, and panic/unwind - via an RAII guard, so an unexpected key-down is bounded by the scope rather than by ptt_max_duration; the watchdog remains the backstop for a transmit that blocks.
     status: ratified
     traceability: baseline
   REQ-PTT-02:
@@ -2168,6 +2170,12 @@ requirements:
     statement: GPIO PTT backend
     status: ratified
     traceability: baseline
+  REQ-PTT-04:
+    covered_by:
+    - CAP-59
+    statement: 'Every transmission the station makes - data, ARQ/ACK, handshake, QSY, relay, station ID, discovery beacon and file-transfer bursts - keys the transmitter through the configured PTT backend before audio is emitted, and holds the key for the burst. Emitting audio unkeyed is a fault, never a fallback: VOX-only operation is an explicit operator configuration, not what an unusable backend degrades to.'
+    status: ratified
+    traceability: enforced
   REQ-QRM-01:
     category: Interference
     covered_by:

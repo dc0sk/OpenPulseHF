@@ -135,6 +135,12 @@ fn the_watchdog_force_releases_a_key_that_outlives_its_deadline() {
 /// writes its calls as multi-line chains where `engine` and `.transmit(` are five lines apart, so
 /// the copied pattern would match **nothing** — a vacuous gate whose planted single-line control
 /// still passes. That is why the control below is deliberately multi-line.
+// VERIFIES: REQ-PTT-04
+//
+// The property had no id until #1411: REQ-PHY-07/08 say which PTT backends must EXIST, and
+// nothing said the configured one is USED on every emission. It shipped broken independently in
+// three front-ends with the same silent symptom — audio emitted with the transmitter unkeyed —
+// which is why the binding lives in each front-end rather than only at the SharedPtt seam.
 #[test]
 fn every_transmit_in_the_bridge_is_keyed() {
     let src = include_str!("../src/bridge.rs");
