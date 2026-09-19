@@ -60,6 +60,19 @@ fn hits(src: &str) -> Vec<String> {
         .collect()
 }
 
+// VERIFIES: REQ-PTT-04
+//
+// The CLI half of the requirement, and the reason it needs its own binding: REQ-PTT-04's other
+// three bindings live in ardop/kiss/daemon, none of whose test binaries can link `openpulse-cli`,
+// so `cli/radio.rs` and `cli/commands/calibrate.rs` — 82 of the requirement's 363 mutants — were
+// unreachable by construction (#1405).
+//
+// This is the acceptance method the requirement's own text names — a source scan requiring every
+// keying site to sit inside the helper, validated against a planted bare call by the sibling test
+// below. Note what that does and does not buy: it makes those mutants LINKABLE, not killable. A
+// mutation of `calibrate.rs`'s logic does not introduce a bare `.assert_ptt(`, so the scan will not
+// catch it. Reachability is necessary for a mutation verdict to mean anything and is not
+// sufficient for it to be strong.
 #[test]
 fn the_cli_never_keys_the_rig_by_hand() {
     let files = sources();

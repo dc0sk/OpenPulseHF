@@ -15,6 +15,32 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-09-19 — REQ-PTT-04 was born scope-bound; bound its CLI half; #1405
+
+**Change.** One `// VERIFIES: REQ-PTT-04` in `openpulse-cli`. Reachability **281/363 (0.77) ->
+363/363 (1.00)**.
+
+**I introduced the defect I had just been fixing.** REQ-PTT-04 shipped yesterday (#1412) with three
+bindings — ardop, kiss, daemon — none of whose test binaries can link `openpulse-cli`. So
+`cli/radio.rs` and `cli/commands/calibrate.rs`, 82 of its 363 mutants, were unreachable by
+construction: a fresh instance of #1405, created in the same week #1405 was filed. Re-measuring the
+enforced set after the merge is what surfaced it, not review.
+
+**The binding target was checked for vacuity first**, per the rule that caught
+`tampered_fragment_fails_verification`: `the_cli_never_keys_the_rig_by_hand` is a source scan over
+`include_str!`'d CLI sources, and its sibling `the_scan_actually_covers_the_files_that_key`
+validates that scan against a **planted** bare `.assert_ptt(` call — so it cannot go vacuous. It is
+also literally the acceptance method REQ-PTT-04's own registered text names.
+
+**A limit of the reachability metric, worth recording because this change demonstrates it.** The
+ratio went to 1.00, and the kill-power of those 82 mutants did not meaningfully change: a source
+scan makes mutants **linkable**, not **killable** — a mutation of `calibrate.rs`'s logic does not
+introduce a bare `.assert_ptt(`, so the scan will not catch it. **Reachability is necessary for a
+mutation verdict to mean anything, and not sufficient for it to be strong.** #1405's check, if it is
+ever built, reports the necessary condition only, and should say so.
+
+---
+
 ## 2026-09-19 — a gate verdict from ANY commit counted as run-status evidence; #1413
 
 **Change.** `trace.py` compares the stored verdict's `commit` against HEAD, degrading to the same
