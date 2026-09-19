@@ -78,6 +78,7 @@ YAML = ROOT / "docs/dev/project/requirements.yaml"
 # is the intended end state: a baseline may SHRINK by hand as entries are paid down, and must never
 # grow back by regeneration.
 ORPHAN_BASELINE = ROOT / "docs/dev/project/trace-orphan-baseline.txt"
+LINK_BASELINE = ROOT / "docs/dev/project/trace-link-baseline.txt"
 GRANDFATHERED = ROOT / "docs/dev/project/trace-grandfathered-ids.txt"
 
 # Production source roots. A file here that no capability claims is an orphan.
@@ -215,6 +216,31 @@ class CargoUnavailable(Exception):
     """
 
 
+_CARGO_META = None
+
+
+def _cargo_metadata():
+    """`cargo metadata --no-deps`, parsed once per process. Raises CargoUnavailable."""
+    global _CARGO_META
+    if _CARGO_META is not None:
+        return _CARGO_META
+    try:
+        out = subprocess.run(
+            ["cargo", "metadata", "--no-deps", "--format-version", "1"],
+            capture_output=True, text=True, cwd=str(ROOT), timeout=300,
+        )
+    except (OSError, subprocess.SubprocessError) as e:
+        raise CargoUnavailable(f"could not run `cargo metadata`: {e}")
+    if out.returncode != 0:
+        raise CargoUnavailable(
+            f"`cargo metadata` exited {out.returncode}: {out.stderr.strip()[:400]}")
+    try:
+        _CARGO_META = json.loads(out.stdout)
+    except ValueError as e:
+        raise CargoUnavailable(f"could not parse `cargo metadata` output: {e}")
+    return _CARGO_META
+
+
 def _workspace_graph():
     """Return `(pkg_of_dir, prod_rdeps, bin_pkgs)` from `cargo metadata`.
 
@@ -293,6 +319,101 @@ def _optional_only_packages():
                 optional_incoming[dep["name"]] = optional_incoming.get(dep["name"], 0) + 1
     return {n for n, total in incoming.items()
             if total > 0 and optional_incoming.get(n, 0) == total}
+
+
+def _link_graph():
+    """Return `(normal, dev, build, bin_srcs, pkg_of_dir)` for TEST-LINKABILITY, not production reach.
+
+    Deliberately NOT `_workspace_graph()`, which filters dev and optional edges because its question
+    is "does production reach this". The question here is the opposite one — "can a test binary in
+    package P link this file" — and a test target DOES link its own package's dev-dependencies.
+    Verified against cargo-mutants 27.1.0 rather than assumed: per mutant `lab.rs` selects
+    `TestsForMutant::Explicit(packages)` (the `--test-package` list only; the mutated package is NOT
+    added) and `cargo.rs` issues `cargo test --package=<testpkg> --no-default-features`. So the
+    linkable set is exactly what that command compiles: P, plus P's normal/dev/build dependencies,
+    then normal/build transitively — a dependency's dev-deps do not link in.
+
+    PRECONDITION on optional edges, checked by `graph-self-test` rather than trusted. Optional
+    internal edges are excluded, which is correct only while no internal dep spec activates one.
+    That holds today for three separate reasons — no internal dep spec names an optional internal
+    target in `features = [...]`, every plugin's `default` feature set is empty, and the one
+    default-on internal optional (`openpulse-daemon`'s `gpu`) is switched off at the root by the
+    `--no-default-features` that `req-mutation.sh` passes. Any one of those changing silently makes
+    this under-report. The rule is really "feature resolution rooted at P under
+    `--no-default-features`"; exclusion is its consequence today, not the rule itself.
+    """
+    meta = _cargo_metadata()
+    pkgs = meta.get("packages", [])
+    if not pkgs:
+        raise CargoUnavailable("`cargo metadata` reported no packages")
+    names = {p["name"] for p in pkgs}
+    pkg_of_dir = {os.path.dirname(p["manifest_path"]): p["name"] for p in pkgs}
+    normal, dev, build = {}, {}, {}
+    bin_srcs = set()
+    for pkg in pkgs:
+        for t in pkg.get("targets", []):
+            if "bin" in t.get("kind", []) and t.get("src_path"):
+                bin_srcs.add(os.path.realpath(t["src_path"]))
+        for dep in pkg.get("dependencies", []):
+            if dep["name"] not in names or dep.get("optional"):
+                continue
+            kind = dep.get("kind")
+            tgt = {None: normal, "dev": dev, "build": build}.get(kind)
+            if tgt is not None:
+                tgt.setdefault(pkg["name"], set()).add(dep["name"])
+    return normal, dev, build, bin_srcs, pkg_of_dir
+
+
+def _mutant_counts(paths):
+    """`cargo mutants --list` counts per file, best-effort. Never a silent 0 (#1279).
+
+    Only called for NEW findings, so the usual cost is nothing. `--list` returns before any build or
+    tree copy, and the counts are syn-level UPPER bounds: they include `cfg`-gated mutants that the
+    gate's `--no-default-features` build compiles out and which therefore could not be killed even
+    inside a linkable file.
+    """
+    if not paths:
+        return {}
+    try:
+        ver = subprocess.run(["cargo", "mutants", "--version"],
+                             capture_output=True, text=True, cwd=str(ROOT), timeout=60)
+        if ver.returncode != 0:
+            return {"__why__": "cargo-mutants not installed"}
+    except (OSError, subprocess.SubprocessError) as e:
+        return {"__why__": f"cargo-mutants not runnable: {e}"}
+    args = ["cargo", "mutants", "--list"]
+    for f in paths:
+        args += ["--file", f]
+    try:
+        out = subprocess.run(args, capture_output=True, text=True, cwd=str(ROOT), timeout=600)
+    except (OSError, subprocess.SubprocessError) as e:
+        return {"__why__": f"`cargo mutants --list` failed: {e}"}
+    if out.returncode != 0:
+        return {"__why__": f"`cargo mutants --list` exited {out.returncode}"}
+    counts = {}
+    for line in out.stdout.splitlines():
+        head = line.split(":", 1)[0].strip()
+        if head:
+            counts[head] = counts.get(head, 0) + 1
+    # A file we asked about and got nothing for is 0 mutants, which is a real answer, not an absence.
+    for f in paths:
+        counts.setdefault(f, 0)
+    return counts
+
+
+def _linkable_packages(test_pkgs, normal, dev, build):
+    """Packages a test binary in any of `test_pkgs` can link. See `_link_graph` for the semantics."""
+    seed = set(test_pkgs)
+    for p in test_pkgs:
+        seed |= normal.get(p, set()) | dev.get(p, set()) | build.get(p, set())
+    seen, stack = set(), list(seed)
+    while stack:
+        n = stack.pop()
+        if n in seen:
+            continue
+        seen.add(n)
+        stack.extend((normal.get(n, set()) | build.get(n, set())) - seen)
+    return seen
 
 
 def _package_of(rel, pkg_of_dir):
@@ -654,6 +775,13 @@ def do_check(release=False):
     if ORPHAN_BASELINE.exists():
         baseline_orphans = {l.strip() for l in ORPHAN_BASELINE.read_text().splitlines()
                             if l.strip() and not l.startswith("#")}
+    baseline_links = set()
+    if LINK_BASELINE.exists():
+        for l in LINK_BASELINE.read_text().splitlines():
+            l = l.strip()
+            if l and not l.startswith("#") and "\t" in l:
+                rid, path = l.split("\t", 1)
+                baseline_links.add((rid.strip(), path.strip()))
     binds = _scan_verifies()
 
     # The grandfathered set. `traceability: baseline` is legal ONLY for an id in this file, which
@@ -952,6 +1080,85 @@ def do_check(release=False):
         if rid not in reqs:
             fails.append(f"binding: DANGLING-BINDING — `// VERIFIES: {rid}` names a requirement not in requirements.yaml")
 
+    # ---- UNLINKABLE-FROM-BINDING (#1405): can the bound test BINARY link the code it claims? ----
+    #
+    # `req-mutation.sh` mutates every file in a requirement's scope and runs that requirement's bound
+    # tests via cargo-mutants `--test-package`. A test binary cannot link code outside its own
+    # package closure, so a mutant in an unlinkable package is unkillable BY CONSTRUCTION and can
+    # only be recorded MISSED. The script's verdict is `killed > 0`, so REQ-FUN-11 passed on the
+    # strength of one reachable file while 401 of its 408 mutants could never die. That makes a
+    # per-requirement mutation PASS partly a statement about the ownership map.
+    #
+    # NOT a coverage metric, and the name says "link" deliberately: `reachability.sh` already uses
+    # "reachable" for PRODUCTION reach, and #1415 established that linkability is necessary but NOT
+    # sufficient — a binding placed in the right package makes mutants linkable, never killable. Two
+    # blindnesses follow and are stated rather than hidden: this cannot see a VACUOUS binding in the
+    # right package (that is `req-mutation.sh`'s job), and it cannot see `cfg`-gated code inside a
+    # linkable file, which compiles out and can also only be MISSED.
+    #
+    # A RATCHET, not a gate: three of the baselined requirements are blocked on #1234 (nothing
+    # depends on `openpulse-keystore`), and a check that fails on conditions its owner cannot resolve
+    # is the red-on-arrival shape (#1074). NEW unlinkable code fails; the baseline warns.
+    link_new, link_stale, link_note = [], [], None
+    try:
+        _normal, _dev, _build, _bin_srcs, _pkgdir = _link_graph()
+    except CargoUnavailable as e:
+        link_note = str(e)
+    else:
+        current_links = set()
+        for rid, r in reqs.items():
+            # `unwired` is in scope alongside `enforced` on purpose: REQ-CTL-04 is unwired precisely
+            # BECAUSE its package has no consumer, so its three linksec files are unlinkable today.
+            # Excluding it would park three entries outside the baseline that all fail on the day
+            # #1234 lands and it flips to enforced — a ratchet that ambushes the person who fixes
+            # the blocker.
+            if (r or {}).get("traceability") not in ("enforced", "unwired"):
+                continue
+            files = set()
+            for cid in (r or {}).get("covered_by", []):
+                for c in caps.get(cid, {}).get("code", []):
+                    files.update(_matches(c))
+            if not files:
+                continue
+            test_pkgs = {pkg for b in binds.get(rid, [])
+                         if (pkg := _package_of(b["file"], _pkgdir))}
+            if not test_pkgs:
+                continue   # a requirement with no binding at all is MISSING-BINDING's business
+            linkable = _linkable_packages(test_pkgs, _normal, _dev, _build)
+            for f in sorted(files):
+                owner = _package_of(f, _pkgdir)
+                if owner is None:
+                    continue
+                # A dependent's tests never build a dependency's `bin` target, so a file that IS a
+                # bin root is linkable only from its OWN package. Without this, `daemon/src/main.rs`
+                # (claimed by CAP-55 and CAP-67) would read as linkable from any daemon-dependent
+                # binding the day either capability's requirement goes enforced.
+                is_bin = os.path.realpath(str(ROOT / f)) in _bin_srcs
+                ok = owner in linkable and (not is_bin or owner in test_pkgs)
+                if not ok:
+                    current_links.add((rid, f))
+        _counts = _mutant_counts(sorted({f for _r, f in current_links - baseline_links}))
+        for rid, f in sorted(current_links - baseline_links):
+            n = _counts.get(f)
+            howmany = (f" ({n} mutants)" if isinstance(n, int)
+                       else f" (mutant count unavailable: {_counts.get('__why__', 'unknown')})")
+            fails.append(f"{rid}: UNLINKABLE-FROM-BINDING{howmany} — `{f}` is in this requirement's scope but "
+                         f"no bound test's package can link it, so every mutant in it is unkillable "
+                         f"by construction; move the binding into a package that reaches it, narrow "
+                         f"the capability, or add the pair to {LINK_BASELINE.name} with a reason")
+        # `baseline - current` FAILS rather than warns: #1371 found 74 of 86 orphan-baseline entries
+        # stale in one pass because "shrink this over time" was enforced by nobody. Four distinct
+        # causes collapse into this one condition, so the message must not guess between them.
+        for rid, f in sorted(baseline_links - current_links):
+            link_stale.append((rid, f))
+        for rid, f in link_stale:
+            why = ("the requirement is no longer enforced/unwired, the file left its `code:` scope, "
+                   "the file is gone, or a bound test's package now links it")
+            fails.append(f"{rid}: STALE-LINK-BASELINE — `{f}` is listed in {LINK_BASELINE.name} but is "
+                         f"not unlinkable now ({why}); remove the entry, or the ratchet stops "
+                         f"ratcheting for it")
+        link_new = sorted(current_links - baseline_links)
+
     # code orphans: production files no capability claims. Baseline grandfathered; NEW ones fail.
     claimed = _claimed_files(caps)
     orphans = sorted(f for f in src if f not in claimed)
@@ -976,6 +1183,13 @@ def do_check(release=False):
     print(f"trace check: {len(reqs)} requirements, {len(caps)} capabilities, "
           f"{len(binds)} in-code bindings, {len(orphans)} code orphans "
           f"({len(new_orphans)} new)")
+    # Print the link ratchet even when it passes: a baseline nobody sees is a baseline nobody prunes.
+    if link_note:
+        print(f"  NOTE: link ratchet not run — {link_note}")
+    else:
+        print(f"trace check: {len(baseline_links)} grandfathered unlinkable scope pair(s) "
+              f"({len(link_new)} new, {len(link_stale)} stale) — linkability is NECESSARY, not "
+              f"sufficient (#1415), and is blind to cfg-gated code inside a linkable file")
     if passed is None:
         # Say WHICH absence this is. The old text claimed "no gate run found" while several logs sat
         # in target/, so a reader could take it as "nothing to see" when the real cause was that
@@ -1096,6 +1310,59 @@ def do_graph_selftest():
         else:
             ok(f"{len(optional_only)} optional-only package(s) are dormant "
                f"(e.g. {sorted(optional_only)[0]})")
+
+    # #1405 precondition. `_link_graph` EXCLUDES optional internal edges, which is right only while
+    # nothing activates one. Cargo activates an optional dep when a requested feature names it, and a
+    # dep spec requests the target's `default` feature set unless it says `default-features = false`.
+    # So the checkable claim is: no internal dep spec activates an optional INTERNAL dependency. If
+    # that ever breaks, the link join under-reports — silently, and in the flattering direction.
+    try:
+        _meta = _cargo_metadata()
+    except CargoUnavailable as e:
+        print(f"  GRAPH-SELF-TEST SKIP: {e}")
+    else:
+        _pkgs = {p["name"]: p for p in _meta.get("packages", [])}
+        def _activated(pkgname, feats):
+            """Optional deps of `pkgname` switched on by feature set `feats`, transitively."""
+            pkg = _pkgs.get(pkgname)
+            if not pkg:
+                return set()
+            table, on, seen = pkg.get("features", {}), set(), set()
+            stack = list(feats)
+            while stack:
+                f = stack.pop()
+                if f in seen:
+                    continue
+                seen.add(f)
+                if f.startswith("dep:"):
+                    on.add(f[4:]); continue
+                if f in table:
+                    stack.extend(table[f])
+                else:
+                    on.add(f)   # a bare feature name matching an optional dep enables it
+            return on
+        offenders = []
+        for pkg in _meta.get("packages", []):
+            for dep in pkg.get("dependencies", []):
+                if dep["name"] not in _pkgs:
+                    continue
+                req = list(dep.get("features") or [])
+                if dep.get("uses_default_features", True):
+                    req.append("default")
+                for act in _activated(dep["name"], req):
+                    tgt = _pkgs.get(dep["name"], {})
+                    for d2 in tgt.get("dependencies", []):
+                        if d2.get("optional") and d2["name"] in _pkgs and d2["name"] == act:
+                            offenders.append(f"{pkg['name']} -> {dep['name']} activates optional {act}")
+        if offenders:
+            print("  GRAPH-SELF-TEST FAIL: an internal dep spec activates an optional internal edge, "
+                  "so _link_graph's exclusion under-reports:")
+            for o in sorted(set(offenders)):
+                print(f"    {o}")
+            rc = 1
+        else:
+            print("  ok: no internal dep spec activates an optional internal edge "
+                  "(_link_graph's exclusion precondition holds)")
 
     print("GRAPH-SELF-TEST: " + ("PASS" if rc == 0 else "FAIL"))
     return rc
