@@ -15,6 +15,64 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-09-19 — a bound test that cannot LINK the code it claims; #1405
+
+**Change.** `req-mutation.sh` mutates every file in a requirement's scope and runs its bound tests
+under cargo-mutants `--test-package`. A test binary cannot link code outside its own package closure,
+so a mutant in an unlinkable package is unkillable **by construction** and can only be recorded
+MISSED. The script's verdict is `killed > 0`, so REQ-FUN-11 passed on the strength of one linkable
+file while 401 of its 408 mutants could never die — a per-requirement PASS that was partly a
+statement about the ownership map.
+
+**Design decision (maintainer chose the ratchet; reviewed by Fable,
+`docs/dev/reviews/review-1405-link-ratchet.md`).** The issue framed this as fail-or-warn and both are
+wrong here: failing is red-on-arrival (#1074) because three of the affected requirements are blocked
+on #1234, and warning repeats `DANGLING-CODE`, which correctly detects CAP-70's dead path and has
+never failed a build. A **grandfathered ratchet** is the repo's existing third mode
+(`reachability.sh`, `NOT-GRANDFATHERED`): baseline today's set, fail only on growth.
+
+**What the review changed, all implemented.** The linkability semantics were *verified against
+cargo-mutants 27.1.0's source* rather than inferred — `lab.rs` passes only the `--test-package` list
+and `cargo.rs` runs `cargo test --package=<p> --no-default-features`, so linkable = P + P's
+normal/dev/build deps then normal/build transitively. Excluding optional edges was right for the
+wrong reason, and is now a **checked precondition** rather than a constant. A file that is a `bin`
+root is linkable only from its own package. `unwired` requirements are in scope so REQ-CTL-04's three
+files do not all fail on the day #1234 lands. `baseline − current` FAILS. Findings carry best-effort
+mutant counts, because the spread is 46× (186 in `linksec/async_channel.rs` against 4 in
+`modem/envelope_codec.rs`). Renamed to **UNLINKABLE**-FROM-BINDING: `reachability.sh` already uses
+"reachable" for production reach.
+
+**A false premise of mine the review caught:** I claimed #1403 would change these ratios through
+function-level `code:` scoping and that this argued for waiting. #1403 is closed and never proposed
+that; I asserted it from the issue body without checking.
+
+**Implementation.** `scripts/lib/trace.py` — `_cargo_metadata()` (parsed once), `_link_graph()`,
+`_linkable_packages()`, `_mutant_counts()`, the `UNLINKABLE-FROM-BINDING` / `STALE-LINK-BASELINE`
+arms in `do_check`, and an optional-edge precondition probe in `graph-self-test`.
+`docs/dev/project/trace-link-baseline.txt` — 15 grandfathered pairs across 6 requirements, with a
+header saying what would pay each group off. `scripts/trace.sh` — two self-test probes.
+
+**Tests → results (actually run, at this branch).**
+
+- `scripts/trace.sh --self-test` → **SELF-TEST: PASS**, 26 `ok` probes, including the two new ones:
+  `scope file no bound test's package can link -> UNLINKABLE-FROM-BINDING` and `baseline entry that
+  is no longer unlinkable -> STALE-LINK-BASELINE`. The unmodified-tree positive control still passes,
+  which is what proves the plants were restored.
+- Precondition probe sabotage: planting `features = ["gpu"]` on `openpulse-cli -> bpsk-plugin` gives
+  `GRAPH-SELF-TEST FAIL: openpulse-cli -> bpsk-plugin activates optional openpulse-gpu`; tree
+  restored in the same command.
+- `python3 scripts/lib/trace.py check` → `TRACE: PASS`, `15 grandfathered unlinkable scope pair(s)
+  (0 new, 0 stale)`.
+- Full gate: see the `GATE:` line on PR #1420.
+
+**Stated blindnesses.** Linkability is necessary, **not** sufficient (#1415): this cannot see a
+vacuous binding in the right package — that is `req-mutation.sh`'s job — nor `cfg`-gated code inside
+a linkable file, which compiles out and can also only be MISSED. Two of the 15 entries (REQ-FUN-05,
+REQ-FUN-11) are ordinary binding-placement debt and are the cheapest to pay down; nine are blocked on
+#1234; one is a bin target with no tests.
+
+---
+
 ## 2026-09-19 — the gate's `--all-targets` hid the shipped configuration; #1418
 
 **Change.** `scripts/gate.sh` and `.cargo-husky/hooks/pre-push` each ran exactly one clippy pass,
