@@ -15,6 +15,70 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-09-19 — REQ-PTT-01's registered statement was a paraphrase that changed its meaning; REQ-PTT-04 added; #1411
+
+**Change.** REQ-PTT-01's yaml statement restored to its ratified prose and re-pointed
+`covered_by: CAP-74 -> CAP-59`; new **REQ-PTT-04** (enforced, CAP-59) for the keying property that
+had no id; three `// VERIFIES: REQ-PTT-04` bindings; `openpulse-kiss`'s keying test added to
+CAP-59's `tests:`; prose added to `requirements.md`.
+
+**The issue half-dissolved, and the reason is a registry defect.** #1411 claimed *no* requirement
+states the PTT keying property. That is true for one half and **false for the other**, because my
+sweep searched the yaml `statement:` fields and the **ratified prose says something else**.
+`docs/dev/requirements.md:398-402`:
+
+> Every PTT-keyed transmit scope shall release the transmitter **deterministically on scope exit** —
+> including on an early return or a panic/unwind — via an RAII guard … (REQ-PTT-01)
+
+The yaml carries `PTT assert/release within 50 ms`. Provenance, by `git log -S`: `f4c10467` (#872)
+created REQ-PTT-01 as the RAII guard; `daa1676e` (#1098) wrote a **traceability-matrix row**
+paraphrasing it as the 50 ms clause and citing the wrong test; `1da27abd` (#1117) imported that row
+into `requirements.yaml` as the statement. The importer was later deleted (#1223), so the yaml became
+source of truth **carrying the paraphrase**. The code agrees with the prose, not the yaml —
+`shared_ptt.rs:221,413,869` all cite REQ-PTT-01 for the RAII guard. **Nothing checks a yaml statement
+against its prose.**
+
+So the stuck-key failure mode was registered all along, and several trailers #1402 called
+"defensible but pointing at a timing requirement" are simply **right**.
+
+**A live #1405 instance, fixed here.** REQ-PTT-01 was `covered_by: [CAP-74]` ("PTT backends"), which
+does **not** own `shared_ptt.rs` — the file its own acceptance test lives in, owned by CAP-59. Its
+coverage was bound to the paraphrase's evidence rather than to its requirement.
+
+**What was genuinely missing, and is now REQ-PTT-04.** REQ-PHY-07/08 say which PTT backends must
+*exist*; nothing said the configured one is *used* on every emission. Swept `unkeyed|stuck key|keys
+the transmitter|every emission|dead RF|jammed` across `requirements.md`, `regulatory.md`, the 1.0
+criteria, `AGENTS.md` and the roadmap: zero hits (positive control: 3 in CLAUDE.md). It shipped
+broken independently in three front-ends with the same silent symptom, which is why the binding sits
+in each front-end and not only at the seam.
+
+**Capability: CAP-59, not a new one — and the registry chose this already.** The emission paths span
+five capabilities, and a "keying discipline" capability owning `bridge.rs` would recreate exactly
+what #1399's maintainer decision measured and rejected (extending CAP-59 into its importers turned
+two ARDOP/KISS *receive* mislabels into passes, because file-level overlap cannot separate two
+concerns in one file) and would rebuild the CAP-68 shape flagged the day before. CAP-59 is the
+registry's own precedent: the author twice added these very tests to `CAP-59.tests`, and it mirrors
+REQ-SEC-13/CAP-77 — the capability owns the *seam*, source scans hold the sites.
+
+**The atomicity argument was dropped as imported.** I proposed splitting on
+`iterative-delivery`'s "requirements must be atomic". **Compound statements are this registry's
+norm** (REQ-CTL-02, REQ-SEC-14, REQ-CTL-04, REQ-DISC-04, REQ-QRM-01 …). The split stands on
+different grounds: different provenance (2026-07 vs never), different evidence tier (a hardware
+1.0-criterion vs a source scan plus a counting spy), different mechanism (RAII/watchdog vs routing
+through the configured backend).
+
+**Corrections to #1411's own text:** ten commits carry `Implements: REQ-PTT-01`, not eight; "PTT-01
+is the only PTT requirement" is false (PTT-02/03, PHY-05/07/08); and CLAUDE.md's 50 ms row names
+REQ-PHY-05 only — it never paired PTT-01 with it, so the "control-path and audio-path halves" framing
+was mine, not the repo's.
+
+**Gates.** trace check ok · trace self-test ok · reachability ok · fmt ok · the three bound suites
+8 passed / 0 failed.
+
+**Review.** `docs/dev/reviews/review-1411-keying-requirement.md`.
+
+---
+
 ## 2026-09-19 — nine merged commits carry the wrong trailer, and most carry the wrong trailer TYPE; #1402
 
 **Change.** This entry. The nine commits below are merged, so the ledger is the only place their

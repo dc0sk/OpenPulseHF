@@ -178,6 +178,12 @@ fn the_transmitter_is_released_before_each_ack_listen() {
 ///
 /// Validated against a planted bare call, so a scan that matched nothing would fail this test rather
 /// than pass it — the vacuous-gate trap this repo has hit three times.
+// VERIFIES: REQ-PTT-04
+//
+// The property had no id until #1411: REQ-PHY-07/08 say which PTT backends must EXIST, and
+// nothing said the configured one is USED on every emission. It shipped broken independently in
+// three front-ends with the same silent symptom — audio emitted with the transmitter unkeyed —
+// which is why the binding lives in each front-end rather than only at the SharedPtt seam.
 #[test]
 fn every_transmit_in_the_bridge_is_inside_the_keyed_helper() {
     let src = include_str!("../src/bridge.rs");

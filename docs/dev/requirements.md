@@ -2,7 +2,7 @@
 project: openpulsehf
 doc: docs/dev/requirements.md
 status: living
-last_updated: 2026-09-16
+last_updated: 2026-09-19
 ---
 
 # Requirements
@@ -400,6 +400,14 @@ in the roadmap; each is a candidate, not a committed deliverable.
   max-duration watchdog (REQ-REG-10 / #863). This bounds an unexpected key-down to the current stack
   scope instead of up to `ptt_max_duration`. Acceptance: a test that panics inside a keyed transmit scope
   and asserts the transmitter was released without waiting for the watchdog timer. (REQ-PTT-01)
+- Every transmission the station makes — data, ARQ/ACK, handshake, QSY, relay, station ID, discovery
+  beacon and file-transfer bursts — shall key the transmitter through the configured PTT backend
+  before audio is emitted, and hold the key for the burst. Emitting audio unkeyed is a **fault, never
+  a fallback**: VOX-only operation is an explicit operator configuration, not what an unusable
+  backend degrades to. REQ-PHY-07/08 say which backends must *exist*; this says the configured one is
+  *used*. Acceptance: per front-end, a source scan requiring every transmit call site to sit inside
+  the keyed helper — itself validated against a planted bare call — plus a counting backend asserting
+  one keying per emission. (REQ-PTT-04)
 - `openpulse-radio` shall support keying via the **CM108/CM119 sound-chip GPIO over USB-HID** (the common
   cheap-interface PTT path), selectable from config like the existing backends. Acceptance: unit tests
   for the HID output-report encoding; documented in the PTT backend list. (REQ-PTT-02)
