@@ -1,0 +1,52 @@
+# Grandfathered UNLINKABLE-FROM-BINDING pairs (#1405).  Format: REQ-ID<TAB>path
+#
+# A requirement's bound tests run, under cargo-mutants `--test-package`, in their OWN package only.
+# A test binary cannot link code outside that package's closure, so a mutant in a file listed here
+# is unkillable BY CONSTRUCTION and can only ever be recorded MISSED. `req-mutation.sh` passes a
+# requirement as soon as ONE mutant dies, so without this list a PASS can be a statement about the
+# ownership map rather than about the tests.
+#
+# THIS LIST ONLY SHRINKS. A NEW pair fails the trace check; an entry here that is no longer
+# unlinkable ALSO fails (STALE-LINK-BASELINE), because a baseline nobody prunes stops ratcheting —
+# #1371 found 74 of 86 orphan-baseline entries stale in one pass.
+#
+# It is NOT a coverage list. Linkability is necessary, not sufficient (#1415): moving a binding into
+# the right package makes mutants linkable, never killable. It is also blind to `cfg`-gated code
+# inside a linkable file, which compiles out and can only be MISSED too.
+#
+# Why each group is here, and what would let it go:
+#
+#   REQ-CTL-01 / -02 / -04 / -05  ->  openpulse-keystore, openpulse-linksec
+#     Blocked on #1234: NOTHING depends on `openpulse-keystore`, so the daemon test bound to
+#     CTL-01/02 cannot link it, and no binding placement can fix that while the crate has no
+#     consumer (putting a `// VERIFIES:` in the keystore would trip DORMANT-ENFORCED instead).
+#     REQ-CTL-04 is `unwired` for exactly this reason and is listed now so that the day #1234 lands
+#     and it flips to `enforced`, it does not fail on arrival.
+#     CTL-05 carries a SECOND, separable cause: CAP-68 spans three crates and serves four
+#     requirements, so each inherits the union. Splitting it along the auth / key-storage seam is
+#     the CAP-70/JS8 treatment (#1400) and would pay down CTL-01/02/05 at once.
+#
+#   REQ-CMP-01  ->  tools/openpulse-dict-trainer/src/main.rs
+#     A bin target with no tests. No binding anywhere can reach it — a dependent's tests never build
+#     a dependency's `bin`. Payable only by giving the trainer a test of its own.
+#
+#   REQ-FUN-05  ->  crates/openpulse-modem/src/envelope_codec.rs
+#   REQ-FUN-11  ->  crates/openpulse-daemon/src/filexfer.rs
+#     Ordinary binding-placement debt: a test in the owning package would pay either off. Both are
+#     single files against otherwise-linkable scopes (FUN-11 is 8/9 since #1406 added its filexfer
+#     binding), so these are the two cheapest entries on the list.
+REQ-CMP-01	tools/openpulse-dict-trainer/src/main.rs
+REQ-CTL-01	crates/openpulse-keystore/src/lib.rs
+REQ-CTL-01	crates/openpulse-keystore/src/store.rs
+REQ-CTL-02	crates/openpulse-keystore/src/lib.rs
+REQ-CTL-02	crates/openpulse-keystore/src/store.rs
+REQ-CTL-04	crates/openpulse-linksec/src/async_channel.rs
+REQ-CTL-04	crates/openpulse-linksec/src/lib.rs
+REQ-CTL-04	crates/openpulse-linksec/src/sync_channel.rs
+REQ-CTL-05	crates/openpulse-keystore/src/lib.rs
+REQ-CTL-05	crates/openpulse-keystore/src/store.rs
+REQ-CTL-05	crates/openpulse-linksec/src/async_channel.rs
+REQ-CTL-05	crates/openpulse-linksec/src/lib.rs
+REQ-CTL-05	crates/openpulse-linksec/src/sync_channel.rs
+REQ-FUN-05	crates/openpulse-modem/src/envelope_codec.rs
+REQ-FUN-11	crates/openpulse-daemon/src/filexfer.rs

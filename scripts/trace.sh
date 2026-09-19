@@ -232,6 +232,49 @@ plant_binding_and_expect "unwired binding in a package that reaches a binary" "U
 
 # POSITIVE CONTROL. Without this, every assertion above is satisfied by a checker that fails on
 # everything — including the empty-yaml refusal, which also exits non-zero.
+# --- #1405 UNLINKABLE-FROM-BINDING ratchet probes -----------------------------------------------
+#
+# Both directions, because a one-sided ratchet is half a ratchet. The NEW arm proves the check can
+# fire at all; the STALE arm proves the baseline is pruned, which is the half #1371 found rotted (74
+# of 86 orphan entries stale in one pass, enforced by nobody).
+#
+# The NEW probe adds an unlinkable file to a requirement whose scope is otherwise fully linkable, so
+# a hit is attributable to the plant rather than to pre-existing debt — REQ-FUN-10 is 5/5 since
+# #1406 moved its binding into the daemon. `openpulse-keystore` is the plant because nothing depends
+# on it (#1234), which is the very condition the check tests for.
+LINK_BASELINE_FILE="docs/dev/project/trace-link-baseline.txt"
+link_backup="$(mktemp)"; cp "$LINK_BASELINE_FILE" "$link_backup"
+
+python3 - <<'PYEOF'
+import io, re, yaml
+p = "docs/dev/project/requirements.yaml"
+lines = io.open(p, encoding="utf-8").read().split("\n")
+cid = yaml.safe_load("\n".join(lines))["requirements"]["REQ-FUN-10"]["covered_by"][0]
+i = next(k for k, l in enumerate(lines) if re.match(rf"^  {re.escape(cid)}:\s*$", l))
+c = next(k for k in range(i, len(lines)) if lines[k].strip() == "code:")
+lines.insert(c + 1, "    - crates/openpulse-keystore/src/store.rs")
+io.open(p, "w", encoding="utf-8").write("\n".join(lines))
+PYEOF
+python3 scripts/lib/trace.py check > "$out" 2>&1
+rc=$?
+restore
+if [ "$rc" -ne 0 ] && grep -q "UNLINKABLE-FROM-BINDING" "$out"; then
+    echo "  ok: scope file no bound test's package can link -> UNLINKABLE-FROM-BINDING"
+else
+    echo "  SELF-TEST FAIL: planted unlinkable scope file was NOT caught (exit $rc)"; rc_all=1
+fi
+
+# STALE: a baseline entry for a pair that IS linkable must fail, or the list silently accumulates.
+printf 'REQ-FUN-10\tcrates/openpulse-core/src/handshake.rs\n' >> "$LINK_BASELINE_FILE"
+python3 scripts/lib/trace.py check > "$out" 2>&1
+rc=$?
+cp "$link_backup" "$LINK_BASELINE_FILE"; rm -f "$link_backup"
+if [ "$rc" -ne 0 ] && grep -q "STALE-LINK-BASELINE" "$out"; then
+    echo "  ok: baseline entry that is no longer unlinkable -> STALE-LINK-BASELINE"
+else
+    echo "  SELF-TEST FAIL: stale link-baseline entry was NOT caught (exit $rc)"; rc_all=1
+fi
+
 python3 scripts/lib/trace.py check > "$out" 2>&1
 rc=$?
 if [ "$rc" -eq 0 ]; then
