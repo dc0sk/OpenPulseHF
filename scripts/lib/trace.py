@@ -366,6 +366,19 @@ def _log_is_complete(path):
     return saw_result and complete
 
 
+def _current_commit():
+    """`git rev-parse HEAD`, or None when it cannot be read.
+
+    Returns None for the same reason `_current_toolchain` does: this EXPIRES evidence, and a tree
+    that cannot be interrogated must not have its stored verdict called stale on that account.
+    """
+    try:
+        out = subprocess.run(["git", "rev-parse", "HEAD"], capture_output=True, text=True, timeout=30)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return out.stdout.strip() if out.returncode == 0 else None
+
+
 def _current_toolchain():
     """`rustc -V`, or None when it cannot be read.
 
@@ -428,6 +441,21 @@ def _evidence_log():
             was = got_tc or "an unrecorded toolchain"
             return None, (f"the last gate verdict was produced by {was} and this is {want} — a "
                           f"verdict does not survive a toolchain change; run a full gate")
+        # THE THIRD MEMBER OF THE TRIPLE (#1413). The comment above names (tree, HEAD, TOOLCHAIN)
+        # and the code checked two of them: a verdict taken at ANY commit was accepted as proof that
+        # a cited test ran. Sabotage-measured before this existed — rewriting the stored commit to
+        # `deadbeef…` still gave TRACE: PASS. The failure it permitted: add a `// VERIFIES:` binding,
+        # skip the gate, and the checker confirms the test "ran and passed" from a run that predates
+        # the binding; sharper, rename a test and bind the old name, and the stale log still records
+        # that name passing. Degraded rather than fatal, exactly like the toolchain case, so that
+        # "not attributable" has one behaviour and an ordinary edit-then-check cycle is not noisy.
+        want_commit = _current_commit()
+        got_commit = v.get("commit")
+        if want_commit and got_commit != want_commit:
+            was = got_commit[:12] if got_commit else "an unrecorded commit"
+            return None, (f"the last gate verdict was taken at {was} and HEAD is "
+                          f"{want_commit[:12]} — a verdict does not survive a commit change; "
+                          f"run a full gate")
         named = v.get("log")
         if named and os.path.exists(named) and _log_is_complete(named):
             return named, None
@@ -569,16 +597,24 @@ def do_evidence_selftest():
     else:
         try:
             here = _current_toolchain()
+            at = _current_commit()
             for label, fields, want_log in (
-                ("INVALID", {"result": "INVALID", "toolchain": here}, False),
-                ("PASS", {"result": "PASS", "toolchain": here}, True),
+                ("INVALID", {"result": "INVALID", "toolchain": here, "commit": at}, False),
+                ("PASS", {"result": "PASS", "toolchain": here, "commit": at}, True),
+                # The (tree, HEAD, TOOLCHAIN) triple's SECOND member (#1413). Unchecked until then:
+                # a verdict from any commit vouched for a cited test, including one whose binding
+                # did not exist when that gate ran. The unrecorded case matches the toolchain one —
+                # every verdict written before gate.sh recorded a commit looks like this.
+                ("PASS from another commit",
+                 {"result": "PASS", "toolchain": here, "commit": "dead" * 10}, False),
+                ("PASS with no commit recorded", {"result": "PASS", "toolchain": here}, False),
                 # A verdict is attributable to (tree, HEAD, TOOLCHAIN). These two probe the third
                 # member, which drifts with no act by anyone — a distro upgrade. The unrecorded
                 # case is not hypothetical: every verdict written before gate.sh recorded the
                 # toolchain looks exactly like this, and must not be trusted by default.
                 ("PASS from another toolchain",
-                 {"result": "PASS", "toolchain": "rustc 0.0.0 (not this host)"}, False),
-                ("PASS with no toolchain recorded", {"result": "PASS"}, False),
+                 {"result": "PASS", "toolchain": "rustc 0.0.0 (not this host)", "commit": at}, False),
+                ("PASS with no toolchain recorded", {"result": "PASS", "commit": at}, False),
             ):
                 fields["log"] = complete
                 verdict.write_text(_json.dumps(fields), encoding="utf-8")

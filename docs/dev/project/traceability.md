@@ -15,6 +15,48 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-09-19 — a gate verdict from ANY commit counted as run-status evidence; #1413
+
+**Change.** `trace.py` compares the stored verdict's `commit` against HEAD, degrading to the same
+"unverified" NOTE the toolchain mismatch already produces. Two probes added to `evidence-self-test`.
+
+**The defect, and how it was found.** `_gate_log`'s own comment states the rule — *"A verdict is
+attributable to (tree, HEAD, TOOLCHAIN)"* — and the code checked **two** of the three: `INVALID`
+(tree/HEAD moved *during* the run) and a toolchain mismatch. The commit was never compared. Found by
+relying on it: #1412 added an `enforced` requirement with a fresh `// VERIFIES:` binding, and
+`scripts/trace.sh check` returned PASS on a verdict taken at an earlier commit — one that predated
+the binding.
+
+**Sabotage-measured before the fix, with a control proving the surrounding machinery fires:**
+
+```
+control  : verdict commit == HEAD                        -> TRACE: PASS   rc=0
+sabotage : verdict commit := deadbeef…                   -> TRACE: PASS   rc=0   <-- unchecked
+control 2: verdict toolchain := "rustc 0.0.0 (not real)" -> NOTE "…run a full gate"
+```
+
+**Scope, stated narrowly.** Inside `gate.sh` the check was never wrong: `gate.sh:203` exports
+`GATE_LOG="$LOG"`, so the live log is used and is attributable by construction. In CI the
+traceability job has no `target/`, so it already reports `no gate log in target/ — run-status of
+enforced bindings unverified`. The hole was the **standalone** `scripts/trace.sh check` path — the
+one a developer runs while *authoring* a binding, which is exactly when the evidence claim is first
+made. The sharper failure it permitted: rename a test and bind the old name, and the stale log still
+records that name passing, so the binding validates against a test that no longer exists.
+
+**Degraded, not fatal, deliberately.** The toolchain case returns `(None, reason)` and the caller
+reports a NOTE; matching it gives "not attributable" a single behaviour and keeps an ordinary
+edit-then-check cycle quiet. Verified both ways after the fix: a stale commit yields *"the last gate
+verdict was taken at 0e42ea2f9d84 and HEAD is 7a3b3ea1fe64 — a verdict does not survive a commit
+change; run a full gate"*, and a matching verdict yields zero NOTEs and PASS.
+
+**The probes are committed, not performed once.** `evidence-self-test` gains *"PASS from another
+commit"* and *"PASS with no commit recorded"*, both required to be refused, alongside the existing
+PASS control that stops the check being satisfied by refusing everything. The unrecorded case
+mirrors the toolchain one: every verdict written before `gate.sh` recorded a commit looks like that
+and must not be trusted by default.
+
+---
+
 ## 2026-09-19 — REQ-PTT-01's registered statement was a paraphrase that changed its meaning; REQ-PTT-04 added; #1411
 
 **Change.** REQ-PTT-01's yaml statement restored to its ratified prose and re-pointed
