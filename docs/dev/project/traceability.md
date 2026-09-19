@@ -15,6 +15,31 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-09-19 — CAP-33 does not own the engine's OTA arm, and should not; #1403
+
+**Decision (maintainer, 2026-09-19): no map change.** `Refactors:` is **structural** — #1402
+established it from `check-trailer.sh`'s own header — so it names the capability whose code was
+changed. `engine.rs` is CAP-38's. A commit changing the engine's OTA arm says `Refactors: CAP-38`;
+CAP-33's involvement is teleological and belongs in `Implements: REQ-FUN-06`. CAP-33 keeps
+`ota_rate.rs` + `profile.rs`: the policy, not its driver.
+
+**The cost I cited in #1403 was wrong, and the correction did not change the answer.** I warned that
+widening CAP-33 to `engine.rs` would add 1 335 mutants. It would add **zero** to the enforced set:
+CAP-33 satisfies only REQ-FUN-06 and CAP-38 only REQ-NFR-10/PHY-02/PHY-06/PERF-01 — **all
+`baseline`**, and `req-mutation.sh --all-enforced` never touches them. The real cost is a **seventh
+owner on `engine.rs`**, which weakens the relevance rule precisely where commits concentrate.
+
+**`09048b84` therefore joins #1410's corrections**: its `Refactors: CAP-33` should have been
+`Refactors: CAP-38`. It is merged, so this entry is the record.
+
+**A squash artefact worth knowing about, found here.** `09048b84`'s message carries **three**
+`Refactors:` lines — `CAP-33`, `CAP-38`, `CAP-33` — because a squash concatenates its constituent
+commits' messages, and `check-trailer.sh` collects every matching line. Under the ANY predicate
+(#1401) one irrelevant id fails the whole body. That is the lint working, not a defect: each
+constituent trailer is judged against the *union* diff, so a correct one still passes and only a
+genuinely wrong one fails — which is what happened. Worth knowing because a PR body left as
+GitHub's default squash text inherits every commit's trailer, so a single bad one in a ten-commit
+branch will fail the PR.
 ## 2026-09-19 — REQ-PTT-04 was born scope-bound; bound its CLI half; #1405
 
 **Change.** One `// VERIFIES: REQ-PTT-04` in `openpulse-cli`. Reachability **281/363 (0.77) ->
