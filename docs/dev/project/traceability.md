@@ -15,6 +15,51 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-09-19 — nine merged commits carry the wrong trailer, and most carry the wrong trailer TYPE; #1402
+
+**Change.** This entry. The nine commits below are merged, so the ledger is the only place their
+record can still be corrected — the remedy #1371 applied to its four. No code, no schema.
+
+**How they were found, and how they were NOT.** #1402 was filed on a count: 29 of 51
+`Implements:`-only production commits name a requirement whose capabilities own none of the touched
+files. Adjudicating those 29 by PURPOSE rather than by file overlap gives **9 real mislabels and 20
+false positives (69 %)**. The relevance rule that works for `Refactors:` would therefore be wrong
+more often than right here, and the reason is in `check-trailer.sh`'s own header:
+`Implements:` is *"product behaviour **serving** a requirement"* (teleological) while `Refactors:`
+is a *"**structural change** to a capability"*. A structural test applied to a purpose claim is a
+category error. **The nine were found by reading, not by the rule**, and no rule is proposed.
+
+**The nine, and what each should have said.** The unifying fact is that most are the wrong trailer
+**type**, not merely the wrong id — they used the teleological trailer for structural changes:
+
+| commits | carried | should have been |
+|---|---|---|
+| `59784df1` `42369e60` `4d268836` `ceaa3d4f` `fcbb8594` | `Implements: REQ-FUN-11` ("signed transfer manifests") | **`Refactors: CAP-47`** (Relay forwarding and digipeater) |
+| `185ce8d1` | `Implements: REQ-OBS-02` ("rotating file logging") | **`Refactors: CAP-47`** |
+| `d8527a3f` | `Implements: REQ-SEC-13` ("signing domains") | **`Refactors: CAP-32`** (ACK taxonomy; it owns `core/ack.rs`) |
+| `6f06b0f6` | `Implements: REQ-SEC-13` | **`Refactors: CAP-55`** (daemon/control server) |
+| `561f064a` | `Implements: REQ-DISC-01` ("Native JS8 waveform") | **`Implements: REQ-DISC-07`** ("2-message rendezvous over JS8") — the one that is genuinely teleological and simply names the wrong id; #1400's CAP-79 split is what made it visible |
+
+**The correct trailer would also have been checkable.** Verified against the live rule: `Refactors:
+CAP-47` on `59784df1`, `42369e60` and `fcbb8594` returns an empty irrelevant-set, i.e. **PASS**. So
+the right answer is not a new requirement or a looser rule — it is the trailer type that carries a
+claim the machine can test.
+
+**Five of the nine are one copy-paste run** (the repeater cluster), the same shape as #1371's four
+CAP-59 commits. That is the defect #1371 was filed about, recurring in the half of the trailers no
+rule inspects.
+
+**A separate gap this surfaced, filed rather than fixed here.** Eight of the twenty *defensible*
+commits map "every emission keys the transmitter" onto **REQ-PTT-01, whose statement is "PTT
+assert/release within 50 ms"**. Keying-at-all and keying-within-50 ms are different properties;
+PTT-01 absorbs both because it is the only PTT requirement, so those trailers are defensible only
+because there is nowhere better to point. CLAUDE.md's acceptance table pins that property with three
+separate rows and the registry does not carry it.
+
+**No rule change.** #1402's recommendation is to leave `Implements:` unchecked by file overlap.
+
+---
+
 ## 2026-09-19 — the keystore wiring is DEFERRED, and the design was forbidden by its own requirement; #1234
 
 **Change.** A review artifact and this entry. No code. #1234's wiring half stays unbuilt and
