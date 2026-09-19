@@ -189,6 +189,21 @@ drift_check
 run_step "cargo fmt --check" cargo fmt --all -- --check || rc_total=1
 drift_check
 run_step "cargo clippy -D warnings" cargo clippy --workspace --no-default-features --all-targets -- -D warnings || rc_total=1
+drift_check
+# The SHIPPED configuration, which the step above structurally cannot see (#1418). `--all-targets`
+# puts dev units in scope, and resolver 2 then unifies dev-dependency features into the normal build
+# — three dev-deps enable `openpulse-modem`'s `instruments` (its own Cargo.toml:41,
+# openpulse-daemon:92, openpulse-kiss:59), and under `--workspace` any one suffices. So the step
+# above always lints the lib with `instruments` ON, while `cargo build --release
+# --no-default-features` (release.yml) links it OFF. Measured: an ungated production caller of an
+# instruments-only item returned rc=0 from the step above AND from the pre-push hook, and rc=101
+# (E0599) from `cargo clippy -p openpulse-daemon --no-default-features`.
+#
+# This is an ADDED pass, not a changed flag: dropping `--all-targets` above would stop linting test
+# code, which is how an unused binding sat in session_key.rs. It must stay `--workspace` — a
+# DOWNSTREAM crate's production code calling an instruments item also escapes, because that crate's
+# lib builds against the ON modem. ~1 s warm; 9.1 s from a cold modem lib.
+run_step "cargo clippy (shipped cfg) -D warns" cargo clippy --workspace --no-default-features -- -D warnings || rc_total=1
 
 TEST_CMD="none"
 if [ "$MODE" = "full" ]; then
