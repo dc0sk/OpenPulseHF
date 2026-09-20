@@ -506,7 +506,7 @@ fn constellation_plot(
                 .include_y(-1.8)
                 .include_y(1.8)
                 .show(ui, |p| {
-                    p.points(Points::new(pts).radius(1.2).color(color));
+                    p.points(Points::new(pts).radius(1.2_f32).color(color));
                 });
         });
     });

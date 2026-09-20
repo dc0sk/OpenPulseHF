@@ -30,6 +30,10 @@ fn demo_params() -> LinkParams {
         turnaround_s: 0.2,
         max_attempts: 4,
         seed: 99,
+        // Both match `LinkParams::default()`: this fixture is about the serve/hub transport, not
+        // about conditioning or notching, so it takes the engine-matching defaults (#1380).
+        cessb_enabled: true,
+        notch: None,
     }
 }
 

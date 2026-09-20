@@ -82,6 +82,25 @@ cargo clippy --workspace --no-default-features --all-targets -- -D warnings
 # E0599 that breaks `cargo build --release --no-default-features`.
 cargo clippy --workspace --no-default-features -- -D warnings
 
+# Feature-gated code, which neither pass above COMPILES at all (#1380) — see scripts/gate.sh for the
+# full reasoning and the two stated limits. Here because rot is a per-push class and this hook is the
+# only check that runs on every push (#1144). Worst case (an edit in openpulse-core) this re-checks
+# the workspace in a second feature configuration, ~40 s measured; a leaf-crate edit is seconds.
+#
+# The preflight exists so a missing distro package reads as a missing distro package: --all-features
+# pulls alsa-sys, libudev-sys and libdbus-sys, whose build scripts call pkg_config and PANIC, which
+# would otherwise surface as a backtrace buried in clippy output.
+missing_pc=""
+for pc in alsa libudev dbus-1; do
+    pkg-config --exists "$pc" 2>/dev/null || missing_pc="$missing_pc $pc"
+done
+if [ -n "$missing_pc" ]; then
+    echo "pre-push: FAIL — --all-features needs pkg-config:$missing_pc"
+    echo "pre-push:   install libasound2-dev libudev-dev libdbus-1-dev (Debian/Ubuntu names)"
+    exit 1
+fi
+cargo clippy --workspace --all-features --all-targets -- -D warnings
+
 if [ -z "${pkgs// /}" ]; then
     echo "pre-push: no crate-owned changes detected; fmt + clippy only."
     exit 0

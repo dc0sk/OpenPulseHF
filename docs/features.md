@@ -2,7 +2,7 @@
 project: openpulsehf
 doc: docs/features.md
 status: living
-last_updated: 2026-09-14
+last_updated: 2026-09-20
 ---
 
 # OpenPulseHF — Feature Reference
@@ -731,7 +731,7 @@ path). Six WGSL compute kernels run on any wgpu-compatible GPU (Vulkan, Metal, D
 WebGPU): `bpsk_modulate`, `bpsk_demodulate`, `timing_search` (the BPSK trio),
 `rrc_fir` (the RRC matched filter, BPSK/QPSK/8PSK/64QAM), `soft_demod` (8PSK/64QAM
 soft LLRs), and `fft256` (SC-FDMA batched FFT). The GPU is API-only (`with_gpu`),
-exercised by tests; a CI job (`gpu-feature-gates`) builds + lints the feature so it
+exercised by tests; `scripts/gate.sh`'s `--all-features` pass builds + lints the feature so it
 doesn't rot. The BPSK modulate path, as one example, is three stages:
 
 1. **Byte-to-bit expansion**: 64-thread workgroups extract LSB-first bits from input

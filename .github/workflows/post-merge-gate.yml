@@ -70,6 +70,16 @@ jobs:
       # One verdict path — `scripts/gate.sh`, never an open-coded `cargo test`. Without
       # `--no-fail-fast` cargo stops at the first failing binary and the count is a lower bound
       # (CLAUDE.md verification rule 2); the script is what guarantees the flag and the `GATE:` line.
+      # `gate.sh`'s --all-features rot guard (#1380) links against ALSA, libudev and D-Bus through
+      # alsa-sys / libudev-sys / libdbus-sys, whose build scripts call pkg_config and PANIC when a
+      # .pc file is absent. The ubuntu runner image ships none of these three -dev packages, so
+      # without this step the gate fails on arrival. NOT `|| true`: a missing library here means the
+      # rot guard cannot run, and the gate's own preflight fails loudly rather than skipping it.
+      - name: Install feature-gate build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libasound2-dev libudev-dev libdbus-1-dev
+
       - name: Workspace gate (fmt + clippy + tests)
         id: gate
         run: ./scripts/gate.sh

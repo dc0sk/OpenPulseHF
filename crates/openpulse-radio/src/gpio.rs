@@ -59,14 +59,14 @@ impl GpioPtt {
     /// Requires the `gpio` feature; without it, returns an error. Leaves PTT released.
     pub fn open(spec: &str) -> Result<Self, PttError> {
         let (chip, offset, active_low) = parse_gpio_spec(spec)?;
-        #[cfg(feature = "gpio")]
+        #[cfg(all(target_os = "linux", feature = "gpio"))]
         {
             let line = CdevLine::request(&chip, offset)?;
             let mut ctrl = Self::with_line(Box::new(line), active_low);
             ctrl.release_ptt()?; // ensure the physical line starts in the released state
             Ok(ctrl)
         }
-        #[cfg(not(feature = "gpio"))]
+        #[cfg(not(all(target_os = "linux", feature = "gpio")))]
         {
             let _ = (chip, offset, active_low);
             Err(PttError::Serial(
@@ -109,13 +109,13 @@ impl PttController for GpioPtt {
     }
 }
 
-#[cfg(feature = "gpio")]
+#[cfg(all(target_os = "linux", feature = "gpio"))]
 struct CdevLine {
     req: gpiocdev::Request,
     offset: u32,
 }
 
-#[cfg(feature = "gpio")]
+#[cfg(all(target_os = "linux", feature = "gpio"))]
 impl CdevLine {
     fn request(chip: &str, offset: u32) -> Result<Self, PttError> {
         let chip_path = if chip.starts_with('/') {
@@ -133,7 +133,7 @@ impl CdevLine {
     }
 }
 
-#[cfg(feature = "gpio")]
+#[cfg(all(target_os = "linux", feature = "gpio"))]
 impl PttLine for CdevLine {
     fn set(&mut self, high: bool) -> Result<(), PttError> {
         let v = if high {
