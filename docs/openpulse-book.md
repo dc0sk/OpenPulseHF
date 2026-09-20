@@ -2,7 +2,7 @@
 project: openpulsehf
 doc: docs/openpulse-book.md
 status: living
-last_updated: 2026-09-14
+last_updated: 2026-09-20
 ---
 
 # The OpenPulseHF Book
@@ -3436,7 +3436,7 @@ All read from the manifests:
 
 Consequences, spelled out: `cargo build -p openpulse-cli` includes CPAL; `cargo build -p openpulse-kiss` does not. The feature is spelled `cpal-backend` for the CLI and audio crates but `cpal` for the daemon, TNCs and testbench — `--features cpal` errors on the CLI, `--features cpal-backend` errors on the daemon. The runtime `--backend cpal` flag warns at startup when the feature is absent. (One more piece of doc drift, flagged rather than repeated: `openpulse-audio/src/lib.rs:7` claims `cpal-backend` is "enabled by default"; its own manifest says `default = []`, and the manifest is authoritative.) Platform limits from the manifest comments: `serial`/`generic-serial` are Unix-only, `gpio` is Linux-only.
 
-GPU acceleration deserves its own row of honesty: five plugins (BPSK, QPSK, 8PSK, 64QAM, SC-FDMA) have optional wgpu paths against six WGSL kernels in `openpulse-gpu`; OFDM is not GPU-accelerated. Because the standard `--no-default-features` gates never compile the `gpu` cfg paths, they would rot silently — the CI workflow therefore has a dedicated `gpu-feature-gates` job that compiles and lints (but does not run — CI runners have no wgpu adapter) the GPU paths on every change; its comment cites the PR that found a build break reachable only there.
+GPU acceleration deserves its own row of honesty: five plugins (BPSK, QPSK, 8PSK, 64QAM, SC-FDMA) have optional wgpu paths against six WGSL kernels in `openpulse-gpu`; OFDM is not GPU-accelerated. Because the standard `--no-default-features` gates never compile the `gpu` cfg paths, they would rot silently — `scripts/gate.sh` therefore carries an `--all-features` pass that compiles and lints (but does not run — CI runners have no wgpu adapter) the GPU paths on every gate run; its comment cites the PR that found a build break reachable only there. Until #1380 this was a dedicated `gpu-feature-gates` CI job, which covered five named plugins and, being `release/**`-scoped, never ran on an ordinary PR.
 
 #### 3.6.2 The canonical gate set
 

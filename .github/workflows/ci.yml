@@ -81,6 +81,16 @@ jobs:
       # enforced by no machine (CLAUDE.md "Known hole"). It cost #1074: four tests red on `main`,
       # plus a fifth gone vacuous, unnoticed. The hook now tests touched crates on every push; this
       # is the full gate, and it is the thing that actually closes the hole.
+      # `gate.sh`'s --all-features rot guard (#1380) links against ALSA, libudev and D-Bus through
+      # alsa-sys / libudev-sys / libdbus-sys, whose build scripts call pkg_config and PANIC when a
+      # .pc file is absent. The ubuntu runner image ships none of these three -dev packages, so
+      # without this step the gate fails on arrival. NOT `|| true`: a missing library here means the
+      # rot guard cannot run, and the gate's own preflight fails loudly rather than skipping it.
+      - name: Install feature-gate build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libasound2-dev libudev-dev libdbus-1-dev
+
       - name: Workspace gate (fmt + clippy + tests)
         run: ./scripts/gate.sh
 
@@ -178,51 +188,11 @@ jobs:
       - name: Build workspace on macOS
         run: cargo build --workspace --no-default-features
 
-  gpu-feature-gates:
-    name: GPU feature gates (compile + lint)
-    runs-on: ubuntu-latest
-    if: ${{ startsWith(github.head_ref, 'release/') || github.event_name == 'workflow_dispatch' }}
-
-    steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
-
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
-        with:
-          toolchain: ${{ env.REQUIRED_RUST }}
-
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
-        with:
-          # One cache per job, so a lint-only job cannot evict the test job's artifacts.
-          shared-key: ${{ github.job }}
-
-      - name: Toolchain preflight
-        run: ./scripts/check-toolchain.sh $REQUIRED_RUST
-
-      # The per-plugin `gpu` feature is never compiled by the --no-default-features
-      # gates above, so its `#[cfg(feature = "gpu")]` paths rot silently (PR #424
-      # found a build break + clippy + flaky-test issue only reachable here). This
-      # job compiles and lints the GPU paths on every change. It does NOT run the
-      # GPU tests — CI runners have no wgpu adapter, so those would only exercise
-      # the CPU fallback; compile + lint is the rot guard.
-      - name: GPU feature build gate
-        run: >
-          cargo build --no-default-features --features gpu
-          -p bpsk-plugin -p qpsk-plugin -p psk8-plugin -p qam64-plugin -p scfdma-plugin
-
-      - name: GPU feature clippy gate
-        run: >
-          cargo clippy --no-default-features --features gpu --all-targets
-          -p bpsk-plugin -p qpsk-plugin -p psk8-plugin -p qam64-plugin -p scfdma-plugin
-          -- -D warnings
-
-      # openpulse-gpu's adapter-requiring differential tests are behind
-      # `hardware-tests`, so the workspace gate never compiles them. Same rot guard
-      # as above: compile + lint only, never run — this runner has no adapter.
-      - name: GPU hardware-test rot guard (compile + lint, not run)
-        run: >
-          cargo clippy --features hardware-tests --all-targets
-          -p openpulse-gpu -- -D warnings
+  # `gpu-feature-gates` was REMOVED here (#1380). It compiled and linted the `gpu` and
+  # `hardware-tests` paths, which `scripts/gate.sh`'s `--all-features` pass now covers for every
+  # crate rather than a named five — and covers on every LOCAL gate run and in post-merge-gate,
+  # where this job never ran at all, being `release/**`-scoped like the rest of this file
+  # (#1120/#1144). Its reasoning survives in that step's comment, PR #424 precedent included.
 
   pi5-smoke-loopback:
     name: Pi5 smoke profile (loopback)

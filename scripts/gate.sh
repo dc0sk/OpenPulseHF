@@ -204,6 +204,44 @@ drift_check
 # DOWNSTREAM crate's production code calling an instruments item also escapes, because that crate's
 # lib builds against the ON modem. ~1 s warm; 9.1 s from a cold modem lib.
 run_step "cargo clippy (shipped cfg) -D warns" cargo clippy --workspace --no-default-features -- -D warnings || rc_total=1
+drift_check
+# FEATURE-GATED code, which neither pass above compiles at all (#1380). `#[cfg(feature = "x")]` code
+# must still PARSE when the feature is off, so a syntax error is caught — but nothing after parsing
+# is: type errors, borrow errors, wrong arity, a renamed method. That is exactly the code most likely
+# to drift, because nobody compiles it while editing something else. Precedent is not hypothetical:
+# PR #424 found a build break, a clippy finding and a flaky test reachable only through the `gpu`
+# feature, and this pass found two more the day it was written — a `serve`-gated test left behind
+# when `LinkParams` gained two fields (uncompilable, therefore never run, for ~3 months) and a
+# `float-literal-f32-fallback` in the `gui` binary that rustc says becomes a hard error.
+#
+# `--all-features` rather than a list of crate+feature pairs: a hand-maintained mirror of the feature
+# set is the same rotting artifact this pass exists to catch. Safe because every feature here is
+# ADDITIVE (`generic-serial = ["serial"]`); there is no mutually exclusive pair to break.
+#
+# TWO STATED LIMITS, neither closed by this pass:
+#   * Not closed over TARGETS. A feature whose optional dependency is target-filtered (gpio's
+#     `gpiocdev` is `[target.'cfg(target_os = "linux")']`) compiles here but not elsewhere; the code
+#     must carry `all(target_os = ..., feature = ...)`, as gpio.rs now does.
+#   * Not closed over the SHIPPED recipe. `--all-features` turns `instruments` on, so an
+#     instruments-only item called from a `cpal-backend`-gated production path passes all three
+#     passes and fails only `cargo build --release -p openpulse-cli --features cpal-backend`. Zero
+#     instances today; it is a residual, not a claim of completeness.
+#
+# The preflight is NOT ceremony: --all-features pulls alsa-sys, libudev-sys and libdbus-sys, whose
+# build scripts call pkg_config and PANIC when a .pc file is absent. Without this, a missing distro
+# package reads as an unintelligible build-script backtrace in the middle of clippy output.
+missing_pc=""
+for pc in alsa libudev dbus-1; do
+    pkg-config --exists "$pc" 2>/dev/null || missing_pc="$missing_pc $pc"
+done
+if [ -n "$missing_pc" ]; then
+    printf '  %-38s%s\n' "cargo clippy (all features)" "SKIPPED (missing pkg-config:$missing_pc)"
+    echo "  install: libasound2-dev libudev-dev libdbus-1-dev  (Debian/Ubuntu names)"
+    echo "=== cargo clippy (all features): SKIPPED — missing pkg-config:$missing_pc ===" >> "$LOG"
+    rc_total=1
+else
+    run_step "cargo clippy (all features) -D warns" cargo clippy --workspace --all-features --all-targets -- -D warnings || rc_total=1
+fi
 
 TEST_CMD="none"
 if [ "$MODE" = "full" ]; then

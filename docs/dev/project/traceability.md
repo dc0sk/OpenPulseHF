@@ -15,6 +15,78 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-09-20 — feature-gated code was compiled by nothing; #1380
+
+**Change.** `#[cfg(feature = "x")]` code must still PARSE when the feature is off, so a syntax error
+was caught — but nothing after parsing was: type errors, borrow errors, wrong arity, a renamed
+method. Both lint passes in `gate.sh` and the hook build `--no-default-features`, so nine feature
+families gating code (cpal, serial/gpio, gpu, keychain, tokio, serde, gui/serve, hardware-tests,
+instruments) were compiled by no automated check at all. `ci.yml`'s `gpu-feature-gates` guarded
+exactly one of them, and being `release/**`-scoped (#1120) it never ran on an ordinary PR.
+
+**Design decision (reviewed by Fable, `docs/dev/reviews/review-1380-feature-rot-guard.md`).** One
+rule — `cargo clippy --workspace --all-features --all-targets -- -D warnings` — rather than the
+issue's named `--features cpal-backend`, because a hand-maintained list of crate+feature pairs is the
+same rotting mirror the guard exists to catch. Safe because every feature here is additive
+(`generic-serial = ["serial"]`); a per-feature matrix was considered and rejected on measurement —
+no `cfg(all(feature = A, not(feature = B)))` exists anywhere, so a 2^17 powerset would find zero
+defects.
+
+**It found two live defects the day it was written**, neither in cpal: a `serve`-gated test left
+behind when `LinkParams` gained `cessb_enabled` (`b883b5f8`) and `notch` (`26696f98`) in 2026-06 —
+uncompilable, therefore **never run, for ~3 months** — and a `float-literal-f32-fallback` in the
+`gui` binary that rustc says becomes a hard error. Fixed; the `serve` tests now RUN: 2 passed, 0
+failed.
+
+**The review's catch that would have broken `main`.** `--all-features` adds `alsa-sys`,
+`libudev-sys` and `libdbus-sys`, whose build scripts call `pkg_config` and panic when a `.pc` file is
+missing; the ubuntu runner ships none of the three `-dev` packages, and neither gate-running job
+installed anything. My clean local run described this host only **after** a root update stamped those
+`.pc` files on 2026-09-19 — `traceability.md`'s 2026-09-16 entry records `libdbus-sys` failing here
+four days before. Unmodified this was red-on-arrival for `post-merge-gate.yml` (#1074's archetype).
+Hence a `pkg-config` preflight in both gate and hook that **fails** with the Debian package names
+rather than skipping, and an `apt-get` step (not `|| true`) in both jobs.
+
+**A latent defect the design exposed.** `gpiocdev` is declared under
+`[target.'cfg(target_os = "linux")']` while `gpio.rs` was gated on `feature = "gpio"` alone. Cargo
+enables a feature whose optional dep is target-filtered out, so `--all-features` on macOS compiles
+that code with no crate. Retargeted to `all(target_os = "linux", feature = "gpio")` at all five sites
+— unverified on darwin here, no darwin std on this host.
+
+**`gpu-feature-gates` REMOVED**, subsumed: the new pass compiles and lints `gpu` and `hardware-tests`
+across every crate rather than five named plugins, on every local gate run and in post-merge-gate,
+where that job never ran. Its reasoning and the PR #424 precedent survive in the new step's comment.
+
+**Corrections to my own framing.** I described the three passes as a 2×2 grid; the axes are not
+independent, since `--all-features` turns `instruments` on regardless of `--all-targets`. And there
+is a **residual off the grid**: the shipped recipe `{cpal, gpu}` with `instruments` OFF is compiled by
+no pass, so an instruments-only item called from a cpal-gated production path fails only
+`cargo build --release -p openpulse-cli --features cpal-backend`. Zero instances today; stated as a
+limit.
+
+**Tests → results (actually run, at this branch).**
+
+- Sabotage, #1380's own probe — a planted type error in the cpal-gated `run_drive`
+  (`calibrate.rs:320`): pass 1 (`--no-default-features --all-targets`) **rc=0**, pass 2
+  (`--no-default-features`) **rc=0**, pass 3 (`--all-features --all-targets`) **rc=101**. The two
+  rc=0 rows are what make the failure attributable to the new pass.
+- Preflight sabotage: a nonexistent library in the list gives
+  `cargo clippy (all features)  SKIPPED (missing pkg-config: zz-nonexistent-lib)` plus the install
+  line, and the gate fails.
+- `cargo test -p openpulse-linksim --features serve --test serve_integration` → 2 passed, 0 failed.
+- Full gate: see the `GATE:` line on PR #1421.
+
+**Evidence honesty.** Both defects found are in `openpulse-linksim`, which a 2026-09-10 direction
+slates for replacement, and the yield on shipped cpal/gpu/serial paths was **zero**. The
+justification is the class — three months undetected, PR #424 precedent — not today's haul.
+
+**Doc twins swept**, since this makes several statements false: `docs/features.md` and
+`docs/openpulse-book.md` (both named the removed job), CLAUDE.md's acceptance row listing a `gpu` CI
+gate, and CLAUDE.md's "**the `KeychainStore` body itself is still never type-checked here**, so #1380
+is contained, not closed" — now type-checked on Linux, compile+lint only.
+
+---
+
 ## 2026-09-19 — a bound test that cannot LINK the code it claims; #1405
 
 **Change.** `req-mutation.sh` mutates every file in a requirement's scope and runs its bound tests
