@@ -607,7 +607,9 @@ impl Default for SoftCombiner {
 ///
 /// # When this is the wrong function
 ///
-/// A true log-likelihood ratio `log P(b=0|y) / P(b=1|y)` already carries `1/σ²` — see
+/// A true log-likelihood ratio `log P(b=0|y) / P(b=1|y)` already carries its own noise scaling —
+/// `1/σ²` where the amplitude is known, and the vanishing slope `2A²/var(dot)` where it is blind
+/// and must be estimated (#1364). See
 /// `openpulse_dsp::constellation::symbol_llrs`, which divides every distance by `noise_var`. For
 /// independent observations of the same bit, the MAP combine of true LLRs is their plain **sum**:
 /// use [`combine_llrs_map`]. Passing `noise_var = σ²` here on top of already-calibrated LLRs applies
