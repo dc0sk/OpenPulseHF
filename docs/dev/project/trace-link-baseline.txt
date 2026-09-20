@@ -17,11 +17,16 @@
 # Why each group is here, and what would let it go:
 #
 #   REQ-CTL-01 / -02 / -04 / -05  ->  openpulse-keystore, openpulse-linksec
-#     Blocked on #1234: NOTHING depends on `openpulse-keystore`, so the daemon test bound to
+#     PERMANENT, not pending. NOTHING depends on `openpulse-keystore`, so the daemon test bound to
 #     CTL-01/02 cannot link it, and no binding placement can fix that while the crate has no
 #     consumer (putting a `// VERIFIES:` in the keystore would trip DORMANT-ENFORCED instead).
-#     REQ-CTL-04 is `unwired` for exactly this reason and is listed now so that the day #1234 lands
-#     and it flips to `enforced`, it does not fail on arrival.
+#     #1234 was CLOSED 2026-09-20 by deciding NOT to wire it: the master-password source the design
+#     needed is forbidden by REQ-CTL-04's own last sentence, the env-var form is a lateral move, and
+#     the Ed25519 station seed — the more valuable secret — already sits in plaintext at 0600, so
+#     AEAD-wrapping the PSK beside it protects nothing. The named alternative (`psk_file`, #1408) was
+#     reviewed and closed too. REQ-CTL-04 stays `unwired`, which is the accurate state.
+#     These nine entries come off this list only if the keystore gains a real consumer — the
+#     maintainer's criterion is multi-secret storage (identity key, trust store), not a PSK.
 #     CTL-05 carries a SECOND, separable cause: CAP-68 spans three crates and serves four
 #     requirements, so each inherits the union. Splitting it along the auth / key-storage seam is
 #     the CAP-70/JS8 treatment (#1400) and would pay down CTL-01/02/05 at once.

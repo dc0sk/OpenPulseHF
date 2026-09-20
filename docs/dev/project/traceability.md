@@ -15,6 +15,40 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-09-20 — #1234 CLOSED by deciding not to wire the keystore; nine baseline pairs are permanent
+
+**Decision (maintainer, 2026-09-20).** #1234's two halves are both resolved, and the wiring half is
+resolved by deciding **not** to build it. The retirement half shipped in #1391 (`e740c8f0`):
+REQ-CTL-03's id retired, the requirement kept, REQ-CTL-04's dropped fallback clause restored. The
+wiring half was deferred 2026-09-19 after adversarial review (option 3,
+`docs/dev/reviews/review-1234-keystore-writer.md`) and nothing since has reopened it — the
+alternative that deferral named, `[control_security] psk_file`, was filed as #1408 and closed too,
+its one argument having been false.
+
+**Why it stays unbuilt**, all three still true: the master-password source the design needed is
+forbidden by REQ-CTL-04's own last sentence ("must never be written to disk in plaintext"); the
+env-var form is a lateral move, as the maintainer said in the thread's second comment; and the
+Ed25519 station seed — which signs all 13 registered domains — already sits in plaintext at 0600, so
+AEAD-wrapping the PSK beside it protects nothing.
+
+**Consequence recorded here because #1420's entry stated the opposite.** That entry said nine of the
+fifteen `trace-link-baseline.txt` pairs were "blocked on #1234". They are **permanent**, not pending:
+`openpulse-keystore` stays consumer-less and workspace-dormant, REQ-CTL-04 stays `unwired`, and those
+entries come off the list only if the keystore gains a real consumer. The baseline header said "the
+day #1234 lands and it flips to `enforced`" — a statement this close makes false, corrected in place
+here rather than only in this ledger.
+
+**What would earn the keystore later**, from the thread rather than invented: not a PSK, but
+multi-secret storage — the identity key and the trust store — which is the maintainer's own criterion
+and the case where the threat-model argument actually holds. A new proposal needing its own review.
+
+**Unchanged on purpose:** `inert_psk_key_id_warning` (`server.rs:2062`) keeps its text — keystore-backed
+PSK loading really is not implemented, and #1234 is now the record of why rather than a promise that
+it will be. REQ-CTL-04's registered statement keeps "No production consumer yet (#1234)", which is
+still literally true.
+
+---
+
 ## 2026-09-20 — feature-gated code was compiled by nothing; #1380
 
 **Change.** `#[cfg(feature = "x")]` code must still PARSE when the feature is off, so a syntax error
