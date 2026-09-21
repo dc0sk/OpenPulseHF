@@ -15,6 +15,61 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-09-21 — #1363's three outstanding measurements, and the one I called impossible
+
+**Change.** Test-only. `plugins/bpsk/src/demodulate.rs` → `mod carrier_dip_tiebreak` gains
+`ray_split` (the two Watterson rays as complex values, LABELLED, without private access), its
+default-run pin `the_ray_split_agrees_with_the_envelope`, and
+`measure_snr_axis_tap_split_and_bytes`, which answers all three measurements #1363 had outstanding.
+No production code changes.
+
+**The finding** (posted to #1363): the cancellation costs **8 frames of 96 at every SNR, including
+noise-free** — so no SNR-conditioned mitigation can help. The harm localises to **delayed-dominant
+mid-depth dips**, where the uncancelled arm reads 0.008/0.011 against the cancelled arm's
+0.236/0.114; in direct-dominant dips the cancelled arm is on par or better. That is a far sharper
+fix target than "the cancellation hurts on fades".
+
+**The ray split was recorded as impossible and is not.** `ray_envelopes` draws `env0` then `env1`
+before any noise sample and reads neither `delay_spread_ms` nor `snr_db`, so one seed gives
+identical rays under any delay; `apply_complex` at delay 0 with a DC probe gives `(e0+e1)/√2` and at
+1 ms with a complex 1500 Hz tone gives `(e0−e1)/√2` (1.5 cycles → `e^{−j3π} = −1`). Magnitudes alone
+are genuinely insufficient — that part of my argument was right — but the complex values are
+available, which I had not considered.
+
+**Three of my own readings were wrong and are retracted on the issue:** "exactly 21 lost frames at
+all three SNRs" was a byte-ALIGNMENT artefact (grouping began 31 bits before the payload boundary
+and swept in preamble bytes; aligned it is 21/19/19/19); "soft improves while hard is pinned" is
+false (both drop by 2 from 16→24 dB, neither moves to noise-free); and the deterministic deep-null
+limit is **not** refuted — split by distance to the next true flip, d=1 rises 0.905 → 0.937 as noise
+is removed while d≥4 falls to 0.000, so the pooled plateau IS the mechanism at finite |H|.
+
+**Two defects in my own apparatus, both caught by the assertions rather than by reading.**
+The first version of the split pin asserted `E[|e|²] ≈ 1` **per seed**; one frame is a single
+Rayleigh realisation and seed 0 reads 1.561/0.747, so it failed immediately — the property is
+population-level and is now asserted as a ratio across seeds. The second is worse and is the
+self-consistent-checker archetype: the pin re-derived the demixed difference **inline** and compared
+that to `carrier_envelope`, so it exercised the algebra but never `ray_split` itself — measured, a
+`dif * 0.5` planted inside the helper **passed**. The pin now runs through the helper and the
+harness calls the same function instead of keeping a private copy; the identical sabotage now fails
+at `depart from carrier_envelope by 1.1306 over 9992 symbols`, with the unmodified control passing.
+
+**Tests → results (actually run).**
+
+- `the_ray_split_agrees_with_the_envelope` — default suite, 9 992 symbols over 8 seeds.
+  Sabotage-verified in both directions as above.
+- `measure_snr_axis_tap_split_and_bytes` — `#[ignore]`d; cross-check 0/96 seeds failing, mean ray
+  powers 0.982/1.001, delayed-dominant fraction 0.508. Numbers identical before and after the
+  refactor onto the shared helper.
+- Full gate: see the `GATE:` line on PR #1427.
+
+**Stated limits, carried into the issue comment rather than left implicit.** The byte count covers
+200 payload bytes, not the 255-byte wire frame, so it is a lower bound for both arms and is not a
+decode rate; no scrambler; RS is not actually run; deep-bin figures are clustered (nominal SE ≈ 0.03
+per bit). The next measurement is **(lock × dominance)** — dominance here is absolute, while this
+thread holds that dominance *relative to the timing lock* is the real variable — and it is not done.
+
+---
+
 ## 2026-09-21 — a signal-free HARQ attempt voted at full strength; #1364
 
 **Change.** `differential_llr_scale` returned `2·mean|dot|/var(cross)`. On an attempt carrying **no
