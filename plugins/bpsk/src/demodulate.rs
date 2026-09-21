@@ -1718,4 +1718,436 @@ mod carrier_dip_tiebreak {
         println!("  the next bit also flips); soft symmetric. FALSIFIED if hard errors are NOT");
         println!("  concentrated on bit 0.\n");
     }
+
+    /// Per-symbol `(e0, e1)` — the two Watterson rays as COMPLEX values, LABELLED, without
+    /// private access.
+    ///
+    /// `ray_envelopes` draws `env0` then `env1` from the seeded RNG BEFORE any noise sample and
+    /// reads neither `delay_spread_ms` nor `snr_db`, so one seed gives identical rays under any
+    /// delay. Two `apply_complex` calls then separate them:
+    ///
+    /// * delay 0, DC probe → `(e0 + e1)/√2`
+    /// * delay 1 ms, complex 1500 Hz tone, demixed → `(e0 − e1)/√2`, because 1500 Hz × 1 ms is 1.5
+    ///   cycles and `e^{−j3π} = −1`
+    ///
+    /// Sum and difference recover both. **Magnitudes alone are not enough** — `|e0+e1|` and
+    /// `|e0−e1|` give the power sum and the cross term, from which the rays come out at best as an
+    /// unlabelled pair. That mistake is why this measurement was recorded as impossible for a day.
+    ///
+    /// `the_ray_split_agrees_with_the_envelope` pins it against `carrier_envelope` in the default
+    /// run, so a silently wrong split cannot feed a table.
+    fn ray_split(
+        seed: u64,
+        len: usize,
+        n: usize,
+        offset: usize,
+    ) -> Vec<(num_complex::Complex<f32>, num_complex::Complex<f32>)> {
+        use num_complex::Complex;
+        let w = 2.0 * std::f32::consts::PI * FC / FS;
+        let ones = vec![1.0f32; len];
+        let zeros = vec![0.0f32; len];
+        let mut c0 = WattersonConfig::moderate_f1(Some(seed));
+        c0.snr_db = 200.0;
+        c0.delay_spread_ms = 0.0;
+        let (si, sq) = WattersonChannel::new(c0)
+            .expect("w")
+            .apply_complex(&ones, &zeros);
+        let pi_: Vec<f32> = (0..len).map(|k| (w * k as f32).cos()).collect();
+        let pq: Vec<f32> = (0..len).map(|k| (w * k as f32).sin()).collect();
+        let mut c1 = WattersonConfig::moderate_f1(Some(seed));
+        c1.snr_db = 200.0;
+        let (di, dq) = WattersonChannel::new(c1)
+            .expect("w")
+            .apply_complex(&pi_, &pq);
+        let mut out = Vec::new();
+        let mut start = offset;
+        while start + n <= len {
+            let (mut sum, mut dif) = (Complex::new(0.0f32, 0.0), Complex::new(0.0f32, 0.0));
+            for t in start..start + n {
+                sum += Complex::new(si[t], sq[t]);
+                dif += Complex::new(di[t], dq[t])
+                    * Complex::new((w * t as f32).cos(), -(w * t as f32).sin());
+            }
+            sum /= n as f32;
+            dif /= n as f32;
+            let e0 = (sum + dif) / std::f32::consts::SQRT_2;
+            let e1 = (sum - dif) / std::f32::consts::SQRT_2;
+            out.push((e0, e1));
+            start += n;
+        }
+        out
+    }
+
+    /// The split is only usable if it agrees with the instrument the tables already bin by, so this
+    /// runs in the DEFAULT suite rather than inside the `#[ignore]`d harness. `|e0 − e1|` is what a
+    /// carrier at `fc` sees through the 1 ms channel, which is exactly `carrier_envelope`.
+    #[test]
+    fn the_ray_split_agrees_with_the_envelope() {
+        let len = 40_000usize;
+        let n = samples_per_symbol(FS, BAUD).expect("sps");
+        // Through `ray_split` itself. A first version re-derived the demixed difference INLINE and
+        // compared that to `carrier_envelope` — which exercises the algebra but never the function
+        // the tables call, so a scaled demix inside the helper passed it. Sabotage-verified after
+        // the fix: `dif * 0.5` in the helper fails this.
+        let (mut worst, mut checked) = (0.0f32, 0usize);
+        for seed in 0..8u64 {
+            let env = carrier_envelope(seed, len, n, 0);
+            for (k, (e0, e1)) in ray_split(seed, len, n, 0).iter().enumerate().skip(1) {
+                if k >= env.len() {
+                    break;
+                }
+                // The 1 ms channel a carrier sees is e0 − e1 (1500 Hz x 1 ms = 1.5 cycles).
+                worst = worst.max((((*e0 - *e1) / std::f32::consts::SQRT_2).norm() - env[k]).abs());
+                checked += 1;
+            }
+        }
+        assert!(
+            checked > 5_000,
+            "only {checked} symbols compared — the sweep is too small to mean anything"
+        );
+        assert!(
+            worst < 0.02,
+            "the rays recovered by `ray_split` depart from `carrier_envelope` by {worst:.4} over \
+             {checked} symbols — the split is not measuring the channel the tables bin by"
+        );
+
+        // The rays are unit-mean-square **in the population**, not per seed: one frame is a single
+        // Rayleigh realisation and reads anywhere from ~0.7 to ~1.6, so asserting it per seed fails
+        // on seed 0 (1.561/0.747) — which this assertion caught before the claim shipped. What must
+        // hold is that NEITHER ray is systematically larger, or "delayed-dominant" is not a
+        // comparison between like quantities and every tap-split row is meaningless.
+        let (mut m0, mut m1) = (0.0f32, 0.0f32);
+        for seed in 0..8u64 {
+            let split = ray_split(seed, len, n, 0);
+            let tail = &split[1..];
+            m0 += tail.iter().map(|(a, _)| a.norm_sqr()).sum::<f32>() / tail.len() as f32;
+            m1 += tail.iter().map(|(_, b)| b.norm_sqr()).sum::<f32>() / tail.len() as f32;
+        }
+        m0 /= 8.0;
+        m1 /= 8.0;
+        assert!(
+            (m0 / m1 - 1.0).abs() < 0.30,
+            "mean ray powers {m0:.3}/{m1:.3} differ by more than 30% across 8 seeds, so one ray is \
+             systematically larger and `|e1| > |e0|` does not mean what the tap-split rows claim"
+        );
+    }
+
+    /// The three measurements this thread named as outstanding, in one pass (#1363).
+    ///
+    /// 1. **An SNR axis** (16/24/32 dB and noise-free, same seeds) — the thread required it "before
+    ///    any claim about a graded onset", because at 16 dB symbol-domain noise (σ ≈ 0.039) is only
+    ///    1.4× the tie-break fill (β·g_next ≈ 0.053), so noise breaks the tie about as often as the
+    ///    recursion does.
+    /// 2. **Bytes, not bits** — RS(255,223) corrects t=16 BYTES, and the hard arm makes FEWER wrong
+    ///    bits while losing MORE frames. Counted on the payload-ALIGNED slice: grouping from
+    ///    differential bit 0 starts 31 bits before the payload's byte boundary and sweeps in
+    ///    preamble bytes, which moved the threshold count by two frames and produced a spurious
+    ///    "pinned at exactly 21".
+    /// 3. **Which tap dominates** — see `ray_split_powers`. This was called impossible once; it is
+    ///    not, and it turned out to be the measurement that located the harm.
+    ///
+    /// Prints tables, asserts no threshold. The assertions that make it trustworthy run in the
+    /// DEFAULT suite: the two fidelity tests above, plus `the_ray_split_agrees_with_the_envelope`.
+    ///
+    ///   cargo test -p bpsk-plugin --no-default-features --lib \
+    ///       carrier_dip_tiebreak::measure_snr_axis -- --ignored --nocapture
+    #[test]
+    #[ignore = "research harness: prints a table, asserts no threshold (#1363)"]
+    fn measure_snr_axis_tap_split_and_bytes() {
+        const SEEDS: u64 = 96;
+        const RS_T: usize = 16;
+        let payload: Vec<u8> = (0..200u32)
+            .map(|i| (i.wrapping_mul(2654435761) >> 13) as u8)
+            .collect();
+        let c = cfg();
+        let tx = bpsk_modulate(&payload, &c).expect("modulate");
+        let n = samples_per_symbol(FS, BAUD).expect("sps");
+        let expected = expected_preamble_symbols(PREAMBLE_SYMS);
+        let off0 = find_timing_offset_with_expected(&tx, n, FC, FS, &expected);
+        assert_eq!(off0, 0);
+        let truth = arm_bits(&tx, n, off0, false);
+        let truth_hard = arm_bits(&tx, n, off0, true);
+        assert_eq!(
+            (0..truth.len().min(truth_hard.len()))
+                .filter(|&i| truth[i] != truth_hard[i])
+                .count(),
+            0
+        );
+        let data_lo = PREAMBLE_SYMS - 1;
+        let data_hi = truth.len() - TAIL_SYMS;
+        let recovered = bits_to_bytes(&truth[data_lo..data_hi]);
+        assert_eq!(
+            &recovered[..],
+            &payload[..],
+            "aligned slice must reproduce the payload"
+        );
+        // distance from bit i (truth 0) to the next true flip
+        let mut dist = vec![usize::MAX; truth.len()];
+        let mut next = usize::MAX;
+        for i in (0..truth.len()).rev() {
+            if truth[i] {
+                next = i;
+            }
+            dist[i] = if next == usize::MAX { 99 } else { next - i };
+        }
+
+        // ---- per-seed: envelope (SNR independent), env0/env1 split, noise-free lock
+        struct SeedInfo {
+            env: Vec<f32>,
+            delayed_dom: Vec<bool>,
+            lock200: usize,
+            split_ok: bool,
+            p0: f32,
+            p1: f32,
+        }
+        let mut infos: Vec<SeedInfo> = Vec::new();
+        for seed in 0..SEEDS {
+            let mut ch = WattersonConfig::moderate_f1(Some(seed));
+            ch.snr_db = 200.0;
+            let faded = WattersonChannel::new(ch).expect("w").apply(&tx);
+            let lock200 = find_timing_offset_with_expected(&faded, n, FC, FS, &expected);
+            // The harness's own instrument, at the noise-free lock.
+            let env = carrier_envelope(seed, tx.len(), n, lock200);
+            // One implementation, the one `the_ray_split_agrees_with_the_envelope` pins.
+            let rays = ray_split(seed, tx.len(), n, lock200);
+            let mut delayed_dom = Vec::new();
+            let mut worst = 0.0f32;
+            let (mut p0, mut p1, mut cnt) = (0.0f32, 0.0f32, 0usize);
+            for (k, (e0, e1)) in rays.iter().enumerate() {
+                if k > 0 && k < env.len() {
+                    let d = (*e0 - *e1) / std::f32::consts::SQRT_2;
+                    worst = worst.max((d.norm() - env[k]).abs());
+                    p0 += e0.norm_sqr();
+                    p1 += e1.norm_sqr();
+                    cnt += 1;
+                }
+                delayed_dom.push(e1.norm() > e0.norm());
+            }
+            let split_ok = worst < 0.02;
+            infos.push(SeedInfo {
+                env,
+                delayed_dom,
+                lock200,
+                split_ok,
+                p0: p0 / cnt as f32,
+                p1: p1 / cnt as f32,
+            });
+        }
+        let bad_split = infos.iter().filter(|i| !i.split_ok).count();
+        let mp0 = infos.iter().map(|i| i.p0).sum::<f32>() / SEEDS as f32;
+        let mp1 = infos.iter().map(|i| i.p1).sum::<f32>() / SEEDS as f32;
+        println!("\nPROBE-1363-TAPS  env0/env1 split: seeds failing cross-check vs carrier_envelope (>0.02): {bad_split}/{SEEDS}; mean|e0|^2={mp0:.3} mean|e1|^2={mp1:.3}");
+        let dd: usize = infos
+            .iter()
+            .map(|i| i.delayed_dom.iter().filter(|&&b| b).count())
+            .sum();
+        let tt: usize = infos.iter().map(|i| i.delayed_dom.len()).sum();
+        println!(
+            "  delayed-ray dominant fraction of symbols: {:.3}",
+            dd as f64 / tt as f64
+        );
+        println!("  lock200 set: {:?}", {
+            let mut l: Vec<usize> = infos.iter().map(|i| i.lock200).collect();
+            l.sort();
+            l.dedup();
+            l
+        });
+
+        let fine = [0.0f32, 0.01, 0.02, 0.05];
+        for &snr in &[16.0f32, 24.0, 32.0, 200.0] {
+            for lockmode in 0..2 {
+                // [arm][bit][finebin]
+                let mut fe = [[[0u64; 3]; 2]; 2];
+                let mut ft = [[[0u64; 3]; 2]; 2];
+                // distance table deep(<0.05) b0: [arm][dbin 0..4]
+                let mut de = [[0u64; 4]; 2];
+                let mut dt = [[0u64; 4]; 2];
+                // dominant tap deep(<0.05): [arm][bit][dom]
+                let mut oe = [[[0u64; 2]; 2]; 2];
+                let mut ot = [[[0u64; 2]; 2]; 2];
+                // also mid bin [0.05,0.20) by dom
+                let mut me = [[[0u64; 2]; 2]; 2];
+                let mut mt = [[[0u64; 2]; 2]; 2];
+                let mut bad_al = [0u64; 2];
+                let mut bad_raw = [0u64; 2];
+                let mut lost_al = [Vec::<u64>::new(), Vec::new()];
+                let mut lost_raw = [0u64; 2];
+                let mut hist = [[0u64; 6]; 2];
+                let mut bits_wrong = [0u64; 2];
+                let mut lock_diff = 0usize;
+                let mut locks_noisy = Vec::new();
+                for seed in 0..SEEDS {
+                    let info = &infos[seed as usize];
+                    let mut ch = WattersonConfig::moderate_f1(Some(seed));
+                    ch.snr_db = snr;
+                    let faded = WattersonChannel::new(ch).expect("w").apply(&tx);
+                    let lock_n = find_timing_offset_with_expected(&faded, n, FC, FS, &expected);
+                    if lock_n != info.lock200 {
+                        lock_diff += 1;
+                    }
+                    locks_noisy.push(lock_n);
+                    let off = if lockmode == 0 { lock_n } else { info.lock200 };
+                    // envelope at the lock actually used
+                    let env = if off == info.lock200 {
+                        info.env.clone()
+                    } else {
+                        carrier_envelope(seed, tx.len(), n, off)
+                    };
+                    for (arm_i, cancel) in [(0usize, false), (1usize, true)] {
+                        let bits = arm_bits(&faded, n, off, cancel);
+                        let m = bits.len().min(truth.len());
+                        for i in 0..m {
+                            let si = (i + 1).min(env.len() - 1);
+                            let d = env[si];
+                            let wrong = bits[i] != truth[i];
+                            if wrong {
+                                bits_wrong[arm_i] += 1;
+                            }
+                            let bit = usize::from(truth[i]);
+                            let dom =
+                                usize::from(info.delayed_dom[si.min(info.delayed_dom.len() - 1)]);
+                            if d < 0.05 {
+                                let fb = if d < 0.01 {
+                                    0
+                                } else if d < 0.02 {
+                                    1
+                                } else {
+                                    2
+                                };
+                                ft[arm_i][bit][fb] += 1;
+                                if wrong {
+                                    fe[arm_i][bit][fb] += 1;
+                                }
+                                ot[arm_i][bit][dom] += 1;
+                                if wrong {
+                                    oe[arm_i][bit][dom] += 1;
+                                }
+                                if bit == 0 {
+                                    let db = (dist[i].min(4)) - 1;
+                                    dt[arm_i][db] += 1;
+                                    if wrong {
+                                        de[arm_i][db] += 1;
+                                    }
+                                }
+                            } else if d < 0.20 {
+                                mt[arm_i][bit][dom] += 1;
+                                if wrong {
+                                    me[arm_i][bit][dom] += 1;
+                                }
+                            }
+                        }
+                        // bytes, aligned to the payload
+                        let hi = data_hi.min(m);
+                        let got = bits_to_bytes(&bits[data_lo..hi]);
+                        let want = bits_to_bytes(&truth[data_lo..hi]);
+                        let nb = got.len().min(want.len());
+                        let bad = (0..nb).filter(|&j| got[j] != want[j]).count();
+                        bad_al[arm_i] += bad as u64;
+                        if bad > RS_T {
+                            lost_al[arm_i].push(seed);
+                        }
+                        let hb = match bad {
+                            0..=8 => 0,
+                            9..=12 => 1,
+                            13..=16 => 2,
+                            17..=20 => 3,
+                            21..=30 => 4,
+                            _ => 5,
+                        };
+                        hist[arm_i][hb] += 1;
+                        // bytes, the harness's grouping (from differential bit 0)
+                        let got = bits_to_bytes(&bits[..m]);
+                        let want = bits_to_bytes(&truth[..m]);
+                        let nb = got.len().min(want.len());
+                        let bad = (0..nb).filter(|&j| got[j] != want[j]).count();
+                        bad_raw[arm_i] += bad as u64;
+                        if bad > RS_T {
+                            lost_raw[arm_i] += 1;
+                        }
+                    }
+                }
+                let lm = if lockmode == 0 {
+                    "noisy-lock"
+                } else {
+                    "fixed-lock(200)"
+                };
+                println!("\n== snr {snr} [{lm}]  seeds whose noisy lock != lock200: {lock_diff}; noisy locks {:?}", { let mut l = locks_noisy.clone(); l.sort(); l.dedup(); l });
+                let r = |e: u64, t: u64| {
+                    if t == 0 {
+                        f64::NAN
+                    } else {
+                        e as f64 / t as f64
+                    }
+                };
+                println!("  fine deep bins   err|b0 (n)          err|b1 (n)");
+                for fb in 0..3 {
+                    for arm_i in 0..2 {
+                        println!(
+                            "   [{:.2},{:.2}) {}  {:.3} ({:4})   {:.3} ({:4})",
+                            fine[fb],
+                            fine[fb + 1],
+                            if arm_i == 0 { "soft" } else { "HARD" },
+                            r(fe[arm_i][0][fb], ft[arm_i][0][fb]),
+                            ft[arm_i][0][fb],
+                            r(fe[arm_i][1][fb], ft[arm_i][1][fb]),
+                            ft[arm_i][1][fb]
+                        );
+                    }
+                }
+                println!("  deep(<0.05) b0 err by distance to next true flip d=1,2,3,4+:");
+                for arm_i in 0..2 {
+                    println!(
+                        "   {}  {}",
+                        if arm_i == 0 { "soft" } else { "HARD" },
+                        (0..4)
+                            .map(|k| format!(
+                                "d{}={:.3}({})",
+                                k + 1,
+                                r(de[arm_i][k], dt[arm_i][k]),
+                                dt[arm_i][k]
+                            ))
+                            .collect::<Vec<_>>()
+                            .join("  ")
+                    );
+                }
+                println!("  deep(<0.05) by dominant tap  [direct-dom b0/b1 | delayed-dom b0/b1]");
+                for arm_i in 0..2 {
+                    println!(
+                        "   {}  {:.3}/{:.3} (n {},{}) | {:.3}/{:.3} (n {},{})",
+                        if arm_i == 0 { "soft" } else { "HARD" },
+                        r(oe[arm_i][0][0], ot[arm_i][0][0]),
+                        r(oe[arm_i][1][0], ot[arm_i][1][0]),
+                        ot[arm_i][0][0],
+                        ot[arm_i][1][0],
+                        r(oe[arm_i][0][1], ot[arm_i][0][1]),
+                        r(oe[arm_i][1][1], ot[arm_i][1][1]),
+                        ot[arm_i][0][1],
+                        ot[arm_i][1][1]
+                    );
+                }
+                println!(
+                    "  mid [0.05,0.20) by dominant tap  [direct-dom b0/b1 | delayed-dom b0/b1]"
+                );
+                for arm_i in 0..2 {
+                    println!(
+                        "   {}  {:.3}/{:.3} (n {},{}) | {:.3}/{:.3} (n {},{})",
+                        if arm_i == 0 { "soft" } else { "HARD" },
+                        r(me[arm_i][0][0], mt[arm_i][0][0]),
+                        r(me[arm_i][1][0], mt[arm_i][1][0]),
+                        mt[arm_i][0][0],
+                        mt[arm_i][1][0],
+                        r(me[arm_i][0][1], mt[arm_i][0][1]),
+                        r(me[arm_i][1][1], mt[arm_i][1][1]),
+                        mt[arm_i][0][1],
+                        mt[arm_i][1][1]
+                    );
+                }
+                for arm_i in 0..2 {
+                    println!("  {}: wrong bits {}  bad bytes aligned {} (raw-grouping {})  lost>16 aligned {} (raw {})  hist[0-8,9-12,13-16,17-20,21-30,31+]={:?}",
+                        if arm_i==0 {"soft"} else {"HARD"}, bits_wrong[arm_i], bad_al[arm_i], bad_raw[arm_i], lost_al[arm_i].len(), lost_raw[arm_i], hist[arm_i]);
+                    println!("     lost seeds (aligned): {:?}", lost_al[arm_i]);
+                }
+            }
+        }
+    }
 }
