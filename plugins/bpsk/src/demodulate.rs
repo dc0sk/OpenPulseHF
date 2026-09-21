@@ -378,7 +378,7 @@ pub fn bpsk_demodulate_soft(
         let offset = find_timing_offset(samples, n, fc, fs);
         // NOTE: crossfade-ISI cancellation is deliberately NOT applied on the soft path. BPSK is
         // *differential*, so the backward-substitution recursion inflates the noise LLRs of a deeply
-        // faded attempt instead of suppressing them — that breaks the 1/σ² LLR calibration HARQ MAP
+        // faded attempt instead of suppressing them — that breaks the LLR calibration HARQ MAP
         // combining relies on (regressed `llr_calibration::a_deeply_faded_extra_attempt_does_not_hurt`).
         // The cancellation stays on the hard differential path (`bpsk_demodulate`), where it restores the
         // decision margin without disturbing any soft-combining scale.
@@ -420,7 +420,9 @@ pub fn bpsk_demodulate_soft(
         })
         .collect();
 
-    // Calibrate the soft values into *true* log-likelihood ratios (magnitude ∝ 1/σ²). Nothing that
+    // Calibrate the soft values into *true* log-likelihood ratios. The target is the DBPSK LLR
+    // slope `2A²/var(dot)`, NOT `1/σ²` — that is only its high-SNR limit, and holding it all the
+    // way down is what let a signal-free attempt vote at full strength (#1364). Nothing that
     // decodes a single frame notices — soft Viterbi, min-sum LDPC and max-log turbo are all
     // scale-invariant — but HARQ soft combining across receive attempts does: uncalibrated, an attempt
     // from a deep fade votes as loudly as a clean one. See `openpulse_core::fec::combine_llrs_map`.

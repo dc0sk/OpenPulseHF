@@ -15,6 +15,69 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-09-21 — a signal-free HARQ attempt voted at full strength; #1364
+
+**Change.** `differential_llr_scale` returned `2·mean|dot|/var(cross)`. On an attempt carrying **no
+signal** that emits LLRs of std **1.41 at every σ from 0.1 to 2.0** — measured through the shipped
+function. Because `combine_llrs_map` SUMS attempts and the OTA arm retains failed bursts, a worthless
+attempt did not merely fail to help: it outvoted the attempts carrying the frame. `hpx_hf` SL2–SL5
+run this path.
+
+**The diagnosis I brought to review was wrong twice, and the review corrected both**
+(`docs/dev/reviews/review-1364-differential-llr-scale.md`). First, at A = 0 the old estimator returns
+**exactly the `1/σ²` its contract promises** — √2 is that contract honoured. The defect is the
+**contract**: `1/σ²` is the high-SNR *limit* of the true DBPSK LLR slope, which vanishes with the
+signal; against the exact pairwise LLR the old formula is 8× over-confident at −12 dB. Second, my
+"target 0.04" was a category error — `σ₁²/σ₂²` is a *scale* ratio while the gate's 0.21 is a
+*magnitude* ratio, and under exact `1/σ²` the magnitude ratio really is ≈0.20.
+
+**Implementation.** `Â² = √(max(0, ⟨dot²⟩ − ⟨cross²⟩))`, scale `2Â²/⟨cross²⟩` — the
+Gaussian-approximation LLR with an unbiased fourth-moment amplitude, tending to `1/σ²` at high SNR
+and to 0 as the signal vanishes. f64 accumulators (the subtraction is catastrophic cancellation by
+construction), and a `SCALE_FLOOR` so a zero estimate cannot emit `−0.0`, which an `l < 0.0` consumer
+reads as bit 0.
+
+**Premise pinned, not assumed.** The identity holds only for noise uncorrelated at lag 1.
+`cancel_crossfade_isi` induces ρ = −1/3, under which A = 0 yields `2ρ²v²` and the defect returns —
+so `differential_llr_scale_assumes_iid_noise` makes #1361's open question a failing test rather than
+a silent regression.
+
+**Why nothing caught it.** The old unit test claimed this exact property and passed, because it
+**synthesised `dots`/`crosses` from the high-SNR asymptotic model**, omitting the `n·conj(n)` term
+that causes the floor, and swept only 10/20 dB — and its `expected = 1/σ²` was the wrong target
+anyway. Rebuilt from actual complex symbols, swept to A = 0, with the old formula retained as a
+control asserting it votes ≈ √2.
+
+**A limit that is fundamental, not a shortfall.** At A = 0 the score for `A²` equals the score for
+`v`, so the Fisher information is singular and any blind estimate is sampling-noise limited at
+`N^(−1/4)`. The tracking sweep is therefore asserted only where `Â²` is resolvable **to the stated
+tolerance** — derived as ≳ −6 dB at N = 20 000, after −12 dB read 2.01× and −9 dB read 1.36×.
+
+**Tests → results (actually run).**
+
+- Sabotage, both directions: the rebuilt tests fail on the old estimator
+  (`v=0.02: signal-free vote 1.439 exceeds derived bound 0.464`) and pass on the new one.
+- Seed-triple sweep, 16 triples, both arms measured here rather than cited:
+  **old 7/16 failing, mean delta 0.656 dB → new 1/16, mean delta 0.156 dB.** (#1364 recorded 3/16 on
+  its own smaller triple set; this is a different set, not a reproduction of that number.)
+- `a_deeply_faded_extra_attempt_does_not_hurt` still passes — #832's gate is improved, not changed.
+- **No fade regression**, which was the review's live risk (Jensen: `√E[A⁴] ≥ E[A²]`, ×1.41 on
+  Rayleigh). `moderate_f1`, 32 seeds, 1 clean + 1 faded: 19/23/27 new against 20/22/27 old at
+  6/8/10 dB; the 2-clean rows are identical. **No fade benefit either** — the gain is AWGN-specific.
+- Full gate: see the `GATE:` line on PR #1426.
+
+**The wrong contract was written in five places** and all were swept: `constellation.rs`'s doc, the
+two `bpsk_demodulate_soft` comments, `llr_calibration.rs`'s header, `fec.rs`'s `combine_llrs_map`
+doc, and CLAUDE.md's "LLRs already carry 1/σ²" edge — which now records that this is the right target
+only where the symbol amplitude is KNOWN.
+
+**Filed, not folded in: #1425.** The property is a class — every blind scale-invariant calibrator
+votes at a σ-independent magnitude on noise, and 8PSK500 does so at **0.44** of a good attempt
+against BPSK250's 0.009. The fix here is specific to a differential detector's dot/cross pair and
+does not generalise to the coherent plugins.
+
+---
+
 ## 2026-09-20 — #1234 CLOSED by deciding not to wire the keystore; nine baseline pairs are permanent
 
 **Decision (maintainer, 2026-09-20).** #1234's two halves are both resolved, and the wiring half is

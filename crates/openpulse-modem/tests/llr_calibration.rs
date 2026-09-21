@@ -1,4 +1,6 @@
-//! Every soft demodulator must emit *calibrated* LLRs: magnitude ∝ 1/σ².
+//! Every soft demodulator must emit *calibrated* LLRs: magnitude ∝ 1/σ² **where the symbol
+//! amplitude is known**. For a blind differential detector that limit is not the target — the true
+//! slope is `2A²/var(dot)` and vanishes with the signal, which is the #1364 correction.
 //!
 //! `openpulse_dsp::constellation::symbol_llrs` divides distances by `noise_var`, so a true
 //! log-likelihood ratio grows as the noise falls. Nothing that decodes a single frame notices — soft
