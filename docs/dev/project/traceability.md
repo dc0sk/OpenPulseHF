@@ -15,6 +15,62 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-09-22 — the GPU BPSK demodulator never cancelled the crossfade ISI (#1433)
+
+**Requirement/change.** `BpskPlugin::demodulate` dispatches to the GPU when a context exists
+(`plugins/bpsk/src/lib.rs:112`), and `bpsk_demodulate_with_gpu`'s non-RRC branch went GPU timing
+search → `bpsk_iq_demod_gpu` → slice → `differential_decode` with **no `cancel_crossfade_isi`**. The
+CPU arm cancels at `demodulate.rs:114`. The GPU path landed 2026-05-04 (`664122b9`); #821 added the
+cancellation 2026-07-13 to `symbol_stream_with_expected` only.
+
+**Blast radius: the shipped daemon.** `crates/openpulse-daemon/Cargo.toml:28` is `default = ["gpu"]`
+and `server.rs:142` registers `BpskPlugin::with_gpu(ctx)` whenever an adapter is present. So on a
+GPU daemon the coded BPSK receive took the uncancelled arm — and `demodulate_soft` has no GPU path
+and already skips cancellation by design (#832), so **both** arms were uncancelled there.
+
+**Design decision.** Cancel on the whole symbol stream immediately after `bpsk_iq_demod_gpu`, before
+the preamble/tail slice — mirroring the CPU ordering, because the cancellation is a backward
+substitution and running it on a slice changes the boundary symbol. The RRC branch is untouched: it
+returns before this point and RRC does not crossfade.
+
+**Measured, 200 B BPSK250, 16 seeds, total-power SNR:**
+
+| SNR | CPU BER | GPU BER before | ratio | CPU ok | GPU ok before | GPU ok after |
+|---|---|---|---|---|---|---|
+| 0 dB | 0.00023 | 0.00328 | 14.0× | 11/16 | **0/16** | 11/16 |
+| 2 dB | 0.00000 | 0.00047 | — | 16/16 | **9/16** | 16/16 |
+| 4 dB | 0.00000 | 0.00000 | — | 16/16 | 16/16 | 16/16 |
+
+After the fix the two arms agree bit-for-bit (BER 0.00023 both at 0 dB).
+
+**Why nothing caught it, and the fixture that replaces it.** `gpu_and_cpu_agree_under_noise` swept
+4–20 dB on a 27-byte payload. BPSK250 at 8 kHz is 32 samples/symbol (~15 dB processing gain), so its
+lowest cell sits near 19 dB Eb/N0 — and **4 dB is measured above as the first SNR at which the
+difference vanishes** (16/16 both ways). The fixture's easiest cell was exactly the boundary. The new
+`gpu_and_cpu_agree_where_the_cancellation_decides_the_frame` runs 0 and 2 dB, asserts the mechanism
+(BER ratio ≤ 2×) *and* the outcome (decode counts), and guards against going vacuous by requiring the
+cell to be one where the CPU both decodes and errs.
+
+**A correction to #1080's record.** `gpu_and_cpu_agree_under_a_carrier_offset` printed "GPU decoded 6
+of 30 frames the CPU did not… the two searches still disagree off-frequency. See #1080." After this
+fix it prints 0. That divergence was this defect, not the timing search.
+
+**Twins swept, with reasons rather than absence.** `psk8_demodulate_gpu` returns `None` for non-RRC
+modes (`demodulate.rs:377`) and RRC does not crossfade; `qpsk`'s `demodulate` never dispatches to the
+GPU; `64qam` has no crossfade canceller. BPSK was the only affected plugin.
+
+**Evidence tier — stated because it is lower than usual.** These tests are `#![cfg(feature = "gpu")]`
+and the workspace gate runs `--no-default-features`, so **the gate cannot run them**; `gate.sh`'s
+`--all-features` pass is compile + lint only, and CI's `gpu` job was removed in #1380. The numbers
+above were run by hand on a host with a working adapter (`the_adapter_is_available_or_this_file_
+proves_nothing` passes here). That absence of an automatic gate is why this survived four months.
+
+**Tests → results.** `cargo test -p bpsk-plugin --features gpu --test gpu_cpu_equivalence` —
+5 passed, 0 failed. The new test **fails before the fix** (0/16 against 11/16, with the other four
+passing), which is the discriminating pair. Workspace gate: see the PR.
+
+---
+
 ## 2026-09-22 — the uncoded BPSK path misses #821's own bar by 1.7×; #1429
 
 **Change.** A characterisation test and a corrected comment; **no behaviour change**, deliberately.
