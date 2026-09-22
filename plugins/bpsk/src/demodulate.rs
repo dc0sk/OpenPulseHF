@@ -553,11 +553,23 @@ pub fn bpsk_demodulate_with_gpu(
     };
 
     let effective = &samples[offset.min(samples.len())..];
-    let (i_syms, q_syms) = match openpulse_gpu::bpsk_iq_demod_gpu(ctx, effective, n, fc, fs, offset)
-    {
-        Some(iq) => iq,
-        None => return bpsk_demodulate(samples, config),
-    };
+    let (mut i_syms, mut q_syms) =
+        match openpulse_gpu::bpsk_iq_demod_gpu(ctx, effective, n, fc, fs, offset) {
+            Some(iq) => iq,
+            None => return bpsk_demodulate(samples, config),
+        };
+
+    // #1433: the CPU arm cancels the crossfade ISI inside `symbol_stream_with_expected`
+    // (`demodulate.rs`, the `cancel_crossfade_isi` call after `demodulate_iq`); this path landed
+    // 2026-05-04 and #821 added the cancellation 2026-07-13 to that function only, so the GPU arm
+    // decoded the uncancelled `r_k = a_k + β·a_{k+1}` for four months. Measured on a 200 B frame at
+    // 0 dB total-power SNR: uncancelled 0/16 frames against the CPU arm's 11/16.
+    //
+    // Applied to the WHOLE symbol stream before the preamble/tail slice below, because the
+    // cancellation is a backward substitution — running it on a slice changes the boundary symbol.
+    // That is the CPU ordering, and `gpu_and_cpu_agree_where_the_cancellation_decides_the_frame`
+    // is what holds the two together.
+    cancel_crossfade_isi(&mut i_syms, &mut q_syms);
 
     if i_syms.len() <= PREAMBLE_SYMS + TAIL_SYMS {
         return Err(ModemError::Demodulation(
