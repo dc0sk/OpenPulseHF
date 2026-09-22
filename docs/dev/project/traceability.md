@@ -15,6 +15,45 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-09-22 — the uncoded BPSK path misses #821's own bar by 1.7×; #1429
+
+**Change.** A characterisation test and a corrected comment; **no behaviour change**, deliberately.
+
+**The finding.** `receive_from_samples` prefers `demodulate_soft` whenever the plugin advertises one,
+and `BpskPlugin::supports_soft_demod` returns `true` unconditionally — so every **uncoded** decode
+(`FecMode::None`, `receive()`, `decode_burst_phase1`) hard-decides the SOFT arm's LLRs, and BPSK's
+soft arm deliberately skips `cancel_crossfade_isi` (#832). Every **coded** decode takes the cancelled
+arm. Measured on #821's own fixture — same payload, same σ = 0.9, same LCG noise, 8 seeds: the
+cancelled arm means **0.0127** against its `< 0.02` bar; the uncancelled arm means **0.0336** and
+exceeds the bar on **every seed**. So `crossfade_cancellation_lowers_awgn_ber`, an *uncoded* BER
+test, guards an arm no uncoded production decode runs — and the arm that ships would fail it.
+
+**What was NOT done, on purpose: no arm was switched.** #1363 measures the cancellation as a win on
+AWGN and pure Doppler and a loss of 8 frames in 96 on a delayed-dominant fade, and the uncoded
+traffic here — §97.119 station ID, handshake, QSY, relay (#1123) — lives on fading channels. So the
+current split gives uncoded traffic the fade-favourable arm and coded traffic the AWGN-favourable
+one, which may be right for the traffic each carries. What was indefensible is that it arose from an
+unconditional capability flag, was justified by a comment that is false for the one plugin whose arms
+differ, and that nothing tested the shipping path.
+
+**Implementation.** `plugins/bpsk/src/lib.rs` gains
+`the_uncoded_production_path_takes_the_uncancelled_arm`, on #821's fixture by construction (a
+different fixture would not be comparable to the bar being cited). Its three assertions each name
+what their own failure would mean — including that if the production arm ever *meets* the bar, the
+reader should delete the test because #1429 is resolved, rather than loosen it.
+`crates/openpulse-modem/src/engine.rs`'s justification comment is corrected: the claim that a hard
+retry "can't succeed where the soft pass failed — both share the same acquisition front end" is false
+for BPSK, whose arms differ by exactly the transform in question.
+
+**Tests → results.** `the_uncoded_production_path_takes_the_uncancelled_arm` passes; full gate on
+PR #1431.
+
+**Open, and the maintainer's.** Which arm uncoded traffic should use. Three candidate closures are on
+the issue; the cheapest is to keep the split and record the reason, and the question may dissolve
+entirely if #1428's gated canceller lands and both arms can take it (#1361's scope).
+
+---
+
 ## 2026-09-22 — the #1363 gate arms, and an estimator that was slandering its own candidates
 
 **Change.** Test-only; no production code. `mod carrier_dip_tiebreak` gains the (lock × dominance)
