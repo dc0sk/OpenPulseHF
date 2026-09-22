@@ -1832,6 +1832,241 @@ mod carrier_dip_tiebreak {
         );
     }
 
+    /// Transmitted symbols `a_k` reconstructed from the decoded truth stream, up to a global sign.
+    ///
+    /// The wire is differential: bit `i` is the flip between symbol `i` and `i+1`. The global sign
+    /// is unobservable and irrelevant — every quantity below is a ratio or a differential product.
+    fn symbols_from_truth(truth: &[bool]) -> Vec<f32> {
+        let mut a = Vec::with_capacity(truth.len() + 1);
+        a.push(1.0f32);
+        for &flip in truth {
+            let last = *a.last().expect("seeded");
+            a.push(if flip { -last } else { last });
+        }
+        a
+    }
+
+    /// Per-symbol composite taps by sliding-window CORRELATION — **the defective instrument,
+    /// retained as a control**, not the one to use. Prefer [`estimate_taps_ls`].
+    ///
+    /// Its "cross terms average out" premise fails on a real payload: 1/√41 ≈ 0.16 of relative
+    /// self-noise. Measured on a CLEAN frame with no channel, no noise and genie symbols, it puts
+    /// `Re(g_next/g_cur)` at p05 0.043 / p50 0.285 / p95 0.532 (truth: 0.308) and fires the sign
+    /// predicate **4.3 %** of the time against least-squares' 0.0 %. It is kept because the
+    /// comparison is itself the finding — it is what made a "genie" arm look like a floor rather
+    /// than a ceiling in the first #1363 gate table.
+    ///
+    /// `r_k = Σ_m g[m]·a_{k+m} + noise`, and `a_k ∈ {±1}` with `a² = 1`, so for a near-random symbol
+    /// stream `⟨r_k · a_{k+m}⟩` over a window estimates `g[m]` directly — the cross terms average
+    /// out. This is deliberately the same shape a receiver's decision-directed estimator would take,
+    /// which is the open question for any β-based fix: here it is fed GENIE symbols, so what it
+    /// measures is the ceiling, not an achievable estimate.
+    ///
+    /// Window 41 symbols: a 1 Hz fade at 250 baud has a coherence time of hundreds of symbols, so
+    /// the taps are ~constant across it, while 41 is long enough for the cross terms to average.
+    fn estimate_taps_correlation(
+        iq: &[(f32, f32)],
+        a: &[f32],
+        window: usize,
+    ) -> Vec<[num_complex::Complex<f32>; 4]> {
+        use num_complex::Complex;
+        let half = window / 2;
+        let n = iq.len().min(a.len());
+        let mut out = vec![[Complex::new(0.0f32, 0.0); 4]; n];
+        // Indexed on purpose: each step reads `iq[j]` against `a` at four different offsets, so an
+        // iterator over one of them would still index the others.
+        #[allow(clippy::needless_range_loop)]
+        for k in 0..n {
+            let lo = k.saturating_sub(half);
+            let hi = (k + half + 1).min(n);
+            let mut acc = [Complex::new(0.0f32, 0.0); 4];
+            let mut cnt = 0.0f32;
+            for j in lo..hi {
+                // m = -1, 0, +1, +2  ->  a index j + m
+                let idx = [j as isize - 1, j as isize, j as isize + 1, j as isize + 2];
+                if idx[0] < 0 || idx[3] >= n as isize {
+                    continue;
+                }
+                let r = Complex::new(iq[j].0, iq[j].1);
+                for (t, &ix) in idx.iter().enumerate() {
+                    acc[t] += r * a[ix as usize];
+                }
+                cnt += 1.0;
+            }
+            if cnt > 0.0 {
+                for t in 0..4 {
+                    out[k][t] = acc[t] / cnt;
+                }
+            }
+        }
+        out
+    }
+
+    /// Backward substitution with a PER-SYMBOL complex β — the generalisation of
+    /// `cancel_crossfade_isi`, which is this with `β ≡ 1/3` real.
+    ///
+    /// `the_variable_canceller_reproduces_the_shipped_one` pins that equivalence in the DEFAULT run,
+    /// so the alternative arms below are measured against the real transform rather than against a
+    /// re-implementation of it (CLAUDE.md verification rule 5).
+    fn cancel_variable(iq: &mut [(f32, f32)], beta: &[num_complex::Complex<f32>]) {
+        use num_complex::Complex;
+        let n = iq.len().min(beta.len());
+        for k in (0..n.saturating_sub(1)).rev() {
+            let next = Complex::new(iq[k + 1].0, iq[k + 1].1);
+            let cur = Complex::new(iq[k].0, iq[k].1) - beta[k] * next;
+            iq[k] = (cur.re, cur.im);
+        }
+    }
+
+    /// The variable-β canceller must BE the shipped one at β = 1/3, or every arm below is measured
+    /// against a re-implementation instead of the product.
+    #[test]
+    fn the_variable_canceller_reproduces_the_shipped_one() {
+        use num_complex::Complex;
+        let payload: Vec<u8> = (0..64u8).map(|i| i.wrapping_mul(11)).collect();
+        let c = cfg();
+        let tx = bpsk_modulate(&payload, &c).expect("modulate");
+        let n = samples_per_symbol(FS, BAUD).expect("sps");
+        let (mut iv, mut qv) = demodulate_iq(&tx, n, FC, FS, 0);
+        let mut mine: Vec<(f32, f32)> = iv.iter().copied().zip(qv.iter().copied()).collect();
+        cancel_crossfade_isi(&mut iv, &mut qv);
+        let betas = vec![Complex::new(CROSSFADE_ISI_BETA, 0.0); mine.len()];
+        cancel_variable(&mut mine, &betas);
+        let worst = mine
+            .iter()
+            .zip(iv.iter().zip(qv.iter()))
+            .map(|((mi, mq), (si, sq))| (mi - si).abs().max((mq - sq).abs()))
+            .fold(0.0f32, f32::max);
+        assert!(
+            worst < 1e-5,
+            "cancel_variable at beta=1/3 differs from cancel_crossfade_isi by {worst:e} — the \
+             alternative arms would be measured against a re-implementation, not the product"
+        );
+        assert!(mine.len() > 100, "fixture too short to mean anything");
+    }
+
+    /// (lock × dominance) — the slice #1363 named next, and the one that tells apart two
+    /// explanations the thread has been carrying side by side.
+    ///
+    /// The thread's claim is that the real variable is not which ray is larger in the ABSOLUTE
+    /// sense, but **where the timing lock sits relative to the dominant ray**. Those are not
+    /// separable from observational data: with one lock per frame and taps at 0 and 8 samples,
+    /// `rel = lock − tap` is nearly determined by dominance once the observed lock distribution is
+    /// fixed, so a cross-tab of found locks would look like a 2×2 while being collinear.
+    ///
+    /// So the lock is FORCED, and only to the two values that are physically meaningful — each ray's
+    /// own arrival. `n = 32` samples per symbol and 1 ms = 8 samples, so lock 0 samples aligned to
+    /// the direct ray and lock 8 aligned to the delayed one; both are a quarter-symbol apart, well
+    /// inside one symbol, so bit `i` still corresponds to transmitted bit `i` in both. That gives a
+    /// genuine 2×2 where alignment and dominance vary independently:
+    ///
+    /// | | direct dominant | delayed dominant |
+    /// |---|---|---|
+    /// | lock 0 | aligned | early by ¼ symbol |
+    /// | lock 8 | late by ¼ symbol | aligned |
+    ///
+    /// Noise-free and restricted to `|H| ∈ [0.05,0.20)`, because that is where the frames are
+    /// actually lost (the deep bin holds ~2.6 bits per frame) and because the noise-free row is the
+    /// one that showed the cost does not close at infinite SNR.
+    ///
+    ///   cargo test -p bpsk-plugin --no-default-features --lib \
+    ///       carrier_dip_tiebreak::measure_lock -- --ignored --nocapture
+    #[test]
+    #[ignore = "research harness: prints a table, asserts no threshold (#1363)"]
+    fn measure_lock_relative_to_dominant_tap() {
+        const SEEDS: u64 = 96;
+        const DELAY_SAMPLES: usize = 8; // 1 ms at 8 kHz, a quarter symbol at BPSK250
+        let payload: Vec<u8> = (0..200u32)
+            .map(|i| (i.wrapping_mul(2654435761) >> 13) as u8)
+            .collect();
+        let c = cfg();
+        let tx = bpsk_modulate(&payload, &c).expect("modulate");
+        let n = samples_per_symbol(FS, BAUD).expect("sps");
+        let expected = expected_preamble_symbols(PREAMBLE_SYMS);
+        let off0 = find_timing_offset_with_expected(&tx, n, FC, FS, &expected);
+        let truth = arm_bits(&tx, n, off0, false);
+
+        // [arm][lock 0|8][dominance 0=direct 1=delayed][bit]
+        let mut err = [[[[0u64; 2]; 2]; 2]; 2];
+        let mut tot = [[[[0u64; 2]; 2]; 2]; 2];
+
+        for seed in 0..SEEDS {
+            let mut ch = WattersonConfig::moderate_f1(Some(seed));
+            ch.snr_db = 200.0;
+            let faded = WattersonChannel::new(ch).expect("w").apply(&tx);
+            for (li, &lock) in [0usize, DELAY_SAMPLES].iter().enumerate() {
+                let env = carrier_envelope(seed, tx.len(), n, lock);
+                let rays = ray_split(seed, tx.len(), n, lock);
+                if env.is_empty() || rays.is_empty() {
+                    continue;
+                }
+                for (arm_i, cancel) in [(0usize, false), (1usize, true)] {
+                    let bits = arm_bits(&faded, n, lock, cancel);
+                    let m = bits.len().min(truth.len());
+                    for i in 0..m {
+                        let si = (i + 1).min(env.len() - 1);
+                        let d = env[si];
+                        if !(0.05..0.20).contains(&d) {
+                            continue;
+                        }
+                        let (e0, e1) = rays[si.min(rays.len() - 1)];
+                        let dom = usize::from(e1.norm() > e0.norm());
+                        let bit = usize::from(truth[i]);
+                        tot[arm_i][li][dom][bit] += 1;
+                        if bits[i] != truth[i] {
+                            err[arm_i][li][dom][bit] += 1;
+                        }
+                    }
+                }
+            }
+        }
+
+        println!("\nPROBE-1363-LOCK  moderate_f1, NOISE-FREE, {SEEDS} seeds, |H| in [0.05,0.20)");
+        println!("  lock is FORCED to each ray's own arrival, so alignment and dominance vary");
+        println!("  independently. lock 0 = direct ray's arrival; lock 8 = delayed ray's.\n");
+        println!(
+            "  lock | dominant | alignment        | soft b0/b1      | HARD b0/b1      |     n"
+        );
+        for li in 0..2 {
+            for dom in 0..2 {
+                let aligned = li == dom;
+                let label = if aligned {
+                    "aligned"
+                } else if li == 0 {
+                    "early by 1/4 sym"
+                } else {
+                    "late by 1/4 sym"
+                };
+                let r = |a: usize, bit: usize| {
+                    if tot[a][li][dom][bit] == 0 {
+                        f64::NAN
+                    } else {
+                        err[a][li][dom][bit] as f64 / tot[a][li][dom][bit] as f64
+                    }
+                };
+                println!(
+                    "  {:4} | {:8} | {:16} | {:6.3} / {:6.3} | {:6.3} / {:6.3} | {:5}",
+                    if li == 0 { 0 } else { DELAY_SAMPLES },
+                    if dom == 0 { "direct" } else { "delayed" },
+                    label,
+                    r(0, 0),
+                    r(0, 1),
+                    r(1, 0),
+                    r(1, 1),
+                    tot[0][li][dom][0] + tot[0][li][dom][1]
+                );
+            }
+        }
+        println!(
+            "\n  READ IT THIS WAY: if the thread is right that ALIGNMENT is the variable, the"
+        );
+        println!("  hard arm's penalty tracks the `aligned`/`early`/`late` column and not the");
+        println!(
+            "  `dominant` one. If instead the penalty follows `delayed` in BOTH lock rows, then"
+        );
+        println!("  absolute dominance is the variable and the lock is a bystander.\n");
+    }
+
     /// The three measurements this thread named as outstanding, in one pass (#1363).
     ///
     /// 1. **An SNR axis** (16/24/32 dB and noise-free, same seeds) — the thread required it "before
@@ -2148,6 +2383,574 @@ mod carrier_dip_tiebreak {
                     println!("     lost seeds (aligned): {:?}", lost_al[arm_i]);
                 }
             }
+        }
+    }
+
+    // ═══════════════════════ REVIEW VARIANT (not for merge) ═══════════════════════
+    // Controls and off-band cells for the six gate arms. Reuses every helper above unchanged.
+
+    fn lcg(seed: &mut u64) -> u64 {
+        *seed = seed
+            .wrapping_mul(6364136223846793005)
+            .wrapping_add(1442695040888963407);
+        *seed >> 11
+    }
+
+    /// Fisher–Yates permutation of a fire mask: same count, positions randomised.
+    fn shuffle_mask(mask: &[bool], mut seed: u64) -> Vec<bool> {
+        let mut out = mask.to_vec();
+        for i in (1..out.len()).rev() {
+            let j = (lcg(&mut seed) % (i as u64 + 1)) as usize;
+            out.swap(i, j);
+        }
+        out
+    }
+
+    /// Shuffle WITHIN each stratum so the duty cycle is matched per cell, not per frame.
+    fn shuffle_stratified(mask: &[bool], seed: u64, strata: Option<&[u8]>) -> Vec<bool> {
+        let Some(st) = strata else {
+            return shuffle_mask(mask, seed);
+        };
+        let mut out = mask.to_vec();
+        for s in 0u8..3 {
+            let idx: Vec<usize> = (0..mask.len().min(st.len()))
+                .filter(|&k| st[k] == s)
+                .collect();
+            let sub: Vec<bool> = idx.iter().map(|&k| mask[k]).collect();
+            let sh = shuffle_mask(&sub, seed.wrapping_add(s as u64 * 999));
+            for (j, &k) in idx.iter().enumerate() {
+                out[k] = sh[j];
+            }
+        }
+        out
+    }
+
+    /// Windowed LEAST-SQUARES taps (4 unknowns, real regressors, complex observations). On a
+    /// noise-free frame this returns the exact composite taps; the correlation estimator does not,
+    /// because the payload's own a_k·a_{k+m} cross terms do not vanish over 41 symbols.
+    // Linear algebra over fixed 4x4 arrays: every loop indexes several parallel arrays at once, so
+    // the iterator rewrite clippy suggests does not apply.
+    #[allow(clippy::needless_range_loop)]
+    fn estimate_taps_ls(
+        iq: &[(f32, f32)],
+        a: &[f32],
+        window: usize,
+    ) -> Vec<[num_complex::Complex<f32>; 4]> {
+        use num_complex::Complex;
+        fn solve4(mut m: [[f64; 4]; 4], mut b: [f64; 4]) -> [f64; 4] {
+            for c in 0..4 {
+                let mut p = c;
+                for r in c + 1..4 {
+                    if m[r][c].abs() > m[p][c].abs() {
+                        p = r;
+                    }
+                }
+                m.swap(c, p);
+                b.swap(c, p);
+                let d = m[c][c];
+                if d.abs() < 1e-12 {
+                    return [0.0; 4];
+                }
+                for r in 0..4 {
+                    if r == c {
+                        continue;
+                    }
+                    let f = m[r][c] / d;
+                    for k in 0..4 {
+                        m[r][k] -= f * m[c][k];
+                    }
+                    b[r] -= f * b[c];
+                }
+            }
+            [
+                b[0] / m[0][0],
+                b[1] / m[1][1],
+                b[2] / m[2][2],
+                b[3] / m[3][3],
+            ]
+        }
+        let half = window / 2;
+        let n = iq.len().min(a.len());
+        let mut out = vec![[Complex::new(0.0f32, 0.0); 4]; n];
+        for k in 0..n {
+            let lo = k.saturating_sub(half);
+            let hi = (k + half + 1).min(n);
+            let mut xtx = [[0.0f64; 4]; 4];
+            let mut xtr = [0.0f64; 4];
+            let mut xti = [0.0f64; 4];
+            let mut cnt = 0usize;
+            for j in lo..hi {
+                if j < 1 || j + 2 >= n {
+                    continue;
+                }
+                let x = [
+                    a[j - 1] as f64,
+                    a[j] as f64,
+                    a[j + 1] as f64,
+                    a[j + 2] as f64,
+                ];
+                for p in 0..4 {
+                    for q in 0..4 {
+                        xtx[p][q] += x[p] * x[q];
+                    }
+                    xtr[p] += x[p] * iq[j].0 as f64;
+                    xti[p] += x[p] * iq[j].1 as f64;
+                }
+                cnt += 1;
+            }
+            if cnt < 8 {
+                continue;
+            }
+            for p in 0..4 {
+                xtx[p][p] += 1e-3 * cnt as f64;
+            } // ridge: the preamble's period-4 run is rank-deficient
+            let re = solve4(xtx, xtr);
+            let im = solve4(xtx, xti);
+            for t in 0..4 {
+                out[k][t] = Complex::new(re[t] as f32, im[t] as f32);
+            }
+        }
+        out
+    }
+
+    /// Least-squares taps by DEFAULT. Set `BPSK_TAPS_CORRELATION=1` to switch to the correlation
+    /// estimator instead — kept only so the instrument comparison stays reproducible, since the
+    /// difference between them flipped a conclusion in #1363 (a "genie" arm that was really a floor).
+    fn taps_for(
+        iq: &[(f32, f32)],
+        a: &[f32],
+        window: usize,
+    ) -> Vec<[num_complex::Complex<f32>; 4]> {
+        if std::env::var("BPSK_TAPS_CORRELATION").is_ok() {
+            estimate_taps_correlation(iq, a, window)
+        } else {
+            estimate_taps_ls(iq, a, window)
+        }
+    }
+
+    const ARMS: [&str; 9] = [
+        "soft",
+        "hard",
+        "thread",
+        "sign",
+        "beta",
+        "sign_dd",
+        "beta_dd",
+        "sign_shuf",
+        "sdd_shuf",
+    ];
+
+    /// Per-arm β vectors plus the two fire masks (genie sign, dd sign) for a frame.
+    #[allow(clippy::type_complexity)]
+    fn build_betas(
+        base: &[(f32, f32)],
+        a_genie: &[f32],
+        window: usize,
+        shuffle_seed: u64,
+        strata: Option<&[u8]>,
+    ) -> (Vec<Vec<num_complex::Complex<f32>>>, Vec<bool>, Vec<bool>) {
+        use num_complex::Complex;
+        let m = base.len();
+        let taps = taps_for(base, a_genie, window);
+        let soft_bits = differential_decode(base);
+        let a_dd = symbols_from_truth(&soft_bits);
+        let taps_dd = taps_for(base, &a_dd, window);
+        let b0 = Complex::new(0.0f32, 0.0);
+        let bh = Complex::new(CROSSFADE_ISI_BETA, 0.0);
+        let mut betas: Vec<Vec<Complex<f32>>> = vec![
+            vec![b0; m],
+            vec![bh; m],
+            vec![bh; m],
+            vec![bh; m],
+            vec![b0; m],
+            vec![bh; m],
+            vec![b0; m],
+            vec![bh; m],
+            vec![bh; m],
+        ];
+        let mut sign_mask = vec![false; m];
+        let mut sdd_mask = vec![false; m];
+        for k in 0..m.min(taps.len()).min(taps_dd.len()) {
+            let (gc, gn) = (taps[k][1], taps[k][2]);
+            if gc.norm() < gn.norm() {
+                betas[2][k] = b0;
+            }
+            if (gn * gc.conj()).re < 0.0 {
+                betas[3][k] = b0;
+                sign_mask[k] = true;
+            }
+            if gc.norm() > 1e-9 {
+                let be = gn / gc;
+                if be.norm() < 1.0 {
+                    betas[4][k] = be;
+                }
+            }
+            let (dc, dn) = (taps_dd[k][1], taps_dd[k][2]);
+            if (dn * dc.conj()).re < 0.0 {
+                betas[5][k] = b0;
+                sdd_mask[k] = true;
+            }
+            if dc.norm() > 1e-9 {
+                let be = dn / dc;
+                if be.norm() < 1.0 {
+                    betas[6][k] = be;
+                }
+            }
+        }
+        let sh = shuffle_stratified(&sign_mask, shuffle_seed ^ 0xA5A5, strata);
+        let sdh = shuffle_stratified(&sdd_mask, shuffle_seed ^ 0x5A5A, strata);
+        for k in 0..m {
+            if sh[k] {
+                betas[7][k] = b0;
+            }
+            if sdh[k] {
+                betas[8][k] = b0;
+            }
+        }
+        (betas, sign_mask, sdd_mask)
+    }
+
+    fn bad_bytes(bits: &[bool], truth: &[bool], lo: usize, hi: usize) -> (usize, usize) {
+        let hi = hi.min(bits.len()).min(truth.len());
+        let got = bits_to_bytes(&bits[lo..hi]);
+        let want = bits_to_bytes(&truth[lo..hi]);
+        let bad = got.iter().zip(want.iter()).filter(|(g, w)| g != w).count();
+        let wrong_bits = (lo..hi).filter(|&i| bits[i] != truth[i]).count();
+        (bad, wrong_bits)
+    }
+
+    fn pct(num: u64, den: u64) -> f64 {
+        if den == 0 {
+            f64::NAN
+        } else {
+            100.0 * num as f64 / den as f64
+        }
+    }
+
+    ///   cargo test -p bpsk-plugin --no-default-features --lib --release \
+    ///       carrier_dip_tiebreak::review_gates -- --ignored --nocapture
+    #[test]
+    #[ignore = "review harness"]
+    fn measure_gates_controls_and_off_band() {
+        use openpulse_channel::awgn::AwgnChannel;
+        use openpulse_channel::AwgnConfig;
+        const SEEDS: u64 = 96;
+        const DELAY: usize = 8;
+        const WINDOW: usize = 41;
+        const RS_T: usize = 16;
+        let payload: Vec<u8> = (0..200u32)
+            .map(|i| (i.wrapping_mul(2654435761) >> 13) as u8)
+            .collect();
+        let c = cfg();
+        let tx = bpsk_modulate(&payload, &c).expect("modulate");
+        let n = samples_per_symbol(FS, BAUD).expect("sps");
+        let expected = expected_preamble_symbols(PREAMBLE_SYMS);
+        let off0 = find_timing_offset_with_expected(&tx, n, FC, FS, &expected);
+        assert_eq!(off0, 0);
+        let truth = arm_bits(&tx, n, off0, false);
+        let a = symbols_from_truth(&truth);
+        let data_lo = PREAMBLE_SYMS - 1;
+        let data_hi = truth.len() - TAIL_SYMS;
+        assert_eq!(bits_to_bytes(&truth[data_lo..data_hi]), payload);
+        let tx_rms = (tx.iter().map(|s| s * s).sum::<f32>() / tx.len() as f32).sqrt();
+        println!(
+            "\nPROBE-1363  estimator = {}",
+            // Read the SAME switch `taps_for` reads. A label that can disagree with the
+            // instrument it names is the defect this whole probe exists to catch.
+            if std::env::var("BPSK_TAPS_CORRELATION").is_ok() {
+                "CORRELATION (the defective control)"
+            } else {
+                "LEAST-SQUARES (default)"
+            }
+        );
+        println!("PROBE-1363  tx rms {tx_rms:.4}; #821's sigma 0.9 is {:.1} dB in this crate's SNR convention",
+            20.0 * (tx_rms / 0.9).log10());
+
+        // ── Part 0: estimator control on the CLEAN frame ─────────────────────────────────
+        {
+            let (iv, qv) = demodulate_iq(&tx, n, FC, FS, 0);
+            let base: Vec<(f32, f32)> = iv.iter().copied().zip(qv.iter().copied()).collect();
+            let (_, sm, sdm) = build_betas(&base, &a, WINDOW, 1, None);
+            let taps = taps_for(&base, &a, WINDOW);
+            let lo = data_lo + WINDOW;
+            let hi = data_hi.saturating_sub(WINDOW);
+            let mut ratios: Vec<f32> = (lo..hi).map(|k| (taps[k][2] / taps[k][1]).re).collect();
+            ratios.sort_by(|x, y| x.partial_cmp(y).unwrap());
+            let q = |p: f64| ratios[((ratios.len() - 1) as f64 * p) as usize];
+            let thread_f = (lo..hi)
+                .filter(|&k| taps[k][1].norm() < taps[k][2].norm())
+                .count();
+            let sign_f = (lo..hi).filter(|&k| sm[k]).count();
+            let sdd_f = (lo..hi).filter(|&k| sdm[k]).count();
+            let mut prev: Vec<f32> = (lo..hi).map(|k| (taps[k][0] / taps[k][1]).norm()).collect();
+            prev.sort_by(|x, y| x.partial_cmp(y).unwrap());
+            println!(
+                "PART 0  clean frame, genie taps, data region only (n={}):",
+                hi - lo
+            );
+            println!(
+                "  Re(g_next/g_cur)  p05 {:.3}  p50 {:.3}  p95 {:.3}   (shipped beta = 0.333)",
+                q(0.05),
+                q(0.5),
+                q(0.95)
+            );
+            println!(
+                "  |g_prev/g_cur|    p50 {:.3}  p95 {:.3}",
+                prev[prev.len() / 2],
+                prev[(prev.len() - 1) * 95 / 100]
+            );
+            println!("  thread fires {:.1}%   sign fires {:.1}%   sign_dd fires {:.1}%  (any non-zero here is estimator self-noise)",
+                pct(thread_f as u64, (hi - lo) as u64), pct(sign_f as u64, (hi - lo) as u64), pct(sdd_f as u64, (hi - lo) as u64));
+        }
+
+        // ── Part A: noise-free 1 ms, forced lock, band [0.05,0.20), 9 arms ───────────────
+        {
+            let mut err = vec![[[[0u64; 2]; 2]; 2]; 9];
+            let mut tot = vec![[[[0u64; 2]; 2]; 2]; 9];
+            // per-seed, lock 0, delayed-dominant cell: paired error counts
+            let mut per_seed: Vec<[u64; 9]> = Vec::new();
+            let mut fire_sign = [[0u64; 2]; 2];
+            let mut fire_sdd = [[0u64; 2]; 2];
+            let mut fire_thr = [[0u64; 2]; 2];
+            let mut seen = [[0u64; 2]; 2];
+            // frame-level at the FOUND (noise-free) lock
+            let mut lost = [0u64; 9];
+            let mut lost_seeds: Vec<Vec<u64>> = vec![Vec::new(); 9];
+            let mut lock_hist = std::collections::BTreeMap::new();
+            for seed in 0..SEEDS {
+                let mut ch = WattersonConfig::moderate_f1(Some(seed));
+                ch.snr_db = 200.0;
+                let faded = WattersonChannel::new(ch).expect("w").apply(&tx);
+                let found = find_timing_offset_with_expected(&faded, n, FC, FS, &expected);
+                *lock_hist.entry(found).or_insert(0u64) += 1;
+                {
+                    let (iv, qv) = demodulate_iq(&faded, n, FC, FS, found);
+                    let base: Vec<(f32, f32)> =
+                        iv.iter().copied().zip(qv.iter().copied()).collect();
+                    let (betas, _, _) = build_betas(&base, &a, WINDOW, seed + 1000, None);
+                    for (ai, bet) in betas.iter().enumerate() {
+                        let mut iq = base.clone();
+                        cancel_variable(&mut iq, bet);
+                        let bits = differential_decode(&iq);
+                        let (bad, _) = bad_bytes(&bits, &truth, data_lo, data_hi);
+                        if bad > RS_T {
+                            lost[ai] += 1;
+                            lost_seeds[ai].push(seed);
+                        }
+                    }
+                }
+                let mut row = [0u64; 9];
+                for (li, &lock) in [0usize, DELAY].iter().enumerate() {
+                    let env = carrier_envelope(seed, tx.len(), n, lock);
+                    let rays = ray_split(seed, tx.len(), n, lock);
+                    if env.is_empty() || rays.is_empty() {
+                        continue;
+                    }
+                    let (iv, qv) = demodulate_iq(&faded, n, FC, FS, lock);
+                    let base: Vec<(f32, f32)> =
+                        iv.iter().copied().zip(qv.iter().copied()).collect();
+                    let strata: Vec<u8> = (0..base.len())
+                        .map(|k| {
+                            let d = env[k.min(env.len() - 1)];
+                            if (0.05..0.20).contains(&d) {
+                                let (e0, e1) = rays[k.min(rays.len() - 1)];
+                                1 + u8::from(e1.norm() > e0.norm())
+                            } else {
+                                0
+                            }
+                        })
+                        .collect();
+                    let (betas, sm, sdm) =
+                        build_betas(&base, &a, WINDOW, seed * 7 + li as u64, Some(&strata));
+                    let tg = taps_for(&base, &a, WINDOW);
+                    for (ai, bet) in betas.iter().enumerate() {
+                        let mut iq = base.clone();
+                        cancel_variable(&mut iq, bet);
+                        let bits = differential_decode(&iq);
+                        let lim = bits.len().min(truth.len());
+                        for i in 0..lim {
+                            let si = (i + 1).min(env.len() - 1);
+                            let d = env[si];
+                            if !(0.05..0.20).contains(&d) {
+                                continue;
+                            }
+                            let (e0, e1) = rays[si.min(rays.len() - 1)];
+                            let dom = usize::from(e1.norm() > e0.norm());
+                            let bit = usize::from(truth[i]);
+                            tot[ai][li][dom][bit] += 1;
+                            let wrong = bits[i] != truth[i];
+                            if wrong {
+                                err[ai][li][dom][bit] += 1;
+                                if li == 0 && dom == 1 {
+                                    row[ai] += 1;
+                                }
+                            }
+                            if ai == 0 {
+                                seen[li][dom] += 1;
+                                let kk = si.min(sm.len() - 1);
+                                if sm[kk] {
+                                    fire_sign[li][dom] += 1;
+                                }
+                                if sdm[kk] {
+                                    fire_sdd[li][dom] += 1;
+                                }
+                                if tg[kk][1].norm() < tg[kk][2].norm() {
+                                    fire_thr[li][dom] += 1;
+                                }
+                            }
+                        }
+                    }
+                }
+                per_seed.push(row);
+            }
+            println!("\nPART A  noise-free, 1 ms, forced lock, |H| in [0.05,0.20), {SEEDS} seeds — err b0/b1");
+            print!("  lock | dominant ");
+            for arm in ARMS {
+                print!("| {arm:>11} ");
+            }
+            println!("| sign fires | sdd fires | thread fires");
+            for li in 0..2 {
+                for dom in 0..2 {
+                    print!(
+                        "  {:4} | {:8} ",
+                        if li == 0 { 0 } else { DELAY },
+                        if dom == 0 { "direct" } else { "delayed" }
+                    );
+                    for ai in 0..9 {
+                        let r = |b: usize| {
+                            if tot[ai][li][dom][b] == 0 {
+                                f64::NAN
+                            } else {
+                                err[ai][li][dom][b] as f64 / tot[ai][li][dom][b] as f64
+                            }
+                        };
+                        print!("| {:5.3}/{:5.3} ", r(0), r(1));
+                    }
+                    println!(
+                        "|     {:5.1}% |   {:5.1}% |   {:5.1}%",
+                        pct(fire_sign[li][dom], seen[li][dom]),
+                        pct(fire_sdd[li][dom], seen[li][dom]),
+                        pct(fire_thr[li][dom], seen[li][dom])
+                    );
+                }
+            }
+            // paired per-seed comparisons in the product cell (lock 0, delayed)
+            let pair = |x: usize, y: usize| {
+                let (mut fewer, mut equal, mut more, mut nz) = (0, 0, 0, 0);
+                for r in &per_seed {
+                    if r[x] + r[y] == 0 {
+                        continue;
+                    }
+                    nz += 1;
+                    match r[x].cmp(&r[y]) {
+                        std::cmp::Ordering::Less => fewer += 1,
+                        std::cmp::Ordering::Equal => equal += 1,
+                        _ => more += 1,
+                    }
+                }
+                format!(
+                    "{} fewer / {} equal / {} more (of {} seeds with any error)",
+                    fewer, equal, more, nz
+                )
+            };
+            println!("\n  PAIRED per seed, lock 0 / delayed cell, errors(X) vs errors(Y):");
+            println!("    sign_dd vs hard : {}", pair(5, 1));
+            println!("    sign    vs soft : {}", pair(3, 0));
+            println!("    sign_dd vs soft : {}", pair(5, 0));
+            println!("    sign vs sign_shuf: {}", pair(3, 7));
+            println!("    sign_dd vs sdd_shuf: {}", pair(5, 8));
+            println!("\n  FRAME LEVEL at the found noise-free lock (lock hist {:?}) — lost = >{} bad payload bytes of 200:", lock_hist, RS_T);
+            for ai in 0..9 {
+                println!(
+                    "    {:>9}: lost {:2}   seeds {:?}",
+                    ARMS[ai], lost[ai], lost_seeds[ai]
+                );
+            }
+        }
+
+        // ── Part B: WITH NOISE, found lock, frame level ──────────────────────────────────
+        println!("\nPART B  with noise, found lock per frame, {SEEDS} seeds; lost = >{RS_T} bad payload bytes; wrong bits over the payload");
+        let cells: [(&str, f32); 12] = [
+            ("moderate_f1 1ms", 8.0),
+            ("moderate_f1 1ms", 12.0),
+            ("moderate_f1 1ms", 16.0),
+            ("doppler-only 0ms", 8.0),
+            ("doppler-only 0ms", 12.0),
+            ("awgn", -2.0),
+            ("awgn", -1.0),
+            ("awgn", 0.0),
+            ("awgn", 2.0),
+            ("awgn", 5.0),
+            ("awgn", 8.0),
+            ("awgn sigma0.9", 20.0 * (tx_rms / 0.9).log10()),
+        ];
+        for (name, snr) in cells {
+            let mut lost = [0u64; 9];
+            let mut wrong = [0u64; 9];
+            let mut badb = [0u64; 9];
+            let (mut f_sign, mut f_sdd, mut n_sym) = (0u64, 0u64, 0u64);
+            for seed in 0..SEEDS {
+                let faded: Vec<f32> = match name {
+                    "moderate_f1 1ms" => {
+                        let mut ch = WattersonConfig::moderate_f1(Some(seed));
+                        ch.snr_db = snr;
+                        WattersonChannel::new(ch).expect("w").apply(&tx)
+                    }
+                    "doppler-only 0ms" => {
+                        let mut ch = WattersonConfig::moderate_f1(Some(seed));
+                        ch.snr_db = snr;
+                        ch.delay_spread_ms = 0.0;
+                        WattersonChannel::new(ch).expect("w").apply(&tx)
+                    }
+                    _ => AwgnChannel::new(AwgnConfig::new(snr, Some(seed)))
+                        .expect("awgn")
+                        .apply(&tx),
+                };
+                let found = find_timing_offset_with_expected(&faded, n, FC, FS, &expected);
+                let (iv, qv) = demodulate_iq(&faded, n, FC, FS, found);
+                let base: Vec<(f32, f32)> = iv.iter().copied().zip(qv.iter().copied()).collect();
+                let (betas, sm, sdm) = build_betas(&base, &a, WINDOW, seed + 77, None);
+                for k in data_lo..data_hi.min(sm.len()) {
+                    n_sym += 1;
+                    if sm[k] {
+                        f_sign += 1;
+                    }
+                    if sdm[k] {
+                        f_sdd += 1;
+                    }
+                }
+                for (ai, bet) in betas.iter().enumerate() {
+                    let mut iq = base.clone();
+                    cancel_variable(&mut iq, bet);
+                    let bits = differential_decode(&iq);
+                    let (bad, wb) = bad_bytes(&bits, &truth, data_lo, data_hi);
+                    wrong[ai] += wb as u64;
+                    badb[ai] += bad as u64;
+                    if bad > RS_T {
+                        lost[ai] += 1;
+                    }
+                }
+            }
+            println!(
+                "\n  {name} @ {snr:.1} dB   sign fires {:.1}%  sign_dd fires {:.1}% (data region)",
+                pct(f_sign, n_sym),
+                pct(f_sdd, n_sym)
+            );
+            print!("    lost  :");
+            for ai in 0..9 {
+                print!(" {}={:<3}", ARMS[ai], lost[ai]);
+            }
+            println!();
+            print!("    badB  :");
+            for ai in 0..9 {
+                print!(" {}={:<5}", ARMS[ai], badb[ai]);
+            }
+            println!();
+            print!("    wrongb:");
+            for ai in 0..9 {
+                print!(" {}={:<6}", ARMS[ai], wrong[ai]);
+            }
+            println!();
         }
     }
 }

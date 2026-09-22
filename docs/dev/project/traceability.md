@@ -15,6 +15,61 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-09-22 — the #1363 gate arms, and an estimator that was slandering its own candidates
+
+**Change.** Test-only; no production code. `mod carrier_dip_tiebreak` gains the (lock × dominance)
+2×2, the candidate gate arms with their controls, off-band cells, and two default-run pins.
+
+**Findings** (posted to #1363; a follow-up task is #1428 and a production defect is #1429):
+
+- This issue's own predicate, `|g_cur| < |g_next|`, is **retired**: it fires 3.9 % / 4.9 % where the
+  penalty lives and 48 % / 84 % where it does not, and costs frames in every cell measured.
+- The mechanism in the band where frames are lost is a **sign-inverted effective ISI with an intact
+  DC term** — delayed-ray-dominant is identical to "the sub-dominant echo is a pre-echo" — not the
+  deep-null tie-break, which is a different regime one bin down.
+- `sign_dd`, the one receiver-realisable arm, recovers the fade gap (32/20/15 against the shipped
+  arm's 45/26/21) and **costs 37 of 96 frames at #821's σ = 0.9** through 7.7 % noise-driven
+  misfire. Found only because the off-band cells were added; the in-band table could not see it.
+- **"β estimation is refuted by the mechanism" (2026-09-13) is withdrawn.** With exact taps, genie
+  complex-β is the best arm in every cell including −3.3 dB AWGN (25 against 46). What that note
+  refuted was a deep-null statement.
+
+**The instrument was wrong before any of it.** My first tap estimator used sliding-window
+correlation, whose "cross terms average out" premise fails on a real payload at 1/√41 ≈ 0.16 of
+self-noise. On a **clean frame with no channel, no noise and genie symbols** it put
+`Re(g_next/g_cur)` at p05 0.043 / p50 0.285 / p95 0.532 against a truth of 0.308, and fired the sign
+predicate **4.3 %** of the time against least-squares' 0.0 %. So the "genie" arms were genie
+*symbols* through a noisy *estimator*, and a doc comment calling one of them "a CEILING" was exactly
+backwards — it was a floor. Least-squares is now the default; the correlation estimator is retained,
+renamed `estimate_taps_correlation` and documented as the defective control, because the comparison
+is itself the finding.
+
+**A mislabelling caught while landing this.** After flipping the default, the harness still printed
+`estimator = correlation` while running least-squares, because the banner read a different env var
+than the selector did. A label that can disagree with the instrument it names is the defect this
+probe exists to catch. Both now read one switch, verified in both positions.
+
+**Default-run pins, which is what makes the tables trustworthy:**
+`the_composed_arm_matches_the_shipped_demodulator` (byte identity against `bpsk_demodulate`),
+`the_same_seed_reproduces_the_same_fading_realisation`, `the_ray_split_agrees_with_the_envelope`
+(sabotage-verified), and **`the_variable_canceller_reproduces_the_shipped_one`** — the per-symbol
+complex-β canceller must BE `cancel_crossfade_isi` at β = 1/3, or every arm would be measured
+against a re-implementation rather than the product.
+
+**Side finding, resolved rather than left open.** The clean-frame β of **0.308** against the shipped
+`CROSSFADE_ISI_BETA = 1/3` is the exact *discrete* composite at n = 32 (`g_c` 1.0400, `g_n` 0.3200);
+1/3 is the continuous integral. Same shape as the 8PSK crossfade fix, where β is computed from the
+window rather than assumed. Residual ISI ~0.027/symbol — no action on its own.
+
+**Tests → results.** Default suite: 4 pins pass. Harnesses (`#[ignore]`d) reproduce every table in
+the #1363 comments, under both estimator settings. Full gate: see PR #1430.
+
+**Stated limits.** Every number is bad-bytes over the 200 payload bytes of a 255-byte wire frame,
+no scrambler, RS never run — a lower bound for all arms alike and **not a decode rate**. The
+engine-level coded A/B is #1428's step 1 and is the cheapest thing that could kill the direction.
+
+---
+
 ## 2026-09-21 — #1363's three outstanding measurements, and the one I called impossible
 
 **Change.** Test-only. `plugins/bpsk/src/demodulate.rs` → `mod carrier_dip_tiebreak` gains
