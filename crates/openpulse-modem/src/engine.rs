@@ -4478,8 +4478,22 @@ impl ModemEngine {
             // and hard bits (via sign decision), avoiding a redundant demodulate() call.
             // Only plugins that declare soft support take this path; for them a soft
             // error is a genuine demodulation failure, not a cue to re-demodulate hard
-            // (which would double the per-attempt cost and can't succeed where the
-            // soft pass failed — both share the same acquisition front end).
+            // (which would double the per-attempt cost).
+            //
+            // **"can't succeed where the soft pass failed — both share the same acquisition front
+            // end" WAS ALSO CLAIMED HERE, AND IS FALSE FOR BPSK (#1429).** Its two arms differ by
+            // exactly `cancel_crossfade_isi`: `demodulate` applies it, `demodulate_soft`
+            // deliberately does not (#832 — the recursion breaks the LLR calibration HARQ combining
+            // relies on). `BpskPlugin::supports_soft_demod` returns `true` unconditionally, so every
+            // UNCODED decode that reaches here takes the uncancelled arm while every coded decode
+            // takes the cancelled one. Measured on #821's own fixture, 8 seeds: cancelled mean BER
+            // 0.0127 against its `< 0.02` bar, uncancelled 0.0336 — above the bar on every seed.
+            // Pinned by `the_uncoded_production_path_takes_the_uncancelled_arm` in `bpsk-plugin`.
+            //
+            // Which arm uncoded traffic SHOULD take is open (#1429) and is a real trade, not an
+            // oversight to reverse on sight: #1363 measures the cancellation as a win on AWGN and
+            // pure Doppler and a loss of 8 frames in 96 on a delayed-dominant fade, and the uncoded
+            // traffic here — §97.119 station ID, handshake, QSY, relay — lives on fading channels.
             // Absolute RX SNR for rate adaptation: the mode's calibrated symbol-domain estimate
             // (M2M4 fallback inside `rx_snr_db`). The old mean-|LLR| proxy reads ≈ −2 dB on a
             // clean path (only a relative confidence indicator) and can't drive the SNR-hint
