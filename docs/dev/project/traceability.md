@@ -68,6 +68,56 @@ proves_nothing` passes here). That absence of an automatic gate is why this surv
 **Tests → results.** `cargo test -p bpsk-plugin --features gpu --test gpu_cpu_equivalence` —
 5 passed, 0 failed. The new test **fails before the fix** (0/16 against 11/16, with the other four
 passing), which is the discriminating pair. Workspace gate: see the PR.
+## 2026-09-22 — #1428 step 1: the engine-level A/B, and a kill criterion with no statistic in it
+
+**Change.** Test-only. `crates/openpulse-modem/tests/engine_cancellation_ab.rs`. #1363 opened with
+engine-level frame counts, so this is **not** the thread's first decode rate — it is the first since
+that opening, and the first whose apparatus is known to put both arms through the same hard RS,
+which the opening left open. Every number in between is the bad-byte proxy.
+
+**Result.** Paired, 96 seeds, BPSK250 + Rs, 200 B. The harness prints
+`tx len 66560 rms 0.6126; sigma0.9 = -3.34 dB`:
+
+| cell | soft | hard | S-only | H-only | exact McNemar p |
+|---|---|---|---|---|---|
+| `moderate_f1` @ 8 dB | 49 | 38 | 14 | 3 | 0.013 |
+| `moderate_f1` @ 12 dB | 69 | 56 | 15 | 2 | 0.002 |
+| doppler-only @ 8 dB | 64 | 83 | 0 | 19 | 4e-6 |
+| awgn −2 dB | 12 | 96 | 0 | 84 | ~0 |
+| awgn −1 dB | 90 | 96 | 0 | 6 | 0.031 |
+| awgn 0/2/5 dB | 96 | 96 | 0 | 0 | 1 |
+| awgn σ = 0.9 (−3.34 dB) | 0 | 16 | 0 | 16 | 3e-5 |
+
+**The survival is marginal, and the criterion named no statistic.** #1428 pre-registered a MARGINAL
+threshold, "soft − hard < ~8 frames at 8 dB", with no SE. The design was paired by seed from the
+opening, so the marginal difference is the SE of an analysis nobody was going to run. Paired at the
+observed discordance, SE = √(b + c − (b−c)²/n) = √(17 − 121/96) = **3.97**: the threshold is ≈ 2σ and
+the observed +11 clears it by **3 frames, less than one paired SE** (Wald 95 % CI [3.2, 18.8] — the
+kill region is inside it). The switch to the paired statistic was made AFTER seeing the data.
+**The transferable rule: a kill criterion names its statistic and that statistic's expected value in
+the cell where it is measured.** This one named neither.
+
+**What the table bounds is a gate that was never built** — best case +11 / +13 of 96 if it never
+misfires, worst case −19 on pure Doppler and −84 at −2 dB AWGN. The **union** of the two arms
+(decode both, let RS + the length prefix + CRC-16 adjudicate) is 52 / 71 / 83 / 96 / 96 / 16 — never
+worse than the better arm, +3 and +2 on the fade cells, and the ceiling any whole-frame selector can
+reach. A per-symbol gate must beat the union, not `sign_dd`.
+
+**Four of my own readings corrected, and the σ = 0.9 cell is NOT separable from −2 dB.** The −2 dB
+cliff is not new: #1363's proxy table already had it (56 lost vs 0); what was 2 dB too narrow was my
+own "equality in AWGN ≥ 0 dB" restatement, and −1 dB is informative too (6:0, p = 0.03). On the
+Rayleigh model ~9.5 % of an 8 dB fade sits below −2 dB and ~7.1 % below −3.34 dB, so the argument
+that pulls −2 dB into the decision pulls σ = 0.9 in with it; the earlier asymmetric treatment rested
+on a mis-transcribed −8.3 dB. The 8 dB cell does **not** replicate the opening (+2/64 is a null);
+what replicates is 12 dB (+12/64 → +13/96). And the proxy's "33/45" counts LOST frames — the
+opposite-signed quantity — which converts to +12, not a third reading of +11.
+
+**Also not detectable by the pre-registered checks:** "exact equality with the shipped arm in AWGN
+≥ 0 dB" cannot see a misfire, because soft is itself 96/96 there. Only a fire-rate measurement can
+carry that requirement.
+
+**Tests → results.** Instrument, `#[ignore]`d, asserts nothing about the counts. Full gate on the
+branch: `GATE: PASS 1c76cb0b clean`, suites=340 tests_passed=2579 tests_failed=0.
 
 ---
 
