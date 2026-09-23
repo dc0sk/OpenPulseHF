@@ -1,5 +1,16 @@
 //! #1428 step 1 — the ENGINE-level soft-vs-hard A/B, with real RS and the scrambler.
 //!
+//! **SINCE #1428's UNION LANDED, THE SECOND COLUMN IS NO LONGER THE CANCELLED ARM.** Its entry,
+//! `receive_with_fec_mode(Rs)` → `receive_with_fec`, now decodes BOTH decision arms and keeps the
+//! first that RS accepts. So this harness now measures **uncancelled vs union**, not uncancelled vs
+//! cancelled, and its "hard"/"H-only" columns are the union's. Expect the union column to be at
+//! least the soft column in every cell. A soft-only frame would indicate the soft sign-slice and
+//! variant 1 have diverged — nothing pins them bit-identical for BPSK (`hard_variant_conformance`'s
+//! I3 skips two-variant plugins) — so treat one as a finding to check, not as noise.
+//! The numbers recorded against this harness in the traceability ledger (2026-09-22) predate the
+//! union and ARE the cancelled-vs-uncancelled comparison; do not re-run this and compare to them.
+//! The labels below are kept as printed so those recorded tables stay readable.
+//!
 //! **What is new here, stated checkably.** #1363 opened with engine-level frame counts, so this is
 //! not the thread's first decode rate. It is the first since that opening, and the first whose
 //! apparatus is known to put BOTH arms through the same hard RS — the opening left that open, and
@@ -102,6 +113,7 @@ fn engine_soft_vs_hard_paired() {
     let tx_rms = (tx.iter().map(|s| s * s).sum::<f32>() / tx.len() as f32).sqrt();
     let sigma09_db = 20.0 * (tx_rms / 0.9).log10();
     println!("\nPAIRED-AB-1428 {SEEDS} seeds {MODE} 200 B; tx len {} rms {tx_rms:.4}; sigma0.9 = {sigma09_db:.2} dB", tx.len());
+    println!("  (since #1428: \"hard\" = the UNION of both arms, not the cancelled arm alone)");
     println!("  cell                       | soft | hard | diff | both | S-only | H-only | neither | McNemar p");
 
     let cells: Vec<Cell> = vec![

@@ -226,6 +226,7 @@ fn gpu_and_cpu_agree_where_the_cancellation_decides_the_frame() {
         .map(|i| (i.wrapping_mul(2654435761) >> 13) as u8)
         .collect();
     let tx = bpsk_modulate(&payload, &cfg).expect("modulate");
+    let mut unsaturated_cells = 0u32;
 
     for snr_db in [0.0f32, 2.0] {
         let (mut cpu_bad, mut cpu_tot, mut gpu_bad, mut gpu_tot) = (0u32, 0u32, 0u32, 0u32);
@@ -269,6 +270,26 @@ fn gpu_and_cpu_agree_where_the_cancellation_decides_the_frame() {
                  crossfade-ISI bias the CPU arm cancels and the GPU arm does not (#1433)",
                 gpu_ber / cpu_ber
             );
+            unsaturated_cells += 1;
         }
     }
+
+    // GUARD BOTH SIDES OF THE CLIFF, not just the floor.
+    //
+    // `cpu_ok > 0` above rejects a cell BELOW the reference arm's cliff. Nothing rejected a cell
+    // ABOVE it — and above is the side #1433 lived on: at 2 dB the CPU column is already
+    // 0.00000 BER and 16/16, so the BER comparison is skipped by `cpu_ber > 0.0` and only the
+    // decode-count assert bites. If both cells drift above the cliff (a faster machine, a better
+    // acquisition, a re-tuned fixture) every assertion here passes on a saturated reference and
+    // this test goes quietly decorative — which is precisely how the sweep it replaced behaved.
+    //
+    // So require at least one cell where the reference arm makes REAL ERRORS, and fail loudly
+    // naming the cause when none does.
+    assert!(
+        unsaturated_cells > 0,
+        "every swept cell had a saturated CPU reference (zero bit errors), so the BER comparison \
+         never ran and this test certified agreement where agreement was guaranteed. Lower the \
+         cells until the reference arm makes errors again — the cliff moves with the mode's \
+         processing gain, not with an absolute SNR."
+    );
 }

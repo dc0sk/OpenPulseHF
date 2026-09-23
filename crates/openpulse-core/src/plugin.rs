@@ -25,7 +25,7 @@ use crate::error::{ModemError, PluginError};
 /// would corroborate settles on pure noise — the exact defect the check exists to prevent, and one
 /// that produces no error, only a receiver that stops acquiring. A single method makes publishing a
 /// template without its own measured constants unrepresentable.
-pub const PLUGIN_TRAIT_VERSION: &str = "3.0.0";
+pub const PLUGIN_TRAIT_VERSION: &str = "3.1.0";
 
 // ── Plugin metadata ───────────────────────────────────────────────────────────
 
@@ -307,6 +307,33 @@ pub trait ModulationPlugin: Send + Sync {
             .flat_map(|&b| (0..8u8).map(move |i| if (b >> i) & 1 == 0 { 1.0f32 } else { -1.0f32 }))
             .collect();
         Ok(llrs)
+    }
+
+    /// Every hard-decision wire this mode can produce from ONE acquisition, best-first.
+    ///
+    /// The engine tries each in order and keeps the first whose FEC + frame decode succeeds, so a
+    /// plugin whose demodulator has two defensible decision rules can offer both and let RS, the
+    /// length prefix and CRC-16 adjudicate — rather than the engine guessing with a predicate.
+    ///
+    /// **`variants[0]` MUST equal [`demodulate`](Self::demodulate) byte-for-byte.** The rest of the
+    /// trait contract hangs off `demodulate`, and the default body below preserves that by
+    /// construction. `every_plugin_obeys_the_hard_variant_contract` (`openpulse-modem/tests/hard_variant_conformance.rs`)
+    /// sweeps the registry for it.
+    ///
+    /// Return ONE variant unless a second is a genuinely different decode. A duplicate costs a
+    /// wasted FEC trial per onset in the scanning receive and can be miscounted as a second arm
+    /// contributing. Note the arms of a given mode may be identical on a clean channel and differ
+    /// only under noise — that is expected, and it is the noisy case the sweep checks.
+    ///
+    /// Motivating case (#1428): BPSK's crossfade-ISI cancellation wins AWGN decisively and loses on
+    /// `moderate_f1`, measured end-to-end with real RS. Neither arm dominates. Their union was never
+    /// below the better arm in any measured cell, and above both on the two `moderate_f1` cells.
+    fn demodulate_variants(
+        &self,
+        samples: &[f32],
+        config: &ModulationConfig,
+    ) -> Result<Vec<Vec<u8>>, ModemError> {
+        Ok(vec![self.demodulate(samples, config)?])
     }
 
     /// Frame geometry for `config.mode`, used by the receive engine to size

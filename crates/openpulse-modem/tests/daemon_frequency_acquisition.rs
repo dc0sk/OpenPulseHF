@@ -9,10 +9,23 @@
 //! `daemon_vs_cli_on_real_captures::m2_carrier_offset_sweep_cli_vs_daemon`.
 //!
 //! **Which arm was broken, measured rather than assumed.** The uncoded arm (`decode_burst`) already
-//! tolerated 50 Hz natively — it needs the acquisition pass only past ~200 Hz. The coded arm
-//! (`ota_decode_burst`) failed from 50 Hz, which is the requirement bound, so that is where the
-//! defect lived. Measured on this file's own fixture, uncoded frame through the uncoded arm:
-//! 0 Hz and 50 Hz decode with **0** settles; 200 Hz and 400 Hz decode with 126. Both arms get the
+//! tolerated 50 Hz natively; the coded arm (`ota_decode_burst`) failed from 50 Hz, which is the
+//! requirement bound, so that is where the defect lived. Measured on this file's own fixture,
+//! uncoded frame through the uncoded arm: 0 Hz and 50 Hz decode with **0** settles; 200 Hz and
+//! 400 Hz decode with 126.
+//!
+//! **Corrected 2026-09-23 (#1428): this used to add "it needs the acquisition pass only past
+//! ~200 Hz", an interpolation across those four points that is false.** Measured in review (Fable,
+//! 2026-09-22/23) across all 64 sub-symbol alignments of this fixture: the uncancelled arm (which the
+//! uncoded arm runs) decodes 40/64 at 50 Hz, 0/64 at 62.5, 75, 100 and 200 Hz, and 52/64 at 250 Hz;
+//! the cancelled arm decodes 0/64 below 250 Hz and 49/64 there. #1428's own daemon sweep of this
+//! fixture (six realisations) needed the acquisition pass on all six at 75–200 Hz and on three at
+//! 300 Hz. A review MODEL — not a measurement — has the crossfade term rotating against the symbol's
+//! own energy by ~0.4°/Hz, which would make native tolerance non-monotonic in offset. It is also
+//! frame-dependent: the same review measured the preamble timing correlation at ~5 % of its peak at
+//! 50 Hz, and a different 200 B frame mis-locked and failed both arms at 25 Hz. **Do not read
+//! "decodes natively at X Hz" from this fixture as a property of the receiver** — the acquisition
+//! pass is what REQ-PHY-03 rests on. Both arms get the
 //! pass, because both are reachable on a shipping station and the uncoded one is what carries
 //! station ID, filexfer, handshake, QSY and relay traffic.
 //!
@@ -41,6 +54,19 @@ const SAMPLE_RATE: usize = 8_000;
 /// REQ-PHY-03's bound. The gate asserts *at* it, not comfortably inside it: this is the number the
 /// requirement names, and the daemon failed at exactly this offset before #1118.
 const REQUIRED_OFFSET_HZ: f32 = 50.0;
+
+/// An offset where NEITHER hard-decision arm decodes without the acquisition pass, so a decode here
+/// is attributable to acquisition and nothing else (#1428).
+///
+/// The differential detector's decision variable rotates by 360°·f/250 per symbol at 250 baud:
+/// 100 Hz is 144° (cos −0.81), deep in the inverted lobe, so neither arm can decode it unaided. Two
+/// nearby values are avoided on purpose — 62.5 Hz is exactly 90°, the detector's own null and a
+/// knife-edge; 250 Hz is 360°, where the detector decodes natively again.
+///
+/// Measured, from two sources: across all 64 sub-symbol alignments of this fixture both arms decode
+/// 0/64 at 100 Hz (review, Fable, 2026-09-22/23); and #1428's daemon sweep spent the full acquisition
+/// pass on every realisation at 100 Hz, in both the union build and a variant-0-only build.
+const ACQUISITION_OFFSET_HZ: f32 = 100.0;
 
 /// A burst as the daemon would hear it: real recorded idle, a frame shifted by `offset_hz`, more idle.
 fn burst_at(offset_hz: f32) -> Vec<f32> {
@@ -114,22 +140,48 @@ fn via_daemon(samples: &[f32]) -> (bool, u64) {
     (ok, e.afc_settle_attempts())
 }
 
-/// The requirement itself, on the surface that was failing it.
+/// The requirement itself, at the bound it names, on the surface that was failing it.
+///
+/// **This asserts the decode and nothing about HOW.** It used to also require `settles > 0`, as
+/// proof the acquisition pass did the work. Since #1428 the union's uncancelled arm decodes THIS
+/// fixture at 50 Hz with no acquisition at all (measured: 0 settles, against 198 for the cancelled
+/// arm alone over six realisations), so that guard was measuring the fixture's luck rather than the
+/// requirement — and per the header, that luck is frame-dependent. The mechanism is gated
+/// separately, at an offset where no arm can reach natively:
+/// [`the_acquisition_pass_recovers_a_station_beyond_native_reach`].
 ///
 // VERIFIES: REQ-PHY-03
 #[test]
-fn the_daemon_acquires_a_station_fifty_hz_off_frequency() {
-    let (ok, settles) = via_daemon(&burst_at(REQUIRED_OFFSET_HZ));
+fn the_daemon_decodes_a_station_fifty_hz_off_frequency() {
+    let (ok, _settles) = via_daemon(&burst_at(REQUIRED_OFFSET_HZ));
     assert!(
         ok,
         "the daemon did not decode a frame {REQUIRED_OFFSET_HZ} Hz off frequency — REQ-PHY-03 \
          requires tracking station-to-station offsets to ±50 Hz without operator intervention, and \
          this is the streaming path a shipping station actually receives on"
     );
+}
+
+/// The acquisition pass itself — the mechanism REQ-PHY-03 actually rests on.
+///
+/// At [`ACQUISITION_OFFSET_HZ`] neither decision arm decodes without acquisition, so a decode here
+/// can only have come from the pass. The settle assertion is the anti-vacuity guard the 50 Hz test
+/// had to give up: it is meaningful here and was not there.
+///
+// VERIFIES: REQ-PHY-03
+#[test]
+fn the_acquisition_pass_recovers_a_station_beyond_native_reach() {
+    let (ok, settles) = via_daemon(&burst_at(ACQUISITION_OFFSET_HZ));
+    assert!(
+        ok,
+        "the daemon did not decode a frame {ACQUISITION_OFFSET_HZ} Hz off frequency — at this \
+         offset only the acquisition pass can recover it, so the pass is broken"
+    );
     assert!(
         settles > 0,
-        "decoded with zero settle attempts, so the acquisition pass is not what recovered it and \
-         this gate is not measuring what it claims"
+        "decoded {ACQUISITION_OFFSET_HZ} Hz off with zero settle attempts, so the acquisition pass \
+         is not what recovered it. Either a decision arm now reaches this offset natively (re-measure \
+         and move ACQUISITION_OFFSET_HZ), or this gate is no longer measuring what it claims"
     );
 }
 

@@ -65,6 +65,33 @@ fn symbol_stream_with_expected(
     config: &ModulationConfig,
     expected: &[f32],
 ) -> Result<(Vec<f32>, Vec<f32>), ModemError> {
+    let (mut iv, mut qv, crossfade) = symbol_stream_parts_with_expected(samples, config, expected)?;
+    if crossfade {
+        // The overlapping half-Hann modulator is a crossfade, so the one-slot matched filter recovers
+        // `r_k = a_k + β·a_{k+1}` (β = 1/3). Left in, that `+β` term adds a constant positive bias to the
+        // differential dot product `r_k·r_{k-1}` (a_k²=1), eroding the flip-bit margin by several dB.
+        cancel_crossfade_isi(&mut iv, &mut qv);
+    }
+    Ok((iv, qv))
+}
+
+/// The symbol stream **before** the crossfade cancellation, plus whether this path crossfades at all.
+///
+/// Split out of [`symbol_stream_with_expected`] for `demodulate_variants` (#1428), which needs both
+/// the cancelled and uncancelled decisions from ONE acquisition — the timing search and
+/// `demodulate_iq` are the expensive terms and are shared, so the second arm costs O(symbols).
+///
+/// `estimate_snr_db` deliberately keeps consuming the CANCELLED stream through `symbol_stream`:
+/// `MATCHED_FILTER_LOSS_DB` was fitted on it, and `symbol_stream_returns_the_cancelled_stream`
+/// pins that bit-for-bit, because the fade gate's 3.0 dB tolerance cannot see a ≲1 dB swap.
+///
+/// The `-RRC` arm reports `false`: Gardner+LMS with no crossfade, so there is no second arm there
+/// and cancelling would inject the neighbour as error.
+fn symbol_stream_parts_with_expected(
+    samples: &[f32],
+    config: &ModulationConfig,
+    expected: &[f32],
+) -> Result<(Vec<f32>, Vec<f32>, bool), ModemError> {
     let baud = parse_baud_rate(&config.mode)?;
     let fs = config.sample_rate as f32;
     let fc = config.center_frequency;
@@ -95,25 +122,63 @@ fn symbol_stream_with_expected(
                     .into(),
             ));
         }
-        Ok(bpsk_demodulate_rrc(
-            samples,
-            n,
-            baud,
-            fc,
-            fs,
-            alpha,
-            &config.mode,
-        ))
+        let (i, q) = bpsk_demodulate_rrc(samples, n, baud, fc, fs, alpha, &config.mode);
+        Ok((i, q, false))
     } else {
         let offset = find_timing_offset_with_expected(samples, n, fc, fs, expected);
-        let (mut iv, mut qv) = demodulate_iq(samples, n, fc, fs, offset);
-        // The overlapping half-Hann modulator is a crossfade, so the one-slot matched filter recovers
-        // `r_k = a_k + β·a_{k+1}` (β = 1/3). Left in, that `+β` term adds a constant positive bias to the
-        // differential dot product `r_k·r_{k-1}` (a_k²=1), eroding the flip-bit margin by several dB.
-        // Cancel it here (crossfade path only; the -RRC path uses Gardner+LMS and does not crossfade).
-        cancel_crossfade_isi(&mut iv, &mut qv);
-        Ok((iv, qv))
+        let (iv, qv) = demodulate_iq(samples, n, fc, fs, offset);
+        Ok((iv, qv, true))
     }
+}
+
+/// Every hard-decision wire this mode can produce from ONE acquisition, best-first (#1428).
+///
+/// Variant 0 is byte-identical to [`bpsk_demodulate`] — the trait contract hangs off `demodulate`,
+/// so variant 0 must keep meaning it. Variant 1, where it exists, is the same symbols decoded
+/// WITHOUT `cancel_crossfade_isi`.
+///
+/// **Why two variants rather than a gate.** #1428 step 1 (PR #1432) measured the two arms
+/// end-to-end with real RS — its "uncancelled" column is the soft arm sign-sliced — and cancelling
+/// won AWGN decisively (96/96 against 12/96 at −2 dB) and lost on `moderate_f1` (38/96 against
+/// 49/96 at 8 dB). The union computed from those discordant pairs, 52/96, was never below the better
+/// arm in any cell and above both on the two `moderate_f1` cells. It needs no predicate, because RS
+/// plus the length prefix and CRC-16 adjudicate which arm was right.
+///
+/// **Cost.** The timing search and `demodulate_iq` are O(samples) and are shared; the second arm
+/// adds `cancel_crossfade_isi` + `differential_decode` + `bits_to_bytes`, all O(symbols). On
+/// BPSK250 that is ~4 120 symbols against ~131 840 samples.
+///
+/// Returns ONE variant where there is genuinely only one arm: the `-RRC` path does not crossfade,
+/// so a second entry there would be a byte-identical duplicate that costs an RS trial and could be
+/// miscounted as an arm-B win.
+pub fn bpsk_demodulate_variants(
+    samples: &[f32],
+    config: &ModulationConfig,
+) -> Result<Vec<Vec<u8>>, ModemError> {
+    let expected = expected_preamble_symbols(PREAMBLE_SYMS);
+    let (iv, qv, crossfade) = symbol_stream_parts_with_expected(samples, config, &expected)?;
+    variants_from_parts(iv, qv, crossfade, expected.len())
+}
+
+/// Shared by the CPU and GPU arms: cancelled first, uncancelled second when the path crossfades.
+///
+/// Both arms go through `bytes_from_symbol_stream`, so the framing cannot drift between them —
+/// which is the structural half of #1433's lesson, where the GPU path's own copy of the slice
+/// silently lacked the cancellation for 71 days.
+fn variants_from_parts(
+    iv: Vec<f32>,
+    qv: Vec<f32>,
+    crossfade: bool,
+    preamble_syms: usize,
+) -> Result<Vec<Vec<u8>>, ModemError> {
+    if !crossfade {
+        return Ok(vec![bytes_from_symbol_stream(&iv, &qv, preamble_syms)?]);
+    }
+    let (mut ci, mut cq) = (iv.clone(), qv.clone());
+    cancel_crossfade_isi(&mut ci, &mut cq);
+    let cancelled = bytes_from_symbol_stream(&ci, &cq, preamble_syms)?;
+    let uncancelled = bytes_from_symbol_stream(&iv, &qv, preamble_syms)?;
+    Ok(vec![cancelled, uncancelled])
 }
 
 /// Absolute additive SNR (dB) of a received BPSK frame — the rate controller's input.
@@ -196,6 +261,20 @@ pub fn bpsk_demodulate_with_expected(
     // so the SNR is measured on exactly the symbols that get decoded.
     let (i_syms, q_syms) = symbol_stream_with_expected(samples, config, expected)?;
 
+    bytes_from_symbol_stream(&i_syms, &q_syms, preamble_syms)
+}
+
+/// Slice the data span out of a symbol stream and differentially decode it to bytes.
+///
+/// Extracted from [`bpsk_demodulate_with_expected`] so the cancelled and uncancelled arms of
+/// `demodulate_variants` (#1428) and the GPU path all reach bytes through ONE piece of framing
+/// logic. Previously the CPU and GPU paths each open-coded this slice; the GPU copy is how
+/// #1433 went 71 days without the cancellation.
+fn bytes_from_symbol_stream(
+    i_syms: &[f32],
+    q_syms: &[f32],
+    preamble_syms: usize,
+) -> Result<Vec<u8>, ModemError> {
     if i_syms.len() <= preamble_syms + TAIL_SYMS {
         return Err(ModemError::Demodulation(
             "no data symbols after preamble".into(),
@@ -205,25 +284,20 @@ pub fn bpsk_demodulate_with_expected(
     // Differential phase detection (handles absolute-phase ambiguity).
     // We take consecutive (I,Q) pairs and compute Re(z[k] * conj(z[k-1])).
     // Positive → same phase → NRZI "0" (no flip); negative → "1" (flip).
-    let data_syms_start = preamble_syms;
     let data_syms_end = i_syms.len() - TAIL_SYMS;
-
-    if data_syms_start >= data_syms_end {
+    if preamble_syms >= data_syms_end {
         return Ok(vec![]);
     }
 
-    // Build the full range including the last preamble symbol as the reference
-    // for the first data bit.
-    let range_start = preamble_syms - 1; // include prev preamble symbol as reference
+    // Include the last preamble symbol as the reference for the first data bit.
+    let range_start = preamble_syms - 1;
     let iq: Vec<(f32, f32)> = i_syms[range_start..data_syms_end]
         .iter()
         .zip(q_syms[range_start..data_syms_end].iter())
         .map(|(&i, &q)| (i, q))
         .collect();
 
-    let bits = differential_decode(&iq);
-    let bytes = bits_to_bytes(&bits);
-    Ok(bytes)
+    Ok(bits_to_bytes(&differential_decode(&iq)))
 }
 
 // ── AFC frequency-offset estimator ───────────────────────────────────────────
@@ -517,6 +591,44 @@ fn bpsk_demodulate_rrc_gpu(
     Ok(bits_to_bytes(&bits))
 }
 
+/// The GPU path's symbol stream **before** cancellation, or `None` when it must fall back to CPU.
+///
+/// The GPU counterpart of `symbol_stream_parts_with_expected`. Both GPU consumers — the single-arm
+/// `bpsk_demodulate_with_gpu` and the two-arm `bpsk_demodulate_variants_with_gpu` — acquire through
+/// this one function, so the arms cannot drift apart again the way the GPU slice drifted from the
+/// CPU one in #1433.
+///
+/// `None` means "no GPU answer" (the timing search or the IQ kernel declined) and the caller falls
+/// back to the CPU path. Errors are real demodulation failures and propagate.
+#[cfg(feature = "gpu")]
+#[allow(clippy::type_complexity)]
+fn gpu_symbol_stream_parts(
+    samples: &[f32],
+    config: &ModulationConfig,
+    ctx: &openpulse_gpu::GpuContext,
+) -> Result<Option<(Vec<f32>, Vec<f32>)>, ModemError> {
+    let baud = parse_baud_rate(&config.mode)?;
+    let fs = config.sample_rate as f32;
+    let fc = config.center_frequency;
+    let n = samples_per_symbol(fs, baud)?;
+
+    if samples.len() < n * (PREAMBLE_SYMS + 1) {
+        return Err(ModemError::Demodulation("signal too short".into()));
+    }
+
+    let expected = expected_preamble_symbols(PREAMBLE_SYMS);
+    let Some(offset) =
+        openpulse_gpu::timing_offset_search_gpu(ctx, samples, n, PREAMBLE_SYMS, &expected, fc, fs)
+    else {
+        return Ok(None);
+    };
+
+    let effective = &samples[offset.min(samples.len())..];
+    Ok(openpulse_gpu::bpsk_iq_demod_gpu(
+        ctx, effective, n, fc, fs, offset,
+    ))
+}
+
 /// GPU-accelerated demodulation path.
 #[cfg(feature = "gpu")]
 pub fn bpsk_demodulate_with_gpu(
@@ -529,40 +641,14 @@ pub fn bpsk_demodulate_with_gpu(
         return bpsk_demodulate_rrc_gpu(samples, config, ctx);
     }
 
-    let baud = parse_baud_rate(&config.mode)?;
-    let fs = config.sample_rate as f32;
-    let fc = config.center_frequency;
-    let n = samples_per_symbol(fs, baud)?;
-
-    if samples.len() < n * (PREAMBLE_SYMS + 1) {
-        return Err(ModemError::Demodulation("signal too short".into()));
-    }
-
-    let expected = expected_preamble_symbols(PREAMBLE_SYMS);
-    let offset = match openpulse_gpu::timing_offset_search_gpu(
-        ctx,
-        samples,
-        n,
-        PREAMBLE_SYMS,
-        &expected,
-        fc,
-        fs,
-    ) {
-        Some(o) => o,
-        None => return bpsk_demodulate(samples, config),
+    let Some((mut i_syms, mut q_syms)) = gpu_symbol_stream_parts(samples, config, ctx)? else {
+        return bpsk_demodulate(samples, config);
     };
-
-    let effective = &samples[offset.min(samples.len())..];
-    let (mut i_syms, mut q_syms) =
-        match openpulse_gpu::bpsk_iq_demod_gpu(ctx, effective, n, fc, fs, offset) {
-            Some(iq) => iq,
-            None => return bpsk_demodulate(samples, config),
-        };
 
     // #1433: the CPU arm cancels the crossfade ISI inside `symbol_stream_with_expected`
     // (`demodulate.rs`, the `cancel_crossfade_isi` call after `demodulate_iq`); this path landed
     // 2026-05-04 and #821 added the cancellation 2026-07-13 to that function only, so the GPU arm
-    // decoded the uncancelled `r_k = a_k + β·a_{k+1}` for four months. Measured on a 200 B frame at
+    // decoded the uncancelled `r_k = a_k + β·a_{k+1}` for 71 days. Measured on a 200 B frame at
     // 0 dB total-power SNR: uncancelled 0/16 frames against the CPU arm's 11/16.
     //
     // Applied to the WHOLE symbol stream before the preamble/tail slice below, because the
@@ -571,26 +657,30 @@ pub fn bpsk_demodulate_with_gpu(
     // is what holds the two together.
     cancel_crossfade_isi(&mut i_syms, &mut q_syms);
 
-    if i_syms.len() <= PREAMBLE_SYMS + TAIL_SYMS {
-        return Err(ModemError::Demodulation(
-            "no data symbols after preamble".into(),
-        ));
+    bytes_from_symbol_stream(&i_syms, &q_syms, PREAMBLE_SYMS)
+}
+
+/// GPU counterpart of [`bpsk_demodulate_variants`] — one acquisition, both decision arms.
+///
+/// The daemon is `default = ["gpu"]` and registers `BpskPlugin::with_gpu` whenever an adapter is
+/// present, so a variants implementation that only covered the CPU path would ship the union
+/// invisible on the binary that runs on air. That is exactly #1433's shape, one method over, and
+/// it is why this function exists rather than a `self.demodulate()` fallback.
+#[cfg(feature = "gpu")]
+pub fn bpsk_demodulate_variants_with_gpu(
+    samples: &[f32],
+    config: &ModulationConfig,
+    ctx: &openpulse_gpu::GpuContext,
+) -> Result<Vec<Vec<u8>>, ModemError> {
+    // The RRC arm does not crossfade, so it has one arm and the CPU path reports that correctly.
+    if matches!(config.pulse_shape, PulseShape::Rrc { .. }) || config.mode.ends_with("-RRC") {
+        return bpsk_demodulate_variants(samples, config);
     }
-
-    let data_syms_end = i_syms.len() - TAIL_SYMS;
-    if PREAMBLE_SYMS >= data_syms_end {
-        return Ok(vec![]);
+    match gpu_symbol_stream_parts(samples, config, ctx)? {
+        Some((iv, qv)) => variants_from_parts(iv, qv, true, PREAMBLE_SYMS),
+        // A GPU fallback takes the CPU path, which reports its own arm count.
+        None => bpsk_demodulate_variants(samples, config),
     }
-
-    let range_start = PREAMBLE_SYMS - 1;
-    let iq: Vec<(f32, f32)> = i_syms[range_start..data_syms_end]
-        .iter()
-        .zip(q_syms[range_start..data_syms_end].iter())
-        .map(|(&i, &q)| (i, q))
-        .collect();
-
-    let bits = differential_decode(&iq);
-    Ok(bits_to_bytes(&bits))
 }
 
 // ── RRC baseband demodulation path ───────────────────────────────────────────
@@ -1006,6 +1096,123 @@ pub(crate) fn bits_to_bytes(bits: &[bool]) -> Vec<u8> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn snr_fixture() -> (Vec<f32>, ModulationConfig) {
+        let cfg = ModulationConfig {
+            mode: "BPSK250".to_string(),
+            sample_rate: 8000,
+            center_frequency: 1500.0,
+            pulse_shape: PulseShape::Hann,
+            ..Default::default()
+        };
+        let payload: Vec<u8> = (0..120u32)
+            .map(|i| (i.wrapping_mul(97) >> 3) as u8)
+            .collect();
+        let tx = crate::modulate::bpsk_modulate(&payload, &cfg).expect("modulate");
+        (tx, cfg)
+    }
+
+    /// `estimate_snr_db` must keep consuming the CANCELLED stream (#1428).
+    ///
+    /// `MATCHED_FILTER_LOSS_DB = 7.1` was fitted on the cancelled stream, and the #1428 split of
+    /// `symbol_stream_with_expected` into raw parts plus a cancelling wrapper makes it a one-line
+    /// edit to feed SNR the uncancelled one instead. **Nothing else would catch that**: the
+    /// cancellation moves the residual by ≲1 dB while `bpsk_snr_tracks_a_fade` tolerates 3.0 dB, so
+    /// the rate controller's input could shift under a green gate.
+    ///
+    /// Asserted bit-for-bit against an independently cancelled copy of the raw parts, and with a
+    /// control requiring the two streams to actually DIFFER — otherwise a build where
+    /// `cancel_crossfade_isi` had become a no-op would satisfy the first assertion vacuously.
+    #[test]
+    fn symbol_stream_feeds_snr_the_cancelled_stream() {
+        let (tx, cfg) = snr_fixture();
+        let expected = expected_preamble_symbols(PREAMBLE_SYMS);
+        let (raw_i, raw_q, crossfade) =
+            symbol_stream_parts_with_expected(&tx, &cfg, &expected).expect("parts");
+        assert!(
+            crossfade,
+            "BPSK250 is the crossfade path; the fixture is wrong"
+        );
+
+        let (mut want_i, mut want_q) = (raw_i.clone(), raw_q.clone());
+        cancel_crossfade_isi(&mut want_i, &mut want_q);
+
+        let (got_i, got_q) = symbol_stream(&tx, &cfg).expect("stream");
+        assert_eq!(
+            got_i, want_i,
+            "symbol_stream (which estimate_snr_db consumes) is no longer the cancelled stream"
+        );
+        assert_eq!(got_q, want_q, "same, on the quadrature arm");
+
+        // Control: the two streams must genuinely differ, or the assertion above is vacuous.
+        assert_ne!(
+            raw_i, want_i,
+            "cancel_crossfade_isi changed nothing on this fixture, so the pin above proves nothing"
+        );
+    }
+
+    /// Deterministic AWGN at a given total-power SNR. Box-Muller over an LCG.
+    fn awgn(signal: &[f32], snr_db: f32, seed: u64) -> Vec<f32> {
+        let p: f32 = signal.iter().map(|s| s * s).sum::<f32>() / signal.len().max(1) as f32;
+        let sigma = (p / 10f32.powf(snr_db / 10.0)).sqrt();
+        let mut st = seed.wrapping_mul(0x9E37_79B9_7F4A_7C15).wrapping_add(1);
+        let mut u = || -> f32 {
+            st = st
+                .wrapping_mul(6_364_136_223_846_793_005)
+                .wrapping_add(1_442_695_040_888_963_407);
+            ((st >> 11) as f32 / (1u64 << 53) as f32).clamp(1e-9, 1.0 - 1e-9)
+        };
+        signal
+            .iter()
+            .map(|&s| {
+                let (a, b) = (u(), u());
+                s + sigma * (-2.0 * a.ln()).sqrt() * (std::f32::consts::TAU * b).cos()
+            })
+            .collect()
+    }
+
+    /// Variant 0 is byte-identical to `demodulate` — the trait contract hangs off `demodulate`.
+    #[test]
+    fn variant_zero_is_the_shipped_demodulate() {
+        let (tx, cfg) = snr_fixture();
+        for rx in [tx.clone(), awgn(&tx, 0.0, 7)] {
+            let variants = bpsk_demodulate_variants(&rx, &cfg).expect("variants");
+            let shipped = bpsk_demodulate(&rx, &cfg).expect("demodulate");
+            assert_eq!(variants[0], shipped, "variant 0 must BE the shipped decode");
+            assert_eq!(variants.len(), 2, "BPSK250 crossfades, so it has two arms");
+        }
+    }
+
+    /// The second arm must be a genuinely different decode — **on a noisy input**.
+    ///
+    /// On a CLEAN fixture the two arms are byte-identical: the crossfade bias is small against a
+    /// noiseless signal and flips no differential decision, so the union would cost an RS trial and
+    /// gain nothing. The arms diverge only where the union exists to help. A version of this test
+    /// written on the clean fixture failed for that reason, which is the useful form of the fact:
+    /// **an invariant about the two arms differing is only meaningful under noise.**
+    #[test]
+    fn the_second_arm_differs_from_the_first_under_noise() {
+        let (tx, cfg) = snr_fixture();
+        let clean = bpsk_demodulate_variants(&tx, &cfg).expect("variants");
+        assert_eq!(
+            clean[0], clean[1],
+            "documenting the boundary: noiseless, the arms agree"
+        );
+
+        let mut differing = 0;
+        for seed in 0..8u64 {
+            let v = bpsk_demodulate_variants(&awgn(&tx, 0.0, seed), &cfg).expect("variants");
+            if v[0] != v[1] {
+                differing += 1;
+            }
+        }
+        assert!(
+            differing >= 4,
+            "only {differing}/8 noisy seeds separated the arms; the second arm is not \
+             contributing a distinct decode and the union cannot pay for itself"
+        );
+    }
+
     use crate::modulate::bytes_to_bits;
 
     #[test]
