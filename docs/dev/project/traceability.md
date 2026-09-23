@@ -15,6 +15,85 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-09-23 — #1428 the union: both crossfade arms, adjudicated by the FEC
+
+**Requirement/change.** #1363 / #1428: BPSK's crossfade-ISI cancellation wins AWGN decisively and
+loses on `moderate_f1` (harm localised to delayed-dominant dips, 2026-09-22 entry). In #1428 step 1
+(PR #1432 — soft-uncancelled against hard-cancelled, union computed from the discordant pairs) that
+was 96/96 against 12/96 at −2 dB AWGN and 38/96 against 49/96 at `moderate_f1` 8 dB, union 52/96.
+Neither arm dominates. The union demodulates both from one acquisition and keeps the first that RS,
+the 4-byte length prefix and CRC-16 accept — no predicate, where the per-symbol gate it replaces
+needed a fitted threshold.
+
+**Design**, reviewed before the code it covered; the reviews are recorded in
+`docs/dev/reviews/review-1428-union.md`:
+- `ModulationPlugin::demodulate_variants`, additive with a default body (trait `3.0.0` → `3.1.0`).
+  BPSK returns cancelled then uncancelled from ONE timing search and ONE `demodulate_iq`; `-RRC`
+  returns one arm, since it does not crossfade.
+- BPSK's override carries its own GPU branch. The trait default would have returned ONE variant on
+  the GPU daemon while CPU tests saw two — #1433's shape, one method over.
+- One hard-decode seam, `decode_through_arms` / `decode_variants`. `stage_demodulate_payload` had
+  eleven callers; the six FEC-protected chains now go through the seam, and the five call sites that
+  remain carry four stated reasons at the function. The decode closure takes `&[u8]`, not
+  `&mut Self`, so a losing arm cannot move AFC, HARQ retention, the rate controller or the SNR record.
+- `decode_variants` is split from the demodulation because `receive_from_samples_with_fec_inner`
+  runs `update_afc_estimate` between them; folding them would demodulate arm 1 at a different centre
+  frequency than arm 0.
+
+**Measured**, each paired against a variant-0-only build on identical channels. Every fixture is
+BPSK250 + `Rs` on synthetic channels.
+- **Gain, and where it was and was not shown.** On 200 B plain-`Rs` frames at `moderate_f1` @ 8 dB:
+  +10/48 via `receive_with_fec_mode` and +18/96 via `ota_decode_burst`. On 29 B frames (which
+  `free_rs_strengthening` upgrades to t = 32) the union matched arm 0 in 7 of 8 `moderate_f1` cells
+  and was +1 in the eighth, and gained +17/384 on a 0.01 Hz fade. The 29 B sweep also set noise from
+  the unfaded frame's RMS in pure AWGN, where the 200 B runs embedded the frame in recorded idle —
+  so the two are not one comparison, and which difference removed the `moderate_f1` gain is untested.
+- **Frames lost to the union: zero** in every paired run — 96 `ota_decode_burst` seeds, 288 AWGN
+  pairs, 768 fading pairs. On the single-shot `receive_with_fec_mode` path this is structural rather
+  than measured: arm 0 is tried first on the same buffer.
+- **Cost:** per-burst ratio 1.017, 95 % CI [0.93, 1.10], nine within-round pairs. Arm 1 ran on ~126
+  attempts per burst — this fixture's onset-scan geometry, not a property of the union. By structure
+  the second arm is a few per cent of an attempt; the interval is consistent with that and cannot
+  resolve it.
+- **SNR on frames credited to arm 1 reads low:** paired on the 8 seeds both builds decode, median
+  −2.97 dB (−0.70 to −6.88), negative on all 8; one frame only the union decodes read −19.3 dB.
+  Probable cause, unmeasured (the discriminating test is in the follow-up issue): `estimate_snr_db`
+  rebuilds symbols from the CANCELLED arm's decisions, and a wrong decision leaves the window holding
+  it largely booked as noise. Not new, but exercised more often. On the ladder, measured: a decoded
+  frame is never answered with a demotion (`a_decoded_frame_is_never_answered_with_a_demotion`, fed
+  −20 dB). By code read: the evidence climb does not read the SNR, and the hard arm records no SNR,
+  so `last_rx_snr_db()` (QSY scan, ADIF) never sees it. It does reach operators, via
+  `OtaRateDecision`.
+- **AFC:** at 50 Hz the uncancelled arm can decode a burst before the settle runs. At offset 0 that
+  commits no correction; in the onset scan it commits the fine estimate at `afc_step = 0.1`, so the
+  correction converges ~10 % per burst instead of in one settle (measured 5.0 → 23.5 Hz over six
+  transmissions). AWGN, −4 to +12 dB, 288 pairs: zero lost; on the first burst the skip occurs only
+  from +8 dB. Fading, `moderate_f1` and a 0.01 Hz fade chosen because it measurably swings burst to
+  burst (9/84 consecutive drops > 6 dB, against 0/84 for `moderate_f1`), 768 pairs: zero lost. One
+  union-specific excursion: an arm-1 win moved a correct 51.0 Hz to 63.4 Hz on a transmission the
+  variant-0-only build failed to decode.
+
+**Gates.**
+- `daemon_frequency_acquisition` split: 50 Hz asserts the decode only (REQ-PHY-03 at its bound);
+  100 Hz — where neither arm decodes unaided — asserts the decode AND that the acquisition pass ran.
+  Sabotage: destroying the settle's estimate fails the 100 Hz test and leaves the 50 Hz one green.
+- `hard_variant_conformance` (new, 67 modes, 9 plugins) and `union_second_arm_wiring` (new; the
+  second arm is reached and wins on a fade, and is never credited on a clean channel).
+- `gpu_cpu_equivalence` now guards the ceiling side of the cliff, not only the floor.
+- `alternate_arm_decodes` reworded as wiring evidence: it read 26 where only 18 frames needed arm 1.
+- `engine_cancellation_ab` relabelled: its second column is now the union, not the cancelled arm.
+
+**Corrections recorded in this change.** "Four months" was 71 days — two sites in the tree, plus
+the #1433 body and PR #1434's description (the merged commit message gives dates, no duration). The
+acquisition test's header claimed acquisition was needed "only past ~200 Hz", which is false.
+`plugin-trait-versioning.md` said `2.0.0` for seven weeks after the constant became `3.0.0`.
+
+**Follow-ups filed:** the SNR-estimator mechanism, and the phase-1 AFC behaviour.
+
+**Tests → results.** Workspace gate quoted in the PR.
+
+---
+
 ## 2026-09-22 — the GPU BPSK demodulator never cancelled the crossfade ISI (#1433)
 
 **Requirement/change.** `BpskPlugin::demodulate` dispatches to the GPU when a context exists
@@ -63,7 +142,7 @@ GPU; `64qam` has no crossfade canceller. BPSK was the only affected plugin.
 and the workspace gate runs `--no-default-features`, so **the gate cannot run them**; `gate.sh`'s
 `--all-features` pass is compile + lint only, and CI's `gpu` job was removed in #1380. The numbers
 above were run by hand on a host with a working adapter (`the_adapter_is_available_or_this_file_
-proves_nothing` passes here). That absence of an automatic gate is why this survived four months.
+proves_nothing` passes here). That absence of an automatic gate is why this survived 71 days.
 
 **Tests → results.** `cargo test -p bpsk-plugin --features gpu --test gpu_cpu_equivalence` —
 5 passed, 0 failed. The new test **fails before the fix** (0/16 against 11/16, with the other four

@@ -776,6 +776,9 @@ pub struct ModemEngine {
     /// Count of capture blocks the notch processed — a tripwire: an enabled notch that never runs
     /// on a given path (e.g. a new capture path that skips the InputCapture seam) leaves this at 0.
     notch_blocks_processed: u64,
+    /// Accepted frames produced by a non-primary decision arm (#1428). Wiring evidence, not a rescue
+    /// count — see [`alternate_arm_decodes`](Self::alternate_arm_decodes).
+    alternate_arm_decodes: u64,
     notch_freqs_seen: std::collections::BTreeSet<i32>,
     notch_protect_extremes: Option<(f32, f32, f32, f32)>,
     /// Count of settle anchors condemned by the micro-sweep and handed back to the scan.
@@ -1010,6 +1013,7 @@ impl ModemEngine {
             notch_in_band_interferers: Vec::new(),
             rx_mode: None,
             notch_blocks_processed: 0,
+            alternate_arm_decodes: 0,
             notch_freqs_seen: std::collections::BTreeSet::new(),
             notch_protect_extremes: None,
             settle_condemnations: 0,
@@ -4625,8 +4629,11 @@ impl ModemEngine {
             FecMode::SoftConcatenated | FecMode::Ldpc | FecMode::LdpcHighRate
         );
 
-        // Soft codecs consume LLRs; hard codecs consume demodulated wire bytes.
-        let (llrs, raw_wire) = {
+        // Soft codecs consume LLRs; hard codecs consume demodulated wire bytes — and since #1428
+        // the hard family takes EVERY decision arm the mode offers, adjudicated by its own FEC.
+        // Demodulated here, before `update_afc_estimate` below, so all arms share one centre
+        // frequency; the decode runs after, via `decode_variants`.
+        let (llrs, raw_variants) = {
             let plugin = self
                 .plugins
                 .get(mode)
@@ -4641,7 +4648,7 @@ impl ModemEngine {
             } else {
                 (
                     None,
-                    Some(self.stage_demodulate_payload(plugin, mode, &samples)?),
+                    Some(self.stage_demodulate_variants(plugin, mode, &samples)?),
                 )
             }
         };
@@ -4652,7 +4659,9 @@ impl ModemEngine {
         // hard codecs the byte count is what the multiple-of-255 / prefix logic keys off.
         debug!(
             "fec demod: mode={mode} fec={fec:?} soft={soft} wire_bytes={} llrs={}",
-            raw_wire.as_ref().map_or(0, |w| w.bytes.len()),
+            raw_variants
+                .as_ref()
+                .map_or(0, |v| v.first().map_or(0, |w| w.bytes.len())),
             llrs.as_ref().map_or(0, |l| l.len())
         );
 
@@ -4685,30 +4694,48 @@ impl ModemEngine {
         // to the FEC family it will be decoded with — hard-decision modes (Rs*/Concatenated) carry
         // `raw_wire = Some`, soft-decision modes (SoftConcatenated/Ldpc*) carry `llrs = Some`. Each
         // per-arm `.unwrap()` below is guarded by that producer↔arm pairing, never operator input.
+        // The hard family, tried on every decision arm (#1428). The closure takes bytes and not
+        // `&mut Self`, so a losing arm cannot touch AFC, HARQ retention, the rate controller or the
+        // SNR record on its way past — that is a property of the signature, not a promise.
+        if let Some(variants) = raw_variants {
+            let corrected = self.decode_variants(mode, variants, |bytes| match fec {
+                // decode_prefix, not decode: this is the SCANNING receive, so `bytes` is a
+                // fixed-length window out of the capture buffer — its length is a function of
+                // the window, not the frame, so `decode` rejected it on the multiple-of-255
+                // gate before RS ever ran whenever the capture outlasted the frame
+                // (audit 2026-07-19). `decode_combined_llrs` and the single-shot
+                // `receive_with_fec_mode` keep strict `decode` — they know the frame extent.
+                FecMode::Rs => Ok(WirePayload {
+                    bytes: Self::rs_decode_prefix_free_strengthened_pure(bytes)?,
+                }),
+                // Prefix trial, not a straight deinterleave: the permutation is derived from the
+                // buffer length, so the window length must be trimmed to the frame's *before* it
+                // is unscrambled. Same reason the `Rs` arm above uses `decode_prefix`.
+                FecMode::RsInterleaved => Ok(WirePayload {
+                    bytes: rs_interleaved_decode_prefix(DEFAULT_INTERLEAVER_DEPTH, bytes)?,
+                }),
+                FecMode::Concatenated => {
+                    let conv = ConvCodec::new().decode(bytes)?;
+                    Ok(WirePayload {
+                        bytes: FecCodec::new().decode(&conv)?,
+                    })
+                }
+                FecMode::RsStrong => Ok(WirePayload {
+                    bytes: FecCodec::strong().decode_prefix(bytes)?,
+                }),
+                // ShortRs (byte-exact, no length prefix) and Turbo (fixed QPP block size
+                // = llrs.len()/3) both need the exact frame length, which the scanning
+                // receive can't guarantee (trailing-noise samples inflate the count), so
+                // they stay single-shot.
+                other => Err(ModemError::Demodulation(format!(
+                    "FEC mode {other:?} is not supported by the timeout receive; \
+                     use receive_with_fec_mode for a single-shot decode"
+                ))),
+            })?;
+            return self.finish_decoded_frame(mode, corrected, pending_snr);
+        }
+
         let corrected = match fec {
-            FecMode::Rs => {
-                let wire =
-                    self.route_wire_stage(PipelineStage::DemodulateDecode, raw_wire.unwrap())?;
-                WirePayload {
-                    // decode_prefix, not decode: this is the SCANNING receive, so `wire.bytes` is a
-                    // fixed-length window out of the capture buffer — its length is a function of
-                    // the window, not the frame, so `decode` rejected it on the multiple-of-255
-                    // gate before RS ever ran whenever the capture outlasted the frame
-                    // (audit 2026-07-19). `decode_combined_llrs` and the single-shot
-                    // `receive_with_fec_mode` keep strict `decode` — they know the frame extent.
-                    bytes: self.rs_decode_prefix_free_strengthened(&wire.bytes)?,
-                }
-            }
-            FecMode::RsInterleaved => {
-                let wire =
-                    self.route_wire_stage(PipelineStage::DemodulateDecode, raw_wire.unwrap())?;
-                WirePayload {
-                    // Prefix trial, not a straight deinterleave: the permutation is derived from the
-                    // buffer length, so the window length must be trimmed to the frame's *before* it
-                    // is unscrambled. Same reason the `Rs` arm above uses `decode_prefix`.
-                    bytes: rs_interleaved_decode_prefix(DEFAULT_INTERLEAVER_DEPTH, &wire.bytes)?,
-                }
-            }
             FecMode::SoftConcatenated => {
                 let llrs = llrs.unwrap();
                 let rs = soft_concat_decode_llrs(&llrs)?;
@@ -4725,25 +4752,7 @@ impl ModemEngine {
                 let info = decode_ldpc_llrs_prefix(&LdpcCodec::high_rate(), &llrs)?;
                 self.route_wire_stage(PipelineStage::DemodulateDecode, WirePayload { bytes: info })?
             }
-            FecMode::Concatenated => {
-                let wire =
-                    self.route_wire_stage(PipelineStage::DemodulateDecode, raw_wire.unwrap())?;
-                let conv = ConvCodec::new().decode(&wire.bytes)?;
-                WirePayload {
-                    bytes: FecCodec::new().decode(&conv)?,
-                }
-            }
-            FecMode::RsStrong => {
-                let wire =
-                    self.route_wire_stage(PipelineStage::DemodulateDecode, raw_wire.unwrap())?;
-                WirePayload {
-                    bytes: FecCodec::strong().decode_prefix(&wire.bytes)?,
-                }
-            }
-            // ShortRs (byte-exact, no length prefix) and Turbo (fixed QPP block size
-            // = llrs.len()/3) both need the exact frame length, which the scanning
-            // receive can't guarantee (trailing-noise samples inflate the count), so
-            // they stay single-shot.
+            // The hard family returned above; anything else reaching here is unsupported.
             other => {
                 return Err(ModemError::Demodulation(format!(
                     "FEC mode {other:?} is not supported by the timeout receive; \
@@ -4752,6 +4761,20 @@ impl ModemEngine {
             }
         };
 
+        self.finish_decoded_frame(mode, corrected, pending_snr)
+    }
+
+    /// The success tail shared by both `receive_from_samples_with_fec_inner` arms (#1428).
+    ///
+    /// Runs ONCE, for whichever decision arm won — frame decode, `HpxStateUpdate`, the
+    /// success-gated SNR record and `FrameReceived`. Keeping it in one place is what stops the
+    /// union from emitting two events or recording two SNRs when a later arm rescues a frame.
+    fn finish_decoded_frame(
+        &mut self,
+        mode: &str,
+        corrected: WirePayload,
+        pending_snr: Option<f32>,
+    ) -> Result<Vec<u8>, ModemError> {
         let frame = self.stage_decode_frame(&corrected)?;
         let frame = self.route_decoded_stage(PipelineStage::HpxStateUpdate, frame)?;
 
@@ -5189,24 +5212,21 @@ impl ModemEngine {
         let samples = self.stage_capture_input(Some(mode), device)?;
         let samples = self.route_audio_stage(PipelineStage::InputCapture, samples)?;
 
-        let raw_wire = {
-            let plugin = self
-                .plugins
-                .get(mode)
-                .ok_or_else(|| ModemError::PluginNotFound(mode.to_string()))?;
-            self.stage_demodulate_payload(plugin, mode, &samples)?
-        };
-        let raw_wire = self.route_wire_stage(PipelineStage::DemodulateDecode, raw_wire)?;
+        // Both decision arms from one acquisition, adjudicated by RS + the length prefix + CRC-16
+        // (#1428). The AFC estimate runs AFTER, so both arms demodulate at the same centre
+        // frequency — updating first would hand arm B a different `mod_cfg`.
+        let frame = self.decode_through_arms(mode, &samples, |bytes| {
+            let corrected = Self::rs_decode_free_strengthened_pure(bytes)?;
+            Frame::decode(&corrected)
+        })?;
 
         self.update_afc_estimate(mode, &samples.samples);
         self.emit_afc_update(mode);
 
-        let corrected_bytes = self.rs_decode_free_strengthened(&raw_wire.bytes)?;
-        let corrected_wire = WirePayload {
-            bytes: corrected_bytes,
+        let frame = DecodedFrame {
+            sequence: frame.sequence,
+            payload: frame.payload,
         };
-
-        let frame = self.stage_decode_frame(&corrected_wire)?;
         let frame = self.route_decoded_stage(PipelineStage::HpxStateUpdate, frame)?;
         info!("FEC receive: frame seq={}", frame.sequence);
 
@@ -5261,25 +5281,27 @@ impl ModemEngine {
         let samples = self.stage_capture_input(Some(mode), device)?;
         let samples = self.route_audio_stage(PipelineStage::InputCapture, samples)?;
 
-        let raw_wire = {
+        let raw_variants = {
             let plugin = self
                 .plugins
                 .get(mode)
                 .ok_or_else(|| ModemError::PluginNotFound(mode.to_string()))?;
-            self.stage_demodulate_payload(plugin, mode, &samples)?
+            self.stage_demodulate_variants(plugin, mode, &samples)?
         };
-        let raw_wire = self.route_wire_stage(PipelineStage::DemodulateDecode, raw_wire)?;
+
+        // Every decision arm, adjudicated by this chain's own FEC (#1428). Demodulated above,
+        // before the AFC update, so all arms share one centre frequency.
+        let corrected = self.decode_variants(mode, raw_variants, |bytes| {
+            let deinterleaved = Interleaver::new(interleaver_depth).deinterleave(bytes);
+            Ok(WirePayload {
+                bytes: FecCodec::new().decode(&deinterleaved)?,
+            })
+        })?;
 
         self.update_afc_estimate(mode, &samples.samples);
         self.emit_afc_update(mode);
 
-        let deinterleaved = Interleaver::new(interleaver_depth).deinterleave(&raw_wire.bytes);
-        let corrected_bytes = FecCodec::new().decode(&deinterleaved)?;
-        let corrected_wire = WirePayload {
-            bytes: corrected_bytes,
-        };
-
-        let frame = self.stage_decode_frame(&corrected_wire)?;
+        let frame = self.stage_decode_frame(&corrected)?;
         let frame = self.route_decoded_stage(PipelineStage::HpxStateUpdate, frame)?;
         let _ = self.event_tx.send(EngineEvent::FrameReceived {
             mode: mode.to_string(),
@@ -5340,21 +5362,25 @@ impl ModemEngine {
         let samples = self.stage_capture_input(Some(mode), device)?;
         let samples = self.route_audio_stage(PipelineStage::InputCapture, samples)?;
 
-        let raw_wire = {
+        let raw_variants = {
             let plugin = self
                 .plugins
                 .get(mode)
                 .ok_or_else(|| ModemError::PluginNotFound(mode.to_string()))?;
-            self.stage_demodulate_payload(plugin, mode, &samples)?
+            self.stage_demodulate_variants(plugin, mode, &samples)?
         };
-        let raw_wire = self.route_wire_stage(PipelineStage::DemodulateDecode, raw_wire)?;
+
+        // Every decision arm, adjudicated by this chain's own FEC (#1428). Demodulated before the
+        // AFC update below, so every arm demodulates at the same centre frequency.
+        let corrected_wire = self.decode_variants(mode, raw_variants, |bytes| {
+            let conv = ConvCodec::new().decode(bytes)?;
+            Ok(WirePayload {
+                bytes: FecCodec::new().decode(&conv)?,
+            })
+        })?;
 
         self.update_afc_estimate(mode, &samples.samples);
         self.emit_afc_update(mode);
-
-        let conv_decoded = ConvCodec::new().decode(&raw_wire.bytes)?;
-        let rs_decoded = FecCodec::new().decode(&conv_decoded)?;
-        let corrected_wire = WirePayload { bytes: rs_decoded };
 
         let frame = self.stage_decode_frame(&corrected_wire)?;
         let frame = self.route_decoded_stage(PipelineStage::HpxStateUpdate, frame)?;
@@ -5489,20 +5515,26 @@ impl ModemEngine {
         let samples = self.stage_capture_input(Some(mode), device)?;
         let samples = self.route_audio_stage(PipelineStage::InputCapture, samples)?;
 
-        let raw_wire = {
+        let raw_variants = {
             let plugin = self
                 .plugins
                 .get(mode)
                 .ok_or_else(|| ModemError::PluginNotFound(mode.to_string()))?;
-            self.stage_demodulate_payload(plugin, mode, &samples)?
+            self.stage_demodulate_variants(plugin, mode, &samples)?
         };
-        let raw_wire = self.route_wire_stage(PipelineStage::DemodulateDecode, raw_wire)?;
+
+        // Every decision arm, adjudicated by this chain's own FEC (#1428). Demodulated before the
+        // AFC update below, so every arm demodulates at the same centre frequency.
+        let corrected_wire = self.decode_variants(mode, raw_variants, |bytes| {
+            Ok(WirePayload {
+                bytes: FecCodec::strong().decode(bytes)?,
+            })
+        })?;
 
         self.update_afc_estimate(mode, &samples.samples);
         self.emit_afc_update(mode);
 
-        let rs_decoded = FecCodec::strong().decode(&raw_wire.bytes)?;
-        let frame = self.stage_decode_frame(&WirePayload { bytes: rs_decoded })?;
+        let frame = self.stage_decode_frame(&corrected_wire)?;
         let frame = self.route_decoded_stage(PipelineStage::HpxStateUpdate, frame)?;
         let _ = self.event_tx.send(EngineEvent::FrameReceived {
             mode: mode.to_string(),
@@ -6874,23 +6906,25 @@ impl ModemEngine {
         let samples = self.stage_capture_input(Some(mode), device)?;
         let samples = self.route_audio_stage(PipelineStage::InputCapture, samples)?;
 
-        let wire = {
+        let raw_variants = {
             let plugin = self
                 .plugins
                 .get(mode)
                 .ok_or_else(|| ModemError::PluginNotFound(mode.to_string()))?;
-            self.stage_demodulate_payload(plugin, mode, &samples)?
+            self.stage_demodulate_variants(plugin, mode, &samples)?
         };
-        let wire = self.route_wire_stage(PipelineStage::DemodulateDecode, wire)?;
+
+        // Every decision arm, adjudicated by this chain's own FEC (#1428). Demodulated before the
+        // AFC update below, so every arm demodulates at the same centre frequency.
+        let corrected_wire = self.decode_variants(mode, raw_variants, |bytes| {
+            Ok(WirePayload {
+                bytes: ShortFecCodec::with_ecc_len(Self::SHORT_FEC_DATA_ECC_LEN).decode(bytes)?,
+            })
+        })?;
 
         self.update_afc_estimate(mode, &samples.samples);
         self.emit_afc_update(mode);
 
-        let corrected_bytes =
-            ShortFecCodec::with_ecc_len(Self::SHORT_FEC_DATA_ECC_LEN).decode(&wire.bytes)?;
-        let corrected_wire = WirePayload {
-            bytes: corrected_bytes,
-        };
         let frame = self.stage_decode_frame(&corrected_wire)?;
         let frame = self.route_decoded_stage(PipelineStage::HpxStateUpdate, frame)?;
         let _ = self.event_tx.send(EngineEvent::FrameReceived {
@@ -7364,6 +7398,28 @@ impl ModemEngine {
         }
     }
 
+    /// The SINGLE-arm hard demodulation. Five call sites remain, for four stated reasons (#1428).
+    ///
+    /// Every chain that hard-decodes a *FEC-protected frame* now goes through
+    /// [`decode_variants`](Self::decode_variants) instead, because the union needs an adjudicator
+    /// — RS plus the length prefix and CRC-16 — to say which arm was right. These four have none,
+    /// or are not the hard-BPSK family at all:
+    ///
+    /// - `receive_from_samples` (the UNCODED path) — for BPSK it never reaches this call: it
+    ///   sign-slices `demodulate_soft` (the uncancelled arm) whenever the plugin advertises soft
+    ///   demod, pinned by `the_uncoded_production_path_takes_the_uncancelled_arm`. So this site serves
+    ///   hard-only modes, all of which offer one arm. Whether uncoded BPSK should take both is #1429,
+    ///   and it is the maintainer's call.
+    /// - `receive_with_soft_combining` — an `instruments`-only sample-domain Memory-ARQ combiner: a
+    ///   hard chain of the CANCELLED arm plus hard RS. Left single-arm because it ships in no binary
+    ///   and nothing has measured the union on averaged samples; if it ships, it takes
+    ///   `decode_through_arms`.
+    /// - `receive_window_retransmit_packet` — returns raw wire bytes with no FEC decode, so there
+    ///   is nothing to arbitrate between arms.
+    /// - the two FSK4-ACK sites — a different plugin, which offers one arm.
+    ///
+    /// If you add a hard-decode chain, use `decode_variants`; reaching for this function means
+    /// asserting one of the four reasons above applies, so say which.
     fn stage_demodulate_payload(
         &self,
         plugin: &dyn openpulse_core::plugin::ModulationPlugin,
@@ -7383,6 +7439,115 @@ impl ModemEngine {
         // XOR-ing, via scramble::descramble_llrs.
         openpulse_core::scramble::scramble(&mut wire_bytes);
         Ok(WirePayload { bytes: wire_bytes })
+    }
+
+    /// Every hard-decision wire candidate for one captured slice, descrambled (#1428).
+    ///
+    /// The variant-aware sibling of [`stage_demodulate_payload`](Self::stage_demodulate_payload),
+    /// carrying the identical `mod_cfg` construction and the identical `scramble::scramble`
+    /// un-whitening, so the arms cannot differ from the single-arm path by anything except the
+    /// plugin's own decision rule.
+    fn stage_demodulate_variants(
+        &self,
+        plugin: &dyn openpulse_core::plugin::ModulationPlugin,
+        mode: &str,
+        samples: &AudioSamples,
+    ) -> Result<Vec<WirePayload>, ModemError> {
+        let _stage = PipelineStage::DemodulateDecode;
+        let mod_cfg = ModulationConfig {
+            mode: mode.to_string(),
+            center_frequency: self.center_frequency + self.afc_correction_hz,
+            afc_correction_hz: self.afc_correction_hz,
+            ..ModulationConfig::default()
+        };
+        let variants = plugin.demodulate_variants(&samples.samples, &mod_cfg)?;
+        Ok(variants
+            .into_iter()
+            .map(|mut bytes| {
+                openpulse_core::scramble::scramble(&mut bytes);
+                WirePayload { bytes }
+            })
+            .collect())
+    }
+
+    /// Demodulate `samples` into every arm the mode offers and return the first that DECODES.
+    ///
+    /// This is the single hard-decision decode seam (#1428). Before it, `stage_demodulate_payload`
+    /// had eleven callers, each open-coding demod → route → FEC → frame, and a property wired into
+    /// one of them was absent from the other ten. That is the same duplicated-open-coding shape that
+    /// let #1433 sit inside the plugin for 71 days (the GPU path's own copy of the slice lacked the
+    /// cancellation), one layer up — #1433 itself was never an engine-seam defect.
+    ///
+    /// **`decode` takes bytes, not `&mut Self`, on purpose.** A closure that cannot reach the
+    /// engine cannot move AFC, HARQ retention, the rate controller or the SNR record while a
+    /// losing arm runs. That makes "a losing arm leaves no trace" a property of the signature
+    /// rather than a promise in a comment.
+    ///
+    /// The winner's tail — `HpxStateUpdate`, `FrameReceived`, the SNR record — stays at the call
+    /// site and runs once, on the returned bytes.
+    fn decode_through_arms<T>(
+        &mut self,
+        mode: &str,
+        samples: &AudioSamples,
+        decode: impl Fn(&[u8]) -> Result<T, ModemError>,
+    ) -> Result<T, ModemError> {
+        let variants = {
+            let plugin = self
+                .plugins
+                .get(mode)
+                .ok_or_else(|| ModemError::PluginNotFound(mode.to_string()))?;
+            self.stage_demodulate_variants(plugin, mode, samples)?
+        };
+        self.decode_variants(mode, variants, decode)
+    }
+
+    /// The decode half of [`decode_through_arms`](Self::decode_through_arms).
+    ///
+    /// Split out because `receive_from_samples_with_fec_inner` demodulates BEFORE
+    /// `update_afc_estimate` and decodes after it. Folding both halves into one call there would
+    /// move the demodulation to the far side of the AFC update, so arm B would run at a different
+    /// `center_frequency` than arm A — the #1428 harness's trap 2, reintroduced in production.
+    fn decode_variants<T>(
+        &mut self,
+        mode: &str,
+        variants: Vec<WirePayload>,
+        decode: impl Fn(&[u8]) -> Result<T, ModemError>,
+    ) -> Result<T, ModemError> {
+        let arms = variants.len();
+        let mut last_err = None;
+        for (idx, wire) in variants.into_iter().enumerate() {
+            let wire = self.route_wire_stage(PipelineStage::DemodulateDecode, wire)?;
+            match decode(&wire.bytes) {
+                Ok(out) => {
+                    if idx > 0 {
+                        // Tripwire: stays zero if a later arm is never reached or never wins, which
+                        // is indistinguishable from the union being unwired without a counter.
+                        self.alternate_arm_decodes = self.alternate_arm_decodes.saturating_add(1);
+                        debug!(
+                            "union: arm {idx} of {arms} produced the frame; arm 0 failed at this attempt (mode={mode})"
+                        );
+                    }
+                    return Ok(out);
+                }
+                Err(e) => last_err = Some(e),
+            }
+        }
+        Err(last_err.unwrap_or_else(|| {
+            ModemError::Demodulation("no demodulation variants produced".into())
+        }))
+    }
+
+    /// Accepted frames produced by a variant other than variant 0, since start-up (#1428).
+    ///
+    /// **Wiring evidence, not a rescue count.** Arm 0 keeps first claim on each *attempt*, not on
+    /// each *frame*: a later arm can win at an onset that arm 0 would have passed, where arm 0 would
+    /// have won at a later onset anyway. Measured through `ota_decode_burst` on a `moderate_f1` fade:
+    /// this counter read 26 while only 18 of those frames were ones arm 0 cannot decode at all. So a
+    /// non-zero value proves a later arm is reached and can win, which is what a tripwire needs; it
+    /// does not measure the union's gain. That comes from comparing against a variant-0-only build.
+    #[cfg(feature = "instruments")]
+    pub fn alternate_arm_decodes(&self) -> u64 {
+        self.alternate_arm_decodes
     }
 
     fn stage_decode_frame(&self, wire: &WirePayload) -> Result<DecodedFrame, ModemError> {
@@ -7406,11 +7571,17 @@ impl ModemEngine {
     /// use. A t=16 candidate is accepted only if its frame validates; otherwise the strong decode
     /// is tried.
     fn rs_decode_free_strengthened(&self, bytes: &[u8]) -> Result<Vec<u8>, ModemError> {
+        Self::rs_decode_free_strengthened_pure(bytes)
+    }
+
+    /// `self`-free form of [`rs_decode_free_strengthened`](Self::rs_decode_free_strengthened).
+    ///
+    /// The `&self` receiver only ever reached `stage_decode_frame`, which is `Frame::decode` and
+    /// pure. Exposing the pure form lets `decode_through_arms`' closure — deliberately given no
+    /// `&mut Self` (#1428) — run the same arbitration a losing arm must not be able to side-effect.
+    fn rs_decode_free_strengthened_pure(bytes: &[u8]) -> Result<Vec<u8>, ModemError> {
         if let Ok(d) = FecCodec::new().decode(bytes) {
-            if self
-                .stage_decode_frame(&WirePayload { bytes: d.clone() })
-                .is_ok()
-            {
+            if Frame::decode(&d).is_ok() {
                 return Ok(d);
             }
         }
@@ -7420,12 +7591,14 @@ impl ModemEngine {
     /// `decode_prefix` variant of [`rs_decode_free_strengthened`](Self::rs_decode_free_strengthened)
     /// for the scanning receive, whose input length is a function of the capture window rather than
     /// the frame.
-    fn rs_decode_prefix_free_strengthened(&self, bytes: &[u8]) -> Result<Vec<u8>, ModemError> {
+    /// `self`-free by construction, for `decode_variants`' closure. See
+    /// [`rs_decode_free_strengthened_pure`](Self::rs_decode_free_strengthened_pure).
+    ///
+    /// The `&self` wrapper this replaced lost its last caller when every scanning hard chain moved
+    /// to `decode_variants` (#1428).
+    fn rs_decode_prefix_free_strengthened_pure(bytes: &[u8]) -> Result<Vec<u8>, ModemError> {
         if let Ok(d) = FecCodec::new().decode_prefix(bytes) {
-            if self
-                .stage_decode_frame(&WirePayload { bytes: d.clone() })
-                .is_ok()
-            {
+            if Frame::decode(&d).is_ok() {
                 return Ok(d);
             }
         }

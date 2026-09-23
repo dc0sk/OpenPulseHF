@@ -116,6 +116,25 @@ impl ModulationPlugin for BpskPlugin {
         demodulate::bpsk_demodulate(samples, config)
     }
 
+    /// Both crossfade-cancellation arms from one acquisition (#1428).
+    ///
+    /// The GPU branch is not an optimisation here — it is the correctness case. The daemon is
+    /// `default = ["gpu"]` and registers `with_gpu` whenever an adapter exists, so relying on the
+    /// trait's default body (which calls `demodulate`, i.e. the GPU path) would return ONE variant
+    /// on the binary that runs on air while the CPU tests saw two. That is #1433's shape exactly,
+    /// one method over.
+    fn demodulate_variants(
+        &self,
+        samples: &[f32],
+        config: &ModulationConfig,
+    ) -> Result<Vec<Vec<u8>>, ModemError> {
+        #[cfg(feature = "gpu")]
+        if let Some(ref ctx) = self.gpu {
+            return demodulate::bpsk_demodulate_variants_with_gpu(samples, config, ctx);
+        }
+        demodulate::bpsk_demodulate_variants(samples, config)
+    }
+
     fn demodulate_soft(
         &self,
         samples: &[f32],

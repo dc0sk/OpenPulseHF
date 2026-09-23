@@ -2,7 +2,7 @@
 project: openpulsehf
 doc: docs/dev/plugin-trait-versioning.md
 status: living
-last_updated: 2026-04-24
+last_updated: 2026-09-23
 ---
 
 # Plugin Trait Versioning and Compatibility
@@ -39,10 +39,22 @@ Plugin trait compatibility is tracked via **semantic versioning** applied to the
 <major>.<minor>.<patch>
 ```
 
-The current trait version is **`2.0.0`** — bumped from `1.1.0` by #1053, which changed
-`ModulationPlugin::preamble_template` to return `PreambleTemplate` (samples bundled with the ρ
-constants measured for that waveform) instead of bare `Vec<f32>`. See `docs/dev/project/traceability.md`
-for the rationale and the one-line migration.
+The current trait version is **`3.1.0`**. Recent history, newest first:
+
+- **`3.1.0`** (#1428, minor) — added `ModulationPlugin::demodulate_variants`, every hard-decision
+  wire a mode can produce from one acquisition. Additive with a default body returning
+  `vec![self.demodulate(..)?]`, so every existing plugin compiles unchanged; BPSK overrides it to
+  offer both crossfade-cancellation arms.
+- **`3.0.0`** (PR #1071, commit `f3c58ce3`, 2026-08-04, major) — `PreambleTemplate` gained a required
+  `for_mode` field binding its ρ constants to the one mode they were measured for.
+- **`2.0.0`** (#1053, major) — `preamble_template` returns `PreambleTemplate` (samples bundled with
+  the ρ constants measured for that waveform) instead of bare `Vec<f32>`.
+
+**Corrected 2026-09-23:** this line said `2.0.0` for seven weeks after the constant had become
+`3.0.0` — the bump in `f3c58ce3` updated `plugin.rs` and not this document. The constant is the
+canonical source (below); when you change it, change this list in the same commit.
+
+See `docs/dev/project/traceability.md` for rationale and migrations.
 
 ### Trait Version Identification
 
