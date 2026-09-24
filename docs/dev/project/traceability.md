@@ -15,6 +15,40 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-09-24 — #1435 refuted; BPSK's timing search locks early (#1438); #1437's OTA gain corrected
+
+**Change.** Test-only, plus this correction. `plugins/bpsk/src/demodulate.rs` gains module
+`snr_decision_discriminator`: two `#[ignore]`d measurements (decisions on a fixed span; a lead-in sweep)
+and one default-run characterisation pin, `the_timing_search_locks_early_when_a_lead_makes_it_reachable`,
+which asserts the measured early lock at lead 16 (objective defect) and lead 32 (range defect) and is
+expected to fail when either is fixed. Sabotage-verified.
+
+**#1435 refuted.** On a fixed span, decisions cost ≤ 0.6 dB on `moderate_f1` even for the worst frames
+(taken at the symbol boundary). #1435's −2.97 dB median came from where the decoded span started:
+re-measuring on the same channel realisation with a fresh engine, changing only the span start (4000
+against 4032), reproduced 7 of its 8 paired differences to within 0.02 dB; the eighth was read at a
+phase-2 AFC correction.
+
+**The defect (#1438), two in one function.** `find_timing_offset_with_expected`'s objective peaks
+before the symbol boundary (computed from the two window definitions: 1.190 at d = −9 against 1.000 at
+0), and measured it locks at d = −8 wherever that is reachable; and it scans only `0..n`, so for leads
+≥ n the boundary is never visited. At lead 0 neither shows. The SNR estimate at the early lock is
+capped: 3.05 / 3.50 / 3.55 / 3.55 dB at a true 10 / 20 / 30 / 40 dB. Through `ota_decode_burst` on a
+clean 10 dB channel it read 3.0 dB at best, identically in a variant-0-only build, except at j = 20, where only the union decodes
+from the earlier 4000 span (−6.0 dB against the variant-0 build's 3.0 dB from 4032) — it predates the union. BPSK's fast SNR climb cannot fire on the OTA path: `hpx_hf`'s
+BPSK ceilings are 6.0–9.0 dB.
+
+**Correction to the 2026-09-23 #1428 entry.** "+18/96 via `ota_decode_burst`" is confounded, in an unknown
+direction: 17 of the 18 union-only frames were decoded from a span one symbol before the frame, where
+the lock is 8 samples early; whether they decode at the boundary is unmeasured. "+10/48 via
+`receive_with_fec_mode`" (lead 0) stands.
+
+**Tests → results.** `cargo test -p bpsk-plugin --no-default-features --lib snr_decision_discriminator`:
+1 passed, 2 ignored. Both pin assertions were watched failing under sabotage, each naming its defect.
+Workspace gate: quoted in the PR.
+
+---
+
 ## 2026-09-23 — #1428 the union: both crossfade arms, adjudicated by the FEC
 
 **Requirement/change.** #1363 / #1428: BPSK's crossfade-ISI cancellation wins AWGN decisively and

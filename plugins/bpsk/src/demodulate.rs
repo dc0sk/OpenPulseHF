@@ -3173,3 +3173,417 @@ mod carrier_dip_tiebreak {
         }
     }
 }
+
+#[cfg(test)]
+mod snr_decision_discriminator {
+    //! #1435 — does BPSK's SNR estimate read low BECAUSE of the decisions it is fed?
+    //!
+    //! One received span, two decision sequences: SHIPPED (the cancelled stream's differential
+    //! decisions, integrated exactly as `estimate_snr_db` does) and ORACLE (the true transmitted
+    //! symbols). Holding the span fixed removes the confound that left #1435's paired measurement
+    //! unable to separate "different onset" from "different decisions".
+    //!
+    //! Pre-registered. If #1435's mechanism is right: identical estimates when no decision is wrong;
+    //! SHIPPED falls below ORACLE as decision errors appear, driven by windows that hold a sign
+    //! DISCONTINUITY rather than by paired errors. **Falsifier:** SHIPPED ≈ ORACLE despite many
+    //! decision errors — then the bias #1435 measured comes from somewhere other than the decisions.
+    //!
+    //! `additive_snr_db_windowed` already documents that it "saturates once symbol errors are common"
+    //! — this measures how much, and whether that is the whole story.
+    use super::*;
+    use crate::modulate::{bytes_to_bits, preamble_bits};
+    use openpulse_channel::{
+        awgn::AwgnChannel, watterson::WattersonChannel, AwgnConfig, ChannelModel, WattersonConfig,
+    };
+    use openpulse_dsp::constellation::additive_snr_db_windowed;
+
+    /// Must equal `estimate_snr_db`'s; the fidelity assertion below fails if it does not.
+    const WINDOW_SYMS: usize = 16;
+
+    fn cfg() -> ModulationConfig {
+        ModulationConfig {
+            mode: "BPSK250".to_string(),
+            sample_rate: 8000,
+            center_frequency: 1500.0,
+            pulse_shape: PulseShape::Hann,
+            ..Default::default()
+        }
+    }
+
+    /// The transmitted symbols. This re-derives the modulator's bit layout, so it is NOT trusted:
+    /// the clean-channel control below requires it to agree with the shipped decisions on every
+    /// symbol, which fails if it is misaligned or wrong.
+    fn truth(payload: &[u8]) -> Vec<f32> {
+        let mut bits = preamble_bits(PREAMBLE_SYMS);
+        bits.extend(bytes_to_bits(payload));
+        bits.extend(std::iter::repeat_n(false, TAIL_SYMS));
+        nrzi_encode(&bits)
+            .iter()
+            .map(|&neg| if neg { -1.0 } else { 1.0 })
+            .collect()
+    }
+
+    struct Row {
+        shipped: f32,
+        oracle: f32,
+        product: f32,
+        diff_errs: usize,
+        paired: usize,
+        damaged_windows: usize,
+        windows: usize,
+    }
+
+    fn measure(audio: &[f32], truth: &[f32]) -> Option<Row> {
+        let c = cfg();
+        let (i_s, q_s) = symbol_stream(audio, &c).ok()?;
+        let range_start = PREAMBLE_SYMS - 1;
+        let end = i_s.len().checked_sub(TAIL_SYMS)?;
+        if range_start >= end {
+            return None;
+        }
+        let rx: Vec<Complex32> = (range_start..end)
+            .map(|k| Complex32::new(i_s[k], q_s[k]))
+            .collect();
+        let iq: Vec<(f32, f32)> = rx.iter().map(|z| (z.re, z.im)).collect();
+        let bits = differential_decode(&iq);
+        let mut shipped = Vec::with_capacity(rx.len());
+        let mut cur = Complex32::new(1.0, 0.0);
+        shipped.push(cur);
+        for &flip in &bits {
+            if flip {
+                cur = -cur;
+            }
+            shipped.push(cur);
+        }
+        let oracle: Vec<Complex32> = truth
+            .get(range_start..end)?
+            .iter()
+            .map(|&s| Complex32::new(s, 0.0))
+            .collect();
+        if oracle.len() != rx.len() {
+            return None;
+        }
+        let tbits: Vec<bool> = oracle.windows(2).map(|w| w[1].re * w[0].re < 0.0).collect();
+        let err: Vec<bool> = bits.iter().zip(&tbits).map(|(a, b)| a != b).collect();
+        let diff_errs = err.iter().filter(|e| **e).count();
+        let mut paired = 0;
+        let mut k = 0;
+        while k + 1 < err.len() {
+            if err[k] && err[k + 1] {
+                paired += 1;
+                k += 2;
+            } else {
+                k += 1;
+            }
+        }
+        // A window is damaged when the shipped sequence changes sign against the truth INSIDE it;
+        // a whole-window inversion is absorbed by that window's own LS gain and does no harm.
+        let agree: Vec<bool> = shipped
+            .iter()
+            .zip(&oracle)
+            .map(|(s, o)| s.re * o.re > 0.0)
+            .collect();
+        let (mut damaged_windows, mut windows, mut start) = (0, 0, 0);
+        while start < agree.len() {
+            let stop = (start + WINDOW_SYMS).min(agree.len());
+            windows += 1;
+            if agree[start..stop].iter().any(|a| *a != agree[start]) {
+                damaged_windows += 1;
+            }
+            start = stop;
+        }
+        Some(Row {
+            shipped: additive_snr_db_windowed(&rx, &shipped, WINDOW_SYMS),
+            oracle: additive_snr_db_windowed(&rx, &oracle, WINDOW_SYMS),
+            product: estimate_snr_db(audio, &c)?,
+            diff_errs,
+            paired,
+            damaged_windows,
+            windows,
+        })
+    }
+
+    /// A CHARACTERISATION pin of a known defect (#1438), which is two defects.
+    ///
+    /// - **Objective** (lead 16, boundary reachable at offset 16): the search locks at offset 8,
+    ///   eight samples early, because its correlation objective peaks before the boundary.
+    /// - **Range** (lead 32, boundary at offset 32): the search scans offsets `0..n` and never
+    ///   visits 32, so it locks at 24. A correct objective alone would lock at 31 here.
+    ///
+    /// This pin's own run, a strong 30 dB and one deterministic seed: lead 0 locks at 0 and
+    /// reads 22.89 dB; lead 16 locks at 8 and reads 3.55 dB; lead 32 locks at 24 and reads
+    /// 3.53 dB. **Expected to fail when either defect is fixed**, and each
+    /// assertion names the one it sees: an objective fix moves lead 16 to 16; a range fix moves
+    /// lead 32 to 32. Update the pin to the corrected behaviour then — do not delete it.
+    #[test]
+    fn the_timing_search_locks_early_when_a_lead_makes_it_reachable() {
+        let c = cfg();
+        let payload: Vec<u8> = (0..200u32)
+            .map(|i| (i.wrapping_mul(2654435761) >> 13) as u8)
+            .collect();
+        let tx = crate::modulate::bpsk_modulate(&payload, &c).expect("modulate");
+        let rms = (tx.iter().map(|x| x * x).sum::<f32>() / tx.len() as f32).sqrt();
+        let sigma = rms / 10f32.powf(30.0 / 20.0);
+        let expected = expected_preamble_symbols(PREAMBLE_SYMS);
+        let run = |lead: usize| {
+            let mut st = 7u64;
+            let mut u = || -> f32 {
+                st = st
+                    .wrapping_mul(6_364_136_223_846_793_005)
+                    .wrapping_add(1_442_695_040_888_963_407);
+                ((st >> 11) as f32 / (1u64 << 53) as f32).clamp(1e-9, 1.0 - 1e-9)
+            };
+            let mut b = vec![0.0f32; lead];
+            b.extend_from_slice(&tx);
+            for x in b.iter_mut() {
+                let (a, bb) = (u(), u());
+                *x += sigma * (-2.0 * a.ln()).sqrt() * (std::f32::consts::TAU * bb).cos();
+            }
+            let off = find_timing_offset_with_expected(
+                &b,
+                32,
+                c.center_frequency,
+                c.sample_rate as f32,
+                &expected,
+            );
+            (off, estimate_snr_db(&b, &c).expect("estimate"))
+        };
+        let (off0, snr0) = run(0);
+        assert_eq!(
+            off0, 0,
+            "control: at lead 0 the lock must be on the boundary"
+        );
+        assert!(
+            snr0 > 20.0,
+            "control: a 30 dB signal at lead 0 read {snr0:.2} dB"
+        );
+
+        let (off16, snr16) = run(16);
+        assert_eq!(
+            off16, 8,
+            "OBJECTIVE defect: lead 16 locked at {off16}, not 8 — if 16, the objective fix landed; \
+             update this pin (see its doc)"
+        );
+        assert!(
+            snr16 < 5.0,
+            "lead 16 read {snr16:.2} dB; the cap is gone at the reachable boundary"
+        );
+
+        let (off32, snr32) = run(32);
+        assert_eq!(
+            off32, 24,
+            "RANGE defect: lead 32 locked at {off32}, not 24 — if 32, the search now reaches past one \
+             symbol; if 31, only the objective changed. Update this pin (see its doc)"
+        );
+        assert!(
+            snr32 < 5.0,
+            "lead 32 read {snr32:.2} dB; the cap is gone beyond one symbol"
+        );
+    }
+
+    /// #1435 / #1438: how the timing lock and the SNR estimate move with a lead before the frame.
+    ///
+    /// `find_timing_offset_with_expected` maximises the preamble correlation of `demodulate_iq`'s
+    /// half-Hann window, which is not matched to the modulator's full-Hann pulse. Computed from the two
+    /// window definitions, the current symbol's gain peaks at d = −9 samples (1.190; 1.188 at −8;
+    /// 1.000 at the boundary). Measured, the search locks at d = −8 wherever that is reachable
+    /// (lead − 8 for leads 9–31). It scans offsets `0..n` from the buffer start, so at lead 0 the
+    /// early optimum is unreachable — which is why every buffer-is-the-frame fixture locks correctly.
+    ///
+    /// The capped reading is measured (~3.5 dB for BPSK250 at a true 10–40 dB). Its attribution is
+    /// derived, not ablated: at d = −8 the next-symbol coefficient is 0.09 while
+    /// `cancel_crossfade_isi` subtracts 1/3, leaving ~0.24 of the next symbol as injected ISI.
+    ///
+    /// Whole-symbol leads alternate because the preamble is period-4: an odd shift cannot reach a
+    /// full-magnitude correlation lag and falls to the early optimum; an even shift locks ON THE
+    /// SYMBOL GRID but two symbols early (lead 64 → offset 0), where the estimate reads normally
+    /// because the per-window gain absorbs it. The sweep's "lock == true offset" column counts that
+    /// as a match; it is not a correct lock. Pinned by
+    /// [`the_timing_search_locks_early_when_a_lead_makes_it_reachable`].
+    #[test]
+    #[ignore = "measurement for #1435; run with --ignored --nocapture"]
+    fn lead_in_sweep_of_the_timing_lock_and_snr() {
+        let c = cfg();
+        let n = 32usize;
+        let payload: Vec<u8> = (0..200u32)
+            .map(|i| (i.wrapping_mul(2654435761) >> 13) as u8)
+            .collect();
+        let tx = crate::modulate::bpsk_modulate(&payload, &c).expect("modulate");
+        let rms = (tx.iter().map(|x| x * x).sum::<f32>() / tx.len() as f32).sqrt();
+        let snr_db: f32 = std::env::var("LEAD_SWEEP_SNR")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(10.0);
+        let sigma = rms / 10f32.powf(snr_db / 20.0);
+        println!("\n#1435 lead-in sweep, BPSK250 200 B, AWGN {snr_db} dB total power, 8 seeds");
+        println!("  lead (syms+samples) | est SNR mean  min   | lock == true offset");
+        let js: Vec<usize> = if std::env::var("LEAD_SWEEP_ALL_J").is_ok() {
+            (0..32).collect()
+        } else {
+            vec![0, 16]
+        };
+        let ks: Vec<usize> = if std::env::var("LEAD_SWEEP_ALL_J").is_ok() {
+            vec![0]
+        } else {
+            (0..=5).collect()
+        };
+        for &k in &ks {
+            for &j in &js {
+                let lead = k * n + j;
+                let (mut ests, mut locked) = (Vec::new(), 0);
+                for seed in 0..8u64 {
+                    let mut st = seed.wrapping_mul(0x9E37_79B9_7F4A_7C15).wrapping_add(1);
+                    let mut u = || -> f32 {
+                        st = st
+                            .wrapping_mul(6_364_136_223_846_793_005)
+                            .wrapping_add(1_442_695_040_888_963_407);
+                        ((st >> 11) as f32 / (1u64 << 53) as f32).clamp(1e-9, 1.0 - 1e-9)
+                    };
+                    let mut b = vec![0.0f32; lead];
+                    b.extend_from_slice(&tx);
+                    for x in b.iter_mut() {
+                        let (a, bb) = (u(), u());
+                        *x += sigma * (-2.0 * a.ln()).sqrt() * (std::f32::consts::TAU * bb).cos();
+                    }
+                    if let Some(e) = estimate_snr_db(&b, &c) {
+                        ests.push(e);
+                    }
+                    let off = find_timing_offset_with_expected(
+                        &b,
+                        n,
+                        c.center_frequency,
+                        c.sample_rate as f32,
+                        &expected_preamble_symbols(PREAMBLE_SYMS),
+                    );
+                    if off == j {
+                        locked += 1;
+                    }
+                }
+                let mean = ests.iter().sum::<f32>() / ests.len().max(1) as f32;
+                let min = ests.iter().cloned().fold(f32::MAX, f32::min);
+                println!("  k={k} +{j:2} ({lead:4} smp)   | {mean:7.2}  {min:7.2} | {locked}/8");
+            }
+        }
+    }
+
+    #[test]
+    #[ignore = "measurement for #1435; run with --ignored --nocapture"]
+    fn shipped_vs_oracle_decisions_on_one_span() {
+        let c = cfg();
+        let payload: Vec<u8> = (0..200u32)
+            .map(|i| (i.wrapping_mul(2654435761) >> 13) as u8)
+            .collect();
+        let tx = crate::modulate::bpsk_modulate(&payload, &c).expect("modulate");
+        let t = truth(&payload);
+        let awgn = |snr: f32| {
+            move |x: &[f32], s: u64| {
+                AwgnChannel::new(AwgnConfig::new(snr, Some(s)))
+                    .expect("awgn")
+                    .apply(x)
+            }
+        };
+        let fade = |snr: f32| {
+            move |x: &[f32], s: u64| {
+                let mut w = WattersonConfig::moderate_f1(Some(s));
+                w.snr_db = snr;
+                WattersonChannel::new(w).expect("watterson").apply(x)
+            }
+        };
+        type Chan = Box<dyn Fn(&[f32], u64) -> Vec<f32>>;
+        let cells: Vec<(&str, Chan)> = vec![
+            ("clean  awgn 30 dB", Box::new(awgn(30.0))),
+            ("awgn  +2 dB", Box::new(awgn(2.0))),
+            ("awgn   0 dB", Box::new(awgn(0.0))),
+            ("awgn  -2 dB", Box::new(awgn(-2.0))),
+            ("awgn  -4 dB", Box::new(awgn(-4.0))),
+            ("fade   8 dB", Box::new(fade(8.0))),
+            ("fade  12 dB", Box::new(fade(12.0))),
+            ("fade  20 dB", Box::new(fade(20.0))),
+        ];
+        let mut offsets = Vec::new();
+        let mut all: Vec<(f32, usize, usize)> = Vec::new();
+        println!("\n#1435  cell              | shipped oracle  s-o  | diff-errs paired | damaged/windows");
+        for (name, chan) in &cells {
+            let rows: Vec<Row> = (0..16u64)
+                .filter_map(|s| measure(&chan(&tx, s), &t))
+                .collect();
+            let n = rows.len().max(1) as f32;
+            let mean = |f: &dyn Fn(&Row) -> f32| rows.iter().map(f).sum::<f32>() / n;
+            println!(
+                "        {name:17} | {:7.2} {:6.2} {:+5.2} | {:9.1} {:6.1} | {:5.1}/{:.0}",
+                mean(&|r| r.shipped),
+                mean(&|r| r.oracle),
+                mean(&|r| r.shipped - r.oracle),
+                mean(&|r| r.diff_errs as f32),
+                mean(&|r| r.paired as f32),
+                mean(&|r| r.damaged_windows as f32),
+                mean(&|r| r.windows as f32),
+            );
+            for r in &rows {
+                offsets.push(r.product - r.shipped);
+                all.push((r.shipped - r.oracle, r.damaged_windows, r.paired));
+            }
+            // The tail, not the mean: #1435 is about the WORST frames (the cancelled arm failed RS).
+            let mut worst: Vec<&Row> = rows.iter().collect();
+            worst.sort_by(|a, b| {
+                (a.shipped - a.oracle)
+                    .partial_cmp(&(b.shipped - b.oracle))
+                    .unwrap()
+            });
+            for r in worst.iter().take(3) {
+                println!(
+                    "           worst: shipped {:6.2} oracle {:6.2} s-o {:+6.2} | diff-errs {:3} paired {:3} | damaged {:3}",
+                    r.shipped, r.oracle, r.shipped - r.oracle, r.diff_errs, r.paired, r.damaged_windows
+                );
+            }
+            if name.starts_with("clean") {
+                for r in &rows {
+                    assert_eq!(
+                        r.diff_errs, 0,
+                        "clean control made decision errors — fixture or truth is wrong"
+                    );
+                    assert_eq!(
+                        r.shipped, r.oracle,
+                        "clean control: shipped and oracle must be identical"
+                    );
+                }
+            }
+        }
+        // FIDELITY: the shipped reconstruction here IS the product's estimate, up to one constant
+        // (the channel-SNR conversion). A varying offset means this probe measures its own copy.
+        let (lo, hi) = offsets
+            .iter()
+            .fold((f32::MAX, f32::MIN), |(a, b), &x| (a.min(x), b.max(x)));
+        assert!(
+            hi - lo < 1e-3,
+            "probe reconstruction diverges from estimate_snr_db: offset spread {}",
+            hi - lo
+        );
+        // Association: does the shortfall follow damaged windows, or paired errors?
+        let corr = |xs: &[f32], ys: &[f32]| {
+            let (mx, my) = (
+                xs.iter().sum::<f32>() / xs.len() as f32,
+                ys.iter().sum::<f32>() / ys.len() as f32,
+            );
+            let cov: f32 = xs.iter().zip(ys).map(|(x, y)| (x - mx) * (y - my)).sum();
+            let vx: f32 = xs.iter().map(|x| (x - mx).powi(2)).sum();
+            let vy: f32 = ys.iter().map(|y| (y - my).powi(2)).sum();
+            cov / (vx * vy).sqrt().max(1e-12)
+        };
+        let short: Vec<f32> = all.iter().map(|a| a.0).collect();
+        let dmg: Vec<f32> = all.iter().map(|a| a.1 as f32).collect();
+        let prd: Vec<f32> = all.iter().map(|a| a.2 as f32).collect();
+        println!(
+            "        corr(shipped-oracle, damaged windows) = {:+.3}",
+            corr(&short, &dmg)
+        );
+        println!(
+            "        corr(shipped-oracle, paired errors)   = {:+.3}",
+            corr(&short, &prd)
+        );
+        println!(
+            "        product-vs-probe offset constant to {:.2e} dB",
+            hi - lo
+        );
+    }
+}
