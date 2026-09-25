@@ -858,7 +858,11 @@ impl LinkSim {
             } else {
                 RxOutcome::Failed
             };
-            let rx_ack = self.ota.on_rx_frame(outcome, Some(snr));
+            // A failed frame carries NO reading, exactly as the daemon's OTA path (#1142): there the
+            // estimate is taken only on a decoded span, because the frame's position is what the
+            // failed decode could not establish. Passing the whole-buffer reading on a failure let
+            // this proxy fast-downshift where the software it models cannot (#1438).
+            let rx_ack = self.ota.on_rx_frame(outcome, decode_ok.then_some(snr));
             ack_sent = rx_ack.ack_type;
 
             // B→A ACK (real FSK4 frame through the reverse channel), carrying `recommended_level`.

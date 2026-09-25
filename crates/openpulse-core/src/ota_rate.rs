@@ -426,6 +426,11 @@ impl OtaRateController {
                 // `unwrap_or(lo)`: one failed decode crashed the recommendation to the bottom of
                 // the ladder, bypassing that hysteresis entirely. From SL10 that cost ~24 clean
                 // frames to undo, at 3 per rung.
+                // DORMANT on air (#1438): the daemon's only feed (`ota_decode_and_ack_inner`) passes
+                // `None` on every failed decode, so this branch fires only for callers that hand
+                // it a reading on a failure — the unit tests and the test-only
+                // `set_rx_snr_estimate`. The link simulator did so until #1438 and was aligned to the
+                // daemon; do not give it a failure-path reading back without re-deciding #1142.
                 let snr_level = snr_db.map(|s| self.level_for_snr(s));
                 let decision = if snr_level.is_some_and(|l| l < self.rx_recommended) {
                     self.rx_consecutive_nack = 0;
