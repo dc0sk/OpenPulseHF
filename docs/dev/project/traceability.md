@@ -85,8 +85,12 @@ What it switches on: `ClimbOnSnr` for DECODED frames. That is every rung on AWGN
 
 - **Fade slopes reported (criterion 2).** BPSK250 `moderate_f1`: 0.68 (the gate's run; bar 0.5).
   BPSK100 `moderate_f1`: 0.19, with a plateau ≈ 4.6 dB post-constant, below SL4's 7.0 — so no SNR
-  climb there. `poor_f1` plateau ≈ 4–5 dB. BPSK31/63 fade slopes were not measured. On a fade, then,
-  the change enables `ClimbOnSnr` on SL5 only.
+  climb there. `poor_f1` plateau ≈ 4–5 dB. BPSK31 and BPSK63 on `moderate_f1` are flat, below their
+  floors: at −0.28n the new estimator reads −10.2 … −10.5 dB (BPSK31) and −2.2 … −1.3 dB (BPSK63) at
+  true 5–30 dB, against the old estimator's −13.6 flat and −7.0 … −6.8. So it is better, not fixed —
+  the #934 low-baud limit, where a 1 Hz fade decorrelates inside any usable window. On a fade, then,
+  the change enables `ClimbOnSnr` on SL5 only. In the daemon a low reading on a decoded frame cannot
+  demote (#934), and a failure carries none; the panel and ADIF will show these low numbers.
 - **Fade climb fraction through the controller** (`#[ignore]`d reporting test, 48 frames per point,
   production alignment). Decoded SL5 frames firing `ClimbOnSnr` at true 7 / 9 / 11 / 13 dB: 1/45,
   3/45, 25/47, 36/47. Reading p50: 5.8 / 7.6 / 9.2 / 10.4 dB.
@@ -99,7 +103,21 @@ What it switches on: `ClimbOnSnr` for DECODED frames. That is every rung on AWGN
      established. The test keeps ±1 dB at 5 and 10 dB, the ladder's decision region, and a one-sided
      −2 … +1 dB bound at 20 dB, with the reason in its doc.
   2. Pre-registration said 0…30 dB; the gate runs 5 / 10 / 20 dB (0 dB dropped).
-- `scripts/slow-tests.sh ota` (CAP-33) and the workspace gate are quoted in the PR.
+- **The link simulator was a #1142 twin, now aligned.** The first workspace gate on this change
+  (`c09531f2`) failed six steps: clippy ×3 (one lint in `solve3`), the reachability ratchet (the
+  now test-only `additive_snr_db_windowed`, recorded DORMANT), the trailer lint, and one test —
+  `psk_ladder_climbs_off_the_entry_rung_on_a_fade` (avg_level 2.8, final SL2). The daemon's only
+  feed of the rate controller passes `None` on every failed decode since #1142; the linksim still
+  passed the whole-buffer reading. With the one change `decode_ok.then_some(snr)` the test passes
+  and the linksim suite is 19/19. A decision trace of the failing run: `ClimbOnSnr` from SL5
+  (BPSK250 read 12–13 dB — the intended new behaviour) led into SL6, whose QPSK250-D failures
+  fast-downshifted on the QPSK estimator's readings (2.7–4.3 dB) to SL1–SL3. Then an SL1↔SL2 loop:
+  every BPSK31 frame after an MFSK16 frame failed (19/19, unexplained — filed), each failure's
+  −12 dB reading sending it back to SL1. `main` passed because the old estimator's reading at the
+  linksim's lead-0 lock did not clear SL5's ceiling on the fade, so SL6 was reached only by evidence
+  — not because the fast-downshift was calibrated. The `FastDownshift` branch now carries a note
+  that it has no on-air consumer.
+- `scripts/slow-tests.sh ota` (CAP-33) and the workspace gate on the final HEAD are quoted in the PR.
 
 **Limitations and follow-ups.**
 - On a static carrier-anti-phase 1 ms echo, the derotation costs 4 dB at the shipped lock
@@ -113,6 +131,8 @@ What it switches on: `ClimbOnSnr` for DECODED frames. That is every rung on AWGN
   - The early/gross lock tail on the fade.
   - A pre-trigger ring.
   - The QPSK/8PSK/64QAM twins.
+  - In the link simulator, every BPSK31 frame after an MFSK16 frame failed (19/19 in one trace).
+    It is unexplained, and possibly cross-mode engine state; whether the daemon shares it is unknown.
   - `scripts/slow-tests.sh` writes its logs to `$REPO_ROOT/target` regardless of `CARGO_TARGET_DIR`,
     so from a worktree with external build output it reports FAIL without running.
 - PR2 (reachability) follows.
