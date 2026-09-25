@@ -540,3 +540,4 @@ with_peg	crates/openpulse-core/src/ldpc.rs
 with_retain	crates/openpulse-core/src/tx_metadata.rs
 with_timestamp	crates/openpulse-core/src/tx_metadata.rs
 with_transport	crates/openpulse-radio/src/generic_cat.rs
+additive_snr_db_windowed	crates/openpulse-dsp/src/constellation.rs

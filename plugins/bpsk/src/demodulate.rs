@@ -29,7 +29,9 @@ use num_complex::Complex32;
 use openpulse_core::error::ModemError;
 use openpulse_core::plugin::{ModulationConfig, PulseShape};
 use openpulse_dsp::acquisition::goertzel_carrier_scan;
-use openpulse_dsp::constellation::{additive_snr_db_windowed, differential_llr_scale};
+use openpulse_dsp::constellation::{
+    differential_llr_scale, isi_aware_snr_db_windowed, remove_residual_frequency,
+};
 use openpulse_dsp::equalizer::LmsEqualizer;
 use openpulse_dsp::farrow::FarrowTimingLoop;
 use openpulse_dsp::filter::FirFilter;
@@ -46,8 +48,9 @@ use crate::parse_baud_rate;
 /// Demodulate audio `samples` and return the recovered bytes.
 /// The symbol stream the decoder sees: matched-filtered, timing-recovered baseband I/Q.
 ///
-/// Shared by `bpsk_demodulate` and `estimate_snr_db` so the SNR is measured on exactly the symbols
-/// that were decoded, not on a separately-derived approximation.
+/// Test-only since #1438 PR1: `bpsk_demodulate` goes through `symbol_stream_with_expected`, and
+/// `estimate_snr_db` reads the UNCANCELLED parts instead of this cancelled stream.
+#[cfg(test)]
 fn symbol_stream(
     samples: &[f32],
     config: &ModulationConfig,
@@ -81,9 +84,11 @@ fn symbol_stream_with_expected(
 /// the cancelled and uncancelled decisions from ONE acquisition — the timing search and
 /// `demodulate_iq` are the expensive terms and are shared, so the second arm costs O(symbols).
 ///
-/// `estimate_snr_db` deliberately keeps consuming the CANCELLED stream through `symbol_stream`:
-/// `MATCHED_FILTER_LOSS_DB` was fitted on it, and `symbol_stream_returns_the_cancelled_stream`
-/// pins that bit-for-bit, because the fade gate's 3.0 dB tolerance cannot see a ≲1 dB swap.
+/// `estimate_snr_db` consumes the UNCANCELLED stream from here (#1438): the cancelled one reads the
+/// channel only at a lock exactly on the symbol boundary, which the timing search produces only when
+/// the frame starts within a quarter symbol of the slice (≈ 2 % of BPSK250 and ≈ 16 % of BPSK31
+/// bursts if starts are uniform over a 400-sample capture tick).
+/// `estimate_snr_db_reads_the_uncancelled_stream` pins it.
 ///
 /// The `-RRC` arm reports `false`: Gardner+LMS with no crossfade, so there is no second arm there
 /// and cancelling would inject the neighbour as error.
@@ -191,28 +196,76 @@ fn variants_from_parts(
 /// bottom rung, delivering nothing on a routine HF fade (issue #934).
 ///
 /// The fix is the same one `openpulse_channel::estimate_additive_snr_db` applies to raw audio:
-/// remove the *multiplicative* channel with a per-window least-squares gain before measuring the
+/// remove the *multiplicative* channel with a per-window least-squares fit before measuring the
 /// residual. BPSK is differentially decoded, so the transmitted ±1 sequence is reconstructed from the
-/// decisions the decoder already made; its arbitrary global sign is absorbed by the per-window gain.
+/// decisions the decoder already made; its arbitrary global sign is absorbed by the per-window fit.
 pub fn estimate_snr_db(samples: &[f32], config: &ModulationConfig) -> Option<f32> {
-    let (i_syms, q_syms) = symbol_stream(samples, config).ok()?;
+    let expected = expected_preamble_symbols(PREAMBLE_SYMS);
+    let (i_syms, q_syms, _) = symbol_stream_parts_with_expected(samples, config, &expected).ok()?;
+    snr_db_from_uncancelled_stream(&i_syms, &q_syms, config)
+}
+
+/// The estimate proper, on the **uncancelled** symbol stream (#1438).
+///
+/// Until #1438 this read the crossfade-CANCELLED stream with a one-tap fit, which reads the channel
+/// only when the timing lock sits exactly on the symbol boundary. The search locks ≈ a quarter
+/// symbol early whenever the frame starts at least that far into the slice, and there the
+/// cancellation injects error: measured at BPSK250, −0.28 of a symbol, it read ≈ 3 dB at every true
+/// SNR from 10 to 30 dB (slope 0.09; the level is phase-dependent, the flatness is not). The
+/// uncancelled stream sampled early carries two neighbour taps instead, which the three-tap fit of
+/// [`isi_aware_snr_db_windowed`] removes; the residual carrier offset the AFC leaves inside its 2 Hz
+/// deadband is removed first by [`remove_residual_frequency`], since a phase ramp inside a window is
+/// the one thing a per-window tap cannot absorb.
+fn snr_db_from_uncancelled_stream(
+    i_syms: &[f32],
+    q_syms: &[f32],
+    config: &ModulationConfig,
+) -> Option<f32> {
     if i_syms.len() <= PREAMBLE_SYMS + TAIL_SYMS {
         return None;
     }
+    // The last preamble symbol serves only as the first differential reference; the period-4
+    // preamble itself spans too few independent taps to fit.
     let range_start = PREAMBLE_SYMS - 1;
     let end = i_syms.len() - TAIL_SYMS;
     if range_start >= end {
         return None;
     }
-    let rx: Vec<Complex32> = i_syms[range_start..end]
+    let mut rx: Vec<Complex32> = i_syms[range_start..end]
         .iter()
         .zip(q_syms[range_start..end].iter())
         .map(|(&i, &q)| Complex32::new(i, q))
         .collect();
+    let decisions = decisions_from_differential(&rx);
+    remove_residual_frequency(&mut rx, &decisions);
+    // A window is a DURATION trade: the phase-ramp floor of a Doppler-spread fade falls ≈ 6 dB per
+    // halving, while the fit's bias grows as 1/(W·Es/N0) — 8 symbols is where that bias is still
+    // ≈ 0.05 dB at the ladder's lowest floors (#1438).
+    const WINDOW_SYMS: usize = 8;
+    let es_n0 = isi_aware_snr_db_windowed(&rx, &decisions, WINDOW_SYMS)?;
+
+    // Convert symbol-domain Es/N0 to the *channel* SNR scale the rate ladder's floors are written in.
+    // The estimate is taken after the matched filter, so it carries the mode's processing gain — a
+    // 31-baud rung reads ~17 dB above the channel SNR and a 250-baud rung ~8 dB. Left unconverted the
+    // receiver over-recommends badly (a 2 dB AWGN channel drove the ladder to SL5), which is just the
+    // #934 scale defect wearing a different hat: never compare one scale's number against another's.
+    //
+    // The offset is `10·log10(fs/baud) − MATCHED_FILTER_LOSS_DB`, fitted on AWGN for the Hann pulse.
+    // It is a function of the sampling phase: across the phases the timing search lands on (−0.45 to
+    // −0.10 of a symbol) it spans ±0.3 dB; at exactly the boundary it reads ≈ 1 dB low, and later than
+    // the boundary it falls away fast. `snr_estimate_tracks_awgn_at_every_early_phase` pins it.
+    const MATCHED_FILTER_LOSS_DB: f32 = 4.4;
+    let baud = parse_baud_rate(&config.mode).ok()?;
+    let fs = config.sample_rate as f32;
+    let processing_gain_db = 10.0 * (fs / baud).log10();
+    Some(es_n0 - processing_gain_db + MATCHED_FILTER_LOSS_DB)
+}
+
+/// Rebuild the transmitted ±1 sequence from a differential decode: each "1" flips the phase. The
+/// starting sign is unknown and does not matter — the per-window fit absorbs it.
+fn decisions_from_differential(rx: &[Complex32]) -> Vec<Complex32> {
     let iq: Vec<(f32, f32)> = rx.iter().map(|z| (z.re, z.im)).collect();
     let bits = differential_decode(&iq);
-    // Rebuild the transmitted symbols from the differential decisions: each "1" flips the phase.
-    // The starting sign is unknown and does not matter — the per-window LS gain absorbs it.
     let mut decisions = Vec::with_capacity(rx.len());
     let mut cur = Complex32::new(1.0, 0.0);
     decisions.push(cur);
@@ -222,24 +275,7 @@ pub fn estimate_snr_db(samples: &[f32], config: &ModulationConfig) -> Option<f32
         }
         decisions.push(cur);
     }
-    const WINDOW_SYMS: usize = 16;
-    let es_n0 = additive_snr_db_windowed(&rx, &decisions, WINDOW_SYMS);
-
-    // Convert symbol-domain Es/N0 to the *channel* SNR scale the rate ladder's floors are written in.
-    // The estimate is taken after the matched filter, so it carries the mode's processing gain — a
-    // 31-baud rung reads ~17 dB above the channel SNR and a 250-baud rung ~8 dB. Left unconverted the
-    // receiver over-recommends badly (a 2 dB AWGN channel drove the ladder to SL5), which is just the
-    // #934 scale defect wearing a different hat: never compare one scale's number against another's.
-    //
-    // Measured on AWGN, the offset is `10·log10(fs/baud) − MATCHED_FILTER_LOSS_DB` and the constant
-    // holds to ~0.3 dB across BPSK31 and BPSK250 — an order of magnitude apart in baud — so it is the
-    // pulse's noise-bandwidth loss, not a per-mode fudge. It IS pulse-specific: it is fitted to this
-    // plugin's Hann/crossfade matched filter. `bpsk_snr_awgn_scale_matches_channel_snr` pins it.
-    const MATCHED_FILTER_LOSS_DB: f32 = 7.1;
-    let baud = parse_baud_rate(&config.mode).ok()?;
-    let fs = config.sample_rate as f32;
-    let processing_gain_db = 10.0 * (fs / baud).log10();
-    Some(es_n0 - processing_gain_db + MATCHED_FILTER_LOSS_DB)
+    decisions
 }
 
 pub fn bpsk_demodulate(samples: &[f32], config: &ModulationConfig) -> Result<Vec<u8>, ModemError> {
@@ -1112,42 +1148,215 @@ mod tests {
         (tx, cfg)
     }
 
-    /// `estimate_snr_db` must keep consuming the CANCELLED stream (#1428).
+    /// `estimate_snr_db` consumes the UNCANCELLED stream (#1438 PR1; it consumed the cancelled one
+    /// before, pinned by the test this replaces).
     ///
-    /// `MATCHED_FILTER_LOSS_DB = 7.1` was fitted on the cancelled stream, and the #1428 split of
-    /// `symbol_stream_with_expected` into raw parts plus a cancelling wrapper makes it a one-line
-    /// edit to feed SNR the uncancelled one instead. **Nothing else would catch that**: the
-    /// cancellation moves the residual by ≲1 dB while `bpsk_snr_tracks_a_fade` tolerates 3.0 dB, so
-    /// the rate controller's input could shift under a green gate.
-    ///
-    /// Asserted bit-for-bit against an independently cancelled copy of the raw parts, and with a
-    /// control requiring the two streams to actually DIFFER — otherwise a build where
-    /// `cancel_crossfade_isi` had become a no-op would satisfy the first assertion vacuously.
+    /// The cancelled stream reads the channel only when the lock sits exactly on the symbol boundary;
+    /// at the quarter-symbol-early lock it read a near-constant (slope 0.09 dB/dB; ≈ 3 dB at −0.28n on
+    /// BPSK250). Asserted bit-for-bit against the stream-level estimator fed the raw parts, at an
+    /// early lock and 20 dB, with a control requiring the cancelled parts to read measurably
+    /// differently — otherwise a regression back to the cancelled stream could pass this vacuously.
     #[test]
-    fn symbol_stream_feeds_snr_the_cancelled_stream() {
+    fn estimate_snr_db_reads_the_uncancelled_stream() {
         let (tx, cfg) = snr_fixture();
+        let mut led = vec![0.0f32; 8];
+        led.extend_from_slice(&tx);
+        let rx = awgn(&led, 20.0, 11);
         let expected = expected_preamble_symbols(PREAMBLE_SYMS);
         let (raw_i, raw_q, crossfade) =
-            symbol_stream_parts_with_expected(&tx, &cfg, &expected).expect("parts");
+            symbol_stream_parts_with_expected(&rx, &cfg, &expected).expect("parts");
         assert!(
             crossfade,
             "BPSK250 is the crossfade path; the fixture is wrong"
         );
 
-        let (mut want_i, mut want_q) = (raw_i.clone(), raw_q.clone());
-        cancel_crossfade_isi(&mut want_i, &mut want_q);
-
-        let (got_i, got_q) = symbol_stream(&tx, &cfg).expect("stream");
+        let got = estimate_snr_db(&rx, &cfg).expect("estimate");
+        let want = snr_db_from_uncancelled_stream(&raw_i, &raw_q, &cfg).expect("uncancelled");
         assert_eq!(
-            got_i, want_i,
-            "symbol_stream (which estimate_snr_db consumes) is no longer the cancelled stream"
+            got.to_bits(),
+            want.to_bits(),
+            "estimate_snr_db ({got}) no longer reads the uncancelled stream ({want})"
         );
-        assert_eq!(got_q, want_q, "same, on the quadrature arm");
 
-        // Control: the two streams must genuinely differ, or the assertion above is vacuous.
-        assert_ne!(
-            raw_i, want_i,
-            "cancel_crossfade_isi changed nothing on this fixture, so the pin above proves nothing"
+        let (mut ci, mut cq) = (raw_i.clone(), raw_q.clone());
+        cancel_crossfade_isi(&mut ci, &mut cq);
+        let cancelled = snr_db_from_uncancelled_stream(&ci, &cq, &cfg).expect("cancelled");
+        assert!(
+            (cancelled - want).abs() > 1.0,
+            "control: the cancelled stream read {cancelled:.2} dB vs {want:.2} dB uncancelled — too \
+             close for the pin above to tell them apart"
+        );
+    }
+
+    /// #1438 PR1 criterion 1: the estimate reads the channel on AWGN at every sampling phase the
+    /// timing search lands on, on every BPSK rung, through a residual carrier offset up to the AFC's
+    /// 2 Hz deadband. **Forced phase** (the demod is run at a fixed offset from the true boundary), so
+    /// this measures the estimator, not the timing search — the search has its own baud/32 CFO null.
+    ///
+    /// Channel SNR is the ladder's scale (`openpulse_channel::AwgnChannel`, total power over the
+    /// buffer, whose lead-in and tail are ≲ 1 % of it). Tolerance ±1 dB at true 5 and 10 dB — the
+    /// ladder's BPSK decision region (ceilings 6–9 dB). At 20 dB the bound is one-sided (−2 … +1 dB):
+    /// a 1–2 Hz residual offset puts a floor under the reading (estimator output, channel scale:
+    /// ≈ 29.5 dB at 1 Hz, ≈ 27.5 dB at 2 Hz on BPSK31, 51 dB at 0 Hz). It is not the frequency
+    /// estimate — an exact derotation reads within 0.6 dB — but the reading still depends on the
+    /// window there, so the mechanism is not established. It reads up to 1.7 dB low at 20 dB. The inventory the constant was fitted to is
+    /// φ ∈ {−0.45, −0.33, −0.28, −0.16, −0.10} of a symbol.
+    #[test]
+    fn snr_estimate_tracks_awgn_at_every_early_phase() {
+        use openpulse_channel::{awgn::AwgnChannel, AwgnConfig, ChannelModel};
+        let payload: Vec<u8> = (0..48u32)
+            .map(|i| (i.wrapping_mul(2654435761) >> 13) as u8)
+            .collect();
+        let mut worst = (0.0f32, String::new());
+        let mut misses: Vec<String> = Vec::new();
+        for mode in ["BPSK31", "BPSK63", "BPSK100", "BPSK250"] {
+            let c = ModulationConfig {
+                mode: mode.into(),
+                ..ModulationConfig::default()
+            };
+            let fs = c.sample_rate as f32;
+            let n = samples_per_symbol(fs, parse_baud_rate(mode).expect("baud")).expect("n");
+            for cfo in [0.0f32, 1.0, 2.0] {
+                let tx_cfg = ModulationConfig {
+                    center_frequency: c.center_frequency + cfo,
+                    ..c.clone()
+                };
+                let tx = crate::modulate::bpsk_modulate(&payload, &tx_cfg).expect("modulate");
+                let mut b = vec![0.0f32; n];
+                b.extend_from_slice(&tx);
+                b.extend(std::iter::repeat_n(0.0, 2 * n));
+                for true_snr in [5.0f32, 10.0, 20.0] {
+                    let seeds = 2u64;
+                    let rxs: Vec<Vec<f32>> = (0..seeds)
+                        .map(|sd| {
+                            AwgnChannel::new(AwgnConfig::new(true_snr, Some(40 + sd)))
+                                .expect("awgn")
+                                .apply(&b)
+                        })
+                        .collect();
+                    for frac in [-0.45f32, -0.33, -0.28, -0.16, -0.10] {
+                        let off = (n as f32 * (1.0 + frac)).round() as usize;
+                        let mut mean = 0.0f32;
+                        for rx in &rxs {
+                            let (iv, qv) = demodulate_iq(rx, n, c.center_frequency, fs, off);
+                            mean += snr_db_from_uncancelled_stream(&iv, &qv, &c).expect("est")
+                                / seeds as f32;
+                        }
+                        let err = mean - true_snr;
+                        if err.abs() > worst.0.abs() {
+                            worst = (
+                                err,
+                                format!("{mode} cfo {cfo} Hz true {true_snr} dB φ {frac}n"),
+                            );
+                        }
+                        // At 20 dB a residual offset's floor (≈ 27.5 dB post-constant on BPSK31 at 2 Hz;
+                        // not the frequency estimate, mechanism not established) costs up to ≈ 1.7 dB. That is far above every BPSK ceiling (6–9 dB), so there the bound is
+                        // one-sided: never high, at most 2 dB low.
+                        let miss = if true_snr >= 20.0 {
+                            !(-2.0..1.0).contains(&err)
+                        } else {
+                            err.abs() >= 1.0
+                        };
+                        if miss {
+                            misses.push(format!(
+                                "{mode}, residual {cfo} Hz, φ = {frac}n, true {true_snr} dB: read {mean:.2} dB"
+                            ));
+                        }
+                    }
+                }
+            }
+        }
+        println!("worst error {:+.2} dB at {}", worst.0, worst.1);
+        assert!(
+            misses.is_empty(),
+            "{} cells outside ±1 dB:\n{}",
+            misses.len(),
+            misses.join("\n")
+        );
+    }
+
+    /// #1438 PR1 criterion 2: on a Watterson `moderate_f1` fade the BPSK250 estimate still MOVES with
+    /// the channel. The cancelled-stream estimator it replaced read a slope of 0.09 dB/dB here (a
+    /// constant); this test's own run of the uncancelled three-tap fit reads 0.68. The bar is 0.5.
+    /// The remaining shortfall is the channel's variation inside the 8-symbol window (reviewer
+    /// reasoning from the flat-fade and window-length controls, not a derived formula).
+    #[test]
+    fn snr_estimate_moves_with_snr_on_a_fade() {
+        use openpulse_channel::{watterson::WattersonChannel, ChannelModel, WattersonConfig};
+        let c = ModulationConfig {
+            mode: "BPSK250".into(),
+            ..ModulationConfig::default()
+        };
+        let fs = c.sample_rate as f32;
+        let n = 32usize;
+        let payload: Vec<u8> = (0..200u32)
+            .map(|i| (i.wrapping_mul(2654435761) >> 13) as u8)
+            .collect();
+        let tx = crate::modulate::bpsk_modulate(&payload, &c).expect("modulate");
+        let mut b = vec![0.0f32; n];
+        b.extend_from_slice(&tx);
+        b.extend(std::iter::repeat_n(0.0, 2 * n));
+        let off = (n as f32 * (1.0 - 0.28)).round() as usize;
+        let mean_at = |snr: f32| -> f32 {
+            let seeds = 16u64;
+            (0..seeds)
+                .map(|sd| {
+                    let mut cfg = WattersonConfig::moderate_f1(Some(900 + sd));
+                    cfg.snr_db = snr;
+                    let rx = WattersonChannel::new(cfg).expect("watterson").apply(&b);
+                    let (iv, qv) = demodulate_iq(&rx, n, c.center_frequency, fs, off);
+                    snr_db_from_uncancelled_stream(&iv, &qv, &c).expect("est")
+                })
+                .sum::<f32>()
+                / seeds as f32
+        };
+        let (lo, hi) = (mean_at(5.0), mean_at(20.0));
+        let slope = (hi - lo) / 15.0;
+        println!("moderate_f1 BPSK250: {lo:.2} dB at 5, {hi:.2} dB at 20, slope {slope:.2}");
+        assert!(
+            slope >= 0.5,
+            "on moderate_f1 the estimate moved only {slope:.2} dB per dB (5 → 20 dB: {lo:.2} → {hi:.2})"
+        );
+    }
+
+    /// The residual-frequency estimate uses decisions from the stream's own differential decode, so a
+    /// decision error flips ONE term of the phase-increment sum rather than every later one. Pinned by
+    /// injecting a single error mid-frame: the estimate must barely move.
+    #[test]
+    fn a_decision_error_moves_the_frequency_estimate_by_one_term() {
+        let (tx, cfg) = snr_fixture();
+        let shifted = ModulationConfig {
+            center_frequency: cfg.center_frequency + 2.0,
+            ..cfg.clone()
+        };
+        let payload: Vec<u8> = (0..120u32)
+            .map(|i| (i.wrapping_mul(97) >> 3) as u8)
+            .collect();
+        let tx2 = crate::modulate::bpsk_modulate(&payload, &shifted).expect("modulate");
+        let _ = tx;
+        let (iv, qv) = demodulate_iq(&tx2, 32, cfg.center_frequency, 8000.0, 0);
+        let rx: Vec<Complex32> = iv[PREAMBLE_SYMS - 1..iv.len() - TAIL_SYMS]
+            .iter()
+            .zip(&qv[PREAMBLE_SYMS - 1..qv.len() - TAIL_SYMS])
+            .map(|(&i, &q)| Complex32::new(i, q))
+            .collect();
+        let d = decisions_from_differential(&rx);
+        let w_clean = remove_residual_frequency(&mut rx.clone(), &d);
+        // One flipped differential bit: every decision after `k` changes sign.
+        let k = d.len() / 2;
+        let mut d_err = d.clone();
+        for x in d_err.iter_mut().skip(k) {
+            *x = -*x;
+        }
+        let w_err = remove_residual_frequency(&mut rx.clone(), &d_err);
+        let expected = std::f32::consts::TAU * 2.0 / 250.0;
+        assert!(
+            (w_clean - expected).abs() < 2e-3,
+            "2 Hz at 250 baud → {w_clean} rad/sym, want {expected}"
+        );
+        assert!(
+            (w_err - w_clean).abs() < 2e-3,
+            "one decision error moved the estimate {w_clean} → {w_err}: more than one term changed"
         );
     }
 
@@ -3303,18 +3512,25 @@ mod snr_decision_discriminator {
         })
     }
 
-    /// A CHARACTERISATION pin of a known defect (#1438), which is two defects.
+    /// A CHARACTERISATION pin of the shipped timing lock (#1438), and of the SNR estimate at it.
     ///
-    /// - **Objective** (lead 16, boundary reachable at offset 16): the search locks at offset 8,
-    ///   eight samples early, because its correlation objective peaks before the boundary.
-    /// - **Range** (lead 32, boundary at offset 32): the search scans offsets `0..n` and never
-    ///   visits 32, so it locks at 24. A correct objective alone would lock at 31 here.
+    /// The half-Hann objective peaks a quarter symbol (8 samples) before the boundary, and the search
+    /// scans offsets `0..n`. So:
+    /// - **Leads 16 and 32** lock at 8 and 24, the objective's early peak. That is NOT simply a
+    ///   defect: the uncancelled decision arm is best sampled early, and against a fixed oracle phase
+    ///   this lock is at the oracle on AWGN and a flat fade and 1.5–2.1 dB off it on BPSK250
+    ///   `moderate_f1`; a pulse-matched objective measured worse there
+    ///   (`docs/dev/reviews/review-1438-snr-estimator.md`). (#1439 read lead 32 as a range defect;
+    ///   that premised the boundary as the target, which the same review overturned.)
+    /// - **Lead 0** locks at 0 only because the peak (−8) lies before the slice: that is the
+    ///   REACHABILITY defect, which #1438 PR2 fixes by searching from −n/2.
     ///
-    /// This pin's own run, a strong 30 dB and one deterministic seed: lead 0 locks at 0 and
-    /// reads 22.89 dB; lead 16 locks at 8 and reads 3.55 dB; lead 32 locks at 24 and reads
-    /// 3.53 dB. **Expected to fail when either defect is fixed**, and each
-    /// assertion names the one it sees: an objective fix moves lead 16 to 16; a range fix moves
-    /// lead 32 to 32. Update the pin to the corrected behaviour then — do not delete it.
+    /// Until #1438 PR1 the SNR estimate read ≈ 3.5 dB at both early locks for a 30 dB signal (this
+    /// pin's own run then: 22.89 / 3.55 / 3.53 dB at leads 0 / 16 / 32), because it consumed the
+    /// crossfade-cancelled stream, which is correct only on the boundary. It now reads the channel at
+    /// each of the three locks this pin visits (28.96 / 29.93 / 30.14, reproduced by its default run).
+    /// **Expected to fail when the lock moves** — lead 0 moving
+    /// to a negative offset is PR2 landing; update the pin then, do not delete it.
     #[test]
     fn the_timing_search_locks_early_when_a_lead_makes_it_reachable() {
         let c = cfg();
@@ -3349,36 +3565,31 @@ mod snr_decision_discriminator {
             (off, estimate_snr_db(&b, &c).expect("estimate"))
         };
         let (off0, snr0) = run(0);
+        let (off16, snr16) = run(16);
+        let (off32, snr32) = run(32);
+        println!("PIN leads 0/16/32: locks {off0}/{off16}/{off32}, SNR {snr0:.2}/{snr16:.2}/{snr32:.2} dB");
         assert_eq!(
             off0, 0,
-            "control: at lead 0 the lock must be on the boundary"
+            "REACHABILITY defect: lead 0 locked at {off0}, not 0 — the objective's peak is at −8, before \
+             the slice. If the lock is now negative, #1438 PR2 landed; update this pin"
         );
-        assert!(
-            snr0 > 20.0,
-            "control: a 30 dB signal at lead 0 read {snr0:.2} dB"
-        );
-
-        let (off16, snr16) = run(16);
         assert_eq!(
             off16, 8,
-            "OBJECTIVE defect: lead 16 locked at {off16}, not 8 — if 16, the objective fix landed; \
-             update this pin (see its doc)"
+            "lead 16 locked at {off16}, not 8: the timing objective changed. #1438's review measured \
+             the alternatives on a fade before rejecting them (docs/dev/reviews/\
+             review-1438-snr-estimator.md); re-measure before accepting this"
         );
-        assert!(
-            snr16 < 5.0,
-            "lead 16 read {snr16:.2} dB; the cap is gone at the reachable boundary"
-        );
-
-        let (off32, snr32) = run(32);
         assert_eq!(
             off32, 24,
-            "RANGE defect: lead 32 locked at {off32}, not 24 — if 32, the search now reaches past one \
-             symbol; if 31, only the objective changed. Update this pin (see its doc)"
+            "lead 32 locked at {off32}, not 24 (the objective's early peak, as at lead 16)"
         );
-        assert!(
-            snr32 < 5.0,
-            "lead 32 read {snr32:.2} dB; the cap is gone beyond one symbol"
-        );
+        for (lead, snr) in [(0, snr0), (16, snr16), (32, snr32)] {
+            assert!(
+                (snr - 30.0).abs() < 2.0,
+                "lead {lead} read {snr:.2} dB for a 30 dB signal: the estimate must read the channel \
+                 at every lock (before #1438 PR1 the early locks read ≈ 3.5 dB)"
+            );
+        }
     }
 
     /// #1435 / #1438: how the timing lock and the SNR estimate move with a lead before the frame.

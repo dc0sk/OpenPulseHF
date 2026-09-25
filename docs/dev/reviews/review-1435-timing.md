@@ -2,10 +2,19 @@
 project: openpulsehf
 doc: docs/dev/reviews/review-1435-timing.md
 status: resolved
-last_updated: 2026-09-24
+last_updated: 2026-09-25
 ---
 
 # Adversarial review — #1435's discriminating test, and the timing defect it found (#1438)
+
+> **CORRECTED 2026-09-25 (#1438 PR1, `review-1438-snr-estimator.md`).** Two conclusions below did not
+> survive the design rounds that followed. "A RANGE defect as well as an objective defect": the early
+> lock is the objective's peak, where the uncancelled decision arm is best sampled, so it is not simply
+> a defect; lead 32 → 24 is that same lock; the reachability defect shows at lead 0. "A data-aided
+> estimator would not help" stands as written: self-derived and true decisions read within 1 dB for
+> φ ≤ 0. What it silently assumed was that the estimator's INPUT was right. It read the cancelled
+> stream, correct only on the boundary, and the fix is a different stream and a three-tap fit, not
+> different decisions.
 
 Three rounds by Fable. The first reviewed the measurements and conclusions; the second and third
 reviewed the actual text of the issue, the #1435 closing comment, the #1437 correction and the ledger
