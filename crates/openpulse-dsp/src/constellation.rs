@@ -396,6 +396,11 @@ const SCALE_FLOOR: f32 = 1e-6;
 
 /// Additive SNR (dB) of a symbol block, with the *multiplicative* channel removed first.
 ///
+/// DORMANT(#1438): no production caller since BPSK's estimator moved to
+/// [`isi_aware_snr_db_windowed`], which removes the neighbour-symbol taps this one counts as noise.
+/// Kept as the one-tap reference: #1439's characterisation probes and this module's tests measure
+/// against it, and it is the natural estimator for a plugin whose stream carries no ISI.
+///
 /// This is the symbol-domain twin of `openpulse_channel::estimate_additive_snr_db`, and it exists for
 /// the same reason: on a fading channel `z[k] ≈ h[k]·s[k] + n[k]`, and any estimator that measures the
 /// raw residual `z − s` (or its orthogonal component) folds the *multiplicative* `h` into the
@@ -446,6 +451,132 @@ pub fn additive_snr_db_windowed(rx: &[Complex32], decisions: &[Complex32], windo
         return 0.0;
     }
     10.0 * (sig / noise.max(1e-12)).max(1e-12).log10() as f32
+}
+
+/// Remove a frame-global residual carrier frequency from a decision-aligned symbol stream, in place;
+/// returns the estimate in radians per symbol.
+///
+/// `ω̂ = arg Σ m_k·m*_{k−1}` with `m_k = rx_k·d*_k`: the data-aided mean phase increment. A residual
+/// frequency ramps the phase inside every window of [`isi_aware_snr_db_windowed`], and a per-window
+/// complex tap cannot absorb a ramp: on BPSK250 at 30 dB true, a 1 Hz residual capped that estimate
+/// at ≈ 24 dB of Es/N0 at W = 8, ≈ 6 dB lower per doubling of W or of the offset, while the AFC
+/// deliberately leaves offsets under `AFC_SETTLE_DEADBAND_HZ` (2 Hz) uncorrected (#1438).
+///
+/// One estimate per frame, not per window: a per-64-symbol estimate measured noisier than no
+/// derotation at all. On a fade the Doppler spread is zero-mean, so `ω̂ ≈ 0` and nothing changes.
+///
+/// When `decisions` come from a differential decode of `rx` itself, `d_k·d*_{k−1}` is the sign of
+/// `Re(rx_k·rx*_{k−1})`, so every term has a non-negative real part: the estimate folds into
+/// (−π/2, π/2] (an unambiguous range of ±baud/4), and a decision error flips the imaginary part of
+/// ONE term rather than of every later one. Low-SNR errors therefore bias `|ω̂|` low, so the reading
+/// under-derotates and reads low, the safe direction for a rate decision.
+pub fn remove_residual_frequency(rx: &mut [Complex32], decisions: &[Complex32]) -> f32 {
+    let n = rx.len().min(decisions.len());
+    let mut acc = Complex32::new(0.0, 0.0);
+    for k in 1..n {
+        let m = rx[k] * decisions[k].conj();
+        let m_prev = rx[k - 1] * decisions[k - 1].conj();
+        acc += m * m_prev.conj();
+    }
+    if acc.norm_sqr() == 0.0 {
+        return 0.0;
+    }
+    let w = acc.arg();
+    for (k, z) in rx.iter_mut().enumerate() {
+        *z *= Complex32::from_polar(1.0, -w * k as f32);
+    }
+    w
+}
+
+/// Additive SNR (dB) with the multiplicative channel AND each symbol's two neighbours removed.
+///
+/// [`additive_snr_db_windowed`] fits one complex gain per window, so inter-symbol interference in the
+/// stream counts as noise and caps the estimate. BPSK's uncancelled crossfade stream carries exactly
+/// that: sampled early, where its decoder is best, the neighbour taps put an Es/N0 floor of ≈ 22.8 dB
+/// under the one-tap fit, which on BPSK31 is a cap of ≈ 3 dB of channel SNR (with BPSK's 4.4 dB
+/// matched-filter constant), below SL2's climb ceiling (#1438). This fits `rx_k ≈ a·d_{k−1} + b·d_k + c·d_{k+1}` per window by least squares and counts
+/// only `|b·d_k|²` as signal.
+///
+/// Signal and residual are summed over all windows before the ratio, so the frame-level variance is
+/// set by the frame length rather than the window, and each window's residual is scaled by `W/(W−3)`
+/// for its three fitted taps. A window whose Gram matrix is singular (a run of constant or
+/// alternating decisions) is skipped; the noise it would have measured is independent of the data,
+/// so skipping it is unbiased. Returns `None` when `window ≤ 3`, when no window can be fitted, or when
+/// no signal was measured.
+///
+/// Decision-directed like its one-tap twin: it saturates once symbol errors are common. It measures
+/// `|b|²` against what the neighbour taps leave behind, which EXCLUDES interference the decoder
+/// itself suffers: a channel-SNR reading, not the SNR the decoder sees.
+pub fn isi_aware_snr_db_windowed(
+    rx: &[Complex32],
+    decisions: &[Complex32],
+    window: usize,
+) -> Option<f32> {
+    const TAPS: usize = 3;
+    let n = rx.len().min(decisions.len());
+    if window <= TAPS {
+        return None;
+    }
+    let dof_scale = window as f64 / (window - TAPS) as f64;
+    let (mut sig, mut noise) = (0.0f64, 0.0f64);
+    // Symbol k needs d_{k−1} and d_{k+1}, so windows tile [1, n − 1).
+    let mut start = 1usize;
+    while start + window < n {
+        let end = start + window;
+        let mut gram = [[Complex32::new(0.0, 0.0); TAPS]; TAPS];
+        let mut rhs = [Complex32::new(0.0, 0.0); TAPS];
+        for k in start..end {
+            let x = [decisions[k - 1], decisions[k], decisions[k + 1]];
+            for i in 0..TAPS {
+                rhs[i] += x[i].conj() * rx[k];
+                for j in 0..TAPS {
+                    gram[i][j] += x[i].conj() * x[j];
+                }
+            }
+        }
+        if let Some(taps) = solve3(gram, rhs, 1e-3 * window as f32) {
+            let mut resid = 0.0f64;
+            for k in start..end {
+                let s = taps[1] * decisions[k];
+                let fit = taps[0] * decisions[k - 1] + s + taps[2] * decisions[k + 1];
+                sig += s.norm_sqr() as f64;
+                resid += (rx[k] - fit).norm_sqr() as f64;
+            }
+            noise += resid * dof_scale;
+        }
+        start = end;
+    }
+    if sig <= 0.0 {
+        return None;
+    }
+    Some(10.0 * (sig / noise.max(1e-12)).max(1e-12).log10() as f32)
+}
+
+/// Solve a 3×3 complex system by Gauss–Jordan with partial pivoting; `None` when a pivot falls below
+/// `min_pivot`, i.e. the window's decisions do not span three independent taps.
+fn solve3(
+    mut a: [[Complex32; 3]; 3],
+    mut b: [Complex32; 3],
+    min_pivot: f32,
+) -> Option<[Complex32; 3]> {
+    for col in 0..3 {
+        let p = (col..3).max_by(|&r, &s| a[r][col].norm().total_cmp(&a[s][col].norm()))?;
+        if a[p][col].norm() < min_pivot {
+            return None;
+        }
+        a.swap(col, p);
+        b.swap(col, p);
+        let pivot_row = a[col];
+        let pivot_rhs = b[col];
+        for r in (0..3).filter(|&r| r != col) {
+            let f = a[r][col] / pivot_row[col];
+            for (x, &p) in a[r].iter_mut().zip(pivot_row.iter()) {
+                *x -= f * p;
+            }
+            b[r] -= f * pivot_rhs;
+        }
+    }
+    Some([b[0] / a[0][0], b[1] / a[1][1], b[2] / a[2][2]])
 }
 
 /// Estimate decision-directed noise variance from a block of equalised symbols
@@ -990,6 +1121,142 @@ mod tests {
             windowed > global + 15.0,
             "windowing is the mechanism: windowed {windowed:.1} dB vs single-gain {global:.1} dB — \
              a single gain counts the rotation as noise, which is the #934 defect"
+        );
+    }
+
+    /// Unit-variance complex Gaussian noise (Box–Muller over xorshift) and random ±1 symbols.
+    fn isi_fixture(
+        seed: u64,
+        n: usize,
+        taps: [Complex32; 3],
+        sigma: f32,
+    ) -> (Vec<Complex32>, Vec<Complex32>) {
+        let mut st = seed;
+        let mut u = move || {
+            st ^= st << 13;
+            st ^= st >> 7;
+            st ^= st << 17;
+            ((st >> 11) as f32 / (1u64 << 53) as f32).clamp(1e-9, 1.0 - 1e-9)
+        };
+        let d: Vec<Complex32> = (0..n)
+            .map(|_| Complex32::new(if u() > 0.5 { 1.0 } else { -1.0 }, 0.0))
+            .collect();
+        let rx = (0..n)
+            .map(|k| {
+                let prev = if k > 0 { d[k - 1] } else { d[k] };
+                let next = if k + 1 < n { d[k + 1] } else { d[k] };
+                let (a, b) = (u(), u());
+                let r = (-2.0 * a.ln()).sqrt() * sigma;
+                let noise = Complex32::from_polar(r, std::f32::consts::TAU * b)
+                    * std::f32::consts::FRAC_1_SQRT_2;
+                taps[0] * prev + taps[1] * d[k] + taps[2] * next + noise
+            })
+            .collect();
+        (rx, d)
+    }
+
+    /// The property #1438 needs: through neighbour-symbol interference the ISI-aware estimate reads
+    /// the true `|b|²/σ²`, where the one-tap estimate is capped by the interference it counts as noise.
+    /// The taps are of the order of BPSK's early-sampled crossfade residue (a few percent of the main
+    /// tap), rotated.
+    #[test]
+    fn isi_aware_snr_reads_through_neighbour_taps_where_one_tap_is_capped() {
+        let rot = Complex32::from_polar(1.0, 0.7);
+        let taps = [rot * 0.08, rot, rot * 0.05];
+        for true_snr_db in [5.0f32, 15.0, 30.0] {
+            let sigma = 10f32.powf(-true_snr_db / 20.0);
+            let (rx, d) = isi_fixture(0xC0FFEE, 8192, taps, sigma);
+            let aware = isi_aware_snr_db_windowed(&rx, &d, 8).expect("windows fit");
+            assert!(
+                (aware - true_snr_db).abs() < 0.5,
+                "true {true_snr_db} dB through neighbour taps → ISI-aware read {aware:.2} dB"
+            );
+            if true_snr_db >= 30.0 {
+                let one_tap = additive_snr_db_windowed(&rx, &d, 8);
+                assert!(
+                    one_tap < true_snr_db - 6.0,
+                    "control: the one-tap estimate must be capped by the taps (read {one_tap:.1} dB \
+                     at true {true_snr_db}), or this fixture carries no interference to remove"
+                );
+            }
+        }
+    }
+
+    /// A run of constant decisions spans one tap, not three: the fit must decline rather than invent.
+    #[test]
+    fn isi_aware_snr_declines_when_no_window_spans_three_taps() {
+        let d = vec![Complex32::new(1.0, 0.0); 64];
+        let rx = d.clone();
+        assert_eq!(isi_aware_snr_db_windowed(&rx, &d, 8), None);
+        assert_eq!(
+            isi_aware_snr_db_windowed(&rx, &d, 3),
+            None,
+            "window ≤ taps is refused"
+        );
+    }
+
+    /// The frequency is recovered and removed: noiseless, a ramp of +0.3 or −0.2 rad/symbol comes back
+    /// within 1e-3, and the derotated stream then reads as noiseless to the ISI-aware estimate.
+    #[test]
+    fn residual_frequency_is_recovered_and_removed() {
+        for w in [0.3f32, -0.2, 0.0] {
+            let (clean, d) = isi_fixture(
+                7,
+                2048,
+                [
+                    Complex32::new(0.0, 0.0),
+                    Complex32::new(1.0, 0.0),
+                    Complex32::new(0.0, 0.0),
+                ],
+                0.0,
+            );
+            let mut rx: Vec<Complex32> = clean
+                .iter()
+                .enumerate()
+                .map(|(k, z)| z * Complex32::from_polar(1.0, w * k as f32))
+                .collect();
+            let got = remove_residual_frequency(&mut rx, &d);
+            assert!((got - w).abs() < 1e-3, "ramp {w} rad/sym → estimated {got}");
+            let after = isi_aware_snr_db_windowed(&rx, &d, 8).expect("windows fit");
+            assert!(
+                after > 50.0,
+                "ramp {w}: derotated stream reads {after:.1} dB, not noiseless"
+            );
+        }
+    }
+
+    /// The estimate must USE the decisions. On data whose neighbouring symbols mostly differ, the sum
+    /// of raw `rx_k·rx*_{k−1}` points the other way (ω + π): an estimator that stopped removing the
+    /// modulation would be wrong here deterministically, where on balanced random data it is only
+    /// wrong half the time — which is how a sabotage of the decision index passed the test above.
+    #[test]
+    fn residual_frequency_estimate_uses_the_decisions() {
+        let mut st = 0x5EEDu64;
+        let mut u = move || {
+            st ^= st << 13;
+            st ^= st >> 7;
+            st ^= st << 17;
+            (st >> 11) as f32 / (1u64 << 53) as f32
+        };
+        let mut cur = 1.0f32;
+        let d: Vec<Complex32> = (0..2048)
+            .map(|_| {
+                if u() < 0.8 {
+                    cur = -cur;
+                }
+                Complex32::new(cur, 0.0)
+            })
+            .collect();
+        let w = 0.25f32;
+        let mut rx: Vec<Complex32> = d
+            .iter()
+            .enumerate()
+            .map(|(k, s)| s * Complex32::from_polar(1.0, w * k as f32))
+            .collect();
+        let got = remove_residual_frequency(&mut rx, &d);
+        assert!(
+            (got - w).abs() < 1e-3,
+            "flip-heavy data: ramp {w} → estimated {got}"
         );
     }
 

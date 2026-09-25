@@ -15,7 +15,138 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-09-25 — #1438 PR1: BPSK's SNR estimate reads the channel at the lock it actually gets
+
+**Requirement / change.** The rate controller's BPSK input (`hpx_hf` SL2–SL5) must read the channel
+SNR at the timing lock the search produces on a real burst. It did not. The search locks a quarter
+symbol early whenever the frame starts that far into the slice, and the estimator read the
+crossfade-CANCELLED stream, which is correct only on the exact boundary. At the production phase,
+measured at BPSK250 −0.28n, it read ≈ 3 dB post-constant at every true SNR from 10 to 30 dB (slope
+0.09 dB/dB on AWGN and on `moderate_f1`), so `ClimbOnSnr` could never fire on air.
+
+**Design decision (reviewed in seven rounds: `docs/dev/reviews/review-1438-snr-estimator.md`).**
+
+1. **The early lock is kept.** The uncancelled decision arm is best sampled early, so the two arms
+   want different phases. At each arm's best, the uncancelled arm wins by 1.3 dB on AWGN and 1.8 dB on
+   `moderate_f1`. A pulse-matched objective was measured worse on the fade and withdrawn.
+2. **The estimator moves to the uncancelled stream** with a 3-tap per-window least-squares fit
+   (`z_k ≈ a·d_{k−1} + b·d_k + c·d_{k+1}`), so the neighbour taps stop counting as noise.
+3. **The residual frequency comes out first.** `ω̂ = arg Σ m_k·m*_{k−1}` is removed once per frame,
+   because a phase ramp inside a window is the one thing a per-window tap cannot absorb, and the AFC
+   discards sub-2 Hz corrections by design. A per-64-symbol estimate was measured worse than none.
+4. **The window is 8 symbols.** It is a duration trade: the fade's in-window floor falls ≈ 6 dB per
+   halving, while the fit's bias stays ≈ 0.05 dB.
+5. **`MATCHED_FILTER_LOSS_DB` goes from 7.1 to 4.4,** fitted at φ ∈ [−0.45, −0.10]n on AWGN, where the
+   implied constant spans 4.14–4.70 (BPSK250 probe log `snrfade5`).
+
+What it switches on: `ClimbOnSnr` for DECODED frames. That is every rung on AWGN, and SL5 on
+`moderate_f1` from ≈ 11 dB true. A failed decode still passes no reading (`engine.rs:3195`).
+
+**Implementation.**
+- `crates/openpulse-dsp/src/constellation.rs`: `remove_residual_frequency`,
+  `isi_aware_snr_db_windowed`, and `solve3`.
+- `plugins/bpsk/src/demodulate.rs`: `estimate_snr_db` becomes a thin wrapper over
+  `snr_db_from_uncancelled_stream`, plus `decisions_from_differential`.
+- The cancelled-stream pin is inverted, and the #1439 characterisation pin is relabelled (see the
+  correction on the 2026-09-24 entry below).
+
+**Tests → results.**
+
+- `cargo test -p openpulse-dsp --lib -- isi_aware residual_frequency`: 3 passed.
+- `cargo test -p bpsk-plugin --lib -- estimate_snr_db_reads snr_estimate_tracks snr_estimate_moves
+  a_decision_error the_timing_search_locks_early`: 5 passed.
+- `cargo test -p openpulse-modem --test snr_climb_at_production_alignment`: 1 passed. At k = 8 / 13 /
+  19 / 24 / 31 samples past a symbol multiple, a 15 dB frame reads 15.15 / 14.58 / 12.49 / 15.05 /
+  15.11 dB and fires `ClimbOnSnr` each time (k = 19 reads 2.5 dB low: unexplained, still above the
+  ceiling). With the old estimator the k = 8 frame reads 7.81 dB and the controller holds; the run
+  stops there, so the other k were not observed.
+- **Sabotage, each watched failing:**
+
+  | sabotage | caught by |
+  |---|---|
+  | drop the neighbour taps from the fit | the DSP tap test, tracking, the fade test |
+  | disable derotation | the DSP frequency test, tracking |
+  | feed the cancelled stream | the stream pin, the #1439 pin, the controller harness |
+  | window 8 → 32 | tracking, the fade test |
+  | zero pivot threshold | the refusal test |
+  | wrong decision index in ω̂ | the one-error pin's recovery assertion, only because of its payload's sign balance (its one-term assertion cannot see this; the sabotaged sum no longer reads the decisions). The DSP frequency test PASSED under it, so a flip-heavy fixture was added, `residual_frequency_estimate_uses_the_decisions`, which fails it deterministically |
+
+  (A first multi-package sabotage run stopped at the first failing binary and never ran the DSP
+  tests. It was re-run per package, with `--no-fail-fast`.)
+- **Lead-0 SNR gates, before → after** (φ = 0, one phase outside the refit inventory; all pass both
+  times):
+
+  | gate | before | after |
+  |---|---|---|
+  | BPSK250 AWGN, true 5 / 10 / 15 | 6.34 / 11.15 / 15.62 | 4.06 / 9.03 / 14.03 |
+  | `moderate_f1`, true 5 / 15 / 25 | 2.90 / 5.33 / 5.63 (spread 2.7) | 3.92 / 11.96 / 15.30 (spread 11.4) |
+  | `single_carrier_reports_true_channel_snr`, true 5 / 15 / 25 | 6.32 / 15.61 / 21.67 | 3.98 / 13.96 / 23.96 |
+  | BPSK250 at 30 dB (OFDM52 15.54 both times) | 22.81 | 28.96 |
+
+- **Fade slopes reported (criterion 2).** BPSK250 `moderate_f1`: 0.68 (the gate's run; bar 0.5).
+  BPSK100 `moderate_f1`: 0.19, with a plateau ≈ 4.6 dB post-constant, below SL4's 7.0 — so no SNR
+  climb there. `poor_f1` plateau ≈ 4–5 dB. BPSK31 and BPSK63 on `moderate_f1` are flat, below their
+  floors: at −0.28n the new estimator reads −10.2 … −10.5 dB (BPSK31) and −2.2 … −1.3 dB (BPSK63) at
+  true 5–30 dB, against the old estimator's −13.6 flat and −7.0 … −6.8. So it is better, not fixed —
+  the #934 low-baud limit, where a 1 Hz fade decorrelates inside any usable window. On a fade, then,
+  the change enables `ClimbOnSnr` on SL5 only. In the daemon a low reading on a decoded frame cannot
+  demote (#934), and a failure carries none; the panel and ADIF will show these low numbers.
+- **Fade climb fraction through the controller** (`#[ignore]`d reporting test, 48 frames per point,
+  production alignment). Decoded SL5 frames firing `ClimbOnSnr` at true 7 / 9 / 11 / 13 dB: 1/45,
+  3/45, 25/47, 36/47. Reading p50: 5.8 / 7.6 / 9.2 / 10.4 dB.
+- **Deviations from pre-registration.**
+  1. Criterion 1 (±1 dB up to 20 dB at every phase, rung and CFO) missed 9 of the 60 cells at 20 dB
+     true (180 cells in the gate), all with a 1–2 Hz residual on BPSK31/63/100. They read up to
+     1.74 dB low. A floor under the reading causes it (estimator output, channel scale: ≈ 27.5 dB on
+     BPSK31 at 2 Hz, against 51 dB at 0 Hz). It is not the frequency estimate: an exact derotation
+     reads within 0.6 dB. The reading still depends on the window there, so the mechanism is not
+     established. The test keeps ±1 dB at 5 and 10 dB, the ladder's decision region, and a one-sided
+     −2 … +1 dB bound at 20 dB, with the reason in its doc.
+  2. Pre-registration said 0…30 dB; the gate runs 5 / 10 / 20 dB (0 dB dropped).
+- **The link simulator was a #1142 twin, now aligned.** The first workspace gate on this change
+  (`c09531f2`) failed six steps: clippy ×3 (one lint in `solve3`), the reachability ratchet (the
+  now test-only `additive_snr_db_windowed`, recorded DORMANT), the trailer lint, and one test —
+  `psk_ladder_climbs_off_the_entry_rung_on_a_fade` (avg_level 2.8, final SL2). The daemon's only
+  feed of the rate controller passes `None` on every failed decode since #1142; the linksim still
+  passed the whole-buffer reading. With the one change `decode_ok.then_some(snr)` the test passes
+  and the linksim suite is 19/19. A decision trace of the failing run: `ClimbOnSnr` from SL5
+  (BPSK250 read 12–13 dB — the intended new behaviour) led into SL6, whose QPSK250-D failures
+  fast-downshifted on the QPSK estimator's readings (2.7–4.3 dB) to SL1–SL3. Then an SL1↔SL2 loop:
+  every BPSK31 frame after an MFSK16 frame failed (19/19, unexplained — filed), each failure's
+  −12 dB reading sending it back to SL1. `main` passed because the old estimator's reading at the
+  linksim's lead-0 lock did not clear SL5's ceiling on the fade, so SL6 was reached only by evidence
+  — not because the fast-downshift was calibrated. The `FastDownshift` branch now carries a note
+  that it has no on-air consumer.
+- `scripts/slow-tests.sh ota` (CAP-33) and the workspace gate on the final HEAD are quoted in the PR.
+
+**Limitations and follow-ups.**
+- On a static carrier-anti-phase 1 ms echo, the derotation costs 4 dB at the shipped lock
+  (18.3 vs 22.3 at true 30).
+- To be filed:
+  - **A pre-existing BPSK31/63 decode failure near a residual offset of m·baud/32.** The coherent
+    timing metric has Dirichlet nulls, and the settle discards sub-2 Hz corrections. It is
+    SNR-dependent; prevalence is unmeasured.
+  - `receive_with_ack_hint` should estimate on the decoded span.
+  - Whole-frame timing refinement (2.1–2.4 dB of oracle headroom on BPSK250 multipath).
+  - The early/gross lock tail on the fade.
+  - A pre-trigger ring.
+  - The QPSK/8PSK/64QAM twins.
+  - In the link simulator, every BPSK31 frame after an MFSK16 frame failed (19/19 in one trace).
+    It is unexplained, and possibly cross-mode engine state; whether the daemon shares it is unknown.
+  - `scripts/slow-tests.sh` writes its logs to `$REPO_ROOT/target` regardless of `CARGO_TARGET_DIR`,
+    so from a worktree with external build output it reports FAIL without running.
+- PR2 (reachability) follows.
+
+---
+
 ## 2026-09-24 — #1435 refuted; BPSK's timing search locks early (#1438); #1437's OTA gain corrected
+
+> **CORRECTED 2026-09-25 (#1438 PR1).** The two labels below are overturned. The early lock at lead
+> 16 is the half-Hann objective's peak and is not simply a defect: the uncancelled decision arm is best
+> sampled there (see the 2026-09-25 entry). Lead 32 → 24 is the same early lock, not a range defect.
+> The reachability defect shows at lead 0, where the peak lies before the slice. The SNR "cap" was the
+> estimator reading the cancelled stream; it now reads 28.96 / 29.93 / 30.14 dB at leads 0 / 16 / 32
+> for a 30 dB signal.
 
 **Change.** Test-only, plus this correction. `plugins/bpsk/src/demodulate.rs` gains module
 `snr_decision_discriminator`: two `#[ignore]`d measurements (decisions on a fixed span; a lead-in sweep)
