@@ -21,11 +21,21 @@
 _hbl_who="${1:-gate}"
 _hbl_path="${HEAVY_BUILD_LOCK:-${XDG_RUNTIME_DIR:-/tmp}/heavy-build.lock}"
 
+# Fail CLOSED once flock exists: a lock file that cannot be opened (its directory
+# missing, or the file owned by another user) made both `flock` calls fail with
+# EBADF, and the old code printed "waiting" and then "lock acquired" and ran
+# unlocked — the one outcome this helper exists to prevent, reported as success.
 if command -v flock >/dev/null 2>&1; then
-    exec 9>"$_hbl_path"
+    if ! exec 9>"$_hbl_path"; then
+        echo "$_hbl_who: cannot open the host-wide build lock $_hbl_path — refusing to run unlocked" >&2
+        exit 1
+    fi
     if ! flock -n 9; then
         echo "$_hbl_who: another heavy build holds $_hbl_path — waiting for it to finish" >&2
-        flock 9
+        if ! flock 9; then
+            echo "$_hbl_who: could not take $_hbl_path — refusing to run unlocked" >&2
+            exit 1
+        fi
         echo "$_hbl_who: lock acquired, continuing" >&2
     fi
 else
