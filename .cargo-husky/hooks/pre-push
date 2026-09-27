@@ -32,6 +32,11 @@ if [ "${GATE_SKIP:-0}" = "1" ]; then
     exit 0
 fi
 
+# Queue behind any other heavy build on this machine, in any project, rather than
+# race it for RAM. After the escape hatch, so a deliberate skip never waits.
+# shellcheck source=scripts/lib/host-build-lock.sh
+source "$(git rev-parse --show-toplevel)/scripts/lib/host-build-lock.sh" "pre-push"
+
 cargo fmt --all -- --check
 
 # Crates owning the changed files. Falls back to the whole workspace when the upstream ref is

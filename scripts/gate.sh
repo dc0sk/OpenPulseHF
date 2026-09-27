@@ -62,6 +62,15 @@ case "${1:-}" in
     *) echo "unknown argument: $1" >&2; exit 2 ;;
 esac
 
+# Queue behind any other heavy build on this machine, in any project, before
+# anything is timed or snapshotted — so time spent waiting is not part of the run,
+# and START_HEAD below is taken after the wait. `--fingerprint` is exempt: it is
+# the seconds-long primitive and builds nothing.
+if [ "$MODE" != "fingerprint" ]; then
+    # shellcheck source=scripts/lib/host-build-lock.sh
+    source "$REPO_ROOT/scripts/lib/host-build-lock.sh" "gate"
+fi
+
 COMMIT=$(git rev-parse HEAD 2>/dev/null || echo "unknown")
 if [ -n "$(git status --porcelain 2>/dev/null)" ]; then DIRTY="dirty"; else DIRTY="clean"; fi
 
