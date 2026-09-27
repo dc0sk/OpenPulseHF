@@ -15,6 +15,212 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-09-27 — #1438 PR2: BPSK searches timing from −n/2 and decodes at both locks, the FEC choosing
+
+**Requirement / change.** A BPSK frame starting within a quarter symbol of the slice start must be
+able to reach the timing lock the objective prefers. The half-Hann objective peaks ≈ −0.25n before
+the symbol boundary, where the uncancelled decision arm is best (#1439, PR1). The search covered
+`[0, n)` only, so such a frame was clamped late. In the instrument below (BPSK250 + Rs, AWGN −4 dB, a
+3n lead of channel noise, frame at the slice start) the old search decoded 0 of 96 frames and the new
+one 91.
+
+**Design decision (reviewed before implementation: `docs/dev/reviews/review-1438-reachability.md`).**
+The maintainer chose P6 on 2026-09-25 in-session ("P6 as design. measure within PR2"), after the
+alias measurement below; the earlier decision to drop edge rejection (same day) stands.
+
+1. **Search `[−n/2, n)`, reading zeros before the slice.** The carrier stays referenced to the
+   absolute sample index, so the `[0, n)` energies are bit-identical to the old search (pinned against
+   a verbatim copy of the pre-PR2 demodulator).
+2. **Decode at both locks, and let the FEC/CRC choose (P6).** Variants are ordered
+   widened-cancelled, widened-uncancelled, restricted-cancelled, restricted-uncancelled, with the
+   restricted pair dropped when the two locks coincide. The restricted `[0, n)` lock is therefore a
+   rescue, and variant 0 (`demodulate`) is taken at the widened lock.
+3. **No edge rule.** Widening makes a −2-symbol alias of the period-4 preamble reachable. The
+   noiseless model puts it at 1.5–1.78 symbols into a slice; measured on the probe, the alias lock wins
+   from 1.25n on `moderate_f1` and from 1.5n on AWGN. It lands at the widened range's LOWER edge, which
+   is also where the true lock of a frame starting just before the slice sits, so no edge rule separates
+   them. Upper-edge rejection (P2) was measured harmful relative to the old search (−91 single-slice,
+   BPSK100 fade at 1.375n; −27 scan, BPSK250 fade).
+4. **Consumers that take one lock use the widened one:** the uncoded path (`receive_from_samples`
+   sign-slices `demodulate_soft`), soft/HARQ, `estimate_snr_db`, and AFC stage 2. They get the widened
+   lock ALONE — no rescue. See *Single-lock consumers* below.
+
+**Implementation.**
+- `plugins/bpsk/src/demodulate.rs`:
+  - `demodulate_iq_at` (signed offset, zero-read);
+  - `TimingLocks` and `timing_locks_with_expected` (one energy array, two argmaxes);
+  - `preamble_energies`, `pick_lock` (first max; NaN never wins), `locks_from_energies`;
+  - `bpsk_demodulate_variants` with the restricted-lock rescue and `append_distinct`;
+  - `find_timing_offset_with_expected` is now the restricted lock; the dead `find_timing_offset` is
+    removed.
+- GPU twin:
+  - `openpulse_gpu::timing_energies_gpu` replaces `timing_offset_search_gpu`, with signed `i32`
+    offsets in both WGSL kernels;
+  - one readback, with the locks picked on the CPU by the same `pick_lock`;
+  - `bpsk_demodulate_variants_with_gpu` gains the rescue.
+- Docs: the trait doc (`plugin.rs`) and `alternate_arm_decodes` (it now counts any non-primary
+  variant); two engine comments citing the replaced #1429 test; and every hit of
+  `git grep -n -i 'one symbol period\|one-symbol timing\|single symbol period\|sub-symbol offsets only\|find_timing_offset\b\|one acquisition' -- crates/openpulse-modem plugins/bpsk docs/openpulse-book.md`
+  that described the old search is corrected or dated (the remaining hits are about onset placement,
+  an acquisition window or an envelope RMS). The onset-window comments keep their pre-PR2 "a third of
+  a symbol late", now dated, since PR2 widens that side to about half a symbol.
+
+**Tests → results.**
+- New tests:
+  - the alias rescue, for both production framings (uncoded and `Rs`, first wire bytes 0xB0 and
+    0xFF pinned);
+  - dedupe when the locks coincide;
+  - bit-identity with the pre-PR2 demodulator at non-negative offsets;
+  - the zero-read before the slice;
+  - #821's uncoded bar at every alignment, replacing the #1429 characterisation test. Saved run:
+    uncoded BER 0.0026 / 0.0025 / 0.0034 / 0.0030 at leads 0 / 8 / 16 / 24 samples, against
+    variant 0 at 0.0214 / 0.0200 / 0.0208 / 0.0263;
+  - `lead_zero_reachability`, an engine-entry gate: BPSK250 + Rs at AWGN −4 dB with the frame at
+    sample 0 and no lead-in, 16 seeds — 15/16 (bar 12);
+  - a GPU equivalence cell where the locks differ (in-crate, `--features gpu --lib`).
+- Rewritten for the new lock at lead 0: `crossfade_cancellation_lowers_awgn_ber` (it now checks the
+  restricted-cancelled variant) and the #1439 lock pin (lead 0: restricted 0, widened −8).
+- Re-pointed: `the_expectation_parameter_actually_reaches_the_timing_lock` now compares locks, not
+  bytes (a byte comparison stopped discriminating under the widened search), and moved from
+  `tests/preamble_seam_identity.rs` into the crate's unit tests; `demod_parity`'s timing column now
+  measures the RESCUE lock; `engine_cancellation_ab`'s "same timing lock" premise now holds for its
+  soft column only (documented in the file).
+- `TimingLocks`, `timing_locks_with_expected` and `pick_lock` are `pub(crate)`: the reachability
+  ratchet flagged them as public items with no production caller outside the crate, and their only
+  outside users were two tests. Those tests moved in-crate. The GPU cell's fixture guard needs the
+  locks; a proxy guard ("4 distinct variants") was tried and failed at lead 0, where the two locks
+  differ but decode to identical bytes and are deduplicated to 2. The moved GPU cell was
+  sabotage-verified again (no GPU rescue → it fails at lead 52).
+- **Lead-0 SNR gates, PR1 → PR2** (all pass; the lead-0 lock moved from φ = 0 to −0.25n, inside PR1's
+  refit inventory):
+
+  | gate | PR1 | PR2 |
+  |---|---|---|
+  | BPSK250 AWGN, true 5 / 10 / 15 | 4.06 / 9.03 / 14.03 | 5.41 / 10.40 / 15.39 |
+  | `moderate_f1`, true 5 / 15 / 25 | 3.92 / 11.96 / 15.30 | 4.16 / 12.24 / 15.62 |
+  | `single_carrier_reports_true_channel_snr`, true 5 / 15 / 25 | 3.98 / 13.96 / 23.96 | 5.34 / 15.32 / 25.32 |
+  | BPSK250 at 30 dB (OFDM52 15.54 both times) | 28.96 | 30.31 |
+
+- **Sabotage, each watched failing** (the failing runs were not saved):
+
+  | sabotage | caught by |
+  |---|---|
+  | no widening | 5 tests, including the engine lead-0 gate |
+  | no restricted rescue | the alias-rescue test, the crossfade test |
+  | no dedupe | `variant_zero_is_the_shipped_demodulate` (4 variants vs 2) |
+  | carrier referenced half a sample off | the bit-identity test |
+  | no zero-read before the slice | the negative-lock test |
+  | no GPU rescue | the new GPU equivalence cell |
+  | GPU shader ignores `offset_base` | 4 GPU tests |
+
+- **Measurement on the CPU path** (`two_lock_policy_measurement`, an `#[ignore]`d instrument; 96
+  frames per cell, 200 B + Rs; 23 slice alignments δ ∈ [−0.75n, 2n] in n/8 steps; the GPU twin is tied
+  to it only by the manual-tier equivalence cell). Scan decodes, where a burst starting at δ0 decodes
+  if any slice δ0 − kn does (the OTA scan steps its onsets by n); summed over the 8 burst starts δ0 ∈
+  [0, n), out of 768:
+
+  | cell | old | new | over δ0 ∈ [0, 2n], old → new |
+  |---|---|---|---|
+  | BPSK250 AWGN −4 dB | 558 | 734 | 1385 → 1564 |
+  | BPSK250 `moderate_f1` 7 dB | 423 | 458 | 958 → 1017 |
+  | BPSK100 AWGN −8 dB | 538 | 715 | 1348 → 1534 |
+  | BPSK100 `moderate_f1` 6 dB | 751 | 760 | 1611 → 1620 |
+  | BPSK31 AWGN −13 dB | 518 | 692 | 1296 → 1490 |
+  | BPSK31 `moderate_f1` 5 dB | 598 | 638 | 1316 → 1371 |
+
+  - Per alignment, new ≥ old **by construction** — the restricted lock's arms are always offered
+    when the locks differ. The measured worst difference of 0, with zero frames decoded only by the old
+    code across 13 248 frame × alignment cells, is a wiring check that the rescue IS the old lock, not
+    a test the policy could fail.
+  - In the four cells run at the design probe's SNR, the old code is identical to the probe in all
+    four, and the new code matches in three (638 against the probe's 642 on BPSK31 fade; the probe
+    emulated the widened search by padding, which is not bit-identical). The two AWGN cells were re-run
+    1 dB higher than the probe (review request) and have no probe comparison.
+- **Cost, reported; no threshold was pre-registered.**
+  - Plugin demodulation on noise-only windows (1e-3 DC plus AWGN; the mixer rejects the DC), release
+    build, 24 windows per rung: ×1.36–1.45 per attempt. The two locks differ in 7–11 of 24 windows.
+    This excludes the engine's extra FEC trials: on a failed attempt where the locks differ, the
+    engine runs up to 4 decodes instead of 2.
+  - Per-burst cost was not measured separately; its proxy is `scripts/slow-tests.sh ota` (CAP-33):
+    PASS, 3 passed, 3949 s, against PR1's 2714 and 2763 s on the same host (×1.43–1.46; host load not
+    controlled between the runs).
+- **Single-lock consumers** — the uncoded path, soft/HARQ, the SNR estimate and AFC stage 2 take the
+  widened lock alone, with no rescue. Measured with two more instrument columns: the uncancelled arm
+  (the soft path's sign slice) at the old lock and at the new one, 96 frames per cell. Coded cells are
+  the design SNRs above; uncoded cells are calibrated operating points (BPSK31 at −9 dB is saturated,
+  so it is repeated at −11 dB; uncoded BPSK31 decodes nothing on `moderate_f1`).
+  - **v6's pre-registered kill trips** (single-slice drop > 2/96 in [1.25n, 2n), per caller). Soft arm
+    on `Rs` frames, in the band: BPSK100 fade −4 / −37 at 1.375n / 1.5n; BPSK31 fade −11 / −15 at 1.5n /
+    1.625n; BPSK250 fade −6 / −4 at 1.25n / 1.375n. Outside the band, also above 2: BPSK250 fade −10 /
+    −9 / −3 at 0.125n / 0.25n / 0.375n, BPSK31 fade −3 at 0.25n, BPSK31 AWGN −3 at 0.375n. Uncoded: the
+    kill trips once, by one frame — −3 at 1.5n (BPSK31 AWGN −9 dB); every other uncoded drop is ≤ 2.
+  - **The maintainer dropped the δ histogram that could have excused it** (2026-09-26), after review
+    showed it cannot decide these consumers. Per consumer instead:
+    - *Uncoded* (OTA fallback `decode_burst_phase1`, non-OTA `decode_burst`, the monitor, the
+      repeater, ARDOP, KISS) scans onsets in steps of n, so the scan outcome is the statistic. Scan
+      decodes over δ0 ∈ [0, 2n], old → new: BPSK250 AWGN −3 dB 174 → 195, fade 20 dB 189 → 180;
+      BPSK100 AWGN −5 dB 1271 → 1419, fade 20 dB 202 → 212; BPSK31 AWGN −9 dB 1511 → 1619, −11 dB
+      648 → 770. The worst single burst start loses 5/96. BPSK250 fade is the one net loss.
+    - *Soft/HARQ* runs only after every hard attempt at every onset has failed, demodulates the whole
+      burst at one lock, and combines only bursts aligned to the sample (#1139). Accepted, and recorded
+      on #1139. Coded scan decodes for comparison: 1385 → 1558, 936 → 921 (BPSK250 fade; worst single
+      burst start −14), 1348 → 1520, 1608 → 1618, 1296 → 1478, 1304 → 1339.
+    - *SNR on the decoded span.* A review claimed that after a restricted-lock rescue the estimate
+      reads the alias lock with #1142's "+5 … −8 dB swing", and the maintainer first chose to fix it.
+      Measured before building (`~/parked/openpulse-1438/snr-alias-probe.log`, 24 frames per cell,
+      AWGN at 10 dB and `moderate_f1` at 15 dB — not the design SNRs,
+      relative to the same frame and noise sliced at 0.5n, the estimator's calibration phase): on
+      rescued frames the widened (alias) reading is −0.53 / −0.61 / −0.48 dB on BPSK250 / 100 / 31 AWGN
+      at 1.625n, and the old (restricted) lock reads −3.01 / −2.51 / −2.37 dB. BPSK100 fade at 1.5n:
+      −0.29 against −0.64 (12 rescued). BPSK250 fade at 1.25n / 1.375n: −7.38 / −4.71 against −0.35 /
+      −1.96 (3 and 2 rescued; observed, rate unmeasured). Both columns follow the estimator's own phase
+      response at the sub-symbol phase each lock sits at, so reading at the lock that decoded would
+      make the AWGN band worse. The "swing" was carried over from #1142 (a noise-argmax lock with no
+      preamble in view; `engine.rs:3179–3186`), a different mechanism, and is **retracted**. No SNR
+      change (maintainer, 2026-09-27). On a decoded frame a low reading cannot demote (#934); it can
+      only withhold `ClimbOnSnr` for that frame. The fade minority is #1451.
+    - *AFC stage 2* uses only consecutive-symbol products, so a lock shift changes its variance, not
+      its expectation. That is argued from the estimator's algebra, **not measured**; a correction is
+      also bounded by the AFC loop gain (0.1 on the streaming path, 0.7 in the mini-settle) and the 2 Hz
+      deadband.
+- The workspace gate on the final HEAD is quoted in the PR.
+
+**Deviations from pre-registration** (design v5/v6):
+1. The production δ histogram (v5 item 1) was not produced: the maintainer dropped it (2026-09-26)
+   after review showed it cannot decide the single-lock consumers. v6's single-lock kill therefore
+   trips unexcused; its disposition per consumer is above.
+2. The noiseless alias check covers the two production first wire bytes (0xB0 uncoded, 0xFF `Rs`),
+   not 0x00–0x03: whitening and the fixed magic make those unreachable. It builds the wire from core's
+   `Frame` / `FecCodec` / `scramble` with the first byte asserted, not through
+   `ModemEngine::transmit` as v5 specified.
+3. The union residual (v5 item 4) was not measured separately.
+4. The GPU equivalence ran on this host's AMD Renoir iGPU (`lspci`): 6 passed, including the new
+   cell where the locks differ. No adapter name is printed by the test itself.
+
+**Limitations.**
+- Found separately: behind a 500 Hz or 250 Hz receive filter the daemon's squelch collapses to its
+  clamp and DCD never drops (#1452).
+- **Soft/HARQ in the alias band.** The soft path keeps an LLR vector shifted by two symbols where the
+  old lock kept an aligned one. As the newest vector it spoils that burst's combine; as an older one,
+  the suffix trial drops it for one extra RS decode. Bounded by `OTA_HARQ_MAX_ATTEMPTS = 3`; it
+  cannot cause a false delivery. Recorded on #1139.
+- **A single slice whose frame starts 1.5–1.75 symbols or more in decodes nothing at either lock**,
+  before and after. The first all-zero alignment is 1.5n in the three AWGN cells and on BPSK250 fade,
+  1.625n on BPSK100 fade, and 1.75n on BPSK31 fade (and 1.75n on BPSK250 AWGN at 20 dB, in a 2-frame
+  smoke run). It is consistent with the asymmetric onset window recorded at `engine.rs:4120–4142`
+  (about 1.5 symbols early; the late side, a third of a symbol before PR2, is what PR2 widens to about
+  half a symbol), not re-derived here. The OTA scan's next onset, one step of
+  n later, sees such a frame 0.5n in; a caller with no next slice does not. Tracked in #1450.
+- Not covered by the measurement: one payload (200 B, one RS block, `Rs` only — no `RsStrong`); no
+  carrier offset (the AFC deadband leaves up to 2 Hz); no BPSK63; no `-RRC` (single-lock by design);
+  `moderate_f1` only; one centre frequency.
+- #1429: its characterisation test is replaced by a guard on the production uncoded arm at every
+  alignment, which meets #821's bar (the bar question is closed). Which arm — or, now, which locks —
+  uncoded traffic should take stays #1429's decision; so does variant 0 being the cancelled arm, the
+  weaker one at the early lock (with #1363). Commented on #1429.
+
+---
+
 ## 2026-09-25 — #1438 PR1: BPSK's SNR estimate reads the channel at the lock it actually gets
 
 **Requirement / change.** The rate controller's BPSK input (`hpx_hf` SL2–SL5) must read the channel
