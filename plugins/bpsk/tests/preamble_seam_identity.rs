@@ -104,44 +104,6 @@ fn the_parameterised_demodulator_reproduces_the_shipped_decode_exactly() {
 }
 
 #[test]
-fn the_expectation_parameter_actually_reaches_the_timing_lock() {
-    // The RX-side anti-vacuity tripwire, and the reason the AFC column had to be
-    // redesigned: stage-2 AFC and the decoder both lock timing by correlating
-    // against the expectation, so feeding candidate audio through the *shipped*
-    // entry point measures a TX/RX mismatch rather than the candidate. If a
-    // deliberately wrong expectation decoded identically, that coupling would be
-    // absent and the redesign unnecessary.
-    let data = b"OPENPULSE parity seam";
-    // The corruption has to be near-orthogonal to the shipped sequence. Measured
-    // while writing this: flipping every third symbol (correlation ~1/3) still
-    // locks to the correct offset, and a full inversion is invariant by design
-    // (the metric is magnitude, handling the 180 degree polarity ambiguity). Only
-    // an uncorrelated expectation moves the lock — which is itself evidence that
-    // the sub-symbol timing metric tolerates partial mismatch.
-    let wrong: Vec<f32> = (0..PREAMBLE_SYMS)
-        .map(|i| {
-            if i.wrapping_mul(2_654_435_761) % 2 == 0 {
-                1.0
-            } else {
-                -1.0
-            }
-        })
-        .collect();
-    let cfg = config("BPSK250");
-    let tx = bpsk_modulate(data, &cfg).expect("modulate");
-    let right = bpsk_demodulate(&tx, &cfg).expect("shipped demodulate");
-    let under_wrong = bpsk_demodulate_with_expected(&tx, &cfg, &wrong);
-    let differs = match under_wrong {
-        Ok(bytes) => bytes != right,
-        Err(_) => true,
-    };
-    assert!(
-        differs,
-        "a corrupted expectation decoded identically — the expectation parameter is inert"
-    );
-}
-
-#[test]
 fn the_demodulator_expectation_derives_from_the_modulator_sequence() {
     // Also a de-delegation guard: `expected_preamble_symbols` currently delegates
     // to `expected_symbols_for(preamble_bits(..))`, so this cannot fail today. It

@@ -116,7 +116,8 @@ impl ModulationPlugin for BpskPlugin {
         demodulate::bpsk_demodulate(samples, config)
     }
 
-    /// Both crossfade-cancellation arms from one acquisition (#1428).
+    /// Both crossfade-cancellation arms, at the widened timing lock and, when it differs, at the
+    /// restricted one (#1428, #1438).
     ///
     /// The GPU branch is not an optimisation here — it is the correctness case. The daemon is
     /// `default = ["gpu"]` and registers `with_gpu` whenever an adapter exists, so relying on the
@@ -299,28 +300,25 @@ mod tests {
         assert_eq!(&recovered[..payload.len()], payload);
     }
 
-    /// The UNCODED production path takes the uncancelled arm, and does NOT meet the bar the test
-    /// below holds the cancelled arm to (#1429).
+    /// The UNCODED production path (the soft arm, uncancelled, hard-decided) meets #821's bar at
+    /// every slice alignment (#1429's bar question; which arm uncoded traffic should take stays
+    /// #1429's).
     ///
     /// `ModemEngine::receive_from_samples` prefers `demodulate_soft` whenever the plugin advertises
-    /// one, and `BpskPlugin::supports_soft_demod` returns `true` unconditionally — so every uncoded
-    /// decode (`FecMode::None`, `receive()`, `decode_burst_phase1`) hard-decides the SOFT arm's
-    /// LLRs, and BPSK's soft arm deliberately skips `cancel_crossfade_isi` (#832, to protect the LLR
-    /// calibration HARQ combining relies on). Coded decodes take the cancelled arm instead.
+    /// one, so every uncoded decode hard-decides the SOFT arm, which skips `cancel_crossfade_isi`
+    /// (#832, to protect HARQ's LLR calibration). #1429 measured that arm at 0.0336 BER against
+    /// #821's `< 0.02` bar — on a LEAD-0 fixture, where the old search locked on the symbol
+    /// boundary: the one phase where the uncancelled arm is worst. At a lead of a quarter symbol or
+    /// more the search already locked a quarter symbol early, where that arm is best; #1438 PR2's
+    /// widened search reaches that lock at lead 0 too. Measured with PR2, 8 seeds, this fixture:
+    /// 0.0026 / 0.0025 / 0.0034 / 0.0030 at leads 0 / 8 / 16 / 24 samples, against the cancelled
+    /// arm at the same lock at 0.0214 / 0.0200 / 0.0208 / 0.0263.
     ///
-    /// So `crossfade_cancellation_lowers_awgn_ber` below — an **uncoded** BER test — guards a
-    /// demodulator that **no uncoded production decode uses**. Measured on its own fixture, 8 seeds:
-    /// the cancelled arm means **0.0127** against its `< 0.02` bar, the production arm means
-    /// **0.0336** and exceeds that bar on *every* seed.
-    ///
-    /// This is a CHARACTERISATION test, not an endorsement. It pins the divergence so it cannot
-    /// change silently, and so that whoever settles #1429 does so deliberately: the current split
-    /// hands uncoded traffic the fade-favourable arm and coded traffic the AWGN-favourable one,
-    /// which #1363 measured and which may well be the right answer for §97.119 station ID,
-    /// handshake, QSY and relay frames that live on a fading channel. What is not defensible is
-    /// that nothing tested it.
+    /// The #1429 characterisation test this replaces said to delete it and name the winner, rather
+    /// than loosen it, once the paths reconciled. Asserted at leads 0, 8, 16 and 24 samples, with
+    /// the cancelled arm at the same lock (`demodulate`, variant 0) as the comparison.
     #[test]
-    fn the_uncoded_production_path_takes_the_uncancelled_arm() {
+    fn the_uncoded_production_arm_meets_821s_bar_at_every_alignment() {
         fn add_noise(samples: &mut [f32], sigma: f32, mut seed: u64) {
             let mut next = || {
                 seed = seed
@@ -340,8 +338,7 @@ mod tests {
             mode: "BPSK250".to_string(),
             ..ModulationConfig::default()
         };
-        // The SAME payload and noise level as `crossfade_cancellation_lowers_awgn_ber`, by
-        // construction: a different fixture would not be comparable to the bar being cited.
+        // The SAME payload and noise level as `crossfade_cancellation_lowers_awgn_ber`.
         let payload: Vec<u8> = (0..180u32)
             .map(|i| (i.wrapping_mul(37).wrapping_add(11) & 0xff) as u8)
             .collect();
@@ -351,59 +348,53 @@ mod tests {
             let e: u32 = (0..n).map(|i| (payload[i] ^ bytes[i]).count_ones()).sum();
             e as f32 / (n * 8) as f32
         };
-
-        let (mut cancelled, mut production) = (0.0f32, 0.0f32);
         const SEEDS: u64 = 8;
-        for k in 0..SEEDS {
-            let mut noisy = clean.clone();
-            add_noise(
-                &mut noisy,
-                0.9,
-                0x1234_5678u64.wrapping_add(k.wrapping_mul(0x9E37_79B9)),
+        for lead in [0usize, 8, 16, 24] {
+            let (mut variant0, mut uncoded) = (0.0f32, 0.0f32);
+            for k in 0..SEEDS {
+                let mut noisy = vec![0.0f32; lead];
+                noisy.extend_from_slice(&clean);
+                add_noise(
+                    &mut noisy,
+                    0.9,
+                    0x1234_5678u64.wrapping_add(k.wrapping_mul(0x9E37_79B9)),
+                );
+                variant0 += ber(&plugin.demodulate(&noisy, &cfg).expect("demodulate"));
+                // Exactly what `receive_from_samples` does on the uncoded path: soft LLRs, hard-decided.
+                let llrs = plugin
+                    .demodulate_soft(&noisy, &cfg)
+                    .expect("demodulate_soft");
+                let bytes: Vec<u8> = llrs
+                    .iter()
+                    .map(|l| *l < 0.0)
+                    .collect::<Vec<bool>>()
+                    .chunks(8)
+                    .map(|c| {
+                        c.iter()
+                            .enumerate()
+                            .fold(0u8, |b, (i, &v)| b | ((v as u8) << i))
+                    })
+                    .collect();
+                uncoded += ber(&bytes);
+            }
+            variant0 /= SEEDS as f32;
+            uncoded /= SEEDS as f32;
+            println!(
+                "lead {lead}: uncoded (soft arm) BER {uncoded:.4}, variant 0 BER {variant0:.4}"
             );
-            cancelled += ber(&plugin.demodulate(&noisy, &cfg).expect("demodulate"));
-            // Exactly what `receive_from_samples` does on the uncoded path: soft LLRs, hard-decided.
-            let llrs = plugin
-                .demodulate_soft(&noisy, &cfg)
-                .expect("demodulate_soft");
-            let bytes: Vec<u8> = llrs
-                .iter()
-                .map(|l| *l < 0.0)
-                .collect::<Vec<bool>>()
-                .chunks(8)
-                .map(|c| {
-                    c.iter()
-                        .enumerate()
-                        .fold(0u8, |b, (i, &v)| b | ((v as u8) << i))
-                })
-                .collect();
-            production += ber(&bytes);
+            assert!(
+                uncoded < 0.01,
+                "lead {lead}: the uncoded production arm reads {uncoded:.4} BER — #821's bar is 0.02, \
+                 and it measured ≤ 0.0034 at every lead once the lock is a quarter symbol early"
+            );
+            assert!(
+                uncoded < variant0,
+                "lead {lead}: the uncoded arm ({uncoded:.4}) no longer beats the cancelled arm at the \
+                 same lock ({variant0:.4})"
+            );
         }
-        cancelled /= SEEDS as f32;
-        production /= SEEDS as f32;
-
-        assert!(
-            cancelled < 0.02,
-            "the CANCELLED arm ({cancelled:.4}) no longer meets #821's bar — that is a regression \
-             in the arm `crossfade_cancellation_lowers_awgn_ber` tests, not this divergence"
-        );
-        assert!(
-            production > cancelled * 1.5,
-            "the production (uncancelled) arm {production:.4} is no longer materially worse than \
-             the cancelled arm {cancelled:.4} on #821's own fixture. If the two paths have been \
-             reconciled, #1429 is resolved — delete this test and say which arm won, rather than \
-             loosening it"
-        );
-        assert!(
-            production > 0.02,
-            "the production arm {production:.4} now MEETS #821's bar. Either the uncoded path was \
-             switched to the cancelled arm or the soft arm gained the cancellation — either way \
-             #1429 is resolved and this test should be replaced by one asserting the bar directly"
-        );
     }
 
-    /// Crossfade-ISI cancellation must lower the BPSK AWGN bit-error rate: the uncancelled `+β` bias in
-    /// the differential dot product costs several dB of flip-bit margin. Deterministic (fixed-seed noise).
     #[test]
     fn crossfade_cancellation_lowers_awgn_ber() {
         // Box-Muller Gaussian from a deterministic LCG — no rng dep, reproducible across runs.
@@ -437,7 +428,19 @@ mod tests {
         // bits, low enough that the cancelled path recovers the frame cleanly.
         let mut noisy = clean.clone();
         add_noise(&mut noisy, 0.9, 0x1234_5678);
-        let recovered = plugin.demodulate(&noisy, &cfg).expect("demodulate");
+        // #821's claim is about the cancellation at the symbol BOUNDARY. Since #1438 PR2 a lead-0
+        // frame's primary lock is a quarter symbol early (where the uncancelled arm is the better
+        // one), and the boundary lock survives as the restricted-lock rescue: variants are
+        // [widened-cancelled, widened-uncancelled, restricted-cancelled, restricted-uncancelled].
+        let variants = plugin
+            .demodulate_variants(&noisy, &cfg)
+            .expect("demodulate_variants");
+        assert_eq!(
+            variants.len(),
+            4,
+            "a lead-0 frame must offer both locks' arms (widened ≠ restricted at lead 0)"
+        );
+        let recovered = &variants[2];
 
         let n = payload.len().min(recovered.len());
         let bit_errors: u32 = (0..n)

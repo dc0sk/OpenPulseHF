@@ -2,15 +2,15 @@
 // Each workitem demodulates one symbol.
 // sym_idx = global_invocation_id.x
 //
-// Matches the CPU demodulate_iq(): half-Hann (w_tail) matched filter with
-// factor-of-2 carrier normalisation. `params.offset` is the timing offset
-// applied before this slice of samples was captured — used only for carrier
-// phase calculation, not for sample indexing (in_samples is already sliced).
+// Matches the CPU demodulate_iq_at(): half-Hann (w_tail) matched filter with
+// factor-of-2 carrier normalisation. `params.offset` is the SIGNED timing offset into the
+// whole buffer (#1438 PR2): symbol k integrates samples offset + k*n .., samples before
+// index 0 read as zero, and the carrier uses the absolute index.
 
 struct BpskDemodParams {
     n_syms:          u32,
     samples_per_sym: u32,
-    offset:          u32,
+    offset:          i32,
     pad0:            u32,
     fc:              f32,
     sample_rate:     f32,
@@ -40,17 +40,20 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     var norm      = 0.0f;
 
     for (var k = 0u; k < n; k++) {
-        let local_idx = sym_start + k;
-        if (local_idx >= arrayLength(&in_samples)) {
+        let idx = params.offset + i32(sym_start + k);
+        if (idx >= i32(arrayLength(&in_samples))) {
             break;
         }
-        let sample = in_samples[local_idx];
+        var sample = 0.0f;
+        if (idx >= 0) {
+            sample = in_samples[u32(idx)];
+        }
 
         // Matched filter: decreasing half-Hann (w_tail), matching the overlapping
         // crossfade modulator.  w_tail = 0.5*(1+cos(π*k/n)) → 1 at k=0, 0 at k=n.
         let window = 0.5 * (1.0 + cos(PI * f32(k) / f32(n)));
 
-        let global_n = f32(params.offset + local_idx);
+        let global_n = f32(idx);
         let t        = global_n / params.sample_rate;
         let ci       =  cos(TWO_PI * params.fc * t);
         let cq       = -sin(TWO_PI * params.fc * t);

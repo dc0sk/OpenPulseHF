@@ -13,7 +13,7 @@ pub mod modulate;
 pub mod rrc_fir;
 pub mod soft_demod;
 
-pub use demodulate::{bpsk_iq_demod_gpu, timing_offset_search_gpu};
+pub use demodulate::{bpsk_iq_demod_gpu, timing_energies_gpu};
 pub use fft256::gpu_fft256_batch;
 pub use modulate::bpsk_modulate_gpu;
 pub use rrc_fir::gpu_rrc_fir;

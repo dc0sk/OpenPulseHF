@@ -2,7 +2,8 @@
 //!
 //! `ota_decode_and_ack_inner` used to make ONE attempt per candidate, at offset 0, on the whole
 //! burst, while its uncoded sibling `decode_burst_inner` scanned onsets. The demodulator's timing
-//! search spans a single symbol period (32 samples at BPSK250), so a frame a few thousand samples
+//! search spans about one and a half symbol periods (`[−n/2, n)` since #1438; one period, 32
+//! samples at BPSK250, when this was written), so a frame a few thousand samples
 //! into a burst was undecodable — and that is where real captures put it. On the on-air corpus the
 //! coded arm lost every RS-coded frame the CLI path recovered (daemon 1/7 vs CLI 5/7); with the scan
 //! it is 5/7, matching the CLI exactly. See `daemon_vs_cli_on_real_captures.rs`.
@@ -87,7 +88,7 @@ fn the_coded_arm_decodes_a_frame_that_does_not_start_at_offset_zero() {
         Some(PAYLOAD),
         "the coded arm failed to decode a frame {LEAD_SAMPLES} samples into the burst (#1138). The \
          candidate loop must scan onsets, as `decode_burst_inner` does — the demod's timing search \
-         spans one symbol period, so an un-scanned attempt at offset 0 cannot find it. This is the \
+         spans only [−n/2, n), so an un-scanned attempt at offset 0 cannot find it. This is the \
          defect that lost every RS-coded frame on the real on-air corpus while the uncoded sibling \
          recovered them."
     );

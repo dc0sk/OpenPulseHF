@@ -20,7 +20,8 @@
 //! up to 4 acquisition windows. `ota_decode_and_ack_inner` (the coded arm, `server.rs:866`) makes
 //! ONE attempt per candidate, at offset 0, on the full burst.
 //!
-//! The demod's timing search spans a single symbol period (32 samples at BPSK250), so a frame a few
+//! The demod's timing search spans about one and a half symbol periods (`[−n/2, n)` since #1438;
+//! one period, 32 samples at BPSK250, when this was written), so a frame a few
 //! thousand samples into a burst is undecodable without a scan — and that is exactly where these
 //! frames sit. The daemon's one success is its uncoded row: the coded/uncoded split tracks SCAN
 //! PRESENCE, not chain presence.

@@ -6,7 +6,7 @@
 //! audio samples
 //!   → multiply by I/Q reference carriers
 //!   → matched-filter (half-Hann w_tail) integration per symbol period
-//!   → timing search over first symbol period (brute-force energy maximisation)
+//!   → timing search over [−n/2, n) (brute-force energy maximisation)
 //!   → differential phase detection (NRZI decode)
 //!   → bits → bytes
 //! ```
@@ -14,9 +14,11 @@
 //! ## Symbol timing
 //!
 //! The modulator prepends [`PREAMBLE_SYMS`] symbols with alternating phases
-//! (+1, −1, +1, …).  The demodulator scans every possible timing offset
-//! within the first symbol period, picks the offset that maximises the
-//! demodulated preamble energy, and uses that offset for the rest of the frame.
+//! (+1, −1, +1, …).  The demodulator scans every timing offset from half a
+//! symbol before the slice to one symbol into it (`[−n/2, n)`, #1438), picks
+//! the offset that maximises the demodulated preamble energy, and uses it for
+//! the rest of the frame. The hard path also decodes at the best offset inside
+//! `[0, n)` when that differs, and lets the FEC/CRC choose.
 //!
 //! ## Phase ambiguity
 //!
@@ -81,13 +83,12 @@ fn symbol_stream_with_expected(
 /// The symbol stream **before** the crossfade cancellation, plus whether this path crossfades at all.
 ///
 /// Split out of [`symbol_stream_with_expected`] for `demodulate_variants` (#1428), which needs both
-/// the cancelled and uncancelled decisions from ONE acquisition — the timing search and
+/// the cancelled and uncancelled decisions from one timing lock — the timing search and
 /// `demodulate_iq` are the expensive terms and are shared, so the second arm costs O(symbols).
 ///
 /// `estimate_snr_db` consumes the UNCANCELLED stream from here (#1438): the cancelled one reads the
-/// channel only at a lock exactly on the symbol boundary, which the timing search produces only when
-/// the frame starts within a quarter symbol of the slice (≈ 2 % of BPSK250 and ≈ 16 % of BPSK31
-/// bursts if starts are uniform over a 400-sample capture tick).
+/// channel only at a lock exactly on the symbol boundary, which the widened search produces only
+/// when the frame starts about a quarter symbol into the slice.
 /// `estimate_snr_db_reads_the_uncancelled_stream` pins it.
 ///
 /// The `-RRC` arm reports `false`: Gardner+LMS with no crossfade, so there is no second arm there
@@ -130,39 +131,76 @@ fn symbol_stream_parts_with_expected(
         let (i, q) = bpsk_demodulate_rrc(samples, n, baud, fc, fs, alpha, &config.mode);
         Ok((i, q, false))
     } else {
-        let offset = find_timing_offset_with_expected(samples, n, fc, fs, expected);
-        let (iv, qv) = demodulate_iq(samples, n, fc, fs, offset);
+        let locks = timing_locks_with_expected(samples, n, fc, fs, expected);
+        let (iv, qv) = demodulate_iq_at(samples, n, fc, fs, locks.widened);
         Ok((iv, qv, true))
     }
 }
 
-/// Every hard-decision wire this mode can produce from ONE acquisition, best-first (#1428).
+/// Every hard-decision wire this mode can produce, best-first (#1428, #1438 PR2).
 ///
 /// Variant 0 is byte-identical to [`bpsk_demodulate`] — the trait contract hangs off `demodulate`,
-/// so variant 0 must keep meaning it. Variant 1, where it exists, is the same symbols decoded
-/// WITHOUT `cancel_crossfade_isi`.
+/// so variant 0 must keep meaning it. The variants are the two decision arms (crossfade-cancelled,
+/// then uncancelled) at the WIDENED timing lock, followed by the same two arms at the RESTRICTED
+/// lock when the two locks differ ([`TimingLocks`]), with byte-identical duplicates removed.
 ///
-/// **Why two variants rather than a gate.** #1428 step 1 (PR #1432) measured the two arms
+/// **Why two arms rather than a gate (#1428).** #1428 step 1 (PR #1432) measured the arms
 /// end-to-end with real RS — its "uncancelled" column is the soft arm sign-sliced — and cancelling
 /// won AWGN decisively (96/96 against 12/96 at −2 dB) and lost on `moderate_f1` (38/96 against
 /// 49/96 at 8 dB). The union computed from those discordant pairs, 52/96, was never below the better
 /// arm in any cell and above both on the two `moderate_f1` cells. It needs no predicate, because RS
 /// plus the length prefix and CRC-16 adjudicate which arm was right.
 ///
-/// **Cost.** The timing search and `demodulate_iq` are O(samples) and are shared; the second arm
-/// adds `cancel_crossfade_isi` + `differential_decode` + `bits_to_bytes`, all O(symbols). On
-/// BPSK250 that is ~4 120 symbols against ~131 840 samples.
+/// **Why two locks rather than an edge rule (#1438 PR2).** Measured over slice alignments on three
+/// rungs, AWGN and `moderate_f1`: the widened lock recovers frames starting within a quarter symbol
+/// of the slice, and loses where it reaches the −2-symbol alias or where the clamped restricted lock
+/// happens to sit nearer a fade's best phase. Rejecting a lock at the range edge lost up to 91/96 on
+/// one-shot callers. Trying both locks cannot be worse than the restricted lock alone, by
+/// construction, and measured no worse in any cell.
 ///
-/// Returns ONE variant where there is genuinely only one arm: the `-RRC` path does not crossfade,
-/// so a second entry there would be a byte-identical duplicate that costs an RS trial and could be
-/// miscounted as an arm-B win.
+/// **Cost.** The timing search covers 1.5 symbol periods, both locks from one pass. The second lock
+/// costs a full `demodulate_iq` whenever the locks differ — on every attempt, not only on failure,
+/// because the variants are built eagerly.
+///
+/// Returns ONE variant where there is genuinely only one arm and one lock: the `-RRC` path does not
+/// crossfade and locks by Gardner+LMS, so a second entry there would be a byte-identical duplicate
+/// that costs an RS trial and could be miscounted as a rescue.
 pub fn bpsk_demodulate_variants(
     samples: &[f32],
     config: &ModulationConfig,
 ) -> Result<Vec<Vec<u8>>, ModemError> {
     let expected = expected_preamble_symbols(PREAMBLE_SYMS);
-    let (iv, qv, crossfade) = symbol_stream_parts_with_expected(samples, config, &expected)?;
-    variants_from_parts(iv, qv, crossfade, expected.len())
+    let baud = parse_baud_rate(&config.mode)?;
+    let fs = config.sample_rate as f32;
+    let fc = config.center_frequency;
+    let n = samples_per_symbol(fs, baud)?;
+    let rrc = matches!(config.pulse_shape, PulseShape::Rrc { .. }) || config.mode.ends_with("-RRC");
+    if rrc || samples.len() < n * (expected.len() + 1) {
+        // The -RRC path (and the too-short refusal) are the single-lock stream.
+        let (iv, qv, crossfade) = symbol_stream_parts_with_expected(samples, config, &expected)?;
+        return variants_from_parts(iv, qv, crossfade, expected.len());
+    }
+    let locks = timing_locks_with_expected(samples, n, fc, fs, &expected);
+    let (iv, qv) = demodulate_iq_at(samples, n, fc, fs, locks.widened);
+    let mut out = variants_from_parts(iv, qv, true, expected.len())?;
+    if locks.restricted as isize != locks.widened {
+        let (iv, qv) = demodulate_iq_at(samples, n, fc, fs, locks.restricted as isize);
+        // A rescue that cannot even be framed is not an error: the widened lock's variants stand.
+        if let Ok(rescue) = variants_from_parts(iv, qv, true, expected.len()) {
+            append_distinct(&mut out, rescue);
+        }
+    }
+    Ok(out)
+}
+
+/// Append each of `more` to `out` unless an identical wire is already there — the trait bans
+/// duplicate variants (each costs an RS trial and could be miscounted as a rescue).
+fn append_distinct(out: &mut Vec<Vec<u8>>, more: Vec<Vec<u8>>) {
+    for v in more {
+        if !out.contains(&v) {
+            out.push(v);
+        }
+    }
 }
 
 /// Shared by the CPU and GPU arms: cancelled first, uncancelled second when the path crossfades.
@@ -415,9 +453,9 @@ pub fn afc_estimate_hz(samples: &[f32], config: &ModulationConfig) -> Option<f32
 
 /// [`afc_estimate_hz`] whose stage-2 timing lock uses a supplied expectation.
 ///
-/// Stage 2 calls [`find_timing_offset`], which correlates against the expected
-/// preamble — so estimating AFC on candidate-preamble audio through the shipped
-/// entry point measures a TX/RX mismatch, not the candidate.
+/// Stage 2 locks timing with [`timing_locks_with_expected`] (the widened lock), which correlates
+/// against the expected preamble — so estimating AFC on candidate-preamble audio through the
+/// shipped entry point measures a TX/RX mismatch, not the candidate.
 pub fn afc_estimate_hz_with_expected(
     samples: &[f32],
     config: &ModulationConfig,
@@ -438,8 +476,8 @@ pub fn afc_estimate_hz_with_expected(
     // eliminate the sub-step quantisation error (≤ 6.25 Hz).
     let c = coarse.unwrap_or(0.0);
     let corrected_fc = config.center_frequency + c;
-    let offset = find_timing_offset_with_expected(samples, n, corrected_fc, fs, expected);
-    let (i_syms, q_syms) = demodulate_iq(samples, n, corrected_fc, fs, offset);
+    let lock = timing_locks_with_expected(samples, n, corrected_fc, fs, expected).widened;
+    let (i_syms, q_syms) = demodulate_iq_at(samples, n, corrected_fc, fs, lock);
     let residual = estimate_frequency_offset(&i_syms, &q_syms, baud);
 
     // The residual should be within ±baud/4 of 0 after Goertzel correction.
@@ -485,14 +523,15 @@ pub fn bpsk_demodulate_soft(
     let (i_syms, q_syms) = if let Some(alpha) = rrc_alpha {
         bpsk_demodulate_rrc(samples, n, baud, fc, fs, alpha, &config.mode)
     } else {
-        let offset = find_timing_offset(samples, n, fc, fs);
+        let expected = expected_preamble_symbols(PREAMBLE_SYMS);
+        let lock = timing_locks_with_expected(samples, n, fc, fs, &expected).widened;
         // NOTE: crossfade-ISI cancellation is deliberately NOT applied on the soft path. BPSK is
         // *differential*, so the backward-substitution recursion inflates the noise LLRs of a deeply
         // faded attempt instead of suppressing them — that breaks the LLR calibration HARQ MAP
         // combining relies on (regressed `llr_calibration::a_deeply_faded_extra_attempt_does_not_hurt`).
         // The cancellation stays on the hard differential path (`bpsk_demodulate`), where it restores the
         // decision margin without disturbing any soft-combining scale.
-        demodulate_iq(samples, n, fc, fs, offset)
+        demodulate_iq_at(samples, n, fc, fs, lock)
     };
 
     if i_syms.len() <= PREAMBLE_SYMS + TAIL_SYMS {
@@ -642,7 +681,7 @@ fn gpu_symbol_stream_parts(
     samples: &[f32],
     config: &ModulationConfig,
     ctx: &openpulse_gpu::GpuContext,
-) -> Result<Option<(Vec<f32>, Vec<f32>)>, ModemError> {
+) -> Result<Option<(TimingLocks, Vec<f32>, Vec<f32>)>, ModemError> {
     let baud = parse_baud_rate(&config.mode)?;
     let fs = config.sample_rate as f32;
     let fc = config.center_frequency;
@@ -653,16 +692,24 @@ fn gpu_symbol_stream_parts(
     }
 
     let expected = expected_preamble_symbols(PREAMBLE_SYMS);
-    let Some(offset) =
-        openpulse_gpu::timing_offset_search_gpu(ctx, samples, n, PREAMBLE_SYMS, &expected, fc, fs)
-    else {
+    let half = n / 2;
+    let Some(energies) = openpulse_gpu::timing_energies_gpu(
+        ctx,
+        samples,
+        n,
+        PREAMBLE_SYMS,
+        &expected,
+        fc,
+        fs,
+        -(half as isize),
+    ) else {
         return Ok(None);
     };
-
-    let effective = &samples[offset.min(samples.len())..];
-    Ok(openpulse_gpu::bpsk_iq_demod_gpu(
-        ctx, effective, n, fc, fs, offset,
-    ))
+    let locks = locks_from_energies(&energies, half);
+    Ok(
+        openpulse_gpu::bpsk_iq_demod_gpu(ctx, samples, n, fc, fs, locks.widened)
+            .map(|(iv, qv)| (locks, iv, qv)),
+    )
 }
 
 /// GPU-accelerated demodulation path.
@@ -677,7 +724,7 @@ pub fn bpsk_demodulate_with_gpu(
         return bpsk_demodulate_rrc_gpu(samples, config, ctx);
     }
 
-    let Some((mut i_syms, mut q_syms)) = gpu_symbol_stream_parts(samples, config, ctx)? else {
+    let Some((_, mut i_syms, mut q_syms)) = gpu_symbol_stream_parts(samples, config, ctx)? else {
         return bpsk_demodulate(samples, config);
     };
 
@@ -696,7 +743,7 @@ pub fn bpsk_demodulate_with_gpu(
     bytes_from_symbol_stream(&i_syms, &q_syms, PREAMBLE_SYMS)
 }
 
-/// GPU counterpart of [`bpsk_demodulate_variants`] — one acquisition, both decision arms.
+/// GPU counterpart of [`bpsk_demodulate_variants`] — both decision arms at both timing locks.
 ///
 /// The daemon is `default = ["gpu"]` and registers `BpskPlugin::with_gpu` whenever an adapter is
 /// present, so a variants implementation that only covered the CPU path would ship the union
@@ -712,11 +759,31 @@ pub fn bpsk_demodulate_variants_with_gpu(
     if matches!(config.pulse_shape, PulseShape::Rrc { .. }) || config.mode.ends_with("-RRC") {
         return bpsk_demodulate_variants(samples, config);
     }
-    match gpu_symbol_stream_parts(samples, config, ctx)? {
-        Some((iv, qv)) => variants_from_parts(iv, qv, true, PREAMBLE_SYMS),
+    let Some((locks, iv, qv)) = gpu_symbol_stream_parts(samples, config, ctx)? else {
         // A GPU fallback takes the CPU path, which reports its own arm count.
-        None => bpsk_demodulate_variants(samples, config),
+        return bpsk_demodulate_variants(samples, config);
+    };
+    let mut out = variants_from_parts(iv, qv, true, PREAMBLE_SYMS)?;
+    // The restricted-lock rescue (#1438 PR2), as on the CPU path.
+    if locks.restricted as isize != locks.widened {
+        let baud = parse_baud_rate(&config.mode)?;
+        let fs = config.sample_rate as f32;
+        let n = samples_per_symbol(fs, baud)?;
+        let rescue = openpulse_gpu::bpsk_iq_demod_gpu(
+            ctx,
+            samples,
+            n,
+            config.center_frequency,
+            fs,
+            locks.restricted as isize,
+        );
+        if let Some(Ok(rescue)) =
+            rescue.map(|(iv, qv)| variants_from_parts(iv, qv, true, PREAMBLE_SYMS))
+        {
+            append_distinct(&mut out, rescue);
+        }
     }
+    Ok(out)
 }
 
 // ── RRC baseband demodulation path ───────────────────────────────────────────
@@ -935,22 +1002,13 @@ fn find_timing_offset_bb(i_bb: &[f32], q_bb: &[f32], n: usize) -> usize {
     best_off
 }
 
-/// Try every possible timing offset within one symbol period.  Return the
-/// offset that gives the maximum preamble correlation magnitude.
-fn find_timing_offset(samples: &[f32], n: usize, fc: f32, fs: f32) -> usize {
-    find_timing_offset_with_expected(
-        samples,
-        n,
-        fc,
-        fs,
-        &expected_preamble_symbols(PREAMBLE_SYMS),
-    )
-}
-
-/// [`find_timing_offset`] correlating against a supplied expectation.
+/// The timing search correlating against a supplied expectation — the RESTRICTED search over
+/// offsets `[0, n)`.
 ///
-/// The search span follows `expected.len()` rather than [`PREAMBLE_SYMS`], so a
-/// candidate preamble is searched over its own length.
+/// Production decodes use both halves of [`timing_locks_with_expected`]; this is the restricted
+/// half, kept as its own entry point because it is the lock BPSK shipped with and the one the #1438
+/// P6 rescue falls back to. The search span follows `expected.len()` rather than [`PREAMBLE_SYMS`],
+/// so a candidate preamble is searched over its own length.
 pub fn find_timing_offset_with_expected(
     samples: &[f32],
     n: usize,
@@ -958,19 +1016,76 @@ pub fn find_timing_offset_with_expected(
     fs: f32,
     expected: &[f32],
 ) -> usize {
-    let mut best_energy = f32::NEG_INFINITY;
-    let mut best_offset = 0usize;
-    let syms = expected.len();
+    let energies = preamble_energies(samples, n, fc, fs, expected, 0);
+    pick_lock(&energies).unwrap_or(0)
+}
 
-    for offset in 0..n {
-        if samples.len() < offset + n * syms {
+/// The two timing locks #1438's P6 decodes at (PR2).
+///
+/// `widened` is the first-max over offsets `[−n/2, n)`; `restricted` the first-max over `[0, n)`,
+/// the lock BPSK shipped with. The search's objective peaks about a quarter symbol before the
+/// boundary, so when a frame starts within a quarter symbol of the slice the restricted search
+/// cannot reach that peak and is clamped late, where the stronger decision arm fails; the widened
+/// search reaches it. It can also reach the −2-symbol alias of the period-4 preamble when a frame
+/// starts ~1.5 symbols into the slice — where the restricted lock still decodes. No edge rule
+/// separates the two (measured: both sit at the widened range's lower edge), so the decoder tries
+/// both and the FEC/CRC adjudicates, exactly as #1428's union does for the two decision arms.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct TimingLocks {
+    /// First-max over `[−n/2, n)`; the lock every single-lock consumer uses.
+    pub(crate) widened: isize,
+    /// First-max over `[0, n)`; the rescue.
+    pub(crate) restricted: usize,
+}
+
+/// Both timing locks from ONE pass of the preamble correlation over `[−n/2, n)`.
+pub(crate) fn timing_locks_with_expected(
+    samples: &[f32],
+    n: usize,
+    fc: f32,
+    fs: f32,
+    expected: &[f32],
+) -> TimingLocks {
+    let half = n / 2;
+    let energies = preamble_energies(samples, n, fc, fs, expected, -(half as isize));
+    locks_from_energies(&energies, half)
+}
+
+/// Both locks from an energy array whose index 0 is offset `−half`: the one composition the CPU
+/// and GPU searches share, so they cannot choose differently from identical energies.
+fn locks_from_energies(energies: &[f32], half: usize) -> TimingLocks {
+    let restricted = pick_lock(energies.get(half..).unwrap_or(&[])).unwrap_or(0);
+    let widened = pick_lock(energies).map_or(restricted as isize, |i| i as isize - half as isize);
+    TimingLocks {
+        widened,
+        restricted,
+    }
+}
+
+/// The preamble correlation energy at every offset from `first` up to `n − 1`, in order.
+///
+/// Evaluation stops at the first offset whose preamble span runs past the end of `samples`, as the
+/// shipped search did; offsets that could not be evaluated are absent, never a sentinel value.
+fn preamble_energies(
+    samples: &[f32],
+    n: usize,
+    fc: f32,
+    fs: f32,
+    expected: &[f32],
+    first: isize,
+) -> Vec<f32> {
+    let syms = expected.len();
+    let mut out = Vec::with_capacity((n as isize - first).max(0) as usize);
+    for offset in first..n as isize {
+        let span_end = offset + (n * syms) as isize;
+        if (samples.len() as isize) < span_end {
             break;
         }
         // Demodulate ONLY the preamble span at this offset (the slice may be
         // multi-second; demodulating all of it per offset is O(offsets × N)).
-        let span_end = (offset + n * syms).min(samples.len());
-        let (i_syms, q_syms) = demodulate_iq(&samples[..span_end], n, fc, fs, offset);
+        let (i_syms, q_syms) = demodulate_iq_at(&samples[..span_end as usize], n, fc, fs, offset);
         if i_syms.len() < syms {
+            out.push(f32::NEG_INFINITY);
             continue;
         }
 
@@ -987,15 +1102,22 @@ pub fn find_timing_offset_with_expected(
             .fold((0.0f32, 0.0f32), |(re, im), ((&i, &q), &e)| {
                 (re + i * e, im + q * e)
             });
-        let energy = re * re + im * im;
+        out.push(re * re + im * im);
+    }
+    out
+}
 
-        if energy > best_energy {
-            best_energy = energy;
-            best_offset = offset;
+/// First-max index of `energies`, shared by the CPU and GPU searches so their locks cannot drift
+/// apart on a tie. NaN never wins (it compares false), and neither does −∞; `None` when nothing
+/// qualifies.
+pub(crate) fn pick_lock(energies: &[f32]) -> Option<usize> {
+    let mut best: Option<(usize, f32)> = None;
+    for (i, &e) in energies.iter().enumerate() {
+        if e > best.map_or(f32::NEG_INFINITY, |(_, b)| b) {
+            best = Some((i, e));
         }
     }
-
-    best_offset
+    best.map(|(i, _)| i)
 }
 
 /// Build the expected I-channel amplitudes for the preamble.
@@ -1026,7 +1148,9 @@ pub fn expected_symbols_for(bits: &[bool]) -> Vec<f32> {
 /// Mix `samples` with I and Q reference carriers, apply the matched filter
 /// (half-Hann w_tail, 1→0) and integrate over each symbol period.
 ///
-/// Returns `(i_values, q_values)` — one value per symbol.
+/// Returns `(i_values, q_values)` — one value per symbol. Test-only since #1438 PR2: production
+/// calls [`demodulate_iq_at`] with a signed lock.
+#[cfg(test)]
 fn demodulate_iq(
     samples: &[f32],
     n: usize,
@@ -1034,8 +1158,30 @@ fn demodulate_iq(
     fs: f32,
     offset: usize,
 ) -> (Vec<f32>, Vec<f32>) {
-    let effective = &samples[offset.min(samples.len())..];
-    let n_syms = effective.len() / n;
+    demodulate_iq_at(samples, n, fc, fs, offset as isize)
+}
+
+/// [`demodulate_iq`] at a SIGNED offset (#1438 PR2): a negative offset starts the first symbol's
+/// window before the slice, and those samples read as zero. That is exact when the frame starts at
+/// the slice (symbol 0's head is never transmitted: slot k carries a_k·w_tail + a_{k+1}·w_head) and
+/// immaterial otherwise, because symbol 0 only enters the preamble correlation and is never data.
+///
+/// The carrier is referenced by the ABSOLUTE sample index, so for a non-negative offset every
+/// output is bit-identical to the unsigned demodulator this replaced: the restricted timing lock
+/// (`find_timing_offset_with_expected`) must not move under a PR that only adds a second lock.
+fn demodulate_iq_at(
+    samples: &[f32],
+    n: usize,
+    fc: f32,
+    fs: f32,
+    offset: isize,
+) -> (Vec<f32>, Vec<f32>) {
+    let len = samples.len() as isize;
+    let n_syms = if len > offset {
+        (len - offset) as usize / n
+    } else {
+        0
+    };
     let two_pi = 2.0 * PI;
 
     let mut i_out = Vec::with_capacity(n_syms);
@@ -1048,8 +1194,9 @@ fn demodulate_iq(
         let mut norm = 0.0f32;
 
         for i in 0..n {
-            let global_n = (offset + sym_start + i) as f32;
-            let sample = effective[sym_start + i];
+            let idx = offset + (sym_start + i) as isize;
+            let sample = if idx < 0 { 0.0 } else { samples[idx as usize] };
+            let global_n = idx as f32;
 
             // Matched filter for the overlapping half-Hann modulator: the
             // decreasing half (w_tail = 1→0) correlates with the current
@@ -1146,6 +1293,465 @@ mod tests {
             .collect();
         let tx = crate::modulate::bpsk_modulate(&payload, &cfg).expect("modulate");
         (tx, cfg)
+    }
+
+    /// The demodulator as it was before #1438 PR2 made the offset signed — kept VERBATIM as the
+    /// reference the bit-identity test compares against. Do not "tidy" it: its value is that it is the
+    /// shipped code, not a re-derivation.
+    fn demodulate_iq_pre_pr2(
+        samples: &[f32],
+        n: usize,
+        fc: f32,
+        fs: f32,
+        offset: usize,
+    ) -> (Vec<f32>, Vec<f32>) {
+        let effective = &samples[offset.min(samples.len())..];
+        let n_syms = effective.len() / n;
+        let two_pi = 2.0 * PI;
+        let mut i_out = Vec::with_capacity(n_syms);
+        let mut q_out = Vec::with_capacity(n_syms);
+        for sym_idx in 0..n_syms {
+            let sym_start = sym_idx * n;
+            let mut i_sum = 0.0f32;
+            let mut q_sum = 0.0f32;
+            let mut norm = 0.0f32;
+            for i in 0..n {
+                let global_n = (offset + sym_start + i) as f32;
+                let sample = effective[sym_start + i];
+                let window = 0.5 * (1.0 + (PI * i as f32 / n as f32).cos());
+                let t = global_n / fs;
+                let ci = (two_pi * fc * t).cos();
+                let cq = -(two_pi * fc * t).sin();
+                i_sum += sample * ci * window * 2.0;
+                q_sum += sample * cq * window * 2.0;
+                norm += window * window;
+            }
+            if norm > 1e-9 {
+                i_sum /= norm;
+                q_sum /= norm;
+            }
+            i_out.push(i_sum);
+            q_out.push(q_sum);
+        }
+        (i_out, q_out)
+    }
+
+    /// #1438 PR2's "no regression" rests on this: at every non-negative offset the signed
+    /// demodulator is BIT-identical to the one it replaced, so the restricted lock — the rescue —
+    /// is exactly today's lock, not merely close to it. (A padded-buffer emulation of the widened
+    /// search flipped one near-tie in 7 329 during PR2's measurement.)
+    #[test]
+    fn the_signed_demodulator_is_bit_identical_at_non_negative_offsets() {
+        let (tx, cfg) = snr_fixture();
+        let noisy = awgn(&tx, 3.0, 17);
+        for off in 0..40usize {
+            let (ri, rq) = demodulate_iq_pre_pr2(&noisy, 32, cfg.center_frequency, 8000.0, off);
+            let (gi, gq) = demodulate_iq_at(&noisy, 32, cfg.center_frequency, 8000.0, off as isize);
+            assert!(
+                ri.iter().zip(&gi).all(|(a, b)| a.to_bits() == b.to_bits()) && ri.len() == gi.len(),
+                "offset {off}: I differs from the pre-PR2 demodulator"
+            );
+            assert!(
+                rq.iter().zip(&gq).all(|(a, b)| a.to_bits() == b.to_bits()),
+                "offset {off}: Q differs from the pre-PR2 demodulator"
+            );
+        }
+    }
+
+    /// A negative lock reads zeros before the slice and keeps the ABSOLUTE carrier index: it must
+    /// equal demodulating the same buffer with that many zeros prepended, at the shifted offset, up
+    /// to the carrier rotation the shift introduces — so compare the symbol count and each symbol's
+    /// magnitude, which the rotation cannot change.
+    #[test]
+    fn a_negative_lock_reads_zeros_before_the_slice() {
+        let (tx, cfg) = snr_fixture();
+        let fc = cfg.center_frequency;
+        for k in [1usize, 8, 16] {
+            let (i_neg, q_neg) = demodulate_iq_at(&tx, 32, fc, 8000.0, -(k as isize));
+            assert_eq!(i_neg.len(), (tx.len() + k) / 32, "lock −{k}: symbol count");
+            let mut padded = vec![0.0f32; k];
+            padded.extend_from_slice(&tx);
+            let (i_pad, q_pad) = demodulate_iq_at(&padded, 32, fc, 8000.0, 0);
+            assert_eq!(i_pad.len(), i_neg.len(), "lock −{k}: padded symbol count");
+            for (s, ((a, b), (c, d))) in i_neg
+                .iter()
+                .zip(&q_neg)
+                .zip(i_pad.iter().zip(&q_pad))
+                .enumerate()
+            {
+                let (m1, m2) = ((a * a + b * b).sqrt(), (c * c + d * d).sqrt());
+                assert!(
+                    (m1 - m2).abs() <= 1e-3 * m2.max(1.0),
+                    "lock −{k}, symbol {s}: |{m1}| vs padded |{m2}|"
+                );
+            }
+        }
+    }
+
+    /// The uncoded wire bytes of one frame, and the frame's payload.
+    fn framed_wire(seq: u16) -> (Vec<u8>, Vec<u8>) {
+        let payload: Vec<u8> = (0..64u32)
+            .map(|i| (i.wrapping_mul(2_654_435_761) >> 13) as u8)
+            .collect();
+        let frame = openpulse_core::frame::Frame::new(seq, payload.clone())
+            .expect("frame")
+            .encode();
+        (openpulse_core::scramble::scrambled(&frame), payload)
+    }
+
+    fn variant_decodes(variant: &[u8], payload: &[u8]) -> bool {
+        let mut w = variant.to_vec();
+        openpulse_core::scramble::scramble(&mut w);
+        openpulse_core::frame::Frame::decode(&w)
+            .map(|f| f.payload == payload)
+            .unwrap_or(false)
+    }
+
+    /// The expectation parameter actually reaches the timing lock (moved from
+    /// `tests/preamble_seam_identity.rs`, which cannot see the crate-private lock).
+    ///
+    /// The RX-side anti-vacuity tripwire: stage-2 AFC and the decoder both lock timing by
+    /// correlating against the expectation, so feeding candidate audio through the shipped entry
+    /// point measures a TX/RX mismatch rather than the candidate. The corruption has to be
+    /// near-orthogonal to the shipped sequence: flipping every third symbol still locks to the
+    /// correct offset, and a full inversion is invariant by design (the metric is magnitude).
+    /// Asserted on the LOCK: a byte comparison stopped discriminating when #1438 PR2 widened the
+    /// search, since most offsets in the wider span decode the same bytes noiselessly.
+    #[test]
+    fn the_expectation_parameter_actually_reaches_the_timing_lock() {
+        let wrong: Vec<f32> = (0..PREAMBLE_SYMS)
+            .map(|i| {
+                if i.wrapping_mul(2_654_435_761) % 2 == 0 {
+                    1.0
+                } else {
+                    -1.0
+                }
+            })
+            .collect();
+        let cfg = ModulationConfig {
+            mode: "BPSK250".into(),
+            ..ModulationConfig::default()
+        };
+        let tx = crate::modulate::bpsk_modulate(b"OPENPULSE parity seam", &cfg).expect("modulate");
+        let (n, fc, fs) = (32, cfg.center_frequency, cfg.sample_rate as f32);
+        let shipped = expected_preamble_symbols(PREAMBLE_SYMS);
+        let right = timing_locks_with_expected(&tx, n, fc, fs, &shipped);
+        let under_wrong = timing_locks_with_expected(&tx, n, fc, fs, &wrong);
+        assert_ne!(
+            under_wrong, right,
+            "a corrupted expectation produced the same timing locks — the expectation parameter is inert"
+        );
+    }
+
+    /// The P6 rescue (#1438 PR2): a frame 1.625 symbols into the slice puts the widened search on
+    /// the −2-symbol alias of the period-4 preamble, which the restricted lock does not reach.
+    /// Measured in PR2's sweep; asserted here noiselessly, for both production framings — uncoded
+    /// and `Rs` — since the symbols after the preamble decide whether the alias holds. Their first
+    /// wire bytes are fixed (magic, then whitening), and pinned here. The widened lock's arms must
+    /// FAIL (else the fixture has no alias and proves nothing) and a restricted-lock arm must
+    /// decode.
+    #[test]
+    fn the_restricted_lock_rescues_a_frame_the_widened_lock_aliases() {
+        use openpulse_core::{fec::FecCodec, frame::Frame, scramble};
+        let cfg = ModulationConfig {
+            mode: "BPSK250".into(),
+            ..ModulationConfig::default()
+        };
+        let (uncoded_wire, payload) = framed_wire(7);
+        let coded_wire = scramble::scrambled(
+            &FecCodec::new().encode(&Frame::new(7, payload.clone()).expect("frame").encode()),
+        );
+        let rs_decodes = |v: &[u8]| {
+            let mut w = v.to_vec();
+            scramble::scramble(&mut w);
+            FecCodec::new()
+                .decode_prefix(&w)
+                .ok()
+                .and_then(|d| Frame::decode(&d).ok())
+                .is_some_and(|f| f.payload == payload)
+        };
+        type Case<'a> = (&'a str, Vec<u8>, u8, &'a dyn Fn(&[u8]) -> bool);
+        let cases: [Case; 2] = [
+            ("uncoded", uncoded_wire, 0xB0, &|v| {
+                variant_decodes(v, &payload)
+            }),
+            ("Rs", coded_wire, 0xFF, &rs_decodes),
+        ];
+        for (name, wire, first, decodes) in cases {
+            assert_eq!(
+                wire[0], first,
+                "{name}: the production first wire byte changed"
+            );
+            let tx = crate::modulate::bpsk_modulate(&wire, &cfg).expect("modulate");
+            let mut slice = vec![0.0f32; 52]; // δ = 1.625 symbols at n = 32
+            slice.extend_from_slice(&tx);
+            let expected = expected_preamble_symbols(PREAMBLE_SYMS);
+            let locks =
+                timing_locks_with_expected(&slice, 32, cfg.center_frequency, 8000.0, &expected);
+            assert!(
+                locks.widened < 0,
+                "{name}: the widened lock should sit on the −2-symbol alias here, got {locks:?}"
+            );
+            let variants = bpsk_demodulate_variants(&slice, &cfg).expect("variants");
+            assert_eq!(
+                variants.len(),
+                4,
+                "{name}: the locks differ, so both locks' arms are offered"
+            );
+            assert!(
+                !decodes(&variants[0]) && !decodes(&variants[1]),
+                "{name}: the widened lock decoded — this fixture no longer exercises the alias"
+            );
+            assert!(
+                variants[2..].iter().any(|v| decodes(v)),
+                "{name}: no restricted-lock arm decoded: the P6 rescue is not reaching the decoder"
+            );
+        }
+    }
+
+    /// #1438 PR2: where the widened and restricted timing locks DIFFER, the GPU path must pick the
+    /// same two locks and offer the same variants as the CPU path. Without this cell the second-lock
+    /// GPU path is exactly #1433's shape: a copy nobody's test reaches. In-crate (not in
+    /// `tests/gpu_cpu_equivalence.rs`) because its fixture guard needs the crate-private locks; that
+    /// file's `the_adapter_is_available_or_this_file_proves_nothing` still flags a host with no
+    /// adapter.
+    ///
+    /// Lead 0 (the widened lock is negative, so the GPU kernels' signed indexing and zero-read are
+    /// exercised) and lead 52 (1.625 symbols: the widened lock sits on the −2-symbol alias and the
+    /// restricted lock rescues). Noiselessly the variant vectors must be identical; under noise the
+    /// decode outcome must agree seed by seed.
+    #[cfg(feature = "gpu")]
+    #[test]
+    fn gpu_and_cpu_agree_where_the_two_timing_locks_differ() {
+        use openpulse_channel::{awgn::AwgnChannel, AwgnConfig, ChannelModel};
+        let Some(c) = openpulse_gpu::GpuContext::init() else {
+            eprintln!(
+                "no GPU adapter — gpu_and_cpu_agree_where_the_two_timing_locks_differ skipped"
+            );
+            return;
+        };
+        let cfg = ModulationConfig {
+            mode: "BPSK250".into(),
+            sample_rate: 8000,
+            center_frequency: 1500.0,
+            ..ModulationConfig::default()
+        };
+        let payload: Vec<u8> = (0..64u32)
+            .map(|i| (i.wrapping_mul(2_654_435_761) >> 13) as u8)
+            .collect();
+        let frame = openpulse_core::frame::Frame::new(9, payload.clone())
+            .expect("frame")
+            .encode();
+        let tx = crate::modulate::bpsk_modulate(&openpulse_core::scramble::scrambled(&frame), &cfg)
+            .expect("modulate");
+        let decodes = |variants: &[Vec<u8>]| variants.iter().any(|v| variant_decodes(v, &payload));
+        for lead in [0usize, 52] {
+            let mut slice = vec![0.0f32; lead];
+            slice.extend_from_slice(&tx);
+            let locks = timing_locks_with_expected(
+                &slice,
+                32,
+                1500.0,
+                8000.0,
+                &expected_preamble_symbols(PREAMBLE_SYMS),
+            );
+            assert_ne!(
+                locks.widened, locks.restricted as isize,
+                "lead {lead}: the fixture must make the locks differ, or this cell proves nothing"
+            );
+            let cpu = bpsk_demodulate_variants(&slice, &cfg).expect("cpu");
+            let gpu = bpsk_demodulate_variants_with_gpu(&slice, &cfg, &c).expect("gpu");
+            assert_eq!(
+                cpu, gpu,
+                "lead {lead}: GPU and CPU variants differ on a NOISELESS slice"
+            );
+            let mut disagree = 0;
+            for seed in 0..8u64 {
+                let noisy = AwgnChannel::new(AwgnConfig::new(3.0, Some(40 + seed)))
+                    .expect("awgn")
+                    .apply(&slice);
+                let c_ok = decodes(&bpsk_demodulate_variants(&noisy, &cfg).expect("cpu"));
+                let g_ok =
+                    decodes(&bpsk_demodulate_variants_with_gpu(&noisy, &cfg, &c).expect("gpu"));
+                disagree += (c_ok != g_ok) as u32;
+            }
+            assert_eq!(
+                disagree, 0,
+                "lead {lead}: GPU and CPU decode outcomes disagree on {disagree}/8 seeds"
+            );
+        }
+    }
+
+    /// #1438 PR2's pre-registered measurement instrument (run on demand; asserts nothing).
+    ///
+    /// Per frame (one channel realisation, shared across every alignment) and per slice alignment
+    /// `δ ∈ [−0.75n, 2n]` in steps of n/8: coded (Rs, free-strengthened) decode of P0 — the restricted
+    /// `[0, n)` lock with both decision arms, i.e. BPSK before PR2 — against P6, the shipped
+    /// `bpsk_demodulate_variants`. Then the cost on PREAMBLE-FREE windows (noise only, frame length):
+    /// how often the two locks differ, and the per-attempt wall-clock of each policy.
+    ///
+    /// Two more columns measure the consumers that take ONE lock (the uncoded path, soft/HARQ):
+    /// the uncancelled arm (the soft path's sign slice) at the restricted lock (before PR2) against
+    /// the same arm at the widened lock (after). `UNCODED=1` sends bare frames, as the uncoded path
+    /// does. The noise-only windows are 1e-3 DC plus AWGN normalised to it; the mixer rejects the
+    /// DC.
+    ///
+    /// `RUNG=BPSK250 CH=awgn|fade SNR=-4 FRAMES=96 PAYLOAD=200 [UNCODED=1] cargo test --release
+    /// -p bpsk-plugin --no-default-features --lib two_lock_policy_measurement -- --ignored
+    /// --nocapture`
+    #[test]
+    #[ignore = "measurement instrument for #1438 PR2; run on demand; asserts nothing"]
+    fn two_lock_policy_measurement() {
+        use openpulse_channel::{
+            awgn::AwgnChannel, watterson::WattersonChannel, AwgnConfig, ChannelModel,
+            WattersonConfig,
+        };
+        use openpulse_core::{
+            fec::{free_rs_strengthening, FecCodec, FecMode},
+            frame::Frame,
+            scramble,
+        };
+        let env = |k: &str, d: &str| std::env::var(k).unwrap_or_else(|_| d.to_string());
+        let mode = env("RUNG", "BPSK250");
+        let ch = env("CH", "awgn");
+        let frames: u64 = env("FRAMES", "96").parse().expect("FRAMES");
+        let plen: usize = env("PAYLOAD", "200").parse().expect("PAYLOAD");
+        let snr: f32 = env("SNR", "-4").parse().expect("SNR");
+        let uncoded = env("UNCODED", "0") == "1";
+        let c = ModulationConfig {
+            mode: mode.clone(),
+            ..ModulationConfig::default()
+        };
+        let fs = c.sample_rate as f32;
+        let fc = c.center_frequency;
+        let n = samples_per_symbol(fs, parse_baud_rate(&mode).expect("baud")).expect("n");
+        let fec = if uncoded {
+            FecMode::None
+        } else {
+            free_rs_strengthening(FecMode::Rs, plen + Frame::WIRE_OVERHEAD)
+        };
+        let expected = expected_preamble_symbols(PREAMBLE_SYMS);
+        let decodes = |variants: &[Vec<u8>], payload: &[u8]| {
+            variants.iter().any(|b| {
+                let mut w = b.clone();
+                scramble::scramble(&mut w);
+                if uncoded {
+                    return Frame::decode(&w).is_ok_and(|f| f.payload == payload);
+                }
+                FecCodec::new()
+                    .decode_prefix(&w)
+                    .ok()
+                    .filter(|d| Frame::decode(d).is_ok())
+                    .or_else(|| FecCodec::strong().decode_prefix(&w).ok())
+                    .and_then(|d| Frame::decode(&d).ok())
+                    .is_some_and(|f| f.payload == payload)
+            })
+        };
+        let p0_variants = |x: &[f32]| -> Vec<Vec<u8>> {
+            let off = find_timing_offset_with_expected(x, n, fc, fs, &expected);
+            let (iv, qv) = demodulate_iq_at(x, n, fc, fs, off as isize);
+            variants_from_parts(iv, qv, true, PREAMBLE_SYMS).unwrap_or_default()
+        };
+        let base = 3 * n;
+        println!("\nTWOLOCK mode={mode} n={n} ch={ch} snr={snr} payload={plen}B fec={fec:?} frames={frames}");
+        let mut frame_len = 0usize;
+        for f in 0..frames {
+            let payload: Vec<u8> = (0..plen as u32)
+                .map(|i| ((i.wrapping_mul(2_654_435_761) >> 13) as u8) ^ (f as u8).wrapping_mul(31))
+                .collect();
+            let frame = Frame::new(f as u16, payload.clone())
+                .expect("frame")
+                .encode();
+            let coded = if uncoded {
+                frame
+            } else if fec == FecMode::RsStrong {
+                FecCodec::strong().encode(&frame)
+            } else {
+                FecCodec::new().encode(&frame)
+            };
+            let tx = crate::modulate::bpsk_modulate(&scramble::scrambled(&coded), &c).expect("mod");
+            frame_len = tx.len();
+            let mut b = vec![0.0f32; base];
+            b.extend_from_slice(&tx);
+            b.extend(std::iter::repeat_n(0.0, 2 * n));
+            let rx = if ch == "fade" {
+                let mut cfg = WattersonConfig::moderate_f1(Some(8100 + f));
+                cfg.snr_db = snr;
+                WattersonChannel::new(cfg).expect("w").apply(&b)
+            } else {
+                AwgnChannel::new(AwgnConfig::new(snr, Some(7700 + f)))
+                    .expect("a")
+                    .apply(&b)
+            };
+            let mut line = format!("TL {mode} {ch} {snr} {f}");
+            for e8 in -6i64..=16 {
+                let delta = e8 * n as i64 / 8;
+                let slice = &rx[(base as i64 - delta) as usize..];
+                let old = p0_variants(slice);
+                let new = bpsk_demodulate_variants(slice, &c).unwrap_or_default();
+                let p0 = decodes(&old, &payload);
+                let p6 = decodes(&new, &payload);
+                // The single-lock consumers: the uncancelled arm alone, old lock vs new.
+                let u0 = decodes(old.get(1..2).unwrap_or(&[]), &payload);
+                let u1 = decodes(new.get(1..2).unwrap_or(&[]), &payload);
+                line += &format!(" {e8}:{}{}{}{}", p0 as u8, p6 as u8, u0 as u8, u1 as u8);
+            }
+            println!("{line}");
+        }
+        // Cost on preamble-free windows: noise only, one frame long.
+        let windows = 24u64;
+        let (mut differ, mut t_p0, mut t_p6) = (0u32, 0f64, 0f64);
+        for w in 0..windows {
+            let noise = AwgnChannel::new(AwgnConfig::new(0.0, Some(5_000 + w)))
+                .expect("a")
+                .apply(&vec![1e-3f32; frame_len]);
+            let locks = timing_locks_with_expected(&noise, n, fc, fs, &expected);
+            differ += (locks.widened != locks.restricted as isize) as u32;
+            let t0 = std::time::Instant::now();
+            let a = p0_variants(&noise);
+            t_p0 += t0.elapsed().as_secs_f64();
+            let t1 = std::time::Instant::now();
+            let b = bpsk_demodulate_variants(&noise, &c).unwrap_or_default();
+            t_p6 += t1.elapsed().as_secs_f64();
+            std::hint::black_box((a, b));
+        }
+        println!(
+            "COST {mode} noise-only windows of {frame_len} samples: locks differ {differ}/{windows}; \
+             per attempt P0 {:.2} ms, P6 {:.2} ms (×{:.2})",
+            1e3 * t_p0 / windows as f64,
+            1e3 * t_p6 / windows as f64,
+            t_p6 / t_p0
+        );
+    }
+
+    /// When the two locks coincide the rescue adds nothing, and the trait bans duplicate variants:
+    /// exactly the two arms are offered.
+    #[test]
+    fn coinciding_locks_offer_each_arm_once() {
+        let cfg = ModulationConfig {
+            mode: "BPSK250".into(),
+            ..ModulationConfig::default()
+        };
+        let (wire, payload) = framed_wire(3);
+        let tx = crate::modulate::bpsk_modulate(&wire, &cfg).expect("modulate");
+        let mut slice = vec![0.0f32; 16]; // δ = n/2: the peak is inside both ranges
+        slice.extend_from_slice(&tx);
+        let expected = expected_preamble_symbols(PREAMBLE_SYMS);
+        let locks = timing_locks_with_expected(&slice, 32, cfg.center_frequency, 8000.0, &expected);
+        assert_eq!(
+            locks.widened, locks.restricted as isize,
+            "fixture: the locks should coincide"
+        );
+        let variants = bpsk_demodulate_variants(&slice, &cfg).expect("variants");
+        assert_eq!(
+            variants.len(),
+            2,
+            "coinciding locks must not duplicate the arms"
+        );
+        assert!(
+            variant_decodes(&variants[0], &payload),
+            "control: variant 0 decodes"
+        );
     }
 
     /// `estimate_snr_db` consumes the UNCANCELLED stream (#1438 PR1; it consumed the cancelled one
@@ -3522,15 +4128,16 @@ mod snr_decision_discriminator {
     ///   `moderate_f1`; a pulse-matched objective measured worse there
     ///   (`docs/dev/reviews/review-1438-snr-estimator.md`). (#1439 read lead 32 as a range defect;
     ///   that premised the boundary as the target, which the same review overturned.)
-    /// - **Lead 0** locks at 0 only because the peak (−8) lies before the slice: that is the
-    ///   REACHABILITY defect, which #1438 PR2 fixes by searching from −n/2.
+    /// - **Lead 0**: the restricted search (`find_timing_offset_with_expected`, `[0, n)`) locks at
+    ///   0 only because the peak (−8) lies before the slice — the REACHABILITY defect. #1438 PR2's
+    ///   widened search (`timing_locks_with_expected`, `[−n/2, n)`) reaches it: −8. At leads 16 and
+    ///   32 the two locks coincide.
     ///
     /// Until #1438 PR1 the SNR estimate read ≈ 3.5 dB at both early locks for a 30 dB signal (this
     /// pin's own run then: 22.89 / 3.55 / 3.53 dB at leads 0 / 16 / 32), because it consumed the
     /// crossfade-cancelled stream, which is correct only on the boundary. It now reads the channel at
     /// each of the three locks this pin visits (28.96 / 29.93 / 30.14, reproduced by its default run).
-    /// **Expected to fail when the lock moves** — lead 0 moving
-    /// to a negative offset is PR2 landing; update the pin then, do not delete it.
+    /// **Expected to fail when either lock moves**; update the pin then, do not delete it.
     #[test]
     fn the_timing_search_locks_early_when_a_lead_makes_it_reachable() {
         let c = cfg();
@@ -3555,34 +4162,53 @@ mod snr_decision_discriminator {
                 let (a, bb) = (u(), u());
                 *x += sigma * (-2.0 * a.ln()).sqrt() * (std::f32::consts::TAU * bb).cos();
             }
-            let off = find_timing_offset_with_expected(
+            let locks = timing_locks_with_expected(
                 &b,
                 32,
                 c.center_frequency,
                 c.sample_rate as f32,
                 &expected,
             );
-            (off, estimate_snr_db(&b, &c).expect("estimate"))
+            assert_eq!(
+                locks.restricted,
+                find_timing_offset_with_expected(
+                    &b,
+                    32,
+                    c.center_frequency,
+                    c.sample_rate as f32,
+                    &expected
+                ),
+                "lead {lead}: the two-lock search's restricted half must BE the restricted search"
+            );
+            (locks, estimate_snr_db(&b, &c).expect("estimate"))
         };
-        let (off0, snr0) = run(0);
-        let (off16, snr16) = run(16);
-        let (off32, snr32) = run(32);
-        println!("PIN leads 0/16/32: locks {off0}/{off16}/{off32}, SNR {snr0:.2}/{snr16:.2}/{snr32:.2} dB");
+        let (l0, snr0) = run(0);
+        let (l16, snr16) = run(16);
+        let (l32, snr32) = run(32);
+        println!("PIN leads 0/16/32: locks {l0:?}/{l16:?}/{l32:?}, SNR {snr0:.2}/{snr16:.2}/{snr32:.2} dB");
         assert_eq!(
-            off0, 0,
-            "REACHABILITY defect: lead 0 locked at {off0}, not 0 — the objective's peak is at −8, before \
-             the slice. If the lock is now negative, #1438 PR2 landed; update this pin"
+            l0.restricted, 0,
+            "lead 0: the restricted [0, n) search locked at {}, not 0 (clamped: the peak is at −8)",
+            l0.restricted
         );
         assert_eq!(
-            off16, 8,
-            "lead 16 locked at {off16}, not 8: the timing objective changed. #1438's review measured \
-             the alternatives on a fade before rejecting them (docs/dev/reviews/\
-             review-1438-snr-estimator.md); re-measure before accepting this"
+            l0.widened, -8,
+            "lead 0: the widened [−n/2, n) search locked at {}, not −8 — #1438 PR2's reachability fix",
+            l0.widened
         );
-        assert_eq!(
-            off32, 24,
-            "lead 32 locked at {off32}, not 24 (the objective's early peak, as at lead 16)"
-        );
+        for (lead, l, want) in [(16usize, l16, 8usize), (32, l32, 24)] {
+            assert_eq!(
+                l.widened, l.restricted as isize,
+                "lead {lead}: the two locks must coincide once the peak is reachable ({l:?})"
+            );
+            assert_eq!(
+                l.restricted, want,
+                "lead {lead} locked at {}, not {want}: the timing objective changed. #1438's review \
+                 measured the alternatives on a fade before rejecting them (docs/dev/reviews/\
+                 review-1438-snr-estimator.md); re-measure before accepting this",
+                l.restricted
+            );
+        }
         for (lead, snr) in [(0, snr0), (16, snr16), (32, snr32)] {
             assert!(
                 (snr - 30.0).abs() < 2.0,

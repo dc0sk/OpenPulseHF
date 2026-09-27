@@ -47,7 +47,8 @@ fn bpsk31_long_frame_with_early_onset_decodes() {
     // Reproduces the dual-card hardware failure: a real analog turn-on ramps the
     // carrier up over ~1-2 symbols before the clean preamble, so the energy gate +
     // refine_onset settle an onset a touch (~1-2 symbols) BEFORE the true preamble
-    // — outside the demodulator's one-symbol timing search.  A partial-amplitude
+    // — outside the demodulator's timing search (`[−n/2, n)` since #1438; one
+    // symbol period when this was written).  A partial-amplitude
     // carrier lead-in here puts the settled onset early the same way; the forward
     // onset micro-sweep in the receive loop must step forward and still decode.
     let loopback = LoopbackBackend::new();
