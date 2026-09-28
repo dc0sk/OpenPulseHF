@@ -573,7 +573,7 @@ impl EnergyGate {
 /// The energy gate's wide window (`acq_samples`, ~32 symbols) trips up to a full
 /// window before the true onset — its tail catches the first signal samples — so
 /// the coarse position can sit a whole acquisition window ahead of the preamble,
-/// far beyond the demodulator's one-symbol timing search.  Scan symbol-length
+/// far beyond the demodulator's timing search (`[−n/2, n)`, #1438).  Scan symbol-length
 /// sub-windows across the gate span and return the first whose energy reaches a
 /// quarter of the span's peak (where the signal turns on), so the preamble lands
 /// within one symbol period of the returned position.
@@ -776,8 +776,9 @@ pub struct ModemEngine {
     /// Count of capture blocks the notch processed — a tripwire: an enabled notch that never runs
     /// on a given path (e.g. a new capture path that skips the InputCapture seam) leaves this at 0.
     notch_blocks_processed: u64,
-    /// Accepted frames produced by a non-primary decision arm (#1428). Wiring evidence, not a rescue
-    /// count — see [`alternate_arm_decodes`](Self::alternate_arm_decodes).
+    /// Accepted frames produced by a non-primary variant — a second decision arm (#1428) or a second
+    /// timing lock (#1438). Wiring evidence, not a rescue count — see
+    /// [`alternate_arm_decodes`](Self::alternate_arm_decodes).
     alternate_arm_decodes: u64,
     notch_freqs_seen: std::collections::BTreeSet<i32>,
     notch_protect_extremes: Option<(f32, f32, f32, f32)>,
@@ -2865,7 +2866,8 @@ impl ModemEngine {
         //
         // `decode_burst_inner`, this arm's uncoded sibling, has always scanned; this arm made one
         // attempt at offset 0 and so could not decode a frame a few thousand samples into a burst —
-        // the demodulator's timing search spans a single symbol period (32 samples at BPSK250).
+        // the demodulator's timing search spans about one and a half symbol periods ([−n/2, n)
+        // since #1438; one symbol period, 32 samples at BPSK250, when this was written).
         // Real captures put the frame exactly there: replaying the on-air corpus through both
         // receive paths measured CLI 5/7 versus daemon 1/7, with onsets of 4032 and 224 samples.
         // With this scan the daemon reads 5/7, matching the CLI on every capture.
@@ -3176,7 +3178,8 @@ impl ModemEngine {
         //
         // This used to run over `samples.samples`, the whole gathered burst. `rx_snr_db` locks
         // sub-symbol timing by correlating the buffer's first 32 symbols against the preamble over
-        // offsets 0..31; once a lead-in pushes the frame past that ~1056-sample window the
+        // offsets 0..31 (−16..31 since #1438); once a lead-in pushes the frame past that
+        // ~1056-sample window the
         // correlation sees no preamble at any offset, the lock becomes a noise argmax, and the frame
         // is demodulated at a wrong sub-symbol offset. The reading is then a deterministic function
         // of `(chosen_offset - lead) mod 32` — swept measurement at one operating point: a smooth
@@ -3920,11 +3923,12 @@ impl ModemEngine {
             // Fires when accumulated ≥ fep + max_frame_samples.  By then the full
             // frame is in the buffer.  Retry positions span fep ± one symbol period
             // (step samples) only — NOT a full preamble lookback.  The preamble must
-            // be near the START of each slice so that find_timing_offset (which only
-            // searches within one symbol period) can locate it.  Earlier runs used
+            // be near the START of each slice so that the demodulator's timing search
+            // (which spans only [−n/2, n), #1438) can locate it.  Earlier runs used
             // fep ± PREAMBLE_SYMS (1024 samples) which placed the preamble 32 symbols
-            // into the slice for positions before fep, causing find_timing_offset to
-            // return a garbage offset and decode the preamble bits as frame data.
+            // into the slice for positions before fep, causing the timing search (then
+            // `find_timing_offset`, removed in #1438) to return a garbage offset and
+            // decode the preamble bits as frame data.
             // Retry fires when enough audio has accumulated to guarantee the
             // full frame is in the buffer:
             //   accumulated ≥ signal_arrival_samples + frame_size
@@ -4120,10 +4124,11 @@ impl ModemEngine {
                 // Forward onset micro-sweep.  The settled onset (`fep`) lands at or
                 // slightly before the true preamble, but the energy gate + refine
                 // can sit up to ~1-2 symbols early on a clean turn-on, and a
-                // demodulator only searches one symbol period for timing.  The
+                // demodulator searches only [−n/2, n) for timing (#1438).  The
                 // decodable onset window is narrow (~2 symbols) and asymmetric — a
                 // start can be ~1.5 symbols early but barely a third of a symbol
-                // late — so the lowest baud rate (BPSK31, 256 samples/symbol) sits
+                // late (measured before #1438, which widens the late side to about
+                // half a symbol) — so the lowest baud rate (BPSK31, 256 samples/symbol) sits
                 // right at the boundary and fails on runs where the estimate lands
                 // a touch too early.  `fep` is never *after* the onset (the gate
                 // trips on the rising edge or before), so sweeping a few half-symbol
@@ -4135,9 +4140,10 @@ impl ModemEngine {
                 // onset sits at or slightly before the true preamble (the gate trips
                 // on the rising edge or earlier), but the energy gate + refine can be
                 // up to ~1-2 symbols early on a clean turn-on, and the demodulator
-                // only searches one symbol period for timing.  The decodable onset
+                // searches only [−n/2, n) for timing (#1438).  The decodable onset
                 // window is narrow (~2 symbols) and asymmetric — a start may be ~1.5
-                // symbols early but barely a third late — so the lowest baud rate
+                // symbols early but barely a third late (before #1438; now about half a
+                // symbol) — so the lowest baud rate
                 // (BPSK31) sits at the boundary and fails on runs where the estimate
                 // lands a touch early.  Stepping a few half-symbols FORWARD lands one
                 // attempt in the window.  Critically this cycles ONE offset per
@@ -4492,7 +4498,10 @@ impl ModemEngine {
             // UNCODED decode that reaches here takes the uncancelled arm while every coded decode
             // takes the cancelled one. Measured on #821's own fixture, 8 seeds: cancelled mean BER
             // 0.0127 against its `< 0.02` bar, uncancelled 0.0336 — above the bar on every seed.
-            // Pinned by `the_uncoded_production_path_takes_the_uncancelled_arm` in `bpsk-plugin`.
+            // That fixture put the frame at sample 0, where the old `[0, n)` search locked on the
+            // boundary; since #1438 PR2 the lock there is a quarter symbol early and the
+            // uncancelled arm reads 0.0026, pinned by
+            // `the_uncoded_production_arm_meets_821s_bar_at_every_alignment` in `bpsk-plugin`.
             //
             // Which arm uncoded traffic SHOULD take is open (#1429) and is a real trade, not an
             // oversight to reverse on sight: #1363 measures the cancellation as a win on AWGN and
@@ -5212,9 +5221,10 @@ impl ModemEngine {
         let samples = self.stage_capture_input(Some(mode), device)?;
         let samples = self.route_audio_stage(PipelineStage::InputCapture, samples)?;
 
-        // Both decision arms from one acquisition, adjudicated by RS + the length prefix + CRC-16
-        // (#1428). The AFC estimate runs AFTER, so both arms demodulate at the same centre
-        // frequency — updating first would hand arm B a different `mod_cfg`.
+        // Both decision arms, at each of the two timing locks when they differ, adjudicated by RS +
+        // the length prefix + CRC-16 (#1428, #1438). The AFC estimate runs AFTER, so both arms
+        // demodulate at the same centre frequency — updating first would hand arm B a different
+        // `mod_cfg`.
         let frame = self.decode_through_arms(mode, &samples, |bytes| {
             let corrected = Self::rs_decode_free_strengthened_pure(bytes)?;
             Frame::decode(&corrected)
@@ -7407,9 +7417,9 @@ impl ModemEngine {
     ///
     /// - `receive_from_samples` (the UNCODED path) — for BPSK it never reaches this call: it
     ///   sign-slices `demodulate_soft` (the uncancelled arm) whenever the plugin advertises soft
-    ///   demod, pinned by `the_uncoded_production_path_takes_the_uncancelled_arm`. So this site serves
-    ///   hard-only modes, all of which offer one arm. Whether uncoded BPSK should take both is #1429,
-    ///   and it is the maintainer's call.
+    ///   demod, pinned by `the_uncoded_production_arm_meets_821s_bar_at_every_alignment`. So this
+    ///   site serves hard-only modes, all of which offer one arm. Whether uncoded BPSK should take
+    ///   both is #1429, and it is the maintainer's call.
     /// - `receive_with_soft_combining` — an `instruments`-only sample-domain Memory-ARQ combiner: a
     ///   hard chain of the CANCELLED arm plus hard RS. Left single-arm because it ships in no binary
     ///   and nothing has measured the union on averaged samples; if it ships, it takes
@@ -7538,6 +7548,9 @@ impl ModemEngine {
     }
 
     /// Accepted frames produced by a variant other than variant 0, since start-up (#1428).
+    ///
+    /// Despite the name, a "variant" here is any non-primary wire the plugin offers: for BPSK a
+    /// second decision arm (#1428) or a second timing lock's arms (#1438 PR2).
     ///
     /// **Wiring evidence, not a rescue count.** Arm 0 keeps first claim on each *attempt*, not on
     /// each *frame*: a later arm can win at an onset that arm 0 would have passed, where arm 0 would

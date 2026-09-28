@@ -13,7 +13,7 @@
 //!
 //! | column | instrument | note |
 //! |---|---|---|
-//! | A timing | the real `find_timing_offset_with_expected` | error **rate**, not a point error |
+//! | A timing | the real `find_timing_offset_with_expected` — since #1438 PR2 the RESCUE lock (`[0, n)`); the primary widened lock is not measured here | error **rate**, not a point error |
 //! | B coarse AFC | the shipped `afc_estimate_hz` (stage 1 is expectation-blind) | lock-error rate |
 //! | C fine AFC | `afc_estimate_hz_with_expected` | stage 2 locks timing, so it needs the matched expectation |
 //! | D self-ambiguity | `IqMatchedFilter::search_normalized` over whole-symbol lags | the property #1062 exists to fix |
@@ -191,8 +191,9 @@ fn timing_error_rate(mode: &str, cand: &Candidate, snr_db: f32, trials: u32) -> 
         };
         let rx = add_awgn(&tx, snr_db, 700 + t as u64);
         let off = find_timing_offset_with_expected(&rx, n, FC, FS, &expected);
-        // The frame starts at sample 0, so the correct sub-symbol offset is 0;
-        // wrap-around means n-1 is one sample early, not n-1 samples late.
+        // The frame starts at sample 0, so the restricted `[0, n)` search's correct answer is 0
+        // (the widened primary lock would sit near −0.28n instead); wrap-around means n-1 is one
+        // sample early, not n-1 samples late.
         let err = off.min(n - off);
         if err > tol {
             bad += 1;
@@ -262,9 +263,9 @@ fn afc_error_rate(mode: &str, cand: &Candidate, snr_db: f32, matched: bool) -> (
 /// This is the property #1062 exists to fix. The shipped sequence is periodic
 /// with period 4, so its autocorrelation has near-full peaks at every 4-symbol
 /// lag — which is what made onset-snapping pick an offset two symbol periods
-/// late and decode to "invalid magic" (#1049 point 3). `find_timing_offset`
-/// never experiences this, because it only searches sub-symbol offsets; the
-/// engine's onset placement does.
+/// late and decode to "invalid magic" (#1049 point 3). The demodulator's timing
+/// search never experiences this, because it spans only `[−n/2, n)` (#1438),
+/// well inside one 4-symbol period; the engine's onset placement does.
 fn self_ambiguity(mode: &str, cand: &Candidate) -> f32 {
     let cfg = config(mode);
     let n = sps(mode);
@@ -312,7 +313,7 @@ fn self_ambiguity(mode: &str, cand: &Candidate) -> f32 {
 /// Uncoded end-to-end decode rate through a channel.
 ///
 /// **Limit, stated rather than hidden:** `bpsk_demodulate_with_expected` assumes
-/// the frame begins at sample 0 (it searches sub-symbol offsets only), so this
+/// the frame begins near sample 0 (its timing search spans `[−n/2, n)`), so this
 /// is a buffer-is-the-frame fixture — the easiest case that exists. Frame
 /// *location* is the engine's job and is not exercised here.
 fn decode_rate(mode: &str, cand: &Candidate, snr_db: f32, fade: bool, trials: u32) -> f32 {

@@ -10,7 +10,7 @@ use crate::GpuContext;
 struct BpskDemodParams {
     n_syms: u32,
     samples_per_sym: u32,
-    offset: u32,
+    offset: i32,
     pad0: u32,
     fc: f32,
     sample_rate: f32,
@@ -25,14 +25,18 @@ struct TimingParams {
     n_offsets: u32,
     samples_per_sym: u32,
     preamble_syms: u32,
-    pad0: u32,
+    offset_base: i32,
     fc: f32,
     sample_rate: f32,
     pad1: f32,
     pad2: f32,
 }
 
-/// IQ demodulation of `samples` (pre-sliced at timing offset) on the GPU.
+/// IQ demodulation of `samples` from a SIGNED timing offset on the GPU (#1438 PR2).
+///
+/// `samples` is the whole buffer, not a pre-sliced one: symbol `k` integrates samples
+/// `offset + k·n .. offset + (k+1)·n`, samples before index 0 read as zero, and the carrier is
+/// referenced by the absolute index — the CPU `demodulate_iq_at` exactly.
 ///
 /// Returns `Some((i_values, q_values))` on success, `None` if the GPU readback
 /// fails. Callers should fall back to the CPU path on `None`.
@@ -42,14 +46,19 @@ pub fn bpsk_iq_demod_gpu(
     samples_per_sym: usize,
     fc: f32,
     sample_rate: f32,
-    offset: usize,
+    offset: isize,
 ) -> Option<(Vec<f32>, Vec<f32>)> {
     // Account GPU dispatch+wait time toward the process-wide GPU-busy counter.
     let _gpu_busy = crate::GpuBusyTimer::start();
     if samples.is_empty() || samples_per_sym == 0 {
         return Some((Vec::new(), Vec::new()));
     }
-    let n_syms = samples.len() / samples_per_sym;
+    let len = samples.len() as isize;
+    let n_syms = if len > offset {
+        (len - offset) as usize / samples_per_sym
+    } else {
+        0
+    };
     if n_syms == 0 {
         return Some((Vec::new(), Vec::new()));
     }
@@ -57,7 +66,7 @@ pub fn bpsk_iq_demod_gpu(
     let params = BpskDemodParams {
         n_syms: n_syms as u32,
         samples_per_sym: samples_per_sym as u32,
-        offset: offset as u32,
+        offset: offset as i32,
         pad0: 0,
         fc,
         sample_rate,
@@ -154,12 +163,17 @@ pub fn bpsk_iq_demod_gpu(
     Some((i_out, q_out))
 }
 
-/// Parallel timing offset search: returns the offset (0..`samples_per_sym`)
-/// that maximises preamble correlation energy.
+/// Preamble correlation energy at every timing offset from `first` up to `samples_per_sym − 1`,
+/// in order, on the GPU (#1438 PR2).
 ///
-/// Returns `None` if the GPU readback fails. Callers should fall back to the
+/// The CPU picks the locks from this array with the plugin's shared first-max picker, so the GPU
+/// and CPU searches cannot drift apart on a tie (the kernel used to return a last-max argmax). As
+/// on the CPU, the array stops at the first offset whose preamble span runs past the buffer.
+///
+/// Returns `None` if there is nothing to search or the GPU readback fails; callers fall back to the
 /// CPU path on `None`.
-pub fn timing_offset_search_gpu(
+#[allow(clippy::too_many_arguments)]
+pub fn timing_energies_gpu(
     ctx: &GpuContext,
     samples: &[f32],
     samples_per_sym: usize,
@@ -167,19 +181,20 @@ pub fn timing_offset_search_gpu(
     expected_preamble: &[f32],
     fc: f32,
     sample_rate: f32,
-) -> Option<usize> {
+    first: isize,
+) -> Option<Vec<f32>> {
     // Account GPU dispatch+wait time toward the process-wide GPU-busy counter.
     let _gpu_busy = crate::GpuBusyTimer::start();
-    let n_offsets = samples_per_sym;
+    let n_offsets = (samples_per_sym as isize - first).max(0) as usize;
     if samples.is_empty() || n_offsets == 0 {
-        return Some(0);
+        return None;
     }
 
     let params = TimingParams {
         n_offsets: n_offsets as u32,
         samples_per_sym: samples_per_sym as u32,
         preamble_syms: preamble_syms as u32,
-        pad0: 0,
+        offset_base: first as i32,
         fc,
         sample_rate,
         pad1: 0.0,
@@ -261,17 +276,15 @@ pub fn timing_offset_search_gpu(
     encoder.copy_buffer_to_buffer(&energy_buf, 0, &energy_rb, 0, (n_offsets * 4) as u64);
     ctx.queue.submit(Some(encoder.finish()));
 
-    // ── Readback + argmax ─────────────────────────────────────────────────────
+    // ── Readback ──────────────────────────────────────────────────────────────
 
-    let energies = readback_f32(&ctx.device, &energy_rb, n_offsets)?;
-    Some(
-        energies
-            .iter()
-            .enumerate()
-            .max_by(|a, b| a.1.partial_cmp(b.1).unwrap_or(std::cmp::Ordering::Equal))
-            .map(|(i, _)| i)
-            .unwrap_or(0),
-    )
+    // The kernel writes −1 (energies are ≥ 0) for an offset whose preamble span runs past the
+    // buffer; truncate there, as the CPU search stops there.
+    let mut energies = readback_f32(&ctx.device, &energy_rb, n_offsets)?;
+    if let Some(stop) = energies.iter().position(|&e| e < 0.0) {
+        energies.truncate(stop);
+    }
+    Some(energies)
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────

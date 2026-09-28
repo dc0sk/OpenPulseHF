@@ -36,7 +36,8 @@ const PAYLOAD: &[u8] = b"HARQ lead-in alignment probe, sixty-four bytes AAAAAAAA
 /// The first version of this measurement used OFDM52-16QAM and read identical columns — but OFDM
 /// SELF-SYNCS: its Schmidl-Cox preamble locates the frame inside the buffer, so lead-in cannot
 /// misalign it and the measurement was structurally incapable of showing the defect. BPSK's timing
-/// search spans one symbol period, which is exactly why #1138 existed. `Rs` is admitted to the HARQ
+/// search spans about one and a half symbol periods (one when #1138 was filed), which is why
+/// #1138 existed. `Rs` is admitted to the HARQ
 /// soft path (`decode_combined_llrs` hard-decides the combined vector) and BPSK reports
 /// `supports_soft_demod = true`, so this reaches the same block.
 const MODE: &str = "BPSK250";

@@ -11,6 +11,13 @@
 //! union and ARE the cancelled-vs-uncancelled comparison; do not re-run this and compare to them.
 //! The labels below are kept as printed so those recorded tables stay readable.
 //!
+//! **And since #1438 PR2, the "same timing lock" premise below holds only for the soft column and
+//! the union's first two variants.** Both now lock on the widened `[−n/2, n)` search; the union
+//! additionally tries the restricted `[0, n)` lock (`find_timing_offset_with_expected`) when the two
+//! differ, and at this file's frame-at-sample-0 fixture they do differ. So the union column is now
+//! two arms at two locks, and its lead over the soft column may include lock rescues as well as the
+//! cancelled arm.
+//!
 //! **What is new here, stated checkably.** #1363 opened with engine-level frame counts, so this is
 //! not the thread's first decode rate. It is the first since that opening, and the first whose
 //! apparatus is known to put BOTH arms through the same hard RS — the opening left that open, and
@@ -18,7 +25,7 @@
 //! 255-byte wire frame, RS never run), which is a lower bound for both arms alike and explicitly
 //! not a decode rate.
 //!
-//! **Why this is a pure cancellation toggle.** Both arms lock timing with the same
+//! **Why this was a pure cancellation toggle (before #1428 and #1438 PR2).** Both arms locked timing with the same
 //! `find_timing_offset_with_expected` and run the same `demodulate_iq`; the hard arm adds
 //! `cancel_crossfade_isi`; the soft arm multiplies by `differential_llr_scale`, a single POSITIVE
 //! scalar floored at 1e-6, so hard-decision sign-slicing reproduces `differential_decode`'s

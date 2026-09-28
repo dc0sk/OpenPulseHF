@@ -2,7 +2,7 @@
 project: openpulsehf
 doc: docs/openpulse-book.md
 status: living
-last_updated: 2026-09-20
+last_updated: 2026-09-27
 ---
 
 # The OpenPulseHF Book
@@ -1482,9 +1482,9 @@ elevated (on-air QRM ≈ 1.5e-3 was measured), firing the expensive AFC settle a
 
 **`refine_onset`.** The gate's wide window (~32 symbols) trips up to a full window *before* the
 true onset, because its tail catches the first signal samples — far beyond the demodulator's
-one-symbol timing search. The fix scans symbol-length sub-windows across the gate span and returns
-the first whose energy reaches a quarter of the span's peak, so the preamble lands within one
-symbol period.
+timing search (about one and a half symbol periods, `[−n/2, n)`). The fix scans symbol-length
+sub-windows across the gate span and returns the first whose energy reaches a quarter of the span's
+peak, so the preamble lands within one symbol period.
 
 **`afc_mini_settle`.** One wide-scan anchor pass, then five fine-tracking passes. Critically, it
 runs on the *refined-onset* window: settling on the coarse gate window (which may be mostly

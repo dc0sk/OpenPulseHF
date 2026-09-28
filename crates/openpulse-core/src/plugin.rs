@@ -309,7 +309,10 @@ pub trait ModulationPlugin: Send + Sync {
         Ok(llrs)
     }
 
-    /// Every hard-decision wire this mode can produce from ONE acquisition, best-first.
+    /// Every hard-decision wire this mode can produce from one received slice, best-first.
+    ///
+    /// A variant may differ by its decision rule, its timing lock, or both: BPSK offers two
+    /// decision arms at each of two timing locks (#1428, #1438), deduplicated.
     ///
     /// The engine tries each in order and keeps the first whose FEC + frame decode succeeds, so a
     /// plugin whose demodulator has two defensible decision rules can offer both and let RS, the

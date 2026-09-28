@@ -1,16 +1,18 @@
 // Parallel timing offset search kernel.
-// Each workitem evaluates one timing offset (0..n_offsets = samples_per_sym).
-// off_idx = global_invocation_id.x
+// Each workitem evaluates one timing offset, offset_base + off_idx, where off_idx =
+// global_invocation_id.x < n_offsets. offset_base is negative for the widened search
+// (#1438 PR2): samples before index 0 read as zero, exactly as the CPU demodulate_iq_at.
 //
 // For each offset, demodulate preamble_syms symbols and correlate the I channel
-// against the expected preamble pattern. Writes correlation energy to out_energy.
-// CPU picks the max-energy offset as the symbol timing.
+// against the expected preamble pattern. Writes correlation energy to out_energy, or -1
+// where the preamble span runs past the buffer. The CPU picks both locks from this array
+// with the plugin's shared first-max picker.
 
 struct TimingParams {
     n_offsets:       u32,
     samples_per_sym: u32,
     preamble_syms:   u32,
-    pad0:            u32,
+    offset_base:     i32,
     fc:              f32,
     sample_rate:     f32,
     pad1:            f32,
@@ -34,10 +36,12 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
 
     let n = params.samples_per_sym;
     let p = params.preamble_syms;
+    let off = i32(off_idx) + params.offset_base;
 
-    // Need enough samples for offset + p symbols.
-    if (arrayLength(&in_samples) < off_idx + p * n) {
-        out_energy[off_idx] = 0.0f;
+    // Need enough samples for offset + p symbols; the CPU search stops at the first offset that
+    // fails this, and the host truncates the array at the first -1.
+    if (i32(arrayLength(&in_samples)) < off + i32(p * n)) {
+        out_energy[off_idx] = -1.0f;
         return;
     }
 
@@ -66,8 +70,11 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
         var norm      = 0.0f;
 
         for (var k = 0u; k < n; k++) {
-            let sample_idx = off_idx + sym_start + k;
-            let sample     = in_samples[sample_idx];
+            let sample_idx = off + i32(sym_start + k);
+            var sample     = 0.0f;
+            if (sample_idx >= 0) {
+                sample = in_samples[u32(sample_idx)];
+            }
 
             let window = 0.5 * (1.0 + cos(PI * f32(k) / f32(n)));
 
