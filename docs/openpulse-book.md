@@ -2,7 +2,7 @@
 project: openpulsehf
 doc: docs/openpulse-book.md
 status: living
-last_updated: 2026-09-27
+last_updated: 2026-09-29
 ---
 
 # The OpenPulseHF Book
