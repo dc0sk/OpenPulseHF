@@ -21,6 +21,9 @@ fn lcg(seed: &mut u64) -> f32 {
 fn agc_boost_does_not_leak_into_the_squelch() {
     let mut e = ModemEngine::new(Box::new(LoopbackBackend::new()));
     e.register_plugin(Box::new(QpskPlugin::new())).unwrap();
+    // The receiver hears 4 s of (silent) band first, as on a real rig: the carrier detect's floor
+    // learns whatever it hears while no burst is being gathered (#1452).
+    let _ = e.accumulate_capture(None, vec![0.0; 32_000]);
     e.configure_agc(0.3, 0.05, 40.0);
     e.enable_agc();
 

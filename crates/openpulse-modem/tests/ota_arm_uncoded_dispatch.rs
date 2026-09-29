@@ -244,6 +244,10 @@ fn a_ladder_frame_still_classifies_as_ladder_when_the_fallback_could_also_decode
     let mut events = engine.subscribe();
 
     let quiet = vec![0.0f32; TICK_SAMPLES];
+    // The receiver hears the (silent) band first, as on a real rig (#1452).
+    for _ in 0..80 {
+        let _ = engine.accumulate_capture(Some("BPSK31"), quiet.clone());
+    }
     let mut burst = None;
     for chunk in signal.chunks(TICK_SAMPLES) {
         if let Ok(Some(b)) = engine.accumulate_capture(Some("BPSK31"), chunk.to_vec()) {

@@ -20,6 +20,9 @@ fn transmit_raw_audio_emits_and_increments_the_tripwire() {
 fn transmit_raw_audio_defers_on_a_busy_channel() {
     let mut e = ModemEngine::new(Box::new(LoopbackBackend::new()));
     e.register_plugin(Box::new(BpskPlugin::new())).unwrap();
+    // The receiver hears 4 s of (silent) band first, as on a real rig: the carrier detect's floor
+    // learns whatever it hears while no burst is being gathered (#1452).
+    let _ = e.accumulate_capture(None, vec![0.0; 32_000]);
 
     // Make the channel busy, then enable CSMA.
     e.transmit(b"remote", "BPSK250", None).unwrap();

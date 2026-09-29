@@ -280,7 +280,8 @@ pub struct RuntimeControlState {
     pub trust_store: InMemoryTrustStore,
     /// Optional relay forwarder; `Some` when `[relay] enabled = true` in config.
     pub relay_forwarder: Option<RelayForwarder>,
-    /// Fallback DCD/squelch RMS threshold when no per-band override matches.
+    /// Fallback operator squelch floor (a lower bound on the adaptive squelch; 0 = off) when no
+    /// per-band value matches.
     pub dcd_squelch_default: f32,
     /// Per-band DCD/squelch overrides (band label → threshold), applied on retune.
     pub dcd_squelch_bands: std::collections::BTreeMap<String, f32>,
@@ -509,7 +510,7 @@ impl Default for RuntimeControlState {
             ptt: crate::ptt::SharedPtt::default(),
             trust_store: InMemoryTrustStore::default(),
             relay_forwarder: None,
-            dcd_squelch_default: 0.01,
+            dcd_squelch_default: 0.0,
             dcd_squelch_bands: std::collections::BTreeMap::new(),
             tx_attenuation_default: 0.0,
             tx_attenuation_bands: std::collections::BTreeMap::new(),
@@ -3740,16 +3741,18 @@ mod command_apply_tests {
         rs.dcd_squelch_bands.insert("40m".into(), 0.05);
 
         // 40m is in the map → its override applies.
+        // Asserted on the OPERATOR value: the threshold in force is max(adaptive, operator), and a
+        // cold engine's 0.01 default would make the 0.01 cases pass whatever was applied (#1452).
         apply_band_squelch(&mut engine, &rs, 7_040_000);
-        assert!((engine.dcd_squelch() - 0.05).abs() < 1e-6);
+        assert!((engine.dcd_operator_squelch() - 0.05).abs() < 1e-6);
 
         // 20m is not in the map → fall back to the default.
         apply_band_squelch(&mut engine, &rs, 14_070_000);
-        assert!((engine.dcd_squelch() - 0.01).abs() < 1e-6);
+        assert!((engine.dcd_operator_squelch() - 0.01).abs() < 1e-6);
 
         // Out-of-band frequency → default.
         apply_band_squelch(&mut engine, &rs, 5_000_000);
-        assert!((engine.dcd_squelch() - 0.01).abs() < 1e-6);
+        assert!((engine.dcd_operator_squelch() - 0.01).abs() < 1e-6);
     }
 
     #[test]
@@ -5045,6 +5048,9 @@ mod command_apply_tests {
         /// removed before the carrier detect ever sees it and nothing accumulates at all — measured,
         /// a constant-0.5 fixture never flushed and the control could not fail.
         fn flushed(engine: &mut ModemEngine) -> bool {
+            // The receiver hears the (silent) band first, as on a real rig: the carrier detect's
+            // floor learns whatever it hears while no burst is being gathered (#1452).
+            let _ = engine.accumulate_capture(Some("BPSK250"), vec![0.0; 32_000]);
             let mut n = 0usize;
             while n < CARRIER {
                 let block: Vec<f32> = (n..n + CHUNK)

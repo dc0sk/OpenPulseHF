@@ -16,6 +16,9 @@ fn engine_with_handle() -> (ModemEngine, LoopbackBackend) {
     let lb = LoopbackBackend::new();
     let mut e = ModemEngine::new(Box::new(lb.clone_shared()));
     e.register_plugin(Box::new(BpskPlugin::new())).unwrap();
+    // The receiver hears 4 s of (silent) band first, as on a real rig: the carrier detect's floor
+    // learns whatever it hears while no burst is being gathered (#1452).
+    let _ = e.accumulate_capture(None, vec![0.0; 32_000]);
     (e, lb)
 }
 
@@ -29,10 +32,10 @@ fn tone(amp: f32, n: usize) -> Vec<f32> {
 fn dc_block_runs_on_the_daemon_streaming_capture_path() {
     // Tripwire (same as notch/AGC): the daemon's `accumulate_capture` path must reach the seam.
     let (mut e, _lb) = engine_with_handle();
-    assert_eq!(e.dc_blocks_processed(), 0);
+    let before = e.dc_blocks_processed();
     let _ = e.accumulate_capture(Some(MODE), tone(0.3, 4096));
     assert!(
-        e.dc_blocks_processed() > 0,
+        e.dc_blocks_processed() > before,
         "DC block must run on the accumulate_capture path"
     );
 }

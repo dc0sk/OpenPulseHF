@@ -4,18 +4,18 @@ use openpulse_core::error::ModemError;
 use openpulse_modem::ModemEngine;
 
 fn make_engine() -> ModemEngine {
-    let mut engine = ModemEngine::new(Box::new(LoopbackBackend::new()));
-    engine
-        .register_plugin(Box::new(BpskPlugin::new()))
-        .expect("register BPSK plugin");
-    engine
+    make_engine_with_backend(LoopbackBackend::new())
 }
 
+/// An engine that has heard 4 s of (silent) band before the test's signal, as a daemon on a real
+/// rig always has. The carrier detect's noise floor learns whatever it hears while no burst is being
+/// gathered (#1452); a receiver whose first audio is the signal learns the signal as the band.
 fn make_engine_with_backend(backend: LoopbackBackend) -> ModemEngine {
     let mut engine = ModemEngine::new(Box::new(backend));
     engine
         .register_plugin(Box::new(BpskPlugin::new()))
         .expect("register BPSK plugin");
+    let _ = engine.accumulate_capture(None, vec![0.0; 32_000]);
     engine
 }
 

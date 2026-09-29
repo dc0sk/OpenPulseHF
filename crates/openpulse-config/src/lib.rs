@@ -439,13 +439,14 @@ pub struct ModemConfig {
     /// A2/A3 gates together; empty = use the individual `ota_min_backlog` /
     /// `ota_upgrade_hold_frames` values above. The preset, when set, takes precedence.
     pub ota_aggressiveness: String,
-    /// Default DCD/squelch RMS threshold (carrier-present level for channel-busy
-    /// detection, CSMA, and burst-capture flush). Raise it above a band's noise
-    /// floor. Applied at startup and as the fallback when no per-band value matches.
+    /// Operator DCD/squelch floor, RMS: a LOWER BOUND on the adaptive squelch, which
+    /// tracks the band's noise on its own (#1452). Raise it to ignore weak traffic;
+    /// it can never make the receiver deaf below the band. 0 (default) = off.
+    /// Applied at startup and as the fallback when no per-band value matches.
     pub dcd_squelch: f32,
-    /// Per-band DCD/squelch override, keyed by band label (`"20m"`, `"2m"`, …).
-    /// When the rig tunes into a listed band, that threshold is applied; otherwise
-    /// `dcd_squelch` is used. Empty (default) = always use `dcd_squelch`.
+    /// Per-band operator squelch floor, keyed by band label (`"20m"`, `"2m"`, …), with
+    /// the same lower-bound meaning. When the rig tunes into a listed band, that value
+    /// is applied; otherwise `dcd_squelch` is used. Empty (default) = always use it.
     pub dcd_squelch_bands: std::collections::BTreeMap<String, f32>,
     /// CE-SSB TX envelope conditioning (raises average power at a fixed peak on
     /// high-PAPR multicarrier modes). Default `true`; it acts only on QPSK-subcarrier OFDM
@@ -714,7 +715,7 @@ impl Default for ModemConfig {
             ota_min_backlog: 0,
             ota_upgrade_hold_frames: 0,
             ota_aggressiveness: String::new(),
-            dcd_squelch: 0.01, // matches the engine's built-in DcdState default
+            dcd_squelch: 0.0, // off: the adaptive squelch governs (#1452)
             dcd_squelch_bands: std::collections::BTreeMap::new(),
             cessb_enabled: true,
             notch_enabled: true,
@@ -1105,16 +1106,16 @@ ota_upgrade_hold_frames = 0
 # gates together (one knob instead of two). Empty = use the two values above.
 # Takes precedence over ota_min_backlog / ota_upgrade_hold_frames when set.
 ota_aggressiveness = ""
-# DCD/squelch RMS threshold (carrier-present level for channel-busy detection,
-# CSMA, and burst-capture flush). Raise above a band's noise floor if the carrier
-# never appears to "drop". Applied at startup and as the per-band fallback.
-dcd_squelch = 0.01
-# Optional per-band squelch overrides (band label → threshold). When the rig tunes
-# into a listed band the matching value is applied; otherwise dcd_squelch is used.
+# Operator squelch floor (RMS). The carrier detect tracks the band's noise on its
+# own; this only RAISES its threshold (to ignore weak traffic) and can never make
+# the receiver deaf below the band. 0 = off. Applied at startup and as the
+# per-band fallback. Before #1452 this was a fixed threshold, silently replaced.
+dcd_squelch = 0.0
+# Optional per-band squelch floors (band label → RMS), same meaning. When the rig
+# tunes into a listed band the matching value is applied; otherwise dcd_squelch.
 # [modem.dcd_squelch_bands]
 # "40m" = 0.05
 # "20m" = 0.02
-# "2m"  = 0.01
 # CE-SSB TX envelope conditioning: raises average power at a fixed peak on
 # high-PAPR multicarrier modes (OFDM/SC-FDMA). No-op for single-carrier modes.
 cessb_enabled = true
@@ -1535,7 +1536,7 @@ mod tests {
         assert_eq!(cfg.modem.ptt_backend, "none");
         assert_eq!(cfg.modem.profile, "hpx_hf");
         assert_eq!(cfg.modem.ota_aggressiveness, ""); // empty = use individual A2/A3 knobs
-        assert!((cfg.modem.dcd_squelch - 0.01).abs() < 1e-6);
+        assert_eq!(cfg.modem.dcd_squelch, 0.0); // off: the adaptive squelch governs (#1452)
         assert!(cfg.modem.dcd_squelch_bands.is_empty());
         // tx_power_watts defaults to 0.0 (unspecified) for the regulatory TX log.
         assert!((cfg.station.tx_power_watts - 0.0).abs() < 1e-6);

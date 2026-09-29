@@ -898,6 +898,14 @@ pub struct ModemEngine {
     frames_transmitted: u64,
     /// Tripwire: frames emitted via `transmit_raw_audio` (the JS8 beacon path).
     raw_audio_frames_transmitted: u64,
+    /// The operator's squelch, a LOWER BOUND on the adaptive one (#1452): `set_dcd_squelch` and the
+    /// per-band values raise the threshold, never lower it below the band. 0 = off (the default).
+    manual_squelch: f32,
+    /// The squelch the noise floor alone asks for, once the tracker is warm.
+    adaptive_squelch: Option<f32>,
+    /// Set while `accumulate_routed` runs the seam: only that path ends a burst, so only it may put a
+    /// carrier block into the noise floor's hold (a one-shot receive would never release it).
+    seam_in_accumulate: bool,
 }
 
 /// CE-SSB TX conditioning clip level as a multiple of the RMS envelope. 2.0×
@@ -921,9 +929,14 @@ const CESSB_LOOKAHEAD: usize = 16;
 const DCD_SQUELCH_MARGIN: f32 = 1.25;
 
 /// Absolute lower bound on the squelch, so a digitally-silent input cannot drive the threshold to
-/// zero and make every sample a carrier. A guard against a degenerate floor, NOT a squelch policy —
-/// the FT-991A capture's floor is 0.0006 RMS, so this must stay well below anything real.
-const DCD_MIN_SQUELCH_THRESHOLD: f32 = 0.001;
+/// zero and make every sample a carrier. A guard against a degenerate floor, NOT a squelch policy.
+/// It was 0.001, which was not "well below anything real": the FT-991A idle floor is ~0.0005 RMS,
+/// so there the clamp governed and set the squelch at 1.67× idle instead of the intended 1.25×
+/// (#1452). 1e-4 is the scanning path's `EnergyGate` floor.
+const DCD_MIN_SQUELCH_THRESHOLD: f32 = 1e-4;
+
+/// The squelch before the noise-floor tracker is warm: `DcdState`'s construction default.
+const DCD_COLD_SQUELCH: f32 = 0.01;
 
 /// Floor for the [`ModemEngine::burst_cap_samples`] runaway guard (~30 s at 8 kHz), so a fast mode
 /// still accumulates a usable burst, and the cap used when the receive mode is unknown or unregistered.
@@ -984,7 +997,7 @@ impl ModemEngine {
             ota_retained_llrs: std::collections::HashMap::new(),
             ota_retained_session: None,
             ack_mac_key: None,
-            dcd: DcdState::new(0.01, 800), // 100 ms hold at 8 kHz; re-aimed per band at the seam
+            dcd: DcdState::new(DCD_COLD_SQUELCH, 800), // 100 ms hold at 8 kHz; re-aimed at the seam
             noise_floor: openpulse_dsp::noise_floor::NoiseFloorTracker::default(),
             csma_enabled: false,
             csma_persistence: 0.3,
@@ -1033,6 +1046,9 @@ impl ModemEngine {
             agc_blocks_processed: 0,
             dc_blocks_processed: 0,
             dcd_blocks_processed: 0,
+            manual_squelch: 0.0,
+            adaptive_squelch: None,
+            seam_in_accumulate: false,
             rho_calibration: crate::rho_calibration::RhoCalibration::new(),
             rho_stand_down: false,
             rho_stand_down_settles: 0,
@@ -2060,13 +2076,46 @@ impl ModemEngine {
         //
         // Deliberately mode-independent. A noise floor is a property of the band, not the waveform,
         // and this sits at the single shared `InputCapture` seam so every receive path gets it.
-        if let Some(floor_rms) = self
-            .noise_floor
-            .update(samples, AudioConfig::default().sample_rate as f32)
-            .map(|m| m.sqrt())
-        {
-            self.dcd
-                .set_threshold((floor_rms * DCD_SQUELCH_MARGIN).max(DCD_MIN_SQUELCH_THRESHOLD));
+        //
+        // #1452 replaced the estimator: the floor is now each bin's noise level over time, summed —
+        // the noise power the block RMS sees — so a narrow receive filter no longer collapses it to
+        // the clamp, and the tracker is HELD while a burst is gathered (`accumulate_routed`), so a
+        // long frame cannot raise it (#1304). The operator's value is a lower bound on it.
+        //
+        // A block is judged against the floor from BEFORE it, and a block that clears the squelch is
+        // not learned as band. Learning first let a read that holds a whole frame — the read after a
+        // blocking decode or transmit can hold seconds of audio, and the twin rig delivers a frame in
+        // one read — teach the floor the frame, which then never cleared the squelch it had raised.
+        // Two exceptions: a cold tracker learns everything (it has nothing to judge with), and a held
+        // tracker keeps the audio aside for the burst's end to decide (`accumulate_routed`).
+        //
+        // On the accumulator path a carrier block STARTS the hold rather than being dropped, so the
+        // burst's end can still learn from it: a burst too short to hold any preamble is the band
+        // flickering over the squelch, and leaving its blocks out biased the floor low (measured on the
+        // 250 Hz capture at 171-sample reads: squelch/idle 1.142 with the burst discarded, sabotage
+        // S6). Other paths never end a burst, so
+        // there a carrier block is simply not learned.
+        let block_rms = if samples.is_empty() {
+            0.0
+        } else {
+            (samples.iter().map(|s| s * s).sum::<f32>() / samples.len() as f32).sqrt()
+        };
+        let mut carrier_block = self.noise_floor.mean_sq().is_some()
+            && !self.noise_floor.is_held()
+            && block_rms >= self.dcd.threshold();
+        if carrier_block && self.seam_in_accumulate {
+            self.noise_floor.hold();
+            carrier_block = false;
+        }
+        if !carrier_block {
+            if let Some(floor_rms) = self
+                .noise_floor
+                .update(samples, AudioConfig::default().sample_rate as f32)
+                .map(|m| m.sqrt())
+            {
+                self.adaptive_squelch = Some(floor_rms * DCD_SQUELCH_MARGIN);
+            }
+            self.dcd.set_threshold(self.effective_squelch());
         }
         let prev_busy = self.dcd.is_busy();
         self.dcd.update(samples);
@@ -2135,6 +2184,25 @@ impl ModemEngine {
             .clamp(BURST_MIN_CAP_SAMPLES, BURST_MAX_CAP_SAMPLES)
     }
 
+    /// Shortest recognition window, in samples, among `candidates`: each mode's acquisition window
+    /// plus one symbol (`frame_scan_geometry`'s `acq + step`) — the shortest slice in which a
+    /// candidate frame's sync and first symbol fit. 0 with no candidates (the short-burst rule then
+    /// does nothing).
+    fn shortest_candidate_recognition_window(
+        &self,
+        candidates: &[(SpeedLevel, String, FecMode)],
+    ) -> usize {
+        let rate = AudioConfig::default().sample_rate;
+        candidates
+            .iter()
+            .map(|(_, mode, _)| {
+                let (step, acq, _, _) = self.frame_scan_geometry(mode, rate);
+                acq + step
+            })
+            .min()
+            .unwrap_or(0)
+    }
+
     /// Burst cap for what this receiver may actually be sent, not just for the mode it is configured
     /// with (#1249).
     ///
@@ -2173,6 +2241,39 @@ impl ModemEngine {
                 .fold(base, usize::max),
             None => base,
         }
+    }
+
+    /// Shortest preamble, in samples, among what may arrive: the configured mode, the relay rung and
+    /// the OTA candidates — the set the burst cap is sized from (#1249). 0 when none publishes a
+    /// frame geometry.
+    fn active_shortest_preamble(&self) -> usize {
+        let preamble = |mode: &str| {
+            let cfg = ModulationConfig {
+                mode: mode.to_string(),
+                ..ModulationConfig::default()
+            };
+            self.plugins
+                .get(mode)
+                .and_then(|p| p.frame_geometry(&cfg))
+                .map(|g| g.preamble_samples)
+        };
+        let ota: Vec<String> = self
+            .ota
+            .as_ref()
+            .map(|o| {
+                o.rx_candidates()
+                    .into_iter()
+                    .map(|(_, m, _)| m.to_string())
+                    .collect()
+            })
+            .unwrap_or_default();
+        self.rx_mode
+            .iter()
+            .chain(self.relay_mode.iter())
+            .chain(ota.iter())
+            .filter_map(|m| preamble(m))
+            .min()
+            .unwrap_or(0)
     }
 
     /// Declare a relay consumer's mode, so the burst cap covers what IT must receive (#1308).
@@ -2219,19 +2320,35 @@ impl ModemEngine {
         // Whether the adaptive floor existed BEFORE this block was judged (#1254). The seam warms the
         // tracker and re-aims the squelch inside `route_audio_stage`, so this must be read first.
         let was_cold = self.noise_floor.mean_sq().is_none();
-        let samples = self.route_audio_stage(PipelineStage::InputCapture, samples)?;
+        self.seam_in_accumulate = true;
+        let routed = self.route_audio_stage(PipelineStage::InputCapture, samples);
+        self.seam_in_accumulate = false;
+        let samples = routed?;
         let carrier_present =
             !samples.samples.is_empty() && self.dcd.energy() >= self.dcd.threshold();
 
         if carrier_present {
-            // Carrier present: keep accumulating this burst.
+            // Carrier present: keep accumulating this burst — and stop the noise floor learning
+            // from it (#1452/#1304). Held audio is learned from only if the burst turns out to be the
+            // band (a cap flush, below) and dropped on an ordinary carrier drop.
             self.rx_burst.extend_from_slice(&samples.samples);
             self.rx_capturing = true;
+            // Only once the tracker is warm: before its first window the squelch is the cold
+            // default, which a hot band's idle clears, and holding then would keep the tracker cold
+            // until a cap flush. The #1254 cold-start rule below discards what that gathers.
+            if self.noise_floor.mean_sq().is_some() {
+                self.noise_floor.hold();
+            }
             // Sized by what may ARRIVE (configured mode ∪ the OTA candidate rungs), not by the
             // configured mode alone — see `active_burst_cap_samples` (#1249).
             if self.rx_burst.len() >= self.active_burst_cap_samples() {
                 self.rx_capturing = false;
-                // The carrier is STILL PRESENT — this slab is not one transmission (#1255).
+                // The carrier is STILL PRESENT — this slab is not one transmission (#1255). It is
+                // the band, so the floor learns from it (#1452): the floor is held while a burst is
+                // gathered, so a genuine step UP in band level reads as carrier until this flush.
+                // Nothing earlier can end it — the engine does not know which FEC its consumers
+                // decode, and over every FEC the longest frame is the cap itself (#1455).
+                self.noise_floor.commit();
                 self.last_flush_capped = true;
                 return Ok(Some(AudioSamples {
                     samples: std::mem::take(&mut self.rx_burst),
@@ -2254,8 +2371,27 @@ impl ModemEngine {
             // says the carrier is absent; if it says present, the cold samples stay in the burst.
             // A tracker that can never warm leaves this branch exactly as it was.
             if was_cold && self.noise_floor.mean_sq().is_some() {
+                self.noise_floor.discard();
                 self.rx_burst.clear();
                 return Ok(None);
+            }
+            // A burst too short to hold any arriving mode's preamble is the band flickering over the
+            // squelch, not a transmission: the floor learns from it. Discarding it takes exactly the
+            // loudest moments of noise out of the history and biases the floor low, more so the
+            // smaller the reads — measured on the 250 Hz capture with the discard instead, squelch/idle
+            // 1.142 / 1.214 / 1.232 / 1.256 at 171 / 400 / 512 / 4096-sample reads (sabotage S6); with
+            // this commit, 1.256 at all four.
+            //
+            // Only when the held audio IS this burst: a hold left open while the accumulator was not
+            // ticked (a transmit dropped the stream; an ACK listen reads elsewhere) holds far more,
+            // and committing all of it would teach the floor whatever it collected.
+            let shortest = self.active_shortest_preamble();
+            let held_is_this_burst = self.noise_floor.held_len()
+                <= self.rx_burst.len() + openpulse_dsp::noise_floor::WINDOW;
+            if shortest > 0 && self.rx_burst.len() < shortest && held_is_this_burst {
+                self.noise_floor.commit();
+            } else {
+                self.noise_floor.discard();
             }
             // Carrier dropped after a burst → the frame is complete; flush it.
             self.last_flush_capped = false;
@@ -2263,6 +2399,22 @@ impl ModemEngine {
                 samples: std::mem::take(&mut self.rx_burst),
             }))
         } else {
+            // No burst owns a hold here. The seam starts one on a block that cleared the squelch it
+            // was judged against, and in the same call re-aims the squelch from the floor — which,
+            // right after a cap flush has committed a louder band, lifts it above that block. Then no
+            // burst opens, nothing ever releases the hold, and the floor freezes at the committed
+            // value: measured, a 6 dB drop after a step up left the squelch at 2.49x the new idle for
+            // a minute (#1452). The block was not carrier against the squelch the accumulator judges
+            // with, so it is band.
+            if self.noise_floor.is_held() {
+                if self.noise_floor.held_len()
+                    <= samples.samples.len() + openpulse_dsp::noise_floor::WINDOW
+                {
+                    self.noise_floor.commit();
+                } else {
+                    self.noise_floor.discard();
+                }
+            }
             Ok(None)
         }
     }
@@ -3224,6 +3376,40 @@ impl ModemEngine {
             return Ok((None, None, last_err));
         }
         self.last_flush_capped = false;
+
+        // #1452: nor is a failed burst shorter than every candidate's RECOGNITION WINDOW (its
+        // acquisition window plus one symbol) — no candidate frame's sync and first symbol fit in it.
+        // Not `min_frame_samples`: on MFSK16 (SL1) that is the whole fixed 17 s frame, and with SL1
+        // the sole candidate every fade-split fragment would have keyed no NACK.
+        //
+        // With the floor now correct behind a narrow filter, the squelch sits ~2σ above the band's
+        // block-RMS spread there, so idle trips a few percent of blocks and flushes short bursts.
+        // Before #1452 such a filter never flushed at all (permanently busy).
+        //
+        // A duration, never a count of reads: a read can hold a whole frame (the twin rig delivers
+        // each frame in one read; a daemon read after a blocking decode or transmit can hold
+        // seconds), and a failed frame must stay evidence. The one-read OFDM flicker is dropped only
+        // because the default `receive_tick_ms = 50` gives 400-sample reads, under OFDM52's 576.
+        //
+        // This makes idle flicker RARER, not non-evidence: a flicker longer than the window still
+        // counts, and the NACK streak has no time decay (#1456).
+        //
+        // A recognition window, not the shortest whole frame: the carrier detect can split a real frame on
+        // a fade, and each piece still counts as a failed decode. A whole-frame bound (66 s at
+        // BPSK31 + Rs, `hpx_hf`'s entry rung) would have silently removed those NACKs too. Applied
+        // here rather than in the accumulator because the monitor reads the same bursts in modes the
+        // engine does not know, whose frames may be shorter.
+        if decoded.is_none() {
+            let floor = self.shortest_candidate_recognition_window(&candidates);
+            if floor > 0 && samples.samples.len() < floor {
+                tracing::debug!(
+                    "OTA: {}-sample burst is shorter than any candidate's recognition window ({floor}); \
+                     not ladder evidence (#1452)",
+                    samples.samples.len()
+                );
+                return Ok((None, None, last_err));
+            }
+        }
 
         let ota = self
             .ota
@@ -4996,17 +5182,47 @@ impl ModemEngine {
         self.tx_attenuation_db
     }
 
-    /// Set the DCD/squelch RMS threshold — the carrier-present level used by
-    /// channel-busy detection, CSMA, and [`capture_burst`](Self::capture_burst)'s
-    /// burst-flush. Raise it on a noisy band so the noise floor doesn't read as a
-    /// permanent carrier; call on frequency change to restore the per-band value.
+    /// Set the operator's DCD squelch, an RMS LOWER BOUND on the adaptive one (#1452).
+    ///
+    /// The threshold in force is `max(adaptive, this, DCD_MIN_SQUELCH_THRESHOLD)`: an operator can
+    /// raise the squelch (to ignore a band's weak traffic, say) but can never make the receiver deaf
+    /// below the band, nor re-open the permanently-busy failure REQ-DCD-01 closed. 0 turns it off.
+    /// Until #1452 this value was silently overwritten by the adaptive seam within one window.
     pub fn set_dcd_squelch(&mut self, threshold: f32) {
-        self.dcd.set_threshold(threshold);
+        self.manual_squelch = threshold.max(0.0);
+        self.dcd.set_threshold(self.effective_squelch());
     }
 
-    /// Return the current DCD/squelch RMS threshold.
+    /// Return the DCD/squelch RMS threshold currently in force.
     pub fn dcd_squelch(&self) -> f32 {
         self.dcd.threshold()
+    }
+
+    /// The squelch in force: the adaptive one (or the cold default before the floor is warm),
+    /// raised by the operator's value, and never below the degenerate-floor guard.
+    fn effective_squelch(&self) -> f32 {
+        self.adaptive_squelch
+            .unwrap_or(DCD_COLD_SQUELCH)
+            .max(self.manual_squelch)
+            .max(DCD_MIN_SQUELCH_THRESHOLD)
+    }
+
+    /// The operator's squelch floor as set (0 = off), as distinct from [`dcd_squelch`] — the
+    /// threshold in force, which the adaptive floor usually decides. What a control surface reads
+    /// back, so a slider does not snap to the adaptive value (#1452).
+    ///
+    /// [`dcd_squelch`]: Self::dcd_squelch
+    pub fn dcd_operator_squelch(&self) -> f32 {
+        self.manual_squelch
+    }
+
+    /// Whether the carrier detect's noise floor rests on enough history to judge a band by (#1452).
+    ///
+    /// Warm, not calibrated: a floor learned while an occupant was on the band is warm too. A
+    /// transmit decision taken on a band this engine has only just started hearing must not rely on
+    /// the busy verdict until this is true.
+    pub fn dcd_floor_is_warm(&self) -> bool {
+        self.noise_floor.is_warm()
     }
 
     /// Set the soft TX limiter threshold (0.0 disables the limiter).
@@ -7986,6 +8202,8 @@ mod tests {
         let rx_lb = LoopbackBackend::new_split();
         let mut rx = ModemEngine::new(Box::new(rx_lb.clone_shared()));
         rx.register_plugin(Box::new(BpskPlugin::new())).unwrap();
+        // The receiver hears the (silent) band first, as on a real rig (#1452).
+        let _ = rx.accumulate_capture(None, vec![0.0; 32_000]);
 
         // Feed the frame in 4 fragments across 4 ticks — each must keep accumulating.
         let chunk = frame.len() / 4 + 1;
@@ -8097,6 +8315,11 @@ mod tests {
         let mut rx = ModemEngine::new(Box::new(LoopbackBackend::new()));
         rx.register_plugin(Box::new(BpskPlugin::new())).unwrap();
         assert!(rx.last_audio().is_empty(), "no audio captured yet");
+        // The receiver hears the (silent) band first, as on a real rig (#1452).
+        assert!(rx
+            .accumulate_capture(None, vec![0.0; 32_000])
+            .unwrap()
+            .is_none());
 
         let chunk = frame.len() / 4 + 1;
         for frag in frame.chunks(chunk) {

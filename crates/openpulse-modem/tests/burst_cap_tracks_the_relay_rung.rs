@@ -45,6 +45,11 @@ fn relay_rung_frame() -> Vec<f32> {
 
 fn flushes(e: &mut ModemEngine, frame: &[f32]) -> Vec<usize> {
     let mut out = Vec::new();
+    // The receiver hears 4 s of (silent) band first, as on a real rig: the carrier detect's floor
+    // learns whatever it hears while no burst is being gathered (#1452).
+    for _ in 0..80 {
+        let _ = e.accumulate_capture(Some(CONFIGURED_MODE), vec![0.0; TICK_SAMPLES]);
+    }
     for chunk in frame.chunks(TICK_SAMPLES) {
         if let Ok(Some(b)) = e.accumulate_capture(Some(CONFIGURED_MODE), chunk.to_vec()) {
             out.push(b.samples.len());

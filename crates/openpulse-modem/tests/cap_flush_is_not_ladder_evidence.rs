@@ -51,11 +51,9 @@ fn engine() -> (ModemEngine, LoopbackBackend) {
 
 /// A stuck NARROWBAND carrier — an unmodulated interferer parked in the passband.
 ///
-/// Deliberately not broadband noise: the squelch is driven by a *spectral* floor taken as a low
-/// percentile across passband bins, so wideband noise raises the floor with itself and the carrier
-/// reads absent within a second (that is #1304's mechanism, measured). A tone lights a handful of
-/// bins, leaves the 25th percentile on noise, and therefore holds the detector open — which is what
-/// a stuck channel actually looks like and the only way to reach a cap flush at all.
+/// A steady tone after silence clears the squelch and, since the noise floor is held while a burst is
+/// gathered (#1452), keeps it cleared until the cap — which is what a stuck channel looks like. Only
+/// the cap flush then teaches the floor that the tone is the band.
 fn stuck_carrier(n: usize) -> Vec<f32> {
     stuck_carrier_at(0, n)
 }
@@ -84,6 +82,12 @@ fn feed(e: &mut ModemEngine, samples: &[f32], block: usize) -> Vec<AudioSamples>
 /// candidate set, which no public accessor exposes, and hard-coding BPSK31's 2.39 M would silently
 /// stop testing a cap flush the day the candidate set changes.
 fn flush_by_cap(e: &mut ModemEngine, lead: &[f32]) -> AudioSamples {
+    // The receiver hears the (silent) band first, as on a real rig: the carrier detect's floor learns
+    // whatever it hears while no burst is being gathered (#1452).
+    assert!(
+        feed(e, &[0.0; 8 * BULK], BULK).is_empty(),
+        "silence flushed a burst"
+    );
     if !lead.is_empty() {
         assert!(
             feed(e, lead, BULK).is_empty(),
@@ -173,7 +177,8 @@ fn a_capped_slab_can_still_contain_a_decodable_frame() {
 #[test]
 fn a_carrier_drop_slab_that_fails_to_decode_still_moves_the_ladder() {
     let (mut e, _lb) = engine();
-    let mut buf = stuck_carrier(40 * TICK);
+    let mut buf = vec![0.0f32; 80 * TICK]; // the silent band first (#1452)
+    buf.extend(stuck_carrier(40 * TICK));
     buf.extend(std::iter::repeat_n(0.0f32, 8 * TICK)); // silence → carrier drops → flush
 
     let bursts = feed(&mut e, &buf, TICK);

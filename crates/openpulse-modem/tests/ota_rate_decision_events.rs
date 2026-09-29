@@ -70,7 +70,9 @@ fn a_failed_decode_emits_a_decision_event() {
     let mut rx = engine.subscribe();
 
     // Noise: no candidate mode can decode it, so the controller takes its failure path.
-    let noise: Vec<f32> = (0..8_000)
+    // Longer than every candidate's preamble (hpx500 enters on BPSK31, 8 192 samples): a shorter
+    // burst cannot hold a frame and is not ladder evidence at all (#1452).
+    let noise: Vec<f32> = (0..16_000)
         .map(|i| ((i as f32 * 12.9898).sin() * 43_758.547).fract() * 0.05)
         .collect();
     let burst = AudioSamples { samples: noise };
@@ -100,7 +102,9 @@ fn the_decision_event_carries_the_snr_it_acted_on() {
     let mut engine = engine_with_ota_session();
     let mut rx = engine.subscribe();
 
-    let noise: Vec<f32> = (0..8_000)
+    // Longer than every candidate's preamble (hpx500 enters on BPSK31, 8 192 samples): a shorter
+    // burst cannot hold a frame and is not ladder evidence at all (#1452).
+    let noise: Vec<f32> = (0..16_000)
         .map(|i| ((i as f32 * 7.233).sin() * 21_312.9).fract() * 0.05)
         .collect();
     let burst = AudioSamples { samples: noise };
@@ -137,7 +141,9 @@ fn repeated_failures_each_emit_rather_than_only_the_transition() {
     let mut engine = engine_with_ota_session();
     let mut rx = engine.subscribe();
 
-    let noise: Vec<f32> = (0..8_000)
+    // Longer than every candidate's preamble (hpx500 enters on BPSK31, 8 192 samples): a shorter
+    // burst cannot hold a frame and is not ladder evidence at all (#1452).
+    let noise: Vec<f32> = (0..16_000)
         .map(|i| ((i as f32 * 3.77).sin() * 9_133.1).fract() * 0.05)
         .collect();
     let burst = AudioSamples { samples: noise };

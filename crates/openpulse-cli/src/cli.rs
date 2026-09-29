@@ -434,9 +434,10 @@ pub enum DaemonCommands {
         /// conservative | balanced | aggressive
         preset: String,
     },
-    /// Set the DCD/squelch RMS threshold at runtime (e.g. 0.05 on a noisy band).
+    /// Set the operator's DCD/squelch floor at runtime: a lower bound on the adaptive squelch.
     SetDcdSquelch {
-        /// RMS threshold (0.0–1.0); raise above the band noise floor.
+        /// RMS floor (0.0–1.0; 0 = off). Raises the squelch to ignore weak traffic; it can never
+        /// lower it below the band.
         threshold: f32,
     },
     /// Enable/disable CE-SSB TX envelope conditioning (multicarrier modes only).

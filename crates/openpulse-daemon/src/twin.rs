@@ -21,6 +21,7 @@ use std::time::Duration;
 use openpulse_audio::LoopbackBackend;
 use openpulse_channel::ChannelModel;
 use openpulse_config::OpenpulseConfig;
+use openpulse_core::audio::AudioConfig;
 use openpulse_modem::channel_sim::bridge_through;
 
 use crate::server::run;
@@ -184,19 +185,28 @@ pub async fn spawn_bridged_pair(
     let rev_samples = Arc::new(AtomicUsize::new(0));
     let fwd_count = fwd_samples.clone();
     let rev_count = rev_samples.clone();
+    // A live sound card delivers audio whether or not anyone transmits. Between frames the rig
+    // delivers one tick of digital silence, so a daemon's noise floor hears the (silent) band before a
+    // frame arrives, as on a real rig — without it the first thing a receiver ever heard was a frame,
+    // and the floor, which learns whatever it hears while no burst is being gathered (#1452), learned
+    // the frame as the band.
+    let idle_samples =
+        (bridge_tick.as_secs_f64() * f64::from(AudioConfig::default().sample_rate)) as usize;
     let bridge = std::thread::spawn(move || {
         while !stop_bridge.load(Ordering::Relaxed) {
             // A TX (playback) → B RX (capture), and back. The counts are kept because a timeout
             // with zero forward samples is a transmit-side failure and a timeout with samples
             // moved is a receive-side one — a distinction no other signal in this rig makes.
-            fwd_count.fetch_add(
-                bridge_through(&a_lb, &b_lb, fwd.as_mut()),
-                Ordering::Relaxed,
-            );
-            rev_count.fetch_add(
-                bridge_through(&b_lb, &a_lb, rev.as_mut()),
-                Ordering::Relaxed,
-            );
+            let fwd_moved = bridge_through(&a_lb, &b_lb, fwd.as_mut());
+            if fwd_moved == 0 {
+                b_lb.fill_samples(&vec![0.0; idle_samples]);
+            }
+            fwd_count.fetch_add(fwd_moved, Ordering::Relaxed);
+            let rev_moved = bridge_through(&b_lb, &a_lb, rev.as_mut());
+            if rev_moved == 0 {
+                a_lb.fill_samples(&vec![0.0; idle_samples]);
+            }
+            rev_count.fetch_add(rev_moved, Ordering::Relaxed);
             std::thread::sleep(bridge_tick);
         }
     });
