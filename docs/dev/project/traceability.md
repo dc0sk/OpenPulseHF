@@ -15,6 +15,237 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-09-28 — #1452 stage 1: the carrier detect's floor follows the band behind any receive filter
+
+**Requirement / change.** The daemon's squelch floor was a 25th percentile ACROSS the 300–2700 Hz
+bins, scaled as if the noise were white across that band. Behind a 500 Hz or 250 Hz receive filter
+(an ordinary setting for these modes) most of those bins are stopband: the floor read the stopband
+and collapsed to the 0.001 clamp while the idle audio sat at 0.071 / 0.045 RMS, every block read as
+carrier, and bursts flushed only at the runaway cap. Measured through `accumulate_capture`
+(`~/parked/openpulse-1452/slab-probe-v2.log`), BPSK250 + Rs 64 B behind the 500 Hz filter at in-band
++8 and +12 dB: production decode 0/8 at both levels, where the same slab decoded from the frame's
+offset 5/8 and the frame alone 8/8 (the three trials that fail the offset control had a feed shorter
+than the cap, so no burst was ever flushed). REQ-DCD-01 is restated as the property (maintainer,
+2026-09-28): the squelch tracks the noise power the block RMS sees, mode-independently, behind a
+narrow filter and under coloured noise; a transmission no longer than the longest candidate frame
+does not close its own burst; an operator value may raise the squelch and never lower it below the
+adaptive one.
+
+**Design (`docs/dev/reviews/review-1452-dcd-floor.md`; maintainer decisions 2026-09-28).** A staged
+redesign; this is stage 1 (stage 2, a spectral-excess busy criterion for #1454; stage 3, a
+pre-trigger ring for #1443).
+
+1. **Each bin's noise level over time, summed** (`openpulse-dsp/src/noise_floor.rs`): per 512-sample
+   Hann window, every one-sided bin's power into a 256-window (16 s) history; the bin's level is the
+   mean of its powers below 5× its quantile-derived level, corrected by the derived
+   `TRIMMED_EXP_MEAN` = 0.966; total = `2·Σ P̄_k / (N²·G)`. A plain `quantile / EXP_QUANTILE_SCALE`
+   inflated a steady tone's bin 3.38× (a carrier 17 dB over the noise), which would have made a
+   receiver with a strong heterodyne deaf.
+2. **Held while a burst is gathered** (maintainer's choice over a very long window): the audio is kept
+   aside and learned from only on a cap flush (the slab is the band) or when the burst is too short to
+   hold any arriving mode's preamble (flicker); otherwise discarded. Holding begins only once the
+   tracker is warm, and a flicker's hold is committed only if it is that burst (≤ burst + one window):
+   a one-shot receive while a burst is held feeds the same tracker, and committing a hold that is
+   mostly something else teaches the floor that instead.
+3. **Each block is judged against the floor from before it.** Learning first let a read that holds a
+   whole frame — the twin rig delivers a frame in one read; a daemon's read after a blocking decode or
+   transmit can hold seconds — teach the floor the frame, which then never cleared the squelch. On the
+   accumulator path a carrier block starts the hold; on one-shot paths it is simply not learned.
+4. **The operator squelch is a lower bound**, default 0 (it was silently overwritten every window, so
+   an operator had no workaround); **the clamp is 1e-4** (0.001 governed a quiet rig at 1.67× idle).
+   `dcd_squelch()` returns the effective threshold; the daemon reports the operator's value
+   (`dcd_operator_squelch()`), so `GetConfig` reads back what was set.
+5. **A failed OTA burst is not ladder evidence when it is shorter than every candidate's recognition
+   window** — its acquisition window plus one symbol, `frame_scan_geometry`'s `acq + step`, the
+   shortest slice in which a candidate frame's sync and first symbol fit — a DURATION, never a count of
+   reads (maintainer, 2026-09-28). At SL7+ (OFDM52, window 576) a 400-sample idle flicker
+   drops and an 800-sample one counts, however many reads delivered it; at SL5 (BPSK250, window 1 056)
+   800 drops. The one-read OFDM flicker drops only because the default `receive_tick_ms = 50` gives
+   400-sample reads; at a longer tick it counts. **This makes idle flicker rarer, not non-evidence**:
+   a longer flicker counts, and with no time decay on the NACK streak counted flickers demote both
+   candidates during a long idle (#1456).
+6. **A hold no burst owns is released.** The seam starts a hold on a block that clears the squelch it
+   is judged against and, in the same call, re-aims the squelch; right after a cap flush has committed
+   a louder band that lifts it above the block, no burst opens, and nothing released the hold — the
+   floor froze at the committed value. Found in round 4 by a probe of a step up then back down:
+   the squelch sat at 2.49× the quiet idle a minute after the band dropped back 6 dB. The accumulator
+   now commits such a hold when it is this read (and discards it otherwise).
+7. **Cold start learns first** (maintainer): fixtures that fed a signal from the very first sample now
+   give the receiver idle audio first, and the twin bridge delivers silence between frames.
+8. **The cross-band repeater does not ACT on a cold floor** (maintainer, 2026-09-29: fail closed while
+   cold). Item 7 holds for the engine; the repeater refuses to transmit on its verdict until rig_b's
+   floor is warm (`NoiseFloorTracker::is_warm`: ≥ 16 windows, stricter than the floor's first
+   estimate). It senses rig_b only just before a relay, so its tracker is cold on the first sense,
+   and a cold tracker learns whoever is on the band as the floor — the gate caught it keying onto a
+   busy band (`a_busy_output_band_stops_the_relay_from_keying`, the #1325 gate). A sense that STARTED
+   cold returns `Cold` (deferred; neither a fault nor a reset of the fault count); the verdict order is Busy > Unreadable >
+   Cold > Clear, so a dead card still exhausts `MAX_SENSE_FAULTS`. Each session primes the floor
+   first (`warm_sensor`, bounded at 256 reads, ~2.6 s on a real card, whose empty read waits 10 ms),
+   so that on a card delivering audio the first relay is judged rather than deferred — by
+   construction, not measured on hardware.
+
+**Deviations from the reviewed design.**
+- (a) The flicker rule sits on the OTA path, not in the accumulator: the monitor reads the same
+  bursts in modes the engine does not know.
+- (b) Its threshold is the candidates' shortest recognition window, not the shortest whole frame: a
+  whole-frame bound (66 s at BPSK31 + Rs) would also have stopped the pieces of a real frame split on
+  a fade from counting as failures. Against the design's preamble bound it is one symbol period longer
+  on most rungs; at `hpx_hf`'s entry set {SL2} it rises from 8 192 (BPSK31's preamble) to 8 448.
+  With SL1 the sole candidate it is 2 048 (MFSK16's Costas 1 792 + one 256-sample symbol); whenever
+  SL1 and SL2 are both candidates it rises from 1 792 to 8 448. It is not `min_frame_samples`: on
+  MFSK16 that is the whole fixed 17 s frame (135 936), so a bound taken from it — the rule's second
+  build — dropped every fade-split fragment at SL1 and the sender abandoned after two silent windows,
+  a regression against `main`. On the four `hpx_pilot*` profiles the window is below the old
+  `min_frame_samples` bound: 784 at 500 baud and 392 at 1000 baud (under one default read), against
+  3 456–928, so a one-read flicker on `hpx_pilot_fast`'s SL2 counts (gated). The maintainer's persistence rule was first built as "a burst of ONE read is never
+  evidence"; measured, that also dropped a 16 000-sample failure delivered in one read (the twin rig
+  delivers each frame in one read; a daemon read after a blocking decode can hold seconds), so it was
+  replaced by this duration before merge.
+- (c) Sub-preamble bursts are committed, and a carrier block starts the hold. With the discard instead
+  (sabotage S6, final build) the 250 Hz capture read squelch/idle 1.142 / 1.214 / 1.232 / 1.256 at
+  171 / 400 / 512 / 4096-sample reads; with both, 1.256 at all four.
+- (d) The maintainer's decision to flush a burst after "the longest frame anything decodable here can
+  emit" was built and **removed before merge**. The bound was sized as the uncoded 255 B frame plus 2 s
+  (8.6 + 2 = 10.6 s at BPSK250) and split every 220-byte Rs frame in the long-frame gate (0/8 gathered whole). The engine
+  does not know which FEC its consumers decode, and over every FEC mode the longest 255-byte frame
+  (Turbo, 37.0 s) is the cap itself. Maintainer: drop it, track a consumer-declared FEC set in
+  #1455.
+- (e) The design's PTT-spy check on flicker is asserted at the ACK instead: the flicker tests require
+  `ack.is_none()`, and the daemon keys the transmitter only to send an ACK. No test here observes the
+  PTT, and none runs 250 Hz idle through a live OTA session.
+- (f) The design's "no idle burst longer than one block" is restated as "no idle burst long enough to
+  hold a BPSK250 preamble": on the 250 Hz capture a floor at its intended ~2σ margin still passes
+  two-block flickers (longest measured 800 samples), which the one-block form would fail.
+- (g) Item 8 was not in the reviewed design: the workspace gate on the first final HEAD failed the
+  #1325 carrier-sense gate, and the maintainer chose to fail closed rather than fix the fixture. The
+  same gate failed the reachability ratchet on a test-only public counter, which was removed, and the
+  next run failed it on `warm_sensor`, public only for a test; it is private and unit-tested in the
+  crate.
+
+**Implementation.** `openpulse-dsp/src/noise_floor.rs` (rewritten; `spectral_noise_floor_mean_sq`
+removed, it had no caller outside its tests); `openpulse-modem/src/engine.rs` (`update_dcd_at_seam`,
+`accumulate_routed`, `set_dcd_squelch` / `effective_squelch` / `dcd_operator_squelch`,
+`active_shortest_preamble`, `shortest_candidate_recognition_window`, the not-evidence rule in
+`ota_decode_and_ack_inner`, constants); `openpulse-config` (`dcd_squelch` default 0.0 and its
+template); `openpulse-repeater` (`Sense::Cold`, `warm_sensor`, the session prime);
+`openpulse-daemon` (runtime default; `FrontEndState` reports the operator value; `twin.rs`
+idle between frames); REQ-DCD-01 in `requirements.md` / `requirements.yaml`.
+
+**Tests → results.**
+- New `crates/openpulse-modem/tests/dcd_floor_follows_the_filter.rs`, 13/13 in one run
+  on the committed tree (23.9 s in release; the not-evidence counter the tests first asserted on was
+  removed, and they assert on the ACK alone — every earlier sabotage failure also differed on the ACK): squelch/idle 1.22–1.26 on all five recorded idles at reads of 171 / 400 / 512 / 4096 (before: ≈0.014
+  and 0.022 on the narrow captures, ≈1.37 wide, 1.67 FT-991A); no idle burst long enough to hold a
+  BPSK250 preamble (longest 800 samples, 5.5 % of 250 Hz idle gathered); 500 Hz / BPSK250 / in-band
+  +12 dB 8/8; a 16.5 s two-block frame (220 B) gathered as exactly one burst 8/8 and decoded 7/8;
+  BPSK31 on a wide filter at +12 dB in-band still 0/4 (#1454, pinned); the operator squelch raises and
+  never lowers; a two-block flicker is not ladder evidence at the entry rungs while a 16 000-sample
+  failure still is; the verdict depends on duration, not reads (at SL9 400 samples drop as one read
+  or four, 800 count as one read or two; at SL5 800 drop either way; 16 000 in one read counts at
+  SL9, SL5 and the entry rungs); the bound is the candidates' recognition window, exact to the sample (at SL3
+  4 224 counts and 4 223 does not; 2 000 drops at SL3 and counts at SL9; at SL1 2 047 drops and 2 048 counts); on `hpx_pilot_fast` a one-read burst
+  counts at SL2; a hold
+  holding 10 s of one-shot silence is not committed with a one-block burst; after a 6 dB step up the
+  squelch recovers at the cap flush (1.248× the louder band) and follows the band back down (1.240×
+  the quiet band 40 s after it drops).
+- Tracker unit tests 9/9, including the new warm-at-16-windows pin: chunking invariance, cold and settled recovery of a known variance,
+  band-limited noise behind a narrow filter, hold/commit/discard, a steady carrier joins the floor and
+  a short one does not, following the band up and down.
+- **Sabotage, each watched failing:** no hold → long-frame 0/8 (7–13 bursts per frame);
+  operator value ignored → operator test; no short-burst rule → flicker test; clamp 0.001 → FT-991A
+  ratio; learning before judging → the twin handshake; discarding flicker → 250 Hz ratio at 171; the
+  untrimmed quantile → the steady-carrier test (3.38×); the read-count rule (the first build) → the one-read 16 000-sample
+  failure dropped; the preamble instead of the recognition window → the duration, SL1 and bound tests
+  (400 at SL9 counted; 2 047 at SL1 counted); `min_frame_samples` instead (the second build) → the SL1
+  and pilot tests (2 048 at SL1 dropped; a one-read burst on `hpx_pilot_fast` dropped); no stale-hold guard → the stale-hold test only (squelch 0.156 → 0.0001); no orphan-hold
+  release → the step-up/down test only (2.488×); no cold check in the repeater's sense → the busy-band
+  gate and the cold-then-warm test; Cold ranked above Unreadable → the fault-budget test (100
+  unreadable senses never tripped it); `warm_sensor` a no-op → the `warm_sensor` unit test. **The long-frame gate
+  was vacuous as first written**: at 200 B the frame is ONE RS block (~8 s), too short to raise an
+  unheld floor, and it passed with the hold disabled; it now uses 220 B and asserts the fixture is longer than that 200 B frame.
+- **Not sabotage-verified:** the cap-flush commit; holding only once warm; the accumulator-only gate on
+  starting a hold (`seam_in_accumulate`); judge-before-learn on the one-shot path (no test observes
+  it); which modes `active_shortest_preamble` includes; the `MAX_HELD_SAMPLES` drain; the twin
+  bridge's idle fill; the repeater's session-start prime in `run_full_duplex` (no test runs a session
+  with `carrier_sense = true` and audio on rig_b; `warm_sensor` itself is unit-tested);
+  the `WARM_TICKS` bound; that `Cold` leaves the fault count untouched; cold-start behaviour; the `FrontEndState` read-back (the band-squelch test
+  asserts the engine accessor, and nothing reads `front_end_state().dcd_squelch`).
+- **The two held-out suites, run on the final code** (`scripts/slow-tests.sh`, HEAD `5de83961`).
+  Neither calls `accumulate_capture`, but both pass the `InputCapture` seam and so run the replaced
+  floor estimator (`update_dcd_at_seam`). `ota_channel_adaptation` goes through `respond_arq_ota` →
+  `ota_decode_and_ack_inner`, where the new squelch and the short-burst rule are consumed.
+  `notch_rescues_interferer` goes through it once per decode attempt in
+  `receive_from_samples_with_fec_inner`, where nothing on that path reads the squelch (only
+  `apply_rx_agc`, off there). `ota_channel_adaptation` 3/3 (68 min, debug). `notch_rescues_interferer`
+  2/3 (468 s): its rescue test fails its own negative control — the no-notch arm decodes at interferer
+  amplitude 0.3 (`notch_rescues_interferer.rs:236`). The same test alone on `origin/main` =
+  `4eb13f95` (detached worktree, release, 174 s) fails the same assertion at the same amplitude, so
+  it predates this change: the last recorded notch PASS is `884d96ed` (2026-09-13), and none of the
+  18 acquisition-path merges since has a recorded notch run. Tracked in #1457; REQ-QRM-01 is not
+  re-proven here, and its CLAUDE.md row now says so.
+- **Probe v2 re-run unchanged on the branch** (`slab-probe-v2-branch.log`; production / from the
+  frame's offset / frame alone, 8 trials each). The wide-filter control, BPSK250 in-band +8 dB: 6/8,
+  where `main` read 4/8; +12 dB: 7/8 on both, so it did not regress. BPSK250 behind 500 Hz: 7/8 at
+  +8 dB and 8/8 at +12 dB, both 0/8 on `main`. BPSK63 behind 250 Hz: 7/8 and 8/8, both 0/8 on `main`.
+  **BPSK63 behind 500 Hz at +8 dB is still 0/8**: the 33 s frame is split into 7–24 bursts, because a
+  63 Hz signal adds too little power across a 500 Hz passband to hold the block RMS over the squelch —
+  the total-power criterion of #1454, not the floor. BPSK31 (250 Hz at +8 dB; wide at +8 and
+  +12 dB) is 0/8 on both, the same mechanism.
+- Existing tests: 36 failed at first; every one fed a signal (or tone) from the first sample the
+  receiver heard. Fixed by giving the receiver idle audio first; REQ-DCD-01's idle gate restated from
+  "no idle burst" to "no idle burst long enough to hold a BPSK250 preamble" (three 171-sample flickers
+  on the hot capture now pass a squelch no longer biased 1.1× high); three decision-event fixtures use
+  16 000-sample noise (hpx500 enters on BPSK31, preamble 8 192); the OTA burst-cap pair asserts that the
+  cap cuts the frame short rather than that it splits it into several pieces.
+- `openpulse-repeater`, all 27 tests pass. New: a cold sense defers and a warm sense of a clear band
+  keys; an unreadable band on a cold sensor still exhausts the fault budget (at `MAX_SENSE_FAULTS`); a
+  tracker unit test pins warm at exactly 16 windows; an in-crate unit test shows `warm_sensor` warms
+  over quiet band, honours `stop` and gives up on an empty card. The full-duplex test now warms rig_b
+  through a first relay that is deferred as cold, so its deferral count is 1 rather than 0; its other
+  assertions are unchanged.
+- `twin_daemon_bridge` 8/8 (13.1 s), run before the repeater change; the twin suite has no repeater
+  test, and the daemon tests that run one (`repeater_relays_a_daemon_burst`, two `lib.rs` unit tests)
+  set `carrier_sense = false`, so nothing in `openpulse-daemon` reaches the cold check.
+- The workspace gate on the final HEAD is quoted in the PR body.
+
+**Limitations.**
+- After a genuine step UP in band level the squelch recovers only at the first cap flush — 37 s at
+  BPSK250, ~5 min with `hpx_hf`'s entry rungs as OTA candidates — and nothing is decoded until then
+  (#1455). Measured at BPSK250 only.
+- On a path that only ever calls one-shot `receive*` (CLI listen, ARDOP's adaptive arm, the ACK
+  listen) a carrier block is never learned and nothing commits, so a genuine step up there freezes
+  the floor below the band with no recovery on that path.
+- Idle flicker longer than the candidates' recognition window is ladder evidence. Estimated, treating blocks
+  as independent, at the measured per-block trip rate behind a 250 Hz filter (5.5 %, 45 s corpus): a
+  k-read flicker occurs ~p^k per block — ~12/h at 3 reads — and with no decay on the NACK streak those
+  demote both candidates during a long idle (#1456). A 250 Hz filter cannot pass OFDM52, so a
+  session behind one does not reach SL7+; {SL5, SL6} on that capture is where this bites, and it is
+  not measured here.
+- After a genuine drop the floor follows within the history (a quarter of it for the quantile), where
+  the old EMA fell in ~0.2 s.
+- The repeater still learns an occupant as rig_b's floor if the occupant fills more than about 75 % of
+  the windows of the first cold read. With the session prime that read is the first ~1 s after
+  enable; without it (a prime that faults or is stopped) it is the whole backlog between the first
+  two relays, since the capture buffer is unbounded. From then on that band reads clear. Recognising
+  a signal by its shape rather than its level is stage 2 (#1454). The main engine's cold window is
+  one 512-sample window, and the engine's `csma_check` (which the KISS front end enables) and discovery's beacon deferral share
+  that exposure.
+- Pre-existing, not changed here: the repeater never drops rig_b's capture stream around its own
+  transmit (the #1007/#1319 obligation `CaptureTicker` documents).
+- A daemon started in the middle of a transmission learns that frame and loses it; the floor recovers
+  once enough of the 16 s history is band again.
+- A frame longer than the burst cap: after the cap flush its remainder is learned as band.
+- Only `accumulate_capture` ends a hold. If it starts one and then stops being called while one-shot
+  `receive*` reads continue, the floor stays frozen at its pre-burst value until the accumulator runs
+  again; the held audio is bounded by `MAX_HELD_SAMPLES` and is discarded, not committed, at that
+  next burst end unless it is that burst.
+- Memory: 256 × 255 × 4 B ≈ 261 kB of bin history per tracker, plus up to 4 MB of held audio
+  (`MAX_HELD_SAMPLES` = 2^20 f32).
+- `bpsk31_long_frame_with_leading_silence_decodes` failed once during a full-suite run and passed when
+  re-run alone; it was not run under load on `main`, so whether this change affects it is not
+  established.
+- Stage 2 (#1454 sensitivity) and stage 3 (#1443 pre-trigger ring) are not in this change.
+
 ## 2026-09-27 — #1438 PR2: BPSK searches timing from −n/2 and decodes at both locks, the FEC choosing
 
 **Requirement / change.** A BPSK frame starting within a quarter symbol of the slice start must be
