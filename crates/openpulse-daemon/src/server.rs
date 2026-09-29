@@ -2219,7 +2219,9 @@ fn front_end_state(
         agc: engine.is_agc_enabled(),
         cessb: engine.cessb_enabled(),
         logbook: runtime_state.logbook.is_enabled(),
-        dcd_squelch: engine.dcd_squelch(),
+        // The operator's value, not the threshold in force: a control surface sets and reads back
+        // the same number (#1452 — the adaptive floor usually decides the threshold).
+        dcd_squelch: engine.dcd_operator_squelch(),
     }
 }
 
@@ -2807,6 +2809,8 @@ mod discovery_tick_tests {
         engine
             .register_plugin(Box::new(BpskPlugin::new()))
             .expect("register BPSK plugin");
+        // The receiver hears the (silent) band first, as on a real rig (#1452).
+        let _ = engine.accumulate_capture(None, vec![0.0; 32_000]);
 
         // Trip DCD: loopback echoes the TX into the RX capture, so the received energy marks the
         // channel busy. Nothing in `discovery_tick` feeds the DCD, so the busy state persists.

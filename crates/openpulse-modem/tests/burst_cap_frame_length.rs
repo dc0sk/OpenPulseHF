@@ -118,6 +118,10 @@ fn a_slow_rung_frame_survives_the_streaming_accumulator_as_one_burst() {
     let mut rx = ModemEngine::new(Box::new(LoopbackBackend::new()));
     rx.register_plugin(Box::new(BpskPlugin::new())).unwrap();
 
+    // The receiver hears the (silent) band first, as on a real rig (#1452).
+    for _ in 0..40 {
+        let _ = rx.accumulate_capture(Some(MODE), vec![0.0; 800]);
+    }
     // The daemon feeds tick-sized chunks (100 ms = 800 samples at 8 kHz), not the whole frame.
     let mut bursts = Vec::new();
     for chunk in frame.chunks(800) {

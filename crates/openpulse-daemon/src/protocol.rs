@@ -452,8 +452,9 @@ pub enum ControlCommand {
     /// Apply an aggressiveness preset (`conservative`/`balanced`/`aggressive`) that
     /// sets the A2/A3 hysteresis gates together — one knob instead of two.
     OtaSetAggressiveness { preset: String },
-    /// Set the DCD/squelch RMS threshold at runtime (e.g. to clear a band's noise
-    /// floor). Holds until the next retune re-applies the per-band/default value.
+    /// Set the operator's DCD/squelch floor at runtime: a lower bound on the adaptive squelch
+    /// (#1452), so it can raise the threshold but never lower it below the band. 0 = off. Holds
+    /// until the next retune re-applies the per-band/default value.
     SetDcdSquelch { threshold: f32 },
     /// Enable/disable CE-SSB TX envelope conditioning (master switch). Only acts on
     /// high-PAPR multicarrier modes; a no-op for single-carrier modes regardless.

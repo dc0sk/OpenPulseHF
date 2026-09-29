@@ -81,6 +81,10 @@ const SENSE_TICKS: usize = 4;
 /// rather than to keep keying. #1298 reports the exit, so this is not a silent death.
 const MAX_SENSE_FAULTS: u32 = 10;
 
+/// Most reads `warm_sensor` takes. A work bound, not a time one (#1066): on a real card an empty read
+/// waits ~10 ms, so this is ~2.6 s at most, well past the ~1 s the floor needs.
+const WARM_TICKS: usize = 256;
+
 /// What one carrier sense concluded.
 #[derive(Debug, PartialEq, Eq)]
 enum Sense {
@@ -90,6 +94,9 @@ enum Sense {
     Busy,
     /// The band could not be read at all.
     Unreadable,
+    /// The band read quiet, but rig_b's noise floor was not yet warm when this sense began, so
+    /// "quiet" may only mean the floor learned whoever is on the band (#1452).
+    Cold,
 }
 
 impl CrossBandRepeater {
@@ -192,6 +199,9 @@ impl CrossBandRepeater {
             return Sense::Unreadable;
         };
         let mode = self.config.mode.clone();
+        // Taken BEFORE ticking: warmth gained during this sense came from this sense's own reads,
+        // which may be an occupant's transmission learned as the floor (#1452).
+        let started_warm = self.engine_tx.dcd_floor_is_warm();
         let mut read_anything = false;
         for _ in 0..SENSE_TICKS {
             let tick = sensor.tick(&mut self.engine_tx, &mode);
@@ -207,7 +217,33 @@ impl CrossBandRepeater {
         if sensor.is_faulted() || !read_anything {
             return Sense::Unreadable;
         }
+        // Only a would-be Clear is downgraded: ahead of Unreadable, a dead card on a tracker that
+        // can never warm would defer forever without tripping `MAX_SENSE_FAULTS`.
+        if !started_warm {
+            return Sense::Cold;
+        }
         Sense::Clear
+    }
+
+    /// Listen to rig_b's band until its noise floor is warm, so the first relay of a session can be
+    /// judged (#1452). Calibration only — no verdict is taken. Stops at a faulted capture, on
+    /// `stop`, or after `WARM_TICKS` reads, and returns whether the floor is warm; a relay whose
+    /// sense still starts cold is deferred, so nothing depends on this succeeding.
+    fn warm_sensor(&mut self, sensor: &mut CaptureTicker, stop: &AtomicBool) -> bool {
+        let mode = self.config.mode.clone();
+        for _ in 0..WARM_TICKS {
+            if self.engine_tx.dcd_floor_is_warm() {
+                return true;
+            }
+            if stop.load(Ordering::Relaxed) {
+                return false;
+            }
+            sensor.tick(&mut self.engine_tx, &mode);
+            if sensor.is_faulted() {
+                return false;
+            }
+        }
+        self.engine_tx.dcd_floor_is_warm()
     }
 
     /// [`relay_one_frame`] with an explicit monotonic clock (for deterministic ID-timing tests).
@@ -254,6 +290,15 @@ impl CrossBandRepeater {
                         deferred = self.bursts_deferred,
                         "cross-band relay: rig_b's band is busy — dropped this burst rather than \
                          doubling with whoever is already there"
+                    );
+                    return Ok(None);
+                }
+                Sense::Cold => {
+                    self.bursts_deferred = self.bursts_deferred.saturating_add(1);
+                    tracing::info!(
+                        deferred = self.bursts_deferred,
+                        "cross-band relay: rig_b's noise floor is not warm yet, so a quiet reading \
+                         proves nothing — dropped this burst"
                     );
                     return Ok(None);
                 }
@@ -493,6 +538,16 @@ impl CrossBandRepeater {
         // which is `!Send` as a trait object, so a repeater carrying one could not be moved into
         // the daemon's thread at all. This function already runs on that thread.
         let mut sensor = self.config.carrier_sense.then(|| CaptureTicker::new(None));
+        // Warm rig_b's floor now, while the operator has just acted, rather than learning the
+        // whole backlog before the second relay as the floor (#1452).
+        if let Some(s) = sensor.as_mut() {
+            if !self.warm_sensor(s, &stop) {
+                tracing::info!(
+                    "cross-band relay: rig_b's noise floor is not warm yet; the first relays will \
+                     be deferred until it is"
+                );
+            }
+        }
         let mut count = 0u64;
         let result = loop {
             if stop.load(Ordering::Relaxed) {
@@ -678,6 +733,82 @@ mod full_duplex_silence_tests {
             vec!["assert"],
             "a repeater relaying continuously must hold ONE key across 400 ms with a 250 ms bound — \
              the deadline measures silence, not session length"
+        );
+    }
+}
+
+#[cfg(test)]
+mod warm_sensor_tests {
+    use super::*;
+    use bpsk_plugin::BpskPlugin;
+    use openpulse_audio::LoopbackBackend;
+    use openpulse_radio::PttError;
+    use std::sync::mpsc::sync_channel;
+
+    struct NoPtt;
+    impl PttController for NoPtt {
+        fn assert_ptt(&mut self) -> Result<(), PttError> {
+            Ok(())
+        }
+        fn release_ptt(&mut self) -> Result<(), PttError> {
+            Ok(())
+        }
+        fn is_asserted(&self) -> bool {
+            false
+        }
+    }
+
+    fn repeater_sensing(rig_b: &LoopbackBackend) -> CrossBandRepeater {
+        let engine = |lb: &LoopbackBackend| {
+            let mut e = ModemEngine::new(Box::new(lb.clone_shared()));
+            e.register_plugin(Box::new(BpskPlugin::new()))
+                .expect("register");
+            e
+        };
+        let (_tx, rx) = sync_channel(1);
+        CrossBandRepeater::new(
+            Box::new(NoPtt),
+            engine(&LoopbackBackend::new()),
+            engine(rig_b),
+            rx,
+            RepeaterConfig {
+                mode: "BPSK250".into(),
+                carrier_sense: true,
+                ..Default::default()
+            },
+        )
+    }
+
+    /// The session prime warms rig_b's floor over quiet band, stops on `stop`, and gives up
+    /// within its work bound on a card that delivers nothing (#1452).
+    #[test]
+    fn warm_sensor_warms_over_quiet_band_and_is_bounded() {
+        let quiet: Vec<f32> = (0..16 * 512)
+            .map(|i| ((i as f32) * 0.37).sin() * 1.0e-4)
+            .collect();
+
+        let rig_b = LoopbackBackend::new();
+        let mut rp = repeater_sensing(&rig_b);
+        let mut sensor = CaptureTicker::new(None);
+        rig_b.push_frame(&quiet);
+        assert!(rp.warm_sensor(&mut sensor, &AtomicBool::new(false)));
+        assert!(rp.engine_tx.dcd_floor_is_warm());
+
+        let rig_b = LoopbackBackend::new();
+        let mut rp = repeater_sensing(&rig_b);
+        let mut sensor = CaptureTicker::new(None);
+        rig_b.push_frame(&quiet);
+        assert!(
+            !rp.warm_sensor(&mut sensor, &AtomicBool::new(true)),
+            "the prime ignored `stop`"
+        );
+
+        let rig_b = LoopbackBackend::new();
+        let mut rp = repeater_sensing(&rig_b);
+        let mut sensor = CaptureTicker::new(None);
+        assert!(
+            !rp.warm_sensor(&mut sensor, &AtomicBool::new(false)),
+            "an empty card warmed the floor"
         );
     }
 }

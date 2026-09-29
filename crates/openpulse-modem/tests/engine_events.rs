@@ -10,6 +10,9 @@ fn make_engine() -> ModemEngine {
     use bpsk_plugin::BpskPlugin;
     let mut engine = ModemEngine::new(Box::new(LoopbackBackend::new()));
     engine.register_plugin(Box::new(BpskPlugin::new())).unwrap();
+    // The receiver hears 4 s of (silent) band first, as on a real rig: the carrier detect's floor
+    // learns whatever it hears while no burst is being gathered (#1452).
+    let _ = engine.accumulate_capture(None, vec![0.0; 32_000]);
     engine
 }
 

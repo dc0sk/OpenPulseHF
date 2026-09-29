@@ -502,7 +502,6 @@ snr_db_from_samples	crates/openpulse-core/src/snr_hysteresis.rs
 snr_linear	crates/openpulse-core/src/snr_hysteresis.rs
 snr_trend	crates/openpulse-core/src/snr_hysteresis.rs
 soft_apsk32	crates/openpulse-dsp/src/constellation.rs
-spectral_noise_floor_mean_sq	crates/openpulse-dsp/src/noise_floor.rs
 sync_map	plugins/js8/src/costas.rs
 time_range	crates/openpulse-core/src/tx_metadata.rs
 to_json_string	crates/openpulse-core/src/tx_metadata.rs

@@ -1088,6 +1088,7 @@ capabilities:
     - crates/openpulse-modem/tests/agc_amplitude_sweep.rs
     - crates/openpulse-modem/tests/notch_rescues_interferer.rs
     - crates/openpulse-modem/tests/daemon_squelch_noise_floor.rs
+    - crates/openpulse-modem/tests/dcd_floor_follows_the_filter.rs
     - crates/openpulse-dsp/src/noise_floor.rs
     traceability: baseline
   CAP-73:
@@ -1371,7 +1372,7 @@ requirements:
     category: Channel access
     covered_by:
     - CAP-72
-    statement: Carrier detect tracks the band noise floor rather than a fixed squelch, at the shared InputCapture seam
+    statement: Carrier detect's squelch tracks the noise power the block RMS sees, at the shared InputCapture seam and independently of the mode, including behind a narrow receive filter and under coloured noise; a transmission no longer than the longest candidate frame does not close its own burst; an operator value may raise the squelch and never lower it below the adaptive one
     status: ratified
     traceability: enforced
   REQ-DEV-01:

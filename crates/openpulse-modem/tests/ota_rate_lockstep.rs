@@ -23,6 +23,9 @@ fn make_engine() -> (ModemEngine, LoopbackBackend) {
     engine.register_plugin(Box::new(QpskPlugin::new())).unwrap();
     engine.register_plugin(Box::new(Fsk4Plugin::new())).unwrap();
     engine.start_ota_session(SessionProfile::hpx500());
+    // The receiver hears 4 s of (silent) band first, as on a real rig: the carrier detect's floor
+    // learns whatever it hears while no burst is being gathered (#1452).
+    let _ = engine.accumulate_capture(None, vec![0.0; 32_000]);
     (engine, backend)
 }
 

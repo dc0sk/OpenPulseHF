@@ -33,9 +33,12 @@ use openpulse_repeater::{CrossBandRepeater, RepeaterConfig};
 /// refuses to call "clear" — so a fixture that pushes nothing tests the fault path, not the clear
 /// path. Amplitude is well under the DCD's squelch floor.
 fn quiet_band() -> Vec<f32> {
-    (0..800)
-        .map(|i| ((i as f32) * 0.37).sin() * 1.0e-4)
-        .collect()
+    quiet(800)
+}
+
+/// Enough quiet band for rig_b's floor to warm in one read (#1452): 16 windows of 512.
+fn quiet(n: usize) -> Vec<f32> {
+    (0..n).map(|i| ((i as f32) * 0.37).sin() * 1.0e-4).collect()
 }
 
 /// Counts keying so a "did not transmit" claim rests on the transmitter, not on a return value.
@@ -216,8 +219,21 @@ fn a_full_duplex_session_does_not_sense_against_its_own_carrier() {
     // second sense would read *quiet* — which is how this test first passed with the
     // skip-while-keyed rule sabotaged, i.e. while proving nothing. One block is enough: the sense
     // needs one non-empty read to call the band readable, and later empty reads do not un-prove it.
-    rig_b_audio.push_frame(&quiet_band());
+    //
+    // rig_b's floor starts cold, so a first relay over quiet band is deferred while it warms (#1452);
+    // the session prime does this in production. Only then is the band judged.
+    rig_b_audio.push_frame(&quiet(16 * 512));
     let mut sensor = CaptureTicker::new(None);
+    let warming = rp
+        .relay_burst(
+            &AudioSamples {
+                samples: frame.clone(),
+            },
+            Some(&mut sensor),
+        )
+        .expect("relay");
+    assert_eq!(warming, None, "a cold sense relayed");
+    rig_b_audio.push_frame(&quiet_band());
     let first = rp
         .relay_burst(
             &AudioSamples {
@@ -252,8 +268,8 @@ fn a_full_duplex_session_does_not_sense_against_its_own_carrier() {
     );
     assert_eq!(
         rp.bursts_deferred(),
-        0,
-        "a session holding the key must defer nothing"
+        1,
+        "a session holding the key must defer nothing beyond the cold warm-up relay"
     );
     assert!(keys.load(std::sync::atomic::Ordering::SeqCst) > 0);
 }
@@ -337,4 +353,53 @@ fn bursts_queued_before_a_session_are_discarded_not_transmitted() {
         "the drain must COUNT what it dropped — a drain that never runs looks exactly like one that \
          found nothing, and this gate would pass either way"
     );
+}
+
+/// A sense that starts on a cold floor does not count a quiet band as clear (#1452): the floor may
+/// have just learned whoever is on it. The burst is deferred; once the floor is warm, a clear band
+/// relays. Two relays only — rig_b's loopback is a self-loop, so a third would hear this one.
+#[test]
+fn a_cold_sensor_defers_then_a_warm_clear_band_keys() {
+    let frame = input_frame();
+    let mut r = rig(true);
+    r.rig_b_audio.push_frame(&quiet(16 * 512));
+    assert_eq!(relay(&mut r, &frame), None, "a cold sense keyed rig_b");
+    assert_eq!(r.repeater.bursts_deferred(), 1);
+    assert_eq!(r.keys.load(std::sync::atomic::Ordering::SeqCst), 0);
+    r.rig_b_audio.push_frame(&quiet_band());
+    assert!(
+        relay(&mut r, &frame).is_some(),
+        "a warm sense of a clear band did not relay"
+    );
+    assert_eq!(r.keys.load(std::sync::atomic::Ordering::SeqCst), 1);
+}
+
+/// A card that reads nothing still exhausts the fault budget while the floor is cold (#1452): the
+/// cold verdict ranks below Unreadable, or a dead card would defer forever and never be reported.
+#[test]
+fn an_unreadable_band_on_a_cold_sensor_still_exhausts_the_fault_budget() {
+    let frame = input_frame();
+    let mut r = rig(true);
+    let mut relays = 0;
+    let err = loop {
+        relays += 1;
+        assert!(
+            relays <= 100,
+            "100 unreadable senses never exhausted the fault budget"
+        );
+        match r.repeater.relay_burst(
+            &AudioSamples {
+                samples: frame.clone(),
+            },
+            Some(&mut r.sensor),
+        ) {
+            Ok(None) => continue,
+            Ok(Some(_)) => panic!("an unreadable band keyed rig_b"),
+            Err(e) => break e,
+        }
+    };
+    println!("fault budget exhausted after {relays} relays: {err}");
+    // Every unreadable sense counts as a deferral, the one that exhausts the budget included.
+    assert_eq!(r.repeater.bursts_deferred(), relays as u64);
+    assert_eq!(r.keys.load(std::sync::atomic::Ordering::SeqCst), 0);
 }

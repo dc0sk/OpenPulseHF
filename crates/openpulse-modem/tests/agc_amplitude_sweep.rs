@@ -34,6 +34,9 @@ fn rx() -> (ModemEngine, LoopbackBackend) {
     let mut rx = ModemEngine::new(Box::new(backend.clone_shared()));
     rx.register_plugin(Box::new(QpskPlugin::new())).unwrap();
     rx.set_center_frequency(1500.0);
+    // The receiver hears 4 s of (silent) band first, as on a real rig: the carrier detect's floor
+    // learns whatever it hears while no burst is being gathered (#1452).
+    let _ = rx.accumulate_capture(None, vec![0.0; 32_000]);
     (rx, backend)
 }
 

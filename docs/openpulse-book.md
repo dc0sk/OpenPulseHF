@@ -2,7 +2,7 @@
 project: openpulsehf
 doc: docs/openpulse-book.md
 status: living
-last_updated: 2026-09-27
+last_updated: 2026-09-29
 ---
 
 # The OpenPulseHF Book
@@ -3744,7 +3744,7 @@ mode = "BPSK250"             # default fixed mode
 profile = "hpx_hf"           # the SpeedLevel ladder (SL1 MFSK16 ... SL14 OFDM52-64QAM+LdpcHighRate)
 ptt_backend = "rigctld"      # none|rts|dtr|vox|rigctld|cm108|gpio
 ptt_device = ""              # serial path (rts/dtr) or /dev/hidrawN (cm108)
-dcd_squelch = 0.01           # busy-channel detector threshold (engine default)
+dcd_squelch = 0.0            # operator floor under the adaptive squelch: raises it, never lowers it (0 = off)
 
 [radio]
 cat_backend = "rigctld"      # also "generic" (Unix, generic-serial feature) or "none"
