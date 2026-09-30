@@ -93,7 +93,7 @@ last_updated: 2026-09-29
 
 - **REQ-CMP-01** — Optional lossless payload compression at the session layer is in scope.
 - **REQ-CMP-02** — Compression algorithm must be deterministic and produce identical output for identical input across platforms.
-- **REQ-CMP-03** — Compression capability must be negotiated during session handshake and must not be assumed.
+- **REQ-CMP-03** — Compression is self-describing on the wire (a magic, an algorithm tag, and the dictionary ID for dictionary-based algorithms); the receiver always accepts a packed frame whatever its own setting, and compressing outbound frames is a local sender opt-in. It is not negotiated in the session handshake (removed in #1166 / PR #1189).
 - **REQ-CMP-04** — If compression is active, compressed size must be compared to uncompressed size before transmission; a compressed frame larger than the uncompressed original must be sent uncompressed.
 - **REQ-CMP-05** — Decompression failure must be treated as a frame integrity error.
 

@@ -237,6 +237,9 @@ pub struct RuntimeControlState {
     /// QSY lines refused for failing authentication or freshness — a tripwire, so a build where the
     /// verification silently stopped running is visible rather than merely quiet.
     pub qsy_lines_refused: u64,
+    /// Received frames carrying the compression magic that failed to decode (REQ-CMP-05) — dropped,
+    /// and counted so a peer on a different dictionary is visible rather than merely quiet.
+    pub packed_frames_refused: u64,
     /// Ed25519 key of the peer this QSY negotiation is bound to, pinned when the session is created
     /// (#1252).
     ///
@@ -496,6 +499,7 @@ impl Default for RuntimeControlState {
             qsy_session: None,
             qsy_session_started: None,
             qsy_lines_refused: 0,
+            packed_frames_refused: 0,
             qsy_peer_pubkey: None,
             qsy_candidate_freqs: Vec::new(),
             qsy_policy: QsyPolicy::default(),
@@ -1628,6 +1632,29 @@ pub async fn process_received_bytes(
     }
 }
 
+/// Undo session compression on a received frame (REQ-CMP-05).
+///
+/// A frame without the pack magic is returned unchanged. One WITH the magic that does not decode —
+/// corrupt, an unknown tag, or another dictionary — is a frame-integrity error: it is counted and an
+/// empty buffer is returned, so nothing routes it as raw compressed bytes. On the OTA arm its ACK has
+/// already been keyed (the modem-layer CRC passed), so the sender cannot see the refusal.
+pub(crate) fn unpack_received(bytes: Vec<u8>, runtime_state: &mut RuntimeControlState) -> Vec<u8> {
+    match openpulse_core::compression::unpack(&bytes) {
+        Ok(None) => bytes,
+        Ok(Some(original)) => original,
+        Err(e) => {
+            runtime_state.packed_frames_refused =
+                runtime_state.packed_frames_refused.saturating_add(1);
+            tracing::warn!(
+                error = %e,
+                refused = runtime_state.packed_frames_refused,
+                "refusing a compressed frame that does not decode"
+            );
+            Vec::new()
+        }
+    }
+}
+
 /// Session key for the handshake SAR reassembler. One handshake is in flight per peer connection,
 /// and a node only ever receives one frame type at a time (initiator→CONACK, responder→CONREQ).
 #[cfg(not(target_arch = "wasm32"))]
@@ -2659,11 +2686,8 @@ pub async fn apply_command_to_engine(
             // only runs for the non-OTA case.
             let mode = active_mode.lock().await.clone();
             // Compress on the wire when enabled; the peer's rx tick unpacks the self-describing frame.
-            let payload = if runtime_state.compress_tx {
-                openpulse_core::compression::pack(body.as_bytes())
-            } else {
-                body.as_bytes().to_vec()
-            };
+            let payload =
+                openpulse_core::compression::outbound(body.as_bytes(), runtime_state.compress_tx);
             // The mode lock above is awaited BEFORE the guard is taken: the guard must not cross an
             // await, and this shape makes that unwriteable rather than merely documented.
             if keyed_transmit(&runtime_state.ptt, Some(event_tx), "send-message", || {
@@ -4533,8 +4557,65 @@ mod command_apply_tests {
         );
         assert_eq!(
             openpulse_core::compression::unpack(&rx).unwrap(),
-            body.as_bytes()
+            Some(body.as_bytes().to_vec())
         );
+    }
+
+    #[test]
+    fn a_packed_frame_that_fails_to_decompress_is_refused_and_counted() {
+        // REQ-CMP-05: it carries the magic, so it IS a packed frame, and a packed frame that does not
+        // decode is an integrity error — not raw bytes to route.
+        let mut state = RuntimeControlState::default();
+        let corrupt = b"OPZ1\x01\xff\xff\xff\x00garbage".to_vec();
+        assert!(unpack_received(corrupt, &mut state).is_empty());
+        assert_eq!(state.packed_frames_refused, 1);
+    }
+
+    #[test]
+    fn a_frame_without_the_magic_passes_through_unchanged() {
+        let mut state = RuntimeControlState::default();
+        let raw = b"OPHF\x01relay envelope".to_vec();
+        assert_eq!(unpack_received(raw.clone(), &mut state), raw);
+        assert_eq!(state.packed_frames_refused, 0);
+    }
+
+    #[test]
+    fn a_good_packed_frame_is_unpacked() {
+        let mut state = RuntimeControlState::default();
+        let body = b"status ok ".repeat(20);
+        let framed = openpulse_core::compression::pack(&body);
+        assert_eq!(unpack_received(framed, &mut state), body);
+        assert_eq!(state.packed_frames_refused, 0);
+    }
+
+    #[tokio::test]
+    async fn an_uncompressed_body_that_starts_with_the_magic_still_crosses() {
+        // With compression OFF, a body beginning "OPZ1" would otherwise be read as a corrupt packed
+        // frame and refused; the sender escapes it by packing it (tag None).
+        let mut engine = test_engine();
+        let active_mode: SharedMode = Arc::new(Mutex::new("BPSK250".to_string()));
+        let (tx, _) = broadcast::channel::<ControlEvent>(16);
+        let ev_tx = Arc::new(tx);
+        let body = "OPZ1 is how a packed frame starts".to_string();
+        let cmd = ControlCommand::SendMessage {
+            to: "W1AW".into(),
+            subject: "s".into(),
+            body: body.clone(),
+        };
+        let mut runtime_state = RuntimeControlState::default();
+        assert!(!runtime_state.compress_tx);
+        apply_command_to_engine(
+            &cmd,
+            &mut engine,
+            &active_mode,
+            &ev_tx,
+            None,
+            &mut runtime_state,
+        )
+        .await;
+        let rx = engine.receive("BPSK250", None).unwrap();
+        assert_eq!(unpack_received(rx, &mut runtime_state), body.as_bytes());
+        assert_eq!(runtime_state.packed_frames_refused, 0);
     }
 
     #[tokio::test]

@@ -21,7 +21,10 @@ use openpulse_core::compression::{
 // The codec tests below are unaffected and still cover compress/decompress including the Zstd
 // dictionary path.
 //
-// IF COMPRESSION IS EVER WIRED FOR REAL, the membership check must come back WITH it: the deleted
+// The dictionary-id half of that property came back on 2026-09-30 WITHOUT negotiation: the `OPZ1`
+// container's zstd tag carries the dictionary id and `unpack` refuses a mismatch
+// (`compression::tests::a_dictionary_id_mismatch_is_rejected`). Only the algorithm-membership half
+// stays dissolved — a self-describing frame needs no offer to police. For the record, the deleted
 // tests were `conreq_carries_supported_compression_in_signature`, `conack_carries_selected_compression_in_signature`, `full_negotiation_round_trip_with_lz4`, `compression_field_tampering_invalidates_signature`, `conack_rejected_when_compression_not_offered`, `zstd_dict_id_mismatch_rejected_in_negotiation`, `zstd_full_negotiation_round_trip`.
 // ---------------------------------------------------------------------------
 

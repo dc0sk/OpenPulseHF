@@ -484,7 +484,24 @@ transfer (the `active_transfer` → completion gate).
 |---|---|
 | `None` | payload as-is |
 | `Lz4` | LZ4 block + 4-byte **little-endian** decompressed-size prefix |
-| `Zstd(dict_id: u32)` | Zstd with the shared HPX dictionary; `dict_id` catches version skew |
+| `Zstd(dict_id: u32)` | 4-byte **big-endian** original size, then a zstd frame (shared HPX dictionary, content checksum on, zstd's own dictionary-ID field off) |
+
+**Session container (`OPZ1`, `compression::pack`/`unpack`).** `OPZ1 (4) | tag (1) | body`:
+
+| Tag | Body |
+|---|---|
+| 0 | the original bytes |
+| 1 | the `Lz4` framing above |
+| 2 | **retired** — zstd without a dictionary ID; refused, never reused |
+| 3 | `dict_id` (**little-endian** u32) \| the `Zstd` framing above |
+
+The receiver checks `dict_id` against its own dictionary before decompressing, and the zstd content
+checksum catches a dictionary whose content changed under the same ID. A frame WITHOUT the magic is
+not a packed frame and passes through untouched; a frame WITH it that does not decode (unknown or
+retired tag, dictionary mismatch, corrupt body, size-prefix mismatch) is a frame-integrity error
+(REQ-CMP-05) — the daemon drops and counts it, the file assembler skips it. A sender with
+compression off still packs (tag 0) any body that itself begins with `OPZ1`, so the receiver cannot
+mistake it for a corrupt packed frame (`compression::outbound`).
 
 Configured locally, NOT negotiated in the handshake (**Removed in #1166** (the #1147 wire-format break): nothing consumed the selection — the daemon sent the lists empty and hardcoded `None`/`None` — so the field was a capability claim the station could not back. Session compression itself is unchanged; only the *handshake negotiation of it* is gone.). A compressed frame
 larger than the original is sent uncompressed (`compress_if_smaller`).

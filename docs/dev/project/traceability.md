@@ -15,6 +15,80 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-09-30 — Session compression: the dictionary ID travels in the frame, and a packed frame that does not decode is refused
+
+**Requirement / change.** REQ-CMP-05 (decompression failure is a frame-integrity error) and
+REQ-CMP-03, restated. Two defects, reported as governance review 2026-09-30 finding 6; that review
+file is not in the tree, so both were re-derived from the code. (1) `unpack` mapped tag 2 to
+`Zstd(ZSTD_DICT_ID)` unconditionally, and `decompress` ignored the ID it was handed. (2) The daemon
+rx tick did `unpack(&bytes).unwrap_or(bytes)`, and `unpack` returned `None` both for "not packed" and
+for "packed but failed", so a failed frame was routed as its raw compressed bytes.
+
+**What the measurement changed about the premise.** The dictionary ID was already on the wire:
+zstd writes it into its own frame header, and `decompress` with another dictionary fails with
+"Dictionary mismatch". A retrained dictionary was therefore not silent inside `decompress`. It was
+made silent by defect 2. What neither the old frame nor a bare ID check catches is **different
+dictionary content under the same ID**. The reviewer measured that case decoding to garbage `Ok`,
+because zstd's content checksum is off by default.
+
+**Design decision (reviewed before implementation, `docs/dev/reviews/review-compression-dict-id.md`).**
+- Container `OPZ1 | tag | body`. Tags 0 (None) and 1 (Lz4) are unchanged. Tag 2 (zstd with no ID) is
+  **retired**: refused and never reused. The new tag 3 carries `dict_id (LE u32) | BE u32 size | zstd
+  frame`, and the ID is checked before decompressing. Rationale: a new tag makes the layout change
+  explicit instead of reading an old frame's size prefix as an ID.
+- The zstd frame drops its own ID field and turns the content checksum on, so it stays the same size.
+  The container ID adds 4 B per zstd frame, and `pack` counts those 4 B when it chooses between LZ4
+  and zstd. `decompress` also rejects a size-prefix mismatch.
+- `unpack` returns `Result<Option<Vec<u8>>, _>`: `Ok(None)` means no magic (pass through), `Err`
+  means the magic is present but the frame does not decode. The type change makes the old
+  `unwrap_or(bytes)` shape stop compiling instead of silently changing meaning.
+- Daemon: `unpack_received` drops and counts (`packed_frames_refused`, `warn!`) — the
+  `qsy_lines_refused` pattern. **On the OTA arm the ACK is keyed before this point**, so a refused
+  frame has already been ACKed; the refusal is visible only at the receiver.
+- File transfer (twin): a packed block that fails is skipped as a candidate (`continue`), not stored
+  raw. It is not an early `Ignored` either, since that would let a poisoned SAR completion shadow the
+  legitimate one.
+- Sender escape: with compression off, a body that itself begins with `OPZ1` is still packed (tag 0)
+  by `compression::outbound`, so it cannot be refused as corrupt.
+- REQ-CMP-03 now reads "self-describing, receiver always accepts, sender opt-in", and CAP-01 no longer
+  claims it: handshake negotiation was removed deliberately in #1166 / PR #1189.
+- Interop (pre-1.0; the wire may still change, release-1.0 criteria decision 2): a new receiver
+  refuses and counts an old sender's zstd frames. An old receiver sees tag 3 as unknown, so its own
+  `unwrap_or` delivers the frame raw, and this change cannot reach that.
+
+**Implementation.** `crates/openpulse-core/src/compression.rs` (`pack`, `outbound`, `unpack`,
+`decompress`, `zstd_compress`, tag constants, error variants); `crates/openpulse-daemon/src/lib.rs`
+(`unpack_received`, `packed_frames_refused`, send site); `crates/openpulse-daemon/src/server.rs`
+(rx tick, send site); `crates/openpulse-filexfer/src/blocks.rs`; the `compression_wire.rs` callers;
+requirements.md/.yaml, the traceability matrix, and protocol-wire-spec §7.1 (which now documents the
+container, previously undocumented).
+
+**Tests.** Core `compression::tests` (ID mismatch, same-ID content skew rejected by the checksum,
+retired tag, lying size prefix, foreign ID in `decompress`, header layout, outbound escape,
+pass-through, size bound); daemon lib (`unpack_received` refuse/count, pass-through, good frame, and
+an escaped body crossing through `apply_command_to_engine`); **`crates/openpulse-daemon/tests/packed_frames_refused.rs`**
+through the real `server::run` tick: it waits for `FrameReceived` so the negative cannot pass without a
+decode, then requires `Metrics.compress_ratio` to stay `None`, with two positive controls;
+`openpulse-filexfer/tests/blocks.rs` (a corrupt packed block of exactly the expected length is not
+stored).
+
+**Test results (actually run).**
+- Fail-first on the unfixed code: `packed_frames_refused` failed only the refusal case (the corrupt
+  frame was delivered, `compress_ratio = Some(1.0)`) while both controls passed; the filexfer test
+  failed ("stored as raw bytes"). The core and daemon-lib tests target the new API and did not compile
+  against the old one, so they carry no behavioural fail-first. Their evidence is the sabotage table.
+- After: core `compression::` 19/19; `compression_integration` 9/9; daemon lib (5 selected) 5/5;
+  `packed_frames_refused` 3/3; filexfer 17 + 8 (blocks) passed; modem `compression_wire` 2/2;
+  workspace clippy `--all-targets -D warnings` clean; fmt clean.
+- Sabotage, each reverted alone: no ID check → the mismatch + foreign-ID tests fail; checksum off →
+  the checksum + header tests fail; zstd in-frame ID back on → the header test fails, plus three
+  tests through their fixture guard (the extra 4 B hands that fixture to LZ4); tag 2 decoded → the
+  retired-tag test fails; no length check → the size-prefix test fails; no escape → the core escape
+  test and the daemon escape test fail; the server site bypassing the helper → **only** the
+  `server::run` refusal test fails (the helper tests cannot see it); helper delivering raw → that
+  test and the helper's refusal test fail; filexfer taking raw → only the new blocks test fails.
+- Workspace gate: GATE_RESULT_PLACEHOLDER
+
 ## 2026-09-30 — #1454 stage 2: a spectral busy criterion gathers the weak frames total power cannot see
 
 **Requirement / change.** REQ-DCD-01 as restated by #1452: a transmission is gathered as one bounded

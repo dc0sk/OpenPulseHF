@@ -877,11 +877,8 @@ pub async fn run(cfg: OpenpulseConfig, modem_backend: Box<dyn AudioBackend>) -> 
                         rx_stream = None;
                         // Compress the session payload on the wire when enabled; the peer's rx tick
                         // unpacks the self-describing frame. Falls back to raw bytes when disabled.
-                        let payload = if compress_tx {
-                            openpulse_core::compression::pack(body.as_bytes())
-                        } else {
-                            body.as_bytes().to_vec()
-                        };
+                        let payload =
+                            openpulse_core::compression::outbound(body.as_bytes(), compress_tx);
                         ota_send_with_ptt(&mut engine, &ptt, &handle.event_tx, &payload, to);
                     }
                 }
@@ -1128,8 +1125,9 @@ pub async fn run(cfg: OpenpulseConfig, modem_backend: Box<dyn AudioBackend>) -> 
                 };
                 // End-to-end session compression: a peer that packed its payload sent a self-describing
                 // frame; unpack it here so routing, metrics, and message surfacing see the original bytes.
-                // Non-packed frames (control frames, un-packed data) lack the magic and pass through.
-                let bytes = openpulse_core::compression::unpack(&bytes).unwrap_or(bytes);
+                // Non-packed frames (control frames, un-packed data) lack the magic and pass through;
+                // a packed frame that does not decode is refused and counted (REQ-CMP-05).
+                let bytes = crate::unpack_received(bytes, &mut runtime_state);
                 let decode_ms = decode_start.elapsed().as_secs_f32() * 1000.0;
                 if !bytes.is_empty() {
                     process_received_bytes(

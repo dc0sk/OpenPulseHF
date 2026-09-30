@@ -226,3 +226,33 @@ fn seeded_blocks_complete_without_fragments() {
     asm.seed_block(9, vec![1, 2, 3]);
     assert_eq!(asm.block(9), None);
 }
+
+#[test]
+fn a_packed_block_that_fails_to_decompress_is_not_stored_even_at_the_expected_length() {
+    // REQ-CMP-05 on the file path. The body carries the pack magic, so it is a packed block, and it
+    // does not decompress; it must not be taken as raw bytes. Sized to EXACTLY the expected block
+    // length, so the F-1 length binding (which caught most such blocks by accident) cannot drop it.
+    use openpulse_core::compression::PACK_MAGIC;
+    use openpulse_core::sar::sar_encode;
+    use openpulse_filexfer::FxFrame;
+
+    let mut packed = PACK_MAGIC.to_vec();
+    packed.push(1); // Lz4 tag
+    packed.resize(32, 0xEE); // an LZ4 size prefix of 0xEEEEEEEE: undecodable
+    let frame = FxFrame::FileData {
+        transfer_id: 7,
+        block_index: 0,
+        packed,
+    }
+    .encode();
+    let mut asm = BlockAssembler::new(7, 1, 32, 32);
+    let mut last = BlockEvent::Ignored;
+    for frag in sar_encode(1, &frame).expect("sar") {
+        last = asm.ingest_fragment(&frag);
+    }
+    assert_eq!(
+        last,
+        BlockEvent::Ignored,
+        "a corrupt packed block was stored as raw bytes"
+    );
+}

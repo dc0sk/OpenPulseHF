@@ -11,7 +11,6 @@ capabilities:
     - REQ-SEC-01
     - REQ-SEC-03
     - REQ-SEC-07
-    - REQ-CMP-03
     - REQ-FEC-05
     - REQ-REG-05
     tests:
@@ -100,6 +99,8 @@ capabilities:
   CAP-08:
     code:
     - crates/openpulse-core/src/compression.rs
+    - crates/openpulse-daemon/src/lib.rs
+    - crates/openpulse-filexfer/src/blocks.rs
     - tools/openpulse-dict-trainer/src/main.rs
     name: Session-layer compression
     satisfies:
@@ -110,6 +111,7 @@ capabilities:
     - REQ-CMP-05
     tests:
     - crates/openpulse-core/tests/compression_integration.rs
+    - crates/openpulse-daemon/tests/packed_frames_refused.rs
     traceability: baseline
   CAP-09:
     code:
@@ -1317,8 +1319,10 @@ requirements:
     category: Compression
     covered_by:
     - CAP-08
-    - CAP-01
-    statement: Compression capability must be negotiated during session handshake and must not be assumed.
+    statement: Compression is self-describing on the wire (a magic, an algorithm tag, and the dictionary
+      ID for dictionary-based algorithms); the receiver always accepts a packed frame whatever its own
+      setting, and compressing outbound frames is a local sender opt-in. It is not negotiated in the
+      session handshake (removed in #1166 / PR #1189).
     status: ratified
     traceability: baseline
   REQ-CMP-04:

@@ -46,13 +46,13 @@ fn packed_payload_survives_the_modem_and_unpacks() {
         decoded, packed,
         "packed bytes must survive the wire unchanged"
     );
-    assert_eq!(unpack(&decoded).expect("unpack"), raw);
+    assert_eq!(unpack(&decoded).expect("unpack"), Some(raw));
 }
 
 #[test]
 fn an_unpacked_payload_passes_through_the_rx_seam_untouched() {
     // Mirrors the daemon rx tick: a non-packed frame (compression disabled on the sender) has no magic,
-    // so `unpack` returns None and the caller keeps the original bytes.
+    // so `unpack` returns Ok(None) and the caller keeps the original bytes.
     let raw = b"plain uncompressed session body".to_vec();
     let mut h = harness();
     h.tx_engine
@@ -63,6 +63,6 @@ fn an_unpacked_payload_passes_through_the_rx_seam_untouched() {
         .rx_engine
         .receive_with_fec_mode(MODE, FecMode::Rs, None)
         .expect("decode");
-    let recovered = unpack(&decoded).unwrap_or(decoded);
-    assert_eq!(recovered, raw);
+    assert_eq!(unpack(&decoded).expect("no magic is not an error"), None);
+    assert_eq!(decoded, raw);
 }

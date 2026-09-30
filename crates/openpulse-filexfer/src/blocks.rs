@@ -161,7 +161,14 @@ impl BlockAssembler {
             }) = FxFrame::decode(&frame_bytes)
             {
                 if transfer_id == self.transfer_id && bi == block_index {
-                    let block = unpack(&packed).unwrap_or(packed);
+                    // A packed block that does not decode is an integrity error (REQ-CMP-05): skip
+                    // this candidate rather than store its raw bytes — and skip, not return, so a
+                    // garbage completion sharing the key cannot shadow the legitimate one.
+                    let block = match unpack(&packed) {
+                        Ok(Some(block)) => block,
+                        Ok(None) => packed,
+                        Err(_) => continue,
+                    };
                     // Bind the decoded length to the offer geometry: a block that unpacks to more (or
                     // fewer) bytes than its slot allows would let a small, quota-approved offer write an
                     // arbitrarily large file to disk (audit F-1). Drop it rather than store it.
