@@ -10,8 +10,8 @@
 //! event, but the rx tick feeds every delivered payload into the live compressibility metric, so
 //! `Metrics.compress_ratio` stays `None` until a payload is delivered. The refusal case first waits
 //! for `FrameReceived` (the modem DID decode the frame) and only then requires the metric to stay
-//! `None` across several snapshots; the two controls deliver the same kind of frame and must turn it
-//! `Some`.
+//! `None` across several snapshots; each control delivers a frame (one packed, one not) that must
+//! turn it `Some`.
 
 use std::time::Duration;
 

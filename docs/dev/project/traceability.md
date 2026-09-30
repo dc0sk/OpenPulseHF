@@ -19,8 +19,9 @@ and the actually-observed results per change.
 
 **Requirement / change.** REQ-CMP-05 (decompression failure is a frame-integrity error) and
 REQ-CMP-03, restated. Two defects, reported as governance review 2026-09-30 finding 6; that review
-file is not in the tree, so both were re-derived from the code. (1) `unpack` mapped tag 2 to
-`Zstd(ZSTD_DICT_ID)` unconditionally, and `decompress` ignored the ID it was handed. (2) The daemon
+file is not in the tree, so both were re-derived from the code. (1) A latent API-level hole, not a
+wire-level one (see the next paragraph): `unpack` mapped tag 2 to `Zstd(ZSTD_DICT_ID)`
+unconditionally, and `decompress` ignored the ID it was handed. (2) The daemon
 rx tick did `unpack(&bytes).unwrap_or(bytes)`, and `unpack` returned `None` both for "not packed" and
 for "packed but failed", so a failed frame was routed as its raw compressed bytes.
 
@@ -38,7 +39,10 @@ because zstd's content checksum is off by default.
   explicit instead of reading an old frame's size prefix as an ID.
 - The zstd frame drops its own ID field and turns the content checksum on, so it stays the same size.
   The container ID adds 4 B per zstd frame, and `pack` counts those 4 B when it chooses between LZ4
-  and zstd. `decompress` also rejects a size-prefix mismatch.
+  and zstd. `decompress` also rejects a size-prefix mismatch on the zstd arm. The LZ4 arm needs no
+  added check: `lz4_flex::decompress_size_prepended` already refuses a size mismatch. The resulting
+  mix of endiannesses (LE dictionary ID, BE zstd size, LE LZ4 size) is a wart kept to avoid a
+  gratuitous change, not a design choice.
 - `unpack` returns `Result<Option<Vec<u8>>, _>`: `Ok(None)` means no magic (pass through), `Err`
   means the magic is present but the frame does not decode. The type change makes the old
   `unwrap_or(bytes)` shape stop compiling instead of silently changing meaning.
@@ -54,7 +58,9 @@ because zstd's content checksum is off by default.
   claims it: handshake negotiation was removed deliberately in #1166 / PR #1189.
 - Interop (pre-1.0; the wire may still change, release-1.0 criteria decision 2): a new receiver
   refuses and counts an old sender's zstd frames. An old receiver sees tag 3 as unknown, so its own
-  `unwrap_or` delivers the frame raw, and this change cannot reach that.
+  `unwrap_or` delivers the frame raw, and this change cannot reach that. In a file transfer, an old
+  sender's tag-2 blocks are now skipped, so an old↔new transfer stalls at the block level with no
+  counter (the daemon counter covers only the rx-tick path).
 
 **Implementation.** `crates/openpulse-core/src/compression.rs` (`pack`, `outbound`, `unpack`,
 `decompress`, `zstd_compress`, tag constants, error variants); `crates/openpulse-daemon/src/lib.rs`

@@ -78,7 +78,9 @@ acceptance row as they will be committed.
    unpack, so a refused frame has already been ACKed, and the sender cannot see the refusal.
 4. The sender-side escape is correct and sufficient. SAR fragments cannot begin with `OPZ1` (the
    fragment index would be 0x5A ≥ total 0x31), and QSY, relay, filexfer and station ID carry their own
-   prefixes. Only SendMessage bodies can collide.
+   prefixes. Among daemon send sites, only SendMessage bodies can collide. A raw payload from a
+   non-daemon sender (an ARDOP or KISS peer) that begins with `OPZ1` is still refused by a receiving
+   daemon.
 5. BLOCKING: the filexfer twin must skip the candidate (`continue`), not return `Ignored`. The loop
    walks every SAR completion so that a poisoned completion sharing the key cannot shadow the real one.
    An early return would regress that property.
@@ -88,4 +90,20 @@ acceptance row as they will be committed.
 7. Traceability: edit both sides of CAP-01 ↔ REQ-CMP-03 (BIDIR-DRIFT), keep CAP-08's test list
    non-empty, and update `compression_integration.rs`'s header comment.
 
-**Round 2** — see the section below, filled in from the reviewer's return.
+**Round 2 — APPROVE**, conditional on replacing the ledger's gate placeholder with a real `GATE:`
+result (done after the gate ran). The reviewer re-ran the server-site sabotage (only the
+`server::run` refusal test failed, both controls green) and confirmed that the OTA ACK is keyed at
+`server.rs:1080–1097`, before `unpack_received` at `:1130`. Nothing else consumes the pre-unpack
+bytes. Non-blocking notes, all adopted in the text:
+- `pack`/`unpack` edges are sound: every malformed frame that carries the magic returns `Err`,
+  never `Ok(None)`. The LZ4 arm's length check already exists inside `lz4_flex`.
+- The `zstd_compress` fallback (u32::MAX prefix) can never be chosen by `pack`.
+- The content-skew test drives `zstd::bulk` directly. Its attribution to the checksum rests on the
+  "checksum off" sabotage, so that sabotage line in the ledger is load-bearing.
+- The daemon test cannot pass vacuously: `compress_ratio` is `None` exactly while
+  `raw_payload_bytes == 0`, and it is fed only after `unpack_received`.
+- The escape covers daemon send sites only, so a raw `OPZ1…` payload from an ARDOP/KISS peer is
+  refused. File transfer between an old and a new build stalls silently at the block level. Both
+  are stated.
+- The mixed endianness is a wart, not a design choice; the CAP-08 results column was stale; and the
+  ledger's opening sentence overstated defect (1), which is latent.
