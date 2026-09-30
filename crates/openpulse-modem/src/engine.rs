@@ -730,6 +730,38 @@ pub struct ModemEngine {
     /// by `ota_decode_and_ack_inner`, which must not treat a failed decode of such a slab as evidence
     /// about the rate ladder.
     last_flush_capped: bool,
+    /// Samples of pre-trigger ring prepended to the last flushed burst (#1454): non-zero when the
+    /// spectral test was true at the burst's open block — which includes a one-read onset that total
+    /// power also opened. Taken by `ota_decode_and_ack_inner` and `decode_burst_with_fec`;
+    /// `last_flush_lead` peeks it for the daemon's fan-out.
+    last_flush_lead: usize,
+    /// How the carrier detect held the last flushed burst (#1454), for the ladder-evidence rule.
+    /// `None` for a burst the accumulator did not flush: a caller-supplied burst is judged as held by
+    /// total power throughout, which is #1452's rule.
+    last_flush_spans: Option<FlushSpans>,
+    /// The spectral test's verdict for the current block (#1454), read by the accumulator and the AGC.
+    seam_s: bool,
+    /// The last spectral (open, hold) verdict; a block that completes no window inherits it.
+    s_last: (bool, bool),
+    /// D3's per-burst latch (#1454): whether the spectral test is permitted for the burst being
+    /// gathered, read when it opened. `None` between bursts, when the live value governs.
+    s_permitted_latch: Option<bool>,
+    /// The most recent routed audio, gathered or not, newest last, at most `S_RING_WINDOWS` windows
+    /// (#1454). Copied, not drained, onto a burst the spectral test opens; cleared once a burst that
+    /// could be a frame is delivered, so a later burst is never prepended audio already handed over.
+    rx_ring: std::collections::VecDeque<f32>,
+    /// Ring samples prepended to the burst being gathered.
+    rx_burst_lead: usize,
+    /// Whether the spectral OPEN test has fired on the burst being gathered (#1454). Only then may the
+    /// looser hold test keep it open: the hold is true on idle too (up to 2.3 % of windows, #1454
+    /// round 7), and without this a total-power flicker could grow an idle tail and escape stage 1's
+    /// flicker commit.
+    s_armed: bool,
+    /// Longest and current total-power run in the burst being gathered, in samples.
+    rx_burst_tp_run: usize,
+    rx_burst_tp_cur: usize,
+    /// Post-trigger samples up to the end of the last block on which the spectral OPEN test was true.
+    rx_burst_s_span: usize,
     /// Set while decoding an already-front-end-processed burst (e.g. `decode_burst` scans a burst that
     /// `accumulate_routed` already ran through the InputCapture seam). Makes the nested
     /// `route_audio_stage(InputCapture)` in the per-slice decode a pass-through, so the stateful AGC and
@@ -928,6 +960,22 @@ const CESSB_LOOKAHEAD: usize = 16;
 /// too high is a receiver that cannot hear. `daemon_squelch_noise_floor.rs` pins both sides.
 const DCD_SQUELCH_MARGIN: f32 = 1.25;
 
+/// Pre-trigger ring for a burst the spectral test opened, in 512-sample windows (#1454). The same
+/// constant is the minimum spectral span at which a failed burst the spectral test carried counts as
+/// ladder evidence — one name, one number (#1454 design, items 2 and 6). It is set by that rule, and
+/// it covers the opening latency with room: with both analysis phases the worst measured latency of a
+/// BPSK31 frame is 2 176 samples at +8 dB in-band and 3 954 at +6 dB (16 placements, #1454 round 7).
+const S_RING_WINDOWS: usize = 16;
+
+/// How the carrier detect held a flushed burst (#1454), in post-trigger samples.
+#[derive(Debug, Clone, Copy)]
+struct FlushSpans {
+    /// Longest contiguous run of total-power-busy blocks.
+    tp_run: usize,
+    /// Up to the end of the last block on which the spectral OPEN test was true.
+    s_span: usize,
+}
+
 /// Absolute lower bound on the squelch, so a digitally-silent input cannot drive the threshold to
 /// zero and make every sample a carrier. A guard against a degenerate floor, NOT a squelch policy.
 /// It was 0.001, which was not "well below anything real": the FT-991A idle floor is ~0.0005 RMS,
@@ -1015,6 +1063,17 @@ impl ModemEngine {
             rx_burst: Vec::new(),
             relay_mode: None,
             last_flush_capped: false,
+            last_flush_lead: 0,
+            last_flush_spans: None,
+            seam_s: false,
+            s_last: (false, false),
+            s_permitted_latch: None,
+            rx_ring: std::collections::VecDeque::new(),
+            rx_burst_lead: 0,
+            s_armed: false,
+            rx_burst_tp_run: 0,
+            rx_burst_tp_cur: 0,
+            rx_burst_s_span: 0,
             input_prerouted: false,
             suppress_afc_events: false,
             rx_capturing: false,
@@ -1380,7 +1439,7 @@ impl ModemEngine {
         } else {
             (samples.iter().map(|s| s * s).sum::<f32>() / n as f32).sqrt()
         };
-        if rms >= self.dcd.threshold() {
+        if rms >= self.dcd.threshold() || self.seam_s {
             self.agc.unlock();
         } else {
             self.agc.lock();
@@ -2100,25 +2159,49 @@ impl ModemEngine {
         } else {
             (samples.iter().map(|s| s * s).sum::<f32>() / samples.len() as f32).sqrt()
         };
+        // #1454: the spectral test judges this block's windows against the floor from before it. It is
+        // OR'd into every decision the total-power test makes, so the total-power behaviour is unchanged.
+        let verdict: openpulse_dsp::noise_floor::SpectralVerdict = self.noise_floor.judge(samples);
+        if verdict.windows > 0 {
+            self.s_last = (verdict.open, verdict.hold);
+        }
+        let permitted = self
+            .s_permitted_latch
+            .unwrap_or_else(|| self.s_permitted_now());
+        let (s_open, s_hold) = self.s_last;
+        let s = self.noise_floor.is_warm()
+            && permitted
+            && if self.rx_capturing {
+                s_open || (self.s_armed && s_hold)
+            } else {
+                s_open
+            };
         let mut carrier_block = self.noise_floor.mean_sq().is_some()
             && !self.noise_floor.is_held()
-            && block_rms >= self.dcd.threshold();
+            && (block_rms >= self.dcd.threshold() || s);
         if carrier_block && self.seam_in_accumulate {
             self.noise_floor.hold();
             carrier_block = false;
         }
-        if !carrier_block {
-            if let Some(floor_rms) = self
-                .noise_floor
-                .update(samples, AudioConfig::default().sample_rate as f32)
-                .map(|m| m.sqrt())
-            {
+        if carrier_block {
+            self.noise_floor.drop_pending();
+        } else {
+            if self.noise_floor.is_held() {
+                self.noise_floor.hold_pending();
+            } else {
+                self.noise_floor.learn_pending();
+            }
+            if let Some(floor_rms) = self.noise_floor.rms() {
                 self.adaptive_squelch = Some(floor_rms * DCD_SQUELCH_MARGIN);
             }
             self.dcd.set_threshold(self.effective_squelch());
         }
+        self.seam_s = s;
         let prev_busy = self.dcd.is_busy();
         self.dcd.update(samples);
+        if s {
+            self.dcd.force_busy();
+        }
         if self.dcd.is_busy() != prev_busy {
             let _ = self.event_tx.send(EngineEvent::DcdChange {
                 busy: self.dcd.is_busy(),
@@ -2324,14 +2407,43 @@ impl ModemEngine {
         let routed = self.route_audio_stage(PipelineStage::InputCapture, samples);
         self.seam_in_accumulate = false;
         let samples = routed?;
-        let carrier_present =
-            !samples.samples.is_empty() && self.dcd.energy() >= self.dcd.threshold();
+        let total = !samples.samples.is_empty() && self.dcd.energy() >= self.dcd.threshold();
+        let carrier_present = total || (!samples.samples.is_empty() && self.seam_s);
 
         if carrier_present {
             // Carrier present: keep accumulating this burst — and stop the noise floor learning
             // from it (#1452/#1304). Held audio is learned from only if the burst turns out to be the
             // band (a cap flush, below) and dropped on an ordinary carrier drop.
+            if !self.rx_capturing {
+                // A burst opens (#1454). D3's permission is latched for it; a burst the spectral test
+                // alone opened gets the pre-trigger ring, so the detector's lag does not cost its head.
+                self.s_permitted_latch = Some(self.s_permitted_now());
+                self.rx_burst_lead = 0;
+                self.rx_burst_tp_run = 0;
+                self.rx_burst_tp_cur = 0;
+                self.rx_burst_s_span = 0;
+                self.s_armed = false;
+                // "Opened by S" is S true at the open block, not "total power false": total power
+                // trips on 10-16 % of a +10 dB frame's blocks, and the proxy withheld the ring then.
+                // The ring is copied, not drained — a flicker that flushes before S opens must not
+                // take the frame's head with it (#1454 M2).
+                if self.seam_s {
+                    self.rx_burst_lead = self.rx_ring.len();
+                    self.rx_burst.extend(self.rx_ring.iter().copied());
+                }
+            }
+            self.push_ring(&samples.samples);
+            self.s_armed |= self.s_last.0;
+            if total {
+                self.rx_burst_tp_cur += samples.samples.len();
+                self.rx_burst_tp_run = self.rx_burst_tp_run.max(self.rx_burst_tp_cur);
+            } else {
+                self.rx_burst_tp_cur = 0;
+            }
             self.rx_burst.extend_from_slice(&samples.samples);
+            if self.s_last.0 {
+                self.rx_burst_s_span = self.rx_burst.len() - self.rx_burst_lead;
+            }
             self.rx_capturing = true;
             // Only once the tracker is warm: before its first window the squelch is the cold
             // default, which a hot band's idle clears, and holding then would keep the tracker cold
@@ -2341,8 +2453,11 @@ impl ModemEngine {
             }
             // Sized by what may ARRIVE (configured mode ∪ the OTA candidate rungs), not by the
             // configured mode alone — see `active_burst_cap_samples` (#1249).
-            if self.rx_burst.len() >= self.active_burst_cap_samples() {
+            if self.rx_burst.len() - self.rx_burst_lead >= self.active_burst_cap_samples() {
                 self.rx_capturing = false;
+                self.record_flush_flags();
+                // Delivered audio; a later S burst must not be prepended it.
+                self.rx_ring.clear();
                 // The carrier is STILL PRESENT — this slab is not one transmission (#1255). It is
                 // the band, so the floor learns from it (#1452): the floor is held while a burst is
                 // gathered, so a genuine step UP in band level reads as carrier until this flush.
@@ -2373,6 +2488,10 @@ impl ModemEngine {
             if was_cold && self.noise_floor.mean_sq().is_some() {
                 self.noise_floor.discard();
                 self.rx_burst.clear();
+                self.rx_ring.clear();
+                self.record_flush_flags();
+                self.last_flush_lead = 0;
+                self.last_flush_spans = None;
                 return Ok(None);
             }
             // A burst too short to hold any arriving mode's preamble is the band flickering over the
@@ -2386,15 +2505,25 @@ impl ModemEngine {
             // ticked (a transmit dropped the stream; an ACK listen reads elsewhere) holds far more,
             // and committing all of it would teach the floor whatever it collected.
             let shortest = self.active_shortest_preamble();
-            let held_is_this_burst = self.noise_floor.held_len()
-                <= self.rx_burst.len() + openpulse_dsp::noise_floor::WINDOW;
-            if shortest > 0 && self.rx_burst.len() < shortest && held_is_this_burst {
+            let post = self.rx_burst.len() - self.rx_burst_lead;
+            let held_is_this_burst =
+                self.noise_floor.held_len() <= post + openpulse_dsp::noise_floor::WINDOW;
+            if shortest > 0 && post < shortest && held_is_this_burst {
                 self.noise_floor.commit();
             } else {
                 self.noise_floor.discard();
             }
+            // Retention (#1454 M2): a burst that could be a frame has been delivered, so its audio
+            // leaves the ring — otherwise a short frame followed within the ring's span by a weak S
+            // over is prepended to it and decoded twice. A flicker keeps the ring, so the S burst that
+            // follows it still gets the head. The closing block is band either way.
+            if post >= shortest {
+                self.rx_ring.clear();
+            }
+            self.push_ring(&samples.samples);
             // Carrier dropped after a burst → the frame is complete; flush it.
             self.last_flush_capped = false;
+            self.record_flush_flags();
             Ok(Some(AudioSamples {
                 samples: std::mem::take(&mut self.rx_burst),
             }))
@@ -2406,6 +2535,8 @@ impl ModemEngine {
             // value: measured, a 6 dB drop after a step up left the squelch at 2.49x the new idle for
             // a minute (#1452). The block was not carrier against the squelch the accumulator judges
             // with, so it is band.
+            // Not gathered, so this block is band; the ring keeps the most recent of it (#1454).
+            self.push_ring(&samples.samples);
             if self.noise_floor.is_held() {
                 if self.noise_floor.held_len()
                     <= samples.samples.len() + openpulse_dsp::noise_floor::WINDOW
@@ -2419,6 +2550,14 @@ impl ModemEngine {
         }
     }
 
+    /// Keep the most recent `S_RING_WINDOWS` of captured audio for an S-opened burst's head (#1454).
+    fn push_ring(&mut self, samples: &[f32]) {
+        let cap = S_RING_WINDOWS * openpulse_dsp::noise_floor::WINDOW;
+        self.rx_ring.extend(samples.iter().copied());
+        let excess = self.rx_ring.len().saturating_sub(cap);
+        self.rx_ring.drain(..excess);
+    }
+
     /// Onset-scan bounds for a gathered burst: `(step, scan_end, max_frame_samples)`.
     ///
     /// ONE definition, used by BOTH daemon decode arms. They had diverged — the uncoded arm scanned
@@ -2430,12 +2569,17 @@ impl ModemEngine {
     /// window, not by acquisition geometry, and on the #1021 capture it cleared a 4032-sample
     /// lead-in by only 64 samples. Widening it is a separate question that affects both arms and
     /// wants its own measurement — this change deliberately does not answer it.
-    fn burst_onset_scan_bounds(&self, mode: &str, n: usize) -> (usize, usize, usize) {
+    fn burst_onset_scan_bounds(&self, mode: &str, n: usize, lead: usize) -> (usize, usize, usize) {
         let (step, acq_samples, min_frame_samples, max_frame_samples) =
             self.frame_scan_geometry(mode, AudioConfig::default().sample_rate);
-        let scan_end = n
-            .saturating_sub(min_frame_samples)
-            .min(acq_samples.saturating_mul(4));
+        // #1454: a burst with a pre-trigger ring has its frame up to `lead` samples in; widen only then,
+        // or every total-power burst would scan (lead + acq) / (4·acq) times further (9× on QPSK500).
+        let reach = if lead > 0 {
+            acq_samples.saturating_mul(4).max(lead + acq_samples)
+        } else {
+            acq_samples.saturating_mul(4)
+        };
+        let scan_end = n.saturating_sub(min_frame_samples).min(reach);
         (step.max(1), scan_end, max_frame_samples)
     }
 
@@ -2526,7 +2670,9 @@ impl ModemEngine {
         // attempt, so those events narrate hypotheses, not state (see `suppress_afc_events`).
         let was_quiet = self.suppress_afc_events;
         self.suppress_afc_events = true;
-        let result = self.decode_burst_inner(mode, fec, burst);
+        // #1454: the ring the accumulator prepended to this engine's last flushed burst, if any.
+        let lead = std::mem::take(&mut self.last_flush_lead);
+        let result = self.decode_burst_inner(mode, fec, burst, lead);
         self.input_prerouted = was_prerouted;
         self.suppress_afc_events = was_quiet;
         // A successful scan's correction IS committed — emit exactly one for it.
@@ -2544,6 +2690,7 @@ impl ModemEngine {
         &mut self,
         mode: &str,
         burst: &AudioSamples,
+        lead: usize,
     ) -> Result<Vec<u8>, ModemError> {
         let was_prerouted = self.input_prerouted;
         self.input_prerouted = true;
@@ -2560,7 +2707,7 @@ impl ModemEngine {
                 },
             )
         } else {
-            let (step, scan_end, _) = self.burst_onset_scan_bounds(mode, n);
+            let (step, scan_end, _) = self.burst_onset_scan_bounds(mode, n, lead);
             // DELIBERATELY `FecMode::None`, and it stays that way (#1310). This helper's only caller
             // is the OTA arm's #1123 uncoded fall-through — the arm that recovers station ID,
             // filexfer, handshake, QSY and relay traffic, none of which is ladder-coded. Threading a
@@ -2586,6 +2733,7 @@ impl ModemEngine {
         mode: &str,
         fec: FecMode,
         burst: &AudioSamples,
+        lead: usize,
     ) -> Result<Vec<u8>, ModemError> {
         let sr = AudioConfig::default().sample_rate;
         let (_, _, min_frame_samples, raw_max_frame_samples) = self.frame_scan_geometry(mode, sr);
@@ -2616,7 +2764,7 @@ impl ModemEngine {
         // The carrier onset sits within the captured lead-in; scan up to a few acquisition windows
         // past sample 0 (bounded so a noise burst can't spin). Shared with the CODED arm via
         // `burst_onset_scan_bounds` so the two cannot diverge again (#1138).
-        let (step, scan_end, _) = self.burst_onset_scan_bounds(mode, n);
+        let (step, scan_end, _) = self.burst_onset_scan_bounds(mode, n, lead);
         // PHASE 1 — today's path exactly: every onset at the current correction. Bit-identical to
         // the behaviour before #1118, which is the whole reason the two-phase shape was chosen: a
         // frame that decodes today still decodes here, and phase 2 cannot regress it.
@@ -2910,6 +3058,9 @@ impl ModemEngine {
         session_id: &str,
         fallback_mode: Option<&str>,
     ) -> Result<OtaDecodeOutcome, ModemError> {
+        // #1454: taken here, before any scan, so every scan of this burst knows where its ring ends.
+        let lead = std::mem::take(&mut self.last_flush_lead);
+        let spans = self.last_flush_spans.take();
         let candidates: Vec<(SpeedLevel, String, FecMode)> = self
             .ota
             .as_ref()
@@ -3003,7 +3154,7 @@ impl ModemEngine {
                 // on-frequency coded burst spent 129 settles inside this fallback and changed no
                 // verdict. The fallback mode gets its acquisition pass with every other candidate,
                 // in the single phase-2 block below.
-                if let Ok(payload) = self.decode_burst_phase1(mode, samples) {
+                if let Ok(payload) = self.decode_burst_phase1(mode, samples, lead) {
                     debug!(
                         "ota fallback decoded {} bytes of non-ladder traffic at {mode}",
                         payload.len()
@@ -3039,7 +3190,7 @@ impl ModemEngine {
         if decoded.is_none() {
             let n = samples.samples.len();
             'scan: for (level, mode, fec) in &candidates {
-                let (step, scan_end, raw_max) = self.burst_onset_scan_bounds(mode, n);
+                let (step, scan_end, raw_max) = self.burst_onset_scan_bounds(mode, n, lead);
                 // SIZE THE SLICE FOR THE CODED FRAME (#1384). `burst_onset_scan_bounds` returns the
                 // plugin's RAW geometry. MEASURED on BPSK250: raw is 74 624 samples, while a coded
                 // frame past the one-RS-block boundary is 131 840 — so every onset except zero
@@ -3123,7 +3274,7 @@ impl ModemEngine {
                 }
             }
             'settle_scan: for (level, mode, fec) in &phase2 {
-                let (step, scan_end, raw_max) = self.burst_onset_scan_bounds(mode, n);
+                let (step, scan_end, raw_max) = self.burst_onset_scan_bounds(mode, n, lead);
                 // Coded sizing here too (#1384) — phase 2 starts its scan at onset 0, but walks past
                 // it, so every later slice has the same raw-truncation exposure as phase 1's.
                 let (max_frame_samples, _) = frame_plan(raw_max, *fec);
@@ -3400,12 +3551,24 @@ impl ModemEngine {
         // here rather than in the accumulator because the monitor reads the same bursts in modes the
         // engine does not know, whose frames may be shorter.
         if decoded.is_none() {
+            // #1452 / #1454: a failed burst is ladder evidence only if total power alone held it for at
+            // least the candidates' recognition window, or the spectral OPEN test was still true at
+            // least the spectral minimum (and that window) after the trigger. A burst total power
+            // opened and never let go has `tp_run == len`, so for it this is exactly #1452's
+            // `len >= floor`. The spectral span ends at the last OPEN, not at the flush: the hold keeps
+            // an armed burst up to eight windows past its occupant, and counting that idle tail made a
+            // loud fragment one sample under a recognition window into a NACK.
             let floor = self.shortest_candidate_recognition_window(&candidates);
-            if floor > 0 && samples.samples.len() < floor {
+            let post = samples.samples.len().saturating_sub(lead);
+            let FlushSpans { tp_run, s_span } = spans.unwrap_or(FlushSpans {
+                tp_run: post,
+                s_span: 0,
+            });
+            let s_min = (S_RING_WINDOWS * openpulse_dsp::noise_floor::WINDOW).max(floor);
+            if !(tp_run >= floor || s_span >= s_min) {
                 tracing::debug!(
-                    "OTA: {}-sample burst is shorter than any candidate's recognition window ({floor}); \
-                     not ladder evidence (#1452)",
-                    samples.samples.len()
+                    "OTA: failed burst is not ladder evidence (#1454): longest total-power run \
+                     {tp_run}, spectral span {s_span}, recognition window {floor}"
                 );
                 return Ok((None, None, last_err));
             }
@@ -5196,6 +5359,34 @@ impl ModemEngine {
     /// Return the DCD/squelch RMS threshold currently in force.
     pub fn dcd_squelch(&self) -> f32 {
         self.dcd.threshold()
+    }
+
+    /// Record the flags a flushed burst carries (#1454), and end its D3 latch.
+    fn record_flush_flags(&mut self) {
+        self.last_flush_lead = self.rx_burst_lead;
+        self.last_flush_spans = Some(FlushSpans {
+            tp_run: self.rx_burst_tp_run,
+            s_span: self.rx_burst_s_span,
+        });
+        self.rx_burst_lead = 0;
+        self.rx_burst_tp_run = 0;
+        self.rx_burst_tp_cur = 0;
+        self.rx_burst_s_span = 0;
+        self.s_armed = false;
+        self.s_permitted_latch = None;
+    }
+
+    /// Samples of pre-trigger ring at the head of the last flushed burst (#1454), without consuming
+    /// it — the daemon strips it before handing the burst to the monitor and the repeater.
+    pub fn last_flush_lead(&self) -> usize {
+        self.last_flush_lead
+    }
+
+    /// D3 (#1454): the spectral test is permitted only while the adaptive squelch is the one in force —
+    /// compared directly, since neither the 1e-4 guard nor the cold default is the operator's value.
+    fn s_permitted_now(&self) -> bool {
+        self.adaptive_squelch
+            .is_some_and(|adaptive| self.manual_squelch < adaptive)
     }
 
     /// The squelch in force: the adaptive one (or the cold default before the floor is warm),
