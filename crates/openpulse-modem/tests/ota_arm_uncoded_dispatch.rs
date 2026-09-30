@@ -9,9 +9,9 @@
 //! handshake CONREQ/CONACK, QSY frames, relay envelopes).
 //!
 //! Note this is a property of the profile's FEC table, not of profiles in general: `fec_for` is
-//! `fec_modes[level].unwrap_or(FecMode::None)` (`profile.rs:110`), and only `hpx_modcod`, `hpx_hf`
-//! and `hpx_ofdm_hf` populate that table at all — the rest yield uncoded candidates that still only
-//! cover the ladder's own modes at the current rung.
+//! `fec_modes[level].unwrap_or(FecMode::None)` (`profile.rs`), and only `hpx_hf`, `hpx_ofdm_hf` and
+//! `hpx_wideband_hd` code every rung — `hpx_modcod` populates the table but leaves SL7 uncoded, and
+//! the rest yield uncoded candidates that still only cover the ladder's own modes at the current rung.
 //!
 //! This isolates the arm as the single variable: ONE burst, gathered through the daemon's own
 //! capture entry, decoded both ways. The `decode_burst` cell is the positive control — it proves
@@ -281,4 +281,77 @@ fn a_ladder_frame_still_classifies_as_ladder_when_the_fallback_could_also_decode
         !decisions.is_empty(),
         "a ladder decode must drive a controller decision"
     );
+}
+
+/// Two seconds of silence ahead of the frame: past the plugin's timing search (~50–100 samples at
+/// BPSK250), inside the onset scan's 4·acq reach, and independent of how the accumulator builds bursts.
+const LEAD: usize = 2_048;
+
+fn behind_a_lead(signal: &[f32]) -> AudioSamples {
+    let mut samples = vec![0.0f32; LEAD];
+    samples.extend_from_slice(signal);
+    samples.extend(std::iter::repeat_n(0.0f32, TICK_SAMPLES));
+    AudioSamples { samples }
+}
+
+/// A ladder frame that does not start at the burst's first sample is still ladder traffic. Under
+/// `hpx500`, SL4 is BPSK250 uncoded — the very decoder the fallback uses at the active mode — and the
+/// rung candidates try offset 0 alone, so a frame 2 048 samples in used to be claimed by the
+/// fallback's scan: payload delivered, no ACK, no controller decision. On `main` this held for every
+/// onset past the timing search, so most bursts gathered at ordinary reads were misclassified.
+#[test]
+fn a_ladder_frame_behind_a_lead_is_still_ladder_traffic() {
+    let signal = uncoded_tx_samples();
+    let mut engine = engine_with(&LoopbackBackend::new());
+    engine.start_ota_session(SessionProfile::hpx500());
+    engine.ota_lock_level(SpeedLevel::Sl4);
+    let mut events = engine.subscribe();
+    let res = engine
+        .ota_decode_burst(&behind_a_lead(&signal), SESSION, Some(MODE))
+        .expect("must not error");
+    assert_eq!(
+        res.payload.as_deref(),
+        Some(PAYLOAD),
+        "precondition: the frame must decode at all"
+    );
+    assert!(
+        res.ack.is_some(),
+        "a frame the SL4 rung decodes is ladder traffic wherever it sits in the burst — the fallback \
+         claimed it and keyed no ACK"
+    );
+    let decisions: Vec<_> = std::iter::from_fn(|| events.try_recv().ok())
+        .filter_map(|e| match e {
+            EngineEvent::OtaRateDecision { decoded_level, .. } => Some(decoded_level),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        decisions,
+        vec![Some(SpeedLevel::Sl4)],
+        "exactly one decision, crediting SL4"
+    );
+}
+
+/// The twin: under a CODED profile the same uncoded frame, behind the same lead, is still not ladder
+/// traffic. `hpx_hf` SL5 is BPSK250 + Rs, so no candidate is the fallback's decoder, the fallback
+/// runs, and the frame is delivered with no ACK. This pins the `FecMode::None` half of the predicate.
+#[test]
+fn an_uncoded_control_frame_behind_a_lead_is_still_not_ladder_traffic() {
+    let signal = uncoded_tx_samples();
+    let mut engine = engine_with(&LoopbackBackend::new());
+    engine.start_ota_session(SessionProfile::hpx_hf());
+    engine.ota_lock_level(LOCK_LEVEL);
+    let mut events = engine.subscribe();
+    let res = engine
+        .ota_decode_burst(&behind_a_lead(&signal), SESSION, Some(MODE))
+        .expect("must not error");
+    assert_eq!(
+        res.payload.as_deref(),
+        Some(PAYLOAD),
+        "the uncoded control frame must still be delivered through the fallback"
+    );
+    assert!(res.ack.is_none(), "a control frame keyed an ACK");
+    let decided = std::iter::from_fn(|| events.try_recv().ok())
+        .any(|e| matches!(e, EngineEvent::OtaRateDecision { .. }));
+    assert!(!decided, "a control frame moved the rate controller");
 }

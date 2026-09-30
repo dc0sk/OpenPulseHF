@@ -15,6 +15,54 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-09-30 — a ladder frame keeps first claim on its burst wherever it sits (found by #1443)
+
+**Requirement / change.** REQ-FUN-06 (the receiver-led rate controller). The OTA arm's design gives a
+ladder frame first claim on a burst (#1123: the rung candidates run before the uncoded fallback for
+non-ladder traffic). Under a profile whose rung is uncoded at the active mode the fallback IS that
+rung's decoder, and the claim held only at offset 0: the candidates try the whole burst once, the
+fallback's phase 1 scans onsets, and the candidates' own onset scan (#1138) runs after it. A frame past
+the plugin's timing search was claimed by the fallback — payload delivered, no ACK, no controller
+decision. Measured (#1443 review round 3, parked): `hpx500` locked at SL4 (BPSK250, uncoded), the
+frame behind a hand-built lead — decoded as ladder traffic at residual offsets 0–48, as a control frame
+at 100 and beyond; BPSK31 at SL2 between 300 and 600. **This predates #1443**: at ordinary 400-sample
+reads a frame's onset is uniform in its trigger read, so on `main` most `hpx500` + BPSK250 frames were
+already misclassified. #1443's pre-trigger lead made it deterministic, which is how a fixture that had
+never seen it (`a_ladder_frame_still_classifies_as_ladder_when_the_fallback_could_also_decode_it`) went
+red. The twin `ota_ladder_steps_under_traffic` test (hpx500 + BPSK250) could not see it: the twin rig
+delivers each frame at offset 0, and the test asserts only "above SL2".
+
+**Design (reviewed, `docs/dev/reviews/review-ota-first-claim.md`).** When a rung candidate is the
+fallback's decoder — the same mode, `FecMode::None` — the fallback is skipped; the onset scan that
+follows runs the same decoder over the same onsets and claims the frame on the ladder path, with its
+span (the SNR the controller reads), its AFC update and its decision. The predicate is the one the
+phase-2 settle pass already used to dedupe the fallback; it is now one helper,
+`fallback_is_a_candidate`, used by both. Zero new decodes; coded profiles, where no candidate matches,
+are unchanged. Rejected: relabelling the fallback's decode (it returns no span, and the whole burst
+as the span would regress #1142's SNR reading), and running the candidates' scan before the fallback
+for every profile (it undoes #1138's cost placement).
+
+**Stated consequence.** Under such a profile a control frame at the active mode is always ACKed as
+ladder traffic — before this, only when it happened to sit near offset 0. Nothing on the wire
+distinguishes the two (the frame header has no class field); resolving it is #1123's open question.
+Eight of the eleven shipped profiles have an uncoded rung (`hpx500` in full, `hpx_modcod` at SL7, the
+four pilot profiles, `hpx_wideband`, `hpx_narrowband`); `hpx_hf`, the daemon's default, codes every
+rung. The engine comment and the test module's doc that said otherwise are corrected.
+
+**Implementation.** `openpulse-modem/src/engine.rs` (`fallback_is_a_candidate`; the fallback block in
+`ota_decode_and_ack_inner`; the phase-2 dedupe).
+
+**Tests.** `ota_arm_uncoded_dispatch.rs`: `a_ladder_frame_behind_a_lead_is_still_ladder_traffic`
+(`hpx500`, SL4, a BPSK250 frame behind 2 048 samples of silence → ACK, exactly one decision crediting
+SL4) and `an_uncoded_control_frame_behind_a_lead_is_still_not_ladder_traffic` (`hpx_hf`, SL5 = BPSK250
++ Rs, the same frame and lead → delivered through the fallback, no ACK, no decision).
+
+**Test results.** `ota_arm_uncoded_dispatch` 6 passed. Sabotage: running the fallback unconditionally
+(`main`) fails the first gate only; matching the predicate on mode alone fails the second gate,
+`one_burst_two_arms` and `a_control_frame_does_not_touch_the_rate_controller` (all `hpx_hf`: the
+uncoded control frame is then decoded by nothing). **Gate:** `GATE: PASS 0a4fa4c82e23a5de1d73e27c882e207b23d92e77 clean 20260930T150700Z` (2 642 passed,
+0 failed; every step ok). The one commit after it adds only this line.
+
 ## 2026-09-30 — #1454 stage 2: a spectral busy criterion gathers the weak frames total power cannot see
 
 **Requirement / change.** REQ-DCD-01 as restated by #1452: a transmission is gathered as one bounded
