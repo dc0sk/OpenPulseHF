@@ -203,6 +203,7 @@ async fn a_packed_frame_that_fails_to_decompress_is_not_delivered() {
     );
 }
 
+// VERIFIES: REQ-CMP-01
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_good_packed_frame_is_delivered() {
     spawn_daemon(19202, 19203, &pack(&b"status ok ".repeat(12)));

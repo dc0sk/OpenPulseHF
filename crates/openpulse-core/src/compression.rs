@@ -137,13 +137,13 @@ pub fn compress_if_smaller(data: &[u8]) -> (Vec<u8>, CompressionAlgorithm) {
 pub const PACK_MAGIC: [u8; 4] = *b"OPZ1";
 
 /// Container tag: payload is the original bytes.
-pub const TAG_NONE: u8 = 0;
+const TAG_NONE: u8 = 0;
 /// Container tag: payload is an LZ4 block with a 4-byte LE size prefix.
-pub const TAG_LZ4: u8 = 1;
+const TAG_LZ4: u8 = 1;
 /// Retired container tag: zstd with no dictionary id. Refused, never reused.
-pub const TAG_ZSTD_RETIRED: u8 = 2;
+const TAG_ZSTD_RETIRED: u8 = 2;
 /// Container tag: `dict_id (LE u32) | BE u32 size | zstd frame`.
-pub const TAG_ZSTD_DICT: u8 = 3;
+const TAG_ZSTD_DICT: u8 = 3;
 
 const HEADER_LEN: usize = PACK_MAGIC.len() + 1;
 
