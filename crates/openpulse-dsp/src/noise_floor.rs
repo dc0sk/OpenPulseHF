@@ -86,8 +86,10 @@ const MAX_HELD_SAMPLES: usize = 1 << 20;
 /// Spectral busy test (#1454): a band is this many adjacent bins (62.5 Hz), sliding one bin at a time.
 const S_BAND_BINS: usize = 4;
 
-/// The spectral test's OPEN judges the last this many windows (256 ms).
-const S_LOOKBACK: usize = 4;
+/// The spectral test's OPEN judges the last this many windows (256 ms). It also bounds its arming
+/// latency (3 of the 4 windows must be lit), which bounds a total-power flicker chain for a frame the
+/// test holds, and so sizes a total-power burst's pre-trigger lead in the engine (#1443).
+pub const S_LOOKBACK: usize = 4;
 
 /// The spectral test OPENS when one band's power is at least `.1` times its floor in at least `.0` of
 /// the last [`S_LOOKBACK`] windows of either analysis phase. Measured on the three recorded idles with

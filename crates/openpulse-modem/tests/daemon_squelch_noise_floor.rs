@@ -61,13 +61,14 @@ fn corpus(name: &str) -> Capture {
     load_corpus(name).unwrap_or_else(|e| panic!("corpus file {name} must load: {e}"))
 }
 
-/// Feed `samples` to the production capture entry in read-sized blocks, returning every burst it
-/// flushed.
+/// Feed `samples` to the production capture entry in read-sized blocks, returning the post-trigger
+/// length of every burst it flushed.
 fn feed(e: &mut ModemEngine, mode: &str, samples: &[f32], block: usize) -> Vec<usize> {
     let mut bursts = Vec::new();
     for chunk in samples.chunks(block) {
         if let Ok(Some(b)) = e.accumulate_capture(Some(mode), chunk.to_vec()) {
-            bursts.push(b.samples.len());
+            // Post-trigger: a burst carries a pre-trigger lead of audio already heard (#1443).
+            bursts.push(b.samples.len() - e.last_flush_lead());
         }
     }
     bursts

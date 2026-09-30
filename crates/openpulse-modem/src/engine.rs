@@ -735,6 +735,10 @@ pub struct ModemEngine {
     /// power also opened. Taken by `ota_decode_and_ack_inner` and `decode_burst_with_fec`;
     /// `last_flush_lead` peeks it for the daemon's fan-out.
     last_flush_lead: usize,
+    /// How far into the last flushed burst its frame can start (#1443): the lead plus the whole
+    /// trigger read — a frame that opens a burst may begin anywhere inside the read that tripped it.
+    /// Taken with `last_flush_lead`; it bounds the onset scan, while the lead alone gives `post`.
+    last_flush_onset_bound: usize,
     /// How the carrier detect held the last flushed burst (#1454), for the ladder-evidence rule.
     /// `None` for a burst the accumulator did not flush: a caller-supplied burst is judged as held by
     /// total power throughout, which is #1452's rule.
@@ -752,6 +756,10 @@ pub struct ModemEngine {
     rx_ring: std::collections::VecDeque<f32>,
     /// Ring samples prepended to the burst being gathered.
     rx_burst_lead: usize,
+    /// Length of the burst's first (trigger) read.
+    rx_burst_first_block: usize,
+    /// Length of the last non-empty read pushed to `rx_ring` — the read before a burst's trigger (#1443).
+    rx_last_read_len: usize,
     /// Whether the spectral OPEN test has fired on the burst being gathered (#1454). Only then may the
     /// looser hold test keep it open: the hold can be true on idle too (it was on up to 2.3 % of
     /// windows in #1454 round 7's offline instrument, before the hold's cap), and without this a
@@ -1075,12 +1083,15 @@ impl ModemEngine {
             relay_mode: None,
             last_flush_capped: false,
             last_flush_lead: 0,
+            last_flush_onset_bound: 0,
             last_flush_spans: None,
             seam_s: false,
             s_last: (false, false),
             s_permitted_latch: None,
             rx_ring: std::collections::VecDeque::new(),
             rx_burst_lead: 0,
+            rx_burst_first_block: 0,
+            rx_last_read_len: 0,
             s_armed: false,
             rx_burst_tp_run: 0,
             rx_burst_tp_cur: 0,
@@ -2438,10 +2449,33 @@ impl ModemEngine {
                 // trips on 10-16 % of a +10 dB frame's blocks, and the proxy withheld the ring then.
                 // The ring is copied, not drained — a flicker that flushes before S opens must not
                 // take the frame's head with it (#1454 M2).
+                //
+                // A burst total power opened gets the previous read plus the spectral test's arming
+                // latency (#1443). The previous read bounds a BLOCK-BOUNDARY loss: a frame that began in
+                // the last part of a read too quiet to trip the squelch lost that part, at any read size.
+                // The arming latency bounds a FLICKER CHAIN: total power has no hold, so at a frame's head
+                // it trips, drops on the next quieter read and re-trips until the spectral test arms and
+                // holds — at most `S_LOOKBACK` windows plus a read, for any frame the spectral test holds
+                // (not for one it never holds, and not once a fragment long enough to be a frame has
+                // cleared the ring). The lead also gives the onset scan room before the burst start, which
+                // BPSK needs as much as the head itself. Not the whole ring (maintainer's choice): a
+                // successful decode scans from the burst start to the frame, so its cost grows with the
+                // lead — per successful BPSK31 decode 0.18 s at a 400-sample lead, 0.46 s at 1 600, 1.96 s
+                // at the whole 8 192; this lead is 2 448 at 400-sample reads (~0.6–0.7 s by that sweep,
+                // not measured directly), and approaches the ring at long reads.
                 if self.seam_s {
                     self.rx_burst_lead = self.rx_ring.len();
                     self.rx_burst.extend(self.rx_ring.iter().copied());
+                } else {
+                    let chain =
+                        openpulse_dsp::noise_floor::S_LOOKBACK * openpulse_dsp::noise_floor::WINDOW;
+                    let n = (self.rx_last_read_len + chain).min(self.rx_ring.len());
+                    self.rx_burst_lead = n;
+                    let skip = self.rx_ring.len() - n;
+                    self.rx_burst
+                        .extend(self.rx_ring.iter().skip(skip).copied());
                 }
+                self.rx_burst_first_block = samples.samples.len();
             }
             self.push_ring(&samples.samples);
             self.s_armed |= self.s_last.0;
@@ -2502,6 +2536,7 @@ impl ModemEngine {
                 self.rx_ring.clear();
                 self.record_flush_flags();
                 self.last_flush_lead = 0;
+                self.last_flush_onset_bound = 0;
                 self.last_flush_spans = None;
                 return Ok(None);
             }
@@ -2563,6 +2598,10 @@ impl ModemEngine {
 
     /// Keep the most recent `S_RING_WINDOWS` of captured audio for an S-opened burst's head (#1454).
     fn push_ring(&mut self, samples: &[f32]) {
+        // An empty read (a callback backend between callbacks) is not the previous read.
+        if !samples.is_empty() {
+            self.rx_last_read_len = samples.len();
+        }
         let cap = S_RING_WINDOWS * openpulse_dsp::noise_floor::WINDOW;
         self.rx_ring.extend(samples.iter().copied());
         let excess = self.rx_ring.len().saturating_sub(cap);
@@ -2580,13 +2619,22 @@ impl ModemEngine {
     /// window, not by acquisition geometry, and on the #1021 capture it cleared a 4032-sample
     /// lead-in by only 64 samples. Widening it is a separate question that affects both arms and
     /// wants its own measurement — this change deliberately does not answer it.
-    fn burst_onset_scan_bounds(&self, mode: &str, n: usize, lead: usize) -> (usize, usize, usize) {
+    fn burst_onset_scan_bounds(
+        &self,
+        mode: &str,
+        n: usize,
+        onset_bound: usize,
+    ) -> (usize, usize, usize) {
         let (step, acq_samples, min_frame_samples, max_frame_samples) =
             self.frame_scan_geometry(mode, AudioConfig::default().sample_rate);
-        // #1454: a burst with a pre-trigger ring has its frame up to `lead` samples in; widen only then,
-        // or every total-power burst would scan (lead + acq) / (4·acq) times further (9× on QPSK500).
-        let reach = if lead > 0 {
-            acq_samples.saturating_mul(4).max(lead + acq_samples)
+        // #1454/#1443: a flushed burst's frame can start up to `onset_bound` samples in — its lead plus
+        // anywhere in its trigger read. Reaching only `lead + acq` missed every frame that opened late
+        // in a long read (the daemon reads whatever buffered since its last tick, thousands of samples
+        // after a slow decode): at 4 096-sample reads BPSK250 at +8 dB decoded 9/16, the seven misses
+        // exactly the onsets past lead + acq. A caller-supplied burst has no
+        // bound and keeps 4·acq.
+        let reach = if onset_bound > 0 {
+            acq_samples.saturating_mul(4).max(onset_bound + acq_samples)
         } else {
             acq_samples.saturating_mul(4)
         };
@@ -2681,9 +2729,10 @@ impl ModemEngine {
         // attempt, so those events narrate hypotheses, not state (see `suppress_afc_events`).
         let was_quiet = self.suppress_afc_events;
         self.suppress_afc_events = true;
-        // #1454: the ring the accumulator prepended to this engine's last flushed burst, if any.
-        let lead = std::mem::take(&mut self.last_flush_lead);
-        let result = self.decode_burst_inner(mode, fec, burst, lead);
+        // #1454/#1443: how far into this engine's last flushed burst its frame can start, if any.
+        self.last_flush_lead = 0;
+        let onset_bound = std::mem::take(&mut self.last_flush_onset_bound);
+        let result = self.decode_burst_inner(mode, fec, burst, onset_bound);
         self.input_prerouted = was_prerouted;
         self.suppress_afc_events = was_quiet;
         // A successful scan's correction IS committed — emit exactly one for it.
@@ -2701,7 +2750,7 @@ impl ModemEngine {
         &mut self,
         mode: &str,
         burst: &AudioSamples,
-        lead: usize,
+        onset_bound: usize,
     ) -> Result<Vec<u8>, ModemError> {
         let was_prerouted = self.input_prerouted;
         self.input_prerouted = true;
@@ -2718,7 +2767,7 @@ impl ModemEngine {
                 },
             )
         } else {
-            let (step, scan_end, _) = self.burst_onset_scan_bounds(mode, n, lead);
+            let (step, scan_end, _) = self.burst_onset_scan_bounds(mode, n, onset_bound);
             // DELIBERATELY `FecMode::None`, and it stays that way (#1310). This helper's only caller
             // is the OTA arm's #1123 uncoded fall-through — the arm that recovers station ID,
             // filexfer, handshake, QSY and relay traffic, none of which is ladder-coded. Threading a
@@ -2744,7 +2793,7 @@ impl ModemEngine {
         mode: &str,
         fec: FecMode,
         burst: &AudioSamples,
-        lead: usize,
+        onset_bound: usize,
     ) -> Result<Vec<u8>, ModemError> {
         let sr = AudioConfig::default().sample_rate;
         let (_, _, min_frame_samples, raw_max_frame_samples) = self.frame_scan_geometry(mode, sr);
@@ -2775,7 +2824,7 @@ impl ModemEngine {
         // The carrier onset sits within the captured lead-in; scan up to a few acquisition windows
         // past sample 0 (bounded so a noise burst can't spin). Shared with the CODED arm via
         // `burst_onset_scan_bounds` so the two cannot diverge again (#1138).
-        let (step, scan_end, _) = self.burst_onset_scan_bounds(mode, n, lead);
+        let (step, scan_end, _) = self.burst_onset_scan_bounds(mode, n, onset_bound);
         // PHASE 1 — today's path exactly: every onset at the current correction. Bit-identical to
         // the behaviour before #1118, which is the whole reason the two-phase shape was chosen: a
         // frame that decodes today still decodes here, and phase 2 cannot regress it.
@@ -3071,6 +3120,7 @@ impl ModemEngine {
     ) -> Result<OtaDecodeOutcome, ModemError> {
         // #1454: taken here, before any scan, so every scan of this burst knows where its ring ends.
         let lead = std::mem::take(&mut self.last_flush_lead);
+        let onset_bound = std::mem::take(&mut self.last_flush_onset_bound);
         let spans = self.last_flush_spans.take();
         let candidates: Vec<(SpeedLevel, String, FecMode)> = self
             .ota
@@ -3175,7 +3225,7 @@ impl ModemEngine {
                 // on-frequency coded burst spent 129 settles inside this fallback and changed no
                 // verdict. The fallback mode gets its acquisition pass with every other candidate,
                 // in the single phase-2 block below.
-                if let Ok(payload) = self.decode_burst_phase1(mode, samples, lead) {
+                if let Ok(payload) = self.decode_burst_phase1(mode, samples, onset_bound) {
                     debug!(
                         "ota fallback decoded {} bytes of non-ladder traffic at {mode}",
                         payload.len()
@@ -3211,7 +3261,7 @@ impl ModemEngine {
         if decoded.is_none() {
             let n = samples.samples.len();
             'scan: for (level, mode, fec) in &candidates {
-                let (step, scan_end, raw_max) = self.burst_onset_scan_bounds(mode, n, lead);
+                let (step, scan_end, raw_max) = self.burst_onset_scan_bounds(mode, n, onset_bound);
                 // SIZE THE SLICE FOR THE CODED FRAME (#1384). `burst_onset_scan_bounds` returns the
                 // plugin's RAW geometry. MEASURED on BPSK250: raw is 74 624 samples, while a coded
                 // frame past the one-RS-block boundary is 131 840 — so every onset except zero
@@ -3292,7 +3342,7 @@ impl ModemEngine {
                 }
             }
             'settle_scan: for (level, mode, fec) in &phase2 {
-                let (step, scan_end, raw_max) = self.burst_onset_scan_bounds(mode, n, lead);
+                let (step, scan_end, raw_max) = self.burst_onset_scan_bounds(mode, n, onset_bound);
                 // Coded sizing here too (#1384) — phase 2 starts its scan at onset 0, but walks past
                 // it, so every later slice has the same raw-truncation exposure as phase 1's.
                 let (max_frame_samples, _) = frame_plan(raw_max, *fec);
@@ -5382,11 +5432,13 @@ impl ModemEngine {
     /// Record the flags a flushed burst carries (#1454), and end its D3 latch.
     fn record_flush_flags(&mut self) {
         self.last_flush_lead = self.rx_burst_lead;
+        self.last_flush_onset_bound = self.rx_burst_lead + self.rx_burst_first_block;
         self.last_flush_spans = Some(FlushSpans {
             tp_run: self.rx_burst_tp_run,
             s_span: self.rx_burst_s_span,
         });
         self.rx_burst_lead = 0;
+        self.rx_burst_first_block = 0;
         self.rx_burst_tp_run = 0;
         self.rx_burst_tp_cur = 0;
         self.rx_burst_s_span = 0;
@@ -8428,7 +8480,12 @@ mod tests {
             .capture_burst(None)
             .unwrap()
             .expect("carrier drop must flush the accumulated burst");
-        assert_eq!(burst.samples.len(), frame.len(), "burst is the whole frame");
+        // Post-trigger: a burst carries a pre-trigger lead of audio already heard (#1443).
+        assert_eq!(
+            burst.samples.len() - rx.last_flush_lead(),
+            frame.len(),
+            "burst is the whole frame"
+        );
         let decoded = rx.decode_burst("BPSK250", &burst).unwrap();
         assert_eq!(&decoded[..b"burst capture".len()], b"burst capture");
     }
@@ -8548,7 +8605,12 @@ mod tests {
             .accumulate_capture(None, vec![0.0; 256])
             .unwrap()
             .expect("carrier drop must flush the accumulated burst");
-        assert_eq!(burst.samples.len(), frame.len(), "burst is the whole frame");
+        // Post-trigger: a burst carries a pre-trigger lead of audio already heard (#1443).
+        assert_eq!(
+            burst.samples.len() - rx.last_flush_lead(),
+            frame.len(),
+            "burst is the whole frame"
+        );
         let decoded = rx.decode_burst("BPSK250", &burst).unwrap();
         assert_eq!(&decoded[..b"streamed burst".len()], b"streamed burst");
     }

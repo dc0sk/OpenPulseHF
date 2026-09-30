@@ -15,6 +15,107 @@ and the actually-observed results per change.
 
 ---
 
+## 2026-09-30 — #1443 stage 3: a total-power burst keeps its frame's start, and the onset scan reaches the whole trigger read
+
+**Requirement / change.** REQ-DCD-01: a transmission is gathered as one bounded burst whose decode
+can reach it. A burst total power opens started at the read that tripped the squelch, and kept no
+audio from before it. Measured through `accumulate_capture` (release, 16 placements, 64 B + Rs, the
+recorded IC-9700 idles, a direct-decode control 16/16 in every cell; `~/parked/openpulse-1443/`):
+at levels where total power opens the burst, up to 9 of 16 frames lost their start (0–9 across the cells), and wide BPSK63 +12 dB
+decoded 9/16, wide BPSK31 +12 dB 10/16, wide BPSK250 +8 dB 10/16. Two shapes:
+1. **Block boundary** — the frame began in the last part of a read too quiet to trip the squelch; 19
+   lost samples already fail BPSK250 (beyond #1438's −n/2 reach) and QPSK500 (no negative reach).
+2. **Flicker chain** — total power has no hold, so near the squelch it trips on the frame's head,
+   drops on the next quieter read and re-trips, until the spectral test arms and holds; the surviving
+   burst began up to ~2 100 samples into the frame (up to six fragments over the frame's head at
+   64-sample reads; nine counting idle flickers just before it).
+
+**Design (`docs/dev/reviews/review-1443-pretrigger-lead.md`, two Fable rounds; maintainer decision
+2026-09-30: the lead length).**
+1. **A burst total power opens gets `min(ring, previous read + S_LOOKBACK × WINDOW)`** of the
+   pre-trigger ring stage 2 keeps (`engine.rs`, `accumulate_routed`). The previous read bounds a
+   block-boundary loss at any read size; `S_LOOKBACK × WINDOW` (2 048 samples, which bounds the
+   spectral test's arming latency) bounds a flicker chain for any frame the spectral test holds — a
+   derivation for a floor that does not move during the chain (its fragments are committed to the
+   floor, filed; the trimmed mean may discount them, unmeasured); the corpus's longest chain, 2 096
+   samples at 171-sample reads, is inside it by 123 samples. A burst the spectral test opens keeps the
+   whole ring. For BPSK the lead is chiefly ROOM before the burst start — its decode reads a fixed
+   preamble from the onset it is handed, and the same length of idle from elsewhere rescues it as well
+   (at block-boundary offsets up to 252, and up to ~600 samples of BPSK250 preamble at +8 dB; at a
+   1 003-sample loss the real head was needed); QPSK500 needs the real head.
+2. **The onset scan reaches `lead + trigger read + acq`** (`last_flush_onset_bound`, taken with the
+   lead by both decode arms; `burst_onset_scan_bounds`). A frame can start anywhere in the read that
+   opened its burst; the stage-2 bound `lead + acq` missed every late onset in a long read (the daemon
+   reads whatever buffered since its last tick, thousands of samples after any slow decode) — at
+   4 096-sample reads BPSK250 at +8 dB decoded 9/16 on `main`, the seven misses exactly the onsets past
+   `lead + acq`. A caller-supplied burst keeps 4·acq.
+3. **Not the whole ring for every burst** (the review's preferred rule; the maintainer chose the
+   derived lead): a successful decode scans from the burst start to the frame, so its cost grows with
+   the lead — measured per successful BPSK31 decode (release, `probe-R*.log`, cell decode time / 16,
+   three test threads concurrently, the pre-#1443 scan bound): 0.18 s at a 400-sample lead, 0.46 s at
+   1 600, 1.96 s at the full 8 192 (BPSK63 0.10 / 0.26 / 1.18). The shipped lead at 400-sample reads is
+   2 448 — not measured directly, ~0.6–0.7 s by that sweep — so the derived lead costs roughly a third
+   of the ring per decode at the daemon's default read, and approaches the ring at long reads.
+
+**Eliminated, with numbers.** The previous read alone (the issue's "one-tick" ring): at 171-sample
+reads wide BPSK63 +12 dB 11/16 and 500 Hz BPSK63 +8 dB 12/16 — the flicker chain outruns one read. A
+fixed 2 048-sample floor: fitted to the corpus's largest trigger; its COVERAGE claim was falsified by
+the first cell outside it (wide BPSK31 +12 dB at 171-sample reads, a 2 096-sample trigger — 48 samples
+outside a 2 048 lead; that frame still decoded, 48 being inside BPSK31's −n/2 reach). That cell is in
+neither the coverage gate nor the held-out set: the shipped rule's coverage of it (171 + 2 048 =
+2 219 ≥ 2 096) is arithmetic, not a run. A 1 600- or 8 192-sample
+lead "costing QPSK500": that was the scan reach (item 2), not the lead.
+
+**Implementation.** `openpulse-modem/src/engine.rs` (`accumulate_routed`, `push_ring` —
+`rx_last_read_len`, the last non-empty read — `record_flush_flags`, `last_flush_onset_bound`,
+`burst_onset_scan_bounds`, `decode_burst_with_fec`, `decode_burst_inner`, `decode_burst_phase1`,
+`ota_decode_and_ack_inner`); `openpulse-dsp/src/noise_floor.rs` (`S_LOOKBACK` made public: it sizes
+the lead); `scripts/slow-tests.sh` (the new held-out decode suite under `spectral`).
+
+**Tests.** `crates/openpulse-modem/tests/total_power_bursts_keep_their_head.rs` (new). Default run:
+the lead covers the frame's first sample on every first burst over the frame, on five block-boundary
+cells and two flicker-chain cells, with two positive controls (the trigger inside the frame in ≥ 3
+placements — measured 50 — and more than one read inside in ≥ 3 — measured 21); BPSK250 +8 dB at
+4 096-sample reads decodes ≥ 15/16 (the reach); a QPSK500 frame starting on its trigger read's last
+symbol decodes at 400- and 4 096-sample reads (the fixture asserts that placement). Held out: decode counts. Six tests now measure post-trigger length — they read a burst's
+raw length, which now includes a lead: three in `dcd_floor_follows_the_filter`, the two engine unit
+tests `capture_burst_accumulates_fragmented_frame_then_decodes` and
+`accumulate_capture_streams_burst_and_feeds_spectrum_tap`, and `daemon_squelch_noise_floor`'s idle
+test. Stage 2's held-out BPSK63 bars rise from 13 to 15. The lead also exposed an OTA-arm defect that
+predates it (a ladder frame not at a burst's first sample was claimed by the uncoded fallback); it is
+fixed in its own change, landed first (the entry below).
+
+**Test results.** Held-out (`scripts/slow-tests.sh spectral`, release, 16 placements): every BPSK
+cell 16/16 at 400-, 171- and 4 096-sample reads, including the flicker-chain cells (wide BPSK63 +8 dB,
+wide BPSK31 +12 dB at 400) — except wide BPSK250 +8 dB at 171-sample reads, 15/16 (its t0, read at the
+gates commit; the mechanism does not depend on the lead rule: a 1 026-sample flicker fragment is longer
+than BPSK250's 1 024-sample preamble, so #1454's retention rule clears the ring before the surviving
+burst opens — a loss no lead can reach) — and both BPSK63 cells 16/16 at 64-sample reads (the only
+cells measured there; BPSK250 at 64-sample reads is the ring-cleared class, not measured). QPSK500
++12 dB 13/14/13 at 400/171/4 096 (#1463's onset-phase window, and phase 2's span-dependent
+correction). Stage 2's suite: +10 dB 15 → 16/16, BPSK63 wide and 500 Hz 13 → 16/16. Default-run gates
+3 passed. Re-run on the final #1443 code before its rebase onto the OTA first-claim fix (the raised bars
+included): identical counts, `SLOW-TESTS: PASS`. The rebase adds only that fix, which changes the OTA
+arm; these suites decode through `decode_burst_with_fec`, which it does not touch.
+**Gate:** `GATE: PASS 00609c1a568ccc84063c84dc62cc2aa39b633a8c clean 20260930T160748Z` (2 645 passed,
+0 failed; every step ok), run on the pre-rebase tip. That tree is byte-identical to this branch rebased
+onto #1468's squash (`279475600b29`), and the later rebase onto `main` adds only #1470's two review
+docs; the one commit after it adds only this line.
+
+**Sabotage** (logs `~/parked/openpulse-1443/sab2-*.log`, `sab3-S4.log`), each failing only its named
+gate of the three default-run gates: S1 no lead
+→ the coverage gate (a burst 63 samples into the frame); S2 the previous read only → the coverage
+gate's flicker-chain cells (715 samples in), the five block-boundary cells passing; S3 the ring cleared
+at every flush → the flicker-chain cells (1 200 in) — the lead depends on #1454's retention rule; S4
+the scan bound back to `lead + acq` → both reach gates (QPSK500 0/4 at 400-sample reads — the first
+size the test tries, re-run on the corrected fixture; BPSK250 9/16, the figure measured on `main`).
+
+**Filed separately** (found in review): #1463 (coherent QPSK loses frames whose onset carrier phase is
+in a ~50° window around 180°, ~1/7 of on-air frames); #1464 (total power has no hold at the frame head), #1465 (flicker fragments committed to the noise floor), #1466 (the ring's retention keyed on the preamble), #1467 (BPSK250 bursts drop after the preamble at small reads).
+
+**Stated limits.** The lead covers the flicker chains the spectral test ends; a frame the spectral
+test never holds, or one whose fragment was long enough to clear the ring, is not covered. The fixtures
+run with the receiver notch off (the engine default; the daemon's config default is on).
 ## 2026-09-30 — a ladder frame keeps first claim on its burst wherever it sits (found by #1443)
 
 **Requirement / change.** REQ-FUN-06 (the receiver-led rate controller). The OTA arm's design gives a
