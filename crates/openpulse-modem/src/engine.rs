@@ -968,6 +968,16 @@ const DCD_SQUELCH_MARGIN: f32 = 1.25;
 /// the +8 dB figure is the maximum at an open threshold of 5.0, an upper bound for 4.5).
 const S_RING_WINDOWS: usize = 16;
 
+/// Whether the OTA arm's uncoded fallback is itself one of the rung candidates — the same mode,
+/// uncoded — in which case a ladder frame and a control frame at that mode are the same decode.
+/// One predicate for both places the arm asks, so the phase-1 fallback and the phase-2 settle pass
+/// cannot disagree about it.
+fn fallback_is_a_candidate(candidates: &[(SpeedLevel, String, FecMode)], mode: &str) -> bool {
+    candidates
+        .iter()
+        .any(|(_, cm, cf)| cm == mode && *cf == FecMode::None)
+}
+
 /// How the carrier detect held a flushed burst (#1454), in post-trigger samples.
 #[derive(Debug, Clone, Copy)]
 struct FlushSpans {
@@ -3120,9 +3130,9 @@ impl ModemEngine {
 
         // Uncoded fallback for NON-LADDER traffic (#1123).
         //
-        // The rung candidates above are the only thing this arm used to try, and every `hpx_*`
-        // profile that populates a FEC table codes every rung — so an uncoded frame matched nothing
-        // and the daemon simply could not receive its own station ID, filexfer fragments, handshake
+        // The rung candidates above are the only thing this arm used to try, and under a profile
+        // whose rungs are coded (`hpx_hf`, the daemon's default) an uncoded frame matched nothing,
+        // so the daemon simply could not receive its own station ID, filexfer fragments, handshake
         // CONREQ/CONACK, QSY frames or relay envelopes whenever an OTA session was active. Those go
         // out via `transmit`, at the station's ACTIVE mode, which is what `fallback_mode` carries.
         //
@@ -3137,15 +3147,25 @@ impl ModemEngine {
         //     profile with no FEC table (`fec_for` is `unwrap_or(FecMode::None)`) the rung candidates
         //     are themselves uncoded, and if such a rung's mode equals the active mode the two frame
         //     classes are indistinguishable on the wire; candidates-first is what keeps those
-        //     counting as ladder traffic. Whether such profiles are legal OTA profiles at all is a
-        //     separate question (see #1123).
+        //     counting as ladder traffic. Eight of the eleven shipped profiles have such a rung
+        //     (`hpx500` in full, `hpx_modcod` at SL7, the pilot, wideband and narrowband families).
+        //     Whether such profiles are legal OTA profiles at all is a separate question (see #1123).
+        //
+        // "Candidates first" held only while a frame started at the burst's first sample: the
+        // candidates above try offset 0 alone, and the fallback's phase 1 SCANS, so a frame a little
+        // way into the burst — past the plugin's timing search, ~50–100 samples at BPSK250 — was
+        // claimed by the fallback and never acknowledged. So when a candidate IS the fallback's
+        // decoder (the same mode, uncoded), the fallback is skipped here: the onset scan below runs
+        // that decoder over the same onsets and keeps the frame on the ladder path — its span, its
+        // AFC update, its controller decision. Under such a profile a control frame at the active
+        // mode is therefore always ACKed as ladder traffic: nothing on the wire distinguishes it.
         //
         // Returns EARLY on success, bypassing `decoded`: assigning it would clear the retained LLRs
         // and run the controller update, and a frame that is not ladder traffic must do neither. The
         // `AckFrame` is `None` for the same reason — there is nothing to acknowledge, and the daemon
         // must not key the transmitter for it.
         if decoded.is_none() {
-            if let Some(mode) = fallback_mode {
+            if let Some(mode) = fallback_mode.filter(|m| !fallback_is_a_candidate(&candidates, m)) {
                 // Same isolation every candidate gets: a failed attempt's AFC drift must not
                 // poison this one.
                 self.afc_correction_hz = afc_before;
@@ -3267,10 +3287,7 @@ impl ModemEngine {
             // ladder frame, and #1123 is the record of what happens when this arm forgets it.
             let mut phase2: Vec<(SpeedLevel, String, FecMode)> = candidates.clone();
             if let Some(m) = fallback_mode {
-                if !phase2
-                    .iter()
-                    .any(|(_, cm, cf)| cm == m && *cf == FecMode::None)
-                {
+                if !fallback_is_a_candidate(&candidates, m) {
                     phase2.push((SpeedLevel::Sl1, m.to_string(), FecMode::None));
                 }
             }
