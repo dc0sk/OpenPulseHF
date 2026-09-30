@@ -97,7 +97,10 @@ correction). Stage 2's suite: +10 dB 15 → 16/16, BPSK63 wide and 500 Hz 13 →
 3 passed. Re-run on the final #1443 code before its rebase onto the OTA first-claim fix (the raised bars
 included): identical counts, `SLOW-TESTS: PASS`. The rebase adds only that fix, which changes the OTA
 arm; these suites decode through `decode_burst_with_fec`, which it does not touch.
-GATE_PLACEHOLDER
+**Gate:** `GATE: PASS 00609c1a568ccc84063c84dc62cc2aa39b633a8c clean 20260930T160748Z` (2 645 passed,
+0 failed; every step ok), run on the pre-rebase tip. That tree is byte-identical to this branch rebased
+onto #1468's squash (`279475600b29`), and the later rebase onto `main` adds only #1470's two review
+docs; the one commit after it adds only this line.
 
 **Sabotage** (logs `~/parked/openpulse-1443/sab2-*.log`, `sab3-S4.log`), each failing only its named
 gate of the three default-run gates: S1 no lead
