@@ -19,10 +19,12 @@ set -euo pipefail
 #     branch or manual dispatch (#1120), and since #1144 also on a push to `main`
 #     (`.github/workflows/post-merge-gate.yml`) — which is DETECTION, on a tip that is already
 #     shared, not prevention. No status check requires the gate. Run it yourself before merging.
-#   - REVERSE DEPENDENTS. Only the crates OWNING changed files are tested, so a behavioural change
-#     in `openpulse-core` that breaks an `openpulse-modem` or plugin test passes here — workspace
-#     clippy catches compile breakage, not behaviour. This is #1074's exact shape. Since #1144 the
-#     hook NAMES them after the test run; naming is all it does, deliberately (see that block).
+#   - REVERSE DEPENDENTS of a leaf crate. Only the crates OWNING changed files are tested, plus —
+#     since work plan decision 9 (2026-09-30) — every reverse dependent when the push touches one of
+#     the core libraries (`openpulse-core`, `openpulse-dsp`, `openpulse-modem`). That closes
+#     #1074's exact shape (a core change breaking a downstream test). For any other crate the
+#     reverse dependents are still only NAMED (see that block). `HOOK_REVDEPS=0 git push` skips the
+#     reverse-dependent run, visibly.
 #
 # Escape hatch: `GATE_SKIP=1 git push`. Note `git push --no-verify` already bypasses this hook
 # silently, so this exists to make skipping deliberate and visible, not to prevent it.
@@ -32,6 +34,21 @@ if [ "${GATE_SKIP:-0}" = "1" ]; then
     exit 0
 fi
 
+# Refuse to run as a stale copy (#1448). cargo-husky installs the versioned hook once and never
+# updates it, so the hook git runs can silently lack later passes. Compare this installed copy with
+# the versioned one, ignoring the two header lines cargo-husky inserts, and stop with the one-line
+# refresh when they differ. `scripts/gate.sh` runs the same comparison.
+repo_root="$(git rev-parse --show-toplevel)"
+installed_hook="$(git rev-parse --git-path hooks/pre-push)"
+versioned_hook="$repo_root/.cargo-husky/hooks/pre-push"
+normalise_hook() { sed -e '2{/^#$/{N;/set by cargo-husky/d;};}' "$1"; }
+if [ -f "$installed_hook" ] && [ -f "$versioned_hook" ] \
+    && ! cmp -s <(normalise_hook "$installed_hook") <(normalise_hook "$versioned_hook"); then
+    echo "pre-push: FAIL — the installed hook differs from .cargo-husky/hooks/pre-push (#1448)."
+    echo "pre-push:   refresh it: cp \"$versioned_hook\" \"$installed_hook\""
+    exit 1
+fi
+
 # Queue behind any other heavy build on this machine, in any project, rather than
 # race it for RAM. After the escape hatch, so a deliberate skip never waits.
 # shellcheck source=scripts/lib/host-build-lock.sh
@@ -39,14 +56,23 @@ source "$(git rev-parse --show-toplevel)/scripts/lib/host-build-lock.sh" "pre-pu
 
 cargo fmt --all -- --check
 
-# Crates owning the changed files. Falls back to the whole workspace when the upstream ref is
-# unknown (first push of a branch), which is the safe direction.
+# The base this push is measured against: what it ADDS relative to where it will land.
+# `@{u}` is that base only while it is an ancestor of HEAD. After a rebase (or any rewrite) the
+# upstream ref still names the pre-rebase commit, `merge-base(@{u}, HEAD)` falls back to the OLD
+# fork point, and both the tested crate set and the lint range widened to commits `main` gained in
+# between (#1357: a push with no Rust paid a four-crate run, and the lint could block on a hit the
+# pusher never wrote). So use `@{u}` when it is an ancestor of HEAD — which keeps a stacked branch
+# measured against the branch it stacks on — and `origin/main` otherwise, including a first push.
 upstream="$(git rev-parse --abbrev-ref --symbolic-full-name '@{u}' 2>/dev/null || echo '')"
+base="origin/main"
 if [ -n "$upstream" ]; then
-    changed="$(git diff --name-only "$upstream"...HEAD)"
-else
-    changed="$(git diff --name-only origin/main...HEAD 2>/dev/null || echo '')"
+    if git merge-base --is-ancestor "$upstream" HEAD 2>/dev/null; then
+        base="$upstream"
+    else
+        echo "pre-push: $upstream is not an ancestor of HEAD (rebased?) — measuring against origin/main (#1357)"
+    fi
 fi
+changed="$(git diff --name-only "$base"...HEAD 2>/dev/null || echo '')"
 
 pkgs=""
 while IFS= read -r f; do
@@ -67,15 +93,9 @@ pkgs="$(printf '%s\n' $pkgs | sort -u | tr '\n' ' ')"
 # Re-homed doc / attribute lint (#1345). This hook is the only check that runs on EVERY push (#1144),
 # and the lint takes under a second. It lints what this push adds (the upstream, else origin/main);
 # the script prints the range, so an empty one is visible. It exits 2 on an unresolvable base, and
-# `set -e` then blocks the push rather than letting it through unlinted.
-# AFTER A REBASE this range is wider than the branch. `merge-base(@{u}, HEAD)` falls back to the OLD
-# fork point while the upstream ref still names the pre-rebase commit, so the lint also covers the
-# commits `main` gained in between, and a hit in one of THOSE blocks a push that did not cause it.
-# Measured 2026-09-12 on this branch: upstream 27d2d37d, merge-base 8837af80, so the lint covered
-# five commits of which three were already merged (#1348, #1350, #1352). It passed, and `main` should
-# stay clean now that the lint runs on it — but if a push is ever blocked by a hit you did not write,
-# that is the mechanism, and the range printed above the failure says so.
-scripts/check-rehomed-docs.sh --base "${upstream:-origin/main}"
+# `set -e` then blocks the push rather than letting it through unlinted. It uses the same `$base` as
+# the crate set, so after a rebase it no longer covers commits `main` gained in between (#1357).
+scripts/check-rehomed-docs.sh --base "$base"
 
 cargo clippy --workspace --no-default-features --all-targets -- -D warnings
 
@@ -111,41 +131,21 @@ if [ -z "${pkgs// /}" ]; then
     exit 0
 fi
 
-echo "pre-push: testing touched crates:$pkgs"
-args=""
-for p in $pkgs; do args="$args -p $p"; done
-# shellcheck disable=SC2086
-cargo test $args --no-default-features
-
-echo "pre-push: touched-crate tests passed —$pkgs"
-
-# NAME the reverse dependents this hook did not test (#1144 part 3, item 4).
-#
-# The hook tests only the crates OWNING changed files. A behavioural change in a library crate that
-# breaks a DOWNSTREAM crate's test therefore passes a fully compliant push — workspace clippy catches
-# compile breakage, never behaviour. That is #1074's failure mode exactly, and it needs no
-# `--no-verify` to happen.
-#
-# This prints the gap instead of closing it, on purpose. Testing the reverse dependents here would
-# recreate the slow hook that #1074's own postmortem says people skip past, and a hook too slow to
-# tolerate enforces nothing. Naming the crates turns "something downstream may be untested" into a
-# list you can act on.
+# Reverse dependents of the touched crates (#1144 part 3, item 4; work plan decision 9).
 #
 # `cargo metadata`'s `dependencies` includes DEV-dependencies, and they are kept on purpose: a
-# dev-dependent's TESTS are exactly what a behavioural break shows up in, which is the whole point.
-# So this list is wider than a pure build-graph reverse-dependency set, and that is the correct
-# width for the question being asked.
+# dev-dependent's TESTS are exactly what a behavioural break shows up in. So this set is wider than
+# a pure build-graph reverse-dependency set, and that is the correct width for the question.
 #
-# Never allowed to block the push: this is a message, not a verdict. But it must not be a message
-# that CONFLATES STATES either — the first draft printed "none found, or cargo metadata failed" for
-# three different situations (metadata failed, the closure computation failed, genuinely nothing
-# downstream), which is the construct this repo bans: silence is not a verdict, and a zero from a
-# filter is a claim about the filter. Each state gets its own sentence, from its own exit status.
+# Each state gets its own sentence, from its own exit status: metadata failed, the closure failed,
+# or a real answer. A zero from a filter is a claim about the filter. The `&& rc=0 || rc=$?` form
+# keeps `set -e` from exiting on a failed substitution before the state can be reported.
+revdeps_state="ok"
 metadata_err="$(mktemp)"
-meta="$(cargo metadata --format-version 1 --no-deps 2>"$metadata_err")"; meta_rc=$?
-
-if [ $meta_rc -ne 0 ]; then
-    echo "pre-push: reverse dependents UNKNOWN — cargo metadata exited $meta_rc: $(head -1 "$metadata_err")"
+meta="$(cargo metadata --format-version 1 --no-deps 2>"$metadata_err")" && meta_rc=0 || meta_rc=$?
+revdeps=""
+if [ "$meta_rc" -ne 0 ]; then
+    revdeps_state="cargo metadata exited $meta_rc: $(head -1 "$metadata_err")"
 else
     # The pipe here SHAPES INPUT; the verdict comes from python's own status in $py_rc, never from
     # the pipeline. Python exits 2 on any parse failure so it can never be mistaken for "no results".
@@ -169,31 +169,80 @@ while frontier:
 # trailing newlines, so an empty name list collapses into the count and `tail -1` hands back the
 # number as if it were a crate. Measured: that printed `cargo test -p 41`.
 print(len(members), *sorted(downstream))
-' "$pkgs")"; py_rc=$?
-
-    if [ $py_rc -ne 0 ]; then
-        echo "pre-push: reverse dependents UNKNOWN — the closure computation exited $py_rc"
-    else
-        # First field is the member count; everything after it is the downstream set.
-        set -- $revdeps
-        total="$1"; shift
-        names="$*"; count=$#
-        if [ "$count" -eq 0 ]; then
-            echo "pre-push: no workspace crate depends on $pkgs— nothing downstream was skipped."
-        elif [ "$count" -ge $(( total / 2 )) ]; then
-            # Naming 31 of 40 crates is "the workspace", and a wall of names trains people to skip
-            # the hook's output entirely. Say so, and point at the one command that covers it.
-            echo "pre-push: NOT run — $count of $total workspace crates depend on $pkgs"
-            echo "pre-push:   that is effectively the whole workspace: run scripts/gate.sh."
-        else
-            echo "pre-push: NOT run — $count reverse dependent(s) of $pkgs— to cover them:"
-            echo "pre-push:   cargo test --no-default-features$(printf ' -p %s' $names)"
-        fi
-    fi
+' "$pkgs")" && py_rc=0 || py_rc=$?
+    [ "$py_rc" -eq 0 ] || revdeps_state="the closure computation exited $py_rc"
 fi
 rm -f "$metadata_err"
+
+total=0; names=""; count=0
+if [ "$revdeps_state" = "ok" ]; then
+    # shellcheck disable=SC2086
+    set -- $revdeps
+    total="$1"; shift
+    names="$*"; count=$#
+fi
+
+# Decision 9: a push touching a core library also tests everything downstream of it. These three
+# are the libraries whose behaviour other crates' tests depend on; a leaf crate's reverse
+# dependents are only named below, because testing them on every push would make the hook slow
+# enough to be skipped. If the reverse-dependent set cannot be computed, the safe direction is the
+# whole workspace, not the touched crates alone.
+core_touched=""
+for p in $pkgs; do
+    case " openpulse-core openpulse-dsp openpulse-modem " in
+        *" $p "*) core_touched="$core_touched $p" ;;
+    esac
+done
+
+test_workspace=0
+test_pkgs="$pkgs"
+revdeps_tested=0
+if [ -n "$core_touched" ]; then
+    if [ "${HOOK_REVDEPS:-1}" = "0" ]; then
+        echo "pre-push: HOOK_REVDEPS=0 — NOT testing the reverse dependents of$core_touched (decision 9 skipped)."
+    elif [ "$revdeps_state" != "ok" ]; then
+        echo "pre-push: reverse dependents UNKNOWN ($revdeps_state) — testing the whole workspace instead."
+        test_workspace=1
+    else
+        echo "pre-push:$core_touched changed — also testing its $count reverse dependent(s) (decision 9)."
+        test_pkgs="$pkgs $names"
+        revdeps_tested=1
+    fi
+fi
+
+if [ "$test_workspace" -eq 1 ]; then
+    echo "pre-push: testing the whole workspace"
+    cargo test --workspace --no-default-features --no-fail-fast
+    echo "pre-push: workspace tests passed."
+else
+    echo "pre-push: testing:$(printf ' %s' $test_pkgs)"
+    args=""
+    for p in $test_pkgs; do args="$args -p $p"; done
+    # shellcheck disable=SC2086
+    cargo test $args --no-default-features --no-fail-fast
+    echo "pre-push: tests passed —$(printf ' %s' $test_pkgs)"
+fi
+
+# For a leaf-crate push, NAME the reverse dependents that were not tested. Naming is all this does:
+# testing them on every push would recreate the slow hook #1074's postmortem says people skip.
+if [ "$test_workspace" -eq 0 ] && [ "$revdeps_tested" -eq 0 ]; then
+    if [ "$revdeps_state" != "ok" ]; then
+        echo "pre-push: reverse dependents UNKNOWN — $revdeps_state"
+    elif [ "$count" -eq 0 ]; then
+        echo "pre-push: no workspace crate depends on $pkgs— nothing downstream was skipped."
+    elif [ "$count" -ge $(( total / 2 )) ]; then
+        # Naming 31 of 40 crates is "the workspace", and a wall of names trains people to skip
+        # the hook's output entirely. Say so, and point at the one command that covers it.
+        echo "pre-push: NOT run — $count of $total workspace crates depend on $pkgs"
+        echo "pre-push:   that is effectively the whole workspace: run scripts/gate.sh."
+    else
+        echo "pre-push: NOT run — $count reverse dependent(s) of $pkgs— to cover them:"
+        echo "pre-push:   cargo test --no-default-features$(printf ' -p %s' $names)"
+    fi
+fi
+
 echo "pre-push: NOT run: the full workspace gate."
-# `scripts/gate.sh` now runs on a push to `main` (.github/workflows/post-merge-gate.yml, #1144), so
-# a break IS detected — AFTER the merge, on a tip that is already shared. It is still not a
-# pre-merge check and no status check requires it, so run the gate yourself before merging.
-echo "pre-push: the gate runs post-merge on main (detection, not prevention) — run it yourself before merging."
+# `scripts/gate.sh` runs on a push to `main` (.github/workflows/post-merge-gate.yml, #1144), so a
+# break IS detected — AFTER the merge, on a tip that is already shared. Decision 9 moves the full
+# gate to once a day and before every tag; it is still not a pre-merge check.
+echo "pre-push: the gate runs post-merge on main (detection, not prevention); run it daily and before every tag."

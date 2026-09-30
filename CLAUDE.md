@@ -201,9 +201,11 @@ Short form; full wording and history in [`docs/dev/verification-mechanics.md`](d
    `git diff --stat origin/main...HEAD` and confirm both match the PR description.
 
 **What enforces the gate today:** nothing blocks a merge on `gate.sh`. It runs post-merge on `main`
-(detection, not prevention), on `release/**` and on manual dispatch. The pre-push hook tests only the
-crates with changed files (it names, but does not test, reverse dependents — #1074's failure mode;
-M0 fixes this per work plan decision 9). Required checks on `main`: traceability and the two benchmark
+(detection, not prevention), on `release/**` and on manual dispatch; per work plan decision 9, run it
+yourself once a day and before every tag. The pre-push hook tests the crates with changed files and,
+when `openpulse-core`, `-dsp` or `-modem` changed, all their reverse dependents (#1074's failure mode);
+for a leaf crate it only names them. It refuses to run as a stale copy of `.cargo-husky/hooks/pre-push`
+(#1448), and the gate checks the same. Required checks on `main`: traceability and the two benchmark
 jobs.
 
 ---
