@@ -753,9 +753,9 @@ pub struct ModemEngine {
     /// Ring samples prepended to the burst being gathered.
     rx_burst_lead: usize,
     /// Whether the spectral OPEN test has fired on the burst being gathered (#1454). Only then may the
-    /// looser hold test keep it open: the hold is true on idle too (up to 2.3 % of windows, #1454
-    /// round 7), and without this a total-power flicker could grow an idle tail and escape stage 1's
-    /// flicker commit.
+    /// looser hold test keep it open: the hold can be true on idle too (it was on up to 2.3 % of
+    /// windows in #1454 round 7's offline instrument, before the hold's cap), and without this a
+    /// total-power flicker could grow an idle tail and escape stage 1's flicker commit.
     s_armed: bool,
     /// Longest and current total-power run in the burst being gathered, in samples.
     rx_burst_tp_run: usize,
@@ -964,7 +964,8 @@ const DCD_SQUELCH_MARGIN: f32 = 1.25;
 /// constant is the minimum spectral span at which a failed burst the spectral test carried counts as
 /// ladder evidence — one name, one number (#1454 design, items 2 and 6). It is set by that rule, and
 /// it covers the opening latency with room: with both analysis phases the worst measured latency of a
-/// BPSK31 frame is 2 176 samples at +8 dB in-band and 3 954 at +6 dB (16 placements, #1454 round 7).
+/// BPSK31 frame is ≤ 2 176 samples at +8 dB in-band and 3 954 at +6 dB (16 placements, #1454 round 7;
+/// the +8 dB figure is the maximum at an open threshold of 5.0, an upper bound for 4.5).
 const S_RING_WINDOWS: usize = 16;
 
 /// How the carrier detect held a flushed burst (#1454), in post-trigger samples.

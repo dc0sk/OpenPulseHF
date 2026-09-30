@@ -72,15 +72,17 @@ modem, daemon and repeater crates.
   histories after every burst (nine blind windows): fixed; a floor-moving commit now clears them. D5
   had no test: four added.
 - **Round 9.** `monitor_during_ota` failed on the branch and passed on `main`: the uncapped mean-8
-  hold carried a strong frame's burst ~0.55 s and merged a second transmission 0.4 s later
-  (reproduced on real idle). The packet posed a two-way trade (keep +6 dB margin, or separate the
-  transmissions); the review found the third option in the hold's arithmetic — cap each window at the
-  open threshold — which kept every decode count and separated the pair.
+  hold carried a strong frame's burst ~0.5 s (≈ 4 000 samples past the frame) and merged a second
+  transmission 0.4 s later (reproduced on real idle). The packet posed three options — keep the +6 dB
+  margin, separate the transmissions with the count rule, or hold only while total power is not
+  carrying the burst; the review found a fourth in the hold's arithmetic — cap each window at the open
+  threshold — which kept every decode count and separated the pair.
 
 ## Stated limits (carried into `CLAUDE.md`)
 
-Two transmissions under ~0.3 s apart are one burst; a third-party monitor on an ARQ exchange is that
-case and is unmeasured. Sub-window broadband events open S about twice as often as with one phase
-(never ladder evidence). The idle open rate is sample-limited (< 0.44 %/window at 95 %). BPSK63's
+Two BPSK250 frames 0.2 s apart are one burst and 0.4 s apart are two (measured at +8…+20 dB; the
+boundary between is not measured); after a broadband burst the appended tail is up to 0.5 s. A
+third-party monitor on an ARQ exchange is that case and is unmeasured. A 512-sample broadband burst at
++29.5 dB opens S in 29/120 trials against 17/120 with one phase (never ladder evidence). The idle open rate is sample-limited (< 0.44 %/window at 95 %). BPSK63's
 losses are total-power-opened heads (#1443). Multi-fragment receive through the accumulator has no
-test in the tree (filed separately).
+test in the tree (ISSUE_PLACEHOLDER).

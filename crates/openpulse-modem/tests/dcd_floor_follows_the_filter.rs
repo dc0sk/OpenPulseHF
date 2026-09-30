@@ -502,8 +502,9 @@ fn the_floor_follows_the_band_up_at_the_cap_and_back_down() {
 
 /// Two transmissions 0.4 s apart are two bursts, at any level (#1454 round 9). Every arm decodes one
 /// frame per burst, so a merged pair loses its second frame. Total power alone ends a burst on the
-/// first quiet read; the spectral hold adds a tail, and uncapped that tail was ~0.55 s after a STRONG
-/// frame (one window ≥ 13× the floor carried the 8-window mean), which merged exactly this pair. The
+/// first quiet read; the spectral hold adds a tail, and uncapped that tail was ~0.5 s after a STRONG
+/// frame (by the hold's arithmetic one window ≥ 13× the floor carries the 8-window mean), which merged
+/// exactly this pair. The
 /// 0.2 s pair is the negative control: inside the tail it is one burst, so the gate can fail both ways.
 #[test]
 fn two_transmissions_four_tenths_of_a_second_apart_are_two_bursts() {

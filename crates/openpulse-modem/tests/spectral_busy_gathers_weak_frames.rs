@@ -278,8 +278,8 @@ fn bpsk63_frames_are_gathered_as_one_burst() {
 }
 
 /// On every recorded idle, at the daemon's read sizes, the spectral test never opens, and its hold —
-/// were an open to arm it — would not outlast 8 windows (round 7: longest run 0 / 5 / 4). 8 keeps
-/// 8 windows below the 16 at which a failed S burst becomes ladder evidence.
+/// were an open to arm it — would not outlast 8 windows (printed below; measured 0 / 1 / 0 with the
+/// capped hold). 8 keeps 8 windows below the 16 at which a failed S burst becomes ladder evidence.
 #[test]
 fn idle_never_opens_the_spectral_test_and_its_hold_is_short() {
     for cap in [WIDE, NARROW_500, NARROW_250] {
@@ -316,8 +316,11 @@ fn idle_never_opens_the_spectral_test_and_its_hold_is_short() {
 
 /// M2: a frame at +10 dB — close enough to the total-power squelch that one onset block can clear it
 /// and close again before the spectral test opens — keeps its head. That flicker used to drain the
-/// ring, so the S burst that followed started after the frame (2/16 lost at +10 dB, round 6). The
-/// cell must actually contain flickers, or it proves nothing.
+/// ring, so the S burst that followed started after the frame (round 6: two flicker placements at
+/// +10 dB, at least one losing its head). The cell must actually contain flickers, or it proves
+/// nothing. It also pins "opened by S" as S true at the open block rather than "total power false":
+/// under that proxy the same cell loses the same heads — a dependence on this fixture containing
+/// such placements, which nothing else asserts.
 #[test]
 fn an_onset_flicker_does_not_take_the_frame_s_head() {
     let tx = frame(&payload(64), "BPSK31");

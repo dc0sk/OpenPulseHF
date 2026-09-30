@@ -100,16 +100,19 @@ const S_OPEN: (usize, f32) = (3, 4.5);
 ///
 /// A count over four windows could not hold a BPSK31 frame: where the window grid puts its reversal
 /// nulls under the Hann peak half the windows read 0.38 of the band power, in runs, and 2-of-4 at 3.0
-/// split 11/16 of +8 dB frames (#1454 round 6). Memory length is what bridges those runs.
+/// gathered only 11/16 of +8 dB frames whole at P2's placements and 5/16 at the worst alignment
+/// (#1454 round 6). Memory length is what bridges those runs.
 const S_HOLD_WINDOWS: usize = 8;
 
 /// While a burst is open, the spectral test HOLDS it when one band's power, averaged over the last
 /// [`S_HOLD_WINDOWS`] windows with each window's ratio capped at the open threshold, is at least this
-/// many times its floor. The cap is what keeps the tail short: uncapped, one window ≥ 13× the floor
-/// carried the mean for seven more windows, so a strong frame — which total power had already ended —
-/// held its burst ~0.55 s and swallowed the next transmission (#1454 round 9). Capped, four of eight
-/// windows at the open threshold are needed: the tail is at most ~4 windows at any level, and a click
-/// train must run at 8 Hz or more to extend an armed burst. Measured with the cap: every BPSK31
+/// many times its floor. The cap is what keeps the tail short: uncapped, by this arithmetic one window
+/// ≥ 13× the floor carries the mean for seven more windows, so a strong frame — which total power had
+/// already ended — held its burst ~0.5 s and swallowed the next transmission (#1454 round 9). Capped,
+/// four of eight windows at the open threshold are needed on real idle (five on digital silence): the
+/// hold's extension past the last loud window is at most ~4 windows at any level (the measured
+/// end-to-end tail is the tests' `SPECTRAL_TAIL_MAX`), and a click train must run at 8 Hz or more to
+/// extend an armed burst. Measured with the cap: every BPSK31
 /// placement at +6…+10 dB held as uncapped; longest idle hold run 0 / 1 / 0 windows (wide / 500 Hz /
 /// 250 Hz); two frames 0.4 s apart are two bursts.
 const S_HOLD_MEAN: f32 = 2.5;

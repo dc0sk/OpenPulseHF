@@ -22,10 +22,10 @@ burst. A BPSK31 frame at +8 dB in its own 62 Hz band lifts a wide filter's total
 so the total-power squelch never opened on it — stage 1 pinned 0/4 even at +12 dB in-band, on the
 rung (`hpx_hf` SL2) every session starts on.
 
-**Design (`docs/dev/reviews/review-1454-spectral-busy.md`, nine Fable rounds; maintainer decisions
-2026-09-29: ring now at K = 4 windows, OTA follow-up filed separately, a raised operator squelch
-disables S, rig_b ticked between relays, a minimum spectral span for evidence, the ring stripped for
-the monitor and repeater).**
+**Design (`docs/dev/reviews/review-1454-spectral-busy.md`: seven recorded Fable rounds, 3–9 — the
+reviews of the two earlier drafts are not on disk. Maintainer decisions 2026-09-29: a failed burst the
+spectral test carried is ladder evidence only past a minimum spectral span of 16 windows; the monitor
+and the repeater receive the burst with the ring stripped.)**
 
 1. **The statistic** (`openpulse-dsp/src/noise_floor.rs`, `judge`): per 512-sample window, per band
    of 4 sliding bins over 312–2 703 Hz, `r = Σ P / Σ floor` against the floor from before the block.
@@ -41,12 +41,16 @@ the monitor and repeater).**
    idle cell, 3.5; zero 3-of-4 at 4.0 in each phase on three captures). **Hold** an opened burst while
    a phase's 8-window mean of the ratio, each window **capped at 4.5**, is ≥ 2.5. The count rule
    (2 of 4 at 3.0) split 5 of 16 frames with one phase; with two phases it holds the +8 dB frames but
-   loses the +6 dB cell (10/16 vs 16/16). Uncapped, one window ≥ 13× the floor carried the mean for
-   seven more: a strong frame, which total power had already ended, held its burst ~0.55 s and
-   swallowed a second transmission 0.4 s later — `monitor_during_ota` failed on the branch and passed
-   on `main`, and two BPSK250 frames on real idle merged at +8, +12 and +20 dB. Capped, the tail is
-   ~4 windows at any level. S is inert until warm and until both phases hold 8 windows; a `discard`
-   keeps the histories (the floor did not move); a commit of ≥ 8 windows clears them (it did).
+   loses the +6 dB cell (10/16 vs 16/16). Uncapped, by the hold's arithmetic one window ≥ 13× the
+   floor carries the mean for seven more: a strong frame, which total power had already ended, held
+   its burst ~0.5 s (≈ 4 000 samples past the frame) and swallowed a second transmission 0.4 s later —
+   `monitor_during_ota` failed on the branch and passed on `main`, and two BPSK250 frames on real idle
+   merged at +8, +12 and +20 dB. Capped, the hold outlasts the last loud window by ≤ 4 windows at any
+   level; end to end, the idle appended after a broadband loud burst is ≤ 4 000 samples (0.5 s,
+   `SPECTRAL_TAIL_MAX`, pinned both sides) and after a BPSK250 frame ≈ 2 400 (0.3 s). S is inert until
+   warm and until a phase's history holds 8 windows (each phase judged on its own history); a
+   `discard` keeps the histories (the floor did not move); a commit of ≥ 8 windows clears them (it
+   did).
 4. **One verdict at the seam** = total power ∨ S, read by the hold start, the accumulator,
    `DcdState::force_busy` and the AGC unlock. S may hold a burst only after S has opened on it
    (`s_armed`). D3: S only while `manual_squelch < adaptive_squelch`, latched per burst.
@@ -81,19 +85,25 @@ property, re-open after a burst, no phantom after a floor-moving commit); `openp
 
 **Test results.** Held-out decode counts (`scripts/slow-tests.sh spectral`, release, 16 placements,
 BPSK31 + Rs 64 B on the wide IC-9700 idle unless stated): +8 dB 16/16 at the P2 placements, at both
-preamble parities (alignment 128 and 384) and at the best alignment (0); +10 dB 15/16 (bar 15; the
-miss is an onset flicker case, head covered 15/16); +7 dB 16/16 and +6 dB 16/16 (reported, not
-claimed); BPSK63 wide 13/16 and behind 500 Hz 13/16 (#1443: every miss is a burst total power opened
-after the frame began). For comparison on the same cells, the uncapped mean-8 hold read identically,
+preamble parities (alignment 128 and 384) and at the best alignment (0); +10 dB 15/16 (bar 15; head
+covered 15/16 — the uncovered head is not one of the cell's two flicker placements, which the ring
+sabotages S6b/S6c show are the ones the ring rescues; by the round-6 per-placement trace it is a burst
+total power opened ~0.1 s into the frame before S opened, the #1443 class); +7 dB 16/16 and +6 dB
+16/16 (reported, not claimed); BPSK63 wide 13/16 and behind 500 Hz 13/16 (#1443: every miss is a burst
+total power opened after the frame began — `h63-detail.log`, per placement on the round-7 build;
+counts identical since). For comparison on the same cells, the uncapped mean-8 hold read identically,
 and the two-phase 2-of-4 hold identically except +6 dB 10/16. Default-run gates:
 `spectral_busy_gathers_weak_frames` 8 passed (1 held out), `dcd_floor_follows_the_filter` 13,
 `noise_floor` 17, `openpulse-repeater` `d5_tests` 4. Idle, production tracker: no open on three
-captures at 171/400/512/4 096-sample reads; longest hold run 0 / 1 / 0 windows. Before stage 2, the
-BPSK31 P2 cell with the design-v6 hold (one phase, 2 of 4 at 3.0) gathered 4/8 whole. GATE_PLACEHOLDER
+captures at 171/400/512/4 096-sample reads; longest hold run 0 / 1 / 0 windows. The first stage-2
+build (design v6: one phase, 2 of 4 at 3.0) gathered the P2 cell 4/8 whole (11/16 at 16 placements).
+GATE_PLACEHOLDER
 
-**Sabotage.** Each fails its own gate (logs `~/parked/openpulse-1454/sab9/`, `sab8/`, `sabD5b/`): S1 second
+**Sabotage.** Run on the tree before the reachability change made the `S_*` constants private
+(visibility only). Each fails its own gate (logs `~/parked/openpulse-1454/sab9/`, `sab8/`, `sabD5b/`): S1 second
 phase off → both preamble parities (alignment 128: 14/16); S2 hold back to 2 of 4 at 3.0 → the idle
-gate (wide idle hold run 9 > 8); S3 max of the two phases' ratios → the idle gate (run 10); S4 open at
+gate (wide idle hold run 9 > 8); S3 a per-bin max of the two phases' periodograms in place of the OR (the round-7 max rule) →
+the idle gate (run 10); S4 open at
 3.5 → the idle gate (500 Hz, 171-sample reads, 2 opens); S5 tail constant at 4·512 + TICK → the upper
 tail bound; S5hi at 20·512 + TICK → the tightness line; S6a ring kept across every flush → ring
 retention; S6b ring cleared at every flush → the onset flicker (heads 13/16); S6c "opened by S" as
@@ -112,9 +122,10 @@ run); the uncapped mean-8 hold (merges transmissions 0.4 s apart); the 2-of-4 ho
 (+6 dB 10/16; idle run 9); "hold only while total power is not carrying the burst" (not built: the
 held-out cells never trip total power, so they could not test it).
 
-**Stated limits.** Two transmissions under ~0.3 s apart are one burst (stage 1 separated them at one
-read); a third-party monitor on an ARQ exchange (ACK, then the next frame) is that case and is
-unmeasured. A 512-sample broadband burst at +30 dB opens S in 29/120 trials against 17/120 with one
+**Stated limits.** Two BPSK250 frames 0.2 s apart are one burst and 0.4 s apart are two (measured at
++8…+20 dB; the boundary between is not measured); after a broadband burst the appended tail is up to
+0.5 s. Stage 1 separated transmissions at one read. A third-party monitor on an ARQ exchange (ACK,
+then the next frame) is that case and is unmeasured. A 512-sample broadband burst at +30 dB opens S in 29/120 trials against 17/120 with one
 phase — never ladder evidence, one decode attempt. The idle open rate is sample-limited (< 0.44 %/
 window at 95 %, 45 s captures). BPSK63's misses are total-power-opened heads (#1443, stage 3).
 Multi-fragment receive through the accumulator has no test (ISSUE_PLACEHOLDER).
