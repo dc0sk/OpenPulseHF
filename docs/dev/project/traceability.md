@@ -60,7 +60,8 @@ SL4) and `an_uncoded_control_frame_behind_a_lead_is_still_not_ladder_traffic` (`
 **Test results.** `ota_arm_uncoded_dispatch` 6 passed. Sabotage: running the fallback unconditionally
 (`main`) fails the first gate only; matching the predicate on mode alone fails the second gate,
 `one_burst_two_arms` and `a_control_frame_does_not_touch_the_rate_controller` (all `hpx_hf`: the
-uncoded control frame is then decoded by nothing). GATE_PLACEHOLDER
+uncoded control frame is then decoded by nothing). **Gate:** `GATE: PASS 0a4fa4c82e23a5de1d73e27c882e207b23d92e77 clean 20260930T150700Z` (2 642 passed,
+0 failed; every step ok). The one commit after it adds only this line.
 
 ## 2026-09-30 — #1454 stage 2: a spectral busy criterion gathers the weak frames total power cannot see
 
