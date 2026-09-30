@@ -85,4 +85,4 @@ boundary between is not measured); after a broadband burst the appended tail is 
 third-party monitor on an ARQ exchange is that case and is unmeasured. A 512-sample broadband burst at
 +29.5 dB opens S in 29/120 trials against 17/120 with one phase (never ladder evidence). The idle open rate is sample-limited (< 0.44 %/window at 95 %). BPSK63's
 losses are total-power-opened heads (#1443). Multi-fragment receive through the accumulator has no
-test in the tree (ISSUE_PLACEHOLDER).
+test in the tree (#1461).

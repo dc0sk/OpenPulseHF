@@ -128,7 +128,7 @@ held-out cells never trip total power, so they could not test it).
 then the next frame) is that case and is unmeasured. A 512-sample broadband burst at +30 dB opens S in 29/120 trials against 17/120 with one
 phase — never ladder evidence, one decode attempt. The idle open rate is sample-limited (< 0.44 %/
 window at 95 %, 45 s captures). BPSK63's misses are total-power-opened heads (#1443, stage 3).
-Multi-fragment receive through the accumulator has no test (ISSUE_PLACEHOLDER).
+Multi-fragment receive through the accumulator has no test (#1461).
 
 ## 2026-09-28 — #1452 stage 1: the carrier detect's floor follows the band behind any receive filter
 
