@@ -97,7 +97,7 @@ and the two-phase 2-of-4 hold identically except +6 dB 10/16. Default-run gates:
 `noise_floor` 17, `openpulse-repeater` `d5_tests` 4. Idle, production tracker: no open on three
 captures at 171/400/512/4 096-sample reads; longest hold run 0 / 1 / 0 windows. The first stage-2
 build (design v6: one phase, 2 of 4 at 3.0) gathered the P2 cell 4/8 whole (11/16 at 16 placements).
-GATE_PLACEHOLDER
+**Gate:** `GATE: PASS 5e909f4dc2f36646acd5443c4987159ab42d49c9 clean 20260930T034739Z` (2 640 passed, 0 failed; every step ok, including the all-features clippy pass). The one commit after it adds only this line.
 
 **Sabotage.** Run on the tree before the reachability change made the `S_*` constants private
 (visibility only). Each fails its own gate (logs `~/parked/openpulse-1454/sab9/`, `sab8/`, `sabD5b/`): S1 second
