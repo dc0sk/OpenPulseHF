@@ -10,8 +10,61 @@ serialisation point by construction: every concurrent PR appends here, so two of
 conflict. Resolve by keeping both entries in date order, never by dropping one.
 
 See `CLAUDE.md` → *PR hygiene → Traceability* for the standing rule. The per-feature
-acceptance gates live in `CLAUDE.md` → *Acceptance criteria*; this ledger adds the design rationale
-and the actually-observed results per change.
+acceptance gates live in `docs/dev/project/acceptance-criteria.md` (moved from `CLAUDE.md` in #1472);
+this ledger adds the design rationale and the actually-observed results per change.
+
+---
+
+## 2026-09-30 — The pre-push hook tests the core libraries' reverse dependents, measures a rebased push against main, and refuses to run stale (decision 9, #1357, #1448)
+
+**Requirement / change.** Work plan M0, decision 9: before the full gate moves to once a day, the
+hook must close #1074's failure mode — a behavioural change in a core library breaking a downstream
+crate's test while the hook tested only the crate that changed. Two defects in the same hook: after
+a rebase it measured the push against the stale upstream ref, widening both the tested crates and
+the lint range (#1357); and cargo-husky never re-installs a changed hook, so a maintainer host ran a
+copy missing three later passes with nothing noticing (#1448).
+
+**Design.**
+1. **Reverse dependents are TESTED when `openpulse-core`, `openpulse-dsp` or `openpulse-modem` is
+   touched**, using the transitive closure the hook already computed (dev-dependencies included).
+   For any other crate they are still only named, so a leaf push stays fast. If the closure cannot
+   be computed, the safe direction is the whole workspace. `HOOK_REVDEPS=0` skips the reverse run,
+   visibly. `cargo test` now runs with `--no-fail-fast`.
+2. **Base = `@{u}` only while it is an ancestor of HEAD, else `origin/main`.** An ancestor upstream
+   keeps a stacked branch measured against the branch it stacks on; a rewritten branch lands on
+   `main`. Both the crate set and the re-homed-docs lint use the same base.
+3. **Drift check** in the hook (first thing after `GATE_SKIP`) and as a gate step: compare the
+   installed hook with the versioned one after stripping exactly cargo-husky's two inserted header
+   lines; fail with a one-line `cp` refresh. A missing hook (fresh clone, CI) is not drift.
+4. Fixed on the way: `meta="$(cargo metadata …)"; rc=$?` exited the hook under `set -e` before the
+   "UNKNOWN" message could print; now `&& rc=0 || rc=$?`.
+
+Review: none — gate tooling, not a mandatory review class under decision 8.
+
+**Implementation.** `.cargo-husky/hooks/pre-push` (base selection, drift self-check, reverse-dependent
+test set), `scripts/gate.sh` (`normalise_hook`, `hook_drift`, step "installed pre-push hook"),
+`CLAUDE.md` (*What enforces the gate today*).
+
+**Tests → results (actually run, 2026-09-30).** The hook ran unmodified in a scratch worktree with a
+stand-in `cargo` on `PATH` that records `test`/`fmt`/`clippy` calls and passes `metadata` to the real
+cargo:
+- A, a commit touching `openpulse-dsp`: tests `openpulse-dsp` + its 23 reverse dependents, one
+  `cargo test` with 24 `-p` and `--no-fail-fast`;
+- B, a commit touching `openpulse-tui` only: tests `openpulse-tui` alone, reports no dependents;
+- C, A with `HOOK_REVDEPS=0`: tests `openpulse-dsp` alone, prints the skip and the 23-of-41 note;
+- D, A with `cargo metadata` failing: prints UNKNOWN with the exit code, runs `cargo test --workspace`;
+- E, A with an upstream that is not an ancestor: prints the #1357 line, measures against `origin/main`;
+- F, a stacked branch (upstream = A, plus a `tui` commit): tests `openpulse-tui` only, i.e. `@{u}` kept;
+- G, installed hook ≠ versioned: exits 1 before any work, printing the `cp` refresh.
+
+`hook_drift` from `gate.sh` (the function text itself, extracted and evaluated): no installed hook →
+rc 0; a cargo-husky-style install of the current hook → rc 0; `origin/main`'s hook installed → rc 1
+with a diff. The new hook also ran for real on this change's own push (no crate-owned files, so fmt
+and the three clippy passes only; all passed). `scripts/gate.sh --self-test` was started and **stopped
+at the session's one-hour background limit before it finished — no self-test result**; this change
+does not touch the failure-detection path it covers, but that is a reason, not a run. **Not measured:** the wall-clock cost of a real
+core-crate push under the new hook (it is most of the workspace test run), and a full `gate.sh` run of
+this branch.
 
 ---
 

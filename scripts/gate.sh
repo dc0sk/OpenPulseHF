@@ -92,6 +92,30 @@ run_step() {
     return $rc
 }
 
+# The installed pre-push hook vs the versioned one (#1448). cargo-husky 1.5.0 copies
+# `.cargo-husky/hooks/pre-push` into the hooks dir only when no hook from the same cargo-husky
+# version is there yet, so once installed, a change to the versioned hook never reaches the hook git
+# runs — and nothing noticed: a maintainer host ran a hook missing three later passes. cargo-husky
+# inserts two header lines after the shebang (`#` and `# This hook was set by cargo-husky …`);
+# `normalise_hook` strips exactly that pair, so a header-bearing install and a plain `cp` both
+# compare equal to the source. A missing hook (fresh clone, CI before any build) is not drift.
+normalise_hook() { sed -e '2{/^#$/{N;/set by cargo-husky/d;};}' "$1"; }
+hook_drift() {
+    versioned=".cargo-husky/hooks/pre-push"
+    installed="$(git rev-parse --git-path hooks/pre-push)"
+    if [ ! -f "$installed" ]; then
+        echo "no installed pre-push hook at $installed — nothing to compare"
+        return 0
+    fi
+    if cmp -s <(normalise_hook "$installed") <(normalise_hook "$versioned"); then
+        echo "installed pre-push hook matches $versioned"
+        return 0
+    fi
+    echo "installed pre-push hook at $installed differs from $versioned:"
+    diff <(normalise_hook "$versioned") <(normalise_hook "$installed") | head -40
+    return 1
+}
+
 self_test() {
     scratch="crates/openpulse-core/tests/gate_self_test_sabotage.rs"
     # Remove the fixture even if the run is interrupted. An abandoned sabotage file was left in the
@@ -317,6 +341,12 @@ if [ "$MODE" = "full" ]; then
     # and passes vacuously.
     drift_check
     run_step "re-homed docs lint" scripts/check-rehomed-docs.sh || rc_total=1
+    # The hook git actually runs must be the hook in the tree (#1448); see hook_drift above.
+    drift_check
+    run_step "installed pre-push hook" hook_drift || {
+        rc_total=1
+        echo "    refresh it: cp .cargo-husky/hooks/pre-push \"$(git rev-parse --git-path hooks/pre-push)\""
+    }
 fi
 
 drift_check   # final boundary: nothing moved between the last step and the verdict
