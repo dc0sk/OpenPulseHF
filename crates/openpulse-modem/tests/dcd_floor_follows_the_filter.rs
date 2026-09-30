@@ -246,8 +246,10 @@ fn idle_never_holds_the_carrier_open() {
         let mut longest = 0usize;
         for chunk in audio.chunks(TICK) {
             if let Ok(Some(b)) = e.accumulate_capture(Some("BPSK250"), chunk.to_vec()) {
-                gathered += b.samples.len();
-                longest = longest.max(b.samples.len());
+                // Post-trigger: a burst carries a pre-trigger lead (#1443) of audio already heard.
+                let post = b.samples.len() - e.last_flush_lead();
+                gathered += post;
+                longest = longest.max(post);
             }
         }
         let share = gathered as f32 / audio.len() as f32;
@@ -434,7 +436,7 @@ fn a_hold_longer_than_its_burst_is_not_committed() {
         let mut flushed = 0;
         for chunk in idle.cycled(20 * 8000, 4 * TICK).chunks(TICK) {
             if let Ok(Some(b)) = e.accumulate_capture(Some("BPSK250"), chunk.to_vec()) {
-                flushed = b.samples.len();
+                flushed = b.samples.len() - e.last_flush_lead();
             }
         }
         (before, e.dcd_squelch(), flushed)
@@ -470,7 +472,7 @@ fn the_floor_follows_the_band_up_at_the_cap_and_back_down() {
         let mut flushed = Vec::new();
         for c in x.chunks(TICK) {
             if let Ok(Some(b)) = e.accumulate_capture(Some("BPSK250"), c.to_vec()) {
-                flushed.push(b.samples.len());
+                flushed.push(b.samples.len() - e.last_flush_lead());
             }
         }
         flushed

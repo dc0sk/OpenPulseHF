@@ -265,8 +265,8 @@ fn a_steady_tone_is_never_split() {
 }
 
 /// BPSK63 at +8 dB behind a wide and a 500 Hz filter is gathered as one burst in every placement.
-/// (Some of these bursts are opened by TOTAL POWER after the frame starts and carry no ring; their
-/// decodes are #1443's, reported by the held-out suite, not gated here.)
+/// (Some of these bursts are opened by TOTAL POWER after the frame starts; since #1443 they carry a
+/// pre-trigger lead, and their decodes are in the held-out suite.)
 #[test]
 fn bpsk63_frames_are_gathered_as_one_burst() {
     let tx = frame(&payload(64), "BPSK63");
@@ -500,16 +500,9 @@ fn weak_frames_decode_through_the_daemon_path() {
         ("I +10", &wide, "BPSK31", &b31, 10.0, None, 15),
         ("E +7 (report)", &wide, "BPSK31", &b31, 7.0, None, 0),
         ("F +6 (report)", &wide, "BPSK31", &b31, 6.0, None, 0),
-        ("BPSK63 wide (#1443)", &wide, "BPSK63", &b63, 8.0, None, 13),
-        (
-            "BPSK63 500 Hz (#1443)",
-            &n500,
-            "BPSK63",
-            &b63,
-            8.0,
-            None,
-            13,
-        ),
+        // 13/16 each until #1443 gave total-power-opened bursts a pre-trigger lead; 16/16 since.
+        ("BPSK63 wide", &wide, "BPSK63", &b63, 8.0, None, 15),
+        ("BPSK63 500 Hz", &n500, "BPSK63", &b63, 8.0, None, 15),
     ] {
         let (whole, heads, decoded, flickers) = cell(idle, mode, tx, db, align, Some(&p));
         eprintln!(
