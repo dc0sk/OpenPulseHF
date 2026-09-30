@@ -93,7 +93,16 @@ stored).
   test and the daemon escape test fail; the server site bypassing the helper → **only** the
   `server::run` refusal test fails (the helper tests cannot see it); helper delivering raw → that
   test and the helper's refusal test fail; filexfer taking raw → only the new blocks test fails.
-- Workspace gate: GATE_RESULT_PLACEHOLDER
+- Workspace gate: the first run, at `4d27380`, gave `GATE: FAIL` with **tests 2656 passed / 0
+  failed**, and three tooling steps red, all caused by this change. The reachability ratchet flagged
+  the four new `pub` `TAG_*` constants, which had no caller outside the module; they are now
+  private. The trace check found REQ-CMP-01's widened CAP-08 scope (daemon `lib.rs`, filexfer
+  `blocks.rs`) unlinkable from its one core-test binding; the daemon positive control now binds it
+  too. The requirements-trailer lint found the fix commit had no `Implements:` trailer; it was added.
+  Re-run at `18f58ad`: `GATE: PASS 18f58ad532125b0428fa0fd91cff4ba34f6b3b44 clean 20260930T173715Z`,
+  suites=347, tests 2656 passed / 0 failed. The held-out slow suites (`notch_rescues_interferer`,
+  `ota_channel_adaptation`, the spectral-busy decode counts) were not run; this change does not touch
+  the receiver notch, the rate controller, the carrier detect or acquisition.
 
 ## 2026-09-30 — #1454 stage 2: a spectral busy criterion gathers the weak frames total power cannot see
 
