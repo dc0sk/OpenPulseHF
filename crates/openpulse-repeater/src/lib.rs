@@ -251,7 +251,7 @@ impl CrossBandRepeater {
         &mut self,
         burst: &AudioSamples,
         now_ms: u64,
-        sensor: Option<&mut CaptureTicker>,
+        mut sensor: Option<&mut CaptureTicker>,
     ) -> Result<Option<usize>, RepeaterError> {
         // The burst arrives from the DAEMON's accumulator (#1308). This engine holds no capture
         // stream: the receive rig has exactly one, and it is the daemon's — #1007's rule. The burst
@@ -280,8 +280,11 @@ impl CrossBandRepeater {
         // Carrier-sense rig_b BEFORE acquiring the key (#1325). Skipped while a full-duplex session
         // already holds it: sensing governs channel acquisition, not continuation, and a station
         // that sensed while keyed would read its own carrier and never relay again.
-        if self.session_guard.is_none() {
-            match self.sense_output_band(sensor) {
+        //
+        // "Holds the key" means a LIVE key: a guard the silence watchdog released is still `Some`, and
+        // treating it as held would re-key rig_b without sensing (#1454, D5).
+        if !self.session_guard.as_ref().is_some_and(|g| g.is_live()) {
+            match self.sense_output_band(sensor.as_deref_mut()) {
                 Sense::Clear => self.sense_faults = 0,
                 Sense::Busy => {
                     self.sense_faults = 0;
@@ -326,6 +329,11 @@ impl CrossBandRepeater {
         // Before #1260 the half-duplex path asserted here and `maybe_identify` asserted again
         // underneath it, releasing rig_b mid-scope while this scope still believed it held the key.
         // The guard also closes the leak this issue was filed for: every `?` below releases.
+        // Drop rig_b's capture before keying (#1454, D5): whatever the rig puts on its RX line while it
+        // transmits is not the band, and the stream would otherwise buffer it for the next read.
+        if let Some(s) = sensor {
+            s.drop_stream();
+        }
         let guard = self.acquire_key()?;
         // Arm the §97.119 timer BEFORE transmitting, not after.
         //
@@ -564,9 +572,27 @@ impl CrossBandRepeater {
                 Err(RecvTimeoutError::Timeout) => {
                     // The tick that used to do nothing. Without it the ID rides relay traffic, so a
                     // quiet band means a station that has transmitted never identifies (#1332).
+                    // #1454, D5: between relays, keep rig_b's floor learning — unless the session key is
+                    // live, when rig_b carries the repeater's own carrier and the stream is dropped.
+                    if let Some(s) = sensor.as_mut() {
+                        if self.session_guard.as_ref().is_some_and(|g| g.is_live()) {
+                            s.drop_stream();
+                        } else {
+                            let mode = self.config.mode.clone();
+                            let _ = s.tick(&mut self.engine_tx, &mode);
+                        }
+                    }
                     let now_ms = self.start.elapsed().as_millis() as u64;
                     match self.identify_if_due_at(now_ms) {
-                        Ok(_) => continue,
+                        Ok(identified) => {
+                            // The ID keyed rig_b: what the stream buffered meanwhile is not the band.
+                            if identified {
+                                if let Some(s) = sensor.as_mut() {
+                                    s.drop_stream();
+                                }
+                            }
+                            continue;
+                        }
                         Err(e) => break Err(e),
                     }
                 }
@@ -809,6 +835,288 @@ mod warm_sensor_tests {
         assert!(
             !rp.warm_sensor(&mut sensor, &AtomicBool::new(false)),
             "an empty card warmed the floor"
+        );
+    }
+}
+
+/// D5 (#1454): how the repeater treats rig_b's capture around its own transmissions. Unit tests,
+/// because the silence watchdog's bound is set inside `new()` and only a unit test can shorten it.
+#[cfg(test)]
+mod d5_tests {
+    use super::*;
+    use bpsk_plugin::BpskPlugin;
+    use openpulse_audio::LoopbackBackend;
+    use openpulse_core::audio::{
+        AudioBackend, AudioConfig, AudioInputStream, AudioOutputStream, DeviceInfo,
+    };
+    use openpulse_core::error::AudioError;
+    use openpulse_radio::PttError;
+    use std::sync::atomic::AtomicUsize;
+    use std::sync::mpsc::sync_channel;
+    use std::time::Duration;
+
+    /// rig_b's card: a loopback that counts stream opens and reads.
+    struct Counting {
+        inner: LoopbackBackend,
+        opens: Arc<AtomicUsize>,
+        reads: Arc<AtomicUsize>,
+    }
+    impl Clone for Counting {
+        fn clone(&self) -> Self {
+            Self {
+                inner: self.inner.clone_shared(),
+                opens: Arc::clone(&self.opens),
+                reads: Arc::clone(&self.reads),
+            }
+        }
+    }
+    struct CountingStream {
+        inner: Box<dyn AudioInputStream>,
+        reads: Arc<AtomicUsize>,
+    }
+    impl AudioInputStream for CountingStream {
+        fn read(&mut self) -> Result<Vec<f32>, AudioError> {
+            self.reads.fetch_add(1, Ordering::SeqCst);
+            self.inner.read()
+        }
+        fn close(self: Box<Self>) {}
+    }
+    impl AudioBackend for Counting {
+        fn name(&self) -> &str {
+            "Counting"
+        }
+        fn list_devices(&self) -> Result<Vec<DeviceInfo>, AudioError> {
+            self.inner.list_devices()
+        }
+        fn open_input(
+            &self,
+            d: Option<&str>,
+            c: &AudioConfig,
+        ) -> Result<Box<dyn AudioInputStream>, AudioError> {
+            self.opens.fetch_add(1, Ordering::SeqCst);
+            Ok(Box::new(CountingStream {
+                inner: self.inner.open_input(d, c)?,
+                reads: Arc::clone(&self.reads),
+            }))
+        }
+        fn open_output(
+            &self,
+            d: Option<&str>,
+            c: &AudioConfig,
+        ) -> Result<Box<dyn AudioOutputStream>, AudioError> {
+            self.inner.open_output(d, c)
+        }
+    }
+
+    #[derive(Clone, Default)]
+    struct Keys(Arc<AtomicUsize>);
+    impl PttController for Keys {
+        fn assert_ptt(&mut self) -> Result<(), PttError> {
+            self.0.fetch_add(1, Ordering::SeqCst);
+            Ok(())
+        }
+        fn release_ptt(&mut self) -> Result<(), PttError> {
+            Ok(())
+        }
+        fn is_asserted(&self) -> bool {
+            false
+        }
+    }
+
+    fn bpsk(backend: Box<dyn AudioBackend>) -> ModemEngine {
+        let mut e = ModemEngine::new(backend);
+        e.register_plugin(Box::new(BpskPlugin::new()))
+            .expect("register");
+        e
+    }
+
+    fn frame() -> Vec<f32> {
+        let lb = LoopbackBackend::new();
+        let mut src = bpsk(Box::new(lb.clone_shared()));
+        src.transmit(b"d5 frame", "BPSK250", None).expect("tx");
+        lb.drain_samples()
+    }
+
+    /// Quiet but present band, below any squelch.
+    fn quiet(n: usize) -> Vec<f32> {
+        (0..n).map(|i| ((i as f32) * 0.37).sin() * 1.0e-4).collect()
+    }
+
+    struct Rig {
+        rp: CrossBandRepeater,
+        rig_b: Counting,
+        keys: Arc<AtomicUsize>,
+        bursts: std::sync::mpsc::SyncSender<AudioSamples>,
+    }
+
+    fn rig(full_duplex: bool, callsign: &str, signoff_s: u64) -> Rig {
+        let rig_b = Counting {
+            inner: LoopbackBackend::new(),
+            opens: Arc::new(AtomicUsize::new(0)),
+            reads: Arc::new(AtomicUsize::new(0)),
+        };
+        let keys = Keys::default();
+        let counter = Arc::clone(&keys.0);
+        let (tx, rx) = sync_channel(4);
+        let rp = CrossBandRepeater::new(
+            Box::new(keys),
+            bpsk(Box::new(LoopbackBackend::new())),
+            bpsk(Box::new(rig_b.clone())),
+            rx,
+            RepeaterConfig {
+                mode: "BPSK250".into(),
+                tx_hang_ms: 0,
+                full_duplex,
+                carrier_sense: true,
+                callsign: callsign.into(),
+                id_interval_secs: 600,
+                id_signoff_idle_secs: signoff_s,
+            },
+        );
+        Rig {
+            rp,
+            rig_b,
+            keys: counter,
+            bursts: tx,
+        }
+    }
+
+    fn relay(r: &mut Rig, sensor: &mut CaptureTicker, audio: &[f32]) -> Option<usize> {
+        r.rp.relay_burst_at(
+            &AudioSamples {
+                samples: audio.to_vec(),
+            },
+            0,
+            Some(sensor),
+        )
+        .expect("relay")
+    }
+
+    /// Warm rig_b's floor through a first (deferred) relay, then leave one quiet read for the next.
+    fn warm(r: &mut Rig, sensor: &mut CaptureTicker, audio: &[f32]) {
+        r.rig_b.inner.push_frame(&quiet(16 * 512));
+        assert_eq!(relay(r, sensor, audio), None, "a cold sense relayed");
+    }
+
+    /// A full-duplex key the silence watchdog RELEASED is not a key held. The guard is still `Some`,
+    /// and skipping the sense on it re-keyed rig_b straight onto a busy band.
+    #[test]
+    fn a_key_the_watchdog_released_is_sensed_again_before_re_keying() {
+        let mut r = rig(true, "", 0);
+        r.rp.ptt.set_max_duration(Duration::from_millis(120));
+        let f = frame();
+        let mut sensor = CaptureTicker::new(None);
+        warm(&mut r, &mut sensor, &f);
+        r.rig_b.inner.push_frame(&quiet(800));
+        assert!(
+            relay(&mut r, &mut sensor, &f).is_some(),
+            "the clear band did not relay"
+        );
+        let keyed = r.keys.load(Ordering::SeqCst);
+        std::thread::sleep(Duration::from_millis(400));
+        // The watchdog has taken the key; rig_b's band is now occupied by someone else.
+        for _ in 0..8 {
+            r.rig_b.inner.push_frame(&f);
+        }
+        assert_eq!(
+            relay(&mut r, &mut sensor, &f),
+            None,
+            "a relay after the watchdog released the key was not sensed and keyed onto a busy band"
+        );
+        assert_eq!(
+            r.keys.load(Ordering::SeqCst),
+            keyed,
+            "rig_b was keyed again"
+        );
+    }
+
+    /// Every keyed relay drops rig_b's stream first, so the next sense opens a fresh one — what the
+    /// rig puts on its RX line while it transmits is not the band.
+    #[test]
+    fn a_keyed_relay_drops_rig_b_s_capture_stream() {
+        let mut r = rig(false, "", 0);
+        let f = frame();
+        let mut sensor = CaptureTicker::new(None);
+        warm(&mut r, &mut sensor, &f);
+        for _ in 0..2 {
+            r.rig_b.inner.push_frame(&quiet(800));
+            assert!(
+                relay(&mut r, &mut sensor, &f).is_some(),
+                "the clear band did not relay"
+            );
+            // A fresh loopback is a self-loop: take the relay's own transmission back off rig_b's
+            // input, which a real receiver on another card would never have been handed.
+            r.rig_b.inner.drain_samples();
+        }
+        assert_eq!(
+            r.rig_b.opens.load(Ordering::SeqCst),
+            2,
+            "two keyed relays must leave rig_b's stream dropped after each: one open for the warm-up \
+             and the first sense, one for the second sense"
+        );
+    }
+
+    /// Between relays, the idle arm keeps reading rig_b so its floor keeps learning the band.
+    #[test]
+    fn the_idle_arm_keeps_reading_rig_b_between_relays() {
+        let mut r = rig(false, "", 0);
+        r.rig_b.inner.push_frame(&quiet(16 * 512));
+        let stop = Arc::new(AtomicBool::new(false));
+        let s = Arc::clone(&stop);
+        let reads = Arc::clone(&r.rig_b.reads);
+        let t = std::thread::spawn(move || {
+            let _ = r.rp.run_full_duplex(s);
+        });
+        std::thread::sleep(Duration::from_millis(6 * IDLE_POLL_MS));
+        stop.store(true, Ordering::SeqCst);
+        t.join().expect("join");
+        let n = reads.load(Ordering::SeqCst);
+        assert!(
+            n >= 3,
+            "rig_b was read {n} times in 6 idle polls: after the warm-up the idle arm stopped reading"
+        );
+    }
+
+    /// An idle station ID keys rig_b, so it drops the stream just as a relay does.
+    #[test]
+    fn an_idle_station_id_drops_rig_b_s_capture_stream() {
+        let r = rig(false, "N0CALL", 1);
+        let f = frame();
+        for _ in 0..64 {
+            r.rig_b.inner.push_frame(&quiet(16 * 512));
+        }
+        let Rig {
+            mut rp,
+            rig_b,
+            keys,
+            bursts,
+        } = r;
+        let stop = Arc::new(AtomicBool::new(false));
+        let s = Arc::clone(&stop);
+        let t = std::thread::spawn(move || {
+            let _ = rp.run_full_duplex(s);
+        });
+        std::thread::sleep(Duration::from_millis(3 * IDLE_POLL_MS));
+        bursts.send(AudioSamples { samples: f }).expect("send");
+        std::thread::sleep(Duration::from_millis(3 * IDLE_POLL_MS));
+        let (keys_after_relay, opens_after_relay) = (
+            keys.load(Ordering::SeqCst),
+            rig_b.opens.load(Ordering::SeqCst),
+        );
+        assert!(
+            keys_after_relay > 0,
+            "the burst never relayed: the fixture proves nothing"
+        );
+        std::thread::sleep(Duration::from_millis(1_500));
+        stop.store(true, Ordering::SeqCst);
+        t.join().expect("join");
+        assert!(
+            keys.load(Ordering::SeqCst) > keys_after_relay,
+            "no sign-off ID was sent: the fixture proves nothing"
+        );
+        assert!(
+            rig_b.opens.load(Ordering::SeqCst) > opens_after_relay,
+            "the ID keyed rig_b and its stream was not dropped: the idle arm kept the stream it had"
         );
     }
 }

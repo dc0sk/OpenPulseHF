@@ -27,6 +27,30 @@ use rustfft::num_complex::Complex32;
 use rustfft::FftPlanner;
 
 const TICK: usize = 400;
+
+/// Longest idle tail the spectral hold can add after a loud burst ends (#1454). MEASURED, not derived:
+/// 4 000 on the loud fixtures here under the capped hold (the 16 000-sample cells read 3 200). It is
+/// window alignment, the open test's own lookback, the capped hold's four windows and one read —
+/// about 511 + 6·512 + 400 — but the constant is the measurement. The cap bounds it at any level;
+/// uncapped, one loud window held the mean for seven more windows and this was 9·512 + TICK.
+const SPECTRAL_TAIL_MAX: usize = 4_000;
+
+/// The tail on a loud read of three or more windows (which opens the spectral test on every band) is
+/// within one window and one read of `SPECTRAL_TAIL_MAX` — so the constant is pinned from BOTH sides,
+/// and cannot grow unnoticed.
+fn assert_tail(post: usize, loud: usize, what: &str) {
+    assert!(
+        post >= loud && post - loud <= SPECTRAL_TAIL_MAX,
+        "{what}: burst of {post} for {loud} loud samples"
+    );
+    if loud >= 3 * 512 {
+        assert!(
+            post - loud + 512 + TICK >= SPECTRAL_TAIL_MAX,
+            "{what}: tail {} is more than a window and a read under SPECTRAL_TAIL_MAX ({SPECTRAL_TAIL_MAX})",
+            post - loud
+        );
+    }
+}
 const RATE: f32 = 8000.0;
 
 fn engine() -> (ModemEngine, LoopbackBackend) {
@@ -315,32 +339,6 @@ fn a_long_frame_is_gathered_as_one_burst() {
     assert!(ok >= 7, "{ok}/8 long frames decoded");
 }
 
-/// PINNED, not fixed: the entry rung is still below the total-power criterion (#1454).
-///
-/// A corrected floor buys back ~2 dB but a 62 Hz signal in a 2.4 kHz band still cannot raise the
-/// block RMS past the squelch at +12 dB in-band. Stage 2 (a spectral-excess criterion) is what
-/// changes this; until then a change here is unplanned and must be looked at.
-#[test]
-fn the_entry_rung_is_still_below_the_total_power_criterion() {
-    let idle = corpus("ic9700-idle-wide-500hz-control.wav");
-    let p = payload(64);
-    let (mut ok, mut decodable) = (0, 0);
-    for t in 0..4usize {
-        let r = trial(&idle, t * 9000, "BPSK31", &p, 12.0, 4000 + t * 17_137);
-        println!("t{t}: decoded {} decodable {}", r.decoded, r.decodable);
-        ok += r.decoded as u32;
-        decodable += r.decodable as u32;
-    }
-    assert_eq!(
-        decodable, 4,
-        "the level is not decodable at all — this fixture proves nothing"
-    );
-    assert_eq!(
-        ok, 0,
-        "BPSK31 at +12 dB in-band decoded {ok}/4 on a wide filter — #1454 moved"
-    );
-}
-
 /// The operator's squelch is a LOWER bound: it raises the threshold and survives the adaptive seam
 /// (before #1452 it was overwritten within one window), and a value below the band cannot lower it.
 #[test]
@@ -502,6 +500,55 @@ fn the_floor_follows_the_band_up_at_the_cap_and_back_down() {
     );
 }
 
+/// Two transmissions 0.4 s apart are two bursts, at any level (#1454 round 9). Every arm decodes one
+/// frame per burst, so a merged pair loses its second frame. Total power alone ends a burst on the
+/// first quiet read; the spectral hold adds a tail, and uncapped that tail was ~0.5 s after a STRONG
+/// frame (by the hold's arithmetic one window ≥ 13× the floor carries the 8-window mean), which merged
+/// exactly this pair. The
+/// 0.2 s pair is the negative control: inside the tail it is one burst, so the gate can fail both ways.
+#[test]
+fn two_transmissions_four_tenths_of_a_second_apart_are_two_bursts() {
+    let idle = corpus("ic9700-idle-wide-500hz-control.wav");
+    let f = {
+        let (mut e, lb) = engine();
+        e.transmit(b"first frame", "BPSK250", None).expect("tx");
+        lb.drain_samples()
+    };
+    let warm = 24_000;
+    let fr = rms(&f);
+    for db in [8.0f32, 12.0, 20.0] {
+        for (gap, want) in [(3_200usize, 2usize), (1_600, 1)] {
+            let mut buf = idle.cycled(0, warm + 5_000 + 2 * f.len() + gap + 5 * 8000);
+            let noise = rms(&buf[..warm]).powi(2)
+                * in_band_share(
+                    &buf[..warm],
+                    1500.0 - half_band("BPSK250"),
+                    1500.0 + half_band("BPSK250"),
+                );
+            let g = (noise * 10f32.powf(db / 10.0)).sqrt() / fr;
+            let (a, b) = (warm + 5_000, warm + 5_000 + f.len() + gap);
+            for (i, s) in f.iter().enumerate() {
+                buf[a + i] += s * g;
+                buf[b + i] += s * g;
+            }
+            let (mut e, _lb) = engine();
+            let (mut fed, mut bursts) = (0usize, 0usize);
+            for chunk in buf.chunks(TICK) {
+                fed += chunk.len();
+                if let Ok(Some(burst)) = e.accumulate_capture(Some("BPSK250"), chunk.to_vec()) {
+                    let end = fed - chunk.len();
+                    let start = end - burst.samples.len();
+                    bursts += (start < b + f.len() && end > a) as usize;
+                }
+            }
+            assert_eq!(
+                bursts, want,
+                "+{db} dB, frames {gap} samples apart: {bursts} bursts over the pair, expected {want}"
+            );
+        }
+    }
+}
+
 /// The recognition window (acquisition window plus one symbol) of the mode `profile` runs at
 /// `level`, from the plugin that ships it — the bound the not-evidence rule reads, from the same
 /// two geometry fields, summed as the engine's `frame_scan_geometry` sums them.
@@ -533,8 +580,10 @@ fn hpx_window(level: openpulse_core::rate::SpeedLevel) -> usize {
 }
 
 /// Feed warm idle, then loud reads of the given sizes, then idle until the burst flushes; decode it
-/// under an `hpx_hf` session (locked to `level` if given). Returns (burst length, ACK keyed): a
-/// failed burst that counts as ladder evidence keys an ACK; one that does not, keys nothing.
+/// under an `hpx_hf` session (locked to `level` if given). Returns (post-trigger burst length, ACK
+/// keyed): a failed burst that counts as ladder evidence keys an ACK; one that does not, keys nothing.
+/// The length excludes the pre-trigger ring, which a one-read onset of three or more windows carries
+/// even though total power opened it (#1454).
 fn ota_verdict(level: Option<openpulse_core::rate::SpeedLevel>, reads: &[usize]) -> (usize, bool) {
     ota_verdict_on(SessionProfile::hpx_hf(), level, reads)
 }
@@ -575,16 +624,20 @@ fn ota_verdict_on(
         }
         at += n;
     }
-    for chunk in idle.cycled(8 * 8000, 4 * TICK).chunks(TICK) {
+    // Twice the longest tail, so the flush is decided by the carrier detect and never by the end of
+    // this feed — otherwise the length assertions against `SPECTRAL_TAIL_MAX` could not fail.
+    for chunk in idle.cycled(8 * 8000, 2 * SPECTRAL_TAIL_MAX).chunks(TICK) {
         if let Ok(Some(b)) = e.accumulate_capture(Some("BPSK250"), chunk.to_vec()) {
             burst.get_or_insert(b);
         }
     }
     let b = burst.expect("the loud reads must flush a burst");
+    // Read before the decode, which takes it.
+    let lead = e.last_flush_lead();
     let r = e
         .ota_decode_burst(&b, "flicker", Some("BPSK250"))
         .expect("decode");
-    (b.samples.len(), r.ack.is_some())
+    (b.samples.len() - lead, r.ack.is_some())
 }
 
 /// A failed burst shorter than every candidate's recognition window is not ladder evidence, and the verdict
@@ -617,11 +670,8 @@ fn a_flicker_is_judged_by_its_duration_not_its_reads() {
     for (level, reads, counts) in cells {
         let (len, ack) = ota_verdict(Some(level), reads);
         println!("{level:?} reads {reads:?}: burst {len}, ack {ack}");
-        assert_eq!(
-            len,
-            reads.iter().sum::<usize>(),
-            "{level:?} {reads:?}: wrong burst length"
-        );
+        let sum = reads.iter().sum::<usize>();
+        assert_tail(len, sum, &format!("{level:?} {reads:?}"));
         assert_eq!(
             ack, counts,
             "{level:?} reads {reads:?}: counted {ack}, expected {counts}"
@@ -680,7 +730,7 @@ fn at_sl1_the_bound_is_mfsk16s_recognition_window() {
     for (len, counts) in [(1_000, false), (w - 1, false), (w, true), (4_000, true)] {
         let (got, ack) = ota_verdict(Some(Sl1), &[len]);
         println!("SL1, {len}: burst {got}, ack {ack}");
-        assert_eq!(got, len);
+        assert_tail(got, len, &format!("SL1, {len}"));
         assert_eq!(ack, counts, "SL1, {len} samples");
     }
 }

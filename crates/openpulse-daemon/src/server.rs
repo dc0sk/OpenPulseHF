@@ -977,6 +977,15 @@ pub async fn run(cfg: OpenpulseConfig, modem_backend: Box<dyn AudioBackend>) -> 
                         }
                     }
                 });
+                // #1454: a burst the spectral test opened carries a pre-trigger ring at its head. The
+                // OTA and non-OTA arms below run on this engine and read where it ends; the monitor and
+                // the repeater decode with their own engines, cannot know, and scan only 4x the
+                // acquisition window from the start — so they get the burst without it (maintainer).
+                let ring_lead = engine.last_flush_lead();
+                let shared: Option<&[f32]> = match &burst {
+                    Ok(Some(b)) => Some(&b.samples[ring_lead.min(b.samples.len())..]),
+                    _ => None,
+                };
                 // Multi-mode monitor (REQ-RX-01): try the configured extra modes on this burst,
                 // independent of the active session mode, and emit a MonitorFrame per decode.
                 //
@@ -987,9 +996,9 @@ pub async fn run(cfg: OpenpulseConfig, modem_backend: Box<dyn AudioBackend>) -> 
                 // for the entire process lifetime under exactly the on-air configuration
                 // (archetype scan 2026-07-29, finding 9). The monitor is about what the RADIO hears,
                 // which does not depend on which decoder the session happens to be running.
-                if let Ok(Some(b)) = &burst {
+                if let Some(heard) = shared {
                     if let Some(mon) = runtime_state.monitor.as_mut() {
-                        let decoded = tokio::task::block_in_place(|| mon.decode_all(&b.samples));
+                        let decoded = tokio::task::block_in_place(|| mon.decode_all(heard));
                         for (m, payload) in decoded {
                             let _ = handle.event_tx.send(
                                 crate::protocol::ControlEvent::MonitorFrame {
@@ -1009,12 +1018,15 @@ pub async fn run(cfg: OpenpulseConfig, modem_backend: Box<dyn AudioBackend>) -> 
                 // `try_send` on purpose: the relay spends rig_b airtime per burst while the daemon
                 // keeps hearing, so a busy relay must DROP rather than grow a queue that would
                 // eventually put minutes-old audio on the air.
-                if let (Ok(Some(b)), Some(tx), true) = (
-                    &burst,
+                if let (Some(heard), Some(tx), true) = (
+                    shared,
                     runtime_state.repeater_bursts.as_ref(),
                     runtime_state.repeater_stop.is_some(),
                 ) {
-                    if tx.try_send(b.clone()).is_err() {
+                    let relayed = openpulse_modem::pipeline::AudioSamples {
+                        samples: heard.to_vec(),
+                    };
+                    if tx.try_send(relayed).is_err() {
                             runtime_state.repeater_bursts_dropped =
                                 runtime_state.repeater_bursts_dropped.saturating_add(1);
                             tracing::warn!(
