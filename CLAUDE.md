@@ -132,6 +132,9 @@ The `--no-default-features` flag disables the CPAL audio backend and is required
 
 ## Current phase and execution order
 
+**Release 1 work plan (2026-09-30): [`docs/dev/project/workplan.md`](docs/dev/project/workplan.md)** — milestones, scope,
+triage rules and the decision log. Work that serves no milestone there is `post-release`.
+
 **Completed**: Phases 1–9, Phase 7 (7.1–7.5), Phase 8 (8.1–8.3), FF series (FF-1 through FF-13), BL-FEC series (BL-FEC-1 through BL-FEC-6), all code stubs (PR #187–#189). See `docs/dev/project/roadmap.md` for full history.
 
 **Active tracks**:

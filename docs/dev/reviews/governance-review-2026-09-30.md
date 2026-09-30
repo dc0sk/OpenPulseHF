@@ -1,7 +1,7 @@
 ---
 project: openpulsehf
 doc: docs/dev/reviews/governance-review-2026-09-30.md
-status: draft
+status: resolved
 last_updated: 2026-09-30
 ---
 
@@ -18,6 +18,10 @@ That sentence is narrower than the 1.0 defined in `docs/dev/project/release-1.0-
 most findings below follow from the gap between the two. Every number here comes from a command
 listed in *Apparatus* at the end. The draft was reviewed adversarially by Fable; its corrections are
 folded in and listed in *Second opinion*.
+
+> **Decided 2026-09-30.** The maintainer went through this review item by item and took twelve
+> decisions. They are recorded, with the resulting milestones, in
+> [`docs/dev/project/workplan.md`](../project/workplan.md), which supersedes §4 and §5 below.
 
 ---
 
