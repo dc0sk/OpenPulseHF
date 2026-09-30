@@ -47,7 +47,27 @@ modem, daemon and repeater crates.
 - The evidence rule's two halves (total power, spectral) are twins: each is measured to the end of the
   carrier its detector saw, not to the flush.
 
-## What each round changed
+## Prompt
+
+Every round was prompted for falsification ("test the instinct rather than confirm it; flag anything
+wrong or unproven in the framing") and handed the raw logs, probe sources and code, not a summary.
+
+- **Round 3 — design v3** and probes v1–v2: the M-of-K band test, ε, the thresholds, the ring.
+- **Round 4 — design v4** and probe v3 (mirrored idle, the passband mask), with the maintainer's
+  minimum-span decision.
+- **Round 5 — design v5**: the D3 latch, the fan-out strip, the non-OTA arm, the implementation notes.
+- **Round 6 — the failed acceptance run** (P2 4/8) with its diagnosis packet, split traces, the
+  ablation and the candidate-hold sweep.
+- **Round 7 — the round-6 measurement plan's results** (six candidate rules × eight cells + idle)
+  and a proposed statistic.
+- **Round 8 — the build**: the rule as built, one deviation from round 7, the sabotage matrix, and
+  three findings.
+- **Round 9 — the hold rule's trade**: `monitor_during_ota` failing on the branch, its bisect, the
+  gap probe on real idle, and options A–C.
+- **The write-up** — the ledger entry, the acceptance row, this artifact, the PR body, the commit
+  messages and the #1461 issue text, checked claim by claim against the logs.
+
+## Verdict
 
 - **Round 3.** ε (a median-relative floor on the ratio) never binds: replaced by a passband mask. The
   M-of-K persistence is right; a false open becomes ladder evidence whenever a fast rung is a
@@ -77,6 +97,10 @@ modem, daemon and repeater crates.
   margin, separate the transmissions with the count rule, or hold only while total power is not
   carrying the burst; the review found a fourth in the hold's arithmetic — cap each window at the open
   threshold — which kept every decode count and separated the pair.
+- **The write-up: revise the text.** Nine required corrections, none touching the code or a measured
+  number: the +10 dB miss's attribution, "~4 windows" beside a 4 000-sample tail, a loud-fixture tail
+  quoted for the frame case, a count read from the wrong side, the maintainer-decision list, the round
+  count, the sabotage descriptions, and "every gate was sabotage-verified" — all applied.
 
 ## Stated limits (carried into `CLAUDE.md`)
 
