@@ -59,7 +59,10 @@ cargo:
 
 `hook_drift` from `gate.sh` (the function text itself, extracted and evaluated): no installed hook →
 rc 0; a cargo-husky-style install of the current hook → rc 0; `origin/main`'s hook installed → rc 1
-with a diff. `scripts/gate.sh --self-test`: see the PR. **Not measured:** the wall-clock cost of a real
+with a diff. The new hook also ran for real on this change's own push (no crate-owned files, so fmt
+and the three clippy passes only; all passed). `scripts/gate.sh --self-test` was started and **stopped
+at the session's one-hour background limit before it finished — no self-test result**; this change
+does not touch the failure-detection path it covers, but that is a reason, not a run. **Not measured:** the wall-clock cost of a real
 core-crate push under the new hook (it is most of the workspace test run), and a full `gate.sh` run of
 this branch.
 
