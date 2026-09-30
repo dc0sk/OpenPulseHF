@@ -66,9 +66,9 @@ on `hpx_hf` (psk8, 64qam, scfdma, pilot).
 | Create the GitHub milestones `M1 wire freeze` … `M4 release` and labels `post-release`, `post-release-rerank`, `tx-safety` (not creatable from the cloud session's tools — maintainer, or a local session with `gh`) | 3, 6 | open |
 | Slim `CLAUDE.md` to ~200 lines; relocate, don't delete; acceptance table → one-line-per-row index | 7 | done (#1472): 731 → ~260 lines, 144 KB → 15 KB; six sections moved verbatim to `docs/dev/` |
 | Rewrite the *Adversarial review* rule in `CLAUDE.md`: mandatory for wire-format/trait changes, anything that keys a transmitter, and eliminations; one round per PR; every prompt asks "does this block Release 1?" | 8 | done (#1472) |
-| Pre-push hook **tests** reverse dependents when `openpulse-core`, `-dsp` or `-modem` change; fix #1357 and #1448 on the way | 9 | done in the hook PR |
+| Pre-push hook **tests** reverse dependents when `openpulse-core`, `-dsp` or `-modem` change; fix #1357 and #1448 on the way | 9 | done (#1473) |
 | Order the galvanic USB isolator | 12 | maintainer |
-| Re-baseline `onair-execution-plan.md` (dated 2026-07-23) against these decisions, incl. the #1081 attribution check and the FT-991A offline receive failure | 12 | open |
+| Re-baseline `onair-execution-plan.md` (dated 2026-07-23) against these decisions, incl. the #1081 attribution check and the FT-991A offline receive failure | 12 | done in the on-air re-baseline PR; it found two tooling gaps, now M2 rows |
 
 **Exit:** all rows done; the tracker matches this file.
 
@@ -95,6 +95,7 @@ picks then (0.x on the current preamble, or current preamble final).
 | PTT and station ID on the core path: #1257 (no leader delay before the first sample), #1334 (a flush timeout un-arms the station-ID timer), #1367 (200 ms sleep before PTT drop) | open |
 | #1304 (noise floor on OFDM52's wide band) — diagnose whether it breaks DCD on SL7–14 | open |
 | #1421 dependency update, security-relevant ones only | open |
+| On-air tooling (found by the re-baseline): `run-onair-twin-ota.sh` enables `observability.audit_mode` so `OtaRateDecision` events are retained for A2; `onair-bundle-evidence.sh` CAT-reads each rig's filter width and frequency trim and records `notch_enabled`/`agc_enabled`/`cessb_enabled` | open |
 | Release check: `every_profile_rung_decodes_at_its_floor_with_its_fec`, `hpx_hf_rungs_survive_fade`, `mfsk16_arq_subfloor`, `goodput_gate`, benchmark, the ARDOP suites — at one commit, with the known-red rows disclosed (notch #1457 per decision 10) | open |
 
 **Exit:** all items closed or explicitly moved; release check green except the disclosed rows.
@@ -103,6 +104,7 @@ picks then (0.x on the current preamble, or current preamble final).
 
 | Item | Status |
 |---|---|
+| Pick the HF-capable station pair and band (the IC-9700 is VHF/UHF only) | maintainer |
 | G0–G3 per the re-baselined plan (isolator fitted, RFI gone) | blocked on isolator |
 | A1: two-station HF exchange in both directions, logs retained | open |
 | A2: climb (new mode then decodes), demotion, stability — scored per `release-1.0-criteria.md` §A2, both stations' logs + capture, `observability.audit_mode` on | open |
