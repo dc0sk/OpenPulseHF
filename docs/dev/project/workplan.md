@@ -64,8 +64,8 @@ on `hpx_hf` (psk8, 64qam, scfdma, pilot).
 | This work plan + decision log | 3 | this PR |
 | Triage all open issues into milestones (proposal in *Triage proposal* below, maintainer approves) | 6 | **awaiting approval** |
 | Create the GitHub milestones `M1 wire freeze` … `M4 release` and labels `post-release`, `post-release-rerank`, `tx-safety` (not creatable from the cloud session's tools — maintainer, or a local session with `gh`) | 3, 6 | open |
-| Slim `CLAUDE.md` to ~200 lines; relocate, don't delete; acceptance table → one-line-per-row index | 7 | open |
-| Rewrite the *Adversarial review* rule in `CLAUDE.md`: mandatory for wire-format/trait changes, anything that keys a transmitter, and eliminations; one round per PR; every prompt asks "does this block Release 1?" | 8 | open |
+| Slim `CLAUDE.md` to ~200 lines; relocate, don't delete; acceptance table → one-line-per-row index | 7 | done in the CLAUDE.md-slim PR: 731 → ~260 lines, 144 KB → 15 KB; six sections moved verbatim to `docs/dev/` |
+| Rewrite the *Adversarial review* rule in `CLAUDE.md`: mandatory for wire-format/trait changes, anything that keys a transmitter, and eliminations; one round per PR; every prompt asks "does this block Release 1?" | 8 | done in the CLAUDE.md-slim PR |
 | Pre-push hook **tests** reverse dependents when `openpulse-core`, `-dsp` or `-modem` change; fix #1357 and #1448 on the way | 9 | open |
 | Order the galvanic USB isolator | 12 | maintainer |
 | Re-baseline `onair-execution-plan.md` (dated 2026-07-23) against these decisions, incl. the #1081 attribution check and the FT-991A offline receive failure | 12 | open |
