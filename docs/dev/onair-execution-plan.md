@@ -31,11 +31,11 @@ The sections below were written 2026-07-23. These changes to them are in force:
    not fade**, so A2's climb and demotion are driven by induced level changes (TX power,
    attenuation), recorded per §A2; Release 1 claims the controller responds correctly, not that it
    is characterised on a fading path. The release candidate then repeats A1/A2 on HF (M4).
-2. **Evidence must be recorded on the final wire format.** M1 (#1062 preamble + the compression
-   dictionary ID, time-boxed to 2026-10-14) changes what goes on the air. G0, G1 and 2 m plumbing
-   runs can and should happen before M1 — they test the rigs and the audio chain, not the format —
-   but **A1/A2 bundles recorded before M1 lands do not count**, and the four replay-corpus rows
-   (#1351) are re-recorded once, after M1.
+2. **Evidence must be recorded on the v0.17 wire format.** M1 changes only the compressed payload
+   (the zstd dictionary ID); the preamble stays as it is for v0.17 and changes before 1.0 (#1062,
+   decision 16). G0, G1 and 2 m plumbing runs can and should happen now. A1/A2 bundles count once M1
+   has landed, since compression is on in those runs. The replay-corpus re-record (#1351) and a second
+   2 m campaign follow #1062, before 1.0.
 3. **Development runs use the 2 m pair** (IC-9700 ↔ FT-818, 144.640 MHz,
    [onair-ic9700-ft818-setup.md](onair-ic9700-ft818-setup.md)). The HF run with the release candidate
    needs an HF-capable pair — the IC-9700 is VHF/UHF only; on record: FT-991A 008924A1, IC-705,
@@ -357,7 +357,7 @@ scanning receive or route the matrix through the daemon streaming path. Filed he
 ## 9. Critical path, one line
 
 **Release 1 (re-baselined 2026-09-30, test stages 2026-10-01):** virtual audio → hardware loopback →
-G0/G1 on the **2 m** pair (isolators fitted; G3 confirms RX is clean) → *wait for M1 (wire freeze)* →
+G0/G1 on the **2 m** pair (isolators fitted; G3 confirms RX is clean) → *wait for M1 (compression dictionary ID)* →
 A1 both directions on 2 m → A2 per §A2 scoring with induced level changes (after the two tooling gaps
 are closed) → the ARDOP Pat session → release candidate → **HF run with the RC** → tag `v0.17.0`.
 A4/A5 run alongside. A3 follows for 1.0.
