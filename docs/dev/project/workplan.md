@@ -2,7 +2,7 @@
 project: openpulsehf
 doc: docs/dev/project/workplan.md
 status: draft
-last_updated: 2026-09-30
+last_updated: 2026-10-01
 ---
 
 # Work plan — Release 1 ("basic modem")
@@ -72,17 +72,25 @@ on `hpx_hf` (psk8, 64qam, scfdma, pilot).
 
 **Exit:** all rows done; the tracker matches this file.
 
-### M1 — Wire freeze (target 2026-10-14, hard time-box — decision 2)
+### M1 — v0.17 wire format (target 2026-10-14)
+
+Narrowed by decision 16: #1062 (the preamble) moves after v0.17, so M1 holds only the one payload
+format change Release 1 needs.
 
 | Item | Status |
 |---|---|
-| #1062: implement the cheapest candidate listed in the issue (modem73-style terminator); fold #1171 in | open |
-| Compression: put the zstd dictionary ID on the wire and reject a mismatch (decision 5; lands in this window because it changes the payload format) | issue to file |
-| Re-record the capture corpus once against the final format; un-ignore the four replay rows (#1351) | open |
+| Compression: put the zstd dictionary ID on the wire and reject a mismatch (decision 5). A wire-format change, so its design goes to review before implementing | design in progress |
+| Declare the v0.17 wire format in `protocol-wire-spec.md`, stating that the preamble changes before 1.0 (#1062) | open |
 
-**Exit:** the wire format is declared v1 in `protocol-wire-spec.md`; the corpus rows run green.
-**If the box slips:** stop, record why in the decision log, and take the fallback the maintainer
-picks then (0.x on the current preamble, or current preamble final).
+**Exit:** the dictionary-ID change merged and gated; the v0.17 format declared.
+
+### After v0.17, before 1.0 (decision 16)
+
+| Item | Status |
+|---|---|
+| #1062: replacement preamble — the thread's recorded direction is PN, N ≥ 63, for interferer refusal and onset placement where thresholds exist; design reviewed before implementing; fold #1171 in | parked |
+| Re-record the replay corpus against the 1.0 format; un-ignore the four replay rows (#1351) | parked |
+| Repeat the 2 m campaign on the 1.0 format | parked |
 
 ### M2 — Release path (target 2026-10-28)
 
@@ -144,6 +152,7 @@ picks then (0.x on the current preamble, or current preamble final).
 | 13 | 2026-10-01 | **Test stages: virtual audio → hardware loopback → 2 m → HF only with the release candidate.** Development evidence (A1, A2) is collected on 2 m: no HF band noise for others during early testing, and no conclusions drawn from band conditions nobody controls. **Amends decision 4**: the HF run moves from the M3 gate to M4, with the release candidate | maintainer |
 | 14 | 2026-10-01 | Release 1 is `v0.17.0`; `1.0` stays reserved for the full criteria | maintainer (open question 1) |
 | 15 | 2026-10-01 | #1438, #1443, #1452, #1454 closed — their stages merged | maintainer (open question 2) |
+| 16 | 2026-10-01 | **#1062 moves after v0.17, before 1.0. Amends decision 2.** Release 1 is 0.x and the wire format may change until 1.0 (release-1.0-criteria decision 2), so the preamble does not gate v0.17. Reading the full #1062 thread showed the "cheapest candidate" (a 2-symbol terminator) fixes onset placement only, not interferer refusal, at close to the full validation cost; the recorded direction is PN with N ≥ 63, whose demod parity is unmeasured. The v0.17 campaign runs on the current preamble, and a second, cheap 2 m campaign follows #1062 before 1.0 | maintainer |
 
 ## Open questions
 
@@ -225,15 +234,15 @@ after M3) · **close?** likely done, maintainer to confirm.
 | 1257 | No leader delay between PTT edge and first sample | **M2** | clips the preamble on host-keyed rigs (on air) |
 | 1241 | trace.py accepts a binding with no sabotage record | PR | tooling |
 | 1197 | Triage the 54 orphans | PR | tooling |
-| 1171 | `preamble_search_plan` mixes domains | **M1** | fold into #1062 |
+| 1171 | `preamble_search_plan` mixes domains | after v0.17 | fold into #1062 (decision 16) |
 | 1160 | #1060 residuals | PR | superseded by #1062's outcome |
 | 1150 | DCD busy flag is a 100 ms wall-clock hold | PR | test load-sensitivity |
 | 1146 | Scan budgets not tied to real-time on reference hardware | PR-R | matters if on-air decode falls behind |
 | 1139 | HARQ combining demodulates at offset 0 only | PR | HARQ gain, not correctness |
 | 1126 | Empty/partial FEC tables legal OTA profiles? | PR | `hpx_hf` codes every rung |
 | 1105 | Mesh route maintenance | PR | mesh out of scope |
-| 1062 | Alternating preamble: O(1) time-bandwidth | **M1** | decision 2 |
+| 1062 | Alternating preamble: O(1) time-bandwidth | after v0.17 | decision 16 (was M1, decision 2) |
 | 1059 | Re-derive QPSK ρ thresholds | PR | no QPSK template ships |
 
-**Totals** (counted from the table): M0 2 · M1 2 · M2 11 · PR-R 12 · PR 34 · closed 2026-10-01 4 = 65. New issues to file with M1/M2:
+**Totals** (counted from the table): M0 2 · M1 0 · after v0.17 2 · M2 11 · PR-R 12 · PR 34 · closed 2026-10-01 4 = 65. New issues to file with M1/M2:
 the compression dictionary ID (M1) and the unpack/REQ-CMP-03 pair (M2).
