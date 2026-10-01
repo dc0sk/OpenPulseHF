@@ -403,7 +403,7 @@ pub struct AudioConfig {
 pub struct ModemConfig {
     /// Default modulation mode (e.g. `"BPSK250"`).
     pub mode: String,
-    /// Adaptive session profile (e.g. `"hpx_hf"`, `"hpx_ofdm_hf"`).
+    /// Adaptive session profile: `"fast"` (full ladder) or `"robust"` (capped at SL6, ≤ 500 Hz).
     ///
     /// Selects the SpeedLevel→mode ladder the rate controller and mode advisor use.
     /// See `SessionProfile::PROFILE_NAMES` in `openpulse-core`.
@@ -600,8 +600,8 @@ pub struct ArdopConfig {
     /// Opt-in: run an adaptive ARQ session so the rate ladder, ARQBW, and ARQTIMEOUT take effect.
     /// Default false (fixed-mode operation, the historical behaviour).
     pub enable_adaptive_arq: bool,
-    /// Session profile name for the adaptive ARQ ladder (e.g. `hpx500`, `hpx_hf`). Empty falls
-    /// back to `hpx500`.
+    /// Session profile for the adaptive ARQ ladder: `fast` or `robust`. The host's `ARQBW` caps it
+    /// further.
     pub adaptive_profile: String,
 }
 
@@ -703,7 +703,7 @@ impl Default for ModemConfig {
     fn default() -> Self {
         Self {
             mode: "BPSK250".into(),
-            profile: "hpx_hf".into(),
+            profile: "fast".into(),
             ptt_backend: "none".into(),
             ptt_device: String::new(),
             ptt_gpio: 3,
@@ -775,7 +775,7 @@ impl Default for ArdopConfig {
             cmd_port: 8515,
             data_port: 8516,
             enable_adaptive_arq: false,
-            adaptive_profile: "hpx500".into(),
+            adaptive_profile: "fast".into(),
         }
     }
 }
@@ -1075,10 +1075,10 @@ device = ""
 # FSK4-ACK — see docs/mode-fec-ladder.md for the authoritative list per band/bandwidth class.
 mode = "BPSK250"
 # Adaptive session profile (SpeedLevel ladder) used by the rate controller and
-# `openpulse mode-advisor`. Available: hpx500, hpx_hf, hpx_ofdm_hf, hpx_wideband,
-# hpx_wideband_hd, hpx_narrowband. hpx_ofdm_hf is the OFDM
-# higher-order (high-throughput/high-reliability) HF ladder.
-profile = "hpx_hf"
+# `openpulse mode-advisor`: "fast" (full ladder, SL1-SL14, up to ~2 kHz, for good conditions) or
+# "robust" (the same ladder capped at SL6: single-carrier, <= 500 Hz, for poor conditions or
+# limited gear). The two interoperate.
+profile = "fast"
 # PTT backend: none | rts | dtr | vox | rigctld | cm108
 ptt_backend = "none"
 # PTT device path for device-based backends. For cm108, a /dev/hidrawN path
@@ -1200,8 +1200,8 @@ data_port = 8516
 # Opt-in: run an adaptive ARQ session so the rate ladder + host ARQBW/ARQTIMEOUT take effect.
 # Default false = fixed-mode operation (ARQBW/ARQTIMEOUT are accepted-and-echoed no-ops).
 enable_adaptive_arq = false
-# Session profile for the adaptive ladder (e.g. hpx500, hpx_hf); empty falls back to hpx500.
-adaptive_profile = "hpx500"
+# Session profile for the adaptive ladder: "fast" or "robust". The host's ARQBW caps it further.
+adaptive_profile = "fast"
 
 [kiss]
 # IP address the KISS TNC listens on.
@@ -1534,7 +1534,7 @@ mod tests {
         assert_eq!(cfg.station.grid_square, "AA00");
         assert_eq!(cfg.ardop.cmd_port, 8515);
         assert_eq!(cfg.modem.ptt_backend, "none");
-        assert_eq!(cfg.modem.profile, "hpx_hf");
+        assert_eq!(cfg.modem.profile, "fast");
         assert_eq!(cfg.modem.ota_aggressiveness, ""); // empty = use individual A2/A3 knobs
         assert_eq!(cfg.modem.dcd_squelch, 0.0); // off: the adaptive squelch governs (#1452)
         assert!(cfg.modem.dcd_squelch_bands.is_empty());
@@ -1580,15 +1580,15 @@ mod tests {
         {
             let mut f = std::fs::File::create(&path).unwrap();
             writeln!(f, "[modem]").unwrap();
-            writeln!(f, r#"profile = "hpx_ofdm_hf""#).unwrap();
+            writeln!(f, r#"profile = "robust""#).unwrap();
         }
         let cfg = load_from(&path).unwrap();
         let _ = std::fs::remove_file(&path);
-        assert_eq!(cfg.modem.profile, "hpx_ofdm_hf");
+        assert_eq!(cfg.modem.profile, "robust");
 
         // The emitted template must parse and carry the documented default.
         let parsed: OpenpulseConfig = toml::from_str(&init_template()).unwrap();
-        assert_eq!(parsed.modem.profile, "hpx_hf");
+        assert_eq!(parsed.modem.profile, "fast");
     }
 
     #[test]

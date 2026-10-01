@@ -20,7 +20,7 @@ fn demo_params() -> LinkParams {
     // hpx_wideband starts at a fast mode (QPSK500), so frames are short and events arrive
     // promptly. usize::MAX runs continuously until the client disconnects.
     LinkParams {
-        profile_name: "hpx_wideband".into(),
+        profile_name: "apparatus:wide-qpsk".into(),
         forward: ChannelSpec::Awgn(20.0),
         reverse: ChannelSpec::Awgn(25.0),
         payload_bytes_per_frame: 32,

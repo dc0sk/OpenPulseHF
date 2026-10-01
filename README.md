@@ -2,7 +2,7 @@
 project: openpulsehf
 doc: README.md
 status: living
-last_updated: 2026-09-14
+last_updated: 2026-10-01
 ---
 
 # OpenPulseHF
@@ -164,7 +164,7 @@ instead of a decision-directed Costas loop — see the
 
 Each `PILOT-*` mode above also has a `-RRC` variant (~half the occupied bandwidth) and
 `1000` / `2000-RRC` baud rungs — e.g. `PILOT-16QAM1000-RRC` (16QAM, 1000 baud, RRC) — all
-selectable by name and surfaced by the `hpx_pilot{,_rrc,_fast,_fast_rrc}` profiles.
+selectable by name as fixed modes (`[modem] mode`); the `hpx_pilot*` session profiles were deleted 2026-10-01.
 
 The mode/FEC selection ladder and which combinations are usable on HF is documented in [docs/mode-fec-ladder.md](docs/mode-fec-ladder.md).
 
@@ -232,26 +232,18 @@ All GPU functions return `Option<T>` — `None` triggers automatic CPU fallback.
 
 ### Adaptive rate profiles
 
-Twelve `SessionProfile` mappings from speed levels to modes, driven by ACK/NACK feedback
+Two session profiles, both on the single `hpx_hf` rate ladder, driven by ACK/NACK feedback
 and per-level SNR floor/ceiling gates:
 
-| Profile | SL range | Initial | Top mode | Target link |
+| Profile | SL range | Top mode | Occupied BW | Use when |
 |---|---|---|---|---|
-| `hpx500` | SL2–SL6 | SL2 | QPSK500 | Robust narrowband (≤600 Hz) |
-| `hpx_modcod` | SL2–SL7 | SL2 | QPSK500 | MODCOD demo: modulation × FEC (BPSK250/QPSK250/QPSK500 × LDPC/RS/none) |
-| `hpx_hf` | SL1–SL14 | SL2 | OFDM52-64QAM | Primary HF (full ≤2700 Hz span) |
-| `hpx_ofdm_hf` | SL5–SL10 | SL5 | OFDM52-64QAM | HF OFDM higher-order ladder |
-| `hpx_pilot` | SL2–SL5 | SL2 | PILOT-32APSK500 | HF pilot-aided (cycle-slip-immune, SRO-robust) |
-| `hpx_pilot_rrc` | SL2–SL5 | SL2 | PILOT-32APSK500-RRC | Pilot, narrowband (RRC, ~half band) |
-| `hpx_pilot_fast` | SL2–SL5 | SL2 | PILOT-32APSK1000 | Pilot, high-throughput (1000 baud) |
-| `hpx_pilot_fast_rrc` | SL2–SL5 | SL2 | PILOT-32APSK1000-RRC | Pilot, fast + narrowband |
-| `hpx_wideband` | SL8–SL11 | SL8 | 8PSK1000 | Wideband HF |
-| `hpx_narrowband` | SL8–SL11 | SL8 | 8PSK2000-RRC | Narrowband HF / VHF |
-| `hpx_wideband_hd` | SL9–SL15 | SL12 | 64QAM2000-RRC | VHF/UHF FM / satellite |
+| `fast` (default) | SL1–SL14 | OFDM52-64QAM + LDPC r≈8/9 | up to ≈2031 Hz | Good conditions, a 2.4 kHz SSB filter, a linear PA |
+| `robust` | SL1–SL6 | QPSK250-D | ≤500 Hz | Poor conditions or limited gear (narrow filters, small or non-linear PAs); single-carrier, all coded |
 
-`hpx_wideband_hd` requires SNR ≥ 16 dB and is not suitable for HF ionospheric paths. The
-four `hpx_pilot*` profiles share one carrier architecture and per-symbol SNR floors,
-trading bandwidth (rect vs `-RRC`) against throughput (500 vs 1000 baud).
+`robust` is the same ladder capped at SL6, so a `fast` and a `robust` station interoperate; the
+robust side never climbs past SL6. Other profile names are rejected with the list of valid
+names. Modes from the earlier profiles remain selectable as fixed modes (`[modem] mode`).
+The ARDOP TNC floors its adaptive ladder at SL2 (it has no MFSK16).
 
 ### Protocol and interfaces
 

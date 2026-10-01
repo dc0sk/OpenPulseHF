@@ -38,7 +38,7 @@ fn ack_frame_with_reverse_ack_updates_both_directions() {
 
     let mut engine = ModemEngine::new(Box::new(LoopbackBackend::new()));
     engine.register_plugin(Box::new(BpskPlugin::new())).ok();
-    engine.start_adaptive_session(SessionProfile::hpx500());
+    engine.start_adaptive_session(SessionProfile::robust());
 
     // Both directions start at SL2 (hpx500 initial).
     // Apply AckUp for TX path and Nack for RX path.
@@ -65,7 +65,7 @@ fn legacy_ack_frame_only_updates_tx() {
 
     let mut engine = ModemEngine::new(Box::new(LoopbackBackend::new()));
     engine.register_plugin(Box::new(BpskPlugin::new())).ok();
-    engine.start_adaptive_session(SessionProfile::hpx500());
+    engine.start_adaptive_session(SessionProfile::robust());
 
     let frame = AckFrame::new(AckType::AckUp, "sess");
     assert!(frame.reverse_ack.is_none());

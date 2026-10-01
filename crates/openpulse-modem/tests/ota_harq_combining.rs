@@ -56,7 +56,7 @@ fn make() -> (ModemEngine, LoopbackBackend) {
         .expect("register");
     // Lock the receiver-led OTA controller to SL9 so `rx_candidates()` is exactly
     // (OFDM52-16QAM, SoftConcatenated) — the soft rung HARQ combining acts on.
-    engine.start_ota_session(SessionProfile::hpx_hf());
+    engine.start_ota_session(SessionProfile::fast());
     engine.ota_lock_level(SpeedLevel::Sl9);
     (engine, backend)
 }

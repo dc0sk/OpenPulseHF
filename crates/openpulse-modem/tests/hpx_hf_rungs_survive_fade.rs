@@ -71,7 +71,7 @@ fn decode_rate(mode: &str, fec: openpulse_core::fec::FecMode, snr_db: f32) -> f3
 /// answer for a rung whose frames stay under 191 B, not a ladder-wide default; see `profile.rs`.
 #[test]
 fn entry_rung_decodes_on_a_fade() {
-    let p = SessionProfile::hpx_hf();
+    let p = SessionProfile::fast();
     let level = p.initial_level;
     let mode = p.mode_for(level).expect("initial rung has a mode");
     let fec = p.fec_for(level);
@@ -91,7 +91,7 @@ fn entry_rung_decodes_on_a_fade() {
 /// (#923's law). An uncoded rung here is the defect this ladder was re-seated to remove.
 #[test]
 fn no_hpx_hf_rung_is_uncoded() {
-    let p = SessionProfile::hpx_hf();
+    let p = SessionProfile::fast();
     for level in p.defined_levels() {
         assert_ne!(
             p.fec_for(level),
@@ -106,7 +106,7 @@ fn no_hpx_hf_rung_is_uncoded() {
 /// it is ~17 s per frame and already has its own sub-floor gates; it is non-coherent and immune.
 #[test]
 fn every_rung_decodes_on_moderate_f1() {
-    let p = SessionProfile::hpx_hf();
+    let p = SessionProfile::fast();
     let mut checked = 0;
     for level in p.defined_levels() {
         let mode = p.mode_for(level).expect("rung mode");

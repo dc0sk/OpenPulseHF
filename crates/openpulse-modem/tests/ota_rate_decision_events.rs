@@ -36,7 +36,7 @@ fn engine_with_ota_session() -> ModemEngine {
     engine
         .register_plugin(Box::new(BpskPlugin::new()))
         .expect("register bpsk");
-    engine.start_ota_session(SessionProfile::hpx500());
+    engine.start_ota_session(SessionProfile::robust());
     engine
 }
 

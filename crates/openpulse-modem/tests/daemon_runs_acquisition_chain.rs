@@ -226,7 +226,7 @@ fn the_daemon_decode_burst_arm_runs_the_acquisition_chain() {
 fn the_daemon_ota_arm_runs_the_acquisition_chain() {
     let signal = signal_with_frame();
     let (_backend, mut e) = engine();
-    e.start_ota_session(SessionProfile::hpx_hf());
+    e.start_ota_session(SessionProfile::fast());
     assert!(
         e.ota_active(),
         "the OTA session must be active or server::run would take the other decode arm, and \

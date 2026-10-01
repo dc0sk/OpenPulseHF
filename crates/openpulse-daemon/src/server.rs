@@ -297,10 +297,12 @@ pub async fn run(cfg: OpenpulseConfig, modem_backend: Box<dyn AudioBackend>) -> 
                     "OTA adaptive rate-stepping enabled"
                 );
             }
-            None => tracing::warn!(
-                profile = profile_name,
-                "OTA enabled but profile unknown; OTA not started"
-            ),
+            None => {
+                return Err(format!(
+                    "OTA enabled but profile {profile_name:?} is unknown; expected one of {:?}",
+                    openpulse_core::profile::SessionProfile::PROFILE_NAMES
+                ))
+            }
         }
     }
 

@@ -2,7 +2,7 @@
 project: openpulsehf
 doc: docs/on-air_testplan.md
 status: living
-last_updated: 2026-07-19
+last_updated: 2026-10-01
 ---
 
 # OpenPulseHF On-Air Test Plan
@@ -334,13 +334,13 @@ ACK-driven rate stepping. Both stations must build with real audio: `cargo build
 **Station B (receiver, start first):**
 ```bash
 RUST_LOG=info ./target/release/openpulse --backend cpal --ptt rigctld --rig 127.0.0.1:4532 \
-  arq listen --profile hpx_hf --frames 20 --session onair-hpxhf
+  arq listen --profile fast --frames 20 --session onair-hpxhf
 ```
 
 **Station A (sender):**
 ```bash
 RUST_LOG=info ./target/release/openpulse --backend cpal --ptt rigctld --rig 127.0.0.1:4532 \
-  arq send --profile hpx_hf --retries 5 \
+  arq send --profile fast --retries 5 \
   --payload "hpx_hf ladder test $(date -u +%H%M%SZ) de K1ABC"
 ```
 

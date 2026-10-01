@@ -432,7 +432,7 @@ fn a_failed_spectral_burst_is_ladder_evidence_only_past_sixteen_windows_of_open(
             .expect("register");
         e.register_plugin(Box::new(pilot_plugin::PilotPlugin::new()))
             .expect("register");
-        e.start_ota_session(SessionProfile::hpx_hf());
+        e.start_ota_session(SessionProfile::fast());
         e.ota_lock_level(Sl2);
         let at = WARM + 4_000;
         let mut buf = idle.cycled(0, at + tone_len + 5 * 8000);

@@ -372,6 +372,17 @@ impl RateAdapter {
         }
     }
 
+    /// Raise the current level up to `min` (a floor, e.g. a front end with no SL1 waveform). Never
+    /// lowers the level. Returns `true` when the level changed.
+    pub fn raise_to(&mut self, min: SpeedLevel) -> bool {
+        if self.current < min {
+            self.current = min;
+            true
+        } else {
+            false
+        }
+    }
+
     /// Apply a raw SNR hint for proactive rate adaptation.
     ///
     /// If `snr_db < floor_db` the adapter steps down immediately (before any NACK)

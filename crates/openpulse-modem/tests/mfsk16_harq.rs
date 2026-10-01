@@ -52,7 +52,7 @@ fn make() -> (ModemEngine, LoopbackBackend) {
         .expect("register");
     e.set_center_frequency(1500.0);
     // Lock the receiver-led controller to SL1 so `rx_candidates()` is exactly (MFSK16, Rs).
-    e.start_ota_session(SessionProfile::hpx_hf());
+    e.start_ota_session(SessionProfile::fast());
     e.ota_lock_level(SpeedLevel::Sl1);
     (e, backend)
 }

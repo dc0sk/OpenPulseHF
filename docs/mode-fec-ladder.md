@@ -2,7 +2,7 @@
 project: openpulsehf
 doc: docs/mode-fec-ladder.md
 status: living
-last_updated: 2026-09-14
+last_updated: 2026-10-01
 ---
 
 # Mode and FEC ladder — how the modem chooses a waveform and a code
@@ -172,26 +172,21 @@ steps **down** when the estimated SNR drops below a rung's floor (or after
 `nack_threshold` consecutive NACKs), and steps **up** when SNR clears a rung's
 ceiling *and* a positive ACK arrives.
 
-| Profile | Class | Rungs (low → high) | Use |
+Release 1 has **one ladder, `hpx_hf`, and two profiles on it** (work plan decision 18,
+`docs/dev/design/session-profiles.md`):
+
+| Profile | Rungs (low → high) | Occupied BW | Use |
 |---|---|---|---|
-| `hpx500` | Narrowband | BPSK31 → BPSK63 → BPSK250 → QPSK250 → QPSK500 | Robust, ≤600 Hz HF |
-| **`hpx_hf`** | **HF (≤2700 Hz)** | **MFSK16 → BPSK31/63/100/250 (all coded) → QPSK250-D → OFDM52 → OFDM52-{8PSK,16QAM,32QAM,64QAM} → the same 16/32/64QAM at r≈8/9 LDPC (SL1–14)** | **Primary HF profile — every rung measured to decode on a fade** |
-| **`hpx_ofdm_hf`** | **HF multicarrier** | **OFDM16 → OFDM52 → OFDM52-{8PSK,16QAM,32QAM,64QAM} (SL5–10)** | **High-throughput / high-reliability HF — per-SC equalization on fades (§7)** |
-| `hpx_pilot` | HF pilot-aided | PILOT-QPSK500 → PILOT-8PSK500 → PILOT-16QAM500 → PILOT-32APSK500 (SL2–5; SNR floors 6/12/17/23 dB) | Carrier-offset / sample-rate-offset-robust single-carrier ladder (cycle-slip-immune **to offset**, not to fade — see §1); soft-capable (auto-selects high-rate LDPC on the dense rungs) |
-| `hpx_pilot_rrc` | HF pilot, narrowband | same ladder on the `-RRC` variants | ~half the bandwidth (RRC); same per-symbol floors. Prefer `hpx_pilot` when SRO-heavy |
-| `hpx_pilot_fast` | HF pilot, high-throughput | PILOT-{QPSK,8PSK,16QAM,32APSK}**1000** (SL2–5) | 2× bits/s at the same per-symbol floors; ~2× bandwidth |
-| `hpx_pilot_fast_rrc` | HF pilot, fast + narrowband | the 1000-baud ladder on `-RRC` | 2× throughput **and** ~half-band (~1350 Hz) |
-| `hpx_wideband_hd` | Wideband HD | SCFDMA26-{8PSK,16QAM,32QAM} (SL9–11 fallback) → SCFDMA52-{16QAM,32QAM,64QAM} → 64QAM2000-RRC (SL12–15) | >2700 Hz links; SL9–11 are the graceful-degradation rungs. **Every rung runs `SoftConcatenated`** — it shipped with no FEC assigned until 2026-07-29 despite its floors and its hardware validation both being measured with it; SL9–SL12 decoded 0–4 of 8 uncoded at their own declared floors |
-| `hpx_wideband` / `hpx_narrowband` | Wide / post-1.0 | QPSK/8PSK 1000, 2000-RRC | FM / VHF / UHF or wider-than-HF; deferred (§8) |
+| **`fast`** | **the full `hpx_hf` ladder, SL1–SL14:** MFSK16 → BPSK31/63/100/250 (all coded) → QPSK250-D → OFDM52 → OFDM52-{8PSK,16QAM,32QAM,64QAM} → the same 16/32/64QAM at r≈8/9 LDPC | up to ≈2031 Hz | Performance and bandwidth under good conditions, a 2.4 kHz SSB filter, a linear PA |
+| **`robust`** | **the same ladder capped at SL6:** MFSK16 → BPSK31/63/100/250 → QPSK250-D, all coded | ≤ 500 Hz, single-carrier | Poor conditions, narrow filters, small or non-linear PAs (no OFDM peak-to-average stress) |
 
-The four `hpx_pilot*` profiles share one carrier architecture and the same
-per-symbol (Es/N0) SNR floors; they trade **bandwidth** (rect vs `-RRC`) against
-**throughput** (500 vs 1000 baud). `PILOT-*2000-RRC` rungs exist as selectable
-modes but are not yet in an adaptive profile.
-
-For dense multicarrier throughput on HF, **`hpx_ofdm_hf` (OFDM HOM) is preferred over the
-SCFDMA52 rungs in `hpx_hf`** — OFDM handles frequency-selective fading better and the
-SC-FDMA PAPR advantage that once motivated those rungs did not materialise (§7).
+The cap is local policy, not part of the ladder fingerprint, so a `fast` and a `robust` station
+interoperate: the robust side simply never climbs past SL6. Operator and host caps
+(`ota_max_level`, ARDOP `ARQBW`) can lower either profile further but never raise `robust`'s cap.
+The ten earlier profiles (`hpx500`, `hpx_modcod`, `hpx_pilot*`, `hpx_ofdm_hf`, `hpx_wideband*`,
+`hpx_narrowband`) were deleted on 2026-10-01; their modes stay selectable as fixed modes. The
+sections below still name `hpx_ofdm_hf` and `hpx_wideband_hd` where they record measurements taken
+on those ladders.
 
 ### `hpx_hf` — the primary HF ladder (the full ≤2700 Hz span)
 
@@ -206,7 +201,7 @@ adaptive session walks from weak-signal to high-throughput without switching pro
 > single-carrier mid rungs (QPSK250/QPSK500/8PSK500) decoded ~0 % at *any* SNR up to 40 dB. See the
 > design points below.
 
-The authoritative rung map is `SessionProfile::hpx_hf` in
+The authoritative rung map is `SessionProfile::fast` in
 `crates/openpulse-core/src/profile.rs`; this table mirrors it. FEC column: `Rs` = Reed-Solomon
 RS(255,223), `SC` = `SoftConcatenated`, `LHR` = `LdpcHighRate`
 (r≈8/9). "Net bps" is the asymptotic gross × code-rate, before retransmit cost.

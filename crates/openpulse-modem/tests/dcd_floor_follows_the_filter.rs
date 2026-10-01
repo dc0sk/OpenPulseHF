@@ -379,7 +379,7 @@ fn the_operator_squelch_raises_the_threshold_and_never_lowers_it() {
 fn idle_flicker_is_not_ladder_evidence_but_a_longer_failure_still_is() {
     let idle = corpus("ic9700-idle-250hz.wav");
     let (mut e, _lb) = engine();
-    e.start_ota_session(SessionProfile::hpx_hf());
+    e.start_ota_session(SessionProfile::fast());
     let before = e.ota_rx_recommended_level().expect("session");
 
     let short = AudioSamples {
@@ -578,7 +578,7 @@ fn recognition_window(profile: &SessionProfile, level: openpulse_core::rate::Spe
 }
 
 fn hpx_window(level: openpulse_core::rate::SpeedLevel) -> usize {
-    recognition_window(&SessionProfile::hpx_hf(), level)
+    recognition_window(&SessionProfile::fast(), level)
 }
 
 /// Feed warm idle, then loud reads of the given sizes, then idle until the burst flushes; decode it
@@ -587,7 +587,7 @@ fn hpx_window(level: openpulse_core::rate::SpeedLevel) -> usize {
 /// The length excludes the pre-trigger ring, which a one-read onset of three or more windows carries
 /// even though total power opened it (#1454).
 fn ota_verdict(level: Option<openpulse_core::rate::SpeedLevel>, reads: &[usize]) -> (usize, bool) {
-    ota_verdict_on(SessionProfile::hpx_hf(), level, reads)
+    ota_verdict_on(SessionProfile::fast(), level, reads)
 }
 
 fn ota_verdict_on(
@@ -735,24 +735,4 @@ fn at_sl1_the_bound_is_mfsk16s_recognition_window() {
         assert_tail(got, len, &format!("SL1, {len}"));
         assert_eq!(ack, counts, "SL1, {len} samples");
     }
-}
-
-/// The pilot profiles' bound fell with the switch from `min_frame_samples` (#1452): at 1000 baud the
-/// recognition window (392) is under one default 400-sample read, so every one-read flicker on
-/// `hpx_pilot_fast`'s SL2 counts — the "rate, not category" regime, stated rather than hidden.
-#[test]
-fn on_hpx_pilot_fast_a_one_read_flicker_counts() {
-    use openpulse_core::rate::SpeedLevel::Sl2;
-    let profile = SessionProfile::hpx_pilot_fast();
-    let w = recognition_window(&profile, Sl2);
-    assert!(
-        w < TICK,
-        "PILOT-QPSK1000's window ({w}) is no longer under one read; this cell moved"
-    );
-    let (len, ack) = ota_verdict_on(profile, Some(Sl2), &[TICK]);
-    println!("hpx_pilot_fast SL2, one read: burst {len}, ack {ack}");
-    assert!(
-        ack,
-        "a one-read burst over the pilot window ({w}) was dropped"
-    );
 }

@@ -156,10 +156,8 @@ fn write_summary(dir: &Path, results: &[TestResult], meta: &RunMeta) {
     out.push_str("|---|---|---|---|---|\n");
     for use_case in &[
         UseCase::RawModem,
-        UseCase::AdaptiveHpx500,
-        UseCase::AdaptiveHpxHf,
-        UseCase::AdaptiveHpxWideband,
-        UseCase::AdaptiveHpxOfdmHf,
+        UseCase::AdaptiveFast,
+        UseCase::AdaptiveRobust,
         UseCase::Ardop,
         UseCase::Kiss,
         UseCase::B2f,

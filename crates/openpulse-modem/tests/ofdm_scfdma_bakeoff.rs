@@ -103,7 +103,7 @@ fn cfg_at(profile: &str, snr_db: f32, seed: u64) -> WattersonConfig {
 /// so it fails if the SL12 rung is ever reverted to a delay-cliffed single-carrier mode.
 #[test]
 fn reseated_sl12_decodes_on_moderate_f1() {
-    let p = SessionProfile::hpx_hf();
+    let p = SessionProfile::fast();
     let mode = p.mode_for(SpeedLevel::Sl12).expect("SL12 mapped");
     assert!(
         mode.starts_with("OFDM"),

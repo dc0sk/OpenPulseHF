@@ -76,7 +76,7 @@ fn flushes(e: &mut ModemEngine, frame: &[f32]) -> Vec<usize> {
 fn an_ota_entry_rung_frame_is_not_split_by_a_cap_sized_for_the_configured_mode() {
     let frame = entry_rung_frame();
     let (mut e, _bk) = engine();
-    e.start_ota_session(SessionProfile::hpx_hf());
+    e.start_ota_session(SessionProfile::fast());
 
     let bursts = flushes(&mut e, &frame);
     assert_eq!(
@@ -122,7 +122,7 @@ fn without_an_ota_session_the_configured_mode_still_bounds_the_burst() {
 #[test]
 fn locking_the_ladder_to_a_fast_rung_narrows_the_cap_again() {
     let (mut e, _bk) = engine();
-    e.start_ota_session(SessionProfile::hpx_hf());
+    e.start_ota_session(SessionProfile::fast());
     let entry_cap = e.burst_cap_samples(Some("BPSK31"));
 
     // Locked to a fast rung, the candidate set no longer contains a slow mode.

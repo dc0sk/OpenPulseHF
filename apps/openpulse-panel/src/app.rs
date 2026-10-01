@@ -164,7 +164,7 @@ impl App {
             mode_sel: "BPSK250".into(),
             freq_khz: "14100.000".into(),
             peer_call: String::new(),
-            ota_profile: "hpx_hf".into(),
+            ota_profile: "fast".into(),
             tx_atten_db: 0.0,
             squelch: 0.02,
             cessb_on: false,

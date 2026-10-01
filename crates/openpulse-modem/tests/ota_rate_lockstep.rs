@@ -16,13 +16,32 @@ use openpulse_core::rate::SpeedLevel;
 use openpulse_modem::engine::ModemEngine;
 use qpsk_plugin::QpskPlugin;
 
+/// The former `hpx500` rungs, uncoded: BPSK31 → BPSK63 → BPSK250 → QPSK250 → QPSK500. Both shipped
+/// profiles are coded on every rung, and this test exercises the uncoded path, so it keeps the old
+/// ladder as apparatus (decision 18 deleted the profile, not the path).
+fn uncoded_bpsk_ladder() -> SessionProfile {
+    use openpulse_core::fec::FecMode::None as Uncoded;
+    use SpeedLevel::*;
+    SessionProfile::from_rungs(
+        &[
+            (Sl2, "BPSK31", Uncoded, Some(3.0), Some(8.0)),
+            (Sl3, "BPSK63", Uncoded, Some(4.0), Some(9.0)),
+            (Sl4, "BPSK250", Uncoded, Some(5.0), Some(11.0)),
+            (Sl5, "QPSK250", Uncoded, Some(9.0), Some(14.0)),
+            (Sl6, "QPSK500", Uncoded, Some(11.0), Some(18.0)),
+        ],
+        Sl2,
+        3,
+    )
+}
+
 fn make_engine() -> (ModemEngine, LoopbackBackend) {
     let backend = LoopbackBackend::new();
     let mut engine = ModemEngine::new(Box::new(backend.clone_shared()));
     engine.register_plugin(Box::new(BpskPlugin::new())).unwrap();
     engine.register_plugin(Box::new(QpskPlugin::new())).unwrap();
     engine.register_plugin(Box::new(Fsk4Plugin::new())).unwrap();
-    engine.start_ota_session(SessionProfile::hpx500());
+    engine.start_ota_session(uncoded_bpsk_ladder());
     // The receiver hears 4 s of (silent) band first, as on a real rig: the carrier detect's floor
     // learns whatever it hears while no burst is being gathered (#1452).
     let _ = engine.accumulate_capture(None, vec![0.0; 32_000]);

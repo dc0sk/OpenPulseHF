@@ -69,7 +69,7 @@ fn burst(idle: &Capture, frame: &[f32], lead: usize, gain: f32) -> Vec<f32> {
 /// The tightest gap between adjacent `hpx_hf` SNR floors — the scale a bias has to clear to move a
 /// rung decision. Read from the profile so it tracks the ladder.
 fn tightest_floor_gap() -> (f32, String) {
-    let p = SessionProfile::hpx_hf();
+    let p = SessionProfile::fast();
     let levels = [
         SpeedLevel::Sl2,
         SpeedLevel::Sl3,

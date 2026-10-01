@@ -3,7 +3,7 @@
 //! `docs/dev/project/roadmap.md` carries a "Profile | SL range | Initial | Top mode" table that had
 //! silently drifted — it listed `hpx_hf` as `SL2–SL11 / SCFDMA52-64QAM` long after the fade-aware
 //! re-seat made it `SL1–SL14 / OFDM52-64QAM`, and it omitted a profile entirely. A hand-maintained
-//! table of twelve profiles rots; this gate makes it self-correcting the same way
+//! table rots; this gate makes it self-correcting the same way
 //! `ladder_doc_matches_profile.rs` does for the mode/FEC ladder.
 //!
 //! To regenerate the table after a profile change, run the printer and paste its output:
@@ -21,7 +21,7 @@ fn expected_rows() -> Vec<(String, String, String, String)> {
         .iter()
         .map(|&name| {
             let p = SessionProfile::by_name(name).expect("PROFILE_NAMES entry constructs");
-            let levels = p.defined_levels();
+            let levels = p.reachable_levels();
             let first = *levels.first().expect("profile has ≥1 mapped level");
             let last = *levels.last().expect("profile has ≥1 mapped level");
             let range = if first == last {
@@ -43,11 +43,11 @@ fn doc_rows(text: &str) -> Vec<(String, String, String, String)> {
     let mut rows = Vec::new();
     for line in text.lines() {
         let line = line.trim();
-        if !line.starts_with("| `hpx") {
+        if !line.starts_with("| `") {
             continue;
         }
         let cells: Vec<&str> = line.trim_matches('|').split('|').map(str::trim).collect();
-        if cells.len() != 4 {
+        if cells.len() != 4 || !cells[1].starts_with("SL") {
             continue;
         }
         let name = cells[0].trim_matches('`').to_string();
@@ -84,12 +84,12 @@ fn roadmap_profile_table_matches_profiles() {
     }
 }
 
-/// Every mode string used by any profile, across all of `PROFILE_NAMES`.
+/// Every mode string any profile can reach, across all of `PROFILE_NAMES`.
 fn all_profile_modes() -> std::collections::BTreeSet<String> {
     let mut modes = std::collections::BTreeSet::new();
     for &name in SessionProfile::PROFILE_NAMES {
         let p = SessionProfile::by_name(name).expect("constructs");
-        for lvl in p.defined_levels() {
+        for lvl in p.reachable_levels() {
             if let Some(m) = p.mode_for(lvl) {
                 modes.insert(m.to_string());
             }

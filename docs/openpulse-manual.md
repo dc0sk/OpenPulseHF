@@ -2,7 +2,7 @@
 project: openpulsehf
 doc: docs/openpulse-manual.md
 status: living
-last_updated: 2026-09-14
+last_updated: 2026-10-01
 ---
 
 # OpenPulseHF Complete Manual
@@ -77,7 +77,7 @@ The modulation catalog spans 10 plugin families:
 - **MFSK16** (`mfsk16`) — `MFSK16` and `MFSK16-ACK`: constant-envelope non-coherent 16-GFSK weak-signal sub-floor waveform (REQ-WSIG-01). Self-acquiring, needs no carrier phase; it is `hpx_hf`'s deep-fade rung SL1.
 - **OFDM** (`ofdm`) — OFDM16/52 (QPSK) plus the OFDM52 higher-order ladder (8PSK/16QAM/32QAM/64QAM — the HF high-throughput path).
 - **SC-FDMA** (`scfdma`) — SCFDMA16/52 (QPSK), the SCFDMA26/52 higher-order ladders, SCFDMA52-64QAM(-P4).
-- **Pilot** (`pilot`) — `PILOT-{QPSK,8PSK,16QAM,32APSK}{500,1000}` plus their `-RRC` variants and `2000-RRC`; pilot-framed single-carrier with pilot-aided carrier recovery (cycle-slip-immune, sample-rate-offset-robust); soft-capable. Four ladders: `hpx_pilot` (500 rect), `hpx_pilot_rrc` (narrowband), `hpx_pilot_fast` (1000 baud), `hpx_pilot_fast_rrc` (fast + narrowband).
+- **Pilot** (`pilot`) — `PILOT-{QPSK,8PSK,16QAM,32APSK}{500,1000}` plus their `-RRC` variants and `2000-RRC`; pilot-framed single-carrier with pilot-aided carrier recovery (cycle-slip-immune, sample-rate-offset-robust); soft-capable. Selectable as fixed modes only; the four `hpx_pilot*` session profiles were deleted 2026-10-01.
 - **JS8** (`js8`) — JS8-compatible 8-GFSK weak-signal waveform used by the station-discovery and rendezvous subsystem ([§4.9](#49-js8-station-discovery-and-rendezvous)), not by the data ladder. Registered in the daemon, not in the CLI's data-mode registry.
 
 The plain rectangular `QPSK2000` is registered but **RRC-superseded**, and `8PSK2000` is no longer advertised at all (#1359) — use `-RRC` for both. For the authoritative per-mode table (baud, bits/symbol, gross bps, occupied bandwidth) see the [README modulation-modes table](../README.md#modulation-types); for the HF mode/FEC selection ladder see [mode-fec-ladder.md](mode-fec-ladder.md). `openpulse modes` prints the live registry.
@@ -88,12 +88,12 @@ The plain rectangular `QPSK2000` is registered but **RRC-superseded**, and `8PSK
 
 #### 1.2.1 The `hpx_hf` ladder (primary HF profile)
 
-`hpx_hf` is the profile for a real ≤2700 Hz HF SSB channel; it is `SL1–SL14` and **every rung is
+The `hpx_hf` ladder is the single rate ladder for a real ≤2700 Hz HF SSB channel. Profile `fast` runs all of it, `SL1–SL14`; profile `robust` runs the same ladder capped at SL6 (≤500 Hz). The ladder and **every rung is
 FEC-coded** (on a fade there is no useful uncoded rung — an uncoded BPSK31 entry rung decoded 0 % of
 fading frames at every SNR tested). Above SL6 the ladder is OFDM: the coherent single-carrier mid
 rungs it replaced decoded ~0 % on `moderate_f1` at any SNR up to 40 dB, and neither FEC nor
 differential encoding rescues them (differential does not scale to 8PSK). Source of truth:
-`SessionProfile::hpx_hf` in `crates/openpulse-core/src/profile.rs`.
+`SessionProfile::fast` in `crates/openpulse-core/src/profile.rs`.
 
 | SL | Mode | FEC | SNR floor (dB) | Note |
 |---|---|---|---|---|
@@ -259,7 +259,7 @@ effective — the rate ladder then adapts, `ARQBW` caps it to a max occupied ban
 ```toml
 [ardop]
 enable_adaptive_arq = true       # default false (fixed-mode)
-adaptive_profile = "hpx500"      # ladder profile; empty falls back to hpx500
+adaptive_profile = "fast"        # "fast" or "robust"; an empty or unknown name is an error
 ```
 
 ### 2.6 KISS TNC Drop-In Path
@@ -519,9 +519,9 @@ openpulse config init > ~/.config/openpulse/config.toml
 
 Recommended baseline:
 - Conservative fixed HF mode to start (`[modem] mode = "BPSK250"`, the built-in default)
-- Adaptive profile `[modem] profile = "hpx_hf"` (also the default) for HF; `hpx500` for a narrow
-  ≤600 Hz channel. The `hpx_wideband*`/`hpx_narrowband*` profiles exceed the 2700 Hz HF channel and
-  are for FM/VHF/UHF links only.
+- Adaptive profile `[modem] profile = "fast"` (also the default) for HF; `robust` (the same ladder
+  capped at SL6, ≤500 Hz) for poor conditions or limited gear. An unknown name fails with the list of
+  valid names.
 - Explicit backend selection
 - Trust policy set to balanced/strict according to operation
 - Logging level set to `info` for field work, `debug` for issue triage
@@ -1384,13 +1384,13 @@ openpulse modes        # list modulation modes
 openpulse devices      # list audio devices
 
 # Mode recommendation for a measured SNR (no hardware)
-openpulse mode-advisor --snr 12.0 --profile hpx_hf
+openpulse mode-advisor --snr 12.0 --profile fast
 
 # Adaptive rate-control over a simulated channel (no hardware)
-openpulse adaptive --profile hpx_hf --channel awgn --snr 6.0 --frames 8 --json
+openpulse adaptive --profile fast --channel awgn --snr 6.0 --frames 8 --json
 
 # Reliable two-way ARQ (FSK4 ACK + retransmit)
-openpulse arq listen --mode BPSK250 --frames 5 --profile hpx_hf   # station 2
+openpulse arq listen --mode BPSK250 --frames 5 --profile fast   # station 2
 openpulse arq send --payload "Test message" --mode BPSK250 --retries 3   # station 1
 
 # Stream engine events as NDJSON; benchmark regression gate
@@ -1413,7 +1413,7 @@ openpulse config init > ~/.config/openpulse/config.toml
 openpulse audit-bundle --help
 
 # Control a running openpulse-server daemon (OTA adaptive rate-stepping)
-openpulse daemon --addr 127.0.0.1:9000 ota-start --profile hpx_modcod
+openpulse daemon --addr 127.0.0.1:9000 ota-start --profile robust
 openpulse daemon ota-bounds --min SL3 --max SL10
 openpulse daemon ota-hysteresis --min-backlog 128 --upgrade-hold-frames 3
 openpulse daemon ota-aggressiveness balanced   # conservative|balanced|aggressive (sets A2/A3 together)
@@ -1549,7 +1549,7 @@ openpulse-testmatrix --bench-only --bench-frames 100 --bench-payload 200
 
 ```bash
 # Single run: QPSK ladder on AWGN 15 dB, RS FEC, 128-byte payloads
-openpulse-linksim --profile hpx_hf --channel awgn --fec rs --payload 128 --frames 40 --snr 15.0
+openpulse-linksim --profile fast --channel awgn --fec rs --payload 128 --frames 40 --snr 15.0
 # SNR sweep with a table, then JSON
 openpulse-linksim --channel watterson-moderate --sweep "10.0:20.0:1.0"
 openpulse-linksim --snr 20.0 --json

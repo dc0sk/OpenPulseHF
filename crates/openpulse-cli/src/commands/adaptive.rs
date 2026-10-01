@@ -28,7 +28,7 @@ fn resolve_profile_name(profile_override: Option<&str>) -> String {
     }
     openpulse_config::load()
         .map(|cfg| cfg.modem.profile)
-        .unwrap_or_else(|_| "hpx_hf".to_string())
+        .unwrap_or_else(|_| "fast".to_string())
 }
 
 /// Build a channel model (`None` = clean passthrough) and the SNR hint (dB) to

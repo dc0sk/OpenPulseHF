@@ -26,6 +26,25 @@ use openpulse_modem::engine::ModemEngine;
 use openpulse_modem::pipeline::AudioSamples;
 use openpulse_modem::EngineEvent;
 
+/// The former `hpx500` rungs, uncoded: BPSK31 → BPSK63 → BPSK250 → QPSK250 → QPSK500. Both shipped
+/// profiles are coded on every rung, and this test exercises the uncoded path, so it keeps the old
+/// ladder as apparatus (decision 18 deleted the profile, not the path).
+fn uncoded_bpsk_ladder() -> SessionProfile {
+    use openpulse_core::fec::FecMode::None as Uncoded;
+    use SpeedLevel::*;
+    SessionProfile::from_rungs(
+        &[
+            (Sl2, "BPSK31", Uncoded, Some(3.0), Some(8.0)),
+            (Sl3, "BPSK63", Uncoded, Some(4.0), Some(9.0)),
+            (Sl4, "BPSK250", Uncoded, Some(5.0), Some(11.0)),
+            (Sl5, "QPSK250", Uncoded, Some(9.0), Some(14.0)),
+            (Sl6, "QPSK500", Uncoded, Some(11.0), Some(18.0)),
+        ],
+        Sl2,
+        3,
+    )
+}
+
 /// hpx_hf SL5 is `BPSK250` + `Rs`. Locking the OTA session here makes the OTA arm's candidate
 /// **mode** identical to the transmitted one, so the only remaining difference is the FEC the
 /// candidate carries. Without the lock a fresh session would offer SL2/BPSK31 and the result would
@@ -86,7 +105,7 @@ fn one_burst_two_arms() {
     // active — the state the daemon is in whenever `ota_enabled = true`.
     let backend = LoopbackBackend::new();
     let mut engine = engine_with(&backend);
-    engine.start_ota_session(SessionProfile::hpx_hf());
+    engine.start_ota_session(SessionProfile::fast());
     engine.ota_lock_level(LOCK_LEVEL);
     assert!(engine.ota_active(), "the OTA session must be active");
 
@@ -157,7 +176,7 @@ fn a_control_frame_does_not_touch_the_rate_controller() {
     let signal = uncoded_tx_samples();
     let backend = LoopbackBackend::new();
     let mut engine = engine_with(&backend);
-    engine.start_ota_session(SessionProfile::hpx_hf());
+    engine.start_ota_session(SessionProfile::fast());
     engine.ota_lock_level(LOCK_LEVEL);
 
     let before_recommended = engine.ota_rx_recommended_level();
@@ -205,7 +224,7 @@ fn fallback_mode_none_changes_nothing() {
     let signal = uncoded_tx_samples();
     let backend = LoopbackBackend::new();
     let mut engine = engine_with(&backend);
-    engine.start_ota_session(SessionProfile::hpx_hf());
+    engine.start_ota_session(SessionProfile::fast());
     engine.ota_lock_level(LOCK_LEVEL);
 
     let burst = capture_via_daemon_path(&mut engine, &signal).expect("a burst must flush");
@@ -240,7 +259,7 @@ fn a_ladder_frame_still_classifies_as_ladder_when_the_fallback_could_also_decode
     let rx_backend = LoopbackBackend::new();
     let mut engine = engine_with(&rx_backend);
     // hpx500's SL2 rung is BPSK31 + no FEC; the fallback mode is that same mode.
-    engine.start_ota_session(SessionProfile::hpx500());
+    engine.start_ota_session(uncoded_bpsk_ladder());
     let mut events = engine.subscribe();
 
     let quiet = vec![0.0f32; TICK_SAMPLES];
@@ -303,7 +322,7 @@ fn behind_a_lead(signal: &[f32]) -> AudioSamples {
 fn a_ladder_frame_behind_a_lead_is_still_ladder_traffic() {
     let signal = uncoded_tx_samples();
     let mut engine = engine_with(&LoopbackBackend::new());
-    engine.start_ota_session(SessionProfile::hpx500());
+    engine.start_ota_session(uncoded_bpsk_ladder());
     engine.ota_lock_level(SpeedLevel::Sl4);
     let mut events = engine.subscribe();
     let res = engine
@@ -339,7 +358,7 @@ fn a_ladder_frame_behind_a_lead_is_still_ladder_traffic() {
 fn an_uncoded_control_frame_behind_a_lead_is_still_not_ladder_traffic() {
     let signal = uncoded_tx_samples();
     let mut engine = engine_with(&LoopbackBackend::new());
-    engine.start_ota_session(SessionProfile::hpx_hf());
+    engine.start_ota_session(SessionProfile::fast());
     engine.ota_lock_level(LOCK_LEVEL);
     let mut events = engine.subscribe();
     let res = engine

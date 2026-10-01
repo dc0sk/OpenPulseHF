@@ -444,12 +444,18 @@ fn every_profile_rung_decodes_at_its_floor_with_its_fec() {
     }
 
     let mut checked = 0usize;
+    // `robust` is `fast` capped at SL6, so its rungs are a subset: measure each (mode, FEC, floor)
+    // once rather than twice.
+    let mut seen = std::collections::HashSet::new();
     for name in SessionProfile::PROFILE_NAMES {
         let p = SessionProfile::by_name(name).unwrap();
-        for level in p.defined_levels() {
+        for level in p.reachable_levels() {
             let Some(mode) = p.mode_for(level) else {
                 continue;
             };
+            if !seen.insert((mode, p.fec_for(level) as u8, level as u8)) {
+                continue;
+            }
             // FSK4-ACK is the ACK channel, not a data rung; the 9600 rungs need a 48 kHz path.
             if mode == "FSK4-ACK" || mode.contains("9600") {
                 continue;
@@ -491,9 +497,12 @@ fn every_profile_rung_decodes_at_its_floor_with_its_fec() {
         }
     }
 
-    // Anti-vacuity: a filter bug that skipped every rung would otherwise leave this green.
-    assert!(
-        checked >= 50,
-        "only {checked} rungs were actually measured — the skip conditions are eating the suite"
+    // Anti-vacuity: a filter bug that skipped every rung would otherwise leave this green. Since
+    // decision 18 the registry is the one `hpx_hf` ladder: SL2–SL14 carry a floor (13 rungs); SL1
+    // (MFSK16) has none and its own gates. It was ≥ 50 across the ten deleted profiles.
+    assert_eq!(
+        checked, 13,
+        "expected the 13 floored hpx_hf rungs to be measured, got {checked} — the skip conditions \
+         are eating the suite, or the ladder changed"
     );
 }

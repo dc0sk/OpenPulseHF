@@ -111,35 +111,19 @@ async fn main() -> anyhow::Result<()> {
     // Opt-in adaptive ARQ: starting the session activates the worker's adaptive TX/RX path
     // (transmit_arq / receive_with_ack_hint) and makes ARQBW/ARQTIMEOUT effective.
     if cfg.ardop.enable_adaptive_arq {
-        let name = if cfg.ardop.adaptive_profile.is_empty() {
-            "hpx500"
-        } else {
-            &cfg.ardop.adaptive_profile
+        let name = cfg.ardop.adaptive_profile.as_str();
+        let Some(profile) = openpulse_core::profile::SessionProfile::by_name(name) else {
+            anyhow::bail!(
+                "unknown [ardop] adaptive_profile {name:?}; expected one of {:?}",
+                openpulse_core::profile::SessionProfile::PROFILE_NAMES
+            );
         };
-        match openpulse_core::profile::SessionProfile::by_name(name) {
-            Some(profile) => {
-                // The MFSK16 sub-floor rung's robust ACK (K=3 union) lives only on the daemon's
-                // receiver-led OTA path, not this RateAdapter path — and MFSK16 isn't even registered here.
-                // A profile that maps it (hpx_hf) would fail at deep fade; warn rather than fail silently.
-                if profile
-                    .defined_levels()
-                    .into_iter()
-                    .any(|l| profile.mode_for(l) == Some("MFSK16"))
-                {
-                    tracing::warn!(
-                        profile = %name,
-                        "adaptive_profile maps an MFSK16 sub-floor rung, which the ARDOP adaptive path does \
-                         not support (its ACK isn't the K=3 union); the rung will fail at deep fade"
-                    );
-                }
-                engine.start_adaptive_session(profile);
-                tracing::info!(profile = %name, "adaptive ARQ session enabled");
-            }
-            None => tracing::warn!(
-                profile = %name,
-                "unknown adaptive_profile; adaptive ARQ not started (fixed-mode operation)"
-            ),
-        }
+        // The TNC registers no MFSK16 and has no K=3 robust ACK (that lives on the daemon's OTA
+        // path), so the ladder's SL1 rung is dead here: floor the session at SL2 so NACK exhaustion
+        // retries at BPSK31 instead of falling onto it.
+        engine.set_arq_min_tx_level(Some(openpulse_core::rate::SpeedLevel::Sl2));
+        engine.start_adaptive_session(profile);
+        tracing::info!(profile = %name, "adaptive ARQ session enabled (floor SL2)");
     }
 
     let config = ArdopConfig {

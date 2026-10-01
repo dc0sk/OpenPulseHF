@@ -32,7 +32,7 @@ fn make_engine() -> (ModemEngine, LoopbackBackend) {
     engine.register_plugin(Box::new(BpskPlugin::new())).unwrap();
     engine.register_plugin(Box::new(QpskPlugin::new())).unwrap();
     engine.register_plugin(Box::new(Fsk4Plugin::new())).unwrap();
-    engine.start_ota_session(SessionProfile::hpx500());
+    engine.start_ota_session(SessionProfile::robust());
     (engine, backend)
 }
 
@@ -196,7 +196,7 @@ fn watterson_fading_never_desyncs_and_recovers() {
         // push TX above what the receiver confirmed it can decode.
         assert!(
             r.tx_level <= SpeedLevel::Sl6,
-            "TX level must stay within the hpx500 ladder; got {:?}",
+            "TX level must stay within the robust ladder; got {:?}",
             r.tx_level
         );
     }
