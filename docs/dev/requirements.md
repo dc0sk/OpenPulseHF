@@ -2,7 +2,7 @@
 project: openpulsehf
 doc: docs/dev/requirements.md
 status: living
-last_updated: 2026-09-29
+last_updated: 2026-10-01
 ---
 
 # Requirements
