@@ -117,6 +117,8 @@ pub struct MetricsSnapshot {
     /// including its framing overhead; never larger than raw). The ratio `compressed / raw` is the
     /// live compression figure reported in `ControlEvent::Metrics`.
     pub compressed_payload_bytes: u64,
+    /// Received frames carrying the pack magic that failed to unpack and were dropped (REQ-CMP-05).
+    pub unpack_failures: u64,
     /// Correlation-veto observability, refreshed from the engine by the main loop (#1344).
     ///
     /// Same route and same reason as `front_end` below: the periodic metrics task holds no engine.

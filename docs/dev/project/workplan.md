@@ -79,10 +79,11 @@ format change Release 1 needs.
 
 | Item | Status |
 |---|---|
-| Compression: put the zstd dictionary ID on the wire and reject a mismatch (decision 5). A wire-format change, so its design goes to review before implementing | design in progress |
+| ~~Compression: put the zstd dictionary ID on the wire~~ — not needed (decision 17): zstd already carries the dictionary ID in its frame header and refuses a mismatch, measured | dropped |
+| Compression: a packed frame that fails to unpack is an integrity error — dropped, counted, logged with zstd's reason; REQ-CMP-03 rewritten to "self-describing, not assumed of the peer" (pulled forward from M2, decision 17) | done in the unpack PR |
 | Declare the v0.17 wire format in `protocol-wire-spec.md`, stating that the preamble changes before 1.0 (#1062) | open |
 
-**Exit:** the dictionary-ID change merged and gated; the v0.17 format declared.
+**Exit:** the unpack fix merged; the v0.17 format declared. M1 carries **no** wire-format change.
 
 ### After v0.17, before 1.0 (decision 16)
 
@@ -96,7 +97,7 @@ format change Release 1 needs.
 
 | Item | Status |
 |---|---|
-| Compression: a packed frame that fails to unpack is an integrity error (`server.rs:1132`); rewrite REQ-CMP-03 to "self-describing, receiver always accepts, sender opt-in" | issue to file |
+| ~~Compression: unpack failure + REQ-CMP-03~~ — moved to M1 (decision 17) | moved |
 | ARDOP receive and host path: #1315 (ARQ ACK has no in-stream acquisition), #1385 (host frames > 255 B, no segmentation) | open |
 | Ladder behaviour that A2 scores: #1456 (NACK streak has no time decay), #1460 (a burst with no preamble evidence keys a NACK), #1446 (linksim: BPSK31 after MFSK16 fails 19/19 — diagnose: ladder bug or sim bug) | open |
 | Data larger than one frame through the daemon: #1461 | open |
@@ -153,6 +154,7 @@ format change Release 1 needs.
 | 14 | 2026-10-01 | Release 1 is `v0.17.0`; `1.0` stays reserved for the full criteria | maintainer (open question 1) |
 | 15 | 2026-10-01 | #1438, #1443, #1452, #1454 closed — their stages merged | maintainer (open question 2) |
 | 16 | 2026-10-01 | **#1062 moves after v0.17, before 1.0. Amends decision 2.** Release 1 is 0.x and the wire format may change until 1.0 (release-1.0-criteria decision 2), so the preamble does not gate v0.17. Reading the full #1062 thread showed the "cheapest candidate" (a 2-symbol terminator) fixes onset placement only, not interferer refusal, at close to the full validation cost; the recorded direction is PN with N ≥ 63, whose demod parity is unmeasured. The v0.17 campaign runs on the current preamble, and a second, cheap 2 m campaign follows #1062 before 1.0 | maintainer |
+| 17 | 2026-10-01 | **Compression: no wire change for Release 1. Amends decision 5.** Measured: a packed zstd frame already carries the dictionary ID (`0x7d6f375f`) in zstd's own frame header, and a decoder holding a dictionary with another ID fails with `Dictionary mismatch`. The silent-garbage path was only the daemon delivering a failed unpack's bytes; fixing that closes both findings. The governance review's "dictionary ID is never on the wire" was wrong — read from the code, not run | maintainer |
 
 ## Open questions
 

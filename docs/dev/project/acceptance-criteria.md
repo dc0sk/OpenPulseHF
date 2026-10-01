@@ -2,7 +2,7 @@
 project: openpulsehf
 doc: docs/dev/project/acceptance-criteria.md
 status: resolved
-last_updated: 2026-09-30
+last_updated: 2026-10-01
 ---
 
 # Acceptance criteria
@@ -89,6 +89,7 @@ Each requirement below is done when the linked test passes. Add new links as tes
 | A diff that **re-homes a doc comment or an outer attribute** fails the gate, the PR lint and the pre-push hook (#1345). Rustdoc attaches every consecutive `///` line (and an outer `#[...]`) to the next item, so an insertion, a deletion or an overwritten summary moves a doc without touching it. Clippy sees only the blank-line form, and 29 live steals sat under a green gate. The lint judges the NEW file and slides pure insertions back first. P9 is a real slide from `acdb1a0d`, and it must flag without normalisation, so the fixture cannot pass vacuously. The wrapper fails closed on an unresolvable base, with no `|| echo HEAD` fallback | `scripts/check-rehomed-docs.sh --self-test` + `scripts/check-rehomed-docs.sh` |
 | A mode with **no preamble template** (energy-only frame start) decodes through a saturating floor — the case #1045's condemnation-triggered floor raise made worse, and the veto cannot reach | `cargo test -p openpulse-modem --no-default-features --test capture_replay_corpus a_no_template_mode_decodes_through_a_saturating_floor` |
 | The energy gate rejects a **real idle noise floor on its first window** (the #1021 trigger; `onair-rx-level-check.sh` bounds the floor only from above and never covered `1e-4 … 1.07e-3`) while still passing a full-scale buffer-is-the-frame fixture | `cargo test -p openpulse-modem --no-default-features --lib energy_gate` |
+| A packed frame that fails to unpack is **dropped and counted, not delivered** (REQ-CMP-05), and a frame compressed against a different zstd dictionary is refused with zstd's own "Dictionary mismatch" — zstd carries the dictionary ID in its frame header (measured 2026-10-01, work plan decision 17), so no wire change was needed. The daemon used to deliver a failed unpack's still-compressed bytes as the message | `cargo test -p openpulse-core --no-default-features --lib compression::` + `cargo test -p openpulse-daemon --no-default-features --lib unpack_received` |
 | Hotplug-safe audio device resolution (REQ-DEV-01) | `cargo test -p openpulse-core --no-default-features audio::tests` |
 | Every device the backend LISTS can also be selected by name (cpal's ALSA enumeration truncates when devices are retained — needs a real audio host, so not in the `--no-default-features` gate) | `cargo test -p openpulse-audio --features cpal-backend --test device_enumeration` |
 | CM108 / GPIO PTT backends (REQ-PTT-02/03) | `cargo test -p openpulse-radio --no-default-features -- cm108 gpio` |
