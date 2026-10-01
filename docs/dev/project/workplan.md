@@ -72,16 +72,16 @@ on `hpx_hf` (psk8, 64qam, scfdma, pilot).
 
 **Exit:** all rows done; the tracker matches this file.
 
-### M1 — v0.17 wire format (target 2026-10-14)
+### M1 — v0.17 wire format (target 2026-10-14) — **done 2026-10-01**
 
-Narrowed by decision 16: #1062 (the preamble) moves after v0.17, so M1 holds only the one payload
-format change Release 1 needs.
+Narrowed by decision 16: #1062 (the preamble) moves after v0.17; decision 17 then removed the one
+payload format change, so M1 closed as a bug fix plus a declaration.
 
 | Item | Status |
 |---|---|
 | ~~Compression: put the zstd dictionary ID on the wire~~ — not needed (decision 17): zstd already carries the dictionary ID in its frame header and refuses a mismatch, measured | dropped |
 | Compression: a packed frame that fails to unpack is an integrity error — dropped, counted, logged with zstd's reason; REQ-CMP-03 rewritten to "self-describing, not assumed of the peer" (pulled forward from M2, decision 17) | done in the unpack PR |
-| Declare the v0.17 wire format in `protocol-wire-spec.md`, stating that the preamble changes before 1.0 (#1062) | open |
+| Declare the v0.17 wire format in `protocol-wire-spec.md`, stating that the preamble changes before 1.0 (#1062) | done |
 
 **Exit:** the unpack fix merged; the v0.17 format declared. M1 carries **no** wire-format change.
 
@@ -166,6 +166,7 @@ None open. (Version number → decision 14; the four "close?" issues → decisio
 |---|---|---|---|
 | 2026-09-28 | Plan written; #1468, #1469 merged | isolator not ordered | — |
 | 2026-09-28 | M0 mine done (#1472–#1474); isolators in place; test stages set (2 m, HF with the RC) | triage approval pending | — |
+| 2026-09-28 | M1 done: #1062 after v0.17 (#1476); compression needs no wire change, unpack fix merged (#1477); v0.17 format declared | triage approval pending | dict-ID wire change (measured unnecessary) |
 
 ---
 
@@ -246,5 +247,5 @@ after M3) · **close?** likely done, maintainer to confirm.
 | 1062 | Alternating preamble: O(1) time-bandwidth | after v0.17 | decision 16 (was M1, decision 2) |
 | 1059 | Re-derive QPSK ρ thresholds | PR | no QPSK template ships |
 
-**Totals** (counted from the table): M0 2 · M1 0 · after v0.17 2 · M2 11 · PR-R 12 · PR 34 · closed 2026-10-01 4 = 65. New issues to file with M1/M2:
-the compression dictionary ID (M1) and the unpack/REQ-CMP-03 pair (M2).
+**Totals** (counted from the table): M0 2 · M1 0 · after v0.17 2 · M2 11 · PR-R 12 · PR 34 · closed 2026-10-01 4 = 65. The two
+compression items that were to be filed as new issues were settled without one (decision 17, #1477).
