@@ -104,6 +104,8 @@ payload format change, so M1 closed as a bug fix plus a declaration.
 | PTT and station ID on the core path: #1257 (no leader delay before the first sample), #1334 (a flush timeout un-arms the station-ID timer), #1367 (200 ms sleep before PTT drop) | open |
 | #1304 (noise floor on OFDM52's wide band) — diagnose whether it breaks DCD on SL7–14 | open |
 | #1421 dependency update, security-relevant ones only | open |
+| **Profiles** (decision 18): two profiles, `fast` (today's `hpx_hf`) and `robust` (the same ladder capped at SL6, ≤ 500 Hz); the other ten deleted; no aliases. Design: `docs/dev/design/session-profiles.md` (reviewed; six fixes folded in) | design done, implementation open |
+| ARDOP `ARQBW` sizes modes from a stale hand-kept table (`bandplan::occupied_bandwidth_hz`): OFDM52 3200 Hz vs the plugin's 2031 Hz; MFSK16, QPSK250-D and OFDM52-* missing, so `ARQBW 2000` caps `fast` at SL5. Size from the plugin instead (found by the profile design). A correct table still stops `ARQBW 2000` below OFDM52 (2031 Hz); the loss is QPSK250-D everywhere and SL6–SL14 at ≥ 2032 Hz | open |
 | On-air tooling (found by the re-baseline): `run-onair-twin-ota.sh` enables `observability.audit_mode` so `OtaRateDecision` events are retained for A2; `onair-bundle-evidence.sh` CAT-reads each rig's filter width and frequency trim and records `notch_enabled`/`agc_enabled`/`cessb_enabled` | open |
 | Release check: `every_profile_rung_decodes_at_its_floor_with_its_fec`, `hpx_hf_rungs_survive_fade`, `mfsk16_arq_subfloor`, `goodput_gate`, benchmark, the ARDOP suites — at one commit, with the known-red rows disclosed (notch #1457 per decision 10) | open |
 
@@ -128,6 +130,7 @@ payload format change, so M1 closed as a bug fix plus a declaration.
 
 | Item | Status |
 |---|---|
+| **UI client for the release candidate** (decision 19), with file transfer or a similar reusable feature for testing. **Last before the RC cut**: started only when everything else for RC1 is done. Design first: whether it is new or grows out of `openpulse-tui`/`openpulse-panel`, and what turning on file transfer (disabled for Release 1 so far) costs | open, last |
 | Cut the release candidate `v0.17.0-rc.1`: full gate + `scripts/slow-tests.sh` at one commit, known-red rows disclosed | open |
 | **HF run with the release candidate** (decision 13): repeat A1 and A2 on an HF-capable pair, logs + capture retained. Band conditions are not controllable, so an HF result is evidence the RC works there, not a characterisation; a failure attributable to propagation is recorded, not chased | open |
 | Release notes (known-red rows, out-of-scope features, "wire format v1"), version bump to `v0.17.0`, tag | open |
@@ -155,6 +158,8 @@ payload format change, so M1 closed as a bug fix plus a declaration.
 | 15 | 2026-10-01 | #1438, #1443, #1452, #1454 closed — their stages merged | maintainer (open question 2) |
 | 16 | 2026-10-01 | **#1062 moves after v0.17, before 1.0. Amends decision 2.** Release 1 is 0.x and the wire format may change until 1.0 (release-1.0-criteria decision 2), so the preamble does not gate v0.17. Reading the full #1062 thread showed the "cheapest candidate" (a 2-symbol terminator) fixes onset placement only, not interferer refusal, at close to the full validation cost; the recorded direction is PN with N ≥ 63, whose demod parity is unmeasured. The v0.17 campaign runs on the current preamble, and a second, cheap 2 m campaign follows #1062 before 1.0 | maintainer |
 | 17 | 2026-10-01 | **Compression: no wire change for Release 1. Amends decision 5.** Measured: a packed zstd frame already carries the dictionary ID (`0x7d6f375f`) in zstd's own frame header, and a decoder holding a dictionary with another ID fails with `Dictionary mismatch`. The silent-garbage path was only the daemon delivering a failed unpack's bytes; fixing that closes both findings. The governance review's "dictionary ID is never on the wire" was wrong — read from the code, not run | maintainer |
+| 18 | 2026-10-01 | **Two session profiles: `fast` and `robust`.** `fast` = today's `hpx_hf` ladder (performance and bandwidth under good conditions); `robust` = the same ladder capped at SL6, ≤ 500 Hz, single-carrier (poor conditions, limited gear). Same ladder, so the handshake fingerprint matches and a fast↔robust pair keeps adaptive OTA. The other ten profiles are deleted; no alias for the old names | maintainer |
+| 19 | 2026-10-01 | **A new UI client ships with the release candidate**, supporting file transfer or a similar reusable feature for testing. It comes after everything else RC1 needs. **Amends decision 1** (Release 1 scope) | maintainer |
 
 ## Open questions
 
@@ -167,6 +172,7 @@ None open. (Version number → decision 14; the four "close?" issues → decisio
 | 2026-09-28 | Plan written; #1468, #1469 merged | isolator not ordered | — |
 | 2026-09-28 | M0 mine done (#1472–#1474); isolators in place; test stages set (2 m, HF with the RC) | triage approval pending | — |
 | 2026-09-28 | M1 done: #1062 after v0.17 (#1476); compression needs no wire change, unpack fix merged (#1477); v0.17 format declared | triage approval pending | dict-ID wire change (measured unnecessary) |
+| 2026-09-28 | Profiles decided (decision 18); UI client added to M4, last (decision 19) | triage approval pending | ten profiles; the `hpx_*` names |
 
 ---
 
