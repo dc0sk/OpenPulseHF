@@ -38,6 +38,8 @@ fn kat_conreq() -> Vec<u8> {
             signing_modes: vec![SigningMode::Normal, SigningMode::Psk],
             session_id: 1_700_000_000_000,
             station_grid: "FN31pr",
+            // An opaque string to the encoder: the vector pins the encoding, not the profile
+            // registry, so the retired name stays (decision 18 renamed the profile, not the format).
             profile_name: "hpx_hf",
             profile_fingerprint: 0x0123_4567_89AB_CDEF,
             timestamp_ms: 1_700_000_000_000,

@@ -72,7 +72,7 @@ fn engine_at_sl5() -> ModemEngine {
         .expect("register bpsk");
     e.register_plugin(Box::new(qpsk_plugin::QpskPlugin::new()))
         .expect("register qpsk");
-    let mut profile = SessionProfile::hpx_hf();
+    let mut profile = SessionProfile::fast();
     profile.initial_level = SpeedLevel::Sl5;
     e.start_ota_session(profile);
     e
@@ -105,7 +105,7 @@ fn decide(burst: &AudioSamples) -> (Option<String>, Option<f32>, RateDecision) {
 /// ceiling, and the controller held; the run stops there, so the other `k` were not observed.
 #[test]
 fn a_clean_frame_at_a_production_alignment_climbs_on_snr() {
-    let ceiling = SessionProfile::hpx_hf()
+    let ceiling = SessionProfile::fast()
         .snr_ceiling_for_level(SpeedLevel::Sl5)
         .expect("SL5 has a ceiling");
     let payload: Vec<u8> = (0..120u32).map(|i| (i * 37 % 251) as u8).collect();

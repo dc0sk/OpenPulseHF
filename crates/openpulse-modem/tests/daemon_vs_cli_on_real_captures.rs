@@ -184,7 +184,7 @@ fn via_daemon_centred(
     // candidates come from the profile. Without this the coded rows would measure "the default arm
     // cannot do RS", which is true but is NOT a fact about the acquisition chain.
     if fec != FecMode::None {
-        let profile = SessionProfile::hpx_hf();
+        let profile = SessionProfile::fast();
         // Lock the OTA level to the rung whose mode IS the captured one. `rx_candidates` offers only
         // the recommended + confirmed levels, which on a fresh session are both the ENTRY rung
         // (BPSK31) — so without this the daemon arm never tries BPSK250+Rs at all and a "no decode"

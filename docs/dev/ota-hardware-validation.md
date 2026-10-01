@@ -2,8 +2,7 @@
 
 Validate receiver-led OTA adaptive rate-stepping end-to-end on two stations. This
 is the on-air / dual-clock counterpart to the in-process loopback tests
-(`crates/openpulse-modem/tests/ota_rate_lockstep.rs`,
-`crates/openpulse-modem/tests/modcod_ladder.rs`) that already prove the mechanism
+(`crates/openpulse-modem/tests/ota_rate_lockstep.rs`) that already prove the mechanism
 single-clock and hardware-free.
 
 > **Author's note:** this runbook is for an operator with the two stations in
@@ -58,7 +57,7 @@ callsign = "<yours>"
 
 [modem]
 ota_enabled = true
-ota_profile = "hpx_modcod"   # or hpx_hf; the MODCOD ladder exercises modulation×FEC
+ota_profile = "fast"         # or "robust" (same ladder capped at SL6, ≤500 Hz)
 # Optional guardrails:
 # ota_max_level = "SL10"     # regulatory bandwidth / robustness cap
 # ota_min_level = "SL3"
@@ -91,9 +90,9 @@ Build with real audio: `cargo build --release -p openpulse-daemon --features cpa
 7. **Operator controls.** `openpulse daemon ota-lock --level SL4` → both
    `tx_level`/`rx_*` pin at SL4 and stop moving; `ota-unlock` resumes.
    `ota-bounds --max SL6` → the climb caps at SL6.
-8. **MODCOD rungs.** With `hpx_modcod`, confirm the ladder traverses FEC steps at a
-   fixed modulation (BPSK250+LDPC → BPSK250+RS) before the modulation changes —
-   visible as `tx_fec` changing while `tx_mode` holds.
+8. **Robust cap.** With `ota_profile = "robust"`, confirm the climb stops at SL6
+   (QPSK250-D) and never goes above it, even after `ota-bounds` changes or an empty
+   `--max`. A `fast` peer still interoperates (same ladder fingerprint).
 
 ## Pass criteria
 
@@ -102,7 +101,7 @@ Build with real audio: `cargo build --release -p openpulse-daemon --features cpa
 - [ ] Per-direction levels adapt independently under asymmetric SNR.
 - [ ] Down-step on degradation; recovery on improvement.
 - [ ] Lock/unlock and min/max bounds behave as commanded.
-- [ ] MODCOD: FEC rungs are used between modulation steps.
+- [ ] Robust: with `robust`, the climb never exceeds SL6.
 - [ ] Station ID / regulatory compliance per `docs/regulatory.md` and
       `docs/on-air_testplan.md`.
 
@@ -117,7 +116,7 @@ Build with real audio: `cargo build --release -p openpulse-daemon --features cpa
 
 ## Related
 
-- In-process proofs: `ota_rate_lockstep.rs`, `modcod_ladder.rs`.
+- In-process proofs: `ota_rate_lockstep.rs` (`modcod_ladder.rs` was deleted with `hpx_modcod`, 2026-10-01).
 - Loopback transports: `docs/dev/virtual-loopback.md`.
 - On-air test plan + regulatory checklist: `docs/on-air_testplan.md`,
   `docs/regulatory.md`.

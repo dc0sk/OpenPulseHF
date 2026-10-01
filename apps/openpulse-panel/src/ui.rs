@@ -89,21 +89,7 @@ const MODES: &[&str] = &[
 ];
 
 /// OTA adaptive-session profiles (`SessionProfile::by_name`).
-const PROFILES: &[&str] = &[
-    "hpx500",
-    "hpx_hf",
-    "hpx_ofdm_hf",
-    "hpx_narrowband",
-    // "hpx_narrowband_hd" removed 2026-09-14 (#1359): the daemon no longer
-    // resolves it, so offering it here would have produced a selection the station rejects.
-    "hpx_wideband",
-    "hpx_wideband_hd",
-    "hpx_modcod",
-    "hpx_pilot",
-    "hpx_pilot_rrc",
-    "hpx_pilot_fast",
-    "hpx_pilot_fast_rrc",
-];
+const PROFILES: &[&str] = &["fast", "robust"];
 
 // Spectrum window (dBFS): 0 dB at the top down to −120 dB.
 const TOP_DB: f32 = 0.0;

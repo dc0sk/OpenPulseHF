@@ -2,193 +2,8 @@ use openpulse_core::profile::SessionProfile;
 use openpulse_core::rate::SpeedLevel;
 
 #[test]
-fn hpx500_mode_mapping() {
-    let p = SessionProfile::hpx500();
-    assert_eq!(p.mode_for(SpeedLevel::Sl1), None);
-    assert_eq!(p.mode_for(SpeedLevel::Sl2), Some("BPSK31"));
-    assert_eq!(p.mode_for(SpeedLevel::Sl3), Some("BPSK63"));
-    assert_eq!(p.mode_for(SpeedLevel::Sl4), Some("BPSK250"));
-    assert_eq!(p.mode_for(SpeedLevel::Sl5), Some("QPSK250"));
-    assert_eq!(p.mode_for(SpeedLevel::Sl6), Some("QPSK500"));
-    assert_eq!(p.mode_for(SpeedLevel::Sl7), None);
-    assert_eq!(p.mode_for(SpeedLevel::Sl8), None);
-    assert_eq!(p.mode_for(SpeedLevel::Sl11), None);
-}
-
-#[test]
-fn hpx500_initial_level() {
-    let p = SessionProfile::hpx500();
-    assert_eq!(p.initial_level, SpeedLevel::Sl2);
-    assert_eq!(p.nack_threshold, 3);
-}
-
-#[test]
-fn hpx_pilot_mode_mapping() {
-    let p = SessionProfile::hpx_pilot();
-    assert_eq!(p.mode_for(SpeedLevel::Sl1), None);
-    assert_eq!(p.mode_for(SpeedLevel::Sl2), Some("PILOT-QPSK500"));
-    assert_eq!(p.mode_for(SpeedLevel::Sl3), Some("PILOT-8PSK500"));
-    assert_eq!(p.mode_for(SpeedLevel::Sl4), Some("PILOT-16QAM500"));
-    assert_eq!(p.mode_for(SpeedLevel::Sl5), Some("PILOT-32APSK500"));
-    assert_eq!(p.mode_for(SpeedLevel::Sl6), None);
-    assert_eq!(p.initial_level, SpeedLevel::Sl2);
-    assert_eq!(p.nack_threshold, 3);
-}
-
-#[test]
-fn hpx_pilot_rrc_is_the_narrowband_sibling() {
-    let rect = SessionProfile::hpx_pilot();
-    let rrc = SessionProfile::hpx_pilot_rrc();
-    assert_eq!(SessionProfile::by_name("hpx_pilot_rrc"), Some(rrc.clone()));
-    // Same ladder shape on the -RRC variants.
-    assert_eq!(rrc.mode_for(SpeedLevel::Sl2), Some("PILOT-QPSK500-RRC"));
-    assert_eq!(rrc.mode_for(SpeedLevel::Sl3), Some("PILOT-8PSK500-RRC"));
-    assert_eq!(rrc.mode_for(SpeedLevel::Sl4), Some("PILOT-16QAM500-RRC"));
-    assert_eq!(rrc.mode_for(SpeedLevel::Sl5), Some("PILOT-32APSK500-RRC"));
-    // Identical control: same levels, initial, thresholds — only the pulse differs.
-    assert_eq!(rrc.defined_levels(), rect.defined_levels());
-    assert_eq!(rrc.initial_level, rect.initial_level);
-    assert_eq!(rrc.nack_threshold, rect.nack_threshold);
-    for sl in rrc.defined_levels() {
-        assert_eq!(
-            rrc.snr_floor_for_level(sl),
-            rect.snr_floor_for_level(sl),
-            "floor {sl:?}"
-        );
-        assert_eq!(
-            rrc.snr_ceiling_for_level(sl),
-            rect.snr_ceiling_for_level(sl),
-            "ceiling {sl:?}"
-        );
-    }
-}
-
-#[test]
-fn hpx_pilot_fast_is_the_high_throughput_ladder() {
-    let base = SessionProfile::hpx_pilot();
-    let fast = SessionProfile::hpx_pilot_fast();
-    assert_eq!(
-        SessionProfile::by_name("hpx_pilot_fast"),
-        Some(fast.clone())
-    );
-    assert_eq!(fast.mode_for(SpeedLevel::Sl2), Some("PILOT-QPSK1000"));
-    assert_eq!(fast.mode_for(SpeedLevel::Sl3), Some("PILOT-8PSK1000"));
-    assert_eq!(fast.mode_for(SpeedLevel::Sl4), Some("PILOT-16QAM1000"));
-    assert_eq!(fast.mode_for(SpeedLevel::Sl5), Some("PILOT-32APSK1000"));
-    // Same per-symbol (Es/N0) thresholds and control as the 500-baud ladder.
-    assert_eq!(fast.defined_levels(), base.defined_levels());
-    assert_eq!(fast.initial_level, base.initial_level);
-    for sl in fast.defined_levels() {
-        assert_eq!(
-            fast.snr_floor_for_level(sl),
-            base.snr_floor_for_level(sl),
-            "floor {sl:?}"
-        );
-    }
-}
-
-#[test]
-fn hpx_pilot_fast_rrc_combines_throughput_and_narrowband() {
-    let fast_rrc = SessionProfile::hpx_pilot_fast_rrc();
-    assert_eq!(
-        SessionProfile::by_name("hpx_pilot_fast_rrc"),
-        Some(fast_rrc.clone())
-    );
-    assert_eq!(
-        fast_rrc.mode_for(SpeedLevel::Sl2),
-        Some("PILOT-QPSK1000-RRC")
-    );
-    assert_eq!(
-        fast_rrc.mode_for(SpeedLevel::Sl3),
-        Some("PILOT-8PSK1000-RRC")
-    );
-    assert_eq!(
-        fast_rrc.mode_for(SpeedLevel::Sl4),
-        Some("PILOT-16QAM1000-RRC")
-    );
-    assert_eq!(
-        fast_rrc.mode_for(SpeedLevel::Sl5),
-        Some("PILOT-32APSK1000-RRC")
-    );
-    // Floors are inherited from the base pilot ladder — EXCEPT SL2, which measurement showed the
-    // inheritance was wrong for.
-    //
-    // `hpx_pilot`'s floors were derived on 500-baud, non-RRC modes. Blanket inheritance assumed that
-    // carries to a 1000-baud RRC-shaped waveform, and for SL2 it does not: measured on AWGN, 12
-    // trials per point, `PILOT-QPSK1000-RRC` vs the plain 1000-baud sibling at the same SNR —
-    // 6 dB **8/12** vs 11/12, 7 dB 11/12 vs 11/12, 8 dB 12/12 vs 12/12. A floor is the SNR below
-    // which the adapter steps down immediately, so declaring 6 dB advertised a rung that decodes two
-    // thirds of the time there. SL2 is pinned to the corrected 8 dB; SL3–SL5 genuinely do inherit
-    // (12/12 at their own floors), and are still checked against the base so a future drift shows up.
-    let base = SessionProfile::hpx_pilot();
-    assert_eq!(
-        fast_rrc.snr_floor_for_level(SpeedLevel::Sl2),
-        Some(8.0),
-        "SL2 must keep the measured RRC floor, not the base ladder's optimistic 6 dB"
-    );
-    assert_ne!(
-        fast_rrc.snr_floor_for_level(SpeedLevel::Sl2),
-        base.snr_floor_for_level(SpeedLevel::Sl2),
-        "SL2 is deliberately NOT inherited; if these have converged again the correction was lost"
-    );
-    for sl in fast_rrc
-        .defined_levels()
-        .into_iter()
-        .filter(|&l| l != SpeedLevel::Sl2)
-    {
-        assert_eq!(
-            fast_rrc.snr_floor_for_level(sl),
-            base.snr_floor_for_level(sl),
-            "floor {sl:?}"
-        );
-    }
-}
-
-#[test]
-fn hpx_pilot_by_name_and_thresholds() {
-    assert_eq!(
-        SessionProfile::by_name("hpx_pilot"),
-        Some(SessionProfile::hpx_pilot())
-    );
-    let p = SessionProfile::hpx_pilot();
-    assert_eq!(
-        p.defined_levels(),
-        vec![
-            SpeedLevel::Sl2,
-            SpeedLevel::Sl3,
-            SpeedLevel::Sl4,
-            SpeedLevel::Sl5
-        ]
-    );
-    // Monotone, density-ordered SNR thresholds (QPSK < 8PSK < 16QAM < 32APSK).
-    assert_eq!(p.snr_floor_for_level(SpeedLevel::Sl2), Some(6.0));
-    assert_eq!(p.snr_floor_for_level(SpeedLevel::Sl3), Some(12.0));
-    assert_eq!(p.snr_floor_for_level(SpeedLevel::Sl4), Some(17.0));
-    assert_eq!(p.snr_floor_for_level(SpeedLevel::Sl5), Some(23.0));
-    assert_eq!(p.snr_ceiling_for_level(SpeedLevel::Sl4), Some(23.0));
-}
-
-#[test]
-fn hpx_wideband_mode_mapping() {
-    let p = SessionProfile::hpx_wideband();
-    assert_eq!(p.mode_for(SpeedLevel::Sl1), None);
-    assert_eq!(p.mode_for(SpeedLevel::Sl7), None);
-    assert_eq!(p.mode_for(SpeedLevel::Sl8), Some("QPSK500"));
-    assert_eq!(p.mode_for(SpeedLevel::Sl9), Some("QPSK1000"));
-    assert_eq!(p.mode_for(SpeedLevel::Sl10), None);
-    assert_eq!(p.mode_for(SpeedLevel::Sl11), Some("8PSK1000"));
-}
-
-#[test]
-fn hpx_wideband_initial_level() {
-    let p = SessionProfile::hpx_wideband();
-    assert_eq!(p.initial_level, SpeedLevel::Sl8);
-    assert_eq!(p.nack_threshold, 3);
-}
-
-#[test]
 fn hpx_hf_mode_mapping() {
-    let p = SessionProfile::hpx_hf();
+    let p = SessionProfile::fast();
     // SL1 = the MFSK16 non-coherent sub-floor rung (the ChirpFallback deep-fade waveform), one RS block.
     assert_eq!(p.mode_for(SpeedLevel::Sl1), Some("MFSK16"));
     assert_eq!(p.fec_for(SpeedLevel::Sl1), openpulse_core::fec::FecMode::Rs);
@@ -246,141 +61,14 @@ fn hpx_hf_mode_mapping() {
 
 #[test]
 fn hpx_hf_initial_level() {
-    let p = SessionProfile::hpx_hf();
+    let p = SessionProfile::fast();
     assert_eq!(p.initial_level, SpeedLevel::Sl2);
     assert_eq!(p.nack_threshold, 3);
 }
 
 #[test]
-fn scfdma_qam_hf_entry_policy_matches_matrix_gate() {
-    let policy = SessionProfile::SCFDMA_QAM_HF_ENTRY_POLICY;
-    assert_eq!(policy.min_success_rate, 0.90);
-    assert_eq!(policy.frames_per_scenario, 30);
-    assert_eq!(
-        policy.required_scenarios,
-        &["good_f1", "good_f2", "moderate_f1"]
-    );
-}
-
-#[test]
-fn hpx_narrowband_mode_mapping() {
-    let p = SessionProfile::hpx_narrowband();
-    assert_eq!(p.mode_for(SpeedLevel::Sl1), None);
-    assert_eq!(p.mode_for(SpeedLevel::Sl7), None);
-    assert_eq!(p.mode_for(SpeedLevel::Sl8), Some("QPSK500"));
-    assert_eq!(p.mode_for(SpeedLevel::Sl9), Some("QPSK1000"));
-    assert_eq!(p.mode_for(SpeedLevel::Sl10), Some("QPSK2000-RRC"));
-    assert_eq!(p.mode_for(SpeedLevel::Sl11), Some("8PSK2000-RRC"));
-}
-
-#[test]
-fn hpx_narrowband_initial_level() {
-    let p = SessionProfile::hpx_narrowband();
-    assert_eq!(p.initial_level, SpeedLevel::Sl8);
-    assert_eq!(p.nack_threshold, 3);
-}
-
-/// `hpx_narrowband_hd` is gone (#1359) and must not come back by name alone.
-///
-/// Its two rungs needed a 48 kHz audio path the engine cannot produce, so selecting it built a
-/// station whose every transmit failed at modulate. This replaces its two mapping tests: what is
-/// worth pinning now is that the name no longer resolves, because the profile could otherwise be
-/// re-added without the sample-rate problem being solved.
-#[test]
-fn hpx_narrowband_hd_is_retired_and_no_longer_resolves() {
-    assert!(
-        SessionProfile::by_name("hpx_narrowband_hd").is_none(),
-        "hpx_narrowband_hd resolves again — if a 48 kHz audio path now exists, say so in the \
-         profile's doc and re-point this test; if it does not, the profile is unusable (#1359)"
-    );
-    // The control: a profile that SHOULD resolve still does, so this cannot pass by from_name
-    // being broken for everything.
-    assert!(SessionProfile::by_name("hpx_hf").is_some());
-}
-
-#[test]
-fn hpx_ofdm_hf_mode_mapping() {
-    let p = SessionProfile::hpx_ofdm_hf();
-    assert_eq!(p.mode_for(SpeedLevel::Sl1), None);
-    assert_eq!(p.mode_for(SpeedLevel::Sl4), None);
-    assert_eq!(p.mode_for(SpeedLevel::Sl5), Some("OFDM16"));
-    assert_eq!(p.mode_for(SpeedLevel::Sl6), Some("OFDM52"));
-    assert_eq!(p.mode_for(SpeedLevel::Sl7), Some("OFDM52-8PSK"));
-    assert_eq!(p.mode_for(SpeedLevel::Sl8), Some("OFDM52-16QAM"));
-    assert_eq!(p.mode_for(SpeedLevel::Sl9), Some("OFDM52-32QAM"));
-    assert_eq!(p.mode_for(SpeedLevel::Sl10), Some("OFDM52-64QAM"));
-    assert_eq!(p.mode_for(SpeedLevel::Sl11), None);
-}
-
-#[test]
-fn hpx_ofdm_hf_initial_level() {
-    let p = SessionProfile::hpx_ofdm_hf();
-    assert_eq!(p.initial_level, SpeedLevel::Sl5);
-    assert_eq!(p.nack_threshold, 3);
-}
-
-#[test]
-fn hpx_ofdm_hf_snr_thresholds() {
-    // Floors are in plugin-SNR units (what the receiver-led ladder reads), calibrated on moderate_f1
-    // where that estimate is conservative and saturates ~17 dB — the AWGN-scale numbers never cleared.
-    let p = SessionProfile::hpx_ofdm_hf();
-    assert_eq!(p.snr_floor_for_level(SpeedLevel::Sl5), Some(8.0));
-    assert_eq!(p.snr_floor_for_level(SpeedLevel::Sl6), Some(9.0));
-    assert_eq!(p.snr_floor_for_level(SpeedLevel::Sl10), Some(16.0));
-    assert_eq!(p.snr_ceiling_for_level(SpeedLevel::Sl5), Some(11.0));
-    assert_eq!(p.snr_ceiling_for_level(SpeedLevel::Sl6), Some(12.0));
-    assert_eq!(p.snr_ceiling_for_level(SpeedLevel::Sl10), None);
-    // Every rung is FEC-protected now (SoftConcatenated) — the unprotected entry rungs failed on fading.
-    assert_eq!(
-        p.fec_for(SpeedLevel::Sl5),
-        openpulse_core::fec::FecMode::SoftConcatenated
-    );
-}
-
-#[test]
-fn hpx_wideband_hd_mode_mapping_uses_crossover_policy() {
-    let p = SessionProfile::hpx_wideband_hd();
-    // SL9–SL11: narrowband (half-width) HOM fallback rungs.
-    assert_eq!(p.mode_for(SpeedLevel::Sl9), Some("SCFDMA26-8PSK"));
-    assert_eq!(p.mode_for(SpeedLevel::Sl10), Some("SCFDMA26-16QAM"));
-    assert_eq!(p.mode_for(SpeedLevel::Sl11), Some("SCFDMA26-32QAM"));
-    assert_eq!(p.mode_for(SpeedLevel::Sl12), Some("SCFDMA52-16QAM"));
-    assert_eq!(p.mode_for(SpeedLevel::Sl13), Some("SCFDMA52-32QAM"));
-    assert_eq!(p.mode_for(SpeedLevel::Sl14), Some("SCFDMA52-64QAM"));
-    assert_eq!(p.mode_for(SpeedLevel::Sl15), Some("64QAM2000-RRC"));
-}
-
-#[test]
-fn hpx_wideband_hd_snr_thresholds_match_policy_intent() {
-    let p = SessionProfile::hpx_wideband_hd();
-    assert_eq!(p.initial_level, SpeedLevel::Sl12);
-    assert_eq!(p.nack_threshold, 2);
-    // Narrowband fallback rungs sit below SL12 with lower floors (more robust).
-    assert_eq!(p.snr_floor_for_level(SpeedLevel::Sl9), Some(9.0));
-    assert_eq!(p.snr_floor_for_level(SpeedLevel::Sl10), Some(11.0));
-    assert_eq!(p.snr_floor_for_level(SpeedLevel::Sl11), Some(13.0));
-    assert_eq!(p.snr_ceiling_for_level(SpeedLevel::Sl11), Some(16.0));
-    assert_eq!(p.snr_floor_for_level(SpeedLevel::Sl12), Some(16.0));
-    assert_eq!(p.snr_floor_for_level(SpeedLevel::Sl13), Some(20.0));
-    assert_eq!(p.snr_floor_for_level(SpeedLevel::Sl14), Some(28.0));
-    assert_eq!(p.snr_floor_for_level(SpeedLevel::Sl15), Some(35.0));
-    assert_eq!(p.snr_ceiling_for_level(SpeedLevel::Sl12), Some(20.0));
-    assert_eq!(p.snr_ceiling_for_level(SpeedLevel::Sl13), Some(26.0));
-    assert_eq!(p.snr_ceiling_for_level(SpeedLevel::Sl14), Some(33.0));
-    assert_eq!(p.snr_ceiling_for_level(SpeedLevel::Sl15), None);
-}
-
-#[test]
-fn hpx_wideband_hd_requires_snr_candidate_before_sl15_ack_up() {
-    let p = SessionProfile::hpx_wideband_hd();
-    assert_eq!(p.ack_up_requires_snr_candidate_at(), Some(SpeedLevel::Sl14));
-
-    let wideband = SessionProfile::hpx_wideband();
-    assert_eq!(wideband.ack_up_requires_snr_candidate_at(), None);
-}
-
-#[test]
 fn by_name_resolves_every_listed_profile() {
+    assert_eq!(SessionProfile::PROFILE_NAMES, &["fast", "robust"]);
     for name in SessionProfile::PROFILE_NAMES {
         assert!(
             SessionProfile::by_name(name).is_some(),
@@ -390,79 +78,91 @@ fn by_name_resolves_every_listed_profile() {
 }
 
 #[test]
-fn by_name_matches_constructors() {
+fn by_name_matches_constructors_and_ignores_case() {
     assert_eq!(
-        SessionProfile::by_name("hpx500"),
-        Some(SessionProfile::hpx500())
+        SessionProfile::by_name("fast"),
+        Some(SessionProfile::fast())
     );
     assert_eq!(
-        SessionProfile::by_name("hpx_hf"),
-        Some(SessionProfile::hpx_hf())
+        SessionProfile::by_name("robust"),
+        Some(SessionProfile::robust())
     );
     assert_eq!(
-        SessionProfile::by_name("hpx_ofdm_hf"),
-        Some(SessionProfile::hpx_ofdm_hf())
+        SessionProfile::by_name("  Robust "),
+        Some(SessionProfile::robust())
+    );
+    assert_eq!(
+        SessionProfile::by_name("FAST"),
+        Some(SessionProfile::fast())
     );
 }
 
+/// Decision 18: the old names are gone with no alias, so a pre-rename config fails loudly instead
+/// of silently picking a ladder.
 #[test]
-fn by_name_normalises_case_and_separators() {
-    let canonical = SessionProfile::by_name("hpx_ofdm_hf");
-    assert!(canonical.is_some());
-    assert_eq!(SessionProfile::by_name("HPX-OFDM-HF"), canonical);
-    assert_eq!(SessionProfile::by_name("  Hpx_Ofdm-Hf  "), canonical);
+fn by_name_rejects_unknown_and_the_retired_names() {
+    for name in [
+        "nope",
+        "",
+        "hpx_hf",
+        "hpx500",
+        "hpx_modcod",
+        "hpx_ofdm_hf",
+        "hpx_wideband",
+        "hpx_wideband_hd",
+        "hpx_narrowband",
+        "hpx_narrowband_hd",
+        "hpx_pilot",
+    ] {
+        assert_eq!(
+            SessionProfile::by_name(name),
+            None,
+            "{name:?} must not resolve"
+        );
+    }
 }
 
 #[test]
-fn by_name_ofdm_hf_exposes_the_hom_ladder() {
-    // The OFDM higher-order ladder (PR #407) must be reachable by name.
-    let p = SessionProfile::by_name("hpx_ofdm_hf").expect("ofdm-hf resolves");
-    assert_eq!(p.initial_level, SpeedLevel::Sl5);
-    assert_eq!(p.mode_for(SpeedLevel::Sl8), Some("OFDM52-16QAM"));
-    assert_eq!(p.mode_for(SpeedLevel::Sl10), Some("OFDM52-64QAM"));
-}
-
-#[test]
-fn by_name_rejects_unknown() {
-    assert_eq!(SessionProfile::by_name("nope"), None);
-    assert_eq!(SessionProfile::by_name(""), None);
+fn robust_is_the_fast_ladder_capped_at_sl6() {
+    let (fast, robust) = (SessionProfile::fast(), SessionProfile::robust());
+    assert_eq!(fast.max_level(), None);
+    assert_eq!(robust.max_level(), Some(SpeedLevel::Sl6));
+    for l in fast.defined_levels() {
+        assert_eq!(robust.mode_for(l), fast.mode_for(l), "{l:?}");
+        assert_eq!(robust.fec_for(l), fast.fec_for(l), "{l:?}");
+    }
+    assert_eq!(robust.initial_level, fast.initial_level);
+    // Every rung `robust` can reach is single-carrier — no OFDM.
+    for l in robust
+        .defined_levels()
+        .into_iter()
+        .filter(|&l| l <= SpeedLevel::Sl6)
+    {
+        let mode = robust.mode_for(l).expect("mapped");
+        assert!(!mode.starts_with("OFDM"), "{l:?} = {mode} under the cap");
+    }
 }
 
 // ── Ladder fingerprint (backward-compat guard) ────────────────────────────────
 
 #[test]
-fn fingerprint_is_deterministic_and_distinguishes_profiles() {
-    let a = SessionProfile::hpx_hf();
-    // Same definition → identical fingerprint (stable across builds/instances).
-    assert_eq!(a.fingerprint(), SessionProfile::hpx_hf().fingerprint());
-    // Different ladders → different fingerprints.
+fn fingerprint_is_deterministic_and_non_trivial() {
+    let a = SessionProfile::fast();
+    assert_eq!(a.fingerprint(), SessionProfile::fast().fingerprint());
     assert_ne!(
-        SessionProfile::hpx_hf().fingerprint(),
-        SessionProfile::hpx500().fingerprint()
-    );
-    assert_ne!(
-        SessionProfile::hpx500().fingerprint(),
-        SessionProfile::hpx_modcod().fingerprint()
-    );
-}
-
-#[test]
-fn fingerprint_tracks_mode_and_fec_mapping() {
-    // The fingerprint reads only the (level → mode, level → FEC) mapping (see `fingerprint()`), so
-    // two profiles with different modes/FEC differ, and the value is a stable u64 (non-zero for a
-    // populated ladder) suitable for advertising in the handshake.
-    let hf = SessionProfile::hpx_hf();
-    assert_ne!(
-        hf.fingerprint(),
+        a.fingerprint(),
         0,
         "a populated ladder has a non-trivial fingerprint"
     );
-    // hpx_hf and hpx_ofdm_hf share some level numbers but map them to different modes → distinct.
-    assert_ne!(
-        hf.fingerprint(),
-        SessionProfile::by_name("hpx_ofdm_hf")
-            .unwrap()
-            .fingerprint()
+}
+
+/// The cap is local policy: a `fast` and a `robust` station advertise the same ladder, so the
+/// handshake's compatibility guard keeps adaptive OTA between them.
+#[test]
+fn the_cap_is_not_part_of_the_fingerprint() {
+    assert_eq!(
+        SessionProfile::fast().fingerprint(),
+        SessionProfile::robust().fingerprint()
     );
 }
 
@@ -471,7 +171,7 @@ fn fingerprint_tracks_mode_and_fec_mapping() {
 /// hysteresis normalised in PR #680).
 #[test]
 fn hpx_hf_floors_are_monotonic_and_ceilings_follow_the_hysteresis_rule() {
-    let p = SessionProfile::hpx_hf();
+    let p = SessionProfile::fast();
     let rungs: Vec<SpeedLevel> = p
         .defined_levels()
         .into_iter()

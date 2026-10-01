@@ -85,7 +85,7 @@ backend = "cpal"
 device = "$RX_DEVICE"
 [modem]
 mode = "$MODE"
-profile = "hpx_hf"
+profile = "fast"
 ptt_backend = "none"
 [daemon]
 tcp_port = 9000

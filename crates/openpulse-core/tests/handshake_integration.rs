@@ -44,7 +44,7 @@ fn conreq(station: &str, dst: &str, seed: u8, modes: Vec<SigningMode>) -> Vec<u8
             signing_modes: modes,
             session_id: 0x5E55_1000_0000_0001,
             station_grid: "FN31pr",
-            profile_name: "hpx_hf",
+            profile_name: "fast",
             profile_fingerprint: 99,
             timestamp_ms: TS,
             kex_pubkey: &[5u8; 32],
@@ -61,7 +61,7 @@ fn conack(station: &str, seed: u8, mode: SigningMode, req: &[u8]) -> Vec<u8> {
             selected_mode: mode,
             conreq_hash: conreq_hash(req),
             station_grid: "EM69",
-            profile_name: "hpx_hf",
+            profile_name: "fast",
             profile_fingerprint: 99,
             timestamp_ms: TS + 100,
             kex_pubkey: &[6u8; 32],
@@ -335,7 +335,7 @@ fn conreq_encode_decode_round_trip() {
     assert_eq!(d.station_id, "W1AW");
     assert_eq!(d.session_id, 0x5E55_1000_0000_0001);
     assert_eq!(d.station_grid, "FN31pr");
-    assert_eq!(d.profile_name, "hpx_hf");
+    assert_eq!(d.profile_name, "fast");
     assert_eq!(d.profile_fingerprint, 99);
     assert_eq!(d.timestamp_ms, TS);
     assert_eq!(d.kex_pubkey, vec![5u8; 32]);
@@ -540,6 +540,6 @@ fn conreq_advertises_profile_and_survives_wire_roundtrip() {
         None,
     )
     .unwrap();
-    assert_eq!(d.profile_name, "hpx_hf");
+    assert_eq!(d.profile_name, "fast");
     assert_eq!(d.profile_fingerprint, 99);
 }

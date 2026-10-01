@@ -3521,7 +3521,7 @@ mod command_apply_tests {
 
         apply(
             ControlCommand::StartOtaSession {
-                profile: "hpx500".into(),
+                profile: "robust".into(),
             },
             &mut engine,
             &mut rs,
@@ -3561,7 +3561,7 @@ mod command_apply_tests {
         // Start an OTA session.
         apply_command_to_engine(
             &ControlCommand::StartOtaSession {
-                profile: "hpx500".into(),
+                profile: "robust".into(),
             },
             &mut engine,
             &active_mode,
@@ -3635,7 +3635,7 @@ mod command_apply_tests {
         let (tx, _rx) = broadcast::channel::<ControlEvent>(16);
         let ev_tx = Arc::new(tx);
         let mut rs = RuntimeControlState {
-            local_ota_ladder: Some(("hpx_hf".into(), 0xAAAA_AAAA_AAAA_AAAA)),
+            local_ota_ladder: Some(("fast".into(), 0xAAAA_AAAA_AAAA_AAAA)),
             ..RuntimeControlState::default()
         };
         let key = [7u8; 32];
@@ -3647,7 +3647,7 @@ mod command_apply_tests {
             "W1AW",
             "",
             &key,
-            "hpx_hf",
+            "fast",
             0xAAAA_AAAA_AAAA_AAAA,
         );
         assert_eq!(
@@ -3663,7 +3663,7 @@ mod command_apply_tests {
             "W1AW",
             "",
             &key,
-            "hpx_hf",
+            "fast",
             0xBBBB_BBBB_BBBB_BBBB,
         );
         assert_eq!(
@@ -3688,7 +3688,7 @@ mod command_apply_tests {
             "W1AW",
             "",
             &key,
-            "hpx_hf",
+            "fast",
             0xAAAA_AAAA_AAAA_AAAA,
         );
         assert_eq!(rs.last_verified_peer().unwrap().profile_compatible, None);
@@ -3705,7 +3705,7 @@ mod command_apply_tests {
 
         apply_command_to_engine(
             &ControlCommand::StartOtaSession {
-                profile: "hpx500".into(),
+                profile: "robust".into(),
             },
             &mut engine,
             &active_mode,

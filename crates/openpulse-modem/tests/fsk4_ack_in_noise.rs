@@ -40,7 +40,7 @@ fn hf_engine() -> (ModemEngine, LoopbackBackend) {
         .register_plugin(Box::new(Mfsk16Plugin::new()))
         .unwrap();
     engine.register_plugin(Box::new(Fsk4Plugin::new())).unwrap();
-    engine.start_ota_session(SessionProfile::hpx_hf());
+    engine.start_ota_session(SessionProfile::fast());
     (engine, backend)
 }
 

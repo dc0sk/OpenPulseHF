@@ -15,6 +15,53 @@ this ledger adds the design rationale and the actually-observed results per chan
 
 ---
 
+## 2026-10-01 — Two session profiles, `fast` and `robust` (work plan decision 18)
+
+**Requirement / change.** The registry held eleven profiles; Release 1 ships one ladder (`hpx_hf`). The
+maintainer asked for two: performance under good conditions, reliability under poor conditions or
+with limited gear. Ten profiles deleted, no aliases. Defaults were `hpx500` for ARDOP (whose coherent
+QPSK rungs decode ~0 % on a fade, #923) and an empty-name fallback to it.
+
+**Design + rationale.** `docs/dev/design/session-profiles.md`, reviewed before implementation
+(`docs/dev/reviews/review-session-profiles.md`, six fixes folded in). `fast` = the `hpx_hf` ladder
+unchanged; `robust` = the same ladder capped at SL6 (≤ 500 Hz, single-carrier). The cap is local
+policy outside `fingerprint()`, so a fast↔robust pair keeps adaptive OTA. It is a separate
+`profile_cap` field on both rate paths, because the existing caps (`set_level_bounds`,
+`set_max_tx_level`) are overwritten by operator bounds and every ARQBW change. At the cap a decode
+reports `Hold`, not `ClimbOnSnr`. The ARDOP TNC floors at SL2 (no MFSK16 there).
+
+**Implementation.** `openpulse-core/src/profile.rs` (`fast`, `robust`, `max_level`, `reachable_levels`,
+`from_rungs` for test apparatus; ten constructors and `SCFDMA_QAM_HF_ENTRY_POLICY` deleted);
+`ota_rate.rs` (`profile_cap`, `hi()`, Hold at the top); `openpulse-core/src/rate.rs` (`raise_to`);
+`openpulse-modem/src/rate_policy.rs` (`profile_cap`, `min_tx_level`, `enforce_bounds`, capped
+`defined_modes`), `engine.rs` (`set_arq_min_tx_level`); `openpulse-ardop/src/main.rs` (unknown name is
+an error, floor SL2); `openpulse-daemon/src/server.rs` (unknown OTA profile is an error);
+`openpulse-config` defaults `fast`; CLI mode-advisor uses `reachable_levels` (it recommended SL14 under
+`robust`); linksim resolves unknown names to a panic instead of a silent `hpx_hf` fallback and keeps
+two apparatus ladders (`apparatus:wide-qpsk`, `apparatus:ofdm`) so the notch experiments and the OFDM
+goodput gate keep their baselines; testmatrix use cases `adaptive_fast`/`adaptive_robust`; scripts,
+config examples and operator docs.
+
+**Tests.** New: `ota_rate` (robust never past SL6; operator bounds never raise the cap; a lower bound
+still applies; Hold at the cap), `rate_policy` (a wider ARQBW cap cannot lift `robust`; a narrower one
+applies; the floor keeps NACK exhaustion off SL1, with a control), `session_profile` (retired names
+rejected; robust = fast capped; cap not in the fingerprint), mode-advisor and CLI robust-cap tests.
+Retargeted: tests that used `hpx500` run `robust` or, where they exercise the uncoded path, an
+apparatus copy of the old uncoded ladder (`ota_arm_uncoded_dispatch`, `ota_rate_lockstep`).
+Deleted: `modcod_ladder.rs` and the pilot/wideband/narrowband profile tests. The handshake KAT keeps
+the literal `"hpx_hf"` input: the vector pins the encoder, which did not change.
+
+**Results (run 2026-10-01).** Full `cargo test --workspace --no-default-features --no-fail-fast`:
+2614 passed, 10 failed, all 10 in three targets, then fixed and rerun: `channel_loopback` 13/13
+(rung-count anti-vacuity now pinned at the 13 floored `hpx_hf` rungs), `ota_arm_uncoded_dispatch` 6/6,
+`ota_rate_lockstep` 10/10. Workspace clippy `-D warnings` clean; `trace.sh check` PASS;
+`reachability.sh check` PASS. **Found:** the twin-daemon OTA test took 812 s floored at SL5 (BPSK250
++ Rs) against ~18 s on the old uncoded rung; MFSK16 (950 s with its ACK path off) and OFDM (828 s
+capped at SL6) were ruled out by experiment, and an SL7 floor runs it in 23 s. Parked in the work plan
+M2 as a receive-cost item to measure in a release build.
+
+---
+
 ## 2026-10-01 — A packed frame that fails to unpack is dropped, not delivered (REQ-CMP-05; work plan decision 17)
 
 **Requirement / change.** REQ-CMP-05: a decompression failure is a frame-integrity error. The daemon's

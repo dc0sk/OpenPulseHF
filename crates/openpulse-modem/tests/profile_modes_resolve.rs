@@ -30,20 +30,7 @@ fn engine_with_all_plugins() -> ModemEngine {
 }
 
 /// The names accepted by `SessionProfile::by_name` (the operator-selectable OTA profiles).
-const PROFILE_NAMES: &[&str] = &[
-    "hpx500",
-    "hpx_modcod",
-    "hpx_pilot",
-    "hpx_pilot_rrc",
-    "hpx_pilot_fast",
-    "hpx_pilot_fast_rrc",
-    "hpx_hf",
-    "hpx_ofdm_hf",
-    "hpx_wideband",
-    "hpx_wideband_hd",
-    "hpx_narrowband",
-    // "hpx_narrowband_hd" retired 2026-09-14 (#1359): unreachable at the engine's 8 kHz.
-];
+const PROFILE_NAMES: &[&str] = &["fast", "robust"];
 
 #[test]
 fn every_profile_mode_string_resolves_to_a_registered_plugin() {

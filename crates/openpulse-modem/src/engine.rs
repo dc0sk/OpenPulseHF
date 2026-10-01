@@ -1719,6 +1719,12 @@ impl ModemEngine {
         self.rate_policy.set_max_tx_level(max);
     }
 
+    /// Floor the adaptive ladder at `min` (a front end with no waveform below it, e.g. the ARDOP TNC
+    /// at SL2); `None` clears it. The active session is raised immediately.
+    pub fn set_arq_min_tx_level(&mut self, min: Option<openpulse_core::rate::SpeedLevel>) {
+        self.rate_policy.set_min_tx_level(min);
+    }
+
     /// The active adaptive profile's defined `(level, mode)` pairs (ascending), for mapping a
     /// bandwidth cap in Hz to a max speed level. Empty when no adaptive session is active.
     pub fn adaptive_profile_modes(&self) -> Vec<(openpulse_core::rate::SpeedLevel, &'static str)> {
@@ -8519,7 +8525,7 @@ mod tests {
             .unwrap();
         // SL9 is OFDM52-16QAM + SoftConcatenated — a SOFT rung, so the HARQ block would demodulate
         // and retain this burst's LLRs if it ever reached it.
-        rx.start_ota_session(SessionProfile::hpx_hf());
+        rx.start_ota_session(SessionProfile::fast());
         rx.ota_lock_level(SpeedLevel::Sl9);
 
         let burst = AudioSamples { samples: signal };
@@ -8547,7 +8553,7 @@ mod tests {
         let mut rx = ModemEngine::new(Box::new(rx_lb.clone_shared()));
         rx.register_plugin(Box::new(BpskPlugin::new())).unwrap();
         rx.enable_notch();
-        rx.start_ota_session(SessionProfile::hpx500());
+        rx.start_ota_session(SessionProfile::robust());
 
         // Any non-empty burst; the decode result is irrelevant — we assert only that the OTA decode
         // path did not re-apply the front-end (the caller owns that).
@@ -9395,7 +9401,7 @@ mod stand_down_is_recorded_on_every_path {
     fn the_daemon_ota_arm_records_a_stand_down() {
         let signal = signal_with_frame();
         let (_backend, mut e) = engine();
-        e.start_ota_session(SessionProfile::hpx_hf());
+        e.start_ota_session(SessionProfile::fast());
         assert!(e.ota_active(), "without a session this arm early-returns");
         prime(&mut e);
         let burst = capture_via_daemon_path(&mut e, &signal);

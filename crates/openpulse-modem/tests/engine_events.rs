@@ -176,7 +176,7 @@ fn emits_hpx_transition() {
 #[test]
 fn emits_rate_change() {
     let mut engine = make_engine();
-    engine.start_adaptive_session(SessionProfile::hpx500());
+    engine.start_adaptive_session(SessionProfile::robust());
 
     let mut rx = engine.subscribe();
     engine.apply_ack(AckType::AckOk);

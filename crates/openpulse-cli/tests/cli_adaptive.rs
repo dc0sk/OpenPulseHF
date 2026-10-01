@@ -1,4 +1,5 @@
 use assert_cmd::Command;
+use predicates::prelude::PredicateBooleanExt;
 use predicates::str::contains;
 
 /// Over a clean channel every frame decodes, so the ladder climbs one rung per
@@ -9,7 +10,7 @@ fn adaptive_clean_climbs_the_ladder() {
     cmd.args([
         "adaptive",
         "--profile",
-        "hpx_hf",
+        "fast",
         "--channel",
         "clean",
         "--frames",
@@ -17,29 +18,30 @@ fn adaptive_clean_climbs_the_ladder() {
     ]);
     cmd.assert()
         .success()
-        .stdout(contains("profile=hpx_hf"))
+        .stdout(contains("profile=fast"))
         .stdout(contains("start: level=SL2 mode=BPSK31"))
         .stdout(contains("→ SL3 (BPSK63)"))
         .stdout(contains("final: level=SL8 mode=OFDM52-8PSK"));
 }
 
-/// The OFDM higher-order ladder is reachable and climbs to its densest rung.
+/// `robust` climbs the same ladder but stops at its SL6 cap (QPSK250-D), never reaching OFDM.
 #[test]
-fn adaptive_ofdm_hf_reaches_top_rung() {
+fn adaptive_robust_stops_at_its_cap() {
     let mut cmd = Command::cargo_bin("openpulse").expect("binary should build");
     cmd.args([
         "adaptive",
         "--profile",
-        "hpx_ofdm_hf",
+        "robust",
         "--channel",
         "clean",
         "--frames",
-        "6",
+        "8",
     ]);
     cmd.assert()
         .success()
-        .stdout(contains("start: level=SL5 mode=OFDM16"))
-        .stdout(contains("final: level=SL10 mode=OFDM52-64QAM"));
+        .stdout(contains("start: level=SL2 mode=BPSK31"))
+        .stdout(contains("final: level=SL6 mode=QPSK250-D"))
+        .stdout(contains("mode=OFDM").not());
 }
 
 #[test]
@@ -48,7 +50,7 @@ fn adaptive_json_emits_frames_and_summary() {
     cmd.args([
         "adaptive",
         "--profile",
-        "hpx_hf",
+        "fast",
         "--channel",
         "clean",
         "--frames",
@@ -61,7 +63,7 @@ fn adaptive_json_emits_frames_and_summary() {
         // Auto-fed backlog: after frame 0 of 3 × 64 B, 2 × 64 = 128 B remain.
         .stdout(contains("\"backlog\":128"))
         .stdout(contains("\"summary\":true"))
-        .stdout(contains("\"profile\":\"hpx_hf\""));
+        .stdout(contains("\"profile\":\"fast\""));
 }
 
 /// The A2 backlog gate auto-feeds the draining queue, so the final ACK-UP arrives
@@ -73,7 +75,7 @@ fn adaptive_backlog_gate_holds_final_upgrade() {
     cmd.args([
         "adaptive",
         "--profile",
-        "hpx_hf",
+        "fast",
         "--channel",
         "clean",
         "--frames",
@@ -102,7 +104,7 @@ fn adaptive_rejects_unknown_profile() {
     cmd.assert()
         .failure()
         .stderr(contains("unknown session profile"))
-        .stderr(contains("hpx_pilot_fast_rrc"));
+        .stderr(contains("robust"));
 }
 
 #[test]
@@ -111,7 +113,7 @@ fn adaptive_awgn_requires_snr() {
     cmd.args([
         "adaptive",
         "--profile",
-        "hpx_hf",
+        "fast",
         "--channel",
         "awgn",
         "--frames",

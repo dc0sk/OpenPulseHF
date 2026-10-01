@@ -219,6 +219,64 @@ impl ChannelModel for NotchedChannel<'_> {
     }
 }
 
+/// Resolve an operator profile (`fast`, `robust`) or a linksim apparatus ladder by name.
+pub fn resolve_profile(name: &str) -> Option<SessionProfile> {
+    SessionProfile::by_name(name).or_else(|| apparatus::by_name(name))
+}
+
+/// Ladders that exist only as experiment apparatus. They are not operator profiles (decision 18
+/// deleted the profiles they were copied from), but some experiments and gates need their shape and
+/// their recorded baselines, so the rungs are kept here verbatim.
+pub mod apparatus {
+    use openpulse_core::fec::FecMode;
+    use openpulse_core::profile::SessionProfile;
+    use openpulse_core::rate::SpeedLevel::*;
+
+    /// Names accepted by [`by_name`].
+    pub const NAMES: &[&str] = &["apparatus:wide-qpsk", "apparatus:ofdm"];
+
+    /// Resolve an apparatus ladder by name.
+    pub fn by_name(name: &str) -> Option<SessionProfile> {
+        match name {
+            "apparatus:wide-qpsk" => Some(wide_qpsk()),
+            "apparatus:ofdm" => Some(ofdm()),
+            _ => None,
+        }
+    }
+
+    /// The former `hpx_wideband` rungs: uncoded single-carrier QPSK500 → QPSK1000 → 8PSK1000, so the
+    /// run's own `fec` knob controls the coding. The notch experiments were measured on it.
+    fn wide_qpsk() -> SessionProfile {
+        SessionProfile::from_rungs(
+            &[
+                (Sl8, "QPSK500", FecMode::None, Some(11.0), Some(18.0)),
+                (Sl9, "QPSK1000", FecMode::None, Some(14.0), Some(22.0)),
+                (Sl11, "8PSK1000", FecMode::None, Some(18.0), None),
+            ],
+            Sl8,
+            3,
+        )
+    }
+
+    /// The former `hpx_ofdm_hf` rungs: OFDM16 → OFDM52 → OFDM52-{8PSK,16QAM,32QAM,64QAM}, all
+    /// soft-concatenated. The OFDM goodput gate's baselines were measured on it.
+    fn ofdm() -> SessionProfile {
+        let sc = FecMode::SoftConcatenated;
+        SessionProfile::from_rungs(
+            &[
+                (Sl5, "OFDM16", sc, Some(8.0), Some(11.0)),
+                (Sl6, "OFDM52", sc, Some(9.0), Some(12.0)),
+                (Sl7, "OFDM52-8PSK", sc, Some(10.0), Some(14.0)),
+                (Sl8, "OFDM52-16QAM", sc, Some(12.0), Some(16.0)),
+                (Sl9, "OFDM52-32QAM", sc, Some(14.0), Some(18.0)),
+                (Sl10, "OFDM52-64QAM", sc, Some(16.0), None),
+            ],
+            Sl5,
+            3,
+        )
+    }
+}
+
 /// Parameters for one link run.
 #[derive(Debug, Clone)]
 pub struct LinkParams {
@@ -254,7 +312,7 @@ pub struct LinkParams {
 impl Default for LinkParams {
     fn default() -> Self {
         Self {
-            profile_name: "hpx_hf".into(),
+            profile_name: "fast".into(),
             forward: ChannelSpec::Awgn(15.0),
             reverse: ChannelSpec::Awgn(20.0),
             payload_bytes_per_frame: 64,
@@ -622,8 +680,16 @@ pub struct LinkSim {
 impl LinkSim {
     /// Build a fresh simulation from `params`.
     pub fn new(params: &LinkParams) -> Self {
-        let profile =
-            SessionProfile::by_name(&params.profile_name).unwrap_or_else(SessionProfile::hpx_hf);
+        // An unknown name is a bug in the caller, not a reason to run some other ladder: a silent
+        // fallback here would turn every stale profile name into a passing `fast` run.
+        let profile = resolve_profile(&params.profile_name).unwrap_or_else(|| {
+            panic!(
+                "unknown profile {:?}; expected one of {:?} or an apparatus ladder {:?}",
+                params.profile_name,
+                SessionProfile::PROFILE_NAMES,
+                apparatus::NAMES
+            )
+        });
 
         let mut fwd = ChannelSimHarness::new();
         register_all(&mut fwd.tx_engine);
@@ -1046,9 +1112,9 @@ mod tests {
     /// arises, and would keep passing if the accounting reverted.
     #[test]
     fn net_bps_is_accounted_against_the_fec_actually_transmitted() {
-        let profile = SessionProfile::hpx_hf();
+        let profile = SessionProfile::fast();
         let mut sim = LinkSim::new(&LinkParams {
-            profile_name: "hpx_hf".into(),
+            profile_name: "fast".into(),
             forward: ChannelSpec::Clean,
             reverse: ChannelSpec::Clean,
             payload_bytes_per_frame: 64,
@@ -1139,7 +1205,7 @@ mod tests {
     /// the regime where this experiment actually measures the notch rather than a link falling over.
     fn qrm_run(notch: Option<LinkNotch>) -> LinkResult {
         run_link(&LinkParams {
-            profile_name: "hpx_wideband".into(),
+            profile_name: "apparatus:wide-qpsk".into(),
             forward: ChannelSpec::Qrm {
                 snr_floor_db: 20.0,
                 tones: vec![(2650.0, 1.5)],
@@ -1276,7 +1342,7 @@ mod tests {
     #[test]
     fn clean_channel_delivers_all_and_climbs() {
         let params = LinkParams {
-            profile_name: "hpx500".into(),
+            profile_name: "robust".into(),
             forward: ChannelSpec::Clean,
             reverse: ChannelSpec::Clean,
             payload_bytes_per_frame: 32,
@@ -1323,7 +1389,7 @@ mod tests {
         // Even on a clean channel, ACK + turnaround overhead must make the effective
         // two-way rate strictly less than the forward mode's raw payload rate.
         let params = LinkParams {
-            profile_name: "hpx500".into(),
+            profile_name: "robust".into(),
             forward: ChannelSpec::Clean,
             reverse: ChannelSpec::Clean,
             payload_bytes_per_frame: 64,
@@ -1349,7 +1415,7 @@ mod tests {
     #[test]
     fn very_low_snr_degrades_delivery() {
         let clean = run_link(&LinkParams {
-            profile_name: "hpx500".into(),
+            profile_name: "robust".into(),
             forward: ChannelSpec::Clean,
             reverse: ChannelSpec::Clean,
             total_frames: 16,
@@ -1357,7 +1423,7 @@ mod tests {
             ..LinkParams::default()
         });
         let noisy = run_link(&LinkParams {
-            profile_name: "hpx500".into(),
+            profile_name: "robust".into(),
             forward: ChannelSpec::Awgn(-5.0),
             reverse: ChannelSpec::Awgn(0.0),
             total_frames: 16,
@@ -1376,7 +1442,7 @@ mod tests {
     fn large_payload_chunks_and_delivers() {
         // > 255 bytes must not stall: it is sent as a burst of chunks and still delivered.
         let r = run_link(&LinkParams {
-            profile_name: "hpx_wideband".into(), // starts fast (QPSK500), avoids slow BPSK31
+            profile_name: "apparatus:wide-qpsk".into(), // starts fast (QPSK500), avoids slow BPSK31
             forward: ChannelSpec::Clean,
             reverse: ChannelSpec::Clean,
             payload_bytes_per_frame: 600,
@@ -1392,7 +1458,7 @@ mod tests {
     #[test]
     fn compression_raises_effective_rate() {
         let base = LinkParams {
-            profile_name: "hpx_wideband".into(),
+            profile_name: "apparatus:wide-qpsk".into(),
             forward: ChannelSpec::Clean,
             reverse: ChannelSpec::Clean,
             payload_bytes_per_frame: 400,
@@ -1422,7 +1488,7 @@ mod tests {
         // a single frame. The former one-step AckDown / NACK-threshold policy could only step down
         // by one, so this assertion fails without the OtaRateController wiring.
         let mut sim = LinkSim::new(&LinkParams {
-            profile_name: "hpx_hf".into(),
+            profile_name: "fast".into(),
             forward: ChannelSpec::Clean,
             reverse: ChannelSpec::Clean,
             payload_bytes_per_frame: 64,
@@ -1463,7 +1529,7 @@ mod tests {
         // per-symbol pilot CE) does decode there, so linksim — now driven by the daemon's symbol-domain
         // SNR — must climb it well into the dense OFDM rungs on moderate_f1.
         let mut sim = LinkSim::new(&LinkParams {
-            profile_name: "hpx_ofdm_hf".into(),
+            profile_name: "apparatus:ofdm".into(),
             forward: ChannelSpec::WattersonModerateF1(30.0),
             reverse: ChannelSpec::Clean,
             payload_bytes_per_frame: 64,
@@ -1480,7 +1546,7 @@ mod tests {
         }
         assert!(
             peak >= SpeedLevel::Sl8 as u8,
-            "hpx_ofdm_hf must climb into the dense OFDM rungs (≥ SL8) on a 30 dB moderate_f1 fade; \
+            "apparatus:ofdm must climb into the dense OFDM rungs (≥ SL8) on a 30 dB moderate_f1 fade; \
              peaked at SL{peak}"
         );
     }
@@ -1520,7 +1586,7 @@ mod goodput_gate {
     #[test]
     fn psk_ladder_climbs_off_the_entry_rung_on_a_fade() {
         let r = run_link(&LinkParams {
-            profile_name: "hpx_hf".into(),
+            profile_name: "fast".into(),
             forward: ChannelSpec::WattersonModerateF1(20.0),
             reverse: ChannelSpec::Clean,
             payload_bytes_per_frame: 64,
@@ -1554,7 +1620,7 @@ mod goodput_gate {
 
     #[test]
     fn psk_ladder_goodput_floor_awgn() {
-        let g = bps("hpx_hf", ChannelSpec::Awgn(20.0));
+        let g = bps("fast", ChannelSpec::Awgn(20.0));
         assert!(
             g >= 250.0,
             "hpx_hf AWGN 20 dB goodput {g:.0} bps below the floor (baseline 331, floor 75%)"
@@ -1563,10 +1629,10 @@ mod goodput_gate {
 
     #[test]
     fn ofdm_ladder_goodput_floor_awgn() {
-        let g = bps("hpx_ofdm_hf", ChannelSpec::Awgn(20.0));
+        let g = bps("apparatus:ofdm", ChannelSpec::Awgn(20.0));
         assert!(
             g >= 600.0,
-            "hpx_ofdm_hf AWGN 20 dB goodput {g:.0} bps below the floor (baseline 893, floor 67%)"
+            "apparatus:ofdm AWGN 20 dB goodput {g:.0} bps below the floor (baseline 893, floor 67%)"
         );
     }
 
@@ -1576,10 +1642,10 @@ mod goodput_gate {
     /// own stated rule (~65 %), which is what the other two already sit at.
     #[test]
     fn ofdm_ladder_goodput_floor_dispersive_fade() {
-        let g = bps("hpx_ofdm_hf", ChannelSpec::WattersonModerateF1(25.0));
+        let g = bps("apparatus:ofdm", ChannelSpec::WattersonModerateF1(25.0));
         assert!(
             g >= 360.0,
-            "hpx_ofdm_hf moderate_f1 25 dB goodput {g:.0} bps below the floor (baseline 555, \
+            "apparatus:ofdm moderate_f1 25 dB goodput {g:.0} bps below the floor (baseline 555, \
              floor 65%)"
         );
     }

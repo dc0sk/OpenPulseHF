@@ -2,7 +2,7 @@
 project: openpulsehf
 doc: docs/dev/design/architecture.md
 status: living
-last_updated: 2026-06-19
+last_updated: 2026-10-01
 ---
 
 # Architecture
@@ -53,7 +53,7 @@ OpenPulseHF's original/default waveforms are single-carrier phase-shift keying; 
 
 **Accepted trade-offs:**
 - Single-carrier modes are more susceptible to inter-symbol interference (ISI) from multipath delay spread. At the symbol periods used by OpenPulseHF (32 ms for BPSK31, 4 ms for BPSK250), ISI from HF multipath delays of 0.5–2 ms is tolerable for lower baud rates without equalization. Higher-rate single-carrier modes will require adaptive equalization as they are developed.
-- Peak throughput for a given occupied bandwidth is lower than OFDM with higher-order QAM, because OFDM can overlap subcarriers spectrally. `hpx_hf` and `hpx_wideband` address this through adaptive modulation across the rate ladder (BPSK → QPSK → 8PSK) within a single occupied bandwidth class.
+- Peak throughput for a given occupied bandwidth is lower than OFDM with higher-order QAM, because OFDM can overlap subcarriers spectrally. The `hpx_hf` ladder addresses this through adaptive modulation across the rate ladder (BPSK → QPSK → 8PSK) within a single occupied bandwidth class.
 
 ### Differential BPSK encoding
 
@@ -92,60 +92,17 @@ Gardner timing loop — see [hpx-waveform-design.md](hpx-waveform-design.md#pilo
 
 ## HPX adaptive profiles
 
-HPX sessions select a modulation mode at runtime based on the current `SpeedLevel` reported by the `RateAdapter`. Several profiles are defined in `openpulse-core/src/profile.rs`; the [README profiles table](../../README.md#adaptive-rate-profiles) and [mode-fec-ladder.md §4](../../mode-fec-ladder.md) are the authoritative list. A few are shown below:
+HPX sessions select a modulation mode at runtime based on the current `SpeedLevel` reported by the `RateAdapter`. Two profiles are defined in `openpulse-core/src/profile.rs`, both on the single `hpx_hf` rate ladder; the [README profiles table](../../README.md#adaptive-rate-profiles) and [mode-fec-ladder.md §4](../../mode-fec-ladder.md) are the authoritative rung list, and [session-profiles.md](session-profiles.md) is the design.
 
-### `hpx500` — 500 Hz class
+### `fast` — the full `hpx_hf` ladder (default)
 
-| SL  | Mode     | Notes |
-|-----|----------|-------|
-| SL1 | — | Chirp fallback (session teardown) |
-| SL2 | BPSK31   | Initial level; most robust |
-| SL3 | BPSK63   | |
-| SL4 | BPSK250  | |
-| SL5 | QPSK250  | |
-| SL6 | QPSK500  | Highest hpx500 rate |
-| SL7 | — | Reserved |
+SL1–SL14 (MFSK16 → BPSK31/63/100/250 coded → QPSK250-D → OFDM52 → OFDM52-{8PSK,16QAM,32QAM,64QAM} → 16/32/64QAM at LDPC r≈8/9), up to ≈2031 Hz occupied bandwidth. For performance and bandwidth under good conditions; use it for HF operation with a 2.4 kHz SSB filter and a linear PA.
 
-### `hpx_hf` — HF-compliant adaptive profile (≤ 2700 Hz)
+### `robust` — the same ladder capped at SL6
 
-Peaks at SL7 = 8PSK500 (1500 bps gross, ~2000 Hz BW with Hann windowing). Legal on all HF amateur allocations. Use this profile for HF operation.
+SL1–SL6 (MFSK16, BPSK31–250, QPSK250-D), all coded, single-carrier, ≤500 Hz. For poor conditions or limited gear (narrow filters, small or non-linear PAs). It shares the ladder fingerprint with `fast`, so the two interoperate; the robust side never climbs past SL6. The ARDOP TNC floors either profile at SL2 (it has no MFSK16).
 
-| SL  | Mode      | Notes |
-|-----|-----------|-------|
-| SL1 | — | Chirp fallback |
-| SL2 | BPSK31    | Initial level |
-| SL3 | BPSK63    | |
-| SL4 | BPSK250   | |
-| SL5 | QPSK250   | |
-| SL6 | QPSK500   | |
-| SL7 | 8PSK500   | Ceiling — ~2000 Hz BW |
-
-### `hpx_wideband` — Wideband profile (≤ 4000 Hz)
-
-Exceeds the 2700 Hz HF channel-width limit at SL9–SL11. Legal on FM voice channels, satellite, and UHF/VHF links. **Do not use on HF amateur allocations.**
-
-Single-carrier modulation was chosen as the default for this profile. Rationale: lower PAPR (near 0 dB for 8PSK vs 9–12 dB for OFDM), no cyclic prefix overhead, simpler AFC, and architectural consistency with `hpx500`. (OFDM was subsequently shipped under FF-4 — `plugins/ofdm` + the `hpx_ofdm_hf` ladder — as the preferred dense-multicarrier HF path; see `mode-fec-ladder.md` §7.)
-
-| SL  | Mode      | Notes |
-|-----|-----------|-------|
-| SL1–SL7 | — | Chirp fallback / hpx500/hpx_hf territory |
-| SL8 | QPSK500   | Initial level |
-| SL9 | QPSK1000  | |
-| SL10 | — | Reserved |
-| SL11 | 8PSK1000 | Ceiling — ~4000 Hz BW |
-
-### `hpx_pilot` — pilot-framed single-carrier profile (~550 Hz)
-
-A cycle-slip-immune, sample-rate-offset-robust ladder built on the pilot-framed
-`PILOT-*` waveform (pilot-aided carrier recovery; see
-[hpx-waveform-design.md](hpx-waveform-design.md#pilot-framed-waveform)).
-
-| SL  | Mode | Notes |
-|-----|------|-------|
-| SL2 | PILOT-QPSK500 | Initial level |
-| SL3 | PILOT-8PSK500 | |
-| SL4 | PILOT-16QAM500 | |
-| SL5 | PILOT-32APSK500 | Ceiling — DVB-S2 32APSK |
+The earlier profiles (`hpx500`, `hpx_modcod`, `hpx_ofdm_hf`, `hpx_pilot*`, `hpx_wideband*`, `hpx_narrowband`) were deleted 2026-10-01; their modes remain selectable as fixed modes.
 
 ## Signed session handshake (Phase 2.3)
 

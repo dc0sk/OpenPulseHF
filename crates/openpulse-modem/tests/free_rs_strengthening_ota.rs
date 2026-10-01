@@ -24,7 +24,7 @@ fn engine() -> (ModemEngine, LoopbackBackend) {
     let mut e = ModemEngine::new(Box::new(backend.clone_shared()));
     e.register_plugin(Box::new(bpsk_plugin::BpskPlugin::new()))
         .expect("register");
-    e.start_ota_session(SessionProfile::hpx_hf());
+    e.start_ota_session(SessionProfile::fast());
     e.ota_lock_level(SpeedLevel::Sl5); // rx_candidates() → (BPSK250, Rs)
     (e, backend)
 }

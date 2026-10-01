@@ -110,15 +110,16 @@ impl From<FecArg> for FecMode {
     }
 }
 
-/// Validate `--profile` through `SessionProfile::by_name`, which is case-insensitive and treats
-/// `-`/`_` as interchangeable — an exact-match parser would reject valid input like `HPX-HF`.
+/// Validate `--profile`: an operator profile (`fast`, `robust`, case-insensitive) or an apparatus
+/// ladder (`apparatus:*`).
 fn parse_profile_name(s: &str) -> Result<String, String> {
-    if openpulse_core::profile::SessionProfile::by_name(s).is_some() {
+    if openpulse_linksim::resolve_profile(s).is_some() {
         Ok(s.to_string())
     } else {
         Err(format!(
-            "unknown session profile '{s}'; expected one of: {}",
-            openpulse_core::profile::SessionProfile::PROFILE_NAMES.join(", ")
+            "unknown session profile '{s}'; expected one of: {}, {}",
+            openpulse_core::profile::SessionProfile::PROFILE_NAMES.join(", "),
+            openpulse_linksim::apparatus::NAMES.join(", ")
         ))
     }
 }
@@ -135,7 +136,7 @@ struct Cli {
     ///
     /// Accepted values come from `SessionProfile::PROFILE_NAMES`, so they cannot drift from what
     /// `by_name` accepts.
-    #[arg(long, default_value = "hpx_hf",
+    #[arg(long, default_value = "fast",
           value_parser = parse_profile_name)]
     profile: String,
     /// Forward (A→B) channel kind.

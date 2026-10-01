@@ -31,12 +31,12 @@ fn mode_advisor_outputs_expected_levels_across_hpx_hf_ladder() {
             "--snr",
             &snr.to_string(),
             "--profile",
-            "hpx_hf",
+            "fast",
         ]);
 
         cmd.assert()
             .success()
-            .stdout(contains("profile=hpx_hf"))
+            .stdout(contains("profile=fast"))
             .stdout(contains(format!("recommended_speed_level={level}")))
             .stdout(contains(format!("recommended_mode={mode}")))
             .stdout(contains("reason="));
@@ -44,23 +44,22 @@ fn mode_advisor_outputs_expected_levels_across_hpx_hf_ladder() {
 }
 
 #[test]
-fn mode_advisor_selects_ofdm_hom_ladder() {
-    // The OFDM higher-order ladder must be reachable via --profile.
+fn mode_advisor_respects_the_robust_cap() {
+    // `robust` never recommends above SL6, however high the SNR.
     let mut cmd = Command::cargo_bin("openpulse").expect("binary should build");
-    cmd.args(["mode-advisor", "--snr", "30", "--profile", "hpx_ofdm_hf"]);
+    cmd.args(["mode-advisor", "--snr", "30", "--profile", "robust"]);
     cmd.assert()
         .success()
-        .stdout(contains("profile=hpx_ofdm_hf"))
-        .stdout(contains("recommended_speed_level=SL10"))
-        .stdout(contains("recommended_mode=OFDM52-64QAM"));
+        .stdout(contains("profile=robust"))
+        .stdout(contains("recommended_speed_level=SL6"))
+        .stdout(contains("recommended_mode=QPSK250-D"));
 
-    // Separator/case normalisation also works.
+    // Case normalisation also works.
     let mut cmd = Command::cargo_bin("openpulse").expect("binary should build");
-    cmd.args(["mode-advisor", "--snr", "0", "--profile", "HPX-OFDM-HF"]);
+    cmd.args(["mode-advisor", "--snr", "30", "--profile", "ROBUST"]);
     cmd.assert()
         .success()
-        // Below the lowest rung's floor → the most robust defined rung (OFDM16), not UNMAPPED.
-        .stdout(contains("recommended_mode=OFDM16"));
+        .stdout(contains("recommended_mode=QPSK250-D"));
 }
 
 #[test]
@@ -72,6 +71,6 @@ fn mode_advisor_rejects_unknown_profile() {
         .stderr(contains("unknown session profile"))
         // clap now lists every accepted profile, sourced from SessionProfile::PROFILE_NAMES,
         // so an operator sees the valid set instead of just being told "no".
-        .stderr(contains("hpx_ofdm_hf"))
-        .stderr(contains("hpx_pilot_fast_rrc"));
+        .stderr(contains("fast"))
+        .stderr(contains("robust"));
 }

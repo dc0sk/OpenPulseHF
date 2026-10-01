@@ -38,7 +38,7 @@ fn rig() -> ModemEngine {
     let mut e = ModemEngine::new(Box::new(openpulse_audio::LoopbackBackend::new()));
     e.register_plugin(Box::new(bpsk_plugin::BpskPlugin::new()))
         .expect("register bpsk");
-    e.start_ota_session(SessionProfile::hpx_hf());
+    e.start_ota_session(SessionProfile::fast());
     e.ota_lock_level(SpeedLevel::Sl5); // rx_candidates() -> (BPSK250, Rs)
     e
 }

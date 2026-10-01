@@ -661,7 +661,7 @@ mod ota_protocol_tests {
     fn ota_commands_round_trip_via_json() {
         let cmds = vec![
             ControlCommand::StartOtaSession {
-                profile: "hpx_modcod".into(),
+                profile: "robust".into(),
             },
             ControlCommand::StopOtaSession,
             ControlCommand::OtaSetLevelBounds {

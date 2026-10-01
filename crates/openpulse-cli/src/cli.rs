@@ -400,7 +400,7 @@ pub enum DaemonCommands {
     },
     /// Start a receiver-led OTA adaptive rate session with the named profile.
     OtaStart {
-        /// Session profile (e.g. hpx_hf, hpx_modcod).
+        /// Session profile: `fast` or `robust`.
         #[arg(long)]
         profile: String,
     },

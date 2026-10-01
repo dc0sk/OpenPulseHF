@@ -113,7 +113,7 @@ fn flush_by_cap(e: &mut ModemEngine, lead: &[f32]) -> AudioSamples {
 fn a_capped_slab_that_fails_to_decode_is_not_ladder_evidence() {
     let (mut e, _lb) = engine();
     let burst = flush_by_cap(&mut e, &[]);
-    e.start_ota_session(SessionProfile::hpx_hf());
+    e.start_ota_session(SessionProfile::fast());
     let before = e.ota_rx_recommended_level().expect("session started");
     let res = e
         .ota_decode_burst(&burst, SESSION, Some(MODE))
@@ -157,7 +157,7 @@ fn a_capped_slab_can_still_contain_a_decodable_frame() {
     };
 
     let burst = flush_by_cap(&mut e, &frame);
-    e.start_ota_session(SessionProfile::hpx_hf());
+    e.start_ota_session(SessionProfile::fast());
     let res = e
         .ota_decode_burst(&burst, SESSION, Some(MODE))
         .expect("decode");
@@ -183,7 +183,7 @@ fn a_carrier_drop_slab_that_fails_to_decode_still_moves_the_ladder() {
 
     let bursts = feed(&mut e, &buf, TICK);
     assert!(!bursts.is_empty(), "no burst flushed");
-    e.start_ota_session(SessionProfile::hpx_hf());
+    e.start_ota_session(SessionProfile::fast());
     let acked = bursts.iter().any(|b| {
         e.ota_decode_burst(b, SESSION, Some(MODE))
             .map(|r| r.ack.is_some())

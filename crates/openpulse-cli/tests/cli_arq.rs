@@ -12,7 +12,7 @@ fn arq_send_rejects_unknown_profile() {
     cmd.assert()
         .failure()
         .stderr(contains("unknown session profile"))
-        .stderr(contains("hpx_pilot_fast_rrc"));
+        .stderr(contains("robust"));
 }
 
 #[test]
@@ -22,7 +22,7 @@ fn arq_listen_rejects_unknown_profile() {
     cmd.assert()
         .failure()
         .stderr(contains("unknown session profile"))
-        .stderr(contains("hpx_pilot_fast_rrc"));
+        .stderr(contains("robust"));
 }
 
 /// `listen --frames 0` does no I/O and exits cleanly — confirms the command is wired.

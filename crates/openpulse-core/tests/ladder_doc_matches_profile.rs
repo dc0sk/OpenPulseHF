@@ -99,7 +99,7 @@ fn mode_fec_ladder_doc_table_matches_hpx_hf_profile() {
     let text = std::fs::read_to_string(doc_path())
         .expect("docs/mode-fec-ladder.md must be readable from the workspace");
     let rows = parse_doc_rows(&text);
-    let p = SessionProfile::hpx_hf();
+    let p = SessionProfile::fast();
 
     // The doc must not silently describe a shorter ladder than the code ships.
     let coded: Vec<usize> = ALL_LEVELS
@@ -154,7 +154,7 @@ fn mode_fec_ladder_doc_table_matches_hpx_hf_profile() {
 
 // ── The in-file comment table ────────────────────────────────────────────────
 
-/// `profile.rs`'s own `hpx_hf` comment table must match the executable floors.
+/// `profile.rs`'s own `hpx_hf` ladder comment table (in `fast()`) must match the executable floors.
 ///
 /// The `.md` gate above did not cover this, and the comment drifted anyway: every OFDM rung's floor
 /// read 3-10 dB high (SL7 10 vs 9, SL14 30 vs 20) while the single-carrier rungs were correct. That
@@ -164,15 +164,15 @@ fn mode_fec_ladder_doc_table_matches_hpx_hf_profile() {
 fn profile_comment_table_matches_the_executable_floors() {
     let src = include_str!("../src/profile.rs");
     let start = src
-        .find("pub fn hpx_hf")
-        .expect("hpx_hf constructor present");
+        .find("pub fn fast()")
+        .expect("fast constructor (the hpx_hf ladder) present");
     let end = src[start + 10..]
         .find("\n    pub fn ")
         .map(|o| start + 10 + o)
         .unwrap_or(src.len());
     let body = &src[start..end];
 
-    let p = SessionProfile::hpx_hf();
+    let p = SessionProfile::fast();
     let mut checked = 0;
 
     for line in body.lines() {

@@ -88,7 +88,7 @@ fn a_failed_decode_burst_scan_emits_no_afc_events() {
 #[test]
 fn a_failed_ota_burst_emits_no_afc_events_and_keeps_its_rate_decision() {
     let (mut e, _b) = engine();
-    e.start_ota_session(SessionProfile::hpx_hf());
+    e.start_ota_session(SessionProfile::fast());
     e.ota_lock_level(SpeedLevel::Sl5);
     let mut rx = e.subscribe();
 

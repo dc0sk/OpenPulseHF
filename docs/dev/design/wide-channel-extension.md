@@ -2,7 +2,7 @@
 project: openpulsehf
 doc: docs/dev/design/wide-channel-extension.md
 status: living
-last_updated: 2026-09-14
+last_updated: 2026-10-01
 ---
 
 # Extending OpenPulseHF to 12.5 kHz and 25 kHz channels — design + action list
@@ -17,7 +17,7 @@ No code was changed.
 **Feasibility is good — much groundwork already exists.** The codebase already has (a) sample-rate-
 parameterized single-carrier plugins with 9600-baud modes explicitly designed for "UHF/VHF — 12.5 kHz
 HD (requires 48 kHz audio)" and tested at 48 kHz (`plugins/qpsk/src/lib.rs:68`, `plugins/psk8/src/lib.rs:66`);
-(b) session profiles for 12.5 kHz channels (`hpx_narrowband`; `hpx_narrowband_hd` until its retirement in #1359); and (c) a TX
+(b) session profiles for 12.5 kHz channels (`hpx_narrowband`, deleted 2026-10-01; `hpx_narrowband_hd` until its retirement in #1359); and (c) a TX
 I/Q-to-SDR seam (`ModulationPlugin::modulate_iq`, `AudioBackend::open_iq_output`, engine IQ transmit).
 The requirements doc already demands a 48 kHz-capable audio backend (`docs/dev/requirements.md:34`).
 
@@ -54,7 +54,7 @@ validated tables **stop at 10 m** and cap at 2 700 Hz. `band_label_for_hz` knows
 but only for labels/squelch, not validation. Requirements are HF/SSB-framed ("500 Hz and 2300–2400 Hz",
 CEPT ≤2.7 kHz).
 
-**Existing "wideband" notions.** `hpx_wideband` (QPSK/8PSK1000, still ≤ ~3 kHz — an FM-voice-channel
+**Existing "wideband" notions** (both profiles below were deleted 2026-10-01). `hpx_wideband` (QPSK/8PSK1000, still ≤ ~3 kHz — an FM-voice-channel
 waveform, not channel-filling). `hpx_narrowband` = "12.5 kHz channel, 2.7 kHz-wide signal".
 **`hpx_narrowband_hd` (QPSK9600-RRC/8PSK9600-RRC, ≈13 kHz, "requires a 48 kHz audio path") could
 not run** — the engine opens audio at `AudioConfig::default()` = 8 kHz, and `sample_rate` is not in
@@ -99,7 +99,7 @@ vehicle Doppler). All `profile.rs` floors were calibrated at 8 kHz.
 | 2.2 | **12.5 kHz candidates** (≤ ~12.2 kHz): `W12-QPSK9600-RRC`/`W12-8PSK9600-RRC` (exist, 19.2/28.8 kbps gross); `OFDM52@48k` clock-scaled ×6 (65 SC × 187.5 Hz = 12.19 kHz): QPSK 17.3 k / 16QAM 34.7 k / **64QAM 52 kbps gross** (~45 net); plus low-PAPR SC-FDMA variants. | M | Med |
 | 2.3 | **25 kHz candidates** (needs 96 kHz audio or complex IQ): `OFDM52@96k` ×12 (65 SC × 375 Hz = 24.4 kHz): QPSK 34.7 k / 16QAM 69 k / **64QAM 104 kbps gross**; `W25-8PSK19200-RRC` at 96 kHz (~26 kHz, 57.6 kbps gross); `OFDM130@48k` (24.4 kHz) — **IQ path only** (exceeds real-audio Nyquist). | M–L | Med–High |
 | 2.4 | **RX IQ input path** (if Phase 0 picks SDR): add `AudioBackend::open_iq_input` + complex-baseband demod entry + engine RX wiring. The TX half exists; RX is the **largest new-code item**. | L | High |
-| 2.5 | Extend the ladder: `hpx_wide12` / `hpx_wide25` profiles with calibrated floors; keep SCFDMA26/52 as narrowband fallback (mirroring `hpx_wideband_hd`). | M | Low |
+| 2.5 | Extend the ladder: `hpx_wide12` / `hpx_wide25` profiles with calibrated floors; keep SCFDMA26/52 as narrowband fallback (mirroring the former `hpx_wideband_hd`, deleted 2026-10-01). | M | Low |
 | 2.6 | **Channel model for VHF/UHF:** keep AWGN; add rate-parameterized Watterson constructors; add a flat Rayleigh/Rician mobile model (fd = v·f/c, ~13 Hz at 145 MHz / 100 km/h). | M | Low |
 | 2.7 | **Recalibrate SNR floors** at the new rates/channels; **define the SNR reference bandwidth explicitly** for wide modes (floors are meaningless across bandwidths without one). | M | Med |
 
@@ -110,7 +110,7 @@ vehicle Doppler). All `profile.rs` floors were calibrated at 8 kHz.
 | 3.1 | Add VHF/UHF band tables (6 m/2 m/1.25 m/70 cm) with per-segment `max_bw_hz` of 12 500/25 000 where regionally appropriate + channel-raster alignment for QSY. | M | Med — regional research (IARU R1 VHF/UHF ≠ HF; FCC §97.307 differs above 50 MHz) |
 | 3.2 | Route `occupied_bandwidth_hz()` through the plugins' trait hook (kill the dual-maintenance static table). | S | Low |
 | 3.3 | Update REQ/regulatory docs — add a wide bandwidth class + VHF/UHF emission designators. | S | Low |
-| 3.4 | Clarify profile taxonomy — `hpx_narrowband` means "12.5 kHz channel, 2.7 kHz signal"; the new modes *fill* 12.5 kHz. Avoid operator confusion. | S | Low |
+| 3.4 | Clarify profile taxonomy — the former `hpx_narrowband` (deleted 2026-10-01; only `fast` and `robust` remain) meant "12.5 kHz channel, 2.7 kHz signal"; the new modes *fill* 12.5 kHz. Avoid operator confusion. | S | Low |
 
 ## Open questions for the user (blocking Phase 0)
 

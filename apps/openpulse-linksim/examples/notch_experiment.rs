@@ -53,29 +53,13 @@ fn run(scn: &Scenario, notch: Option<LinkNotch>) -> Row {
 }
 
 fn main() {
-    let scenarios = [
-        Scenario {
-            name: "rectangular QPSK500, OUT-OF-BAND tone @800 Hz (0 dB SIR)",
-            profile: "hpx_wideband",
-            tone: (800.0, 1.0),
-            snr_floor_db: 20.0,
-            protect: (1100.0, 1900.0),
-        },
-        Scenario {
-            name: "RRC ladder, OUT-OF-BAND tone @2900 Hz (+3.5 dB SIR)",
-            profile: "hpx_wideband_hd",
-            tone: (2900.0, 1.5),
-            snr_floor_db: 20.0,
-            protect: (400.0, 2600.0),
-        },
-        Scenario {
-            name: "RRC ladder, IN-BAND tone @1800 Hz (+3.5 dB SIR)",
-            profile: "hpx_wideband_hd",
-            tone: (1800.0, 1.5),
-            snr_floor_db: 20.0,
-            protect: (400.0, 2600.0),
-        },
-    ];
+    let scenarios = [Scenario {
+        name: "rectangular QPSK500, OUT-OF-BAND tone @800 Hz (0 dB SIR)",
+        profile: "apparatus:wide-qpsk",
+        tone: (800.0, 1.0),
+        snr_floor_db: 20.0,
+        protect: (1100.0, 1900.0),
+    }];
 
     println!(
         "QRM automatic-notch experiment — 24 frames × 200 B, RS FEC, noise floor 20 dB\n\
