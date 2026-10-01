@@ -90,7 +90,8 @@ SNR/LLR edges; anything that must run on every receive or transmit → the RX/TX
 ## Current focus
 
 **Release 1** = the `hpx_hf` ladder, FEC, session compression, daemon + CLI and the ARDOP TNC,
-gated on A1 + A2 on HF. Everything else ships disabled. The plan, milestones and triage rules are in
+gated on A1 + A2 on **2 m**, then confirmed on HF with the release candidate (test stages: virtual
+audio → hardware loopback → 2 m → HF). Version `v0.17.0`. Everything else ships disabled. The plan, milestones and triage rules are in
 [`docs/dev/project/workplan.md`](docs/dev/project/workplan.md). **Work that serves no milestone there
 is `post-release`**; a PR says which milestone it serves and updates that milestone's status line.
 

@@ -2,40 +2,49 @@
 project: openpulsehf
 doc: docs/dev/onair-execution-plan.md
 status: living
-last_updated: 2026-09-30
+last_updated: 2026-10-01
 ---
 
 # On-air execution plan
 
 The sequenced plan to obtain the on-air evidence **Release 1** needs (work plan milestone **M3**,
-[`project/workplan.md`](project/workplan.md)): **A1** a two-station HF exchange on the `hpx_hf`
-ladder in both directions, **A2** the ladder climbing, demoting and holding stable on a real link
+[`project/workplan.md`](project/workplan.md)): **A1** a two-station exchange on the `hpx_hf`
+ladder in both directions **on 2 m**, **A2** the ladder climbing, demoting and holding stable on a real link
 (scored per `release-1.0-criteria.md` §A2), **A4/A5** station-ID and PTT fail-safe checks, and one
-**Pat session over the air through the ARDOP TNC**. A3 (Winlink through a real CMS/RMS) is a 1.0
-criterion and is **not** part of Release 1.
+**Pat session over the air through the ARDOP TNC**, then a confirming **HF run with the release
+candidate** (work plan M4). A3 (Winlink through a real CMS/RMS) is a 1.0 criterion and is **not** part
+of Release 1.
+
+**Test stages (maintainer, 2026-10-01 — decision 13):** virtual audio → hardware loopback → **2 m** →
+HF only with the release candidate. Development runs stay on 2 m: they put no noise on HF bands
+while the modem is early, and they avoid drawing conclusions from HF band conditions nobody controls.
 
 ## Re-baseline 2026-09-30 — read this before anything below
 
 The sections below were written 2026-07-23. These changes to them are in force:
 
-1. **Scope and bar (work plan decisions 1 and 4).** Release 1 needs A1 in both directions **on HF**,
-   A2 per the §A2 scoring (one climb whose new mode then decodes, one demotion after a logged decode
+1. **Scope and bar (work plan decisions 1, 4 and 13).** Release 1 needs A1 in both directions **on
+   2 m**, A2 per the §A2 scoring (one climb whose new mode then decodes, one demotion after a logged decode
    failure, and stability on a clean link, each visible in both stations' logs and in the capture;
    induced level changes count and are recorded). The "≥3 transitions" wording in §4 is superseded.
-   A3 moves to 1.0; §5b adds the ARDOP session Release 1 does need.
+   A3 moves to 1.0; §5b adds the ARDOP session Release 1 does need. **A 2 m line-of-sight link does
+   not fade**, so A2's climb and demotion are driven by induced level changes (TX power,
+   attenuation), recorded per §A2; Release 1 claims the controller responds correctly, not that it
+   is characterised on a fading path. The release candidate then repeats A1/A2 on HF (M4).
 2. **Evidence must be recorded on the final wire format.** M1 (#1062 preamble + the compression
    dictionary ID, time-boxed to 2026-10-14) changes what goes on the air. G0, G1 and 2 m plumbing
    runs can and should happen before M1 — they test the rigs and the audio chain, not the format —
    but **A1/A2 bundles recorded before M1 lands do not count**, and the four replay-corpus rows
    (#1351) are re-recorded once, after M1.
-3. **An HF-capable pair is needed.** The IC-9700 is VHF/UHF only, so the current IC-9700 ↔ FT-818
-   2 m pairing cannot produce A1/A2 on HF. HF-capable rigs on record: FT-991A 008924A1, IC-705,
-   FT-818, and the TX500/KX3 pair (`run-onair-tx500-kx3.sh`). **Maintainer: pick the HF pair and the
-   band** (§4 suggests 40 m NVIS for a real fade). The SDR (RSP2pro) covers HF as the witness.
-4. **G0 is not only a purchase.** The isolator is being ordered (decision 12), but
-   `release-1.0-criteria.md` records an FT-991A receive-path blocker: "A→B fails offline too, so it is
-   in the receiver". If that holds, isolation alone will not fix that rig. G3 decides: if it still fails after
-   isolation, the rig is not usable for A1 and another HF rig takes its place.
+3. **Development runs use the 2 m pair** (IC-9700 ↔ FT-818, 144.640 MHz,
+   [onair-ic9700-ft818-setup.md](onair-ic9700-ft818-setup.md)). The HF run with the release candidate
+   needs an HF-capable pair — the IC-9700 is VHF/UHF only; on record: FT-991A 008924A1, IC-705,
+   FT-818, and the TX500/KX3 pair (`run-onair-tx500-kx3.sh`). The pair and band are picked when the RC
+   is cut. §4's "40 m NVIS" note describes that later run, not the development campaign.
+4. **G0: the USB isolators are in place (maintainer, 2026-10-01).** G3 on the 2 m pair now decides
+   whether the receive-path RFI is gone. Separately, `release-1.0-criteria.md` records an FT-991A
+   receive-path blocker: "A→B fails offline too, so it is in the receiver". Isolation alone will not
+   fix that; it matters only if the FT-991A is picked for the HF run with the release candidate.
 5. **Two tooling gaps found 2026-09-30 — must close before an A2 window, or the window is wasted:**
    - `scripts/run-onair-twin-ota.sh` does not turn on `observability.audit_mode` (default `false`,
      `openpulse-config/src/lib.rs:215`). #1081 shipped the `OtaRateDecision` event (which branch
@@ -347,9 +356,10 @@ scanning receive or route the matrix through the daemon streaming path. Filed he
 
 ## 9. Critical path, one line
 
-**Release 1 (re-baselined 2026-09-30):** G0 (isolator fitted, RX clean; FT-991A offline fault
-resolved or rig replaced) → G1 (seven gates on an **HF** pair) → *wait for M1 (wire freeze)* → A1
-both directions → A2 per §A2 scoring (after the two tooling gaps are closed) → the ARDOP Pat session.
+**Release 1 (re-baselined 2026-09-30, test stages 2026-10-01):** virtual audio → hardware loopback →
+G0/G1 on the **2 m** pair (isolators fitted; G3 confirms RX is clean) → *wait for M1 (wire freeze)* →
+A1 both directions on 2 m → A2 per §A2 scoring with induced level changes (after the two tooling gaps
+are closed) → the ARDOP Pat session → release candidate → **HF run with the RC** → tag `v0.17.0`.
 A4/A5 run alongside. A3 follows for 1.0.
 
 Previously: **G0 (kill the RX RFI) → G1 (seven gates pass) → A1 (one rig→rig decode) → A2 (ladder on a real fade)

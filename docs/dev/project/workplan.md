@@ -51,7 +51,7 @@ classical handshake.
 transfer, QSY, FreeDV auth, Winlink B2F/gateway (A3), KISS, PQ handshake, GPU, panel/TUI, plugins not
 on `hpx_hf` (psk8, 64qam, scfdma, pilot).
 
-**Version number:** open — see *Open questions*.
+**Version number:** `v0.17.0` (decision 14); `1.0` stays reserved for the full criteria.
 
 ---
 
@@ -67,7 +67,7 @@ on `hpx_hf` (psk8, 64qam, scfdma, pilot).
 | Slim `CLAUDE.md` to ~200 lines; relocate, don't delete; acceptance table → one-line-per-row index | 7 | done (#1472): 731 → ~260 lines, 144 KB → 15 KB; six sections moved verbatim to `docs/dev/` |
 | Rewrite the *Adversarial review* rule in `CLAUDE.md`: mandatory for wire-format/trait changes, anything that keys a transmitter, and eliminations; one round per PR; every prompt asks "does this block Release 1?" | 8 | done (#1472) |
 | Pre-push hook **tests** reverse dependents when `openpulse-core`, `-dsp` or `-modem` change; fix #1357 and #1448 on the way | 9 | done (#1473) |
-| Order the galvanic USB isolator | 12 | maintainer |
+| Order the galvanic USB isolator | 12 | done — isolators in place (maintainer, 2026-10-01) |
 | Re-baseline `onair-execution-plan.md` (dated 2026-07-23) against these decisions, incl. the #1081 attribution check and the FT-991A offline receive failure | 12 | done in the on-air re-baseline PR; it found two tooling gaps, now M2 rows |
 
 **Exit:** all rows done; the tracker matches this file.
@@ -104,10 +104,10 @@ picks then (0.x on the current preamble, or current preamble final).
 
 | Item | Status |
 |---|---|
-| Pick the HF-capable station pair and band (the IC-9700 is VHF/UHF only) | maintainer |
-| G0–G3 per the re-baselined plan (isolator fitted, RFI gone) | blocked on isolator |
-| A1: two-station HF exchange in both directions, logs retained | open |
-| A2: climb (new mode then decodes), demotion, stability — scored per `release-1.0-criteria.md` §A2, both stations' logs + capture, `observability.audit_mode` on | open |
+| Test stages in order (decision 13): virtual audio → hardware loopback → **2 m** (IC-9700 ↔ FT-818, 144.640 MHz) → HF only with the release candidate (M4) | — |
+| G0–G3 per the re-baselined plan on the 2 m pair (isolators fitted; G3 decides whether the RFI is gone) | open |
+| A1: two-station exchange **on 2 m** in both directions, logs retained | open |
+| A2 **on 2 m**: climb (new mode then decodes), demotion, stability — scored per `release-1.0-criteria.md` §A2, both stations' logs + capture, `observability.audit_mode` on. A 2 m line-of-sight link does not fade, so the climb and demotion are driven by **induced level changes** (TX power, attenuation), which §A2 allows and requires to be recorded | open |
 | A4 (station ID cadence) and A5 (PTT fail-safe) checks | open |
 | ARDOP: one Pat session over the air through the TNC | open |
 | Re-rank every `post-release-rerank` issue against what the air showed | after A2 |
@@ -115,9 +115,13 @@ picks then (0.x on the current preamble, or current preamble final).
 **Exit:** evidence bundles for A1, A2, A4, A5 and the ARDOP session in
 `docs/dev/test-reports/on-air/`.
 
-### M4 — Release 1
+### M4 — Release 1 (`v0.17.0`)
 
-Release notes (known-red rows, out-of-scope features, "wire format v1"), version bump, tag.
+| Item | Status |
+|---|---|
+| Cut the release candidate `v0.17.0-rc.1`: full gate + `scripts/slow-tests.sh` at one commit, known-red rows disclosed | open |
+| **HF run with the release candidate** (decision 13): repeat A1 and A2 on an HF-capable pair, logs + capture retained. Band conditions are not controllable, so an HF result is evidence the RC works there, not a characterisation; a failure attributable to propagation is recorded, not chased | open |
+| Release notes (known-red rows, out-of-scope features, "wire format v1"), version bump to `v0.17.0`, tag | open |
 
 ---
 
@@ -137,19 +141,20 @@ Release notes (known-red rows, out-of-scope features, "wire format v1"), version
 | 10 | 2026-09-30 | Notch (#1457): ship on as today, row disclosed as unproven since `884d96ed`; fix post-release | review §3.3, round 3 |
 | 11 | 2026-09-30 | Ghost rule: a simulator-only defect blocks only on the release path and at/above the rung floor; transmit safety always blocks | review finding 5, round 3 |
 | 12 | 2026-09-30 | G0: maintainer orders the isolator; Claude re-baselines the on-air plan | review §3.1, round 3 |
+| 13 | 2026-10-01 | **Test stages: virtual audio → hardware loopback → 2 m → HF only with the release candidate.** Development evidence (A1, A2) is collected on 2 m: no HF band noise for others during early testing, and no conclusions drawn from band conditions nobody controls. **Amends decision 4**: the HF run moves from the M3 gate to M4, with the release candidate | maintainer |
+| 14 | 2026-10-01 | Release 1 is `v0.17.0`; `1.0` stays reserved for the full criteria | maintainer (open question 1) |
+| 15 | 2026-10-01 | #1438, #1443, #1452, #1454 closed — their stages merged | maintainer (open question 2) |
 
 ## Open questions
 
-1. **Version number for Release 1.** It meets 1.0's group A except A3 (Winlink via CMS), but not B–E.
-   Suggestion: `v0.17.0`, keeping `1.0` for the full criteria. Maintainer to decide.
-2. **Are the "closeable?" issues in the triage done?** (#1438, #1443, #1452, #1454 — their stages
-   have merged.)
+None open. (Version number → decision 14; the four "close?" issues → decision 15.)
 
 ## Weekly log
 
 | Week of | Closer? | On-air blocker | Dropped |
 |---|---|---|---|
 | 2026-09-28 | Plan written; #1468, #1469 merged | isolator not ordered | — |
+| 2026-09-28 | M0 mine done (#1472–#1474); isolators in place; test stages set (2 m, HF with the RC) | triage approval pending | — |
 
 ---
 
@@ -174,8 +179,8 @@ after M3) · **close?** likely done, maintainer to confirm.
 | 1457 | Notch gate red on main | PR | decision 10 (disclosed) |
 | 1456 | NACK streak has no time decay | **M2** | A2 stability clause |
 | 1455 | Squelch recovers only at the burst cap after a step up | PR-R | on `hpx_hf`, simulator-only |
-| 1454 | BPSK31 not gathered below +14 dB (DCD) | close? | stage 2 merged (#1462) |
-| 1452 | Squelch collapses behind a narrow filter | close? | stage 1 merged (#1458) |
+| 1454 | BPSK31 not gathered below +14 dB (DCD) | closed 2026-10-01 | stage 2 merged (#1462) |
+| 1452 | Squelch collapses behind a narrow filter | closed 2026-10-01 | stage 1 merged (#1458) |
 | 1451 | BPSK SNR reads low on a fade after restricted lock | PR-R | simulator-only |
 | 1450 | Frame ≥ 1.5 symbols into a single slice | PR-R | simulator-only |
 | 1449 | Heavy scripts skip the build lock | PR | tooling |
@@ -183,10 +188,10 @@ after M3) · **close?** likely done, maintainer to confirm.
 | 1446 | Linksim: BPSK31 after MFSK16 fails 19/19 | **M2** | SL1→SL2 is a core ladder step; diagnose |
 | 1445 | `slow-tests.sh` fails without `target/` | PR | tooling |
 | 1444 | QPSK/8PSK/64QAM timing shapes unmeasured | PR | research |
-| 1443 | `accumulate_routed` keeps no pre-trigger audio | close? | stage 3 merged (#1469) |
+| 1443 | `accumulate_routed` keeps no pre-trigger audio | closed 2026-10-01 | stage 3 merged (#1469) |
 | 1442 | BPSK250 trails an oracle phase by ~2 dB | PR | margin vs an oracle, not a failure |
 | 1441 | BPSK31/63 lose lock near m·baud/32 | PR-R | simulator-only |
-| 1438 | BPSK timing search locks early | close? | PR1 + PR2 merged (#1447, #1453) |
+| 1438 | BPSK timing search locks early | closed 2026-10-01 | PR1 + PR2 merged (#1447, #1453) |
 | 1436 | 50 Hz-off station decoded before AFC converges | PR | simulator-only, not a failure to decode |
 | 1429 | Uncoded BPSK uses the uncancelled arm | PR | `hpx_hf` is fully coded |
 | 1428 | #1363 follow-up A/B | PR | research |
@@ -230,5 +235,5 @@ after M3) · **close?** likely done, maintainer to confirm.
 | 1062 | Alternating preamble: O(1) time-bandwidth | **M1** | decision 2 |
 | 1059 | Re-derive QPSK ρ thresholds | PR | no QPSK template ships |
 
-**Totals** (counted from the table): M0 2 · M1 2 · M2 11 · PR-R 12 · PR 34 · close? 4 = 65. New issues to file with M1/M2:
+**Totals** (counted from the table): M0 2 · M1 2 · M2 11 · PR-R 12 · PR 34 · closed 2026-10-01 4 = 65. New issues to file with M1/M2:
 the compression dictionary ID (M1) and the unpack/REQ-CMP-03 pair (M2).
