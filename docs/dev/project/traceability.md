@@ -31,7 +31,11 @@ run before designing it (`/tmp` scratch test, not committed) showed:
 - a decoder given the same dictionary with its ID byte flipped fails with `Dictionary mismatch`; the
   real dictionary decodes the frame (control).
 
-So zstd already refuses a mismatched dictionary; the silent garbage came only from the daemon
+So zstd already refuses a mismatched dictionary **for any frame whose header carries a non-zero
+dictionary ID** — the decoder's check is guarded by `fParams.dictID &&` (`zstd_decompress.c:717`).
+Our sender always writes it (`ZSTD_c_dictIDFlag` defaults to 1), and the trainer's ID is a hash of the
+dictionary content (`zdict.c:879`), so a retrain changes it; a foreign frame with dictID 0 would skip
+the check (no checksum either). The silent garbage came only from the daemon
 delivering a failed unpack. The maintainer dropped the wire change (decision 17, amending decision 5).
 
 **Design.** `compression::try_unpack` returns `Ok(None)` for a frame that is not packed, `Ok(Some)` for
@@ -44,8 +48,8 @@ dropped too — the price of the magic. REQ-CMP-03 is rewritten to what ships: s
 assumed of the peer, sender opt-in.
 
 **Twin, not changed:** `openpulse-filexfer/src/blocks.rs` also does `unpack(..).unwrap_or(packed)`, but
-a block that unpacks wrongly then fails the offer-length check and is dropped; file transfer ships
-disabled in Release 1.
+a block that unpacks wrongly is caught by the offer-length check when its length differs, and
+otherwise by the file-level verify; file transfer ships disabled in Release 1. Parked, not fixed here.
 
 **Implementation.** `crates/openpulse-core/src/compression.rs` (`try_unpack`, `UnpackError`),
 `crates/openpulse-daemon/src/server.rs` (`unpack_received` + its call site, counter increment),
