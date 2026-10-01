@@ -15,6 +15,54 @@ this ledger adds the design rationale and the actually-observed results per chan
 
 ---
 
+## 2026-10-01 — A packed frame that fails to unpack is dropped, not delivered (REQ-CMP-05; work plan decision 17)
+
+**Requirement / change.** REQ-CMP-05: a decompression failure is a frame-integrity error. The daemon's
+receive loop did `unpack(&bytes).unwrap_or(bytes)` (`server.rs`), so a frame carrying the `OPZ1` pack
+magic that failed to unpack was delivered as the message with its bytes still compressed.
+REQ-CMP-03 described a handshake negotiation deleted in #1166 / PR #1189.
+
+**What was measured first, and what it overturned.** The 2026-09-30 governance review (a Fable
+finding I confirmed by reading the code) said the zstd dictionary ID is never on the wire, so a
+retrained dictionary would silently break mixed-version sessions, and proposed a wire change. A probe
+run before designing it (`/tmp` scratch test, not committed) showed:
+- a packed zstd frame carries the dictionary ID in zstd's own frame header — FHD `0x63`,
+  `Dictionary_ID_flag` 3, 4 bytes, `0x7d6f375f`, equal to `ZSTD_DICT_ID`;
+- a decoder given the same dictionary with its ID byte flipped fails with `Dictionary mismatch`; the
+  real dictionary decodes the frame (control).
+
+So zstd already refuses a mismatched dictionary; the silent garbage came only from the daemon
+delivering a failed unpack. The maintainer dropped the wire change (decision 17, amending decision 5).
+
+**Design.** `compression::try_unpack` returns `Ok(None)` for a frame that is not packed, `Ok(Some)` for
+an unpacked one, and `Err(UnpackError)` for a packed frame that is corrupt (no tag, unknown tag, or a
+decompression failure carrying zstd's reason). `unpack` keeps its old `Option` contract on top of it
+for its other callers. The daemon's single receive site calls `unpack_received`, which drops a corrupt
+packed frame, logs the reason at `warn`, and counts it in the internal `MetricsSnapshot::unpack_failures`
+(not on the wire `ControlEvent`). Stated cost: a raw payload that happens to begin with `OPZ1` is now
+dropped too — the price of the magic. REQ-CMP-03 is rewritten to what ships: self-describing, not
+assumed of the peer, sender opt-in.
+
+**Twin, not changed:** `openpulse-filexfer/src/blocks.rs` also does `unpack(..).unwrap_or(packed)`, but
+a block that unpacks wrongly then fails the offer-length check and is dropped; file transfer ships
+disabled in Release 1.
+
+**Implementation.** `crates/openpulse-core/src/compression.rs` (`try_unpack`, `UnpackError`),
+`crates/openpulse-daemon/src/server.rs` (`unpack_received` + its call site, counter increment),
+`crates/openpulse-daemon/src/lib.rs` (`MetricsSnapshot::unpack_failures`), REQ-CMP-03 in
+`requirements.yaml` / `requirements.md` / `traceability-matrix.md` (CAP-01 no longer claims it).
+
+**Tests → results (run 2026-10-01).** `cargo test -p openpulse-core --no-default-features --lib
+compression::` 13 passed, including `a_frame_from_another_dictionary_is_an_error` (a frame compressed
+against the flipped-ID dictionary is refused with "Dictionary mismatch") and
+`try_unpack_tells_not_packed_from_corrupt`. `cargo test -p openpulse-daemon --no-default-features --lib
+unpack_received` 2 passed. **Sabotage:** making `unpack_received` deliver the bytes on an error fails
+`a_corrupt_packed_frame_is_dropped_not_delivered` and nothing else (1 passed, 1 failed). fmt and the
+three clippy passes clean; `trace.sh check` and `reachability.sh check` PASS. **Not run:** an
+end-to-end twin-daemon test — no command puts a corrupt packed frame on the air — and the full gate.
+
+---
+
 ## 2026-09-30 — The pre-push hook tests the core libraries' reverse dependents, measures a rebased push against main, and refuses to run stale (decision 9, #1357, #1448)
 
 **Requirement / change.** Work plan M0, decision 9: before the full gate moves to once a day, the

@@ -2,7 +2,7 @@
 project: openpulsehf
 doc: docs/dev/reviews/governance-review-2026-09-30.md
 status: resolved
-last_updated: 2026-09-30
+last_updated: 2026-10-01
 ---
 
 # Governance and focus review — 2026-09-30
@@ -47,7 +47,12 @@ folded in and listed in *Second opinion*.
    probes, fixtures and reviews of reviews. Some are real. But the project has close to zero field
    hours, so there is no way to tell which ones matter, and each one is treated as a blocker.
 6. **Compression, which your release explicitly includes, has gaps the matrix marks ✅.**
-   - **Dictionary version is not on the wire.** `unpack` maps algorithm tag `2` to
+   - **Corrected 2026-10-01 — this bullet is wrong.** A packed zstd frame **does** carry the dictionary
+     ID, in zstd's own frame header, and zstd refuses a mismatched dictionary (`Dictionary mismatch`) —
+     measured in a probe; see work plan decision 17 and the 2026-10-01 ledger entry. The bullet below
+     was concluded by reading `compression.rs` and was never run. The real defect was only the third
+     bullet (a failed unpack delivered as the message), now fixed. Original text, kept for the record:
+   - ~~**Dictionary version is not on the wire.**~~ `unpack` maps algorithm tag `2` to
      `Zstd(ZSTD_DICT_ID)` unconditionally (`compression.rs:149`). The dictionary ID field exists to
      catch version skew but is never sent or checked, so a retrained dictionary
      (`tools/openpulse-dict-trainer`) would silently break every mixed-version session. This is the

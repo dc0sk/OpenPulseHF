@@ -11,7 +11,6 @@ capabilities:
     - REQ-SEC-01
     - REQ-SEC-03
     - REQ-SEC-07
-    - REQ-CMP-03
     - REQ-FEC-05
     - REQ-REG-05
     tests:
@@ -1317,8 +1316,11 @@ requirements:
     category: Compression
     covered_by:
     - CAP-08
-    - CAP-01
-    statement: Compression capability must be negotiated during session handshake and must not be assumed.
+    statement: "Compression is self-describing and must not be assumed of the peer. A packed frame carries
+      its own algorithm tag (and a zstd frame its dictionary ID); a receiver accepts packed and unpacked
+      frames alike, and a sender compresses only when its operator enables it. (Rewritten 2026-10-01,
+      work plan decision 17; the handshake negotiation fields were deleted in #1166 / PR #1189 because
+      nothing consumed them.)"
     status: ratified
     traceability: baseline
   REQ-CMP-04:

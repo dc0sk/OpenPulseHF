@@ -1128,8 +1128,9 @@ pub async fn run(cfg: OpenpulseConfig, modem_backend: Box<dyn AudioBackend>) -> 
                 };
                 // End-to-end session compression: a peer that packed its payload sent a self-describing
                 // frame; unpack it here so routing, metrics, and message surfacing see the original bytes.
-                // Non-packed frames (control frames, un-packed data) lack the magic and pass through.
-                let bytes = openpulse_core::compression::unpack(&bytes).unwrap_or(bytes);
+                // Non-packed frames (control frames, un-packed data) lack the magic and pass through; a
+                // packed frame that fails to unpack is dropped (REQ-CMP-05), see `unpack_received`.
+                let (bytes, unpack_failed) = unpack_received(bytes);
                 let decode_ms = decode_start.elapsed().as_secs_f32() * 1000.0;
                 if !bytes.is_empty() {
                     process_received_bytes(
@@ -1226,6 +1227,9 @@ pub async fn run(cfg: OpenpulseConfig, modem_backend: Box<dyn AudioBackend>) -> 
                     // arm, so this line is reached on a silent tick.)
                     m.veto = veto_state(&engine, &mode);
                     m.total_rx_bytes += bytes.len() as u64;
+                    if unpack_failed {
+                        m.unpack_failures += 1;
+                    }
                     // EWMA of decode latency, sampled only when a frame was actually decoded.
                     if !bytes.is_empty() {
                         m.decode_latency_ms = if m.decode_latency_ms <= 0.0 {
@@ -2216,6 +2220,26 @@ pub fn build_cat_controller(radio: &openpulse_config::RadioConfig) -> Option<Cat
             }
         },
     }
+}
+
+/// Unpack a received frame; a packed frame that fails to unpack is dropped, not delivered (REQ-CMP-05).
+///
+/// Returns the bytes to deliver and whether a packed frame was dropped. The old `unwrap_or(bytes)`
+/// delivered such a frame's still-compressed bytes as the message — the only way a zstd dictionary
+/// mismatch, which zstd itself refuses, reached an operator as silent garbage. A raw payload that
+/// happens to begin with `OPZ1` is now dropped too; that collision is the price of the magic.
+fn unpack_received(bytes: Vec<u8>) -> (Vec<u8>, bool) {
+    use openpulse_core::compression::{try_unpack, UnpackError};
+    let failure: UnpackError = match try_unpack(&bytes) {
+        Ok(Some(unpacked)) => return (unpacked, false),
+        Ok(None) => return (bytes, false),
+        Err(e) => e,
+    };
+    tracing::warn!(
+        len = bytes.len(),
+        "dropped a packed frame that failed to unpack: {failure}"
+    );
+    (Vec::new(), true)
 }
 
 /// The five front-end toggles, read from the engine and runtime state rather than mirrored (#1276).
@@ -3506,6 +3530,29 @@ mod station_identity_tests {
             "the persisted identity must be stable across loads"
         );
         let _ = std::fs::remove_dir_all(&dir);
+    }
+}
+
+#[cfg(test)]
+mod unpack_received_tests {
+    use super::unpack_received;
+    use openpulse_core::compression::{pack, PACK_MAGIC};
+
+    #[test]
+    fn a_corrupt_packed_frame_is_dropped_not_delivered() {
+        let mut corrupt = PACK_MAGIC.to_vec();
+        corrupt.extend_from_slice(b"\x02\x00\x00\x00\x10not a zstd frame");
+        assert_eq!(unpack_received(corrupt), (Vec::new(), true));
+    }
+
+    #[test]
+    fn packed_and_plain_frames_are_delivered() {
+        let body = b"status ok ".repeat(20);
+        assert_eq!(unpack_received(pack(&body)), (body.clone(), false));
+        assert_eq!(
+            unpack_received(b"plain frame".to_vec()),
+            (b"plain frame".to_vec(), false)
+        );
     }
 }
 
