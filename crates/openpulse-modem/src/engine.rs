@@ -1725,10 +1725,30 @@ impl ModemEngine {
         self.rate_policy.set_min_tx_level(min);
     }
 
-    /// The active adaptive profile's defined `(level, mode)` pairs (ascending), for mapping a
-    /// bandwidth cap in Hz to a max speed level. Empty when no adaptive session is active.
-    pub fn adaptive_profile_modes(&self) -> Vec<(openpulse_core::rate::SpeedLevel, &'static str)> {
-        self.rate_policy.defined_modes()
+    /// The highest adaptive level whose mode fits `max_hz` of occupied bandwidth (ARDOP `ARQBW`),
+    /// sized by the registered plugin rather than a hand-kept table. When no reachable rung fits,
+    /// the narrowest-ladder answer is the lowest reachable level, never "uncapped". `None` only
+    /// when no adaptive session is active.
+    pub fn arq_max_tx_level_for_bandwidth(
+        &self,
+        max_hz: u32,
+    ) -> Option<openpulse_core::rate::SpeedLevel> {
+        let modes = self.rate_policy.defined_modes();
+        let lowest = modes.first().map(|(l, _)| *l)?;
+        let fits = |mode: &str| {
+            self.plugins
+                .get(mode)
+                .and_then(|p| p.occupied_bandwidth_hz(mode))
+                .is_some_and(|bw| bw <= max_hz as f32)
+        };
+        Some(
+            modes
+                .iter()
+                .filter(|(_, m)| fits(m))
+                .map(|(l, _)| *l)
+                .max()
+                .unwrap_or(lowest),
+        )
     }
 
     /// A2 (backlog-aware gating): minimum queued TX bytes required before an

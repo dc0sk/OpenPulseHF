@@ -15,6 +15,39 @@ this ledger adds the design rationale and the actually-observed results per chan
 
 ---
 
+## 2026-10-02 — ARDOP `ARQBW` sizes modes from the plugin (work plan M2; found by the profile design)
+
+**Change.** `ARQBW` mapped a host bandwidth cap to a ladder level through
+`openpulse_qsy::bandplan::max_speed_level_for_bandwidth`, which read a hand-kept Hz table. That table
+was a stale twin of `ModemPlugin::occupied_bandwidth_hz`: it listed OFDM52 at 3200 Hz against the
+plugin's 2031 Hz and lacked MFSK16, QPSK250-D and every OFDM52-* variant. A mode it could not size was
+dropped, so no `ARQBW` reached QPSK250-D (SL6), and `fast` stopped at SL5 for every cap of 2032 Hz or
+more. When no mode fitted it returned `None`, which the bridge applied as "uncapped".
+
+**Design.** Size from the registered plugin, at the engine, which owns both the plugins and the
+active ladder. When nothing fits, answer the lowest reachable rung, never "uncapped".
+
+**Implementation.** `ModemEngine::arq_max_tx_level_for_bandwidth` (`crates/openpulse-modem/src/engine.rs`)
+replaces `adaptive_profile_modes`. `crates/openpulse-ardop/src/bridge.rs` (ARQBW block) calls it.
+`max_speed_level_for_bandwidth` and its test are deleted from `crates/openpulse-qsy/src/bandplan.rs`,
+which keeps `occupied_bandwidth_hz` for its segment checks. `openpulse-ardop` no longer depends on
+`openpulse-qsy`.
+
+**Tests.** `crates/openpulse-modem/tests/arqbw_sizes_from_the_plugin.rs` covers:
+- `fast` at 200/500/2000/2500 Hz → SL4/SL6/SL6/SL14;
+- 50 Hz → SL1;
+- `robust` at 2500 Hz → SL6;
+- no session → `None`.
+
+**Results (run).**
+- The new test passed **4/0**.
+- `openpulse-ardop` and `openpulse-qsy` passed **94/0** (`--no-fail-fast`).
+- Clippy `-D warnings` is clean on the three crates; fmt is clean.
+- Sabotage: excluding QPSK modes from sizing and answering SL14 when nothing fits gave **3 failed /
+  1 passed**. The no-session case was unaffected, as expected.
+
+---
+
 ## 2026-10-02 — On-air twin runner retains A2 evidence (work plan M2; on-air re-baseline item 5)
 
 **Change.** `scripts/run-onair-twin-ota.sh` left `observability.audit_mode` off, so the `OtaRateDecision`

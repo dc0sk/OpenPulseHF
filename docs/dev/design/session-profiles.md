@@ -2,7 +2,7 @@
 project: openpulsehf
 doc: docs/dev/design/session-profiles.md
 status: review
-last_updated: 2026-10-01
+last_updated: 2026-10-02
 ---
 
 # Session profiles for Release 1: `fast` and `robust`
@@ -114,7 +114,8 @@ So no `ARQBW` value reaches QPSK250-D (SL6), and with `fast` on ARDOP an `ARQBW`
 which should reach SL14, also stops at SL5 (BPSK250). `ARQBW 2000` correctly stops below OFDM52
 (2031 Hz > 2000) once QPSK250-D is sized. The fix is to size modes from the registered plugin (the trait method exists; the engine does not
 expose it yet), not from the table.
-It is filed as an M2 item.
+It is filed as an M2 item. **Fixed 2026-10-02:** `ModemEngine::arq_max_tx_level_for_bandwidth`
+sizes from the plugin; the bandplan's Hz→level helper is deleted.
 
 **Wire.** `profile_name` is used only for logging in production (`openpulse-daemon/src/lib.rs:2184`).
 The fingerprint of `fast` equals today's `hpx_hf`, so builds from before and after the rename still
