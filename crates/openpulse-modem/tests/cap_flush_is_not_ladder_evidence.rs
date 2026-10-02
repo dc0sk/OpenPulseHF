@@ -6,7 +6,7 @@
 //! stuck channel, or a frame trailed by a long carrier). The caller could not tell them apart.
 //!
 //! A failed decode of a capped slab therefore drove `RxOutcome::Failed`, which does two things and
-//! only one of them is bounded: the NACK keying is capped by `OTA_NACK_BUDGET` in the daemon, but
+//! only one of them is bounded: the NACK keying is capped by the daemon's NACK budget (`nack_budget.rs`), but
 //! the rate controller's **demotion is not** — successive capped slabs walk `recommended_level` down
 //! and the next real ACK carries it to the peer.
 //!
@@ -128,7 +128,7 @@ fn a_capped_slab_that_fails_to_decode_is_not_ladder_evidence() {
         "a cap-flushed slab that decoded nothing produced an ACK frame. In the daemon \
          `ladder_frame = res.ack.is_some()`, so this keys the transmitter and radiates a NACK on a \
          stuck channel (#1178 class) — and drives RxOutcome::Failed into the rate controller, whose \
-         demotion is NOT bounded by OTA_NACK_BUDGET the way the keying is."
+         demotion is NOT bounded by the daemon's NACK budget the way the keying is."
     );
     assert_eq!(
         e.ota_rx_recommended_level(),
