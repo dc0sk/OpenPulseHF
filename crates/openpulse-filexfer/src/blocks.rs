@@ -79,6 +79,18 @@ struct FragTracker {
     seen: Vec<bool>,
 }
 
+/// A block fragment's header, read without ingesting it ([`BlockAssembler::peek`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FragPeek {
+    pub block_index: u16,
+    pub frag_index: u8,
+    pub frag_total: u8,
+    /// The block is already complete (or was seeded on resume).
+    pub held: bool,
+    /// This fragment index was already received for this block.
+    pub duplicate: bool,
+}
+
 /// Outcome of ingesting one fragment.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum BlockEvent {
@@ -114,6 +126,35 @@ impl BlockAssembler {
         let bs = self.block_size as u64;
         let start = (block_index as u64).saturating_mul(bs);
         self.file_size.saturating_sub(start).min(bs) as usize
+    }
+
+    /// What a block fragment is, before ingesting it: its block and position, whether that block is
+    /// already held (complete or seeded on resume), and whether this fragment was already seen.
+    /// `None` for a malformed or out-of-range header — the cases [`ingest_fragment`](Self::ingest_fragment)
+    /// ignores.
+    pub fn peek(&self, fragment: &[u8]) -> Option<FragPeek> {
+        if fragment.len() < SAR_HEADER_SIZE {
+            return None;
+        }
+        let segment_id = ((fragment[0] as u16) << 8) | fragment[1] as u16;
+        let (frag_index, frag_total) = (fragment[2], fragment[3]);
+        if segment_id == 0 || frag_total == 0 || frag_index >= frag_total {
+            return None;
+        }
+        let block_index = segment_id - 1;
+        if block_index >= self.block_count {
+            return None;
+        }
+        let duplicate = self.seen.get(&block_index).is_some_and(|t| {
+            t.total == frag_total && t.seen.get(frag_index as usize).copied().unwrap_or(false)
+        });
+        Some(FragPeek {
+            block_index,
+            frag_index,
+            frag_total,
+            held: self.blocks.contains_key(&block_index),
+            duplicate,
+        })
     }
 
     /// Ingest one received SAR fragment: peek its header for the missing-bitmap, then reassemble.

@@ -24,8 +24,15 @@ pub struct SenderSession {
     timeouts: Timeouts,
     /// Absolute ms deadline for the current state (offer wait / block stall / verify wait).
     deadline: u64,
+    /// Unanswered probes, and NACKs that made no progress, for the current block.
     retries: u8,
     max_block_retries: u8,
+    /// The missing bitmap the current block's last round carried (`None` = the whole block).
+    last_round: Option<Vec<u8>>,
+    /// Fragments the last NACK for this block reported missing; a smaller count is progress.
+    last_missing: Option<u32>,
+    /// A round is queued and not yet transmitted, so no ack can be due yet.
+    round_pending: bool,
     /// Blocks the receiver already holds (from `FileAccept.have_bitmap`) — skipped when sending (resume).
     held: Vec<bool>,
 }
@@ -44,6 +51,9 @@ impl SenderSession {
             deadline: now_ms.saturating_add(timeouts.offer_ms),
             retries: 0,
             max_block_retries: DEFAULT_MAX_BLOCK_RETRIES,
+            last_round: None,
+            last_missing: None,
+            round_pending: false,
             held: vec![false; block_count as usize],
         };
         let actions = vec![FxAction::Transmit(FxFrame::FileOffer(offer).encode())];
@@ -115,18 +125,37 @@ impl SenderSession {
                         self.deadline = now_ms.saturating_add(self.timeouts.verify_ms);
                         vec![self.progress(self.block_count)]
                     }
-                } else if self.retries < self.max_block_retries {
-                    self.retries += 1;
-                    self.arm_stall(now_ms);
+                } else {
+                    // Progress (fewer fragments missing than the last NACK said) resets the budget;
+                    // only a NACK that gained nothing spends it.
+                    let missing = popcount(missing_frag_bitmap);
+                    if self.last_missing.is_none_or(|prev| missing < prev) {
+                        self.retries = 0;
+                    } else if self.retries < self.max_block_retries {
+                        self.retries += 1;
+                    } else {
+                        return self.finish(TransferResult::Failed {
+                            reason: Reason::Stall,
+                        });
+                    }
+                    self.last_missing = Some(missing);
+                    // An empty bitmap names nothing to resend: send the whole block again.
+                    let round = (missing > 0).then(|| missing_frag_bitmap.clone());
+                    self.last_round = round.clone();
+                    self.await_round_sent();
                     vec![FxAction::SendBlock {
                         block_index: block,
-                        missing: Some(missing_frag_bitmap.clone()),
+                        missing: round,
                     }]
-                } else {
-                    self.finish(TransferResult::Failed {
-                        reason: Reason::Stall,
-                    })
                 }
+            }
+            // The last block's ack was lost but the receiver verified the whole file: done.
+            (State::Sending { block }, FxFrame::FileComplete { status, .. })
+                if self.next_unheld(block + 1) >= self.block_count =>
+            {
+                self.finish(TransferResult::Sent {
+                    peer_verified: status.is_ok(),
+                })
             }
             (State::AwaitVerify, FxFrame::FileComplete { status, .. }) => {
                 self.finish(TransferResult::Sent {
@@ -146,6 +175,16 @@ impl SenderSession {
             State::Offering => self.finish(TransferResult::Failed {
                 reason: Reason::Timeout,
             }),
+            // No answer to the last round: probe with its last fragment, which draws an ack, a NACK
+            // or `FileComplete` from the receiver, until the budget is spent.
+            State::Sending { block } if self.retries < self.max_block_retries => {
+                self.retries += 1;
+                self.await_round_sent();
+                vec![FxAction::ProbeBlock {
+                    block_index: block,
+                    round: self.last_round.clone(),
+                }]
+            }
             State::Sending { .. } => self.finish(TransferResult::Failed {
                 reason: Reason::Stall,
             }),
@@ -178,9 +217,26 @@ impl SenderSession {
         self.state == State::Terminal
     }
 
-    fn begin_block(&mut self, block: u16, missing: Option<Vec<u8>>, now_ms: u64) -> Vec<FxAction> {
+    /// The daemon finished transmitting what was queued: the ack-wait starts now. `min_wait_ms` lets
+    /// the caller stretch it for a slow mode (a control frame's airtime plus decode time).
+    pub fn note_round_sent(&mut self, now_ms: u64, min_wait_ms: u64) {
+        if matches!(self.state, State::Sending { .. }) && self.round_pending {
+            self.round_pending = false;
+            self.deadline = now_ms.saturating_add(self.timeouts.ack_wait_ms.max(min_wait_ms));
+        }
+    }
+
+    /// A round is queued: nothing is due until [`note_round_sent`](Self::note_round_sent).
+    fn await_round_sent(&mut self) {
+        self.round_pending = true;
+        self.deadline = u64::MAX;
+    }
+
+    fn begin_block(&mut self, block: u16, missing: Option<Vec<u8>>, _now_ms: u64) -> Vec<FxAction> {
         self.state = State::Sending { block };
-        self.arm_stall(now_ms);
+        self.last_round = missing.clone();
+        self.last_missing = None;
+        self.await_round_sent();
         vec![
             FxAction::SendBlock {
                 block_index: block,
@@ -188,10 +244,6 @@ impl SenderSession {
             },
             self.progress(block),
         ]
-    }
-
-    fn arm_stall(&mut self, now_ms: u64) {
-        self.deadline = now_ms.saturating_add(self.timeouts.block_stall_ms);
     }
 
     fn progress(&self, blocks_done: u16) -> FxAction {
@@ -209,6 +261,11 @@ impl SenderSession {
             result,
         })]
     }
+}
+
+/// Set bits in a fragment bitmap.
+fn popcount(bitmap: &[u8]) -> u32 {
+    bitmap.iter().map(|b| b.count_ones()).sum()
 }
 
 /// Bit `i` of a little-endian-by-byte bitmap (byte `i/8`, bit `i%8`).

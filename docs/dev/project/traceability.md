@@ -15,6 +15,71 @@ this ledger adds the design rationale and the actually-observed results per chan
 
 ---
 
+## 2026-10-02 — File transfer survives a lost fragment, a lost ack and a long block (work plan M2; REQ-FX-05)
+
+**Change.** Three defects, found by the #1461 review and by reading the timers.
+
+1. Nothing could trigger the sender's selective-repeat arm. The receiver only ever sent
+   `BlockAck { complete: true }`, so one lost fragment meant silence until both stall timers fired.
+2. A lost `BlockAck` was fatal: the sender's only reaction to silence was `Failed { Stall }`.
+3. The stall timers did not scale with airtime. The sender armed its 120 s deadline when a block was
+   queued, and the daemon then transmitted the block synchronously. A default 16 KiB block is about
+   9.5 min at BPSK250, so any block with more than about 120 s of airtime failed on a perfect channel.
+
+**Design.** `docs/dev/design/filexfer-selective-repeat.md`. Fable review was mandatory, because the
+design changes when a station keys (`reviews/review-filexfer-selective-repeat.md`): 2 blocking and
+4 fix findings, all folded in. There is no wire change.
+- The receiver answers fragments and never transmits on a timer:
+  - a fragment of a held block gets a complete ack and is not ingested;
+  - a NACK goes out at the end of the round (the block's last fragment, or the highest index the last
+    NACK asked for), or on a duplicate fragment;
+  - a probe for a transfer that already finished gets its `FileComplete` again.
+- The sender probes with the round's last fragment instead of failing. `FileComplete` on the last
+  block counts as success. Only an unanswered probe, or a NACK that gains nothing, spends the retry
+  budget.
+- The ack-wait starts when the round has been transmitted, stretched to 3 control-frame airtimes plus
+  30 s. The receiver re-arms per fragment, with a 720 s stall.
+- The drain defers while the channel is busy, and drops its queue after 5 min of busy.
+
+**Implementation.**
+- `openpulse-filexfer`:
+  - `lib.rs`: `Timeouts.ack_wait_ms`, `FxAction::ProbeBlock`;
+  - `sender.rs`: `note_round_sent`, the probe, retry accounting, `FileComplete` in `Sending`;
+  - `receiver.rs`: `note_fragment`;
+  - `blocks.rs`: `BlockAssembler::peek`.
+- `openpulse-daemon`:
+  - `filexfer.rs`: `on_block_fragment`, `answer_finished_probe`, `FinishedRx`, `note_round_sent`,
+    `ProbeBlock` handling;
+  - `lib.rs`: `file_rx_finished`, `filexfer_busy_since`;
+  - `server.rs`: the `drain_filexfer_tx` busy gate, the give-up and the ack-wait arming.
+
+**Tests.**
+- `openpulse-filexfer/tests/filexfer.rs`: 8 new or changed state-machine tests with injected time
+  (24 in the file).
+- `openpulse-daemon/tests/filexfer_lossy_link.rs`: two stations' real file-transfer code over a link
+  that drops chosen frames, in virtual time. Seven cases:
+  - clean link;
+  - lost fragment;
+  - lost `BlockAck`;
+  - lost round end;
+  - lost NACK;
+  - lost NACK after a resend round;
+  - lost final ack plus `FileComplete`.
+
+**Results (run).**
+- filexfer **24/0**; lossy link **7/0**.
+- Sabotage, each mechanism removed separately; every one fails its own case:
+  - arming at queue time, ignoring `FileComplete` and no per-fragment re-arm → 4 state-machine tests
+    fail;
+  - no end-of-round NACK → 2 fail;
+  - no held re-ack → 1 fails;
+  - no duplicate NACK → the resend-round case fails;
+  - no finished record → 1 fails.
+- Clippy `-D warnings` is clean.
+- Daemon + filexfer suites, on top of the #1461 change: **250 passed / 0 failed**, rc=0, with the multi-fragment twin tests included.
+
+---
+
 ## 2026-10-02 — Every frame of a multi-frame burst is decoded (#1461; work plan M2)
 
 **Change.** The daemon sends a planned burst of SAR fragments inside one keying, back to back, so the
