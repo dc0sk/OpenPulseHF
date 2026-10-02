@@ -62,8 +62,8 @@ on `hpx_hf` (psk8, 64qam, scfdma, pilot).
 | Item | Decision | Status |
 |---|---|---|
 | This work plan + decision log | 3 | this PR |
-| Triage all open issues into milestones (proposal in *Triage proposal* below, maintainer approves) | 6 | **awaiting approval** |
-| Create the GitHub milestones `M1 wire freeze` … `M4 release` and labels `post-release`, `post-release-rerank`, `tx-safety` (not creatable from the cloud session's tools — maintainer, or a local session with `gh`) | 3, 6 | open |
+| Triage all open issues into milestones (maintainer approves) | 6 | **done 2026-10-02** — approved and labelled (see *Triage* below) |
+| Create the GitHub milestones `M1 wire freeze` … `M4 release` and move the `milestone:*` stand-in labels onto them (not creatable from the cloud session's tools — maintainer, or a local session with `gh`). The labels `post-release`, `post-release-rerank`, `milestone:M2` and `milestone:after-v0.17` exist since 2026-10-02 (created by the triage) | 3, 6, 20 | labels done; milestones open |
 | Slim `CLAUDE.md` to ~200 lines; relocate, don't delete; acceptance table → one-line-per-row index | 7 | done (#1472): 731 → ~260 lines, 144 KB → 15 KB; six sections moved verbatim to `docs/dev/` |
 | Rewrite the *Adversarial review* rule in `CLAUDE.md`: mandatory for wire-format/trait changes, anything that keys a transmitter, and eliminations; one round per PR; every prompt asks "does this block Release 1?" | 8 | done (#1472) |
 | Pre-push hook **tests** reverse dependents when `openpulse-core`, `-dsp` or `-modem` change; fix #1357 and #1448 on the way | 9 | done (#1473) |
@@ -161,6 +161,7 @@ payload format change, so M1 closed as a bug fix plus a declaration.
 | 17 | 2026-10-01 | **Compression: no wire change for Release 1. Amends decision 5.** Measured: a packed zstd frame already carries the dictionary ID (`0x7d6f375f`) in zstd's own frame header, and a decoder holding a dictionary with another ID fails with `Dictionary mismatch`. The silent-garbage path was only the daemon delivering a failed unpack's bytes; fixing that closes both findings. The governance review's "dictionary ID is never on the wire" was wrong — read from the code, not run | maintainer |
 | 18 | 2026-10-01 | **Two session profiles: `fast` and `robust`.** `fast` = today's `hpx_hf` ladder (performance and bandwidth under good conditions); `robust` = the same ladder capped at SL6, ≤ 500 Hz, single-carrier (poor conditions, limited gear). Same ladder, so the handshake fingerprint matches and a fast↔robust pair keeps adaptive OTA. The other ten profiles are deleted; no alias for the old names | maintainer |
 | 19 | 2026-10-01 | **A new UI client ships with the release candidate**, supporting file transfer or a similar reusable feature for testing. It comes after everything else RC1 needs. **Amends decision 1** (Release 1 scope) | maintainer |
+| 20 | 2026-10-02 | **Triage approved** as proposed and applied as labels. M2 and after-v0.17 rows carry `milestone:*` stand-in labels until the GitHub milestones are created | maintainer |
 
 ## Open questions
 
@@ -174,85 +175,22 @@ None open. (Version number → decision 14; the four "close?" issues → decisio
 | 2026-09-28 | M0 mine done (#1472–#1474); isolators in place; test stages set (2 m, HF with the RC) | triage approval pending | — |
 | 2026-09-28 | M1 done: #1062 after v0.17 (#1476); compression needs no wire change, unpack fix merged (#1477); v0.17 format declared | triage approval pending | dict-ID wire change (measured unnecessary) |
 | 2026-09-28 | Profiles decided (decision 18); UI client added to M4, last (decision 19) | triage approval pending | ten profiles; the `hpx_*` names |
+| 2026-09-28 | Profiles shipped (#1480); PTT leader delay (#1481) and flush-timeout count (#1482) merged; receive cost diagnosed (#1483); triage approved and labelled (decision 20) | Pi receive-cost numbers (rpi51/rpi53); dual-card drain measurement for #1367 | — |
 
 ---
 
-## Triage proposal (awaiting maintainer approval)
+## Triage (approved 2026-10-02, decision 20)
 
-All 65 issues open on 2026-09-30, classified by the rules above from each issue's title and, where
-needed, its body. **Nothing is labelled yet.** Edit this table in review; once approved, the labels
-and milestones are applied and this section is replaced by a pointer to the milestones.
+The 65-issue triage proposal of 2026-09-30 was approved by the maintainer and applied as labels on
+2026-10-02. The full proposal table is in git history; this section points at the tracker instead.
 
-Legend: **M1/M2/M3** milestone · **PR** `post-release` · **PR-R** `post-release-rerank` (re-read
-after M3) · **close?** likely done, maintainer to confirm.
+| Class | Label on the issue | Count applied |
+|---|---|---|
+| Release path | `milestone:M2` (stand-in until the GitHub milestone exists) | 9 open (#1257 and #1334 were already closed) |
+| After v0.17, before 1.0 | `milestone:after-v0.17` (stand-in) | 2 (#1062, #1171) |
+| Post-release | `post-release` | 34 |
+| Re-rank after M3 | `post-release-rerank` | 12 |
+| Already closed | — | #1438, #1443, #1452, #1454 (decision 15); #1357, #1448 (M0, fixed by #1473) |
 
-| # | Title (short) | Proposal | Why |
-|---|---|---|---|
-| 1467 | BPSK250 bursts drop after the preamble at small reads | PR-R | DCD, simulator-only; floor relevance unknown |
-| 1466 | Ring retention keys on the shortest preamble | PR-R | DCD follow-up, simulator-only |
-| 1465 | Flicker fragments committed to the noise floor | PR-R | DCD follow-up, simulator-only |
-| 1464 | Total-power carrier detect has no hold | PR-R | DCD follow-up, simulator-only |
-| 1463 | Coherent QPSK fails ~50° onset window | PR | not on `hpx_hf` (SL6 is differential) |
-| 1461 | Multi-fragment receive through the accumulator untested | **M2** | messages > 1 frame are basic functionality |
-| 1460 | Failed burst with no preamble evidence keys a NACK | **M2** | A2 stability clause |
-| 1457 | Notch gate red on main | PR | decision 10 (disclosed) |
-| 1456 | NACK streak has no time decay | **M2** | A2 stability clause |
-| 1455 | Squelch recovers only at the burst cap after a step up | PR-R | on `hpx_hf`, simulator-only |
-| 1454 | BPSK31 not gathered below +14 dB (DCD) | closed 2026-10-01 | stage 2 merged (#1462) |
-| 1452 | Squelch collapses behind a narrow filter | closed 2026-10-01 | stage 1 merged (#1458) |
-| 1451 | BPSK SNR reads low on a fade after restricted lock | PR-R | simulator-only |
-| 1450 | Frame ≥ 1.5 symbols into a single slice | PR-R | simulator-only |
-| 1449 | Heavy scripts skip the build lock | PR | tooling |
-| 1448 | Installed pre-push hook drifts | **M0** | the hook becomes load-bearing (decision 9) |
-| 1446 | Linksim: BPSK31 after MFSK16 fails 19/19 | **M2** | SL1→SL2 is a core ladder step; diagnose |
-| 1445 | `slow-tests.sh` fails without `target/` | PR | tooling |
-| 1444 | QPSK/8PSK/64QAM timing shapes unmeasured | PR | research |
-| 1443 | `accumulate_routed` keeps no pre-trigger audio | closed 2026-10-01 | stage 3 merged (#1469) |
-| 1442 | BPSK250 trails an oracle phase by ~2 dB | PR | margin vs an oracle, not a failure |
-| 1441 | BPSK31/63 lose lock near m·baud/32 | PR-R | simulator-only |
-| 1438 | BPSK timing search locks early | closed 2026-10-01 | PR1 + PR2 merged (#1447, #1453) |
-| 1436 | 50 Hz-off station decoded before AFC converges | PR | simulator-only, not a failure to decode |
-| 1429 | Uncoded BPSK uses the uncancelled arm | PR | `hpx_hf` is fully coded |
-| 1428 | #1363 follow-up A/B | PR | research |
-| 1425 | Blind LLR calibrators vote on noise | PR-R | HARQ on SL2–5; BPSK part fixed in #1364 |
-| 1422 | Pure SDR TX+RX | PR | new feature |
-| 1421 | Outdated dependencies | **M2** | security-relevant updates only |
-| 1397 | rust-analyzer false E0599 | PR | tooling |
-| 1385 | ARDOP accepts 4096-byte host frames, no segmentation | **M2** | ARDOP is in scope |
-| 1376 | REQ-MAC-02: broadcast/relay do not carrier-sense | PR | relay out of scope, ships off |
-| 1372 | Distro rustc rebuild invalidates the cache | PR | tooling |
-| 1371 | Trailer lint checks CAP existence, not relevance | PR | tooling |
-| 1367 | 200 ms sleep before the PTT drop | **M2** | PTT timing on the core path (A5) |
-| 1363 | Crossfade cancellation loses ~24 % on moderate_f1 | PR-R | mitigated by the #1428 union; re-rank on air |
-| 1361 | BPSK soft path skips crossfade cancellation | PR-R | HARQ on SL2–5 |
-| 1357 | Pre-push hook uses a stale upstream after rebase | **M0** | hook is load-bearing (decision 9) |
-| 1344 | ρ getters have no production consumer | PR | observability |
-| 1341 | OTA phase 2 repeats a settle pass | PR | efficiency |
-| 1337 | `DELIVERED_FRAME_RHO_BOUND` rests on a min-of-180 | PR | statistics of a bound |
-| 1335 | Repeater re-keys blind after a watchdog release | PR | tx-safety, but repeater ships **off** (rule 1) |
-| 1334 | Flush timeout un-arms three consumers (incl. station ID) | **M2** | station ID on the core path |
-| 1330 | Queued relay bursts carry no timestamp | PR | repeater, ships off |
-| 1329 | DisableRepeater blocks the select loop | PR | repeater |
-| 1321 | Traffic the station is simultaneously relaying | PR | relay design question |
-| 1316 | `band_filled` true on 45 % of idle blocks | PR | notch/QRM path |
-| 1315 | ARDOP ARQ ACK has no in-stream acquisition | **M2** | ARDOP is in scope |
-| 1310 | Adopt CaptureTicker in server/ARDOP/KISS | PR | refactor; ARDOP receive fixed in #1390 |
-| 1304 | Noise-floor premise fails for OFDM52 (85 % of band) | **M2** | may break DCD on SL7–14; diagnose |
-| 1301 | Daemon cannot service a command for ~68 s during TX | PR | usability |
-| 1283 | Requirements `verification:` field | PR | tooling |
-| 1279 | `req-mutation.sh` runs in no workflow | PR | tooling |
-| 1257 | No leader delay between PTT edge and first sample | **M2** | clips the preamble on host-keyed rigs (on air) |
-| 1241 | trace.py accepts a binding with no sabotage record | PR | tooling |
-| 1197 | Triage the 54 orphans | PR | tooling |
-| 1171 | `preamble_search_plan` mixes domains | after v0.17 | fold into #1062 (decision 16) |
-| 1160 | #1060 residuals | PR | superseded by #1062's outcome |
-| 1150 | DCD busy flag is a 100 ms wall-clock hold | PR | test load-sensitivity |
-| 1146 | Scan budgets not tied to real-time on reference hardware | PR-R | matters if on-air decode falls behind |
-| 1139 | HARQ combining demodulates at offset 0 only | PR | HARQ gain, not correctness |
-| 1126 | Empty/partial FEC tables legal OTA profiles? | PR | `hpx_hf` codes every rung |
-| 1105 | Mesh route maintenance | PR | mesh out of scope |
-| 1062 | Alternating preamble: O(1) time-bandwidth | after v0.17 | decision 16 (was M1, decision 2) |
-| 1059 | Re-derive QPSK ρ thresholds | PR | no QPSK template ships |
-
-**Totals** (counted from the table): M0 2 · M1 0 · after v0.17 2 · M2 11 · PR-R 12 · PR 34 · closed 2026-10-01 4 = 65. The two
-compression items that were to be filed as new issues were settled without one (decision 17, #1477).
+Queries: `label:milestone:M2`, `label:post-release-rerank`, `label:post-release` on the issue tracker.
+New issues follow the triage rules above; one that serves no milestone gets `post-release`.
