@@ -92,6 +92,7 @@ payload format change, so M1 closed as a bug fix plus a declaration.
 | #1062: replacement preamble — the thread's recorded direction is PN, N ≥ 63, for interferer refusal and onset placement where thresholds exist; design reviewed before implementing; fold #1171 in | parked |
 | Re-record the replay corpus against the 1.0 format; un-ignore the four replay rows (#1351) | parked |
 | Repeat the 2 m campaign on the 1.0 format | parked |
+| Sender-side silence between fragments in one keying, as belt-and-braces to the #1461 receiver fix (review finding 8; about 6 % airtime; the gap needed depends on the receiver's read size and detector hold) | parked |
 
 ### M2 — Release path (target 2026-10-28)
 
@@ -100,7 +101,9 @@ payload format change, so M1 closed as a bug fix plus a declaration.
 | ~~Compression: unpack failure + REQ-CMP-03~~ — moved to M1 (decision 17) | moved |
 | ARDOP receive and host path: #1315 (ARQ ACK has no in-stream acquisition), #1385 (host frames > 255 B, no segmentation) | open |
 | Ladder behaviour that A2 scores: #1456 (NACK streak has no time decay), #1460 (a burst with no preamble evidence keys a NACK), #1446 (linksim: BPSK31 after MFSK16 fails 19/19 — diagnose: ladder bug or sim bug) | open |
-| Data larger than one frame through the daemon: #1461 | open |
+| Data larger than one frame through the daemon: #1461. Measured 2026-10-02: a 4-fragment file in one keying delivered one fragment and stalled. Fixed: `decode_burst_frames` and the OTA fallback continue past each decoded frame (`design/multi-frame-burst-decode.md`, reviewed) | done 2026-10-02 (`twin_multi_fragment_file`, OTA off and on; `burst_carries_several_frames`) |
+| File-transfer receiver never asks for a missing fragment (found by the #1461 review): the sender's selective-repeat arm (`BlockAck { complete: false }`) is unreachable, because the daemon receiver only sends `complete: true` and has no fragment-gap timer. One faded fragment on HF fails the transfer at the 120 s block stall | open |
+| OTA phase 2 decodes an off-frequency fallback frame as a ladder frame at SL1 (found 2026-10-02): the fallback mode rides phase 2 as an `Sl1` candidate, so a non-ladder frame recovered there moves the controller and is ACKed, the #1123 failure mode for off-frequency bursts. It also yields the first frame only | open |
 | PTT and station ID on the core path: #1257 (no leader delay before the first sample — done in its PR, default 0 until a rig is measured), #1334 (a flush timeout un-arms the station-ID timer — done in its PR), #1367 (200 ms sleep before PTT drop) | #1257, #1334 done; #1367 open (needs a rig measurement) |
 | Key-to-audio gap (found 2026-10-02 reading the IC-9700 SDR captures for #1257): every keyed path keys first and then modulates and opens the output inside the guard, so the rig carries dead air for the synthesis time before the first sample — about 1.3 s per frame on the 2026-07-30 run (clicks at −1.3 s, reading UNCHECKED; `tests/captures/README.md`). It is airtime on every turn and an uncontrolled implicit leader. Moving synthesis before the key changes when PTT asserts → design review first (decision 8). Measure the gap on the 2 m pair before deciding whether it blocks | open — measure in M3 G1 |
 | #1304 (noise floor on OFDM52's wide band) — diagnose whether it breaks DCD on SL7–14 | open |

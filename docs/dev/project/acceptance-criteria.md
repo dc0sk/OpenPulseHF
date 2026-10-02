@@ -23,6 +23,7 @@ Each requirement below is done when the linked test passes. Add new links as tes
 | The #1021 settle-recovery precondition is REACHABLE on the slow rungs — sized from frame arrival, not from the FEC slice reserve | `cargo test -p openpulse-modem --test coded_noise_settle_recovery the_settle_recovery_threshold_is_reachable_for_the_slow_rungs` |
 | A mode never advertises a soft-demod capability it refuses at call time (`supports_soft_demod(mode)` agrees with `demodulate_soft`) | `cargo test -p qpsk-plugin --test differential_soft_capability` |
 | The plain 8PSK pulse refuses a sample rate it cannot decode at (≥5 samples/symbol) instead of emitting undecodable audio — floor pinned from BOTH sides | `cargo test -p psk8-plugin --test plain_pulse_sps_floor` |
+| A burst carrying several back-to-back frames yields every one, in order, through the daemon with OTA off and on — a multi-fragment file keying used to deliver its first fragment and stall (#1461, REQ-FX-06) | `cargo test -p openpulse-daemon --no-default-features --test twin_multi_fragment_file` + `cargo test -p openpulse-modem --no-default-features --test burst_carries_several_frames` |
 | HPX state machine transitions | `cargo test -p openpulse-modem --test hpx_conformance_integration` |
 | Benchmark 100% pass, mean_transitions ≤ 20 | `cargo test -p openpulse-modem --test benchmark_integration` |
 | Session persistence | `cargo test -p openpulse-cli --test local_state_integration` |

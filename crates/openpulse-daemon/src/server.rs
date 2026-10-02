@@ -1044,7 +1044,9 @@ pub async fn run(cfg: OpenpulseConfig, modem_backend: Box<dyn AudioBackend>) -> 
                         );
                     }
                 }
-                let bytes = match burst {
+                // Every frame the burst carried, in order: a sender keys once and sends its fragments
+                // back to back, so one burst can hold several (#1461).
+                let frames: Vec<Vec<u8>> = match burst {
                     Ok(Some(burst)) if engine.ota_active() && !runtime_state.ota_suppressed_by_peer() => {
                         // Receiver-led OTA: decode the burst, then key PTT only to answer
                         // with the ACK carrying our absolute recommended_level.
@@ -1105,7 +1107,7 @@ pub async fn run(cfg: OpenpulseConfig, modem_backend: Box<dyn AudioBackend>) -> 
                                         }
                                     }
                                 }
-                                res.payload.unwrap_or_default()
+                                res.payload.into_iter().chain(res.more).collect()
                             }
                             Err(e) => {
                                 tracing::debug!("OTA burst decode error: {e}");
@@ -1120,8 +1122,14 @@ pub async fn run(cfg: OpenpulseConfig, modem_backend: Box<dyn AudioBackend>) -> 
                         // silent — but the reason the decode ended (PluginNotFound, bad magic, CRC)
                         // was dropped on the floor while the OTA arm 30 lines up logged its
                         // equivalent (archetype scan 2026-07-29, finding 11).
-                        match tokio::task::block_in_place(|| engine.decode_burst(&mode, &burst)) {
-                            Ok(b) => b,
+                        match tokio::task::block_in_place(|| {
+                            engine.decode_burst_frames(
+                                &mode,
+                                openpulse_core::fec::FecMode::None,
+                                &burst,
+                            )
+                        }) {
+                            Ok(frames) => frames,
                             Err(e) => {
                                 tracing::debug!("burst decode error: {e}");
                                 Vec::new()
@@ -1138,18 +1146,26 @@ pub async fn run(cfg: OpenpulseConfig, modem_backend: Box<dyn AudioBackend>) -> 
                 // frame; unpack it here so routing, metrics, and message surfacing see the original bytes.
                 // Non-packed frames (control frames, un-packed data) lack the magic and pass through; a
                 // packed frame that fails to unpack is dropped (REQ-CMP-05), see `unpack_received`.
-                let (bytes, unpack_failed) = unpack_received(bytes);
                 let decode_ms = decode_start.elapsed().as_secs_f32() * 1000.0;
-                if !bytes.is_empty() {
-                    process_received_bytes(
-                        &bytes,
-                        &mut runtime_state,
-                        rig_controller.as_mut().map(|c| c as &mut (dyn CatController + Send)),
-                        &handle.event_tx,
-                        &handle.active_mode,
-                        &mut engine,
-                    )
-                    .await;
+                let mut received: Vec<Vec<u8>> = Vec::with_capacity(frames.len());
+                let mut unpack_failures = 0u64;
+                for frame in frames {
+                    let (bytes, unpack_failed) = unpack_received(frame);
+                    unpack_failures += u64::from(unpack_failed);
+                    if !bytes.is_empty() {
+                        process_received_bytes(
+                            &bytes,
+                            &mut runtime_state,
+                            rig_controller.as_mut().map(|c| c as &mut (dyn CatController + Send)),
+                            &handle.event_tx,
+                            &handle.active_mode,
+                            &mut engine,
+                        )
+                        .await;
+                        received.push(bytes);
+                    }
+                }
+                if !received.is_empty() {
                     // The receive handler may have queued FileAccept/BlockAck/FileComplete, or an
                     // inbound ACK may have queued the next send burst — send them PTT-keyed.
                     drain_filexfer_tx(
@@ -1234,21 +1250,21 @@ pub async fn run(cfg: OpenpulseConfig, modem_backend: Box<dyn AudioBackend>) -> 
                     // needs it. (Checked: the enclosing `match burst` has an `Ok(None) => Vec::new()`
                     // arm, so this line is reached on a silent tick.)
                     m.veto = veto_state(&engine, &mode);
-                    m.total_rx_bytes += bytes.len() as u64;
-                    if unpack_failed {
-                        m.unpack_failures += 1;
-                    }
+                    m.total_rx_bytes += received.iter().map(|b| b.len() as u64).sum::<u64>();
+                    m.unpack_failures += unpack_failures;
                     // EWMA of decode latency, sampled only when a frame was actually decoded.
-                    if !bytes.is_empty() {
+                    if !received.is_empty() {
                         m.decode_latency_ms = if m.decode_latency_ms <= 0.0 {
                             decode_ms
                         } else {
                             m.decode_latency_ms * 0.8 + decode_ms * 0.2
                         };
+                    }
+                    for bytes in &received {
                         // Live compressibility of the decoded payload stream: the session compressor's
                         // best-effort size (never larger than raw) drives the reported compress_ratio.
                         let (compressed, _algo) =
-                            openpulse_core::compression::compress_if_smaller(&bytes);
+                            openpulse_core::compression::compress_if_smaller(bytes);
                         m.raw_payload_bytes += bytes.len() as u64;
                         m.compressed_payload_bytes += compressed.len() as u64;
                     }

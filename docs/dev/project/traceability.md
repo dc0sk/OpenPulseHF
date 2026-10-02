@@ -15,6 +15,64 @@ this ledger adds the design rationale and the actually-observed results per chan
 
 ---
 
+## 2026-10-02 — Every frame of a multi-frame burst is decoded (#1461; work plan M2)
+
+**Change.** The daemon sends a planned burst of SAR fragments inside one keying, back to back, so the
+receiver's accumulator gathers them as one burst. Every decode arm returned the first frame that
+validated and dropped the rest.
+
+Measured before the fix with `twin_multi_fragment_file`, two real daemons:
+- an 878 B file (4 fragments in one keying) never arrived. B decoded one 255 B frame and reported
+  `file_failed` `Stall` at 121 s.
+- the 1-fragment control arrived in 3.6 s.
+
+**Design.** `docs/dev/design/multi-frame-burst-decode.md`, reviewed (`reviews/review-multi-frame-burst-decode.md`,
+ten findings, six folded in). The receiver continues past each decoded frame:
+- the cursor is the frame's onset plus its exact length (`tx_airtime_seconds`), minus 4 symbols;
+- frames 2..N run phase 1 only, at frame 1's committed correction;
+- it stops at the first failure, or when less than the shortest possible frame remains.
+
+The sender-side gap alternative is rejected (it depends on the receiver's timing) and parked.
+
+**Implementation** (`crates/openpulse-modem/src/engine.rs`):
+- `scan_burst_onsets`, `decode_burst_inner` and `decode_burst_phase1` also return the onset;
+- new `decode_burst_frames` and `decode_following_frames`;
+- `OtaRxResult.more`, filled by the #1123 fallback.
+
+`crates/openpulse-daemon/src/server.rs`: both arms produce a frame list, and each frame is unpacked and
+processed in order before one drain. The latency EWMA updates once per burst.
+
+**Tests.**
+- `crates/openpulse-daemon/tests/twin_multi_fragment_file.rs`: 4 fragments at the default
+  `burst_max_secs`, OTA off and on, plus the 1-fragment control. Each asserts some keying carried more
+  than one frame.
+- `crates/openpulse-modem/tests/burst_carries_several_frames.rs`: 3 frames over the recorded IC-9700
+  idle, through `accumulate_capture`, returned in order; a lone frame yields exactly one.
+
+**Results (run).**
+- `twin_multi_fragment_file` passed **3/0** in 7.6 s.
+  - Sabotage (continuation returns nothing): **2 failed / 1 passed**, with the control passing.
+- `burst_carries_several_frames` passed **2/0**.
+  - Sabotage: the multi-frame test fails and the single-frame test passes.
+- Single-frame cost (debug): `decode_burst_frames` 1.43 s against `decode_burst_with_fec` 1.40 s on the
+  same 60 048-sample burst.
+- `cargo test -p openpulse-daemon -p openpulse-modem --no-fail-fast`: **801 passed / 0 failed**
+  (102 ignored), rc=0.
+- Clippy `-D warnings` and fmt are clean.
+- `scripts/slow-tests.sh`, the acquisition chain:
+  - spectral and total-power suites: pass;
+  - notch: 2/1, the known-red #1457 row (decision 10);
+  - `ota_channel_adaptation`: 0/3 — `PluginNotFound("MFSK16")`, not this change. #1480 renamed its
+    `hpx500` ladder to `robust`, which enters at SL1 MFSK16, and the gate does not run held-out
+    suites. Fixed here with the uncoded apparatus ladder it was calibrated on; rerun: **3 passed / 0 failed** in 1 961 s.
+
+**Found, not fixed here** (work plan rows):
+- the file-transfer receiver never NACKs a missing fragment, and the sender's stall timers do not
+  scale with airtime (separate design, `design/filexfer-selective-repeat.md`);
+- OTA phase 2 decodes an off-frequency fallback frame as a ladder frame at SL1.
+
+---
+
 ## 2026-10-02 — ARDOP `ARQBW` sizes modes from the plugin (work plan M2; found by the profile design)
 
 **Change.** `ARQBW` mapped a host bandwidth cap to a ladder level through

@@ -623,6 +623,9 @@ pub struct OtaRxResult {
     pub ack: Option<AckFrame>,
     /// Mode string a candidate decoded at, for event reporting.
     pub mode: Option<String>,
+    /// Further non-ladder frames the uncoded fallback found after `payload` in the same burst — a
+    /// multi-fragment keying (#1461). Always empty for a ladder frame: ARQ keys one per ACK.
+    pub more: Vec<Vec<u8>>,
 }
 
 /// The modem engine.
@@ -739,6 +742,9 @@ pub struct ModemEngine {
     /// trigger read — a frame that opens a burst may begin anywhere inside the read that tripped it.
     /// Taken with `last_flush_lead`; it bounds the onset scan, while the lead alone gives `post`.
     last_flush_onset_bound: usize,
+    /// Frames after the first that the OTA arm's uncoded fallback decoded from one burst (#1461),
+    /// handed out by [`ota_decode_burst`](Self::ota_decode_burst).
+    ota_fallback_more: Vec<Vec<u8>>,
     /// How the carrier detect held the last flushed burst (#1454), for the ladder-evidence rule.
     /// `None` for a burst the accumulator did not flush: a caller-supplied burst is judged as held by
     /// total power throughout, which is #1452's rule.
@@ -1084,6 +1090,7 @@ impl ModemEngine {
             last_flush_capped: false,
             last_flush_lead: 0,
             last_flush_onset_bound: 0,
+            ota_fallback_more: Vec::new(),
             last_flush_spans: None,
             seam_s: false,
             s_last: (false, false),
@@ -2148,7 +2155,12 @@ impl ModemEngine {
                 bytes: p.len(),
             });
         }
-        Ok(Some(OtaRxResult { payload, ack, mode }))
+        Ok(Some(OtaRxResult {
+            payload,
+            ack,
+            mode,
+            more: Vec::new(),
+        }))
     }
 
     /// Update DCD from a captured window at the InputCapture seam, emitting a `DcdChange` event on a
@@ -2758,7 +2770,9 @@ impl ModemEngine {
         // #1454/#1443: how far into this engine's last flushed burst its frame can start, if any.
         self.last_flush_lead = 0;
         let onset_bound = std::mem::take(&mut self.last_flush_onset_bound);
-        let result = self.decode_burst_inner(mode, fec, burst, onset_bound);
+        let result = self
+            .decode_burst_inner(mode, fec, burst, onset_bound)
+            .map(|(payload, _)| payload);
         self.input_prerouted = was_prerouted;
         self.suppress_afc_events = was_quiet;
         // A successful scan's correction IS committed — emit exactly one for it.
@@ -2766,6 +2780,89 @@ impl ModemEngine {
             self.emit_afc_update(mode);
         }
         result
+    }
+
+    /// Every frame `burst` carries, in order; [`decode_burst_with_fec`](Self::decode_burst_with_fec)
+    /// returns only the first.
+    ///
+    /// A sender keys once per burst and sends its fragments back to back (filexfer, a PQ handshake),
+    /// so the accumulator hands them over as ONE burst. Measured before this existed: a 4-fragment
+    /// file through two daemons delivered one fragment and stalled (#1461). Design and review:
+    /// `docs/dev/design/multi-frame-burst-decode.md`.
+    pub fn decode_burst_frames(
+        &mut self,
+        mode: &str,
+        fec: FecMode,
+        burst: &AudioSamples,
+    ) -> Result<Vec<Vec<u8>>, ModemError> {
+        let was_prerouted = self.input_prerouted;
+        self.input_prerouted = true;
+        let was_quiet = self.suppress_afc_events;
+        self.suppress_afc_events = true;
+        self.last_flush_lead = 0;
+        let onset_bound = std::mem::take(&mut self.last_flush_onset_bound);
+        let first = self.decode_burst_inner(mode, fec, burst, onset_bound);
+        let frames = first.map(|(payload, onset)| {
+            let more = self.decode_following_frames(mode, fec, &burst.samples, onset, &payload);
+            std::iter::once(payload).chain(more).collect::<Vec<_>>()
+        });
+        self.input_prerouted = was_prerouted;
+        self.suppress_afc_events = was_quiet;
+        if frames.is_ok() {
+            self.emit_afc_update(mode);
+        }
+        frames
+    }
+
+    /// The frames that follow one already decoded at `onset` in `samples` (#1461).
+    ///
+    /// Phase 1 only, at the correction the first frame committed: a later frame of the same keying is
+    /// on the same frequency, and phase 2's failure path zeroes the correction rather than restoring
+    /// it, so running it on the burst's tail would undo the first frame's. Each frame's length is
+    /// `tx_airtime_seconds` of its payload — the real codecs and modulator, so exact on the wire
+    /// (`tx_airtime_matches_the_emitted_frame`). The cursor backs off four symbols from that end to
+    /// cover an onset found a little late; a slice starting inside a decoded frame lacks its
+    /// preamble and cannot decode it again. Stops at the first failure or once less than the
+    /// shortest possible frame remains, so a single-frame burst's short tail costs nothing.
+    fn decode_following_frames(
+        &mut self,
+        mode: &str,
+        fec: FecMode,
+        samples: &[f32],
+        onset: usize,
+        first: &[u8],
+    ) -> Vec<Vec<u8>> {
+        let sr = AudioConfig::default().sample_rate;
+        let (step, _, _, raw_max_frame_samples) = self.frame_scan_geometry(mode, sr);
+        let (max_frame_samples, _) = frame_plan(raw_max_frame_samples, fec);
+        let frame_len = |engine: &Self, payload: &[u8]| {
+            engine
+                .tx_airtime_seconds(payload, mode, fec)
+                .ok()
+                .map(|secs| (secs * f64::from(sr)).round() as usize)
+        };
+        let (Some(shortest), Some(first_len)) = (frame_len(self, &[]), frame_len(self, first))
+        else {
+            return Vec::new();
+        };
+        let back_off = step.saturating_mul(4);
+        let mut cursor = (onset + first_len).saturating_sub(back_off);
+        let mut more = Vec::new();
+        while let Some(rest) = samples.get(cursor..).filter(|r| r.len() >= shortest) {
+            let (_, scan_end, _) = self.burst_onset_scan_bounds(mode, rest.len(), 0);
+            let Ok((payload, at)) =
+                self.scan_burst_onsets(mode, rest, step, scan_end, max_frame_samples, false, fec)
+            else {
+                break;
+            };
+            let Some(len) = frame_len(self, &payload) else {
+                more.push(payload);
+                break;
+            };
+            cursor += (at + len).saturating_sub(back_off).max(step);
+            more.push(payload);
+        }
+        more
     }
 
     /// [`decode_burst`](Self::decode_burst) without its acquisition pass — the onset scan only.
@@ -2777,7 +2874,7 @@ impl ModemEngine {
         mode: &str,
         burst: &AudioSamples,
         onset_bound: usize,
-    ) -> Result<Vec<u8>, ModemError> {
+    ) -> Result<(Vec<u8>, usize), ModemError> {
         let was_prerouted = self.input_prerouted;
         self.input_prerouted = true;
         let was_quiet = self.suppress_afc_events;
@@ -2792,6 +2889,7 @@ impl ModemEngine {
                     samples: burst.samples.clone(),
                 },
             )
+            .map(|payload| (payload, 0))
         } else {
             let (step, scan_end, _) = self.burst_onset_scan_bounds(mode, n, onset_bound);
             // DELIBERATELY `FecMode::None`, and it stays that way (#1310). This helper's only caller
@@ -2820,7 +2918,7 @@ impl ModemEngine {
         fec: FecMode,
         burst: &AudioSamples,
         onset_bound: usize,
-    ) -> Result<Vec<u8>, ModemError> {
+    ) -> Result<(Vec<u8>, usize), ModemError> {
         let sr = AudioConfig::default().sample_rate;
         let (_, _, min_frame_samples, raw_max_frame_samples) = self.frame_scan_geometry(mode, sr);
         // SIZE THE SLICE FOR THE CODED FRAME, not the raw geometry (#1310). `frame_scan_geometry`
@@ -2839,13 +2937,15 @@ impl ModemEngine {
             // Too short to hold a frame: one direct attempt for the error/SNR path. It must be the
             // FEC-aware receive, or a burst just under `min_frame_samples` decodes as uncoded and
             // reports a channel error for what is really a framing mismatch.
-            return self.receive_from_samples_with_fec(
-                mode,
-                AudioSamples {
-                    samples: burst.samples.clone(),
-                },
-                fec,
-            );
+            return self
+                .receive_from_samples_with_fec(
+                    mode,
+                    AudioSamples {
+                        samples: burst.samples.clone(),
+                    },
+                    fec,
+                )
+                .map(|payload| (payload, 0));
         }
         // The carrier onset sits within the captured lead-in; scan up to a few acquisition windows
         // past sample 0 (bounded so a noise burst can't spin). Shared with the CODED arm via
@@ -2863,7 +2963,7 @@ impl ModemEngine {
             false,
             fec,
         ) {
-            Ok(payload) => Ok(payload),
+            Ok(found) => Ok(found),
             Err(phase1_err) => {
                 // PHASE 2 — acquire the carrier, then retry (#1118, REQ-PHY-03). Reached only when
                 // every onset failed at the current correction, which is the evidence that the
@@ -3023,7 +3123,7 @@ impl ModemEngine {
         max_frame_samples: usize,
         settle: bool,
         fec: FecMode,
-    ) -> Result<Vec<u8>, ModemError> {
+    ) -> Result<(Vec<u8>, usize), ModemError> {
         let n = samples.len();
         let sr = AudioConfig::default().sample_rate;
         let (_, acq_samples, min_frame_samples, _) = self.frame_scan_geometry(mode, sr);
@@ -3059,7 +3159,7 @@ impl ModemEngine {
                         // one, so the single `AfcUpdate` the wrapper emits carries a real
                         // correction.
                         self.update_afc_estimate(mode, &slice);
-                        return Ok(payload);
+                        return Ok((payload, start));
                     }
                     Err(e) => {
                         self.afc_correction_hz = afc_before; // undo the failed attempt's AFC drift
@@ -3102,7 +3202,13 @@ impl ModemEngine {
         };
         // `FrameReceived` is already emitted by the inner `decode_attempt` → `receive_from_samples`
         // on a successful decode; emitting again here double-counted it on the OTA path only.
-        Ok(OtaRxResult { payload, ack, mode })
+        let more = std::mem::take(&mut self.ota_fallback_more);
+        Ok(OtaRxResult {
+            payload,
+            ack,
+            mode,
+            more,
+        })
     }
 
     /// Shared OTA receive core: run the candidate-fallback decode on an already
@@ -3144,6 +3250,7 @@ impl ModemEngine {
         session_id: &str,
         fallback_mode: Option<&str>,
     ) -> Result<OtaDecodeOutcome, ModemError> {
+        self.ota_fallback_more.clear();
         // #1454: taken here, before any scan, so every scan of this burst knows where its ring ends.
         let lead = std::mem::take(&mut self.last_flush_lead);
         let onset_bound = std::mem::take(&mut self.last_flush_onset_bound);
@@ -3251,10 +3358,18 @@ impl ModemEngine {
                 // on-frequency coded burst spent 129 settles inside this fallback and changed no
                 // verdict. The fallback mode gets its acquisition pass with every other candidate,
                 // in the single phase-2 block below.
-                if let Ok(payload) = self.decode_burst_phase1(mode, samples, onset_bound) {
+                if let Ok((payload, onset)) = self.decode_burst_phase1(mode, samples, onset_bound) {
                     debug!(
                         "ota fallback decoded {} bytes of non-ladder traffic at {mode}",
                         payload.len()
+                    );
+                    // A multi-fragment keying arrives as one burst (#1461); hand the rest out too.
+                    self.ota_fallback_more = self.decode_following_frames(
+                        mode,
+                        FecMode::None,
+                        &samples.samples,
+                        onset,
+                        &payload,
                     );
                     return Ok((Some((payload, mode.to_string())), None, last_err));
                 }
