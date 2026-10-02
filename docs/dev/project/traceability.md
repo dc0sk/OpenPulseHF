@@ -15,6 +15,32 @@ this ledger adds the design rationale and the actually-observed results per chan
 
 ---
 
+## 2026-10-02 — A flush timeout still counts the frame (#1334; work plan M2)
+
+**Requirement / change.** `record_tx_frame` ran only after a successful `flush()` on both emit seams.
+`CpalOutputStream::flush` errors exactly when the queue has not drained — the samples are still
+playing — so a frame that reached the air left `frames_transmitted` unbumped. Three consumers key off
+that counter: the daemon's §97.119 ID timer (`server.rs`), ARDOP's ID timer (`bridge.rs`) and the
+daemon's #1319 post-transmit capture drop. The frame was also missing from the §97 TX log.
+
+**Design + rationale.** Record intent, not completion — the correction #1333 made to the repeater's
+`note_tx`, one layer down. A failed `write` emitted nothing and returns unrecorded; a failed `flush`
+is recorded, then its error is returned to the caller unchanged.
+
+**Implementation.** `openpulse-modem/src/engine.rs`: the audio emit seam and `transmit_iq` record
+between `write` and returning the `flush` error. The consumers poll the counter delta each tick
+regardless of the transmit result (`server.rs:870/923/932/1370`, `ardop/src/bridge.rs:206/261/288`),
+so the engine fix reaches all three.
+
+**Tests.** New `openpulse-modem/tests/flush_timeout_still_counts_the_frame.rs`: a backend whose
+`write` succeeds and `flush` fails counts the frame on the audio and the IQ seam; the control (a
+failing `write`) counts nothing on either.
+
+**Results (run 2026-10-02).** 3/3 pass. Sabotage: with `engine.rs` reverted to `origin/main`, the two
+flush-timeout tests fail and the control passes. Clippy `-D warnings` clean.
+
+---
+
 ## 2026-10-02 — PTT leader delay (#1257; work plan M2)
 
 **Requirement / change.** The first sample left as soon as PTT asserted, so a rig's key-up clipped the

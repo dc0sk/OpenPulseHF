@@ -101,7 +101,7 @@ payload format change, so M1 closed as a bug fix plus a declaration.
 | ARDOP receive and host path: #1315 (ARQ ACK has no in-stream acquisition), #1385 (host frames > 255 B, no segmentation) | open |
 | Ladder behaviour that A2 scores: #1456 (NACK streak has no time decay), #1460 (a burst with no preamble evidence keys a NACK), #1446 (linksim: BPSK31 after MFSK16 fails 19/19 — diagnose: ladder bug or sim bug) | open |
 | Data larger than one frame through the daemon: #1461 | open |
-| PTT and station ID on the core path: #1257 (no leader delay before the first sample — done in its PR, default 0 until a rig is measured), #1334 (a flush timeout un-arms the station-ID timer), #1367 (200 ms sleep before PTT drop) | #1257 done; #1334, #1367 open |
+| PTT and station ID on the core path: #1257 (no leader delay before the first sample — done in its PR, default 0 until a rig is measured), #1334 (a flush timeout un-arms the station-ID timer — done in its PR), #1367 (200 ms sleep before PTT drop) | #1257, #1334 done; #1367 open (needs a rig measurement) |
 | #1304 (noise floor on OFDM52's wide band) — diagnose whether it breaks DCD on SL7–14 | open |
 | #1421 dependency update, security-relevant ones only | open |
 | Daemon receive cost on single-carrier coded frames: a two-daemon twin exchange takes ~80 s of CPU per BPSK250 + Rs frame in a debug build (10 sends: 812 s floored at SL5, 23 s floored at SL7; MFSK16 and OFDM ruled out by experiment). Measure in a release build before the 2 m campaign — if it holds there, the station cannot keep up on air | open (found 2026-10-01) |

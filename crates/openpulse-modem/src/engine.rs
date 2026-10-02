@@ -4121,12 +4121,12 @@ impl ModemEngine {
         stream
             .write_iq(&i_bb, &q_bb)
             .map_err(|e| ModemError::Audio(e.to_string()))?;
-        stream
-            .flush()
-            .map_err(|e| ModemError::Audio(e.to_string()))?;
-
+        // Record intent, not completion (#1334): a failed write emitted nothing, but a failed flush
+        // (the cpal drain timeout) means the samples are still playing — the frame reached the air.
+        let flushed = stream.flush();
         // Route through the same compliance bookkeeping as the audio seam: regulatory log + frame count.
         self.record_tx_frame(mode)?;
+        flushed.map_err(|e| ModemError::Audio(e.to_string()))?;
 
         let _ = self.event_tx.send(EngineEvent::FrameTransmitted {
             mode: mode.to_string(),
@@ -7562,11 +7562,13 @@ impl ModemEngine {
         stream
             .write(&write_samples)
             .map_err(|e| ModemError::Audio(e.to_string()))?;
-        stream
-            .flush()
-            .map_err(|e| ModemError::Audio(e.to_string()))?;
-
+        // Record intent, not completion (#1334). A failed `write` emitted nothing and returns above
+        // unrecorded. A failed `flush` is `CpalOutputStream`'s drain timeout: the samples are still
+        // playing, so the frame reached the air and the station-ID timers, the §97 TX log and the
+        // post-transmit capture drop (all keyed off `frames_transmitted`) must see it.
+        let flushed = stream.flush();
         self.record_tx_frame(mode)?;
+        flushed.map_err(|e| ModemError::Audio(e.to_string()))?;
 
         Ok(())
     }
