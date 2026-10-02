@@ -15,6 +15,28 @@ this ledger adds the design rationale and the actually-observed results per chan
 
 ---
 
+## 2026-10-02 — On-air twin runner retains A2 evidence (work plan M2; on-air re-baseline item 5)
+
+**Change.** `scripts/run-onair-twin-ota.sh` left `observability.audit_mode` off, so the `OtaRateDecision`
+events A2 is scored from were broadcast and not retained, and no bundle recorded the rig's filter
+width or frequency trim. Its default frequency was 14.070 MHz, while decision 13 keeps testing on
+2 m until the release candidate.
+
+**Implementation.** In `run-onair-twin-ota.sh`:
+- the station config now writes `[observability] audit_mode = true` and an `archive_dir`, plus explicit
+  `notch_enabled`, `agc_enabled`, `cessb_enabled` and `ptt_leader_ms` (env-overridable, daemon defaults);
+- a new `collect_evidence` fetches each station's `events.ndjson`, daemon log and config, plus a
+  `rig_readback` (`rigctl f m j z`: frequency, mode and passband, RIT, XIT), into
+  `<report>-evidence/`, and warns when a station retained no events;
+- `TEST_FREQ_HZ` now defaults to 144 640 000.
+
+**Tests.** The functions ran against local `ssh` and `rigctl` stubs. The generated config carries every
+new key in its section (`ModemConfig`, `ObservabilityConfig`). The evidence directory holds all eight
+files. The event count is reported (2 seeded → "2 audit events"), and the read-back prints
+`f: 144640000 / m: USB 2400 / j: 0 / z: 0`. `bash -n` passes. Not run against real rigs; that is M3.
+
+---
+
 ## 2026-10-02 — A flush timeout still counts the frame (#1334; work plan M2)
 
 **Requirement / change.** `record_tx_frame` ran only after a successful `flush()` on both emit seams.

@@ -2,7 +2,7 @@
 project: openpulsehf
 doc: docs/dev/onair-execution-plan.md
 status: living
-last_updated: 2026-10-01
+last_updated: 2026-10-02
 ---
 
 # On-air execution plan
@@ -45,15 +45,14 @@ The sections below were written 2026-07-23. These changes to them are in force:
    whether the receive-path RFI is gone. Separately, `release-1.0-criteria.md` records an FT-991A
    receive-path blocker: "A→B fails offline too, so it is in the receiver". Isolation alone will not
    fix that; it matters only if the FT-991A is picked for the HF run with the release candidate.
-5. **Two tooling gaps found 2026-09-30 — must close before an A2 window, or the window is wasted:**
-   - `scripts/run-onair-twin-ota.sh` does not turn on `observability.audit_mode` (default `false`,
-     `openpulse-config/src/lib.rs:215`). #1081 shipped the `OtaRateDecision` event (which branch
-     fired, outcome, SNR) and the daemon forwards it as `ControlEvent::EngineEvent`
-     (`openpulse-daemon/src/lib.rs:752–759`), but without `audit_mode` it is broadcast and **not
-     retained**, so A2 cannot be scored from the bundle.
-   - `scripts/onair-bundle-evidence.sh` does not CAT-read the rig's **filter width and frequency
-     trim** (release-criteria sequencing item 4). A2 decode anomalies need them to be attributable.
-   Checked by grep with a positive control (the same filter finds 26 `bundle` lines in that script).
+5. **Two tooling gaps found 2026-09-30 — closed 2026-10-02.** `scripts/run-onair-twin-ota.sh` now
+   writes `[observability] audit_mode = true` (with `archive_dir` under the run's config dir) into
+   both stations' configs, so the `OtaRateDecision` events A2 is scored from are retained. After the
+   traffic window it collects each station's `events.ndjson`, daemon log, config, and a CAT read-back
+   (`rigctl f m j z`: frequency, mode + passband = the filter width, RIT and XIT = the trim) into
+   `<report>-evidence/`, and warns if a station retained no events. The configs also state
+   `notch_enabled`, `agc_enabled`, `cessb_enabled` and `ptt_leader_ms` explicitly (item 7). The
+   script's default frequency is now 144.640 MHz (decision 13); it was 14.070 MHz.
 6. **Code items on the on-air path, in M2:** #1257 (no leader delay between PTT edge and first
    sample — host-keyed rigs clip the preamble), #1334 (a flush timeout un-arms the station-ID timer),
    #1367 (200 ms sleep before PTT drop), #1456 and #1460 (idle noise feeding the NACK streak — they
