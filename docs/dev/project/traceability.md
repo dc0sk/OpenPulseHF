@@ -15,6 +15,45 @@ this ledger adds the design rationale and the actually-observed results per chan
 
 ---
 
+## 2026-10-02 — PTT release waits for the device's reported drain (#1367; work plan M2)
+
+**Change.** `CpalOutputStream::flush` slept a fixed 200 ms after the software queue emptied. Every PTT
+guard drops after `flush`, so release came 200 ms after the queue emptied whatever the device needed:
+about 140 ms of software-owned delay against REQ-PHY-05's 50 ms.
+
+**Design.** `docs/dev/design/drain-from-device-delay.md`. Fable review was mandatory, because it moves
+PTT release (`reviews/review-drain-from-device-delay.md`): 1 blocking, 1 fix, 6 notes.
+- cpal's `playback − callback` is, on ALSA, the PCM's own queued delay. The callback that empties the
+  queue latches when the last sample leaves the device, in the queue's own mutex, on the non-empty →
+  empty transition only.
+- `flush` waits until then plus 10 ms, capped at 200 ms.
+- A zero delay is not trusted: cpal clamps an underrun's negative delay to 0. Zero or no report →
+  the full 200 ms.
+
+**Implementation.**
+- `crates/openpulse-audio/src/flush.rs`: `drain_after_callback`, `drain_wait`, `DRAIN_WAIT_CAP`,
+  `DRAIN_MARGIN` (ungated, so tested in the default gate).
+- `crates/openpulse-audio/src/cpal_backend.rs`: `OutQueue { samples, drained }`, the latch in the
+  output callback, `flush` using `drain_wait`. A corrected comment: lazy `play()` does not defer
+  ALSA.
+
+**Tests.** `flush::tests`:
+- a reported delay sets the wait (20 ms + 80 frames → 30 ms → 40 ms);
+- a zero delay falls back to 200 ms;
+- no report or no rate falls back;
+- the wait is never longer than 200 ms.
+
+**Results (run).**
+- `openpulse-audio` **27/0**.
+- Sabotage (a zero delay trusted again): `a_zero_delay_is_not_trusted_and_falls_back_to_the_full_wait`
+  **fails**.
+- Clippy `-D warnings` is clean with `--features cpal-backend` and with `--no-default-features`;
+  fmt is clean.
+- **Not run:** real audio. The tail-integrity check (dual-card rung) and the PTT release check (G1)
+  are hardware stages.
+
+---
+
 ## 2026-10-02 — The ARQ ACK listen holds its stream and scans it (#1315; work plan M2)
 
 **Change.** `receive_ack_with_short_fec_within` retried `receive_ack_with_short_fec`, which opens a stream,
