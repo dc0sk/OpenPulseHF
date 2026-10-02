@@ -18,7 +18,14 @@ use openpulse_core::rate::SpeedLevel;
 use openpulse_modem::ModemEngine;
 use std::time::Instant;
 
-const READ: usize = 400;
+/// Samples per `accumulate_capture` read. The daemon reads whatever buffered since its last tick, so
+/// set `PROBE_READ` to the station's typical read (larger reads widen the onset scan via `onset_bound`).
+fn read_size() -> usize {
+    std::env::var("PROBE_READ")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(400)
+}
 
 fn engine(backend: &LoopbackBackend, level: SpeedLevel) -> ModemEngine {
     let mut e = ModemEngine::new(Box::new(backend.clone_shared()));
@@ -49,19 +56,19 @@ fn probe(level: SpeedLevel, payload: usize) {
         .expect("transmit");
     let mut audio = tx_bk.drain_samples();
     let frame_len = audio.len();
-    audio.extend(std::iter::repeat_n(0.0, 8 * READ));
+    audio.extend(std::iter::repeat_n(0.0, 8 * read_size()));
 
     let rx_bk = LoopbackBackend::new();
     let mut rx = engine(&rx_bk, level);
     // Warm the noise floor on silence first, as a running daemon would be.
     for _ in 0..40 {
-        let _ = rx.accumulate_capture(Some(mode), vec![0.0; READ]);
+        let _ = rx.accumulate_capture(Some(mode), vec![0.0; read_size()]);
     }
 
     let t = Instant::now();
     let mut burst = None;
     let mut reads = 0;
-    for chunk in audio.chunks(READ) {
+    for chunk in audio.chunks(read_size()) {
         reads += 1;
         if let Some(b) = rx.accumulate_capture(Some(mode), chunk.to_vec()).unwrap() {
             burst = Some(b);
