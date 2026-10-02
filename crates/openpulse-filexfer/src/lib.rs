@@ -18,7 +18,7 @@ mod sanitize;
 mod sender;
 mod wire;
 
-pub use blocks::{encode_block, split_blocks, BlockAssembler, BlockEvent};
+pub use blocks::{encode_block, split_blocks, BlockAssembler, BlockEvent, FragPeek};
 pub use error::FxError;
 pub use offer::{decide, FileOffer, OfferDecision, OfferPolicy, SenderId};
 pub use receiver::ReceiverSession;
@@ -61,8 +61,14 @@ pub struct Timeouts {
     /// How long the sender waits for a `FileAccept`/`FileReject`, and the receiver waits for the
     /// operator to answer a prompt, before giving up.
     pub offer_ms: u64,
-    /// How long either side tolerates no forward progress within the transfer before aborting `stall`.
+    /// How long the receiver tolerates no fragment of an accepted transfer before aborting `stall`.
+    /// Re-armed on every fragment, and longer than the sender's whole probe cycle, so a receiver
+    /// never gives up while its peer is still probing.
     pub block_stall_ms: u64,
+    /// How long the sender waits for an answer after a block round has finished TRANSMITTING
+    /// before it probes. Measured from the end of the round, never from when it was queued: a
+    /// default block is minutes of airtime.
+    pub ack_wait_ms: u64,
     /// How long the sender waits for the receiver's `FileComplete` after the last block.
     pub verify_ms: u64,
 }
@@ -71,7 +77,9 @@ impl Default for Timeouts {
     fn default() -> Self {
         Self {
             offer_ms: 60_000,
-            block_stall_ms: 120_000,
+            // (max_block_retries + 2) × ack_wait: outlasts the sender's probe cycle.
+            block_stall_ms: 720_000,
+            ack_wait_ms: 120_000,
             verify_ms: 60_000,
         }
     }
@@ -87,6 +95,14 @@ pub enum FxAction {
     SendBlock {
         block_index: u16,
         missing: Option<Vec<u8>>,
+    },
+    /// Sender: no answer came after the last round, so re-send only that round's LAST fragment —
+    /// the highest bit of `round`, or the block's last fragment when `round` is `None` (the whole
+    /// block was sent). The receiver answers any fragment with a complete ack, a NACK, or
+    /// `FileComplete`, so one fragment re-synchronises both ends.
+    ProbeBlock {
+        block_index: u16,
+        round: Option<Vec<u8>>,
     },
     /// Receiver: ask the operator to accept or reject this offer (size above auto-accept).
     Prompt { transfer_id: u32 },

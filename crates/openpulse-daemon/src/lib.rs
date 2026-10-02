@@ -331,6 +331,9 @@ pub struct RuntimeControlState {
     pub filexfer_frames_routed: u64,
     /// Active inbound file-transfer session (at most one per link in v1).
     pub file_rx: Option<crate::filexfer::FxRxState>,
+    /// The last finished receive, kept so a probe from a sender that missed its `FileComplete` is
+    /// answered (selective-repeat design, R1).
+    pub file_rx_finished: Option<crate::filexfer::FinishedRx>,
     /// Received files this session, newest last — served by `ListFiles` so a late-connecting client
     /// sees transfers that completed before it attached (not just live `FileReceived` events).
     pub received_files: Vec<crate::protocol::FileSummary>,
@@ -342,6 +345,8 @@ pub struct RuntimeControlState {
     /// with a single PTT keying per burst; queueing (not transmitting inline) keeps the module I/O-free
     /// while the PTT controller — which lives in `server::run` — sequences the half-duplex TX.
     pub filexfer_tx_queue: Vec<(Vec<u8>, String)>,
+    /// When the file-transfer drain first deferred to a busy channel, while it is still deferring.
+    pub filexfer_busy_since: Option<u64>,
     /// JS8 station-discovery runtime (FF-15), present when `[discovery]` is configured. `enabled`
     /// gates activity; `server::run` feeds it captured audio + the idle predicate and executes its
     /// retune outcomes. `None` when discovery is not built for this daemon.
@@ -530,10 +535,12 @@ impl Default for RuntimeControlState {
             filexfer_sar: SarReassembler::new(FILEXFER_SAR_TIMEOUT),
             filexfer_frames_routed: 0,
             file_rx: None,
+            file_rx_finished: None,
             received_files: Vec::new(),
             file_tx: None,
             filexfer_policy: crate::filexfer::FileTransferPolicy::default(),
             filexfer_tx_queue: Vec::new(),
+            filexfer_busy_since: None,
             discovery: None,
             monitor: None,
             discovery_home_freq_hz: None,

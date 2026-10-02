@@ -1391,6 +1391,9 @@ pub async fn run(cfg: OpenpulseConfig, modem_backend: Box<dyn AudioBackend>) -> 
     }
 }
 
+/// How long the file-transfer drain waits for a busy channel to clear before dropping its queue.
+const FILEXFER_BUSY_GIVE_UP_MS: u64 = 300_000;
+
 /// Upper bound on fragments per keyed burst (the plan §5.3 clamp), independent of the airtime bound.
 const MAX_FRAGS_PER_BURST: usize = 64;
 
@@ -1438,6 +1441,26 @@ fn drain_filexfer_tx(
     if runtime_state.filexfer_tx_queue.is_empty() {
         return;
     }
+    // Never key a file-transfer frame into a busy channel (selective-repeat design, B1): the queue is
+    // kept and the next tick retries. This is what keeps a receiver's NACK off the sender's station
+    // ID, and a sender's probe off a NACK still in the air.
+    if engine.is_channel_busy() {
+        let now = epoch_ms();
+        let since = *runtime_state.filexfer_busy_since.get_or_insert(now);
+        // A channel busy for this long is not going to clear for us. Drop what was queued — never key
+        // into it — and let the sender's probe and stall timers decide the transfer.
+        if now.saturating_sub(since) >= FILEXFER_BUSY_GIVE_UP_MS {
+            tracing::warn!(
+                dropped = runtime_state.filexfer_tx_queue.len(),
+                "filexfer: channel busy too long; queued frames dropped"
+            );
+            runtime_state.filexfer_tx_queue.clear();
+            runtime_state.filexfer_busy_since = None;
+            crate::filexfer::note_round_sent(runtime_state, now, 0);
+        }
+        return;
+    }
+    runtime_state.filexfer_busy_since = None;
     let queue = std::mem::take(&mut runtime_state.filexfer_tx_queue);
     let burst_max = runtime_state.filexfer_policy.burst_max_secs;
 
@@ -1468,9 +1491,25 @@ fn drain_filexfer_tx(
         })
         .is_err()
         {
-            return;
+            tracing::warn!(
+                dropped = queue.len() - idx,
+                "filexfer: drain aborted; the sender's probe recovers the rest"
+            );
+            break;
         }
     }
+    // The round is on the air (or abandoned): only now can an answer be due. A control frame's
+    // airtime at a slow mode can approach the default wait, so stretch it to three of them plus
+    // decode time.
+    let ctrl_air_ms = queue
+        .first()
+        .and_then(|(_, mode)| engine.estimate_air_secs(64, mode))
+        .map_or(0, |secs| (secs * 1000.0) as u64);
+    crate::filexfer::note_round_sent(
+        runtime_state,
+        epoch_ms(),
+        ctrl_air_ms.saturating_mul(3).saturating_add(30_000),
+    );
 }
 
 // ── JS8 discovery (FF-15) ────────────────────────────────────────────────────

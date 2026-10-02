@@ -314,14 +314,15 @@ fn sender_offer_timeout_fails() {
 }
 
 #[test]
-fn sender_retransmits_missing_then_stalls() {
+fn sender_retransmits_missing_then_stalls_once_nacks_stop_progressing() {
     let payload = vec![0u8; 1500]; // 2 blocks
     let offer = signed_offer(1, &payload, 1024, &seed(5));
     let (mut tx, _) = SenderSession::new(offer, Timeouts::default(), 0);
     tx.apply(&accept(1), 0);
 
-    // Four NACKs (max retries) each re-send only the missing fragments.
-    for i in 0..4 {
+    // The first NACK is progress (nothing was known missing before); the next four report the same
+    // missing set, so each spends one retry. Every one re-sends only the missing fragments.
+    for i in 0..5 {
         let a = tx.apply(&block_ack(1, 0, false, vec![0b0000_0010]), 10 + i);
         assert_eq!(
             a,
@@ -331,12 +332,137 @@ fn sender_retransmits_missing_then_stalls() {
             }]
         );
     }
-    // Fifth NACK exhausts retries → stall failure.
+    // A sixth NACK with nothing gained exhausts the budget → stall failure.
     let a = tx.apply(&block_ack(1, 0, false, vec![0b0000_0010]), 20);
     assert_eq!(
         finished(&a).unwrap().result,
         TransferResult::Failed {
             reason: Reason::Stall
+        }
+    );
+}
+
+/// A NACK naming fewer missing fragments than the last is progress and restores the budget, so a
+/// lossy but advancing block is not failed for losses it is recovering from.
+#[test]
+fn a_nack_that_makes_progress_resets_the_retry_budget() {
+    let offer = signed_offer(1, &vec![0u8; 1500], 1024, &seed(5));
+    let (mut tx, _) = SenderSession::new(offer, Timeouts::default(), 0);
+    tx.apply(&accept(1), 0);
+    tx.apply(&block_ack(1, 0, false, vec![0b0000_0111]), 1);
+    for i in 0..4 {
+        tx.apply(&block_ack(1, 0, false, vec![0b0000_0111]), 2 + i); // four retries spent
+    }
+    let a = tx.apply(&block_ack(1, 0, false, vec![0b0000_0011]), 10); // one fewer missing
+    assert!(
+        finished(&a).is_none(),
+        "progress must not fail the transfer"
+    );
+    let a = tx.apply(&block_ack(1, 0, false, vec![0b0000_0011]), 11);
+    assert!(
+        finished(&a).is_none(),
+        "the budget was reset by the progress"
+    );
+}
+
+/// The ack-wait starts when the round has been TRANSMITTED. A 16 KiB block is minutes of airtime at
+/// BPSK250; armed at queue time, the 120 s deadline had passed before the round finished.
+#[test]
+fn the_sender_does_not_stall_while_its_round_is_still_on_the_air() {
+    let offer = signed_offer(1, &vec![0u8; 1500], 1024, &seed(5));
+    let t = Timeouts::default();
+    let (mut tx, _) = SenderSession::new(offer, t, 0);
+    tx.apply(&accept(1), 0);
+    let on_air = 20 * 60 * 1000; // a 20-minute round
+    assert!(
+        tx.poll_timeout(on_air).is_empty(),
+        "nothing can be due while the round is still being sent"
+    );
+    tx.note_round_sent(on_air, 0);
+    assert!(tx.poll_timeout(on_air + t.ack_wait_ms - 1).is_empty());
+    assert_eq!(
+        tx.poll_timeout(on_air + t.ack_wait_ms),
+        vec![FxAction::ProbeBlock {
+            block_index: 0,
+            round: None
+        }],
+        "an unanswered round is probed, not failed"
+    );
+}
+
+/// Unanswered probes spend the budget; when it is gone the transfer fails `Stall`.
+#[test]
+fn unanswered_probes_end_in_a_stall() {
+    let offer = signed_offer(1, &vec![0u8; 1500], 1024, &seed(5));
+    let t = Timeouts::default();
+    let (mut tx, _) = SenderSession::new(offer, t, 0);
+    tx.apply(&accept(1), 0);
+    let mut now = 0;
+    for _ in 0..4 {
+        tx.note_round_sent(now, 0);
+        now += t.ack_wait_ms;
+        let a = tx.poll_timeout(now);
+        assert!(matches!(
+            a[..],
+            [FxAction::ProbeBlock { block_index: 0, .. }]
+        ));
+    }
+    tx.note_round_sent(now, 0);
+    let a = tx.poll_timeout(now + t.ack_wait_ms);
+    assert_eq!(
+        finished(&a).unwrap().result,
+        TransferResult::Failed {
+            reason: Reason::Stall
+        }
+    );
+}
+
+/// A probe after a selective resend re-sends that resend's last fragment.
+#[test]
+fn a_probe_after_a_nack_names_the_resend_round() {
+    let offer = signed_offer(1, &vec![0u8; 1500], 1024, &seed(5));
+    let (mut tx, _) = SenderSession::new(offer, Timeouts::default(), 0);
+    tx.apply(&accept(1), 0);
+    tx.apply(&block_ack(1, 0, false, vec![0b0000_0110]), 1);
+    tx.note_round_sent(2, 0);
+    assert_eq!(
+        tx.poll_timeout(2 + Timeouts::default().ack_wait_ms),
+        vec![FxAction::ProbeBlock {
+            block_index: 0,
+            round: Some(vec![0b0000_0110])
+        }]
+    );
+}
+
+/// The caller can stretch the ack-wait for a slow mode, never shorten it.
+#[test]
+fn a_slow_mode_stretches_the_ack_wait() {
+    let offer = signed_offer(1, &vec![0u8; 1500], 1024, &seed(5));
+    let t = Timeouts::default();
+    let (mut tx, _) = SenderSession::new(offer, t, 0);
+    tx.apply(&accept(1), 0);
+    tx.note_round_sent(0, 3 * t.ack_wait_ms);
+    assert!(tx.poll_timeout(2 * t.ack_wait_ms).is_empty());
+    assert!(!tx.poll_timeout(3 * t.ack_wait_ms).is_empty());
+}
+
+/// The last block's ack was lost but the receiver verified the file: its `FileComplete` ends the
+/// send as success instead of being ignored until the sender stalls.
+#[test]
+fn file_complete_while_sending_the_last_block_is_success() {
+    let offer = signed_offer(1, b"one block", 1024, &seed(5));
+    let (mut tx, _) = SenderSession::new(offer, Timeouts::default(), 0);
+    tx.apply(&accept(1), 0); // Sending { 0 }, the only block
+    let done = FxFrame::FileComplete {
+        transfer_id: 1,
+        status: CompleteStatus::VerifiedOk,
+        countersignature: [0u8; 64],
+    };
+    let a = tx.apply(&done, 5);
+    assert_eq!(
+        finished(&a).unwrap().result,
+        TransferResult::Sent {
+            peer_verified: true
         }
     );
 }
@@ -554,4 +680,25 @@ fn sanitize_defeats_traversal_and_control_chars() {
     assert_eq!(sanitize_filename(""), "received.bin");
     assert_eq!(sanitize_filename("na\u{0000}me.bin"), "na_me.bin");
     assert!(!sanitize_filename("a/b\\c:d*e?f").contains(['/', '\\', ':', '*', '?']));
+}
+
+/// Every fragment restarts the receiver's stall clock: a block still arriving never stalls.
+#[test]
+fn every_fragment_restarts_the_receivers_stall_clock() {
+    let offer = signed_offer(7, &vec![1u8; 1500], 1024, &seed(5));
+    let t = Timeouts::default();
+    let (mut rx, _) = ReceiverSession::new(&offer, OfferDecision::AutoAccept, t, 0);
+    let late = t.block_stall_ms - 1;
+    rx.note_fragment(late);
+    assert!(
+        rx.poll_timeout(t.block_stall_ms + 1).is_empty(),
+        "a fragment just arrived"
+    );
+    let a = rx.poll_timeout(late + t.block_stall_ms);
+    assert_eq!(
+        finished(&a).unwrap().result,
+        TransferResult::Failed {
+            reason: Reason::Stall
+        }
+    );
 }

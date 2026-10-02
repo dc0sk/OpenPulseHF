@@ -100,6 +100,16 @@ pub struct FxRxState {
     file_received_emitted: bool,
     /// Directory holding this transfer's resumable partial blocks (`…/.partial/<sha256>/`).
     partial_dir: PathBuf,
+    /// Per block, the highest fragment index the last NACK asked for: the end of the sender's resend
+    /// round, where the next NACK is due.
+    round_last: std::collections::HashMap<u16, u8>,
+}
+
+/// A receive that finished: its `FileComplete`, re-sent when the sender probes because it never
+/// heard the first (the last block's ack, or the `FileComplete` itself, was lost).
+pub struct FinishedRx {
+    complete_frame: Vec<u8>,
+    until_ms: u64,
 }
 
 /// Active send-side session context (one transfer per link in v1).
@@ -190,6 +200,8 @@ fn on_offer(
     event_tx: &Arc<broadcast::Sender<ControlEvent>>,
     mode: &str,
 ) {
+    // A new offer supersedes the record of the last finished receive.
+    rs.file_rx_finished = None;
     // One transfer per link: reject a second offer while one is active.
     if rs.file_rx.is_some() {
         enqueue_ctrl(rs, mode, &reject(offer.transfer_id, Reason::Busy));
@@ -278,6 +290,7 @@ fn on_offer(
         peer_pubkey,
         file_received_emitted: false,
         partial_dir,
+        round_last: std::collections::HashMap::new(),
     };
     drive_rx_actions(&mut fx, actions, rs, event_tx, mode);
     if !fx.receiver.is_terminal() {
@@ -530,6 +543,27 @@ fn drive_tx_actions(
                     missing.as_deref(),
                 );
             }
+            FxAction::ProbeBlock { block_index, round } => {
+                let bs = fx.offer.block_size as usize;
+                let start = (block_index as usize).saturating_mul(bs).min(fx.file.len());
+                let end = start.saturating_add(bs).min(fx.file.len());
+                let transfer_id = fx.offer.transfer_id;
+                let block = fx.file[start..end].to_vec();
+                // The round's last fragment: the highest bit of its bitmap, or the block's last.
+                let last = match round.as_deref().and_then(highest_set_bit) {
+                    Some(i) => i,
+                    None => match encode_block(transfer_id, block_index, &block, None) {
+                        Ok(all) => all.len().saturating_sub(1),
+                        Err(e) => {
+                            tracing::warn!(error = %e, "filexfer: probe encode failed");
+                            continue;
+                        }
+                    },
+                };
+                let mut one = vec![0u8; last / 8 + 1];
+                one[last / 8] |= 1 << (last % 8);
+                enqueue_block(rs, mode, transfer_id, block_index, &block, Some(&one));
+            }
             FxAction::Progress {
                 transfer_id,
                 blocks_done,
@@ -573,15 +607,28 @@ fn drive_tx_actions(
     }
 }
 
-/// Feed one block-data fragment into the active receive session; on a completed block send a
-/// `BlockAck` and, once every block is in, reassemble → verify → write → `FileComplete`.
+/// Feed one block-data fragment into the active receive session and answer it.
+///
+/// The receiver never transmits on a timer; every ack here answers a fragment just decoded, so it
+/// cannot key over the sender (`docs/dev/design/filexfer-selective-repeat.md`, R1):
+/// * a fragment of a block already held draws `BlockAck { complete: true }` and is not ingested — it is
+///   the sender's probe after a lost ack, and SAR would otherwise open a candidate nobody expires;
+/// * a completed block draws `BlockAck { complete: true }`; once every block is in, reassemble →
+///   verify → write → `FileComplete`;
+/// * an incomplete block is NACKed (`complete: false` + missing bitmap) at the end of the sender's
+///   round — its last fragment, or the highest one the last NACK asked for — or on a duplicate
+///   fragment, which is a probe whose NACK was lost;
+/// * with no receive active, a fragment is a probe for a transfer that already finished, answered by
+///   re-sending its `FileComplete`.
 fn on_block_fragment(
     bytes: &[u8],
     rs: &mut RuntimeControlState,
     event_tx: &Arc<broadcast::Sender<ControlEvent>>,
     mode: &str,
 ) {
+    let now = now_ms();
     let Some(mut fx) = rs.file_rx.take() else {
+        answer_finished_probe(rs, mode, now);
         return;
     };
     // Only an ACCEPTED transfer may have its bytes written to disk or its blocks acknowledged on
@@ -591,28 +638,79 @@ fn on_block_fragment(
         rs.file_rx = Some(fx);
         return;
     }
-    if let BlockEvent::Complete { block_index } = fx.assembler.ingest_fragment(bytes) {
-        // Persist the just-completed block so an interrupted transfer can resume (disjoint field
-        // borrows: `assembler` and `partial_dir` are separate fields).
-        if let Some(block) = fx.assembler.block(block_index) {
-            persist_block(&fx.partial_dir, block_index, block);
-        }
-        enqueue_ctrl(
-            rs,
-            mode,
-            &FxFrame::BlockAck {
-                transfer_id: fx.offer.transfer_id,
-                block_index,
-                complete: true,
-                missing_frag_bitmap: Vec::new(),
+    let Some(peek) = fx.assembler.peek(bytes) else {
+        rs.file_rx = Some(fx);
+        return;
+    };
+    fx.receiver.note_fragment(now);
+    let transfer_id = fx.offer.transfer_id;
+    let ack = |block_index: u16, missing: Option<Vec<u8>>| FxFrame::BlockAck {
+        transfer_id,
+        block_index,
+        complete: missing.is_none(),
+        missing_frag_bitmap: missing.unwrap_or_default(),
+    };
+    if peek.held {
+        enqueue_ctrl(rs, mode, &ack(peek.block_index, None).encode());
+        rs.file_rx = Some(fx);
+        return;
+    }
+    match fx.assembler.ingest_fragment(bytes) {
+        BlockEvent::Complete { block_index } => {
+            // Persist the just-completed block so an interrupted transfer can resume (disjoint field
+            // borrows: `assembler` and `partial_dir` are separate fields).
+            if let Some(block) = fx.assembler.block(block_index) {
+                persist_block(&fx.partial_dir, block_index, block);
             }
-            .encode(),
-        );
-        let actions = fx.receiver.note_block_complete(block_index, now_ms());
-        drive_rx_actions(&mut fx, actions, rs, event_tx, mode);
+            enqueue_ctrl(rs, mode, &ack(block_index, None).encode());
+            let actions = fx.receiver.note_block_complete(block_index, now);
+            drive_rx_actions(&mut fx, actions, rs, event_tx, mode);
+        }
+        _ => {
+            let end_of_round = peek.frag_index + 1 == peek.frag_total
+                || fx.round_last.get(&peek.block_index) == Some(&peek.frag_index);
+            if end_of_round || peek.duplicate {
+                let missing = fx.assembler.missing_bitmap(peek.block_index);
+                if let Some(last) = highest_set_bit(&missing) {
+                    fx.round_last.insert(peek.block_index, last as u8);
+                    enqueue_ctrl(rs, mode, &ack(peek.block_index, Some(missing)).encode());
+                }
+            }
+        }
     }
     if !fx.receiver.is_terminal() {
         rs.file_rx = Some(fx);
+    }
+}
+
+/// A block fragment with no receive active: the sender is probing a transfer that finished here.
+/// Re-send its `FileComplete` while the record lasts.
+fn answer_finished_probe(rs: &mut RuntimeControlState, mode: &str, now: u64) {
+    match rs.file_rx_finished.as_ref() {
+        Some(f) if now < f.until_ms => {
+            let frame = f.complete_frame.clone();
+            enqueue_ctrl(rs, mode, &frame);
+        }
+        Some(_) => rs.file_rx_finished = None,
+        None => {}
+    }
+}
+
+/// Index of the highest set bit in a little-endian-by-byte fragment bitmap.
+fn highest_set_bit(bitmap: &[u8]) -> Option<usize> {
+    bitmap
+        .iter()
+        .enumerate()
+        .rev()
+        .find(|(_, b)| **b != 0)
+        .map(|(i, b)| i * 8 + 7 - b.leading_zeros() as usize)
+}
+
+/// The sender's round has finished transmitting: start its ack-wait. `min_wait_ms` stretches it for a
+/// slow mode (a control frame's airtime plus decode time).
+pub fn note_round_sent(rs: &mut RuntimeControlState, now: u64, min_wait_ms: u64) {
+    if let Some(fx) = rs.file_tx.as_mut() {
+        fx.sender.note_round_sent(now, min_wait_ms);
     }
 }
 
@@ -626,7 +724,16 @@ fn drive_rx_actions(
 ) {
     for action in actions {
         match action {
-            FxAction::Transmit(frame) => enqueue_ctrl(rs, mode, &frame),
+            FxAction::Transmit(frame) => {
+                if matches!(FxFrame::decode(&frame), Ok(FxFrame::FileComplete { .. })) {
+                    rs.file_rx_finished = Some(FinishedRx {
+                        complete_frame: frame.clone(),
+                        until_ms: now_ms()
+                            .saturating_add(rs.filexfer_policy.timeouts.block_stall_ms),
+                    });
+                }
+                enqueue_ctrl(rs, mode, &frame);
+            }
             FxAction::Progress {
                 transfer_id,
                 blocks_done,
@@ -654,7 +761,7 @@ fn drive_rx_actions(
                 emit_terminal(transfer_id, &result, fx, event_tx);
             }
             // Sender-only / already-prompted actions have no receive-side effect.
-            FxAction::SendBlock { .. } | FxAction::Prompt { .. } => {}
+            FxAction::SendBlock { .. } | FxAction::ProbeBlock { .. } | FxAction::Prompt { .. } => {}
         }
     }
 }
