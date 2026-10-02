@@ -40,6 +40,13 @@ asks first within each section. Report results in chat or as a comment on the li
   gh label delete milestone:M2 -R $R --yes; gh label delete milestone:after-v0.17 -R $R --yes
   ```
 
+- [ ] **Decide: move #1456 and #1460 to post-release?** The NACK-decay design was reviewed and
+  parked ([`design/nack-streak-decay.md`](../design/nack-streak-decay.md), review linked there). The
+  reviewer judges neither Release 1 blocking: A2 on 2 m is scored on clean-decode windows, and the
+  exchange cadence keeps real failures inside any gap. Idle-flicker demotion (#1456) bites between
+  sessions; the foreign-over residual (#1460) is HF only. Say "move" or "keep in M2", and if they
+  stay, I redesign against the review's falsifier.
+
 ## Rig work — M3 on air (2 m)
 
 Station pair (decided 2026-10-02): **rpi51 + IC-9700** and **rpi53 + FT-818**, local, 144.640 MHz.
