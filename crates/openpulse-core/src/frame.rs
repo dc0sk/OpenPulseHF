@@ -28,9 +28,9 @@ pub struct Frame {
 impl Frame {
     /// Create a new frame.
     ///
-    /// Returns `Err` if `payload.len() > 255`.
+    /// Returns `Err` if `payload.len() > MAX_PAYLOAD`.
     pub fn new(sequence: u16, payload: Vec<u8>) -> Result<Self, FrameError> {
-        if payload.len() > 255 {
+        if payload.len() > Self::MAX_PAYLOAD {
             return Err(FrameError::PayloadTooLarge(payload.len()));
         }
         Ok(Self { sequence, payload })
@@ -39,6 +39,9 @@ impl Frame {
     /// Fixed byte overhead [`Frame::encode`] adds to the payload: magic(4) + version(1) +
     /// sequence(2) + length(1) + CRC(2). So `encode().len() == payload.len() + WIRE_OVERHEAD`.
     pub const WIRE_OVERHEAD: usize = 4 + 1 + 2 + 1 + 2;
+
+    /// Largest payload one frame carries: the length field is one byte.
+    pub const MAX_PAYLOAD: usize = 255;
 
     /// Serialise the frame to bytes ready for the modulator.
     pub fn encode(&self) -> Vec<u8> {
