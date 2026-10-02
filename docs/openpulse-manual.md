@@ -2,7 +2,7 @@
 project: openpulsehf
 doc: docs/openpulse-manual.md
 status: living
-last_updated: 2026-10-01
+last_updated: 2026-10-02
 ---
 
 # OpenPulseHF Complete Manual
@@ -1488,9 +1488,13 @@ openpulse-kisstnc --bind 127.0.0.1 --port 8100 --mode BPSK500 --backend cpal
 >
 > **PTT ownership.** The TNC keys from `[modem] ptt_backend` and emits `PTT TRUE` / `PTT FALSE` as
 > asynchronous events for hosts that drive their own rig. If you let the TNC key, set Pat's
-> `ptt_ctrl` to `false` — otherwise both key the same device. `ptt_backend = "none"` with a
-> host-keyed rig is **not supported**: the TNC starts audio immediately after the edge, with no
-> leader delay, so the first ~50 ms of preamble would be clipped and the frame would not demodulate.
+> `ptt_ctrl` to `false` — otherwise both key the same device. With `ptt_backend = "none"` and a
+> host-keyed rig, set `[modem] ptt_leader_ms` to at least the rig's key-up time: the TNC emits
+> `PTT TRUE`, then waits that long before the first sample (#1257). At the default `0` audio starts
+> immediately after the edge, so the rig's key-up clips the start of the preamble and a truncated
+> preamble does not demodulate (#1049). The same key sets the leader for a TNC-keyed rig. No default
+> is shipped because none has been measured; measure your rig (e.g. count the preamble symbols that
+> survive in an off-air recording) before relying on a value.
 
 #### `openpulse-gateway` (Winlink CMS, no radio)
 

@@ -201,9 +201,9 @@ pub fn run_ptt(ptt_backend: &str, rig: &str, rig_file: &str) -> Result<Calibrati
     // INSTRUMENT: it measures the assert→release round trip against `PTT_TARGET_MS`. Two notes on
     // why that is still safe to funnel:
     //
-    //  * it builds its own `SharedPtt` and never sets a transmit leader, so a leader configured
-    //    elsewhere cannot inflate the number this reports (#1257). Pinned by
-    //    `calibrate_ptt_is_not_inflated_by_a_leader`.
+    //  * it builds its own `SharedPtt` and never sets a transmit leader, so `--ptt-leader-ms`
+    //    cannot inflate the number this reports (#1257). No test pins this; the `calibrate drive`
+    //    path builds its own `SharedPtt` too and also ignores the flag.
     //  * `unkey` reports `UnkeyOutcome`, which does not carry the underlying error the way
     //    `release_ptt` did. The detail is not lost: `SharedPtt` logs it, and tracing is now
     //    initialised before this dispatch runs (it was not, so those warnings were dark).

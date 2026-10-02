@@ -15,6 +15,43 @@ this ledger adds the design rationale and the actually-observed results per chan
 
 ---
 
+## 2026-10-02 — PTT leader delay (#1257; work plan M2)
+
+**Requirement / change.** The first sample left as soon as PTT asserted, so a rig's key-up clipped the
+preamble, and #1049 measured that a truncated preamble does not demodulate. A host-keyed ARDOP rig
+(`ptt_backend = "none"`) was therefore documented as unsupported.
+
+**Design + rationale.** #1257's reviewed design pass: the wait is a key-transition property, so it
+lives in `SharedPtt::key_as`, the one funnel every front end keys through. It runs after the hardware
+assert and the `PTT TRUE` notify (a host keying on our edge gets the same head start), with the lock
+dropped (the watchdog can preempt). It defaults to 0, because no rig has been measured. The
+implementation review (`docs/dev/reviews/review-1257-leader-delay.md`) found an ownership race, now
+fixed: the generation is captured before the wait and re-checked after it.
+
+**Implementation.** `openpulse-radio/src/shared_ptt.rs` (`set_leader`, `leader`, `key_owned`, the
+post-wait re-check), `error.rs` (`PttError::ReleasedDuringLeader`); `openpulse-config` `[modem]
+ptt_leader_ms`; wired in `openpulse-daemon/src/server.rs` and `ptt.rs`, `openpulse-ardop`
+`ArdopConfig::ptt_leader`, `openpulse-kiss` `KissConfig::ptt_leader`, and CLI `--ptt-leader-ms`
+(`transmit.rs` counts it against the watchdog). Docs: the manual's host-keyed paragraph, a correction
+in the #1250 review (ardopcf does not wait), the CLI guide and the book.
+
+**Tests.** `openpulse-ardop/tests/ptt_leader_delay.rs` builds an `ArdopServer` from `ArdopConfig` with
+a spy PTT and a recording output stream. With a 300 ms leader, first-write minus assert is ≥ 300 ms;
+the control with no leader is < 300 ms. Unit tests in `shared_ptt.rs`: the notify comes before the
+wait; the wait holds no lock; a key released during the leader is not returned as owned.
+
+**Results (run 2026-10-02).** `openpulse-radio`, `-ardop`, `-kiss`, `-cli` and `-config`: 244 passed,
+0 failed. `shared_ptt` 26/26; `ptt_leader_delay` 2/2. Sabotage, each run and reverted:
+- no sleep → the leader test fails (first sample 461 µs after the edge);
+- `set_leader` removed from `ArdopServer` → it fails (456 µs);
+- post-wait re-check disabled → the release test fails;
+- sleep under the lock → the lock test fails ("waited 400 ms").
+
+The no-leader control measured the accidental leader of this in-process path at ≈ 0.46 ms.
+Workspace clippy `-D warnings` clean.
+
+---
+
 ## 2026-10-01 — Two session profiles, `fast` and `robust` (work plan decision 18)
 
 **Requirement / change.** The registry held eleven profiles; Release 1 ships one ladder (`hpx_hf`). The

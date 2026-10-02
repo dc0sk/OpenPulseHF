@@ -29,6 +29,10 @@ pub enum PttError {
     /// nothing decides anything from this string.
     #[error("PTT already keyed by {held_by}")]
     AlreadyKeyed { held_by: &'static str },
+    /// The key was released (by the watchdog or another holder) during the leader wait (#1257), so
+    /// the caller no longer owns a keyed transmitter and must not emit.
+    #[error("PTT was released during the leader wait")]
+    ReleasedDuringLeader,
 }
 
 /// Error type for full rig CAT control operations.

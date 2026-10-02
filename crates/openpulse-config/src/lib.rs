@@ -420,6 +420,10 @@ pub struct ModemConfig {
     pub ptt_device: String,
     /// CM108 GPIO pin driving PTT (1..=8); GPIO 3 is the near-universal default.
     pub ptt_gpio: u8,
+    /// Leader: milliseconds between the PTT edge and the first transmitted sample, so the rig's
+    /// key-up does not clip the preamble (#1257). `0` (default) = none; measure the rig before
+    /// setting it. The cross-band repeater's `rig_b` does not use it.
+    pub ptt_leader_ms: u32,
     /// Receiver-led OTA adaptive rate-stepping. When `true`, the daemon starts an
     /// OTA session at launch and drives it on the RX path.
     pub ota_enabled: bool,
@@ -705,6 +709,7 @@ impl Default for ModemConfig {
             mode: "BPSK250".into(),
             profile: "fast".into(),
             ptt_backend: "none".into(),
+            ptt_leader_ms: 0,
             ptt_device: String::new(),
             ptt_gpio: 3,
             ota_enabled: false,
@@ -1087,6 +1092,10 @@ ptt_backend = "none"
 ptt_device = ""
 # CM108 GPIO pin driving PTT (1..8); 3 is the near-universal default.
 ptt_gpio = 3
+# Leader: ms between the PTT edge and the first sample, so the rig's key-up does not clip the
+# preamble. 0 = none. Measure the rig (or its off-air recording) before setting it. Not applied
+# to the cross-band repeater's rig_b.
+ptt_leader_ms = 0
 # Receiver-led OTA adaptive rate-stepping. When true the daemon starts an OTA
 # session at launch and drives it on the RX path (the data receiver leads the
 # rate per direction; the sender follows an absolute recommendation in the ACK).

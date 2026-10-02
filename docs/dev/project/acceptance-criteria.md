@@ -2,7 +2,7 @@
 project: openpulsehf
 doc: docs/dev/project/acceptance-criteria.md
 status: resolved
-last_updated: 2026-10-01
+last_updated: 2026-10-02
 ---
 
 # Acceptance criteria
@@ -91,6 +91,7 @@ Each requirement below is done when the linked test passes. Add new links as tes
 | The energy gate rejects a **real idle noise floor on its first window** (the #1021 trigger; `onair-rx-level-check.sh` bounds the floor only from above and never covered `1e-4 … 1.07e-3`) while still passing a full-scale buffer-is-the-frame fixture | `cargo test -p openpulse-modem --no-default-features --lib energy_gate` |
 | A packed frame that fails to unpack is **dropped and counted, not delivered** (REQ-CMP-05), and a frame compressed against a different zstd dictionary is refused with zstd's own "Dictionary mismatch" — zstd carries the dictionary ID in its frame header (measured 2026-10-01, work plan decision 17), so no wire change was needed. The daemon used to deliver a failed unpack's still-compressed bytes as the message | `cargo test -p openpulse-core --no-default-features --lib compression::` + `cargo test -p openpulse-daemon --no-default-features --lib unpack_received` |
 | Two profiles, `fast` (the `hpx_hf` ladder) and `robust` (the same ladder capped at SL6): the cap survives operator bounds, an `OtaSetLevelBounds` with empty fields and any ARQBW change, a decode at the cap reports `Hold`, the ARDOP path never falls to SL1, and the retired profile names no longer resolve (decision 18) | `cargo test -p openpulse-core --no-default-features --lib ota_rate` + `cargo test -p openpulse-modem --no-default-features --lib rate_policy` + `cargo test -p openpulse-core --no-default-features --test session_profile` |
+| The first transmitted sample follows the PTT edge by at least `[modem] ptt_leader_ms`, through `ArdopServer`'s config path; the `PTT TRUE` notify precedes the wait, the wait holds no lock, and a key released during the wait is reported as not owned (#1257) | `cargo test -p openpulse-ardop --no-default-features --test ptt_leader_delay` + `cargo test -p openpulse-radio --no-default-features --lib shared_ptt` |
 | Hotplug-safe audio device resolution (REQ-DEV-01) | `cargo test -p openpulse-core --no-default-features audio::tests` |
 | Every device the backend LISTS can also be selected by name (cpal's ALSA enumeration truncates when devices are retained — needs a real audio host, so not in the `--no-default-features` gate) | `cargo test -p openpulse-audio --features cpal-backend --test device_enumeration` |
 | CM108 / GPIO PTT backends (REQ-PTT-02/03) | `cargo test -p openpulse-radio --no-default-features -- cm108 gpio` |

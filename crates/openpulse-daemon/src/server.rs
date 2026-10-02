@@ -703,7 +703,13 @@ pub async fn run(cfg: OpenpulseConfig, modem_backend: Box<dyn AudioBackend>) -> 
         repeater_enabled: false,
         repeater,
         repeater_bursts: repeater_burst_tx,
-        ptt: crate::ptt::SharedPtt::new(ptt_controller, crate::ptt::DEFAULT_PTT_MAX),
+        ptt: {
+            let ptt = crate::ptt::SharedPtt::new(ptt_controller, crate::ptt::DEFAULT_PTT_MAX);
+            ptt.set_leader(std::time::Duration::from_millis(
+                cfg.modem.ptt_leader_ms.into(),
+            ));
+            ptt
+        },
         station_seed,
         local_callsign: cfg.station.callsign.clone(),
         local_grid: cfg.station.grid_square.clone(),
