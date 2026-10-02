@@ -15,6 +15,31 @@ this ledger adds the design rationale and the actually-observed results per chan
 
 ---
 
+## 2026-10-02 — Security-relevant dependency updates and Node 24 CI actions (#1421; work plan M2)
+
+**Change.** `cargo audit` found two vulnerabilities on the Release 1 path:
+- `h2` 0.4.14 (RUSTSEC-2026-0258, unbounded empty DATA frames);
+- `rustls` 0.23.40 (RUSTSEC-2026-0285, TLS 1.3 handshake messages accepted across encryption levels).
+
+Both reach `openpulse-cli` through `reqwest`. CI also warned that Node.js 20 is deprecated.
+
+**Design.** Only security-relevant updates, per the work-plan row.
+- `cargo update -p h2 -p rustls`: semver-compatible; `rustls-webpki` moved with `rustls`.
+- Every `actions/*` action moves to its current major, which runs on Node 24, still pinned by commit SHA:
+  - checkout v7.0.1, cache v6.1.0, upload-artifact v7.0.1, download-artifact v8.0.1;
+  - `softprops/action-gh-release` v3.0.3.
+
+  The release notes list no input changes for how these workflows call them. Downloads are by name, on hosted runners.
+- Not changed:
+  - `lru` and `event-listener` are flagged unsound but have no fixed release, and only `openpulse-panel`/`openpulse-tui` (post-release) reach them.
+  - The three yanked transitive crates are left as they are.
+
+**Implementation.** `Cargo.lock`; `.github/workflows/*.yml`.
+
+**Tests.** `cargo audit` after the update; `cargo test -p openpulse-cli -p pki-tooling --no-default-features --no-fail-fast`.
+
+**Test results.** `cargo audit` exit 0: no vulnerabilities, 6 allowed warnings. CLI and PKI suites: rc=0, 151 passed, 0 failed.
+
 ## 2026-10-02 — ARDOP host blocks larger than a frame go on the air (#1385; work plan M2)
 
 **Change.** The data port accepted host blocks up to 4 096 B and queued each whole. `Frame::new` refuses
