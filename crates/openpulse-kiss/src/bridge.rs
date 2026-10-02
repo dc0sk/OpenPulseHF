@@ -23,6 +23,8 @@ pub struct KissConfig {
     pub mode: String,
     /// When `true`, TX data is echoed as RX without going through the modem engine.
     pub loopback: bool,
+    /// Wait between the PTT edge and the first sample (#1257). From `[modem] ptt_leader_ms`.
+    pub ptt_leader: std::time::Duration,
 }
 
 impl Default for KissConfig {
@@ -32,6 +34,7 @@ impl Default for KissConfig {
             port: 8100,
             mode: "BPSK250".into(),
             loopback: false,
+            ptt_leader: std::time::Duration::ZERO,
         }
     }
 }

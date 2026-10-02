@@ -40,6 +40,8 @@ pub struct ArdopConfig {
     pub auto_id_interval_secs: u64,
     /// End-of-exchange (sign-off) ID idle in seconds; `0` disables the sign-off ID. From `[station]`.
     pub auto_id_signoff_idle_secs: u64,
+    /// Wait between the PTT edge and the first sample (#1257). From `[modem] ptt_leader_ms`.
+    pub ptt_leader: std::time::Duration,
 }
 
 impl Default for ArdopConfig {
@@ -52,6 +54,7 @@ impl Default for ArdopConfig {
             loopback: false,
             auto_id_interval_secs: 0,
             auto_id_signoff_idle_secs: 0,
+            ptt_leader: std::time::Duration::ZERO,
         }
     }
 }
@@ -103,6 +106,7 @@ impl ArdopServer {
             config.auto_id_interval_secs,
             config.auto_id_signoff_idle_secs,
         );
+        bridge.ptt.set_leader(config.ptt_leader);
         spawn_worker(bridge.clone(), tx_data_rx);
         // Force-release a key that outlives DEFAULT_PTT_MAX. Without this the manual `PTT TRUE` path
         // has no bound at all: `release_ptt_on_disconnect` only fires when the socket CLOSES, so a

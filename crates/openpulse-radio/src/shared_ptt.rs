@@ -89,6 +89,9 @@ struct PttInner {
     /// the owner is the guard and the identity is the generation. A caller-supplied label that
     /// decided access would be a claim any site could make, which is the hole the first design had.
     held_by: &'static str,
+    /// Wait between the PTT edge and the caller's first sample (#1257), so a rig's key-up time does
+    /// not clip the preamble. Zero by default: a non-zero value must be measured per rig.
+    leader: Duration,
 }
 
 /// PTT hardware + watchdog deadline behind a shared lock. Cheap to `clone` (shares the same lock).
@@ -105,7 +108,17 @@ impl SharedPtt {
             stuck_warned: false,
             generation: 0,
             held_by: "nobody",
+            leader: Duration::ZERO,
         })))
+    }
+
+    /// Set the leader: how long [`Self::key_as`] waits after the PTT edge before returning (#1257).
+    ///
+    /// The wait is a **key-transition** property, so it lives here — the one funnel every front end
+    /// keys through — and not at the audio seam, which would charge it per SAR fragment and per relayed
+    /// burst and miss the IQ path (the #1250 review's ruling, applied in #1257's design pass).
+    pub fn set_leader(&self, leader: Duration) {
+        self.lock().leader = leader;
     }
 
     fn lock(&self) -> std::sync::MutexGuard<'_, PttInner> {
@@ -147,6 +160,13 @@ impl SharedPtt {
         // between this arm and its `true` (which would show unkeyed during a live keyed burst).
         if let Some(obs) = observer {
             obs.ptt_changed(true);
+        }
+        // The leader runs AFTER the notify, so a host keying its own rig on our `PTT TRUE` gets the
+        // same head start, and with the lock dropped, so the watchdog can still preempt during it.
+        let leader = g.leader;
+        drop(g);
+        if !leader.is_zero() {
+            std::thread::sleep(leader);
         }
         Ok(())
     }
@@ -1169,5 +1189,62 @@ mod ownership_token_tests {
         assert_eq!(stale.release(), UnkeyOutcome::NotKeyed);
         assert!(p.is_keyed(), "release() must be scoped exactly as Drop is");
         assert_eq!(releases.load(Ordering::SeqCst), 1);
+    }
+
+    /// Records the instant of the first `PTT TRUE` notify.
+    struct StampObserver(Mutex<Option<Instant>>);
+    impl PttObserver for StampObserver {
+        fn ptt_changed(&self, active: bool) {
+            if active {
+                let mut g = self.0.lock().unwrap_or_else(|e| e.into_inner());
+                g.get_or_insert_with(Instant::now);
+            }
+        }
+    }
+
+    /// #1257: a host keying its own rig on our `PTT TRUE` needs the leader too, so the notify must
+    /// come BEFORE the wait, and `key_as` must not return until the leader has elapsed.
+    #[test]
+    fn the_leader_runs_after_the_notify_and_before_key_returns() {
+        let (p, _asserts, _releases) = ptt(DEFAULT_PTT_MAX);
+        let leader = Duration::from_millis(150);
+        p.set_leader(leader);
+        let stamp = Arc::new(StampObserver(Mutex::new(None)));
+        let observer: Arc<dyn PttObserver> = stamp.clone();
+        let _guard = p.keyed(Some(&observer)).expect("key");
+        let returned = Instant::now();
+        let notified = stamp.0.lock().unwrap().expect("PTT TRUE was notified");
+        assert!(
+            returned.duration_since(notified) >= leader,
+            "key returned {:?} after the notify, under the {leader:?} leader",
+            returned.duration_since(notified)
+        );
+    }
+
+    /// The wait holds no lock: the watchdog (and anything reading the key state) must not stall
+    /// behind a leader.
+    #[test]
+    fn the_leader_does_not_hold_the_lock() {
+        let (p, _asserts, _releases) = ptt(DEFAULT_PTT_MAX);
+        p.set_leader(Duration::from_millis(400));
+        let keyer = p.clone();
+        let t = std::thread::spawn(move || keyer.keyed(None).map(|g| g.is_live()));
+        // Wait until the key is armed, then time a lock-taking read during the leader.
+        let armed = Instant::now() + Duration::from_secs(5);
+        while !p.is_keyed() {
+            assert!(Instant::now() < armed, "never keyed");
+            std::thread::yield_now();
+        }
+        let start = Instant::now();
+        assert!(p.is_keyed());
+        assert!(
+            start.elapsed() < Duration::from_millis(200),
+            "a state read waited {:?} — the leader is holding the lock",
+            start.elapsed()
+        );
+        assert!(
+            t.join().expect("keyer").expect("key"),
+            "the keyer still owns its key"
+        );
     }
 }

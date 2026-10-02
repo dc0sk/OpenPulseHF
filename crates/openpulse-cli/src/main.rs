@@ -171,6 +171,7 @@ fn main() -> Result<()> {
         )?),
         DEFAULT_PTT_MAX,
     );
+    ptt.set_leader(std::time::Duration::from_millis(cli.ptt_leader_ms.into()));
     let _ptt_watchdog = ptt.spawn_watchdog(None);
     let mut exit_code = 0;
 

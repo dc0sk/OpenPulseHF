@@ -21,6 +21,7 @@ async fn start_server(loopback: bool) -> std::net::SocketAddr {
         port: addr.port(),
         mode: "BPSK250".into(),
         loopback,
+        ptt_leader: std::time::Duration::ZERO,
     };
     let server = KissServer::new(engine, config);
     tokio::spawn(async move {

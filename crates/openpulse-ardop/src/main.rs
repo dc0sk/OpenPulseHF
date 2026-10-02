@@ -134,6 +134,7 @@ async fn main() -> anyhow::Result<()> {
         loopback: false,
         auto_id_interval_secs: cfg.station.auto_id_interval_secs,
         auto_id_signoff_idle_secs: cfg.station.auto_id_signoff_idle_secs,
+        ptt_leader: std::time::Duration::from_millis(cfg.modem.ptt_leader_ms.into()),
     };
 
     tracing::info!(

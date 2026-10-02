@@ -66,6 +66,7 @@ impl KissServer {
             relay_forwarder,
             ptt,
         );
+        bridge.ptt.set_leader(config.ptt_leader);
         // Force-release a key that outlives DEFAULT_PTT_MAX (#1299). Without this the crate built a
         // `SharedPtt` and never started its watchdog thread, so `force_release_if_expired` had no
         // caller and the deadline was never checked — a `SharedPtt` with no watchdog is the bare
