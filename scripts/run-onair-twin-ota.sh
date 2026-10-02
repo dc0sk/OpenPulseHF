@@ -33,10 +33,15 @@ B_PTT_PORT="${B_PTT_PORT:-$B_CAT_PORT}"; B_PTT_TYPE="${B_PTT_TYPE:-RTS}"
 A_RIGCTLD_PORT="${A_RIGCTLD_PORT:-4532}"; B_RIGCTLD_PORT="${B_RIGCTLD_PORT:-4532}"
 A_AUDIO_DEVICE="${A_AUDIO_DEVICE:-default}"; B_AUDIO_DEVICE="${B_AUDIO_DEVICE:-default}"
 A_REPO_DIR="${A_REPO_DIR:-\$HOME/OpenPulseHF}"; B_REPO_DIR="${B_REPO_DIR:-\$HOME/OpenPulseHF}"
-TEST_FREQ_HZ="${TEST_FREQ_HZ:-14070000}"; TEST_MODE_RIG="${TEST_MODE_RIG:-USB}"
+# 2 m by default (decision 13: HF only with the release candidate). Override for an HF run.
+TEST_FREQ_HZ="${TEST_FREQ_HZ:-144640000}"; TEST_MODE_RIG="${TEST_MODE_RIG:-USB}"
 A_RFPOWER="${A_RFPOWER:-0.10}"; B_RFPOWER="${B_RFPOWER:-0.10}"
 OTA_PROFILE="${OTA_PROFILE:-fast}"; START_MODE="${START_MODE:-BPSK250}"
 DAEMON_TCP_PORT="${DAEMON_TCP_PORT:-9000}"
+# Recorded explicitly in every station config, so the bundle's config snapshot attributes any effect
+# to the DSP that ran (re-baseline item 7). Defaults match the daemon's.
+NOTCH_ENABLED="${NOTCH_ENABLED:-true}"; AGC_ENABLED="${AGC_ENABLED:-false}"; CESSB_ENABLED="${CESSB_ENABLED:-true}"
+PTT_LEADER_MS="${PTT_LEADER_MS:-0}"   # #1257; measure the rig before raising it
 TRAFFIC_INTERVAL="${TRAFFIC_INTERVAL:-2}"; TRAFFIC_SIZE="${TRAFFIC_SIZE:-128}"
 TRAFFIC_DURATION="${TRAFFIC_DURATION:-120}"
 OUTPUT_DIR="${OUTPUT_DIR:-docs/dev/test-reports}"
@@ -87,8 +92,17 @@ device = \"$dev\"
 mode = \"$START_MODE\"
 profile = \"$OTA_PROFILE\"
 ptt_backend = \"rigctld\"
+ptt_leader_ms = $PTT_LEADER_MS
 ota_enabled = true
 ota_profile = \"$OTA_PROFILE\"
+notch_enabled = $NOTCH_ENABLED
+agc_enabled = $AGC_ENABLED
+cessb_enabled = $CESSB_ENABLED
+[observability]
+# A2 is scored from the OtaRateDecision events, which the daemon broadcasts but retains only in
+# audit mode (re-baseline item 5).
+audit_mode = true
+archive_dir = \"$CFG_DIR/openpulse/audit\"
 [radio]
 cat_backend = \"rigctld\"
 rigctld_addr = \"127.0.0.1:$rigport\"
@@ -115,6 +129,31 @@ launch_daemon() {  # ssh_fn repo_dir label
         XDG_CONFIG_HOME=$CFG_DIR RUST_LOG=info \
         nohup $repo/target/release/openpulse-server </dev/null >/tmp/twin-ota-daemon.log 2>&1 & \
         sleep 2; pgrep -x openpulse-server >/dev/null && echo '  [$label] daemon ok' || { echo '  [$label] daemon FAILED'; tail -5 /tmp/twin-ota-daemon.log; exit 1; }"
+}
+
+# CAT read-back of what the rig was actually set to, so a decode anomaly can be attributed
+# (re-baseline item 5): frequency, mode + passband (the filter width), RIT and XIT (the trim).
+rig_readback() {  # ssh_fn rigctld_port label
+    local sshfn="$1" port="$2" label="$3"
+    "$sshfn" "echo '# $label'; for c in f m j z; do printf '%s: ' \$c; \
+        rigctl -m 2 -r 127.0.0.1:$port \$c 2>&1 | tr '\n' ' '; echo; done"
+}
+
+# Pull each station's retained audit events, daemon log and config next to the report.
+collect_evidence() {  # report_path
+    local report="$1" dir="${1%.log}-evidence"
+    mkdir -p "$dir"
+    for pair in "ssh_a:a:$A_LABEL:$A_RIGCTLD_PORT" "ssh_b:b:$B_LABEL:$B_RIGCTLD_PORT"; do
+        IFS=: read -r fn tag label port <<<"$pair"
+        "$fn" "cat $CFG_DIR/openpulse/audit/events.ndjson 2>/dev/null" >"$dir/events-$tag.ndjson" || true
+        "$fn" "cat /tmp/twin-ota-daemon.log 2>/dev/null" >"$dir/daemon-$tag.log" || true
+        "$fn" "cat $CFG_DIR/openpulse/config.toml 2>/dev/null" >"$dir/config-$tag.toml" || true
+        rig_readback "$fn" "$port" "$label" >"$dir/rig-$tag.txt" 2>&1 || true
+        local n; n=$(wc -l <"$dir/events-$tag.ndjson" 2>/dev/null || echo 0)
+        echo "  [$label] evidence: $n audit events, rig read-back, config, daemon log" | tee -a "$report"
+        [ "$n" -gt 0 ] || echo "  [$label] WARNING: no audit events retained — A2 cannot be scored from this run" | tee -a "$report"
+    done
+    echo "evidence: $dir" | tee -a "$report"
 }
 
 # ── actions ───────────────────────────────────────────────────────────────────
@@ -167,6 +206,7 @@ EOF
     done
 
     echo "traffic window complete." | tee -a "$report"
+    collect_evidence "$report"
     echo "report: $report"
     echo "(watch the live TX-level climb on both directions in openpulse-twinview)"
 }
