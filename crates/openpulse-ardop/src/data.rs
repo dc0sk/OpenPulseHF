@@ -10,11 +10,26 @@ use crate::error::ArdopError;
 
 /// Maximum data-port frame payload accepted from clients.
 ///
-/// The ARDOP TNC transport carries modem frames which are always ≤ 255 bytes
-/// per HPX SAR fragment.  4096 bytes is a generous upper bound that still
-/// prevents a malicious client from forcing a 64 KiB heap allocation with a
-/// crafted `u16::MAX` length prefix.
+/// A host block can exceed one modem frame (#1385), so it is split into frame-sized chunks before
+/// it reaches the modem worker. 4096 bytes bounds what one block may allocate, so a crafted
+/// `u16::MAX` length prefix cannot force a 64 KiB heap allocation.
 const MAX_FRAME_BYTES: usize = 4096;
+
+/// Split one host data block into chunks one modem frame carries, in order (#1385).
+///
+/// The data port is a byte stream to the host on both ends (Pat concatenates what the TNC delivers),
+/// so chunking at the sender needs no reassembly at the receiver: each chunk is an ordinary frame.
+/// Before this a block over 255 bytes reached `Frame::new` whole and was refused, so it never went on
+/// the air and the host saw no error it could read as "too large".
+pub(crate) fn frame_chunks(block: Vec<u8>) -> Vec<Vec<u8>> {
+    if block.len() <= openpulse_core::frame::Frame::MAX_PAYLOAD {
+        return vec![block];
+    }
+    block
+        .chunks(openpulse_core::frame::Frame::MAX_PAYLOAD)
+        .map(<[u8]>::to_vec)
+        .collect()
+}
 
 pub async fn serve(listener: TcpListener, bridge: Arc<ModemBridge>) -> Result<(), ArdopError> {
     loop {
@@ -54,7 +69,8 @@ async fn handle_client(
                 // Winlink message) is delivered in full rather than silently truncated. `spawn_blocking`
                 // keeps the blocking send off the async reactor. `Err` means the worker is gone → close.
                 let tx = bridge.tx_data_tx.clone();
-                if tokio::task::spawn_blocking(move || tx.send(payload))
+                let chunks = frame_chunks(payload);
+                if tokio::task::spawn_blocking(move || chunks.into_iter().try_for_each(|c| tx.send(c)))
                     .await
                     .map_err(|_| ())
                     .and_then(|r| r.map_err(|_| ()))
@@ -86,5 +102,28 @@ async fn handle_client(
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod chunk_tests {
+    use super::frame_chunks;
+    use openpulse_core::frame::Frame;
+
+    #[test]
+    fn a_block_within_one_frame_is_one_chunk() {
+        assert_eq!(frame_chunks(vec![7; 255]), vec![vec![7; 255]]);
+        assert_eq!(frame_chunks(Vec::new()), vec![Vec::<u8>::new()]);
+    }
+
+    /// #1385: a 4 096-byte host block becomes frame-sized chunks, in order, every one of which
+    /// `Frame::new` accepts — before this the whole block reached `Frame::new` and was refused.
+    #[test]
+    fn a_large_block_splits_into_frames_the_engine_accepts() {
+        let block: Vec<u8> = (0..4096u32).map(|i| i as u8).collect();
+        let chunks = frame_chunks(block.clone());
+        assert_eq!(chunks.len(), 4096usize.div_ceil(Frame::MAX_PAYLOAD));
+        assert!(chunks.iter().all(|c| Frame::new(0, c.clone()).is_ok()));
+        assert_eq!(chunks.concat(), block, "order and content preserved");
     }
 }

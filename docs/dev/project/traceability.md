@@ -15,6 +15,39 @@ this ledger adds the design rationale and the actually-observed results per chan
 
 ---
 
+## 2026-10-02 — ARDOP host blocks larger than a frame go on the air (#1385; work plan M2)
+
+**Change.** The data port accepted host blocks up to 4 096 B and queued each whole. `Frame::new` refuses
+a payload over 255 B, so a larger block keyed the transmitter once, modulated nothing, and returned no
+error the host could read.
+
+**Design.** The data port is a byte stream at both hosts: Pat concatenates what the TNC delivers. So
+the sender splits each block into frame-sized chunks before queueing them. Each chunk is an ordinary
+frame (and, on the adaptive path, its own ARQ exchange), so the receiver needs no reassembly. That
+answers both design questions in the issue: blocks over 255 B are live (B2F through Pat), and nothing
+needs reassembling, because the host stream is already a stream. It is not a wire change.
+
+**Implementation.**
+- `crates/openpulse-core/src/frame.rs`: `Frame::MAX_PAYLOAD` (255) names the limit `Frame::new`
+  enforces.
+- `crates/openpulse-ardop/src/data.rs`: `frame_chunks`; the data-port reader queues each chunk in
+  order under its existing backpressure.
+
+**Tests.**
+- `crates/openpulse-ardop/tests/host_block_larger_than_a_frame.rs`: a non-loopback TNC with a spy
+  PTT, driven through the real data port. A 600 B block keys 3 times (one per frame); the control, a
+  200 B block, keys once.
+- Unit tests in `data.rs`: chunk sizes, order and content, and every chunk accepted by `Frame::new`.
+
+**Results (run).**
+- New test **2/0**; unit **2/0**.
+- Sabotage (blocks passed whole): the 600 B case keys **1** time against 3, so it fails, and the
+  control passes.
+- `openpulse-ardop` + `openpulse-core`: **599 passed / 0 failed**.
+- Clippy `-D warnings` is clean.
+
+---
+
 ## 2026-10-02 — PTT release waits for the device's reported drain (#1367; work plan M2)
 
 **Change.** `CpalOutputStream::flush` slept a fixed 200 ms after the software queue emptied. Every PTT
