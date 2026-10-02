@@ -79,7 +79,7 @@ pub struct Cli {
     pub rig: String,
 
     /// Leader: ms between the PTT edge and the first sample, so the rig's key-up does not clip the
-    /// preamble (#1257). 0 = none.
+    /// preamble (#1257). 0 = none. Not applied by `calibrate`, which keys its own instrument paths.
     #[arg(long, global = true, default_value_t = 0)]
     pub ptt_leader_ms: u32,
 

@@ -121,6 +121,11 @@ impl SharedPtt {
         self.lock().leader = leader;
     }
 
+    /// The configured leader (see [`Self::set_leader`]).
+    pub fn leader(&self) -> Duration {
+        self.lock().leader
+    }
+
     fn lock(&self) -> std::sync::MutexGuard<'_, PttInner> {
         self.0.lock().unwrap_or_else(|e| e.into_inner())
     }
@@ -145,6 +150,16 @@ impl SharedPtt {
         who: &'static str,
         observer: Option<&Arc<dyn PttObserver>>,
     ) -> Result<(), PttError> {
+        self.key_owned(who, observer).map(|_| ())
+    }
+
+    /// [`Self::key_as`], returning the generation this caller keyed — the identity a guard holds.
+    /// Read before the leader wait: after it, a later key may already have moved the counter.
+    fn key_owned(
+        &self,
+        who: &'static str,
+        observer: Option<&Arc<dyn PttObserver>>,
+    ) -> Result<u64, PttError> {
         let mut g = self.lock();
         if g.asserted_at.is_some() {
             return Err(PttError::AlreadyKeyed { held_by: g.held_by });
@@ -163,17 +178,20 @@ impl SharedPtt {
         }
         // The leader runs AFTER the notify, so a host keying its own rig on our `PTT TRUE` gets the
         // same head start, and with the lock dropped, so the watchdog can still preempt during it.
-        let leader = g.leader;
+        let (leader, generation) = (g.leader, g.generation);
         drop(g);
         if !leader.is_zero() {
             std::thread::sleep(leader);
+            // The lock was free for the whole wait, so the key may have been released (watchdog, a
+            // host's `PTT FALSE`) and even re-keyed by someone else. Returning Ok then would let this
+            // caller transmit into a released rig, and its guard would later release the other
+            // holder's key — #1263 reopened for the length of the leader.
+            let g = self.lock();
+            if g.asserted_at.is_none() || g.generation != generation {
+                return Err(PttError::ReleasedDuringLeader);
+            }
         }
-        Ok(())
-    }
-
-    /// The current key generation — the identity a [`PttKeyGuard`] holds (#1263).
-    fn generation(&self) -> u64 {
-        self.lock().generation
+        Ok(generation)
     }
 
     /// Release only if `generation` is still the live one; otherwise do nothing.
@@ -243,12 +261,12 @@ impl SharedPtt {
     /// current stack scope instead of up to the 180 s watchdog. The observer is cloned into the guard so
     /// the release edge is still emitted on unwind; `None` keys silently (the beacon path).
     pub fn keyed(&self, observer: Option<&Arc<dyn PttObserver>>) -> Result<PttKeyGuard, PttError> {
-        self.key(observer)?;
+        let generation = self.key_owned("automatic", observer)?;
         Ok(PttKeyGuard {
             ptt: self.clone(),
             observer: observer.cloned(),
             released: false,
-            generation: self.generation(),
+            generation,
         })
     }
 
@@ -1222,29 +1240,66 @@ mod ownership_token_tests {
     }
 
     /// The wait holds no lock: the watchdog (and anything reading the key state) must not stall
-    /// behind a leader.
+    /// behind a leader. Timed from the `PTT TRUE` notify, which takes no lock to observe, so a
+    /// leader slept under the lock fails on the wait assertion and not on some other symptom.
     #[test]
     fn the_leader_does_not_hold_the_lock() {
         let (p, _asserts, _releases) = ptt(DEFAULT_PTT_MAX);
         p.set_leader(Duration::from_millis(400));
+        let stamp = Arc::new(StampObserver(Mutex::new(None)));
+        let observer: Arc<dyn PttObserver> = stamp.clone();
         let keyer = p.clone();
-        let t = std::thread::spawn(move || keyer.keyed(None).map(|g| g.is_live()));
-        // Wait until the key is armed, then time a lock-taking read during the leader.
-        let armed = Instant::now() + Duration::from_secs(5);
-        while !p.is_keyed() {
-            assert!(Instant::now() < armed, "never keyed");
+        let t = std::thread::spawn(move || keyer.keyed(Some(&observer)).map(|g| g.is_live()));
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while stamp.0.lock().unwrap().is_none() {
+            assert!(Instant::now() < deadline, "PTT TRUE was never notified");
             std::thread::yield_now();
         }
         let start = Instant::now();
-        assert!(p.is_keyed());
+        let keyed = p.is_keyed();
+        let waited = start.elapsed();
         assert!(
-            start.elapsed() < Duration::from_millis(200),
-            "a state read waited {:?} — the leader is holding the lock",
-            start.elapsed()
+            waited < Duration::from_millis(200),
+            "a state read during the leader waited {waited:?} — the leader is holding the lock"
         );
+        assert!(keyed, "the key is armed during the leader");
         assert!(
             t.join().expect("keyer").expect("key"),
             "the keyer still owns its key"
+        );
+    }
+
+    /// The defect the review's probe found: a key released during the leader must not be reported
+    /// as owned, or the caller transmits into a released rig and its guard later releases somebody
+    /// else's key (#1263 reopened for the length of the leader).
+    #[test]
+    fn a_key_released_during_the_leader_is_not_returned_as_owned() {
+        let (p, _asserts, releases) = ptt(DEFAULT_PTT_MAX);
+        p.set_leader(Duration::from_millis(300));
+        let keyer = p.clone();
+        let t = std::thread::spawn(move || keyer.keyed(None).map(|g| g.is_live()));
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while !p.is_keyed() {
+            assert!(Instant::now() < deadline, "never keyed");
+            std::thread::yield_now();
+        }
+        // A host's `PTT FALSE` (or the watchdog) releases mid-leader, then somebody else keys.
+        assert_eq!(p.unkey(None), UnkeyOutcome::Released);
+        p.set_leader(Duration::ZERO);
+        let second = p.keyed(None).expect("second key");
+        assert!(
+            matches!(
+                t.join().expect("keyer"),
+                Err(PttError::ReleasedDuringLeader)
+            ),
+            "the first caller must learn it no longer owns the key"
+        );
+        assert!(second.is_live(), "the second key survives the first caller");
+        assert!(p.is_keyed());
+        assert_eq!(
+            releases.load(Ordering::SeqCst),
+            1,
+            "only the mid-leader release happened"
         );
     }
 }

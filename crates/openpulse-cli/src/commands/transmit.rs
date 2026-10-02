@@ -29,6 +29,8 @@ pub fn run(
         .tx_airtime_seconds(data.as_bytes(), mode, fec)
         .context("could not determine this frame's airtime")?;
     let deadline = ptt.max_duration().as_secs_f64();
+    // The watchdog's clock starts at the PTT edge, so the leader counts against it too.
+    let airtime = airtime + ptt.leader().as_secs_f64();
     if airtime > deadline {
         bail!(
             "this frame needs {airtime:.0} s of continuous keying, but the PTT watchdog releases \

@@ -3715,8 +3715,10 @@ PTT and CAT are separate concerns: the modem asserts PTT through one of seven ba
 
 **Leader.** `[modem] ptt_leader_ms` (CLI `--ptt-leader-ms`) is a wait between the PTT edge and the
 first sample, so the rig's key-up does not clip the preamble (#1257). It applies once per key, not
-per frame, on every front end, and it runs after the `PTT TRUE` event, so a host keying its own rig
-gets the same head start. The default is `0`; measure the rig before setting it.
+per frame, on the daemon, both TNCs and `openpulse transmit`, and it runs after the `PTT TRUE` event, so a host keying its own rig
+gets the same head start. The default is `0`; measure the rig before setting it. Not covered: the cross-band repeater's
+second rig (`rig_b`) keys with no leader, and `openpulse calibrate` keys its own instrument paths
+without one.
 
 Shipped rig-definition files for the generic backend: `docs/config/rig-icom-ic7300.toml` and
 `docs/config/rig-yaesu-ft817.toml`. Shipped example station configs:
