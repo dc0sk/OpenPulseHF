@@ -138,6 +138,9 @@ payload format change, so M1 closed as a bug fix plus a declaration.
 
 ---
 
+**What is on the maintainer** — hardware runs, credentials, decisions — is kept in
+[`maintainer-todo.md`](maintainer-todo.md), separate from this plan so it stays short and actionable.
+
 ## Decision log
 
 | # | Date | Decision | Source |
