@@ -283,16 +283,38 @@ impl AudioBackend for CpalBackend {
             },
         };
 
-        let buf: Arc<Mutex<VecDeque<f32>>> = Arc::new(Mutex::new(VecDeque::new()));
+        let buf: Arc<Mutex<OutQueue>> = Arc::new(Mutex::new(OutQueue::default()));
         let buf_read = Arc::clone(&buf);
+        let (rate, channels) = (config.sample_rate, config.channels.max(1) as usize);
 
         let stream = dev
             .build_output_stream(
                 &stream_config,
-                move |output: &mut [f32], _| {
+                move |output: &mut [f32], info: &cpal::OutputCallbackInfo| {
                     let mut guard = buf_read.lock().unwrap_or_else(|p| p.into_inner());
-                    for sample in output.iter_mut() {
-                        *sample = guard.pop_front().unwrap_or(0.0);
+                    let had_samples = !guard.samples.is_empty();
+                    let mut last = 0usize;
+                    for (i, sample) in output.iter_mut().enumerate() {
+                        match guard.samples.pop_front() {
+                            Some(v) => {
+                                *sample = v;
+                                last = i;
+                            }
+                            None => *sample = 0.0,
+                        }
+                    }
+                    // Latch only on the transition to empty: every later callback pops nothing and
+                    // must not move the mark (#1367 review, finding 2).
+                    if had_samples && guard.samples.is_empty() {
+                        let ts = info.timestamp();
+                        guard.drained = Some(
+                            crate::flush::drain_after_callback(
+                                ts.playback.duration_since(&ts.callback),
+                                last / channels + 1,
+                                rate,
+                            )
+                            .map(|d| std::time::Instant::now() + d),
+                        );
                     }
                 },
                 |err| warn!("cpal output error: {err}"),
@@ -300,10 +322,11 @@ impl AudioBackend for CpalBackend {
             )
             .map_err(|e| AudioError::Stream(e.to_string()))?;
 
-        // Do NOT play() yet. Starting the stream before any samples are buffered
-        // makes the output callback fire against an empty queue and underrun
-        // (audible at the frame start, and flaky for slow/bursty modes). Playback
-        // is started lazily on the first write(), once the frame is buffered.
+        // play() is deferred to the first write(), so hosts that honour pause start with the
+        // frame buffered. On ALSA it changes nothing: cpal's worker starts the device on silence
+        // as soon as the stream is built (`play()` is only `pause(false)`), so the callback runs
+        // against an empty queue before any write — the drain mark latches only on a
+        // non-empty → empty transition for that reason (#1367 review, finding 4).
         debug!(
             "opened cpal output stream on '{}' (playback deferred to first write)",
             dev.name().unwrap_or_default()
@@ -364,16 +387,29 @@ pub struct CpalOutputStream {
     /// Playback is started lazily on the first write so the queue is non-empty
     /// when the output callback first fires (prevents the startup underrun).
     started: bool,
-    buf: Arc<Mutex<VecDeque<f32>>>,
+    buf: Arc<Mutex<OutQueue>>,
     sample_rate_hz: u32,
     channels: u16,
+}
+
+/// The output queue and, in the same lock, when its last sample leaves the device (#1367).
+///
+/// `drained` is set by the callback that empties the queue: `Some(Some(t))` when the device reported a
+/// trustworthy delay, `Some(None)` when it did not. One mutex, so `flush` can never see the queue
+/// empty before the mark is stored. A stream sees one `write` then one `flush` today (every transmit
+/// opens its own stream); a caller that writes again after a drain re-arms it by clearing the mark.
+#[derive(Default)]
+struct OutQueue {
+    samples: VecDeque<f32>,
+    drained: Option<Option<std::time::Instant>>,
 }
 
 impl AudioOutputStream for CpalOutputStream {
     fn write(&mut self, samples: &[f32]) -> Result<(), AudioError> {
         {
             let mut guard = self.buf.lock().unwrap_or_else(|p| p.into_inner());
-            guard.extend(samples.iter().copied());
+            guard.samples.extend(samples.iter().copied());
+            guard.drained = None;
         }
         // Start playback only once the queue holds data (drop the buffer lock
         // first — the output callback also takes it).
@@ -394,8 +430,9 @@ impl AudioOutputStream for CpalOutputStream {
         {
             let pad = ((self.sample_rate_hz as usize) * (self.channels.max(1) as usize)) / 32;
             let mut guard = self.buf.lock().unwrap_or_else(|p| p.into_inner());
-            if !guard.is_empty() {
-                guard.extend(std::iter::repeat_n(0.0_f32, pad));
+            if !guard.samples.is_empty() {
+                guard.samples.extend(std::iter::repeat_n(0.0_f32, pad));
+                guard.drained = None;
             }
         }
         // Wait until the driver has consumed all buffered samples.
@@ -403,7 +440,7 @@ impl AudioOutputStream for CpalOutputStream {
         // `flush::flush_timeout_seconds` for why the old 60 s cap made that adaptation inert.
         let queued_samples = {
             let guard = self.buf.lock().unwrap_or_else(|p| p.into_inner());
-            guard.len()
+            guard.samples.len()
         };
         let timeout_seconds =
             crate::flush::flush_timeout_seconds(queued_samples, self.sample_rate_hz, self.channels);
@@ -411,12 +448,17 @@ impl AudioOutputStream for CpalOutputStream {
         loop {
             std::thread::sleep(Duration::from_millis(10));
             let guard = self.buf.lock().unwrap_or_else(|p| p.into_inner());
-            if guard.is_empty() {
-                // The software queue is empty, but the soundcard's hardware
-                // output buffer may still hold up to ~2688 samples at 48 kHz
-                // (≈ 6 BPSK symbols at 8 kHz).  Sleep for 200 ms to let the
-                // hardware buffer drain before the caller closes the stream.
-                std::thread::sleep(Duration::from_millis(200));
+            if guard.samples.is_empty() {
+                // The software queue is empty, but the device still holds what it reported as
+                // queued. Wait until it says the last sample has played (plus a margin), never
+                // longer than the fixed 200 ms this replaced, and the full 200 ms when the device
+                // reported nothing trustworthy (#1367).
+                let remaining = guard
+                    .drained
+                    .flatten()
+                    .map(|at| at.saturating_duration_since(std::time::Instant::now()));
+                drop(guard);
+                std::thread::sleep(crate::flush::drain_wait(remaining));
                 return Ok(());
             }
             if std::time::Instant::now() >= deadline {
