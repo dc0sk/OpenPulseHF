@@ -48,14 +48,20 @@ FT-991A on dd2zm-landline later (remote; its RX path fails offline).
 - [ ] **G0–G3 on the 2 m pair**, per the re-baselined [`onair-execution-plan.md`](../onair-execution-plan.md)
   (isolators fitted; G3 decides whether the RFI is gone). Build both ends from the same commit.
 - [ ] **Leader delay**, once G1 passes: if the first frames fail to decode while later ones work,
-  set `[modem] ptt_leader_ms` (start around 50–100 ms) on the transmitting station and note the
-  value. Claude is first measuring the IC-9700's key-up from the recorded SDR captures, so a starting
-  value may arrive before you need it.
+  set `[modem] ptt_leader_ms` on the transmitting station and note the value. **150 ms** is a
+  reasonable start for the IC-9700: on the recorded captures its key-up clicks sit 130 ms apart.
+  That is a reading, not a measurement (`crates/openpulse-modem/tests/captures/README.md`). Today the
+  daemon keys before it modulates, so every frame already carries its synthesis time as dead air. Note
+  that gap too if you can: the `PttChanged` event time against the first audio on the other station.
 
-## Waiting on Claude first
+## Questions for you
 
-- **#1367 (200 ms sleep before PTT drop)** — Claude writes the dual-card drain-time measurement script;
-  then you run it on the dual-card rig. Not actionable yet.
+- **#1367 (200 ms sleep before PTT drop): what is the "dual-card rig"?** The measurement needs the
+  PTT edge and the last emitted sample on ONE clock. The off-air SDR captures cannot show the release:
+  an SSB rig with no audio radiates nothing visible. The cleanest setup is card A's output into card
+  B's left input, with the PTT or SEND line through a divider into card B's right input. Tell me which
+  cards and which PTT interface (serial RTS/DTR, CAT, CM108 GPIO), and whether a line can reach card B,
+  and I write the script to fit.
 
 ## Done
 
