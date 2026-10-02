@@ -540,3 +540,7 @@ with_retain	crates/openpulse-core/src/tx_metadata.rs
 with_timestamp	crates/openpulse-core/src/tx_metadata.rs
 with_transport	crates/openpulse-radio/src/generic_cat.rs
 additive_snr_db_windowed	crates/openpulse-dsp/src/constellation.rs
+# 2026-10-02 (#1315): receive_ack_with_short_fec is the one-shot ACK read. Production now listens
+# through receive_ack_with_short_fec_within (held stream + scan); the one-shot form stays pub for the six
+# integration tests that read a whole loopback ACK in one call, and as the timeout-0 path of _within.
+receive_ack_with_short_fec	crates/openpulse-modem/src/engine.rs
