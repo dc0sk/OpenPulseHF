@@ -235,6 +235,12 @@ impl ScanPlanner {
 /// frame this long outruns the read cadence so the frame never finishes buffering.
 pub const LONG_FRAME_SAMPLES: usize = 120_000;
 
+/// How long an ARQ ISS listens for the ACK after its frame (CLI `transmit_arq`, ARDOP adaptive ARQ).
+/// It must cover the peer's decode of a coded frame — measured 0.85–1.72 s per frame on x86, more on
+/// a Pi — plus its turnaround and the ACK's own airtime; the daemon's OTA listen uses the same 9 s.
+/// A maximum, not a delay: the listen returns on the first decoded ACK.
+pub const ARQ_ACK_WINDOW_MS: u64 = 9_000;
+
 /// How many times a mode's raw `max_frame_samples` a coded frame can actually reach.
 ///
 /// **Measured, not guessed** (`tests/fec_slice_expansion.rs`, BPSK250 @ 8 kHz, worst case over
@@ -5464,7 +5470,7 @@ impl ModemEngine {
             let current_mode = self.current_adaptive_mode().unwrap_or(mode).to_owned();
             self.transmit(data, &current_mode, device)?;
 
-            match self.receive_ack_with_short_fec(device) {
+            match self.receive_ack_with_short_fec_within(device, ARQ_ACK_WINDOW_MS) {
                 Ok(ack_frame) if ack_frame.ack_type != AckType::Nack => {
                     let rate_event = self.apply_ack_frame(&ack_frame);
                     info!(
@@ -7097,9 +7103,14 @@ impl ModemEngine {
         self.stage_emit_output(device, "MFSK16-ACK", &samples)
     }
 
-    /// Receive an FSK4 short-FEC ACK, re-capturing until it decodes or `timeout_ms`
-    /// elapses. `0` falls back to a single immediate read
+    /// Receive an FSK4 short-FEC ACK within `timeout_ms`, holding one capture stream and scanning it
+    /// in-stream (#1315). `0` falls back to a single immediate read
     /// ([`receive_ack_with_short_fec`](Self::receive_ack_with_short_fec)).
+    ///
+    /// It used to retry `receive_ack_with_short_fec`, which opens a stream, reads once and drops it:
+    /// on a callback backend each try saw one poll interval and no scan, so an ACK with any lead —
+    /// every ACK on real audio — was unreachable. The unpaced loopback hid it by returning the whole
+    /// capture in one read.
     pub fn receive_ack_with_short_fec_within(
         &mut self,
         device: Option<&str>,
@@ -7108,18 +7119,7 @@ impl ModemEngine {
         if timeout_ms == 0 {
             return self.receive_ack_with_short_fec(device);
         }
-        let deadline = Instant::now() + Duration::from_millis(timeout_ms);
-        loop {
-            match self.receive_ack_with_short_fec(device) {
-                Ok(ack) => return Ok(ack),
-                Err(e) => {
-                    if Instant::now() >= deadline {
-                        return Err(e);
-                    }
-                }
-            }
-            std::thread::sleep(Duration::from_millis(30));
-        }
+        self.listen_for_ack(device, timeout_ms, |_| true, false)
     }
 
     /// Demodulate FSK4-ACK, ShortFecCodec decode (13 → 5 bytes), return `AckFrame`.
@@ -7322,6 +7322,20 @@ impl ModemEngine {
         let session_ok = move |ack: &AckFrame| {
             has_key || expected_session_hash.is_none_or(|h| ack.session_hash == h)
         };
+        self.listen_for_ack(device, timeout_ms, session_ok, true)
+    }
+
+    /// The ACK listen both ARQ paths share: hold one capture stream for the window, accumulate, and
+    /// trial-decode the FSK4 ACK in-stream; with `k3`, also union-decode the K=3 MFSK16 ACK. Returns
+    /// the first ACK `accept` takes.
+    fn listen_for_ack(
+        &mut self,
+        device: Option<&str>,
+        timeout_ms: u64,
+        accept: impl Fn(&AckFrame) -> bool,
+        k3: bool,
+    ) -> Result<AckFrame, ModemError> {
+        let session_ok = accept;
         let deadline = Instant::now() + Duration::from_millis(timeout_ms.max(1));
         // Throttle the (expensive) K=3 union decode: only attempt it once `accum` holds a full 3-copy span,
         // and thereafter only after it has grown by another copy. Otherwise a streaming backend that returns
@@ -7383,7 +7397,7 @@ impl ModemEngine {
                                 }
                             }
                         }
-                        if accum.len() >= next_k3_at {
+                        if k3 && accum.len() >= next_k3_at {
                             next_k3_at = accum.len() + copy_len;
                             if let Some(ack) = self.decode_mfsk16_k3_ack(&accum) {
                                 if session_ok(&ack) {
@@ -7402,7 +7416,7 @@ impl ModemEngine {
             }
             if Instant::now() >= deadline {
                 return Err(ModemError::Demodulation(
-                    "OTA ACK not received within window".into(),
+                    "ACK not received within window".into(),
                 ));
             }
             std::thread::sleep(Duration::from_millis(30));

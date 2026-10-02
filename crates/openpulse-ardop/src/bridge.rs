@@ -379,7 +379,12 @@ fn worker_loop(bridge: Arc<ModemBridge>, tx_data_rx: std::sync::mpsc::Receiver<V
                         if !sent {
                             break;
                         }
-                        match engine.receive_ack_with_short_fec(None) {
+                        // Held-stream listen with an in-stream scan (#1315): a one-shot read sees
+                        // one poll interval and no scan, so on real audio it never heard an ACK.
+                        match engine.receive_ack_with_short_fec_within(
+                            None,
+                            openpulse_modem::engine::ARQ_ACK_WINDOW_MS,
+                        ) {
                             Ok(ack) if ack.ack_type != AckType::Nack => {
                                 engine.apply_ack_frame(&ack);
                                 tracing::debug!(attempt, "ARQ: acked");

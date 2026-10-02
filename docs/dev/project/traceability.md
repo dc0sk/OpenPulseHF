@@ -15,6 +15,39 @@ this ledger adds the design rationale and the actually-observed results per chan
 
 ---
 
+## 2026-10-02 — The ARQ ACK listen holds its stream and scans it (#1315; work plan M2)
+
+**Change.** `receive_ack_with_short_fec_within` retried `receive_ack_with_short_fec`, which opens a stream,
+reads once and decodes that read whole, with no onset scan. On a callback backend each try saw one
+poll interval, so an ACK with any lead was unreachable. ARDOP's adaptive ISS (`bridge.rs`) called the
+one-shot form with no window at all, and so did the CLI's `transmit_arq`. Every attempt therefore
+counted as a missing ACK: an implicit NACK, a rate step-down and a retry.
+
+**Design.** The OTA ISS listen (`receive_ota_ack_within`, #1177/#1247) already holds one stream,
+accumulates, and runs the resumable FSK4 scan over the same ShortFec ACK framing. Its loop is extracted
+as `listen_for_ack(device, window, accept, k3)`. The short-FEC listen uses it FSK4-only and accepts any
+session; the OTA listen keeps its session filter and the K=3 MFSK16 union.
+
+**Implementation.** `crates/openpulse-modem/src/engine.rs`:
+- `listen_for_ack`;
+- `receive_ack_with_short_fec_within` uses it;
+- `transmit_arq` listens with `ARQ_ACK_WINDOW_MS` (9 s, the daemon's OTA window).
+
+`crates/openpulse-ardop/src/bridge.rs`: the adaptive ISS uses the windowed listen. The ARDOP default
+(`enable_adaptive_arq` false) never reached this path, which is why the defect went unseen.
+
+**Tests.** `crates/openpulse-modem/tests/arq_ack_listen_holds_the_stream.rs`: an ACK behind a 3 377-sample
+lead, delivered in 1 000-sample chunks, is found; silence yields no ACK.
+
+**Results (run).**
+- New test **2/0**.
+- Sabotage (the old retry-one-shot body restored): the lead case fails and the control passes.
+- `fsk4_ack_scan_reaches_the_whole_window` **3/0**.
+- `openpulse-ardop` **45/0**.
+- Clippy `-D warnings` is clean.
+
+---
+
 ## 2026-10-02 — File transfer survives a lost fragment, a lost ack and a long block (work plan M2; REQ-FX-05)
 
 **Change.** Three defects, found by the #1461 review and by reading the timers.
