@@ -572,7 +572,7 @@ async fn a_file_crosses_the_bridge_with_ota_enabled() {
 ///
 /// The reception half of #1123 is gated above; this is the controller/PTT half at the shipping
 /// surface. On `main` a heard uncoded frame counted as a decode failure, so it drove
-/// `on_rx_frame(RxOutcome::Failed, ..)` and — within `OTA_NACK_BUDGET` — keyed a NACK back at the
+/// `on_rx_frame(RxOutcome::Failed, ..)` and — within the NACK budget (`nack_budget.rs`) — keyed a NACK back at the
 /// sender. The fix gates the whole keying block on `ladder_frame` (`res.ack.is_some()`), and without
 /// this test that gate is verified only by reading.
 ///

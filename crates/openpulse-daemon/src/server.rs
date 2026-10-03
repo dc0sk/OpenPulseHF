@@ -814,13 +814,8 @@ pub async fn run(cfg: OpenpulseConfig, modem_backend: Box<dyn AudioBackend>) -> 
     // unbroken run of successful empty reads, so the reopen path below was unreachable and the
     // station went deaf in silence (audit 2026-07-19, #19).
     let mut capture_failed = false;
-    // Consecutive-Nack budget: how many Nack-ACKs the IRS will key in a row with no intervening successful
-    // data decode before going silent (reset on any decode). Caps a keyed Nack storm — two OTA-active ends
-    // answering each other's ACK/QRM bursts forever — and a §97 babbling transmitter on repetitive
-    // co-channel QRM. The sender retries on its own ACK-window timeout and the downshift recommendation
-    // rides the first Nack, so ARQ is unharmed.
-    const OTA_NACK_BUDGET: u32 = 3;
-    let mut consecutive_ota_nack: u32 = 0;
+    // Keyed-NACK budget, leaking with listening time (#1456; `nack_budget.rs`).
+    let mut ota_nack_budget = crate::nack_budget::NackBudget::default();
     // Periodic station identification (REQ-REG-10): while transmitting, key up and send the
     // callsign at least every `auto_id_interval_secs`. The pure `StationIdTimer` is fed a
     // monotonic ms clock (`id_start`) and armed by polling the engine's `frames_transmitted`
@@ -1059,8 +1054,7 @@ pub async fn run(cfg: OpenpulseConfig, modem_backend: Box<dyn AudioBackend>) -> 
                         }) {
                             Ok(res) => {
                                 // A LADDER frame resets the budget and is always ACKed; a failed decode
-                                // is a Nack — key it only while within OTA_NACK_BUDGET consecutive
-                                // failures.
+                                // is a Nack — key it only while the leaking budget allows.
                                 //
                                 // A `None` ack means the uncoded fallback recovered non-ladder traffic.
                                 // That is not evidence about the rate ladder in either direction, so it
@@ -1071,15 +1065,11 @@ pub async fn run(cfg: OpenpulseConfig, modem_backend: Box<dyn AudioBackend>) -> 
                                 // the peer's own file transfer.
                                 let ladder_frame = res.ack.is_some();
                                 let decoded = res.payload.is_some();
-                                if ladder_frame {
-                                    consecutive_ota_nack =
-                                        if decoded { 0 } else { consecutive_ota_nack.saturating_add(1) };
-                                }
+                                let within_budget = ladder_frame
+                                    && ota_nack_budget.on_ladder_burst(decoded, engine.listening_samples());
                                 // Audit F6 (§97.119): the ACK keys the transmitter; without a valid MYID
                                 // the daemon can't auto-ID, so decode the payload but don't send the ACK.
-                                if ladder_frame
-                                    && (decoded || consecutive_ota_nack <= OTA_NACK_BUDGET)
-                                    && runtime_state.local_callsign_valid()
+                                if within_budget && runtime_state.local_callsign_valid()
                                 {
                                     // RAII guard (REQ-PTT-01): releases at block end / on unwind. On assert
                                     // failure `keyed` returns Err and we skip the ACK, leaving nothing keyed.

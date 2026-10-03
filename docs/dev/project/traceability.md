@@ -15,6 +15,53 @@ this ledger adds the design rationale and the actually-observed results per chan
 
 ---
 
+## 2026-10-02 — Idle flicker and ACKs are not ladder evidence; the NACK budget leaks (#1456, #1460; work plan M2)
+
+**Change.**
+- **#1456.** Behind a 250 Hz filter, idle at SL6 produced about 214 failed bursts an hour that counted
+  against the ladder. Each one keyed a NACK, and every third one demoted the rung.
+- **The mute.** The daemon's NACK budget reset only on a decode, so three such bursts muted the receiver
+  until the next decode.
+- **#1460.** Another station's ACK counted the same way.
+
+**Design** (`design/reply-window-evidence.md` v3). This is the third design: v1 and v2 used a reply
+window and were reviewed and not implemented (`reviews/review-reply-window-evidence.md`). v3 is the round-2
+reviewer's recommendation, set from measurements:
+- **Idle flicker** is two or three 400-sample reads, 0.1–0.15 s post-lead, at SL2, SL5 and SL6.
+- **A failing frame** puts its counted pieces at 4.2 s and up: BPSK31 at −3 dB has one 6.2 s piece
+  among dozens; QPSK250-D flushes whole.
+
+Hence three rules:
+1. A failed burst needs post-lead audio of at least `EVIDENCE_FLOOR_SAMPLES` (0.5 s), or half the shortest
+   candidate frame where that is less.
+2. A short burst holding a ShortFEC ACK codeword, checked keyless, is not evidence.
+3. The daemon's budget leaks one per 10 min of listening time, and a failure heard while muted adds nothing.
+
+**Implementation.**
+- `crates/openpulse-modem/src/engine.rs`:
+  - in `ota_decode_and_ack_inner`, the floor and the ACK check after the #1454 guard;
+  - `evidence_floor`, `shortest_frame_samples` (cached `tx_airtime_seconds`) and `holds_an_ack_codeword`;
+  - `listening_samples`, counted in `accumulate_capture`.
+- `crates/openpulse-daemon/src/nack_budget.rs`: new `NackBudget`.
+- `server.rs`: the OTA arm keys through `NackBudget::on_ladder_burst`.
+
+**Tests.**
+- `tests/idle_flicker_is_not_evidence.rs`, through `accumulate_capture` and `ota_decode_burst`:
+  - 2 min of the 250 Hz idle at SL6 keys nothing;
+  - a QPSK250-D frame failing at 0 dB is still answered;
+  - another station's NACK at +12 dB is not answered.
+- `nack_budget` unit tests (4).
+- Ignored measurements: `idle_flicker_evidence_rate`, `marginal_frame_pieces`.
+
+**Test results.**
+- `idle_flicker_is_not_evidence`: 3 passed.
+- Sabotage:
+  - without the floor, the idle test fails with 11 NACKs keyed;
+  - without the ACK rule, the ACK test fails with 1;
+  - the failing-frame test passes in all three builds.
+- `nack_budget`: 4 passed.
+- Core, modem and daemon suites (`--no-fail-fast`): rc=0, 1367 passed, 0 failed, 106 ignored.
+
 ## 2026-10-02 — Security-relevant dependency updates and Node 24 CI actions (#1421; work plan M2)
 
 **Change.** `cargo audit` found two vulnerabilities on the Release 1 path:

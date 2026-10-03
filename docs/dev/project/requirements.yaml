@@ -427,12 +427,14 @@ capabilities:
     code:
     - crates/openpulse-core/src/ota_rate.rs
     - crates/openpulse-core/src/profile.rs
+    - crates/openpulse-daemon/src/nack_budget.rs
     name: Over-the-air receiver-led rate controller
     satisfies:
     - REQ-FUN-06
     tests:
     - crates/openpulse-core/src/ota_rate.rs
     - crates/openpulse-modem/tests/burst_cap_tracks_the_ota_rung.rs
+    - crates/openpulse-modem/tests/idle_flicker_is_not_evidence.rs
     - crates/openpulse-modem/tests/ota_channel_adaptation.rs
     - crates/openpulse-modem/tests/ota_rate_lockstep.rs
     - crates/openpulse-modem/tests/snr_floor_calibration.rs

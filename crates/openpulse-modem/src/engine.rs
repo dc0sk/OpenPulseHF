@@ -739,6 +739,11 @@ pub struct ModemEngine {
     /// by `ota_decode_and_ack_inner`, which must not treat a failed decode of such a slab as evidence
     /// about the rate ladder.
     last_flush_capped: bool,
+    /// Samples fed through `accumulate_capture`: this station's listening time. It stops while the
+    /// daemon transmits, because the daemon drops the capture stream then.
+    listening_samples: u64,
+    /// Shortest frame per `(mode, FEC)`, measured once by modulating a 1-byte payload (#1456).
+    shortest_frame_cache: Vec<(String, FecMode, usize)>,
     /// Samples of pre-trigger ring prepended to the last flushed burst (#1454): non-zero when the
     /// spectral test was true at the burst's open block — which includes a one-read onset that total
     /// power also opened. Taken by `ota_decode_and_ack_inner` and `decode_burst_with_fec`;
@@ -1049,6 +1054,13 @@ const SPECTRUM_TAP_MAX: usize = 16384;
 /// dropped. Three matches the HARQ diversity depth measured in `harq_fade_diversity`.
 const OTA_HARQ_MAX_ATTEMPTS: usize = 3;
 
+/// Post-lead samples a failed burst needs before it counts against the ladder (#1456): 0.5 s, about
+/// 3× the longest idle flicker measured behind a 250 Hz filter (1200 samples) and an eighth of the
+/// shortest counted piece of a failing frame (4.2 s at QPSK250-D). Falsified by a recorded idle
+/// whose evidence bursts reach it at a reachable rung (`tests/idle_flicker_evidence_rate.rs` prints
+/// their lengths).
+const EVIDENCE_FLOOR_SAMPLES: usize = 4000;
+
 /// One Reed–Solomon code block, RS(255,223). A SoftConcatenated frame at or below this is a single
 /// block; the burst interleaver only benefits frames larger than one block.
 const RS_BLOCK_BYTES: usize = 255;
@@ -1094,6 +1106,8 @@ impl ModemEngine {
             rx_burst: Vec::new(),
             relay_mode: None,
             last_flush_capped: false,
+            listening_samples: 0,
+            shortest_frame_cache: Vec::new(),
             last_flush_lead: 0,
             last_flush_onset_bound: 0,
             ota_fallback_more: Vec::new(),
@@ -2352,6 +2366,64 @@ impl ModemEngine {
             .unwrap_or(0)
     }
 
+    /// Least post-lead length a failed burst needs to be ladder evidence (#1456): `EVIDENCE_FLOOR_SAMPLES`,
+    /// or half the shortest candidate frame where that is less.
+    fn evidence_floor(&mut self, candidates: &[(SpeedLevel, String, FecMode)]) -> usize {
+        candidates
+            .iter()
+            .filter_map(|(_, mode, fec)| self.shortest_frame_samples(mode, *fec))
+            .map(|n| n / 2)
+            .fold(EVIDENCE_FLOOR_SAMPLES, usize::min)
+    }
+
+    /// Length of a 1-byte frame at `mode` + `fec`, measured through the transmit codecs and cached.
+    /// Coded frames are padded to a whole RS block, so this is the shortest frame the rung sends.
+    fn shortest_frame_samples(&mut self, mode: &str, fec: FecMode) -> Option<usize> {
+        if let Some((_, _, n)) = self
+            .shortest_frame_cache
+            .iter()
+            .find(|(m, f, _)| m == mode && *f == fec)
+        {
+            return Some(*n);
+        }
+        let secs = self.tx_airtime_seconds(&[0], mode, fec).ok()?;
+        let n = (secs * f64::from(AudioConfig::default().sample_rate)).round() as usize;
+        self.shortest_frame_cache.push((mode.to_string(), fec, n));
+        Some(n)
+    }
+
+    /// Does any FSK4-ACK-length window of `samples` decode as a ShortFEC ACK codeword? Deliberately
+    /// keyless and session-blind: any ACK on air is not a ladder frame, including a foreign
+    /// station's whose MAC this session cannot check. No CRC check for the same reason: a keyed
+    /// ACK carries its MAC in that byte.
+    fn holds_an_ack_codeword(&self, samples: &[f32]) -> bool {
+        let (Some(fsk4_len), Some(plugin)) =
+            (self.fsk4_ack_frame_len(), self.plugins.get("FSK4-ACK"))
+        else {
+            return false;
+        };
+        let sps = (AudioConfig::default().sample_rate as usize / 100).max(1);
+        let step = (sps / 4).max(1);
+        let Some((first, last)) = Self::ack_scan_span(None, samples.len(), fsk4_len, step) else {
+            return false;
+        };
+        (first..=last).step_by(step).any(|off| {
+            let window = AudioSamples {
+                samples: samples[off..off + fsk4_len].to_vec(),
+            };
+            self.stage_demodulate_payload(plugin, "FSK4-ACK", &window)
+                .ok()
+                .and_then(|wire| ShortFecCodec::new().decode(&wire.bytes).ok())
+                .is_some_and(|d| d.len() == 5)
+        })
+    }
+
+    /// Samples fed through [`accumulate_capture`](Self::accumulate_capture) since the engine was built:
+    /// this station's listening time, which the daemon's NACK budget leaks against (#1456).
+    pub fn listening_samples(&self) -> u64 {
+        self.listening_samples
+    }
+
     /// Burst cap for what this receiver may actually be sent, not just for the mode it is configured
     /// with (#1249).
     ///
@@ -2449,6 +2521,7 @@ impl ModemEngine {
         mode: Option<&str>,
         samples: Vec<f32>,
     ) -> Result<Option<AudioSamples>, ModemError> {
+        self.listening_samples = self.listening_samples.saturating_add(samples.len() as u64);
         self.record_audio(&samples); // RX window (raw channel audio) for the spectrum/waterfall tap
                                      // The notch is applied once, at the single `PipelineStage::InputCapture` seam in
                                      // `route_audio_stage` (reached via `accumulate_routed` below); just record the mode here.
@@ -3785,6 +3858,33 @@ impl ModemEngine {
                     "OTA: failed burst is not ladder evidence (#1454): longest total-power run \
                      {tp_run}, spectral span {s_span}, recognition window {floor}"
                 );
+                return Ok((None, None, last_err));
+            }
+            // #1456: nor is a failed burst with less audio after its lead than the evidence floor.
+            // Idle behind a 250 Hz filter trips the squelch for two or three reads (800–1200 samples,
+            // measured over 30 min at SL2, SL5 and SL6), and at SL6 that clears the 544-sample
+            // recognition window about 214 times an hour: three of them demote the ladder. The
+            // counted pieces of a BPSK31 or QPSK250-D frame failing at the decode edge measured 4.2 s
+            // and longer. Capped at half the shortest candidate frame, because a fade can split a
+            // frame and each piece must stay evidence (#1452); a half-frame floor ALONE was rejected,
+            // because it silences a frame shredded into three pieces (`design/reply-window-evidence.md`).
+            let evidence_floor = self.evidence_floor(&candidates);
+            if post < evidence_floor {
+                tracing::debug!(
+                    "OTA: failed burst is not ladder evidence (#1456): {post} samples after the \
+                     lead, evidence floor {evidence_floor}"
+                );
+                return Ok((None, None, last_err));
+            }
+            // An ACK is not a ladder frame, but at about 0.5 s it clears the floor at every rung: a
+            // station hearing another's NACK would otherwise NACK it back, and two idle OTA stations
+            // can answer each other until the daemon's budget runs out.
+            // The whole burst, lead included: FSK4-ACK has no preamble, so when the squelch opens on
+            // the ACK's second read its first read sits in the ring.
+            if post <= 2 * self.fsk4_ack_frame_len().unwrap_or(0)
+                && self.holds_an_ack_codeword(&samples.samples)
+            {
+                tracing::debug!("OTA: failed burst is an ACK, not ladder evidence (#1456)");
                 return Ok((None, None, last_err));
             }
         }
