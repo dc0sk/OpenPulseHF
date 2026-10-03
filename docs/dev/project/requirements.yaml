@@ -435,6 +435,7 @@ capabilities:
     - crates/openpulse-core/src/ota_rate.rs
     - crates/openpulse-modem/tests/burst_cap_tracks_the_ota_rung.rs
     - crates/openpulse-modem/tests/idle_flicker_is_not_evidence.rs
+    - crates/openpulse-modem/tests/off_frequency_fallback_is_not_ladder.rs
     - crates/openpulse-modem/tests/ota_channel_adaptation.rs
     - crates/openpulse-modem/tests/ota_rate_lockstep.rs
     - crates/openpulse-modem/tests/snr_floor_calibration.rs

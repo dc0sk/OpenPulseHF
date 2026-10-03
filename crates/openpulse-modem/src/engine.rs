@@ -3555,13 +3555,19 @@ impl ModemEngine {
             // The fallback mode rides along as an uncoded candidate: non-ladder traffic (station ID,
             // filexfer, handshake, QSY, relay) is exactly as likely to arrive off frequency as a
             // ladder frame, and #1123 is the record of what happens when this arm forgets it.
+            //
+            // It is the LAST entry, and a decode there is non-ladder traffic exactly as in phase 1:
+            // returned early, with no ACK and no controller update. Before this it was reported as an
+            // `Sl1` ladder decode, so an off-frequency station ID or file fragment moved the rung and
+            // was ACKed (#1123's failure mode), and only its keying's first frame came out (#1461).
             let mut phase2: Vec<(SpeedLevel, String, FecMode)> = candidates.clone();
-            if let Some(m) = fallback_mode {
-                if !fallback_is_a_candidate(&candidates, m) {
+            let fallback_at = fallback_mode
+                .filter(|m| !fallback_is_a_candidate(&candidates, m))
+                .map(|m| {
                     phase2.push((SpeedLevel::Sl1, m.to_string(), FecMode::None));
-                }
-            }
-            'settle_scan: for (level, mode, fec) in &phase2 {
+                    phase2.len() - 1
+                });
+            'settle_scan: for (i, (level, mode, fec)) in phase2.iter().enumerate() {
                 let (step, scan_end, raw_max) = self.burst_onset_scan_bounds(mode, n, onset_bound);
                 // Coded sizing here too (#1384) — phase 2 starts its scan at onset 0, but walks past
                 // it, so every later slice has the same raw-truncation exposure as phase 1's.
@@ -3589,6 +3595,22 @@ impl ModemEngine {
                             },
                             *fec,
                         ) {
+                            Ok(payload) if fallback_at == Some(i) => {
+                                self.update_afc_estimate(mode, &slice);
+                                debug!(
+                                    "ota fallback decoded {} bytes of non-ladder traffic at {mode} \
+                                     after acquisition",
+                                    payload.len()
+                                );
+                                self.ota_fallback_more = self.decode_following_frames(
+                                    mode,
+                                    FecMode::None,
+                                    &samples.samples,
+                                    start,
+                                    &payload,
+                                );
+                                return Ok((Some((payload, mode.clone())), None, last_err));
+                            }
                             Ok(payload) => {
                                 self.update_afc_estimate(mode, &slice);
                                 decoded_span = Some((start, end));

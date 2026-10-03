@@ -15,6 +15,32 @@ this ledger adds the design rationale and the actually-observed results per chan
 
 ---
 
+## 2026-10-03 — An off-frequency fallback frame is non-ladder traffic in phase 2 too (work plan M2)
+
+**Change.** Phase 2 of the OTA decode (the acquisition pass, #1118) carried the uncoded fallback mode as
+an `Sl1` candidate. An off-frequency station ID or file fragment that only phase 2 could recover was
+therefore reported as an SL1 ladder decode:
+- the rate controller moved;
+- the daemon keyed an ACK at it, which is #1123's failure mode;
+- only the first frame of a multi-fragment keying came out (#1461).
+
+**Design.** The phase-2 fallback entry is handled exactly like phase 1's fallback: an early return with
+the payload and mode, no ACK frame and no controller update, and `ota_fallback_more` filled by
+`decode_following_frames`.
+
+**Implementation.** `crates/openpulse-modem/src/engine.rs`, the phase-2 block of `ota_decode_and_ack_inner`.
+
+**Tests.** `crates/openpulse-modem/tests/off_frequency_fallback_is_not_ladder.rs`. An uncoded BPSK250
+frame 100 Hz off frequency, in recorded idle, with the rung locked at SL2, goes through
+`accumulate_capture` and `ota_decode_burst`. It must decode with no ACK, leave the rung at SL2 and need
+settles; a two-frame keying must yield both frames.
+
+**Test results.**
+- Before the fix: 0/2 (an ACK keyed; the second fragment lost).
+- After: 2/2.
+- Modem and daemon suites (`--no-fail-fast`): rc=0, 819 passed, 0 failed, 105 ignored.
+- Sabotage (fix reverted): the rung assertion fails with SL2 → SL1, and the multi-frame test fails on the ACK.
+
 ## 2026-10-02 — Idle flicker and ACKs are not ladder evidence; the NACK budget leaks (#1456, #1460; work plan M2)
 
 **Change.**
