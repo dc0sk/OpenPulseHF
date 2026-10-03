@@ -3642,6 +3642,12 @@ impl ModemEngine {
         // the diversity gain (measured 0.43 → 0.67 on `moderate_f1` SCFDMA52-16QAM) only reaches
         // the air here. Retain this burst on continued failure; clear all retained LLRs on any
         // success so a delivered frame's soft info can't bleed into the next one.
+        //
+        // The retention is STAGED, not pushed: it is committed only after the burst clears the
+        // evidence guards below. Pushed here, every failed idle flicker at a soft rung filled the
+        // diversity set with noise that the next real frame was combined with — the guards kept it from moving the ladder but not from the combine (decay
+        // review, finding 7). A burst that is not evidence of a failed frame is not a copy of one.
+        let mut harq_staged: Vec<(String, Vec<f32>)> = Vec::new();
         if decoded.is_none() {
             if self.ota_retained_session.as_deref() != Some(session_id) {
                 self.ota_retained_llrs.clear();
@@ -3756,12 +3762,7 @@ impl ModemEngine {
                 if decoded.is_some() {
                     break;
                 }
-                let buf = self.ota_retained_llrs.entry(mode.clone()).or_default();
-                buf.push(llrs);
-                if buf.len() > OTA_HARQ_MAX_ATTEMPTS {
-                    let excess = buf.len() - OTA_HARQ_MAX_ATTEMPTS;
-                    buf.drain(0..excess);
-                }
+                harq_staged.push((mode.clone(), llrs));
             }
             // RESTORE THE AFC ON FAILURE, as every sibling arm does (#1139).
             //
@@ -3908,6 +3909,14 @@ impl ModemEngine {
             {
                 tracing::debug!("OTA: failed burst is an ACK, not ladder evidence (#1456)");
                 return Ok((None, None, last_err));
+            }
+            for (mode, llrs) in harq_staged {
+                let buf = self.ota_retained_llrs.entry(mode).or_default();
+                buf.push(llrs);
+                if buf.len() > OTA_HARQ_MAX_ATTEMPTS {
+                    let excess = buf.len() - OTA_HARQ_MAX_ATTEMPTS;
+                    buf.drain(0..excess);
+                }
             }
         }
 
@@ -8814,6 +8823,84 @@ mod tests {
             rx.ota_retained_llrs.is_empty(),
             "a fallback decode must retain NO HARQ LLRs; retained {:?}",
             rx.ota_retained_llrs.keys().collect::<Vec<_>>()
+        );
+    }
+
+    /// Decay review, finding 7: a failed burst that is not ladder evidence retains no HARQ LLRs.
+    ///
+    /// The retention used to be pushed before the evidence guards, so an idle flicker at a soft rung
+    /// was combined into the next real frame although the guards kept it off the ladder. Measured on
+    /// the recorded IC-9700 250 Hz idle at SL7 and SL9: 240 of 624 flushed bursts in 10 min reached
+    /// the soft demod and were retained, none of them evidence. Pure noise is no stand-in — the OFDM
+    /// demod finds no preamble in it and nothing is retained either way — so the flicker here is the
+    /// head of a real SL9 frame, cut to 2000 samples (a measured flicker length). The positive
+    /// control is the same head followed by noise to six seconds: evidence, and retained.
+    #[test]
+    fn a_burst_that_is_not_evidence_retains_no_harq_llrs() {
+        let lb = LoopbackBackend::new();
+        let mut tx = ModemEngine::new(Box::new(lb.clone_shared()));
+        tx.register_plugin(Box::new(ofdm_plugin::OfdmPlugin::new()))
+            .unwrap();
+        tx.transmit_with_fec_mode(b"x", "OFDM52-16QAM", FecMode::SoftConcatenated, None)
+            .unwrap();
+        let frame = lb.drain_samples();
+        const HEAD: usize = 2000;
+        let mut x: u32 = 0x1234_5678;
+        let mut noise = move || {
+            x = x.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+            ((x >> 8) as f32 / (1u32 << 24) as f32 - 0.5) * 0.2
+        };
+        let head: Vec<f32> = frame[..HEAD].to_vec();
+        let mut long = head.clone();
+        long.extend((HEAD..48_000).map(|_| noise()));
+
+        let rx_for = || {
+            let mut rx = ModemEngine::new(Box::new(LoopbackBackend::new()));
+            rx.register_plugin(Box::new(ofdm_plugin::OfdmPlugin::new()))
+                .unwrap();
+            // SL9 is OFDM52-16QAM + SoftConcatenated, a soft rung: HARQ demodulates every failed burst.
+            rx.start_ota_session(SessionProfile::fast());
+            rx.ota_lock_level(SpeedLevel::Sl9);
+            rx
+        };
+
+        let mut control = rx_for();
+        let floor = control.evidence_floor(&[(
+            SpeedLevel::Sl9,
+            "OFDM52-16QAM".to_string(),
+            FecMode::SoftConcatenated,
+        )]);
+        assert!(
+            HEAD < floor,
+            "precondition: the flicker ({HEAD}) must be under the evidence floor ({floor})"
+        );
+        let res = control
+            .ota_decode_burst(&AudioSamples { samples: long }, "retention", None)
+            .expect("must not error");
+        assert!(
+            res.payload.is_none(),
+            "precondition: the cut frame must not decode"
+        );
+        assert!(
+            !control.ota_retained_llrs.is_empty(),
+            "positive control: a six-second failed burst is evidence and must be retained"
+        );
+
+        let mut rx = rx_for();
+        let res = rx
+            .ota_decode_burst(&AudioSamples { samples: head }, "retention", None)
+            .expect("must not error");
+        assert!(
+            res.payload.is_none(),
+            "precondition: the cut frame must not decode"
+        );
+        assert!(
+            rx.ota_retained_llrs.is_empty(),
+            "a flicker-length burst is not evidence and must retain no HARQ LLRs; retained {:?}",
+            rx.ota_retained_llrs
+                .iter()
+                .map(|(m, v)| (m, v.len()))
+                .collect::<Vec<_>>()
         );
     }
 
