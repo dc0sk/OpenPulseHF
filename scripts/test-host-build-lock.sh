@@ -13,7 +13,11 @@
 set -uo pipefail
 
 HELPER="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/host-build-lock.sh"
-SCRATCH="$(mktemp -d "${HOME}/.cache/test-host-build-lock.XXXXXX")"
+# A failed mktemp left SCRATCH empty and the cases ran against /lock, /inner.sh and /outer.sh —
+# and as root still printed OK. Refuse instead.
+SCRATCH="$(mktemp -d "${TMPDIR:-/tmp}/test-host-build-lock.XXXXXX")" && [[ -d "$SCRATCH" ]] || {
+    echo "FAIL: cannot create a scratch directory for the lock self-test" >&2; exit 1
+}
 trap 'rm -rf "$SCRATCH"' EXIT
 export HEAVY_BUILD_LOCK="$SCRATCH/lock"
 fail=0
