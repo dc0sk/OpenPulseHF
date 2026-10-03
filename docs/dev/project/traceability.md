@@ -15,6 +15,27 @@ this ledger adds the design rationale and the actually-observed results per chan
 
 ---
 
+## 2026-10-03 — A wideband transmission does not close its own burst (#1304, work plan M2)
+
+**Change.** #1304 asked whether OFDM52 (SL7–14), which fills ~85 % of the 300–2700 Hz band, walks the
+carrier-detect floor up to its own level and flushes its burst mid-frame. The test it asked for did not
+exist.
+
+**Design.** No code change: #1452 already replaced the across-bin percentile with a per-bin floor over
+time and holds it while a burst is gathered. This adds the missing evidence on the case the issue names.
+
+**Implementation.** `crates/openpulse-modem/tests/dcd_wideband_long_frame.rs`: OFDM52 + SoftConcatenated
+frames on the two recorded wide-filter idles, levelled against the noise in OFDM52's occupied band, fed
+through `accumulate_capture` at 800-sample reads.
+
+**Tests → results** (`cargo test -p openpulse-modem --no-default-features --test dcd_wideband_long_frame`,
+3 passed, debug and release):
+- eight back-to-back 255 B frames (~13 s): one burst spanning the whole transmission, 8/8;
+- sabotage S1 (`NoiseFloorTracker::hold` a no-op): that test fails 8/8 cells, six split into 2–4 bursts
+  and two ending early — #1304's mechanism, reproduced;
+- one 255 B frame (~1.6 s): one burst, decoded 8/8; it passes under S1 too, so it is documented as a
+  decode check, not the discriminator. A 64QAM variant at +22 dB also passed under S1 and was dropped.
+
 ## 2026-10-03 — An off-frequency fallback frame is non-ladder traffic in phase 2 too (work plan M2)
 
 **Change.** Phase 2 of the OTA decode (the acquisition pass, #1118) carried the uncoded fallback mode as
