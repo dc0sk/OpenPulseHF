@@ -770,10 +770,25 @@ fn run_adaptive_ladder(
     stats: Arc<RwLock<TestStats>>,
     stop_rx: crossbeam_channel::Receiver<()>,
 ) {
+    run_adaptive_ladder_with(config, taps, stats, stop_rx, SessionProfile::by_name)
+}
+
+/// The ladder loop, resolving profile names through `resolve`. An unknown name shows an empty
+/// ladder (the "no levels" event) rather than silently running another profile.
+fn run_adaptive_ladder_with(
+    config: Arc<RwLock<AppConfig>>,
+    taps: [Tap; 4],
+    stats: Arc<RwLock<TestStats>>,
+    stop_rx: crossbeam_channel::Receiver<()>,
+    resolve: fn(&str) -> Option<SessionProfile>,
+) {
     let mut current = config.read().unwrap().clone();
     let mut profile_name = current.profile.clone();
-    let mut profile = SessionProfile::by_name(&profile_name).unwrap_or_else(SessionProfile::hpx500);
-    let mut levels = profile.defined_levels();
+    let mut profile = resolve(&profile_name);
+    let mut levels = profile
+        .as_ref()
+        .map(SessionProfile::reachable_levels)
+        .unwrap_or_default();
     if levels.is_empty() {
         stats
             .write()
@@ -815,8 +830,11 @@ fn run_adaptive_ladder(
         let new_cfg = config.read().unwrap().clone();
         if new_cfg.profile != profile_name {
             profile_name = new_cfg.profile.clone();
-            profile = SessionProfile::by_name(&profile_name).unwrap_or_else(SessionProfile::hpx500);
-            levels = profile.defined_levels();
+            profile = resolve(&profile_name);
+            levels = profile
+                .as_ref()
+                .map(SessionProfile::reachable_levels)
+                .unwrap_or_default();
             idx = 0;
             if levels.is_empty() {
                 stats
@@ -837,6 +855,10 @@ fn run_adaptive_ladder(
         }
         current = new_cfg;
 
+        // Non-empty `levels` means the name resolved.
+        let Some(profile) = profile.as_ref() else {
+            break;
+        };
         let level = levels[idx];
         let mode = profile.mode_for(level).unwrap_or("BPSK250").to_string();
         let fec = if fec_locked(&mode, true) {
@@ -1487,11 +1509,34 @@ mod tests {
 
     #[test]
     fn run_adaptive_ladder_produces_updates_and_status() {
-        // hpx_wideband starts at QPSK500 (fast frames) so the test doesn't wait on a
-        // huge BPSK31+RS buffer; hpx500 works in the app but is slow for a unit test.
+        // A QPSK500-only apparatus ladder (fast frames) so the test doesn't wait on the shipped
+        // profiles' MFSK16/BPSK31 entry rungs; `fast`/`robust` work in the app but are slow here.
+        fn wide(_: &str) -> Option<SessionProfile> {
+            use openpulse_core::rate::SpeedLevel::*;
+            Some(SessionProfile::from_rungs(
+                &[
+                    (
+                        Sl8,
+                        "QPSK500",
+                        openpulse_core::fec::FecMode::None,
+                        Some(11.0),
+                        Some(18.0),
+                    ),
+                    (
+                        Sl9,
+                        "QPSK1000",
+                        openpulse_core::fec::FecMode::None,
+                        Some(14.0),
+                        None,
+                    ),
+                ],
+                Sl8,
+                3,
+            ))
+        }
         let mut cfg = AppConfig {
             audio_source: crate::state::AudioSource::AdaptiveLadder,
-            profile: "hpx_wideband".into(),
+            profile: "apparatus".into(),
             noise_model: NoiseModel::Awgn,
             ..Default::default()
         };
@@ -1506,7 +1551,7 @@ mod tests {
         let stats_clone = Arc::clone(&stats);
         let config_clone = Arc::clone(&config);
         let handle = std::thread::spawn(move || {
-            run_adaptive_ladder(config_clone, taps_clone, stats_clone, stop_rx);
+            run_adaptive_ladder_with(config_clone, taps_clone, stats_clone, stop_rx, wide);
         });
 
         std::thread::sleep(std::time::Duration::from_millis(500));

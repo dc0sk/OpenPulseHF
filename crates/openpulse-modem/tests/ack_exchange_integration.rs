@@ -147,8 +147,8 @@ fn ack_up_from_irs_increases_iss_tx_speed() {
     let (mut irs, irs_lb) = make_engine();
 
     // Start adaptive sessions on both ends (profile gives SNR thresholds).
-    iss.start_adaptive_session(SessionProfile::hpx500());
-    irs.start_adaptive_session(SessionProfile::hpx500());
+    iss.start_adaptive_session(SessionProfile::robust());
+    irs.start_adaptive_session(SessionProfile::robust());
 
     let initial_level = iss
         .current_tx_level()
@@ -174,7 +174,7 @@ fn ack_up_from_irs_increases_iss_tx_speed() {
     assert_eq!(received_ack.ack_type, AckType::AckUp);
 
     // prime the upgrade candidate on the ISS TX adapter so AckUp is admitted.
-    let ceiling = SessionProfile::hpx500()
+    let ceiling = SessionProfile::robust()
         .snr_ceiling_for_level(initial_level)
         .unwrap_or(f32::INFINITY);
     iss.apply_snr_hint(ceiling + 5.0);
@@ -199,7 +199,7 @@ fn ack_down_from_irs_decreases_iss_tx_speed() {
     let (mut iss, iss_lb) = make_engine();
     let (mut irs, irs_lb) = make_engine();
 
-    iss.start_adaptive_session(SessionProfile::hpx500());
+    iss.start_adaptive_session(SessionProfile::robust());
     // Step ISS up so there is room to step down.
     let _ = iss.apply_ack(AckType::AckUp);
     let _ = iss.apply_ack(AckType::AckUp);

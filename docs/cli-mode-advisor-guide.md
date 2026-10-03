@@ -2,7 +2,7 @@
 project: openpulsehf
 doc: docs/cli-mode-advisor-guide.md
 status: living
-last_updated: 2026-05-14
+last_updated: 2026-10-01
 ---
 
 # CLI Mode Advisor Guide
@@ -46,6 +46,6 @@ Current command behavior uses the HPX HF ladder:
 ## Notes
 
 - This is a static recommendation based on instant SNR only.
-- Thresholds are derived from `SessionProfile::hpx_hf()` SNR floors to stay aligned with rate-control policy.
+- Thresholds are derived from the SNR floors of the `hpx_hf` ladder (profile `fast`) to stay aligned with rate-control policy.
 - Dynamic trend-aware recommendations and use-case weighting are planned in later Item 10 increments.
 - Always validate recommendations against channel behavior (FER, retries, and latency) during operation.

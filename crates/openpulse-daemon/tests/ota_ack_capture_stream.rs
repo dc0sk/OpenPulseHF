@@ -183,7 +183,7 @@ async fn an_ota_send_never_opens_a_second_concurrent_capture_stream() {
     send(
         &mut w,
         &ControlCommand::StartOtaSession {
-            profile: "hpx500".into(),
+            profile: "robust".into(),
         },
     )
     .await;

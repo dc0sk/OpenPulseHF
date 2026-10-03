@@ -1,16 +1,18 @@
 #!/usr/bin/env bash
-# The two acceptance suites held out of the default workspace run because of RUNTIME, not staleness.
+# The acceptance suites held out of the default workspace run because of RUNTIME, not staleness.
 #
-# They cost ~83 minutes of the ~2 h `scripts/gate.sh` between them, which is most of it. They are
+# The first two cost ~83 minutes of the ~2 h `scripts/gate.sh` between them, which is most of it. They are
 # `#[ignore]`d rather than feature-gated on purpose: an ignored test still compiles and is still
 # linted by `--all-targets`, so it cannot rot the way a default-off feature can.
 #
-# Run this before any change that touches the receiver notch, the OTA rate controller, or the
-# acquisition chain they exercise — and before a release. `scripts/gate.sh` does NOT run them.
+# Run this before any change that touches the receiver notch, the OTA rate controller, the carrier
+# detect, or the acquisition chain they exercise — and before a release. `scripts/gate.sh` does NOT
+# run them.
 #
-#   scripts/slow-tests.sh          # both suites
-#   scripts/slow-tests.sh notch    # just the notch acceptance suite (REQ-QRM-01)
-#   scripts/slow-tests.sh ota      # just the OTA rate-adaptation suite (CAP-33)
+#   scripts/slow-tests.sh             # every suite
+#   scripts/slow-tests.sh notch       # just the notch acceptance suite (REQ-QRM-01)
+#   scripts/slow-tests.sh ota         # just the OTA rate-adaptation suite (CAP-33)
+#   scripts/slow-tests.sh spectral    # just the carrier-detect decode counts (#1454, #1443, REQ-DCD-01)
 #
 # Named tests, never a blanket `-- --ignored`: the notch binary also holds `probe_band_sweep`, a
 # manual env-driven research harness that asserts nothing, and `capture_replay_corpus` holds two
@@ -22,12 +24,14 @@ cd "$REPO_ROOT" || exit 2
 
 want=${1:-all}
 case "$want" in
-    all|notch|ota) ;;
-    *) echo "usage: scripts/slow-tests.sh {all|notch|ota}" >&2; exit 2 ;;
+    all|notch|ota|spectral) ;;
+    *) echo "usage: scripts/slow-tests.sh {all|notch|ota|spectral}" >&2; exit 2 ;;
 esac
 
 rc_total=0
 log_dir="$REPO_ROOT/target"
+# The build may go elsewhere (CARGO_TARGET_DIR), so this directory need not exist.
+mkdir -p "$log_dir" || exit 2
 stamp=$(date -u +%Y%m%dT%H%M%SZ)
 
 # One cargo invocation per SUITE, not per test: cargo runs the tests inside a binary in parallel,
@@ -43,7 +47,8 @@ run_suite() {  # $1=suite name, $2...=extra args passed after --
     local log="$log_dir/slow-$suite-$stamp.log"
     echo "  $suite -> $log"
     # Two-line form, never a pipeline: the verdict must come from the command's own status.
-    cargo test -p openpulse-modem --no-default-features --test "$suite" -- --ignored "$@" >"$log" 2>&1
+    # shellcheck disable=SC2086  # PROFILE is either empty or one flag
+    cargo test ${PROFILE:-} -p openpulse-modem --no-default-features --test "$suite" -- --ignored "$@" >"$log" 2>&1
     local rc=$?
     local result
     result=$(grep '^test result:' "$log" | tail -1)
@@ -64,8 +69,16 @@ run_suite() {  # $1=suite name, $2...=extra args passed after --
     esac
 }
 
-[ "$want" = "ota" ]   || run_suite notch_rescues_interferer --skip probe_band_sweep
-[ "$want" = "notch" ] || run_suite ota_channel_adaptation
+wants() { [ "$want" = all ] || [ "$want" = "$1" ]; }
+wants notch    && run_suite notch_rescues_interferer --skip probe_band_sweep
+wants ota      && run_suite ota_channel_adaptation
+# The spectral-busy gates' COUNTS run by default in the gate; only their decode counts are held out.
+# Release, unlike the two above: 144 slow-rung decodes take hours unoptimised, and what this suite
+# asserts is a decode count, which does not depend on the profile.
+# `--nocapture`: the per-cell decode counts are the result the PR quotes, and a passing test's
+# output is otherwise swallowed.
+wants spectral && PROFILE=--release run_suite spectral_busy_gathers_weak_frames --nocapture
+wants spectral && PROFILE=--release run_suite total_power_bursts_keep_their_head --nocapture
 
 if [ "$rc_total" -eq 0 ]; then
     echo "SLOW-TESTS: PASS"

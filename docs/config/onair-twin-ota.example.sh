@@ -53,8 +53,8 @@ export A_RFPOWER=0.10                     # 0.0–1.0 fraction of full power
 export B_RFPOWER=0.10
 
 # ── OTA / modem ───────────────────────────────────────────────────────────────
-# hpx_hf / hpx_modcod exercise the modulation×FEC ladder; hpx500 is the simplest.
-export OTA_PROFILE="hpx_hf"
+# fast = the full ladder (SL1-SL14, up to ~2 kHz); robust = the same ladder capped at SL6 (<= 500 Hz).
+export OTA_PROFILE="fast"
 export START_MODE="BPSK250"              # daemon [modem] mode (initial)
 export DAEMON_TCP_PORT=9000             # each daemon's control port (same on both hosts)
 

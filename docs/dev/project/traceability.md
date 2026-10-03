@@ -10,10 +10,1122 @@ serialisation point by construction: every concurrent PR appends here, so two of
 conflict. Resolve by keeping both entries in date order, never by dropping one.
 
 See `CLAUDE.md` → *PR hygiene → Traceability* for the standing rule. The per-feature
-acceptance gates live in `CLAUDE.md` → *Acceptance criteria*; this ledger adds the design rationale
-and the actually-observed results per change.
+acceptance gates live in `docs/dev/project/acceptance-criteria.md` (moved from `CLAUDE.md` in #1472);
+this ledger adds the design rationale and the actually-observed results per change.
 
 ---
+
+## 2026-10-03 — A wideband transmission does not close its own burst (#1304, work plan M2)
+
+**Change.** #1304 asked whether OFDM52 (SL7–14), which fills ~85 % of the 300–2700 Hz band, walks the
+carrier-detect floor up to its own level and flushes its burst mid-frame. The test it asked for did not
+exist.
+
+**Design.** No code change: #1452 already replaced the across-bin percentile with a per-bin floor over
+time and holds it while a burst is gathered. This adds the missing evidence on the case the issue names.
+
+**Implementation.** `crates/openpulse-modem/tests/dcd_wideband_long_frame.rs`: OFDM52 + SoftConcatenated
+frames on the two recorded wide-filter idles, levelled against the noise in OFDM52's occupied band, fed
+through `accumulate_capture` at 800-sample reads.
+
+**Tests → results** (`cargo test -p openpulse-modem --no-default-features --test dcd_wideband_long_frame`,
+3 passed, debug and release):
+- eight back-to-back 255 B frames (~13 s): one burst spanning the whole transmission, 8/8;
+- sabotage S1 (`NoiseFloorTracker::hold` a no-op): that test fails 8/8 cells, six split into 2–4 bursts
+  and two ending early — #1304's mechanism, reproduced;
+- one 255 B frame (~1.6 s): one burst, decoded 8/8; it passes under S1 too, so it is documented as a
+  decode check, not the discriminator. A 64QAM variant at +22 dB also passed under S1 and was dropped.
+
+## 2026-10-03 — An off-frequency fallback frame is non-ladder traffic in phase 2 too (work plan M2)
+
+**Change.** Phase 2 of the OTA decode (the acquisition pass, #1118) carried the uncoded fallback mode as
+an `Sl1` candidate. An off-frequency station ID or file fragment that only phase 2 could recover was
+therefore reported as an SL1 ladder decode:
+- the rate controller moved;
+- the daemon keyed an ACK at it, which is #1123's failure mode;
+- only the first frame of a multi-fragment keying came out (#1461).
+
+**Design.** The phase-2 fallback entry is handled exactly like phase 1's fallback: an early return with
+the payload and mode, no ACK frame and no controller update, and `ota_fallback_more` filled by
+`decode_following_frames`.
+
+**Implementation.** `crates/openpulse-modem/src/engine.rs`, the phase-2 block of `ota_decode_and_ack_inner`.
+
+**Tests.** `crates/openpulse-modem/tests/off_frequency_fallback_is_not_ladder.rs`. An uncoded BPSK250
+frame 100 Hz off frequency, in recorded idle, with the rung locked at SL2, goes through
+`accumulate_capture` and `ota_decode_burst`. It must decode with no ACK, leave the rung at SL2 and need
+settles; a two-frame keying must yield both frames.
+
+**Test results.**
+- Before the fix: 0/2 (an ACK keyed; the second fragment lost).
+- After: 2/2.
+- Modem and daemon suites (`--no-fail-fast`): rc=0, 819 passed, 0 failed, 105 ignored.
+- Sabotage (fix reverted): the rung assertion fails with SL2 → SL1, and the multi-frame test fails on the ACK.
+
+## 2026-10-02 — Idle flicker and ACKs are not ladder evidence; the NACK budget leaks (#1456, #1460; work plan M2)
+
+**Change.**
+- **#1456.** Behind a 250 Hz filter, idle at SL6 produced about 214 failed bursts an hour that counted
+  against the ladder. Each one keyed a NACK, and every third one demoted the rung.
+- **The mute.** The daemon's NACK budget reset only on a decode, so three such bursts muted the receiver
+  until the next decode.
+- **#1460.** Another station's ACK counted the same way.
+
+**Design** (`design/reply-window-evidence.md` v3). This is the third design: v1 and v2 used a reply
+window and were reviewed and not implemented (`reviews/review-reply-window-evidence.md`). v3 is the round-2
+reviewer's recommendation, set from measurements:
+- **Idle flicker** is two or three 400-sample reads, 0.1–0.15 s post-lead, at SL2, SL5 and SL6.
+- **A failing frame** puts its counted pieces at 4.2 s and up: BPSK31 at −3 dB has one 6.2 s piece
+  among dozens; QPSK250-D flushes whole.
+
+Hence three rules:
+1. A failed burst needs post-lead audio of at least `EVIDENCE_FLOOR_SAMPLES` (0.5 s), or half the shortest
+   candidate frame where that is less.
+2. A short burst holding a ShortFEC ACK codeword, checked keyless, is not evidence.
+3. The daemon's budget leaks one per 10 min of listening time, and a failure heard while muted adds nothing.
+
+**Implementation.**
+- `crates/openpulse-modem/src/engine.rs`:
+  - in `ota_decode_and_ack_inner`, the floor and the ACK check after the #1454 guard;
+  - `evidence_floor`, `shortest_frame_samples` (cached `tx_airtime_seconds`) and `holds_an_ack_codeword`;
+  - `listening_samples`, counted in `accumulate_capture`.
+- `crates/openpulse-daemon/src/nack_budget.rs`: new `NackBudget`.
+- `server.rs`: the OTA arm keys through `NackBudget::on_ladder_burst`.
+
+**Tests.**
+- `tests/idle_flicker_is_not_evidence.rs`, through `accumulate_capture` and `ota_decode_burst`:
+  - 2 min of the 250 Hz idle at SL6 keys nothing;
+  - a QPSK250-D frame failing at 0 dB is still answered;
+  - another station's NACK at +12 dB is not answered.
+- `nack_budget` unit tests (4).
+- Ignored measurements: `idle_flicker_evidence_rate`, `marginal_frame_pieces`.
+
+**Test results.**
+- `idle_flicker_is_not_evidence`: 3 passed.
+- Sabotage:
+  - without the floor, the idle test fails with 11 NACKs keyed;
+  - without the ACK rule, the ACK test fails with 1;
+  - the failing-frame test passes in all three builds.
+- `nack_budget`: 4 passed.
+- Core, modem and daemon suites (`--no-fail-fast`): rc=0, 1367 passed, 0 failed, 106 ignored.
+
+## 2026-10-02 — Security-relevant dependency updates and Node 24 CI actions (#1421; work plan M2)
+
+**Change.** `cargo audit` found two vulnerabilities on the Release 1 path:
+- `h2` 0.4.14 (RUSTSEC-2026-0258, unbounded empty DATA frames);
+- `rustls` 0.23.40 (RUSTSEC-2026-0285, TLS 1.3 handshake messages accepted across encryption levels).
+
+Both reach `openpulse-cli` through `reqwest`. CI also warned that Node.js 20 is deprecated.
+
+**Design.** Only security-relevant updates, per the work-plan row.
+- `cargo update -p h2 -p rustls`: semver-compatible; `rustls-webpki` moved with `rustls`.
+- Every `actions/*` action moves to its current major, which runs on Node 24, still pinned by commit SHA:
+  - checkout v7.0.1, cache v6.1.0, upload-artifact v7.0.1, download-artifact v8.0.1;
+  - `softprops/action-gh-release` v3.0.3.
+
+  The release notes list no input changes for how these workflows call them. Downloads are by name, on hosted runners.
+- Not changed:
+  - `lru` and `event-listener` are flagged unsound but have no fixed release, and only `openpulse-panel`/`openpulse-tui` (post-release) reach them.
+  - The three yanked transitive crates are left as they are.
+
+**Implementation.** `Cargo.lock`; `.github/workflows/*.yml`.
+
+**Tests.** `cargo audit` after the update; `cargo test -p openpulse-cli -p pki-tooling --no-default-features --no-fail-fast`.
+
+**Test results.** `cargo audit` exit 0: no vulnerabilities, 6 allowed warnings. CLI and PKI suites: rc=0, 151 passed, 0 failed.
+
+## 2026-10-02 — ARDOP host blocks larger than a frame go on the air (#1385; work plan M2)
+
+**Change.** The data port accepted host blocks up to 4 096 B and queued each whole. `Frame::new` refuses
+a payload over 255 B, so a larger block keyed the transmitter once, modulated nothing, and returned no
+error the host could read.
+
+**Design.** The data port is a byte stream at both hosts: Pat concatenates what the TNC delivers. So
+the sender splits each block into frame-sized chunks before queueing them. Each chunk is an ordinary
+frame (and, on the adaptive path, its own ARQ exchange), so the receiver needs no reassembly. That
+answers both design questions in the issue: blocks over 255 B are live (B2F through Pat), and nothing
+needs reassembling, because the host stream is already a stream. It is not a wire change.
+
+**Implementation.**
+- `crates/openpulse-core/src/frame.rs`: `Frame::MAX_PAYLOAD` (255) names the limit `Frame::new`
+  enforces.
+- `crates/openpulse-ardop/src/data.rs`: `frame_chunks`; the data-port reader queues each chunk in
+  order under its existing backpressure.
+
+**Tests.**
+- `crates/openpulse-ardop/tests/host_block_larger_than_a_frame.rs`: a non-loopback TNC with a spy
+  PTT, driven through the real data port. A 600 B block keys 3 times (one per frame); the control, a
+  200 B block, keys once.
+- Unit tests in `data.rs`: chunk sizes, order and content, and every chunk accepted by `Frame::new`.
+
+**Results (run).**
+- New test **2/0**; unit **2/0**.
+- Sabotage (blocks passed whole): the 600 B case keys **1** time against 3, so it fails, and the
+  control passes.
+- `openpulse-ardop` + `openpulse-core`: **599 passed / 0 failed**.
+- Clippy `-D warnings` is clean.
+
+---
+
+## 2026-10-02 — PTT release waits for the device's reported drain (#1367; work plan M2)
+
+**Change.** `CpalOutputStream::flush` slept a fixed 200 ms after the software queue emptied. Every PTT
+guard drops after `flush`, so release came 200 ms after the queue emptied whatever the device needed:
+about 140 ms of software-owned delay against REQ-PHY-05's 50 ms.
+
+**Design.** `docs/dev/design/drain-from-device-delay.md`. Fable review was mandatory, because it moves
+PTT release (`reviews/review-drain-from-device-delay.md`): 1 blocking, 1 fix, 6 notes.
+- cpal's `playback − callback` is, on ALSA, the PCM's own queued delay. The callback that empties the
+  queue latches when the last sample leaves the device, in the queue's own mutex, on the non-empty →
+  empty transition only.
+- `flush` waits until then plus 10 ms, capped at 200 ms.
+- A zero delay is not trusted: cpal clamps an underrun's negative delay to 0. Zero or no report →
+  the full 200 ms.
+
+**Implementation.**
+- `crates/openpulse-audio/src/flush.rs`: `drain_after_callback`, `drain_wait`, `DRAIN_WAIT_CAP`,
+  `DRAIN_MARGIN` (ungated, so tested in the default gate).
+- `crates/openpulse-audio/src/cpal_backend.rs`: `OutQueue { samples, drained }`, the latch in the
+  output callback, `flush` using `drain_wait`. A corrected comment: lazy `play()` does not defer
+  ALSA.
+
+**Tests.** `flush::tests`:
+- a reported delay sets the wait (20 ms + 80 frames → 30 ms → 40 ms);
+- a zero delay falls back to 200 ms;
+- no report or no rate falls back;
+- the wait is never longer than 200 ms.
+
+**Results (run).**
+- `openpulse-audio` **27/0**.
+- Sabotage (a zero delay trusted again): `a_zero_delay_is_not_trusted_and_falls_back_to_the_full_wait`
+  **fails**.
+- Clippy `-D warnings` is clean with `--features cpal-backend` and with `--no-default-features`;
+  fmt is clean.
+- **Not run:** real audio. The tail-integrity check (dual-card rung) and the PTT release check (G1)
+  are hardware stages.
+
+---
+
+## 2026-10-02 — The ARQ ACK listen holds its stream and scans it (#1315; work plan M2)
+
+**Change.** `receive_ack_with_short_fec_within` retried `receive_ack_with_short_fec`, which opens a stream,
+reads once and decodes that read whole, with no onset scan. On a callback backend each try saw one
+poll interval, so an ACK with any lead was unreachable. ARDOP's adaptive ISS (`bridge.rs`) called the
+one-shot form with no window at all, and so did the CLI's `transmit_arq`. Every attempt therefore
+counted as a missing ACK: an implicit NACK, a rate step-down and a retry.
+
+**Design.** The OTA ISS listen (`receive_ota_ack_within`, #1177/#1247) already holds one stream,
+accumulates, and runs the resumable FSK4 scan over the same ShortFec ACK framing. Its loop is extracted
+as `listen_for_ack(device, window, accept, k3)`. The short-FEC listen uses it FSK4-only and accepts any
+session; the OTA listen keeps its session filter and the K=3 MFSK16 union.
+
+**Implementation.** `crates/openpulse-modem/src/engine.rs`:
+- `listen_for_ack`;
+- `receive_ack_with_short_fec_within` uses it;
+- `transmit_arq` listens with `ARQ_ACK_WINDOW_MS` (9 s, the daemon's OTA window).
+
+`crates/openpulse-ardop/src/bridge.rs`: the adaptive ISS uses the windowed listen. The ARDOP default
+(`enable_adaptive_arq` false) never reached this path, which is why the defect went unseen.
+
+**Tests.** `crates/openpulse-modem/tests/arq_ack_listen_holds_the_stream.rs`: an ACK behind a 3 377-sample
+lead, delivered in 1 000-sample chunks, is found; silence yields no ACK.
+
+**Results (run).**
+- New test **2/0**.
+- Sabotage (the old retry-one-shot body restored): the lead case fails and the control passes.
+- `fsk4_ack_scan_reaches_the_whole_window` **3/0**.
+- `openpulse-ardop` **45/0**.
+- Clippy `-D warnings` is clean.
+
+---
+
+## 2026-10-02 — File transfer survives a lost fragment, a lost ack and a long block (work plan M2; REQ-FX-05)
+
+**Change.** Three defects, found by the #1461 review and by reading the timers.
+
+1. Nothing could trigger the sender's selective-repeat arm. The receiver only ever sent
+   `BlockAck { complete: true }`, so one lost fragment meant silence until both stall timers fired.
+2. A lost `BlockAck` was fatal: the sender's only reaction to silence was `Failed { Stall }`.
+3. The stall timers did not scale with airtime. The sender armed its 120 s deadline when a block was
+   queued, and the daemon then transmitted the block synchronously. A default 16 KiB block is about
+   9.5 min at BPSK250, so any block with more than about 120 s of airtime failed on a perfect channel.
+
+**Design.** `docs/dev/design/filexfer-selective-repeat.md`. Fable review was mandatory, because the
+design changes when a station keys (`reviews/review-filexfer-selective-repeat.md`): 2 blocking and
+4 fix findings, all folded in. There is no wire change.
+- The receiver answers fragments and never transmits on a timer:
+  - a fragment of a held block gets a complete ack and is not ingested;
+  - a NACK goes out at the end of the round (the block's last fragment, or the highest index the last
+    NACK asked for), or on a duplicate fragment;
+  - a probe for a transfer that already finished gets its `FileComplete` again.
+- The sender probes with the round's last fragment instead of failing. `FileComplete` on the last
+  block counts as success. Only an unanswered probe, or a NACK that gains nothing, spends the retry
+  budget.
+- The ack-wait starts when the round has been transmitted, stretched to 3 control-frame airtimes plus
+  30 s. The receiver re-arms per fragment, with a 720 s stall.
+- The drain defers while the channel is busy, and drops its queue after 5 min of busy.
+
+**Implementation.**
+- `openpulse-filexfer`:
+  - `lib.rs`: `Timeouts.ack_wait_ms`, `FxAction::ProbeBlock`;
+  - `sender.rs`: `note_round_sent`, the probe, retry accounting, `FileComplete` in `Sending`;
+  - `receiver.rs`: `note_fragment`;
+  - `blocks.rs`: `BlockAssembler::peek`.
+- `openpulse-daemon`:
+  - `filexfer.rs`: `on_block_fragment`, `answer_finished_probe`, `FinishedRx`, `note_round_sent`,
+    `ProbeBlock` handling;
+  - `lib.rs`: `file_rx_finished`, `filexfer_busy_since`;
+  - `server.rs`: the `drain_filexfer_tx` busy gate, the give-up and the ack-wait arming.
+
+**Tests.**
+- `openpulse-filexfer/tests/filexfer.rs`: 8 new or changed state-machine tests with injected time
+  (24 in the file).
+- `openpulse-daemon/tests/filexfer_lossy_link.rs`: two stations' real file-transfer code over a link
+  that drops chosen frames, in virtual time. Seven cases:
+  - clean link;
+  - lost fragment;
+  - lost `BlockAck`;
+  - lost round end;
+  - lost NACK;
+  - lost NACK after a resend round;
+  - lost final ack plus `FileComplete`.
+
+**Results (run).**
+- filexfer **24/0**; lossy link **7/0**.
+- Sabotage, each mechanism removed separately; every one fails its own case:
+  - arming at queue time, ignoring `FileComplete` and no per-fragment re-arm → 4 state-machine tests
+    fail;
+  - no end-of-round NACK → 2 fail;
+  - no held re-ack → 1 fails;
+  - no duplicate NACK → the resend-round case fails;
+  - no finished record → 1 fails.
+- Clippy `-D warnings` is clean.
+- Daemon + filexfer suites, on top of the #1461 change: **250 passed / 0 failed**, rc=0, with the multi-fragment twin tests included.
+
+---
+
+## 2026-10-02 — Every frame of a multi-frame burst is decoded (#1461; work plan M2)
+
+**Change.** The daemon sends a planned burst of SAR fragments inside one keying, back to back, so the
+receiver's accumulator gathers them as one burst. Every decode arm returned the first frame that
+validated and dropped the rest.
+
+Measured before the fix with `twin_multi_fragment_file`, two real daemons:
+- an 878 B file (4 fragments in one keying) never arrived. B decoded one 255 B frame and reported
+  `file_failed` `Stall` at 121 s.
+- the 1-fragment control arrived in 3.6 s.
+
+**Design.** `docs/dev/design/multi-frame-burst-decode.md`, reviewed (`reviews/review-multi-frame-burst-decode.md`,
+ten findings, six folded in). The receiver continues past each decoded frame:
+- the cursor is the frame's onset plus its exact length (`tx_airtime_seconds`), minus 4 symbols;
+- frames 2..N run phase 1 only, at frame 1's committed correction;
+- it stops at the first failure, or when less than the shortest possible frame remains.
+
+The sender-side gap alternative is rejected (it depends on the receiver's timing) and parked.
+
+**Implementation** (`crates/openpulse-modem/src/engine.rs`):
+- `scan_burst_onsets`, `decode_burst_inner` and `decode_burst_phase1` also return the onset;
+- new `decode_burst_frames` and `decode_following_frames`;
+- `OtaRxResult.more`, filled by the #1123 fallback.
+
+`crates/openpulse-daemon/src/server.rs`: both arms produce a frame list, and each frame is unpacked and
+processed in order before one drain. The latency EWMA updates once per burst.
+
+**Tests.**
+- `crates/openpulse-daemon/tests/twin_multi_fragment_file.rs`: 4 fragments at the default
+  `burst_max_secs`, OTA off and on, plus the 1-fragment control. Each asserts some keying carried more
+  than one frame.
+- `crates/openpulse-modem/tests/burst_carries_several_frames.rs`: 3 frames over the recorded IC-9700
+  idle, through `accumulate_capture`, returned in order; a lone frame yields exactly one.
+
+**Results (run).**
+- `twin_multi_fragment_file` passed **3/0** in 7.6 s.
+  - Sabotage (continuation returns nothing): **2 failed / 1 passed**, with the control passing.
+- `burst_carries_several_frames` passed **2/0**.
+  - Sabotage: the multi-frame test fails and the single-frame test passes.
+- Single-frame cost (debug): `decode_burst_frames` 1.43 s against `decode_burst_with_fec` 1.40 s on the
+  same 60 048-sample burst.
+- `cargo test -p openpulse-daemon -p openpulse-modem --no-fail-fast`: **801 passed / 0 failed**
+  (102 ignored), rc=0.
+- Clippy `-D warnings` and fmt are clean.
+- `scripts/slow-tests.sh`, the acquisition chain:
+  - spectral and total-power suites: pass;
+  - notch: 2/1, the known-red #1457 row (decision 10);
+  - `ota_channel_adaptation`: 0/3 — `PluginNotFound("MFSK16")`, not this change. #1480 renamed its
+    `hpx500` ladder to `robust`, which enters at SL1 MFSK16, and the gate does not run held-out
+    suites. Fixed here with the uncoded apparatus ladder it was calibrated on; rerun: **3 passed / 0 failed** in 1 961 s.
+
+**Found, not fixed here** (work plan rows):
+- the file-transfer receiver never NACKs a missing fragment, and the sender's stall timers do not
+  scale with airtime (separate design, `design/filexfer-selective-repeat.md`);
+- OTA phase 2 decodes an off-frequency fallback frame as a ladder frame at SL1.
+
+---
+
+## 2026-10-02 — ARDOP `ARQBW` sizes modes from the plugin (work plan M2; found by the profile design)
+
+**Change.** `ARQBW` mapped a host bandwidth cap to a ladder level through
+`openpulse_qsy::bandplan::max_speed_level_for_bandwidth`, which read a hand-kept Hz table. That table
+was a stale twin of `ModemPlugin::occupied_bandwidth_hz`: it listed OFDM52 at 3200 Hz against the
+plugin's 2031 Hz and lacked MFSK16, QPSK250-D and every OFDM52-* variant. A mode it could not size was
+dropped, so no `ARQBW` reached QPSK250-D (SL6), and `fast` stopped at SL5 for every cap of 2032 Hz or
+more. When no mode fitted it returned `None`, which the bridge applied as "uncapped".
+
+**Design.** Size from the registered plugin, at the engine, which owns both the plugins and the
+active ladder. When nothing fits, answer the lowest reachable rung, never "uncapped".
+
+**Implementation.** `ModemEngine::arq_max_tx_level_for_bandwidth` (`crates/openpulse-modem/src/engine.rs`)
+replaces `adaptive_profile_modes`. `crates/openpulse-ardop/src/bridge.rs` (ARQBW block) calls it.
+`max_speed_level_for_bandwidth` and its test are deleted from `crates/openpulse-qsy/src/bandplan.rs`,
+which keeps `occupied_bandwidth_hz` for its segment checks. `openpulse-ardop` no longer depends on
+`openpulse-qsy`.
+
+**Tests.** `crates/openpulse-modem/tests/arqbw_sizes_from_the_plugin.rs` covers:
+- `fast` at 200/500/2000/2500 Hz → SL4/SL6/SL6/SL14;
+- 50 Hz → SL1;
+- `robust` at 2500 Hz → SL6;
+- no session → `None`.
+
+**Results (run).**
+- The new test passed **4/0**.
+- `openpulse-ardop` and `openpulse-qsy` passed **94/0** (`--no-fail-fast`).
+- Clippy `-D warnings` is clean on the three crates; fmt is clean.
+- Sabotage: excluding QPSK modes from sizing and answering SL14 when nothing fits gave **3 failed /
+  1 passed**. The no-session case was unaffected, as expected.
+
+---
+
+## 2026-10-02 — On-air twin runner retains A2 evidence (work plan M2; on-air re-baseline item 5)
+
+**Change.** `scripts/run-onair-twin-ota.sh` left `observability.audit_mode` off, so the `OtaRateDecision`
+events A2 is scored from were broadcast and not retained, and no bundle recorded the rig's filter
+width or frequency trim. Its default frequency was 14.070 MHz, while decision 13 keeps testing on
+2 m until the release candidate.
+
+**Implementation.** In `run-onair-twin-ota.sh`:
+- the station config now writes `[observability] audit_mode = true` and an `archive_dir`, plus explicit
+  `notch_enabled`, `agc_enabled`, `cessb_enabled` and `ptt_leader_ms` (env-overridable, daemon defaults);
+- a new `collect_evidence` fetches each station's `events.ndjson`, daemon log and config, plus a
+  `rig_readback` (`rigctl f m j z`: frequency, mode and passband, RIT, XIT), into
+  `<report>-evidence/`, and warns when a station retained no events;
+- `TEST_FREQ_HZ` now defaults to 144 640 000.
+
+**Tests.** The functions ran against local `ssh` and `rigctl` stubs. The generated config carries every
+new key in its section (`ModemConfig`, `ObservabilityConfig`). The evidence directory holds all eight
+files. The event count is reported (2 seeded → "2 audit events"), and the read-back prints
+`f: 144640000 / m: USB 2400 / j: 0 / z: 0`. `bash -n` passes. Not run against real rigs; that is M3.
+
+---
+
+## 2026-10-02 — A flush timeout still counts the frame (#1334; work plan M2)
+
+**Requirement / change.** `record_tx_frame` ran only after a successful `flush()` on both emit seams.
+`CpalOutputStream::flush` errors exactly when the queue has not drained — the samples are still
+playing — so a frame that reached the air left `frames_transmitted` unbumped. Three consumers key off
+that counter: the daemon's §97.119 ID timer (`server.rs`), ARDOP's ID timer (`bridge.rs`) and the
+daemon's #1319 post-transmit capture drop. The frame was also missing from the §97 TX log.
+
+**Design + rationale.** Record intent, not completion — the correction #1333 made to the repeater's
+`note_tx`, one layer down. A failed `write` emitted nothing and returns unrecorded; a failed `flush`
+is recorded, then its error is returned to the caller unchanged.
+
+**Implementation.** `openpulse-modem/src/engine.rs`: the audio emit seam and `transmit_iq` record
+between `write` and returning the `flush` error. The consumers poll the counter delta each tick
+regardless of the transmit result (`server.rs:870/923/932/1370`, `ardop/src/bridge.rs:206/261/288`),
+so the engine fix reaches all three.
+
+**Tests.** New `openpulse-modem/tests/flush_timeout_still_counts_the_frame.rs`: a backend whose
+`write` succeeds and `flush` fails counts the frame on the audio and the IQ seam; the control (a
+failing `write`) counts nothing on either.
+
+**Results (run 2026-10-02).** 3/3 pass. Sabotage: with `engine.rs` reverted to `origin/main`, the two
+flush-timeout tests fail and the control passes. Clippy `-D warnings` clean.
+
+---
+
+## 2026-10-02 — PTT leader delay (#1257; work plan M2)
+
+**Requirement / change.** The first sample left as soon as PTT asserted, so a rig's key-up clipped the
+preamble, and #1049 measured that a truncated preamble does not demodulate. A host-keyed ARDOP rig
+(`ptt_backend = "none"`) was therefore documented as unsupported.
+
+**Design + rationale.** #1257's reviewed design pass: the wait is a key-transition property, so it
+lives in `SharedPtt::key_as`, the one funnel every front end keys through. It runs after the hardware
+assert and the `PTT TRUE` notify (a host keying on our edge gets the same head start), with the lock
+dropped (the watchdog can preempt). It defaults to 0, because no rig has been measured. The
+implementation review (`docs/dev/reviews/review-1257-leader-delay.md`) found an ownership race, now
+fixed: the generation is captured before the wait and re-checked after it.
+
+**Implementation.** `openpulse-radio/src/shared_ptt.rs` (`set_leader`, `leader`, `key_owned`, the
+post-wait re-check), `error.rs` (`PttError::ReleasedDuringLeader`); `openpulse-config` `[modem]
+ptt_leader_ms`; wired in `openpulse-daemon/src/server.rs` and `ptt.rs`, `openpulse-ardop`
+`ArdopConfig::ptt_leader`, `openpulse-kiss` `KissConfig::ptt_leader`, and CLI `--ptt-leader-ms`
+(`transmit.rs` counts it against the watchdog). Docs: the manual's host-keyed paragraph, a correction
+in the #1250 review (ardopcf does not wait), the CLI guide and the book.
+
+**Tests.** `openpulse-ardop/tests/ptt_leader_delay.rs` builds an `ArdopServer` from `ArdopConfig` with
+a spy PTT and a recording output stream. With a 300 ms leader, first-write minus assert is ≥ 300 ms;
+the control with no leader is < 300 ms. Unit tests in `shared_ptt.rs`: the notify comes before the
+wait; the wait holds no lock; a key released during the leader is not returned as owned.
+
+**Results (run 2026-10-02).** `openpulse-radio`, `-ardop`, `-kiss`, `-cli` and `-config`: 244 passed,
+0 failed. `shared_ptt` 26/26; `ptt_leader_delay` 2/2. Sabotage, each run and reverted:
+- no sleep → the leader test fails (first sample 461 µs after the edge);
+- `set_leader` removed from `ArdopServer` → it fails (456 µs);
+- post-wait re-check disabled → the release test fails;
+- sleep under the lock → the lock test fails ("waited 400 ms").
+
+The no-leader control measured the accidental leader of this in-process path at ≈ 0.46 ms.
+Workspace clippy `-D warnings` clean.
+
+---
+
+## 2026-10-01 — Two session profiles, `fast` and `robust` (work plan decision 18)
+
+**Requirement / change.** The registry held eleven profiles; Release 1 ships one ladder (`hpx_hf`). The
+maintainer asked for two: performance under good conditions, reliability under poor conditions or
+with limited gear. Ten profiles deleted, no aliases. Defaults were `hpx500` for ARDOP (whose coherent
+QPSK rungs decode ~0 % on a fade, #923) and an empty-name fallback to it.
+
+**Design + rationale.** `docs/dev/design/session-profiles.md`, reviewed before implementation
+(`docs/dev/reviews/review-session-profiles.md`, six fixes folded in). `fast` = the `hpx_hf` ladder
+unchanged; `robust` = the same ladder capped at SL6 (≤ 500 Hz, single-carrier). The cap is local
+policy outside `fingerprint()`, so a fast↔robust pair keeps adaptive OTA. It is a separate
+`profile_cap` field on both rate paths, because the existing caps (`set_level_bounds`,
+`set_max_tx_level`) are overwritten by operator bounds and every ARQBW change. At the cap a decode
+reports `Hold`, not `ClimbOnSnr`. The ARDOP TNC floors at SL2 (no MFSK16 there).
+
+**Implementation.** `openpulse-core/src/profile.rs` (`fast`, `robust`, `max_level`, `reachable_levels`,
+`from_rungs` for test apparatus; ten constructors and `SCFDMA_QAM_HF_ENTRY_POLICY` deleted);
+`ota_rate.rs` (`profile_cap`, `hi()`, Hold at the top); `openpulse-core/src/rate.rs` (`raise_to`);
+`openpulse-modem/src/rate_policy.rs` (`profile_cap`, `min_tx_level`, `enforce_bounds`, capped
+`defined_modes`), `engine.rs` (`set_arq_min_tx_level`); `openpulse-ardop/src/main.rs` (unknown name is
+an error, floor SL2); `openpulse-daemon/src/server.rs` (unknown OTA profile is an error);
+`openpulse-config` defaults `fast`; CLI mode-advisor uses `reachable_levels` (it recommended SL14 under
+`robust`); linksim resolves unknown names to a panic instead of a silent `hpx_hf` fallback and keeps
+two apparatus ladders (`apparatus:wide-qpsk`, `apparatus:ofdm`) so the notch experiments and the OFDM
+goodput gate keep their baselines; testmatrix use cases `adaptive_fast`/`adaptive_robust`; scripts,
+config examples and operator docs.
+
+**Tests.** New: `ota_rate` (robust never past SL6; operator bounds never raise the cap; a lower bound
+still applies; Hold at the cap), `rate_policy` (a wider ARQBW cap cannot lift `robust`; a narrower one
+applies; the floor keeps NACK exhaustion off SL1, with a control), `session_profile` (retired names
+rejected; robust = fast capped; cap not in the fingerprint), mode-advisor and CLI robust-cap tests.
+Retargeted: tests that used `hpx500` run `robust` or, where they exercise the uncoded path, an
+apparatus copy of the old uncoded ladder (`ota_arm_uncoded_dispatch`, `ota_rate_lockstep`).
+Deleted: `modcod_ladder.rs` and the pilot/wideband/narrowband profile tests. The handshake KAT keeps
+the literal `"hpx_hf"` input: the vector pins the encoder, which did not change.
+
+**Results (run 2026-10-01).** Full `cargo test --workspace --no-default-features --no-fail-fast`:
+2614 passed, 10 failed, all 10 in three targets, then fixed and rerun: `channel_loopback` 13/13
+(rung-count anti-vacuity now pinned at the 13 floored `hpx_hf` rungs), `ota_arm_uncoded_dispatch` 6/6,
+`ota_rate_lockstep` 10/10. Workspace clippy `-D warnings` clean; `trace.sh check` PASS;
+`reachability.sh check` PASS. **Found:** the twin-daemon OTA test took 812 s floored at SL5 (BPSK250
++ Rs) against ~18 s on the old uncoded rung; MFSK16 (950 s with its ACK path off) and OFDM (828 s
+capped at SL6) were ruled out by experiment, and an SL7 floor runs it in 23 s. Parked in the work plan
+M2 as a receive-cost item to measure in a release build.
+
+---
+
+## 2026-10-01 — A packed frame that fails to unpack is dropped, not delivered (REQ-CMP-05; work plan decision 17)
+
+**Requirement / change.** REQ-CMP-05: a decompression failure is a frame-integrity error. The daemon's
+receive loop did `unpack(&bytes).unwrap_or(bytes)` (`server.rs`), so a frame carrying the `OPZ1` pack
+magic that failed to unpack was delivered as the message with its bytes still compressed.
+REQ-CMP-03 described a handshake negotiation deleted in #1166 / PR #1189.
+
+**What was measured first, and what it overturned.** The 2026-09-30 governance review (a Fable
+finding I confirmed by reading the code) said the zstd dictionary ID is never on the wire, so a
+retrained dictionary would silently break mixed-version sessions, and proposed a wire change. A probe
+run before designing it (`/tmp` scratch test, not committed) showed:
+- a packed zstd frame carries the dictionary ID in zstd's own frame header — FHD `0x63`,
+  `Dictionary_ID_flag` 3, 4 bytes, `0x7d6f375f`, equal to `ZSTD_DICT_ID`;
+- a decoder given the same dictionary with its ID byte flipped fails with `Dictionary mismatch`; the
+  real dictionary decodes the frame (control).
+
+So zstd already refuses a mismatched dictionary **for any frame whose header carries a non-zero
+dictionary ID** — the decoder's check is guarded by `fParams.dictID &&` (`zstd_decompress.c:717`).
+Our sender always writes it (`ZSTD_c_dictIDFlag` defaults to 1), and the trainer's ID is a hash of the
+dictionary content (`zdict.c:879`), so a retrain changes it; a foreign frame with dictID 0 would skip
+the check (no checksum either). The silent garbage came only from the daemon
+delivering a failed unpack. The maintainer dropped the wire change (decision 17, amending decision 5).
+
+**Design.** `compression::try_unpack` returns `Ok(None)` for a frame that is not packed, `Ok(Some)` for
+an unpacked one, and `Err(UnpackError)` for a packed frame that is corrupt (no tag, unknown tag, or a
+decompression failure carrying zstd's reason). `unpack` keeps its old `Option` contract on top of it
+for its other callers. The daemon's single receive site calls `unpack_received`, which drops a corrupt
+packed frame, logs the reason at `warn`, and counts it in the internal `MetricsSnapshot::unpack_failures`
+(not on the wire `ControlEvent`). Stated cost: a raw payload that happens to begin with `OPZ1` is now
+dropped too — the price of the magic. REQ-CMP-03 is rewritten to what ships: self-describing, not
+assumed of the peer, sender opt-in.
+
+**Twin, not changed:** `openpulse-filexfer/src/blocks.rs` also does `unpack(..).unwrap_or(packed)`, but
+a block that unpacks wrongly is caught by the offer-length check when its length differs, and
+otherwise by the file-level verify; file transfer ships disabled in Release 1. Parked, not fixed here.
+
+**Implementation.** `crates/openpulse-core/src/compression.rs` (`try_unpack`, `UnpackError`),
+`crates/openpulse-daemon/src/server.rs` (`unpack_received` + its call site, counter increment),
+`crates/openpulse-daemon/src/lib.rs` (`MetricsSnapshot::unpack_failures`), REQ-CMP-03 in
+`requirements.yaml` / `requirements.md` / `traceability-matrix.md` (CAP-01 no longer claims it).
+
+**Tests → results (run 2026-10-01).** `cargo test -p openpulse-core --no-default-features --lib
+compression::` 13 passed, including `a_frame_from_another_dictionary_is_an_error` (a frame compressed
+against the flipped-ID dictionary is refused with "Dictionary mismatch") and
+`try_unpack_tells_not_packed_from_corrupt`. `cargo test -p openpulse-daemon --no-default-features --lib
+unpack_received` 2 passed. **Sabotage:** making `unpack_received` deliver the bytes on an error fails
+`a_corrupt_packed_frame_is_dropped_not_delivered` and nothing else (1 passed, 1 failed). fmt and the
+three clippy passes clean; `trace.sh check` and `reachability.sh check` PASS. **Not run:** an
+end-to-end twin-daemon test — no command puts a corrupt packed frame on the air — and the full gate.
+
+---
+
+## 2026-09-30 — The pre-push hook tests the core libraries' reverse dependents, measures a rebased push against main, and refuses to run stale (decision 9, #1357, #1448)
+
+**Requirement / change.** Work plan M0, decision 9: before the full gate moves to once a day, the
+hook must close #1074's failure mode — a behavioural change in a core library breaking a downstream
+crate's test while the hook tested only the crate that changed. Two defects in the same hook: after
+a rebase it measured the push against the stale upstream ref, widening both the tested crates and
+the lint range (#1357); and cargo-husky never re-installs a changed hook, so a maintainer host ran a
+copy missing three later passes with nothing noticing (#1448).
+
+**Design.**
+1. **Reverse dependents are TESTED when `openpulse-core`, `openpulse-dsp` or `openpulse-modem` is
+   touched**, using the transitive closure the hook already computed (dev-dependencies included).
+   For any other crate they are still only named, so a leaf push stays fast. If the closure cannot
+   be computed, the safe direction is the whole workspace. `HOOK_REVDEPS=0` skips the reverse run,
+   visibly. `cargo test` now runs with `--no-fail-fast`.
+2. **Base = `@{u}` only while it is an ancestor of HEAD, else `origin/main`.** An ancestor upstream
+   keeps a stacked branch measured against the branch it stacks on; a rewritten branch lands on
+   `main`. Both the crate set and the re-homed-docs lint use the same base.
+3. **Drift check** in the hook (first thing after `GATE_SKIP`) and as a gate step: compare the
+   installed hook with the versioned one after stripping exactly cargo-husky's two inserted header
+   lines; fail with a one-line `cp` refresh. A missing hook (fresh clone, CI) is not drift.
+4. Fixed on the way: `meta="$(cargo metadata …)"; rc=$?` exited the hook under `set -e` before the
+   "UNKNOWN" message could print; now `&& rc=0 || rc=$?`.
+
+Review: none — gate tooling, not a mandatory review class under decision 8.
+
+**Implementation.** `.cargo-husky/hooks/pre-push` (base selection, drift self-check, reverse-dependent
+test set), `scripts/gate.sh` (`normalise_hook`, `hook_drift`, step "installed pre-push hook"),
+`CLAUDE.md` (*What enforces the gate today*).
+
+**Tests → results (actually run, 2026-09-30).** The hook ran unmodified in a scratch worktree with a
+stand-in `cargo` on `PATH` that records `test`/`fmt`/`clippy` calls and passes `metadata` to the real
+cargo:
+- A, a commit touching `openpulse-dsp`: tests `openpulse-dsp` + its 23 reverse dependents, one
+  `cargo test` with 24 `-p` and `--no-fail-fast`;
+- B, a commit touching `openpulse-tui` only: tests `openpulse-tui` alone, reports no dependents;
+- C, A with `HOOK_REVDEPS=0`: tests `openpulse-dsp` alone, prints the skip and the 23-of-41 note;
+- D, A with `cargo metadata` failing: prints UNKNOWN with the exit code, runs `cargo test --workspace`;
+- E, A with an upstream that is not an ancestor: prints the #1357 line, measures against `origin/main`;
+- F, a stacked branch (upstream = A, plus a `tui` commit): tests `openpulse-tui` only, i.e. `@{u}` kept;
+- G, installed hook ≠ versioned: exits 1 before any work, printing the `cp` refresh.
+
+`hook_drift` from `gate.sh` (the function text itself, extracted and evaluated): no installed hook →
+rc 0; a cargo-husky-style install of the current hook → rc 0; `origin/main`'s hook installed → rc 1
+with a diff. The new hook also ran for real on this change's own push (no crate-owned files, so fmt
+and the three clippy passes only; all passed). `scripts/gate.sh --self-test` was started and **stopped
+at the session's one-hour background limit before it finished — no self-test result**; this change
+does not touch the failure-detection path it covers, but that is a reason, not a run. **Not measured:** the wall-clock cost of a real
+core-crate push under the new hook (it is most of the workspace test run), and a full `gate.sh` run of
+this branch.
+
+---
+
+## 2026-09-30 — #1443 stage 3: a total-power burst keeps its frame's start, and the onset scan reaches the whole trigger read
+
+**Requirement / change.** REQ-DCD-01: a transmission is gathered as one bounded burst whose decode
+can reach it. A burst total power opens started at the read that tripped the squelch, and kept no
+audio from before it. Measured through `accumulate_capture` (release, 16 placements, 64 B + Rs, the
+recorded IC-9700 idles, a direct-decode control 16/16 in every cell; `~/parked/openpulse-1443/`):
+at levels where total power opens the burst, up to 9 of 16 frames lost their start (0–9 across the cells), and wide BPSK63 +12 dB
+decoded 9/16, wide BPSK31 +12 dB 10/16, wide BPSK250 +8 dB 10/16. Two shapes:
+1. **Block boundary** — the frame began in the last part of a read too quiet to trip the squelch; 19
+   lost samples already fail BPSK250 (beyond #1438's −n/2 reach) and QPSK500 (no negative reach).
+2. **Flicker chain** — total power has no hold, so near the squelch it trips on the frame's head,
+   drops on the next quieter read and re-trips, until the spectral test arms and holds; the surviving
+   burst began up to ~2 100 samples into the frame (up to six fragments over the frame's head at
+   64-sample reads; nine counting idle flickers just before it).
+
+**Design (`docs/dev/reviews/review-1443-pretrigger-lead.md`, two Fable rounds; maintainer decision
+2026-09-30: the lead length).**
+1. **A burst total power opens gets `min(ring, previous read + S_LOOKBACK × WINDOW)`** of the
+   pre-trigger ring stage 2 keeps (`engine.rs`, `accumulate_routed`). The previous read bounds a
+   block-boundary loss at any read size; `S_LOOKBACK × WINDOW` (2 048 samples, which bounds the
+   spectral test's arming latency) bounds a flicker chain for any frame the spectral test holds — a
+   derivation for a floor that does not move during the chain (its fragments are committed to the
+   floor, filed; the trimmed mean may discount them, unmeasured); the corpus's longest chain, 2 096
+   samples at 171-sample reads, is inside it by 123 samples. A burst the spectral test opens keeps the
+   whole ring. For BPSK the lead is chiefly ROOM before the burst start — its decode reads a fixed
+   preamble from the onset it is handed, and the same length of idle from elsewhere rescues it as well
+   (at block-boundary offsets up to 252, and up to ~600 samples of BPSK250 preamble at +8 dB; at a
+   1 003-sample loss the real head was needed); QPSK500 needs the real head.
+2. **The onset scan reaches `lead + trigger read + acq`** (`last_flush_onset_bound`, taken with the
+   lead by both decode arms; `burst_onset_scan_bounds`). A frame can start anywhere in the read that
+   opened its burst; the stage-2 bound `lead + acq` missed every late onset in a long read (the daemon
+   reads whatever buffered since its last tick, thousands of samples after any slow decode) — at
+   4 096-sample reads BPSK250 at +8 dB decoded 9/16 on `main`, the seven misses exactly the onsets past
+   `lead + acq`. A caller-supplied burst keeps 4·acq.
+3. **Not the whole ring for every burst** (the review's preferred rule; the maintainer chose the
+   derived lead): a successful decode scans from the burst start to the frame, so its cost grows with
+   the lead — measured per successful BPSK31 decode (release, `probe-R*.log`, cell decode time / 16,
+   three test threads concurrently, the pre-#1443 scan bound): 0.18 s at a 400-sample lead, 0.46 s at
+   1 600, 1.96 s at the full 8 192 (BPSK63 0.10 / 0.26 / 1.18). The shipped lead at 400-sample reads is
+   2 448 — not measured directly, ~0.6–0.7 s by that sweep — so the derived lead costs roughly a third
+   of the ring per decode at the daemon's default read, and approaches the ring at long reads.
+
+**Eliminated, with numbers.** The previous read alone (the issue's "one-tick" ring): at 171-sample
+reads wide BPSK63 +12 dB 11/16 and 500 Hz BPSK63 +8 dB 12/16 — the flicker chain outruns one read. A
+fixed 2 048-sample floor: fitted to the corpus's largest trigger; its COVERAGE claim was falsified by
+the first cell outside it (wide BPSK31 +12 dB at 171-sample reads, a 2 096-sample trigger — 48 samples
+outside a 2 048 lead; that frame still decoded, 48 being inside BPSK31's −n/2 reach). That cell is in
+neither the coverage gate nor the held-out set: the shipped rule's coverage of it (171 + 2 048 =
+2 219 ≥ 2 096) is arithmetic, not a run. A 1 600- or 8 192-sample
+lead "costing QPSK500": that was the scan reach (item 2), not the lead.
+
+**Implementation.** `openpulse-modem/src/engine.rs` (`accumulate_routed`, `push_ring` —
+`rx_last_read_len`, the last non-empty read — `record_flush_flags`, `last_flush_onset_bound`,
+`burst_onset_scan_bounds`, `decode_burst_with_fec`, `decode_burst_inner`, `decode_burst_phase1`,
+`ota_decode_and_ack_inner`); `openpulse-dsp/src/noise_floor.rs` (`S_LOOKBACK` made public: it sizes
+the lead); `scripts/slow-tests.sh` (the new held-out decode suite under `spectral`).
+
+**Tests.** `crates/openpulse-modem/tests/total_power_bursts_keep_their_head.rs` (new). Default run:
+the lead covers the frame's first sample on every first burst over the frame, on five block-boundary
+cells and two flicker-chain cells, with two positive controls (the trigger inside the frame in ≥ 3
+placements — measured 50 — and more than one read inside in ≥ 3 — measured 21); BPSK250 +8 dB at
+4 096-sample reads decodes ≥ 15/16 (the reach); a QPSK500 frame starting on its trigger read's last
+symbol decodes at 400- and 4 096-sample reads (the fixture asserts that placement). Held out: decode counts. Six tests now measure post-trigger length — they read a burst's
+raw length, which now includes a lead: three in `dcd_floor_follows_the_filter`, the two engine unit
+tests `capture_burst_accumulates_fragmented_frame_then_decodes` and
+`accumulate_capture_streams_burst_and_feeds_spectrum_tap`, and `daemon_squelch_noise_floor`'s idle
+test. Stage 2's held-out BPSK63 bars rise from 13 to 15. The lead also exposed an OTA-arm defect that
+predates it (a ladder frame not at a burst's first sample was claimed by the uncoded fallback); it is
+fixed in its own change, landed first (the entry below).
+
+**Test results.** Held-out (`scripts/slow-tests.sh spectral`, release, 16 placements): every BPSK
+cell 16/16 at 400-, 171- and 4 096-sample reads, including the flicker-chain cells (wide BPSK63 +8 dB,
+wide BPSK31 +12 dB at 400) — except wide BPSK250 +8 dB at 171-sample reads, 15/16 (its t0, read at the
+gates commit; the mechanism does not depend on the lead rule: a 1 026-sample flicker fragment is longer
+than BPSK250's 1 024-sample preamble, so #1454's retention rule clears the ring before the surviving
+burst opens — a loss no lead can reach) — and both BPSK63 cells 16/16 at 64-sample reads (the only
+cells measured there; BPSK250 at 64-sample reads is the ring-cleared class, not measured). QPSK500
++12 dB 13/14/13 at 400/171/4 096 (#1463's onset-phase window, and phase 2's span-dependent
+correction). Stage 2's suite: +10 dB 15 → 16/16, BPSK63 wide and 500 Hz 13 → 16/16. Default-run gates
+3 passed. Re-run on the final #1443 code before its rebase onto the OTA first-claim fix (the raised bars
+included): identical counts, `SLOW-TESTS: PASS`. The rebase adds only that fix, which changes the OTA
+arm; these suites decode through `decode_burst_with_fec`, which it does not touch.
+**Gate:** `GATE: PASS 00609c1a568ccc84063c84dc62cc2aa39b633a8c clean 20260930T160748Z` (2 645 passed,
+0 failed; every step ok), run on the pre-rebase tip. That tree is byte-identical to this branch rebased
+onto #1468's squash (`279475600b29`), and the later rebase onto `main` adds only #1470's two review
+docs; the one commit after it adds only this line.
+
+**Sabotage** (logs `~/parked/openpulse-1443/sab2-*.log`, `sab3-S4.log`), each failing only its named
+gate of the three default-run gates: S1 no lead
+→ the coverage gate (a burst 63 samples into the frame); S2 the previous read only → the coverage
+gate's flicker-chain cells (715 samples in), the five block-boundary cells passing; S3 the ring cleared
+at every flush → the flicker-chain cells (1 200 in) — the lead depends on #1454's retention rule; S4
+the scan bound back to `lead + acq` → both reach gates (QPSK500 0/4 at 400-sample reads — the first
+size the test tries, re-run on the corrected fixture; BPSK250 9/16, the figure measured on `main`).
+
+**Filed separately** (found in review): #1463 (coherent QPSK loses frames whose onset carrier phase is
+in a ~50° window around 180°, ~1/7 of on-air frames); #1464 (total power has no hold at the frame head), #1465 (flicker fragments committed to the noise floor), #1466 (the ring's retention keyed on the preamble), #1467 (BPSK250 bursts drop after the preamble at small reads).
+
+**Stated limits.** The lead covers the flicker chains the spectral test ends; a frame the spectral
+test never holds, or one whose fragment was long enough to clear the ring, is not covered. The fixtures
+run with the receiver notch off (the engine default; the daemon's config default is on).
+## 2026-09-30 — a ladder frame keeps first claim on its burst wherever it sits (found by #1443)
+
+**Requirement / change.** REQ-FUN-06 (the receiver-led rate controller). The OTA arm's design gives a
+ladder frame first claim on a burst (#1123: the rung candidates run before the uncoded fallback for
+non-ladder traffic). Under a profile whose rung is uncoded at the active mode the fallback IS that
+rung's decoder, and the claim held only at offset 0: the candidates try the whole burst once, the
+fallback's phase 1 scans onsets, and the candidates' own onset scan (#1138) runs after it. A frame past
+the plugin's timing search was claimed by the fallback — payload delivered, no ACK, no controller
+decision. Measured (#1443 review round 3, parked): `hpx500` locked at SL4 (BPSK250, uncoded), the
+frame behind a hand-built lead — decoded as ladder traffic at residual offsets 0–48, as a control frame
+at 100 and beyond; BPSK31 at SL2 between 300 and 600. **This predates #1443**: at ordinary 400-sample
+reads a frame's onset is uniform in its trigger read, so on `main` most `hpx500` + BPSK250 frames were
+already misclassified. #1443's pre-trigger lead made it deterministic, which is how a fixture that had
+never seen it (`a_ladder_frame_still_classifies_as_ladder_when_the_fallback_could_also_decode_it`) went
+red. The twin `ota_ladder_steps_under_traffic` test (hpx500 + BPSK250) could not see it: the twin rig
+delivers each frame at offset 0, and the test asserts only "above SL2".
+
+**Design (reviewed, `docs/dev/reviews/review-ota-first-claim.md`).** When a rung candidate is the
+fallback's decoder — the same mode, `FecMode::None` — the fallback is skipped; the onset scan that
+follows runs the same decoder over the same onsets and claims the frame on the ladder path, with its
+span (the SNR the controller reads), its AFC update and its decision. The predicate is the one the
+phase-2 settle pass already used to dedupe the fallback; it is now one helper,
+`fallback_is_a_candidate`, used by both. Zero new decodes; coded profiles, where no candidate matches,
+are unchanged. Rejected: relabelling the fallback's decode (it returns no span, and the whole burst
+as the span would regress #1142's SNR reading), and running the candidates' scan before the fallback
+for every profile (it undoes #1138's cost placement).
+
+**Stated consequence.** Under such a profile a control frame at the active mode is always ACKed as
+ladder traffic — before this, only when it happened to sit near offset 0. Nothing on the wire
+distinguishes the two (the frame header has no class field); resolving it is #1123's open question.
+Eight of the eleven shipped profiles have an uncoded rung (`hpx500` in full, `hpx_modcod` at SL7, the
+four pilot profiles, `hpx_wideband`, `hpx_narrowband`); `hpx_hf`, the daemon's default, codes every
+rung. The engine comment and the test module's doc that said otherwise are corrected.
+
+**Implementation.** `openpulse-modem/src/engine.rs` (`fallback_is_a_candidate`; the fallback block in
+`ota_decode_and_ack_inner`; the phase-2 dedupe).
+
+**Tests.** `ota_arm_uncoded_dispatch.rs`: `a_ladder_frame_behind_a_lead_is_still_ladder_traffic`
+(`hpx500`, SL4, a BPSK250 frame behind 2 048 samples of silence → ACK, exactly one decision crediting
+SL4) and `an_uncoded_control_frame_behind_a_lead_is_still_not_ladder_traffic` (`hpx_hf`, SL5 = BPSK250
++ Rs, the same frame and lead → delivered through the fallback, no ACK, no decision).
+
+**Test results.** `ota_arm_uncoded_dispatch` 6 passed. Sabotage: running the fallback unconditionally
+(`main`) fails the first gate only; matching the predicate on mode alone fails the second gate,
+`one_burst_two_arms` and `a_control_frame_does_not_touch_the_rate_controller` (all `hpx_hf`: the
+uncoded control frame is then decoded by nothing). **Gate:** `GATE: PASS 0a4fa4c82e23a5de1d73e27c882e207b23d92e77 clean 20260930T150700Z` (2 642 passed,
+0 failed; every step ok). The one commit after it adds only this line.
+
+## 2026-09-30 — #1454 stage 2: a spectral busy criterion gathers the weak frames total power cannot see
+
+**Requirement / change.** REQ-DCD-01 as restated by #1452: a transmission is gathered as one bounded
+burst. A BPSK31 frame at +8 dB in its own 62 Hz band lifts a wide filter's total power by under 2 dB,
+so the total-power squelch never opened on it — stage 1 pinned 0/4 even at +12 dB in-band, on the
+rung (`hpx_hf` SL2) every session starts on.
+
+**Design (`docs/dev/reviews/review-1454-spectral-busy.md`: seven recorded Fable rounds, 3–9 — the
+reviews of the two earlier drafts are not on disk. Maintainer decisions 2026-09-29: a failed burst the
+spectral test carried is ladder evidence only past a minimum spectral span of 16 windows; the monitor
+and the repeater receive the burst with the ring stripped.)**
+
+1. **The statistic** (`openpulse-dsp/src/noise_floor.rs`, `judge`): per 512-sample window, per band
+   of 4 sliding bins over 312–2 703 Hz, `r = Σ P / Σ floor` against the floor from before the block.
+   A band whose mean floor is under 1e-3 × the p95 per-bin floor is stopband and not judged (a click
+   read 7 000× there behind a narrow filter).
+2. **Two phases, judged separately and OR'd.** Each window also judges the window straddling it and
+   its predecessor. A BPSK31 reversal nulls the envelope at the symbol centre; with one phase the
+   alternating preamble read 0.38 of its power at one grid parity in every window, the open waited for
+   data, and the head fell outside the ring (paired test, same noise: 14/16 vs 16/16). A max over the
+   phases' ratios was measured and rejected: it takes the larger of two noise draws per window and
+   raised the idle hold tail (longest run 12 vs 4 on the 250 Hz capture).
+3. **Open** at 3 of the last 4 windows ≥ 4.5 in either phase (two half-steps above the last non-zero
+   idle cell, 3.5; zero 3-of-4 at 4.0 in each phase on three captures). **Hold** an opened burst while
+   a phase's 8-window mean of the ratio, each window **capped at 4.5**, is ≥ 2.5. The count rule
+   (2 of 4 at 3.0) split 5 of 16 frames with one phase; with two phases it holds the +8 dB frames but
+   loses the +6 dB cell (10/16 vs 16/16). Uncapped, by the hold's arithmetic one window ≥ 13× the
+   floor carries the mean for seven more: a strong frame, which total power had already ended, held
+   its burst ~0.5 s (≈ 4 000 samples past the frame) and swallowed a second transmission 0.4 s later —
+   `monitor_during_ota` failed on the branch and passed on `main`, and two BPSK250 frames on real idle
+   merged at +8, +12 and +20 dB. Capped, the hold outlasts the last loud window by ≤ 4 windows at any
+   level; end to end, the idle appended after a broadband loud burst is ≤ 4 000 samples (0.5 s,
+   `SPECTRAL_TAIL_MAX`, pinned both sides) and after a BPSK250 frame ≈ 2 400 (0.3 s). S is inert until
+   warm and until a phase's history holds 8 windows (each phase judged on its own history); a
+   `discard` keeps the histories (the floor did not move); a commit of ≥ 8 windows clears them (it
+   did).
+4. **One verdict at the seam** = total power ∨ S, read by the hold start, the accumulator,
+   `DcdState::force_busy` and the AGC unlock. S may hold a burst only after S has opened on it
+   (`s_armed`). D3: S only while `manual_squelch < adaptive_squelch`, latched per burst.
+5. **The ring** (`engine.rs`, `push_ring`): the last 16 windows of routed audio, every block included;
+   copied onto a burst when S is true at its open block (not "total power false" — total power trips on
+   10–16 % of a +10 dB frame's blocks); cleared at a flush whose post-trigger length is at least the
+   shortest candidate preamble, and at a cap flush; kept across a flicker flush, so an onset flicker no
+   longer takes the head. The scan widens to `max(4·acq, lead + acq)` only when a lead exists. The
+   daemon strips the lead before the monitor and the repeater.
+6. **Evidence**: a failed burst counts if total power held it for the candidates' recognition window
+   (#1452) OR S was still OPEN at least 16 windows (and that window) after the trigger — measured to
+   the last open, not to the flush, because the hold's tail made a loud fragment one sample under
+   SL3's window into a NACK. A burst the accumulator did not flush is judged by #1452's rule.
+7. **D5** (`openpulse-repeater`): a key the watchdog released is sensed again before re-keying; rig_b's
+   stream is dropped before every keying and after an idle ID; the idle arm keeps rig_b's floor learning.
+
+**Implementation.** `openpulse-dsp/src/noise_floor.rs` (`judge`, `opens`, `holds`, `push_ratios`,
+`commit`, `discard`; `S_BAND_BINS`, `S_LOOKBACK`, `S_OPEN`, `S_HOLD_WINDOWS`, `S_HOLD_MEAN`,
+`S_MASK_REL`); `openpulse-modem/src/engine.rs` (`update_dcd_at_seam`, `accumulate_routed`,
+`push_ring`, `record_flush_flags`, `FlushSpans`, `burst_onset_scan_bounds(…, lead)`, the evidence rule
+in `ota_decode_and_ack_inner`, `apply_rx_agc`); `openpulse-daemon/src/server.rs` (the fan-out strip);
+`openpulse-repeater/src/lib.rs` (D5); `scripts/slow-tests.sh` (the held-out `spectral` suite, release,
+`--nocapture`, creates its log dir); `scripts/gate.sh` (the held-out line).
+
+**Tests.** `crates/openpulse-modem/tests/spectral_busy_gathers_weak_frames.rs` (new; default run:
+P2 over 16 placements, both preamble parities + the best alignment, a tone control, BPSK63 ×2, idle ×3
+captures × 4 read sizes, the onset flicker, ring retention, the positive and negative spectral-evidence
+cells; held out: the decode counts); `dcd_floor_follows_the_filter.rs` (the gap gate; `assert_tail`
+pins `SPECTRAL_TAIL_MAX` from both sides); `noise_floor` unit tests (the event-in-one-window-per-phase
+property, re-open after a burst, no phantom after a floor-moving commit); `openpulse-repeater`
+`d5_tests` (four).
+
+**Test results.** Held-out decode counts (`scripts/slow-tests.sh spectral`, release, 16 placements,
+BPSK31 + Rs 64 B on the wide IC-9700 idle unless stated): +8 dB 16/16 at the P2 placements, at both
+preamble parities (alignment 128 and 384) and at the best alignment (0); +10 dB 15/16 (bar 15; head
+covered 15/16 — the uncovered head is not one of the cell's two flicker placements, which the ring
+sabotages S6b/S6c show are the ones the ring rescues; by the round-6 per-placement trace it is a burst
+total power opened ~0.1 s into the frame before S opened, the #1443 class); +7 dB 16/16 and +6 dB
+16/16 (reported, not claimed); BPSK63 wide 13/16 and behind 500 Hz 13/16 (#1443: every miss is a burst
+total power opened after the frame began — `h63-detail.log`, per placement on the round-7 build;
+counts identical since). For comparison on the same cells, the uncapped mean-8 hold read identically,
+and the two-phase 2-of-4 hold identically except +6 dB 10/16. Default-run gates:
+`spectral_busy_gathers_weak_frames` 8 passed (1 held out), `dcd_floor_follows_the_filter` 13,
+`noise_floor` 17, `openpulse-repeater` `d5_tests` 4. Idle, production tracker: no open on three
+captures at 171/400/512/4 096-sample reads; longest hold run 0 / 1 / 0 windows. The first stage-2
+build (design v6: one phase, 2 of 4 at 3.0) gathered the P2 cell 4/8 whole (11/16 at 16 placements).
+**Gate:** `GATE: PASS 5e909f4dc2f36646acd5443c4987159ab42d49c9 clean 20260930T034739Z` (2 640 passed, 0 failed; every step ok, including the all-features clippy pass). The one commit after it adds only this line.
+
+**Sabotage.** Run on the tree before the reachability change made the `S_*` constants private
+(visibility only). Each fails its own gate (logs `~/parked/openpulse-1454/sab9/`, `sab8/`, `sabD5b/`): S1 second
+phase off → both preamble parities (alignment 128: 14/16); S2 hold back to 2 of 4 at 3.0 → the idle
+gate (wide idle hold run 9 > 8); S3 a per-bin max of the two phases' periodograms in place of the OR (the round-7 max rule) →
+the idle gate (run 10); S4 open at
+3.5 → the idle gate (500 Hz, 171-sample reads, 2 opens); S5 tail constant at 4·512 + TICK → the upper
+tail bound; S5hi at 20·512 + TICK → the tightness line; S6a ring kept across every flush → ring
+retention; S6b ring cleared at every flush → the onset flicker (heads 13/16); S6c "opened by S" as
+"total power false" → the onset flicker (13/16 — one gate covers both, a stated fixture dependence);
+S7 evidence span to the flush → the short-tone control counts; S8 no spectral evidence clause → the
+3 s tone keys no NACK; S9 hold uncapped → the gap gate (+8 dB, 0.4 s apart: one burst) and the tail
+pins; the two round-8 tracker fixes each fail their own unit gate; D5a/b/c/d each fail their named
+repeater gate (c also fails the ID gate, which needs the idle tick). The positive-evidence control's
+sizing line also fires under S1, S2 and S4 — its tone is sized to the hold's tail, which any hold change
+moves; that dependence is written in its doc.
+
+**Eliminated, with numbers.** ε as a median-relative floor (never binds; replaced by the mask); a
+2 048-sample ring (latency 7 875); a max over the two phases (idle run 12); a mean of the two phases
+(0.69 × the frame's power on the preamble, under the open threshold at both parities — predicted, not
+run); the uncapped mean-8 hold (merges transmissions 0.4 s apart); the 2-of-4 hold with two phases
+(+6 dB 10/16; idle run 9); "hold only while total power is not carrying the burst" (not built: the
+held-out cells never trip total power, so they could not test it).
+
+**Stated limits.** Two BPSK250 frames 0.2 s apart are one burst and 0.4 s apart are two (measured at
++8…+20 dB; the boundary between is not measured); after a broadband burst the appended tail is up to
+0.5 s. Stage 1 separated transmissions at one read. A third-party monitor on an ARQ exchange (ACK,
+then the next frame) is that case and is unmeasured. A 512-sample broadband burst at +30 dB opens S in 29/120 trials against 17/120 with one
+phase — never ladder evidence, one decode attempt. The idle open rate is sample-limited (< 0.44 %/
+window at 95 %, 45 s captures). BPSK63's misses are total-power-opened heads (#1443, stage 3).
+Multi-fragment receive through the accumulator has no test (#1461).
+
+## 2026-09-28 — #1452 stage 1: the carrier detect's floor follows the band behind any receive filter
+
+**Requirement / change.** The daemon's squelch floor was a 25th percentile ACROSS the 300–2700 Hz
+bins, scaled as if the noise were white across that band. Behind a 500 Hz or 250 Hz receive filter
+(an ordinary setting for these modes) most of those bins are stopband: the floor read the stopband
+and collapsed to the 0.001 clamp while the idle audio sat at 0.071 / 0.045 RMS, every block read as
+carrier, and bursts flushed only at the runaway cap. Measured through `accumulate_capture`
+(`~/parked/openpulse-1452/slab-probe-v2.log`), BPSK250 + Rs 64 B behind the 500 Hz filter at in-band
++8 and +12 dB: production decode 0/8 at both levels, where the same slab decoded from the frame's
+offset 5/8 and the frame alone 8/8 (the three trials that fail the offset control had a feed shorter
+than the cap, so no burst was ever flushed). REQ-DCD-01 is restated as the property (maintainer,
+2026-09-28): the squelch tracks the noise power the block RMS sees, mode-independently, behind a
+narrow filter and under coloured noise; a transmission no longer than the longest candidate frame
+does not close its own burst; an operator value may raise the squelch and never lower it below the
+adaptive one.
+
+**Design (`docs/dev/reviews/review-1452-dcd-floor.md`; maintainer decisions 2026-09-28).** A staged
+redesign; this is stage 1 (stage 2, a spectral-excess busy criterion for #1454; stage 3, a
+pre-trigger ring for #1443).
+
+1. **Each bin's noise level over time, summed** (`openpulse-dsp/src/noise_floor.rs`): per 512-sample
+   Hann window, every one-sided bin's power into a 256-window (16 s) history; the bin's level is the
+   mean of its powers below 5× its quantile-derived level, corrected by the derived
+   `TRIMMED_EXP_MEAN` = 0.966; total = `2·Σ P̄_k / (N²·G)`. A plain `quantile / EXP_QUANTILE_SCALE`
+   inflated a steady tone's bin 3.38× (a carrier 17 dB over the noise), which would have made a
+   receiver with a strong heterodyne deaf.
+2. **Held while a burst is gathered** (maintainer's choice over a very long window): the audio is kept
+   aside and learned from only on a cap flush (the slab is the band) or when the burst is too short to
+   hold any arriving mode's preamble (flicker); otherwise discarded. Holding begins only once the
+   tracker is warm, and a flicker's hold is committed only if it is that burst (≤ burst + one window):
+   a one-shot receive while a burst is held feeds the same tracker, and committing a hold that is
+   mostly something else teaches the floor that instead.
+3. **Each block is judged against the floor from before it.** Learning first let a read that holds a
+   whole frame — the twin rig delivers a frame in one read; a daemon's read after a blocking decode or
+   transmit can hold seconds — teach the floor the frame, which then never cleared the squelch. On the
+   accumulator path a carrier block starts the hold; on one-shot paths it is simply not learned.
+4. **The operator squelch is a lower bound**, default 0 (it was silently overwritten every window, so
+   an operator had no workaround); **the clamp is 1e-4** (0.001 governed a quiet rig at 1.67× idle).
+   `dcd_squelch()` returns the effective threshold; the daemon reports the operator's value
+   (`dcd_operator_squelch()`), so `GetConfig` reads back what was set.
+5. **A failed OTA burst is not ladder evidence when it is shorter than every candidate's recognition
+   window** — its acquisition window plus one symbol, `frame_scan_geometry`'s `acq + step`, the
+   shortest slice in which a candidate frame's sync and first symbol fit — a DURATION, never a count of
+   reads (maintainer, 2026-09-28). At SL7+ (OFDM52, window 576) a 400-sample idle flicker
+   drops and an 800-sample one counts, however many reads delivered it; at SL5 (BPSK250, window 1 056)
+   800 drops. The one-read OFDM flicker drops only because the default `receive_tick_ms = 50` gives
+   400-sample reads; at a longer tick it counts. **This makes idle flicker rarer, not non-evidence**:
+   a longer flicker counts, and with no time decay on the NACK streak counted flickers demote both
+   candidates during a long idle (#1456).
+6. **A hold no burst owns is released.** The seam starts a hold on a block that clears the squelch it
+   is judged against and, in the same call, re-aims the squelch; right after a cap flush has committed
+   a louder band that lifts it above the block, no burst opens, and nothing released the hold — the
+   floor froze at the committed value. Found in round 4 by a probe of a step up then back down:
+   the squelch sat at 2.49× the quiet idle a minute after the band dropped back 6 dB. The accumulator
+   now commits such a hold when it is this read (and discards it otherwise).
+7. **Cold start learns first** (maintainer): fixtures that fed a signal from the very first sample now
+   give the receiver idle audio first, and the twin bridge delivers silence between frames.
+8. **The cross-band repeater does not ACT on a cold floor** (maintainer, 2026-09-29: fail closed while
+   cold). Item 7 holds for the engine; the repeater refuses to transmit on its verdict until rig_b's
+   floor is warm (`NoiseFloorTracker::is_warm`: ≥ 16 windows, stricter than the floor's first
+   estimate). It senses rig_b only just before a relay, so its tracker is cold on the first sense,
+   and a cold tracker learns whoever is on the band as the floor — the gate caught it keying onto a
+   busy band (`a_busy_output_band_stops_the_relay_from_keying`, the #1325 gate). A sense that STARTED
+   cold returns `Cold` (deferred; neither a fault nor a reset of the fault count); the verdict order is Busy > Unreadable >
+   Cold > Clear, so a dead card still exhausts `MAX_SENSE_FAULTS`. Each session primes the floor
+   first (`warm_sensor`, bounded at 256 reads, ~2.6 s on a real card, whose empty read waits 10 ms),
+   so that on a card delivering audio the first relay is judged rather than deferred — by
+   construction, not measured on hardware.
+
+**Deviations from the reviewed design.**
+- (a) The flicker rule sits on the OTA path, not in the accumulator: the monitor reads the same
+  bursts in modes the engine does not know.
+- (b) Its threshold is the candidates' shortest recognition window, not the shortest whole frame: a
+  whole-frame bound (66 s at BPSK31 + Rs) would also have stopped the pieces of a real frame split on
+  a fade from counting as failures. Against the design's preamble bound it is one symbol period longer
+  on most rungs; at `hpx_hf`'s entry set {SL2} it rises from 8 192 (BPSK31's preamble) to 8 448.
+  With SL1 the sole candidate it is 2 048 (MFSK16's Costas 1 792 + one 256-sample symbol); whenever
+  SL1 and SL2 are both candidates it rises from 1 792 to 8 448. It is not `min_frame_samples`: on
+  MFSK16 that is the whole fixed 17 s frame (135 936), so a bound taken from it — the rule's second
+  build — dropped every fade-split fragment at SL1 and the sender abandoned after two silent windows,
+  a regression against `main`. On the four `hpx_pilot*` profiles the window is below the old
+  `min_frame_samples` bound: 784 at 500 baud and 392 at 1000 baud (under one default read), against
+  3 456–928, so a one-read flicker on `hpx_pilot_fast`'s SL2 counts (gated). The maintainer's persistence rule was first built as "a burst of ONE read is never
+  evidence"; measured, that also dropped a 16 000-sample failure delivered in one read (the twin rig
+  delivers each frame in one read; a daemon read after a blocking decode can hold seconds), so it was
+  replaced by this duration before merge.
+- (c) Sub-preamble bursts are committed, and a carrier block starts the hold. With the discard instead
+  (sabotage S6, final build) the 250 Hz capture read squelch/idle 1.142 / 1.214 / 1.232 / 1.256 at
+  171 / 400 / 512 / 4096-sample reads; with both, 1.256 at all four.
+- (d) The maintainer's decision to flush a burst after "the longest frame anything decodable here can
+  emit" was built and **removed before merge**. The bound was sized as the uncoded 255 B frame plus 2 s
+  (8.6 + 2 = 10.6 s at BPSK250) and split every 220-byte Rs frame in the long-frame gate (0/8 gathered whole). The engine
+  does not know which FEC its consumers decode, and over every FEC mode the longest 255-byte frame
+  (Turbo, 37.0 s) is the cap itself. Maintainer: drop it, track a consumer-declared FEC set in
+  #1455.
+- (e) The design's PTT-spy check on flicker is asserted at the ACK instead: the flicker tests require
+  `ack.is_none()`, and the daemon keys the transmitter only to send an ACK. No test here observes the
+  PTT, and none runs 250 Hz idle through a live OTA session.
+- (f) The design's "no idle burst longer than one block" is restated as "no idle burst long enough to
+  hold a BPSK250 preamble": on the 250 Hz capture a floor at its intended ~2σ margin still passes
+  two-block flickers (longest measured 800 samples), which the one-block form would fail.
+- (g) Item 8 was not in the reviewed design: the workspace gate on the first final HEAD failed the
+  #1325 carrier-sense gate, and the maintainer chose to fail closed rather than fix the fixture. The
+  same gate failed the reachability ratchet on a test-only public counter, which was removed, and the
+  next run failed it on `warm_sensor`, public only for a test; it is private and unit-tested in the
+  crate.
+
+**Implementation.** `openpulse-dsp/src/noise_floor.rs` (rewritten; `spectral_noise_floor_mean_sq`
+removed, it had no caller outside its tests); `openpulse-modem/src/engine.rs` (`update_dcd_at_seam`,
+`accumulate_routed`, `set_dcd_squelch` / `effective_squelch` / `dcd_operator_squelch`,
+`active_shortest_preamble`, `shortest_candidate_recognition_window`, the not-evidence rule in
+`ota_decode_and_ack_inner`, constants); `openpulse-config` (`dcd_squelch` default 0.0 and its
+template); `openpulse-repeater` (`Sense::Cold`, `warm_sensor`, the session prime);
+`openpulse-daemon` (runtime default; `FrontEndState` reports the operator value; `twin.rs`
+idle between frames); REQ-DCD-01 in `requirements.md` / `requirements.yaml`.
+
+**Tests → results.**
+- New `crates/openpulse-modem/tests/dcd_floor_follows_the_filter.rs`, 13/13 in one run
+  on the committed tree (23.9 s in release; the not-evidence counter the tests first asserted on was
+  removed, and they assert on the ACK alone — every earlier sabotage failure also differed on the ACK): squelch/idle 1.22–1.26 on all five recorded idles at reads of 171 / 400 / 512 / 4096 (before: ≈0.014
+  and 0.022 on the narrow captures, ≈1.37 wide, 1.67 FT-991A); no idle burst long enough to hold a
+  BPSK250 preamble (longest 800 samples, 5.5 % of 250 Hz idle gathered); 500 Hz / BPSK250 / in-band
+  +12 dB 8/8; a 16.5 s two-block frame (220 B) gathered as exactly one burst 8/8 and decoded 7/8;
+  BPSK31 on a wide filter at +12 dB in-band still 0/4 (#1454, pinned); the operator squelch raises and
+  never lowers; a two-block flicker is not ladder evidence at the entry rungs while a 16 000-sample
+  failure still is; the verdict depends on duration, not reads (at SL9 400 samples drop as one read
+  or four, 800 count as one read or two; at SL5 800 drop either way; 16 000 in one read counts at
+  SL9, SL5 and the entry rungs); the bound is the candidates' recognition window, exact to the sample (at SL3
+  4 224 counts and 4 223 does not; 2 000 drops at SL3 and counts at SL9; at SL1 2 047 drops and 2 048 counts); on `hpx_pilot_fast` a one-read burst
+  counts at SL2; a hold
+  holding 10 s of one-shot silence is not committed with a one-block burst; after a 6 dB step up the
+  squelch recovers at the cap flush (1.248× the louder band) and follows the band back down (1.240×
+  the quiet band 40 s after it drops).
+- Tracker unit tests 9/9, including the new warm-at-16-windows pin: chunking invariance, cold and settled recovery of a known variance,
+  band-limited noise behind a narrow filter, hold/commit/discard, a steady carrier joins the floor and
+  a short one does not, following the band up and down.
+- **Sabotage, each watched failing:** no hold → long-frame 0/8 (7–13 bursts per frame);
+  operator value ignored → operator test; no short-burst rule → flicker test; clamp 0.001 → FT-991A
+  ratio; learning before judging → the twin handshake; discarding flicker → 250 Hz ratio at 171; the
+  untrimmed quantile → the steady-carrier test (3.38×); the read-count rule (the first build) → the one-read 16 000-sample
+  failure dropped; the preamble instead of the recognition window → the duration, SL1 and bound tests
+  (400 at SL9 counted; 2 047 at SL1 counted); `min_frame_samples` instead (the second build) → the SL1
+  and pilot tests (2 048 at SL1 dropped; a one-read burst on `hpx_pilot_fast` dropped); no stale-hold guard → the stale-hold test only (squelch 0.156 → 0.0001); no orphan-hold
+  release → the step-up/down test only (2.488×); no cold check in the repeater's sense → the busy-band
+  gate and the cold-then-warm test; Cold ranked above Unreadable → the fault-budget test (100
+  unreadable senses never tripped it); `warm_sensor` a no-op → the `warm_sensor` unit test. **The long-frame gate
+  was vacuous as first written**: at 200 B the frame is ONE RS block (~8 s), too short to raise an
+  unheld floor, and it passed with the hold disabled; it now uses 220 B and asserts the fixture is longer than that 200 B frame.
+- **Not sabotage-verified:** the cap-flush commit; holding only once warm; the accumulator-only gate on
+  starting a hold (`seam_in_accumulate`); judge-before-learn on the one-shot path (no test observes
+  it); which modes `active_shortest_preamble` includes; the `MAX_HELD_SAMPLES` drain; the twin
+  bridge's idle fill; the repeater's session-start prime in `run_full_duplex` (no test runs a session
+  with `carrier_sense = true` and audio on rig_b; `warm_sensor` itself is unit-tested);
+  the `WARM_TICKS` bound; that `Cold` leaves the fault count untouched; cold-start behaviour; the `FrontEndState` read-back (the band-squelch test
+  asserts the engine accessor, and nothing reads `front_end_state().dcd_squelch`).
+- **The two held-out suites, run on the final code** (`scripts/slow-tests.sh`, HEAD `5de83961`).
+  Neither calls `accumulate_capture`, but both pass the `InputCapture` seam and so run the replaced
+  floor estimator (`update_dcd_at_seam`). `ota_channel_adaptation` goes through `respond_arq_ota` →
+  `ota_decode_and_ack_inner`, where the new squelch and the short-burst rule are consumed.
+  `notch_rescues_interferer` goes through it once per decode attempt in
+  `receive_from_samples_with_fec_inner`, where nothing on that path reads the squelch (only
+  `apply_rx_agc`, off there). `ota_channel_adaptation` 3/3 (68 min, debug). `notch_rescues_interferer`
+  2/3 (468 s): its rescue test fails its own negative control — the no-notch arm decodes at interferer
+  amplitude 0.3 (`notch_rescues_interferer.rs:236`). The same test alone on `origin/main` =
+  `4eb13f95` (detached worktree, release, 174 s) fails the same assertion at the same amplitude, so
+  it predates this change: the last recorded notch PASS is `884d96ed` (2026-09-13), and none of the
+  18 acquisition-path merges since has a recorded notch run. Tracked in #1457; REQ-QRM-01 is not
+  re-proven here, and its CLAUDE.md row now says so.
+- **Probe v2 re-run unchanged on the branch** (`slab-probe-v2-branch.log`; production / from the
+  frame's offset / frame alone, 8 trials each). The wide-filter control, BPSK250 in-band +8 dB: 6/8,
+  where `main` read 4/8; +12 dB: 7/8 on both, so it did not regress. BPSK250 behind 500 Hz: 7/8 at
+  +8 dB and 8/8 at +12 dB, both 0/8 on `main`. BPSK63 behind 250 Hz: 7/8 and 8/8, both 0/8 on `main`.
+  **BPSK63 behind 500 Hz at +8 dB is still 0/8**: the 33 s frame is split into 7–24 bursts, because a
+  63 Hz signal adds too little power across a 500 Hz passband to hold the block RMS over the squelch —
+  the total-power criterion of #1454, not the floor. BPSK31 (250 Hz at +8 dB; wide at +8 and
+  +12 dB) is 0/8 on both, the same mechanism.
+- Existing tests: 36 failed at first; every one fed a signal (or tone) from the first sample the
+  receiver heard. Fixed by giving the receiver idle audio first; REQ-DCD-01's idle gate restated from
+  "no idle burst" to "no idle burst long enough to hold a BPSK250 preamble" (three 171-sample flickers
+  on the hot capture now pass a squelch no longer biased 1.1× high); three decision-event fixtures use
+  16 000-sample noise (hpx500 enters on BPSK31, preamble 8 192); the OTA burst-cap pair asserts that the
+  cap cuts the frame short rather than that it splits it into several pieces.
+- `openpulse-repeater`, all 27 tests pass. New: a cold sense defers and a warm sense of a clear band
+  keys; an unreadable band on a cold sensor still exhausts the fault budget (at `MAX_SENSE_FAULTS`); a
+  tracker unit test pins warm at exactly 16 windows; an in-crate unit test shows `warm_sensor` warms
+  over quiet band, honours `stop` and gives up on an empty card. The full-duplex test now warms rig_b
+  through a first relay that is deferred as cold, so its deferral count is 1 rather than 0; its other
+  assertions are unchanged.
+- `twin_daemon_bridge` 8/8 (13.1 s), run before the repeater change; the twin suite has no repeater
+  test, and the daemon tests that run one (`repeater_relays_a_daemon_burst`, two `lib.rs` unit tests)
+  set `carrier_sense = false`, so nothing in `openpulse-daemon` reaches the cold check.
+- The workspace gate on the final HEAD is quoted in the PR body.
+
+**Limitations.**
+- After a genuine step UP in band level the squelch recovers only at the first cap flush — 37 s at
+  BPSK250, ~5 min with `hpx_hf`'s entry rungs as OTA candidates — and nothing is decoded until then
+  (#1455). Measured at BPSK250 only.
+- On a path that only ever calls one-shot `receive*` (CLI listen, ARDOP's adaptive arm, the ACK
+  listen) a carrier block is never learned and nothing commits, so a genuine step up there freezes
+  the floor below the band with no recovery on that path.
+- Idle flicker longer than the candidates' recognition window is ladder evidence. Estimated, treating blocks
+  as independent, at the measured per-block trip rate behind a 250 Hz filter (5.5 %, 45 s corpus): a
+  k-read flicker occurs ~p^k per block — ~12/h at 3 reads — and with no decay on the NACK streak those
+  demote both candidates during a long idle (#1456). A 250 Hz filter cannot pass OFDM52, so a
+  session behind one does not reach SL7+; {SL5, SL6} on that capture is where this bites, and it is
+  not measured here.
+- After a genuine drop the floor follows within the history (a quarter of it for the quantile), where
+  the old EMA fell in ~0.2 s.
+- The repeater still learns an occupant as rig_b's floor if the occupant fills more than about 75 % of
+  the windows of the first cold read. With the session prime that read is the first ~1 s after
+  enable; without it (a prime that faults or is stopped) it is the whole backlog between the first
+  two relays, since the capture buffer is unbounded. From then on that band reads clear. Recognising
+  a signal by its shape rather than its level is stage 2 (#1454). The main engine's cold window is
+  one 512-sample window, and the engine's `csma_check` (which the KISS front end enables) and discovery's beacon deferral share
+  that exposure.
+- Pre-existing, not changed here: the repeater never drops rig_b's capture stream around its own
+  transmit (the #1007/#1319 obligation `CaptureTicker` documents).
+- A daemon started in the middle of a transmission learns that frame and loses it; the floor recovers
+  once enough of the 16 s history is band again.
+- A frame longer than the burst cap: after the cap flush its remainder is learned as band.
+- Only `accumulate_capture` ends a hold. If it starts one and then stops being called while one-shot
+  `receive*` reads continue, the floor stays frozen at its pre-burst value until the accumulator runs
+  again; the held audio is bounded by `MAX_HELD_SAMPLES` and is discarded, not committed, at that
+  next burst end unless it is that burst.
+- Memory: 256 × 255 × 4 B ≈ 261 kB of bin history per tracker, plus up to 4 MB of held audio
+  (`MAX_HELD_SAMPLES` = 2^20 f32).
+- `bpsk31_long_frame_with_leading_silence_decodes` failed once during a full-suite run and passed when
+  re-run alone; it was not run under load on `main`, so whether this change affects it is not
+  established.
+- Stage 2 (#1454 sensitivity) and stage 3 (#1443 pre-trigger ring) are not in this change.
 
 ## 2026-09-27 — #1438 PR2: BPSK searches timing from −n/2 and decodes at both locks, the FEC choosing
 

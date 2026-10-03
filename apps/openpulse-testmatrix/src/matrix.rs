@@ -11,10 +11,8 @@ pub enum Tier {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum UseCase {
     RawModem,
-    AdaptiveHpx500,
-    AdaptiveHpxHf,
-    AdaptiveHpxWideband,
-    AdaptiveHpxOfdmHf,
+    AdaptiveFast,
+    AdaptiveRobust,
     Ardop,
     Kiss,
     B2f,
@@ -24,10 +22,8 @@ impl UseCase {
     pub fn label(&self) -> &'static str {
         match self {
             Self::RawModem => "raw_modem",
-            Self::AdaptiveHpx500 => "adaptive_hpx500",
-            Self::AdaptiveHpxHf => "adaptive_hpx_hf",
-            Self::AdaptiveHpxWideband => "adaptive_hpx_wideband",
-            Self::AdaptiveHpxOfdmHf => "adaptive_hpx_ofdm_hf",
+            Self::AdaptiveFast => "adaptive_fast",
+            Self::AdaptiveRobust => "adaptive_robust",
             Self::Ardop => "ardop",
             Self::Kiss => "kiss",
             Self::B2f => "b2f",

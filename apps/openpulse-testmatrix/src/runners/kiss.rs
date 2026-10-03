@@ -47,6 +47,7 @@ async fn run_async(case: &TestCase) -> Result<Vec<u8>, String> {
         port: addr.port(),
         mode: case.mode.clone(),
         loopback: true,
+        ptt_leader: std::time::Duration::ZERO,
     };
     let server = KissServer::new(engine, config);
     tokio::spawn(async move {

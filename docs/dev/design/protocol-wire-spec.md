@@ -2,7 +2,7 @@
 project: openpulsehf
 doc: docs/dev/design/protocol-wire-spec.md
 status: living
-last_updated: 2026-08-23
+last_updated: 2026-10-01
 ---
 
 # Protocol & Handshake Wire Specification
@@ -17,6 +17,27 @@ session handshake**. It complements the two companion specs:
 
 The authoritative source is always the code; this document pins the layouts and links each to its
 module. Capability IDs (CAP-NN) refer to [traceability-matrix.md](../project/traceability-matrix.md).
+
+## Release 1 (v0.17.0) wire format
+
+Declared 2026-10-01 (work plan milestone M1, decisions 16 and 17). **The v0.17.0 wire format is
+this document as of that date, with `WIRE_VERSION` `0x01`** (§3, frozen until 1.0), and the zstd
+dictionary `crates/openpulse-core/assets/zstd-hpx-dict.bin` with sha256 `cc5f3f30d7ebe5d24370250615b9f5e362f349a0222604fc86d023e927301761`
+(dictionary ID `0x7d6f375f`). The declaration is pinned by the `v0.17.0` tag when it is cut (M4);
+until then this doc is the reference and both stations build from the same commit. M1 itself made no
+wire change: the compression fix of #1477 changed only what a receiver does with a corrupt packed
+frame (§7.1), not a byte on the wire. **No compatibility with `v0.16.0` builds** — that tag
+speaks a JSON `HSCQ`/`HSAK` handshake; the binary handshake and its version byte were introduced
+later (#1189, after the #1147 and #1166 breaks), so the format was replaced, not versioned. On-air evidence for Release 1 (work plan M3)
+is recorded on this format.
+
+**What changes before 1.0, so it is not a surprise:**
+- **The preamble** (#1062): the alternating preamble is to be replaced, the recorded direction being
+  a PN sequence with N ≥ 63. It is a plugin-level change, out of this document's byte layout, but it
+  breaks interop with v0.17 builds. A second, short 2 m campaign follows it before 1.0.
+- Anything else the pre-1.0 window needs, under the §3 rule: the byte does not move, so two builds
+  from different points fail with a garbled decode, not a clean version rejection. **Rebuild both ends
+  in lockstep before any on-air session.**
 
 ## Conventions
 
@@ -484,7 +505,25 @@ transfer (the `active_transfer` → completion gate).
 |---|---|
 | `None` | payload as-is |
 | `Lz4` | LZ4 block + 4-byte **little-endian** decompressed-size prefix |
-| `Zstd(dict_id: u32)` | Zstd with the shared HPX dictionary; `dict_id` catches version skew |
+| `Zstd(dict_id: u32)` | 4-byte **big-endian** decompressed-size prefix + a zstd frame compressed against the shared HPX dictionary |
+
+**Session framing** (`compression::pack`/`try_unpack`): `"OPZ1"(4) | tag(1) | payload`, tag `0` =
+none, `1` = LZ4, `2` = zstd. Self-describing: the sender opts in (`compression.enabled`), the receiver
+always unpacks, nothing is negotiated (REQ-CMP-03). A frame that carries `OPZ1` but fails to unpack —
+no tag, an unknown tag, or a decompression failure — is dropped and counted, never delivered
+(REQ-CMP-05, #1477). Cost: a raw payload that begins with `OPZ1` is dropped too. Only the session
+message body is packed (`server.rs`, the `compression.enabled` branch); handshake, ACK and control
+frames are not. If the zstd encoder itself fails, `zstd_compress` emits a `u32::MAX` size prefix plus
+the raw bytes, which a decoder rejects as `DecompressedSizeTooLarge`; `pack` never sends it, because
+that output is never smaller than the input `compress_if_smaller` compares it with.
+
+**Dictionary skew is caught by zstd, not by `dict_id`.** The decoder ignores the enum's `dict_id`
+and always uses `HPX_DICT_BYTES`. The guard is zstd's own frame header: our encoder writes the
+dictionary ID there (`ZSTD_c_dictIDFlag` defaults to 1; ours is `0x7d6f375f`), and a decoder holding a
+dictionary with another ID fails with `Dictionary mismatch` (test
+`a_frame_from_another_dictionary_is_an_error`). The trainer's ID is a hash of the dictionary content,
+so a retrain changes it. A frame whose header carries ID 0 skips the check.
+**Corrected 2026-10-01** — this row said "`dict_id` catches version skew".
 
 Configured locally, NOT negotiated in the handshake (**Removed in #1166** (the #1147 wire-format break): nothing consumed the selection — the daemon sent the lists empty and hardcoded `None`/`None` — so the field was a capability claim the station could not back. Session compression itself is unchanged; only the *handshake negotiation of it* is gone.). A compressed frame
 larger than the original is sent uncompressed (`compress_if_smaller`).

@@ -33,9 +33,8 @@ fn recommend_hf_level(
     profile_name: &str,
     snr_db: f32,
 ) -> (SpeedLevel, String) {
-    let levels = profile.defined_levels();
-    // Floor at the most robust rung the profile actually defines (e.g. SL5 for
-    // hpx_ofdm_hf), not a hard-coded SL2 that some profiles never map.
+    // Only the rungs the profile may use: `robust` stops at SL6 however high the SNR.
+    let levels = profile.reachable_levels();
     let mut selected = levels.first().copied().unwrap_or(SpeedLevel::Sl2);
 
     for &level in &levels {
@@ -65,7 +64,7 @@ fn recommend_hf_level(
 /// Recommend a speed level and mode for `snr_db` using the selected session profile.
 ///
 /// Profile resolution order: explicit `--profile` flag > config `[modem] profile` >
-/// built-in default (`hpx_hf`).
+/// built-in default (`fast`).
 pub fn run(snr_db: f32, profile_override: Option<&str>) -> Result<()> {
     let name = resolve_profile_name(profile_override);
     let profile = SessionProfile::by_name(&name).ok_or_else(|| {
@@ -94,7 +93,7 @@ fn resolve_profile_name(profile_override: Option<&str>) -> String {
     }
     openpulse_config::load()
         .map(|cfg| cfg.modem.profile)
-        .unwrap_or_else(|_| "hpx_hf".to_string())
+        .unwrap_or_else(|_| "fast".to_string())
 }
 
 #[cfg(test)]
@@ -103,7 +102,7 @@ mod tests {
 
     #[test]
     fn recommends_expected_levels_for_thresholds() {
-        let profile = SessionProfile::hpx_hf();
+        let profile = SessionProfile::fast();
         // Thresholds track the fade-aware hpx_hf SNR floors: SL2=3 SL3=4 SL4=4.5 SL5=5 SL6=7
         // SL7=9 SL8=10 SL9=12 SL10=14 SL11=16 SL12=18 SL13=19 SL14=20 (ladder top). The OFDM rungs'
         // floors are plugin symbol-domain SNR, not AWGN channel SNR — see profile.rs.
@@ -141,27 +140,23 @@ mod tests {
         ];
 
         for (snr, expected_level) in cases {
-            let (level, _) = recommend_hf_level(&profile, "hpx_hf", snr);
+            let (level, _) = recommend_hf_level(&profile, "fast", snr);
             assert_eq!(level, expected_level, "snr={snr}");
         }
     }
 
     #[test]
-    fn ofdm_hf_profile_recommends_ofdm_modes() {
-        let profile = SessionProfile::by_name("hpx_ofdm_hf").expect("ofdm-hf resolves");
-        // Below the lowest rung's floor → floor at the most robust defined rung (SL5),
-        // not an unmapped SL2.
-        let (low, _) = recommend_hf_level(&profile, "hpx_ofdm_hf", 0.0);
-        assert_eq!(low, SpeedLevel::Sl5);
-        assert_eq!(profile.mode_for(low), Some("OFDM16"));
-        // High SNR → the densest OFDM rung.
-        let (high, _) = recommend_hf_level(&profile, "hpx_ofdm_hf", 30.0);
-        assert_eq!(high, SpeedLevel::Sl10);
-        assert_eq!(profile.mode_for(high), Some("OFDM52-64QAM"));
+    fn robust_never_recommends_above_its_cap() {
+        let profile = SessionProfile::robust();
+        let (high, _) = recommend_hf_level(&profile, "robust", 30.0);
+        assert_eq!(high, SpeedLevel::Sl6);
+        assert_eq!(profile.mode_for(high), Some("QPSK250-D"));
+        let (low, _) = recommend_hf_level(&profile, "robust", 0.0);
+        assert_eq!(low, SpeedLevel::Sl1);
     }
 
     #[test]
     fn explicit_override_takes_precedence() {
-        assert_eq!(resolve_profile_name(Some("hpx_ofdm_hf")), "hpx_ofdm_hf");
+        assert_eq!(resolve_profile_name(Some("robust")), "robust");
     }
 }

@@ -9,11 +9,11 @@
 #
 # Env overrides:
 #   MODE        modulation mode for both stations (default BPSK250)
-#   PROFILE     adaptive profile (default hpx_hf); set OTA=1 to enable OTA stepping
+#   PROFILE     adaptive profile: fast (default) or robust; set OTA=1 to enable OTA stepping
 #   OTA         1 to start a receiver-led OTA session on both daemons (default 0)
 #   OTA_LOCK    pin both stations to a fixed level, e.g. SL1 (the MFSK16 sub-floor rung) — the way to
 #               validate the weak-signal ARQ rung on the clean snd-aloop rig, which has no channel model to
-#               fade the ladder down to it. Requires OTA=1 and a PROFILE that maps the level (hpx_hf).
+#               fade the ladder down to it. Requires OTA=1 and a PROFILE that maps the level (fast or robust both map SL1).
 #   A_DEVICE    cpal device for station A (default aloop_a)
 #   B_DEVICE    cpal device for station B (default aloop_b)
 #   A_TCP/A_WS  station A control ports (default 9000 / 9001)
@@ -21,7 +21,7 @@
 set -euo pipefail
 
 MODE="${MODE:-BPSK250}"
-PROFILE="${PROFILE:-hpx_hf}"
+PROFILE="${PROFILE:-fast}"
 OTA="${OTA:-0}"
 OTA_LOCK="${OTA_LOCK:-}"
 A_DEVICE="${A_DEVICE:-aloop_a}"
@@ -81,7 +81,7 @@ Drive traffic from one station, e.g.:
   # or send a message from a panel; watch B decode it.
 
 Validate the MFSK16 weak-signal sub-floor ARQ rung over real audio:
-  OTA=1 OTA_LOCK=SL1 PROFILE=hpx_hf ./scripts/run-twin-station-audio.sh
+  OTA=1 OTA_LOCK=SL1 PROFILE=fast ./scripts/run-twin-station-audio.sh
   # then send a short (<=209 B) message A->B; ota-status on both must show tx_mode=MFSK16 (SL1),
   # B decodes the MFSK16 frame, and A applies B's K=3 MFSK16-ACK (union-listen).
 

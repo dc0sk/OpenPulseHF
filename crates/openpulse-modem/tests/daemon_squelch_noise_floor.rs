@@ -22,6 +22,7 @@
 
 use bpsk_plugin::BpskPlugin;
 use openpulse_audio::LoopbackBackend;
+use openpulse_core::plugin::{ModulationConfig, ModulationPlugin};
 use openpulse_dsp::noise_floor::WINDOW;
 use openpulse_modem::capture_replay::{load_corpus, Capture};
 use openpulse_modem::ModemEngine;
@@ -60,13 +61,14 @@ fn corpus(name: &str) -> Capture {
     load_corpus(name).unwrap_or_else(|e| panic!("corpus file {name} must load: {e}"))
 }
 
-/// Feed `samples` to the production capture entry in read-sized blocks, returning every burst it
-/// flushed.
+/// Feed `samples` to the production capture entry in read-sized blocks, returning the post-trigger
+/// length of every burst it flushed.
 fn feed(e: &mut ModemEngine, mode: &str, samples: &[f32], block: usize) -> Vec<usize> {
     let mut bursts = Vec::new();
     for chunk in samples.chunks(block) {
         if let Ok(Some(b)) = e.accumulate_capture(Some(mode), chunk.to_vec()) {
-            bursts.push(b.samples.len());
+            // Post-trigger: a burst carries a pre-trigger lead of audio already heard (#1443).
+            bursts.push(b.samples.len() - e.last_flush_lead());
         }
     }
     bursts
@@ -110,13 +112,24 @@ fn a_recorded_idle_floor_is_not_mistaken_for_a_carrier() {
             "the noise-floor tracker never warmed at block size {block}, so the squelch is still \
              the configured default and this test measured nothing about REQ-DCD-01 (#1254)"
         );
+        // Every idle burst is shorter than a BPSK250 preamble: the band may flicker over a squelch
+        // set 1.25x above it (a block or two at the smallest reads, since #1452 removed a 1.1x bias
+        // from the floor), but never gathers anything that could hold a frame. Before #1055 every
+        // block read as carrier and only the cap flushed it.
+        let preamble = BpskPlugin::new()
+            .frame_geometry(&ModulationConfig {
+                mode: "BPSK250".into(),
+                ..ModulationConfig::default()
+            })
+            .expect("BPSK250 publishes its frame geometry")
+            .preamble_samples;
         assert!(
-            bursts.is_empty(),
+            bursts.iter().all(|&n| n < preamble),
             "the receiver flushed {} burst(s) of {:?} samples from PURE RECORDED IDLE at \
-             {rms:.4} RMS with {block}-sample reads, against a {cap}-sample runaway cap. The \
-             daemon's carrier detector is a fixed threshold, so a band whose floor sits above it \
-             reads as permanently busy: the burst never ends on a carrier drop, and the cap alone \
-             flushes it — handing the decoder a bufferful of noise and nothing else.",
+             {rms:.4} RMS with {block}-sample reads, against a {cap}-sample runaway cap and a \
+             {preamble}-sample preamble. A burst that long from idle is the band reading as a \
+             carrier: at worst the burst never ends on a carrier drop and the cap alone flushes \
+             it — handing the decoder a bufferful of noise and nothing else.",
             bursts.len(),
             bursts
         );

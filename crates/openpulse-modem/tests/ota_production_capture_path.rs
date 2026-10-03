@@ -42,7 +42,7 @@ fn make() -> (ModemEngine, LoopbackBackend) {
     engine
         .register_plugin(Box::new(OfdmPlugin::new()))
         .expect("register");
-    engine.start_ota_session(SessionProfile::hpx_hf());
+    engine.start_ota_session(SessionProfile::fast());
     engine.ota_lock_level(SpeedLevel::Sl9);
     (engine, backend)
 }

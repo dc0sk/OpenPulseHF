@@ -168,7 +168,7 @@ fn rig(frame: Vec<f32>, adaptive: bool) -> (Arc<ModemBridge>, Arc<AtomicUsize>, 
         .register_plugin(Box::new(bpsk_plugin::BpskPlugin::new()))
         .expect("register bpsk");
     if adaptive {
-        engine.start_adaptive_session(openpulse_core::profile::SessionProfile::hpx500());
+        engine.start_adaptive_session(openpulse_core::profile::SessionProfile::robust());
     }
     let (bridge, tx_rx) = ModemBridge::with_ptt(
         engine,

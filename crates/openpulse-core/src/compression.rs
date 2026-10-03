@@ -140,16 +140,40 @@ pub fn pack(data: &[u8]) -> Vec<u8> {
 /// returns `None` for anything else — un-packed data, control frames, a corrupt frame — so the caller
 /// keeps its original bytes. Never panics and never allocates above [`MAX_DECOMPRESSED_SIZE`].
 pub fn unpack(framed: &[u8]) -> Option<Vec<u8>> {
-    if framed.len() < PACK_MAGIC.len() + 1 || framed[..PACK_MAGIC.len()] != PACK_MAGIC {
-        return None;
+    try_unpack(framed).ok().flatten()
+}
+
+/// Why a frame carrying [`PACK_MAGIC`] could not be unpacked.
+#[derive(Debug, thiserror::Error)]
+pub enum UnpackError {
+    #[error("packed frame has no algorithm tag")]
+    MissingTag,
+    #[error("packed frame has unknown algorithm tag {0}")]
+    UnknownTag(u8),
+    #[error(transparent)]
+    Decompress(#[from] CompressionError),
+}
+
+/// Like [`unpack`], but tells a frame that is not packed (`Ok(None)`) from a packed frame that is
+/// corrupt (`Err`).
+///
+/// A receiver must not deliver the second kind: its bytes are still compressed, and passing them on
+/// as the message is how a dictionary mismatch (zstd checks the dictionary ID carried in its own frame
+/// header) used to surface as silent garbage instead of an error (REQ-CMP-05).
+pub fn try_unpack(framed: &[u8]) -> Result<Option<Vec<u8>>, UnpackError> {
+    if framed.len() < PACK_MAGIC.len() || framed[..PACK_MAGIC.len()] != PACK_MAGIC {
+        return Ok(None);
     }
-    let algo = match framed[PACK_MAGIC.len()] {
+    let tag = *framed
+        .get(PACK_MAGIC.len())
+        .ok_or(UnpackError::MissingTag)?;
+    let algo = match tag {
         0 => CompressionAlgorithm::None,
         1 => CompressionAlgorithm::Lz4,
         2 => CompressionAlgorithm::Zstd(ZSTD_DICT_ID),
-        _ => return None,
+        other => return Err(UnpackError::UnknownTag(other)),
     };
-    decompress(&framed[PACK_MAGIC.len() + 1..], algo).ok()
+    Ok(Some(decompress(&framed[PACK_MAGIC.len() + 1..], algo)?))
 }
 
 /// Compress `data` with zstd + the embedded HPX dictionary.
@@ -214,6 +238,47 @@ mod tests {
         assert_eq!(unpack(b"plain user message body"), None);
         assert_eq!(unpack(b""), None);
         assert_eq!(unpack(b"OPZ"), None); // too short to be a frame
+    }
+
+    #[test]
+    fn try_unpack_tells_not_packed_from_corrupt() {
+        assert!(matches!(try_unpack(b"plain user message body"), Ok(None)));
+        assert!(matches!(try_unpack(b"OPZ"), Ok(None)));
+        assert!(matches!(try_unpack(b"OPZ1"), Err(UnpackError::MissingTag)));
+        assert!(matches!(
+            try_unpack(b"OPZ1\x09garbage"),
+            Err(UnpackError::UnknownTag(9))
+        ));
+        assert!(matches!(
+            try_unpack(b"OPZ1\x01\x00\x00"),
+            Err(UnpackError::Decompress(_))
+        ));
+        let data = vec![0x5Au8; 4096];
+        assert_eq!(try_unpack(&pack(&data)).unwrap(), Some(data));
+    }
+
+    /// A frame compressed against a different dictionary is refused with zstd's own reason, not
+    /// passed through: zstd carries the dictionary ID in its frame header and checks it on decode.
+    #[test]
+    fn a_frame_from_another_dictionary_is_an_error() {
+        let msg = b"From: N0CALL\r\nTo: DL1ABC\r\nSubject: t\r\n\r\nbody text text text".repeat(4);
+        // A stand-in for a retrained dictionary: same content, different dictionary ID.
+        let mut other_dict = HPX_DICT_BYTES.to_vec();
+        other_dict[4] ^= 0x01;
+        let z = zstd::bulk::Compressor::with_dictionary(3, &other_dict)
+            .and_then(|mut c| c.compress(&msg))
+            .expect("compress with the other dictionary");
+        let mut framed = PACK_MAGIC.to_vec();
+        framed.push(2);
+        framed.extend_from_slice(&(msg.len() as u32).to_be_bytes());
+        framed.extend_from_slice(&z);
+        match try_unpack(&framed) {
+            Err(UnpackError::Decompress(CompressionError::DecompressFailed(reason))) => {
+                assert!(reason.contains("Dictionary mismatch"), "reason: {reason}")
+            }
+            other => panic!("expected a dictionary-mismatch error, got {other:?}"),
+        }
+        assert_eq!(unpack(&framed), None);
     }
 
     #[test]

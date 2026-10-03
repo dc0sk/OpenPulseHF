@@ -292,15 +292,14 @@ fn worker_loop(bridge: Arc<ModemBridge>, tx_data_rx: std::sync::mpsc::Receiver<V
         }
 
         // Apply the ARQBW host cap to the adaptive ladder when it changes (no-op when no adaptive
-        // session is active, since `adaptive_profile_modes()` is then empty).
+        // session is active).
         if let Ok(bw) = bridge.arq_bw.try_read().map(|g| *g) {
             if bw != last_arq_bw {
                 let mut engine = bridge.engine.lock().unwrap_or_else(|e| e.into_inner());
-                if engine.current_tx_level().is_some() {
-                    let modes = engine.adaptive_profile_modes();
-                    let cap =
-                        openpulse_qsy::bandplan::max_speed_level_for_bandwidth(&modes, bw as u32);
-                    engine.set_arq_max_tx_level(cap);
+                // Sized by the registered plugins: the bandplan table is a stale twin that lacked
+                // MFSK16, QPSK250-D and every OFDM52-* rung and listed OFDM52 at 3200 Hz.
+                if let Some(cap) = engine.arq_max_tx_level_for_bandwidth(bw as u32) {
+                    engine.set_arq_max_tx_level(Some(cap));
                     tracing::debug!(arq_bw_hz = bw, ?cap, "applied ARQBW cap to adaptive ladder");
                 }
                 drop(engine);
@@ -380,7 +379,12 @@ fn worker_loop(bridge: Arc<ModemBridge>, tx_data_rx: std::sync::mpsc::Receiver<V
                         if !sent {
                             break;
                         }
-                        match engine.receive_ack_with_short_fec(None) {
+                        // Held-stream listen with an in-stream scan (#1315): a one-shot read sees
+                        // one poll interval and no scan, so on real audio it never heard an ACK.
+                        match engine.receive_ack_with_short_fec_within(
+                            None,
+                            openpulse_modem::engine::ARQ_ACK_WINDOW_MS,
+                        ) {
                             Ok(ack) if ack.ack_type != AckType::Nack => {
                                 engine.apply_ack_frame(&ack);
                                 tracing::debug!(attempt, "ARQ: acked");

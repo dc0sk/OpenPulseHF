@@ -42,6 +42,39 @@ pub fn flush_timeout_seconds(queued_samples: usize, sample_rate_hz: u32, channel
         .clamp(MIN_TIMEOUT_SECONDS, MAX_TIMEOUT_SECONDS)
 }
 
+/// Ceiling on the wait after the queue empties: the fixed sleep it replaces (#1367), so the wait is
+/// never longer than it was.
+pub(crate) const DRAIN_WAIT_CAP: std::time::Duration = std::time::Duration::from_millis(200);
+
+/// Margin over the device's own report, for the part of the output path it does not count (a USB
+/// codec's FIFO and DAC, about 1–2 ms).
+pub(crate) const DRAIN_MARGIN: std::time::Duration = std::time::Duration::from_millis(10);
+
+/// How long after the output callback the last queued sample leaves the device, or `None` when the
+/// report cannot be trusted.
+///
+/// `delay` is cpal's `playback − callback`: on ALSA, the frames already queued in the hardware when
+/// the callback ran. `last_frame` is the 1-based frame position of the last real sample in that
+/// callback's buffer. A delay of ZERO is not trusted: cpal clamps an underrun's negative delay to 0,
+/// and a running stream whose callback fired always has something queued — so 0 is the report that
+/// lies, and it would release the transmitter with a whole hardware buffer still playing.
+pub fn drain_after_callback(
+    delay: Option<std::time::Duration>,
+    last_frame: usize,
+    sample_rate_hz: u32,
+) -> Option<std::time::Duration> {
+    let delay = delay.filter(|d| !d.is_zero())?;
+    (sample_rate_hz > 0).then(|| {
+        delay + std::time::Duration::from_secs_f64(last_frame as f64 / f64::from(sample_rate_hz))
+    })
+}
+
+/// The wait once the software queue is empty: until the device's reported drain plus
+/// [`DRAIN_MARGIN`], never above [`DRAIN_WAIT_CAP`]; the full cap when there is no trustworthy report.
+pub fn drain_wait(remaining: Option<std::time::Duration>) -> std::time::Duration {
+    remaining.map_or(DRAIN_WAIT_CAP, |r| (r + DRAIN_MARGIN).min(DRAIN_WAIT_CAP))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -123,5 +156,45 @@ mod tests {
         let t = flush_timeout_seconds(1000, 0, 1);
         assert!(t.is_finite());
         assert_eq!(t, MIN_TIMEOUT_SECONDS);
+    }
+
+    use std::time::Duration;
+
+    #[test]
+    fn a_reported_delay_sets_the_wait() {
+        let after = drain_after_callback(Some(Duration::from_millis(20)), 80, 8000);
+        assert_eq!(
+            after,
+            Some(Duration::from_millis(30)),
+            "20 ms queued + 80 frames at 8 kHz"
+        );
+        assert_eq!(
+            drain_wait(after),
+            Duration::from_millis(40),
+            "plus the 10 ms margin"
+        );
+    }
+
+    /// THE #1367 REVIEW FINDING: cpal reports an underrun as delay 0. Trusting it would release the
+    /// transmitter with a whole hardware buffer still playing.
+    #[test]
+    fn a_zero_delay_is_not_trusted_and_falls_back_to_the_full_wait() {
+        assert_eq!(drain_after_callback(Some(Duration::ZERO), 80, 8000), None);
+        assert_eq!(drain_wait(None), DRAIN_WAIT_CAP);
+    }
+
+    #[test]
+    fn no_report_or_no_rate_falls_back_to_the_full_wait() {
+        assert_eq!(drain_after_callback(None, 80, 8000), None);
+        assert_eq!(
+            drain_after_callback(Some(Duration::from_millis(20)), 80, 0),
+            None
+        );
+    }
+
+    #[test]
+    fn the_wait_is_never_longer_than_before() {
+        let after = drain_after_callback(Some(Duration::from_millis(500)), 0, 8000);
+        assert_eq!(drain_wait(after), DRAIN_WAIT_CAP);
     }
 }

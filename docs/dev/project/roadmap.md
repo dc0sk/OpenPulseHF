@@ -2,7 +2,7 @@
 project: openpulsehf
 doc: docs/dev/project/roadmap.md
 status: living
-last_updated: 2026-09-14
+last_updated: 2026-10-01
 ---
 
 # Roadmap
@@ -1856,23 +1856,15 @@ After the fix, BPSK250 + RS FEC + block interleaver correctly decodes through Go
 
 Every profile in `SessionProfile::PROFILE_NAMES`, in registry order. `profile.rs` is the source of
 truth and this table is **gated against it** by `tests/roadmap_profile_table.rs` — it cannot drift.
-"Top mode" is the mode at the highest mapped level (its FEC and the full rung map live in
+Decision 18 (2026-10-01) reduced the registry to two profiles on the one `hpx_hf` ladder: `fast` and
+`robust` (capped at SL6); the other ten were deleted. "SL range" is what the profile can reach. "Top mode" is the mode at the highest reachable level (its FEC and the full rung map live in
 `profile.rs`; the `hpx_hf` rung map is additionally gated against `docs/mode-fec-ladder.md`). To
 regenerate after a profile change, run the printer named in that test.
 
 | Profile | SL range | Initial | Top mode |
 |---|---|---|---|
-| `hpx500` | SL2–SL6 | SL2 | QPSK500 |
-| `hpx_modcod` | SL2–SL7 | SL2 | QPSK500 |
-| `hpx_pilot` | SL2–SL5 | SL2 | PILOT-32APSK500 |
-| `hpx_pilot_rrc` | SL2–SL5 | SL2 | PILOT-32APSK500-RRC |
-| `hpx_pilot_fast` | SL2–SL5 | SL2 | PILOT-32APSK1000 |
-| `hpx_pilot_fast_rrc` | SL2–SL5 | SL2 | PILOT-32APSK1000-RRC |
-| `hpx_hf` | SL1–SL14 | SL2 | OFDM52-64QAM |
-| `hpx_ofdm_hf` | SL5–SL10 | SL5 | OFDM52-64QAM |
-| `hpx_wideband` | SL8–SL11 | SL8 | 8PSK1000 |
-| `hpx_wideband_hd` | SL9–SL15 | SL12 | 64QAM2000-RRC |
-| `hpx_narrowband` | SL8–SL11 | SL8 | 8PSK2000-RRC |
+| `fast` | SL1–SL14 | SL2 | OFDM52-64QAM |
+| `robust` | SL1–SL6 | SL2 | QPSK250-D |
 
 ### Mode-to-plugin mapping
 

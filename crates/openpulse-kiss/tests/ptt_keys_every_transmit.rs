@@ -102,6 +102,7 @@ fn the_watchdog_force_releases_a_key_that_outlives_its_deadline() {
             port: 0,
             mode: "BPSK250".into(),
             loopback: true,
+            ptt_leader: std::time::Duration::ZERO,
         },
         Default::default(),
         None,

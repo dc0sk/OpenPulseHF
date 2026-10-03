@@ -2,7 +2,7 @@
 project: openpulsehf
 doc: docs/openpulse-book.md
 status: living
-last_updated: 2026-09-27
+last_updated: 2026-10-02
 ---
 
 # The OpenPulseHF Book
@@ -507,14 +507,18 @@ decide). Update both ends. Gates: `free_rs_strengthening` (core) and `free_rs_st
 ### 1.4 The adaptive rate ladders
 
 A `SessionProfile` (`crates/openpulse-core/src/profile.rs`) maps each `SpeedLevel` (SL1–SL20) to a
-mode string, a per-level FEC, and per-level SNR floor/ceiling. Twelve named profiles ship:
-`hpx500`, `hpx_modcod`, `hpx_pilot`, `hpx_pilot_rrc`, `hpx_pilot_fast`, `hpx_pilot_fast_rrc`,
-`hpx_hf`, `hpx_ofdm_hf`, `hpx_wideband`, `hpx_wideband_hd`, `hpx_narrowband`.
-The configured default is `[modem] profile = "hpx_hf"`.
+mode string, a per-level FEC, and per-level SNR floor/ceiling. Two named profiles
+ship, both on the single `hpx_hf` ladder: `fast` (the full ladder, SL1–SL14, up to ≈2031 Hz) and
+`robust` (the same ladder capped at SL6 — MFSK16, BPSK31–250, QPSK250-D — all coded, single-carrier,
+≤500 Hz, for poor conditions or limited gear). Both carry the same ladder fingerprint, so a `fast`
+and a `robust` station interoperate; the robust side never climbs past SL6. The configured default
+is `[modem] profile = "fast"`. An unknown name fails with the list of valid names; the earlier
+profiles were deleted (2026-10-01) without aliases, and their modes remain selectable as fixed modes
+(`[modem] mode`).
 
 #### 1.4.1 `hpx_hf` — the primary HF ladder (SL1–SL14)
 
-This table is read from `SessionProfile::hpx_hf`. The repository keeps its own copy of it in
+This table is read from `SessionProfile::fast`. The repository keeps its own copy of it in
 `docs/mode-fec-ladder.md`, and that copy is *gated*: `ladder_doc_matches_profile`
 (`crates/openpulse-core/tests/`) parses the doc table and asserts mode/FEC/floor/ceiling equality
 per level, so doc and code cannot silently drift.
@@ -572,6 +576,8 @@ AWGN penalty versus QPSK's ~2 dB). The ordering the project distilled from this:
 phase margin — MFSK16 (non-coherent) > BPSK (±90°) > QPSK (±45°) > 8PSK (±22.5°).
 
 #### 1.4.3 The other ladders, briefly
+
+These profiles were deleted on 2026-10-01; the table is kept as design history.
 
 | Profile | Rungs | Character |
 |---|---|---|
@@ -805,7 +811,7 @@ measurements.
 | JS8 NORMAL weak-signal floor | 11/12 at −18 dB; floor −21 dB | deterministic AWGN, 2 500 Hz ref BW; gate ≥ 6/8 at −18 dB |
 | `LdpcHighRate` vs `SoftConcatenated` floor cost | +4…+8 dB for 2.03× rate, per SC-FDMA mode | AWGN, 62 B payload, 90 % frame-success; why code rate is the *last* lever |
 | CE-SSB average-power gain | +1.6/+2.7/+3.8 dB in channel-sim (OFDM52 at 2.5/2.0/1.5 × rms), zero BER cost; **+1.18 dB confirmed on-air** | FT-991A, 2 m, 20 W via attenuator; software ACPR + SDR spectral-mask check |
-| Goodput floors (regression gates) | `hpx_hf` AWGN 20 dB ≥ 250 bps (baseline ~397); `hpx_ofdm_hf` AWGN ≥ 600 (~919); `hpx_ofdm_hf` `moderate_f1` 25 dB ≥ 280 (~414) | linksim, 200 B frames, 40 frames, seeded |
+| Goodput floors (regression gates) | `hpx_hf` AWGN 20 dB ≥ 250 bps (baseline ~397); `hpx_ofdm_hf` AWGN ≥ 600 (~919); `hpx_ofdm_hf` `moderate_f1` 25 dB ≥ 280 (~414) (profile `hpx_ofdm_hf` deleted 2026-10-01) | linksim, 200 B frames, 40 frames, seeded |
 | Benchmark harness gate | 100 % pass, mean_transitions ≤ 20 | `benchmark_integration`; CLI: `benchmark run` + `jq` check |
 
 CE-SSB deserves its scope stated exactly, because the project's own `docs/features.md` once got it
@@ -2194,7 +2200,7 @@ an unrealistic bar, and soft FEC (~+6 dB) was the bigger lever the loopback had 
 
 The full adaptive-rate machinery is a protocol topic, but the ladder is where every measurement in
 this chapter lands, so here it is as the code builds it. Source of truth:
-`SessionProfile::hpx_hf()` (`crates/openpulse-core/src/profile.rs`); `initial_level = SL2`,
+`SessionProfile::fast()` (`crates/openpulse-core/src/profile.rs`); `initial_level = SL2`,
 `nack_threshold = 3`, admission to SL14 gated behind a prior SNR upgrade candidate
 (`ack_up_requires_snr_candidate_at = Some(SL14)`). Ceilings follow one rule — a uniform +2 dB
 hysteresis over the next rung's floor, `ceiling(L) = floor(L+1) + 2` — so every rung dwells the
@@ -2239,7 +2245,7 @@ says "SL7 (OFDM52) = 10" where the code assigns 9.0. `ladder_doc_matches_profile
 comment table — so the *tables* cannot drift. The surrounding prose is checked by nothing, which is
 exactly why it did. The table above reproduces the code.)
 
-For contrast, the original `hpx500` profile (BPSK31 → QPSK500, floors 3/4/5/9/11, no per-level
+For contrast, the original `hpx500` profile (deleted 2026-10-01; BPSK31 → QPSK500, floors 3/4/5/9/11, no per-level
 FEC) states its derivation as "3 dB headroom above the Eb/N₀ required for 10⁻³ BER" — a code
 comment with no test or sweep behind the specific figures that we could verify, and in any case an
 AWGN-derived calibration, which §2A.8.3 showed is exactly the class of ladder that does not survive
@@ -3546,11 +3552,11 @@ The single best no-hardware demonstration of what the adaptive rate controller d
 
 ```sh
 openpulse --backend loopback --log error adaptive \
-  --profile hpx_hf --channel awgn --snr 14 --frames 6 --seed 42
+  --profile fast --channel awgn --snr 14 --frames 6 --seed 42
 ```
 
 ```
-adaptive session: profile=hpx_hf channel=awgn frames=6 payload=64B
+adaptive session: profile=fast channel=awgn frames=6 payload=64B
   start: level=SL2 mode=BPSK31
   frame 0: mode=BPSK31 decoded=ok snr=14.0dB ack=ACK-UP → SL3 (BPSK63)
   frame 1: mode=BPSK63 decoded=ok snr=14.0dB ack=ACK-UP → SL4 (BPSK100)
@@ -3561,7 +3567,7 @@ adaptive session: profile=hpx_hf channel=awgn frames=6 payload=64B
   final: level=SL8 mode=OFDM52-8PSK | 6/6 frames decoded, 6 transitions, ~23 bps
 ```
 
-Every `hpx_hf` session starts at SL2 (`BPSK31+Rs`) and climbs one rung per clean decode.
+Every `fast` session starts at SL2 (`BPSK31+Rs`) and climbs one rung per clean decode.
 The `~23 bps` figure is the *effective* rate of this six-frame run including the climb
 through the slow rungs — do not read it as a steady-state throughput. `--channel` also
 accepts `clean`, `watterson-good-f1` and `watterson-poor-f1`; pass `--seed` for determinism
@@ -3570,18 +3576,16 @@ and `--json` for machine-readable output.
 #### 4.1.4 Ask the mode advisor
 
 ```sh
-openpulse mode-advisor --snr 12 --profile hpx_hf
-openpulse mode-advisor --snr 3  --profile hpx_hf
+openpulse mode-advisor --snr 12 --profile fast
+openpulse mode-advisor --snr 3  --profile fast
 ```
 
 ```
-profile=hpx_hf snr_db=12.0 recommended_speed_level=SL9 recommended_mode=OFDM52-16QAM reason="Using profile 'hpx_hf' floor: snr_db=12.0 meets SL9 floor (12.0 dB)."
-profile=hpx_hf snr_db=3.0 recommended_speed_level=SL2 recommended_mode=BPSK31 reason="Using profile 'hpx_hf' floor: snr_db=3.0 meets SL2 floor (3.0 dB)."
+profile=fast snr_db=12.0 recommended_speed_level=SL9 recommended_mode=OFDM52-16QAM reason="Using profile 'fast' floor: snr_db=12.0 meets SL9 floor (12.0 dB)."
+profile=fast snr_db=3.0 recommended_speed_level=SL2 recommended_mode=BPSK31 reason="Using profile 'fast' floor: snr_db=3.0 meets SL2 floor (3.0 dB)."
 ```
 
-The `--profile` help lists all twelve accepted values — `hpx500`, `hpx_modcod`, `hpx_pilot`,
-`hpx_pilot_rrc`, `hpx_pilot_fast`, `hpx_pilot_fast_rrc`, `hpx_hf`, `hpx_ofdm_hf`,
-`hpx_wideband`, `hpx_wideband_hd`, `hpx_narrowband` — because clap takes
+The `--profile` help lists both accepted values — `fast` and `robust` — because clap takes
 them straight from `SessionProfile::PROFILE_NAMES`
 (`crates/openpulse-core/src/profile.rs`), so the help cannot drift from what `by_name`
 accepts. Profile names are case-insensitive and `-`/`_` interchangeable.
@@ -3709,6 +3713,13 @@ PTT and CAT are separate concerns: the modem asserts PTT through one of seven ba
 | `gpio` | Linux GPIO character device | `--rig chip:line[:active_low]` (e.g. `gpiochip0:17`); needs a `--features gpio` build |
 | `generic` | TOML-defined serial CAT command set | `--rig <serial>` **and** `--rig-file <toml>`; Unix-only, `--features generic-serial` build. Present in code but absent from the `--ptt` help string — treat it as an undocumented option |
 
+**Leader.** `[modem] ptt_leader_ms` (CLI `--ptt-leader-ms`) is a wait between the PTT edge and the
+first sample, so the rig's key-up does not clip the preamble (#1257). It applies once per key, not
+per frame, on the daemon, both TNCs and `openpulse transmit`, and it runs after the `PTT TRUE` event, so a host keying its own rig
+gets the same head start. The default is `0`; measure the rig before setting it. Not covered: the cross-band repeater's
+second rig (`rig_b`) keys with no leader, and `openpulse calibrate` keys its own instrument paths
+without one.
+
 Shipped rig-definition files for the generic backend: `docs/config/rig-icom-ic7300.toml` and
 `docs/config/rig-yaesu-ft817.toml`. Shipped example station configs:
 `docs/config/openpulse-kx3.toml` and `docs/config/openpulse-tx500.toml`.
@@ -3741,10 +3752,10 @@ tx_limiter_threshold = 0.0   # 0.0 = disabled; soft limiter s -> t*tanh(s/t)
 
 [modem]
 mode = "BPSK250"             # default fixed mode
-profile = "hpx_hf"           # the SpeedLevel ladder (SL1 MFSK16 ... SL14 OFDM52-64QAM+LdpcHighRate)
+profile = "fast"             # "fast" (SL1–SL14) or "robust" (SL1–SL6); the SpeedLevel ladder (SL1 MFSK16 ... SL14 OFDM52-64QAM+LdpcHighRate)
 ptt_backend = "rigctld"      # none|rts|dtr|vox|rigctld|cm108|gpio
 ptt_device = ""              # serial path (rts/dtr) or /dev/hidrawN (cm108)
-dcd_squelch = 0.01           # busy-channel detector threshold (engine default)
+dcd_squelch = 0.0            # operator floor under the adaptive squelch: raises it, never lowers it (0 = off)
 
 [radio]
 cat_backend = "rigctld"      # also "generic" (Unix, generic-serial feature) or "none"
@@ -3846,12 +3857,12 @@ data_port = 8516
 # Opt-in: run an adaptive ARQ session so the rate ladder + host ARQBW/ARQTIMEOUT take effect.
 # Default false = fixed-mode operation (ARQBW/ARQTIMEOUT are accepted-and-echoed no-ops).
 enable_adaptive_arq = false
-adaptive_profile = "hpx500"
+adaptive_profile = "fast"
 ```
 
 That comment is worth reading twice: with `enable_adaptive_arq = false` (the default), the
 host commands `ARQBW` and `ARQTIMEOUT` are accepted and echoed **but inert**. Set it to
-`true` (and pick `adaptive_profile`, e.g. `hpx_hf`) to let the rate ladder drive the link.
+`true` (and pick `adaptive_profile`, `fast` or `robust`) to let the rate ladder drive the link.
 
 The implemented host command set (`crates/openpulse-ardop/src/command.rs`): `VERSION`
 (replies `VERSION 1.0-OpenPulseHF`), `MYID`, `LISTEN`, `CONNECT`, `DISCONNECT`, `ABORT`,
@@ -3942,15 +3953,15 @@ transfer rate:
 
 ```sh
 cargo run --release -p openpulse-linksim --no-default-features -- \
-  --profile hpx_hf --channel awgn --snr 20 --frames 20 --payload 64
+  --profile fast --channel awgn --snr 20 --frames 20 --payload 64
 ```
 
 ```
-Two-station link — profile hpx_hf | 20 frames × 64 B | FEC Rs | turnaround 250 ms
+Two-station link — profile fast | 20 frames × 64 B | FEC Rs | turnaround 250 ms
 
        profile |    fwd channel | deliver |  effective | avg level |     final | air time
 --------------------------------------------------------------------------------------------
-        hpx_hf |      AWGN 20dB |    100% |   63.4 bps | avg SL 10.0 | final SL14 |  161.6 s
+          fast |      AWGN 20dB |    100% |   63.4 bps | avg SL 10.0 | final SL14 |  161.6 s
 ```
 
 Again: 63.4 bps is the effective rate of a 20-frame run *including* the climb from SL2, not
@@ -4448,7 +4459,7 @@ All symptoms below are real strings or verified behaviours from the 0.15.0 tree.
 ### 4.14 Where to go next
 
 - The mode and FEC ladder in engineering depth: `docs/mode-fec-ladder.md` — the `hpx_hf`
-  rung table there is enforced against `SessionProfile::hpx_hf` by
+  rung table there is enforced against `SessionProfile::fast` by
   `cargo test -p openpulse-core --test ladder_doc_matches_profile`.
 - The on-air validation ladder and its scripts: `docs/dev/virtual-loopback.md`,
   `scripts/onair-preflight.sh`, `scripts/run-onair-validation-flow.sh` (preflight → matrix

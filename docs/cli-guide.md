@@ -2,7 +2,7 @@
 project: openpulsehf
 doc: docs/cli-guide.md
 status: living
-last_updated: 2026-09-14
+last_updated: 2026-10-02
 ---
 
 # CLI Guide - openpulse (v0.16.0)
@@ -47,7 +47,7 @@ cargo build --release
 - openpulse config init: print a fully-commented `config.toml` template to stdout.
 
 Notes:
-- `mode-advisor` and `adaptive` select the SpeedLevel ladder via `--profile` (overrides `[modem] profile` in config). Profiles: `hpx500`, `hpx_hf`, `hpx_ofdm_hf`, `hpx_pilot`, `hpx_pilot_rrc`, `hpx_pilot_fast`, `hpx_pilot_fast_rrc`, `hpx_wideband`, `hpx_wideband_hd`, `hpx_narrowband`.
+- `mode-advisor` and `adaptive` select the SpeedLevel ladder via `--profile` (overrides `[modem] profile` in config). Profiles: `fast` (default; the full `hpx_hf` ladder SL1–SL14) and `robust` (the same ladder capped at SL6, ≤500 Hz, for poor conditions or limited gear). An unknown name fails with the list of valid names.
 - `adaptive` runs a real rate-control session over a simulated channel (`clean`, `awgn` with `--snr`, `watterson-good-f1`, `watterson-poor-f1`) and reports each speed-level transition; no audio hardware required. Add `--json` for newline-delimited JSON.
 - `arq send` (ISS) / `arq listen` (IRS) run a reliable two-way exchange over the modem: data forward, FSK4 ACK return, retransmit on NACK. Run `listen` on one station and `send` on the other. Keying is per transmission — use a VOX or wired/full-duplex audio path.
 
@@ -176,6 +176,7 @@ Run `openpulse daemon --help` for the full subcommand and flag reference.
   - cm108: CM108/CM109/CM119 sound-chip GPIO over USB-HID (DMK URI, RA-series, AIOC, homebrew); --rig specifies the `/dev/hidrawN` path (empty = auto-detect the first C-Media device). Keys GPIO 3 by default. In the daemon, `[modem] ptt_device` / `ptt_gpio` set the path and pin.
   - gpio: Linux GPIO line (e.g. a Raspberry Pi header pin); --rig specifies the `chip:line[:active_low]` spec (e.g. `gpiochip0:17`). Requires the `gpio` feature. In the daemon, `[modem] ptt_device` carries the spec.
 - --rig <path|address:port>: serial port path for rts/dtr PTT, rigctld address:port, /dev/hidrawN for cm108, or chip:line for gpio.
+- --ptt-leader-ms <ms>: wait between the PTT edge and the first sample, so the rig's key-up does not clip the preamble (default 0). In the daemon and the TNCs, `[modem] ptt_leader_ms`. Measure the rig before setting it.
 - --help: show full command and flag reference.
 
 Output format options (available on most commands):

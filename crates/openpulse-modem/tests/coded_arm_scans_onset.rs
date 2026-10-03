@@ -36,7 +36,7 @@ fn engine_with_ota() -> (LoopbackBackend, ModemEngine) {
     let mut e = ModemEngine::new(Box::new(backend.clone_shared()));
     e.register_plugin(Box::new(BpskPlugin::new()))
         .expect("register bpsk");
-    let profile = SessionProfile::hpx_hf();
+    let profile = SessionProfile::fast();
     // The rung is SEARCHED, not transcribed: `rx_candidates` offers only the recommended and
     // confirmed levels, both the entry rung on a fresh session, so without locking the right rung
     // this test would never try BPSK250+Rs and would pass for the wrong reason.

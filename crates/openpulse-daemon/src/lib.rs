@@ -12,6 +12,7 @@
 pub mod audit;
 pub mod logbook;
 pub mod monitor;
+mod nack_budget;
 pub mod protocol;
 pub mod ptt;
 
@@ -117,6 +118,8 @@ pub struct MetricsSnapshot {
     /// including its framing overhead; never larger than raw). The ratio `compressed / raw` is the
     /// live compression figure reported in `ControlEvent::Metrics`.
     pub compressed_payload_bytes: u64,
+    /// Received frames carrying the pack magic that failed to unpack and were dropped (REQ-CMP-05).
+    pub unpack_failures: u64,
     /// Correlation-veto observability, refreshed from the engine by the main loop (#1344).
     ///
     /// Same route and same reason as `front_end` below: the periodic metrics task holds no engine.
@@ -280,7 +283,8 @@ pub struct RuntimeControlState {
     pub trust_store: InMemoryTrustStore,
     /// Optional relay forwarder; `Some` when `[relay] enabled = true` in config.
     pub relay_forwarder: Option<RelayForwarder>,
-    /// Fallback DCD/squelch RMS threshold when no per-band override matches.
+    /// Fallback operator squelch floor (a lower bound on the adaptive squelch; 0 = off) when no
+    /// per-band value matches.
     pub dcd_squelch_default: f32,
     /// Per-band DCD/squelch overrides (band label → threshold), applied on retune.
     pub dcd_squelch_bands: std::collections::BTreeMap<String, f32>,
@@ -328,6 +332,9 @@ pub struct RuntimeControlState {
     pub filexfer_frames_routed: u64,
     /// Active inbound file-transfer session (at most one per link in v1).
     pub file_rx: Option<crate::filexfer::FxRxState>,
+    /// The last finished receive, kept so a probe from a sender that missed its `FileComplete` is
+    /// answered (selective-repeat design, R1).
+    pub file_rx_finished: Option<crate::filexfer::FinishedRx>,
     /// Received files this session, newest last — served by `ListFiles` so a late-connecting client
     /// sees transfers that completed before it attached (not just live `FileReceived` events).
     pub received_files: Vec<crate::protocol::FileSummary>,
@@ -339,6 +346,8 @@ pub struct RuntimeControlState {
     /// with a single PTT keying per burst; queueing (not transmitting inline) keeps the module I/O-free
     /// while the PTT controller — which lives in `server::run` — sequences the half-duplex TX.
     pub filexfer_tx_queue: Vec<(Vec<u8>, String)>,
+    /// When the file-transfer drain first deferred to a busy channel, while it is still deferring.
+    pub filexfer_busy_since: Option<u64>,
     /// JS8 station-discovery runtime (FF-15), present when `[discovery]` is configured. `enabled`
     /// gates activity; `server::run` feeds it captured audio + the idle predicate and executes its
     /// retune outcomes. `None` when discovery is not built for this daemon.
@@ -509,7 +518,7 @@ impl Default for RuntimeControlState {
             ptt: crate::ptt::SharedPtt::default(),
             trust_store: InMemoryTrustStore::default(),
             relay_forwarder: None,
-            dcd_squelch_default: 0.01,
+            dcd_squelch_default: 0.0,
             dcd_squelch_bands: std::collections::BTreeMap::new(),
             tx_attenuation_default: 0.0,
             tx_attenuation_bands: std::collections::BTreeMap::new(),
@@ -527,10 +536,12 @@ impl Default for RuntimeControlState {
             filexfer_sar: SarReassembler::new(FILEXFER_SAR_TIMEOUT),
             filexfer_frames_routed: 0,
             file_rx: None,
+            file_rx_finished: None,
             received_files: Vec::new(),
             file_tx: None,
             filexfer_policy: crate::filexfer::FileTransferPolicy::default(),
             filexfer_tx_queue: Vec::new(),
+            filexfer_busy_since: None,
             discovery: None,
             monitor: None,
             discovery_home_freq_hz: None,
@@ -3518,7 +3529,7 @@ mod command_apply_tests {
 
         apply(
             ControlCommand::StartOtaSession {
-                profile: "hpx500".into(),
+                profile: "robust".into(),
             },
             &mut engine,
             &mut rs,
@@ -3558,7 +3569,7 @@ mod command_apply_tests {
         // Start an OTA session.
         apply_command_to_engine(
             &ControlCommand::StartOtaSession {
-                profile: "hpx500".into(),
+                profile: "robust".into(),
             },
             &mut engine,
             &active_mode,
@@ -3632,7 +3643,7 @@ mod command_apply_tests {
         let (tx, _rx) = broadcast::channel::<ControlEvent>(16);
         let ev_tx = Arc::new(tx);
         let mut rs = RuntimeControlState {
-            local_ota_ladder: Some(("hpx_hf".into(), 0xAAAA_AAAA_AAAA_AAAA)),
+            local_ota_ladder: Some(("fast".into(), 0xAAAA_AAAA_AAAA_AAAA)),
             ..RuntimeControlState::default()
         };
         let key = [7u8; 32];
@@ -3644,7 +3655,7 @@ mod command_apply_tests {
             "W1AW",
             "",
             &key,
-            "hpx_hf",
+            "fast",
             0xAAAA_AAAA_AAAA_AAAA,
         );
         assert_eq!(
@@ -3660,7 +3671,7 @@ mod command_apply_tests {
             "W1AW",
             "",
             &key,
-            "hpx_hf",
+            "fast",
             0xBBBB_BBBB_BBBB_BBBB,
         );
         assert_eq!(
@@ -3685,7 +3696,7 @@ mod command_apply_tests {
             "W1AW",
             "",
             &key,
-            "hpx_hf",
+            "fast",
             0xAAAA_AAAA_AAAA_AAAA,
         );
         assert_eq!(rs.last_verified_peer().unwrap().profile_compatible, None);
@@ -3702,7 +3713,7 @@ mod command_apply_tests {
 
         apply_command_to_engine(
             &ControlCommand::StartOtaSession {
-                profile: "hpx500".into(),
+                profile: "robust".into(),
             },
             &mut engine,
             &active_mode,
@@ -3740,16 +3751,18 @@ mod command_apply_tests {
         rs.dcd_squelch_bands.insert("40m".into(), 0.05);
 
         // 40m is in the map → its override applies.
+        // Asserted on the OPERATOR value: the threshold in force is max(adaptive, operator), and a
+        // cold engine's 0.01 default would make the 0.01 cases pass whatever was applied (#1452).
         apply_band_squelch(&mut engine, &rs, 7_040_000);
-        assert!((engine.dcd_squelch() - 0.05).abs() < 1e-6);
+        assert!((engine.dcd_operator_squelch() - 0.05).abs() < 1e-6);
 
         // 20m is not in the map → fall back to the default.
         apply_band_squelch(&mut engine, &rs, 14_070_000);
-        assert!((engine.dcd_squelch() - 0.01).abs() < 1e-6);
+        assert!((engine.dcd_operator_squelch() - 0.01).abs() < 1e-6);
 
         // Out-of-band frequency → default.
         apply_band_squelch(&mut engine, &rs, 5_000_000);
-        assert!((engine.dcd_squelch() - 0.01).abs() < 1e-6);
+        assert!((engine.dcd_operator_squelch() - 0.01).abs() < 1e-6);
     }
 
     #[test]
@@ -5045,6 +5058,9 @@ mod command_apply_tests {
         /// removed before the carrier detect ever sees it and nothing accumulates at all — measured,
         /// a constant-0.5 fixture never flushed and the control could not fail.
         fn flushed(engine: &mut ModemEngine) -> bool {
+            // The receiver hears the (silent) band first, as on a real rig: the carrier detect's
+            // floor learns whatever it hears while no burst is being gathered (#1452).
+            let _ = engine.accumulate_capture(Some("BPSK250"), vec![0.0; 32_000]);
             let mut n = 0usize;
             while n < CARRIER {
                 let block: Vec<f32> = (n..n + CHUNK)

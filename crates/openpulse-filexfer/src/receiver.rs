@@ -187,6 +187,14 @@ impl ReceiverSession {
         }
     }
 
+    /// A fragment of this transfer arrived: the stall clock restarts, so a block that takes longer
+    /// than `block_stall_ms` to arrive in full never stalls while it is still arriving.
+    pub fn note_fragment(&mut self, now_ms: u64) {
+        if self.state == State::Receiving {
+            self.deadline = now_ms.saturating_add(self.timeouts.block_stall_ms);
+        }
+    }
+
     /// Whether the transfer has been accepted and is actively receiving blocks.
     ///
     /// A caller must consult this **before** persisting peer bytes or acknowledging a block on air:

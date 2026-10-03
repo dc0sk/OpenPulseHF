@@ -2,7 +2,7 @@
 project: openpulsehf
 doc: docs/features.md
 status: living
-last_updated: 2026-09-20
+last_updated: 2026-10-01
 ---
 
 # OpenPulseHF — Feature Reference
@@ -51,10 +51,9 @@ The **Pilot** family (`PILOT-{QPSK,8PSK,16QAM,32APSK}{500,1000}` plus their `-RR
 variants and `2000-RRC`, `plugins/pilot`) is a pilot-framed single-carrier waveform:
 known in-band pilot symbols drive carrier recovery instead of a decision-directed
 Costas loop, making it cycle-slip-immune on dense constellations and robust to
-soundcard sample-rate offset. It is soft-capable, and spans four adaptive profiles
-(`hpx_pilot{,_rrc,_fast,_fast_rrc}`) trading bandwidth against throughput. See the
-[pilot-framed waveform](dev/design/hpx-waveform-design.md#pilot-framed-waveform) note and the
-`hpx_pilot` adaptive profile.
+soundcard sample-rate offset. It is soft-capable, and selectable as fixed modes only (the `hpx_pilot*`
+session profiles were deleted 2026-10-01). See the
+[pilot-framed waveform](dev/design/hpx-waveform-design.md#pilot-framed-waveform) note.
 
 All modes target an 8 kHz audio sample rate and a nominal 1500 Hz carrier, fitting
 within a standard SSB passband.  Effective throughput figures are approximate; overhead
@@ -63,7 +62,7 @@ plus an 8-symbol tail.  Actual throughput also depends on frame length, FEC mode
 channel conditions.  RRC modes use α = 0.35; their bandwidth is ~35% wider than the
 non-RRC equivalent at the same baud rate.
 
-QPSK1000 (used in the `hpx_wideband` adaptive profile, formerly HPX2300) and QPSK1000-HF are distinct registered
+QPSK1000 (formerly used by the `hpx_wideband` profile, deleted 2026-10-01) and QPSK1000-HF are distinct registered
 mode names with the same baud rate and similar bandwidth; the same applies to 8PSK1000
 and 8PSK1000-HF.  The -HF suffix variants are tuned for HF path conditions.
 
@@ -377,61 +376,21 @@ The `RateAdapter` state machine maps ACK events to speed level transitions acros
 
 ### Adaptive profiles
 
-Several `SessionProfile` ladders map speed levels to modulation modes; the
-[README profiles table](../README.md#adaptive-rate-profiles) is the authoritative
-list. Examples:
+Two `SessionProfile`s ship, both on the single `hpx_hf` rate ladder; the
+[README profiles table](../README.md#adaptive-rate-profiles) and
+[mode-fec-ladder.md](mode-fec-ladder.md) are the authoritative lists:
 
-**HPX500** (narrowband, ~500 Hz occupied bandwidth):
+- **`fast`** (default): the full ladder, SL1–SL14 (MFSK16, BPSK31/63/100/250 coded, QPSK250-D,
+  OFDM52, OFDM52-{8PSK,16QAM,32QAM,64QAM}, then 16/32/64QAM at LDPC r≈8/9), up to ≈2031 Hz
+  occupied bandwidth. For performance and bandwidth under good conditions.
+- **`robust`**: the same ladder capped at SL6 (MFSK16, BPSK31–250, QPSK250-D), all coded,
+  single-carrier, ≤500 Hz. For poor conditions or limited gear (narrow filters, small or
+  non-linear PAs). The ladder fingerprint is the same, so `fast` and `robust` stations
+  interoperate; the robust side never climbs past SL6.
 
-| Speed Level | Mode | Eff. throughput |
-|-------------|------|-----------------|
-| SL1 | Chirp fallback | — |
-| SL2 | BPSK31 | ~19 bps |
-| SL3 | BPSK63 | ~38 bps |
-| SL4 | BPSK250 | ~150 bps |
-| SL5 | QPSK250 | ~300 bps |
-| SL6 | QPSK500 | ~600 bps |
-
-**`hpx_wideband`** (wideband, ~2300 Hz occupied bandwidth; formerly named HPX2300):
-
-| Speed Level | Mode | Eff. throughput |
-|-------------|------|-----------------|
-| SL8 | QPSK500 | ~600 bps |
-| SL9 | QPSK1000 | ~1200 bps |
-| SL10 | QPSK2000-RRC | ~2400 bps |
-| SL11 | 8PSK2000-RRC | ~3600 bps |
-
-The 8PSK1000 waveform at SL11 was chosen over OFDM for its lower Peak-to-Average
-Power Ratio (PAPR ≈ 0 dB for single-carrier vs ≈ 6–10 dB for OFDM), simpler AFC
-(single-carrier phase tracking), and no cyclic-prefix overhead.
-
-**HPX Wideband HD** (full SSB passband, up to 2700 Hz; 64QAM):
-
-| Speed Level | Mode |
-|-------------|------|
-| SL9 | SCFDMA26-8PSK |
-| SL10 | SCFDMA26-16QAM |
-| SL11 | SCFDMA26-32QAM |
-| SL12 | SCFDMA52-16QAM |
-| SL13 | SCFDMA52-32QAM |
-| SL14 | SCFDMA52-64QAM |
-| SL15 | 64QAM2000-RRC |
-| SL14 | 64QAM2000-RRC | ~7200 bps |
-
-`hpx_wideband_hd` is intended for clear VHF/UHF paths or quiet 10 m conditions; 64QAM
-requires an SNR of approximately 20–25 dB for reliable operation.
-
-**HPX Pilot** (`hpx_pilot`, pilot-framed single-carrier, ~550 Hz):
-
-| Speed Level | Mode | Bits/sym |
-|-------------|------|----------|
-| SL2 | PILOT-QPSK500 | 2 |
-| SL3 | PILOT-8PSK500 | 3 |
-| SL4 | PILOT-16QAM500 | 4 |
-| SL5 | PILOT-32APSK500 | 5 |
-
-`hpx_pilot` climbs a cycle-slip-immune, sample-rate-offset-robust ladder
-(see the [pilot-framed waveform](dev/design/hpx-waveform-design.md#pilot-framed-waveform) note).
+The ARDOP TNC floors its adaptive ladder at SL2 (it has no MFSK16). The earlier profiles
+(`hpx500`, `hpx_modcod`, `hpx_pilot*`, `hpx_ofdm_hf`, `hpx_wideband*`, `hpx_narrowband`) were
+deleted 2026-10-01 without aliases; their modes remain selectable as fixed modes.
 
 ---
 

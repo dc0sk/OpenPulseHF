@@ -53,6 +53,11 @@ impl SharedPtt {
         Self(openpulse_radio::SharedPtt::new(controller, max_duration))
     }
 
+    /// Set the wait between the PTT edge and the first sample (#1257).
+    pub fn set_leader(&self, leader: Duration) {
+        self.0.set_leader(leader);
+    }
+
     /// Key the transmitter and arm the watchdog. `event_tx = None` keys silently (the beacon path).
     pub fn key(&self, event_tx: Option<&broadcast::Sender<ControlEvent>>) -> Result<(), PttError> {
         self.0.key(event_tx.map(observer).as_ref())

@@ -26,13 +26,32 @@ use openpulse_modem::channel_sim::bridge_through;
 use openpulse_modem::engine::ModemEngine;
 use qpsk_plugin::QpskPlugin;
 
+/// The retired `hpx500` ladder this suite was calibrated on: uncoded BPSK/QPSK, SL2–SL6. #1480
+/// renamed it to `robust`, which enters at SL1 MFSK16 with FEC, and this held-out suite failed every
+/// test with `PluginNotFound("MFSK16")` — unseen, because the gate does not run it.
+fn uncoded_bpsk_ladder() -> SessionProfile {
+    use openpulse_core::fec::FecMode::None as Uncoded;
+    use SpeedLevel::*;
+    SessionProfile::from_rungs(
+        &[
+            (Sl2, "BPSK31", Uncoded, Some(3.0), Some(8.0)),
+            (Sl3, "BPSK63", Uncoded, Some(4.0), Some(9.0)),
+            (Sl4, "BPSK250", Uncoded, Some(5.0), Some(11.0)),
+            (Sl5, "QPSK250", Uncoded, Some(9.0), Some(14.0)),
+            (Sl6, "QPSK500", Uncoded, Some(11.0), Some(18.0)),
+        ],
+        Sl2,
+        3,
+    )
+}
+
 fn make_engine() -> (ModemEngine, LoopbackBackend) {
     let backend = LoopbackBackend::new();
     let mut engine = ModemEngine::new(Box::new(backend.clone_shared()));
     engine.register_plugin(Box::new(BpskPlugin::new())).unwrap();
     engine.register_plugin(Box::new(QpskPlugin::new())).unwrap();
     engine.register_plugin(Box::new(Fsk4Plugin::new())).unwrap();
-    engine.start_ota_session(SessionProfile::hpx500());
+    engine.start_ota_session(uncoded_bpsk_ladder());
     (engine, backend)
 }
 
@@ -196,7 +215,7 @@ fn watterson_fading_never_desyncs_and_recovers() {
         // push TX above what the receiver confirmed it can decode.
         assert!(
             r.tx_level <= SpeedLevel::Sl6,
-            "TX level must stay within the hpx500 ladder; got {:?}",
+            "TX level must stay within the SL2–SL6 ladder; got {:?}",
             r.tx_level
         );
     }

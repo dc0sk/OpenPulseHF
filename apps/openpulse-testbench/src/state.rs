@@ -148,7 +148,7 @@ impl Default for AppConfig {
     fn default() -> Self {
         Self {
             mode: "BPSK250".into(),
-            profile: "hpx500".into(),
+            profile: "robust".into(),
             noise_model: NoiseModel::Awgn,
             snr_db: 15.0,
             fec_mode: FecMode::None,

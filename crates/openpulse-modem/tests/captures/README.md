@@ -57,6 +57,33 @@ One gain note worth keeping: at **RFGR 12 the RSPdx front end saturated** (peak 
 and produced an undecodable 523–808 Hz smear that looks exactly like a modulation defect. RFGR 22
 gives 0.00 % clipping and clean decodes. An overloaded SDR is not a neutral witness.
 
+## What the SDR captures say about key-up and release (measured 2026-10-02)
+
+Read for #1257 (PTT leader) and #1367 (drain before release), from a 5 ms RMS envelope of each
+`sdr-ic9700tx-*` file:
+
+| capture | clicks before the frame (ms before first sample) | frame length |
+|---|---|---|
+| 1 | −1 305, −1 175, −155 | 8.319 s |
+| 2 | −1 350, −1 220, −195 | 8.319 s |
+| 3 | −1 335, −1 210, −55 | 8.319 s |
+
+- Each event is a 5–45 ms click, 13–24 dB above the noise floor. Between the clicks the floor does
+  not move: a keyed SSB rig with no audio radiates nothing the SDR can see.
+- The frame then starts at full level within a millisecond, with no ALC ramp.
+- **Reading, UNCHECKED** (no PTT timestamp was logged on that run):
+  - the pair of clicks 130 ms apart is PTT assert and the IC-9700's T/R sequencing;
+  - the late click is the audio stream opening.
+
+  If that is right, the rig was keyed about 1.3 s before its first audio sample on every frame.
+  The source supports it: every keyed path keys first and then modulates inside the guard
+  (`keyed_transmit` in the daemon, `commands/transmit.rs` in the CLI, `bridge.rs` in ARDOP).
+- **What this cannot settle.**
+  - Key-up: with 1.3 s of lead, any key-up of 1.3 s or less is hidden. These files bound it from
+    above only.
+  - Release: nothing is visible after the last sample, so the drain-to-release interval #1367 asks
+    about cannot be read from them.
+
 ## The gap is closed, and it closed a defect
 
 A real modem frame now decodes end to end from recorded radio audio — both an uncoded one

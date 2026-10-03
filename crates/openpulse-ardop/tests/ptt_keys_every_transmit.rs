@@ -62,7 +62,7 @@ fn rig() -> Rig {
     // `the_transmitter_is_released_before_each_ack_listen` passed while reaching **no ACK listen at
     // all** — it was observing the ordinary data burst's PTT drop, which is true on any build,
     // including one that keys straight through its ACK listen.
-    engine.start_adaptive_session(openpulse_core::profile::SessionProfile::hpx500());
+    engine.start_adaptive_session(openpulse_core::profile::SessionProfile::robust());
     let asserted = Arc::new(AtomicBool::new(false));
     let asserts = Arc::new(AtomicUsize::new(0));
     let releases = Arc::new(AtomicUsize::new(0));

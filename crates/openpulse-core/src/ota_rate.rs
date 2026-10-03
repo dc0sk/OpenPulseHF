@@ -165,6 +165,9 @@ pub struct OtaRateController {
     min_level: Option<SpeedLevel>,
     /// Highest level adaptation may use (`None` = the profile's highest mapped level).
     max_level: Option<SpeedLevel>,
+    /// The profile's own cap (`robust` = SL6). Kept apart from `max_level` because operator bounds
+    /// overwrite that field; this one is set once and only ever lowers `hi()`.
+    profile_cap: Option<SpeedLevel>,
     /// When set, both directions are pinned to this level and adaptation is off.
     locked: Option<SpeedLevel>,
 }
@@ -180,6 +183,7 @@ impl OtaRateController {
             // Fall back to the lowest mapped level if the configured initial is unmapped.
             *levels.first().unwrap_or(&SpeedLevel::Sl1)
         };
+        let profile_cap = profile.max_level();
         Self {
             profile,
             levels,
@@ -190,6 +194,7 @@ impl OtaRateController {
             tx_level: initial,
             min_level: None,
             max_level: None,
+            profile_cap,
             locked: None,
         }
     }
@@ -233,8 +238,11 @@ impl OtaRateController {
     }
 
     fn hi(&self) -> SpeedLevel {
-        self.max_level
-            .unwrap_or_else(|| *self.levels.last().unwrap_or(&SpeedLevel::Sl1))
+        let top = *self.levels.last().unwrap_or(&SpeedLevel::Sl1);
+        [self.max_level, self.profile_cap]
+            .into_iter()
+            .flatten()
+            .fold(top, std::cmp::min)
     }
 
     fn next_mapped(&self, level: SpeedLevel) -> SpeedLevel {
@@ -501,7 +509,10 @@ impl OtaRateController {
                 // Precedence when BOTH fire: report `ClimbOnSnr`. The distinction that matters is
                 // whether the estimate was informative at all — a run of `ClimbOnEvidence` with no
                 // `ClimbOnSnr` is the signature of an estimate carrying no information (#934).
-                let decision = if !(snr_clears_ceiling || proven_by_success) {
+                // At the top of the reachable range a climb has nowhere to go, so it is a hold: a
+                // capped profile (`robust`) would otherwise log a phantom climb on every frame.
+                let at_top = self.next_mapped(self.rx_confirmed) == self.rx_confirmed;
+                let decision = if at_top || !(snr_clears_ceiling || proven_by_success) {
                     RateDecision::Hold
                 } else if snr_clears_ceiling {
                     RateDecision::ClimbOnSnr
@@ -571,7 +582,7 @@ mod tests {
     }
 
     fn ctrl() -> OtaRateController {
-        OtaRateController::new(SessionProfile::hpx_hf())
+        OtaRateController::new(SessionProfile::fast())
     }
 
     /// Every branch must report the decision that actually ran. A reason field that does not track
@@ -857,6 +868,67 @@ mod tests {
         );
     }
 
+    /// Climbs a controller on clean high-SNR decodes and returns the highest level it confirmed.
+    fn climb(c: &mut OtaRateController, frames: usize) -> SpeedLevel {
+        let mut sender_tx = c.tx_level();
+        let mut top = sender_tx;
+        for _ in 0..frames {
+            let ack = c.on_rx_frame(RxOutcome::Decoded(sender_tx), Some(HIGH_SNR));
+            sender_tx = ack.recommended_level;
+            top = top.max(c.rx_confirmed).max(c.rx_recommended);
+        }
+        top
+    }
+
+    #[test]
+    fn robust_profile_never_climbs_past_sl6() {
+        let mut c = OtaRateController::new(SessionProfile::robust());
+        assert_eq!(climb(&mut c, 60), SpeedLevel::Sl6);
+    }
+
+    #[test]
+    fn operator_bounds_never_raise_the_profile_cap() {
+        // Each of these used to overwrite the only cap field: a min-only bound (what the daemon
+        // applies for `ota_min_level` alone), cleared bounds (`OtaSetLevelBounds` with empty
+        // fields), and a max above the cap.
+        for (min, max) in [
+            (Some(SpeedLevel::Sl2), None),
+            (None, None),
+            (None, Some(SpeedLevel::Sl10)),
+        ] {
+            let mut c = OtaRateController::new(SessionProfile::robust());
+            c.set_level_bounds(min, max);
+            assert_eq!(
+                climb(&mut c, 60),
+                SpeedLevel::Sl6,
+                "bounds {min:?}..{max:?}"
+            );
+            c.adopt_recommendation(SpeedLevel::Sl11);
+            assert_eq!(
+                c.tx_level(),
+                SpeedLevel::Sl6,
+                "a peer cannot lift the cap either"
+            );
+        }
+    }
+
+    #[test]
+    fn an_operator_bound_below_the_cap_still_applies() {
+        let mut c = OtaRateController::new(SessionProfile::robust());
+        c.set_level_bounds(None, Some(SpeedLevel::Sl4));
+        assert_eq!(climb(&mut c, 60), SpeedLevel::Sl4);
+    }
+
+    #[test]
+    fn a_decode_at_the_cap_is_a_hold_not_a_climb() {
+        let mut c = OtaRateController::new(SessionProfile::robust());
+        climb(&mut c, 60);
+        let ack = c.on_rx_frame(RxOutcome::Decoded(SpeedLevel::Sl6), Some(HIGH_SNR));
+        assert_eq!(ack.decision, RateDecision::Hold);
+        assert_eq!(ack.ack_type, AckType::AckOk);
+        assert_eq!(ack.recommended_level, SpeedLevel::Sl6);
+    }
+
     #[test]
     fn min_level_clamp_floors_the_descent() {
         let mut c = ctrl();
@@ -960,7 +1032,7 @@ mod abstention_tests {
     use super::*;
 
     fn ctl() -> OtaRateController {
-        let mut c = OtaRateController::new(SessionProfile::hpx_hf());
+        let mut c = OtaRateController::new(SessionProfile::fast());
         // Climb to a rung well above the floor so a downshift has somewhere to fall from.
         for _ in 0..12 {
             c.on_rx_frame(RxOutcome::Decoded(c.rx_recommended_level()), Some(40.0));

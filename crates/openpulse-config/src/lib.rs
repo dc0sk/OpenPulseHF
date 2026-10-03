@@ -403,7 +403,7 @@ pub struct AudioConfig {
 pub struct ModemConfig {
     /// Default modulation mode (e.g. `"BPSK250"`).
     pub mode: String,
-    /// Adaptive session profile (e.g. `"hpx_hf"`, `"hpx_ofdm_hf"`).
+    /// Adaptive session profile: `"fast"` (full ladder) or `"robust"` (capped at SL6, ≤ 500 Hz).
     ///
     /// Selects the SpeedLevel→mode ladder the rate controller and mode advisor use.
     /// See `SessionProfile::PROFILE_NAMES` in `openpulse-core`.
@@ -420,6 +420,10 @@ pub struct ModemConfig {
     pub ptt_device: String,
     /// CM108 GPIO pin driving PTT (1..=8); GPIO 3 is the near-universal default.
     pub ptt_gpio: u8,
+    /// Leader: milliseconds between the PTT edge and the first transmitted sample, so the rig's
+    /// key-up does not clip the preamble (#1257). `0` (default) = none; measure the rig before
+    /// setting it. The cross-band repeater's `rig_b` does not use it.
+    pub ptt_leader_ms: u32,
     /// Receiver-led OTA adaptive rate-stepping. When `true`, the daemon starts an
     /// OTA session at launch and drives it on the RX path.
     pub ota_enabled: bool,
@@ -439,13 +443,14 @@ pub struct ModemConfig {
     /// A2/A3 gates together; empty = use the individual `ota_min_backlog` /
     /// `ota_upgrade_hold_frames` values above. The preset, when set, takes precedence.
     pub ota_aggressiveness: String,
-    /// Default DCD/squelch RMS threshold (carrier-present level for channel-busy
-    /// detection, CSMA, and burst-capture flush). Raise it above a band's noise
-    /// floor. Applied at startup and as the fallback when no per-band value matches.
+    /// Operator DCD/squelch floor, RMS: a LOWER BOUND on the adaptive squelch, which
+    /// tracks the band's noise on its own (#1452). Raise it to ignore weak traffic;
+    /// it can never make the receiver deaf below the band. 0 (default) = off.
+    /// Applied at startup and as the fallback when no per-band value matches.
     pub dcd_squelch: f32,
-    /// Per-band DCD/squelch override, keyed by band label (`"20m"`, `"2m"`, …).
-    /// When the rig tunes into a listed band, that threshold is applied; otherwise
-    /// `dcd_squelch` is used. Empty (default) = always use `dcd_squelch`.
+    /// Per-band operator squelch floor, keyed by band label (`"20m"`, `"2m"`, …), with
+    /// the same lower-bound meaning. When the rig tunes into a listed band, that value
+    /// is applied; otherwise `dcd_squelch` is used. Empty (default) = always use it.
     pub dcd_squelch_bands: std::collections::BTreeMap<String, f32>,
     /// CE-SSB TX envelope conditioning (raises average power at a fixed peak on
     /// high-PAPR multicarrier modes). Default `true`; it acts only on QPSK-subcarrier OFDM
@@ -599,8 +604,8 @@ pub struct ArdopConfig {
     /// Opt-in: run an adaptive ARQ session so the rate ladder, ARQBW, and ARQTIMEOUT take effect.
     /// Default false (fixed-mode operation, the historical behaviour).
     pub enable_adaptive_arq: bool,
-    /// Session profile name for the adaptive ARQ ladder (e.g. `hpx500`, `hpx_hf`). Empty falls
-    /// back to `hpx500`.
+    /// Session profile for the adaptive ARQ ladder: `fast` or `robust`. The host's `ARQBW` caps it
+    /// further.
     pub adaptive_profile: String,
 }
 
@@ -702,8 +707,9 @@ impl Default for ModemConfig {
     fn default() -> Self {
         Self {
             mode: "BPSK250".into(),
-            profile: "hpx_hf".into(),
+            profile: "fast".into(),
             ptt_backend: "none".into(),
+            ptt_leader_ms: 0,
             ptt_device: String::new(),
             ptt_gpio: 3,
             ota_enabled: false,
@@ -714,7 +720,7 @@ impl Default for ModemConfig {
             ota_min_backlog: 0,
             ota_upgrade_hold_frames: 0,
             ota_aggressiveness: String::new(),
-            dcd_squelch: 0.01, // matches the engine's built-in DcdState default
+            dcd_squelch: 0.0, // off: the adaptive squelch governs (#1452)
             dcd_squelch_bands: std::collections::BTreeMap::new(),
             cessb_enabled: true,
             notch_enabled: true,
@@ -774,7 +780,7 @@ impl Default for ArdopConfig {
             cmd_port: 8515,
             data_port: 8516,
             enable_adaptive_arq: false,
-            adaptive_profile: "hpx500".into(),
+            adaptive_profile: "fast".into(),
         }
     }
 }
@@ -1074,10 +1080,10 @@ device = ""
 # FSK4-ACK — see docs/mode-fec-ladder.md for the authoritative list per band/bandwidth class.
 mode = "BPSK250"
 # Adaptive session profile (SpeedLevel ladder) used by the rate controller and
-# `openpulse mode-advisor`. Available: hpx500, hpx_hf, hpx_ofdm_hf, hpx_wideband,
-# hpx_wideband_hd, hpx_narrowband. hpx_ofdm_hf is the OFDM
-# higher-order (high-throughput/high-reliability) HF ladder.
-profile = "hpx_hf"
+# `openpulse mode-advisor`: "fast" (full ladder, SL1-SL14, up to ~2 kHz, for good conditions) or
+# "robust" (the same ladder capped at SL6: single-carrier, <= 500 Hz, for poor conditions or
+# limited gear). The two interoperate.
+profile = "fast"
 # PTT backend: none | rts | dtr | vox | rigctld | cm108
 ptt_backend = "none"
 # PTT device path for device-based backends. For cm108, a /dev/hidrawN path
@@ -1086,6 +1092,10 @@ ptt_backend = "none"
 ptt_device = ""
 # CM108 GPIO pin driving PTT (1..8); 3 is the near-universal default.
 ptt_gpio = 3
+# Leader: ms between the PTT edge and the first sample, so the rig's key-up does not clip the
+# preamble. 0 = none. Measure the rig (or its off-air recording) before setting it. Not applied
+# to the cross-band repeater's rig_b.
+ptt_leader_ms = 0
 # Receiver-led OTA adaptive rate-stepping. When true the daemon starts an OTA
 # session at launch and drives it on the RX path (the data receiver leads the
 # rate per direction; the sender follows an absolute recommendation in the ACK).
@@ -1105,16 +1115,16 @@ ota_upgrade_hold_frames = 0
 # gates together (one knob instead of two). Empty = use the two values above.
 # Takes precedence over ota_min_backlog / ota_upgrade_hold_frames when set.
 ota_aggressiveness = ""
-# DCD/squelch RMS threshold (carrier-present level for channel-busy detection,
-# CSMA, and burst-capture flush). Raise above a band's noise floor if the carrier
-# never appears to "drop". Applied at startup and as the per-band fallback.
-dcd_squelch = 0.01
-# Optional per-band squelch overrides (band label → threshold). When the rig tunes
-# into a listed band the matching value is applied; otherwise dcd_squelch is used.
+# Operator squelch floor (RMS). The carrier detect tracks the band's noise on its
+# own; this only RAISES its threshold (to ignore weak traffic) and can never make
+# the receiver deaf below the band. 0 = off. Applied at startup and as the
+# per-band fallback. Before #1452 this was a fixed threshold, silently replaced.
+dcd_squelch = 0.0
+# Optional per-band squelch floors (band label → RMS), same meaning. When the rig
+# tunes into a listed band the matching value is applied; otherwise dcd_squelch.
 # [modem.dcd_squelch_bands]
 # "40m" = 0.05
 # "20m" = 0.02
-# "2m"  = 0.01
 # CE-SSB TX envelope conditioning: raises average power at a fixed peak on
 # high-PAPR multicarrier modes (OFDM/SC-FDMA). No-op for single-carrier modes.
 cessb_enabled = true
@@ -1199,8 +1209,8 @@ data_port = 8516
 # Opt-in: run an adaptive ARQ session so the rate ladder + host ARQBW/ARQTIMEOUT take effect.
 # Default false = fixed-mode operation (ARQBW/ARQTIMEOUT are accepted-and-echoed no-ops).
 enable_adaptive_arq = false
-# Session profile for the adaptive ladder (e.g. hpx500, hpx_hf); empty falls back to hpx500.
-adaptive_profile = "hpx500"
+# Session profile for the adaptive ladder: "fast" or "robust". The host's ARQBW caps it further.
+adaptive_profile = "fast"
 
 [kiss]
 # IP address the KISS TNC listens on.
@@ -1533,9 +1543,9 @@ mod tests {
         assert_eq!(cfg.station.grid_square, "AA00");
         assert_eq!(cfg.ardop.cmd_port, 8515);
         assert_eq!(cfg.modem.ptt_backend, "none");
-        assert_eq!(cfg.modem.profile, "hpx_hf");
+        assert_eq!(cfg.modem.profile, "fast");
         assert_eq!(cfg.modem.ota_aggressiveness, ""); // empty = use individual A2/A3 knobs
-        assert!((cfg.modem.dcd_squelch - 0.01).abs() < 1e-6);
+        assert_eq!(cfg.modem.dcd_squelch, 0.0); // off: the adaptive squelch governs (#1452)
         assert!(cfg.modem.dcd_squelch_bands.is_empty());
         // tx_power_watts defaults to 0.0 (unspecified) for the regulatory TX log.
         assert!((cfg.station.tx_power_watts - 0.0).abs() < 1e-6);
@@ -1579,15 +1589,15 @@ mod tests {
         {
             let mut f = std::fs::File::create(&path).unwrap();
             writeln!(f, "[modem]").unwrap();
-            writeln!(f, r#"profile = "hpx_ofdm_hf""#).unwrap();
+            writeln!(f, r#"profile = "robust""#).unwrap();
         }
         let cfg = load_from(&path).unwrap();
         let _ = std::fs::remove_file(&path);
-        assert_eq!(cfg.modem.profile, "hpx_ofdm_hf");
+        assert_eq!(cfg.modem.profile, "robust");
 
         // The emitted template must parse and carry the documented default.
         let parsed: OpenpulseConfig = toml::from_str(&init_template()).unwrap();
-        assert_eq!(parsed.modem.profile, "hpx_hf");
+        assert_eq!(parsed.modem.profile, "fast");
     }
 
     #[test]

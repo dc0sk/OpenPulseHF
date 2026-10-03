@@ -540,7 +540,7 @@ mod tests {
         let (_events, resp) = run_command(
             &addr,
             &ControlCommand::StartOtaSession {
-                profile: "hpx_modcod".into(),
+                profile: "robust".into(),
             },
         )
         .unwrap();
@@ -548,7 +548,7 @@ mod tests {
         assert!(resp.ok);
         let parsed: ControlCommand = serde_json::from_str(req.trim()).unwrap();
         assert!(
-            matches!(parsed, ControlCommand::StartOtaSession { profile } if profile == "hpx_modcod")
+            matches!(parsed, ControlCommand::StartOtaSession { profile } if profile == "robust")
         );
     }
 

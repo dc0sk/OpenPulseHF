@@ -39,7 +39,7 @@ fn make_engine() -> (ModemEngine, LoopbackBackend) {
         .register_plugin(Box::new(ofdm_plugin::OfdmPlugin::new()))
         .unwrap();
     engine.register_plugin(Box::new(Fsk4Plugin::new())).unwrap();
-    engine.start_ota_session(SessionProfile::hpx_hf());
+    engine.start_ota_session(SessionProfile::fast());
     (engine, backend)
 }
 

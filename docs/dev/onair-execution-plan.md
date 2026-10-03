@@ -2,16 +2,69 @@
 project: openpulsehf
 doc: docs/dev/onair-execution-plan.md
 status: living
-last_updated: 2026-07-23
+last_updated: 2026-10-02
 ---
 
 # On-air execution plan
 
-The sequenced plan to obtain the on-air evidence 1.0 needs (release-1.0-criteria.md group **A**:
-A1 two-station HF QSO on the `hpx_hf` ladder, A2 rate ladder observed adapting on a *real* fading
-channel, A3 one Winlink message over RF). It is written to be executed against the tooling as it
-stands **today** — the on-air scripts were brought current on 2026-07-23; the currency audit and the
-fixes are in the "Tooling readiness" section at the end.
+The sequenced plan to obtain the on-air evidence **Release 1** needs (work plan milestone **M3**,
+[`project/workplan.md`](project/workplan.md)): **A1** a two-station exchange on the `hpx_hf`
+ladder in both directions **on 2 m**, **A2** the ladder climbing, demoting and holding stable on a real link
+(scored per `release-1.0-criteria.md` §A2), **A4/A5** station-ID and PTT fail-safe checks, and one
+**Pat session over the air through the ARDOP TNC**, then a confirming **HF run with the release
+candidate** (work plan M4). A3 (Winlink through a real CMS/RMS) is a 1.0 criterion and is **not** part
+of Release 1.
+
+**Test stages (maintainer, 2026-10-01 — decision 13):** virtual audio → hardware loopback → **2 m** →
+HF only with the release candidate. Development runs stay on 2 m: they put no noise on HF bands
+while the modem is early, and they avoid drawing conclusions from HF band conditions nobody controls.
+
+## Re-baseline 2026-09-30 — read this before anything below
+
+The sections below were written 2026-07-23. These changes to them are in force:
+
+1. **Scope and bar (work plan decisions 1, 4 and 13).** Release 1 needs A1 in both directions **on
+   2 m**, A2 per the §A2 scoring (one climb whose new mode then decodes, one demotion after a logged decode
+   failure, and stability on a clean link, each visible in both stations' logs and in the capture;
+   induced level changes count and are recorded). The "≥3 transitions" wording in §4 is superseded.
+   A3 moves to 1.0; §5b adds the ARDOP session Release 1 does need. **A 2 m line-of-sight link does
+   not fade**, so A2's climb and demotion are driven by induced level changes (TX power,
+   attenuation), recorded per §A2; Release 1 claims the controller responds correctly, not that it
+   is characterised on a fading path. The release candidate then repeats A1/A2 on HF (M4).
+2. **Evidence must be recorded on the v0.17 wire format.** M1 changes only the compressed payload
+   (the zstd dictionary ID); the preamble stays as it is for v0.17 and changes before 1.0 (#1062,
+   decision 16). G0, G1 and 2 m plumbing runs can and should happen now. A1/A2 bundles count once M1
+   has landed, since compression is on in those runs. The replay-corpus re-record (#1351) and a second
+   2 m campaign follow #1062, before 1.0.
+3. **Development runs use the 2 m pair** (IC-9700 ↔ FT-818, 144.640 MHz,
+   [onair-ic9700-ft818-setup.md](onair-ic9700-ft818-setup.md)). The HF run with the release candidate
+   needs an HF-capable pair — the IC-9700 is VHF/UHF only; on record: FT-991A 008924A1, IC-705,
+   FT-818, and the TX500/KX3 pair (`run-onair-tx500-kx3.sh`). The pair and band are picked when the RC
+   is cut. §4's "40 m NVIS" note describes that later run, not the development campaign.
+4. **G0: the USB isolators are in place (maintainer, 2026-10-01).** G3 on the 2 m pair now decides
+   whether the receive-path RFI is gone. Separately, `release-1.0-criteria.md` records an FT-991A
+   receive-path blocker: "A→B fails offline too, so it is in the receiver". Isolation alone will not
+   fix that; it matters only if the FT-991A is picked for the HF run with the release candidate.
+5. **Two tooling gaps found 2026-09-30 — closed 2026-10-02.** `scripts/run-onair-twin-ota.sh` now
+   writes `[observability] audit_mode = true` (with `archive_dir` under the run's config dir) into
+   both stations' configs, so the `OtaRateDecision` events A2 is scored from are retained. After the
+   traffic window it collects each station's `events.ndjson`, daemon log, config, and a CAT read-back
+   (`rigctl f m j z`: frequency, mode + passband = the filter width, RIT and XIT = the trim) into
+   `<report>-evidence/`, and warns if a station retained no events. The configs also state
+   `notch_enabled`, `agc_enabled`, `cessb_enabled` and `ptt_leader_ms` explicitly (item 7). The
+   script's default frequency is now 144.640 MHz (decision 13); it was 14.070 MHz.
+6. **Code items on the on-air path, in M2:** #1257 (no leader delay between PTT edge and first
+   sample — host-keyed rigs clip the preamble), #1334 (a flush timeout un-arms the station-ID timer),
+   #1367 (200 ms sleep before PTT drop), #1456 and #1460 (idle noise feeding the NACK streak — they
+   break A2's stability clause).
+7. **Add-on DSP.** The receiver notch ships **on** (decision 10) with its acceptance row disclosed as
+   unproven since `884d96ed` (#1457). Per release-criteria decision 3, record `notch_enabled`,
+   `agc_enabled` and `cessb_enabled` in every bundle so an effect can be attributed; a runner that
+   sweeps them is not built.
+8. **Still to check, not re-derived here:** whether the one-shot receive "retry window misalignment"
+   (onair-status.md Issue B, §2) is still live after the #1310/#1384 burst-path fixes. The A2 runner
+   uses the daemon streaming path, which that item does not affect. UNCHECKED.
+
 
 **Read this first, because it changes the order of everything below:** the modem, every shipping
 waveform, the decoder, and two independent transmitters are already **proven on real 2 m RF** — a
@@ -205,12 +258,16 @@ saturation-bounded plugin SNR. The evidence climb is what carries the ladder acr
 real fade is exactly where you would see it either work or stall, so this is also a validation of the
 #934 evidence-based climb on real conditions.
 
-**Exit criterion A2:** a retained session log showing ≥3 ladder transitions attributable to measured
-channel change (SNR log + FER per rung), with the fade independently visible on the SDR.
+**Exit criterion A2 (superseded 2026-09-30 — see the re-baseline, item 1):** scored per
+`release-1.0-criteria.md` §A2 — one climb whose new mode then decodes, one demotion following a
+logged decode failure, and no demotion over a window of clean decodes on a stable link; each
+transition in both stations' `events.ndjson` (`observability.audit_mode` on) and visible in the
+capture. ~~A retained session log showing ≥3 ladder transitions attributable to measured channel
+change.~~
 
 ---
 
-## 5. Phase A3 — Winlink message over RF
+## 5. Phase A3 — Winlink message over RF (1.0 only, not Release 1)
 
 **Goal:** one end-to-end Winlink message across RF to a real CMS/RMS gateway.
 
@@ -223,6 +280,18 @@ exercise on top of it, not a new signal-path unknown.
 
 **Exit criterion A3:** a retained session log plus the delivered message, round-tripped through a real
 RMS/CMS.
+
+## 5b. Release 1 — one Pat session over the air through the ARDOP TNC
+
+**Goal:** show the ARDOP TNC front end works on real audio between two stations, which is what
+Release 1 claims for ARDOP. `pat` on each side drives `openpulse-tnc` (built with `cpal`); a
+peer-to-peer Pat session (no CMS) exchanges one message over the air on the A1 pair.
+
+Prerequisites: A1 passes on the same pair; the ARDOP M2 items (#1315 ACK in-stream acquisition,
+#1385 host frames over 255 B) are closed.
+
+**Exit criterion:** the session log from both TNCs, the delivered message, and the SDR capture,
+bundled with `scripts/onair-bundle-evidence.sh`.
 
 ---
 
@@ -286,7 +355,13 @@ scanning receive or route the matrix through the daemon streaming path. Filed he
 
 ## 9. Critical path, one line
 
-**G0 (kill the RX RFI) → G1 (seven gates pass) → A1 (one rig→rig decode) → A2 (ladder on a real fade)
+**Release 1 (re-baselined 2026-09-30, test stages 2026-10-01):** virtual audio → hardware loopback →
+G0/G1 on the **2 m** pair (isolators fitted; G3 confirms RX is clean) → *wait for M1 (compression dictionary ID)* →
+A1 both directions on 2 m → A2 per §A2 scoring with induced level changes (after the two tooling gaps
+are closed) → the ARDOP Pat session → release candidate → **HF run with the RC** → tag `v0.17.0`.
+A4/A5 run alongside. A3 follows for 1.0.
+
+Previously: **G0 (kill the RX RFI) → G1 (seven gates pass) → A1 (one rig→rig decode) → A2 (ladder on a real fade)
 → A3 (Winlink over RF).** A4/A5 run alongside. The SDR monitors every step and is the arbiter of any
 rig-RX result. Everything upstream of G0 — the modem, the waveforms, the transmitters — is already
 proven; the campaign is a receive-path and propagation exercise, not a modem debug.

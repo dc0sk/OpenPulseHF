@@ -20,12 +20,12 @@ use openpulse_core::profile::SessionProfile;
 const FLAT_UNINFORMATIVE_SNR: f32 = 4.4;
 
 fn controller() -> OtaRateController {
-    OtaRateController::new(SessionProfile::hpx_hf())
+    OtaRateController::new(SessionProfile::fast())
 }
 
 #[test]
 fn a_rung_that_keeps_decoding_climbs_without_snr_evidence() {
-    let p = SessionProfile::hpx_hf();
+    let p = SessionProfile::fast();
     let start = p.initial_level;
     // The premise: this SNR must NOT clear the entry rung's ceiling, or the test proves nothing.
     let ceiling = p.snr_ceiling_for_level(start).expect("entry rung ceiling");
@@ -53,7 +53,7 @@ fn a_rung_that_keeps_decoding_climbs_without_snr_evidence() {
 
 #[test]
 fn one_clean_decode_is_not_enough_to_climb() {
-    let start = SessionProfile::hpx_hf().initial_level;
+    let start = SessionProfile::fast().initial_level;
     let mut c = controller();
     let ack = c.on_rx_frame(RxOutcome::Decoded(start), Some(FLAT_UNINFORMATIVE_SNR));
     assert_eq!(
@@ -64,7 +64,7 @@ fn one_clean_decode_is_not_enough_to_climb() {
 
 #[test]
 fn a_failure_restarts_the_streak() {
-    let start = SessionProfile::hpx_hf().initial_level;
+    let start = SessionProfile::fast().initial_level;
     let mut c = controller();
     // Alternating pass/fail must never accumulate into a climb.
     for _ in 0..6 {
@@ -86,7 +86,7 @@ fn a_failure_restarts_the_streak() {
 /// demotion, and the link oscillated on its bottom two rungs while delivering 20/20 frames.
 #[test]
 fn a_decoded_frame_is_never_answered_with_a_demotion() {
-    let p = SessionProfile::hpx_hf();
+    let p = SessionProfile::fast();
     let mut c = controller();
     // Climb to a mid rung on good SNR.
     let mut level = p.initial_level;
@@ -119,7 +119,7 @@ fn a_decoded_frame_is_never_answered_with_a_demotion() {
 /// where it explains what went wrong and can skip several rungs at once.
 #[test]
 fn a_failed_frame_still_fast_downshifts_on_snr() {
-    let p = SessionProfile::hpx_hf();
+    let p = SessionProfile::fast();
     let mut c = controller();
     let mut level = p.initial_level;
     for _ in 0..40 {
@@ -146,7 +146,7 @@ fn a_failed_frame_still_fast_downshifts_on_snr() {
 /// mapped step, whatever the climb trigger. Violating it desyncs the two ends on a lost ACK.
 #[test]
 fn evidence_climb_advances_at_most_one_mapped_step() {
-    let p = SessionProfile::hpx_hf();
+    let p = SessionProfile::fast();
     let levels = p.defined_levels();
     let start = p.initial_level;
     let mut c = controller();

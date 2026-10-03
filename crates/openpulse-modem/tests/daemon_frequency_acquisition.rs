@@ -107,7 +107,7 @@ fn via_daemon(samples: &[f32]) -> (bool, u64) {
         .expect("register");
     // Lock the rung whose mode IS the transmitted one — searched from the profile, not transcribed,
     // so a profile change cannot silently turn this into a test about candidate coverage.
-    let profile = SessionProfile::hpx_hf();
+    let profile = SessionProfile::fast();
     let level = (1u8..=20)
         .filter_map(SpeedLevel::from_u8)
         .find(|&l| profile.mode_for(l) == Some(MODE))

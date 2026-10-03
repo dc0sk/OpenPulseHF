@@ -49,11 +49,15 @@ fn entry_rung_frame() -> Vec<f32> {
     bk.drain_samples()
 }
 
-/// Feed `frame` in tick-sized chunks then digital silence, counting flushes. Amplitude is left as
-/// transmitted (well above the 0.01 default DCD threshold) so the verdict does not depend on the
-/// noise-floor tracker warming — that is #1254's question, not this one.
+/// Feed silence, then `frame` in tick-sized chunks, then silence, counting flushes. The silent lead-in
+/// is the band a real receiver hears first; without it the floor would learn the frame (#1452).
 fn flushes(e: &mut ModemEngine, frame: &[f32]) -> Vec<usize> {
     let mut out = Vec::new();
+    // The receiver hears 4 s of (silent) band first, as on a real rig: the carrier detect's floor
+    // learns whatever it hears while no burst is being gathered (#1452).
+    for _ in 0..80 {
+        let _ = e.accumulate_capture(Some(CONFIGURED_MODE), vec![0.0; TICK_SAMPLES]);
+    }
     for chunk in frame.chunks(TICK_SAMPLES) {
         if let Ok(Some(b)) = e.accumulate_capture(Some(CONFIGURED_MODE), chunk.to_vec()) {
             out.push(b.samples.len());
@@ -72,7 +76,7 @@ fn flushes(e: &mut ModemEngine, frame: &[f32]) -> Vec<usize> {
 fn an_ota_entry_rung_frame_is_not_split_by_a_cap_sized_for_the_configured_mode() {
     let frame = entry_rung_frame();
     let (mut e, _bk) = engine();
-    e.start_ota_session(SessionProfile::hpx_hf());
+    e.start_ota_session(SessionProfile::fast());
 
     let bursts = flushes(&mut e, &frame);
     assert_eq!(
@@ -101,13 +105,16 @@ fn without_an_ota_session_the_configured_mode_still_bounds_the_burst() {
     let frame = entry_rung_frame();
     let (mut e, _bk) = engine(); // no start_ota_session
 
+    // Bounded, not "split into several": since #1452 a cap flush teaches the noise floor that the
+    // slab is the band, so the rest of an over-long frame is no longer gathered as further pieces.
+    // What this control needs is that the configured cap cut the frame short.
     let bursts = flushes(&mut e, &frame);
     assert!(
-        bursts.len() > 1,
-        "control: with no OTA session the {CONFIGURED_MODE} cap must still split a {}-sample frame — \
-         it arrived as {} burst(s), so the sibling gate above proves nothing",
+        bursts.first().is_some_and(|&n| n < frame.len()),
+        "control: with no OTA session the {CONFIGURED_MODE} cap must still cut a {}-sample frame \
+         short — it arrived as {:?}, so the sibling gate above proves nothing",
         frame.len(),
-        bursts.len()
+        bursts
     );
 }
 
@@ -115,7 +122,7 @@ fn without_an_ota_session_the_configured_mode_still_bounds_the_burst() {
 #[test]
 fn locking_the_ladder_to_a_fast_rung_narrows_the_cap_again() {
     let (mut e, _bk) = engine();
-    e.start_ota_session(SessionProfile::hpx_hf());
+    e.start_ota_session(SessionProfile::fast());
     let entry_cap = e.burst_cap_samples(Some("BPSK31"));
 
     // Locked to a fast rung, the candidate set no longer contains a slow mode.
@@ -123,9 +130,9 @@ fn locking_the_ladder_to_a_fast_rung_narrows_the_cap_again() {
     let frame = entry_rung_frame();
     let bursts = flushes(&mut e, &frame);
     assert!(
-        bursts.len() > 1,
-        "with the ladder locked to SL9 the entry-rung frame must split again (cap back to the \
-         configured mode's {} samples, not the entry rung's {entry_cap})",
+        bursts.first().is_some_and(|&n| n < frame.len()),
+        "with the ladder locked to SL9 the entry-rung frame must be cut short again (cap back to \
+         the configured mode's {} samples, not the entry rung's {entry_cap}); got {bursts:?}",
         e.burst_cap_samples(Some(CONFIGURED_MODE))
     );
 }

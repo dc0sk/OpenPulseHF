@@ -2,7 +2,7 @@
 project: openpulsehf
 doc: docs/dev/requirements.md
 status: living
-last_updated: 2026-09-19
+last_updated: 2026-10-01
 ---
 
 # Requirements
@@ -93,7 +93,7 @@ last_updated: 2026-09-19
 
 - **REQ-CMP-01** — Optional lossless payload compression at the session layer is in scope.
 - **REQ-CMP-02** — Compression algorithm must be deterministic and produce identical output for identical input across platforms.
-- **REQ-CMP-03** — Compression capability must be negotiated during session handshake and must not be assumed.
+- **REQ-CMP-03** — Compression is self-describing and must not be assumed of the peer: a packed frame carries its own algorithm tag (and a zstd frame its dictionary ID), a receiver accepts packed and unpacked frames alike, and a sender compresses only when its operator enables it. *(Rewritten 2026-10-01, work plan decision 17; the handshake negotiation fields were deleted in #1166.)*
 - **REQ-CMP-04** — If compression is active, compressed size must be compared to uncompressed size before transmission; a compressed frame larger than the uncompressed original must be sent uncompressed.
 - **REQ-CMP-05** — Decompression failure must be treated as a frame integrity error.
 
@@ -387,14 +387,21 @@ in the roadmap; each is a candidate, not a committed deliverable.
   to the decoder at all. This is the daemon's half of the hot-floor failure the scanning receive path
   hit five times (#1020/#1021/#1039/#1040/#1045/#1049) — **none of that path's machinery
   (`EnergyGate`, the AFC settle, the correlation veto) runs on the daemon's `accumulate_capture`
-  route.** The floor shall be estimated from the **passband spectral distribution**, not from block
-  energies: a carrier that stays on raises every block and drags a time-domain percentile up with it,
-  which is exactly how `EnergyGate` saturates, whereas a narrowband signal cannot reach a low
-  percentile across bins (Mercury uses the same spectral-minimum floor for its channel-busy decision).
-  Level, floor and interference are properties of the environment, not of the waveform, so this is
-  deliberately mode-independent — frame *detection* remains per-waveform. Acceptance: recorded idle at
-  0.126 RMS produces no burst, and a real frame in that same floor still produces one bounded burst
-  that ends on the carrier drop rather than at the cap. (REQ-DCD-01)
+  route.** **Restated 2026-09-28 (#1452) as the property, not the mechanism:** the squelch shall track
+  the noise power the block RMS sees, at the `InputCapture` seam, independently of the active mode,
+  including behind a narrow receive filter and under coloured noise; a transmission no longer than the
+  longest candidate frame shall not close its own burst; and an operator value may raise the squelch
+  and never lower it below the adaptive one. The earlier text prescribed the mechanism — a low
+  percentile ACROSS passband bins, which a narrowband signal cannot reach — and that mechanism is what
+  failed: behind a 500 Hz or 250 Hz filter most of those bins are stopband, the floor read the stopband
+  and collapsed to the clamp, and the daemon could not receive (#1452); a wideband signal filling the
+  band pulled it up instead (#1304). Level, floor and interference are properties of the environment,
+  not of the waveform, so this stays mode-independent — frame *detection* remains per-waveform.
+  Acceptance: on each recorded idle (hot, wide, 500 Hz, 250 Hz, FT-991A) squelch/idle RMS within
+  [1.20, 1.35] at block sizes {171, 400, 512, 4096}; recorded idle at 0.126 RMS produces no burst long
+  enough to hold a preamble, and a real frame in that floor still produces one bounded burst that ends
+  on the carrier drop; a two-block BPSK250 frame behind a 500 Hz filter is gathered as one burst.
+  (REQ-DCD-01)
 - Every PTT-keyed transmit scope shall release the transmitter **deterministically on scope exit** —
   including on an early return or a panic/unwind — via an RAII guard, rather than relying solely on the
   max-duration watchdog (REQ-REG-10 / #863). This bounds an unexpected key-down to the current stack

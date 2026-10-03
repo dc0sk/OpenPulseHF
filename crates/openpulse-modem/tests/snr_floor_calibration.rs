@@ -196,7 +196,7 @@ fn print_row(label: &str, mode: &str, fec: FecMode, cfg: Option<f32>, meas: Opti
 fn calibrate_snr_floors_hpx_hf() {
     const FRAMES: u32 = 16;
     const TARGET: f32 = 0.90;
-    let profile = SessionProfile::hpx_hf();
+    let profile = SessionProfile::fast();
     println!(
         "\n=== hpx_hf SNR-floor calibration (AWGN, {FRAMES} frames, target {:.0}%) ===",
         TARGET * 100.0
@@ -228,7 +228,7 @@ fn calibrate_snr_floors_watterson() {
     // "floor" is where a MAJORITY of fades decode — use a 50 % target (cf. the seed-window pattern in
     // `channel_loopback.rs`).
     const TARGET: f32 = 0.50;
-    let profile = SessionProfile::hpx_hf();
+    let profile = SessionProfile::fast();
     println!(
         "\n=== hpx_hf Watterson fading calibration (50% target — fading has an outage floor) ==="
     );

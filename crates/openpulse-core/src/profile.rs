@@ -1,18 +1,7 @@
-//! HPX session profiles: SpeedLevel-to-mode-string mappings for each bandwidth class.
+//! Session profiles: the `hpx_hf` rate ladder and the two ways Release 1 runs it, `fast` and `robust`.
 
 use crate::fec::FecMode;
 use crate::rate::SpeedLevel;
-
-/// Profile-entry policy for promoting SC-FDMA QAM rungs into the HPX HF ladder.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct ScfdmaQamHfEntryPolicy {
-    /// Minimum per-scenario frame success required for promotion.
-    pub min_success_rate: f32,
-    /// Deterministic scenario labels that must all meet `min_success_rate`.
-    pub required_scenarios: &'static [&'static str],
-    /// Frames evaluated per scenario in the deterministic matrix test.
-    pub frames_per_scenario: usize,
-}
 
 /// Maps each [`SpeedLevel`] to a concrete modulation mode string for a given HPX profile.
 ///
@@ -36,20 +25,12 @@ pub struct SessionProfile {
     /// Per-level FEC scheme (MODCOD). `None` = no FEC for that level. Indexed by
     /// SpeedLevel discriminant (1–20); index 0 unused.
     fec_modes: [Option<FecMode>; 21],
+    /// Highest level this profile may use (`None` = the top mapped level). Local policy: excluded
+    /// from [`fingerprint`](Self::fingerprint) so a capped and an uncapped station interoperate.
+    max_level: Option<SpeedLevel>,
 }
 
 impl SessionProfile {
-    /// Deterministic promotion policy for SC-FDMA QAM modes on HF ladders.
-    ///
-    /// This policy is validated in
-    /// `plugins/scfdma/tests/pilot_channel_estimation.rs` against a Watterson
-    /// profile-entry matrix.
-    pub const SCFDMA_QAM_HF_ENTRY_POLICY: ScfdmaQamHfEntryPolicy = ScfdmaQamHfEntryPolicy {
-        min_success_rate: 0.90,
-        required_scenarios: &["good_f1", "good_f2", "moderate_f1"],
-        frames_per_scenario: 30,
-    };
-
     /// Return the mode string for the given speed level, or `None` if the level
     /// is not mapped in this profile.
     pub fn mode_for(&self, level: SpeedLevel) -> Option<&'static str> {
@@ -110,6 +91,21 @@ impl SessionProfile {
         self.fec_modes[level as usize].unwrap_or(FecMode::None)
     }
 
+    /// The profile's level cap (`None` = uncapped). Rate controllers keep it apart from operator and
+    /// host bounds, which may lower it but never raise it.
+    pub fn max_level(&self) -> Option<SpeedLevel> {
+        self.max_level
+    }
+
+    /// The defined levels at or below the profile's cap, ascending — what a session may use.
+    pub fn reachable_levels(&self) -> Vec<SpeedLevel> {
+        let cap = self.max_level;
+        self.defined_levels()
+            .into_iter()
+            .filter(|&l| cap.is_none_or(|c| l <= c))
+            .collect()
+    }
+
     /// Return all speed levels that have a mode string defined in this profile, in
     /// ascending order.  Useful for building profile-driven recommendation tables
     /// without hard-coding a fixed level range.
@@ -124,244 +120,70 @@ impl SessionProfile {
         .collect()
     }
 
-    /// Canonical profile names accepted by [`SessionProfile::by_name`], in ladder order.
-    pub const PROFILE_NAMES: &'static [&'static str] = &[
-        "hpx500",
-        "hpx_modcod",
-        "hpx_pilot",
-        "hpx_pilot_rrc",
-        "hpx_pilot_fast",
-        "hpx_pilot_fast_rrc",
-        "hpx_hf",
-        "hpx_ofdm_hf",
-        "hpx_wideband",
-        "hpx_wideband_hd",
-        "hpx_narrowband",
-        // "hpx_narrowband_hd" removed 2026-09-14 (#1359): unreachable at the engine's 8 kHz.
-    ];
+    /// Profile names accepted by [`SessionProfile::by_name`].
+    pub const PROFILE_NAMES: &'static [&'static str] = &["fast", "robust"];
 
-    /// Construct a profile by name (case-insensitive; `-` and `_` are interchangeable).
+    /// Construct a profile by name (case-insensitive, surrounding whitespace ignored).
     ///
     /// Returns `None` for an unrecognised name; see [`SessionProfile::PROFILE_NAMES`].
     pub fn by_name(name: &str) -> Option<SessionProfile> {
-        let key = name.trim().to_ascii_lowercase().replace('-', "_");
-        match key.as_str() {
-            "hpx500" => Some(Self::hpx500()),
-            "hpx_modcod" => Some(Self::hpx_modcod()),
-            "hpx_pilot" => Some(Self::hpx_pilot()),
-            "hpx_pilot_rrc" => Some(Self::hpx_pilot_rrc()),
-            "hpx_pilot_fast" => Some(Self::hpx_pilot_fast()),
-            "hpx_pilot_fast_rrc" => Some(Self::hpx_pilot_fast_rrc()),
-            "hpx_hf" => Some(Self::hpx_hf()),
-            "hpx_ofdm_hf" => Some(Self::hpx_ofdm_hf()),
-            "hpx_wideband" => Some(Self::hpx_wideband()),
-            "hpx_wideband_hd" => Some(Self::hpx_wideband_hd()),
-            "hpx_narrowband" => Some(Self::hpx_narrowband()),
+        match name.trim().to_ascii_lowercase().as_str() {
+            "fast" => Some(Self::fast()),
+            "robust" => Some(Self::robust()),
             _ => None,
         }
     }
 
-    /// HPX500 profile: 500 Hz class, BPSK/QPSK rate ladder (SL2–SL6).
+    /// Build a ladder from explicit `(level, mode, fec, snr_floor, snr_ceiling)` rungs, uncapped.
     ///
-    /// | SL  | Mode     |
-    /// |-----|----------|
-    /// | SL1 | — (chirp fallback) |
-    /// | SL2 | BPSK31   |
-    /// | SL3 | BPSK63   |
-    /// | SL4 | BPSK250  |
-    /// | SL5 | QPSK250  |
-    /// | SL6 | QPSK500  |
-    /// | SL7–SL11 | — (reserved / HPX2300) |
-    pub fn hpx500() -> Self {
-        let mut modes = [None; 21];
-        modes[SpeedLevel::Sl2 as usize] = Some("BPSK31");
-        modes[SpeedLevel::Sl3 as usize] = Some("BPSK63");
-        modes[SpeedLevel::Sl4 as usize] = Some("BPSK250");
-        modes[SpeedLevel::Sl5 as usize] = Some("QPSK250");
-        modes[SpeedLevel::Sl6 as usize] = Some("QPSK500");
-        // SNR floors: 3 dB headroom above Eb/N₀ required for 10⁻³ BER.
-        let mut snr_floors = [None; 21];
-        snr_floors[SpeedLevel::Sl2 as usize] = Some(3.0_f32);
-        snr_floors[SpeedLevel::Sl3 as usize] = Some(4.0_f32);
-        snr_floors[SpeedLevel::Sl4 as usize] = Some(5.0_f32);
-        snr_floors[SpeedLevel::Sl5 as usize] = Some(9.0_f32);
-        snr_floors[SpeedLevel::Sl6 as usize] = Some(11.0_f32);
-        let mut snr_ceilings = [None; 21];
-        snr_ceilings[SpeedLevel::Sl2 as usize] = Some(8.0_f32);
-        snr_ceilings[SpeedLevel::Sl3 as usize] = Some(9.0_f32);
-        snr_ceilings[SpeedLevel::Sl4 as usize] = Some(11.0_f32);
-        snr_ceilings[SpeedLevel::Sl5 as usize] = Some(14.0_f32);
-        snr_ceilings[SpeedLevel::Sl6 as usize] = Some(18.0_f32);
-        Self {
-            modes,
-            initial_level: SpeedLevel::Sl2,
-            nack_threshold: 3,
-            snr_floors,
-            snr_ceilings,
+    /// For test apparatus that needs a ladder shape the shipped profiles do not have (no SL1 rung,
+    /// an uncoded wide ladder). Not reachable through [`by_name`](Self::by_name): operators choose
+    /// `fast` or `robust`.
+    #[allow(clippy::type_complexity)]
+    pub fn from_rungs(
+        rungs: &[(SpeedLevel, &'static str, FecMode, Option<f32>, Option<f32>)],
+        initial_level: SpeedLevel,
+        nack_threshold: u8,
+    ) -> Self {
+        let mut p = Self {
+            modes: [None; 21],
+            initial_level,
+            nack_threshold,
+            snr_floors: [None; 21],
+            snr_ceilings: [None; 21],
             ack_up_requires_snr_candidate_at: None,
             fec_modes: [None; 21],
+            max_level: None,
+        };
+        for &(level, mode, fec, floor, ceiling) in rungs {
+            let i = level as usize;
+            p.modes[i] = Some(mode);
+            p.fec_modes[i] = Some(fec);
+            p.snr_floors[i] = floor;
+            p.snr_ceilings[i] = ceiling;
         }
+        p
     }
 
-    /// HPX MODCOD profile: a 500 Hz ladder that adapts **modulation × FEC** together
-    /// (DVB-S2 / WiFi-MCS style), interleaving FEC rungs between modulation steps so
-    /// the link can trade coding gain for throughput at fine granularity.
-    ///
-    /// | SL  | Mode     | FEC   | note                         |
-    /// |-----|----------|-------|------------------------------|
-    /// | SL2 | BPSK250  | LDPC  | most robust (rate-1/2 soft)  |
-    /// | SL3 | BPSK250  | RS    | same mod, lighter coding     |
-    /// | SL4 | QPSK250  | LDPC  | denser mod, strong coding    |
-    /// | SL5 | QPSK250  | RS    | same mod, lighter coding     |
-    /// | SL6 | QPSK500  | RS    | fastest mod, coded           |
-    /// | SL7 | QPSK500  | none  | peak throughput, uncoded     |
-    pub fn hpx_modcod() -> Self {
-        let mut modes = [None; 21];
-        modes[SpeedLevel::Sl2 as usize] = Some("BPSK250");
-        modes[SpeedLevel::Sl3 as usize] = Some("BPSK250");
-        modes[SpeedLevel::Sl4 as usize] = Some("QPSK250");
-        modes[SpeedLevel::Sl5 as usize] = Some("QPSK250");
-        modes[SpeedLevel::Sl6 as usize] = Some("QPSK500");
-        modes[SpeedLevel::Sl7 as usize] = Some("QPSK500");
-
-        let mut fec_modes = [None; 21];
-        fec_modes[SpeedLevel::Sl2 as usize] = Some(FecMode::Ldpc);
-        fec_modes[SpeedLevel::Sl3 as usize] = Some(FecMode::Rs);
-        fec_modes[SpeedLevel::Sl4 as usize] = Some(FecMode::Ldpc);
-        fec_modes[SpeedLevel::Sl5 as usize] = Some(FecMode::Rs);
-        fec_modes[SpeedLevel::Sl6 as usize] = Some(FecMode::Rs);
-        fec_modes[SpeedLevel::Sl7 as usize] = Some(FecMode::None);
-
-        let mut snr_floors = [None; 21];
-        let mut snr_ceilings = [None; 21];
-        for (lvl, (floor, ceil)) in [
-            (SpeedLevel::Sl2, (1.0, 6.0)),
-            (SpeedLevel::Sl3, (4.0, 9.0)),
-            (SpeedLevel::Sl4, (7.0, 12.0)),
-            (SpeedLevel::Sl5, (10.0, 15.0)),
-            (SpeedLevel::Sl6, (13.0, 18.0)),
-            (SpeedLevel::Sl7, (16.0, 21.0)),
-        ] {
-            snr_floors[lvl as usize] = Some(floor);
-            snr_ceilings[lvl as usize] = Some(ceil);
-        }
-
+    /// `robust`: the [`fast`](Self::fast) ladder capped at SL6 — MFSK16, BPSK31–250 and QPSK250-D,
+    /// all coded, single-carrier, ≤ 500 Hz occupied. For poor conditions, narrow filters and small or
+    /// non-linear PAs. Same rungs as `fast`, so the two interoperate (same ladder fingerprint).
+    pub fn robust() -> Self {
         Self {
-            modes,
-            initial_level: SpeedLevel::Sl2,
-            nack_threshold: 3,
-            snr_floors,
-            snr_ceilings,
-            ack_up_requires_snr_candidate_at: None,
-            fec_modes,
+            max_level: Some(SpeedLevel::Sl6),
+            ..Self::fast()
         }
     }
 
-    /// HPX pilot profile: the pilot-framed waveform's adaptive ladder (SL2–SL4).
-    ///
-    /// Climbs constellation density on the same 500-baud pilot-framed carrier:
-    /// QPSK (most robust) → 8PSK → 16QAM (highest throughput). All three recover
-    /// the carrier from known in-band pilots, so the ladder stays usable on the
-    /// dual-clock / carrier-offset paths where the single-Costas ladders struggle.
-    ///
-    /// | SL  | Mode           |
-    /// |-----|----------------|
-    /// | SL2 | PILOT-QPSK500  |
-    /// | SL3 | PILOT-8PSK500  |
-    /// | SL4 | PILOT-16QAM500 |
-    /// | SL5 | PILOT-32APSK500 |
-    pub fn hpx_pilot() -> Self {
-        let mut modes = [None; 21];
-        modes[SpeedLevel::Sl2 as usize] = Some("PILOT-QPSK500");
-        modes[SpeedLevel::Sl3 as usize] = Some("PILOT-8PSK500");
-        modes[SpeedLevel::Sl4 as usize] = Some("PILOT-16QAM500");
-        modes[SpeedLevel::Sl5 as usize] = Some("PILOT-32APSK500");
-        let mut snr_floors = [None; 21];
-        snr_floors[SpeedLevel::Sl2 as usize] = Some(6.0_f32);
-        snr_floors[SpeedLevel::Sl3 as usize] = Some(12.0_f32);
-        snr_floors[SpeedLevel::Sl4 as usize] = Some(17.0_f32);
-        snr_floors[SpeedLevel::Sl5 as usize] = Some(23.0_f32);
-        let mut snr_ceilings = [None; 21];
-        snr_ceilings[SpeedLevel::Sl2 as usize] = Some(12.0_f32);
-        snr_ceilings[SpeedLevel::Sl3 as usize] = Some(17.0_f32);
-        snr_ceilings[SpeedLevel::Sl4 as usize] = Some(23.0_f32);
-        // SL5 (32APSK) is the top rung — no ceiling.
-        Self {
-            modes,
-            initial_level: SpeedLevel::Sl2,
-            nack_threshold: 3,
-            snr_floors,
-            snr_ceilings,
-            ack_up_requires_snr_candidate_at: None,
-            fec_modes: [None; 21],
-        }
-    }
-
-    /// HPX pilot profile, narrowband (RRC pulse): same QPSK→8PSK→16QAM→32APSK
-    /// ladder as [`hpx_pilot`](Self::hpx_pilot) but on the `-RRC` variants, which
-    /// occupy ~half the bandwidth (~(1+α)·baud ≈ 675 Hz). The matched RRC filter
-    /// gives the same Eb/N0 as the rectangular pulse, so the per-constellation SNR
-    /// thresholds are unchanged; the win is spectral occupancy. RRC samples at a
-    /// point (vs the rectangular integrate-and-dump averaging over the symbol), so
-    /// prefer [`hpx_pilot`](Self::hpx_pilot) when the link is dual-clock/SRO-heavy.
-    pub fn hpx_pilot_rrc() -> Self {
-        let mut p = Self::hpx_pilot();
-        p.modes[SpeedLevel::Sl2 as usize] = Some("PILOT-QPSK500-RRC");
-        p.modes[SpeedLevel::Sl3 as usize] = Some("PILOT-8PSK500-RRC");
-        p.modes[SpeedLevel::Sl4 as usize] = Some("PILOT-16QAM500-RRC");
-        p.modes[SpeedLevel::Sl5 as usize] = Some("PILOT-32APSK500-RRC");
-        p
-    }
-
-    /// HPX pilot profile, high-throughput (1000 baud): same constellation ladder
-    /// as [`hpx_pilot`](Self::hpx_pilot) on the 1000-baud rungs — 2× the bits/s at
-    /// each step (8 samples/symbol at 8 kHz). The SNR thresholds are the same: they
-    /// are per-symbol (Es/N0) floors set by the constellation, which the engine
-    /// measures from the LLRs after the matched filter — so they don't move with
-    /// baud. The cost of the faster rungs is ~2× occupied bandwidth and the wider
-    /// noise bandwidth (the channel must actually deliver that Es/N0); prefer
-    /// [`hpx_pilot`](Self::hpx_pilot) on bandwidth- or power-limited links.
-    pub fn hpx_pilot_fast() -> Self {
-        let mut p = Self::hpx_pilot();
-        p.modes[SpeedLevel::Sl2 as usize] = Some("PILOT-QPSK1000");
-        p.modes[SpeedLevel::Sl3 as usize] = Some("PILOT-8PSK1000");
-        p.modes[SpeedLevel::Sl4 as usize] = Some("PILOT-16QAM1000");
-        p.modes[SpeedLevel::Sl5 as usize] = Some("PILOT-32APSK1000");
-        p
-    }
-
-    /// HPX pilot profile, high-throughput **and** narrowband (1000-baud RRC): the
-    /// 1000-baud ladder of [`hpx_pilot_fast`](Self::hpx_pilot_fast) on the `-RRC`
-    /// variants, so it gets the 2× throughput while keeping the RRC's ~half-band
-    /// occupancy (~(1+α)·1000 ≈ 1350 Hz vs the rectangular 1000-baud's wide sinc).
-    /// Same per-symbol Es/N0 floors. The combined choice when bandwidth matters but
-    /// the link can carry 1000 baud; [`hpx_pilot`](Self::hpx_pilot) stays the
-    /// SRO-robust pick (RRC samples at a point — see `hpx_pilot_rrc`).
-    pub fn hpx_pilot_fast_rrc() -> Self {
-        let mut p = Self::hpx_pilot();
-        p.modes[SpeedLevel::Sl2 as usize] = Some("PILOT-QPSK1000-RRC");
-        p.modes[SpeedLevel::Sl3 as usize] = Some("PILOT-8PSK1000-RRC");
-        p.modes[SpeedLevel::Sl4 as usize] = Some("PILOT-16QAM1000-RRC");
-        p.modes[SpeedLevel::Sl5 as usize] = Some("PILOT-32APSK1000-RRC");
-        // SL2's floor is inherited from `hpx_pilot`, whose modes are 500-baud and not RRC-shaped, and
-        // it is ~2 dB optimistic here. Measured on AWGN, 12 trials per point, RRC vs the plain
-        // 1000-baud sibling at the same SNR: 6 dB 8/12 vs 11/12, 7 dB 11/12 vs 11/12, 8 dB 12/12 vs
-        // 12/12. The other three rungs' inherited floors hold (12/12 at their own floors), so only
-        // SL2 moves. Found by the per-rung floor sweep added with the profile-FEC gate (2026-07-29).
-        p.snr_floors[SpeedLevel::Sl2 as usize] = Some(8.0_f32);
-        p
-    }
-
-    /// HPX HF profile: the full HF-compliant rate ladder (SL2–SL19), 62 bps to 7.7 kbps.
+    /// `fast`: the full `hpx_hf` rate ladder (SL1–SL14), ~9 bps to 7.7 kbps, up to ≈2031 Hz occupied.
     ///
     /// Every mode here fits within the 2700 Hz HF channel-width limit (SCFDMA52-* is ≈2031 Hz), so the
     /// ladder spans weak-signal BPSK31 all the way to 64QAM SC-FDMA at code rate ≈8/9.  The dense rungs
     /// (SL10–SL19) always run FEC-protected: soft-concatenated up to SL15, then high-rate LDPC for the
     /// top four — see the table in the body for the mode/FEC/rate/floor of every rung and for why LDPC
-    /// appears only above SL15.  For SNR-marginal links, `hpx_wideband_hd` provides the narrowband
-    /// SCFDMA26-* fallback rungs; for genuinely wider-than-3 kHz channels (FM/UHF/VHF) use
-    /// `hpx_wideband`.
-    pub fn hpx_hf() -> Self {
+    /// appears only above SL15.  For poor conditions or limited gear use
+    /// [`robust`](Self::robust), the same ladder capped at SL6.
+    pub fn fast() -> Self {
         // Finer HF ladder (research #2, docs/dev/research/ladder-granularity.md). Fills the old
         // throughput cliffs and SNR dead-zones with existing (previously unused) modes plus two MODCOD
         // rungs, keeping every rung ≤ ~2 kHz occupied (well within the 2700 Hz HF channel). Pre-release,
@@ -419,7 +241,7 @@ impl SessionProfile {
         //     @7 dB) — dead vs usable-under-ARQ. `RsStrong` remains the right code for a rung whose
         //     frames are known to stay under 191 B; it is not a safe ladder-wide default.
         // The `SCFDMA26-32QAM` narrowband rung was dropped: it decoded 0.00/0.17/0.17 at 8/12/16 dB on
-        // `moderate_f1`, so it was not a usable fallback. It still lives in `hpx_wideband_hd`. `OFDM16`
+        // `moderate_f1`, so it was not a usable fallback. `OFDM16`
         // is not a rung here — it is the most fade-robust OFDM mode (0.92 @16 dB) and the narrowest
         // (625 Hz), but its ~401 net bps sits *below* SL6, so it has no monotonic slot.
         //
@@ -550,258 +372,10 @@ impl SessionProfile {
             snr_floors,
             snr_ceilings,
             // Guard admission to the densest rung (SL14, 64QAM at r≈8/9) behind a prior SNR upgrade
-            // candidate, mirroring hpx_wideband_hd.
+            // candidate.
             ack_up_requires_snr_candidate_at: Some(SpeedLevel::Sl14),
             fec_modes,
-        }
-    }
-
-    /// HPX Wideband profile: wideband class, single-carrier QPSK/8PSK ladder (SL8–SL11).
-    ///
-    /// Single-carrier over OFDM: lower PAPR, no cyclic prefix overhead, simpler AFC.
-    /// See docs/architecture.md for the full design rationale.
-    ///
-    /// **Bandwidth note**: SL9 (QPSK1000) and SL11 (8PSK1000) exceed the 2700 Hz HF
-    /// channel-width limit.  Use this profile on FM, satellite, and UHF/VHF links only.
-    /// For HF operation use [`SessionProfile::hpx_hf`].
-    ///
-    /// | SL  | Mode      |
-    /// |-----|-----------|
-    /// | SL1–SL7 | — (chirp fallback / HPX500) |
-    /// | SL8 | QPSK500   |
-    /// | SL9 | QPSK1000  |
-    /// | SL10 | — (reserved) |
-    /// | SL11 | 8PSK1000  |
-    pub fn hpx_wideband() -> Self {
-        let mut modes = [None; 21];
-        modes[SpeedLevel::Sl8 as usize] = Some("QPSK500");
-        modes[SpeedLevel::Sl9 as usize] = Some("QPSK1000");
-        modes[SpeedLevel::Sl11 as usize] = Some("8PSK1000");
-        let mut snr_floors = [None; 21];
-        snr_floors[SpeedLevel::Sl8 as usize] = Some(11.0_f32);
-        snr_floors[SpeedLevel::Sl9 as usize] = Some(14.0_f32);
-        snr_floors[SpeedLevel::Sl11 as usize] = Some(18.0_f32);
-        let mut snr_ceilings = [None; 21];
-        snr_ceilings[SpeedLevel::Sl8 as usize] = Some(18.0_f32);
-        snr_ceilings[SpeedLevel::Sl9 as usize] = Some(22.0_f32);
-        // SL11 is the ceiling; no upgrade above it.
-        Self {
-            modes,
-            initial_level: SpeedLevel::Sl8,
-            nack_threshold: 3,
-            snr_floors,
-            snr_ceilings,
-            ack_up_requires_snr_candidate_at: None,
-            fec_modes: [None; 21],
-        }
-    }
-
-    /// HPX Narrowband profile: 12.5 kHz PMR/LMR channel at 8 kHz audio (standard tier).
-    ///
-    /// All modes fit within a 12.5 kHz channelised plan.  Requires only an 8 kHz audio
-    /// path — suitable for standard PMR/LMR radios.
-    ///
-    /// | SL  | Mode           |
-    /// |-----|----------------|
-    /// | SL1–SL7 | — (fall-through to HF/wideband rungs) |
-    /// | SL8  | QPSK500        |
-    /// | SL9  | QPSK1000       |
-    /// | SL10 | QPSK2000-RRC   |
-    /// | SL11 | 8PSK2000-RRC   |
-    pub fn hpx_narrowband() -> Self {
-        let mut modes = [None; 21];
-        modes[SpeedLevel::Sl8 as usize] = Some("QPSK500");
-        modes[SpeedLevel::Sl9 as usize] = Some("QPSK1000");
-        modes[SpeedLevel::Sl10 as usize] = Some("QPSK2000-RRC");
-        modes[SpeedLevel::Sl11 as usize] = Some("8PSK2000-RRC");
-        let mut snr_floors = [None; 21];
-        snr_floors[SpeedLevel::Sl8 as usize] = Some(11.0_f32);
-        snr_floors[SpeedLevel::Sl9 as usize] = Some(14.0_f32);
-        snr_floors[SpeedLevel::Sl10 as usize] = Some(17.0_f32);
-        snr_floors[SpeedLevel::Sl11 as usize] = Some(20.0_f32);
-        let mut snr_ceilings = [None; 21];
-        snr_ceilings[SpeedLevel::Sl8 as usize] = Some(18.0_f32);
-        snr_ceilings[SpeedLevel::Sl9 as usize] = Some(21.0_f32);
-        snr_ceilings[SpeedLevel::Sl10 as usize] = Some(24.0_f32);
-        // SL11 is the ceiling; no upgrade above it.
-        Self {
-            modes,
-            initial_level: SpeedLevel::Sl8,
-            nack_threshold: 3,
-            snr_floors,
-            snr_ceilings,
-            ack_up_requires_snr_candidate_at: None,
-            fec_modes: [None; 21],
-        }
-    }
-
-    /// HPX OFDM HF profile: multi-carrier HF ladder (SL5–SL6), capped at 2031 Hz BW.
-    ///
-    /// Both modes fit within the 2700 Hz HF channel-width limit.  Channel equalization
-    /// (LS estimate + ZF) provides robustness against frequency-selective HF fading that
-    /// single-carrier modes cannot achieve without an equalizer.
-    ///
-    /// | SL  | Mode         | BW        | Gross bps |
-    /// |-----|--------------|-----------|-----------|
-    /// | SL5 | OFDM16       | ≈ 625 Hz  | ≈ 889     |
-    /// | SL6 | OFDM52       | ≈ 2031 Hz | ≈ 2889    |
-    /// | SL7 | OFDM52-8PSK  | ≈ 2031 Hz | ≈ 4333    |
-    /// | SL8 | OFDM52-16QAM | ≈ 2031 Hz | ≈ 5778    |
-    /// | SL9 | OFDM52-32QAM | ≈ 2031 Hz | ≈ 7222    |
-    /// | SL10| OFDM52-64QAM | ≈ 2031 Hz | ≈ 8667    |
-    ///
-    /// The higher-order rungs (SL7+) run FEC-protected (soft); OFDM's per-subcarrier
-    /// equalization handles frequency-selective HF fading better than SC-FDMA (no
-    /// DFT-despread noise enhancement), making this the high-throughput /
-    /// high-reliability HF path.  All rungs fit the 2700 Hz channel.
-    pub fn hpx_ofdm_hf() -> Self {
-        let mut modes = [None; 21];
-        modes[SpeedLevel::Sl5 as usize] = Some("OFDM16");
-        modes[SpeedLevel::Sl6 as usize] = Some("OFDM52");
-        modes[SpeedLevel::Sl7 as usize] = Some("OFDM52-8PSK");
-        modes[SpeedLevel::Sl8 as usize] = Some("OFDM52-16QAM");
-        modes[SpeedLevel::Sl9 as usize] = Some("OFDM52-32QAM");
-        modes[SpeedLevel::Sl10 as usize] = Some("OFDM52-64QAM");
-        // Floors/ceilings are in the units the receiver-led ladder actually reads: the plugin
-        // symbol-domain SNR (`ModemEngine::rx_snr_db`), which for OFDM is *conservative* (ZF
-        // noise-enhancement on faded subcarriers) and saturates near ~16 dB — it physically cannot
-        // report the 20–30 dB the dense rungs run at. This is why the OFDM floors are on a DIFFERENT
-        // scale from the single-carrier rungs (which read ~true channel SNR): the two are per-family
-        // by physical necessity, not a wart, and cannot be unified — forcing OFDM onto a true-SNR
-        // scale would put these floors above anything the estimate can read and stall the SNR climb
-        // (the pre-2026-07 bug). The evidence-based climb bridges it; the boundary is pinned by
-        // `openpulse-modem/tests/snr_scale_boundary.rs`. Calibrated from measured (plugin-SNR, decode)
-        // pairs on moderate_f1 (`ldpc_ladder_rungs`-style sweep): each rung decodes ≥ 0.8 once the
-        // plugin reads its floor.
-        let mut snr_floors = [None; 21];
-        snr_floors[SpeedLevel::Sl5 as usize] = Some(8.0_f32); // OFDM16
-        snr_floors[SpeedLevel::Sl6 as usize] = Some(9.0_f32); // OFDM52
-        snr_floors[SpeedLevel::Sl7 as usize] = Some(10.0_f32); // OFDM52-8PSK
-        snr_floors[SpeedLevel::Sl8 as usize] = Some(12.0_f32); // OFDM52-16QAM
-        snr_floors[SpeedLevel::Sl9 as usize] = Some(14.0_f32); // OFDM52-32QAM
-        snr_floors[SpeedLevel::Sl10 as usize] = Some(16.0_f32); // OFDM52-64QAM
-        let mut snr_ceilings = [None; 21];
-        snr_ceilings[SpeedLevel::Sl5 as usize] = Some(11.0_f32); // floor(SL6)=9 +2
-        snr_ceilings[SpeedLevel::Sl6 as usize] = Some(12.0_f32); // floor(SL7)=10 +2
-        snr_ceilings[SpeedLevel::Sl7 as usize] = Some(14.0_f32); // floor(SL8)=12 +2
-        snr_ceilings[SpeedLevel::Sl8 as usize] = Some(16.0_f32); // floor(SL9)=14 +2
-        snr_ceilings[SpeedLevel::Sl9 as usize] = Some(18.0_f32); // floor(SL10)=16 +2
-                                                                 // SL10 (OFDM52-64QAM) is the ceiling; no upgrade above it.
-                                                                 // Every rung carries SoftConcatenated FEC. The unprotected OFDM16/OFDM52 entry rungs failed ~50 %
-                                                                 // of moderate_f1 frames (a single faded subcarrier corrupts a byte with no FEC → the ladder stuck
-                                                                 // on an unreliable rung); SoftConcatenated's soft LLRs (per-subcarrier |H|²-weighted) take them to
-                                                                 // ≥ 0.9. It does NOT hit the padded-RS-block geometry problem plain RS did on OFDM16/OFDM52.
-        let mut fec_modes = [None; 21];
-        for sl in [
-            SpeedLevel::Sl5,
-            SpeedLevel::Sl6,
-            SpeedLevel::Sl7,
-            SpeedLevel::Sl8,
-            SpeedLevel::Sl9,
-            SpeedLevel::Sl10,
-        ] {
-            fec_modes[sl as usize] = Some(FecMode::SoftConcatenated);
-        }
-        Self {
-            modes,
-            initial_level: SpeedLevel::Sl5,
-            nack_threshold: 3,
-            snr_floors,
-            snr_ceilings,
-            // Gate admission to the densest rung behind a prior SNR-upgrade candidate.
-            ack_up_requires_snr_candidate_at: Some(SpeedLevel::Sl10),
-            fec_modes,
-        }
-    }
-
-    // `hpx_narrowband_hd` was REMOVED here on 2026-09-14 (#1359). Its only two rungs were
-    // `QPSK9600-RRC` (SL8) and `8PSK9600-RRC` (SL9), both of which need a 48 kHz audio path — and
-    // the engine builds every `ModulationConfig` at `AudioConfig`'s 8 kHz, with `sample_rate` absent
-    // from the TOML schema, so no operator could reach it. Selecting it by name produced a station
-    // whose every transmit failed at modulate, on a profile the CLI guide, the ladder doc, features
-    // and the book all offered. The two waveforms keep their implementations and their 48 kHz
-    // loopback tests; only the profile and the advertisements are gone.
-
-    /// HPX Wideband HD profile: SC-FDMA crossover ladder (SL12–SL15).
-    ///
-    /// For VHF/UHF FM, microwave, and satellite links where the 2700 Hz HF bandwidth
-    /// ceiling does not apply and SNR margins of 16–40 dB are achievable.
-    /// Not suitable for HF ionospheric paths (Watterson fading breaks QAM coherence).
-    ///
-    /// | SL   | Mode              | Gross bps (8 kHz audio) | Min SNR | Real-audio status |
-    /// |------|-------------------|-------------------------|---------|---|
-    /// | SL12 | SCFDMA52-16QAM   | ≈ 5778                  | 16 dB   | PASS |
-    /// | SL13 | SCFDMA52-32QAM   | ≈ 7222                  | 20 dB   | PASS |
-    /// | SL14 | SCFDMA52-64QAM   | ≈ 8667                  | 28 dB   | **marginal — 3/5** |
-    /// | SL15 | 64QAM2000-RRC    | ≈ 12000                 | 35 dB   | PASS 3/3 |
-    ///
-    /// Real-audio status is the dual-card hardware loopback with `soft-concatenated` FEC
-    /// (2026-07-22), which is the first time these rungs were measured on a correctly-normalised rig —
-    /// an earlier sweep recorded all four as failures while the capture AGC was live, and that was a
-    /// property of the rig rather than of the waveforms (`docs/dev/dualcard-loopback.md`).
-    ///
-    /// **SL14 is the rung to watch.** It decodes 3 of 5 attempts on a clean cable at 71 dB SNR, so it
-    /// is at the edge of what a DFT-spread 64QAM waveform holds on a real analog path rather than
-    /// comfortably inside it. The ladder reaches it only on an evidence-based climb, and demotes off
-    /// it on failure, so a marginal rung costs retries rather than correctness — but do not read the
-    /// 28 dB floor as the only thing standing between a link and this rate.
-    pub fn hpx_wideband_hd() -> Self {
-        let mut modes = [None; 21];
-        // SL9–SL11: half-width SCFDMA26 higher-order rungs — the robust graceful-
-        // degradation path. Same constellations as the wide SL12+ modes but ~half the
-        // occupied bandwidth (~+3 dB per-subcarrier SNR), so an adaptive session drops
-        // here when the link cannot sustain the full-width modes. Hardware-validated
-        // with soft-concatenated FEC (the session FEC these dense modes run under).
-        modes[SpeedLevel::Sl9 as usize] = Some("SCFDMA26-8PSK");
-        modes[SpeedLevel::Sl10 as usize] = Some("SCFDMA26-16QAM");
-        modes[SpeedLevel::Sl11 as usize] = Some("SCFDMA26-32QAM");
-        modes[SpeedLevel::Sl12 as usize] = Some("SCFDMA52-16QAM");
-        modes[SpeedLevel::Sl13 as usize] = Some("SCFDMA52-32QAM");
-        modes[SpeedLevel::Sl14 as usize] = Some("SCFDMA52-64QAM");
-        modes[SpeedLevel::Sl15 as usize] = Some("64QAM2000-RRC");
-        let mut snr_floors = [None; 21];
-        snr_floors[SpeedLevel::Sl9 as usize] = Some(9.0_f32);
-        snr_floors[SpeedLevel::Sl10 as usize] = Some(11.0_f32);
-        snr_floors[SpeedLevel::Sl11 as usize] = Some(13.0_f32);
-        snr_floors[SpeedLevel::Sl12 as usize] = Some(16.0_f32);
-        snr_floors[SpeedLevel::Sl13 as usize] = Some(20.0_f32);
-        snr_floors[SpeedLevel::Sl14 as usize] = Some(28.0_f32);
-        snr_floors[SpeedLevel::Sl15 as usize] = Some(35.0_f32);
-        let mut snr_ceilings = [None; 21];
-        snr_ceilings[SpeedLevel::Sl9 as usize] = Some(12.0_f32);
-        snr_ceilings[SpeedLevel::Sl10 as usize] = Some(14.0_f32);
-        snr_ceilings[SpeedLevel::Sl11 as usize] = Some(16.0_f32);
-        snr_ceilings[SpeedLevel::Sl12 as usize] = Some(20.0_f32);
-        snr_ceilings[SpeedLevel::Sl13 as usize] = Some(26.0_f32);
-        snr_ceilings[SpeedLevel::Sl14 as usize] = Some(33.0_f32);
-        // SL15 is the ceiling; no upgrade above it.
-
-        // Every rung runs SoftConcatenated — the FEC this profile's own comments and real-audio
-        // status table have always said these modes run under, and the FEC the 2026-07-22 hardware
-        // validation actually used. Until 2026-07-29 this was `[None; 21]`, so `fec_for` returned
-        // `FecMode::None` for every rung and the shipped ladder never applied the FEC its floors were
-        // measured with. Measured at each rung's own declared floor (8 trials, AWGN, seeds 0..7):
-        //
-        //   SL9  SCFDMA26-8PSK  @  9 dB   uncoded 2/8   SoftConcatenated 8/8
-        //   SL10 SCFDMA26-16QAM @ 11 dB   uncoded 2/8   SoftConcatenated 8/8
-        //   SL11 SCFDMA26-32QAM @ 13 dB   uncoded 0/8   SoftConcatenated 8/8
-        //   SL12 SCFDMA52-16QAM @ 16 dB   uncoded 4/8   SoftConcatenated 8/8
-        //   SL13/SL14/SL15                uncoded 8/8   SoftConcatenated 8/8
-        //
-        // Note which rungs broke: the SCFDMA26 tier described above as "the robust
-        // graceful-degradation path" was the *least* robust part of the profile. SL13–SL15 pass
-        // uncoded on AWGN, but they are assigned FEC too — the recorded hardware validation used it,
-        // and an in-process AWGN pass is not evidence about a real analog path.
-        let fec_modes = [Some(FecMode::SoftConcatenated); 21];
-
-        Self {
-            modes,
-            initial_level: SpeedLevel::Sl12,
-            nack_threshold: 2,
-            snr_floors,
-            snr_ceilings,
-            ack_up_requires_snr_candidate_at: Some(SpeedLevel::Sl14),
-            fec_modes,
+            max_level: None,
         }
     }
 }

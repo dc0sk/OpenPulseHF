@@ -2,7 +2,7 @@
 project: openpulsehf
 doc: docs/dev/design/hpx-waveform-design.md
 status: living
-last_updated: 2026-06-19
+last_updated: 2026-10-01
 ---
 
 # HPX Waveform Design
@@ -13,7 +13,8 @@ Parameters marked **[proposed]** are design targets requiring simulation validat
 
 > **Implementation status (2026).** This is the original design ladder (notional speed
 > levels SL1–11 in design notation). The shipped profiles in
-> `crates/openpulse-core/src/profile.rs` (`hpx_hf`, `hpx_ofdm_hf`, `hpx_wideband_hd`, …)
+> `crates/openpulse-core/src/profile.rs` (`fast` and `robust`, both on the `hpx_hf` ladder; the
+> earlier `hpx_ofdm_hf`, `hpx_wideband_hd` etc. were deleted 2026-10-01)
 > realise it with the registered plugin modes — single-carrier BPSK/QPSK/8PSK/64QAM and
 > the OFDM / SC-FDMA multicarrier families. At higher baud the single-carrier modes use
 > **root-raised-cosine (`-RRC`) pulse shaping** for carrier-offset robustness: the
@@ -119,12 +120,12 @@ dedicated pilot/known-symbol carrier-recovery stage.
 
 **Modes and ladder.** The base ladder is `PILOT-QPSK500` → `PILOT-8PSK500` →
 `PILOT-16QAM500` → `PILOT-32APSK500` (500 baud, ~550 Hz), which the `hpx_pilot`
-profile maps to SL2–SL5. Each `PILOT-*` mode also has a `-RRC` variant (root-
+profile (deleted 2026-10-01; the modes remain selectable as fixed modes) mapped to SL2–SL5. Each `PILOT-*` mode also has a `-RRC` variant (root-
 raised-cosine, ~half the occupied bandwidth) and `1000` / `2000-RRC` baud rungs,
 parsed generically from the mode string (`PILOT-<CONST><BAUD>[-RRC]`). Four
-adaptive profiles span the bandwidth × throughput grid on the same carrier:
+adaptive profiles (all deleted 2026-10-01) spanned the bandwidth × throughput grid on the same carrier:
 `hpx_pilot` (500 rect), `hpx_pilot_rrc` (500 narrowband), `hpx_pilot_fast`
-(1000 throughput), `hpx_pilot_fast_rrc` (1000 throughput + narrowband) — all with
+(1000 throughput), `hpx_pilot_fast_rrc` (1000 throughput + narrowband) — all had
 the same per-symbol Es/N0 floors. The pilot family is also soft-capable (per-bit
 LLRs), so the dense rungs auto-select high-rate LDPC. See the
 [mode/FEC guide](../../mode-fec-ladder.md).

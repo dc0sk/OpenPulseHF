@@ -78,6 +78,11 @@ pub struct Cli {
     #[arg(long, global = true, default_value = "")]
     pub rig: String,
 
+    /// Leader: ms between the PTT edge and the first sample, so the rig's key-up does not clip the
+    /// preamble (#1257). 0 = none. Not applied by `calibrate`, which keys its own instrument paths.
+    #[arg(long, global = true, default_value_t = 0)]
+    pub ptt_leader_ms: u32,
+
     /// Path to TOML rig-definition file for the generic serial CAT backend.
     #[arg(long, global = true, default_value = "")]
     pub rig_file: String,
@@ -400,7 +405,7 @@ pub enum DaemonCommands {
     },
     /// Start a receiver-led OTA adaptive rate session with the named profile.
     OtaStart {
-        /// Session profile (e.g. hpx_hf, hpx_modcod).
+        /// Session profile: `fast` or `robust`.
         #[arg(long)]
         profile: String,
     },
@@ -434,9 +439,10 @@ pub enum DaemonCommands {
         /// conservative | balanced | aggressive
         preset: String,
     },
-    /// Set the DCD/squelch RMS threshold at runtime (e.g. 0.05 on a noisy band).
+    /// Set the operator's DCD/squelch floor at runtime: a lower bound on the adaptive squelch.
     SetDcdSquelch {
-        /// RMS threshold (0.0–1.0); raise above the band noise floor.
+        /// RMS floor (0.0–1.0; 0 = off). Raises the squelch to ignore weak traffic; it can never
+        /// lower it below the band.
         threshold: f32,
     },
     /// Enable/disable CE-SSB TX envelope conditioning (multicarrier modes only).

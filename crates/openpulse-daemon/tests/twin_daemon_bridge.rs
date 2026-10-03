@@ -169,7 +169,12 @@ async fn message_crosses_the_bridge_between_two_real_daemons() {
 fn ota_cfg(callsign: &str) -> OpenpulseConfig {
     let mut c = cfg_auto(callsign);
     c.modem.ota_enabled = true;
-    c.modem.ota_profile = "hpx500".into();
+    c.modem.ota_profile = "fast".into();
+    // Floor at SL7 (OFDM52): every shipped rung is coded, so a frame is a whole 255-byte RS block.
+    // Measured 2026-10-01 (debug build): ten sends took 812 s floored at SL5 (BPSK250 + Rs), 828 s
+    // capped at SL6, and 23 s floored at SL7 — the single-carrier coded frames, not MFSK16 (950 s
+    // with its ACK path off) or OFDM, are what costs. The old `hpx500` entry rung was uncoded.
+    c.modem.ota_min_level = "SL7".into();
     c
 }
 
@@ -178,7 +183,7 @@ async fn ota_ladder_steps_under_traffic_between_two_real_daemons() {
     // Both daemons run a receiver-led OTA session. Driving SendMessage on A makes A
     // the ISS (transmit at the OTA mode → wait for B's ACK → adopt its absolute
     // recommended_level); B's receive tick is the IRS (decode → ACK with a
-    // recommendation). Over several frames A's TX level must climb above the SL2
+    // recommendation). Over several frames A's TX level must climb above its SL7
     // floor — i.e. the rate ladder moves, which is what the panel renders.
     let pair = spawn_bridged_pair(
         ota_cfg("OTAA"),
@@ -207,7 +212,7 @@ async fn ota_ladder_steps_under_traffic_between_two_real_daemons() {
     // spuriously time out when the full suite runs it under concurrent CPU load — the assertion is on
     // the ladder stepping, not on latency (audit finding S4-3).
     let max_level = timeout(Duration::from_secs(120), async {
-        let mut max_seen = 2u8; // SL2 floor
+        let mut max_seen = 7u8; // SL7 floor
         for _ in 0..10 {
             a_write.write_all(send.as_bytes()).await.unwrap();
             // Read until the post-send OtaStatus (or any) reports a tx_level.
@@ -239,8 +244,8 @@ async fn ota_ladder_steps_under_traffic_between_two_real_daemons() {
     pair.shutdown();
     let max_level = max_level.expect("timed out driving OTA traffic");
     assert!(
-        max_level > 2,
-        "OTA rate ladder should step above the SL2 floor under traffic; reached SL{max_level}"
+        max_level > 7,
+        "OTA rate ladder should step above the SL7 floor under traffic; reached SL{max_level}"
     );
 }
 
@@ -384,7 +389,7 @@ async fn a_file_crosses_the_bridge_between_two_real_daemons() {
 fn subfloor_cfg(callsign: &str) -> OpenpulseConfig {
     let mut c = cfg_auto(callsign);
     c.modem.ota_enabled = true;
-    c.modem.ota_profile = "hpx_hf".into(); // has SL1 = MFSK16
+    c.modem.ota_profile = "fast".into(); // has SL1 = MFSK16
     c.modem.ota_lock_level = "SL1".into(); // pin at the sub-floor rung
     c
 }
@@ -504,7 +509,7 @@ async fn a_file_crosses_the_bridge_with_ota_enabled() {
 
     // EXACTLY one line differs from the control above. `ota_profile` is deliberately left empty so
     // the daemon falls back to `[modem] profile` (server.rs:229-233) — the default `hpx_hf`, every
-    // rung of which is coded. Setting `ota_profile = "hpx500"` here (as the first draft did) would
+    // rung of which is coded. Setting `ota_profile = "robust"` here (as the first draft did) would
     // have changed the mechanism under test: `hpx500` populates no FEC table, so `fec_for` returns
     // `FecMode::None` for every rung (profile.rs:110) and the failure would have been candidate-MODE
     // mismatch rather than the absence of an uncoded candidate.
@@ -567,7 +572,7 @@ async fn a_file_crosses_the_bridge_with_ota_enabled() {
 ///
 /// The reception half of #1123 is gated above; this is the controller/PTT half at the shipping
 /// surface. On `main` a heard uncoded frame counted as a decode failure, so it drove
-/// `on_rx_frame(RxOutcome::Failed, ..)` and — within `OTA_NACK_BUDGET` — keyed a NACK back at the
+/// `on_rx_frame(RxOutcome::Failed, ..)` and — within the NACK budget (`nack_budget.rs`) — keyed a NACK back at the
 /// sender. The fix gates the whole keying block on `ladder_frame` (`res.ack.is_some()`), and without
 /// this test that gate is verified only by reading.
 ///

@@ -142,7 +142,7 @@ fn ldpc_top_rungs_decode_at_their_calibrated_awgn_floor() {
     //
     // Every rung is measured before anything is asserted: the old form asserted inside the loop, so
     // SL12's failure masked SL13 and SL14 entirely.
-    let p = SessionProfile::hpx_hf();
+    let p = SessionProfile::fast();
     let mut rows = Vec::new();
     for (level, measured_floor) in MEASURED_AWGN_FLOOR_DB {
         let mode = p.mode_for(level).expect("mode");
@@ -197,7 +197,7 @@ fn ldpc_top_rungs_decode_at_their_calibrated_awgn_floor() {
 /// count at a short payload.
 #[test]
 fn ofdm_rungs_never_lengthen_the_air_time_and_ldpc_shortens_it_sharply() {
-    let p = SessionProfile::hpx_hf();
+    let p = SessionProfile::fast();
     let rungs: Vec<SpeedLevel> = p
         .defined_levels()
         .into_iter()

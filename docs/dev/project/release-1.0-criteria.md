@@ -2,10 +2,14 @@
 project: openpulsehf
 doc: docs/dev/project/release-1.0-criteria.md
 status: living
-last_updated: 2026-09-16
+last_updated: 2026-09-30
 ---
 
 # What 1.0 means
+
+> **Release 1 comes first (2026-09-30).** A narrower first release — the `hpx_hf` ladder, FEC,
+> compression, daemon + CLI and the ARDOP TNC, gated on A1 + A2 on HF — is planned in
+> [`workplan.md`](workplan.md). This document still defines 1.0.
 
 **Draft, except for the *Decided by the maintainer* section below — those four are settled.** This
 exists because "pre-1.x" was undefinable:

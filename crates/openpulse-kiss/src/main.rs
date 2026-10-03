@@ -107,6 +107,7 @@ async fn main() -> anyhow::Result<()> {
         port: cfg.kiss.port,
         mode: cfg.modem.mode.clone(),
         loopback: false,
+        ptt_leader: std::time::Duration::from_millis(cfg.modem.ptt_leader_ms.into()),
     };
 
     tracing::info!(

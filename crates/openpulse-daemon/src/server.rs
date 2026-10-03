@@ -297,10 +297,12 @@ pub async fn run(cfg: OpenpulseConfig, modem_backend: Box<dyn AudioBackend>) -> 
                     "OTA adaptive rate-stepping enabled"
                 );
             }
-            None => tracing::warn!(
-                profile = profile_name,
-                "OTA enabled but profile unknown; OTA not started"
-            ),
+            None => {
+                return Err(format!(
+                    "OTA enabled but profile {profile_name:?} is unknown; expected one of {:?}",
+                    openpulse_core::profile::SessionProfile::PROFILE_NAMES
+                ))
+            }
         }
     }
 
@@ -701,7 +703,13 @@ pub async fn run(cfg: OpenpulseConfig, modem_backend: Box<dyn AudioBackend>) -> 
         repeater_enabled: false,
         repeater,
         repeater_bursts: repeater_burst_tx,
-        ptt: crate::ptt::SharedPtt::new(ptt_controller, crate::ptt::DEFAULT_PTT_MAX),
+        ptt: {
+            let ptt = crate::ptt::SharedPtt::new(ptt_controller, crate::ptt::DEFAULT_PTT_MAX);
+            ptt.set_leader(std::time::Duration::from_millis(
+                cfg.modem.ptt_leader_ms.into(),
+            ));
+            ptt
+        },
         station_seed,
         local_callsign: cfg.station.callsign.clone(),
         local_grid: cfg.station.grid_square.clone(),
@@ -806,13 +814,8 @@ pub async fn run(cfg: OpenpulseConfig, modem_backend: Box<dyn AudioBackend>) -> 
     // unbroken run of successful empty reads, so the reopen path below was unreachable and the
     // station went deaf in silence (audit 2026-07-19, #19).
     let mut capture_failed = false;
-    // Consecutive-Nack budget: how many Nack-ACKs the IRS will key in a row with no intervening successful
-    // data decode before going silent (reset on any decode). Caps a keyed Nack storm — two OTA-active ends
-    // answering each other's ACK/QRM bursts forever — and a §97 babbling transmitter on repetitive
-    // co-channel QRM. The sender retries on its own ACK-window timeout and the downshift recommendation
-    // rides the first Nack, so ARQ is unharmed.
-    const OTA_NACK_BUDGET: u32 = 3;
-    let mut consecutive_ota_nack: u32 = 0;
+    // Keyed-NACK budget, leaking with listening time (#1456; `nack_budget.rs`).
+    let mut ota_nack_budget = crate::nack_budget::NackBudget::default();
     // Periodic station identification (REQ-REG-10): while transmitting, key up and send the
     // callsign at least every `auto_id_interval_secs`. The pure `StationIdTimer` is fed a
     // monotonic ms clock (`id_start`) and armed by polling the engine's `frames_transmitted`
@@ -977,6 +980,15 @@ pub async fn run(cfg: OpenpulseConfig, modem_backend: Box<dyn AudioBackend>) -> 
                         }
                     }
                 });
+                // #1454: a burst the spectral test opened carries a pre-trigger ring at its head. The
+                // OTA and non-OTA arms below run on this engine and read where it ends; the monitor and
+                // the repeater decode with their own engines, cannot know, and scan only 4x the
+                // acquisition window from the start — so they get the burst without it (maintainer).
+                let ring_lead = engine.last_flush_lead();
+                let shared: Option<&[f32]> = match &burst {
+                    Ok(Some(b)) => Some(&b.samples[ring_lead.min(b.samples.len())..]),
+                    _ => None,
+                };
                 // Multi-mode monitor (REQ-RX-01): try the configured extra modes on this burst,
                 // independent of the active session mode, and emit a MonitorFrame per decode.
                 //
@@ -987,9 +999,9 @@ pub async fn run(cfg: OpenpulseConfig, modem_backend: Box<dyn AudioBackend>) -> 
                 // for the entire process lifetime under exactly the on-air configuration
                 // (archetype scan 2026-07-29, finding 9). The monitor is about what the RADIO hears,
                 // which does not depend on which decoder the session happens to be running.
-                if let Ok(Some(b)) = &burst {
+                if let Some(heard) = shared {
                     if let Some(mon) = runtime_state.monitor.as_mut() {
-                        let decoded = tokio::task::block_in_place(|| mon.decode_all(&b.samples));
+                        let decoded = tokio::task::block_in_place(|| mon.decode_all(heard));
                         for (m, payload) in decoded {
                             let _ = handle.event_tx.send(
                                 crate::protocol::ControlEvent::MonitorFrame {
@@ -1009,12 +1021,15 @@ pub async fn run(cfg: OpenpulseConfig, modem_backend: Box<dyn AudioBackend>) -> 
                 // `try_send` on purpose: the relay spends rig_b airtime per burst while the daemon
                 // keeps hearing, so a busy relay must DROP rather than grow a queue that would
                 // eventually put minutes-old audio on the air.
-                if let (Ok(Some(b)), Some(tx), true) = (
-                    &burst,
+                if let (Some(heard), Some(tx), true) = (
+                    shared,
                     runtime_state.repeater_bursts.as_ref(),
                     runtime_state.repeater_stop.is_some(),
                 ) {
-                    if tx.try_send(b.clone()).is_err() {
+                    let relayed = openpulse_modem::pipeline::AudioSamples {
+                        samples: heard.to_vec(),
+                    };
+                    if tx.try_send(relayed).is_err() {
                             runtime_state.repeater_bursts_dropped =
                                 runtime_state.repeater_bursts_dropped.saturating_add(1);
                             tracing::warn!(
@@ -1024,7 +1039,9 @@ pub async fn run(cfg: OpenpulseConfig, modem_backend: Box<dyn AudioBackend>) -> 
                         );
                     }
                 }
-                let bytes = match burst {
+                // Every frame the burst carried, in order: a sender keys once and sends its fragments
+                // back to back, so one burst can hold several (#1461).
+                let frames: Vec<Vec<u8>> = match burst {
                     Ok(Some(burst)) if engine.ota_active() && !runtime_state.ota_suppressed_by_peer() => {
                         // Receiver-led OTA: decode the burst, then key PTT only to answer
                         // with the ACK carrying our absolute recommended_level.
@@ -1037,8 +1054,7 @@ pub async fn run(cfg: OpenpulseConfig, modem_backend: Box<dyn AudioBackend>) -> 
                         }) {
                             Ok(res) => {
                                 // A LADDER frame resets the budget and is always ACKed; a failed decode
-                                // is a Nack — key it only while within OTA_NACK_BUDGET consecutive
-                                // failures.
+                                // is a Nack — key it only while the leaking budget allows.
                                 //
                                 // A `None` ack means the uncoded fallback recovered non-ladder traffic.
                                 // That is not evidence about the rate ladder in either direction, so it
@@ -1049,15 +1065,11 @@ pub async fn run(cfg: OpenpulseConfig, modem_backend: Box<dyn AudioBackend>) -> 
                                 // the peer's own file transfer.
                                 let ladder_frame = res.ack.is_some();
                                 let decoded = res.payload.is_some();
-                                if ladder_frame {
-                                    consecutive_ota_nack =
-                                        if decoded { 0 } else { consecutive_ota_nack.saturating_add(1) };
-                                }
+                                let within_budget = ladder_frame
+                                    && ota_nack_budget.on_ladder_burst(decoded, engine.listening_samples());
                                 // Audit F6 (§97.119): the ACK keys the transmitter; without a valid MYID
                                 // the daemon can't auto-ID, so decode the payload but don't send the ACK.
-                                if ladder_frame
-                                    && (decoded || consecutive_ota_nack <= OTA_NACK_BUDGET)
-                                    && runtime_state.local_callsign_valid()
+                                if within_budget && runtime_state.local_callsign_valid()
                                 {
                                     // RAII guard (REQ-PTT-01): releases at block end / on unwind. On assert
                                     // failure `keyed` returns Err and we skip the ACK, leaving nothing keyed.
@@ -1085,7 +1097,7 @@ pub async fn run(cfg: OpenpulseConfig, modem_backend: Box<dyn AudioBackend>) -> 
                                         }
                                     }
                                 }
-                                res.payload.unwrap_or_default()
+                                res.payload.into_iter().chain(res.more).collect()
                             }
                             Err(e) => {
                                 tracing::debug!("OTA burst decode error: {e}");
@@ -1100,8 +1112,14 @@ pub async fn run(cfg: OpenpulseConfig, modem_backend: Box<dyn AudioBackend>) -> 
                         // silent — but the reason the decode ended (PluginNotFound, bad magic, CRC)
                         // was dropped on the floor while the OTA arm 30 lines up logged its
                         // equivalent (archetype scan 2026-07-29, finding 11).
-                        match tokio::task::block_in_place(|| engine.decode_burst(&mode, &burst)) {
-                            Ok(b) => b,
+                        match tokio::task::block_in_place(|| {
+                            engine.decode_burst_frames(
+                                &mode,
+                                openpulse_core::fec::FecMode::None,
+                                &burst,
+                            )
+                        }) {
+                            Ok(frames) => frames,
                             Err(e) => {
                                 tracing::debug!("burst decode error: {e}");
                                 Vec::new()
@@ -1116,19 +1134,28 @@ pub async fn run(cfg: OpenpulseConfig, modem_backend: Box<dyn AudioBackend>) -> 
                 };
                 // End-to-end session compression: a peer that packed its payload sent a self-describing
                 // frame; unpack it here so routing, metrics, and message surfacing see the original bytes.
-                // Non-packed frames (control frames, un-packed data) lack the magic and pass through.
-                let bytes = openpulse_core::compression::unpack(&bytes).unwrap_or(bytes);
+                // Non-packed frames (control frames, un-packed data) lack the magic and pass through; a
+                // packed frame that fails to unpack is dropped (REQ-CMP-05), see `unpack_received`.
                 let decode_ms = decode_start.elapsed().as_secs_f32() * 1000.0;
-                if !bytes.is_empty() {
-                    process_received_bytes(
-                        &bytes,
-                        &mut runtime_state,
-                        rig_controller.as_mut().map(|c| c as &mut (dyn CatController + Send)),
-                        &handle.event_tx,
-                        &handle.active_mode,
-                        &mut engine,
-                    )
-                    .await;
+                let mut received: Vec<Vec<u8>> = Vec::with_capacity(frames.len());
+                let mut unpack_failures = 0u64;
+                for frame in frames {
+                    let (bytes, unpack_failed) = unpack_received(frame);
+                    unpack_failures += u64::from(unpack_failed);
+                    if !bytes.is_empty() {
+                        process_received_bytes(
+                            &bytes,
+                            &mut runtime_state,
+                            rig_controller.as_mut().map(|c| c as &mut (dyn CatController + Send)),
+                            &handle.event_tx,
+                            &handle.active_mode,
+                            &mut engine,
+                        )
+                        .await;
+                        received.push(bytes);
+                    }
+                }
+                if !received.is_empty() {
                     // The receive handler may have queued FileAccept/BlockAck/FileComplete, or an
                     // inbound ACK may have queued the next send burst — send them PTT-keyed.
                     drain_filexfer_tx(
@@ -1213,18 +1240,21 @@ pub async fn run(cfg: OpenpulseConfig, modem_backend: Box<dyn AudioBackend>) -> 
                     // needs it. (Checked: the enclosing `match burst` has an `Ok(None) => Vec::new()`
                     // arm, so this line is reached on a silent tick.)
                     m.veto = veto_state(&engine, &mode);
-                    m.total_rx_bytes += bytes.len() as u64;
+                    m.total_rx_bytes += received.iter().map(|b| b.len() as u64).sum::<u64>();
+                    m.unpack_failures += unpack_failures;
                     // EWMA of decode latency, sampled only when a frame was actually decoded.
-                    if !bytes.is_empty() {
+                    if !received.is_empty() {
                         m.decode_latency_ms = if m.decode_latency_ms <= 0.0 {
                             decode_ms
                         } else {
                             m.decode_latency_ms * 0.8 + decode_ms * 0.2
                         };
+                    }
+                    for bytes in &received {
                         // Live compressibility of the decoded payload stream: the session compressor's
                         // best-effort size (never larger than raw) drives the reported compress_ratio.
                         let (compressed, _algo) =
-                            openpulse_core::compression::compress_if_smaller(&bytes);
+                            openpulse_core::compression::compress_if_smaller(bytes);
                         m.raw_payload_bytes += bytes.len() as u64;
                         m.compressed_payload_bytes += compressed.len() as u64;
                     }
@@ -1351,6 +1381,9 @@ pub async fn run(cfg: OpenpulseConfig, modem_backend: Box<dyn AudioBackend>) -> 
     }
 }
 
+/// How long the file-transfer drain waits for a busy channel to clear before dropping its queue.
+const FILEXFER_BUSY_GIVE_UP_MS: u64 = 300_000;
+
 /// Upper bound on fragments per keyed burst (the plan §5.3 clamp), independent of the airtime bound.
 const MAX_FRAGS_PER_BURST: usize = 64;
 
@@ -1398,6 +1431,26 @@ fn drain_filexfer_tx(
     if runtime_state.filexfer_tx_queue.is_empty() {
         return;
     }
+    // Never key a file-transfer frame into a busy channel (selective-repeat design, B1): the queue is
+    // kept and the next tick retries. This is what keeps a receiver's NACK off the sender's station
+    // ID, and a sender's probe off a NACK still in the air.
+    if engine.is_channel_busy() {
+        let now = epoch_ms();
+        let since = *runtime_state.filexfer_busy_since.get_or_insert(now);
+        // A channel busy for this long is not going to clear for us. Drop what was queued — never key
+        // into it — and let the sender's probe and stall timers decide the transfer.
+        if now.saturating_sub(since) >= FILEXFER_BUSY_GIVE_UP_MS {
+            tracing::warn!(
+                dropped = runtime_state.filexfer_tx_queue.len(),
+                "filexfer: channel busy too long; queued frames dropped"
+            );
+            runtime_state.filexfer_tx_queue.clear();
+            runtime_state.filexfer_busy_since = None;
+            crate::filexfer::note_round_sent(runtime_state, now, 0);
+        }
+        return;
+    }
+    runtime_state.filexfer_busy_since = None;
     let queue = std::mem::take(&mut runtime_state.filexfer_tx_queue);
     let burst_max = runtime_state.filexfer_policy.burst_max_secs;
 
@@ -1428,9 +1481,25 @@ fn drain_filexfer_tx(
         })
         .is_err()
         {
-            return;
+            tracing::warn!(
+                dropped = queue.len() - idx,
+                "filexfer: drain aborted; the sender's probe recovers the rest"
+            );
+            break;
         }
     }
+    // The round is on the air (or abandoned): only now can an answer be due. A control frame's
+    // airtime at a slow mode can approach the default wait, so stretch it to three of them plus
+    // decode time.
+    let ctrl_air_ms = queue
+        .first()
+        .and_then(|(_, mode)| engine.estimate_air_secs(64, mode))
+        .map_or(0, |secs| (secs * 1000.0) as u64);
+    crate::filexfer::note_round_sent(
+        runtime_state,
+        epoch_ms(),
+        ctrl_air_ms.saturating_mul(3).saturating_add(30_000),
+    );
 }
 
 // ── JS8 discovery (FF-15) ────────────────────────────────────────────────────
@@ -2206,6 +2275,26 @@ pub fn build_cat_controller(radio: &openpulse_config::RadioConfig) -> Option<Cat
     }
 }
 
+/// Unpack a received frame; a packed frame that fails to unpack is dropped, not delivered (REQ-CMP-05).
+///
+/// Returns the bytes to deliver and whether a packed frame was dropped. The old `unwrap_or(bytes)`
+/// delivered such a frame's still-compressed bytes as the message — the only way a zstd dictionary
+/// mismatch, which zstd itself refuses, reached an operator as silent garbage. A raw payload that
+/// happens to begin with `OPZ1` is now dropped too; that collision is the price of the magic.
+fn unpack_received(bytes: Vec<u8>) -> (Vec<u8>, bool) {
+    use openpulse_core::compression::{try_unpack, UnpackError};
+    let failure: UnpackError = match try_unpack(&bytes) {
+        Ok(Some(unpacked)) => return (unpacked, false),
+        Ok(None) => return (bytes, false),
+        Err(e) => e,
+    };
+    tracing::warn!(
+        len = bytes.len(),
+        "dropped a packed frame that failed to unpack: {failure}"
+    );
+    (Vec::new(), true)
+}
+
 /// The five front-end toggles, read from the engine and runtime state rather than mirrored (#1276).
 ///
 /// One function so every emitter reports the same source of truth. `logbook` lives in
@@ -2219,7 +2308,9 @@ fn front_end_state(
         agc: engine.is_agc_enabled(),
         cessb: engine.cessb_enabled(),
         logbook: runtime_state.logbook.is_enabled(),
-        dcd_squelch: engine.dcd_squelch(),
+        // The operator's value, not the threshold in force: a control surface sets and reads back
+        // the same number (#1452 — the adaptive floor usually decides the threshold).
+        dcd_squelch: engine.dcd_operator_squelch(),
     }
 }
 
@@ -2807,6 +2898,8 @@ mod discovery_tick_tests {
         engine
             .register_plugin(Box::new(BpskPlugin::new()))
             .expect("register BPSK plugin");
+        // The receiver hears the (silent) band first, as on a real rig (#1452).
+        let _ = engine.accumulate_capture(None, vec![0.0; 32_000]);
 
         // Trip DCD: loopback echoes the TX into the RX capture, so the received energy marks the
         // channel busy. Nothing in `discovery_tick` feeds the DCD, so the busy state persists.
@@ -3490,6 +3583,29 @@ mod station_identity_tests {
             "the persisted identity must be stable across loads"
         );
         let _ = std::fs::remove_dir_all(&dir);
+    }
+}
+
+#[cfg(test)]
+mod unpack_received_tests {
+    use super::unpack_received;
+    use openpulse_core::compression::{pack, PACK_MAGIC};
+
+    #[test]
+    fn a_corrupt_packed_frame_is_dropped_not_delivered() {
+        let mut corrupt = PACK_MAGIC.to_vec();
+        corrupt.extend_from_slice(b"\x02\x00\x00\x00\x10not a zstd frame");
+        assert_eq!(unpack_received(corrupt), (Vec::new(), true));
+    }
+
+    #[test]
+    fn packed_and_plain_frames_are_delivered() {
+        let body = b"status ok ".repeat(20);
+        assert_eq!(unpack_received(pack(&body)), (body.clone(), false));
+        assert_eq!(
+            unpack_received(b"plain frame".to_vec()),
+            (b"plain frame".to_vec(), false)
+        );
     }
 }
 

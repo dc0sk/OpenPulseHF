@@ -23,7 +23,7 @@ fn hf_engine() -> (ModemEngine, LoopbackBackend) {
         .register_plugin(Box::new(Mfsk16Plugin::new()))
         .unwrap();
     engine.register_plugin(Box::new(Fsk4Plugin::new())).unwrap();
-    engine.start_ota_session(SessionProfile::hpx_hf()); // hpx_hf has SL1 = MFSK16
+    engine.start_ota_session(SessionProfile::fast()); // hpx_hf has SL1 = MFSK16
     (engine, backend)
 }
 
@@ -67,13 +67,28 @@ fn union_listen_also_accepts_the_fsk4_ack() {
     assert_eq!(got.ack_type, AckType::AckDown);
 }
 
+/// A ladder with no SL1 rung. Both shipped profiles carry MFSK16 at SL1, so this apparatus is the only
+/// way to exercise the FSK4-only ACK path, which a peer without the sub-floor rung still takes.
+fn no_subfloor_ladder() -> SessionProfile {
+    use SpeedLevel::*;
+    SessionProfile::from_rungs(
+        &[
+            (Sl2, "BPSK31", FecMode::Rs, Some(3.0), Some(6.0)),
+            (Sl3, "BPSK63", FecMode::Rs, Some(4.0), Some(7.0)),
+            (Sl4, "BPSK250", FecMode::Rs, Some(5.0), None),
+        ],
+        Sl2,
+        3,
+    )
+}
+
 /// A profile without an MFSK16 rung keeps the fast FSK4-only path (no sub-floor turnaround cost).
 #[test]
 fn non_subfloor_profile_uses_the_fast_fsk4_path() {
     let backend = LoopbackBackend::new();
     let mut engine = ModemEngine::new(Box::new(backend.clone_shared()));
     engine.register_plugin(Box::new(Fsk4Plugin::new())).unwrap();
-    engine.start_ota_session(SessionProfile::hpx500()); // no MFSK16 rung
+    engine.start_ota_session(no_subfloor_ladder());
     assert!(!engine.ota_profile_has_mfsk16());
     assert_eq!(engine.ota_ack_timeout_ms(), 4000);
 }
@@ -194,11 +209,11 @@ fn mixed_profile_peer_acquires_the_leading_fsk4_ack() {
         irs.transmit_ota_ack(&ack, None)
             .expect("transmit dual-waveform sub-floor ACK");
 
-        // A peer with NO MFSK16 rung (hpx500, FSK4 only) must recover the ACK from the leading FSK4 copy.
+        // A peer with NO MFSK16 rung (FSK4 ACK only) must recover the ACK from the leading FSK4 copy.
         let backend = LoopbackBackend::new();
         let mut peer = ModemEngine::new(Box::new(backend.clone_shared()));
         peer.register_plugin(Box::new(Fsk4Plugin::new())).unwrap();
-        peer.start_ota_session(SessionProfile::hpx500());
+        peer.start_ota_session(no_subfloor_ladder());
         let mut sig = vec![0.0f32; lead];
         sig.extend_from_slice(&irs_bk.drain_samples());
         backend.fill_samples(&sig);
