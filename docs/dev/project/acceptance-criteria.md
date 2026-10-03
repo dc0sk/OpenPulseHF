@@ -2,7 +2,7 @@
 project: openpulsehf
 doc: docs/dev/project/acceptance-criteria.md
 status: resolved
-last_updated: 2026-10-02
+last_updated: 2026-10-03
 ---
 
 # Acceptance criteria
@@ -29,6 +29,7 @@ Each requirement below is done when the linked test passes. Add new links as tes
 | PTT release waits for the device's reported drain plus 10 ms, never longer than the old fixed 200 ms, and the full 200 ms when the device reports a zero (underrun) or no delay (#1367, REQ-PHY-05 software term) | `cargo test -p openpulse-audio --no-default-features --lib flush` (the cpal wiring: `cargo clippy -p openpulse-audio --features cpal-backend`) |
 | An ARDOP host data block over one frame (up to 4 096 B) goes on the air as frame-sized chunks, through the real data port (#1385) | `cargo test -p openpulse-ardop --no-default-features --test host_block_larger_than_a_frame` |
 | Idle flicker behind a 250 Hz filter and an ACK on air are not ladder evidence, and a frame failing at the decode edge still is (#1456); the daemon's NACK budget leaks one per 10 min of listening (#1456) | `cargo test -p openpulse-modem --no-default-features --test idle_flicker_is_not_evidence`; `cargo test -p openpulse-daemon --no-default-features --lib nack_budget` |
+| An off-frequency non-ladder frame recovered by the OTA acquisition pass keys no ACK, moves no rung, and yields every frame of its keying (#1123, #1461) | `cargo test -p openpulse-modem --no-default-features --test off_frequency_fallback_is_not_ladder` |
 | HPX state machine transitions | `cargo test -p openpulse-modem --test hpx_conformance_integration` |
 | Benchmark 100% pass, mean_transitions ≤ 20 | `cargo test -p openpulse-modem --test benchmark_integration` |
 | Session persistence | `cargo test -p openpulse-cli --test local_state_integration` |
