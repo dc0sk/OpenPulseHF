@@ -2,7 +2,7 @@
 project: openpulsehf
 doc: docs/dev/project/maintainer-todo.md
 status: draft
-last_updated: 2026-10-02
+last_updated: 2026-10-04
 ---
 
 # Maintainer TODO — what only you can do
@@ -13,16 +13,20 @@ asks first within each section. Report results in chat or as a comment on the li
 
 ## Now — unblocks Release 1 work
 
-- [ ] **Run the receive-cost probe on the station Pis** (rpi51, rpi53). It decides whether the
-  onset-ranking fix ([`design/fallback-onset-ranking.md`](../design/fallback-onset-ranking.md)) blocks
-  Release 1: each decode plus the ACK's airtime must fit the sender's 9 s ACK window.
+- [ ] **Run the receive-cost probe once more on one Pi, without the fallback scan.** The first run
+  (2026-10-04, below) showed the decode leaves no margin in the 9 s ACK window at SL2, and none fits with the MFSK16 ACK, so the onset-ranking fix
+  ([`design/fallback-onset-ranking.md`](../design/fallback-onset-ranking.md)) is in progress. This run
+  says how much of the Pi's decode time the fix can remove:
   ```bash
   git pull   # on main
-  PROBE_ENTRY_RUNGS=1 PROBE_READ=4096 cargo test --release -p openpulse-modem \
+  PROBE_NO_FALLBACK=1 PROBE_ENTRY_RUNGS=1 PROBE_READ=4096 cargo test --release -p openpulse-modem \
     --no-default-features --test receive_cost_scaling -- --ignored --nocapture
   ```
-  Paste the five `Sl…` lines it prints. If you know the daemon's typical read size on that Pi, use it
-  for `PROBE_READ`; 4096 is a guess.
+  Paste the five `Sl…` lines.
+
+- [x] **Run the receive-cost probe on the station Pis** (done 2026-10-04, `PROBE_READ=4096`). Decode
+  per frame, rpi53 / rpi51: SL6 3.21 / 3.32 s, SL5 5.19 / 5.45 s, SL4 5.56 / 5.76 s, SL3 5.90 /
+  6.12 s, SL2 7.04 / 7.26 s. All five decoded.
 
 - [ ] **Create the GitHub milestones and move the stand-in labels onto them** (decision 20; the cloud
   session cannot create milestones). From a checkout with `gh` logged in:
