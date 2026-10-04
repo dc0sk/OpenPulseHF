@@ -135,16 +135,11 @@ fn cfg(tcp_port: u16, ws_port: u16) -> OpenpulseConfig {
     c
 }
 
-/// Run a real daemon on its own thread and runtime.
-///
-/// `server::run`'s future is `!Send` (the engine holds an `mpsc::Receiver`), so it cannot be
-/// `tokio::spawn`ed onto the test's multi-thread runtime — the same reason `twin.rs` does this.
-/// The thread is detached: each test asserts on the counters and then lets the process end.
 /// Wait until the receive tick has opened its first capture stream, or 10 s; returns the open count.
 ///
-/// A fixed 400 ms sleep here failed all three tests under `scripts/gate.sh`'s parallel load
-/// (2026-10-04) while passing alone: the daemon had not reached its first tick yet. Polling keeps
-/// the assertion that follows meaningful without betting on scheduler latency.
+/// A fixed 400 ms sleep here failed all three tests once under `scripts/gate.sh` (2026-10-04) and
+/// has not failed since, alone or loaded; the cause is not known. Polling keeps the assertion that
+/// follows meaningful without betting on how long the daemon takes to reach its first tick.
 async fn first_capture_open(counters: &Counters) -> usize {
     let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
     loop {
@@ -156,6 +151,11 @@ async fn first_capture_open(counters: &Counters) -> usize {
     }
 }
 
+/// Run a real daemon on its own thread and runtime.
+///
+/// `server::run`'s future is `!Send` (the engine holds an `mpsc::Receiver`), so it cannot be
+/// `tokio::spawn`ed onto the test's multi-thread runtime — the same reason `twin.rs` does this.
+/// The thread is detached: each test asserts on the counters and then lets the process end.
 fn spawn_daemon(cfg: OpenpulseConfig, backend: CountingBackend) {
     std::thread::spawn(move || {
         let rt = tokio::runtime::Builder::new_multi_thread()
