@@ -43,9 +43,20 @@ a template keeps today's order and scan.
 row): uncoded BPSK250 frames of 8–207 B inside REAL idle recordings (IC-9700 250 Hz, 500 Hz and hot
 captures; the idle runs under the frame), leads 0–11 264 samples, `onset_bound` 12 288, flat and
 Watterson `moderate_f1`, 12 dB down to −6 dB signal-to-idle, through the decode cliff. Of the 226
-frames that decoded when handed their own onset, **all 226 ranked first** (±16 samples). K = 4 keeps
-three ranks of margin for what this could not cover: no real on-air frame (the corpus's frame captures
-predate #1148 and #1062 and decode against nothing current) and no residual carrier offset.
+frames that decoded when handed their own onset, **all 226 ranked first** (±16 samples). Re-run
+after review with a preamble-span separation and at `onset_bound` 12 288 and 49 152 (the range after a
+slow decode lengthens the read): **all 449 decodable frames ranked first**. K = 4 keeps three ranks of
+margin for what this could not cover: no real on-air frame (the corpus's frame captures predate #1148
+and #1062 and decode against nothing current) and no residual carrier offset.
+
+**Adversarial review** (Fable, 2026-10-04): does not block Release 1. Fixed here: ranked attempts ran
+in ρ order, so in a keying of two control frames (#1461) a better-correlating second frame was decoded
+first and the first was lost — now earliest first, pinned by
+`the_first_of_two_frames_in_one_keying_is_not_lost` (sabotage, sort removed: `FRAG B` delivered,
+`FRAG A` lost); a one-symbol separation let the `++--` preamble's own shifted copies fill ranks 1–3 —
+now a preamble span; a rank ≥ 1 decode logs at `info`. Parked in the work plan: K on a re-recorded
+on-air frame and under a tone at fc ± baud/4, the counter in daemon diagnostics, templates for the
+slow BPSK modes (only BPSK250, the default `[modem] mode`, gets this fix).
 
 **Cost, measured** (`receive_cost_scaling`, x86, release, `PROBE_READ=4096`, decode per frame):
 SL6 2.17 → 0.19 s, SL5 3.69 → 0.86 s, SL4 3.77 → 0.95 s, SL3 3.95 → 1.15 s, SL2 4.61 → 1.84 s, within
