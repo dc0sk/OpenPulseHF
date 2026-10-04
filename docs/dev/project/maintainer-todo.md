@@ -13,13 +13,14 @@ asks first within each section. Report results in chat or as a comment on the li
 
 ## Now — unblocks Release 1 work
 
-- [ ] **Run the receive-cost probe once more on one Pi, without the fallback scan.** The first run
-  (2026-10-04, below) showed the decode leaves no margin in the 9 s ACK window at SL2, and none fits with the MFSK16 ACK, so the onset-ranking fix
-  ([`design/fallback-onset-ranking.md`](../design/fallback-onset-ranking.md)) is in progress. This run
-  says how much of the Pi's decode time the fix can remove:
+- [ ] **Re-run the receive-cost probe on one Pi after the onset-ranking fix merges.** The first run
+  (2026-10-04, below) showed the decode leaves no margin in the 9 s ACK window at SL2, and none fits
+  with the MFSK16 ACK. The fix
+  ([`design/fallback-onset-ranking.md`](../design/fallback-onset-ranking.md)) brought x86 SL2 from
+  4.6 s to 1.8 s; this confirms it on the station:
   ```bash
   git pull   # on main
-  PROBE_NO_FALLBACK=1 PROBE_ENTRY_RUNGS=1 PROBE_READ=4096 cargo test --release -p openpulse-modem \
+  PROBE_ENTRY_RUNGS=1 PROBE_READ=4096 cargo test --release -p openpulse-modem \
     --no-default-features --test receive_cost_scaling -- --ignored --nocapture
   ```
   Paste the five `Sl…` lines.
