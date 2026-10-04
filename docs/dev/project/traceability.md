@@ -15,6 +15,30 @@ this ledger adds the design rationale and the actually-observed results per chan
 
 ---
 
+## 2026-10-04 — The file assembler skips a packed block that does not decompress (REQ-CMP-05, twin of #1477)
+
+**Change.** #1477 made the daemon rx tick drop a frame that carries the `OPZ1` pack magic but fails
+to decompress. It did not convert the twin in `BlockAssembler::ingest_fragment`, which still did
+`unpack(&packed).unwrap_or(packed)` and so took a corrupt packed block as raw bytes. The audit F-1
+length binding dropped most of these by accident. A corrupt block of exactly the expected length was
+stored as file content.
+
+**Design.** Use #1477's `compression::try_unpack`. `Ok(Some)` gives the block, and `Ok(None)` keeps
+the raw bytes (unchanged; the shipped sender always packs). `Err` skips this candidate with
+`continue`, not an early `Ignored`: the loop walks every SAR completion so that a poisoned completion
+sharing the key cannot shadow the legitimate one. The shape was specified in the task, so no design
+review was needed.
+
+**Implementation.** `crates/openpulse-filexfer/src/blocks.rs` (`ingest_fragment`).
+
+**Tests.** `crates/openpulse-filexfer/tests/blocks.rs`
+`a_packed_block_that_fails_to_decompress_is_not_stored_even_at_the_expected_length`: a `FileData`
+block of `OPZ1`, the Lz4 tag and an undecodable body, padded to exactly the 32-byte expected length.
+
+**Test results (actually run).** Fail-first on `main` at `21acf82`: the new test FAILED ("a corrupt
+packed block was stored as raw bytes"). After: `openpulse-filexfer` 40 passed / 0 failed. Sabotage
+(`Err(_) => packed`): only the new test fails, 7/8 in `blocks`. Workspace gate: GATE_PENDING
+
 ## 2026-10-03 — HARQ keeps only bursts that count as ladder evidence (decay review finding 7, work plan M2)
 
 **Change.** `ota_decode_burst` retained a failed burst's soft LLRs in the HARQ diversity set *before*

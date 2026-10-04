@@ -8,7 +8,7 @@
 use std::collections::HashMap;
 use std::time::Duration;
 
-use openpulse_core::compression::{pack, unpack};
+use openpulse_core::compression::{pack, try_unpack};
 use openpulse_core::sar::{sar_encode, SarReassembler, SAR_HEADER_SIZE};
 
 use crate::error::FxError;
@@ -202,7 +202,14 @@ impl BlockAssembler {
             }) = FxFrame::decode(&frame_bytes)
             {
                 if transfer_id == self.transfer_id && bi == block_index {
-                    let block = unpack(&packed).unwrap_or(packed);
+                    // A packed block that does not decode is an integrity error (REQ-CMP-05): skip
+                    // this candidate rather than store its raw bytes — skip, not return, so a garbage
+                    // completion sharing the SAR key cannot shadow the legitimate one.
+                    let block = match try_unpack(&packed) {
+                        Ok(Some(block)) => block,
+                        Ok(None) => packed,
+                        Err(_) => continue,
+                    };
                     // Bind the decoded length to the offer geometry: a block that unpacks to more (or
                     // fewer) bytes than its slot allows would let a small, quota-approved offer write an
                     // arbitrarily large file to disk (audit F-1). Drop it rather than store it.
