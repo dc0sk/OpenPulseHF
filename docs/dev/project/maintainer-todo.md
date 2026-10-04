@@ -29,7 +29,7 @@ asks first within each section. Report results in chat or as a comment on the li
   per frame, rpi53 / rpi51: SL6 3.21 / 3.32 s, SL5 5.19 / 5.45 s, SL4 5.56 / 5.76 s, SL3 5.90 /
   6.12 s, SL2 7.04 / 7.26 s. All five decoded.
 
-- [ ] **Create the GitHub milestones and move the stand-in labels onto them** (decision 20; the cloud
+- [x] **Create the GitHub milestones and move the stand-in labels onto them** (done 2026-10-04) (decision 20; the cloud
   session cannot create milestones). From a checkout with `gh` logged in:
   ```bash
   R=dc0sk/OpenPulseHF
