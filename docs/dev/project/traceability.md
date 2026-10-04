@@ -15,6 +15,34 @@ this ledger adds the design rationale and the actually-observed results per chan
 
 ---
 
+## 2026-10-03 — HARQ keeps only bursts that count as ladder evidence (decay review finding 7, work plan M2)
+
+**Change.** `ota_decode_burst` retained a failed burst's soft LLRs in the HARQ diversity set *before*
+the evidence guards (#1255 cap flush, #1454 recognition window, #1456 evidence floor, the ACK test).
+So a burst those guards rejected still went into the set, and the next real frame at a soft rung
+(SL1–SL5 Rs, SL7+) was MAP-combined with it. Recorded in the NACK-streak-decay review as finding 7,
+and left open by the budget-mute fix.
+
+**Design.** Stage the new LLRs in the HARQ loop and commit them only once the burst has cleared every
+guard. A burst that is not evidence of a failed frame is not a copy of one. The combine *trial* still
+runs on every failed burst; only the retention moves. Success still clears the set, as before.
+
+**Implementation.** `crates/openpulse-modem/src/engine.rs`, `ota_decode_burst`: `harq_staged` replaces
+the in-loop push; the push and the `OTA_HARQ_MAX_ATTEMPTS` trim now run after the ACK guard.
+
+**Measured reachability** (throwaway prints, then `idle_flicker_evidence_rate`, release,
+`FLICKER_MINUTES=10`): on the recorded IC-9700 250 Hz idle at SL7 and at SL9, 624 bursts were flushed,
+240 reached the soft demod and were staged (whole-burst lengths 1600–3248 samples), and 0 were
+evidence. Before the change all 240 were retained; with it, none. Pure noise does not reproduce this:
+the OFDM demod finds no preamble in it, so nothing is retained either way.
+
+**Tests → results:**
+- `engine::tests::a_burst_that_is_not_evidence_retains_no_harq_llrs` (default run): a 2000-sample head
+  of a real SL9 frame (under the evidence floor, asserted) retains nothing. The positive control, the
+  same head followed by noise to 6 s, is retained. Passes.
+- Sabotage (push restored inside the loop): fails with `retained [("OFDM52-16QAM", 1)]`.
+- `scripts/gate.sh`: see the PR.
+
 ## 2026-10-03 — A wideband transmission does not close its own burst (#1304, work plan M2)
 
 **Change.** #1304 asked whether OFDM52 (SL7–14), which fills ~85 % of the 300–2700 Hz band, walks the
