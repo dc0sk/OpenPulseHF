@@ -1,8 +1,8 @@
 //! End-to-end session compression: a `pack`ed payload must survive modem framing + FEC over the wire
-//! and `unpack` back to the original, and the compressed frame must actually be smaller than the raw
+//! and `try_unpack` back to the original, and the compressed frame must actually be smaller than the raw
 //! bytes it replaces (the point of enabling it).
 
-use openpulse_core::compression::{pack, unpack};
+use openpulse_core::compression::{pack, try_unpack};
 use openpulse_core::fec::FecMode;
 use openpulse_modem::channel_sim::ChannelSimHarness;
 use qpsk_plugin::QpskPlugin;
@@ -46,13 +46,13 @@ fn packed_payload_survives_the_modem_and_unpacks() {
         decoded, packed,
         "packed bytes must survive the wire unchanged"
     );
-    assert_eq!(unpack(&decoded).expect("unpack"), raw);
+    assert_eq!(try_unpack(&decoded).expect("unpack"), Some(raw));
 }
 
 #[test]
 fn an_unpacked_payload_passes_through_the_rx_seam_untouched() {
     // Mirrors the daemon rx tick: a non-packed frame (compression disabled on the sender) has no magic,
-    // so `unpack` returns None and the caller keeps the original bytes.
+    // so `try_unpack` returns Ok(None) and the caller keeps the original bytes.
     let raw = b"plain uncompressed session body".to_vec();
     let mut h = harness();
     h.tx_engine
@@ -63,6 +63,10 @@ fn an_unpacked_payload_passes_through_the_rx_seam_untouched() {
         .rx_engine
         .receive_with_fec_mode(MODE, FecMode::Rs, None)
         .expect("decode");
-    let recovered = unpack(&decoded).unwrap_or(decoded);
+    assert_eq!(
+        try_unpack(&decoded).expect("no magic is not an error"),
+        None
+    );
+    let recovered = decoded;
     assert_eq!(recovered, raw);
 }
