@@ -94,6 +94,7 @@ payload format change, so M1 closed as a bug fix plus a declaration.
 | Repeat the 2 m campaign on the 1.0 format | parked |
 | A twin-daemon test of the leaking NACK budget (#1456 review round 3, finding 6): four failed ladder bursts key three NACKs on the production path; needs deterministic failing bursts in the bridge | parked |
 | Sender-side silence between fragments in one keying, as belt-and-braces to the #1461 receiver fix (review finding 8; about 6 % airtime; the gap needed depends on the receiver's read size and detector hold) | parked |
+| Onset-ranking review (2026-10-04) parked items: K re-measured on a re-recorded on-air frame and with a steady tone at fc ± baud/4 stronger than the frame (finding 3's falsifier; the notch normally removes it first); the rank counter in the daemon's diagnostics rather than instruments only (finding 4); templates for BPSK31/63/100 so a station on a slow `[modem] mode` gets the fix too (finding 5) | parked |
 
 ### M2 — Release path (target 2026-10-28)
 

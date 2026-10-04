@@ -3035,7 +3035,7 @@ impl ModemEngine {
         let VetoCorrelator::Passband(filter) = &veto.filter else {
             return None;
         };
-        let (step, scan_end, _) = self.burst_onset_scan_bounds(mode, samples.len(), onset_bound);
+        let (_, scan_end, _) = self.burst_onset_scan_bounds(mode, samples.len(), onset_bound);
         let df = Self::preamble_grid_step(&veto);
         let c = self.afc_correction_hz;
         let profile = filter.rho_profile_over_frequency(
@@ -3045,8 +3045,11 @@ impl ModemEngine {
             sr as f32,
             &[c - df, c, c + df],
         );
-        // One symbol apart: the period-4 preamble's alias lobes sit whole symbols off the peak.
-        Some(pick_separated_peaks(&profile, k, step))
+        // At least a preamble apart. The preamble's symbols run `++--`, period four, and ρ is a
+        // magnitude, so the copies two and four symbols off the true peak score ~0.94 and ~0.87 of
+        // it: a one-symbol separation filled the ranks below the first with the same frame. Two
+        // real frames cannot start closer than a preamble, so this costs no genuine hypothesis.
+        Some(pick_separated_peaks(&profile, k, veto.filter.input_span()))
     }
 
     /// The top `k` ranked onsets for `mode` over `samples`, as the OTA fallback computes them.
@@ -3062,7 +3065,13 @@ impl ModemEngine {
         self.ranked_fallback_onsets(mode, samples, onset_bound, k)
     }
 
-    /// Uncoded decode attempts at `onsets`, in order. Returns the payload, the onset and its rank.
+    /// Uncoded decode attempts at the ranked `onsets`, EARLIEST FIRST. Returns the payload, the
+    /// onset and its correlation rank (its index in `onsets`).
+    ///
+    /// Time order, not ρ order: a keying of several frames (#1461) has one identical preamble per
+    /// frame, so a later frame can outrank the first, and decoding it first hands out the frames
+    /// after it and loses the ones before (`the_first_of_two_frames_in_one_keying_is_not_lost`).
+    /// The exhaustive scan this replaces walked forward too.
     ///
     /// Same discipline as [`Self::scan_burst_onsets`]: AFC restored after every failed attempt, the
     /// estimate updated on the winning slice. Each attempt starts a quarter symbol early, because the
@@ -3076,7 +3085,9 @@ impl ModemEngine {
         let sr = AudioConfig::default().sample_rate;
         let (step, _, _, max_frame_samples) = self.frame_scan_geometry(mode, sr);
         let afc_before = self.afc_correction_hz;
-        for (rank, &onset) in onsets.iter().enumerate() {
+        let mut by_time: Vec<(usize, usize)> = onsets.iter().copied().enumerate().collect();
+        by_time.sort_by_key(|&(_, onset)| onset);
+        for (rank, onset) in by_time {
             let start = onset.saturating_sub(step / 4);
             let end = (start + max_frame_samples).min(samples.len());
             let slice = samples[start..end].to_vec();
@@ -3576,7 +3587,11 @@ impl ModemEngine {
                         let hit = self.decode_at_ranked_onsets(mode, &samples.samples, &onsets);
                         if let Some((_, _, rank)) = &hit {
                             self.fallback_onset_ranks[*rank] += 1;
-                            debug!("ota fallback decoded at correlation rank {rank}");
+                            // Info, not debug, above rank 0: on air this is how a K that is too
+                            // small shows up before it starts missing.
+                            if *rank > 0 {
+                                info!("ota fallback decoded at correlation rank {rank}");
+                            }
                         } else {
                             fallback_deferred = Some(mode);
                         }

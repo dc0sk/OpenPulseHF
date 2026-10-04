@@ -29,7 +29,8 @@ use openpulse_modem::engine::ModemEngine;
 use openpulse_modem::pipeline::AudioSamples;
 
 const MODE: &str = "BPSK250";
-/// The widest onset range the daemon hands the fallback: the ring (up to 8 192) plus a trigger read.
+/// The onset range at a 4 096-sample read: the ring (up to 8 192) plus the trigger read. The
+/// measurement also runs at four times this, the range after a slow decode lengthens the read.
 const ONSET_BOUND: usize = 12_288;
 const TOLERANCE: usize = 16;
 const RANKS_SHOWN: usize = 8;
@@ -100,48 +101,50 @@ fn measure_fallback_onset_ranks() {
         .unwrap_or(24);
     // The worst rank any decodable frame reached; RANKS_SHOWN means beyond the shown ranks.
     let mut worst = 0usize;
-    for idle_name in idles {
-        let idle = load_corpus(idle_name).expect("idle capture");
-        for fading in [false, true] {
-            for snr_db in [12.0f32, 9.0, 6.0, 3.0, 0.0, -3.0, -6.0] {
-                let mut rng = Rng(0x9E37_79B9_7F4A_7C15 ^ snr_db.to_bits() as u64);
-                let mut hist = [0usize; RANKS_SHOWN + 1];
-                let mut undecodable = 0usize;
-                for t in 0..trials {
-                    let len = 8 + rng.below(200) as usize;
-                    let payload: Vec<u8> = (0..len).map(|_| rng.next() as u8).collect();
-                    let mut signal = frame(&payload);
-                    if fading {
-                        let mut cfg = WattersonConfig::moderate_f1(Some(t as u64 + 1));
-                        cfg.snr_db = 60.0;
-                        signal = WattersonChannel::new(cfg).unwrap().apply(&signal);
-                    }
-                    let lead = rng.below(ONSET_BOUND as u64 - 1_024) as usize;
-                    let from = rng.below(idle.samples.len() as u64) as usize;
-                    let burst = embed(&idle, from, lead, &signal, snr_db);
+    for bound in [ONSET_BOUND, 4 * ONSET_BOUND] {
+        for idle_name in idles {
+            let idle = load_corpus(idle_name).expect("idle capture");
+            for fading in [false, true] {
+                for snr_db in [12.0f32, 9.0, 6.0, 3.0, 0.0, -3.0, -6.0] {
+                    let mut rng = Rng(0x9E37_79B9_7F4A_7C15 ^ snr_db.to_bits() as u64);
+                    let mut hist = [0usize; RANKS_SHOWN + 1];
+                    let mut undecodable = 0usize;
+                    for t in 0..trials {
+                        let len = 8 + rng.below(200) as usize;
+                        let payload: Vec<u8> = (0..len).map(|_| rng.next() as u8).collect();
+                        let mut signal = frame(&payload);
+                        if fading {
+                            let mut cfg = WattersonConfig::moderate_f1(Some(t as u64 + 1));
+                            cfg.snr_db = 60.0;
+                            signal = WattersonChannel::new(cfg).unwrap().apply(&signal);
+                        }
+                        let lead = rng.below(bound as u64 - 1_024) as usize;
+                        let from = rng.below(idle.samples.len() as u64) as usize;
+                        let burst = embed(&idle, from, lead, &signal, snr_db);
 
-                    // Decodable at all, when handed its own onset?
-                    let own = AudioSamples {
-                        samples: burst[lead..].to_vec(),
-                    };
-                    if engine().decode_burst(MODE, &own).ok().as_deref() != Some(&payload[..]) {
-                        undecodable += 1;
-                        continue;
+                        // Decodable at all, when handed its own onset?
+                        let own = AudioSamples {
+                            samples: burst[lead..].to_vec(),
+                        };
+                        if engine().decode_burst(MODE, &own).ok().as_deref() != Some(&payload[..]) {
+                            undecodable += 1;
+                            continue;
+                        }
+                        let onsets = engine()
+                            .fallback_onset_ranking(MODE, &burst, bound, RANKS_SHOWN)
+                            .expect("BPSK250 publishes a template");
+                        let r = rank_of(&onsets, lead).unwrap_or(RANKS_SHOWN);
+                        hist[r] += 1;
+                        worst = worst.max(r);
                     }
-                    let onsets = engine()
-                        .fallback_onset_ranking(MODE, &burst, ONSET_BOUND, RANKS_SHOWN)
-                        .expect("BPSK250 publishes a template");
-                    let r = rank_of(&onsets, lead).unwrap_or(RANKS_SHOWN);
-                    hist[r] += 1;
-                    worst = worst.max(r);
-                }
-                println!(
-                    "{idle_name:<24} {:<9} {snr_db:>5.1} dB | undecodable {undecodable:>3} | rank 0..{} {:?} | miss {}",
+                    println!(
+                    "bound {bound:>6} {idle_name:<24} {:<9} {snr_db:>5.1} dB | undecodable {undecodable:>3} | rank 0..{} {:?} | miss {}",
                     if fading { "moderate" } else { "flat" },
                     RANKS_SHOWN - 1,
                     &hist[..RANKS_SHOWN],
                     hist[RANKS_SHOWN],
                 );
+                }
             }
         }
     }
@@ -212,4 +215,49 @@ fn a_frame_behind_a_long_real_lead_ranks_first() {
             .expect("template");
         assert_eq!(rank_of(&onsets, lead), Some(0), "lead {lead}: {onsets:?}");
     }
+}
+
+/// Two control frames in one keying (#1461), the second louder so it ranks first: the first is
+/// still delivered first and the second rides along in `more`. Ranked onsets are attempted in time
+/// order; attempting them in ρ order decoded the second frame and lost the first.
+#[test]
+fn the_first_of_two_frames_in_one_keying_is_not_lost() {
+    let idle = load_corpus("ic9700-idle-500hz.wav").expect("idle capture");
+    let a = frame(b"FRAG A");
+    let b = frame(b"FRAG B");
+    let gap = 400usize;
+    let mut keying = a.clone();
+    keying.extend(std::iter::repeat_n(0.0, gap));
+    keying.extend(b.iter().map(|&s| s * 2.0));
+    // 15 dB over the keying's mean puts A near 11 dB, above the cliff, and B 6 dB above A.
+    let audio = embed(&idle, 0, 16_000, &keying, 15.0);
+
+    let mut rx = engine();
+    rx.start_ota_session(SessionProfile::fast());
+    // One read spans both frames, as the daemon's does after a slow decode, so both onsets fall
+    // inside the scan range.
+    let reads = audio.chunks(32_768).map(<[f32]>::to_vec);
+    let tail = (0..8).map(|i| idle.cycled(40_000 + i * 32_768, 32_768));
+    let mut got = None;
+    for read in reads.chain(tail) {
+        let Some(burst) = rx.accumulate_capture(Some(MODE), read).unwrap() else {
+            continue;
+        };
+        let r = rx.ota_decode_burst(&burst, "rank", Some(MODE)).unwrap();
+        if r.payload.is_some() {
+            got = Some(r);
+            break;
+        }
+    }
+    let r = got.expect("the keying decodes");
+    assert_eq!(
+        r.payload.as_deref(),
+        Some(&b"FRAG A"[..]),
+        "first frame first"
+    );
+    assert_eq!(
+        r.more,
+        vec![b"FRAG B".to_vec()],
+        "second frame handed out too"
+    );
 }

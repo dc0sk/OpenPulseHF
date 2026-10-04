@@ -115,9 +115,21 @@ The decision above, with these choices and measurements. Ledger:
   UNCHECKED until the re-record) and no residual carrier offset. The miss counter and its `warn!` are
   how K is checked on air.
 - **Grid:** the settled correction and one step either side, the step from `preamble_grid_step` (the
-  quarter-cycle step `preamble_search_plan` uses). **Separation:** one symbol period. **Attempt
-  start:** a quarter symbol before the peak, because the demodulator's timing search reaches further
-  forward than back.
+  quarter-cycle step `preamble_search_plan` uses). **Attempt start:** a quarter symbol before the
+  peak, because the demodulator's timing search reaches further forward than back.
+- **Separation: one preamble span, not one symbol** (changed after review). The preamble's symbols
+  run `++--` and ρ is a magnitude, so the copies two and four symbols off the true peak score about
+  0.94 and 0.87 of it; with a one-symbol separation they filled ranks 1–3 with the same frame. Two
+  real frames cannot start closer than a preamble.
+- **Attempt order: time, not ρ** (changed after review). A keying of several frames (#1461) carries
+  one identical preamble per frame, so a later frame can outrank the first; decoding it first handed
+  out the frames after it and lost the ones before. Pinned by
+  `the_first_of_two_frames_in_one_keying_is_not_lost`, which fails in ρ order (`FRAG B` delivered,
+  `FRAG A` lost). The counter still records the correlation rank.
+- **On air:** a decode at rank ≥ 1 logs at `info`, a miss at `warn`, so a K that is too small shows
+  before it misses. The counter itself is an instrument; moving it into the daemon's diagnostics is
+  parked, as are templates for the slow BPSK modes: **only BPSK250, the default `[modem] mode`, gets
+  this fix**; a station configured for BPSK31/63/100 keeps the exhaustive scan.
 - **Cost** (x86, release, `PROBE_READ=4096`): SL6 2.17 → 0.19 s, SL5 3.69 → 0.86 s, SL4 3.77 →
   0.95 s, SL3 3.95 → 1.15 s, SL2 4.61 → 1.84 s per decode, within noise of removing the fallback
   outright. The correlation itself is not visible at this resolution.
