@@ -117,7 +117,7 @@ pub const PACK_MAGIC: [u8; 4] = *b"OPZ1";
 ///
 /// Picks the best of Lz4/Zstd via [`compress_if_smaller`] and records which one in the tag, so the
 /// receiver needs no out-of-band negotiation. When nothing beats the raw size the tag is `None` and the
-/// payload is the original bytes (the 5-byte header is the only overhead). The magic lets [`unpack`]
+/// payload is the original bytes (the 5-byte header is the only overhead). The magic lets [`try_unpack`]
 /// distinguish a packed frame from any other traffic (control frames, un-packed data) and pass those
 /// through untouched — so enabling compression on one end never corrupts frames from the other.
 pub fn pack(data: &[u8]) -> Vec<u8> {
@@ -134,15 +134,6 @@ pub fn pack(data: &[u8]) -> Vec<u8> {
     out
 }
 
-/// Recover the original bytes from a [`pack`]ed frame.
-///
-/// Returns `Some(original)` only for a well-formed packed frame (magic + known tag + valid payload);
-/// returns `None` for anything else — un-packed data, control frames, a corrupt frame — so the caller
-/// keeps its original bytes. Never panics and never allocates above [`MAX_DECOMPRESSED_SIZE`].
-pub fn unpack(framed: &[u8]) -> Option<Vec<u8>> {
-    try_unpack(framed).ok().flatten()
-}
-
 /// Why a frame carrying [`PACK_MAGIC`] could not be unpacked.
 #[derive(Debug, thiserror::Error)]
 pub enum UnpackError {
@@ -154,8 +145,8 @@ pub enum UnpackError {
     Decompress(#[from] CompressionError),
 }
 
-/// Like [`unpack`], but tells a frame that is not packed (`Ok(None)`) from a packed frame that is
-/// corrupt (`Err`).
+/// Recover the original bytes from a [`pack`]ed frame, telling a frame that is not packed
+/// (`Ok(None)`) from a packed frame that is corrupt (`Err`).
 ///
 /// A receiver must not deliver the second kind: its bytes are still compressed, and passing them on
 /// as the message is how a dictionary mismatch (zstd checks the dictionary ID carried in its own frame
@@ -215,7 +206,7 @@ mod tests {
             framed[4], 0,
             "compressible data should not use the None tag"
         );
-        assert_eq!(unpack(&framed), Some(data));
+        assert_eq!(try_unpack(&framed).unwrap(), Some(data));
     }
 
     #[test]
@@ -226,18 +217,21 @@ mod tests {
             .collect();
         let framed = pack(&data);
         assert_eq!(framed[4], 0, "incompressible data should use the None tag");
-        assert_eq!(unpack(&framed), Some(data));
+        assert_eq!(try_unpack(&framed).unwrap(), Some(data));
     }
 
     #[test]
     fn unpack_passes_through_non_packed_frames() {
         // Control-frame magics and plain text must not be mistaken for packed frames.
-        assert_eq!(unpack(b"OPHF\x01binary relay envelope"), None);
-        assert_eq!(unpack(b"HSCQ handshake conreq"), None);
-        assert_eq!(unpack(b"QSY REQ token"), None);
-        assert_eq!(unpack(b"plain user message body"), None);
-        assert_eq!(unpack(b""), None);
-        assert_eq!(unpack(b"OPZ"), None); // too short to be a frame
+        assert!(matches!(
+            try_unpack(b"OPHF\x01binary relay envelope"),
+            Ok(None)
+        ));
+        assert!(matches!(try_unpack(b"HSCQ handshake conreq"), Ok(None)));
+        assert!(matches!(try_unpack(b"QSY REQ token"), Ok(None)));
+        assert!(matches!(try_unpack(b"plain user message body"), Ok(None)));
+        assert!(matches!(try_unpack(b""), Ok(None)));
+        assert!(matches!(try_unpack(b"OPZ"), Ok(None))); // too short to be a frame
     }
 
     #[test]
@@ -278,13 +272,6 @@ mod tests {
             }
             other => panic!("expected a dictionary-mismatch error, got {other:?}"),
         }
-        assert_eq!(unpack(&framed), None);
-    }
-
-    #[test]
-    fn unpack_rejects_unknown_tag_and_corrupt_payload() {
-        assert_eq!(unpack(b"OPZ1\x09garbage"), None); // unknown algo tag
-        assert_eq!(unpack(b"OPZ1\x01\x00\x00"), None); // Lz4 tag, truncated/garbage payload
     }
 
     #[test]

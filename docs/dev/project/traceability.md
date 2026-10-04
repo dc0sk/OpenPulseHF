@@ -15,6 +15,39 @@ this ledger adds the design rationale and the actually-observed results per chan
 
 ---
 
+## 2026-10-04 — The file assembler skips a packed block that does not decompress (REQ-CMP-05, twin of #1477)
+
+**Change.** #1477 made the daemon rx tick drop a frame that carries the `OPZ1` pack magic but fails
+to decompress. It did not convert the twin in `BlockAssembler::ingest_fragment`, which still did
+`unpack(&packed).unwrap_or(packed)` and so took a corrupt packed block as raw bytes. #1477 parked
+this twin because the damage is bounded. The audit F-1 length binding drops most such blocks. One of
+exactly the expected length was stored, and the file-level manifest verify then failed the WHOLE
+transfer. Skipping the block instead leaves it missing in the fragment bitmap, so it is retransmitted
+selectively, and the transfer does not fail at the end.
+
+**Design.** Use #1477's `compression::try_unpack`. `Ok(Some)` gives the block, and `Ok(None)` keeps
+the raw bytes (unchanged; the shipped sender always packs). `Err` skips this candidate with
+`continue`, not an early `Ignored`: the loop walks every SAR completion so that a poisoned completion
+sharing the key cannot shadow the legitimate one. The shape was specified in the task, so no design
+review was needed.
+
+**Implementation.** `crates/openpulse-filexfer/src/blocks.rs` (`ingest_fragment`). This removed
+the last production caller of `compression::unpack`, the lossy `Option` wrapper, and the
+reachability ratchet flagged it. It is deleted, and its remaining test callers (core
+`compression::tests`, daemon lib, `openpulse-modem/tests/compression_wire.rs`) now use `try_unpack`.
+
+**Tests.** `crates/openpulse-filexfer/tests/blocks.rs`
+`a_packed_block_that_fails_to_decompress_is_not_stored_even_at_the_expected_length`: a `FileData`
+block of `OPZ1`, the Lz4 tag and an undecodable body, padded to exactly the 32-byte expected length.
+
+**Test results (actually run).** Fail-first on `main` at `21acf82`: the new test FAILED ("a corrupt
+packed block was stored as raw bytes"). After: `openpulse-filexfer` 40 passed / 0 failed. Sabotage
+(`Err(_) => packed`): only the new test fails, 7/8 in `blocks`. Workspace gate: the first run at `dd0e674` gave `GATE: FAIL` with tests
+2678 passed / 0 failed. The reachability ratchet flagged `compression::unpack`, which the fix had left
+without a production caller, so it was removed. The installed pre-push hook was stale in this
+container (local state, synced). Re-run: `GATE: PASS 15287aa6aecb209e649e67aff9696aacf5a70ea5 clean
+20261004T203826Z`, suites=361, tests 2677 passed / 0 failed. The held-out slow suites were not run.
+
 ## 2026-10-03 — HARQ keeps only bursts that count as ladder evidence (decay review finding 7, work plan M2)
 
 **Change.** `ota_decode_burst` retained a failed burst's soft LLRs in the HARQ diversity set *before*
