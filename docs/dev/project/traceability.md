@@ -42,7 +42,11 @@ block of `OPZ1`, the Lz4 tag and an undecodable body, padded to exactly the 32-b
 
 **Test results (actually run).** Fail-first on `main` at `21acf82`: the new test FAILED ("a corrupt
 packed block was stored as raw bytes"). After: `openpulse-filexfer` 40 passed / 0 failed. Sabotage
-(`Err(_) => packed`): only the new test fails, 7/8 in `blocks`. Workspace gate: GATE_PENDING
+(`Err(_) => packed`): only the new test fails, 7/8 in `blocks`. Workspace gate: the first run at `dd0e674` gave `GATE: FAIL` with tests
+2678 passed / 0 failed. The reachability ratchet flagged `compression::unpack`, which the fix had left
+without a production caller, so it was removed. The installed pre-push hook was stale in this
+container (local state, synced). Re-run: `GATE: PASS 15287aa6aecb209e649e67aff9696aacf5a70ea5 clean
+20261004T203826Z`, suites=361, tests 2677 passed / 0 failed. The held-out slow suites were not run.
 
 ## 2026-10-03 — HARQ keeps only bursts that count as ladder evidence (decay review finding 7, work plan M2)
 
