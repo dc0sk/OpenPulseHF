@@ -19,9 +19,11 @@ this ledger adds the design rationale and the actually-observed results per chan
 
 **Change.** #1477 made the daemon rx tick drop a frame that carries the `OPZ1` pack magic but fails
 to decompress. It did not convert the twin in `BlockAssembler::ingest_fragment`, which still did
-`unpack(&packed).unwrap_or(packed)` and so took a corrupt packed block as raw bytes. The audit F-1
-length binding dropped most of these by accident. A corrupt block of exactly the expected length was
-stored as file content.
+`unpack(&packed).unwrap_or(packed)` and so took a corrupt packed block as raw bytes. #1477 parked
+this twin because the damage is bounded. The audit F-1 length binding drops most such blocks. One of
+exactly the expected length was stored, and the file-level manifest verify then failed the WHOLE
+transfer. Skipping the block instead leaves it missing in the fragment bitmap, so it is retransmitted
+selectively, and the transfer does not fail at the end.
 
 **Design.** Use #1477's `compression::try_unpack`. `Ok(Some)` gives the block, and `Ok(None)` keeps
 the raw bytes (unchanged; the shipped sender always packs). `Err` skips this candidate with
@@ -29,7 +31,10 @@ the raw bytes (unchanged; the shipped sender always packs). `Err` skips this can
 sharing the key cannot shadow the legitimate one. The shape was specified in the task, so no design
 review was needed.
 
-**Implementation.** `crates/openpulse-filexfer/src/blocks.rs` (`ingest_fragment`).
+**Implementation.** `crates/openpulse-filexfer/src/blocks.rs` (`ingest_fragment`). This removed
+the last production caller of `compression::unpack`, the lossy `Option` wrapper, and the
+reachability ratchet flagged it. It is deleted, and its remaining test callers (core
+`compression::tests`, daemon lib, `openpulse-modem/tests/compression_wire.rs`) now use `try_unpack`.
 
 **Tests.** `crates/openpulse-filexfer/tests/blocks.rs`
 `a_packed_block_that_fails_to_decompress_is_not_stored_even_at_the_expected_length`: a `FileData`
