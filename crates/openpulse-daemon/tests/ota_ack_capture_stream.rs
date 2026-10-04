@@ -140,6 +140,22 @@ fn cfg(tcp_port: u16, ws_port: u16) -> OpenpulseConfig {
 /// `server::run`'s future is `!Send` (the engine holds an `mpsc::Receiver`), so it cannot be
 /// `tokio::spawn`ed onto the test's multi-thread runtime — the same reason `twin.rs` does this.
 /// The thread is detached: each test asserts on the counters and then lets the process end.
+/// Wait until the receive tick has opened its first capture stream, or 10 s; returns the open count.
+///
+/// A fixed 400 ms sleep here failed all three tests under `scripts/gate.sh`'s parallel load
+/// (2026-10-04) while passing alone: the daemon had not reached its first tick yet. Polling keeps
+/// the assertion that follows meaningful without betting on scheduler latency.
+async fn first_capture_open(counters: &Counters) -> usize {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+    loop {
+        let n = counters.opened_total.load(Ordering::SeqCst);
+        if n > 0 || tokio::time::Instant::now() >= deadline {
+            return n;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+}
+
 fn spawn_daemon(cfg: OpenpulseConfig, backend: CountingBackend) {
     std::thread::spawn(move || {
         let rt = tokio::runtime::Builder::new_multi_thread()
@@ -148,7 +164,11 @@ fn spawn_daemon(cfg: OpenpulseConfig, backend: CountingBackend) {
             .build()
             .expect("daemon runtime");
         rt.block_on(async move {
-            let _ = openpulse_daemon::server::run(cfg, Box::new(backend)).await;
+            // Printed, not discarded: a daemon that fails to start (a port taken, a config refused)
+            // otherwise shows up only as "the receive tick never opened a capture stream".
+            if let Err(e) = openpulse_daemon::server::run(cfg, Box::new(backend)).await {
+                eprintln!("daemon exited: {e}");
+            }
         });
     });
 }
@@ -169,9 +189,8 @@ async fn an_ota_send_never_opens_a_second_concurrent_capture_stream() {
     spawn_daemon(cfg(19140, 19141), backend);
 
     // Let the control server bind and the receive tick open its persistent capture stream.
-    tokio::time::sleep(Duration::from_millis(400)).await;
     assert!(
-        counters.opened_total.load(Ordering::SeqCst) > 0,
+        first_capture_open(&counters).await > 0,
         "the receive tick never opened a capture stream — the test would pass vacuously, since a \
          daemon that never captures also never opens two streams"
     );
@@ -224,8 +243,7 @@ async fn the_capture_stream_is_reopened_after_a_keyed_transmit() {
 
     spawn_daemon(cfg(19142, 19143), backend);
 
-    tokio::time::sleep(Duration::from_millis(400)).await;
-    let before = counters.opened_total.load(Ordering::SeqCst);
+    let before = first_capture_open(&counters).await;
     assert!(before > 0, "the receive tick never opened a capture stream");
 
     let stream = TcpStream::connect("127.0.0.1:19142").await.unwrap();
@@ -277,8 +295,7 @@ async fn the_capture_stream_is_reopened_after_the_receive_tick_transmits() {
     c.station.auto_id_interval_secs = 1;
     spawn_daemon(c, backend);
 
-    tokio::time::sleep(Duration::from_millis(400)).await;
-    let before = counters.opened_total.load(Ordering::SeqCst);
+    let before = first_capture_open(&counters).await;
     assert!(
         before > 0,
         "the receive tick never opened a capture stream, so nothing below is a reopen"
