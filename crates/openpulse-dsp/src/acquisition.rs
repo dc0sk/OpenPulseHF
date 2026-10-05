@@ -311,6 +311,87 @@ impl IqMatchedFilter {
             })
             .collect()
     }
+
+    /// Normalised ρ for every offset in `0..=hi` (clamped), each the maximum over `freqs`.
+    ///
+    /// The profile counterpart of [`search_normalized_over_frequency`](Self::search_normalized_over_frequency),
+    /// for a caller that ranks onsets rather than taking one argmax. Offsets whose window energy is
+    /// below `min_energy_frac` of the mean read 0.0, so near-silence cannot rank on numerical noise.
+    pub fn rho_profile_over_frequency(
+        &self,
+        samples: &[f32],
+        hi: usize,
+        min_energy_frac: f32,
+        sample_rate: f32,
+        freqs: &[f32],
+    ) -> Vec<f32> {
+        let tlen = self.template.len();
+        if samples.len() < tlen || tlen == 0 || sample_rate <= 0.0 {
+            return vec![];
+        }
+        let max_offset = (samples.len() - tlen).min(hi);
+        let energies: Vec<f32> = (0..=max_offset)
+            .map(|d| samples[d..d + tlen].iter().map(|&s| s * s).sum())
+            .collect();
+        let mean = energies.iter().map(|&e| e as f64).sum::<f64>() / energies.len() as f64;
+        let floor = mean as f32 * min_energy_frac;
+        let mut profile = vec![0.0f32; max_offset + 1];
+        let mut ti = vec![0.0f32; tlen];
+        let mut tq = vec![0.0f32; tlen];
+        for &f in freqs {
+            let w = 2.0 * std::f32::consts::PI * f / sample_rate;
+            let mut t_energy = 0.0f32;
+            for m in 0..tlen {
+                let (s, c) = (w * m as f32).sin_cos();
+                ti[m] = self.template[m] * c - self.template_q[m] * s;
+                tq[m] = self.template[m] * s + self.template_q[m] * c;
+                t_energy += ti[m] * ti[m];
+            }
+            for (d, rho_max) in profile.iter_mut().enumerate() {
+                let energy = energies[d];
+                if energy < floor {
+                    continue;
+                }
+                let win = &samples[d..d + tlen];
+                let mut dot_i = 0.0f32;
+                let mut dot_q = 0.0f32;
+                for (m, &s) in win.iter().enumerate() {
+                    dot_i += s * ti[m];
+                    dot_q += s * tq[m];
+                }
+                let rho =
+                    (dot_i * dot_i + dot_q * dot_q).sqrt() / ((energy * t_energy).sqrt() + 1e-12);
+                if rho > *rho_max {
+                    *rho_max = rho;
+                }
+            }
+        }
+        profile
+    }
+}
+
+/// The offsets of the `k` highest values in `profile`, best first, no two closer than `min_sep`.
+///
+/// Greedy in descending value: an offset within `min_sep` of one already taken is the same lobe (or,
+/// for a periodic preamble, its alias) and is skipped. Zero values are never taken.
+pub fn pick_separated_peaks(profile: &[f32], k: usize, min_sep: usize) -> Vec<usize> {
+    let mut order: Vec<usize> = (0..profile.len()).filter(|&d| profile[d] > 0.0).collect();
+    order.sort_by(|&a, &b| {
+        profile[b]
+            .partial_cmp(&profile[a])
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then(a.cmp(&b))
+    });
+    let mut picked: Vec<usize> = Vec::with_capacity(k);
+    for d in order {
+        if picked.len() >= k {
+            break;
+        }
+        if picked.iter().all(|&p| p.abs_diff(d) >= min_sep) {
+            picked.push(d);
+        }
+    }
+    picked
 }
 
 /// Squared magnitude of the complex preamble correlation `|Σ r·conj(e)|²`.
@@ -448,6 +529,66 @@ mod tests {
                 (2.0 * PI * (5.0 + 20.0 * t) * t * 8.0).sin()
             })
             .collect()
+    }
+
+    /// The profile's maximum is the same (offset, ρ) the argmax search reports, at every frequency
+    /// in the grid — one definition of ρ, two readers.
+    #[test]
+    fn rho_profile_over_frequency_peaks_where_the_argmax_search_does() {
+        let template = chirp_template(256);
+        let filt = IqMatchedFilter::new(template.clone());
+        let fs = 8_000.0;
+        let mut samples: Vec<f32> = (0..1_200)
+            .map(|i| 0.1 * ((i as f32 * 12.9898).sin() * 43_758.547).fract())
+            .collect();
+        let true_offset = 413usize;
+        for (k, &t) in template.iter().enumerate() {
+            samples[true_offset + k] += t;
+        }
+        let freqs = [-3.0f32, 0.0, 3.0];
+        let bound = samples.len() - template.len();
+        let profile = filt.rho_profile_over_frequency(&samples, bound, 0.05, fs, &freqs);
+        let (argmax, peak) = profile
+            .iter()
+            .enumerate()
+            .fold((0, f32::MIN), |b, (d, &r)| if r > b.1 { (d, r) } else { b });
+        let (r, _) = filt
+            .search_normalized_over_frequency(&samples, bound, 0.05, fs, &freqs)
+            .expect("search");
+        assert_eq!(argmax, r.offset);
+        assert_eq!(argmax, true_offset);
+        assert!(
+            (peak - r.rho).abs() < 1e-5,
+            "profile {peak} vs search {}",
+            r.rho
+        );
+    }
+
+    /// Below the energy floor an offset reads zero rather than ρ of numerical noise.
+    #[test]
+    fn rho_profile_over_frequency_zeroes_silent_windows() {
+        let template = chirp_template(64);
+        let filt = IqMatchedFilter::new(template.clone());
+        let mut samples = vec![0.0f32; 400];
+        samples[300..364].copy_from_slice(&template);
+        let profile = filt.rho_profile_over_frequency(&samples, usize::MAX, 0.05, 8_000.0, &[0.0]);
+        assert_eq!(profile.len(), 400 - 64 + 1);
+        assert!(profile[..200].iter().all(|&r| r == 0.0));
+        assert!(profile[300] > 0.99);
+    }
+
+    #[test]
+    fn pick_separated_peaks_skips_values_within_the_separation() {
+        let mut p = vec![0.0f32; 100];
+        p[10] = 0.9;
+        p[12] = 0.85; // same lobe as 10
+        p[40] = 0.8;
+        p[70] = 0.7;
+        p[95] = 0.6;
+        assert_eq!(pick_separated_peaks(&p, 3, 8), vec![10, 40, 70]);
+        assert_eq!(pick_separated_peaks(&p, 10, 8), vec![10, 40, 70, 95]);
+        assert_eq!(pick_separated_peaks(&p, 2, 1), vec![10, 12]);
+        assert!(pick_separated_peaks(&[0.0; 5], 3, 1).is_empty());
     }
 
     #[test]

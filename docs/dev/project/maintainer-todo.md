@@ -2,7 +2,7 @@
 project: openpulsehf
 doc: docs/dev/project/maintainer-todo.md
 status: draft
-last_updated: 2026-10-02
+last_updated: 2026-10-05
 ---
 
 # Maintainer TODO — what only you can do
@@ -13,18 +13,36 @@ asks first within each section. Report results in chat or as a comment on the li
 
 ## Now — unblocks Release 1 work
 
-- [ ] **Run the receive-cost probe on the station Pis** (rpi51, rpi53). It decides whether the
-  onset-ranking fix ([`design/fallback-onset-ranking.md`](../design/fallback-onset-ranking.md)) blocks
-  Release 1: each decode plus the ACK's airtime must fit the sender's 9 s ACK window.
+- [ ] **Re-run the receive-cost probe on one Pi after the onset-ranking fix merges.** The first run
+  (2026-10-04, below) showed the decode leaves no margin in the 9 s ACK window at SL2, and none fits
+  with the MFSK16 ACK. The fix
+  ([`design/fallback-onset-ranking.md`](../design/fallback-onset-ranking.md)) brought x86 SL2 from
+  4.6 s to 1.8 s; this confirms it on the station:
   ```bash
   git pull   # on main
   PROBE_ENTRY_RUNGS=1 PROBE_READ=4096 cargo test --release -p openpulse-modem \
     --no-default-features --test receive_cost_scaling -- --ignored --nocapture
   ```
-  Paste the five `Sl…` lines it prints. If you know the daemon's typical read size on that Pi, use it
-  for `PROBE_READ`; 4096 is a guess.
+  Paste the five `Sl…` lines.
 
-- [ ] **Create the GitHub milestones and move the stand-in labels onto them** (decision 20; the cloud
+- [ ] **Run the key-to-audio probe on both station Pis** (work plan M2, key-to-audio gap). The IC-9700
+  SDR captures suggest ~1.3 s of dead air between PTT and the first sample on every keyed turn; the
+  modulator is ruled out (≤ 26 ms), so this times the audio device path. It writes **silence**, so
+  nothing is radiated even with VOX on; PTT is not touched. Use the output device name the daemon is
+  configured with:
+  ```bash
+  git fetch origin claude/affectionate-brahmagupta-sdn8qg && git checkout FETCH_HEAD
+  PROBE_DEVICE='<daemon output device>' cargo test --release -p openpulse-audio \
+    --features cpal-backend --lib key_to_audio -- --ignored --nocapture
+  ```
+  Paste the five `run …` lines from each Pi. If enumeration or `open_output` is most of it, the fix
+  is opening the stream before keying (a PTT-timing change, so a design review first).
+
+- [x] **Run the receive-cost probe on the station Pis** (done 2026-10-04, `PROBE_READ=4096`). Decode
+  per frame, rpi53 / rpi51: SL6 3.21 / 3.32 s, SL5 5.19 / 5.45 s, SL4 5.56 / 5.76 s, SL3 5.90 /
+  6.12 s, SL2 7.04 / 7.26 s. All five decoded.
+
+- [x] **Create the GitHub milestones and move the stand-in labels onto them** (done 2026-10-04) (decision 20; the cloud
   session cannot create milestones). From a checkout with `gh` logged in:
   ```bash
   R=dc0sk/OpenPulseHF

@@ -1,8 +1,8 @@
 ---
 project: openpulsehf
 doc: docs/dev/design/fallback-onset-ranking.md
-status: review
-last_updated: 2026-10-02
+status: resolved
+last_updated: 2026-10-05
 ---
 
 # Rank the uncoded fallback's onsets by preamble correlation
@@ -46,7 +46,7 @@ that scan exhausted every onset instead (`engine.rs`, the comment above the onse
 decode-driven and exhaustive, so whichever runs first pays its full cost on the other class of
 traffic.** Reordering moves the cost; it does not remove it.
 
-## Decision (proposed, revised after review)
+## Decision (revised after review; implemented 2026-10-04)
 
 New order in `ota_decode_and_ack_inner` when the fallback mode has a preamble template:
 
@@ -97,6 +97,44 @@ Properties:
   claimed.
 - **Acquisition-chain change.** Per CLAUDE.md, `scripts/slow-tests.sh` runs before merge: notch
   REQ-QRM-01, OTA CAP-33 and the spectral decode counts.
+
+## As implemented (2026-10-04)
+
+The decision above, with these choices and measurements. Ledger:
+`docs/dev/project/traceability.md`, 2026-10-04.
+
+- **Station numbers that made it a Release 1 blocker** (`receive_cost_scaling`, release,
+  `PROBE_READ=4096`, rpi53/rpi51): SL6 3.2/3.3 s, SL5 5.2/5.5 s, SL4 5.6/5.8 s, SL3 5.9/6.1 s, SL2
+  7.0/7.3 s per decode. With the 0.52 s FSK4 ACK, SL2 left ≈1.2 s of the 9 s window; with the ≈5 s
+  MFSK16 ACK no rung fitted.
+- **K = 4** (`FALLBACK_RANKED_ONSETS`). Measured by `fallback_onset_rank_measurement`: 226 decodable
+  uncoded BPSK250 frames inside real idle recordings (250 Hz, 500 Hz, hot), leads to 11 264 samples,
+  flat and Watterson `moderate_f1`, 12 dB down through the decode cliff to −6 dB. Every one ranked
+  first. K stays above the measured 1 for what the measurement could not cover: **no real on-air
+  frame** (the corpus's frame captures predate #1148 and #1062 and decode against nothing current;
+  UNCHECKED until the re-record) and no residual carrier offset. The miss counter and its `warn!` are
+  how K is checked on air.
+- **Grid:** the settled correction and one step either side, the step from `preamble_grid_step` (the
+  quarter-cycle step `preamble_search_plan` uses). **Attempt start:** a quarter symbol before the
+  peak, because the demodulator's timing search reaches further forward than back.
+- **Separation: one preamble span, not one symbol** (changed after review). The preamble's symbols
+  run `++--` and ρ is a magnitude, so the copies two and four symbols off the true peak score about
+  0.94 and 0.87 of it; with a one-symbol separation they filled ranks 1–3 with the same frame. Two
+  real frames cannot start closer than a preamble.
+- **Attempt order: time, not ρ** (changed after review). A keying of several frames (#1461) carries
+  one identical preamble per frame, so a later frame can outrank the first; decoding it first handed
+  out the frames after it and lost the ones before. Pinned by
+  `the_first_of_two_frames_in_one_keying_is_not_lost`, which fails in ρ order (`FRAG B` delivered,
+  `FRAG A` lost). The counter still records the correlation rank.
+- **On air:** a decode at rank ≥ 1 logs at `info`, a miss at `warn`, so a K that is too small shows
+  before it misses. The counter itself is an instrument; moving it into the daemon's diagnostics is
+  parked, as are templates for the slow BPSK modes: **only BPSK250, the default `[modem] mode`, gets
+  this fix**; a station configured for BPSK31/63/100 keeps the exhaustive scan.
+- **Cost** (x86, release, `PROBE_READ=4096`): SL6 2.17 → 0.19 s, SL5 3.69 → 0.86 s, SL4 3.77 →
+  0.95 s, SL3 3.95 → 1.15 s, SL2 4.61 → 1.84 s per decode, within noise of removing the fallback
+  outright. The correlation itself is not visible at this resolution.
+- **A ranking miss, measured by sabotage** (K forced to 0): the frame still decodes, through the
+  deferred exhaustive scan after the coded scan; in a debug build that took 12.8 s against 2.4 s.
 
 ## Consumer
 

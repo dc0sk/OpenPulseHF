@@ -1,7 +1,7 @@
 //! The core [`ModemEngine`] struct.
 
 use openpulse_audio::tanh_limit;
-use openpulse_dsp::acquisition::{DdcMatchedFilter, IqMatchedFilter};
+use openpulse_dsp::acquisition::{pick_separated_peaks, DdcMatchedFilter, IqMatchedFilter};
 use rand::Rng;
 use std::time::{Duration, Instant};
 use tokio::sync::broadcast;
@@ -333,6 +333,15 @@ const AFC_SETTLE_DEADBAND_HZ: f32 = 2.0;
 /// Derived from the cost that forced it, not tuned: at every onset, the pass turned a Watterson
 /// fading test from minutes into 98+ minutes without finishing.
 const PHASE2_STEP_MULTIPLIER: usize = 4;
+
+/// How many correlation-ranked onsets the #1123 uncoded fallback tries before the coded onset scan
+/// (`docs/dev/design/fallback-onset-ranking.md`).
+///
+/// A ranking miss is not a loss: the exhaustive fallback still runs after the coded scan fails, so K
+/// trades only the delay of a control frame whose onset ranked below K against the cost every coded
+/// burst pays. Measured: every decodable frame in `fallback_onset_rank_measurement` ranked first;
+/// 4 keeps margin for real on-air frames and residual carrier offset, which it could not cover.
+const FALLBACK_RANKED_ONSETS: usize = 4;
 
 /// Maximum AFC correction magnitude accepted after settling.
 ///
@@ -922,6 +931,10 @@ pub struct ModemEngine {
     /// no template. Only the accept count separates "the gate passed this input" from "the gate
     /// never saw it" — which is exactly what a test feeding deliberate interference must know.
     rho_accepted_settles: u64,
+    /// Decodes of the #1123 fallback by onset rank: index `r < K` counts a decode at the rank-`r`
+    /// correlation onset, index `K` a ranking miss the exhaustive fallback recovered after the coded
+    /// scan. The miss column is how K is re-checked on air.
+    fallback_onset_ranks: [u64; FALLBACK_RANKED_ONSETS + 1],
     /// Receiver-side streaming AGC on captured audio (default off). Normalises the level so the
     /// PSK/QAM ladder sees a consistent amplitude despite QSB fading and inter-station spread.
     /// Active-span gated: the gain only adapts on carrier-present blocks (RMS ≥ DCD threshold) and
@@ -1148,6 +1161,7 @@ impl ModemEngine {
             settle_failure_limit: None,
             rho_rejected_settles: 0,
             rho_accepted_settles: 0,
+            fallback_onset_ranks: [0; FALLBACK_RANKED_ONSETS + 1],
             agc_enabled: false,
             // target RMS 0.3 (headroom below ±1.0), slow loop (α=0.02), ±40 dB clamp.
             agc: openpulse_dsp::agc::Agc::new(0.3, 0.02, 40.0),
@@ -1309,6 +1323,13 @@ impl ModemEngine {
     #[cfg(feature = "instruments")]
     pub fn rho_accepted_settles(&self) -> u64 {
         self.rho_accepted_settles
+    }
+
+    /// #1123 fallback decodes by correlation rank; the last entry counts ranking misses. See the
+    /// field docs.
+    #[cfg(feature = "instruments")]
+    pub fn fallback_onset_ranks(&self) -> [u64; FALLBACK_RANKED_ONSETS + 1] {
+        self.fallback_onset_ranks
     }
 
     /// Tripwire count of capture blocks the DCD carrier detector processed at the seam. DCD runs on the
@@ -2991,6 +3012,102 @@ impl ModemEngine {
         result
     }
 
+    /// The burst's likeliest frame onsets for `mode`, best first, ranked by preamble correlation
+    /// (`docs/dev/design/fallback-onset-ranking.md`).
+    ///
+    /// `None` when the mode has no passband template or the burst is shorter than a frame; the
+    /// caller then keeps the exhaustive scan, bit for bit. Ranks, never thresholds: the veto's ρ
+    /// constants and the runtime calibration are not consulted and not fed. The grid is the settled
+    /// correction and one step either side, because phase 1 decodes at that single correction.
+    fn ranked_fallback_onsets(
+        &self,
+        mode: &str,
+        samples: &[f32],
+        onset_bound: usize,
+        k: usize,
+    ) -> Option<Vec<usize>> {
+        let sr = AudioConfig::default().sample_rate;
+        let (_, _, min_frame_samples, _) = self.frame_scan_geometry(mode, sr);
+        if samples.len() < min_frame_samples {
+            return None;
+        }
+        let veto = self.build_preamble_veto(mode, sr)?;
+        let VetoCorrelator::Passband(filter) = &veto.filter else {
+            return None;
+        };
+        let (_, scan_end, _) = self.burst_onset_scan_bounds(mode, samples.len(), onset_bound);
+        let df = Self::preamble_grid_step(&veto);
+        let c = self.afc_correction_hz;
+        let profile = filter.rho_profile_over_frequency(
+            samples,
+            scan_end,
+            0.05,
+            sr as f32,
+            &[c - df, c, c + df],
+        );
+        // At least a preamble apart. The preamble's symbols run `++--`, period four, and ρ is a
+        // magnitude, so the copies two and four symbols off the true peak score ~0.94 and ~0.87 of
+        // it: a one-symbol separation filled the ranks below the first with the same frame. Two
+        // real frames cannot start closer than a preamble, so this costs no genuine hypothesis.
+        Some(pick_separated_peaks(&profile, k, veto.filter.input_span()))
+    }
+
+    /// The top `k` ranked onsets for `mode` over `samples`, as the OTA fallback computes them.
+    /// Exists to be measured (`fallback_onset_rank_measurement`); `k` may exceed the shipped K.
+    #[cfg(feature = "instruments")]
+    pub fn fallback_onset_ranking(
+        &self,
+        mode: &str,
+        samples: &[f32],
+        onset_bound: usize,
+        k: usize,
+    ) -> Option<Vec<usize>> {
+        self.ranked_fallback_onsets(mode, samples, onset_bound, k)
+    }
+
+    /// Uncoded decode attempts at the ranked `onsets`, EARLIEST FIRST. Returns the payload, the
+    /// onset and its correlation rank (its index in `onsets`).
+    ///
+    /// Time order, not ρ order: a keying of several frames (#1461) has one identical preamble per
+    /// frame, so a later frame can outrank the first, and decoding it first hands out the frames
+    /// after it and loses the ones before (`the_first_of_two_frames_in_one_keying_is_not_lost`).
+    /// The exhaustive scan this replaces walked forward too.
+    ///
+    /// Same discipline as [`Self::scan_burst_onsets`]: AFC restored after every failed attempt, the
+    /// estimate updated on the winning slice. Each attempt starts a quarter symbol early, because the
+    /// demodulator's timing search reaches further forward than back.
+    fn decode_at_ranked_onsets(
+        &mut self,
+        mode: &str,
+        samples: &[f32],
+        onsets: &[usize],
+    ) -> Option<(Vec<u8>, usize, usize)> {
+        let sr = AudioConfig::default().sample_rate;
+        let (step, _, _, max_frame_samples) = self.frame_scan_geometry(mode, sr);
+        let afc_before = self.afc_correction_hz;
+        let mut by_time: Vec<(usize, usize)> = onsets.iter().copied().enumerate().collect();
+        by_time.sort_by_key(|&(_, onset)| onset);
+        for (rank, onset) in by_time {
+            let start = onset.saturating_sub(step / 4);
+            let end = (start + max_frame_samples).min(samples.len());
+            let slice = samples[start..end].to_vec();
+            match self.decode_attempt(
+                mode,
+                AudioSamples {
+                    samples: slice.clone(),
+                },
+                FecMode::None,
+            ) {
+                Ok(payload) => {
+                    self.update_afc_estimate(mode, &slice);
+                    return Some((payload, start, rank));
+                }
+                Err(_) => self.afc_correction_hz = afc_before,
+            }
+        }
+        None
+    }
+
     fn decode_burst_inner(
         &mut self,
         mode: &str,
@@ -3323,6 +3440,25 @@ impl ModemEngine {
         result
     }
 
+    /// The early return for a #1123 fallback decode: non-ladder traffic, so no ACK and no controller
+    /// update. A multi-fragment keying arrives as one burst (#1461); the rest is handed out too.
+    fn fallback_decoded(
+        &mut self,
+        mode: &str,
+        samples: &AudioSamples,
+        payload: Vec<u8>,
+        onset: usize,
+        last_err: Option<ModemError>,
+    ) -> OtaDecodeOutcome {
+        debug!(
+            "ota fallback decoded {} bytes of non-ladder traffic at {mode}",
+            payload.len()
+        );
+        self.ota_fallback_more =
+            self.decode_following_frames(mode, FecMode::None, &samples.samples, onset, &payload);
+        (Some((payload, mode.to_string())), None, last_err)
+    }
+
     fn ota_decode_and_ack_inner(
         &mut self,
         samples: &AudioSamples,
@@ -3426,31 +3562,51 @@ impl ModemEngine {
         // and run the controller update, and a frame that is not ladder traffic must do neither. The
         // `AckFrame` is `None` for the same reason — there is nothing to acknowledge, and the daemon
         // must not key the transmitter for it.
+        //
+        // RANKED, then exhaustive (`docs/dev/design/fallback-onset-ranking.md`). The exhaustive scan
+        // here ran ~128–400 full-slice decodes on EVERY coded ladder burst, which can never decode
+        // uncoded: measured 2026-10-04 at 4 096-sample reads, 77–91 % of the daemon's decode time
+        // (x86 SL6 2.17 s → 0.19 s without it; the station Pis 3.2–7.3 s per frame against a 9 s
+        // ACK window). So a mode with a preamble template tries only its best-correlating onsets
+        // here, and the exhaustive scan waits until the coded scan below has also failed. A control
+        // frame whose onset ranked below K is therefore delayed, never lost; the miss is counted.
+        // A mode without a template keeps the exhaustive scan here, bit for bit.
+        let mut fallback_deferred: Option<&str> = None;
         if decoded.is_none() {
             if let Some(mode) = fallback_mode.filter(|m| !fallback_is_a_candidate(&candidates, m)) {
                 // Same isolation every candidate gets: a failed attempt's AFC drift must not
                 // poison this one.
                 self.afc_correction_hz = afc_before;
-                // PHASE 1 ONLY here (#1118). `decode_burst` runs its own acquisition pass when its
-                // scan fails, and on a coded ladder burst that pass is pure cost: an RS frame will
-                // never decode uncoded, at any frequency. Measured before this split: an
-                // on-frequency coded burst spent 129 settles inside this fallback and changed no
-                // verdict. The fallback mode gets its acquisition pass with every other candidate,
-                // in the single phase-2 block below.
-                if let Ok((payload, onset)) = self.decode_burst_phase1(mode, samples, onset_bound) {
-                    debug!(
-                        "ota fallback decoded {} bytes of non-ladder traffic at {mode}",
-                        payload.len()
-                    );
-                    // A multi-fragment keying arrives as one burst (#1461); hand the rest out too.
-                    self.ota_fallback_more = self.decode_following_frames(
-                        mode,
-                        FecMode::None,
-                        &samples.samples,
-                        onset,
-                        &payload,
-                    );
-                    return Ok((Some((payload, mode.to_string())), None, last_err));
+                let found = match self.ranked_fallback_onsets(
+                    mode,
+                    &samples.samples,
+                    onset_bound,
+                    FALLBACK_RANKED_ONSETS,
+                ) {
+                    Some(onsets) => {
+                        let hit = self.decode_at_ranked_onsets(mode, &samples.samples, &onsets);
+                        if let Some((_, _, rank)) = &hit {
+                            self.fallback_onset_ranks[*rank] += 1;
+                            // Info, not debug, above rank 0: on air this is how a K that is too
+                            // small shows up before it starts missing.
+                            if *rank > 0 {
+                                info!("ota fallback decoded at correlation rank {rank}");
+                            }
+                        } else {
+                            fallback_deferred = Some(mode);
+                        }
+                        hit.map(|(payload, onset, _)| (payload, onset))
+                    }
+                    // PHASE 1 ONLY here (#1118). `decode_burst` runs its own acquisition pass when
+                    // its scan fails, and on a coded ladder burst that pass is pure cost: an RS
+                    // frame will never decode uncoded, at any frequency. Measured before this
+                    // split: an on-frequency coded burst spent 129 settles inside this fallback and
+                    // changed no verdict. The fallback mode gets its acquisition pass with every
+                    // other candidate, in the single phase-2 block below.
+                    None => self.decode_burst_phase1(mode, samples, onset_bound).ok(),
+                };
+                if let Some((payload, onset)) = found {
+                    return Ok(self.fallback_decoded(mode, samples, payload, onset, last_err));
                 }
                 self.afc_correction_hz = afc_before;
             }
@@ -3474,7 +3630,9 @@ impl ModemEngine {
         // `twin_daemon_bridge::a_file_crosses_the_bridge_with_ota_enabled`. Appending the scan is
         // also the genuinely ADDITIVE change: the pre-#1138 order was candidates@0 → fallback →
         // HARQ, and this adds a stage rather than inserting ~129 attempts ahead of traffic that
-        // decodes immediately.
+        // decodes immediately. Since the onset ranking the fallback ahead of this scan is K ranked
+        // attempts, and its exhaustive scan follows this one: a control frame keeps its fast path
+        // unless its onset ranked below K, and a coded burst no longer pays the exhaustive scan.
         //
         // Placed BEFORE HARQ for the same reason the fallback is: HARQ retains this burst's LLRs on
         // failure, and a scan running after it would have nothing to undo but would delay retention.
@@ -3533,6 +3691,25 @@ impl ModemEngine {
             } else {
                 afc_before
             };
+        }
+
+        // The exhaustive fallback the ranking deferred: reached only by a burst that no ranked
+        // onset, no rung at offset 0 and no rung at any scanned onset decoded. Before phase 2 and
+        // HARQ for the reasons the ranked attempt above sits before them.
+        if decoded.is_none() {
+            if let Some(mode) = fallback_deferred {
+                self.afc_correction_hz = afc_before;
+                if let Ok((payload, onset)) = self.decode_burst_phase1(mode, samples, onset_bound) {
+                    self.fallback_onset_ranks[FALLBACK_RANKED_ONSETS] += 1;
+                    warn!(
+                        "ota fallback: a {mode} frame at onset {onset} ranked below the top \
+                         {FALLBACK_RANKED_ONSETS} correlation peaks and was recovered only by the \
+                         exhaustive scan"
+                    );
+                    return Ok(self.fallback_decoded(mode, samples, payload, onset, last_err));
+                }
+                self.afc_correction_hz = afc_before;
+            }
         }
 
         // PHASE 2 — the same candidate scan, acquiring the carrier at each onset (#1118,
@@ -8026,6 +8203,17 @@ impl ModemEngine {
         }
     }
 
+    /// The residual-frequency grid step for `veto`'s template: a quarter of its coherent bandwidth.
+    ///
+    /// The 0.5 Hz floor bounds the hypothesis count for long templates. It does not bind for any
+    /// passband mode (BPSK250 steps at 2.016 Hz) and DOES bind for a BPSK31-length template
+    /// (0.256 Hz), leaving a worst case of |sinc(0.25)| = 0.900 — exactly the quarter-cycle
+    /// criterion this derivation is built on, so the floor is kept rather than removed.
+    fn preamble_grid_step(veto: &PreambleVeto) -> f32 {
+        let fs = AudioConfig::default().sample_rate as f32;
+        (0.25 * fs / veto.filter.input_span() as f32).max(0.5)
+    }
+
     /// The residual-frequency grid and timing bound for the correlation check.
     ///
     /// The grid step is derived from the template's own coherent bandwidth rather than fixed. A
@@ -8051,12 +8239,7 @@ impl ModemEngine {
         if window.len() <= tlen {
             return None;
         }
-        let fs = AudioConfig::default().sample_rate as f32;
-        // The 0.5 Hz floor bounds the hypothesis count for long templates. It does not bind for any
-        // passband mode (BPSK250 steps at 2.016 Hz) and DOES bind for a BPSK31-length template
-        // (0.256 Hz), leaving a worst case of |sinc(0.25)| = 0.900 — exactly the quarter-cycle
-        // criterion this derivation is built on, so the floor is kept rather than removed.
-        let step = (0.25 * fs / veto.filter.input_span() as f32).max(0.5);
+        let step = Self::preamble_grid_step(veto);
         let n = (veto.rho_grid_hz / step).round() as i32;
         let freqs: Vec<f32> = (-n..=n).map(|k| settled_hz + k as f32 * step).collect();
         // The search bound is whatever timing slack the window leaves past the template — about two

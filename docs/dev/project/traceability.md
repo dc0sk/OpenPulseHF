@@ -15,6 +15,68 @@ this ledger adds the design rationale and the actually-observed results per chan
 
 ---
 
+## 2026-10-04 — The uncoded fallback tries ranked onsets first (receive cost, work plan M2)
+
+**Change.** Every coded ladder burst paid the #1123 uncoded fallback's exhaustive onset scan (~128–400
+full-slice decodes that cannot succeed) before the coded scan found it. The station Pis measured
+3.2–7.3 s per decode (rpi53/rpi51, release, `PROBE_READ=4096`) against the ISS's 9 s ACK window:
+with the 0.52 s FSK4 ACK, SL2 left ≈1.2 s for flush, PTT and key-up, and with the ≈5 s MFSK16 ACK no
+rung fitted. On x86 at the same read size the fallback was 77–91 % of the decode.
+
+**Design** (`docs/dev/design/fallback-onset-ranking.md`, reviewed 2026-10-02). When the fallback mode
+publishes a passband preamble template (BPSK250, the default `[modem] mode`): rank the burst's onsets
+by preamble ρ (max over the settled correction ±1 grid step), take the top K at least one symbol apart,
+try the uncoded decode there; then the coded onset scan; then, only if that also failed, the
+exhaustive fallback. A control frame whose onset ranks below K is delayed, never lost. Ranks, not
+thresholds: the veto's ρ constants and the runtime calibration are neither read nor fed. A mode without
+a template keeps today's order and scan.
+
+**Implementation.**
+- `crates/openpulse-dsp/src/acquisition.rs`: `IqMatchedFilter::rho_profile_over_frequency`,
+  `pick_separated_peaks`.
+- `crates/openpulse-modem/src/engine.rs`: `FALLBACK_RANKED_ONSETS` (K = 4), `ranked_fallback_onsets`,
+  `decode_at_ranked_onsets`, `fallback_decoded`, the reorder in `ota_decode_and_ack_inner`;
+  `preamble_grid_step` extracted from `preamble_search_plan`; counter `fallback_onset_ranks`
+  (instrument `fallback_onset_ranks()`) and a `warn!` on a ranking miss, so K is checkable on air.
+
+**K, measured** (`fallback_onset_rank_measurement::measure_fallback_onset_ranks`, release, 24 trials per
+row): uncoded BPSK250 frames of 8–207 B inside REAL idle recordings (IC-9700 250 Hz, 500 Hz and hot
+captures; the idle runs under the frame), leads 0–11 264 samples, `onset_bound` 12 288, flat and
+Watterson `moderate_f1`, 12 dB down to −6 dB signal-to-idle, through the decode cliff. Of the 226
+frames that decoded when handed their own onset, **all 226 ranked first** (±16 samples). Re-run
+after review with a preamble-span separation and at `onset_bound` 12 288 and 49 152 (the range after a
+slow decode lengthens the read): **all 449 decodable frames ranked first**. K = 4 keeps three ranks of
+margin for what this could not cover: no real on-air frame (the corpus's frame captures predate #1148
+and #1062 and decode against nothing current) and no residual carrier offset.
+
+**Adversarial review** (Fable, 2026-10-04): does not block Release 1. Fixed here: ranked attempts ran
+in ρ order, so in a keying of two control frames (#1461) a better-correlating second frame was decoded
+first and the first was lost — now earliest first, pinned by
+`the_first_of_two_frames_in_one_keying_is_not_lost` (sabotage, sort removed: `FRAG B` delivered,
+`FRAG A` lost); a one-symbol separation let the `++--` preamble's own shifted copies fill ranks 1–3 —
+now a preamble span; a rank ≥ 1 decode logs at `info`. Parked in the work plan: K on a re-recorded
+on-air frame and under a tone at fc ± baud/4, the counter in daemon diagnostics, templates for the
+slow BPSK modes (only BPSK250, the default `[modem] mode`, gets this fix).
+
+**Cost, measured** (`receive_cost_scaling`, x86, release, `PROBE_READ=4096`, decode per frame):
+SL6 2.17 → 0.19 s, SL5 3.69 → 0.86 s, SL4 3.77 → 0.95 s, SL3 3.95 → 1.15 s, SL2 4.61 → 1.84 s, within
+noise of the fallback removed outright (0.19 / 0.82 / 0.95 / 1.14 / 1.85 s). Pi numbers after the
+change: pending (maintainer TODO).
+
+**Tests → results:**
+- `openpulse-dsp` `acquisition` unit tests: the profile peaks where the argmax search does, at the
+  same ρ; silent windows read 0; the peak picker keeps its separation. 15 passed.
+- `fallback_onset_rank_measurement::a_control_frame_in_a_real_ring_decodes_at_rank_zero` (default
+  run): an uncoded frame in the 250 Hz idle, through `accumulate_capture` → `ota_decode_burst` in
+  4 096-sample reads, decodes with no ACK and moves exactly the rank-0 counter. Sabotage (K forced to
+  0): fails with `[0, 0, 0, 0, 0] -> [0, 0, 0, 0, 1]` — the frame still decodes, through the deferred
+  exhaustive scan, which is the "delayed, not lost" property.
+- `a_frame_behind_a_long_real_lead_ranks_first` (leads 0, 2 731, 9 000): passes.
+- The fallback suites (`ota_arm_uncoded_dispatch`, `off_frequency_fallback_is_not_ladder`,
+  `coded_arm_scans_onset`, `burst_carries_several_frames`, `daemon_frequency_acquisition`,
+  `free_rs_strengthening_ota`): 18 passed.
+- `scripts/gate.sh` and `scripts/slow-tests.sh`: see the PR.
+
 ## 2026-10-04 — The file assembler skips a packed block that does not decompress (REQ-CMP-05, twin of #1477)
 
 **Change.** #1477 made the daemon rx tick drop a frame that carries the `OPZ1` pack magic but fails
