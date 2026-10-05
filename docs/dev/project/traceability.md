@@ -15,6 +15,33 @@ this ledger adds the design rationale and the actually-observed results per chan
 
 ---
 
+## 2026-10-05 — #1062 PN-63 preamble: design reviewed; F0, F1 and F1c (x86) measured (decision 22, work plan M2)
+
+**Change.** Decision 22 moves #1062 into Release 1. Design `docs/dev/design/pn-preamble.md`
+(revision 2 after the mandatory wire-format review, `docs/dev/reviews/review-pn-preamble-design.md`):
+the BPSK rungs' 32-symbol `--++` preamble becomes the PN-63 m-sequence (x⁶ + x + 1) as symbols, at
+each rung's baud. Not yet the wire change: this records the candidate and the falsifiers run on it.
+
+**Implementation (measurement apparatus).** `bpsk-plugin` feature `pn-candidate` (dev-only):
+`BPSK31/63/100/250-PN` modes transmit the candidate via the NRZI pre-image; every production demod
+site reads the preamble from the mode (`preamble_syms_for`, `preamble_bits_for`,
+`expected_preamble_for`); the coarse AFC window is the named constant `AFC_WINDOW_SYMS = 128`
+(unchanged value). Shipped modes are byte-identical. `qpsk-plugin::qpsk_modulate_with_preamble`
+(vetting seam). Harnesses: `pn_preamble_parity` (F1), `f14_qpsk_preamble_length_and_the_noise_ceiling`
+(F0), `receive_cost_scaling` `PROBE_PN` (F1c).
+
+**Tests → results.**
+- Plugin: the candidate transmits the m-sequence as symbols; every `-PN` rung round-trips, 31 symbols
+  longer; shipped modes keep the alternating run. 3 passed. Modem suite with the feature on: 611
+  passed, 0 failed.
+- **F0 (QPSK):** 64-symbol noise ceiling SSB 0.158, 500 Hz 0.334 against the pre-registered ≤ 0.23 in
+  both → **QPSK stays out**. Positive control missed (0.332 vs #1059's 0.293); the verdict survives
+  correcting for it (0.295 > 0.23).
+- **F1 (BPSK250, n = 600 paired, δ = 0.03):** PASS on all five columns; PN − shipped at the SL5 floor
+  +0.033 [+0.010, +0.056], 8 dB +0.015 [−0.004, +0.034], ±50 Hz +0.037 / +0.030, AWGN cliff +0.027
+  [+0.005, +0.049]. The cliff SNR (−5 dB) was fixed from a shipped-arm pilot before the main run.
+- **F1c (x86):** decode SL2 1.79 → 3.08 s, SL5 0.83 → 0.94 s. The Pi half of the rule is pending.
+
 ## 2026-10-04 — The uncoded fallback tries ranked onsets first (receive cost, work plan M2)
 
 **Change.** Every coded ladder burst paid the #1123 uncoded fallback's exhaustive onset scan (~128–400

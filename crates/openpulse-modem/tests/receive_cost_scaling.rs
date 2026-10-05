@@ -8,6 +8,7 @@
 //! Run on the station computer, release build:
 //! `PROBE_ENTRY_RUNGS=1 cargo test --release -p openpulse-modem --no-default-features \
 //!  --test receive_cost_scaling -- --ignored --nocapture`.
+//! `PROBE_PN=1` runs the BPSK rungs on the #1062 PN-63 candidate (design row F1c).
 //! `PROBE_NO_FALLBACK=1` removes the #1123 uncoded fallback scan, to show its share of the cost.
 //! Measured 2026-10-02 (x86 container, release, fallback `BPSK250` as the daemon passes it): decode
 //! 0.85 s (SL6) to 1.72 s (SL2) per frame; SL2 without the fallback scan 0.77 s.
@@ -27,6 +28,26 @@ fn read_size() -> usize {
         .unwrap_or(400)
 }
 
+/// The ladder under test: `fast`, or with `PROBE_PN` its BPSK rungs as the #1062 PN-63 candidate
+/// (`-PN` modes, design row F1c). Same FEC and floors either way.
+fn profile() -> SessionProfile {
+    if std::env::var_os("PROBE_PN").is_none() {
+        return SessionProfile::fast();
+    }
+    let fast = SessionProfile::fast();
+    let rungs: Vec<_> = [
+        (SpeedLevel::Sl2, "BPSK31-PN"),
+        (SpeedLevel::Sl3, "BPSK63-PN"),
+        (SpeedLevel::Sl4, "BPSK100-PN"),
+        (SpeedLevel::Sl5, "BPSK250-PN"),
+        (SpeedLevel::Sl6, "QPSK250-D"),
+    ]
+    .into_iter()
+    .map(|(l, m)| (l, m, fast.fec_for(l), None, None))
+    .collect();
+    SessionProfile::from_rungs(&rungs, SpeedLevel::Sl2, 3)
+}
+
 fn engine(backend: &LoopbackBackend, level: SpeedLevel) -> ModemEngine {
     let mut e = ModemEngine::new(Box::new(backend.clone_shared()));
     e.register_plugin(Box::new(bpsk_plugin::BpskPlugin::new()))
@@ -39,13 +60,13 @@ fn engine(backend: &LoopbackBackend, level: SpeedLevel) -> ModemEngine {
         .unwrap();
     e.register_plugin(Box::new(mfsk16_plugin::Mfsk16Plugin::new()))
         .unwrap();
-    e.start_ota_session(SessionProfile::fast());
+    e.start_ota_session(profile());
     e.ota_lock_level(level);
     e
 }
 
 fn probe(level: SpeedLevel, payload: usize) {
-    let profile = SessionProfile::fast();
+    let profile = profile();
     let mode = profile.mode_for(level).unwrap();
     let fec = profile.fec_for(level);
 

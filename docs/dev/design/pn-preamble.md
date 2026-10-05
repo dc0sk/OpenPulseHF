@@ -160,6 +160,47 @@ parity (timing, AFC, decode at n = 96), and a random balanced sequence with 23 t
 AFC at BPSK31 (unexplained; a hypothesis, 2026-08-04). x⁶ + x + 1 has 32 runs, so 31 transitions in
 63 (density 0.49, against 0.47 shipped and 0.50 for PN-31), which passed. Supporting, not sufficient.
 
+## Results so far (2026-10-05)
+
+**F0 — QPSK stays out.** `f14_qpsk_preamble_length_and_the_noise_ceiling`, release, 5 seeds × 15 s:
+
+| band | 16 symbols (shipped) | 64 symbols (PN-63 pairs) |
+|---|---|---|
+| white | 0.257 | 0.124 |
+| SSB 300–2700 | 0.332 | 0.158 |
+| 500 Hz | 0.614 | 0.334 |
+| 200 Hz | 0.797 | 0.414 |
+
+Rule: 64-symbol ≤ 0.23 in SSB **and** 500 Hz → SSB passes, 500 Hz fails (0.334): **FAIL, QPSK stays
+out of this break.** The positive control **missed**: the 16-symbol SSB cell read 0.332 against
+#1059's 0.293 (tolerance 0.03), most likely because this run's grid (±20 Hz, 11 hypotheses) is wider
+than the withdrawn QPSK template's (not recorded); more hypotheses raise the noise maximum. The
+verdict survives the miss: scaling every cell by the control's ×1.13 overestimate leaves the 500 Hz
+cell at 0.295 > 0.23. The ratio (×0.48–0.54 for 4× the duration, every band) matches the 1/√T law.
+
+**F1 — PASS on every column; PN-63 is better than `--++` on four of five.**
+`pn_preamble_parity::f1_bpsk250_pn63_against_the_shipped_preamble`, release, n = 600 paired, δ = 0.03,
+through `accumulate_capture` → `ota_decode_burst` in 4 096-sample reads, lead 8–9 reads of noise:
+
+| column | shipped | PN-63 | PN − shipped, 95 % CI | |
+|---|---|---|---|---|
+| `moderate_f1` 5 dB (SL5 floor) | 507 | 527 | +0.033 [+0.010, +0.056] | PASS |
+| `moderate_f1` 8 dB | 558 | 567 | +0.015 [−0.004, +0.034] | PASS |
+| `moderate_f1` 8 dB, +50 Hz | 537 | 559 | +0.037 [+0.015, +0.058] | PASS |
+| `moderate_f1` 8 dB, −50 Hz | 543 | 561 | +0.030 [+0.007, +0.053] | PASS |
+| AWGN −5 dB (the cliff) | 534 | 550 | +0.027 [+0.005, +0.049] | PASS |
+
+SNR here is frame power over full-band noise (8 kHz), not the ladder table's convention, so the
+absolute rates do not compare with `mode-fec-ladder.md`; the paired difference is the measurement.
+Positive control: `both_arms_deliver_a_clean_frame` (default run).
+
+**F1c, x86 half** (`receive_cost_scaling`, release, `PROBE_READ=4096`, `PROBE_PN=1` for the
+candidate), decode per frame: SL5 0.83 → 0.94 s (+14 %), SL4 0.92 → 1.27 s (+38 %), SL3 1.14 →
+1.76 s (+54 %), SL2 1.79 → 3.08 s (+72 %). At the Pis' measured ×1.5 that projects SL2 to ≈ 4.7 s,
+inside the rule (decode + 0.52 s FSK4 ACK + 1 s ≤ 9 s), but **the rule is on the Pis, pending**.
+With the ≈ 5.9 s MFSK16 ACK SL2 would not fit (it barely fits today at ≈ 2.7 + 5.9 s); the MFSK16
+ACK follows only an SL1 recommendation, which this rule did not cover — noted, not re-scoped.
+
 ## Cost
 
 - Airtime +1.49 % on the rungs that take it.

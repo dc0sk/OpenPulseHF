@@ -25,6 +25,18 @@ asks first within each section. Report results in chat or as a comment on the li
   ```
   Paste the five `Sl…` lines.
 
+- [ ] **Run the receive-cost probe with the PN-63 candidate on both station Pis** (#1062 design,
+  row F1c). Decides whether the slow rungs can take the longer preamble: the rule is Pi SL2 decode
+  + 0.52 s + 1 s ≤ 9 s. x86 went 1.79 → 3.08 s at SL2.
+  ```bash
+  git fetch origin claude/affectionate-brahmagupta-sdn8qg && git checkout FETCH_HEAD
+  PROBE_ENTRY_RUNGS=1 PROBE_READ=4096 cargo test --release -p openpulse-modem \
+    --no-default-features --test receive_cost_scaling -- --ignored --nocapture
+  PROBE_PN=1 PROBE_ENTRY_RUNGS=1 PROBE_READ=4096 cargo test --release -p openpulse-modem \
+    --no-default-features --test receive_cost_scaling -- --ignored --nocapture
+  ```
+  Paste the ten `Sl…` lines from each Pi (five shipped, five `-PN`).
+
 - [ ] **Run the key-to-audio probe on both station Pis** (work plan M2, key-to-audio gap). The IC-9700
   SDR captures suggest ~1.3 s of dead air between PTT and the first sample on every keyed turn; the
   modulator is ruled out (≤ 26 ms), so this times the audio device path. It writes **silence**, so
