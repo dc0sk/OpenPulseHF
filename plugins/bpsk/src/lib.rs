@@ -77,6 +77,9 @@ impl BpskPlugin {
     /// one cargo invocation a dev-only feature is unified across all of them, and extra advertised
     /// modes then appeared in every mode enumeration (the test matrix's coverage gate caught it).
     /// Here the feature changes nothing a shipped-mode caller can observe.
+    ///
+    /// DORMANT(#1062): no production caller by design, a measurement arm until the flag day;
+    /// baselined in `reachability-baseline.txt`.
     #[cfg(feature = "pn-candidate")]
     pub fn pn_candidate() -> Self {
         let mut info = Self::make_info();
