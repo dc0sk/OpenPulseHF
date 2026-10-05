@@ -89,7 +89,7 @@ payload format change, so M1 closed as a bug fix plus a declaration.
 
 | Item | Status |
 |---|---|
-| #1062: replacement preamble — the thread's recorded direction is PN, N ≥ 63, for interferer refusal and onset placement where thresholds exist; design reviewed before implementing; fold #1171 in | parked |
+| ~~#1062: replacement preamble~~ — moved into Release 1 (decision 22), see M2 | moved |
 | Re-record the replay corpus against the 1.0 format; un-ignore the four replay rows (#1351) | parked |
 | Repeat the 2 m campaign on the 1.0 format | parked |
 | A twin-daemon test of the leaking NACK budget (#1456 review round 3, finding 6): four failed ladder bursts key three NACKs on the production path; needs deterministic failing bursts in the bridge | parked |
@@ -117,6 +117,7 @@ payload format change, so M1 closed as a bug fix plus a declaration.
 | ARDOP `ARQBW` sizes modes from a stale hand-kept table (`bandplan::occupied_bandwidth_hz`): OFDM52 3200 Hz vs the plugin's 2031 Hz; MFSK16, QPSK250-D and OFDM52-* missing, so `ARQBW 2000` caps `fast` at SL5. Size from the plugin instead (found by the profile design). A correct table still stops `ARQBW 2000` below OFDM52 (2031 Hz); the loss is QPSK250-D everywhere and SL6–SL14 at ≥ 2032 Hz | done 2026-10-02 — `arq_max_tx_level_for_bandwidth` sizes from the plugin; a cap below every rung now answers the lowest rung, not "uncapped" (`arqbw_sizes_from_the_plugin`) |
 | On-air tooling (found by the re-baseline): `run-onair-twin-ota.sh` enables `observability.audit_mode` so `OtaRateDecision` events are retained for A2; `onair-bundle-evidence.sh` CAT-reads each rig's filter width and frequency trim and records `notch_enabled`/`agc_enabled`/`cessb_enabled` | done 2026-10-02 (audit mode on, evidence collected per station, 2 m default) |
 | Release check: `every_profile_rung_decodes_at_its_floor_with_its_fec`, `hpx_hf_rungs_survive_fade`, `mfsk16_arq_subfloor`, `goodput_gate`, benchmark, the ARDOP suites — at one commit, with the known-red rows disclosed (notch #1457 per decision 10) | done 2026-10-03 at `5809597f` (tree identical to the gated `beba762d`): `GATE: PASS beba762d… clean`, which ran `every_profile_rung_decodes_at_its_floor_with_its_fec`, `hpx_hf_rungs_survive_fade` (3/3), `mfsk16_arq_subfloor` (8/8), `goodput_gate`, `openpulse-ardop` (9 lib + 24 integration); benchmark gate `true`; `slow-tests.sh`: OTA CAP-33 3/3, spectral and total-power decode counts pass, notch REQ-QRM-01 2/3 — `the_notch_rescues_a_decode_that_fails_without_it` fails (decodes without the notch at 0.3), the disclosed #1457 row. Built with `CARGO_INCREMENTAL=0` and no debuginfo to fit the cloud session's disk; test behaviour is unaffected. Re-run before the tag |
+| **#1062 replacement preamble** (decision 22): PN, N ≥ 63, chipped at each rung's own baud, on the BPSK rungs (SL2–SL5); QPSK keeps its designed sequence. Design `docs/dev/design/pn-preamble.md` (mandatory review, wire format), then the BPSK250 parity falsifier, then the remaining rungs, the synthetic fixtures for the #1021/#1045/#1049 classes, and #1460's evidence rule on top. Gates M3: the campaign runs on this format | design 2026-10-05 |
 
 **Exit:** all items closed or explicitly moved; release check green except the disclosed rows.
 
@@ -174,6 +175,7 @@ payload format change, so M1 closed as a bug fix plus a declaration.
 | 19 | 2026-10-01 | **A new UI client ships with the release candidate**, supporting file transfer or a similar reusable feature for testing. It comes after everything else RC1 needs. **Amends decision 1** (Release 1 scope) | maintainer |
 | 20 | 2026-10-02 | **Triage approved** as proposed and applied as labels. M2 and after-v0.17 rows carry `milestone:*` stand-in labels until the GitHub milestones are created | maintainer |
 | 21 | 2026-10-02 | **#1456 and #1460 stay in M2**: the parked decay design is to be redesigned against its review's falsifier, not moved to post-release | maintainer |
+| 22 | 2026-10-05 | **#1062 moves into Release 1 and gates M3. Amends decision 16.** The alternating preamble is the one root of #1460's remainder (a foreign over cannot be refused), the onset ranking's and the veto's BPSK250-only coverage, and #1049's onset placement; v0.17.0 is not cut, so the break costs one campaign and one corpus re-record instead of two. Sequenced design → mandatory review → the BPSK250 parity falsifier before any other mode. #1460 stays open until the evidence rule lands on the new preamble | maintainer |
 
 ## Open questions
 
