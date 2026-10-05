@@ -2,7 +2,7 @@
 project: openpulsehf
 doc: docs/dev/design/fallback-onset-ranking.md
 status: resolved
-last_updated: 2026-10-04
+last_updated: 2026-10-05
 ---
 
 # Rank the uncoded fallback's onsets by preamble correlation
