@@ -2322,3 +2322,98 @@ fn f13_fade_cost_of_doubling_the_preamble() {
     println!("  that is the finer frequency grid the longer template earns, not noise averaging.");
     println!("  thresholds the CFAR stand-down decision uses.");
 }
+
+// ── F14: does a 64-symbol QPSK preamble open the noise margin? (#1062 design, F0) ─────────────
+
+/// A QPSK250-D preamble template built through the shipped modulator from `symbols`, last symbol
+/// dropped as the BPSK template drops it (it carries part of the first payload symbol).
+fn qpsk_template(symbols: &[(f32, f32)]) -> (Vec<f32>, usize) {
+    let c = cfg("QPSK250-D");
+    let n = (FS / 250.0) as usize;
+    let full = qpsk_plugin::modulate::qpsk_modulate_with_preamble(&[], &c, symbols)
+        .expect("qpsk modulate");
+    (full[..n * (symbols.len() - 1)].to_vec(), n)
+}
+
+/// F0 of `docs/dev/design/pn-preamble.md`, pre-registered there before this ran.
+///
+/// The noise ceiling of QPSK250's shipped 16-symbol template against a 64-symbol one (PN-63 chips
+/// taken pairwise, `PreambleSpec(Pn63, 64, Qpsk)`), on the f2 statistic: peak ρ with the engine's
+/// window (template + 2 symbols, stride a quarter window) and frequency grid (±20 Hz), here as the
+/// max over 5 seeds × 15 s per band. Positive control: the 16-symbol SSB cell must reproduce #1059's
+/// 0.293 within 0.03. Pass (QPSK joins the break): the 64-symbol ceiling ≤ 0.23 in both SSB and
+/// 500 Hz. The decodable tail at 64 symbols is not measurable here, so a pass is necessary only.
+#[test]
+#[ignore = "verification"]
+fn f14_qpsk_preamble_length_and_the_noise_ceiling() {
+    use openpulse_dsp::preamble::{PreambleConstellation, PreambleSpec, PreambleType};
+    let shipped = qpsk_plugin::modulate::preamble_symbols();
+    assert_eq!(shipped.len(), 16);
+    let long = PreambleSpec::new(PreambleType::Pn63, 64, PreambleConstellation::Qpsk).iq_symbols();
+    assert_eq!(long.len(), 64);
+    let cases = [
+        ("16 (shipped)", qpsk_template(&shipped)),
+        ("64 (PN-63 pairs)", qpsk_template(&long)),
+    ];
+    let bands = [
+        ("white 0-4k", 0.0f32, 4_000.0),
+        ("ssb 300-2700", 300.0, 2_700.0),
+        ("filter 1250-1750", 1_250.0, 1_750.0),
+        ("filter 1400-1600", 1_400.0, 1_600.0),
+    ];
+    let seeds: [u64; 5] = [12345, 777, 90210, 31337, 424242];
+    let per_seed = 120_000usize; // 15 s
+    println!(
+        "\nF14 (#1062 F0): QPSK250 noise ceiling, max over {} seeds x 15 s",
+        seeds.len()
+    );
+    println!("{:<18} {:>14} {:>18}", "band", cases[0].0, cases[1].0);
+    let mut ceil = std::collections::HashMap::new();
+    for (bname, lo, hi) in bands {
+        let mut row = Vec::new();
+        for (cname, (t, n)) in &cases {
+            let grid = engine_grid(t.len(), 20.0);
+            let mf = IqMatchedFilter::new(t.clone());
+            let w = win_len_for(t, *n);
+            let mut peak = 0.0f32;
+            for &sd in &seeds {
+                let noise = band_noise(per_seed, lo, hi, sd);
+                let mut s = 0usize;
+                while s + w <= noise.len() {
+                    if let Some((r, _)) = mf.search_normalized_over_frequency(
+                        &noise[s..s + w],
+                        w - mf.len(),
+                        0.05,
+                        FS,
+                        &grid,
+                    ) {
+                        peak = peak.max(r.rho);
+                    }
+                    s += w / 4;
+                }
+            }
+            ceil.insert((bname, *cname), peak);
+            row.push(peak);
+        }
+        println!("{bname:<18} {:>14.3} {:>18.3}", row[0], row[1]);
+    }
+    let control = ceil[&("ssb 300-2700", "16 (shipped)")];
+    let ssb64 = ceil[&("ssb 300-2700", "64 (PN-63 pairs)")];
+    let f500 = ceil[&("filter 1250-1750", "64 (PN-63 pairs)")];
+    println!(
+        "control: 16-symbol SSB {control:.3} vs #1059's 0.293 -> {}",
+        if (control - 0.293).abs() <= 0.03 {
+            "reproduced"
+        } else {
+            "NOT reproduced"
+        }
+    );
+    println!(
+        "F0 rule (64-symbol <= 0.23 in SSB and 500 Hz): SSB {ssb64:.3}, 500 Hz {f500:.3} -> {}",
+        if ssb64 <= 0.23 && f500 <= 0.23 {
+            "PASS: QPSK joins"
+        } else {
+            "FAIL: QPSK stays out"
+        }
+    );
+}

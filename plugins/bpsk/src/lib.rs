@@ -72,6 +72,15 @@ impl BpskPlugin {
     }
 
     fn make_info() -> PluginInfo {
+        #[allow(unused_mut)]
+        let mut info = Self::shipped_info();
+        #[cfg(feature = "pn-candidate")]
+        info.supported_modes
+            .extend(["BPSK31-PN", "BPSK63-PN", "BPSK100-PN", "BPSK250-PN"].map(String::from));
+        info
+    }
+
+    fn shipped_info() -> PluginInfo {
         PluginInfo {
             name: "BPSK".to_string(),
             version: env!("CARGO_PKG_VERSION").to_string(),
@@ -150,11 +159,12 @@ impl ModulationPlugin for BpskPlugin {
         const BITS_PER_SYMBOL: usize = 1;
         // Largest frame: full 255-byte RS block + envelope, plus 10% margin.
         let max_data_syms = (260usize * 8).div_ceil(BITS_PER_SYMBOL);
-        let frame_syms = modulate::PREAMBLE_SYMS + max_data_syms + modulate::TAIL_SYMS;
+        let preamble_syms = modulate::preamble_syms_for(&config.mode);
+        let frame_syms = preamble_syms + max_data_syms + modulate::TAIL_SYMS;
         Some(FrameGeometry {
             symbol_period_samples: n,
-            preamble_samples: n * modulate::PREAMBLE_SYMS,
-            min_frame_samples: n * (modulate::PREAMBLE_SYMS + 1),
+            preamble_samples: n * preamble_syms,
+            min_frame_samples: n * (preamble_syms + 1),
             max_frame_samples: n * frame_syms * 11 / 10,
         })
     }
@@ -263,7 +273,7 @@ impl ModulationPlugin for BpskPlugin {
 /// Parse the numeric baud rate from a mode string such as `"BPSK31"` or `"BPSK250-RRC"`.
 pub(crate) fn parse_baud_rate(mode: &str) -> Result<f32, ModemError> {
     // Strip trailing suffixes (-RRC) then parse leading digits after "BPSK".
-    let base = mode.trim_end_matches("-RRC");
+    let base = mode.trim_end_matches("-RRC").trim_end_matches("-PN");
     let digits: String = base.chars().skip_while(|c| !c.is_ascii_digit()).collect();
     match digits.as_str() {
         "31" => Ok(31.25),
@@ -483,5 +493,59 @@ mod tests {
             !all_hard,
             "demodulate_soft must return real soft LLRs, not hard ±1.0 decisions"
         );
+    }
+
+    /// The shipped modes transmit the shipped preamble, with or without the candidate feature.
+    #[test]
+    fn shipped_modes_keep_the_alternating_preamble() {
+        for mode in ["BPSK31", "BPSK63", "BPSK100", "BPSK250"] {
+            assert_eq!(
+                modulate::preamble_bits_for(mode),
+                modulate::preamble_bits(modulate::PREAMBLE_SYMS),
+                "{mode}"
+            );
+        }
+    }
+
+    /// The candidate transmits PN-63 as SYMBOLS: the NRZI encoding of its bits is the m-sequence
+    /// itself, not its integral (#1062 design, *Decision*).
+    #[cfg(feature = "pn-candidate")]
+    #[test]
+    fn the_pn_candidate_transmits_the_m_sequence_as_symbols() {
+        let symbols = demodulate::expected_preamble_for("BPSK250-PN");
+        assert_eq!(
+            symbols,
+            openpulse_dsp::preamble::PreambleType::Pn63.sequence()
+        );
+        assert_eq!(symbols.len(), modulate::PN_PREAMBLE_SYMS);
+    }
+
+    /// Every candidate rung round-trips, and its frame is 31 symbols longer than the shipped one.
+    #[cfg(feature = "pn-candidate")]
+    #[test]
+    fn every_pn_candidate_rung_round_trips() {
+        let plugin = BpskPlugin::new();
+        let data = b"PN-63 candidate";
+        for base in ["BPSK31", "BPSK63", "BPSK100", "BPSK250"] {
+            let mode = format!("{base}-PN");
+            assert!(plugin.info().supported_modes.contains(&mode), "{mode}");
+            let pn = cfg(&mode);
+            let shipped = cfg(base);
+            let tx = plugin.modulate(data, &pn).unwrap();
+            assert_eq!(plugin.demodulate(&tx, &pn).unwrap(), data, "{mode}");
+            let n = modulate::samples_per_symbol(8000.0, parse_baud_rate(base).unwrap()).unwrap();
+            let shipped_len = plugin.modulate(data, &shipped).unwrap().len();
+            assert_eq!(tx.len(), shipped_len + 31 * n, "{mode}");
+            let g = plugin.frame_geometry(&pn).unwrap();
+            assert_eq!(g.preamble_samples, 63 * n, "{mode}");
+        }
+    }
+
+    #[cfg(feature = "pn-candidate")]
+    fn cfg(mode: &str) -> ModulationConfig {
+        ModulationConfig {
+            mode: mode.to_string(),
+            ..ModulationConfig::default()
+        }
     }
 }

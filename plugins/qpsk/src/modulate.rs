@@ -18,6 +18,19 @@ const INV_SQRT_2: f32 = 0.70710677;
 pub(crate) const RRC_SPAN_SYMBOLS: usize = 12;
 
 pub fn qpsk_modulate(data: &[u8], config: &ModulationConfig) -> Result<Vec<f32>, ModemError> {
+    qpsk_modulate_with_preamble(data, config, &preamble_symbols())
+}
+
+/// [`qpsk_modulate`] with the preamble supplied, for wire-format vetting (#1062 design, F0).
+///
+/// Builds a candidate preamble's template through the shipped pulse shaping, so a measurement
+/// cannot drift from the modulator. Only the preamble is candidate: a differential payload is still
+/// referenced to the SHIPPED preamble's last symbol, so pass an empty `data` when vetting.
+pub fn qpsk_modulate_with_preamble(
+    data: &[u8],
+    config: &ModulationConfig,
+    preamble: &[(f32, f32)],
+) -> Result<Vec<f32>, ModemError> {
     let baud = parse_baud_rate(&config.mode)?;
     let fs = config.sample_rate as f32;
     let fc = config.center_frequency;
@@ -33,7 +46,7 @@ pub fn qpsk_modulate(data: &[u8], config: &ModulationConfig) -> Result<Vec<f32>,
         None
     };
 
-    let mut symbols = preamble_symbols();
+    let mut symbols = preamble.to_vec();
     if crate::is_differential(&config.mode) {
         symbols.extend(differential_encode(&bytes_to_bits(data)));
     } else {
@@ -385,7 +398,7 @@ pub(crate) fn samples_per_symbol(sample_rate: f32, baud: f32) -> Result<usize, M
     Ok(n)
 }
 
-pub(crate) fn preamble_symbols() -> Vec<(f32, f32)> {
+pub fn preamble_symbols() -> Vec<(f32, f32)> {
     // Designed sequence: [45°,135°,225°,315°,225°,135°,45°,315°,225°,135°,45°,135°,225°,315°,45°,315°]
     //
     // Three properties are required simultaneously:

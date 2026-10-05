@@ -18,6 +18,54 @@ use crate::parse_baud_rate;
 
 /// Number of preamble symbols prepended to every transmission.
 pub const PREAMBLE_SYMS: usize = 32;
+/// Preamble length of the #1062 PN-63 candidate (`docs/dev/design/pn-preamble.md`).
+pub const PN_PREAMBLE_SYMS: usize = 63;
+
+/// Whether `mode` is the #1062 PN-63 candidate (the `-PN` suffix, `pn-candidate` feature only).
+///
+/// A measurement arm, not a shipped mode: it exists so the candidate and the shipped preamble run
+/// through the same engine and daemon receive path in one build (design F1). Without the feature
+/// every mode is shipped and this is constantly false.
+pub fn is_pn_mode(mode: &str) -> bool {
+    cfg!(feature = "pn-candidate") && mode.ends_with("-PN")
+}
+
+/// Preamble length, in symbols, that `mode` transmits.
+pub fn preamble_syms_for(mode: &str) -> usize {
+    if is_pn_mode(mode) {
+        PN_PREAMBLE_SYMS
+    } else {
+        PREAMBLE_SYMS
+    }
+}
+
+/// The preamble bits `mode` transmits: the shipped alternating run, or the NRZI pre-image of PN-63.
+pub fn preamble_bits_for(mode: &str) -> Vec<bool> {
+    if is_pn_mode(mode) {
+        pn63_preamble_bits()
+    } else {
+        preamble_bits(PREAMBLE_SYMS)
+    }
+}
+
+/// Bits whose NRZI encoding transmits the PN-63 m-sequence (x⁶ + x + 1) as symbols.
+///
+/// The sequence is specified in the symbol domain (design, *Decision*): `b[k] = s[k] ≠ s[k−1]` with
+/// `s[−1] = +1`, because `nrzi_encode` starts at positive phase and flips on a `1`. Specifying it in
+/// the bit domain instead would transmit the NRZI integral of an m-sequence, which is not one.
+fn pn63_preamble_bits() -> Vec<bool> {
+    let symbols = openpulse_dsp::preamble::PreambleType::Pn63.sequence();
+    let mut prev = 1.0f32;
+    symbols
+        .iter()
+        .map(|&s| {
+            let flip = s != prev;
+            prev = s;
+            flip
+        })
+        .collect()
+}
+
 /// Number of tail symbols appended after data to let the signal decay.
 pub const TAIL_SYMS: usize = 8;
 pub(crate) const RRC_SPAN_SYMBOLS: usize = 8;
@@ -41,7 +89,7 @@ fn rrc_alpha_for(config: &ModulationConfig) -> Option<f32> {
 /// `out[k] * cos(2π·fc·k/fs)`.  For RRC path, caller must apply the RRC
 /// FIR filter and then upconvert.
 fn bpsk_baseband(data: &[u8], config: &ModulationConfig) -> Result<Vec<f32>, ModemError> {
-    bpsk_baseband_with_preamble(data, config, &preamble_bits(PREAMBLE_SYMS))
+    bpsk_baseband_with_preamble(data, config, &preamble_bits_for(&config.mode))
 }
 
 /// The preamble bit pattern the BPSK wire format prepends to every frame.
@@ -94,7 +142,7 @@ fn bpsk_baseband_with_preamble(
 
 /// Modulate `data` bytes to a vector of normalised PCM samples.
 pub fn bpsk_modulate(data: &[u8], config: &ModulationConfig) -> Result<Vec<f32>, ModemError> {
-    bpsk_modulate_with_preamble(data, config, &preamble_bits(PREAMBLE_SYMS))
+    bpsk_modulate_with_preamble(data, config, &preamble_bits_for(&config.mode))
 }
 
 /// [`bpsk_modulate`] with the preamble supplied, for wire-format vetting.
@@ -299,7 +347,7 @@ pub fn bpsk_preamble_template(config: &ModulationConfig) -> Result<Vec<f32>, Mod
     let baud = parse_baud_rate(&config.mode)?;
     let n = samples_per_symbol(config.sample_rate as f32, baud)?;
     let full = bpsk_modulate(&[], config)?;
-    let span = n * (PREAMBLE_SYMS - 1);
+    let span = n * (preamble_syms_for(&config.mode) - 1);
     if full.len() < span {
         return Err(ModemError::Demodulation(
             "modulated preamble shorter than its own symbol span".into(),
@@ -365,7 +413,7 @@ pub fn bpsk_modulate_with_gpu(
     let fc = config.center_frequency;
     let n = samples_per_symbol(fs, baud)?;
 
-    let mut bits: Vec<bool> = preamble_bits(PREAMBLE_SYMS);
+    let mut bits: Vec<bool> = preamble_bits_for(&config.mode);
     bits.extend(bytes_to_bits(data));
     bits.extend(std::iter::repeat_n(false, TAIL_SYMS));
 
