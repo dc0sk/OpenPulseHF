@@ -19,14 +19,14 @@ use crate::parse_baud_rate;
 /// Number of preamble symbols prepended to every transmission.
 pub const PREAMBLE_SYMS: usize = 32;
 /// Preamble length of the #1062 PN-63 candidate (`docs/dev/design/pn-preamble.md`).
-pub const PN_PREAMBLE_SYMS: usize = 63;
+pub(crate) const PN_PREAMBLE_SYMS: usize = 63;
 
 /// Whether `mode` is the #1062 PN-63 candidate (the `-PN` suffix, `pn-candidate` feature only).
 ///
 /// A measurement arm, not a shipped mode: it exists so the candidate and the shipped preamble run
 /// through the same engine and daemon receive path in one build (design F1). Without the feature
 /// every mode is shipped and this is constantly false.
-pub fn is_pn_mode(mode: &str) -> bool {
+pub(crate) fn is_pn_mode(mode: &str) -> bool {
     cfg!(feature = "pn-candidate") && mode.ends_with("-PN")
 }
 

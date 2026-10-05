@@ -1144,7 +1144,7 @@ pub fn expected_preamble_symbols(len: usize) -> Vec<f32> {
 }
 
 /// The expected I-channel amplitudes of the preamble `mode` transmits.
-pub fn expected_preamble_for(mode: &str) -> Vec<f32> {
+pub(crate) fn expected_preamble_for(mode: &str) -> Vec<f32> {
     expected_symbols_for(&preamble_bits_for(mode))
 }
 

@@ -23,6 +23,9 @@ pub fn qpsk_modulate(data: &[u8], config: &ModulationConfig) -> Result<Vec<f32>,
 
 /// [`qpsk_modulate`] with the preamble supplied, for wire-format vetting (#1062 design, F0).
 ///
+/// DORMANT(#1062): no production caller by design — a vetting seam like `bpsk_modulate_with_preamble`,
+/// baselined beside it in `reachability-baseline.txt`.
+///
 /// Builds a candidate preamble's template through the shipped pulse shaping, so a measurement
 /// cannot drift from the modulator. Only the preamble is candidate: a differential payload is still
 /// referenced to the SHIPPED preamble's last symbol, so pass an empty `data` when vetting.
