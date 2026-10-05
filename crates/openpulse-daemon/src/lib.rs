@@ -4542,8 +4542,8 @@ mod command_apply_tests {
             body.len()
         );
         assert_eq!(
-            openpulse_core::compression::unpack(&rx).unwrap(),
-            body.as_bytes()
+            openpulse_core::compression::try_unpack(&rx).unwrap(),
+            Some(body.as_bytes().to_vec())
         );
     }
 
