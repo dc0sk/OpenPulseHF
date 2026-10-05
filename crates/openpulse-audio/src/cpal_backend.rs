@@ -472,3 +472,57 @@ impl AudioOutputStream for CpalOutputStream {
 
     fn close(self: Box<Self>) {}
 }
+
+/// Station probe for the key-to-audio gap (work plan M2): how long a transmit's output path takes
+/// before its first sample plays. Every keyed path asserts PTT before `open_output`, so this is dead
+/// air on the rig. Writes SILENCE, so nothing is radiated even with VOX on.
+///
+/// Run on the station, with the rig's output device name as the daemon is configured:
+/// `PROBE_DEVICE='<name>' cargo test --release -p openpulse-audio --features cpal-backend \
+///  --lib key_to_audio -- --ignored --nocapture` (omit `PROBE_DEVICE` for the default device).
+#[cfg(test)]
+mod key_to_audio_probe {
+    use super::*;
+    use openpulse_core::audio::AudioBackend;
+    use std::time::Instant;
+
+    #[test]
+    #[ignore = "station probe: needs a real output device; prints timings"]
+    fn key_to_audio_by_stage() {
+        let device = std::env::var("PROBE_DEVICE").ok();
+        let backend = CpalBackend::new();
+        let config = AudioConfig::default();
+        let silence = vec![0.0f32; config.sample_rate as usize / 2];
+        for run in 1..=5 {
+            let t = Instant::now();
+            let enumerated = backend
+                .host
+                .output_devices()
+                .map(|d| d.count())
+                .unwrap_or(0);
+            let enumerate = t.elapsed();
+
+            let t = Instant::now();
+            let mut stream = backend
+                .open_output(device.as_deref(), &config)
+                .expect("open_output");
+            let open = t.elapsed();
+
+            // `flush` returns once the device reports the queue played out, so what the drain
+            // took beyond the audio's own length is start-up plus device latency.
+            let t = Instant::now();
+            stream.write(&silence).expect("write");
+            let _ = stream.flush();
+            let audio = Duration::from_secs_f64(silence.len() as f64 / config.sample_rate as f64);
+            let first_pop = t.elapsed().saturating_sub(audio);
+            println!(
+                "run {run}: enumerate {:>7.1} ms ({enumerated} devices) | open_output {:>7.1} ms | \
+                 write → drained − audio {:>7.1} ms | open + that {:>7.1} ms",
+                enumerate.as_secs_f64() * 1e3,
+                open.as_secs_f64() * 1e3,
+                first_pop.as_secs_f64() * 1e3,
+                (open + first_pop).as_secs_f64() * 1e3,
+            );
+        }
+    }
+}

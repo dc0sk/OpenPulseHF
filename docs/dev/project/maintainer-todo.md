@@ -2,7 +2,7 @@
 project: openpulsehf
 doc: docs/dev/project/maintainer-todo.md
 status: draft
-last_updated: 2026-10-04
+last_updated: 2026-10-05
 ---
 
 # Maintainer TODO — what only you can do
@@ -24,6 +24,19 @@ asks first within each section. Report results in chat or as a comment on the li
     --no-default-features --test receive_cost_scaling -- --ignored --nocapture
   ```
   Paste the five `Sl…` lines.
+
+- [ ] **Run the key-to-audio probe on both station Pis** (work plan M2, key-to-audio gap). The IC-9700
+  SDR captures suggest ~1.3 s of dead air between PTT and the first sample on every keyed turn; the
+  modulator is ruled out (≤ 26 ms), so this times the audio device path. It writes **silence**, so
+  nothing is radiated even with VOX on; PTT is not touched. Use the output device name the daemon is
+  configured with:
+  ```bash
+  git fetch origin claude/affectionate-brahmagupta-sdn8qg && git checkout FETCH_HEAD
+  PROBE_DEVICE='<daemon output device>' cargo test --release -p openpulse-audio \
+    --features cpal-backend --lib key_to_audio -- --ignored --nocapture
+  ```
+  Paste the five `run …` lines from each Pi. If enumeration or `open_output` is most of it, the fix
+  is opening the stream before keying (a PTT-timing change, so a design review first).
 
 - [x] **Run the receive-cost probe on the station Pis** (done 2026-10-04, `PROBE_READ=4096`). Decode
   per frame, rpi53 / rpi51: SL6 3.21 / 3.32 s, SL5 5.19 / 5.45 s, SL4 5.56 / 5.76 s, SL3 5.90 /
