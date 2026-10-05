@@ -41,6 +41,8 @@ fn rx_engine(mode: &'static str) -> ModemEngine {
     let mut e = ModemEngine::new(Box::new(LoopbackBackend::new()));
     e.register_plugin(Box::new(bpsk_plugin::BpskPlugin::new()))
         .unwrap();
+    e.register_plugin(Box::new(bpsk_plugin::BpskPlugin::pn_candidate()))
+        .unwrap();
     e.register_plugin(Box::new(fsk4_plugin::Fsk4Plugin::new()))
         .unwrap();
     let profile = SessionProfile::from_rungs(
@@ -57,6 +59,8 @@ fn tx_frame(mode: &str, payload: &[u8]) -> Vec<f32> {
     let bk = LoopbackBackend::new();
     let mut tx = ModemEngine::new(Box::new(bk.clone_shared()));
     tx.register_plugin(Box::new(bpsk_plugin::BpskPlugin::new()))
+        .unwrap();
+    tx.register_plugin(Box::new(bpsk_plugin::BpskPlugin::pn_candidate()))
         .unwrap();
     tx.transmit_with_fec_mode(payload, mode, FecMode::Rs, None)
         .expect("transmit");

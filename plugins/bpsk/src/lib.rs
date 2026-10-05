@@ -71,13 +71,28 @@ impl BpskPlugin {
         }
     }
 
+    /// The #1062 PN-63 candidate as its own plugin, named `BPSK-PN`, advertising only the `-PN` modes.
+    ///
+    /// A separate instance rather than extra modes on [`Self::new`]: when several crates are tested in
+    /// one cargo invocation a dev-only feature is unified across all of them, and extra advertised
+    /// modes then appeared in every mode enumeration (the test matrix's coverage gate caught it).
+    /// Here the feature changes nothing a shipped-mode caller can observe.
+    #[cfg(feature = "pn-candidate")]
+    pub fn pn_candidate() -> Self {
+        let mut info = Self::make_info();
+        info.name = "BPSK-PN".to_string();
+        info.supported_modes = ["BPSK31-PN", "BPSK63-PN", "BPSK100-PN", "BPSK250-PN"]
+            .map(String::from)
+            .to_vec();
+        Self {
+            info,
+            #[cfg(feature = "gpu")]
+            gpu: None,
+        }
+    }
+
     fn make_info() -> PluginInfo {
-        #[allow(unused_mut)]
-        let mut info = Self::shipped_info();
-        #[cfg(feature = "pn-candidate")]
-        info.supported_modes
-            .extend(["BPSK31-PN", "BPSK63-PN", "BPSK100-PN", "BPSK250-PN"].map(String::from));
-        info
+        Self::shipped_info()
     }
 
     fn shipped_info() -> PluginInfo {
@@ -524,7 +539,12 @@ mod tests {
     #[cfg(feature = "pn-candidate")]
     #[test]
     fn every_pn_candidate_rung_round_trips() {
-        let plugin = BpskPlugin::new();
+        let plugin = BpskPlugin::pn_candidate();
+        assert!(BpskPlugin::new()
+            .info()
+            .supported_modes
+            .iter()
+            .all(|m| !m.ends_with("-PN")));
         let data = b"PN-63 candidate";
         for base in ["BPSK31", "BPSK63", "BPSK100", "BPSK250"] {
             let mode = format!("{base}-PN");
