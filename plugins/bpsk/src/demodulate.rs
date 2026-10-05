@@ -419,15 +419,15 @@ pub fn estimate_frequency_offset(i_syms: &[f32], q_syms: &[f32], baud_rate: f32)
     im_sum.atan2(re_sum) * baud_rate / (4.0 * PI)
 }
 
+/// Symbols of audio the coarse AFC search reads: today's `4 × 32`, held fixed across preambles.
+const AFC_WINDOW_SYMS: usize = 128;
+
 /// Wide-range carrier frequency estimator using the Goertzel algorithm on the
 /// squared signal.
 ///
 /// Squaring removes BPSK modulation, leaving a tone at 2×fc.  A Goertzel
 /// search in 25 Hz steps over 2×fc ± 800 Hz (= fc ± 400 Hz at baseband)
 /// locates the dominant peak.  **Acquisition range: ±400 Hz.**
-/// Symbols of audio the coarse AFC search reads: today's `4 × 32`, held fixed across preambles.
-const AFC_WINDOW_SYMS: usize = 128;
-
 fn estimate_carrier_hz_wide(samples: &[f32], config: &ModulationConfig) -> Option<f32> {
     let baud = crate::parse_baud_rate(&config.mode).ok()?;
     let fs = config.sample_rate as f32;
