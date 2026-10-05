@@ -5,144 +5,172 @@ status: draft
 last_updated: 2026-10-05
 ---
 
-# Replace the BPSK preamble with a PN-63 sync word (#1062)
+# Replace the BPSK preamble with a PN-63 sync word (#1062) — revision 2
 
 Work plan decision 22 (2026-10-05): #1062 moves into Release 1 and gates M3. This is a wire-format
 change, so it is reviewed as a design **before** any implementation (CLAUDE.md, adversarial review).
 It builds on the #1062 thread's recorded state, not its body: revisions 2–4, the demod-parity column
 (2026-08-04), the duration retraction (2026-09-07) and the f13 fade sweeps (2026-09-10).
 
+Revision 2 folds in the mandatory review (`docs/dev/reviews/review-pn-preamble-design.md`): F1's pass
+rule could not fail; the onset ranking reaches one rung, not four; the slow-rung blocker was
+misquoted; distinct per-mode sequences had no consumer; receive cost was unmeasured; the AFC window
+and QPSK were decided by assertion; and the receiver-site list had phantom and missing entries.
+
 ## Problem
 
 Every BPSK frame starts with 32 symbols of NRZI-encoded alternating bits, so the transmitted
-symbols run `--++` with period 4. That one property causes four open defects:
+symbols run `--++` with period 4. Three open defects follow from that, plus a coverage gap:
 
 1. **No interferer refusal.** The spectrum is lines at `fc ± baud/4` and odd harmonics. A steady
    tone on a line scores ρ ≈ 0.70 at any grid width (#1049 point 2), and sideband-symmetric shapes
    score 0.48–0.98. So a failed burst can never be shown to be *not ours*: #1460's remainder (a
    foreign CW/PSK31 over counts as ladder evidence) has no discriminator.
 2. **No onset placement.** The template matches a copy of itself shifted 2 symbols at ρ = 1.000
-   (`demod_parity` column D), so correlation cannot place a frame (#1049 point 3, #1052 reverted).
-   The onset ranking (#1504) needs a preamble-span separation to stop that alias filling its ranks.
-3. **No slow-rung templates.** BPSK31/63 cannot publish a template, because the frequency grid must
-   stay under `baud/4` (7.8 / 15.6 Hz) and a tone near a line corroborates anyway
-   (`chain_veto_slow_rung::q1`: BPSK31/63 corroborate a steady tone; BPSK250 refuses it). So the
-   veto, the onset ranking and any evidence rule cover BPSK250 only.
-4. **Per-mode coverage gaps compound.** QPSK publishes no template (#1053, #1059 withdrawn). The
-   ladder's acquisition protection exists on one rung of five single-carrier rungs.
+   (`demod_parity` column D), so correlation cannot place a frame (#1049 point 3; the onset-snap
+   was built and reverted). The onset ranking (#1504) needs a preamble-span separation to stop that
+   alias filling its ranks.
+3. **BPSK31/63 cannot publish a template, for two independent reasons.** (a) The **margin**: the
+   2026-08-04 elimination failed its pre-registered rule on the noise ceiling (0.426) against the
+   weakest decodable frame (0.569), correlator-independent, with the decode edge still falling with
+   sample size; revision 3 showed both sides are sequence-invariant at the same bandwidth. (b) The
+   **tone**: the grid must stay under `baud/4` (7.8 / 15.6 Hz) and a tone near a line corroborates
+   anyway (`chain_veto_slow_rung::q1`, 2026-08-19). **PN removes (b) only.** It also doubles the
+   duration, which lowers the noise ceiling ×0.68–0.73 for any sequence (2026-09-07), but coherent
+   gain is bounded by the ~0.4 s coherence time on `moderate_f1` (2026-08-09, correction 2), BPSK31's
+   template is already 1 s, and f13 shows the delivered-frame p10 falling 0.03–0.08 under masks. The
+   honest prior is that BPSK31/63 **still cannot publish** after this change.
+4. **Coverage.** The veto, the onset ranking and any evidence rule cover BPSK250 only today.
 
-**Not a problem, and not claimed:** the noise floor. The thread established (2026-09-07, f7/f13)
-that the in-band noise ceiling is set by template *duration*, for any sequence including a tone.
-PN at the same length is tied with `--++` there. PN buys refusal and placement, not noise margin.
+**Not a problem, and not claimed:** the noise floor. The in-band noise ceiling is set by template
+*duration*, for any sequence including a tone (2026-09-07). PN buys refusal and placement.
 
 ## Decision
 
-- **Sequence:** a length-63 maximal-length sequence (m-sequence, degree 6), as **symbols** (±1),
-  replacing the 32-symbol run. N = 31 was vetted and failed (worst interferer 0.377, worst family
-  tone 0.389, grid-searched sidelobe 0.409 against the 0.40 reference); 63 is the floor.
-- **Chip rate = the rung's own baud** (revision 2). A wider preamble dies in the payload-matched
-  receive filter (a 4×-wide PN keeps 27 % through a 200 Hz mask), and it keeps the occupied
-  bandwidth unchanged.
-- **Specified in the symbol domain.** BPSK data is NRZI-differential and the first data symbol is
-  referenced to the last preamble symbol (`range_start = PREAMBLE_SYMS - 1`). The wire definition is
-  the symbol sequence `p[0..63]`; `preamble_bits` becomes the NRZI pre-image of it, so the modulator,
-  GPU modulator and demodulator's expected table keep deriving from one function (phase 0.5's single
-  source of truth).
-- **Distinct sequence per mode** (revision 2's proposal). Degree 6 has six primitive polynomials, so
-  BPSK31/63/100/250 each take one, chosen by the vetting gate below, not by name ("PN" guarantees
-  nothing: 26 % of random 31-chip sequences fail the tone test). Distinct sequences make the
-  correlation mode-selective at no cost and identify the mode from the sync word (REQ-RX-01).
-  Cross-correlation between the chosen four is a vetting column.
-- **Scope: the BPSK rungs, SL2–SL5, all four** at the flag day (revision 4: uniformity). One wire
-  format across the BPSK ladder, so the rate adapter never crosses formats mid-session, at a uniform
-  airtime cost of **1.49 %** (31 extra symbols at every baud).
-- **Out of scope:** QPSK250-D (SL6) keeps its designed 16-symbol aperiodic sequence (R₁-minimal,
-  drift-fit neutral, LMS-diverse; its defects are duration and fade overlap, which PN does not fix).
-  MFSK16 (Costas), OFDM (Schmidl-Cox), FSK4 ACK, and the non-`hpx_hf` modes (8PSK, 64QAM, pilot,
-  SC-FDMA) are untouched. A later QPSK change would be a second wire break; this is accepted
-  knowingly, since QPSK is not where the four defects above live.
+- **Sequence:** the length-63 m-sequence from x⁶ + x + 1 (`openpulse-dsp::preamble::Pn63`, already
+  transmitted by the pilot plugin), as **symbols** (±1), replacing the 32-symbol run. N = 31 was
+  vetted and failed (worst interferer 0.377, worst family tone 0.389, grid-searched sidelobe 0.409
+  against the 0.40 reference); 63 is the floor. If F3 rejects this polynomial, the next of the six
+  degree-6 primitives is vetted; the choice is one sequence for all rungs.
+- **One sequence, not one per mode** (changed from revision 1). No two BPSK rungs share a chip rate
+  (31.25 / 62.5 / 100 / 250), so the sequences never meet at the same rate and the mode is already
+  told apart by baud and geometry. Revision 2 of the thread justified distinct sequences for two
+  modes at the *same* chip rate and called the harm a nuisance. One sequence keeps `preamble_bits`
+  a single source of truth and one fixture set.
+- **Chip rate = the rung's own baud** (thread revision 2). A wider preamble dies in the
+  payload-matched receive filter (a 4×-wide PN keeps 27 % through a 200 Hz mask), and occupied
+  bandwidth is unchanged.
+- **Specified in the symbol domain.** The NRZI pre-image is `b[k] = p[k] XOR p[k−1]`, `p[−1] = +1`
+  (`nrzi_encode` starts at `phase_neg = false`, `modulate.rs:326`), which is exactly what
+  `demod_parity`'s `symbols_to_bits` did, so the PN-31 parity evidence is for a symbol-domain
+  m-sequence. `p[62]` is unconstrained: differential decode starts at `PREAMBLE_SYMS − 1` and NRZI
+  runs on into the data, so the last preamble symbol's sign never enters a data bit, and the template
+  already drops it (`modulate.rs:302`). `preamble_bits(len)` keeps its length argument
+  (`demodulate.rs:904` passes `PREAMBLE_SYMS.min(n)`): `len ≤ 63` **truncates** the sequence, and
+  `len > 63` is an error, never a cycle.
+- **Scope: the four BPSK rungs, SL2–SL5, for uniformity** (thread revision 4) — one generator and
+  one demod tuning across the BPSK ladder, at a uniform **1.49 %** airtime. Uniformity has a limit,
+  stated now: **if F5's parity columns fail at a slow rung, that rung keeps `--++`** (two generators,
+  accepted); a failed *template* column there changes nothing, since that rung cannot publish
+  today either. The smaller alternative the review named — PN-63 on BPSK250 (and BPSK100 if its
+  columns pass) only — delivers the same defect fixes, because only BPSK250 can carry the template
+  path (see *Onset ranking*); it is the fallback if F5 fails.
+- **QPSK250-D (SL6): decided by a number, not by assertion.** Its 16-symbol designed sequence has a
+  lag-2 sidelobe of 0.500 (a placement defect) and its #1053 failure (decodable tail 0.276 against
+  ceiling 0.291) is a 64 ms duration problem that a longer preamble plausibly fixes; SL6 is the
+  `robust` profile's top rung. F0 measures its noise ceiling at 64 symbols. If that opens the margin,
+  QPSK joins this break (one window); if not, it stays out and a later change is a second break,
+  paid knowingly.
+- **Out of scope:** MFSK16 (Costas), OFDM (Schmidl-Cox), the FSK4 ACK, and the non-`hpx_hf` modes
+  (8PSK, 64QAM, pilot, SC-FDMA).
 - **Flag day, no dual receive.** v0.17.0 is not cut and nothing is deployed (release-1.0-criteria
-  decision 2: wire format may change freely until 1.0). An old receiver reports "invalid magic" on a
-  new frame, as at #1148.
+  decision 2). An old receiver reports "invalid magic" on a new frame, as at #1148.
 
 ## What changes
 
-**Wire (plugins/bpsk):** `PREAMBLE_SYMS` 32 → 63; `preamble_bits` per mode; frame geometry
-(`preamble_samples`, `min_frame_samples`, `max_frame_samples`) follows.
+**Wire (plugins/bpsk):** `PREAMBLE_SYMS` 32 → 63; `preamble_bits` returns the NRZI pre-image of
+`Pn63`; frame geometry (`preamble_samples`, `min_frame_samples`, `max_frame_samples`) follows. The
+Hann, RRC and GPU modulators all derive from `preamble_bits`; the RRC demod path, which refuses a
+non-shipped expectation today, accepts the new one.
 
-**Receiver sites that consume the preamble length or pattern** (from
-`grep -n PREAMBLE_SYMS plugins/bpsk/src/demodulate.rs`, ~30 production sites): data start and range
-start (`PREAMBLE_SYMS - 1`), the AFC window (`4 × PREAMBLE_SYMS`), the expected-symbol tables for
-timing, drift-fit and LMS training, the SNR lock over the first preamble symbols (#1142), the P6
-rescue span, and the engine's hard-coded geometry comments and constants (`engine.rs` ~4715: "33 =
-PREAMBLE_SYMS(32) + 1"; ~4800: "± PREAMBLE_SYMS (1024 samples)"; `ScanPlanner`'s 33-symbol minimum).
-Every one is re-pointed at the plugin's geometry, not re-typed: a literal `32` or `33` left behind is
-the one-sided-rebuild failure ("invalid magic") the phase 0.5 refactor exists to prevent. A gate
-greps for them.
+**AFC window, decoupled.** `estimate_carrier_hz_wide` uses `4 × PREAMBLE_SYMS × n`
+(`demodulate.rs:437`); at 63 that is 252 symbols, 1 s at BPSK250 and 8 s at BPSK31, on a fade. The
+coarse stage squares, so the sequence is irrelevant there and the window is a separate parameter: it
+becomes a named constant at **128 symbols** (today's value), not `4 × PREAMBLE_SYMS`. Inside the
+engine's settle the plugin is handed preamble + 1 symbol anyway; the 4× applies to whole-burst
+callers.
+
+**Receiver sites.** Every `PREAMBLE_SYMS` use in `plugins/bpsk/src/demodulate.rs` follows the
+constant: data and range start (`PREAMBLE_SYMS − 1`), the expected-symbol tables for timing and LMS
+training, the P6 rescue span, `frame_geometry`. The engine's hard-coded 32/33 (`engine.rs:2818,
+4717`) are the fallback for plugins **without** geometry; BPSK publishes geometry, so they are not
+production sites and only their comments go stale (corrected in place). Revision 1 listed a
+"drift-fit" and an "SNR lock over the preamble"; neither exists in the BPSK demod (the SNR estimate
+runs over the data span from `range_start`, `demodulate.rs:263-276`; #1142 is success gating in the
+engine).
+
+**Tests whose premise is `--++`, rewritten rather than re-run:**
+`preamble_correlation_settle::the_gate_is_not_fooled_by_a_steady_tone` (acceptance row 86) asserts
+the template has ≥ 2 spectral lines and that an on-line tone fools the correlator; on PN its premise
+guard fires, and its replacement asserts the tone is **refused**. The restricted-lock rescue
+(`demodulate.rs:1029, 1447`, acceptance row 54, "at the −2-symbol alias") goes vacuous and is
+re-scoped. The #1454 spectral-busy gather counts (16/16, acceptance row 92) were fitted on the
+alternating preamble's envelope and are re-measured (F5).
 
 **Templates and constants:** each mode publishes a template only after its own constants are
-derived (the `DERIVED_FOR` rule, #1053). BPSK250's `PREAMBLE_RHO_THRESHOLD` (0.40), grid (±20 Hz)
-and `DELIVERED_FRAME_RHO_BOUND` (0.50) were derived on `--++` at 124 ms and are **void** for PN-63
-at 252 ms; they are re-derived, not carried. The `baud/4` grid bound is a property of the period-4
-line structure ("would be wrong for a PN successor", `plugins/bpsk/src/lib.rs`), so PN needs its own
-grid bound, derived (the prediction that it is looser is to be tested, not assumed). BPSK31/63/100
-publish if and only if their own columns pass; revision 3's argument that no same-bandwidth sequence
-gives them a threshold was about the *noise* column, while their blocker today is the tone column,
-which PN changes.
+derived (`DERIVED_FOR`, #1053). BPSK250's threshold (0.40), grid (±20 Hz) and delivered-frame bound
+(0.50) were derived on `--++` at 124 ms and are **void** at 252 ms; re-derived, not carried. The
+`baud/4` grid bound belongs to the period-4 line structure; PN's own grid bound is derived (F2).
 
-**Onset ranking (#1504):** `FALLBACK_RANKED_ONSETS` and the preamble-span separation are re-measured
-on PN-63 (the alias the separation exists for should be gone); `fallback_onset_rank_measurement` is
-reused unchanged.
+**Onset ranking (#1504): BPSK250 only, by construction.** A PN-63 template is 62 symbols:
+1 984 samples at BPSK250 against `MAX_PREAMBLE_CORRELATION_SAMPLES = 2_048` (`engine.rs:387`), and
+4 960 / 7 936 / 15 872 at BPSK100/63/31, which take the DDC arm, where `ranked_fallback_onsets`
+returns `None` (`engine.rs:3035`). BPSK250 fits by 64 samples, so a gate pins BPSK250's template to
+the passband arm (as `veto_membership_pin` pins membership); keeping the 63rd symbol or raising N
+would silently drop the receive-cost fix. K and the separation are re-measured on PN-63. A DDC-arm
+rank path is out of scope (`[modem] mode` defaults to BPSK250).
 
-**#1460, after:** with templates on the BPSK rungs, a failed burst counts as ladder evidence only if
-a candidate rung's template corroborates it. Rungs without a template keep today's 0.5 s floor. A
-separate PR on top of this one.
+**#1460, after:** with a BPSK250 template, a failed burst counts as ladder evidence only if a
+candidate rung's template corroborates it; rungs without one keep the 0.5 s floor. A separate PR.
 
 ## Validation, in order, with what each result kills
 
-Pre-registered: each row's pass rule is fixed here, before its numbers exist.
+Pre-registered: each pass rule is fixed here, before its numbers exist. **Non-inferiority**, not
+"within the CI": a column passes only if the **lower** bound of the paired 95 % CI of
+(PN − `--++`) is ≥ −δ. δ and n are fixed now, n sized to resolve δ (the thread needed 600 paired
+seeds to resolve 0.03–0.08, 2026-09-10).
 
 | # | measurement | pass rule | kills, if it fails |
 |---|---|---|---|
-| F1 | **BPSK250 parity at the production entry**: PN-63 vs `--++`, through `accumulate_capture` → `ota_decode_burst` (frame location in play, unlike `demod_parity` column E): decode rate on `moderate_f1` at the SL5 floor with `RsStrong`, AWGN cliff, acquisition across ±50 Hz (REQ-PHY-03), AFC lock rate, timing lock | PN within the paired 95 % CI of `--++` on every column, n ≥ 200 fade trials | **the whole design**; run before any other mode is touched |
-| F2 | BPSK250's own constants: noise column (white, SSB, 500, 200 Hz), decode column (`moderate_f1`), interference column (tone swept over ±200 Hz, AM/DSB/comb at the mode's band) | a threshold exists with the decode tail above the noise and interference ceilings | BPSK250's template (it would fall back to energy-only, a regression; stop and redesign) |
-| F3 | self-ambiguity and cross-correlation of the four chosen sequences at sample offsets | worst off-peak ≤ 0.5 of peak on any payload tried; cross-mode ≤ the mode's derived threshold | the sequence choice (pick another polynomial) |
-| F4 | goodput gate at N = 63 (`goodput_gate`, benchmark) | passes as today | the chip count |
-| F5 | F1 and F2 for BPSK100, BPSK63, BPSK31 | per mode | that mode's template only (it still changes on the wire, for uniformity) |
-| F6 | synthetic regression fixtures for the #1021 / #1045 / #1049 defect classes under the new format, **landed before the flag day** | each fails on a sabotaged build | the flag day (the capture-based pins go dark with the old corpus) |
+| F0 | QPSK250-D noise ceiling at 64 vs 16 symbols, f7-style, white / SSB / 500 / 200 Hz | the 64-symbol ceiling sits below the 0.276 decodable tail with margin | QPSK joining this break (it stays out) |
+| F1 | **BPSK250 parity at the production entry**, PN-63 vs `--++`, through `accumulate_capture` → `ota_decode_burst` (frame location in play): decode rate on `moderate_f1` at the SL5 floor with `Rs`; decode rate at the AWGN cliff; decode rate across ±50 Hz offsets on `moderate_f1` (REQ-PHY-03); timing-lock rate. n = 600 paired per column | δ = 0.03 absolute on every rate | **the whole design**; run before any other mode is touched |
+| F1c | **Receive cost**, `receive_cost_scaling` x86 and both Pis, `PROBE_READ=4096`, after the change | Pi SL2 decode + 0.52 s FSK4 ACK + 1 s margin fits the 9 s ACK window | the slow rungs taking PN (settle window, timing search, veto and phase-2 windows all scale with `preamble_samples`) |
+| F2 | BPSK250's own constants: noise column (white, SSB, 500, 200 Hz), decode column (`moderate_f1`), interference column (tone swept ±200 Hz, AM/DSB/comb at the mode's band) | a threshold exists with the decode tail above the noise and interference ceilings | BPSK250's template (energy-only fallback: a regression; stop and redesign) |
+| F3 | self-ambiguity of x⁶ + x + 1 at sample offsets ≥ 1 symbol, on a **fixed** set of 32 whitened random payloads | worst off-peak ≤ 0.5 of peak on every payload in the set | the polynomial (vet the next primitive) |
+| F4 | goodput gate and benchmark at N = 63 | pass as today | the chip count |
+| F5 | for BPSK100, BPSK63, BPSK31: F1's parity columns (δ = 0.03, n = 600) and the #1454 gather count (BPSK31 at +8 dB, wide filter, 16 placements); then the template columns with the 2026-08-04 pre-registered margin rule and CI-calibrated margins, on the engine's shipped grid (2026-09-11 caveat) | parity: as F1; gather ≥ today's 16/16; template: the rule | parity fail → that rung keeps `--++`; template fail → no template (as today) |
+| F6 | synthetic regression fixtures for the #1021 / #1045 / #1049 defect classes under the new format, **landed before the flag day** | each fails on a sabotaged build | the flag day (the capture pins go dark with the old corpus) |
 | F7 | full gate + `scripts/slow-tests.sh` at one commit | green except the disclosed rows | the merge |
 | F8 | on-air: re-record the corpus on 2 m; un-ignore the four replay rows (#1351) | the replay rows decode | the campaign (M3) |
 
-F1 is the cheapest falsifier and the most likely to kill: the preamble is training data (LMS, the
-drift-fit, the timing metric and the fine AFC all consume known preamble symbols), and the only
-prior parity evidence is `demod_parity`'s same-shape 32-symbol swap with the frame at buffer offset 0.
-`demod_parity` measured PN-31 at parity there (timing, AFC, decode at n = 96) and the transition
-density of a random balanced sequence (23 transitions) failed AFC at BPSK31; an m-sequence has
-N/2 ± 1 transitions, like PN-31 (16), which passed. That is supporting, not sufficient.
+F1 is the cheapest falsifier and the most likely to kill: the preamble is training data (LMS and
+the timing metric consume known preamble symbols), and the only prior parity evidence is
+`demod_parity`'s same-shape 32-symbol swap with the frame at buffer offset 0. There, PN-31 was at
+parity (timing, AFC, decode at n = 96), and a random balanced sequence with 23 transitions failed
+AFC at BPSK31 (unexplained; a hypothesis, 2026-08-04). x⁶ + x + 1 has 32 runs, so 31 transitions in
+63 (density 0.49, against 0.47 shipped and 0.50 for PN-31), which passed. Supporting, not sufficient.
 
 ## Cost
 
-- Airtime +1.49 % on SL2–SL5.
-- ~30 receiver sites, 3 modulator paths (Hann, RRC, GPU), frame geometry, the acceptance-table
-  targets that name geometry (14 of 56 at the last count, a floor).
-- Every BPSK ρ constant re-derived; the veto, the calibration (#1060) and the onset ranking
+- Airtime +1.49 % on the rungs that take it.
+- One generator change, ~30 demod uses following one constant, the AFC-window decoupling, three
+  rewritten tests, frame geometry, and the acceptance rows that name geometry.
+- Every BPSK250 ρ constant re-derived; the veto, the calibration (#1060) and the onset ranking
   re-measured.
+- Receive cost on the slow rungs rises with `preamble_samples` (F1c measures it).
 - The replay corpus is dead until re-recorded (it already is: it predates #1148); F6 replaces its
   pins first.
 - Schedule: past M2's 2026-10-28 target. M3 waits on it (decision 22).
-
-## Open questions for the review
-
-1. Is symbol-domain specification with an NRZI pre-image the right layering, or should the PN be
-   specified in the bit domain (simpler generator, but the transmitted symbols are then the NRZI
-   integral of an m-sequence, which is not an m-sequence and loses the autocorrelation property)?
-   The design assumes symbol domain for that reason.
-2. Does the last preamble symbol's role as the differential reference constrain the sequence
-   (e.g. fix `p[62]`), and does a fixed final symbol cost anything measurable?
-3. Is the AFC window (`4 × PREAMBLE_SYMS` = 252 symbols at 63) still right, or should it stay at 128
-   symbols? The coarse AFC squares the signal, so the sequence is irrelevant at first order; the
-   window length is a separate parameter that the doubling would change silently.
-4. Is uniformity a sufficient reason to change BPSK31/63 on the wire if F5 fails for them?
 
 ## Consumer
 
@@ -155,13 +183,14 @@ traffic), `BpskPlugin::preamble_template` → `ModemEngine::build_preamble_veto`
 
 `openpulse-dsp::preamble` (`PreambleType::Pn63`, `pn_sequence(63, 0x45)`, x⁶ + x + 1), already
 transmitted by the pilot plugin (`plugins/pilot/src/frame.rs:76`); MFSK16's Costas sync (aperiodic,
-in production); QPSK's designed 16-symbol sequence; `demod_parity.rs` (the parity harness) and
-`preamble_rho_fade_and_filter_probe.rs` (f7–f13, the duration/noise measurements). Found by
-`grep -rn "Pn63\|fn pn_sequence" crates plugins --include=*.rs` and the #1062 thread.
+in production); QPSK's designed 16-symbol sequence; `demod_parity.rs` (the parity harness, whose
+`symbols_to_bits` already does the symbol-domain pre-image) and
+`preamble_rho_fade_and_filter_probe.rs` (f7–f13). Found by
+`grep -rn "Pn63\|fn pn_sequence\|fn symbols_to_bits" crates plugins --include=*.rs` and the #1062
+thread.
 
 ## Twins
 
 The GPU modulator (`preamble_bits` is its source too, and default CI does not compile it) and the RRC
-path (which refuses a non-shipped expectation today and must accept the new one). The 8PSK and
-64QAM plugins share the `PREAMBLE_SYMS` shape but are off `hpx_hf` and unchanged; the QPSK plugin
-likewise. Found by `grep -rln "PREAMBLE_SYMS" plugins crates --include=*.rs`.
+path. The 8PSK and 64QAM plugins share the `PREAMBLE_SYMS` shape but are off `hpx_hf` and unchanged;
+QPSK is decided by F0. Found by `grep -rln "PREAMBLE_SYMS" plugins crates --include=*.rs`.
