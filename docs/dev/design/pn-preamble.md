@@ -229,6 +229,31 @@ on both sides: today's 0.40 passes the tone (0.699) and the DSB pair (0.981) and
 fade's decodable frames (shipped p05 0.490). The rule's 1.2 margin is not met and is recorded as not
 met; the margin is 1.07. The validation continues at F3.
 
+**F3 — FAIL as pre-registered, for every degree-6 polynomial; decision needed.**
+`f16_self_ambiguity_over_whitened_frames` (engine-built `Rs` frames, x⁶ + x + 1) and
+`f16b_self_ambiguity_by_polynomial` (all six primitives, 32 seeded 255-byte blocks), 0 Hz:
+
+| polynomial | whole frame (rule ≤ 0.5) | preamble span (≤ 63 symbols) | scan range (≤ 13 000 samples) |
+|---|---|---|---|
+| x⁶+x+1 | 0.572 (engine frames: 0.526) | 0.430 | 0.542 |
+| x⁶+x⁵+1 | 0.583 | 0.375 | 0.467 |
+| x⁶+x⁴+x³+x+1 | 0.653 | 0.441 | 0.484 |
+| x⁶+x⁵+x³+x²+1 | 0.528 | 0.405 | 0.453 |
+| x⁶+x⁵+x²+x+1 | 0.557 | 0.364 | 0.521 |
+| x⁶+x⁵+x⁴+x+1 | 0.521 | 0.462 | 0.492 |
+| shipped `--++` (control) | 0.972 at 1.97 symbols | — | — |
+
+The whole-frame worst is chance correlation of a 62-symbol template with whitened payload
+(σ ≈ 1/√62 ≈ 0.13 per offset, maximised over ~2 000 symbol offsets per frame), so it is set by
+frame length, not by the polynomial, and no N = 63 sequence can meet the rule as written; the same
+polynomial reads 0.526 and 0.572 on two payload sets, which is larger than most gaps between
+polynomials. Inside the preamble span every candidate sits at 0.36–0.46 against the shipped 0.97.
+
+**A finding F2 missed:** the same chance correlation applies to a *foreign* same-baud PSK signal
+carrying random data. Over a long over it can exceed the 0.315 threshold, so neither the veto nor a
+#1460 evidence rule can refuse same-baud data signals by ρ alone. This is inherent to a 62-symbol
+template (the shipped one is worse) and bounds what #1460's rule can promise.
+
 ## Cost
 
 - Airtime +1.49 % on the rungs that take it.

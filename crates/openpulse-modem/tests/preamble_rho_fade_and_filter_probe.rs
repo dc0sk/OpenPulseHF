@@ -2616,3 +2616,147 @@ fn f15_bpsk250_pn63_constants() {
         );
     }
 }
+
+// ── F16: self-ambiguity of the PN-63 template over whitened frames (#1062 design, F3) ──────────
+
+/// F3 of `docs/dev/design/pn-preamble.md`: the worst ρ of the template against its own clean frame
+/// at any sample offset ≥ 1 symbol from the onset, as a fraction of the peak, over a fixed set of
+/// 32 whitened `Rs` frames (payload 8–200 B, seeded). Single frequency (0 Hz): the question is
+/// timing ambiguity at the true carrier. Rule: ≤ 0.5 on every payload. Control: the shipped
+/// template, whose period-4 alias is known to score 1.000 at a 2-symbol lag.
+#[test]
+#[ignore = "verification"]
+fn f16_self_ambiguity_over_whitened_frames() {
+    let sps = 32usize;
+    for (mode, label) in [("BPSK250", "shipped --++"), ("BPSK250-PN", "PN-63")] {
+        let t = bpsk_plugin::modulate::bpsk_preamble_template(&cfg(mode)).expect("template");
+        let mf = IqMatchedFilter::new(t.clone());
+        let mut worst = (0.0f32, 0usize, 0isize);
+        for p in 0..32u64 {
+            let mut x = p.wrapping_mul(0x9E37_79B9_7F4A_7C15) | 1;
+            let len = 8 + (p as usize * 6) % 193;
+            let payload: Vec<u8> = (0..len)
+                .map(|_| {
+                    x ^= x << 13;
+                    x ^= x >> 7;
+                    x ^= x << 17;
+                    x as u8
+                })
+                .collect();
+            let bk = openpulse_audio::LoopbackBackend::new();
+            let mut tx = openpulse_modem::engine::ModemEngine::new(Box::new(bk.clone_shared()));
+            tx.register_plugin(Box::new(bpsk_plugin::BpskPlugin::new()))
+                .unwrap();
+            tx.register_plugin(Box::new(bpsk_plugin::BpskPlugin::pn_candidate()))
+                .unwrap();
+            tx.transmit_with_fec_mode(&payload, mode, FecMode::Rs, None)
+                .unwrap();
+            let frame = bk.drain_samples();
+            let prof = mf.rho_profile(&frame, 0, frame.len());
+            let peak = prof[0];
+            for (off, &r) in prof.iter().enumerate().skip(sps) {
+                let frac = r / peak;
+                if frac > worst.0 {
+                    worst = (frac, p as usize, off as isize);
+                }
+            }
+        }
+        println!(
+            "F16 (#1062 F3) {label}: worst off-peak / peak = {:.3} (payload {}, offset {} samples = {:.2} symbols) -> {}",
+            worst.0,
+            worst.1,
+            worst.2,
+            worst.2 as f32 / sps as f32,
+            if worst.0 <= 0.5 { "PASS" } else { "FAIL" }
+        );
+    }
+}
+
+/// The ±1 symbols of the m-sequence for `x^6 + Σ x^i + 1` (`taps` = the middle exponents),
+/// from the recurrence `a[k+6] = a[k] ⊕ Σ a[k+i]`, seeded `000001`.
+fn m_sequence_6(taps: &[usize]) -> Vec<f32> {
+    let mut a = vec![0u8, 0, 0, 0, 0, 1];
+    while a.len() < 63 {
+        let k = a.len() - 6;
+        let mut b = a[k];
+        for &i in taps {
+            b ^= a[k + i];
+        }
+        a.push(b);
+    }
+    a.iter().map(|&b| if b == 1 { 1.0 } else { -1.0 }).collect()
+}
+
+/// NRZI pre-image of ±1 symbols: flip where the symbol changes, from a positive start.
+fn nrzi_pre_image(symbols: &[f32]) -> Vec<bool> {
+    let mut prev = 1.0f32;
+    symbols
+        .iter()
+        .map(|&s| {
+            let f = s != prev;
+            prev = s;
+            f
+        })
+        .collect()
+}
+
+/// F3's consequence ("vet the next primitive"): the same self-ambiguity statistic for all six
+/// degree-6 primitive polynomials, with frames built through `bpsk_modulate_with_preamble` over a
+/// whitened-like 255-byte block (seeded random bytes). Also reports, without changing the rule,
+/// the worst value within the preamble span (|offset| ≤ 63 symbols) and within the acquisition
+/// scan range (≤ 13 000 samples), the offsets a receiver actually searches.
+#[test]
+#[ignore = "verification"]
+fn f16b_self_ambiguity_by_polynomial() {
+    let sps = 32usize;
+    let c = cfg("BPSK250");
+    let polys: [(&str, &[usize]); 6] = [
+        ("x^6+x+1", &[1]),
+        ("x^6+x^5+1", &[5]),
+        ("x^6+x^4+x^3+x+1", &[1, 3, 4]),
+        ("x^6+x^5+x^3+x^2+1", &[2, 3, 5]),
+        ("x^6+x^5+x^2+x+1", &[1, 2, 5]),
+        ("x^6+x^5+x^4+x+1", &[1, 4, 5]),
+    ];
+    for (name, taps) in polys {
+        let syms = m_sequence_6(taps);
+        let distinct: std::collections::BTreeSet<Vec<i8>> = (0..63)
+            .map(|r| (0..63).map(|k| syms[(k + r) % 63] as i8).collect())
+            .collect();
+        assert_eq!(distinct.len(), 63, "{name} is not maximal-length");
+        let bits = nrzi_pre_image(&syms);
+        let full = bpsk_plugin::modulate::bpsk_modulate_with_preamble(&[], &c, &bits).unwrap();
+        let t = full[..sps * 62].to_vec();
+        let mf = IqMatchedFilter::new(t);
+        let (mut all, mut span, mut scan) = (0.0f32, 0.0f32, 0.0f32);
+        for p in 0..32u64 {
+            let mut x = p.wrapping_mul(0x9E37_79B9_7F4A_7C15) | 1;
+            let block: Vec<u8> = (0..255)
+                .map(|_| {
+                    x ^= x << 13;
+                    x ^= x >> 7;
+                    x ^= x << 17;
+                    x as u8
+                })
+                .collect();
+            let frame =
+                bpsk_plugin::modulate::bpsk_modulate_with_preamble(&block, &c, &bits).unwrap();
+            let prof = mf.rho_profile(&frame, 0, frame.len());
+            let peak = prof[0];
+            for (off, &r) in prof.iter().enumerate().skip(sps) {
+                let f = r / peak;
+                all = all.max(f);
+                if off <= 63 * sps {
+                    span = span.max(f);
+                }
+                if off <= 13_000 {
+                    scan = scan.max(f);
+                }
+            }
+        }
+        println!(
+            "F16b {name:<20} worst/peak: whole frame {all:.3} ({}) | preamble span {span:.3} | scan range {scan:.3}",
+            if all <= 0.5 { "PASS" } else { "FAIL" }
+        );
+    }
+}
