@@ -325,6 +325,12 @@ had been seen). Columns already run (BPSK31 floor/8 dB/−15 dB, BPSK63 floor/8 
 b4bcf90b. BPSK63's −12 dB column also sat under 10 % on both arms (27 / 34 of 600, CI
 [−0.013, +0.036]), so by the amendment above it is re-run at −11 dB.
 
+**BPSK100 on d9031766 (n = 600):** floor 598 / 599, discordant 0/1, +0.002 [−0.002, +0.005] PASS;
+8 dB 597 / 599, discordant 0/2, +0.003 [−0.001, +0.008] PASS. The −10 dB cliff column sat under
+10 % on both arms (30 / 31, discordant 27/28, +0.002 [−0.023, +0.026]), so by the same amendment it
+is re-run at −9 dB, the pilot grid point nearest 50 % (89 %; −11 dB read 0 %). Recorded before the
+−9 dB result.
+
 **A second gap, found preparing F6: `BPSK250-PN` publishes no template.** `preamble_template`
 returns one only for the exact mode `BPSK250`, so F1's PN arm ran with no correlation veto and no
 onset ranking, energy-only, and still matched or beat the shipped arm. The flag-day configuration
