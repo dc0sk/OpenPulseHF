@@ -14,6 +14,7 @@
 //! 0.85 s (SL6) to 1.72 s (SL2) per frame; SL2 without the fallback scan 0.77 s.
 
 use openpulse_audio::LoopbackBackend;
+use openpulse_channel::ChannelModel;
 use openpulse_core::profile::SessionProfile;
 use openpulse_core::rate::SpeedLevel;
 use openpulse_modem::ModemEngine;
@@ -78,6 +79,19 @@ fn probe(level: SpeedLevel, payload: usize) {
     tx.transmit_with_fec_mode(&data, mode, fec, None)
         .expect("transmit");
     let mut audio = tx_bk.drain_samples();
+    // PROBE_OFFSET_HZ shifts the frame's carrier (REQ-PHY-03's ±50 Hz): a BPSK31 frame at +50 Hz
+    // cost ~100 s of x86 CPU to decode in the #1062 F5 parity run, against ~4 s at 0 Hz.
+    let offset: f32 = std::env::var("PROBE_OFFSET_HZ")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(0.0);
+    if offset != 0.0 {
+        audio = openpulse_channel::cfo::CfoChannel::new(openpulse_channel::cfo::CfoConfig::new(
+            offset, 8_000.0,
+        ))
+        .unwrap()
+        .apply(&audio);
+    }
     let frame_len = audio.len();
     audio.extend(std::iter::repeat_n(0.0, 8 * read_size()));
 
@@ -115,7 +129,7 @@ fn probe(level: SpeedLevel, payload: usize) {
     let r = rx.ota_decode_burst(&burst, "probe", fallback).unwrap();
     let decode = t.elapsed();
     println!(
-        "{level:?} {mode:<14} {fec:?} payload {payload:>3}: frame {frame_len:>7} samples ({:>5.1} s audio) \
+        "{level:?} {mode:<14} {fec:?} payload {payload:>3} offset {offset:+.0} Hz: frame {frame_len:>7} samples ({:>5.1} s audio) \
          burst {:>7} | accumulate {:>8.1} ms ({reads} reads) | decode {:>9.1} ms | ok={}",
         frame_len as f64 / 8000.0,
         burst.samples.len(),
