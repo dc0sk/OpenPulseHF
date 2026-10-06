@@ -41,6 +41,10 @@ site reads the preamble from the mode (`preamble_syms_for`, `preamble_bits_for`,
   +0.033 [+0.010, +0.056], 8 dB +0.015 [−0.004, +0.034], ±50 Hz +0.037 / +0.030, AWGN cliff +0.027
   [+0.005, +0.049]. The cliff SNR (−5 dB) was fixed from a shipped-arm pilot before the main run.
 - **F1c (x86):** decode SL2 1.79 → 3.08 s, SL5 0.83 → 0.94 s. The Pi half of the rule is pending.
+- **F2 (BPSK250 constants, rule pre-registered in 7b918cff):** FAIL. PN-63 worst interferer 0.304
+  (DSB ±31.25 Hz; shipped 0.981), lone tone 0.248 (shipped 0.699), SSB noise 0.152 (shipped 0.205);
+  decodable p01 at 3 dB 0.327 against the required 1.2 × 0.304 = 0.364. Control: shipped SSB/500/200 Hz
+  within 0.01 of f2. Sequence stopped for a decision (design, *Results*).
 
 ## 2026-10-04 — The uncoded fallback tries ranked onsets first (receive cost, work plan M2)
 

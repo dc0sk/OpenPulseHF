@@ -2417,3 +2417,202 @@ fn f14_qpsk_preamble_length_and_the_noise_ceiling() {
         }
     );
 }
+
+// ── F15: BPSK250's own constants on the PN-63 candidate (#1062 design, F2) ────────────────────
+
+/// Peak ρ of `t` over band noise, max over `seeds` × `per_seed` samples, engine window and grid.
+fn noise_ceiling(t: &[f32], sps: usize, lo: f32, hi: f32, seeds: &[u64], per_seed: usize) -> f32 {
+    let grid = engine_grid(t.len(), 20.0);
+    let mf = IqMatchedFilter::new(t.to_vec());
+    let w = win_len_for(t, sps);
+    let mut peak = 0.0f32;
+    for &sd in seeds {
+        let noise = band_noise(per_seed, lo, hi, sd);
+        let mut s = 0usize;
+        while s + w <= noise.len() {
+            if let Some((r, _)) =
+                mf.search_normalized_over_frequency(&noise[s..s + w], w - mf.len(), 0.05, FS, &grid)
+            {
+                peak = peak.max(r.rho);
+            }
+            s += w / 4;
+        }
+    }
+    peak
+}
+
+/// ρ of `t` against `window`, engine grid centred at 0.
+fn rho_window(t: &[f32], window: &[f32]) -> f32 {
+    let grid = engine_grid(t.len(), 20.0);
+    let mf = IqMatchedFilter::new(t.to_vec());
+    mf.search_normalized_over_frequency(window, window.len() - mf.len(), 0.05, FS, &grid)
+        .map_or(0.0, |(r, _)| r.rho)
+}
+
+/// The worst ρ of `t` over the pre-registered interference shapes, by shape.
+fn interference_column(t: &[f32], sps: usize) -> Vec<(String, f32)> {
+    let w = win_len_for(t, sps);
+    let fc = 1_500.0f32;
+    let tone = |f: f32, ph: f32| -> Vec<f32> {
+        (0..w)
+            .map(|k| (2.0 * PI_F * f * k as f32 / FS + ph).cos())
+            .collect()
+    };
+    let add = |a: &mut Vec<f32>, b: Vec<f32>| a.iter_mut().zip(b).for_each(|(x, y)| *x += y);
+    let mut out = Vec::new();
+    let mut worst = (0.0f32, 0.0f32);
+    for d in -200..=200 {
+        let r = rho_window(t, &tone(fc + d as f32, 0.0));
+        if r > worst.0 {
+            worst = (r, d as f32);
+        }
+    }
+    out.push((format!("lone tone (worst at {:+.0} Hz)", worst.1), worst.0));
+    for fm in [31.25f32, 62.5, 125.0] {
+        let mut am = tone(fc, 0.0);
+        add(
+            &mut am,
+            tone(fc + fm, 0.0).iter().map(|x| 0.5 * x).collect(),
+        );
+        add(
+            &mut am,
+            tone(fc - fm, 0.0).iter().map(|x| 0.5 * x).collect(),
+        );
+        out.push((format!("AM fm {fm} Hz"), rho_window(t, &am)));
+        let mut dsb = tone(fc + fm, 0.0);
+        add(&mut dsb, tone(fc - fm, 0.0));
+        out.push((format!("DSB fm {fm} Hz"), rho_window(t, &dsb)));
+    }
+    let mut comb = vec![0.0f32; w];
+    for k in -8i32..=8 {
+        add(&mut comb, tone(fc + k as f32 * 31.25, k as f32 * 0.7));
+    }
+    out.push(("comb every 31.25 Hz".into(), rho_window(t, &comb)));
+    out
+}
+
+/// One decode-column trial: (decoded at the true onset, ρ at the true onset).
+fn decode_trial(mode: &'static str, t: &[f32], sps: usize, snr_db: f32, seed: u64) -> (bool, f32) {
+    let payload: Vec<u8> = (0..24u64)
+        .map(|i| (seed.wrapping_mul(31).wrapping_add(i * 7)) as u8)
+        .collect();
+    let bk = openpulse_audio::LoopbackBackend::new();
+    let mut tx = openpulse_modem::engine::ModemEngine::new(Box::new(bk.clone_shared()));
+    tx.register_plugin(Box::new(bpsk_plugin::BpskPlugin::new()))
+        .unwrap();
+    tx.register_plugin(Box::new(bpsk_plugin::BpskPlugin::pn_candidate()))
+        .unwrap();
+    tx.transmit_with_fec_mode(&payload, mode, FecMode::Rs, None)
+        .unwrap();
+    let mut wcfg = WattersonConfig::moderate_f1(Some(seed));
+    wcfg.snr_db = 60.0;
+    let signal = WattersonChannel::new(wcfg)
+        .unwrap()
+        .apply(&bk.drain_samples());
+    let rms = (signal.iter().map(|s| s * s).sum::<f32>() / signal.len() as f32).sqrt();
+    let sigma = rms / 10f32.powf(snr_db / 20.0);
+    let noise = band_noise(signal.len() + 4 * sps, 0.0, 4_000.0, seed ^ 0xA5A5);
+    let nrms = (noise.iter().map(|s| s * s).sum::<f32>() / noise.len() as f32).sqrt();
+    let mut audio: Vec<f32> = noise.iter().map(|x| x / nrms * sigma).collect();
+    for (a, s) in audio.iter_mut().zip(&signal) {
+        *a += s;
+    }
+    let rho = rho_window(t, &audio[..win_len_for(t, sps)]);
+    let mut rx = openpulse_modem::engine::ModemEngine::new(Box::new(
+        openpulse_audio::LoopbackBackend::new(),
+    ));
+    rx.register_plugin(Box::new(bpsk_plugin::BpskPlugin::new()))
+        .unwrap();
+    rx.register_plugin(Box::new(bpsk_plugin::BpskPlugin::pn_candidate()))
+        .unwrap();
+    let ok = rx
+        .decode_burst_with_fec(
+            mode,
+            FecMode::Rs,
+            &openpulse_modem::pipeline::AudioSamples { samples: audio },
+        )
+        .ok()
+        .as_deref()
+        == Some(&payload[..]);
+    (ok, rho)
+}
+
+/// F2 of `docs/dev/design/pn-preamble.md`, pre-registered there (7b918cff) before this ran.
+#[test]
+#[ignore = "verification"]
+fn f15_bpsk250_pn63_constants() {
+    let arms: [(&'static str, &str); 2] = [("BPSK250", "shipped --++"), ("BPSK250-PN", "PN-63")];
+    let sps = 32usize;
+    let seeds: [u64; 5] = [12345, 777, 90210, 31337, 424242];
+    let bands = [
+        ("white 0-4k", 0.0f32, 4_000.0),
+        ("ssb 300-2700", 300.0, 2_700.0),
+        ("filter 1250-1750", 1_250.0, 1_750.0),
+        ("filter 1400-1600", 1_400.0, 1_600.0),
+    ];
+    let trials: u64 = std::env::var("F15_TRIALS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(400);
+    for (mode, label) in arms {
+        let t = bpsk_plugin::modulate::bpsk_preamble_template(&cfg(mode)).expect("template");
+        println!(
+            "\nF15 (#1062 F2): {label} ({mode}), template {} samples",
+            t.len()
+        );
+        let mut ssb = 0.0;
+        for (b, lo, hi) in bands {
+            let c = noise_ceiling(&t, sps, lo, hi, &seeds, 120_000);
+            if b.starts_with("ssb") {
+                ssb = c;
+            }
+            println!("  noise {b:<18} {c:.3}");
+        }
+        let inter = interference_column(&t, sps);
+        let worst_i = inter.iter().map(|x| x.1).fold(0.0f32, f32::max);
+        for (name, r) in &inter {
+            println!("  interference {name:<32} {r:.3}");
+        }
+        let mut p01_3 = f32::NAN;
+        for snr in [5.0f32, 3.0] {
+            let threads = std::thread::available_parallelism().map_or(4, |p| p.get()) as u64;
+            let t_ref = &t;
+            let results: Vec<(bool, f32)> = std::thread::scope(|s| {
+                let hs: Vec<_> = (0..threads)
+                    .map(|k| {
+                        s.spawn(move || {
+                            (0..trials)
+                                .filter(|i| i % threads == k)
+                                .map(|i| decode_trial(mode, t_ref, sps, snr, i + 1))
+                                .collect::<Vec<_>>()
+                        })
+                    })
+                    .collect();
+                hs.into_iter().flat_map(|h| h.join().unwrap()).collect()
+            });
+            let mut dec: Vec<f32> = results.iter().filter(|r| r.0).map(|r| r.1).collect();
+            dec.sort_by(|a, b| a.partial_cmp(b).unwrap());
+            let q = |p: f64| {
+                dec.get(((dec.len() as f64 * p) as usize).min(dec.len().saturating_sub(1)))
+                    .copied()
+                    .unwrap_or(f32::NAN)
+            };
+            let (mn, p01, p05) = (dec.first().copied().unwrap_or(f32::NAN), q(0.01), q(0.05));
+            if snr == 3.0 {
+                p01_3 = p01;
+            }
+            println!(
+                "  decode moderate_f1 {snr} dB: {}/{trials} decodable, rho min {mn:.3} p01 {p01:.3} p05 {p05:.3}",
+                dec.len()
+            );
+        }
+        let floor = ssb.max(worst_i);
+        let pass = p01_3 >= 1.2 * floor;
+        println!(
+            "  F2 rule: decodable p01 @3 dB {p01_3:.3} vs 1.2 x max(SSB {ssb:.3}, interference {worst_i:.3}) = {:.3} -> {}{}",
+            1.2 * floor,
+            if pass { "PASS" } else { "FAIL" },
+            if pass { format!(", threshold {:.3}", (p01_3 * floor).sqrt()) } else { String::new() }
+        );
+    }
+}

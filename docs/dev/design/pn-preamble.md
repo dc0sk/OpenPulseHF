@@ -201,6 +201,28 @@ inside the rule (decode + 0.52 s FSK4 ACK + 1 s ≤ 9 s), but **the rule is on t
 With the ≈ 5.9 s MFSK16 ACK SL2 would not fit (it barely fits today at ≈ 2.7 + 5.9 s); the MFSK16
 ACK follows only an SL1 recommendation, which this rule did not cover — noted, not re-scoped.
 
+**F2 — FAIL under the pre-registered rule (7b918cff); the sequence stops here for a decision.**
+`f15_bpsk250_pn63_constants`, release, 400 seeds per decode cell, same harness for both templates:
+
+| | shipped `--++` (992) | PN-63 (1 984) |
+|---|---|---|
+| noise white / SSB / 500 / 200 Hz | 0.159 / 0.205 / 0.436 / 0.627 | 0.118 / 0.152 / 0.327 / 0.433 |
+| lone tone, fc ± 200 Hz | 0.699 (+83 Hz) | 0.248 (−60 Hz) |
+| AM ±31.25 / ±62.5 / ±125 Hz | 0.114 / 0.569 / 0.054 | 0.182 / 0.271 / 0.197 |
+| DSB ±31.25 / ±62.5 / ±125 Hz | 0.136 / **0.981** / 0.036 | **0.304** / 0.271 / 0.170 |
+| comb every 31.25 Hz | 0.291 | 0.261 |
+| decodable, `moderate_f1` 5 dB | 345/400, min 0.295, p01 0.388 | 355/400, min 0.325, p01 0.387 |
+| decodable, `moderate_f1` 3 dB | 275/400, min 0.306, p01 0.324 | 298/400, min 0.318, p01 0.327 |
+| rule: p01 @3 dB ≥ 1.2 × max(SSB, interference) | 0.324 vs 1.177 — FAIL | 0.327 vs 0.364 — **FAIL** |
+
+Control: the shipped template reproduces f2's SSB / 500 / 200 Hz cells (0.196 / 0.441 / 0.624) within
+0.01; its white cell (0.159 vs 0.080) differs for the documented reason — f2's table predates the
+`band_noise` DC fix. Reading: PN-63 cuts the worst interferer from 0.981 to 0.304 and the lone tone
+from 0.699 to 0.248, and lowers every noise ceiling ~25 %, but a threshold that refuses every
+measured interferer (> 0.304) keeps the 3 dB decodable p01 (0.327) by a margin of 1.07, not the
+1.2 the rule asked for. The binding interferer is a DSB pair at fc ± 31.25 Hz; the binding decode
+tail is #1059's fade-null case (a preamble inside a fade), which no sequence removes.
+
 ## Cost
 
 - Airtime +1.49 % on the rungs that take it.
