@@ -289,6 +289,22 @@ one-rung `Rs` ladders at each rung's own level. Two changes from F1, both fixed 
 BPSK31 −15 dB, BPSK63 −12 dB, BPSK100 −10 dB.** The PN arm trailing at BPSK31's −14 and −12 dB is
 a pilot reading, not a verdict; the main run decides it.
 
+**First main run, BPSK31, floor column (the receiver as of c56fc245): FAIL.** Shipped 599/600,
+PN 573/600, discordant 26/0, PN − shipped −0.043 [−0.060, −0.027]. `f5_diagnose_discordant_seeds`
+put the loss in demodulation, not gathering: each lost frame was gathered whole, and failed again
+when cut at its true onset. **Mechanism:** the timing search summed the preamble correlation
+coherently over the whole preamble, 2.0 s at BPSK31-PN against 1.0 s shipped and 0.25 s at
+BPSK250 (where PN won). A fade, or a carrier error inside the AFC's 2 Hz deadband, turns the phase
+across that span and cancels the sum. **Fix (b4bcf90b):** coherent over at most 32 symbols (the
+shipped length, so the shipped lock is bit-identical and no constant is fitted), segments added
+in power; the GPU kernel declines past one segment. Seeds 1–80: 2 discordant before, 0 after;
+`a_long_preamble_locks_through_a_deadband_carrier_error` fails with the span uncapped. The run was
+stopped there; F5 restarts on the fixed receiver, **and F1 is rerun** because BPSK250-PN's lock
+changed from one 63-symbol sum to two segments.
+
+**Lesson for any long preamble** (QPSK's parked longer preamble, pilots): length buys energy only
+up to the channel's coherence time; past it, combine in power.
+
 ## Cost
 
 - Airtime +1.49 % on the rungs that take it.
