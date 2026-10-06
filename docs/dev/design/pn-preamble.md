@@ -254,6 +254,10 @@ carrying random data. Over a long over it can exceed the 0.315 threshold, so nei
 #1460 evidence rule can refuse same-baud data signals by ρ alone. This is inherent to a 62-symbol
 template (the shipped one is worse) and bounds what #1460's rule can promise.
 
+**Decision 24 (maintainer, 2026-10-06): keep x⁶ + x + 1.** F3 is recorded as failed with a misframed
+rule; the polynomial stays because the measured differences are within payload noise and it is
+already in production. The validation continues at F4.
+
 ## Cost
 
 - Airtime +1.49 % on the rungs that take it.
