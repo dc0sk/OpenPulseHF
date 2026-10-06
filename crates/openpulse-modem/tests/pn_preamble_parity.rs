@@ -133,15 +133,8 @@ impl Rng {
     }
 }
 
-/// One arm of one trial: does `mode` deliver `payload` through the production receive path?
-fn trial(
-    mode: &'static str,
-    level: SpeedLevel,
-    col: Column,
-    seed: u64,
-    payload: &[u8],
-    lead: usize,
-) -> bool {
+/// The capture one arm of one trial sees, and the frame's length in it.
+fn capture(mode: &str, col: Column, seed: u64, payload: &[u8], lead: usize) -> (Vec<f32>, usize) {
     let mut signal = tx_frame(mode, payload);
     if col.fading {
         let mut cfg = WattersonConfig::moderate_f1(Some(seed));
@@ -162,6 +155,19 @@ fn trial(
     for (a, &s) in audio[lead..].iter_mut().zip(&signal) {
         *a += s;
     }
+    (audio, signal.len())
+}
+
+/// One arm of one trial: does `mode` deliver `payload` through the production receive path?
+fn trial(
+    mode: &'static str,
+    level: SpeedLevel,
+    col: Column,
+    seed: u64,
+    payload: &[u8],
+    lead: usize,
+) -> bool {
+    let (audio, _) = capture(mode, col, seed, payload, lead);
     let mut rx = rx_engine(mode, level);
     for read in audio.chunks(READ) {
         if let Some(burst) = rx.accumulate_capture(Some(mode), read.to_vec()).unwrap() {
@@ -173,6 +179,60 @@ fn trial(
         }
     }
     false
+}
+
+/// What one arm did: every gathered burst (start and end against the frame's onset, lead, outcome),
+/// then the same frame handed to `ota_decode_burst` cut at its true onset ± 1 000 samples (oracle).
+fn diagnose(
+    mode: &'static str,
+    level: SpeedLevel,
+    col: Column,
+    seed: u64,
+    payload: &[u8],
+    lead: usize,
+) -> String {
+    let (audio, len) = capture(mode, col, seed, payload, lead);
+    let mut rx = rx_engine(mode, level);
+    let mut out = String::new();
+    let mut fed = 0usize;
+    for read in audio.chunks(READ) {
+        fed += read.len();
+        if let Some(burst) = rx.accumulate_capture(Some(mode), read.to_vec()).unwrap() {
+            let start = fed as i64 - read.len() as i64 - burst.samples.len() as i64 - lead as i64;
+            let end = start + burst.samples.len() as i64;
+            let verdict = match rx.ota_decode_burst(&burst, "diag", None) {
+                Ok(r) if r.payload.as_deref() == Some(payload) => "ok".to_string(),
+                Ok(r) => format!("no payload (mode {:?})", r.mode),
+                Err(e) => format!("err {e}"),
+            };
+            out += &format!(
+                "\n    burst [{start}, {end}) of frame [0, {len}), lead {}: {verdict}",
+                rx.last_flush_lead()
+            );
+        }
+    }
+    let cut = audio[lead - 1_000..(lead + len + 1_000).min(audio.len())].to_vec();
+    let mut rx = rx_engine(mode, level);
+    let oracle = match rx.ota_decode_burst(
+        &openpulse_modem::pipeline::AudioSamples { samples: cut },
+        "oracle",
+        None,
+    ) {
+        Ok(r) if r.payload.as_deref() == Some(payload) => "ok".to_string(),
+        Ok(_) => "no payload".to_string(),
+        Err(e) => format!("err {e}"),
+    };
+    out + &format!("\n    oracle cut: {oracle}")
+}
+
+/// The trial's payload and lead for `seed`, as `run_column` draws them.
+fn draw(seed: u64, max: usize) -> (Vec<u8>, usize) {
+    let mut rng = Rng(seed ^ 0xD1B5_4A32_D192_ED03);
+    let len = 16 + (rng.next() % (max as u64 - 15)) as usize;
+    let payload: Vec<u8> = (0..len).map(|_| rng.next() as u8).collect();
+    // A real lead: noise to warm the carrier detect, then the frame anywhere in a read.
+    let lead = 8 * READ + (rng.next() % READ as u64) as usize;
+    (payload, lead)
 }
 
 /// Paired outcomes `(shipped, candidate)` for `n` seeds of `col`, on all cores.
@@ -187,11 +247,7 @@ fn run_column(r: Rung, col: Column, n: usize) -> Vec<(bool, bool)> {
             s.spawn(move || {
                 for (k, slot) in chunk.iter_mut().enumerate() {
                     let seed = (base + k) as u64 + 1;
-                    let mut rng = Rng(seed ^ 0xD1B5_4A32_D192_ED03);
-                    let len = 16 + (rng.next() % (max as u64 - 15)) as usize;
-                    let payload: Vec<u8> = (0..len).map(|_| rng.next() as u8).collect();
-                    // A real lead: noise to warm the carrier detect, then the frame anywhere in a read.
-                    let lead = 8 * READ + (rng.next() % READ as u64) as usize;
+                    let (payload, lead) = draw(seed, max);
                     *slot = (
                         trial(r.shipped, r.level, col, seed, &payload, lead),
                         trial(r.candidate, r.level, col, seed, &payload, lead),
@@ -334,5 +390,36 @@ fn both_arms_deliver_a_clean_frame() {
             trial(mode, r.level, col, 7, &payload, 8 * READ + 1_234),
             "{mode}"
         );
+    }
+}
+
+/// The discordant seeds of the floor column among `F1_DIAG_SEEDS` (default 1..=60), each arm
+/// diagnosed: does the loss sit in the gathering or in the demodulation?
+#[test]
+#[ignore = "diagnostic: #1062 design F5"]
+fn f5_diagnose_discordant_seeds() {
+    let r = rung();
+    let col = columns(r)[0];
+    let n: u64 = std::env::var("F1_DIAG_SEEDS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(60);
+    for seed in 1..=n {
+        let (payload, lead) = draw(seed, payload_max());
+        let a = trial(r.shipped, r.level, col, seed, &payload, lead);
+        let b = trial(r.candidate, r.level, col, seed, &payload, lead);
+        if a == b {
+            continue;
+        }
+        println!(
+            "seed {seed}: shipped {a}, PN {b}, payload {} B",
+            payload.len()
+        );
+        for mode in [r.shipped, r.candidate] {
+            println!(
+                "  {mode}:{}",
+                diagnose(mode, r.level, col, seed, &payload, lead)
+            );
+        }
     }
 }
