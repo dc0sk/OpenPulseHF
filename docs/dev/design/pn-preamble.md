@@ -2,7 +2,7 @@
 project: openpulsehf
 doc: docs/dev/design/pn-preamble.md
 status: draft
-last_updated: 2026-10-05
+last_updated: 2026-10-06
 ---
 
 # Replace the BPSK preamble with a PN-63 sync word (#1062) — revision 2
@@ -147,7 +147,7 @@ seeds to resolve 0.03–0.08, 2026-09-10).
 | F1c | **Receive cost**, `receive_cost_scaling` x86 and both Pis, `PROBE_READ=4096`, after the change | Pi SL2 decode + 0.52 s FSK4 ACK + 1 s margin fits the 9 s ACK window | the slow rungs taking PN (settle window, timing search, veto and phase-2 windows all scale with `preamble_samples`) |
 | F2 | BPSK250's own constants, PN-63 template (`bpsk_preamble_template` on `BPSK250-PN`, 1 984 samples), engine window (template + 2 symbols) and grid (±20 Hz, step from the span), shipped template alongside as control. **Noise:** peak ρ, max over 5 seeds × 15 s, white / SSB / 500 / 200 Hz; control: the shipped template reproduces f2's BPSK250 column within 0.03. **Decode:** 400 seeds of `moderate_f1` at 5 dB and at 3 dB (F1's SNR convention), payload 24 B `Rs`; ρ at the true onset for every frame that decodes at its true onset; report min, p01, p05. **Interference:** ρ against a lone tone swept fc ± 200 Hz in 1 Hz steps, AM (carrier ± 31.25/62.5/125 Hz), DSB (the same pairs, no carrier) and a comb (tones every 31.25 Hz across ±250 Hz), grid centred at 0 | **pass** if the decodable p01 at 3 dB is ≥ 1.2 × max(SSB noise ceiling, worst interference ρ); the threshold is then the geometric mean of the two sides. The 500/200 Hz cells are reported, not gating: the #1157 runtime calibration owns narrow filters, as it does today | BPSK250's template (energy-only fallback: a regression; stop and redesign) |
 | F3 | self-ambiguity of x⁶ + x + 1 at sample offsets ≥ 1 symbol, on a **fixed** set of 32 whitened random payloads | worst off-peak ≤ 0.5 of peak on every payload in the set | the polynomial (vet the next primitive) |
-| F4 | goodput gate and benchmark at N = 63 | pass as today | the chip count |
+| F4 | goodput gate at N = 63: the gate's two PSK cases (`fast`, AWGN 20 dB, 200 B × 40, seed 5; `moderate_f1` 20 dB, 64 B × 60, seed 7) on `apparatus:fast-pn` (`fast`'s rungs through `from_rungs`, BPSK31–250 as `-PN`) against `apparatus:fast-copy` (the same rebuild, shipped preamble). Positive control: `fast-copy` reproduces `fast` within 2 % on both cases. The CLI benchmark replays HPX state-machine events with no modem, so the preamble cannot move it; it is run once as a check, not a measurement | the PN ladder clears the shipped floors (AWGN ≥ 250 bps; fade avg level ≥ 3.0, delivery > 0.9), and its AWGN goodput is ≥ control × (1 − 0.0149) × 0.95 (the airtime cost, then 5 % for one seed) | the chip count |
 | F5 | for BPSK100, BPSK63, BPSK31: F1's parity columns (δ = 0.03, n = 600) and the #1454 gather count (BPSK31 at +8 dB, wide filter, 16 placements); then the template columns with the 2026-08-04 pre-registered margin rule and CI-calibrated margins, on the engine's shipped grid (2026-09-11 caveat) | parity: as F1; gather ≥ today's 16/16; template: the rule | parity fail → that rung keeps `--++`; template fail → no template (as today) |
 | F6 | synthetic regression fixtures for the #1021 / #1045 / #1049 defect classes under the new format, **landed before the flag day** | each fails on a sabotaged build | the flag day (the capture pins go dark with the old corpus) |
 | F7 | full gate + `scripts/slow-tests.sh` at one commit | green except the disclosed rows | the merge |
