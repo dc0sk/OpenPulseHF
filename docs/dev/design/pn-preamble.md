@@ -302,6 +302,14 @@ in power; the GPU kernel declines past one segment. Seeds 1–80: 2 discordant b
 stopped there; F5 restarts on the fixed receiver, **and F1 is rerun** because BPSK250-PN's lock
 changed from one 63-symbol sum to two segments.
 
+**Amendment (before any offset-column result): the ±50 Hz columns on the slow rungs run at
+n = 200, not 600.** A 4-pair timing probe of BPSK31's +50 Hz column took 271 s (4/4 on both arms,
+the only outcome seen): about 100 s of x86 CPU per 66 s frame, against ~8 s per pair at 0 Hz, the
+same on both arms. At n = 600 each offset column costs ~8 h. At the measured decode rates (≈ 1.0)
+200 pairs resolve δ = 0.03 unless discordance appears, and the column is then re-run at 600.
+The other three columns keep n = 600. Run per column with `F1_COLUMN`. The receive cost itself is
+a separate Release 1 finding (work plan), not a preamble question: it is the shipped receiver's.
+
 **A second gap, found preparing F6: `BPSK250-PN` publishes no template.** `preamble_template`
 returns one only for the exact mode `BPSK250`, so F1's PN arm ran with no correlation veto and no
 onset ranking, energy-only, and still matched or beat the shipped arm. The flag-day configuration

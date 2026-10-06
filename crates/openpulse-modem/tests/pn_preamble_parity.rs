@@ -352,7 +352,12 @@ fn f1_bpsk250_pn63_against_the_shipped_preamble() {
         payload_max()
     );
     let mut all_pass = true;
-    for col in columns(r) {
+    // `F1_COLUMN` runs one column by index, to time or re-run it alone.
+    let only: Option<usize> = std::env::var("F1_COLUMN").ok().and_then(|v| v.parse().ok());
+    for (k, col) in columns(r).into_iter().enumerate() {
+        if only.is_some_and(|o| o != k) {
+            continue;
+        }
         let t = std::time::Instant::now();
         let pairs = run_column(r, col, n);
         let a = pairs.iter().filter(|p| p.0).count();
