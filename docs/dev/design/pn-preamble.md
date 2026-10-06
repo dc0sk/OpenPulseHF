@@ -258,6 +258,18 @@ template (the shipped one is worse) and bounds what #1460's rule can promise.
 rule; the polynomial stays because the measured differences are within payload noise and it is
 already in production. The validation continues at F4.
 
+### F4: goodput gate (rule pre-registered in a1619ea2)
+
+| ladder | AWGN 20 dB | `moderate_f1` 20 dB delivery | avg level | final |
+|---|---|---|---|---|
+| `fast` | 331 bps | 0.98 | 9.8 | SL13 |
+| `apparatus:fast-copy` (control) | 331 bps | 0.98 | 9.8 | SL13 |
+| `apparatus:fast-pn` | 328 bps | 1.00 | 9.8 | SL11 |
+
+**PASS.** The control reproduces `fast` exactly; the PN ladder clears both floors and its goodput
+is above the bound 331 × 0.9851 × 0.95 = 310 (−0.9 %, one seed). The CLI benchmark replays state-machine events with no
+modem: 10/10, mean transitions 5.1, as expected. The validation continues at F5.
+
 ## Cost
 
 - Airtime +1.49 % on the rungs that take it.

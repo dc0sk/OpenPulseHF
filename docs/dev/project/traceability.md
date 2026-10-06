@@ -15,6 +15,28 @@ this ledger adds the design rationale and the actually-observed results per chan
 
 ---
 
+## 2026-10-06 — #1062 PN-63 preamble: F3 and F4 (work plan M2; follows the 2026-10-05 entry below)
+
+**Change.** The next two falsifiers of `docs/dev/design/pn-preamble.md`. Still not the wire change.
+
+**Decision.** F3 failed under a misframed rule (whole-frame chance correlation is set by frame length,
+not the polynomial); decision 24 keeps x⁶ + x + 1. F4's rule was pre-registered in a1619ea2 before
+the run.
+
+**Implementation (measurement apparatus).** `f16_self_ambiguity_over_whitened_frames` and
+`f16b_self_ambiguity_by_polynomial` (F3). `openpulse-linksim` feature `pn-candidate` (dev-only):
+`apparatus:fast-pn` (`fast`'s rungs through `from_rungs`, BPSK31–250 as `-PN`), the control
+`apparatus:fast-copy` (the same rebuild, shipped preamble), and the ignored `f4_pn_ladder_goodput`.
+
+**Tests → results.**
+- **F3:** worst off-peak over 32 whitened frames 0.52–0.65 for every primitive degree-6 polynomial
+  (x⁶ + x + 1: 0.53–0.57 across two payload sets); inside the preamble span 0.36–0.46 against the
+  shipped 0.97. FAIL for all; polynomial kept (decision 24).
+- **F4 (release, seeded):** AWGN 20 dB `fast` 331 bps, `fast-copy` 331, `fast-pn` 328 (bound
+  331 × 0.9851 × 0.95 = 310); `moderate_f1` 20 dB delivery 0.98 / 0.98 / 1.00, avg level 9.8 on all
+  three. Positive control exact. **PASS.** CLI benchmark (no modem in the loop, so a check only):
+  10/10, mean transitions 5.1. Clippy with the feature: clean.
+
 ## 2026-10-05 — #1062 PN-63 preamble: design reviewed; F0, F1 and F1c (x86) measured (decision 22, work plan M2)
 
 **Change.** Decision 22 moves #1062 into Release 1. Design `docs/dev/design/pn-preamble.md`
