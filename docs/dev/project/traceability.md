@@ -44,7 +44,8 @@ site reads the preamble from the mode (`preamble_syms_for`, `preamble_bits_for`,
 - **F2 (BPSK250 constants, rule pre-registered in 7b918cff):** FAIL. PN-63 worst interferer 0.304
   (DSB ±31.25 Hz; shipped 0.981), lone tone 0.248 (shipped 0.699), SSB noise 0.152 (shipped 0.205);
   decodable p01 at 3 dB 0.327 against the required 1.2 × 0.304 = 0.364. Control: shipped SSB/500/200 Hz
-  within 0.01 of f2. Sequence stopped for a decision (design, *Results*).
+  within 0.01 of f2. Accepted by decision 23 at a 1.07 margin, threshold 0.315: better than the shipped
+  template on both sides (it passes tone 0.699 and DSB 0.981, and rejects more decodable frames).
 
 ## 2026-10-04 — The uncoded fallback tries ranked onsets first (receive cost, work plan M2)
 

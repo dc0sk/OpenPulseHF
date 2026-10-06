@@ -223,6 +223,12 @@ measured interferer (> 0.304) keeps the 3 dB decodable p01 (0.327) by a margin o
 1.2 the rule asked for. The binding interferer is a DSB pair at fc ± 31.25 Hz; the binding decode
 tail is #1059's fade-null case (a preamble inside a fade), which no sequence removes.
 
+**Decision 23 (maintainer, 2026-10-06): accepted.** BPSK250-PN publishes a template with threshold
+**0.315** (the geometric mean of 0.304 and 0.327), on the ground that it beats the shipped template
+on both sides: today's 0.40 passes the tone (0.699) and the DSB pair (0.981) and rejects more of the
+fade's decodable frames (shipped p05 0.490). The rule's 1.2 margin is not met and is recorded as not
+met; the margin is 1.07. The validation continues at F3.
+
 ## Cost
 
 - Airtime +1.49 % on the rungs that take it.
