@@ -302,6 +302,17 @@ in power; the GPU kernel declines past one segment. Seeds 1–80: 2 discordant b
 stopped there; F5 restarts on the fixed receiver, **and F1 is rerun** because BPSK250-PN's lock
 changed from one 63-symbol sum to two segments.
 
+**A second gap, found preparing F6: `BPSK250-PN` publishes no template.** `preamble_template`
+returns one only for the exact mode `BPSK250`, so F1's PN arm ran with no correlation veto and no
+onset ranking, energy-only, and still matched or beat the shipped arm. The flag-day configuration
+publishes a template with threshold 0.315 (decision 23) and grid ±20 Hz (F2), and a delivered-frame
+bound that was never re-derived (the shipped 0.50 is void at 252 ms, *Templates and constants*).
+**Derivation, fixed before the run:** f9 (`F9_MODE`), veto off on the receiver, `filter 1250-1750`
+on `moderate_f1` at 5 / 10 / 20 dB, 120 seeds per cell, payload 200 B `Rs`, deterministic budget
+`F9_POS=8000 F9_ITERS=64000` (the #1058 family's); the bound is the lowest of the three cells'
+decoded-ρ p01, rounded down to 0.01. The shipped template runs the same cells as a control and is
+reported beside its 0.50. Then F1 is rerun on BPSK250 with the full template.
+
 **Lesson for any long preamble** (QPSK's parked longer preamble, pilots): length buys energy only
 up to the channel's coherence time; past it, combine in power.
 

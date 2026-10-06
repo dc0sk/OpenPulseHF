@@ -1371,7 +1371,19 @@ impl ModulationPlugin for NoVetoBpsk {
 #[test]
 #[ignore = "verification"]
 fn f9_decode_conditioned_rho_tail() {
-    let t = plugin_template("BPSK250").expect("BPSK250 template").0;
+    // `F9_MODE=BPSK250-PN` measures the #1062 candidate (design F5: its delivered-frame bound). The
+    // candidate publishes no template yet, so its template is built directly and its receiver runs
+    // without a veto whatever F9_VETO says.
+    let mode: &'static str = match std::env::var("F9_MODE").as_deref() {
+        Ok("BPSK250-PN") => "BPSK250-PN",
+        _ => "BPSK250",
+    };
+    let pn = mode.ends_with("-PN");
+    let t = if pn {
+        bpsk_plugin::modulate::bpsk_preamble_template(&cfg(mode)).expect("PN template")
+    } else {
+        plugin_template(mode).expect("BPSK250 template").0
+    };
     let seeds: u64 = std::env::var("F9_SEEDS")
         .ok()
         .and_then(|v| v.parse().ok())
@@ -1380,7 +1392,7 @@ fn f9_decode_conditioned_rho_tail() {
         .map(|i| (i.wrapping_mul(2_654_435_761) >> 24) as u8)
         .collect();
 
-    println!("\nF9: BPSK250+Rs, rho vs DECODE on identical samples, {seeds} seeds/cell");
+    println!("\nF9: {mode}+Rs, rho vs DECODE on identical samples, {seeds} seeds/cell");
     println!(
         "  {:<16} {:>5} {:>7} {:>9} {:>25} {:>25}",
         "band", "snr", "decode", "min rho", "miss rate, ALL frames", "miss rate, DECODED only"
@@ -1427,6 +1439,12 @@ fn f9_decode_conditioned_rho_tail() {
                 h.tx_engine
                     .register_plugin(Box::new(bpsk_plugin::BpskPlugin::new()))
                     .expect("register tx");
+                h.tx_engine
+                    .register_plugin(Box::new(bpsk_plugin::BpskPlugin::pn_candidate()))
+                    .expect("register tx");
+                h.rx_engine
+                    .register_plugin(Box::new(bpsk_plugin::BpskPlugin::pn_candidate()))
+                    .expect("register rx");
                 // F9_VETO=off registers the veto-disabled wrapper on the RECEIVER only, so the
                 // decoded set is chosen by the channel rather than partly by the subject of the
                 // measurement. The transmitter is untouched: the wire is identical either way.
@@ -1463,7 +1481,7 @@ fn f9_decode_conditioned_rho_tail() {
                     h.rx_engine.set_deterministic_max_iterations(Some(iters));
                 }
                 if h.tx_engine
-                    .transmit_with_fec_mode(&payload, "BPSK250", FecMode::Rs, None)
+                    .transmit_with_fec_mode(&payload, mode, FecMode::Rs, None)
                     .is_err()
                 {
                     continue;
@@ -1484,7 +1502,7 @@ fn f9_decode_conditioned_rho_tail() {
                 let ok = h
                     .rx_engine
                     .receive_with_fec_mode_timeout(
-                        "BPSK250",
+                        mode,
                         FecMode::Rs,
                         None,
                         Duration::from_millis(8_000),
@@ -1528,6 +1546,22 @@ fn f9_decode_conditioned_rho_tail() {
                 rate(&decoded, 0.30),
                 rate(&decoded, 0.40),
                 rate(&decoded, 0.50),
+            );
+            let mut sorted = decoded.clone();
+            sorted.sort_by(f32::total_cmp);
+            let q = |p: f64| {
+                sorted
+                    .get(((sorted.len() as f64 * p) as usize).min(sorted.len().saturating_sub(1)))
+                    .copied()
+                    .unwrap_or(f32::NAN)
+            };
+            println!(
+                "      decoded rho: n {} p01 {:.3} p05 {:.3} p10 {:.3} median {:.3}",
+                sorted.len(),
+                q(0.01),
+                q(0.05),
+                q(0.10),
+                q(0.50)
             );
             println!(
                 "      veto: {veto_rejections} settle rejections over {} seeds; seeds with a \
