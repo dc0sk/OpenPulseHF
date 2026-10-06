@@ -317,6 +317,14 @@ before any −14 dB main-run result:** the column is re-run at −14 dB, the pil
 50 %, n = 600, and the same rule applies to BPSK63/100 if their cliff columns land under 10 % on
 both arms.
 
+**Receiver for the remaining F5 columns: d9031766** (the off-frequency scan fix, REQ-PHY-03,
+found by this run). Both arms share it, so parity is unaffected, and it is the receiver the flag day
+ships. It makes an offset frame cost what an on-frequency one does, so **the ±50 Hz columns return
+to the pre-registered n = 600** (the n = 200 amendment was for cost alone, and no offset-column result
+had been seen). Columns already run (BPSK31 floor/8 dB/−15 dB, BPSK63 floor/8 dB/−12 dB) ran on
+b4bcf90b. BPSK63's −12 dB column also sat under 10 % on both arms (27 / 34 of 600, CI
+[−0.013, +0.036]), so by the amendment above it is re-run at −11 dB.
+
 **A second gap, found preparing F6: `BPSK250-PN` publishes no template.** `preamble_template`
 returns one only for the exact mode `BPSK250`, so F1's PN arm ran with no correlation veto and no
 onset ranking, energy-only, and still matched or beat the shipped arm. The flag-day configuration
