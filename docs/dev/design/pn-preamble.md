@@ -310,6 +310,13 @@ same on both arms. At n = 600 each offset column costs ~8 h. At the measured dec
 The other three columns keep n = 600. Run per column with `F1_COLUMN`. The receive cost itself is
 a separate Release 1 finding (work plan), not a preamble question: it is the shipped receiver's.
 
+**BPSK31 cliff column, as pre-registered (−15 dB): vacuous.** Shipped 2/600, PN 4/600, discordant
+2/4, CI [−0.005, +0.011]: it passes, but both arms sit on the floor, so it says nothing. The
+midpoint rule assumed a gentler curve than the pilot's (−16 dB 0 %, −14 dB 57 %). **Amendment,
+before any −14 dB main-run result:** the column is re-run at −14 dB, the pilot grid point nearest
+50 %, n = 600, and the same rule applies to BPSK63/100 if their cliff columns land under 10 % on
+both arms.
+
 **A second gap, found preparing F6: `BPSK250-PN` publishes no template.** `preamble_template`
 returns one only for the exact mode `BPSK250`, so F1's PN arm ran with no correlation veto and no
 onset ranking, energy-only, and still matched or beat the shipped arm. The flag-day configuration
