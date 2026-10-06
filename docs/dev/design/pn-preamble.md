@@ -284,6 +284,11 @@ one-rung `Rs` ladders at each rung's own level. Two changes from F1, both fixed 
   50 % decode rate (F1's rule: −6 dB 12 %, −4 dB 99 % → −5 dB). If the grid does not bracket 50 %,
   it is extended by 4 dB on the open side and rerun, never interpolated.
 
+**Pilots (2026-10-06, 100 trials per SNR, shipped / PN):** BPSK31 −16 dB 0/0, −14 dB 57/46,
+−12 dB 100/94; BPSK63 −13 dB 0/0, −11 dB 96/95; BPSK100 −11 dB 0/0, −9 dB 89/98. **Cliffs fixed:
+BPSK31 −15 dB, BPSK63 −12 dB, BPSK100 −10 dB.** The PN arm trailing at BPSK31's −14 and −12 dB is
+a pilot reading, not a verdict; the main run decides it.
+
 ## Cost
 
 - Airtime +1.49 % on the rungs that take it.

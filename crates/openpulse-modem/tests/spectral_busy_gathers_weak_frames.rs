@@ -39,6 +39,9 @@ fn engine() -> (ModemEngine, LoopbackBackend) {
     let mut e = ModemEngine::new(Box::new(lb.clone_shared()));
     e.register_plugin(Box::new(BpskPlugin::new()))
         .expect("register");
+    // The #1062 candidate's `-PN` modes, for the F5 probe below; no shipped mode changes.
+    e.register_plugin(Box::new(BpskPlugin::pn_candidate()))
+        .expect("register");
     (e, lb)
 }
 
@@ -81,7 +84,7 @@ fn frame(payload: &[u8], mode: &str) -> Vec<f32> {
 
 /// Half the occupied band of each BPSK rung used here (its baud).
 fn half_band(mode: &str) -> f32 {
-    match mode {
+    match mode.trim_end_matches("-PN") {
         "BPSK250" => 250.0,
         "BPSK63" => 63.0,
         "BPSK31" => 31.25,
@@ -513,4 +516,43 @@ fn weak_frames_decode_through_the_daemon_path() {
         }
     }
     assert!(failures.is_empty(), "{failures:#?}");
+}
+
+/// #1062 design F5: the decode cells above with the PN-63 candidate beside the shipped preamble on the
+/// same placements. The alignment cells were built for the alternating preamble's two parities; the
+/// PN preamble has no parity, so they are kept as placements. Rule: PN decodes at least as many as
+/// shipped in every cell, and the shipped arm reproduces the bars above.
+#[test]
+#[ignore = "measurement: #1062 design F5, release build"]
+fn f5_pn_gather_counts() {
+    let p = payload(64);
+    let wide = corpus(WIDE);
+    let n500 = corpus(NARROW_500);
+    for (shipped, pn) in [("BPSK31", "BPSK31-PN"), ("BPSK63", "BPSK63-PN")] {
+        let tx = [frame(&p, shipped), frame(&p, pn)];
+        let cells: Vec<(&str, &Capture, f32, Option<usize>)> = if shipped == "BPSK31" {
+            vec![
+                ("A +8", &wide, 8.0, None),
+                ("B128 +8", &wide, 8.0, Some(128)),
+                ("B384 +8", &wide, 8.0, Some(384)),
+                ("C0 +8", &wide, 8.0, Some(0)),
+                ("I +10", &wide, 10.0, None),
+                ("E +7", &wide, 7.0, None),
+                ("F +6", &wide, 6.0, None),
+            ]
+        } else {
+            vec![
+                ("wide +8", &wide, 8.0, None),
+                ("500 Hz +8", &n500, 8.0, None),
+            ]
+        };
+        for (name, idle, db, align) in cells {
+            for (mode, tx) in [(shipped, &tx[0]), (pn, &tx[1])] {
+                let (whole, heads, decoded, flickers) = cell(idle, mode, tx, db, align, Some(&p));
+                eprintln!(
+                    "F5 {mode:<10} {name:<8} decoded {decoded}/16, whole {whole}/16, head {heads}/16, flickers {flickers}"
+                );
+            }
+        }
+    }
 }
