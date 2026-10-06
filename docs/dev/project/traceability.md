@@ -15,6 +15,32 @@ this ledger adds the design rationale and the actually-observed results per chan
 
 ---
 
+## 2026-10-06 — An off-frequency first frame does not pay the onset scan (REQ-PHY-03, work plan M2)
+
+**Change.** Found by #1062's F5 parity run: a BPSK31 frame at +50 Hz cost ~100 s of x86 CPU on both
+arms. `receive_cost_scaling` with the new `PROBE_OFFSET_HZ` (clean frame, fresh receiver, x86
+release): +50 Hz decode SL2 23.9 s (0 Hz: 1.9), SL3 9.1, SL4 6.4, SL6 3.0; SL5 unchanged. On a Pi
+(~3.7×) that misses the 9 s ACK window on the first frame from every station.
+
+**Decision.** The coded onset scan ran at the pre-burst AFC correction, learnt only from a decode,
+so an off-frequency frame failed every onset and was found by phase 2 after the scan, the deferred
+fallback and phase 2's own settle. Deleting the fallback (`PROBE_NO_FALLBACK`) left SL2 at 21.5 s,
+so the scan was the cost. Fix: one settle at the flushed burst's trigger (`lead`, where the frame is
+on air; onset 0 is the pre-trigger ring and settled at −1739 Hz) through `acquire_at_onset`, phase
+2's own definition, which answers `false` inside the settle deadband; when it reports a correction
+the scan runs at it first, from onset 0, and the uncorrected scan follows if it fails. An
+on-frequency burst pays one mini-settle per candidate (at most two) and scans as before.
+
+**Implementation.** `engine.rs` `ota_decode_and_ack_inner` (the coded scan), `decode_attempts`
+tripwire (instruments). Tests: `daemon_frequency_acquisition::an_off_frequency_first_frame_does_not_pay_the_onset_scan`;
+`an_on_frequency_burst_pays_no_acquisition_cost` bound 0 → ≤ 2 settles (the trigger check, not
+phase 2's ~129).
+
+**Tests → results.** New test 4/4 in its file; BPSK100 decode attempts 34 at 0 Hz, 35 at +50 Hz;
+sabotaged (corrected pass disabled) 292, FAIL. Probe after: +50 Hz SL2 2.18 s, SL3 1.21, SL4 0.95,
+SL6 0.22, SL5 0.81; −50 Hz the same; 0 Hz unchanged. `openpulse-modem` + `openpulse-daemon`:
+828 passed, 0 failed; clippy clean.
+
 ## 2026-10-06 — #1062 PN-63 preamble: F3 and F4 (work plan M2; follows the 2026-10-05 entry below)
 
 **Change.** The next two falsifiers of `docs/dev/design/pn-preamble.md`. Still not the wire change.

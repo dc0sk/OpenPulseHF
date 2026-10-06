@@ -74,13 +74,17 @@ fn burst_at(offset_hz: f32) -> Vec<f32> {
 }
 
 fn burst_at_fec(offset_hz: f32, fec: FecMode) -> Vec<f32> {
+    burst_of(MODE, offset_hz, fec)
+}
+
+fn burst_of(mode: &str, offset_hz: f32, fec: FecMode) -> Vec<f32> {
     let idle = load_corpus("ic9700-idle-hot.wav").expect("corpus idle");
     let mut tx = ChannelSimHarness::new();
     tx.tx_engine
         .register_plugin(Box::new(BpskPlugin::new()))
         .expect("register");
     tx.tx_engine
-        .transmit_with_fec_mode(PAYLOAD, MODE, fec, None)
+        .transmit_with_fec_mode(PAYLOAD, mode, fec, None)
         .expect("transmit");
     let mut cfo = openpulse_channel::cfo::CfoChannel::new(openpulse_channel::cfo::CfoConfig::new(
         offset_hz,
@@ -101,6 +105,12 @@ fn burst_at_fec(offset_hz: f32, fec: FecMode) -> Vec<f32> {
 /// the decode would pass while the acquisition pass ran on every burst, which is the property the
 /// two-phase design exists to avoid.
 fn via_daemon(samples: &[f32]) -> (bool, u64) {
+    let (ok, settles, _) = via_daemon_at(MODE, samples);
+    (ok, settles)
+}
+
+/// [`via_daemon`] on the rung running `mode`, also returning the decode attempts the bursts cost.
+fn via_daemon_at(mode: &str, samples: &[f32]) -> (bool, u64, u64) {
     let backend = LoopbackBackend::new();
     let mut e = ModemEngine::new(Box::new(backend.clone_shared()));
     e.register_plugin(Box::new(BpskPlugin::new()))
@@ -110,8 +120,8 @@ fn via_daemon(samples: &[f32]) -> (bool, u64) {
     let profile = SessionProfile::fast();
     let level = (1u8..=20)
         .filter_map(SpeedLevel::from_u8)
-        .find(|&l| profile.mode_for(l) == Some(MODE))
-        .unwrap_or_else(|| panic!("hpx_hf has no rung running {MODE}"));
+        .find(|&l| profile.mode_for(l) == Some(mode))
+        .unwrap_or_else(|| panic!("hpx_hf has no rung running {mode}"));
     e.start_ota_session(profile);
     e.ota_lock_level(level);
 
@@ -119,12 +129,12 @@ fn via_daemon(samples: &[f32]) -> (bool, u64) {
         SAMPLE_RATE * openpulse_config::DaemonConfig::default().receive_tick_ms as usize / 1_000;
     let mut bursts = Vec::new();
     for chunk in samples.chunks(tick) {
-        if let Ok(Some(b)) = e.accumulate_capture(Some(MODE), chunk.to_vec()) {
+        if let Ok(Some(b)) = e.accumulate_capture(Some(mode), chunk.to_vec()) {
             bursts.push(b);
         }
     }
     for _ in 0..8 {
-        if let Ok(Some(b)) = e.accumulate_capture(Some(MODE), vec![0.0; tick]) {
+        if let Ok(Some(b)) = e.accumulate_capture(Some(mode), vec![0.0; tick]) {
             bursts.push(b);
         }
     }
@@ -137,7 +147,7 @@ fn via_daemon(samples: &[f32]) -> (bool, u64) {
             }
         }
     }
-    (ok, e.afc_settle_attempts())
+    (ok, e.afc_settle_attempts(), e.decode_attempts())
 }
 
 /// The requirement itself, at the bound it names, on the surface that was failing it.
@@ -195,10 +205,37 @@ fn the_acquisition_pass_recovers_a_station_beyond_native_reach() {
 fn an_on_frequency_burst_pays_no_acquisition_cost() {
     let (ok, settles) = via_daemon(&burst_at(0.0));
     assert!(ok, "the on-frequency case must still decode");
-    assert_eq!(
-        settles, 0,
+    // One settle per rung candidate (at most two) is the trigger-point check that asks whether the
+    // burst is off frequency before the coded scan; phase 2 settles at every coarse onset.
+    assert!(
+        settles <= 2,
         "an on-frequency burst spent {settles} settle attempts — phase 1 decoded it, so phase 2 \
          must never have run. (Measured before the fallback split: 129, all of them inside the \
          uncoded fallback trying to decode a coded frame.)"
+    );
+}
+
+/// The first frame from a station off frequency must not pay the whole onset scan before the
+/// carrier is acquired (REQ-PHY-03, receive cost).
+///
+/// The correction is learnt only from a decode, so a fresh receiver meets every station's first
+/// frame at its raw offset. Before the trigger-point check, a frame off frequency failed the coded
+/// scan at every onset and was found only by phase 2: at +50 Hz `receive_cost_scaling` measured SL4
+/// 1.0 → 6.4 s and SL2 1.9 → 23.9 s, past a Pi's 9 s ACK window. Bounded in decode attempts, not
+/// time, so a loaded machine cannot pass or fail it.
+// VERIFIES: REQ-PHY-03
+#[test]
+fn an_off_frequency_first_frame_does_not_pay_the_onset_scan() {
+    const SLOW_MODE: &str = "BPSK100";
+    let (ok_on, _, on) = via_daemon_at(SLOW_MODE, &burst_of(SLOW_MODE, 0.0, FEC));
+    let (ok_off, _, off) = via_daemon_at(SLOW_MODE, &burst_of(SLOW_MODE, REQUIRED_OFFSET_HZ, FEC));
+    eprintln!("{SLOW_MODE} decode attempts: 0 Hz {on}, +{REQUIRED_OFFSET_HZ} Hz {off}");
+    assert!(
+        ok_on && ok_off,
+        "both must decode (0 Hz {ok_on}, +50 Hz {ok_off})"
+    );
+    assert!(
+        off <= 2 * on + 2,
+        "the +{REQUIRED_OFFSET_HZ} Hz frame cost {off} decode attempts against {on} on frequency"
     );
 }

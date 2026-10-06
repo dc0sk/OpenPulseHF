@@ -917,6 +917,9 @@ pub struct ModemEngine {
     /// veto being reachable. Added because a gate built on the `rho_*` counters alone stays green if
     /// the chain is ever half-wired into the streaming path — gate and settle without the veto.
     afc_settle_attempts: u64,
+    /// Every FEC/plain decode attempt `decode_attempt` made: the work an OTA burst cost, counted so a
+    /// test can bound it instead of timing it.
+    decode_attempts: u64,
     /// Settles rejected because the preamble correlation did not corroborate them (#1049).
     ///
     /// A tripwire as much as a counter: it stays 0 when the mode publishes no template, so a test
@@ -1153,6 +1156,7 @@ impl ModemEngine {
             notch_protect_extremes: None,
             settle_condemnations: 0,
             afc_settle_attempts: 0,
+            decode_attempts: 0,
             condemned_positions: Vec::new(),
             accepted_settle_positions: Vec::new(),
             sweep_attempt_inputs: Vec::new(),
@@ -1307,6 +1311,12 @@ impl ModemEngine {
     #[cfg(feature = "instruments")]
     pub fn afc_settle_attempts(&self) -> u64 {
         self.afc_settle_attempts
+    }
+
+    /// Decode attempts made so far, every arm of the OTA chain included.
+    #[cfg(feature = "instruments")]
+    pub fn decode_attempts(&self) -> u64 {
+        self.decode_attempts
     }
 
     /// How many candidate settles the preamble correlation refused (#1049).
@@ -3638,8 +3648,38 @@ impl ModemEngine {
         // failure, and a scan running after it would have nothing to undo but would delay retention.
         if decoded.is_none() {
             let n = samples.samples.len();
+            let sr = AudioConfig::default().sample_rate;
             'scan: for (level, mode, fec) in &candidates {
                 let (step, scan_end, raw_max) = self.burst_onset_scan_bounds(mode, n, onset_bound);
+                // OFF FREQUENCY: scan at the carrier the trigger point settles on, first (REQ-PHY-03).
+                //
+                // Phase 2 acquires the carrier, but only after this scan has failed at every onset
+                // at the current correction, which an off-frequency frame always does: measured with
+                // `receive_cost_scaling` at +50 Hz on a fresh receiver (x86 release), SL2 decoded in
+                // 23.9 s against 1.9 s at 0 Hz, SL3 9.1 s, SL4 6.4 s — past a Pi's 9 s ACK window on
+                // the first frame from every station, since the correction is learnt only from a
+                // decode. One settle at the flushed burst's trigger (the frame is on air there) says
+                // whether the burst is off frequency; `acquire_at_onset` is phase 2's own definition
+                // and answers `false` inside the settle deadband, so an on-frequency burst scans
+                // exactly as before. The uncorrected scan still follows a corrected one that fails.
+                self.afc_correction_hz = afc_before;
+                let (_, acq_samples, min_frame_samples, _) = self.frame_scan_geometry(mode, sr);
+                let veto = self.build_preamble_veto(mode, sr);
+                let corrected = self
+                    .acquire_at_onset(
+                        mode,
+                        &samples.samples,
+                        lead.min(n),
+                        acq_samples.max(min_frame_samples),
+                        veto.as_ref(),
+                    )
+                    .then_some(self.afc_correction_hz);
+                // Offset 0 was tried at `afc_before` by attempt 0; at a new correction it is not.
+                let passes: Vec<(f32, usize)> = corrected
+                    .map(|c| (c, 0))
+                    .into_iter()
+                    .chain(std::iter::once((afc_before, step)))
+                    .collect();
                 // SIZE THE SLICE FOR THE CODED FRAME (#1384). `burst_onset_scan_bounds` returns the
                 // plugin's RAW geometry. MEASURED on BPSK250: raw is 74 624 samples, while a coded
                 // frame past the one-RS-block boundary is 131 840 — so every onset except zero
@@ -3647,41 +3687,43 @@ impl ModemEngine {
                 // because the attempt before this scan decodes the whole burst, which is why the
                 // defect could sit unseen.
                 let (max_frame_samples, _) = frame_plan(raw_max, *fec);
-                if scan_end == 0 {
-                    continue; // nothing to search: attempt 0 already covered this candidate
-                }
-                let mut start = step;
-                loop {
-                    self.afc_correction_hz = afc_before;
-                    let end = (start + max_frame_samples).min(n);
-                    if start >= end {
-                        break;
+                for (afc, first) in passes {
+                    if scan_end == 0 && first > 0 {
+                        continue; // nothing to search: attempt 0 already covered this candidate
                     }
-                    let slice = samples.samples[start..end].to_vec();
-                    match self.decode_attempt(
-                        mode,
-                        AudioSamples {
-                            samples: slice.clone(),
-                        },
-                        *fec,
-                    ) {
-                        Ok(payload) => {
-                            // E1 skips the estimate on every attempt; the WINNING slice still needs
-                            // one so the wrapper's single `AfcUpdate` carries a real correction.
-                            self.update_afc_estimate(mode, &slice);
-                            // The window that DECODED is the only defensible place to measure the
-                            // SNR (#1142) — measuring over the whole gathered burst hands the
-                            // estimator's timing search a lead-in it cannot see past.
-                            decoded_span = Some((start, end));
-                            decoded = Some((payload, *level, mode.clone()));
-                            break 'scan;
+                    let mut start = first;
+                    loop {
+                        self.afc_correction_hz = afc;
+                        let end = (start + max_frame_samples).min(n);
+                        if start >= end {
+                            break;
                         }
-                        Err(e) => {
-                            last_err = Some(e);
-                            if start >= scan_end {
-                                break;
+                        let slice = samples.samples[start..end].to_vec();
+                        match self.decode_attempt(
+                            mode,
+                            AudioSamples {
+                                samples: slice.clone(),
+                            },
+                            *fec,
+                        ) {
+                            Ok(payload) => {
+                                // E1 skips the estimate on every attempt; the WINNING slice still needs
+                                // one so the wrapper's single `AfcUpdate` carries a real correction.
+                                self.update_afc_estimate(mode, &slice);
+                                // The window that DECODED is the only defensible place to measure the
+                                // SNR (#1142) — measuring over the whole gathered burst hands the
+                                // estimator's timing search a lead-in it cannot see past.
+                                decoded_span = Some((start, end));
+                                decoded = Some((payload, *level, mode.clone()));
+                                break 'scan;
                             }
-                            start = (start + step).min(scan_end);
+                            Err(e) => {
+                                last_err = Some(e);
+                                if start >= scan_end {
+                                    break;
+                                }
+                                start = (start + step).min(scan_end);
+                            }
                         }
                     }
                 }
@@ -5452,6 +5494,7 @@ impl ModemEngine {
         samples: AudioSamples,
         fec: FecMode,
     ) -> Result<Vec<u8>, ModemError> {
+        self.decode_attempts = self.decode_attempts.wrapping_add(1);
         match fec {
             FecMode::None => self.receive_from_samples(mode, samples),
             _ => self.receive_from_samples_with_fec(mode, samples, fec),
