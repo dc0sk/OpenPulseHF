@@ -270,6 +270,20 @@ already in production. The validation continues at F4.
 is above the bound 331 × 0.9851 × 0.95 = 310 (−0.9 %, one seed). The CLI benchmark replays state-machine events with no
 modem: 10/10, mean transitions 5.1, as expected. The validation continues at F5.
 
+### F5 parity: parameters fixed before the pilots
+
+The F1 harness per rung (`F1_RUNG=31|63|100`), the same five columns, n = 600 paired, δ = 0.03,
+one-rung `Rs` ladders at each rung's own level. Two changes from F1, both fixed now:
+
+- **Payload 16–64 B** (`F1_PAYLOAD_MAX=64`), not 16–200 B: at BPSK31 a 200 B frame is 66 s of audio,
+  which triples the run for no preamble information (the preamble is the same 63 symbols at any
+  payload). Every rung uses the same cap, so the three are comparable with each other, not with F1.
+- **Floor column** at each rung's `fast` floor: BPSK31 3 dB, BPSK63 4 dB, BPSK100 4.5 dB.
+- **Cliff column:** a pilot of 100 trials per SNR on a 2 dB grid (BPSK31 −18…−10, BPSK63 −15…−7,
+  BPSK100 −13…−5 dB); the cliff is the midpoint of the two grid points bracketing the shipped arm's
+  50 % decode rate (F1's rule: −6 dB 12 %, −4 dB 99 % → −5 dB). If the grid does not bracket 50 %,
+  it is extended by 4 dB on the open side and rerun, never interpolated.
+
 ## Cost
 
 - Airtime +1.49 % on the rungs that take it.

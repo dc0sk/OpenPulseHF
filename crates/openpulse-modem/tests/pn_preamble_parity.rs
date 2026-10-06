@@ -10,8 +10,9 @@
 //! Pass rule (pre-registered in the design): non-inferiority per column, the lower bound of the
 //! paired 95 % CI of (PN − shipped) ≥ −0.03, n = 600.
 //!
-//! `F1_TRIALS` overrides n; `F1_PILOT=1` runs the shipped arm alone over an AWGN SNR sweep to locate
-//! the cliff, which is then fixed in the design before the main run. Release build:
+//! `F1_TRIALS` overrides n; `F1_PILOT=1` runs an AWGN SNR sweep (`F1_PILOT_DB`) to locate the cliff,
+//! which is then fixed in the design before the main run. `F1_RUNG` and `F1_PAYLOAD_MAX` select the
+//! slow rungs for F5. Release build:
 //! `cargo test --release -p openpulse-modem --no-default-features --test pn_preamble_parity -- --ignored --nocapture`.
 
 use openpulse_audio::LoopbackBackend;
@@ -23,8 +24,58 @@ use openpulse_core::profile::SessionProfile;
 use openpulse_core::rate::SpeedLevel;
 use openpulse_modem::ModemEngine;
 
-const SHIPPED: &str = "BPSK250";
-const CANDIDATE: &str = "BPSK250-PN";
+/// One rung under test: its shipped and candidate modes, its ladder level and its SNR floor.
+#[derive(Clone, Copy)]
+struct Rung {
+    shipped: &'static str,
+    candidate: &'static str,
+    level: SpeedLevel,
+    floor_db: f32,
+}
+
+const RUNGS: [Rung; 4] = [
+    Rung {
+        shipped: "BPSK31",
+        candidate: "BPSK31-PN",
+        level: SpeedLevel::Sl2,
+        floor_db: 3.0,
+    },
+    Rung {
+        shipped: "BPSK63",
+        candidate: "BPSK63-PN",
+        level: SpeedLevel::Sl3,
+        floor_db: 4.0,
+    },
+    Rung {
+        shipped: "BPSK100",
+        candidate: "BPSK100-PN",
+        level: SpeedLevel::Sl4,
+        floor_db: 4.5,
+    },
+    Rung {
+        shipped: "BPSK250",
+        candidate: "BPSK250-PN",
+        level: SpeedLevel::Sl5,
+        floor_db: 5.0,
+    },
+];
+
+/// `F1_RUNG` (31, 63, 100 or 250; default 250) picks the rung; F5 runs the slow ones.
+fn rung() -> Rung {
+    let baud = std::env::var("F1_RUNG").unwrap_or_else(|_| "250".into());
+    *RUNGS
+        .iter()
+        .find(|r| r.shipped == format!("BPSK{baud}"))
+        .expect("F1_RUNG is 31, 63, 100 or 250")
+}
+
+/// `F1_PAYLOAD_MAX` caps the random payload (default 200 B, F1's range 16..=200).
+fn payload_max() -> usize {
+    std::env::var("F1_PAYLOAD_MAX")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(200)
+}
 const READ: usize = 4_096;
 const DELTA: f64 = 0.03;
 
@@ -37,7 +88,7 @@ struct Column {
     offset_hz: f32,
 }
 
-fn rx_engine(mode: &'static str) -> ModemEngine {
+fn rx_engine(mode: &'static str, level: SpeedLevel) -> ModemEngine {
     let mut e = ModemEngine::new(Box::new(LoopbackBackend::new()));
     e.register_plugin(Box::new(bpsk_plugin::BpskPlugin::new()))
         .unwrap();
@@ -45,13 +96,10 @@ fn rx_engine(mode: &'static str) -> ModemEngine {
         .unwrap();
     e.register_plugin(Box::new(fsk4_plugin::Fsk4Plugin::new()))
         .unwrap();
-    let profile = SessionProfile::from_rungs(
-        &[(SpeedLevel::Sl5, mode, FecMode::Rs, Some(5.0), None)],
-        SpeedLevel::Sl5,
-        3,
-    );
+    let profile =
+        SessionProfile::from_rungs(&[(level, mode, FecMode::Rs, Some(5.0), None)], level, 3);
     e.start_ota_session(profile);
-    e.ota_lock_level(SpeedLevel::Sl5);
+    e.ota_lock_level(level);
     e
 }
 
@@ -86,7 +134,14 @@ impl Rng {
 }
 
 /// One arm of one trial: does `mode` deliver `payload` through the production receive path?
-fn trial(mode: &'static str, col: Column, seed: u64, payload: &[u8], lead: usize) -> bool {
+fn trial(
+    mode: &'static str,
+    level: SpeedLevel,
+    col: Column,
+    seed: u64,
+    payload: &[u8],
+    lead: usize,
+) -> bool {
     let mut signal = tx_frame(mode, payload);
     if col.fading {
         let mut cfg = WattersonConfig::moderate_f1(Some(seed));
@@ -107,7 +162,7 @@ fn trial(mode: &'static str, col: Column, seed: u64, payload: &[u8], lead: usize
     for (a, &s) in audio[lead..].iter_mut().zip(&signal) {
         *a += s;
     }
-    let mut rx = rx_engine(mode);
+    let mut rx = rx_engine(mode, level);
     for read in audio.chunks(READ) {
         if let Some(burst) = rx.accumulate_capture(Some(mode), read.to_vec()).unwrap() {
             if let Ok(r) = rx.ota_decode_burst(&burst, "f1", None) {
@@ -121,7 +176,8 @@ fn trial(mode: &'static str, col: Column, seed: u64, payload: &[u8], lead: usize
 }
 
 /// Paired outcomes `(shipped, candidate)` for `n` seeds of `col`, on all cores.
-fn run_column(col: Column, n: usize) -> Vec<(bool, bool)> {
+fn run_column(r: Rung, col: Column, n: usize) -> Vec<(bool, bool)> {
+    let max = payload_max();
     let threads = std::thread::available_parallelism().map_or(4, |p| p.get());
     let mut out = vec![(false, false); n];
     std::thread::scope(|s| {
@@ -132,13 +188,13 @@ fn run_column(col: Column, n: usize) -> Vec<(bool, bool)> {
                 for (k, slot) in chunk.iter_mut().enumerate() {
                     let seed = (base + k) as u64 + 1;
                     let mut rng = Rng(seed ^ 0xD1B5_4A32_D192_ED03);
-                    let len = 16 + (rng.next() % 185) as usize;
+                    let len = 16 + (rng.next() % (max as u64 - 15)) as usize;
                     let payload: Vec<u8> = (0..len).map(|_| rng.next() as u8).collect();
                     // A real lead: noise to warm the carrier detect, then the frame anywhere in a read.
                     let lead = 8 * READ + (rng.next() % READ as u64) as usize;
                     *slot = (
-                        trial(SHIPPED, col, seed, &payload, lead),
-                        trial(CANDIDATE, col, seed, &payload, lead),
+                        trial(r.shipped, r.level, col, seed, &payload, lead),
+                        trial(r.candidate, r.level, col, seed, &payload, lead),
                     );
                 }
             });
@@ -160,7 +216,7 @@ fn paired_ci(pairs: &[(bool, bool)]) -> (f64, f64, f64) {
     (mean, mean - half, mean + half)
 }
 
-fn columns() -> Vec<Column> {
+fn columns(r: Rung) -> Vec<Column> {
     // The AWGN cliff SNR is fixed from the pilot before the main run (design F1).
     let cliff: f32 = std::env::var("F1_CLIFF_DB")
         .ok()
@@ -168,9 +224,9 @@ fn columns() -> Vec<Column> {
         .unwrap_or(f32::NAN);
     let mut c = vec![
         Column {
-            name: "moderate_f1 5 dB (SL5 floor)",
+            name: "moderate_f1 at the floor",
             fading: true,
-            snr_db: 5.0,
+            snr_db: r.floor_db,
             offset_hz: 0.0,
         },
         Column {
@@ -204,33 +260,45 @@ fn columns() -> Vec<Column> {
 }
 
 #[test]
-#[ignore = "measurement: #1062 design F1, release build, long"]
+#[ignore = "measurement: #1062 design F1/F5, release build, long"]
 fn f1_bpsk250_pn63_against_the_shipped_preamble() {
+    let r = rung();
     let n: usize = std::env::var("F1_TRIALS")
         .ok()
         .and_then(|v| v.parse().ok())
         .unwrap_or(600);
     if std::env::var_os("F1_PILOT").is_some() {
-        println!("\nF1 pilot: shipped arm, AWGN, {n} trials per SNR");
-        for snr in [-12.0f32, -10.0, -8.0, -6.0, -4.0, -2.0] {
+        // `F1_PILOT_DB` overrides the sweep, comma-separated: the slow rungs' cliffs sit lower.
+        let sweep: Vec<f32> = std::env::var("F1_PILOT_DB")
+            .ok()
+            .map(|v| v.split(',').filter_map(|x| x.trim().parse().ok()).collect())
+            .unwrap_or_else(|| vec![-12.0, -10.0, -8.0, -6.0, -4.0, -2.0]);
+        println!("\nF1 pilot: {}, AWGN, {n} trials per SNR", r.shipped);
+        for snr in sweep {
             let col = Column {
                 name: "pilot",
                 fading: false,
                 snr_db: snr,
                 offset_hz: 0.0,
             };
-            let pairs = run_column(col, n);
+            let t = std::time::Instant::now();
+            let pairs = run_column(r, col, n);
             let a = pairs.iter().filter(|p| p.0).count();
             let b = pairs.iter().filter(|p| p.1).count();
+            print!("  ({:.0} s)", t.elapsed().as_secs_f64());
             println!("  {snr:>5.1} dB: shipped {a}/{n}  candidate {b}/{n}");
         }
         return;
     }
-    println!("\nF1: BPSK250 PN-63 vs shipped, production entry, n = {n} paired, delta = {DELTA}");
+    println!(
+        "\nF1: {} PN-63 vs shipped, production entry, n = {n} paired, delta = {DELTA}, payload 16..={} B",
+        r.shipped,
+        payload_max()
+    );
     let mut all_pass = true;
-    for col in columns() {
+    for col in columns(r) {
         let t = std::time::Instant::now();
-        let pairs = run_column(col, n);
+        let pairs = run_column(r, col, n);
         let a = pairs.iter().filter(|p| p.0).count();
         let b = pairs.iter().filter(|p| p.1).count();
         let disc_a = pairs.iter().filter(|p| p.0 && !p.1).count();
@@ -260,7 +328,11 @@ fn both_arms_deliver_a_clean_frame() {
         offset_hz: 0.0,
     };
     let payload = b"F1 positive control".to_vec();
-    for mode in [SHIPPED, CANDIDATE] {
-        assert!(trial(mode, col, 7, &payload, 8 * READ + 1_234), "{mode}");
+    let r = RUNGS[3];
+    for mode in [r.shipped, r.candidate] {
+        assert!(
+            trial(mode, r.level, col, 7, &payload, 8 * READ + 1_234),
+            "{mode}"
+        );
     }
 }
