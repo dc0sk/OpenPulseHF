@@ -320,6 +320,11 @@ on `moderate_f1` at 5 / 10 / 20 dB, 120 seeds per cell, payload 200 B `Rs`, dete
 `F9_POS=8000 F9_ITERS=64000` (the #1058 family's); the bound is the lowest of the three cells'
 decoded-ρ p01, rounded down to 0.01. The shipped template runs the same cells as a control and is
 reported beside its 0.50. Then F1 is rerun on BPSK250 with the full template.
+**Amended before any output:** the deterministic budget (`F9_POS=8000 F9_ITERS=64000`) did not
+finish the first cell in ~4 h (the probe's own comment records a smaller budget taking > 2 h), and
+was stopped with nothing printed. The derivation uses the probe's default budget, the regime the
+shipped 0.50 was derived in, on an otherwise idle machine, so the wall-clock budget is not
+truncated by load.
 
 **Lesson for any long preamble** (QPSK's parked longer preamble, pilots): length buys energy only
 up to the channel's coherence time; past it, combine in power.
