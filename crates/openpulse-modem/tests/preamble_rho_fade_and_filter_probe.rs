@@ -143,8 +143,15 @@ fn win_len(mode: &str) -> usize {
 /// Takes samples-per-symbol rather than a mode string. The previous form divided by the *shipped*
 /// preamble symbol count, which is only correct for a shipped template — applied to a 110-chip PN
 /// template it divided by 31 and produced a window shorter than the template it was sizing.
+///
+/// `F15_SLACK_SYMS` overrides the two symbols (#1062): phase 2's veto with its reach searches six,
+/// and F2's noise and interference columns are re-measured at that span.
 fn win_len_for(samples: &[f32], sps: usize) -> usize {
-    samples.len() + 2 * sps
+    let slack: usize = std::env::var("F15_SLACK_SYMS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(2);
+    samples.len() + slack * sps
 }
 
 // ── F2: does noise COLOUR move the rho ceiling? ───────────────────────────────

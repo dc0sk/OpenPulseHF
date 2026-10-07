@@ -65,6 +65,10 @@ fn engine(backend: &LoopbackBackend, level: SpeedLevel) -> ModemEngine {
         .unwrap();
     e.start_ota_session(profile());
     e.ota_lock_level(level);
+    // `PROBE_NO_REACH=1` times the receiver before #1062's phase-2 veto reach, for its cost A/B.
+    if std::env::var_os("PROBE_NO_REACH").is_some() {
+        e.set_phase2_veto_reach(false);
+    }
     e
 }
 

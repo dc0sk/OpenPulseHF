@@ -107,17 +107,16 @@ fn rx_engine(mode: &'static str, level: SpeedLevel) -> ModemEngine {
     if veto_gate_off(mode) {
         e.set_preamble_veto_gate(false);
     }
-    if veto_reach(mode) {
-        e.set_phase2_veto_reach(true);
+    if veto_reach_off(mode) {
+        e.set_phase2_veto_reach(false);
     }
     e
 }
 
-/// `F1_VETO_REACH=on`: the PN arm's phase-2 veto searches timing one coarse grid step further
-/// (#1062), so an onset grid coarser than PN's timing acceptance still lands a judged window on the
-/// preamble. The shipped arm is never touched.
-fn veto_reach(mode: &str) -> bool {
-    mode.ends_with("-PN") && std::env::var("F1_VETO_REACH").as_deref() == Ok("on")
+/// `F1_VETO_REACH=off`: the PN arm's phase-2 veto loses its reach (#1062), the receiver before the
+/// fix. The shipped arm is never touched.
+fn veto_reach_off(mode: &str) -> bool {
+    mode.ends_with("-PN") && std::env::var("F1_VETO_REACH").as_deref() == Ok("off")
 }
 
 /// `F1_VETO_GATE=off`: the PN arm's veto computes ρ but rejects nothing, its onset ranking unchanged,
@@ -404,8 +403,8 @@ fn f1_bpsk250_pn63_against_the_shipped_preamble() {
             "  {mode}: preamble veto {}",
             if veto_gate_off(mode) {
                 "computed, gate OFF (F1_VETO_GATE=off: rejects nothing; ranking unchanged)"
-            } else if veto_reach(mode) {
-                "active, phase-2 reach +1 coarse step (F1_VETO_REACH=on)"
+            } else if veto_reach_off(mode) {
+                "active, phase-2 reach OFF (F1_VETO_REACH=off: the receiver before the fix)"
             } else if rx_engine(mode, r.level).preamble_veto_active(mode) {
                 "active"
             } else {
@@ -786,5 +785,23 @@ fn f1_rho_by_onset_shift() {
                 v.get(v.len() / 2).copied().unwrap_or(f32::NAN)
             );
         }
+    }
+}
+
+/// #1062 regression: two BPSK250-PN frames at +50 Hz whose phase-2 settle grid puts no onset inside
+/// PN's timing acceptance. They decode only because phase 2's veto reaches one coarse step past each
+/// grid onset; with the reach off (the receiver before the fix) both are refused at every settle.
+#[test]
+fn a_pn_frame_off_frequency_is_not_refused_between_settle_grid_points() {
+    let r = RUNGS[3];
+    assert_eq!(r.candidate, "BPSK250-PN");
+    let col = columns(r)[2];
+    assert_eq!(col.offset_hz, 50.0);
+    for seed in [7u64, 16] {
+        let (payload, lead) = draw(seed, 200);
+        assert!(
+            trial(r.candidate, r.level, col, seed, &payload, lead),
+            "seed {seed}: refused off frequency"
+        );
     }
 }

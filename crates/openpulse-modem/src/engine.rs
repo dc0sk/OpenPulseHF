@@ -970,10 +970,15 @@ pub struct ModemEngine {
     /// loss can be separated from the onset ranking's, which reads the same template. Always `true`
     /// outside `set_preamble_veto_gate`.
     veto_gate: bool,
-    /// Measurement only (#1062): when set, phase 2's veto searches timing over one more coarse grid
-    /// step past each settle onset, so the grid's gaps are covered for a template whose timing
-    /// acceptance is narrower than the grid (an aperiodic preamble). `false` outside
-    /// `set_phase2_veto_reach`.
+    /// Phase 2's veto searches timing over one more coarse grid step past each settle onset (#1062).
+    ///
+    /// The settle grid is `PHASE2_STEP_MULTIPLIER` symbols coarse, and the veto's own timing search
+    /// spans about two symbols past the judged onset, so without the reach the grid's gaps are seen
+    /// by no veto query. The periodic `--++` hides that (it correlates at any alignment in its
+    /// preamble); an aperiodic preamble does not: PN-63 lost 64 of 600 BPSK250 frames at +50 Hz to
+    /// refused settles, and the reach recovers 55. Measured cost to the constants: F2's binding
+    /// interferer unchanged (0.304), SSB noise ceiling 0.152 → 0.157. `true` except under
+    /// `set_phase2_veto_reach(false)`, the A/B switch.
     phase2_veto_reach: bool,
     /// Monotonic count of frames emitted at the single TX seam (`stage_emit_output`) — every
     /// transmit path (data, FEC, ACK, retransmit, QSY, ID) increments it once. A pollable
@@ -1189,7 +1194,7 @@ impl ModemEngine {
             rho_stand_down: false,
             rho_stand_down_settles: 0,
             veto_gate: true,
-            phase2_veto_reach: false,
+            phase2_veto_reach: true,
             frames_transmitted: 0,
             raw_audio_frames_transmitted: 0,
         }
@@ -1350,7 +1355,7 @@ impl ModemEngine {
         self.veto_gate = on;
     }
 
-    /// Widen phase 2's veto timing search by one coarse grid step (#1062). Measurement only.
+    /// Turn phase 2's veto reach off (`false`) for an A/B, or back on (#1062). Measurement only.
     #[cfg(feature = "instruments")]
     pub fn set_phase2_veto_reach(&mut self, on: bool) {
         self.phase2_veto_reach = on;
