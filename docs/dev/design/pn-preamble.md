@@ -331,6 +331,12 @@ b4bcf90b. BPSK63's −12 dB column also sat under 10 % on both arms (27 / 34 of 
 is re-run at −9 dB, the pilot grid point nearest 50 % (89 %; −11 dB read 0 %). Recorded before the
 −9 dB result.
 
+**BPSK31 cliff column re-run at −14 dB (d9031766, n = 600): FAIL.** Shipped 345/600, PN 298/600,
+discordant 136/89, PN − shipped −0.078 [−0.127, −0.030]. The pilot read the same way (57 / 46 at
+−14 dB). This is the pre-registered column, so BPSK31 fails F5 as it stands. The mechanism is not
+yet known; next is `f5_diagnose_discordant_seeds` on the 136 shipped-only seeds (gathering vs
+demodulation, as for the floor-column failure), and no constant is changed before that reads.
+
 **A second gap, found preparing F6: `BPSK250-PN` publishes no template.** `preamble_template`
 returns one only for the exact mode `BPSK250`, so F1's PN arm ran with no correlation veto and no
 onset ranking, energy-only, and still matched or beat the shipped arm. The flag-day configuration
