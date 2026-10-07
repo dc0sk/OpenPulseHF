@@ -45,6 +45,10 @@ brick-wall mask moved to `tests/common` (`filter::band_limit`) and is shared wit
   −0.043). Without the PN template (755fa457) the same columns pass (PN 572 / 570): the loss is the
   template path's, in acquisition (bursts gathered whole, `ota_decode_burst` fails); reproduced
   537 / 508 on a build that reports both vetoes active.
+- **Veto vs ranking:** `set_preamble_veto_gate` (instruments only;
+  `the_veto_gate_switch_accepts_what_the_veto_would_refuse` 1 passed, fails sabotaged). PN arm gate
+  off: ±50 Hz PN 572 / 570, identical to no template. The loss is the veto's rejection; the ranking
+  adds nothing.
 
 ## 2026-10-06 — An off-frequency first frame does not pay the onset scan (REQ-PHY-03, work plan M2)
 

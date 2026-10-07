@@ -474,6 +474,16 @@ ranks and never thresholds, is unchanged. F1 at ±50 Hz with `F1_VETO_GATE=off` 
 n = 600. Reading: PN recovering to within the no-template run's CI (572 / 570) lays the loss on the
 veto; PN staying at 508 / 517 lays it on the ranking; anything between, on both, in proportion.
 
+**Result: the veto, all of it.** With the PN arm's gate off, +50 Hz reads shipped 537, PN **572**,
+discordant 4/39, +0.058 [+0.037, +0.079]; −50 Hz shipped 543, PN **570**, discordant 8/35, +0.045
+[+0.024, +0.066]: both identical to the no-template run, so the ranking contributes nothing. On the
+PN-only losses of seeds 1–40 (gate on) PN's veto refused about twice as many onsets as the shipped
+veto on the same frame (41 / 18, 39 / 24, 37 / 19, 56 / 26, 31 / 16), and the ranking produced no
+decode on either arm. **Why** PN's ρ falls under 0.315 off-frequency (settle residual against the
+template's narrower coherent bandwidth, or the threshold itself) is the next measurement: the true
+onset's ρ at 0 and ±50 Hz on both templates. Until then decision 23's 0.315 is not validated for
+`BPSK250-PN`, and the flag-day template stays unaccepted.
+
 **Caution recorded:** an A/B built in a second worktree with `CARGO_TARGET_DIR` shared with the main
 checkout left the main test binary linked against the worktree's `bpsk-plugin` until that crate was
 touched, and four diagnostic runs (none recorded here) silently measured the no-template receiver.
