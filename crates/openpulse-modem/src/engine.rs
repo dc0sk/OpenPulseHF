@@ -970,6 +970,11 @@ pub struct ModemEngine {
     /// loss can be separated from the onset ranking's, which reads the same template. Always `true`
     /// outside `set_preamble_veto_gate`.
     veto_gate: bool,
+    /// Measurement only (#1062): when set, phase 2's veto searches timing over one more coarse grid
+    /// step past each settle onset, so the grid's gaps are covered for a template whose timing
+    /// acceptance is narrower than the grid (an aperiodic preamble). `false` outside
+    /// `set_phase2_veto_reach`.
+    phase2_veto_reach: bool,
     /// Monotonic count of frames emitted at the single TX seam (`stage_emit_output`) — every
     /// transmit path (data, FEC, ACK, retransmit, QSY, ID) increments it once. A pollable
     /// TX-activity signal for the daemon's periodic station-ID timer (REQ-REG-10).
@@ -1184,6 +1189,7 @@ impl ModemEngine {
             rho_stand_down: false,
             rho_stand_down_settles: 0,
             veto_gate: true,
+            phase2_veto_reach: false,
             frames_transmitted: 0,
             raw_audio_frames_transmitted: 0,
         }
@@ -1344,6 +1350,12 @@ impl ModemEngine {
         self.veto_gate = on;
     }
 
+    /// Widen phase 2's veto timing search by one coarse grid step (#1062). Measurement only.
+    #[cfg(feature = "instruments")]
+    pub fn set_phase2_veto_reach(&mut self, on: bool) {
+        self.phase2_veto_reach = on;
+    }
+
     /// Settles the preamble correlation accepted. See [`Self::rho_rejected_settles`].
     #[cfg(feature = "instruments")]
     pub fn rho_accepted_settles(&self) -> u64 {
@@ -1376,6 +1388,33 @@ impl ModemEngine {
     pub fn rho_effective_threshold(&self, mode: &str) -> Option<f32> {
         let veto = self.build_preamble_veto(mode, AudioConfig::default().sample_rate)?;
         Some(self.rho_calibration.effective_threshold(veto.rho_threshold))
+    }
+
+    /// What the veto sees at one onset (#1062): the settled correction, the ρ `acquire_at_onset`
+    /// would compare, and the threshold it would compare it against — through the same
+    /// `afc_mini_settle` and `preamble_rho` steps, on the same window length. `settled_override`
+    /// centres the ρ grid on a given correction instead of the settle's, so a ρ lost to the settle's
+    /// residual can be told from one the template loses at the right frequency. Leaves the engine's
+    /// AFC state as it found it. `None` when the mode has no veto or the window cannot hold it.
+    #[cfg(feature = "instruments")]
+    pub fn veto_probe(
+        &mut self,
+        mode: &str,
+        samples: &[f32],
+        start: usize,
+        settled_override: Option<f32>,
+    ) -> Option<(f32, f32, f32)> {
+        let sr = AudioConfig::default().sample_rate;
+        let veto = self.build_preamble_veto(mode, sr)?;
+        let (_, acq_samples, min_frame_samples, _) = self.frame_scan_geometry(mode, sr);
+        let end = start.checked_add(acq_samples.max(min_frame_samples))?;
+        let window = samples.get(start..end)?;
+        let entry = self.afc_correction_hz;
+        let fine = self.afc_mini_settle(mode, window).fine;
+        self.afc_correction_hz = entry;
+        let (rho, _) = self.preamble_rho(&veto, window, settled_override.unwrap_or(fine))?;
+        let threshold = self.rho_calibration.effective_threshold(veto.rho_threshold);
+        Some((fine, rho, threshold))
     }
 
     /// Whether the veto is standing down for want of a separating threshold (REQ-RX-03), and how
@@ -3253,11 +3292,12 @@ impl ModemEngine {
         let afc_window = acq_samples.max(min_frame_samples);
         let veto = self.build_preamble_veto(mode, sr);
         let coarse = step.saturating_mul(PHASE2_STEP_MULTIPLIER).max(1);
+        let reach = if self.phase2_veto_reach { coarse } else { 0 };
         let entry = self.afc_correction_hz;
         let mut corrections: Vec<f32> = Vec::new();
         let mut start = 0usize;
         loop {
-            if self.acquire_at_onset(mode, samples, start, afc_window, veto.as_ref()) {
+            if self.acquire_at_onset(mode, samples, start, afc_window, veto.as_ref(), reach) {
                 corrections.push(self.afc_correction_hz);
             }
             self.afc_correction_hz = entry;
@@ -3295,6 +3335,7 @@ impl ModemEngine {
         start: usize,
         afc_window: usize,
         veto: Option<&PreambleVeto>,
+        veto_reach: usize,
     ) -> bool {
         let n = samples.len();
         let settle_end = (start + afc_window).min(n);
@@ -3311,7 +3352,8 @@ impl ModemEngine {
         let Some(v) = veto else {
             return true;
         };
-        let Some((rho, _)) = self.preamble_rho(v, &samples[start..settle_end], outcome.fine) else {
+        let rho_end = (settle_end + veto_reach).min(n);
+        let Some((rho, _)) = self.preamble_rho(v, &samples[start..rho_end], outcome.fine) else {
             return true;
         };
         // Decide and record through the one step the CLI path uses too (#1342): the calibration
@@ -3361,7 +3403,7 @@ impl ModemEngine {
             let afc_before = self.afc_correction_hz;
             let mut skip = false;
             if settle {
-                skip = !self.acquire_at_onset(mode, samples, start, afc_window, veto.as_ref());
+                skip = !self.acquire_at_onset(mode, samples, start, afc_window, veto.as_ref(), 0);
                 if skip {
                     self.afc_correction_hz = afc_before;
                 }
@@ -3687,6 +3729,7 @@ impl ModemEngine {
                         lead.min(n),
                         acq_samples.max(min_frame_samples),
                         veto.as_ref(),
+                        0,
                     )
                     .then_some(self.afc_correction_hz);
                 // Offset 0 was tried at `afc_before` by attempt 0; at a new correction it is not.

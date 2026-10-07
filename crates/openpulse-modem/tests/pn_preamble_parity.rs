@@ -107,7 +107,17 @@ fn rx_engine(mode: &'static str, level: SpeedLevel) -> ModemEngine {
     if veto_gate_off(mode) {
         e.set_preamble_veto_gate(false);
     }
+    if veto_reach(mode) {
+        e.set_phase2_veto_reach(true);
+    }
     e
+}
+
+/// `F1_VETO_REACH=on`: the PN arm's phase-2 veto searches timing one coarse grid step further
+/// (#1062), so an onset grid coarser than PN's timing acceptance still lands a judged window on the
+/// preamble. The shipped arm is never touched.
+fn veto_reach(mode: &str) -> bool {
+    mode.ends_with("-PN") && std::env::var("F1_VETO_REACH").as_deref() == Ok("on")
 }
 
 /// `F1_VETO_GATE=off`: the PN arm's veto computes ρ but rejects nothing, its onset ranking unchanged,
@@ -394,6 +404,8 @@ fn f1_bpsk250_pn63_against_the_shipped_preamble() {
             "  {mode}: preamble veto {}",
             if veto_gate_off(mode) {
                 "computed, gate OFF (F1_VETO_GATE=off: rejects nothing; ranking unchanged)"
+            } else if veto_reach(mode) {
+                "active, phase-2 reach +1 coarse step (F1_VETO_REACH=on)"
             } else if rx_engine(mode, r.level).preamble_veto_active(mode) {
                 "active"
             } else {
@@ -629,6 +641,149 @@ fn f5_preamble_band_power_by_phase() {
                     .map(|p| format!("{p:.2}"))
                     .collect::<Vec<_>>()
                     .join(" ")
+            );
+        }
+    }
+}
+
+/// What each arm's veto sees at the frame's TRUE onset inside the burst the production entry
+/// gathered, on the 8 dB fading columns at 0 and ±50 Hz, seeds 1..=`F1_DIAG_SEEDS`: the settled
+/// correction, ρ at that correction, and ρ with the grid centred on the true offset (either sign).
+/// Separates a ρ the settle's residual costs from one the template loses at the right frequency.
+#[test]
+#[ignore = "diagnostic: #1062 F1 offset columns"]
+fn f1_true_onset_rho_by_offset() {
+    let r = rung();
+    let n: u64 = std::env::var("F1_DIAG_SEEDS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(60);
+    let cols = columns(r);
+    for index in [1usize, 2, 3] {
+        let col = cols[index];
+        for mode in [r.shipped, r.candidate] {
+            let (mut fines, mut at_settle, mut at_truth) = (Vec::new(), Vec::new(), Vec::new());
+            let mut threshold = f32::NAN;
+            for seed in 1..=n {
+                let (payload, lead) = draw(seed, payload_max());
+                let (audio, _) = capture(mode, col, seed, &payload, lead);
+                let mut rx = rx_engine(mode, r.level);
+                let mut fed = 0usize;
+                let mut burst = None;
+                for read in audio.chunks(READ) {
+                    fed += read.len();
+                    if let Some(b) = rx.accumulate_capture(Some(mode), read.to_vec()).unwrap() {
+                        let start =
+                            fed as i64 - read.len() as i64 - b.samples.len() as i64 - lead as i64;
+                        burst = Some((b.samples, start));
+                        break;
+                    }
+                }
+                let Some((samples, start)) = burst else {
+                    continue;
+                };
+                if start > 0 {
+                    continue;
+                }
+                let onset = (-start) as usize;
+                let Some((fine, rho, thr)) = rx.veto_probe(mode, &samples, onset, None) else {
+                    continue;
+                };
+                let truth = [col.offset_hz, -col.offset_hz]
+                    .iter()
+                    .filter_map(|&f| rx.veto_probe(mode, &samples, onset, Some(f)))
+                    .map(|p| p.1)
+                    .fold(f32::MIN, f32::max);
+                threshold = thr;
+                fines.push(fine);
+                at_settle.push(rho);
+                at_truth.push(truth);
+            }
+            let q = |v: &mut Vec<f32>, p: usize| {
+                v.sort_by(f32::total_cmp);
+                v.get(v.len() * p / 100).copied().unwrap_or(f32::NAN)
+            };
+            let below = |v: &[f32]| v.iter().filter(|&&x| x < threshold).count();
+            let (bs, bt) = (below(&at_settle), below(&at_truth));
+            println!(
+                "{} {mode}: n {} threshold {threshold:.3} | settled corr p10 {:+.1} p50 {:+.1} \
+                 p90 {:+.1} Hz | rho at settle p10 {:.3} p50 {:.3}, below {bs} | rho at truth \
+                 p10 {:.3} p50 {:.3}, below {bt}",
+                col.name,
+                fines.len(),
+                q(&mut fines, 10),
+                q(&mut fines, 50),
+                q(&mut fines, 90),
+                q(&mut at_settle, 10),
+                q(&mut at_settle, 50),
+                q(&mut at_truth, 10),
+                q(&mut at_truth, 50),
+            );
+        }
+    }
+}
+
+/// The veto's ρ at onsets shifted from the true one, on the +50 Hz column, seeds 1..=`F1_DIAG_SEEDS`:
+/// phase 2 settles on a grid 4 symbols coarse, so the onsets the veto judges sit up to 128 samples
+/// (BPSK250) either side of the frame's start. Per shift: ρ p10 / p50 at the settled correction, and
+/// how many fall under the threshold.
+#[test]
+#[ignore = "diagnostic: #1062 F1 offset columns"]
+fn f1_rho_by_onset_shift() {
+    const SHIFT: [i64; 9] = [-128, -96, -64, -32, 0, 32, 64, 96, 128];
+    let r = rung();
+    let n: u64 = std::env::var("F1_DIAG_SEEDS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(60);
+    let index: usize = std::env::var("F1_COLUMN")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(2);
+    let col = columns(r)[index];
+    println!("{}", col.name);
+    for mode in [r.shipped, r.candidate] {
+        let mut rhos: Vec<Vec<f32>> = vec![Vec::new(); SHIFT.len()];
+        let mut threshold = f32::NAN;
+        for seed in 1..=n {
+            let (payload, lead) = draw(seed, payload_max());
+            let (audio, _) = capture(mode, col, seed, &payload, lead);
+            let mut rx = rx_engine(mode, r.level);
+            let mut fed = 0usize;
+            let mut burst = None;
+            for read in audio.chunks(READ) {
+                fed += read.len();
+                if let Some(b) = rx.accumulate_capture(Some(mode), read.to_vec()).unwrap() {
+                    let start =
+                        fed as i64 - read.len() as i64 - b.samples.len() as i64 - lead as i64;
+                    burst = Some((b.samples, start));
+                    break;
+                }
+            }
+            let Some((samples, start)) = burst else {
+                continue;
+            };
+            for (k, &shift) in SHIFT.iter().enumerate() {
+                let onset = shift - start;
+                if onset < 0 {
+                    continue;
+                }
+                if let Some((_, rho, thr)) = rx.veto_probe(mode, &samples, onset as usize, None) {
+                    threshold = thr;
+                    rhos[k].push(rho);
+                }
+            }
+        }
+        println!("  {mode}: threshold {threshold:.3}");
+        for (k, v) in rhos.iter_mut().enumerate() {
+            v.sort_by(f32::total_cmp);
+            let below = v.iter().filter(|&&x| x < threshold).count();
+            println!(
+                "    shift {:+4}: n {} rho p10 {:.3} p50 {:.3}, below {below}",
+                SHIFT[k],
+                v.len(),
+                v.get(v.len() / 10).copied().unwrap_or(f32::NAN),
+                v.get(v.len() / 2).copied().unwrap_or(f32::NAN)
             );
         }
     }

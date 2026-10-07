@@ -489,6 +489,30 @@ template's narrower coherent bandwidth, or the threshold itself) is the next mea
 onset's ρ at 0 and ±50 Hz on both templates. Until then decision 23's 0.315 is not validated for
 `BPSK250-PN`, and the flag-day template stays unaccepted.
 
+**Where the veto loses PN frames (2026-10-07).** `veto_probe` (instruments: the same settle and ρ
+steps `acquire_at_onset` runs) at the TRUE onset, 8 dB fading, 60 seeds: the settle lands within
+±1 Hz at ±50 Hz on both arms, and PN's ρ is healthy (p10 0.60 vs 0.315; 2 of 60 under at +50 Hz,
+0 at the true frequency). So neither the settle residual nor the threshold at the right onset is the
+cause. `f1_rho_by_onset_shift` (+50 Hz) moves the judged onset instead:
+
+| shift (samples) | −128 | −96 | −64 | −32 | 0 | +32 | +64 | +96 | +128 |
+|---|---|---|---|---|---|---|---|---|---|
+| shipped ρ p50 (n < 0.40) | 0.835 (5) | 0.855 (7) | 0.868 (6) | 0.886 (5) | 0.887 (5) | 0.858 (5) | 0.860 (4) | 0.784 (6) | 0.793 (5) |
+| PN ρ p50 (n < 0.315) | 0.189 (60) | 0.205 (60) | 0.836 (4) | 0.859 (3) | 0.857 (2) | 0.236 (55) | 0.195 (60) | 0.189 (60) | 0.196 (60) |
+
+**Mechanism:** the veto's timing search spans about two symbols past the judged onset. The periodic
+`--++` correlates at any alignment inside its preamble; PN-63 only within that span (−64…0 here).
+Phase 2 settles on a grid of `PHASE2_STEP_MULTIPLIER` × 1 symbol = 128 samples, so on many frames no
+grid onset lands inside PN's acceptance, every settle is refused, no correction is produced and the
+frame is lost. At 0 Hz phase 1 decodes without the veto and the fine scan's one-symbol step always
+lands inside, which is why only the offset columns fail.
+
+**Confirmation run (pre-registered, before any output):** `set_phase2_veto_reach` (instruments)
+lets phase 2's veto search one more coarse step past each grid onset, covering the grid's gaps at
+an unchanged settle count. F1 ±50 Hz, n = 600, `F1_VETO_REACH=on` on the PN arm only. Reading: PN
+at or within the no-template run's CI (572 / 570) confirms the mechanism and makes the reach the
+fix candidate; PN still near 508 / 517 refutes it.
+
 **Caution recorded:** an A/B built in a second worktree with `CARGO_TARGET_DIR` shared with the main
 checkout left the main test binary linked against the worktree's `bpsk-plugin` until that crate was
 touched, and four diagnostic runs (none recorded here) silently measured the no-template receiver.
