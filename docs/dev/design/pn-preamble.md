@@ -330,6 +330,14 @@ b4bcf90b. BPSK63's −12 dB column also sat under 10 % on both arms (27 / 34 of 
 10 % on both arms (30 / 31, discordant 27/28, +0.002 [−0.023, +0.026]), so by the same amendment it
 is re-run at −9 dB, the pilot grid point nearest 50 % (89 %; −11 dB read 0 %). Recorded before the
 −9 dB result.
+**BPSK100 at −9 dB (n = 600): PASS.** Shipped 564/600, PN 579/600, discordant 17/32, +0.025
+[+0.002, +0.048].
+
+**F5 on d9031766, complete.** Every column passes on BPSK100 and BPSK63 (PN ahead at both cliffs),
+and on BPSK31 except one: **BPSK31's AWGN cliff at −14 dB fails** (−0.078), a carrier-detect
+gathering deficit (below). Whether BPSK31 takes PN-63 is therefore open; the options are the
+maintainer's (keep the shipped preamble on BPSK31 only, or make the carrier detect open as early
+on the PN preamble, a DSP change that needs its own measurement and review).
 
 **BPSK31 cliff column re-run at −14 dB (d9031766, n = 600): FAIL.** Shipped 345/600, PN 298/600,
 discordant 136/89, PN − shipped −0.078 [−0.127, −0.030]. The pilot read the same way (57 / 46 at
