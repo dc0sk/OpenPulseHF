@@ -339,6 +339,11 @@ gathering deficit (below). Whether BPSK31 takes PN-63 is therefore open; the opt
 maintainer's (keep the shipped preamble on BPSK31 only, or make the carrier detect open as early
 on the PN preamble, a DSP change that needs its own measurement and review).
 
+**Decision 25 (maintainer, 2026-10-07): BPSK31 keeps the shipped `--++` preamble**, as F5's
+pre-registered consequence says, and the carrier detect is not changed for it. The flag day puts
+PN-63 on BPSK63, BPSK100 and (once its template is settled) BPSK250. The −14 dB gathering deficit is
+parked with its measurements above, not ruled out.
+
 **BPSK31 cliff column re-run at −14 dB (d9031766, n = 600): FAIL.** Shipped 345/600, PN 298/600,
 discordant 136/89, PN − shipped −0.078 [−0.127, −0.030]. The pilot read the same way (57 / 46 at
 −14 dB). This is the pre-registered column, so BPSK31 fails F5 as it stands. The mechanism is not

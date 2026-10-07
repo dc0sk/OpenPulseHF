@@ -49,6 +49,8 @@ brick-wall mask moved to `tests/common` (`filter::band_limit`) and is shared wit
   `the_veto_gate_switch_accepts_what_the_veto_would_refuse` 1 passed, fails sabotaged). PN arm gate
   off: ±50 Hz PN 572 / 570, identical to no template. The loss is the veto's rejection; the ranking
   adds nothing.
+- **Decision 25 (maintainer):** BPSK31 keeps `--++` per F5's pre-registered consequence; the carrier
+  detect is not changed for it; PN-63 scope is SL3–SL5 (work plan decision log).
 
 ## 2026-10-06 — An off-frequency first frame does not pay the onset scan (REQ-PHY-03, work plan M2)
 
