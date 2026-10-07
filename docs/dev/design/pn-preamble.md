@@ -458,6 +458,21 @@ at 0.315, its ±20 Hz grid around the settled carrier, or the onset ranking) is 
 until it is, the flag-day template is not accepted, and decision 23's threshold stands only as
 derived, not as validated off-frequency.
 
+**Reproduced, and located in acquisition.** The +50 Hz column rerun on a build whose header reports
+both vetoes active (`F1_PRINT_SEEDS=1`) gives the same 537 / 508, discordant 60/31, so the result
+is deterministic; PN's 60 losses spread over the whole seed range. `f5_diagnose_discordant_seeds`
+(`F1_COLUMN=2`, seeds 1–40): on every PN-only loss the gathered burst holds the whole frame (about
+10 000 samples of lead) and `ota_decode_burst` returns no payload; cut at the true onset ± 1 000
+samples, 3 of 5 then decode (seeds 28, 36, 38) and 2 still fail (7, 16). The loss is not gathering.
+That a shorter lead rescues most of them points at the template path's choice among onsets (the
+ranking, or the veto applied per candidate) more than at the threshold alone; **not yet shown**.
+
+**Caution recorded:** an A/B built in a second worktree with `CARGO_TARGET_DIR` shared with the main
+checkout left the main test binary linked against the worktree's `bpsk-plugin` until that crate was
+touched, and four diagnostic runs (none recorded here) silently measured the no-template receiver.
+F1 now prints, per arm, whether the receive path has a veto (`preamble_veto_active`), so a run states
+which receiver it measured.
+
 **Lesson for any long preamble** (QPSK's parked longer preamble, pilots): length buys energy only
 up to the channel's coherence time; past it, combine in power.
 

@@ -374,6 +374,17 @@ fn f1_bpsk250_pn63_against_the_shipped_preamble() {
         r.shipped,
         payload_max()
     );
+    // Which arms the receiver vetoes, as the receive path decides it: a result is read against this.
+    for mode in [r.shipped, r.candidate] {
+        println!(
+            "  {mode}: preamble veto {}",
+            if rx_engine(mode, r.level).preamble_veto_active(mode) {
+                "active"
+            } else {
+                "none (energy-only settle)"
+            }
+        );
+    }
     let mut all_pass = true;
     // `F1_COLUMN` runs one column by index, to time or re-run it alone.
     let only: Option<usize> = std::env::var("F1_COLUMN").ok().and_then(|v| v.parse().ok());
@@ -397,6 +408,12 @@ fn f1_bpsk250_pn63_against_the_shipped_preamble() {
             if pass { "PASS" } else { "FAIL" },
             t.elapsed().as_secs_f64()
         );
+        // `F1_PRINT_SEEDS` lists the discordant seeds, so a column's losses can be re-run alone.
+        if std::env::var_os("F1_PRINT_SEEDS").is_some() {
+            for (i, p) in pairs.iter().enumerate().filter(|(_, p)| p.0 != p.1) {
+                println!("    seed {}: shipped {}, PN {}", i + 1, p.0, p.1);
+            }
+        }
     }
     println!("F1 verdict: {}", if all_pass { "PASS" } else { "FAIL" });
 }
@@ -422,8 +439,8 @@ fn both_arms_deliver_a_clean_frame() {
     }
 }
 
-/// The discordant seeds of column `F1_COLUMN` (default the floor) among `F1_DIAG_SEEDS` (default
-/// 1..=60), each arm diagnosed: does the loss sit in the gathering or in the demodulation?
+/// The discordant seeds of column `F1_COLUMN` (default the floor) among `F1_DIAG_SEEDS` seeds from
+/// `F1_DIAG_FROM` (default 60 from 1), each arm diagnosed: does the loss sit in the gathering or in the demodulation?
 #[test]
 #[ignore = "diagnostic: #1062 design F5"]
 fn f5_diagnose_discordant_seeds() {
@@ -437,7 +454,13 @@ fn f5_diagnose_discordant_seeds() {
         .ok()
         .and_then(|v| v.parse().ok())
         .unwrap_or(60);
-    for seed in 1..=n {
+    // `F1_DIAG_FROM` starts the range elsewhere: a column's seeds are split across threads, so a
+    // block of later seeds can be checked in a fresh process.
+    let from: u64 = std::env::var("F1_DIAG_FROM")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(1);
+    for seed in from..from + n {
         let (payload, lead) = draw(seed, payload_max());
         let a = trial(r.shipped, r.level, col, seed, &payload, lead);
         let b = trial(r.candidate, r.level, col, seed, &payload, lead);
