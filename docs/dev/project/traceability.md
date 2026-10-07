@@ -15,6 +15,37 @@ this ledger adds the design rationale and the actually-observed results per chan
 
 ---
 
+## 2026-10-07 — #1062 PN-63 preamble: F5 on the offset-fixed receiver, f9, and F1 with the full template (work plan M2)
+
+**Change.** The rest of F5 (BPSK31/63/100) on d9031766, f9 (PN's delivered-frame bound), and the F1
+rerun on BPSK250 with the template the flag day would ship. Still not the wire change.
+
+**Decision.** Each rule and every amendment was written into `docs/dev/design/pn-preamble.md` before
+its output (cliff re-runs at the pilot point nearest 50 % when a column sat under 10 % on both arms;
+the F1 filter column). f9's bound follows the rule fixed before its run.
+
+**Implementation.** `BpskPlugin::preamble_template` publishes `BPSK250-PN`'s template on the dormant
+candidate only: `PN_PREAMBLE_RHO_THRESHOLD` 0.315 (decision 23), grid ±20 Hz (F2),
+`PN_DELIVERED_FRAME_RHO_BOUND` 0.51 (f9) (`plugins/bpsk/src/{lib,modulate}.rs`). Measurement
+apparatus in `crates/openpulse-modem/tests/pn_preamble_parity.rs`: a filter column, per-arm
+`preamble_veto_active` in the header, `F1_PRINT_SEEDS`, `f5_open_latency_and_truncation`,
+`f5_preamble_band_power_by_phase`, column/start knobs on `f5_diagnose_discordant_seeds`; the
+brick-wall mask moved to `tests/common` (`filter::band_limit`) and is shared with the f9 probe.
+
+**Tests → results.**
+- `only_bpsk250_pn_publishes_a_pn_template`: 1 passed. Clippy (modem tests, release): clean.
+- **F5 (n = 600):** BPSK100 and BPSK63 pass every column (cliffs: BPSK100 −9 dB +0.025, BPSK63
+  −11 dB +0.032); every ±50 Hz column 599 / 599. **BPSK31's −14 dB cliff FAILS** (345 / 298,
+  −0.078): a carrier-detect gathering deficit (head gathered on shipped alone in 54 of 200 seeds, on
+  PN alone in 20), not demodulation; mechanism not shown.
+- **f9 (idle machine, exact reproduction of a first run under load):** PN bound 0.51; shipped control
+  0.871–0.892. Behind the 500 Hz mask PN decoded 14 / 32 / 44 of 120 against 19 / 59 / 79.
+- **F1 rerun with the template (1e83be8d): FAIL.** Floor, 8 dB, cliff and the new filter column
+  pass (filter +0.012, so f9's gap does not reach the production entry); **±50 Hz fail** (−0.048,
+  −0.043). Without the PN template (755fa457) the same columns pass (PN 572 / 570): the loss is the
+  template path's, in acquisition (bursts gathered whole, `ota_decode_burst` fails); reproduced
+  537 / 508 on a build that reports both vetoes active.
+
 ## 2026-10-06 — An off-frequency first frame does not pay the onset scan (REQ-PHY-03, work plan M2)
 
 **Change.** Found by #1062's F5 parity run: a BPSK31 frame at +50 Hz cost ~100 s of x86 CPU on both
