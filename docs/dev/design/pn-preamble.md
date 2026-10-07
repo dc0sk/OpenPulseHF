@@ -392,6 +392,14 @@ was stopped with nothing printed. The derivation uses the probe's default budget
 shipped 0.50 was derived in, on an otherwise idle machine, so the wall-clock budget is not
 truncated by load.
 
+**f9 run of 2026-10-07: void, rerun pending.** The derivation's condition above is an otherwise
+idle machine, because f9 decodes through `receive_with_fec_mode_timeout`, a wall-clock budget. Both
+arms ran beside the pre-push hook's test suites and other diagnostics, and not under the same load
+(the PN arm overlapped the heavier of two hook runs), so neither the PN bound it gave (0.51) nor the
+decode-rate gap it showed (PN 14 / 32 / 44 vs shipped 19 / 59 / 79 of 120 at 5 / 10 / 20 dB) is
+evidence. Both arms are rerun on an idle machine. Whatever the rerun shows, the F1 rerun with the full
+template adds a paired column behind `filter 1250-1750` (n = 600, δ = 0.03): F1 never had one.
+
 **Lesson for any long preamble** (QPSK's parked longer preamble, pilots): length buys energy only
 up to the channel's coherence time; past it, combine in power.
 
