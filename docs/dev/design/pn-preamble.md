@@ -449,6 +449,15 @@ slow PN rungs read 599 / 599 at ±50 Hz (F5). **Next, before any mechanism is wr
 same two columns on 755fa457 (the same receiver, `BPSK250-PN` publishing no template), so a loss
 that disappears there is the template path's (veto or onset ranking), and one that stays is not.
 
+**A/B on 755fa457 (no PN template), n = 600:** +50 Hz shipped 537, PN **572**, discordant 4/39,
++0.058 [+0.037, +0.079] PASS; −50 Hz shipped 543, PN **570**, discordant 8/35, +0.045 [+0.024,
++0.066] PASS. Shipped is identical in both runs (its template did not change); PN without its
+template reads the same at ±50 Hz as at 0 Hz (572). **The whole offset loss is the template path's:**
+publishing `BPSK250-PN`'s template costs 64 / 53 of 600 PN frames at ±50 Hz. Which part (the veto
+at 0.315, its ±20 Hz grid around the settled carrier, or the onset ranking) is not yet separated;
+until it is, the flag-day template is not accepted, and decision 23's threshold stands only as
+derived, not as validated off-frequency.
+
 **Lesson for any long preamble** (QPSK's parked longer preamble, pilots): length buys energy only
 up to the channel's coherence time; past it, combine in power.
 
