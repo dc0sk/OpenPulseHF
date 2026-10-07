@@ -467,6 +467,13 @@ samples, 3 of 5 then decode (seeds 28, 36, 38) and 2 still fail (7, 16). The los
 That a shorter lead rescues most of them points at the template path's choice among onsets (the
 ranking, or the veto applied per candidate) more than at the threshold alone; **not yet shown**.
 
+**Veto vs ranking (pre-registered 2026-10-07, before any output).** `set_preamble_veto_gate(false)`
+(instruments only; `the_veto_gate_switch_accepts_what_the_veto_would_refuse`, sabotage-verified) makes
+the veto compute ρ and count what it would refuse while rejecting nothing; the onset ranking, which
+ranks and never thresholds, is unchanged. F1 at ±50 Hz with `F1_VETO_GATE=off` on the PN arm only,
+n = 600. Reading: PN recovering to within the no-template run's CI (572 / 570) lays the loss on the
+veto; PN staying at 508 / 517 lays it on the ranking; anything between, on both, in proportion.
+
 **Caution recorded:** an A/B built in a second worktree with `CARGO_TARGET_DIR` shared with the main
 checkout left the main test binary linked against the worktree's `bpsk-plugin` until that crate was
 touched, and four diagnostic runs (none recorded here) silently measured the no-template receiver.

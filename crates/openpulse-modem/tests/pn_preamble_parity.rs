@@ -104,7 +104,16 @@ fn rx_engine(mode: &'static str, level: SpeedLevel) -> ModemEngine {
         SessionProfile::from_rungs(&[(level, mode, FecMode::Rs, Some(5.0), None)], level, 3);
     e.start_ota_session(profile);
     e.ota_lock_level(level);
+    if veto_gate_off(mode) {
+        e.set_preamble_veto_gate(false);
+    }
     e
+}
+
+/// `F1_VETO_GATE=off`: the PN arm's veto computes ρ but rejects nothing, its onset ranking unchanged,
+/// so a PN loss can be laid at the veto or at the ranking (#1062). The shipped arm is never touched.
+fn veto_gate_off(mode: &str) -> bool {
+    mode.ends_with("-PN") && std::env::var("F1_VETO_GATE").as_deref() == Ok("off")
 }
 
 fn tx_frame(mode: &str, payload: &[u8]) -> Vec<f32> {
@@ -219,6 +228,11 @@ fn diagnose(
             );
         }
     }
+    out += &format!(
+        "\n    veto rejections {}, fallback ranks hit {:?}",
+        rx.rho_rejected_settles(),
+        rx.fallback_onset_ranks()
+    );
     let cut = audio[lead - 1_000..(lead + len + 1_000).min(audio.len())].to_vec();
     let mut rx = rx_engine(mode, level);
     let oracle = match rx.ota_decode_burst(
@@ -378,7 +392,9 @@ fn f1_bpsk250_pn63_against_the_shipped_preamble() {
     for mode in [r.shipped, r.candidate] {
         println!(
             "  {mode}: preamble veto {}",
-            if rx_engine(mode, r.level).preamble_veto_active(mode) {
+            if veto_gate_off(mode) {
+                "computed, gate OFF (F1_VETO_GATE=off: rejects nothing; ranking unchanged)"
+            } else if rx_engine(mode, r.level).preamble_veto_active(mode) {
                 "active"
             } else {
                 "none (energy-only settle)"

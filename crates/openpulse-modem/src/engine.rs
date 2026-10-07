@@ -965,6 +965,11 @@ pub struct ModemEngine {
     /// #1342; on the daemon's phase-2 path the unit is one coarse-grid settle query, the unit
     /// `rho_accepted_settles` already has there.
     rho_stand_down_settles: u64,
+    /// Measurement only (#1062): `false` makes the veto accept every onset while still computing ρ,
+    /// feeding the calibration and counting what it would have rejected, so the veto's share of a
+    /// loss can be separated from the onset ranking's, which reads the same template. Always `true`
+    /// outside `set_preamble_veto_gate`.
+    veto_gate: bool,
     /// Monotonic count of frames emitted at the single TX seam (`stage_emit_output`) — every
     /// transmit path (data, FEC, ACK, retransmit, QSY, ID) increments it once. A pollable
     /// TX-activity signal for the daemon's periodic station-ID timer (REQ-REG-10).
@@ -1178,6 +1183,7 @@ impl ModemEngine {
             rho_calibration: crate::rho_calibration::RhoCalibration::new(),
             rho_stand_down: false,
             rho_stand_down_settles: 0,
+            veto_gate: true,
             frames_transmitted: 0,
             raw_audio_frames_transmitted: 0,
         }
@@ -1327,6 +1333,15 @@ impl ModemEngine {
     #[cfg(feature = "instruments")]
     pub fn rho_rejected_settles(&self) -> u64 {
         self.rho_rejected_settles
+    }
+
+    /// Turn the veto's rejection off (`false`) or back on, leaving the onset ranking as it is (#1062).
+    ///
+    /// Measurement only. With the gate off, [`Self::rho_rejected_settles`] counts the onsets the veto
+    /// WOULD have refused; the calibration still sees every ρ.
+    #[cfg(feature = "instruments")]
+    pub fn set_preamble_veto_gate(&mut self, on: bool) {
+        self.veto_gate = on;
     }
 
     /// Settles the preamble correlation accepted. See [`Self::rho_rejected_settles`].
@@ -8153,7 +8168,11 @@ impl ModemEngine {
             VetoVerdict::StoodDown
         } else if rho < threshold {
             self.rho_rejected_settles += 1;
-            VetoVerdict::Rejected { threshold }
+            if self.veto_gate {
+                VetoVerdict::Rejected { threshold }
+            } else {
+                VetoVerdict::Corroborated
+            }
         } else {
             self.rho_accepted_settles += 1;
             VetoVerdict::Corroborated
@@ -9695,6 +9714,22 @@ mod ddc_veto_arm {
         assert!(
             decimated <= MAX_PREAMBLE_CORRELATION_SAMPLES,
             "the point of the Ddc arm is that the budget is honoured AFTER decimation, and              {decimated} exceeds {MAX_PREAMBLE_CORRELATION_SAMPLES}"
+        );
+    }
+
+    /// The measurement switch (#1062) turns off the veto's rejection and nothing else: a ρ the veto
+    /// refuses is accepted with the gate off and still counted as a rejection it would have made.
+    #[test]
+    fn the_veto_gate_switch_accepts_what_the_veto_would_refuse() {
+        let mut e = engine_with_long_template();
+        let veto = e.build_preamble_veto(MODE, FS).expect("veto");
+        assert!(!e.decide_preamble_veto(&veto, 0.0, 0).accepted());
+        e.veto_gate = false;
+        assert!(e.decide_preamble_veto(&veto, 0.0, 0).accepted());
+        assert_eq!(e.rho_rejected_settles, 2);
+        assert!(
+            !e.rho_stand_down,
+            "accepted by the switch, not by a stand-down"
         );
     }
 
