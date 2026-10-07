@@ -290,6 +290,19 @@ pub const PREAMBLE_RHO_THRESHOLD: f32 = 0.40;
 /// frames.
 pub const DELIVERED_FRAME_RHO_BOUND: f32 = 0.50;
 
+/// `BPSK250-PN`'s veto threshold (#1062 decision 23): the geometric mean of the worst measured
+/// interferer (0.304, a DSB pair at fc ± 31.25 Hz) and the 3 dB decodable p01 (0.327), so the margin
+/// is 1.07, not the 1.2 the rule asked for, and is recorded as not met (`docs/dev/design/pn-preamble.md`).
+/// What would falsify it: an interferer above 0.315 or a delivered frame below it on a channel the
+/// rung runs on.
+pub const PN_PREAMBLE_RHO_THRESHOLD: f32 = 0.315;
+
+/// `BPSK250-PN`'s delivered-frame bound (#1062): f9 with the veto off through a 1250–1750 Hz mask
+/// on `moderate_f1` at 5/10/20 dB, 120 seeds each, lowest decoded-ρ p01 (0.518) rounded down. Each
+/// p01 is a cell minimum (14–44 decodes per cell), so it bounds the measured population only.
+/// What would falsify it: a delivered PN frame below 0.51 on any channel this mode runs on.
+pub const PN_DELIVERED_FRAME_RHO_BOUND: f32 = 0.51;
+
 /// Half-width of the residual-frequency grid the preamble correlation searches, in Hz.
 ///
 /// **Bounded from both sides, and the upper bound is the interesting one.**

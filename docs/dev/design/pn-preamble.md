@@ -423,6 +423,14 @@ production-entry parity had no filter column, so it could not have seen this. f9
 F1 rerun with the full template adds a paired column behind `filter 1250-1750` (n = 600, δ = 0.03),
 and that column decides it.
 
+**F1 rerun with the full template (pre-registered 2026-10-07, before any output).** The candidate
+plugin now publishes `BPSK250-PN`'s template: threshold 0.315 (decision 23), grid ±20 Hz (F2),
+delivered-frame bound 0.51 (f9); the slow PN rungs still publish none. Receiver d9031766 plus that
+template. Same harness, rule and columns as F1 (n = 600 paired, δ = 0.03, payload 16–200 B, cliff
+fixed at −5 dB), plus a sixth column, **`moderate_f1` 8 dB behind a brick-wall 1250–1750 Hz filter**
+over signal and noise (the SNR is set before the filter, as in every other column; the filter is
+`common::filter::band_limit`, the same function f9 uses). A FAIL in the filter column fails F1.
+
 **Lesson for any long preamble** (QPSK's parked longer preamble, pilots): length buys energy only
 up to the channel's coherence time; past it, combine in power.
 

@@ -81,6 +81,8 @@ use openpulse_modem::capture_replay::{load_corpus, load_wav};
 use openpulse_modem::channel_sim::ChannelSimHarness;
 use std::time::Duration;
 
+mod common;
+
 const FS: f32 = 8_000.0;
 const PI_F: f32 = std::f32::consts::PI;
 
@@ -522,35 +524,7 @@ fn rho_of(template: &[f32], window: &[f32], grid_hz: f32) -> Option<f32> {
         .map(|(r, _)| r.rho)
 }
 
-/// Apply the same brick-wall band mask `band_noise` uses, to an arbitrary signal.
-///
-/// Same mask for signal and noise, so the two columns of the table are comparable. Brick-wall is a
-/// worst case for selectivity; a real rig filter has skirts and sits between this and the SSB row.
-fn band_limit(x: &[f32], lo_hz: f32, hi_hz: f32) -> Vec<f32> {
-    use rustfft::{num_complex::Complex, FftPlanner};
-    let n = x.len().next_power_of_two();
-    let mut buf: Vec<Complex<f32>> = x
-        .iter()
-        .map(|&v| Complex::new(v, 0.0))
-        .chain(std::iter::repeat_n(Complex::new(0.0, 0.0), n - x.len()))
-        .collect();
-    let mut planner = FftPlanner::new();
-    planner.plan_fft_forward(n).process(&mut buf);
-    let bin_hz = FS / n as f32;
-    for (k, v) in buf.iter_mut().enumerate() {
-        let f = if k <= n / 2 {
-            k as f32 * bin_hz
-        } else {
-            (n - k) as f32 * bin_hz
-        };
-        if f < lo_hz || f > hi_hz {
-            *v = Complex::new(0.0, 0.0);
-        }
-    }
-    planner.plan_fft_inverse(n).process(&mut buf);
-    let scale = 1.0 / n as f32;
-    buf.iter().map(|c| c.re * scale).collect()
-}
+use common::filter::band_limit;
 
 /// Fraction of the DFT bins that actually carry the template's energy (participation ratio /
 /// bin count). A two-line spectrum scores near zero however long it runs; flat noise scores 1.

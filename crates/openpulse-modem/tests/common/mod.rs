@@ -137,3 +137,34 @@ pub mod preamble {
         s
     }
 }
+
+/// The receive-filter apparatus shared by the f9 probe and the F1 parity harness (#1062).
+pub mod filter {
+    /// A brick-wall FFT band mask at 8 kHz: sharper than any real rig filter, so a worst case for
+    /// selectivity. One mask for signal and noise, so filtered columns stay comparable.
+    pub fn band_limit(x: &[f32], lo_hz: f32, hi_hz: f32) -> Vec<f32> {
+        use rustfft::{num_complex::Complex, FftPlanner};
+        let n = x.len().next_power_of_two();
+        let mut buf: Vec<Complex<f32>> = x
+            .iter()
+            .map(|&v| Complex::new(v, 0.0))
+            .chain(std::iter::repeat_n(Complex::new(0.0, 0.0), n - x.len()))
+            .collect();
+        let mut planner = FftPlanner::new();
+        planner.plan_fft_forward(n).process(&mut buf);
+        let bin_hz = 8_000.0 / n as f32;
+        for (k, v) in buf.iter_mut().enumerate() {
+            let f = if k <= n / 2 {
+                k as f32 * bin_hz
+            } else {
+                (n - k) as f32 * bin_hz
+            };
+            if f < lo_hz || f > hi_hz {
+                *v = Complex::new(0.0, 0.0);
+            }
+        }
+        planner.plan_fft_inverse(n).process(&mut buf);
+        let scale = 1.0 / n as f32;
+        buf.iter().map(|c| c.re * scale).collect()
+    }
+}

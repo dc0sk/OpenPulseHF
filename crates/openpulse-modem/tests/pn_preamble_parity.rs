@@ -24,6 +24,8 @@ use openpulse_core::profile::SessionProfile;
 use openpulse_core::rate::SpeedLevel;
 use openpulse_modem::ModemEngine;
 
+mod common;
+
 /// One rung under test: its shipped and candidate modes, its ladder level and its SNR floor.
 #[derive(Clone, Copy)]
 struct Rung {
@@ -86,6 +88,8 @@ struct Column {
     fading: bool,
     snr_db: f32,
     offset_hz: f32,
+    /// A brick-wall receive filter `(lo, hi)` Hz over signal and noise, or none.
+    band: Option<(f32, f32)>,
 }
 
 fn rx_engine(mode: &'static str, level: SpeedLevel) -> ModemEngine {
@@ -154,6 +158,10 @@ fn capture(mode: &str, col: Column, seed: u64, payload: &[u8], lead: usize) -> (
     let mut audio: Vec<f32> = (0..total).map(|_| sigma * noise.gauss()).collect();
     for (a, &s) in audio[lead..].iter_mut().zip(&signal) {
         *a += s;
+    }
+    if let Some((lo, hi)) = col.band {
+        audio = common::filter::band_limit(&audio, lo, hi);
+        audio.truncate(total);
     }
     (audio, signal.len())
 }
@@ -284,24 +292,28 @@ fn columns(r: Rung) -> Vec<Column> {
             fading: true,
             snr_db: r.floor_db,
             offset_hz: 0.0,
+            band: None,
         },
         Column {
             name: "moderate_f1 8 dB",
             fading: true,
             snr_db: 8.0,
             offset_hz: 0.0,
+            band: None,
         },
         Column {
             name: "moderate_f1 8 dB, +50 Hz",
             fading: true,
             snr_db: 8.0,
             offset_hz: 50.0,
+            band: None,
         },
         Column {
             name: "moderate_f1 8 dB, -50 Hz",
             fading: true,
             snr_db: 8.0,
             offset_hz: -50.0,
+            band: None,
         },
     ];
     if cliff.is_finite() {
@@ -310,8 +322,18 @@ fn columns(r: Rung) -> Vec<Column> {
             fading: false,
             snr_db: cliff,
             offset_hz: 0.0,
+            band: None,
         });
     }
+    // Last, so the earlier columns keep their `F1_COLUMN` indices: f9 saw the PN arm decode about
+    // half as often behind this filter, and F1 had no filtered column (design, f9 result).
+    c.push(Column {
+        name: "moderate_f1 8 dB, filter 1250-1750",
+        fading: true,
+        snr_db: 8.0,
+        offset_hz: 0.0,
+        band: Some((1_250.0, 1_750.0)),
+    });
     c
 }
 
@@ -336,6 +358,7 @@ fn f1_bpsk250_pn63_against_the_shipped_preamble() {
                 fading: false,
                 snr_db: snr,
                 offset_hz: 0.0,
+                band: None,
             };
             let t = std::time::Instant::now();
             let pairs = run_column(r, col, n);
@@ -387,6 +410,7 @@ fn both_arms_deliver_a_clean_frame() {
         fading: false,
         snr_db: 30.0,
         offset_hz: 0.0,
+        band: None,
     };
     let payload = b"F1 positive control".to_vec();
     let r = RUNGS[3];

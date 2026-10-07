@@ -233,6 +233,21 @@ impl ModulationPlugin for BpskPlugin {
         // column on the channel that rung exists for) AND its own grid (bounded above by baud/4,
         // below by the settle residual, measured at <= 0.3 Hz), then name it here.
         const DERIVED_FOR: &str = "BPSK250";
+        // The PN candidate's constants are its own (#1062 decisions 23 and F2/f9); an aperiodic
+        // preamble has no line structure, so the baud/4 guard below does not apply to it.
+        const PN_DERIVED_FOR: &str = "BPSK250-PN";
+        if config.mode == PN_DERIVED_FOR {
+            let samples = modulate::bpsk_preamble_template(config).ok()?;
+            return Some(
+                PreambleTemplate::new(
+                    PN_DERIVED_FOR,
+                    samples,
+                    modulate::PN_PREAMBLE_RHO_THRESHOLD,
+                    modulate::PREAMBLE_RHO_GRID_HZ,
+                )
+                .with_delivered_frame_bound(modulate::PN_DELIVERED_FRAME_RHO_BOUND),
+            );
+        }
         if config.mode != DERIVED_FOR {
             return None;
         }
@@ -561,6 +576,36 @@ mod tests {
             assert_eq!(tx.len(), shipped_len + 31 * n, "{mode}");
             let g = plugin.frame_geometry(&pn).unwrap();
             assert_eq!(g.preamble_samples, 63 * n, "{mode}");
+        }
+    }
+
+    /// Only `BPSK250-PN` publishes a PN template, with its own constants (#1062 decision 23, f9);
+    /// the slow PN rungs have none derived and publish nothing.
+    #[cfg(feature = "pn-candidate")]
+    #[test]
+    fn only_bpsk250_pn_publishes_a_pn_template() {
+        let plugin = BpskPlugin::pn_candidate();
+        let t = plugin
+            .preamble_template(&cfg("BPSK250-PN"))
+            .expect("BPSK250-PN template");
+        assert_eq!(t.for_mode, "BPSK250-PN");
+        assert_eq!(t.rho_threshold, modulate::PN_PREAMBLE_RHO_THRESHOLD);
+        assert_eq!(t.rho_grid_hz, modulate::PREAMBLE_RHO_GRID_HZ);
+        assert_eq!(
+            t.delivered_frame_rho_bound,
+            Some(modulate::PN_DELIVERED_FRAME_RHO_BOUND)
+        );
+        let shipped = BpskPlugin::new()
+            .preamble_template(&cfg("BPSK250"))
+            .expect("BPSK250 template");
+        assert_eq!(shipped.rho_threshold, modulate::PREAMBLE_RHO_THRESHOLD);
+        assert_eq!(
+            shipped.delivered_frame_rho_bound,
+            Some(modulate::DELIVERED_FRAME_RHO_BOUND)
+        );
+        assert_ne!(t.samples, shipped.samples);
+        for mode in ["BPSK31-PN", "BPSK63-PN", "BPSK100-PN"] {
+            assert!(plugin.preamble_template(&cfg(mode)).is_none(), "{mode}");
         }
     }
 
