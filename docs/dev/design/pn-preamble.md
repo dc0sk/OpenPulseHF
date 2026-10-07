@@ -431,6 +431,24 @@ fixed at −5 dB), plus a sixth column, **`moderate_f1` 8 dB behind a brick-wall
 over signal and noise (the SNR is set before the filter, as in every other column; the filter is
 `common::filter::band_limit`, the same function f9 uses). A FAIL in the filter column fails F1.
 
+**F1 rerun result (1e83be8d, n = 600 paired): FAIL, on the two offset columns.**
+
+| column | shipped | PN | discordant | PN − shipped [95 % CI] | verdict |
+|---|---|---|---|---|---|
+| `moderate_f1` at the floor | 507 | 524 | 16/33 | +0.028 [+0.006, +0.051] | PASS |
+| `moderate_f1` 8 dB | 558 | 572 | 7/21 | +0.023 [+0.006, +0.041] | PASS |
+| `moderate_f1` 8 dB, +50 Hz | 537 | 508 | 60/31 | −0.048 [−0.079, −0.017] | **FAIL** |
+| `moderate_f1` 8 dB, −50 Hz | 543 | 517 | 52/26 | −0.043 [−0.072, −0.015] | **FAIL** |
+| AWGN −5 dB (the cliff) | 534 | 550 | 15/31 | +0.027 [+0.005, +0.049] | PASS |
+| `moderate_f1` 8 dB, filter 1250–1750 | 525 | 532 | 10/17 | +0.012 [−0.005, +0.029] | PASS |
+
+The cliff column reproduces the first F1 exactly (534 / 550), so the template changes nothing at
+0 Hz in AWGN. The filter column passes, so f9's 2:1 decode gap behind the same mask does not appear
+at the production entry. The offset loss is new: on the same receiver without the PN template, the
+slow PN rungs read 599 / 599 at ±50 Hz (F5). **Next, before any mechanism is written down:** the
+same two columns on 755fa457 (the same receiver, `BPSK250-PN` publishing no template), so a loss
+that disappears there is the template path's (veto or onset ranking), and one that stays is not.
+
 **Lesson for any long preamble** (QPSK's parked longer preamble, pilots): length buys energy only
 up to the channel's coherence time; past it, combine in power.
 
