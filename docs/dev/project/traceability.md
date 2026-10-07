@@ -49,6 +49,10 @@ brick-wall mask moved to `tests/common` (`filter::band_limit`) and is shared wit
   `the_veto_gate_switch_accepts_what_the_veto_would_refuse` 1 passed, fails sabotaged). PN arm gate
   off: ±50 Hz PN 572 / 570, identical to no template. The loss is the veto's rejection; the ranking
   adds nothing.
+- **Where the veto loses PN frames:** `veto_probe` (instruments) shows healthy PN ρ at the true onset
+  at ±50 Hz (settle within ±1 Hz); `f1_rho_by_onset_shift` shows PN's ρ collapsing beyond about two
+  symbols of onset error while `--++` holds at every shift, against phase 2's 4-symbol grid.
+  `set_phase2_veto_reach` (instruments, default off) confirms it: ±50 Hz PN 563 / 566, PASS.
 - **Decision 25 (maintainer):** BPSK31 keeps `--++` per F5's pre-registered consequence; the carrier
   detect is not changed for it; PN-63 scope is SL3–SL5 (work plan decision log).
 

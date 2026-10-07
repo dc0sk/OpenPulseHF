@@ -513,6 +513,20 @@ an unchanged settle count. F1 ±50 Hz, n = 600, `F1_VETO_REACH=on` on the PN arm
 at or within the no-template run's CI (572 / 570) confirms the mechanism and makes the reach the
 fix candidate; PN still near 508 / 517 refutes it.
 
+**Result: confirmed.** +50 Hz shipped 537, PN **563**, discordant 12/38, +0.043 [+0.020, +0.066]
+PASS; −50 Hz shipped 543, PN **566**, discordant 10/33, +0.038 [+0.017, +0.060] PASS. The reach
+recovers 55 of 64 and 49 of 53 lost frames; both CIs overlap the no-template run's. The remainder is
+the veto's ordinary cost (frames whose ρ is low even at the true onset, 2 of 60 in the probe).
+
+**Not yet a fix.** Two ways to make it one, each with a cost that must be measured first:
+- **Reach** (as tested): phase 2's veto searches one more coarse step. Settle count unchanged, but
+  the veto's timing search grows from about two symbols to six, which raises the noise ceiling the
+  0.315 was derived against (F2, margin already 1.07): F2's noise column must be re-measured on the
+  wider search before this ships.
+- **Finer grid for PN:** phase 2 settles every two symbols instead of four, inside PN's acceptance.
+  The veto's search is unchanged, so 0.315 and the 0.51 bound stand as derived, but phase 2's settles
+  double, and receive cost at ±50 Hz (REQ-PHY-03, the 9 s ACK window on the Pi) must be re-measured.
+
 **Caution recorded:** an A/B built in a second worktree with `CARGO_TARGET_DIR` shared with the main
 checkout left the main test binary linked against the worktree's `bpsk-plugin` until that crate was
 touched, and four diagnostic runs (none recorded here) silently measured the no-template receiver.
