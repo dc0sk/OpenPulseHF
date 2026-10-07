@@ -400,13 +400,28 @@ was stopped with nothing printed. The derivation uses the probe's default budget
 shipped 0.50 was derived in, on an otherwise idle machine, so the wall-clock budget is not
 truncated by load.
 
-**f9 run of 2026-10-07: void, rerun pending.** The derivation's condition above is an otherwise
-idle machine, because f9 decodes through `receive_with_fec_mode_timeout`, a wall-clock budget. Both
-arms ran beside the pre-push hook's test suites and other diagnostics, and not under the same load
-(the PN arm overlapped the heavier of two hook runs), so neither the PN bound it gave (0.51) nor the
-decode-rate gap it showed (PN 14 / 32 / 44 vs shipped 19 / 59 / 79 of 120 at 5 / 10 / 20 dB) is
-evidence. Both arms are rerun on an idle machine. Whatever the rerun shows, the F1 rerun with the full
-template adds a paired column behind `filter 1250-1750` (n = 600, δ = 0.03): F1 never had one.
+**f9 result (2026-10-07, d9031766, default budget, veto off, `filter 1250-1750`, `moderate_f1`,
+120 seeds per cell).** The first run overlapped other load, against the condition above, so both
+arms were rerun on an idle machine (load average 1.00 throughout, the probe's one core): **every
+figure reproduced exactly**, so the probe is deterministic here and the load did not bind its
+budget.
+
+| cell | BPSK250 decoded | ρ p01 / p05 / median | BPSK250-PN decoded | ρ p01 / p05 / median |
+|---|---|---|---|---|
+| 5 dB | 19 | 0.892 / 0.892 / 0.972 | 14 | 0.830 / 0.830 / 0.894 |
+| 10 dB | 59 | 0.871 / 0.890 / 0.965 | 32 | 0.518 / 0.847 / 0.918 |
+| 20 dB | 79 | 0.881 / 0.901 / 0.978 | 44 | 0.535 / 0.827 / 0.950 |
+
+**Bound, by the rule fixed above: 0.51** (lowest PN p01, 0.518, rounded down). With 14–44 decodes
+per cell each p01 is that cell's minimum, one frame each at 10 and 20 dB; p05 sits at 0.83–0.85.
+The shipped control reads 0.871–0.892, above its 0.50.
+
+**Unexplained, and now the open question for BPSK250:** behind this 500 Hz filter the PN arm
+decodes about half as often as the shipped arm (14 / 32 / 44 vs 19 / 59 / 79), veto off on both. F1's
+production-entry parity had no filter column, so it could not have seen this. f9 decodes through
+`receive_with_fec_mode_timeout`, not the production entry, so this is not yet a parity verdict: the
+F1 rerun with the full template adds a paired column behind `filter 1250-1750` (n = 600, δ = 0.03),
+and that column decides it.
 
 **Lesson for any long preamble** (QPSK's parked longer preamble, pilots): length buys energy only
 up to the channel's coherence time; past it, combine in power.
