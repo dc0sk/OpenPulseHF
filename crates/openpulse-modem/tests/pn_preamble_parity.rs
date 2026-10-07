@@ -398,13 +398,17 @@ fn both_arms_deliver_a_clean_frame() {
     }
 }
 
-/// The discordant seeds of the floor column among `F1_DIAG_SEEDS` (default 1..=60), each arm
-/// diagnosed: does the loss sit in the gathering or in the demodulation?
+/// The discordant seeds of column `F1_COLUMN` (default the floor) among `F1_DIAG_SEEDS` (default
+/// 1..=60), each arm diagnosed: does the loss sit in the gathering or in the demodulation?
 #[test]
 #[ignore = "diagnostic: #1062 design F5"]
 fn f5_diagnose_discordant_seeds() {
     let r = rung();
-    let col = columns(r)[0];
+    let index: usize = std::env::var("F1_COLUMN")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(0);
+    let col = columns(r)[index];
     let n: u64 = std::env::var("F1_DIAG_SEEDS")
         .ok()
         .and_then(|v| v.parse().ok())
@@ -425,6 +429,66 @@ fn f5_diagnose_discordant_seeds() {
                 "  {mode}:{}",
                 diagnose(mode, r.level, col, seed, &payload, lead)
             );
+        }
+    }
+}
+
+/// Column `F1_COLUMN` over seeds 1..=`F1_DIAG_SEEDS`, one line per seed and arm: where the first
+/// gathered burst starts against the frame's onset, and whether the frame decodes when cut late by a
+/// fixed offset. Separates a carrier detect that opens later on one preamble from a preamble that
+/// cannot survive a lost head.
+#[test]
+#[ignore = "diagnostic: #1062 design F5"]
+fn f5_open_latency_and_truncation() {
+    const LATE: [i64; 3] = [0, 500, 2_000];
+    let r = rung();
+    let index: usize = std::env::var("F1_COLUMN")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(0);
+    let col = columns(r)[index];
+    let n: u64 = std::env::var("F1_DIAG_SEEDS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(40);
+    println!("cuts {LATE:?} samples after the onset");
+    for seed in 1..=n {
+        let (payload, lead) = draw(seed, payload_max());
+        for mode in [r.shipped, r.candidate] {
+            let (audio, len) = capture(mode, col, seed, &payload, lead);
+            let mut rx = rx_engine(mode, r.level);
+            let mut fed = 0usize;
+            let mut start = None;
+            for read in audio.chunks(READ) {
+                fed += read.len();
+                if let Some(burst) = rx.accumulate_capture(Some(mode), read.to_vec()).unwrap() {
+                    start = Some(
+                        fed as i64 - read.len() as i64 - burst.samples.len() as i64 - lead as i64,
+                    );
+                    break;
+                }
+            }
+            // `F1_DIAG_GATHER_ONLY` skips the late cuts: a failed BPSK31 decode costs minutes.
+            let cut_at: &[i64] = if std::env::var_os("F1_DIAG_GATHER_ONLY").is_some() {
+                &[]
+            } else {
+                &LATE
+            };
+            let cuts: Vec<bool> = cut_at
+                .iter()
+                .map(|&late| {
+                    let from = (lead as i64 + late) as usize;
+                    let cut = audio[from..(lead + len + 1_000).min(audio.len())].to_vec();
+                    rx_engine(mode, r.level)
+                        .ota_decode_burst(
+                            &openpulse_modem::pipeline::AudioSamples { samples: cut },
+                            "late",
+                            None,
+                        )
+                        .is_ok_and(|d| d.payload.as_deref() == Some(payload.as_slice()))
+                })
+                .collect();
+            println!("seed {seed} {mode}: first burst start {start:?}, cuts {cuts:?}");
         }
     }
 }

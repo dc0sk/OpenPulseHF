@@ -337,6 +337,34 @@ discordant 136/89, PN − shipped −0.078 [−0.127, −0.030]. The pilot read 
 yet known; next is `f5_diagnose_discordant_seeds` on the 136 shipped-only seeds (gathering vs
 demodulation, as for the floor-column failure), and no constant is changed before that reads.
 
+**Where the BPSK31 cliff loss sits: the carrier detect, not the demodulator.**
+`f5_diagnose_discordant_seeds` (`F1_COLUMN=4`, seeds 1–40): 15 discordant, 10 PN-only losses and
+5 shipped-only; 14 of the 15 losing arms decode when the frame is cut at its true onset. The losses
+are a burst never gathered (PN 5, shipped 4) or one that opens late or split, 418–2 107 samples
+past the onset (PN 5, shipped 1). Cutting frames late shows a lost head is fatal to **both**
+preambles (seeds 1–2: a 500-sample cut fails on either arm), so the asymmetry is not PN's
+truncation tolerance. `f5_open_latency_and_truncation` with `F1_DIAG_GATHER_ONLY=1`, seeds
+1–200, first gathered burst per arm:
+
+| arm | no burst | burst covers the head | burst opens late |
+|---|---|---|---|
+| shipped | 62 | 132 | 6 |
+| PN | 79 | 98 | 23 |
+
+Paired: the head is gathered on shipped alone in 54 seeds and on PN alone in 20. The floor is warm
+when every frame starts (8 reads of noise, 64 windows; warm at 16), so a cold floor learning the
+head is ruled out for this harness. Which part of the carrier detect opens later on the PN preamble
+at −14 dB (total power vs the spectral test, and why) is not yet measured. BPSK63 at −11 dB passed
+with PN ahead (below), so the effect is at least rung- or SNR-dependent.
+
+**BPSK63 cliff column re-run at −11 dB (d9031766, n = 600): PASS.** Shipped 560/600, PN 579/600,
+discordant 19/38, +0.032 [+0.007, +0.056].
+
+**Offset columns (d9031766, n = 600), all PASS with no discordant pair:** BPSK100 +50 Hz and
+−50 Hz 599 / 599; BPSK63 +50 Hz and −50 Hz 599 / 599. Spectral-busy gather counts
+(`f5_pn_gather_counts`): every condition 16/16 decoded, whole and with its head, on both arms of
+BPSK31 and BPSK63.
+
 **A second gap, found preparing F6: `BPSK250-PN` publishes no template.** `preamble_template`
 returns one only for the exact mode `BPSK250`, so F1's PN arm ran with no correlation veto and no
 onset ranking, energy-only, and still matched or beat the shipped arm. The flag-day configuration
