@@ -357,11 +357,22 @@ head is ruled out for this harness. Which part of the carrier detect opens later
 at −14 dB (total power vs the spectral test, and why) is not yet measured. BPSK63 at −11 dB passed
 with PN ahead (below), so the effect is at least rung- or SNR-dependent.
 
+Two facts bound it. **The longer preamble buys nothing for gathering:** the head is kept only if
+the detector opens within the pre-trigger lead (the previous read plus `S_LOOKBACK` windows, ~6 000
+samples at 4 096-sample reads), and PN-63's extra 31 symbols lie past that. **The PN preamble's
+band power is less steady:** `f5_preamble_band_power_by_phase` (clean frame, both of the spectral
+test's window phases, best 4-bin band ÷ data median) reads the shipped preamble at 1.00 in every
+window of both phases, the PN preamble at 0.70 / 1.00 / 1.28 (0.70 in 9 of 31 windows on one
+phase, 8 of 31 on the other), and no window of either preamble or the data below 0.5. The spectral
+test's two-phase design was built around the alternating preamble (#1454 round 7). Whether a
+1.5 dB dip in a quarter of the windows accounts for the deficit is **not shown**: near the open
+threshold a fluctuation can as well help as hurt a 3-of-4 count. Candidate, not mechanism.
+
 **BPSK63 cliff column re-run at −11 dB (d9031766, n = 600): PASS.** Shipped 560/600, PN 579/600,
 discordant 19/38, +0.032 [+0.007, +0.056].
 
 **Offset columns (d9031766, n = 600), all PASS with no discordant pair:** BPSK100 +50 Hz and
-−50 Hz 599 / 599; BPSK63 +50 Hz and −50 Hz 599 / 599. Spectral-busy gather counts
+−50 Hz 599 / 599; BPSK63 and BPSK31, +50 Hz and −50 Hz, 599 / 599. Spectral-busy gather counts
 (`f5_pn_gather_counts`): every condition 16/16 decoded, whole and with its head, on both arms of
 BPSK31 and BPSK63.
 

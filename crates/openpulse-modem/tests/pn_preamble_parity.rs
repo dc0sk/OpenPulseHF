@@ -492,3 +492,81 @@ fn f5_open_latency_and_truncation() {
         }
     }
 }
+
+/// Per-window band power across a clean frame, on the spectral test's two window phases: Hann, 512
+/// samples, the best band of 4 adjacent bins over FFT bins 20..=173, as a fraction of the median
+/// over the data windows. Tests whether the shipped preamble's band power stays steady in one phase
+/// while a PN preamble's dips in both, which the spectral test's 3-of-4 open would feel at the cliff.
+#[test]
+#[ignore = "diagnostic: #1062 design F5"]
+fn f5_preamble_band_power_by_phase() {
+    const N: usize = 512;
+    let r = rung();
+    let baud: f32 = match std::env::var("F1_RUNG").as_deref() {
+        Ok("31") => 31.25,
+        Ok("63") => 62.5,
+        Ok("100") => 100.0,
+        _ => 250.0,
+    };
+    let sps = (8_000.0 / baud) as usize;
+    let hann: Vec<f32> = (0..N)
+        .map(|n| 0.5 - 0.5 * (2.0 * std::f32::consts::PI * n as f32 / N as f32).cos())
+        .collect();
+    let band = |x: &[f32]| -> f32 {
+        let p: Vec<f32> = (20..=173)
+            .map(|k| {
+                let (mut re, mut im) = (0.0f32, 0.0f32);
+                for (n, (&s, &w)) in x.iter().zip(&hann).enumerate() {
+                    let a = -2.0 * std::f32::consts::PI * (k * n) as f32 / N as f32;
+                    re += s * w * a.cos();
+                    im += s * w * a.sin();
+                }
+                re * re + im * im
+            })
+            .collect();
+        p.windows(4)
+            .map(|b| b.iter().sum::<f32>())
+            .fold(0.0, f32::max)
+    };
+    let payload: Vec<u8> = (0..64u8).collect();
+    for (mode, pre_syms) in [(r.shipped, 32usize), (r.candidate, 63)] {
+        let x = tx_frame(mode, &payload);
+        let pre = pre_syms * sps;
+        for (phase, off) in [("a", 0usize), ("b", N / 2)] {
+            let starts: Vec<usize> = (off..x.len().saturating_sub(N)).step_by(N).collect();
+            let powers: Vec<(usize, f32)> =
+                starts.iter().map(|&s| (s, band(&x[s..s + N]))).collect();
+            let mut data: Vec<f32> = powers
+                .iter()
+                .filter(|(s, _)| *s >= pre + sps)
+                .map(|(_, p)| *p)
+                .collect();
+            data.sort_by(f32::total_cmp);
+            let median = data[data.len() / 2];
+            let in_pre: Vec<f32> = powers
+                .iter()
+                .filter(|(s, _)| s + N <= pre)
+                .map(|(_, p)| p / median)
+                .collect();
+            let low = |v: &[f32]| v.iter().filter(|&&p| p < 0.5).count();
+            let data_rel: Vec<f32> = data.iter().map(|p| p / median).collect();
+            println!(
+                "{mode} phase {phase}: preamble {} windows, min {:.2}, below 0.5 {}; \
+                 data {} windows, below 0.5 {}",
+                in_pre.len(),
+                in_pre.iter().copied().fold(f32::INFINITY, f32::min),
+                low(&in_pre),
+                data_rel.len(),
+                low(&data_rel)
+            );
+            println!(
+                "  preamble windows: {}",
+                in_pre
+                    .iter()
+                    .map(|p| format!("{p:.2}"))
+                    .collect::<Vec<_>>()
+                    .join(" ")
+            );
+        }
+    }
+}
