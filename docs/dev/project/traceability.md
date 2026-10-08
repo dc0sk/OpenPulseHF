@@ -26,7 +26,7 @@ refused.
 a finer grid, which doubles the settles and the ±50 Hz receive cost. F2's constants were re-measured on
 the wider search first (`docs/dev/design/pn-preamble.md`).
 
-**Implementation (44632e76).** `crates/openpulse-modem/src/engine.rs`: phase 2's veto reach on by
+**Implementation (d8051fa5).** `crates/openpulse-modem/src/engine.rs`: phase 2's veto reach on by
 default; `set_phase2_veto_reach(false)` (instruments) keeps the A/B, used by F1's `F1_VETO_REACH`
 and `receive_cost_scaling`'s `PROBE_NO_REACH`.
 
@@ -41,7 +41,7 @@ and `receive_cost_scaling`'s `PROBE_NO_REACH`.
   `total_power_bursts_keep_their_head` 1/0; `notch_rescues_interferer` **2/1**, the known #1457 row
   (no-notch arm decodes at amplitude 0.3, `notch_rescues_interferer.rs:236`). With the reach off the
   same test fails the same assertion (217 s), so it is not this change. REQ-QRM-01 not re-proven.
-- **F1 rerun on 44632e76 (n = 600 paired): PASS on every column**, PN − shipped: floor +0.028,
+- **F1 rerun on d8051fa5 (n = 600 paired): PASS on every column**, PN − shipped: floor +0.028,
   8 dB +0.022, +50 Hz +0.037, −50 Hz +0.037, cliff +0.027, filter +0.010 [−0.007, +0.027]. The
   −50 Hz verdict is the printed line only (the disk filled before its rc was written). Table in the
   design doc.
@@ -71,7 +71,7 @@ brick-wall mask moved to `tests/common` (`filter::band_limit`) and is shared wit
   PN alone in 20), not demodulation; mechanism not shown.
 - **f9 (idle machine, exact reproduction of a first run under load):** PN bound 0.51; shipped control
   0.871–0.892. Behind the 500 Hz mask PN decoded 14 / 32 / 44 of 120 against 19 / 59 / 79.
-- **F1 rerun with the template (1e83be8d): FAIL.** Floor, 8 dB, cliff and the new filter column
+- **F1 rerun with the template (0ea48cdd): FAIL.** Floor, 8 dB, cliff and the new filter column
   pass (filter +0.012, so f9's gap does not reach the production entry); **±50 Hz fail** (−0.048,
   −0.043). Without the PN template (755fa457) the same columns pass (PN 572 / 570): the loss is the
   template path's, in acquisition (bursts gathered whole, `ota_decode_burst` fails); reproduced

@@ -436,7 +436,7 @@ fixed at −5 dB), plus a sixth column, **`moderate_f1` 8 dB behind a brick-wall
 over signal and noise (the SNR is set before the filter, as in every other column; the filter is
 `common::filter::band_limit`, the same function f9 uses). A FAIL in the filter column fails F1.
 
-**F1 rerun result (1e83be8d, n = 600 paired): FAIL, on the two offset columns.**
+**F1 rerun result (0ea48cdd, n = 600 paired): FAIL, on the two offset columns.**
 
 | column | shipped | PN | discordant | PN − shipped [95 % CI] | verdict |
 |---|---|---|---|---|---|
@@ -527,12 +527,12 @@ the veto's ordinary cost (frames whose ρ is low even at the true onset, 2 of 60
   The veto's search is unchanged, so 0.315 and the 0.51 bound stand as derived, but phase 2's settles
   double, and receive cost at ±50 Hz (REQ-PHY-03, the 9 s ACK window on the Pi) must be re-measured.
 
-**The reach shipped (44632e76)** after F2 was re-measured on the wider search: binding interferer
+**The reach shipped (d8051fa5)** after F2 was re-measured on the wider search: binding interferer
 0.304 unchanged, SSB noise ceiling 0.152 → 0.157 (shipped `--++` 0.205 → 0.210). x86 receive cost,
 BPSK250-PN at +50 Hz: 772 ms against 759 ms without. The reach applies to every template, so the
 shipped arm moves too.
 
-**F1 rerun on 44632e76 (n = 600 paired, same rule, columns and seeds as the 1e83be8d run): PASS on
+**F1 rerun on d8051fa5 (n = 600 paired, same rule, columns and seeds as the 0ea48cdd run): PASS on
 every column.**
 
 | column | shipped | PN | discordant | PN − shipped [95 % CI] | verdict |
