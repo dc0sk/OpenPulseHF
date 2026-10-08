@@ -15,6 +15,37 @@ this ledger adds the design rationale and the actually-observed results per chan
 
 ---
 
+## 2026-10-08 — #1062 phase 2's preamble veto reaches past the settle grid's gaps; F1 passes (work plan M2)
+
+**Change.** F1 with the full PN template failed ±50 Hz (entry below): phase 2 settles on a
+4-symbol grid, the veto searches about two symbols past each grid onset, and PN-63 (unlike the
+periodic `--++`) correlates only inside that span, so every settle on many off-frequency frames was
+refused.
+
+**Decision.** The veto searches one more coarse step (the "reach"), keeping the settle count. Chosen over
+a finer grid, which doubles the settles and the ±50 Hz receive cost. F2's constants were re-measured on
+the wider search first (`docs/dev/design/pn-preamble.md`).
+
+**Implementation (44632e76).** `crates/openpulse-modem/src/engine.rs`: phase 2's veto reach on by
+default; `set_phase2_veto_reach(false)` (instruments) keeps the A/B, used by F1's `F1_VETO_REACH`
+and `receive_cost_scaling`'s `PROBE_NO_REACH`.
+
+**Tests → results.**
+- `a_pn_frame_off_frequency_is_not_refused_between_settle_grid_points`: passes, fails with the reach
+  off.
+- F2 on the wider search: binding interferer 0.304 unchanged; SSB noise ceiling 0.152 → 0.157.
+  Receive cost x86, BPSK250-PN +50 Hz: 772 ms (759 ms without).
+- `cargo test -p openpulse-modem --no-default-features --no-fail-fast`: **615 passed / 0 failed**
+  (118 ignored, 162 binaries), rc=0.
+- `scripts/slow-tests.sh`: `ota_channel_adaptation` 3/0, `spectral_busy_gathers_weak_frames` 2/0,
+  `total_power_bursts_keep_their_head` 1/0; `notch_rescues_interferer` **2/1**, the known #1457 row
+  (no-notch arm decodes at amplitude 0.3, `notch_rescues_interferer.rs:236`). With the reach off the
+  same test fails the same assertion (217 s), so it is not this change. REQ-QRM-01 not re-proven.
+- **F1 rerun on 44632e76 (n = 600 paired): PASS on every column**, PN − shipped: floor +0.028,
+  8 dB +0.022, +50 Hz +0.037, −50 Hz +0.037, cliff +0.027, filter +0.010 [−0.007, +0.027]. The
+  −50 Hz verdict is the printed line only (the disk filled before its rc was written). Table in the
+  design doc.
+
 ## 2026-10-07 — #1062 PN-63 preamble: F5 on the offset-fixed receiver, f9, and F1 with the full template (work plan M2)
 
 **Change.** The rest of F5 (BPSK31/63/100) on d9031766, f9 (PN's delivered-frame bound), and the F1

@@ -527,6 +527,30 @@ the veto's ordinary cost (frames whose ρ is low even at the true onset, 2 of 60
   The veto's search is unchanged, so 0.315 and the 0.51 bound stand as derived, but phase 2's settles
   double, and receive cost at ±50 Hz (REQ-PHY-03, the 9 s ACK window on the Pi) must be re-measured.
 
+**The reach shipped (44632e76)** after F2 was re-measured on the wider search: binding interferer
+0.304 unchanged, SSB noise ceiling 0.152 → 0.157 (shipped `--++` 0.205 → 0.210). x86 receive cost,
+BPSK250-PN at +50 Hz: 772 ms against 759 ms without. The reach applies to every template, so the
+shipped arm moves too.
+
+**F1 rerun on 44632e76 (n = 600 paired, same rule, columns and seeds as the 1e83be8d run): PASS on
+every column.**
+
+| column | shipped | PN | discordant | PN − shipped [95 % CI] | verdict |
+|---|---|---|---|---|---|
+| `moderate_f1` at the floor | 507 | 524 | 16/33 | +0.028 [+0.006, +0.051] | PASS |
+| `moderate_f1` 8 dB | 559 | 572 | 7/20 | +0.022 [+0.005, +0.039] | PASS |
+| `moderate_f1` 8 dB, +50 Hz | 541 | 563 | 14/36 | +0.037 [+0.014, +0.060] | PASS |
+| `moderate_f1` 8 dB, −50 Hz | 544 | 566 | 9/31 | +0.037 [+0.016, +0.057] | PASS ¹ |
+| AWGN −5 dB (the cliff) | 534 | 550 | 15/31 | +0.027 [+0.005, +0.049] | PASS |
+| `moderate_f1` 8 dB, filter 1250–1750 | 526 | 532 | 10/16 | +0.010 [−0.007, +0.027] | PASS |
+
+¹ The disk filled after this column printed its verdict line; its exit status and the log's tail
+were lost. The verdict is the harness's printed line, not an rc.
+
+Both arms printed `preamble veto active`. PN is better than `--++` on five columns; behind the filter
+the two are level (the CI spans 0, its lower bound −0.007 clears δ = −0.03). The reach moved the
+shipped arm by at most four frames per column (+50 Hz 537 → 541, −50 Hz 543 → 544).
+
 **Caution recorded:** an A/B built in a second worktree with `CARGO_TARGET_DIR` shared with the main
 checkout left the main test binary linked against the worktree's `bpsk-plugin` until that crate was
 touched, and four diagnostic runs (none recorded here) silently measured the no-template receiver.
