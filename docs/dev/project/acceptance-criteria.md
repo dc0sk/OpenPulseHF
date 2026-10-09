@@ -2,7 +2,7 @@
 project: openpulsehf
 doc: docs/dev/project/acceptance-criteria.md
 status: resolved
-last_updated: 2026-10-06
+last_updated: 2026-10-09
 ---
 
 # Acceptance criteria
@@ -77,7 +77,8 @@ Each requirement below is done when the linked test passes. Add new links as tes
 | The multi-mode monitor keeps emitting **while an OTA session is active** — through the real `server::run` dispatch, not by calling `MonitorRuntime` directly | `cargo test -p openpulse-daemon --no-default-features --test monitor_during_ota` |
 | An I/Q-transmitted frame **decodes** on a receiver of the same build (the wire-whitening seam covers the baseband path, not just audio) | `cargo test -p openpulse-modem --no-default-features --test iq_decode_round_trip` |
 | The **transmitting** rig's chain is proven independently of the receiving rig — an off-air SDR recording of the same keyed transmission decodes, which is the only thing that can tell a bad transmitter from a bad receiver. **`#[ignore]`d since #1148**: the capture carries the pre-#1148 21-bit keystream (and the pre-#1062 preamble); un-ignoring is part of the corpus re-record, **tracked in #1351** — until that lands this row is NOT currently proven | `cargo test -p openpulse-modem --no-default-features --test capture_replay_corpus the_ic9700_transmit_chain_decodes_off_air_from_an_independent_receiver` |
-| A **real coded on-air frame** decodes from the replay corpus — the #1021 artifact, which needs the settle recovery to walk PAST a condemned noise anchor. **`#[ignore]`d since #1148** for the same reason (**tracked in #1351**; until it lands this row is NOT currently proven); the #1021 *class* stays gated by the synthesized-frame-in-real-noise tests, which still run | `cargo test -p openpulse-modem --no-default-features --test capture_replay_corpus the_real_on_air_frame_decodes` |
+| A **real coded on-air frame** decodes from the replay corpus — the #1021 artifact, which needs the settle recovery to walk PAST a condemned noise anchor. **`#[ignore]`d since #1148** for the same reason (**tracked in #1351**; until it lands this row is NOT currently proven); the #1021 *class* is gated by `f6_capture_class_fixtures` below (#1062 F6). `coded_noise_settle_recovery` decodes on its first settle and passes with the #1021 fix reverted, so it does not gate the recovery | `cargo test -p openpulse-modem --no-default-features --test capture_replay_corpus the_real_on_air_frame_decodes` |
+| The capture-pinned defect classes hold on freshly modulated frames, on `BPSK250` and `BPSK250-PN` (#1062 F6): a coded and an uncoded frame in the #1021 recording's own floor, at its onset, carrier and level; the #1045/#1049 saturating-floor pins on PN; and the #1021 recovery with noise reaching the settle (veto off), which livelocks with `unsettle` rewinding to 0 | `cargo test -p openpulse-modem --no-default-features --test f6_capture_class_fixtures` |
 | Whitening is measured on the **real** wire — the actual #1021 frame, zero runs (not identical-bit runs), in the wire's own LSB-first order — and the measurement is pinned able to fail on a balanced-but-dead stream | `cargo test -p openpulse-core --no-default-features --lib scramble::` |
 | RX SNR is recorded for **hard-only** modes too (`QPSK250-D` estimates SNR but reports `supports_soft_demod = false`), so the QSY scan and the ADIF logbook stop reading `unwrap_or(0.0)` | `cargo test -p openpulse-modem --no-default-features --test engine_events receive_populates_last_rx_snr_db_on_a_hard_only_mode` |
 | Every `FecMode`'s slice factor is measured, on more than one plugin (the "geometry already holds one RS block" premise is false for MFSK16) | `cargo test -p openpulse-modem --no-default-features --test fec_slice_expansion` |

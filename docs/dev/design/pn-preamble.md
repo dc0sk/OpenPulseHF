@@ -2,7 +2,7 @@
 project: openpulsehf
 doc: docs/dev/design/pn-preamble.md
 status: draft
-last_updated: 2026-10-06
+last_updated: 2026-10-09
 ---
 
 # Replace the BPSK preamble with a PN-63 sync word (#1062) — revision 2
@@ -612,6 +612,23 @@ noise reaches the settle. F6 adds that as its #1021 pin:
 `the_recovery_reaches_the_frame_when_noise_passes_the_veto`, the coded frame in the saturating floor
 at lead 40 000 with the veto off (`set_preamble_veto_gate(false)`, instruments), which must decode on
 both arms, and must fail under S1 on both arms.
+
+**F6 result: PASS.** Every fixture passes on both arms and fails on its sabotage on both arms:
+
+| fixture | clean (`BPSK250` / `BPSK250-PN`) | sabotaged |
+|---|---|---|
+| `the_recovery_reaches_the_frame_when_noise_passes_the_veto` (#1021) | decodes after 87 / 66 condemnations | S1: no decode, 3 555 / 3 555 condemnations |
+| `the_receiver_never_settles_on_a_saturating_noise_floor` (#1049; `BPSK250` in `preamble_correlation_settle.rs`) | 0 condemnations on PN at every lead; ρ refusals 138 / 233 / 323 | S2: 87 (`BPSK250`) and 66 (PN) at lead 40 000, bound 6 |
+| `a_coded_frame_decodes_through_a_saturating_floor` (#1045; `BPSK250` in `capture_replay_corpus.rs`) | PN decodes at both leads | S2: PN 120 at lead 80 000, bound 12 |
+| `a_coded_frame_in_the_1021_floor_decodes_without_crawling`, `an_uncoded_frame_in_the_1021_floor_decodes` | 0 condemnations on both arms | not pins of a mechanism (see above); they replace the decode and cost assertions |
+
+Release runs except where noted; the file takes 259 s in the default (debug) test run.
+
+**Found on the way:** `coded_noise_settle_recovery`, the existing synthetic #1021 test (acceptance row
+80 calls it the class's gate), also passes under S1: it decodes on the first settle, so it never
+reaches the recovery. Until this F6 pin, nothing in the default run failed when the #1021 fix was
+reverted. S1 does not fail the QPSK no-template saturating pin either, so whatever keeps the energy-only
+path off a condemned anchor is not `unsettle`; not established here.
 
 **Lesson for any long preamble** (QPSK's parked longer preamble, pilots): length buys energy only
 up to the channel's coherence time; past it, combine in power.

@@ -15,6 +15,37 @@ this ledger adds the design rationale and the actually-observed results per chan
 
 ---
 
+## 2026-10-09 — #1062 F6: synthetic fixtures for the capture-pinned defect classes (work plan M2)
+
+**Change.** The real-capture replay rows (#1351) go dark at the flag day. F6 replaces the ones that
+pin defect classes with freshly modulated frames, on `BPSK250` and `BPSK250-PN`, before the wire
+changes.
+
+**Decision.** Pre-registered in `docs/dev/design/pn-preamble.md` *F6*, amended twice before the runs
+the amendments govern. Each fixture must fail on a named sabotage: S1, `ScanPlanner::unsettle`
+rewinds to 0 (the pre-#1021 code); S2, the correlation veto off. The SDR transmit-chain row is a
+hardware observation and waits for F8.
+
+**Implementation.** `ChannelSimHarness::route_over_recorded` (`crates/openpulse-modem/src/channel_sim.rs`)
+adds a frame onto recorded idle at a set mean-square and carrier offset.
+`crates/openpulse-modem/tests/f6_capture_class_fixtures.rs`:
+- The #1021 recording's own floor around a fresh frame at its onset, carrier and level.
+- The #1045/#1049 saturating-floor pins on PN.
+- The #1021 recovery pin with the veto off.
+
+**Tests → results.**
+- `f6_capture_class_fixtures`: 6 passed / 0 failed, debug, 259 s. Clippy (modem, all targets) and fmt
+  are clean.
+- **#1021 recovery pin:** decodes after 87 / 66 condemnations (`BPSK250` / PN). Under S1 it fails on
+  both arms: 3 555 condemnations and no decode.
+- **#1049 pin under S2:** fails on both arms, with 87 and 66 condemnations against a bound of 6.
+- **#1045 pin on PN under S2:** fails, with 120 condemnations against a bound of 12.
+- **The #1021-floor fixtures** pass with 0 condemnations on both arms, and pass under S1 and S2 too.
+  No settle in that floor is condemned, so they replace decode and cost assertions, not a mechanism.
+- **Found:** `coded_noise_settle_recovery` (acceptance row 80's #1021 gate) passes under S1 (4/4,
+  0.03 s, release). It decodes on its first settle. The QPSK no-template saturating pin also passes
+  under S1. Acceptance row 80 is corrected, and the new row points at `f6_capture_class_fixtures`.
+
 ## 2026-10-08 — #1062 phase 2's preamble veto reaches past the settle grid's gaps; F1 passes (work plan M2)
 
 **Change.** F1 with the full PN template failed ±50 Hz (entry below): phase 2 settles on a
