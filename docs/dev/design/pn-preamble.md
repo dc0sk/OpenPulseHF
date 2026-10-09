@@ -601,6 +601,18 @@ saturating-floor fixtures with the veto off on both arms. The #1021 class counts
 QPSK pin fails under S1; the veto-off runs say whether the BPSK path would livelock if noise ever
 passed the veto.
 
+**Amendment results.** S1 does **not** fail the QPSK pin (it decodes in 19.3 s against 18.9 s
+unsabotaged): something else keeps the no-template path off a condemned anchor, not established
+here. S1 with the veto off **livelocks** `BPSK250-PN`: 3 555 condemnations and no decode at leads
+40 000 and 80 000 (1 288 s), against 66 and 120 condemnations and a decode with the veto off alone.
+The shipped arm's run was cut short by a container restart.
+
+**Amendment 2 (2026-10-09, before its run).** So the #1021 recovery is load-bearing exactly when
+noise reaches the settle. F6 adds that as its #1021 pin:
+`the_recovery_reaches_the_frame_when_noise_passes_the_veto`, the coded frame in the saturating floor
+at lead 40 000 with the veto off (`set_preamble_veto_gate(false)`, instruments), which must decode on
+both arms, and must fail under S1 on both arms.
+
 **Lesson for any long preamble** (QPSK's parked longer preamble, pilots): length buys energy only
 up to the channel's coherence time; past it, combine in power.
 
