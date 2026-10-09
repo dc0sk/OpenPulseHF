@@ -557,6 +557,31 @@ touched, and four diagnostic runs (none recorded here) silently measured the no-
 F1 now prints, per arm, whether the receive path has a veto (`preamble_veto_active`), so a run states
 which receiver it measured.
 
+### F6: synthetic fixtures for the capture-pinned defect classes
+
+**Pre-registered 2026-10-09, before any output.** The pins that go dark are the four ignored rows of
+`capture_replay_corpus.rs` (#1351; already dark since #1148 changed the keystream). Three pin defect
+classes. The fourth, `the_ic9700_transmit_chain_decodes_off_air_from_an_independent_receiver`, pins
+a hardware observation (the IC-9700's transmit chain, heard by an SDR), which no synthetic fixture
+can stand in for; it waits for F8's re-recording.
+
+| replaced pin | class | fixture | sabotage it must fail on |
+|---|---|---|---|
+| `the_real_on_air_frame_decodes` | #1021: on a floor above the gate's absolute 1e-4 threshold, AFC settles on noise before the gate has history, and the recovery re-settles at the same anchor | the recorded floor of `ic9700-frame-bpsk250-rs-whitened.wav` itself (idle before the burst, 0…82 304, and after it, from 152 000), a freshly modulated `Rs` frame `DUALCAP TEST 1` at the recorded onset 82 304, at the recorded carrier (+2.42 Hz) and the recorded signal level (burst mean-square minus floor mean-square, measured on the file) | S1: `ScanPlanner::unsettle` rewinds the scan to 0 (the pre-#1021 code) |
+| `the_settle_recovery_reaches_the_frame_without_crawling` | #1040: the recovery re-offers ground the micro-sweep already proved | the same fixture; condemnations ≤ 2 (the replaced pin's bound) | S1, and S2 below |
+| `a_real_on_air_frame_decodes_end_to_end` | the uncoded control for #1021 | the same fixture, `FecMode::None` | none (a control; it pins that the coded case's failure is not the floor) |
+
+The #1045 / #1049 class (a saturating floor; settle on correlation, not energy) is already pinned by
+freshly modulated frames in recorded idle (`the_receiver_never_settles_on_a_saturating_noise_floor`,
+`a_coded_frame_decodes_through_a_saturating_floor`). Those follow the wire at the flag day, but have
+run only on `--++`. F6 runs both on `BPSK250-PN` too. Sabotage **S2**: the correlation veto off
+(`set_preamble_veto_gate(false)`); the #1049 pin must fail on it on both arms.
+
+Every fixture runs on both arms, `BPSK250` and `BPSK250-PN` (`pn_candidate`). **Pass:** every
+fixture passes on both arms, and fails on its sabotage on both arms. A fixture that passes on its
+sabotaged build is not a pin and is reported as such, not loosened. The condemnation bound is the
+replaced pin's (≤ 2) on both arms; a PN count above it is a finding, not a reason to raise the bound.
+
 **Lesson for any long preamble** (QPSK's parked longer preamble, pilots): length buys energy only
 up to the channel's coherence time; past it, combine in power.
 
