@@ -39,6 +39,9 @@ instruments = []
 # Enable this crate's own `instruments` feature for its tests (#1277). This is what makes the
 # accessors exist for `tests/` while staying absent from every production build.
 openpulse-modem = { path = ".", features = ["instruments"] }
+# The #1062 PN-63 candidate as `-PN` modes, for the head-to-head against the shipped preamble
+# (docs/dev/design/pn-preamble.md, F1). Dev-only for the same resolver-2 reason as above.
+bpsk-plugin = { workspace = true, features = ["pn-candidate"] }
 openpulse-config = { path = "../openpulse-config" }
 # Test-only: `tx_airtime.rs` asserts a frame's airtime against the REAL `DEFAULT_PTT_MAX` rather
 # than restating 180 s, so the gate cannot pass while the constant it guards has moved. No cycle:

@@ -1,0 +1,807 @@
+//! F1 of `docs/dev/design/pn-preamble.md`: BPSK250 with the PN-63 candidate preamble against the
+//! shipped `--++` preamble, through the daemon's production receive entry.
+//!
+//! Paired trials: for each seed both arms get the same payload, the same Watterson fade, the same
+//! carrier offset and the same noise realisation, at the same lead into the capture. Each arm's
+//! receiver is an OTA engine on a one-rung ladder (SL5 = its mode, `Rs`), fed in 4 096-sample reads
+//! through `accumulate_capture`, every flushed burst decoded by `ota_decode_burst` as the daemon
+//! does. A trial is a success when the payload comes back.
+//!
+//! Pass rule (pre-registered in the design): non-inferiority per column, the lower bound of the
+//! paired 95 % CI of (PN − shipped) ≥ −0.03, n = 600.
+//!
+//! `F1_TRIALS` overrides n; `F1_PILOT=1` runs an AWGN SNR sweep (`F1_PILOT_DB`) to locate the cliff,
+//! which is then fixed in the design before the main run. `F1_RUNG` and `F1_PAYLOAD_MAX` select the
+//! slow rungs for F5. Release build:
+//! `cargo test --release -p openpulse-modem --no-default-features --test pn_preamble_parity -- --ignored --nocapture`.
+
+use openpulse_audio::LoopbackBackend;
+use openpulse_channel::cfo::{CfoChannel, CfoConfig};
+use openpulse_channel::watterson::WattersonChannel;
+use openpulse_channel::{ChannelModel, WattersonConfig};
+use openpulse_core::fec::FecMode;
+use openpulse_core::profile::SessionProfile;
+use openpulse_core::rate::SpeedLevel;
+use openpulse_modem::ModemEngine;
+
+mod common;
+
+/// One rung under test: its shipped and candidate modes, its ladder level and its SNR floor.
+#[derive(Clone, Copy)]
+struct Rung {
+    shipped: &'static str,
+    candidate: &'static str,
+    level: SpeedLevel,
+    floor_db: f32,
+}
+
+const RUNGS: [Rung; 4] = [
+    Rung {
+        shipped: "BPSK31",
+        candidate: "BPSK31-PN",
+        level: SpeedLevel::Sl2,
+        floor_db: 3.0,
+    },
+    Rung {
+        shipped: "BPSK63",
+        candidate: "BPSK63-PN",
+        level: SpeedLevel::Sl3,
+        floor_db: 4.0,
+    },
+    Rung {
+        shipped: "BPSK100",
+        candidate: "BPSK100-PN",
+        level: SpeedLevel::Sl4,
+        floor_db: 4.5,
+    },
+    Rung {
+        shipped: "BPSK250",
+        candidate: "BPSK250-PN",
+        level: SpeedLevel::Sl5,
+        floor_db: 5.0,
+    },
+];
+
+/// `F1_RUNG` (31, 63, 100 or 250; default 250) picks the rung; F5 runs the slow ones.
+fn rung() -> Rung {
+    let baud = std::env::var("F1_RUNG").unwrap_or_else(|_| "250".into());
+    *RUNGS
+        .iter()
+        .find(|r| r.shipped == format!("BPSK{baud}"))
+        .expect("F1_RUNG is 31, 63, 100 or 250")
+}
+
+/// `F1_PAYLOAD_MAX` caps the random payload (default 200 B, F1's range 16..=200).
+fn payload_max() -> usize {
+    std::env::var("F1_PAYLOAD_MAX")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(200)
+}
+const READ: usize = 4_096;
+const DELTA: f64 = 0.03;
+
+/// One measurement column: the channel every paired trial in it sees.
+#[derive(Clone, Copy)]
+struct Column {
+    name: &'static str,
+    fading: bool,
+    snr_db: f32,
+    offset_hz: f32,
+    /// A brick-wall receive filter `(lo, hi)` Hz over signal and noise, or none.
+    band: Option<(f32, f32)>,
+}
+
+fn rx_engine(mode: &'static str, level: SpeedLevel) -> ModemEngine {
+    let mut e = ModemEngine::new(Box::new(LoopbackBackend::new()));
+    e.register_plugin(Box::new(bpsk_plugin::BpskPlugin::new()))
+        .unwrap();
+    e.register_plugin(Box::new(bpsk_plugin::BpskPlugin::pn_candidate()))
+        .unwrap();
+    e.register_plugin(Box::new(fsk4_plugin::Fsk4Plugin::new()))
+        .unwrap();
+    let profile =
+        SessionProfile::from_rungs(&[(level, mode, FecMode::Rs, Some(5.0), None)], level, 3);
+    e.start_ota_session(profile);
+    e.ota_lock_level(level);
+    if veto_gate_off(mode) {
+        e.set_preamble_veto_gate(false);
+    }
+    if veto_reach_off(mode) {
+        e.set_phase2_veto_reach(false);
+    }
+    e
+}
+
+/// `F1_VETO_REACH=off`: the PN arm's phase-2 veto loses its reach (#1062), the receiver before the
+/// fix. The shipped arm is never touched.
+fn veto_reach_off(mode: &str) -> bool {
+    mode.ends_with("-PN") && std::env::var("F1_VETO_REACH").as_deref() == Ok("off")
+}
+
+/// `F1_VETO_GATE=off`: the PN arm's veto computes ρ but rejects nothing, its onset ranking unchanged,
+/// so a PN loss can be laid at the veto or at the ranking (#1062). The shipped arm is never touched.
+fn veto_gate_off(mode: &str) -> bool {
+    mode.ends_with("-PN") && std::env::var("F1_VETO_GATE").as_deref() == Ok("off")
+}
+
+fn tx_frame(mode: &str, payload: &[u8]) -> Vec<f32> {
+    let bk = LoopbackBackend::new();
+    let mut tx = ModemEngine::new(Box::new(bk.clone_shared()));
+    tx.register_plugin(Box::new(bpsk_plugin::BpskPlugin::new()))
+        .unwrap();
+    tx.register_plugin(Box::new(bpsk_plugin::BpskPlugin::pn_candidate()))
+        .unwrap();
+    tx.transmit_with_fec_mode(payload, mode, FecMode::Rs, None)
+        .expect("transmit");
+    bk.drain_samples()
+}
+
+/// Deterministic xorshift, so every trial is reproducible from its seed.
+struct Rng(u64);
+impl Rng {
+    fn next(&mut self) -> u64 {
+        self.0 ^= self.0 << 13;
+        self.0 ^= self.0 >> 7;
+        self.0 ^= self.0 << 17;
+        self.0
+    }
+    fn unit(&mut self) -> f64 {
+        (self.next() >> 11) as f64 / (1u64 << 53) as f64
+    }
+    fn gauss(&mut self) -> f32 {
+        let (u1, u2) = (self.unit().max(1e-12), self.unit());
+        ((-2.0 * u1.ln()).sqrt() * (2.0 * std::f64::consts::PI * u2).cos()) as f32
+    }
+}
+
+/// The capture one arm of one trial sees, and the frame's length in it.
+fn capture(mode: &str, col: Column, seed: u64, payload: &[u8], lead: usize) -> (Vec<f32>, usize) {
+    let mut signal = tx_frame(mode, payload);
+    if col.fading {
+        let mut cfg = WattersonConfig::moderate_f1(Some(seed));
+        cfg.snr_db = 60.0;
+        signal = WattersonChannel::new(cfg).unwrap().apply(&signal);
+    }
+    if col.offset_hz != 0.0 {
+        signal = CfoChannel::new(CfoConfig::new(col.offset_hz, 8_000.0))
+            .unwrap()
+            .apply(&signal);
+    }
+    let rms = (signal.iter().map(|s| s * s).sum::<f32>() / signal.len() as f32).sqrt();
+    let sigma = rms / 10f32.powf(col.snr_db / 20.0);
+    // The same noise sequence for both arms: seeded identically, read in order.
+    let mut noise = Rng(seed.wrapping_mul(0x9E37_79B9_7F4A_7C15) | 1);
+    let total = lead + signal.len() + 8 * READ;
+    let mut audio: Vec<f32> = (0..total).map(|_| sigma * noise.gauss()).collect();
+    for (a, &s) in audio[lead..].iter_mut().zip(&signal) {
+        *a += s;
+    }
+    if let Some((lo, hi)) = col.band {
+        audio = common::filter::band_limit(&audio, lo, hi);
+        audio.truncate(total);
+    }
+    (audio, signal.len())
+}
+
+/// One arm of one trial: does `mode` deliver `payload` through the production receive path?
+fn trial(
+    mode: &'static str,
+    level: SpeedLevel,
+    col: Column,
+    seed: u64,
+    payload: &[u8],
+    lead: usize,
+) -> bool {
+    let (audio, _) = capture(mode, col, seed, payload, lead);
+    let mut rx = rx_engine(mode, level);
+    for read in audio.chunks(READ) {
+        if let Some(burst) = rx.accumulate_capture(Some(mode), read.to_vec()).unwrap() {
+            if let Ok(r) = rx.ota_decode_burst(&burst, "f1", None) {
+                if r.payload.as_deref() == Some(payload) {
+                    return true;
+                }
+            }
+        }
+    }
+    false
+}
+
+/// What one arm did: every gathered burst (start and end against the frame's onset, lead, outcome),
+/// then the same frame handed to `ota_decode_burst` cut at its true onset ± 1 000 samples (oracle).
+fn diagnose(
+    mode: &'static str,
+    level: SpeedLevel,
+    col: Column,
+    seed: u64,
+    payload: &[u8],
+    lead: usize,
+) -> String {
+    let (audio, len) = capture(mode, col, seed, payload, lead);
+    let mut rx = rx_engine(mode, level);
+    let mut out = String::new();
+    let mut fed = 0usize;
+    for read in audio.chunks(READ) {
+        fed += read.len();
+        if let Some(burst) = rx.accumulate_capture(Some(mode), read.to_vec()).unwrap() {
+            let start = fed as i64 - read.len() as i64 - burst.samples.len() as i64 - lead as i64;
+            let end = start + burst.samples.len() as i64;
+            let verdict = match rx.ota_decode_burst(&burst, "diag", None) {
+                Ok(r) if r.payload.as_deref() == Some(payload) => "ok".to_string(),
+                Ok(r) => format!("no payload (mode {:?})", r.mode),
+                Err(e) => format!("err {e}"),
+            };
+            out += &format!(
+                "\n    burst [{start}, {end}) of frame [0, {len}), lead {}: {verdict}",
+                rx.last_flush_lead()
+            );
+        }
+    }
+    out += &format!(
+        "\n    veto rejections {}, fallback ranks hit {:?}",
+        rx.rho_rejected_settles(),
+        rx.fallback_onset_ranks()
+    );
+    let cut = audio[lead - 1_000..(lead + len + 1_000).min(audio.len())].to_vec();
+    let mut rx = rx_engine(mode, level);
+    let oracle = match rx.ota_decode_burst(
+        &openpulse_modem::pipeline::AudioSamples { samples: cut },
+        "oracle",
+        None,
+    ) {
+        Ok(r) if r.payload.as_deref() == Some(payload) => "ok".to_string(),
+        Ok(_) => "no payload".to_string(),
+        Err(e) => format!("err {e}"),
+    };
+    out + &format!("\n    oracle cut: {oracle}")
+}
+
+/// The trial's payload and lead for `seed`, as `run_column` draws them.
+fn draw(seed: u64, max: usize) -> (Vec<u8>, usize) {
+    let mut rng = Rng(seed ^ 0xD1B5_4A32_D192_ED03);
+    let len = 16 + (rng.next() % (max as u64 - 15)) as usize;
+    let payload: Vec<u8> = (0..len).map(|_| rng.next() as u8).collect();
+    // A real lead: noise to warm the carrier detect, then the frame anywhere in a read.
+    let lead = 8 * READ + (rng.next() % READ as u64) as usize;
+    (payload, lead)
+}
+
+/// Paired outcomes `(shipped, candidate)` for `n` seeds of `col`, on all cores.
+fn run_column(r: Rung, col: Column, n: usize) -> Vec<(bool, bool)> {
+    let max = payload_max();
+    let threads = std::thread::available_parallelism().map_or(4, |p| p.get());
+    let mut out = vec![(false, false); n];
+    std::thread::scope(|s| {
+        let chunks: Vec<_> = out.chunks_mut(n.div_ceil(threads)).enumerate().collect();
+        for (c, chunk) in chunks {
+            let base = c * n.div_ceil(threads);
+            s.spawn(move || {
+                for (k, slot) in chunk.iter_mut().enumerate() {
+                    let seed = (base + k) as u64 + 1;
+                    let (payload, lead) = draw(seed, max);
+                    *slot = (
+                        trial(r.shipped, r.level, col, seed, &payload, lead),
+                        trial(r.candidate, r.level, col, seed, &payload, lead),
+                    );
+                }
+            });
+        }
+    });
+    out
+}
+
+/// Mean and paired 95 % CI of (candidate − shipped).
+fn paired_ci(pairs: &[(bool, bool)]) -> (f64, f64, f64) {
+    let n = pairs.len() as f64;
+    let d: Vec<f64> = pairs
+        .iter()
+        .map(|&(a, b)| b as u8 as f64 - a as u8 as f64)
+        .collect();
+    let mean = d.iter().sum::<f64>() / n;
+    let var = d.iter().map(|x| (x - mean).powi(2)).sum::<f64>() / (n - 1.0).max(1.0);
+    let half = 1.96 * (var / n).sqrt();
+    (mean, mean - half, mean + half)
+}
+
+fn columns(r: Rung) -> Vec<Column> {
+    // The AWGN cliff SNR is fixed from the pilot before the main run (design F1).
+    let cliff: f32 = std::env::var("F1_CLIFF_DB")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(f32::NAN);
+    let mut c = vec![
+        Column {
+            name: "moderate_f1 at the floor",
+            fading: true,
+            snr_db: r.floor_db,
+            offset_hz: 0.0,
+            band: None,
+        },
+        Column {
+            name: "moderate_f1 8 dB",
+            fading: true,
+            snr_db: 8.0,
+            offset_hz: 0.0,
+            band: None,
+        },
+        Column {
+            name: "moderate_f1 8 dB, +50 Hz",
+            fading: true,
+            snr_db: 8.0,
+            offset_hz: 50.0,
+            band: None,
+        },
+        Column {
+            name: "moderate_f1 8 dB, -50 Hz",
+            fading: true,
+            snr_db: 8.0,
+            offset_hz: -50.0,
+            band: None,
+        },
+    ];
+    if cliff.is_finite() {
+        c.push(Column {
+            name: "AWGN at the cliff",
+            fading: false,
+            snr_db: cliff,
+            offset_hz: 0.0,
+            band: None,
+        });
+    }
+    // Last, so the earlier columns keep their `F1_COLUMN` indices: f9 saw the PN arm decode about
+    // half as often behind this filter, and F1 had no filtered column (design, f9 result).
+    c.push(Column {
+        name: "moderate_f1 8 dB, filter 1250-1750",
+        fading: true,
+        snr_db: 8.0,
+        offset_hz: 0.0,
+        band: Some((1_250.0, 1_750.0)),
+    });
+    c
+}
+
+#[test]
+#[ignore = "measurement: #1062 design F1/F5, release build, long"]
+fn f1_bpsk250_pn63_against_the_shipped_preamble() {
+    let r = rung();
+    let n: usize = std::env::var("F1_TRIALS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(600);
+    if std::env::var_os("F1_PILOT").is_some() {
+        // `F1_PILOT_DB` overrides the sweep, comma-separated: the slow rungs' cliffs sit lower.
+        let sweep: Vec<f32> = std::env::var("F1_PILOT_DB")
+            .ok()
+            .map(|v| v.split(',').filter_map(|x| x.trim().parse().ok()).collect())
+            .unwrap_or_else(|| vec![-12.0, -10.0, -8.0, -6.0, -4.0, -2.0]);
+        println!("\nF1 pilot: {}, AWGN, {n} trials per SNR", r.shipped);
+        for snr in sweep {
+            let col = Column {
+                name: "pilot",
+                fading: false,
+                snr_db: snr,
+                offset_hz: 0.0,
+                band: None,
+            };
+            let t = std::time::Instant::now();
+            let pairs = run_column(r, col, n);
+            let a = pairs.iter().filter(|p| p.0).count();
+            let b = pairs.iter().filter(|p| p.1).count();
+            print!("  ({:.0} s)", t.elapsed().as_secs_f64());
+            println!("  {snr:>5.1} dB: shipped {a}/{n}  candidate {b}/{n}");
+        }
+        return;
+    }
+    println!(
+        "\nF1: {} PN-63 vs shipped, production entry, n = {n} paired, delta = {DELTA}, payload 16..={} B",
+        r.shipped,
+        payload_max()
+    );
+    // Which arms the receiver vetoes, as the receive path decides it: a result is read against this.
+    for mode in [r.shipped, r.candidate] {
+        println!(
+            "  {mode}: preamble veto {}",
+            if veto_gate_off(mode) {
+                "computed, gate OFF (F1_VETO_GATE=off: rejects nothing; ranking unchanged)"
+            } else if veto_reach_off(mode) {
+                "active, phase-2 reach OFF (F1_VETO_REACH=off: the receiver before the fix)"
+            } else if rx_engine(mode, r.level).preamble_veto_active(mode) {
+                "active"
+            } else {
+                "none (energy-only settle)"
+            }
+        );
+    }
+    let mut all_pass = true;
+    // `F1_COLUMN` runs one column by index, to time or re-run it alone.
+    let only: Option<usize> = std::env::var("F1_COLUMN").ok().and_then(|v| v.parse().ok());
+    for (k, col) in columns(r).into_iter().enumerate() {
+        if only.is_some_and(|o| o != k) {
+            continue;
+        }
+        let t = std::time::Instant::now();
+        let pairs = run_column(r, col, n);
+        let a = pairs.iter().filter(|p| p.0).count();
+        let b = pairs.iter().filter(|p| p.1).count();
+        let disc_a = pairs.iter().filter(|p| p.0 && !p.1).count();
+        let disc_b = pairs.iter().filter(|p| !p.0 && p.1).count();
+        let (mean, lo, hi) = paired_ci(&pairs);
+        let pass = lo >= -DELTA;
+        all_pass &= pass;
+        println!(
+            "  {:<30} shipped {a:>4}/{n}  PN {b:>4}/{n}  discordant {disc_a}/{disc_b}  \
+             PN-shipped {mean:+.3} CI [{lo:+.3}, {hi:+.3}]  {}  ({:.0} s)",
+            col.name,
+            if pass { "PASS" } else { "FAIL" },
+            t.elapsed().as_secs_f64()
+        );
+        // `F1_PRINT_SEEDS` lists the discordant seeds, so a column's losses can be re-run alone.
+        if std::env::var_os("F1_PRINT_SEEDS").is_some() {
+            for (i, p) in pairs.iter().enumerate().filter(|(_, p)| p.0 != p.1) {
+                println!("    seed {}: shipped {}, PN {}", i + 1, p.0, p.1);
+            }
+        }
+    }
+    println!("F1 verdict: {}", if all_pass { "PASS" } else { "FAIL" });
+}
+
+/// The harness itself: a clean frame through each arm decodes, so a FAIL above is about the
+/// preamble, not a harness that cannot deliver either one.
+#[test]
+fn both_arms_deliver_a_clean_frame() {
+    let col = Column {
+        name: "clean",
+        fading: false,
+        snr_db: 30.0,
+        offset_hz: 0.0,
+        band: None,
+    };
+    let payload = b"F1 positive control".to_vec();
+    let r = RUNGS[3];
+    for mode in [r.shipped, r.candidate] {
+        assert!(
+            trial(mode, r.level, col, 7, &payload, 8 * READ + 1_234),
+            "{mode}"
+        );
+    }
+}
+
+/// The discordant seeds of column `F1_COLUMN` (default the floor) among `F1_DIAG_SEEDS` seeds from
+/// `F1_DIAG_FROM` (default 60 from 1), each arm diagnosed: does the loss sit in the gathering or in the demodulation?
+#[test]
+#[ignore = "diagnostic: #1062 design F5"]
+fn f5_diagnose_discordant_seeds() {
+    let r = rung();
+    let index: usize = std::env::var("F1_COLUMN")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(0);
+    let col = columns(r)[index];
+    let n: u64 = std::env::var("F1_DIAG_SEEDS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(60);
+    // `F1_DIAG_FROM` starts the range elsewhere: a column's seeds are split across threads, so a
+    // block of later seeds can be checked in a fresh process.
+    let from: u64 = std::env::var("F1_DIAG_FROM")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(1);
+    for seed in from..from + n {
+        let (payload, lead) = draw(seed, payload_max());
+        let a = trial(r.shipped, r.level, col, seed, &payload, lead);
+        let b = trial(r.candidate, r.level, col, seed, &payload, lead);
+        if a == b {
+            continue;
+        }
+        println!(
+            "seed {seed}: shipped {a}, PN {b}, payload {} B",
+            payload.len()
+        );
+        for mode in [r.shipped, r.candidate] {
+            println!(
+                "  {mode}:{}",
+                diagnose(mode, r.level, col, seed, &payload, lead)
+            );
+        }
+    }
+}
+
+/// Column `F1_COLUMN` over seeds 1..=`F1_DIAG_SEEDS`, one line per seed and arm: where the first
+/// gathered burst starts against the frame's onset, and whether the frame decodes when cut late by a
+/// fixed offset. Separates a carrier detect that opens later on one preamble from a preamble that
+/// cannot survive a lost head.
+#[test]
+#[ignore = "diagnostic: #1062 design F5"]
+fn f5_open_latency_and_truncation() {
+    const LATE: [i64; 3] = [0, 500, 2_000];
+    let r = rung();
+    let index: usize = std::env::var("F1_COLUMN")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(0);
+    let col = columns(r)[index];
+    let n: u64 = std::env::var("F1_DIAG_SEEDS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(40);
+    println!("cuts {LATE:?} samples after the onset");
+    for seed in 1..=n {
+        let (payload, lead) = draw(seed, payload_max());
+        for mode in [r.shipped, r.candidate] {
+            let (audio, len) = capture(mode, col, seed, &payload, lead);
+            let mut rx = rx_engine(mode, r.level);
+            let mut fed = 0usize;
+            let mut start = None;
+            for read in audio.chunks(READ) {
+                fed += read.len();
+                if let Some(burst) = rx.accumulate_capture(Some(mode), read.to_vec()).unwrap() {
+                    start = Some(
+                        fed as i64 - read.len() as i64 - burst.samples.len() as i64 - lead as i64,
+                    );
+                    break;
+                }
+            }
+            // `F1_DIAG_GATHER_ONLY` skips the late cuts: a failed BPSK31 decode costs minutes.
+            let cut_at: &[i64] = if std::env::var_os("F1_DIAG_GATHER_ONLY").is_some() {
+                &[]
+            } else {
+                &LATE
+            };
+            let cuts: Vec<bool> = cut_at
+                .iter()
+                .map(|&late| {
+                    let from = (lead as i64 + late) as usize;
+                    let cut = audio[from..(lead + len + 1_000).min(audio.len())].to_vec();
+                    rx_engine(mode, r.level)
+                        .ota_decode_burst(
+                            &openpulse_modem::pipeline::AudioSamples { samples: cut },
+                            "late",
+                            None,
+                        )
+                        .is_ok_and(|d| d.payload.as_deref() == Some(payload.as_slice()))
+                })
+                .collect();
+            println!("seed {seed} {mode}: first burst start {start:?}, cuts {cuts:?}");
+        }
+    }
+}
+
+/// Per-window band power across a clean frame, on the spectral test's two window phases: Hann, 512
+/// samples, the best band of 4 adjacent bins over FFT bins 20..=173, as a fraction of the median
+/// over the data windows. Tests whether the shipped preamble's band power stays steady in one phase
+/// while a PN preamble's dips in both, which the spectral test's 3-of-4 open would feel at the cliff.
+#[test]
+#[ignore = "diagnostic: #1062 design F5"]
+fn f5_preamble_band_power_by_phase() {
+    const N: usize = 512;
+    let r = rung();
+    let baud: f32 = match std::env::var("F1_RUNG").as_deref() {
+        Ok("31") => 31.25,
+        Ok("63") => 62.5,
+        Ok("100") => 100.0,
+        _ => 250.0,
+    };
+    let sps = (8_000.0 / baud) as usize;
+    let hann: Vec<f32> = (0..N)
+        .map(|n| 0.5 - 0.5 * (2.0 * std::f32::consts::PI * n as f32 / N as f32).cos())
+        .collect();
+    let band = |x: &[f32]| -> f32 {
+        let p: Vec<f32> = (20..=173)
+            .map(|k| {
+                let (mut re, mut im) = (0.0f32, 0.0f32);
+                for (n, (&s, &w)) in x.iter().zip(&hann).enumerate() {
+                    let a = -2.0 * std::f32::consts::PI * (k * n) as f32 / N as f32;
+                    re += s * w * a.cos();
+                    im += s * w * a.sin();
+                }
+                re * re + im * im
+            })
+            .collect();
+        p.windows(4)
+            .map(|b| b.iter().sum::<f32>())
+            .fold(0.0, f32::max)
+    };
+    let payload: Vec<u8> = (0..64u8).collect();
+    for (mode, pre_syms) in [(r.shipped, 32usize), (r.candidate, 63)] {
+        let x = tx_frame(mode, &payload);
+        let pre = pre_syms * sps;
+        for (phase, off) in [("a", 0usize), ("b", N / 2)] {
+            let starts: Vec<usize> = (off..x.len().saturating_sub(N)).step_by(N).collect();
+            let powers: Vec<(usize, f32)> =
+                starts.iter().map(|&s| (s, band(&x[s..s + N]))).collect();
+            let mut data: Vec<f32> = powers
+                .iter()
+                .filter(|(s, _)| *s >= pre + sps)
+                .map(|(_, p)| *p)
+                .collect();
+            data.sort_by(f32::total_cmp);
+            let median = data[data.len() / 2];
+            let in_pre: Vec<f32> = powers
+                .iter()
+                .filter(|(s, _)| s + N <= pre)
+                .map(|(_, p)| p / median)
+                .collect();
+            let low = |v: &[f32]| v.iter().filter(|&&p| p < 0.5).count();
+            let data_rel: Vec<f32> = data.iter().map(|p| p / median).collect();
+            println!(
+                "{mode} phase {phase}: preamble {} windows, min {:.2}, below 0.5 {}; \
+                 data {} windows, below 0.5 {}",
+                in_pre.len(),
+                in_pre.iter().copied().fold(f32::INFINITY, f32::min),
+                low(&in_pre),
+                data_rel.len(),
+                low(&data_rel)
+            );
+            println!(
+                "  preamble windows: {}",
+                in_pre
+                    .iter()
+                    .map(|p| format!("{p:.2}"))
+                    .collect::<Vec<_>>()
+                    .join(" ")
+            );
+        }
+    }
+}
+
+/// What each arm's veto sees at the frame's TRUE onset inside the burst the production entry
+/// gathered, on the 8 dB fading columns at 0 and ±50 Hz, seeds 1..=`F1_DIAG_SEEDS`: the settled
+/// correction, ρ at that correction, and ρ with the grid centred on the true offset (either sign).
+/// Separates a ρ the settle's residual costs from one the template loses at the right frequency.
+#[test]
+#[ignore = "diagnostic: #1062 F1 offset columns"]
+fn f1_true_onset_rho_by_offset() {
+    let r = rung();
+    let n: u64 = std::env::var("F1_DIAG_SEEDS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(60);
+    let cols = columns(r);
+    for index in [1usize, 2, 3] {
+        let col = cols[index];
+        for mode in [r.shipped, r.candidate] {
+            let (mut fines, mut at_settle, mut at_truth) = (Vec::new(), Vec::new(), Vec::new());
+            let mut threshold = f32::NAN;
+            for seed in 1..=n {
+                let (payload, lead) = draw(seed, payload_max());
+                let (audio, _) = capture(mode, col, seed, &payload, lead);
+                let mut rx = rx_engine(mode, r.level);
+                let mut fed = 0usize;
+                let mut burst = None;
+                for read in audio.chunks(READ) {
+                    fed += read.len();
+                    if let Some(b) = rx.accumulate_capture(Some(mode), read.to_vec()).unwrap() {
+                        let start =
+                            fed as i64 - read.len() as i64 - b.samples.len() as i64 - lead as i64;
+                        burst = Some((b.samples, start));
+                        break;
+                    }
+                }
+                let Some((samples, start)) = burst else {
+                    continue;
+                };
+                if start > 0 {
+                    continue;
+                }
+                let onset = (-start) as usize;
+                let Some((fine, rho, thr)) = rx.veto_probe(mode, &samples, onset, None) else {
+                    continue;
+                };
+                let truth = [col.offset_hz, -col.offset_hz]
+                    .iter()
+                    .filter_map(|&f| rx.veto_probe(mode, &samples, onset, Some(f)))
+                    .map(|p| p.1)
+                    .fold(f32::MIN, f32::max);
+                threshold = thr;
+                fines.push(fine);
+                at_settle.push(rho);
+                at_truth.push(truth);
+            }
+            let q = |v: &mut Vec<f32>, p: usize| {
+                v.sort_by(f32::total_cmp);
+                v.get(v.len() * p / 100).copied().unwrap_or(f32::NAN)
+            };
+            let below = |v: &[f32]| v.iter().filter(|&&x| x < threshold).count();
+            let (bs, bt) = (below(&at_settle), below(&at_truth));
+            println!(
+                "{} {mode}: n {} threshold {threshold:.3} | settled corr p10 {:+.1} p50 {:+.1} \
+                 p90 {:+.1} Hz | rho at settle p10 {:.3} p50 {:.3}, below {bs} | rho at truth \
+                 p10 {:.3} p50 {:.3}, below {bt}",
+                col.name,
+                fines.len(),
+                q(&mut fines, 10),
+                q(&mut fines, 50),
+                q(&mut fines, 90),
+                q(&mut at_settle, 10),
+                q(&mut at_settle, 50),
+                q(&mut at_truth, 10),
+                q(&mut at_truth, 50),
+            );
+        }
+    }
+}
+
+/// The veto's ρ at onsets shifted from the true one, on the +50 Hz column, seeds 1..=`F1_DIAG_SEEDS`:
+/// phase 2 settles on a grid 4 symbols coarse, so the onsets the veto judges sit up to 128 samples
+/// (BPSK250) either side of the frame's start. Per shift: ρ p10 / p50 at the settled correction, and
+/// how many fall under the threshold.
+#[test]
+#[ignore = "diagnostic: #1062 F1 offset columns"]
+fn f1_rho_by_onset_shift() {
+    const SHIFT: [i64; 9] = [-128, -96, -64, -32, 0, 32, 64, 96, 128];
+    let r = rung();
+    let n: u64 = std::env::var("F1_DIAG_SEEDS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(60);
+    let index: usize = std::env::var("F1_COLUMN")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(2);
+    let col = columns(r)[index];
+    println!("{}", col.name);
+    for mode in [r.shipped, r.candidate] {
+        let mut rhos: Vec<Vec<f32>> = vec![Vec::new(); SHIFT.len()];
+        let mut threshold = f32::NAN;
+        for seed in 1..=n {
+            let (payload, lead) = draw(seed, payload_max());
+            let (audio, _) = capture(mode, col, seed, &payload, lead);
+            let mut rx = rx_engine(mode, r.level);
+            let mut fed = 0usize;
+            let mut burst = None;
+            for read in audio.chunks(READ) {
+                fed += read.len();
+                if let Some(b) = rx.accumulate_capture(Some(mode), read.to_vec()).unwrap() {
+                    let start =
+                        fed as i64 - read.len() as i64 - b.samples.len() as i64 - lead as i64;
+                    burst = Some((b.samples, start));
+                    break;
+                }
+            }
+            let Some((samples, start)) = burst else {
+                continue;
+            };
+            for (k, &shift) in SHIFT.iter().enumerate() {
+                let onset = shift - start;
+                if onset < 0 {
+                    continue;
+                }
+                if let Some((_, rho, thr)) = rx.veto_probe(mode, &samples, onset as usize, None) {
+                    threshold = thr;
+                    rhos[k].push(rho);
+                }
+            }
+        }
+        println!("  {mode}: threshold {threshold:.3}");
+        for (k, v) in rhos.iter_mut().enumerate() {
+            v.sort_by(f32::total_cmp);
+            let below = v.iter().filter(|&&x| x < threshold).count();
+            println!(
+                "    shift {:+4}: n {} rho p10 {:.3} p50 {:.3}, below {below}",
+                SHIFT[k],
+                v.len(),
+                v.get(v.len() / 10).copied().unwrap_or(f32::NAN),
+                v.get(v.len() / 2).copied().unwrap_or(f32::NAN)
+            );
+        }
+    }
+}
+
+/// #1062 regression: two BPSK250-PN frames at +50 Hz whose phase-2 settle grid puts no onset inside
+/// PN's timing acceptance. They decode only because phase 2's veto reaches one coarse step past each
+/// grid onset; with the reach off (the receiver before the fix) both are refused at every settle.
+#[test]
+fn a_pn_frame_off_frequency_is_not_refused_between_settle_grid_points() {
+    let r = RUNGS[3];
+    assert_eq!(r.candidate, "BPSK250-PN");
+    let col = columns(r)[2];
+    assert_eq!(col.offset_hz, 50.0);
+    for seed in [7u64, 16] {
+        let (payload, lead) = draw(seed, 200);
+        assert!(
+            trial(r.candidate, r.level, col, seed, &payload, lead),
+            "seed {seed}: refused off frequency"
+        );
+    }
+}

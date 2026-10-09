@@ -41,7 +41,8 @@ use openpulse_dsp::pll::CarrierPll;
 use openpulse_dsp::rrc::generate_rrc_coefficients;
 
 use crate::modulate::{
-    nrzi_encode, samples_per_symbol, PREAMBLE_SYMS, RRC_SPAN_SYMBOLS, TAIL_SYMS,
+    nrzi_encode, preamble_bits_for, preamble_syms_for, samples_per_symbol, PREAMBLE_SYMS,
+    RRC_SPAN_SYMBOLS, TAIL_SYMS,
 };
 use crate::parse_baud_rate;
 
@@ -169,7 +170,7 @@ pub fn bpsk_demodulate_variants(
     samples: &[f32],
     config: &ModulationConfig,
 ) -> Result<Vec<Vec<u8>>, ModemError> {
-    let expected = expected_preamble_symbols(PREAMBLE_SYMS);
+    let expected = expected_preamble_for(&config.mode);
     let baud = parse_baud_rate(&config.mode)?;
     let fs = config.sample_rate as f32;
     let fc = config.center_frequency;
@@ -238,7 +239,7 @@ fn variants_from_parts(
 /// residual. BPSK is differentially decoded, so the transmitted ±1 sequence is reconstructed from the
 /// decisions the decoder already made; its arbitrary global sign is absorbed by the per-window fit.
 pub fn estimate_snr_db(samples: &[f32], config: &ModulationConfig) -> Option<f32> {
-    let expected = expected_preamble_symbols(PREAMBLE_SYMS);
+    let expected = expected_preamble_for(&config.mode);
     let (i_syms, q_syms, _) = symbol_stream_parts_with_expected(samples, config, &expected).ok()?;
     snr_db_from_uncancelled_stream(&i_syms, &q_syms, config)
 }
@@ -259,12 +260,13 @@ fn snr_db_from_uncancelled_stream(
     q_syms: &[f32],
     config: &ModulationConfig,
 ) -> Option<f32> {
-    if i_syms.len() <= PREAMBLE_SYMS + TAIL_SYMS {
+    let preamble_syms = preamble_syms_for(&config.mode);
+    if i_syms.len() <= preamble_syms + TAIL_SYMS {
         return None;
     }
     // The last preamble symbol serves only as the first differential reference; the period-4
     // preamble itself spans too few independent taps to fit.
-    let range_start = PREAMBLE_SYMS - 1;
+    let range_start = preamble_syms - 1;
     let end = i_syms.len() - TAIL_SYMS;
     if range_start >= end {
         return None;
@@ -317,7 +319,7 @@ fn decisions_from_differential(rx: &[Complex32]) -> Vec<Complex32> {
 }
 
 pub fn bpsk_demodulate(samples: &[f32], config: &ModulationConfig) -> Result<Vec<u8>, ModemError> {
-    bpsk_demodulate_with_expected(samples, config, &expected_preamble_symbols(PREAMBLE_SYMS))
+    bpsk_demodulate_with_expected(samples, config, &expected_preamble_for(&config.mode))
 }
 
 /// [`bpsk_demodulate`] whose timing lock and framing use a supplied expectation.
@@ -417,6 +419,9 @@ pub fn estimate_frequency_offset(i_syms: &[f32], q_syms: &[f32], baud_rate: f32)
     im_sum.atan2(re_sum) * baud_rate / (4.0 * PI)
 }
 
+/// Symbols of audio the coarse AFC search reads: today's `4 × 32`, held fixed across preambles.
+const AFC_WINDOW_SYMS: usize = 128;
+
 /// Wide-range carrier frequency estimator using the Goertzel algorithm on the
 /// squared signal.
 ///
@@ -429,12 +434,14 @@ fn estimate_carrier_hz_wide(samples: &[f32], config: &ModulationConfig) -> Optio
     let fc = config.center_frequency;
     let n = crate::modulate::samples_per_symbol(fs, baud).ok()?;
 
-    if samples.len() < n * PREAMBLE_SYMS {
+    if samples.len() < n * preamble_syms_for(&config.mode) {
         return None;
     }
 
-    // Limit to 4× preamble length to keep per-call cost bounded.
-    let window_len = (n * PREAMBLE_SYMS * 4).min(samples.len());
+    // Bounded per-call cost. A named length, not `4 × PREAMBLE_SYMS`: the coarse stage squares the
+    // signal, so the preamble's content is irrelevant here, and a longer preamble must not silently
+    // stretch this window over a fade (#1062 design, *AFC window, decoupled*).
+    let window_len = (n * AFC_WINDOW_SYMS).min(samples.len());
     goertzel_carrier_scan(&samples[..window_len], fs, fc, 2, 400.0, 12.5)
 }
 
@@ -448,7 +455,7 @@ fn estimate_carrier_hz_wide(samples: &[f32], config: &ModulationConfig) -> Optio
 ///
 /// Returns `None` if the buffer is too short for either path.
 pub fn afc_estimate_hz(samples: &[f32], config: &ModulationConfig) -> Option<f32> {
-    afc_estimate_hz_with_expected(samples, config, &expected_preamble_symbols(PREAMBLE_SYMS))
+    afc_estimate_hz_with_expected(samples, config, &expected_preamble_for(&config.mode))
 }
 
 /// [`afc_estimate_hz`] whose stage-2 timing lock uses a supplied expectation.
@@ -507,8 +514,9 @@ pub fn bpsk_demodulate_soft(
     let fs = config.sample_rate as f32;
     let fc = config.center_frequency;
     let n = samples_per_symbol(fs, baud)?;
+    let preamble_syms = preamble_syms_for(&config.mode);
 
-    if samples.len() < n * (PREAMBLE_SYMS + 1) {
+    if samples.len() < n * (preamble_syms + 1) {
         return Err(ModemError::Demodulation("signal too short".into()));
     }
 
@@ -523,7 +531,7 @@ pub fn bpsk_demodulate_soft(
     let (i_syms, q_syms) = if let Some(alpha) = rrc_alpha {
         bpsk_demodulate_rrc(samples, n, baud, fc, fs, alpha, &config.mode)
     } else {
-        let expected = expected_preamble_symbols(PREAMBLE_SYMS);
+        let expected = expected_preamble_for(&config.mode);
         let lock = timing_locks_with_expected(samples, n, fc, fs, &expected).widened;
         // NOTE: crossfade-ISI cancellation is deliberately NOT applied on the soft path. BPSK is
         // *differential*, so the backward-substitution recursion inflates the noise LLRs of a deeply
@@ -534,13 +542,13 @@ pub fn bpsk_demodulate_soft(
         demodulate_iq_at(samples, n, fc, fs, lock)
     };
 
-    if i_syms.len() <= PREAMBLE_SYMS + TAIL_SYMS {
+    if i_syms.len() <= preamble_syms + TAIL_SYMS {
         return Err(ModemError::Demodulation(
             "no data symbols after preamble".into(),
         ));
     }
 
-    let range_start = PREAMBLE_SYMS - 1;
+    let range_start = preamble_syms - 1;
     let data_syms_end = i_syms.len() - TAIL_SYMS;
 
     let iq: Vec<(f32, f32)> = i_syms[range_start..data_syms_end]
@@ -687,17 +695,22 @@ fn gpu_symbol_stream_parts(
     let fc = config.center_frequency;
     let n = samples_per_symbol(fs, baud)?;
 
-    if samples.len() < n * (PREAMBLE_SYMS + 1) {
+    let expected = expected_preamble_for(&config.mode);
+    if samples.len() < n * (expected.len() + 1) {
         return Err(ModemError::Demodulation("signal too short".into()));
     }
+    // The kernel sums the whole preamble coherently; past one coherent segment the CPU search
+    // segments it, so the GPU declines rather than lock differently.
+    if expected.len() > COHERENT_SYMS {
+        return Ok(None);
+    }
 
-    let expected = expected_preamble_symbols(PREAMBLE_SYMS);
     let half = n / 2;
     let Some(energies) = openpulse_gpu::timing_energies_gpu(
         ctx,
         samples,
         n,
-        PREAMBLE_SYMS,
+        expected.len(),
         &expected,
         fc,
         fs,
@@ -740,7 +753,7 @@ pub fn bpsk_demodulate_with_gpu(
     // is what holds the two together.
     cancel_crossfade_isi(&mut i_syms, &mut q_syms);
 
-    bytes_from_symbol_stream(&i_syms, &q_syms, PREAMBLE_SYMS)
+    bytes_from_symbol_stream(&i_syms, &q_syms, preamble_syms_for(&config.mode))
 }
 
 /// GPU counterpart of [`bpsk_demodulate_variants`] — both decision arms at both timing locks.
@@ -763,7 +776,8 @@ pub fn bpsk_demodulate_variants_with_gpu(
         // A GPU fallback takes the CPU path, which reports its own arm count.
         return bpsk_demodulate_variants(samples, config);
     };
-    let mut out = variants_from_parts(iv, qv, true, PREAMBLE_SYMS)?;
+    let preamble_syms = preamble_syms_for(&config.mode);
+    let mut out = variants_from_parts(iv, qv, true, preamble_syms)?;
     // The restricted-lock rescue (#1438 PR2), as on the CPU path.
     if locks.restricted as isize != locks.widened {
         let baud = parse_baud_rate(&config.mode)?;
@@ -778,7 +792,7 @@ pub fn bpsk_demodulate_variants_with_gpu(
             locks.restricted as isize,
         );
         if let Some(Ok(rescue)) =
-            rescue.map(|(iv, qv)| variants_from_parts(iv, qv, true, PREAMBLE_SYMS))
+            rescue.map(|(iv, qv)| variants_from_parts(iv, qv, true, preamble_syms))
         {
             append_distinct(&mut out, rescue);
         }
@@ -1062,6 +1076,9 @@ fn locks_from_energies(energies: &[f32], half: usize) -> TimingLocks {
     }
 }
 
+/// Longest coherent span of the timing correlation: the shipped preamble's length.
+const COHERENT_SYMS: usize = PREAMBLE_SYMS;
+
 /// The preamble correlation energy at every offset from `first` up to `n − 1`, in order.
 ///
 /// Evaluation stops at the first offset whose preamble span runs past the end of `samples`, as the
@@ -1089,20 +1106,31 @@ fn preamble_energies(
             continue;
         }
 
-        // Correlate the first PREAMBLE_SYMS symbols with the expected
-        // alternating pattern that NRZI-encoding the preamble bits produces,
-        // using the carrier-phase-invariant magnitude (Σ I·e)² + (Σ Q·e)².
-        // The previous |Σ I·e| handled the 180° polarity ambiguity but
-        // collapsed at a ~90° carrier phase where the preamble energy lives in
-        // Q.  The differential BPSK decoder handles polarity after timing lock.
-        let (re, im) = i_syms[..syms]
-            .iter()
-            .zip(q_syms[..syms].iter())
-            .zip(expected.iter())
-            .fold((0.0f32, 0.0f32), |(re, im), ((&i, &q), &e)| {
-                (re + i * e, im + q * e)
-            });
-        out.push(re * re + im * im);
+        // Correlate the preamble symbols with the expected pattern that NRZI-encoding the preamble
+        // bits produces, using the carrier-phase-invariant magnitude (Σ I·e)² + (Σ Q·e)². The
+        // previous |Σ I·e| handled the 180° polarity ambiguity but collapsed at a ~90° carrier
+        // phase where the preamble energy lives in Q. The differential BPSK decoder handles
+        // polarity after timing lock.
+        //
+        // Coherent over at most COHERENT_SYMS symbols, segments summed in power: a fade or an AFC
+        // residual rotates the phase across a long span and cancels a coherent sum (#1062 F5,
+        // BPSK31-PN at 2 s). The shipped preamble is exactly one segment, so its lock is unchanged.
+        let energy = i_syms[..syms]
+            .chunks(COHERENT_SYMS)
+            .zip(q_syms[..syms].chunks(COHERENT_SYMS))
+            .zip(expected.chunks(COHERENT_SYMS))
+            .map(|((ic, qc), ec)| {
+                let (re, im) = ic
+                    .iter()
+                    .zip(qc)
+                    .zip(ec)
+                    .fold((0.0f32, 0.0f32), |(re, im), ((&i, &q), &e)| {
+                        (re + i * e, im + q * e)
+                    });
+                re * re + im * im
+            })
+            .sum();
+        out.push(energy);
     }
     out
 }
@@ -1132,6 +1160,11 @@ pub fn expected_preamble_symbols(len: usize) -> Vec<f32> {
     // → pattern: −1,−1,+1,+1,−1,−1,+1,+1,…
     // Pre-compute this via nrzi_encode.
     expected_symbols_for(&crate::modulate::preamble_bits(len))
+}
+
+/// The expected I-channel amplitudes of the preamble `mode` transmits.
+pub(crate) fn expected_preamble_for(mode: &str) -> Vec<f32> {
+    expected_symbols_for(&preamble_bits_for(mode))
 }
 
 /// Build the expected I-channel amplitudes for an arbitrary preamble bit pattern.
@@ -1279,6 +1312,40 @@ pub(crate) fn bits_to_bytes(bits: &[bool]) -> Vec<u8> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// #1062 F5: a carrier error inside the engine AFC's 2 Hz deadband turns BPSK31-PN's 2 s
+    /// preamble a full cycle, so a sum coherent over all of it cancels and the timing lock wanders
+    /// (the PN arm lost 26 of 600 floor-column frames to that). Coherent over 32 symbols, it holds.
+    #[cfg(feature = "pn-candidate")]
+    #[test]
+    fn a_long_preamble_locks_through_a_deadband_carrier_error() {
+        let mode = "BPSK31-PN";
+        let data = b"a 2 s preamble spun one turn";
+        let tx_at = |fc: f32| {
+            let cfg = ModulationConfig {
+                mode: mode.into(),
+                center_frequency: fc,
+                ..ModulationConfig::default()
+            };
+            crate::modulate::bpsk_modulate(data, &cfg).expect("modulate")
+        };
+        let rx = ModulationConfig {
+            mode: mode.into(),
+            ..ModulationConfig::default()
+        };
+        let n = samples_per_symbol(8000.0, 31.25).unwrap();
+        let expected = expected_preamble_for(mode);
+        let lock =
+            |tx: &[f32]| timing_locks_with_expected(tx, n, 1500.0, 8000.0, &expected).widened;
+        let reference = lock(&tx_at(1500.0));
+        let spun = tx_at(1500.5);
+        let got = lock(&spun);
+        assert!(
+            (got - reference).abs() <= n as isize / 16,
+            "lock {got} against {reference} without the carrier error (n = {n})"
+        );
+        assert_eq!(bpsk_demodulate(&spun, &rx).expect("decode"), data);
+    }
 
     fn snr_fixture() -> (Vec<f32>, ModulationConfig) {
         let cfg = ModulationConfig {

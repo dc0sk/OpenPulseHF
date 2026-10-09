@@ -8,11 +8,13 @@
 //! Run on the station computer, release build:
 //! `PROBE_ENTRY_RUNGS=1 cargo test --release -p openpulse-modem --no-default-features \
 //!  --test receive_cost_scaling -- --ignored --nocapture`.
+//! `PROBE_PN=1` runs the BPSK rungs on the #1062 PN-63 candidate (design row F1c).
 //! `PROBE_NO_FALLBACK=1` removes the #1123 uncoded fallback scan, to show its share of the cost.
 //! Measured 2026-10-02 (x86 container, release, fallback `BPSK250` as the daemon passes it): decode
 //! 0.85 s (SL6) to 1.72 s (SL2) per frame; SL2 without the fallback scan 0.77 s.
 
 use openpulse_audio::LoopbackBackend;
+use openpulse_channel::ChannelModel;
 use openpulse_core::profile::SessionProfile;
 use openpulse_core::rate::SpeedLevel;
 use openpulse_modem::ModemEngine;
@@ -27,9 +29,31 @@ fn read_size() -> usize {
         .unwrap_or(400)
 }
 
+/// The ladder under test: `fast`, or with `PROBE_PN` its BPSK rungs as the #1062 PN-63 candidate
+/// (`-PN` modes, design row F1c). Same FEC and floors either way.
+fn profile() -> SessionProfile {
+    if std::env::var_os("PROBE_PN").is_none() {
+        return SessionProfile::fast();
+    }
+    let fast = SessionProfile::fast();
+    let rungs: Vec<_> = [
+        (SpeedLevel::Sl2, "BPSK31-PN"),
+        (SpeedLevel::Sl3, "BPSK63-PN"),
+        (SpeedLevel::Sl4, "BPSK100-PN"),
+        (SpeedLevel::Sl5, "BPSK250-PN"),
+        (SpeedLevel::Sl6, "QPSK250-D"),
+    ]
+    .into_iter()
+    .map(|(l, m)| (l, m, fast.fec_for(l), None, None))
+    .collect();
+    SessionProfile::from_rungs(&rungs, SpeedLevel::Sl2, 3)
+}
+
 fn engine(backend: &LoopbackBackend, level: SpeedLevel) -> ModemEngine {
     let mut e = ModemEngine::new(Box::new(backend.clone_shared()));
     e.register_plugin(Box::new(bpsk_plugin::BpskPlugin::new()))
+        .unwrap();
+    e.register_plugin(Box::new(bpsk_plugin::BpskPlugin::pn_candidate()))
         .unwrap();
     e.register_plugin(Box::new(qpsk_plugin::QpskPlugin::new()))
         .unwrap();
@@ -39,13 +63,17 @@ fn engine(backend: &LoopbackBackend, level: SpeedLevel) -> ModemEngine {
         .unwrap();
     e.register_plugin(Box::new(mfsk16_plugin::Mfsk16Plugin::new()))
         .unwrap();
-    e.start_ota_session(SessionProfile::fast());
+    e.start_ota_session(profile());
     e.ota_lock_level(level);
+    // `PROBE_NO_REACH=1` times the receiver before #1062's phase-2 veto reach, for its cost A/B.
+    if std::env::var_os("PROBE_NO_REACH").is_some() {
+        e.set_phase2_veto_reach(false);
+    }
     e
 }
 
 fn probe(level: SpeedLevel, payload: usize) {
-    let profile = SessionProfile::fast();
+    let profile = profile();
     let mode = profile.mode_for(level).unwrap();
     let fec = profile.fec_for(level);
 
@@ -55,6 +83,19 @@ fn probe(level: SpeedLevel, payload: usize) {
     tx.transmit_with_fec_mode(&data, mode, fec, None)
         .expect("transmit");
     let mut audio = tx_bk.drain_samples();
+    // PROBE_OFFSET_HZ shifts the frame's carrier (REQ-PHY-03's ±50 Hz): a BPSK31 frame at +50 Hz
+    // cost ~100 s of x86 CPU to decode in the #1062 F5 parity run, against ~4 s at 0 Hz.
+    let offset: f32 = std::env::var("PROBE_OFFSET_HZ")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(0.0);
+    if offset != 0.0 {
+        audio = openpulse_channel::cfo::CfoChannel::new(openpulse_channel::cfo::CfoConfig::new(
+            offset, 8_000.0,
+        ))
+        .unwrap()
+        .apply(&audio);
+    }
     let frame_len = audio.len();
     audio.extend(std::iter::repeat_n(0.0, 8 * read_size()));
 
@@ -92,7 +133,7 @@ fn probe(level: SpeedLevel, payload: usize) {
     let r = rx.ota_decode_burst(&burst, "probe", fallback).unwrap();
     let decode = t.elapsed();
     println!(
-        "{level:?} {mode:<14} {fec:?} payload {payload:>3}: frame {frame_len:>7} samples ({:>5.1} s audio) \
+        "{level:?} {mode:<14} {fec:?} payload {payload:>3} offset {offset:+.0} Hz: frame {frame_len:>7} samples ({:>5.1} s audio) \
          burst {:>7} | accumulate {:>8.1} ms ({reads} reads) | decode {:>9.1} ms | ok={}",
         frame_len as f64 / 8000.0,
         burst.samples.len(),

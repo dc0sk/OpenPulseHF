@@ -9,6 +9,9 @@ repository.workspace = true
 
 [features]
 gpu = ["dep:openpulse-gpu"]
+# The #1062 PN-63 candidate preamble as `-PN` modes, for measurement against the shipped one
+# (docs/dev/design/pn-preamble.md, F1). Never enabled in a shipped build.
+pn-candidate = []
 
 [dependencies]
 openpulse-core = { workspace = true }

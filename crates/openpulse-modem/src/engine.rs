@@ -917,6 +917,9 @@ pub struct ModemEngine {
     /// veto being reachable. Added because a gate built on the `rho_*` counters alone stays green if
     /// the chain is ever half-wired into the streaming path — gate and settle without the veto.
     afc_settle_attempts: u64,
+    /// Every FEC/plain decode attempt `decode_attempt` made: the work an OTA burst cost, counted so a
+    /// test can bound it instead of timing it.
+    decode_attempts: u64,
     /// Settles rejected because the preamble correlation did not corroborate them (#1049).
     ///
     /// A tripwire as much as a counter: it stays 0 when the mode publishes no template, so a test
@@ -962,6 +965,21 @@ pub struct ModemEngine {
     /// #1342; on the daemon's phase-2 path the unit is one coarse-grid settle query, the unit
     /// `rho_accepted_settles` already has there.
     rho_stand_down_settles: u64,
+    /// Measurement only (#1062): `false` makes the veto accept every onset while still computing ρ,
+    /// feeding the calibration and counting what it would have rejected, so the veto's share of a
+    /// loss can be separated from the onset ranking's, which reads the same template. Always `true`
+    /// outside `set_preamble_veto_gate`.
+    veto_gate: bool,
+    /// Phase 2's veto searches timing over one more coarse grid step past each settle onset (#1062).
+    ///
+    /// The settle grid is `PHASE2_STEP_MULTIPLIER` symbols coarse, and the veto's own timing search
+    /// spans about two symbols past the judged onset, so without the reach the grid's gaps are seen
+    /// by no veto query. The periodic `--++` hides that (it correlates at any alignment in its
+    /// preamble); an aperiodic preamble does not: PN-63 lost 64 of 600 BPSK250 frames at +50 Hz to
+    /// refused settles, and the reach recovers 55. Measured cost to the constants: F2's binding
+    /// interferer unchanged (0.304), SSB noise ceiling 0.152 → 0.157. `true` except under
+    /// `set_phase2_veto_reach(false)`, the A/B switch.
+    phase2_veto_reach: bool,
     /// Monotonic count of frames emitted at the single TX seam (`stage_emit_output`) — every
     /// transmit path (data, FEC, ACK, retransmit, QSY, ID) increments it once. A pollable
     /// TX-activity signal for the daemon's periodic station-ID timer (REQ-REG-10).
@@ -1153,6 +1171,7 @@ impl ModemEngine {
             notch_protect_extremes: None,
             settle_condemnations: 0,
             afc_settle_attempts: 0,
+            decode_attempts: 0,
             condemned_positions: Vec::new(),
             accepted_settle_positions: Vec::new(),
             sweep_attempt_inputs: Vec::new(),
@@ -1174,6 +1193,8 @@ impl ModemEngine {
             rho_calibration: crate::rho_calibration::RhoCalibration::new(),
             rho_stand_down: false,
             rho_stand_down_settles: 0,
+            veto_gate: true,
+            phase2_veto_reach: true,
             frames_transmitted: 0,
             raw_audio_frames_transmitted: 0,
         }
@@ -1309,6 +1330,12 @@ impl ModemEngine {
         self.afc_settle_attempts
     }
 
+    /// Decode attempts made so far, every arm of the OTA chain included.
+    #[cfg(feature = "instruments")]
+    pub fn decode_attempts(&self) -> u64 {
+        self.decode_attempts
+    }
+
     /// How many candidate settles the preamble correlation refused (#1049).
     ///
     /// Zero has two meanings and a test must distinguish them: the gate ran and accepted
@@ -1317,6 +1344,21 @@ impl ModemEngine {
     #[cfg(feature = "instruments")]
     pub fn rho_rejected_settles(&self) -> u64 {
         self.rho_rejected_settles
+    }
+
+    /// Turn the veto's rejection off (`false`) or back on, leaving the onset ranking as it is (#1062).
+    ///
+    /// Measurement only. With the gate off, [`Self::rho_rejected_settles`] counts the onsets the veto
+    /// WOULD have refused; the calibration still sees every ρ.
+    #[cfg(feature = "instruments")]
+    pub fn set_preamble_veto_gate(&mut self, on: bool) {
+        self.veto_gate = on;
+    }
+
+    /// Turn phase 2's veto reach off (`false`) for an A/B, or back on (#1062). Measurement only.
+    #[cfg(feature = "instruments")]
+    pub fn set_phase2_veto_reach(&mut self, on: bool) {
+        self.phase2_veto_reach = on;
     }
 
     /// Settles the preamble correlation accepted. See [`Self::rho_rejected_settles`].
@@ -1351,6 +1393,33 @@ impl ModemEngine {
     pub fn rho_effective_threshold(&self, mode: &str) -> Option<f32> {
         let veto = self.build_preamble_veto(mode, AudioConfig::default().sample_rate)?;
         Some(self.rho_calibration.effective_threshold(veto.rho_threshold))
+    }
+
+    /// What the veto sees at one onset (#1062): the settled correction, the ρ `acquire_at_onset`
+    /// would compare, and the threshold it would compare it against — through the same
+    /// `afc_mini_settle` and `preamble_rho` steps, on the same window length. `settled_override`
+    /// centres the ρ grid on a given correction instead of the settle's, so a ρ lost to the settle's
+    /// residual can be told from one the template loses at the right frequency. Leaves the engine's
+    /// AFC state as it found it. `None` when the mode has no veto or the window cannot hold it.
+    #[cfg(feature = "instruments")]
+    pub fn veto_probe(
+        &mut self,
+        mode: &str,
+        samples: &[f32],
+        start: usize,
+        settled_override: Option<f32>,
+    ) -> Option<(f32, f32, f32)> {
+        let sr = AudioConfig::default().sample_rate;
+        let veto = self.build_preamble_veto(mode, sr)?;
+        let (_, acq_samples, min_frame_samples, _) = self.frame_scan_geometry(mode, sr);
+        let end = start.checked_add(acq_samples.max(min_frame_samples))?;
+        let window = samples.get(start..end)?;
+        let entry = self.afc_correction_hz;
+        let fine = self.afc_mini_settle(mode, window).fine;
+        self.afc_correction_hz = entry;
+        let (rho, _) = self.preamble_rho(&veto, window, settled_override.unwrap_or(fine))?;
+        let threshold = self.rho_calibration.effective_threshold(veto.rho_threshold);
+        Some((fine, rho, threshold))
     }
 
     /// Whether the veto is standing down for want of a separating threshold (REQ-RX-03), and how
@@ -3228,11 +3297,12 @@ impl ModemEngine {
         let afc_window = acq_samples.max(min_frame_samples);
         let veto = self.build_preamble_veto(mode, sr);
         let coarse = step.saturating_mul(PHASE2_STEP_MULTIPLIER).max(1);
+        let reach = if self.phase2_veto_reach { coarse } else { 0 };
         let entry = self.afc_correction_hz;
         let mut corrections: Vec<f32> = Vec::new();
         let mut start = 0usize;
         loop {
-            if self.acquire_at_onset(mode, samples, start, afc_window, veto.as_ref()) {
+            if self.acquire_at_onset(mode, samples, start, afc_window, veto.as_ref(), reach) {
                 corrections.push(self.afc_correction_hz);
             }
             self.afc_correction_hz = entry;
@@ -3270,6 +3340,7 @@ impl ModemEngine {
         start: usize,
         afc_window: usize,
         veto: Option<&PreambleVeto>,
+        veto_reach: usize,
     ) -> bool {
         let n = samples.len();
         let settle_end = (start + afc_window).min(n);
@@ -3286,7 +3357,8 @@ impl ModemEngine {
         let Some(v) = veto else {
             return true;
         };
-        let Some((rho, _)) = self.preamble_rho(v, &samples[start..settle_end], outcome.fine) else {
+        let rho_end = (settle_end + veto_reach).min(n);
+        let Some((rho, _)) = self.preamble_rho(v, &samples[start..rho_end], outcome.fine) else {
             return true;
         };
         // Decide and record through the one step the CLI path uses too (#1342): the calibration
@@ -3336,7 +3408,7 @@ impl ModemEngine {
             let afc_before = self.afc_correction_hz;
             let mut skip = false;
             if settle {
-                skip = !self.acquire_at_onset(mode, samples, start, afc_window, veto.as_ref());
+                skip = !self.acquire_at_onset(mode, samples, start, afc_window, veto.as_ref(), 0);
                 if skip {
                     self.afc_correction_hz = afc_before;
                 }
@@ -3638,8 +3710,39 @@ impl ModemEngine {
         // failure, and a scan running after it would have nothing to undo but would delay retention.
         if decoded.is_none() {
             let n = samples.samples.len();
+            let sr = AudioConfig::default().sample_rate;
             'scan: for (level, mode, fec) in &candidates {
                 let (step, scan_end, raw_max) = self.burst_onset_scan_bounds(mode, n, onset_bound);
+                // OFF FREQUENCY: scan at the carrier the trigger point settles on, first (REQ-PHY-03).
+                //
+                // Phase 2 acquires the carrier, but only after this scan has failed at every onset
+                // at the current correction, which an off-frequency frame always does: measured with
+                // `receive_cost_scaling` at +50 Hz on a fresh receiver (x86 release), SL2 decoded in
+                // 23.9 s against 1.9 s at 0 Hz, SL3 9.1 s, SL4 6.4 s — past a Pi's 9 s ACK window on
+                // the first frame from every station, since the correction is learnt only from a
+                // decode. One settle at the flushed burst's trigger (the frame is on air there) says
+                // whether the burst is off frequency; `acquire_at_onset` is phase 2's own definition
+                // and answers `false` inside the settle deadband, so an on-frequency burst scans
+                // exactly as before. The uncorrected scan still follows a corrected one that fails.
+                self.afc_correction_hz = afc_before;
+                let (_, acq_samples, min_frame_samples, _) = self.frame_scan_geometry(mode, sr);
+                let veto = self.build_preamble_veto(mode, sr);
+                let corrected = self
+                    .acquire_at_onset(
+                        mode,
+                        &samples.samples,
+                        lead.min(n),
+                        acq_samples.max(min_frame_samples),
+                        veto.as_ref(),
+                        0,
+                    )
+                    .then_some(self.afc_correction_hz);
+                // Offset 0 was tried at `afc_before` by attempt 0; at a new correction it is not.
+                let passes: Vec<(f32, usize)> = corrected
+                    .map(|c| (c, 0))
+                    .into_iter()
+                    .chain(std::iter::once((afc_before, step)))
+                    .collect();
                 // SIZE THE SLICE FOR THE CODED FRAME (#1384). `burst_onset_scan_bounds` returns the
                 // plugin's RAW geometry. MEASURED on BPSK250: raw is 74 624 samples, while a coded
                 // frame past the one-RS-block boundary is 131 840 — so every onset except zero
@@ -3647,41 +3750,43 @@ impl ModemEngine {
                 // because the attempt before this scan decodes the whole burst, which is why the
                 // defect could sit unseen.
                 let (max_frame_samples, _) = frame_plan(raw_max, *fec);
-                if scan_end == 0 {
-                    continue; // nothing to search: attempt 0 already covered this candidate
-                }
-                let mut start = step;
-                loop {
-                    self.afc_correction_hz = afc_before;
-                    let end = (start + max_frame_samples).min(n);
-                    if start >= end {
-                        break;
+                for (afc, first) in passes {
+                    if scan_end == 0 && first > 0 {
+                        continue; // nothing to search: attempt 0 already covered this candidate
                     }
-                    let slice = samples.samples[start..end].to_vec();
-                    match self.decode_attempt(
-                        mode,
-                        AudioSamples {
-                            samples: slice.clone(),
-                        },
-                        *fec,
-                    ) {
-                        Ok(payload) => {
-                            // E1 skips the estimate on every attempt; the WINNING slice still needs
-                            // one so the wrapper's single `AfcUpdate` carries a real correction.
-                            self.update_afc_estimate(mode, &slice);
-                            // The window that DECODED is the only defensible place to measure the
-                            // SNR (#1142) — measuring over the whole gathered burst hands the
-                            // estimator's timing search a lead-in it cannot see past.
-                            decoded_span = Some((start, end));
-                            decoded = Some((payload, *level, mode.clone()));
-                            break 'scan;
+                    let mut start = first;
+                    loop {
+                        self.afc_correction_hz = afc;
+                        let end = (start + max_frame_samples).min(n);
+                        if start >= end {
+                            break;
                         }
-                        Err(e) => {
-                            last_err = Some(e);
-                            if start >= scan_end {
-                                break;
+                        let slice = samples.samples[start..end].to_vec();
+                        match self.decode_attempt(
+                            mode,
+                            AudioSamples {
+                                samples: slice.clone(),
+                            },
+                            *fec,
+                        ) {
+                            Ok(payload) => {
+                                // E1 skips the estimate on every attempt; the WINNING slice still needs
+                                // one so the wrapper's single `AfcUpdate` carries a real correction.
+                                self.update_afc_estimate(mode, &slice);
+                                // The window that DECODED is the only defensible place to measure the
+                                // SNR (#1142) — measuring over the whole gathered burst hands the
+                                // estimator's timing search a lead-in it cannot see past.
+                                decoded_span = Some((start, end));
+                                decoded = Some((payload, *level, mode.clone()));
+                                break 'scan;
                             }
-                            start = (start + step).min(scan_end);
+                            Err(e) => {
+                                last_err = Some(e);
+                                if start >= scan_end {
+                                    break;
+                                }
+                                start = (start + step).min(scan_end);
+                            }
                         }
                     }
                 }
@@ -5452,6 +5557,7 @@ impl ModemEngine {
         samples: AudioSamples,
         fec: FecMode,
     ) -> Result<Vec<u8>, ModemError> {
+        self.decode_attempts = self.decode_attempts.wrapping_add(1);
         match fec {
             FecMode::None => self.receive_from_samples(mode, samples),
             _ => self.receive_from_samples_with_fec(mode, samples, fec),
@@ -8110,7 +8216,11 @@ impl ModemEngine {
             VetoVerdict::StoodDown
         } else if rho < threshold {
             self.rho_rejected_settles += 1;
-            VetoVerdict::Rejected { threshold }
+            if self.veto_gate {
+                VetoVerdict::Rejected { threshold }
+            } else {
+                VetoVerdict::Corroborated
+            }
         } else {
             self.rho_accepted_settles += 1;
             VetoVerdict::Corroborated
@@ -9652,6 +9762,22 @@ mod ddc_veto_arm {
         assert!(
             decimated <= MAX_PREAMBLE_CORRELATION_SAMPLES,
             "the point of the Ddc arm is that the budget is honoured AFTER decimation, and              {decimated} exceeds {MAX_PREAMBLE_CORRELATION_SAMPLES}"
+        );
+    }
+
+    /// The measurement switch (#1062) turns off the veto's rejection and nothing else: a ρ the veto
+    /// refuses is accepted with the gate off and still counted as a rejection it would have made.
+    #[test]
+    fn the_veto_gate_switch_accepts_what_the_veto_would_refuse() {
+        let mut e = engine_with_long_template();
+        let veto = e.build_preamble_veto(MODE, FS).expect("veto");
+        assert!(!e.decide_preamble_veto(&veto, 0.0, 0).accepted());
+        e.veto_gate = false;
+        assert!(e.decide_preamble_veto(&veto, 0.0, 0).accepted());
+        assert_eq!(e.rho_rejected_settles, 2);
+        assert!(
+            !e.rho_stand_down,
+            "accepted by the switch, not by a stand-down"
         );
     }
 

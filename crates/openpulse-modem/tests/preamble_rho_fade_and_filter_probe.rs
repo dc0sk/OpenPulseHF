@@ -81,6 +81,8 @@ use openpulse_modem::capture_replay::{load_corpus, load_wav};
 use openpulse_modem::channel_sim::ChannelSimHarness;
 use std::time::Duration;
 
+mod common;
+
 const FS: f32 = 8_000.0;
 const PI_F: f32 = std::f32::consts::PI;
 
@@ -141,8 +143,15 @@ fn win_len(mode: &str) -> usize {
 /// Takes samples-per-symbol rather than a mode string. The previous form divided by the *shipped*
 /// preamble symbol count, which is only correct for a shipped template — applied to a 110-chip PN
 /// template it divided by 31 and produced a window shorter than the template it was sizing.
+///
+/// `F15_SLACK_SYMS` overrides the two symbols (#1062): phase 2's veto with its reach searches six,
+/// and F2's noise and interference columns are re-measured at that span.
 fn win_len_for(samples: &[f32], sps: usize) -> usize {
-    samples.len() + 2 * sps
+    let slack: usize = std::env::var("F15_SLACK_SYMS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(2);
+    samples.len() + slack * sps
 }
 
 // ── F2: does noise COLOUR move the rho ceiling? ───────────────────────────────
@@ -522,35 +531,7 @@ fn rho_of(template: &[f32], window: &[f32], grid_hz: f32) -> Option<f32> {
         .map(|(r, _)| r.rho)
 }
 
-/// Apply the same brick-wall band mask `band_noise` uses, to an arbitrary signal.
-///
-/// Same mask for signal and noise, so the two columns of the table are comparable. Brick-wall is a
-/// worst case for selectivity; a real rig filter has skirts and sits between this and the SSB row.
-fn band_limit(x: &[f32], lo_hz: f32, hi_hz: f32) -> Vec<f32> {
-    use rustfft::{num_complex::Complex, FftPlanner};
-    let n = x.len().next_power_of_two();
-    let mut buf: Vec<Complex<f32>> = x
-        .iter()
-        .map(|&v| Complex::new(v, 0.0))
-        .chain(std::iter::repeat_n(Complex::new(0.0, 0.0), n - x.len()))
-        .collect();
-    let mut planner = FftPlanner::new();
-    planner.plan_fft_forward(n).process(&mut buf);
-    let bin_hz = FS / n as f32;
-    for (k, v) in buf.iter_mut().enumerate() {
-        let f = if k <= n / 2 {
-            k as f32 * bin_hz
-        } else {
-            (n - k) as f32 * bin_hz
-        };
-        if f < lo_hz || f > hi_hz {
-            *v = Complex::new(0.0, 0.0);
-        }
-    }
-    planner.plan_fft_inverse(n).process(&mut buf);
-    let scale = 1.0 / n as f32;
-    buf.iter().map(|c| c.re * scale).collect()
-}
+use common::filter::band_limit;
 
 /// Fraction of the DFT bins that actually carry the template's energy (participation ratio /
 /// bin count). A two-line spectrum scores near zero however long it runs; flat noise scores 1.
@@ -1371,7 +1352,19 @@ impl ModulationPlugin for NoVetoBpsk {
 #[test]
 #[ignore = "verification"]
 fn f9_decode_conditioned_rho_tail() {
-    let t = plugin_template("BPSK250").expect("BPSK250 template").0;
+    // `F9_MODE=BPSK250-PN` measures the #1062 candidate (design F5: its delivered-frame bound). The
+    // candidate publishes no template yet, so its template is built directly and its receiver runs
+    // without a veto whatever F9_VETO says.
+    let mode: &'static str = match std::env::var("F9_MODE").as_deref() {
+        Ok("BPSK250-PN") => "BPSK250-PN",
+        _ => "BPSK250",
+    };
+    let pn = mode.ends_with("-PN");
+    let t = if pn {
+        bpsk_plugin::modulate::bpsk_preamble_template(&cfg(mode)).expect("PN template")
+    } else {
+        plugin_template(mode).expect("BPSK250 template").0
+    };
     let seeds: u64 = std::env::var("F9_SEEDS")
         .ok()
         .and_then(|v| v.parse().ok())
@@ -1380,7 +1373,7 @@ fn f9_decode_conditioned_rho_tail() {
         .map(|i| (i.wrapping_mul(2_654_435_761) >> 24) as u8)
         .collect();
 
-    println!("\nF9: BPSK250+Rs, rho vs DECODE on identical samples, {seeds} seeds/cell");
+    println!("\nF9: {mode}+Rs, rho vs DECODE on identical samples, {seeds} seeds/cell");
     println!(
         "  {:<16} {:>5} {:>7} {:>9} {:>25} {:>25}",
         "band", "snr", "decode", "min rho", "miss rate, ALL frames", "miss rate, DECODED only"
@@ -1427,6 +1420,12 @@ fn f9_decode_conditioned_rho_tail() {
                 h.tx_engine
                     .register_plugin(Box::new(bpsk_plugin::BpskPlugin::new()))
                     .expect("register tx");
+                h.tx_engine
+                    .register_plugin(Box::new(bpsk_plugin::BpskPlugin::pn_candidate()))
+                    .expect("register tx");
+                h.rx_engine
+                    .register_plugin(Box::new(bpsk_plugin::BpskPlugin::pn_candidate()))
+                    .expect("register rx");
                 // F9_VETO=off registers the veto-disabled wrapper on the RECEIVER only, so the
                 // decoded set is chosen by the channel rather than partly by the subject of the
                 // measurement. The transmitter is untouched: the wire is identical either way.
@@ -1463,7 +1462,7 @@ fn f9_decode_conditioned_rho_tail() {
                     h.rx_engine.set_deterministic_max_iterations(Some(iters));
                 }
                 if h.tx_engine
-                    .transmit_with_fec_mode(&payload, "BPSK250", FecMode::Rs, None)
+                    .transmit_with_fec_mode(&payload, mode, FecMode::Rs, None)
                     .is_err()
                 {
                     continue;
@@ -1484,7 +1483,7 @@ fn f9_decode_conditioned_rho_tail() {
                 let ok = h
                     .rx_engine
                     .receive_with_fec_mode_timeout(
-                        "BPSK250",
+                        mode,
                         FecMode::Rs,
                         None,
                         Duration::from_millis(8_000),
@@ -1528,6 +1527,22 @@ fn f9_decode_conditioned_rho_tail() {
                 rate(&decoded, 0.30),
                 rate(&decoded, 0.40),
                 rate(&decoded, 0.50),
+            );
+            let mut sorted = decoded.clone();
+            sorted.sort_by(f32::total_cmp);
+            let q = |p: f64| {
+                sorted
+                    .get(((sorted.len() as f64 * p) as usize).min(sorted.len().saturating_sub(1)))
+                    .copied()
+                    .unwrap_or(f32::NAN)
+            };
+            println!(
+                "      decoded rho: n {} p01 {:.3} p05 {:.3} p10 {:.3} median {:.3}",
+                sorted.len(),
+                q(0.01),
+                q(0.05),
+                q(0.10),
+                q(0.50)
             );
             println!(
                 "      veto: {veto_rejections} settle rejections over {} seeds; seeds with a \
@@ -2321,4 +2336,442 @@ fn f13_fade_cost_of_doubling_the_preamble() {
     );
     println!("  that is the finer frequency grid the longer template earns, not noise averaging.");
     println!("  thresholds the CFAR stand-down decision uses.");
+}
+
+// ── F14: does a 64-symbol QPSK preamble open the noise margin? (#1062 design, F0) ─────────────
+
+/// A QPSK250-D preamble template built through the shipped modulator from `symbols`, last symbol
+/// dropped as the BPSK template drops it (it carries part of the first payload symbol).
+fn qpsk_template(symbols: &[(f32, f32)]) -> (Vec<f32>, usize) {
+    let c = cfg("QPSK250-D");
+    let n = (FS / 250.0) as usize;
+    let full = qpsk_plugin::modulate::qpsk_modulate_with_preamble(&[], &c, symbols)
+        .expect("qpsk modulate");
+    (full[..n * (symbols.len() - 1)].to_vec(), n)
+}
+
+/// F0 of `docs/dev/design/pn-preamble.md`, pre-registered there before this ran.
+///
+/// The noise ceiling of QPSK250's shipped 16-symbol template against a 64-symbol one (PN-63 chips
+/// taken pairwise, `PreambleSpec(Pn63, 64, Qpsk)`), on the f2 statistic: peak ρ with the engine's
+/// window (template + 2 symbols, stride a quarter window) and frequency grid (±20 Hz), here as the
+/// max over 5 seeds × 15 s per band. Positive control: the 16-symbol SSB cell must reproduce #1059's
+/// 0.293 within 0.03. Pass (QPSK joins the break): the 64-symbol ceiling ≤ 0.23 in both SSB and
+/// 500 Hz. The decodable tail at 64 symbols is not measurable here, so a pass is necessary only.
+#[test]
+#[ignore = "verification"]
+fn f14_qpsk_preamble_length_and_the_noise_ceiling() {
+    use openpulse_dsp::preamble::{PreambleConstellation, PreambleSpec, PreambleType};
+    let shipped = qpsk_plugin::modulate::preamble_symbols();
+    assert_eq!(shipped.len(), 16);
+    let long = PreambleSpec::new(PreambleType::Pn63, 64, PreambleConstellation::Qpsk).iq_symbols();
+    assert_eq!(long.len(), 64);
+    let cases = [
+        ("16 (shipped)", qpsk_template(&shipped)),
+        ("64 (PN-63 pairs)", qpsk_template(&long)),
+    ];
+    let bands = [
+        ("white 0-4k", 0.0f32, 4_000.0),
+        ("ssb 300-2700", 300.0, 2_700.0),
+        ("filter 1250-1750", 1_250.0, 1_750.0),
+        ("filter 1400-1600", 1_400.0, 1_600.0),
+    ];
+    let seeds: [u64; 5] = [12345, 777, 90210, 31337, 424242];
+    let per_seed = 120_000usize; // 15 s
+    println!(
+        "\nF14 (#1062 F0): QPSK250 noise ceiling, max over {} seeds x 15 s",
+        seeds.len()
+    );
+    println!("{:<18} {:>14} {:>18}", "band", cases[0].0, cases[1].0);
+    let mut ceil = std::collections::HashMap::new();
+    for (bname, lo, hi) in bands {
+        let mut row = Vec::new();
+        for (cname, (t, n)) in &cases {
+            let grid = engine_grid(t.len(), 20.0);
+            let mf = IqMatchedFilter::new(t.clone());
+            let w = win_len_for(t, *n);
+            let mut peak = 0.0f32;
+            for &sd in &seeds {
+                let noise = band_noise(per_seed, lo, hi, sd);
+                let mut s = 0usize;
+                while s + w <= noise.len() {
+                    if let Some((r, _)) = mf.search_normalized_over_frequency(
+                        &noise[s..s + w],
+                        w - mf.len(),
+                        0.05,
+                        FS,
+                        &grid,
+                    ) {
+                        peak = peak.max(r.rho);
+                    }
+                    s += w / 4;
+                }
+            }
+            ceil.insert((bname, *cname), peak);
+            row.push(peak);
+        }
+        println!("{bname:<18} {:>14.3} {:>18.3}", row[0], row[1]);
+    }
+    let control = ceil[&("ssb 300-2700", "16 (shipped)")];
+    let ssb64 = ceil[&("ssb 300-2700", "64 (PN-63 pairs)")];
+    let f500 = ceil[&("filter 1250-1750", "64 (PN-63 pairs)")];
+    println!(
+        "control: 16-symbol SSB {control:.3} vs #1059's 0.293 -> {}",
+        if (control - 0.293).abs() <= 0.03 {
+            "reproduced"
+        } else {
+            "NOT reproduced"
+        }
+    );
+    println!(
+        "F0 rule (64-symbol <= 0.23 in SSB and 500 Hz): SSB {ssb64:.3}, 500 Hz {f500:.3} -> {}",
+        if ssb64 <= 0.23 && f500 <= 0.23 {
+            "PASS: QPSK joins"
+        } else {
+            "FAIL: QPSK stays out"
+        }
+    );
+}
+
+// ── F15: BPSK250's own constants on the PN-63 candidate (#1062 design, F2) ────────────────────
+
+/// Peak ρ of `t` over band noise, max over `seeds` × `per_seed` samples, engine window and grid.
+fn noise_ceiling(t: &[f32], sps: usize, lo: f32, hi: f32, seeds: &[u64], per_seed: usize) -> f32 {
+    let grid = engine_grid(t.len(), 20.0);
+    let mf = IqMatchedFilter::new(t.to_vec());
+    let w = win_len_for(t, sps);
+    let mut peak = 0.0f32;
+    for &sd in seeds {
+        let noise = band_noise(per_seed, lo, hi, sd);
+        let mut s = 0usize;
+        while s + w <= noise.len() {
+            if let Some((r, _)) =
+                mf.search_normalized_over_frequency(&noise[s..s + w], w - mf.len(), 0.05, FS, &grid)
+            {
+                peak = peak.max(r.rho);
+            }
+            s += w / 4;
+        }
+    }
+    peak
+}
+
+/// ρ of `t` against `window`, engine grid centred at 0.
+fn rho_window(t: &[f32], window: &[f32]) -> f32 {
+    let grid = engine_grid(t.len(), 20.0);
+    let mf = IqMatchedFilter::new(t.to_vec());
+    mf.search_normalized_over_frequency(window, window.len() - mf.len(), 0.05, FS, &grid)
+        .map_or(0.0, |(r, _)| r.rho)
+}
+
+/// The worst ρ of `t` over the pre-registered interference shapes, by shape.
+fn interference_column(t: &[f32], sps: usize) -> Vec<(String, f32)> {
+    let w = win_len_for(t, sps);
+    let fc = 1_500.0f32;
+    let tone = |f: f32, ph: f32| -> Vec<f32> {
+        (0..w)
+            .map(|k| (2.0 * PI_F * f * k as f32 / FS + ph).cos())
+            .collect()
+    };
+    let add = |a: &mut Vec<f32>, b: Vec<f32>| a.iter_mut().zip(b).for_each(|(x, y)| *x += y);
+    let mut out = Vec::new();
+    let mut worst = (0.0f32, 0.0f32);
+    for d in -200..=200 {
+        let r = rho_window(t, &tone(fc + d as f32, 0.0));
+        if r > worst.0 {
+            worst = (r, d as f32);
+        }
+    }
+    out.push((format!("lone tone (worst at {:+.0} Hz)", worst.1), worst.0));
+    for fm in [31.25f32, 62.5, 125.0] {
+        let mut am = tone(fc, 0.0);
+        add(
+            &mut am,
+            tone(fc + fm, 0.0).iter().map(|x| 0.5 * x).collect(),
+        );
+        add(
+            &mut am,
+            tone(fc - fm, 0.0).iter().map(|x| 0.5 * x).collect(),
+        );
+        out.push((format!("AM fm {fm} Hz"), rho_window(t, &am)));
+        let mut dsb = tone(fc + fm, 0.0);
+        add(&mut dsb, tone(fc - fm, 0.0));
+        out.push((format!("DSB fm {fm} Hz"), rho_window(t, &dsb)));
+    }
+    let mut comb = vec![0.0f32; w];
+    for k in -8i32..=8 {
+        add(&mut comb, tone(fc + k as f32 * 31.25, k as f32 * 0.7));
+    }
+    out.push(("comb every 31.25 Hz".into(), rho_window(t, &comb)));
+    out
+}
+
+/// One decode-column trial: (decoded at the true onset, ρ at the true onset).
+fn decode_trial(mode: &'static str, t: &[f32], sps: usize, snr_db: f32, seed: u64) -> (bool, f32) {
+    let payload: Vec<u8> = (0..24u64)
+        .map(|i| (seed.wrapping_mul(31).wrapping_add(i * 7)) as u8)
+        .collect();
+    let bk = openpulse_audio::LoopbackBackend::new();
+    let mut tx = openpulse_modem::engine::ModemEngine::new(Box::new(bk.clone_shared()));
+    tx.register_plugin(Box::new(bpsk_plugin::BpskPlugin::new()))
+        .unwrap();
+    tx.register_plugin(Box::new(bpsk_plugin::BpskPlugin::pn_candidate()))
+        .unwrap();
+    tx.transmit_with_fec_mode(&payload, mode, FecMode::Rs, None)
+        .unwrap();
+    let mut wcfg = WattersonConfig::moderate_f1(Some(seed));
+    wcfg.snr_db = 60.0;
+    let signal = WattersonChannel::new(wcfg)
+        .unwrap()
+        .apply(&bk.drain_samples());
+    let rms = (signal.iter().map(|s| s * s).sum::<f32>() / signal.len() as f32).sqrt();
+    let sigma = rms / 10f32.powf(snr_db / 20.0);
+    let noise = band_noise(signal.len() + 4 * sps, 0.0, 4_000.0, seed ^ 0xA5A5);
+    let nrms = (noise.iter().map(|s| s * s).sum::<f32>() / noise.len() as f32).sqrt();
+    let mut audio: Vec<f32> = noise.iter().map(|x| x / nrms * sigma).collect();
+    for (a, s) in audio.iter_mut().zip(&signal) {
+        *a += s;
+    }
+    let rho = rho_window(t, &audio[..win_len_for(t, sps)]);
+    let mut rx = openpulse_modem::engine::ModemEngine::new(Box::new(
+        openpulse_audio::LoopbackBackend::new(),
+    ));
+    rx.register_plugin(Box::new(bpsk_plugin::BpskPlugin::new()))
+        .unwrap();
+    rx.register_plugin(Box::new(bpsk_plugin::BpskPlugin::pn_candidate()))
+        .unwrap();
+    let ok = rx
+        .decode_burst_with_fec(
+            mode,
+            FecMode::Rs,
+            &openpulse_modem::pipeline::AudioSamples { samples: audio },
+        )
+        .ok()
+        .as_deref()
+        == Some(&payload[..]);
+    (ok, rho)
+}
+
+/// F2 of `docs/dev/design/pn-preamble.md`, pre-registered there (7b918cff) before this ran.
+#[test]
+#[ignore = "verification"]
+fn f15_bpsk250_pn63_constants() {
+    let arms: [(&'static str, &str); 2] = [("BPSK250", "shipped --++"), ("BPSK250-PN", "PN-63")];
+    let sps = 32usize;
+    let seeds: [u64; 5] = [12345, 777, 90210, 31337, 424242];
+    let bands = [
+        ("white 0-4k", 0.0f32, 4_000.0),
+        ("ssb 300-2700", 300.0, 2_700.0),
+        ("filter 1250-1750", 1_250.0, 1_750.0),
+        ("filter 1400-1600", 1_400.0, 1_600.0),
+    ];
+    let trials: u64 = std::env::var("F15_TRIALS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(400);
+    for (mode, label) in arms {
+        let t = bpsk_plugin::modulate::bpsk_preamble_template(&cfg(mode)).expect("template");
+        println!(
+            "\nF15 (#1062 F2): {label} ({mode}), template {} samples",
+            t.len()
+        );
+        let mut ssb = 0.0;
+        for (b, lo, hi) in bands {
+            let c = noise_ceiling(&t, sps, lo, hi, &seeds, 120_000);
+            if b.starts_with("ssb") {
+                ssb = c;
+            }
+            println!("  noise {b:<18} {c:.3}");
+        }
+        let inter = interference_column(&t, sps);
+        let worst_i = inter.iter().map(|x| x.1).fold(0.0f32, f32::max);
+        for (name, r) in &inter {
+            println!("  interference {name:<32} {r:.3}");
+        }
+        let mut p01_3 = f32::NAN;
+        for snr in [5.0f32, 3.0] {
+            let threads = std::thread::available_parallelism().map_or(4, |p| p.get()) as u64;
+            let t_ref = &t;
+            let results: Vec<(bool, f32)> = std::thread::scope(|s| {
+                let hs: Vec<_> = (0..threads)
+                    .map(|k| {
+                        s.spawn(move || {
+                            (0..trials)
+                                .filter(|i| i % threads == k)
+                                .map(|i| decode_trial(mode, t_ref, sps, snr, i + 1))
+                                .collect::<Vec<_>>()
+                        })
+                    })
+                    .collect();
+                hs.into_iter().flat_map(|h| h.join().unwrap()).collect()
+            });
+            let mut dec: Vec<f32> = results.iter().filter(|r| r.0).map(|r| r.1).collect();
+            dec.sort_by(|a, b| a.partial_cmp(b).unwrap());
+            let q = |p: f64| {
+                dec.get(((dec.len() as f64 * p) as usize).min(dec.len().saturating_sub(1)))
+                    .copied()
+                    .unwrap_or(f32::NAN)
+            };
+            let (mn, p01, p05) = (dec.first().copied().unwrap_or(f32::NAN), q(0.01), q(0.05));
+            if snr == 3.0 {
+                p01_3 = p01;
+            }
+            println!(
+                "  decode moderate_f1 {snr} dB: {}/{trials} decodable, rho min {mn:.3} p01 {p01:.3} p05 {p05:.3}",
+                dec.len()
+            );
+        }
+        let floor = ssb.max(worst_i);
+        let pass = p01_3 >= 1.2 * floor;
+        println!(
+            "  F2 rule: decodable p01 @3 dB {p01_3:.3} vs 1.2 x max(SSB {ssb:.3}, interference {worst_i:.3}) = {:.3} -> {}{}",
+            1.2 * floor,
+            if pass { "PASS" } else { "FAIL" },
+            if pass { format!(", threshold {:.3}", (p01_3 * floor).sqrt()) } else { String::new() }
+        );
+    }
+}
+
+// ── F16: self-ambiguity of the PN-63 template over whitened frames (#1062 design, F3) ──────────
+
+/// F3 of `docs/dev/design/pn-preamble.md`: the worst ρ of the template against its own clean frame
+/// at any sample offset ≥ 1 symbol from the onset, as a fraction of the peak, over a fixed set of
+/// 32 whitened `Rs` frames (payload 8–200 B, seeded). Single frequency (0 Hz): the question is
+/// timing ambiguity at the true carrier. Rule: ≤ 0.5 on every payload. Control: the shipped
+/// template, whose period-4 alias is known to score 1.000 at a 2-symbol lag.
+#[test]
+#[ignore = "verification"]
+fn f16_self_ambiguity_over_whitened_frames() {
+    let sps = 32usize;
+    for (mode, label) in [("BPSK250", "shipped --++"), ("BPSK250-PN", "PN-63")] {
+        let t = bpsk_plugin::modulate::bpsk_preamble_template(&cfg(mode)).expect("template");
+        let mf = IqMatchedFilter::new(t.clone());
+        let mut worst = (0.0f32, 0usize, 0isize);
+        for p in 0..32u64 {
+            let mut x = p.wrapping_mul(0x9E37_79B9_7F4A_7C15) | 1;
+            let len = 8 + (p as usize * 6) % 193;
+            let payload: Vec<u8> = (0..len)
+                .map(|_| {
+                    x ^= x << 13;
+                    x ^= x >> 7;
+                    x ^= x << 17;
+                    x as u8
+                })
+                .collect();
+            let bk = openpulse_audio::LoopbackBackend::new();
+            let mut tx = openpulse_modem::engine::ModemEngine::new(Box::new(bk.clone_shared()));
+            tx.register_plugin(Box::new(bpsk_plugin::BpskPlugin::new()))
+                .unwrap();
+            tx.register_plugin(Box::new(bpsk_plugin::BpskPlugin::pn_candidate()))
+                .unwrap();
+            tx.transmit_with_fec_mode(&payload, mode, FecMode::Rs, None)
+                .unwrap();
+            let frame = bk.drain_samples();
+            let prof = mf.rho_profile(&frame, 0, frame.len());
+            let peak = prof[0];
+            for (off, &r) in prof.iter().enumerate().skip(sps) {
+                let frac = r / peak;
+                if frac > worst.0 {
+                    worst = (frac, p as usize, off as isize);
+                }
+            }
+        }
+        println!(
+            "F16 (#1062 F3) {label}: worst off-peak / peak = {:.3} (payload {}, offset {} samples = {:.2} symbols) -> {}",
+            worst.0,
+            worst.1,
+            worst.2,
+            worst.2 as f32 / sps as f32,
+            if worst.0 <= 0.5 { "PASS" } else { "FAIL" }
+        );
+    }
+}
+
+/// The ±1 symbols of the m-sequence for `x^6 + Σ x^i + 1` (`taps` = the middle exponents),
+/// from the recurrence `a[k+6] = a[k] ⊕ Σ a[k+i]`, seeded `000001`.
+fn m_sequence_6(taps: &[usize]) -> Vec<f32> {
+    let mut a = vec![0u8, 0, 0, 0, 0, 1];
+    while a.len() < 63 {
+        let k = a.len() - 6;
+        let mut b = a[k];
+        for &i in taps {
+            b ^= a[k + i];
+        }
+        a.push(b);
+    }
+    a.iter().map(|&b| if b == 1 { 1.0 } else { -1.0 }).collect()
+}
+
+/// NRZI pre-image of ±1 symbols: flip where the symbol changes, from a positive start.
+fn nrzi_pre_image(symbols: &[f32]) -> Vec<bool> {
+    let mut prev = 1.0f32;
+    symbols
+        .iter()
+        .map(|&s| {
+            let f = s != prev;
+            prev = s;
+            f
+        })
+        .collect()
+}
+
+/// F3's consequence ("vet the next primitive"): the same self-ambiguity statistic for all six
+/// degree-6 primitive polynomials, with frames built through `bpsk_modulate_with_preamble` over a
+/// whitened-like 255-byte block (seeded random bytes). Also reports, without changing the rule,
+/// the worst value within the preamble span (|offset| ≤ 63 symbols) and within the acquisition
+/// scan range (≤ 13 000 samples), the offsets a receiver actually searches.
+#[test]
+#[ignore = "verification"]
+fn f16b_self_ambiguity_by_polynomial() {
+    let sps = 32usize;
+    let c = cfg("BPSK250");
+    let polys: [(&str, &[usize]); 6] = [
+        ("x^6+x+1", &[1]),
+        ("x^6+x^5+1", &[5]),
+        ("x^6+x^4+x^3+x+1", &[1, 3, 4]),
+        ("x^6+x^5+x^3+x^2+1", &[2, 3, 5]),
+        ("x^6+x^5+x^2+x+1", &[1, 2, 5]),
+        ("x^6+x^5+x^4+x+1", &[1, 4, 5]),
+    ];
+    for (name, taps) in polys {
+        let syms = m_sequence_6(taps);
+        let distinct: std::collections::BTreeSet<Vec<i8>> = (0..63)
+            .map(|r| (0..63).map(|k| syms[(k + r) % 63] as i8).collect())
+            .collect();
+        assert_eq!(distinct.len(), 63, "{name} is not maximal-length");
+        let bits = nrzi_pre_image(&syms);
+        let full = bpsk_plugin::modulate::bpsk_modulate_with_preamble(&[], &c, &bits).unwrap();
+        let t = full[..sps * 62].to_vec();
+        let mf = IqMatchedFilter::new(t);
+        let (mut all, mut span, mut scan) = (0.0f32, 0.0f32, 0.0f32);
+        for p in 0..32u64 {
+            let mut x = p.wrapping_mul(0x9E37_79B9_7F4A_7C15) | 1;
+            let block: Vec<u8> = (0..255)
+                .map(|_| {
+                    x ^= x << 13;
+                    x ^= x >> 7;
+                    x ^= x << 17;
+                    x as u8
+                })
+                .collect();
+            let frame =
+                bpsk_plugin::modulate::bpsk_modulate_with_preamble(&block, &c, &bits).unwrap();
+            let prof = mf.rho_profile(&frame, 0, frame.len());
+            let peak = prof[0];
+            for (off, &r) in prof.iter().enumerate().skip(sps) {
+                let f = r / peak;
+                all = all.max(f);
+                if off <= 63 * sps {
+                    span = span.max(f);
+                }
+                if off <= 13_000 {
+                    scan = scan.max(f);
+                }
+            }
+        }
+        println!(
+            "F16b {name:<20} worst/peak: whole frame {all:.3} ({}) | preamble span {span:.3} | scan range {scan:.3}",
+            if all <= 0.5 { "PASS" } else { "FAIL" }
+        );
+    }
 }

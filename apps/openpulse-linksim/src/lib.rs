@@ -240,6 +240,10 @@ pub mod apparatus {
         match name {
             "apparatus:wide-qpsk" => Some(wide_qpsk()),
             "apparatus:ofdm" => Some(ofdm()),
+            #[cfg(feature = "pn-candidate")]
+            "apparatus:fast-copy" => Some(fast_rebuilt(false)),
+            #[cfg(feature = "pn-candidate")]
+            "apparatus:fast-pn" => Some(fast_rebuilt(true)),
             _ => None,
         }
     }
@@ -256,6 +260,37 @@ pub mod apparatus {
             Sl8,
             3,
         )
+    }
+
+    /// `fast`'s rungs rebuilt through `from_rungs`, with the BPSK rungs as the #1062 PN-63 candidate
+    /// when `pn` (design row F4). `from_rungs` cannot set `ack_up_requires_snr_candidate_at`, which
+    /// `fast` sets at SL14, so `apparatus:fast-copy` (pn = false) is the control the PN ladder is
+    /// compared against, and it is itself checked against `fast`.
+    #[cfg(feature = "pn-candidate")]
+    fn fast_rebuilt(pn: bool) -> SessionProfile {
+        let fast = SessionProfile::fast();
+        let rungs: Vec<_> = fast
+            .defined_levels()
+            .into_iter()
+            .map(|l| {
+                let mode = fast.mode_for(l).expect("defined level has a mode");
+                let mode = match (pn, mode) {
+                    (true, "BPSK31") => "BPSK31-PN",
+                    (true, "BPSK63") => "BPSK63-PN",
+                    (true, "BPSK100") => "BPSK100-PN",
+                    (true, "BPSK250") => "BPSK250-PN",
+                    (_, m) => m,
+                };
+                (
+                    l,
+                    mode,
+                    fast.fec_for(l),
+                    fast.snr_floor_for_level(l),
+                    fast.snr_ceiling_for_level(l),
+                )
+            })
+            .collect();
+        SessionProfile::from_rungs(&rungs, fast.initial_level, fast.nack_threshold)
     }
 
     /// The former `hpx_ofdm_hf` rungs: OFDM16 → OFDM52 → OFDM52-{8PSK,16QAM,32QAM,64QAM}, all
@@ -434,6 +469,8 @@ fn register_all(engine: &mut ModemEngine) {
     // ladder demotes there, so a fading run reads as a total link failure that is pure harness
     // artifact (issue #934) rather than modem behaviour.
     let _ = engine.register_plugin(Box::new(mfsk16_plugin::Mfsk16Plugin::new()));
+    #[cfg(feature = "pn-candidate")]
+    let _ = engine.register_plugin(Box::new(BpskPlugin::pn_candidate()));
 }
 
 /// FSK4-ACK is the only profile-reachable mode that can't carry RS FEC; everything else
@@ -1549,6 +1586,44 @@ mod tests {
             "apparatus:ofdm must climb into the dense OFDM rungs (≥ SL8) on a 30 dB moderate_f1 fade; \
              peaked at SL{peak}"
         );
+    }
+}
+
+/// Design row F4 of `docs/dev/design/pn-preamble.md`: the goodput gate's PSK cases on the PN-63
+/// ladder against the same ladder rebuilt with the shipped preamble. Pre-registered rule: the PN
+/// ladder clears the shipped gate's floors (AWGN 20 dB ≥ 250 bps; the fade climb's avg level ≥ 3),
+/// and its AWGN goodput is within the 1.49 % airtime cost of the control's, minus 5 % for seed noise.
+#[cfg(all(test, feature = "pn-candidate"))]
+mod pn_goodput {
+    use super::*;
+    fn run(
+        profile: &str,
+        forward: ChannelSpec,
+        payload: usize,
+        frames: usize,
+        seed: u64,
+    ) -> LinkResult {
+        run_link(&LinkParams {
+            profile_name: profile.into(),
+            forward,
+            reverse: ChannelSpec::Clean,
+            payload_bytes_per_frame: payload,
+            total_frames: frames,
+            seed,
+            ..LinkParams::default()
+        })
+    }
+    #[test]
+    #[ignore = "measurement: #1062 design F4"]
+    fn f4_pn_ladder_goodput() {
+        for p in ["fast", "apparatus:fast-copy", "apparatus:fast-pn"] {
+            let awgn = run(p, ChannelSpec::Awgn(20.0), 200, 40, 5);
+            let fade = run(p, ChannelSpec::WattersonModerateF1(20.0), 64, 60, 7);
+            println!(
+                "F4 {p:<22} AWGN 20 dB {:>6.0} bps | moderate_f1 20 dB delivery {:.2} avg level {:.1} final SL{}",
+                awgn.effective_bps, fade.delivery_ratio, fade.avg_level, fade.final_level
+            );
+        }
     }
 }
 

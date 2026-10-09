@@ -15,6 +15,158 @@ this ledger adds the design rationale and the actually-observed results per chan
 
 ---
 
+## 2026-10-08 — #1062 phase 2's preamble veto reaches past the settle grid's gaps; F1 passes (work plan M2)
+
+**Change.** F1 with the full PN template failed ±50 Hz (entry below): phase 2 settles on a
+4-symbol grid, the veto searches about two symbols past each grid onset, and PN-63 (unlike the
+periodic `--++`) correlates only inside that span, so every settle on many off-frequency frames was
+refused.
+
+**Decision.** The veto searches one more coarse step (the "reach"), keeping the settle count. Chosen over
+a finer grid, which doubles the settles and the ±50 Hz receive cost. F2's constants were re-measured on
+the wider search first (`docs/dev/design/pn-preamble.md`).
+
+**Implementation (d8051fa5).** `crates/openpulse-modem/src/engine.rs`: phase 2's veto reach on by
+default; `set_phase2_veto_reach(false)` (instruments) keeps the A/B, used by F1's `F1_VETO_REACH`
+and `receive_cost_scaling`'s `PROBE_NO_REACH`.
+
+**Tests → results.**
+- `a_pn_frame_off_frequency_is_not_refused_between_settle_grid_points`: passes, fails with the reach
+  off.
+- F2 on the wider search: binding interferer 0.304 unchanged; SSB noise ceiling 0.152 → 0.157.
+  Receive cost x86, BPSK250-PN +50 Hz: 772 ms (759 ms without).
+- `cargo test -p openpulse-modem --no-default-features --no-fail-fast`: **615 passed / 0 failed**
+  (118 ignored, 162 binaries), rc=0.
+- `scripts/slow-tests.sh`: `ota_channel_adaptation` 3/0, `spectral_busy_gathers_weak_frames` 2/0,
+  `total_power_bursts_keep_their_head` 1/0; `notch_rescues_interferer` **2/1**, the known #1457 row
+  (no-notch arm decodes at amplitude 0.3, `notch_rescues_interferer.rs:236`). With the reach off the
+  same test fails the same assertion (217 s), so it is not this change. REQ-QRM-01 not re-proven.
+- **F1 rerun on d8051fa5 (n = 600 paired): PASS on every column**, PN − shipped: floor +0.028,
+  8 dB +0.022, +50 Hz +0.037, −50 Hz +0.037, cliff +0.027, filter +0.010 [−0.007, +0.027]. The
+  −50 Hz verdict is the printed line only (the disk filled before its rc was written). Table in the
+  design doc.
+
+## 2026-10-07 — #1062 PN-63 preamble: F5 on the offset-fixed receiver, f9, and F1 with the full template (work plan M2)
+
+**Change.** The rest of F5 (BPSK31/63/100) on d9031766, f9 (PN's delivered-frame bound), and the F1
+rerun on BPSK250 with the template the flag day would ship. Still not the wire change.
+
+**Decision.** Each rule and every amendment was written into `docs/dev/design/pn-preamble.md` before
+its output (cliff re-runs at the pilot point nearest 50 % when a column sat under 10 % on both arms;
+the F1 filter column). f9's bound follows the rule fixed before its run.
+
+**Implementation.** `BpskPlugin::preamble_template` publishes `BPSK250-PN`'s template on the dormant
+candidate only: `PN_PREAMBLE_RHO_THRESHOLD` 0.315 (decision 23), grid ±20 Hz (F2),
+`PN_DELIVERED_FRAME_RHO_BOUND` 0.51 (f9) (`plugins/bpsk/src/{lib,modulate}.rs`). Measurement
+apparatus in `crates/openpulse-modem/tests/pn_preamble_parity.rs`: a filter column, per-arm
+`preamble_veto_active` in the header, `F1_PRINT_SEEDS`, `f5_open_latency_and_truncation`,
+`f5_preamble_band_power_by_phase`, column/start knobs on `f5_diagnose_discordant_seeds`; the
+brick-wall mask moved to `tests/common` (`filter::band_limit`) and is shared with the f9 probe.
+
+**Tests → results.**
+- `only_bpsk250_pn_publishes_a_pn_template`: 1 passed. Clippy (modem tests, release): clean.
+- **F5 (n = 600):** BPSK100 and BPSK63 pass every column (cliffs: BPSK100 −9 dB +0.025, BPSK63
+  −11 dB +0.032); every ±50 Hz column 599 / 599. **BPSK31's −14 dB cliff FAILS** (345 / 298,
+  −0.078): a carrier-detect gathering deficit (head gathered on shipped alone in 54 of 200 seeds, on
+  PN alone in 20), not demodulation; mechanism not shown.
+- **f9 (idle machine, exact reproduction of a first run under load):** PN bound 0.51; shipped control
+  0.871–0.892. Behind the 500 Hz mask PN decoded 14 / 32 / 44 of 120 against 19 / 59 / 79.
+- **F1 rerun with the template (0ea48cdd): FAIL.** Floor, 8 dB, cliff and the new filter column
+  pass (filter +0.012, so f9's gap does not reach the production entry); **±50 Hz fail** (−0.048,
+  −0.043). Without the PN template (755fa457) the same columns pass (PN 572 / 570): the loss is the
+  template path's, in acquisition (bursts gathered whole, `ota_decode_burst` fails); reproduced
+  537 / 508 on a build that reports both vetoes active.
+- **Veto vs ranking:** `set_preamble_veto_gate` (instruments only;
+  `the_veto_gate_switch_accepts_what_the_veto_would_refuse` 1 passed, fails sabotaged). PN arm gate
+  off: ±50 Hz PN 572 / 570, identical to no template. The loss is the veto's rejection; the ranking
+  adds nothing.
+- **Where the veto loses PN frames:** `veto_probe` (instruments) shows healthy PN ρ at the true onset
+  at ±50 Hz (settle within ±1 Hz); `f1_rho_by_onset_shift` shows PN's ρ collapsing beyond about two
+  symbols of onset error while `--++` holds at every shift, against phase 2's 4-symbol grid.
+  `set_phase2_veto_reach` (instruments, default off) confirms it: ±50 Hz PN 563 / 566, PASS.
+- **Decision 25 (maintainer):** BPSK31 keeps `--++` per F5's pre-registered consequence; the carrier
+  detect is not changed for it; PN-63 scope is SL3–SL5 (work plan decision log).
+
+## 2026-10-06 — An off-frequency first frame does not pay the onset scan (REQ-PHY-03, work plan M2)
+
+**Change.** Found by #1062's F5 parity run: a BPSK31 frame at +50 Hz cost ~100 s of x86 CPU on both
+arms. `receive_cost_scaling` with the new `PROBE_OFFSET_HZ` (clean frame, fresh receiver, x86
+release): +50 Hz decode SL2 23.9 s (0 Hz: 1.9), SL3 9.1, SL4 6.4, SL6 3.0; SL5 unchanged. On a Pi
+(~3.7×) that misses the 9 s ACK window on the first frame from every station.
+
+**Decision.** The coded onset scan ran at the pre-burst AFC correction, learnt only from a decode,
+so an off-frequency frame failed every onset and was found by phase 2 after the scan, the deferred
+fallback and phase 2's own settle. Deleting the fallback (`PROBE_NO_FALLBACK`) left SL2 at 21.5 s,
+so the scan was the cost. Fix: one settle at the flushed burst's trigger (`lead`, where the frame is
+on air; onset 0 is the pre-trigger ring and settled at −1739 Hz) through `acquire_at_onset`, phase
+2's own definition, which answers `false` inside the settle deadband; when it reports a correction
+the scan runs at it first, from onset 0, and the uncorrected scan follows if it fails. An
+on-frequency burst pays one mini-settle per candidate (at most two) and scans as before.
+
+**Implementation.** `engine.rs` `ota_decode_and_ack_inner` (the coded scan), `decode_attempts`
+tripwire (instruments). Tests: `daemon_frequency_acquisition::an_off_frequency_first_frame_does_not_pay_the_onset_scan`;
+`an_on_frequency_burst_pays_no_acquisition_cost` bound 0 → ≤ 2 settles (the trigger check, not
+phase 2's ~129).
+
+**Tests → results.** New test 4/4 in its file; BPSK100 decode attempts 34 at 0 Hz, 35 at +50 Hz;
+sabotaged (corrected pass disabled) 292, FAIL. Probe after: +50 Hz SL2 2.18 s, SL3 1.21, SL4 0.95,
+SL6 0.22, SL5 0.81; −50 Hz the same; 0 Hz unchanged. `openpulse-modem` + `openpulse-daemon`:
+828 passed, 0 failed; clippy clean.
+
+## 2026-10-06 — #1062 PN-63 preamble: F3 and F4 (work plan M2; follows the 2026-10-05 entry below)
+
+**Change.** The next two falsifiers of `docs/dev/design/pn-preamble.md`. Still not the wire change.
+
+**Decision.** F3 failed under a misframed rule (whole-frame chance correlation is set by frame length,
+not the polynomial); decision 24 keeps x⁶ + x + 1. F4's rule was pre-registered in a1619ea2 before
+the run.
+
+**Implementation (measurement apparatus).** `f16_self_ambiguity_over_whitened_frames` and
+`f16b_self_ambiguity_by_polynomial` (F3). `openpulse-linksim` feature `pn-candidate` (dev-only):
+`apparatus:fast-pn` (`fast`'s rungs through `from_rungs`, BPSK31–250 as `-PN`), the control
+`apparatus:fast-copy` (the same rebuild, shipped preamble), and the ignored `f4_pn_ladder_goodput`.
+
+**Tests → results.**
+- **F3:** worst off-peak over 32 whitened frames 0.52–0.65 for every primitive degree-6 polynomial
+  (x⁶ + x + 1: 0.53–0.57 across two payload sets); inside the preamble span 0.36–0.46 against the
+  shipped 0.97. FAIL for all; polynomial kept (decision 24).
+- **F4 (release, seeded):** AWGN 20 dB `fast` 331 bps, `fast-copy` 331, `fast-pn` 328 (bound
+  331 × 0.9851 × 0.95 = 310); `moderate_f1` 20 dB delivery 0.98 / 0.98 / 1.00, avg level 9.8 on all
+  three. Positive control exact. **PASS.** CLI benchmark (no modem in the loop, so a check only):
+  10/10, mean transitions 5.1. Clippy with the feature: clean.
+
+## 2026-10-05 — #1062 PN-63 preamble: design reviewed; F0, F1 and F1c (x86) measured (decision 22, work plan M2)
+
+**Change.** Decision 22 moves #1062 into Release 1. Design `docs/dev/design/pn-preamble.md`
+(revision 2 after the mandatory wire-format review, `docs/dev/reviews/review-pn-preamble-design.md`):
+the BPSK rungs' 32-symbol `--++` preamble becomes the PN-63 m-sequence (x⁶ + x + 1) as symbols, at
+each rung's baud. Not yet the wire change: this records the candidate and the falsifiers run on it.
+
+**Implementation (measurement apparatus).** `bpsk-plugin` feature `pn-candidate` (dev-only):
+`BPSK31/63/100/250-PN` modes transmit the candidate via the NRZI pre-image; every production demod
+site reads the preamble from the mode (`preamble_syms_for`, `preamble_bits_for`,
+`expected_preamble_for`); the coarse AFC window is the named constant `AFC_WINDOW_SYMS = 128`
+(unchanged value). Shipped modes are byte-identical. `qpsk-plugin::qpsk_modulate_with_preamble`
+(vetting seam). Harnesses: `pn_preamble_parity` (F1), `f14_qpsk_preamble_length_and_the_noise_ceiling`
+(F0), `receive_cost_scaling` `PROBE_PN` (F1c).
+
+**Tests → results.**
+- Plugin: the candidate transmits the m-sequence as symbols; every `-PN` rung round-trips, 31 symbols
+  longer; shipped modes keep the alternating run. 3 passed. Modem suite with the feature on: 611
+  passed, 0 failed.
+- **F0 (QPSK):** 64-symbol noise ceiling SSB 0.158, 500 Hz 0.334 against the pre-registered ≤ 0.23 in
+  both → **QPSK stays out**. Positive control missed (0.332 vs #1059's 0.293); the verdict survives
+  correcting for it (0.295 > 0.23).
+- **F1 (BPSK250, n = 600 paired, δ = 0.03):** PASS on all five columns; PN − shipped at the SL5 floor
+  +0.033 [+0.010, +0.056], 8 dB +0.015 [−0.004, +0.034], ±50 Hz +0.037 / +0.030, AWGN cliff +0.027
+  [+0.005, +0.049]. The cliff SNR (−5 dB) was fixed from a shipped-arm pilot before the main run.
+- **F1c (x86):** decode SL2 1.79 → 3.08 s, SL5 0.83 → 0.94 s. The Pi half of the rule is pending.
+- **F2 (BPSK250 constants, rule pre-registered in 7b918cff):** FAIL. PN-63 worst interferer 0.304
+  (DSB ±31.25 Hz; shipped 0.981), lone tone 0.248 (shipped 0.699), SSB noise 0.152 (shipped 0.205);
+  decodable p01 at 3 dB 0.327 against the required 1.2 × 0.304 = 0.364. Control: shipped SSB/500/200 Hz
+  within 0.01 of f2. Accepted by decision 23 at a 1.07 margin, threshold 0.315: better than the shipped
+  template on both sides (it passes tone 0.699 and DSB 0.981, and rejects more decodable frames).
+
 ## 2026-10-04 — The uncoded fallback tries ranked onsets first (receive cost, work plan M2)
 
 **Change.** Every coded ladder burst paid the #1123 uncoded fallback's exhaustive onset scan (~128–400

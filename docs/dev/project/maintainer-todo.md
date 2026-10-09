@@ -2,7 +2,7 @@
 project: openpulsehf
 doc: docs/dev/project/maintainer-todo.md
 status: draft
-last_updated: 2026-10-05
+last_updated: 2026-10-06
 ---
 
 # Maintainer TODO — what only you can do
@@ -24,6 +24,24 @@ asks first within each section. Report results in chat or as a comment on the li
     --no-default-features --test receive_cost_scaling -- --ignored --nocapture
   ```
   Paste the five `Sl…` lines.
+
+- [ ] **Run the receive-cost probe with the PN-63 candidate on both station Pis** (#1062 design,
+  row F1c). Decides whether the slow rungs can take the longer preamble: the rule is Pi SL2 decode
+  + 0.52 s + 1 s ≤ 9 s. x86 went 1.79 → 3.08 s at SL2.
+  ```bash
+  git fetch origin claude/affectionate-brahmagupta-sdn8qg && git checkout FETCH_HEAD
+  PROBE_ENTRY_RUNGS=1 PROBE_READ=4096 cargo test --release -p openpulse-modem \
+    --no-default-features --test receive_cost_scaling -- --ignored --nocapture
+  PROBE_PN=1 PROBE_ENTRY_RUNGS=1 PROBE_READ=4096 cargo test --release -p openpulse-modem \
+    --no-default-features --test receive_cost_scaling -- --ignored --nocapture
+  ```
+  Paste the ten `Sl…` lines from each Pi (five shipped, five `-PN`). **Add the offset run** (same
+  checkout): before the off-frequency scan fix, x86 SL2 at +50 Hz took 23.9 s; after it, 2.2 s, the
+  same as 0 Hz. This confirms the Pi stays inside the 9 s ACK window at REQ-PHY-03's ±50 Hz:
+  ```bash
+  PROBE_OFFSET_HZ=50 PROBE_ENTRY_RUNGS=1 PROBE_READ=4096 cargo test --release -p openpulse-modem \
+    --no-default-features --test receive_cost_scaling -- --ignored --nocapture
+  ```
 
 - [ ] **Run the key-to-audio probe on both station Pis** (work plan M2, key-to-audio gap). The IC-9700
   SDR captures suggest ~1.3 s of dead air between PTT and the first sample on every keyed turn; the
