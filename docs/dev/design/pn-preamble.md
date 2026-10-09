@@ -582,6 +582,25 @@ fixture passes on both arms, and fails on its sabotage on both arms. A fixture t
 sabotaged build is not a pin and is reported as such, not loosened. The condemnation bound is the
 replaced pin's (≤ 2) on both arms; a PN count above it is a finding, not a reason to raise the bound.
 
+**First runs (release, `f6_capture_class_fixtures`).** Unsabotaged, every fixture passes on both arms
+with 0 condemnations (`BPSK250-PN` refuses 33 noise settles on correlation in the #1021 floor and
+138 / 233 / 323 on the saturating floor; `BPSK250` refuses none in the #1021 floor). **S2 (veto off)
+fails the #1049 pin on both arms:** `BPSK250` 87 condemnations at lead 40 000, `BPSK250-PN` 66 at
+40 000, and the #1045 pin on PN 120 at 80 000 (bounds 6 and 12). **S1 does not fail the #1021
+fixture on either arm, and neither does S2:** with or without the veto, no settle in the #1021 floor
+is ever condemned, so `unsettle`, which S1 breaks, never runs. Today's receiver no longer settles on
+this floor's noise at all. By the pass rule, the #1021 fixture is **not a pin of the #1021
+mechanism**; it stays as the replacement of the decode and cost assertions it was built for.
+
+**Amendment (2026-10-09, before its run).** The #1021 mechanism (a recovery that re-settles at the
+anchor it just condemned) is live wherever settles are condemned: in production on every mode
+without a template (QPSK at SL6, the OFDM rungs), which decides on energy. S1 is run against
+`a_no_template_mode_decodes_through_a_saturating_floor` (QPSK, `capture_replay_corpus.rs`; 315
+condemnations, decodes), which does not depend on the BPSK preamble, and against the two
+saturating-floor fixtures with the veto off on both arms. The #1021 class counts as pinned if the
+QPSK pin fails under S1; the veto-off runs say whether the BPSK path would livelock if noise ever
+passed the veto.
+
 **Lesson for any long preamble** (QPSK's parked longer preamble, pilots): length buys energy only
 up to the channel's coherence time; past it, combine in power.
 
