@@ -2,7 +2,7 @@
 project: openpulsehf
 doc: docs/dev/design/pn-preamble.md
 status: draft
-last_updated: 2026-10-06
+last_updated: 2026-10-10
 ---
 
 # Replace the BPSK preamble with a PN-63 sync word (#1062) — revision 2
@@ -200,6 +200,16 @@ candidate), decode per frame: SL5 0.83 → 0.94 s (+14 %), SL4 0.92 → 1.27 s (
 inside the rule (decode + 0.52 s FSK4 ACK + 1 s ≤ 9 s), but **the rule is on the Pis, pending**.
 With the ≈ 5.9 s MFSK16 ACK SL2 would not fit (it barely fits today at ≈ 2.7 + 5.9 s); the MFSK16
 ACK follows only an SL1 recommendation, which this rule did not cover — noted, not re-scoped.
+
+**F1c, Pi half: PASS** (rpi51, 2026-10-10, `main` at 10c9ec9f, release, `PROBE_READ=4096`;
+one Pi, because decode is CPU work and the two
+Pi 5 stations agreed within ~5 % on 2026-10-04 with rpi51 the slower). Decode per frame, shipped →
+PN: SL5 1.28 → 1.55 s (+21 %), SL4 1.54 → 2.17 s (+41 %), SL3 1.98 → 3.14 s (+59 %), SL2 3.63 →
+6.29 s (+73 %); SL6 (QPSK, unchanged) 0.31 s. The rule as written, on SL2: 6.29 + 0.52 + 1 = 7.81 s
+≤ 9 s. Since decision 25, PN-63 goes on SL3–SL5 only, where the worst case is SL3 at 4.66 s. The
+percentages match x86's; the Pi/x86 ratio is ≈ 2.0, not the ×1.5 the projection used. With the
+MFSK16 ACK the ISS's window does not hold SL3-PN either (3.14 s plus the ACK's ≈ 5.9 s), which,
+like SL2 today, is the SL1-recommendation case this rule never covered.
 
 **F2 — FAIL under the pre-registered rule (7b918cff); the sequence stops here for a decision.**
 `f15_bpsk250_pn63_constants`, release, 400 seeds per decode cell, same harness for both templates:
@@ -556,6 +566,79 @@ checkout left the main test binary linked against the worktree's `bpsk-plugin` u
 touched, and four diagnostic runs (none recorded here) silently measured the no-template receiver.
 F1 now prints, per arm, whether the receive path has a veto (`preamble_veto_active`), so a run states
 which receiver it measured.
+
+### F6: synthetic fixtures for the capture-pinned defect classes
+
+**Pre-registered 2026-10-09, before any output.** The pins that go dark are the four ignored rows of
+`capture_replay_corpus.rs` (#1351; already dark since #1148 changed the keystream). Three pin defect
+classes. The fourth, `the_ic9700_transmit_chain_decodes_off_air_from_an_independent_receiver`, pins
+a hardware observation (the IC-9700's transmit chain, heard by an SDR), which no synthetic fixture
+can stand in for; it waits for F8's re-recording.
+
+| replaced pin | class | fixture | sabotage it must fail on |
+|---|---|---|---|
+| `the_real_on_air_frame_decodes` | #1021: on a floor above the gate's absolute 1e-4 threshold, AFC settles on noise before the gate has history, and the recovery re-settles at the same anchor | the recorded floor of `ic9700-frame-bpsk250-rs-whitened.wav` itself (idle before the burst, 0…82 304, and after it, from 152 000), a freshly modulated `Rs` frame `DUALCAP TEST 1` at the recorded onset 82 304, at the recorded carrier (+2.42 Hz) and the recorded signal level (burst mean-square minus floor mean-square, measured on the file) | S1: `ScanPlanner::unsettle` rewinds the scan to 0 (the pre-#1021 code) |
+| `the_settle_recovery_reaches_the_frame_without_crawling` | #1040: the recovery re-offers ground the micro-sweep already proved | the same fixture; condemnations ≤ 2 (the replaced pin's bound) | S1, and S2 below |
+| `a_real_on_air_frame_decodes_end_to_end` | the uncoded control for #1021 | the same fixture, `FecMode::None` | none (a control; it pins that the coded case's failure is not the floor) |
+
+The #1045 / #1049 class (a saturating floor; settle on correlation, not energy) is already pinned by
+freshly modulated frames in recorded idle (`the_receiver_never_settles_on_a_saturating_noise_floor`,
+`a_coded_frame_decodes_through_a_saturating_floor`). Those follow the wire at the flag day, but have
+run only on `--++`. F6 runs both on `BPSK250-PN` too. Sabotage **S2**: the correlation veto off
+(`set_preamble_veto_gate(false)`); the #1049 pin must fail on it on both arms.
+
+Every fixture runs on both arms, `BPSK250` and `BPSK250-PN` (`pn_candidate`). **Pass:** every
+fixture passes on both arms, and fails on its sabotage on both arms. A fixture that passes on its
+sabotaged build is not a pin and is reported as such, not loosened. The condemnation bound is the
+replaced pin's (≤ 2) on both arms; a PN count above it is a finding, not a reason to raise the bound.
+
+**First runs (release, `f6_capture_class_fixtures`).** Unsabotaged, every fixture passes on both arms
+with 0 condemnations (`BPSK250-PN` refuses 33 noise settles on correlation in the #1021 floor and
+138 / 233 / 323 on the saturating floor; `BPSK250` refuses none in the #1021 floor). **S2 (veto off)
+fails the #1049 pin on both arms:** `BPSK250` 87 condemnations at lead 40 000, `BPSK250-PN` 66 at
+40 000, and the #1045 pin on PN 120 at 80 000 (bounds 6 and 12). **S1 does not fail the #1021
+fixture on either arm, and neither does S2:** with or without the veto, no settle in the #1021 floor
+is ever condemned, so `unsettle`, which S1 breaks, never runs. Today's receiver no longer settles on
+this floor's noise at all. By the pass rule, the #1021 fixture is **not a pin of the #1021
+mechanism**; it stays as the replacement of the decode and cost assertions it was built for.
+
+**Amendment (2026-10-09, before its run).** The #1021 mechanism (a recovery that re-settles at the
+anchor it just condemned) is live wherever settles are condemned: in production on every mode
+without a template (QPSK at SL6, the OFDM rungs), which decides on energy. S1 is run against
+`a_no_template_mode_decodes_through_a_saturating_floor` (QPSK, `capture_replay_corpus.rs`; 315
+condemnations, decodes), which does not depend on the BPSK preamble, and against the two
+saturating-floor fixtures with the veto off on both arms. The #1021 class counts as pinned if the
+QPSK pin fails under S1; the veto-off runs say whether the BPSK path would livelock if noise ever
+passed the veto.
+
+**Amendment results.** S1 does **not** fail the QPSK pin (it decodes in 19.3 s against 18.9 s
+unsabotaged): something else keeps the no-template path off a condemned anchor, not established
+here. S1 with the veto off **livelocks** `BPSK250-PN`: 3 555 condemnations and no decode at leads
+40 000 and 80 000 (1 288 s), against 66 and 120 condemnations and a decode with the veto off alone.
+The shipped arm's run was cut short by a container restart.
+
+**Amendment 2 (2026-10-09, before its run).** So the #1021 recovery is load-bearing exactly when
+noise reaches the settle. F6 adds that as its #1021 pin:
+`the_recovery_reaches_the_frame_when_noise_passes_the_veto`, the coded frame in the saturating floor
+at lead 40 000 with the veto off (`set_preamble_veto_gate(false)`, instruments), which must decode on
+both arms, and must fail under S1 on both arms.
+
+**F6 result: PASS.** Every fixture passes on both arms and fails on its sabotage on both arms:
+
+| fixture | clean (`BPSK250` / `BPSK250-PN`) | sabotaged |
+|---|---|---|
+| `the_recovery_reaches_the_frame_when_noise_passes_the_veto` (#1021) | decodes after 87 / 66 condemnations | S1: no decode, 3 555 / 3 555 condemnations |
+| `the_receiver_never_settles_on_a_saturating_noise_floor` (#1049; `BPSK250` in `preamble_correlation_settle.rs`) | 0 condemnations on PN at every lead; ρ refusals 138 / 233 / 323 | S2: 87 (`BPSK250`) and 66 (PN) at lead 40 000, bound 6 |
+| `a_coded_frame_decodes_through_a_saturating_floor` (#1045; `BPSK250` in `capture_replay_corpus.rs`) | PN decodes at both leads | S2: PN 120 at lead 80 000, bound 12 |
+| `a_coded_frame_in_the_1021_floor_decodes_without_crawling`, `an_uncoded_frame_in_the_1021_floor_decodes` | 0 condemnations on both arms | not pins of a mechanism (see above); they replace the decode and cost assertions |
+
+Release runs except where noted; the file takes 259 s in the default (debug) test run.
+
+**Found on the way:** `coded_noise_settle_recovery`, the existing synthetic #1021 test (acceptance row
+80 calls it the class's gate), also passes under S1: it decodes on the first settle, so it never
+reaches the recovery. Until this F6 pin, nothing in the default run failed when the #1021 fix was
+reverted. S1 does not fail the QPSK no-template saturating pin either, so whatever keeps the energy-only
+path off a condemned anchor is not `unsettle`; not established here.
 
 **Lesson for any long preamble** (QPSK's parked longer preamble, pilots): length buys energy only
 up to the channel's coherence time; past it, combine in power.

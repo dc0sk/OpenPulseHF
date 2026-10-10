@@ -15,6 +15,49 @@ this ledger adds the design rationale and the actually-observed results per chan
 
 ---
 
+## 2026-10-10 — #1062 F1c on the station Pi: PASS (work plan M2)
+
+**Change.** None to code: the Pi half of F1c, the receive cost of the PN-63 candidate.
+
+**Decision.** F1c's rule (`docs/dev/design/pn-preamble.md`): Pi SL2 decode + 0.52 s FSK4 ACK + 1 s
+≤ 9 s. One Pi, rpi51, because decode is CPU work and the two Pi 5 stations agreed within ~5 %.
+
+**Tests → results.** `receive_cost_scaling` (`PROBE_PN=1`, `PROBE_ENTRY_RUNGS=1`, `PROBE_READ=4096`,
+release, rpi51, `main` at 10c9ec9f): decode per frame, shipped → PN, SL5 1.28 → 1.55 s, SL4 1.54 →
+2.17 s, SL3 1.98 → 3.14 s, SL2 3.63 → 6.29 s; all `ok=true`. PASS: 7.81 s on SL2. PN-63's rungs since
+decision 25 (SL3–SL5) peak at 4.66 s.
+
+## 2026-10-09 — #1062 F6: synthetic fixtures for the capture-pinned defect classes (work plan M2)
+
+**Change.** The real-capture replay rows (#1351) go dark at the flag day. F6 replaces the ones that
+pin defect classes with freshly modulated frames, on `BPSK250` and `BPSK250-PN`, before the wire
+changes.
+
+**Decision.** Pre-registered in `docs/dev/design/pn-preamble.md` *F6*, amended twice before the runs
+the amendments govern. Each fixture must fail on a named sabotage: S1, `ScanPlanner::unsettle`
+rewinds to 0 (the pre-#1021 code); S2, the correlation veto off. The SDR transmit-chain row is a
+hardware observation and waits for F8.
+
+**Implementation.** `ChannelSimHarness::route_over_recorded` (`crates/openpulse-modem/src/channel_sim.rs`)
+adds a frame onto recorded idle at a set mean-square and carrier offset.
+`crates/openpulse-modem/tests/f6_capture_class_fixtures.rs`:
+- The #1021 recording's own floor around a fresh frame at its onset, carrier and level.
+- The #1045/#1049 saturating-floor pins on PN.
+- The #1021 recovery pin with the veto off.
+
+**Tests → results.**
+- `f6_capture_class_fixtures`: 6 passed / 0 failed, debug, 259 s. Clippy (modem, all targets) and fmt
+  are clean.
+- **#1021 recovery pin:** decodes after 87 / 66 condemnations (`BPSK250` / PN). Under S1 it fails on
+  both arms: 3 555 condemnations and no decode.
+- **#1049 pin under S2:** fails on both arms, with 87 and 66 condemnations against a bound of 6.
+- **#1045 pin on PN under S2:** fails, with 120 condemnations against a bound of 12.
+- **The #1021-floor fixtures** pass with 0 condemnations on both arms, and pass under S1 and S2 too.
+  No settle in that floor is condemned, so they replace decode and cost assertions, not a mechanism.
+- **Found:** `coded_noise_settle_recovery` (acceptance row 80's #1021 gate) passes under S1 (4/4,
+  0.03 s, release). It decodes on its first settle. The QPSK no-template saturating pin also passes
+  under S1. Acceptance row 80 is corrected, and the new row points at `f6_capture_class_fixtures`.
+
 ## 2026-10-08 — #1062 phase 2's preamble veto reaches past the settle grid's gaps; F1 passes (work plan M2)
 
 **Change.** F1 with the full PN template failed ±50 Hz (entry below): phase 2 settles on a

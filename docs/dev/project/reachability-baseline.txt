@@ -459,6 +459,7 @@ route_embedded_at_level	crates/openpulse-modem/src/channel_sim.rs
 route_embedded_in_capture	crates/openpulse-modem/src/channel_sim.rs
 route_embedded_noisy	crates/openpulse-modem/src/channel_sim.rs
 route_embedded_with_cfo	crates/openpulse-modem/src/channel_sim.rs
+route_over_recorded	crates/openpulse-modem/src/channel_sim.rs
 route_with_capture_agc	crates/openpulse-modem/src/channel_sim.rs
 route_with_cfo	crates/openpulse-modem/src/channel_sim.rs
 route_with_sro	crates/openpulse-modem/src/channel_sim.rs

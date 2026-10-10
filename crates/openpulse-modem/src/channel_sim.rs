@@ -218,6 +218,53 @@ impl ChannelSimHarness {
         n
     }
 
+    /// Route TX samples ON TOP of recorded idle audio, at a set signal level and carrier offset.
+    ///
+    /// Reproduces a recorded on-air burst with a freshly modulated frame (#1062 F6): `lead` and
+    /// `trail` are recorded idle before and after it, and the frame is added onto `under` (recorded
+    /// idle, cycled if shorter) so the floor continues beneath the signal as it did on air. The frame
+    /// is scaled to mean-square `signal_mean_sq`, the level measured on the recording, and shifted by
+    /// `offset_hz`. Returns the number of TX samples routed.
+    pub fn route_over_recorded(
+        &mut self,
+        lead: &[f32],
+        under: &[f32],
+        trail: &[f32],
+        signal_mean_sq: f32,
+        offset_hz: f32,
+    ) -> usize {
+        let samples = self.tx_loopback.drain_samples();
+        let n = samples.len();
+        let shifted = if offset_hz == 0.0 {
+            samples
+        } else {
+            let mut ch = openpulse_channel::cfo::CfoChannel::new(
+                openpulse_channel::cfo::CfoConfig::new(offset_hz, 8_000.0),
+            )
+            .expect("finite offset and sample rate");
+            ch.apply(&samples)
+        };
+        let frame_mean_sq = shifted.iter().map(|s| s * s).sum::<f32>() / n.max(1) as f32;
+        let gain = if frame_mean_sq > 0.0 {
+            (signal_mean_sq.max(0.0) / frame_mean_sq).sqrt()
+        } else {
+            0.0
+        };
+        let mut buf = Vec::with_capacity(lead.len() + n + trail.len());
+        buf.extend_from_slice(lead);
+        buf.extend(shifted.iter().enumerate().map(|(i, &s)| {
+            let floor = if under.is_empty() {
+                0.0
+            } else {
+                under[i % under.len()]
+            };
+            s * gain + floor
+        }));
+        buf.extend_from_slice(trail);
+        self.rx_loopback.fill_samples(&buf);
+        n
+    }
+
     /// Route TX samples through a fixed capture gain, with noise padded around the frame.
     ///
     /// The absolute level a receiver hands the modem is set by the rig's audio output and the host

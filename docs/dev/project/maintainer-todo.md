@@ -2,7 +2,7 @@
 project: openpulsehf
 doc: docs/dev/project/maintainer-todo.md
 status: draft
-last_updated: 2026-10-06
+last_updated: 2026-10-10
 ---
 
 # Maintainer TODO — what only you can do
@@ -13,48 +13,38 @@ asks first within each section. Report results in chat or as a comment on the li
 
 ## Now — unblocks Release 1 work
 
-- [ ] **Re-run the receive-cost probe on one Pi after the onset-ranking fix merges.** The first run
-  (2026-10-04, below) showed the decode leaves no margin in the 9 s ACK window at SL2, and none fits
-  with the MFSK16 ACK. The fix
-  ([`design/fallback-onset-ranking.md`](../design/fallback-onset-ranking.md)) brought x86 SL2 from
-  4.6 s to 1.8 s; this confirms it on the station:
-  ```bash
-  git pull   # on main
-  PROBE_ENTRY_RUNGS=1 PROBE_READ=4096 cargo test --release -p openpulse-modem \
-    --no-default-features --test receive_cost_scaling -- --ignored --nocapture
-  ```
-  Paste the five `Sl…` lines.
-
-- [ ] **Run the receive-cost probe with the PN-63 candidate on both station Pis** (#1062 design,
-  row F1c). Decides whether the slow rungs can take the longer preamble: the rule is Pi SL2 decode
-  + 0.52 s + 1 s ≤ 9 s. x86 went 1.79 → 3.08 s at SL2.
-  ```bash
-  git fetch origin claude/affectionate-brahmagupta-sdn8qg && git checkout FETCH_HEAD
-  PROBE_ENTRY_RUNGS=1 PROBE_READ=4096 cargo test --release -p openpulse-modem \
-    --no-default-features --test receive_cost_scaling -- --ignored --nocapture
-  PROBE_PN=1 PROBE_ENTRY_RUNGS=1 PROBE_READ=4096 cargo test --release -p openpulse-modem \
-    --no-default-features --test receive_cost_scaling -- --ignored --nocapture
-  ```
-  Paste the ten `Sl…` lines from each Pi (five shipped, five `-PN`). **Add the offset run** (same
-  checkout): before the off-frequency scan fix, x86 SL2 at +50 Hz took 23.9 s; after it, 2.2 s, the
-  same as 0 Hz. This confirms the Pi stays inside the 9 s ACK window at REQ-PHY-03's ±50 Hz:
-  ```bash
-  PROBE_OFFSET_HZ=50 PROBE_ENTRY_RUNGS=1 PROBE_READ=4096 cargo test --release -p openpulse-modem \
-    --no-default-features --test receive_cost_scaling -- --ignored --nocapture
-  ```
-
 - [ ] **Run the key-to-audio probe on both station Pis** (work plan M2, key-to-audio gap). The IC-9700
   SDR captures suggest ~1.3 s of dead air between PTT and the first sample on every keyed turn; the
   modulator is ruled out (≤ 26 ms), so this times the audio device path. It writes **silence**, so
-  nothing is radiated even with VOX on; PTT is not touched. Use the output device name the daemon is
-  configured with:
+  nothing is radiated even with VOX on; PTT is not touched. It uses the output device the on-air daemon is configured with
+  (`[audio] device` in the config `run-onair-twin-ota.sh` writes; empty would mean the system
+  default, and then `PROBE_DEVICE` is left unset). Both Pis, because this times each station's own
+  audio device, and the two drive different rigs. A named device matters: production enumerates every
+  output device on each open only when a name is configured, and the on-air config always names one.
+  rpi51 on the system default (no config at the old path; `10c9ec9f`): enumerate 1066 / 530 / 483 /
+  485 / 582 ms, `open_output` 30–118 ms, write → drained − audio 132–144 ms. Enumeration would be
+  most of the ~1.3 s gap, if the station's named device enumerates the same way:
   ```bash
-  git fetch origin claude/affectionate-brahmagupta-sdn8qg && git checkout FETCH_HEAD
-  PROBE_DEVICE='<daemon output device>' cargo test --release -p openpulse-audio \
+  git checkout main && git pull && git log --oneline -1
+  DEV=$(sed -n '/^\[audio\]/,/^\[/s/^device *= *"\(.*\)"/\1/p' ~/.config/openpulse-twin-ota/openpulse/config.toml)
+  env ${DEV:+PROBE_DEVICE="$DEV"} cargo test --release -p openpulse-audio \
     --features cpal-backend --lib key_to_audio -- --ignored --nocapture
   ```
-  Paste the five `run …` lines from each Pi. If enumeration or `open_output` is most of it, the fix
+  If that file is missing, set `DEV` by hand to the station's `A_AUDIO_DEVICE` / `B_AUDIO_DEVICE` from
+  your on-air profile. Paste the five `run …` lines and the device name from each Pi. If enumeration or `open_output` is most of it, the fix
   is opening the stream before keying (a PTT-timing change, so a design review first).
+
+- [x] **Run the receive-cost probe with the PN-63 candidate on rpi51** (#1062 F1c; done 2026-10-10,
+  `main`). Decode per frame, shipped → PN: SL5 1.28 → 1.55 s, SL4 1.54 → 2.17 s, SL3 1.98 → 3.14 s,
+  SL2 3.63 → 6.29 s. PASS: SL2 + 0.52 s + 1 s = 7.81 s ≤ 9 s; on SL3–SL5, where PN-63 goes
+  (decision 25), the worst is SL3 at 4.66 s.
+
+- [x] **Re-run the receive-cost probe on one Pi after the onset-ranking fix merges** (done
+  2026-10-10 on rpi51, `PROBE_READ=4096`; commit not recorded, since the checkout of the deleted branch failed
+  and the run used the tree already there). Decode per frame, 0 Hz / +50 Hz: SL6 0.31 / 0.33 s, SL5
+  1.28 / 1.33 s, SL4 1.54 / 1.60 s, SL3 1.98 / 2.09 s, SL2 3.63 / 3.75 s (2026-10-04: SL2 7.3 s).
+  SL2 + 0.52 s FSK4 ACK + 1 s = 5.2 s, inside the 9 s window; with the ≈5 s MFSK16 ACK, 8.6 s, inside
+  but without the full 1 s margin.
 
 - [x] **Run the receive-cost probe on the station Pis** (done 2026-10-04, `PROBE_READ=4096`). Decode
   per frame, rpi53 / rpi51: SL6 3.21 / 3.32 s, SL5 5.19 / 5.45 s, SL4 5.56 / 5.76 s, SL3 5.90 /
