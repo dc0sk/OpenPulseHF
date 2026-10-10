@@ -679,6 +679,9 @@ frame.
   callers) still keep a failed receive's estimate; they were not audited here, and the work plan
   parks that audit.
 
+**F7 (55f77b03): PASS under its rule.** `GATE: PASS` (366 suites, 2 702 tests, 0 failed);
+`slow-tests.sh` green except the disclosed #1457 notch row. F8 (on air) is M3's.
+
 ## Cost
 
 - Airtime +1.49 % on the rungs that take it.

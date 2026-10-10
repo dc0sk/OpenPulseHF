@@ -15,6 +15,31 @@ this ledger adds the design rationale and the actually-observed results per chan
 
 ---
 
+## 2026-10-10 — #1062 flag day: PN-63 on BPSK63/100/250, and the ARDOP/CLI receive at ±50 Hz (work plan M2)
+
+**Change.** BPSK63, BPSK100 and BPSK250 send the 63-symbol PN preamble; BPSK31 and `BPSK250-RRC` keep
+the alternating run (decision 25). BPSK250's template is PN-63's (ρ 0.315, ±20 Hz, bound 0.51). The
+ARDOP adaptive IRS and CLI `arq` one-shot receive (`receive_with_ack_hint`) now decodes at the frame's
+own carrier estimate and restores the AFC correction after a failed receive.
+
+**Decision.** Decisions 22–25 and `docs/dev/design/pn-preamble.md` (*The flag day*). The receive fix
+came from a flag-day test failure: PN-63's longer coherent timing correlation tolerates about 5 Hz of
+raw offset on that path where the alternating run tolerated about 40, and a failed receive on silence
+learned −400 Hz. The `-ALT` measurement arm keeps F1–F6's control.
+
+**Implementation.** `plugins/bpsk/src/modulate.rs` (`is_pn_mode`, constants), `lib.rs`
+(`preamble_template`, `measurement_arms`), `crates/openpulse-modem/src/engine.rs`
+(`receive_with_ack_hint` → `receive_with_ack_hint_at`).
+
+**Tests → results.** `the_wire_preamble_per_mode`, `every_rung_round_trips_at_its_preamble_length`,
+`only_bpsk250_publishes_a_template`, the PN-63 hand-transcription pin; `the_gate_is_not_fooled_by_a_steady_tone`
+(PN worst ρ 0.248 vs 0.315; `-ALT` 0.698 vs 0.40); `legacy_receive_carrier_offset` (every BPSK rung
+at ±20/±50 Hz; no AFC learned on silence; both fail with the fix reverted). F7 at 55f77b03:
+`GATE: PASS 55f77b034e8bb21f307ec472434fa4e2fdc1fc6b clean` (366 suites, 2 702 passed, 0 failed);
+`scripts/slow-tests.sh` exit 1 on the disclosed #1457 row only
+(`the_notch_rescues_a_decode_that_fails_without_it`, decodes without the notch at 0.3), every other
+slow test passing (notch 2/3, OTA CAP-33 3/3, spectral decode counts 2/2, total-power heads 1/1).
+
 ## 2026-10-10 — #1062 F1c on the station Pi: PASS (work plan M2)
 
 **Change.** None to code: the Pi half of F1c, the receive cost of the PN-63 candidate.
