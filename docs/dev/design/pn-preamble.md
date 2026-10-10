@@ -201,8 +201,8 @@ inside the rule (decode + 0.52 s FSK4 ACK + 1 s ≤ 9 s), but **the rule is on t
 With the ≈ 5.9 s MFSK16 ACK SL2 would not fit (it barely fits today at ≈ 2.7 + 5.9 s); the MFSK16
 ACK follows only an SL1 recommendation, which this rule did not cover — noted, not re-scoped.
 
-**F1c, Pi half: PASS** (rpi51, 2026-10-10, `main`, release, `PROBE_READ=4096`; the commit line was
-not pasted, `main` has been 10c9ec9f since #1505; one Pi, because decode is CPU work and the two
+**F1c, Pi half: PASS** (rpi51, 2026-10-10, `main` at 10c9ec9f, release, `PROBE_READ=4096`;
+one Pi, because decode is CPU work and the two
 Pi 5 stations agreed within ~5 % on 2026-10-04 with rpi51 the slower). Decode per frame, shipped →
 PN: SL5 1.28 → 1.55 s (+21 %), SL4 1.54 → 2.17 s (+41 %), SL3 1.98 → 3.14 s (+59 %), SL2 3.63 →
 6.29 s (+73 %); SL6 (QPSK, unchanged) 0.31 s. The rule as written, on SL2: 6.29 + 0.52 + 1 = 7.81 s
