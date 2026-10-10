@@ -1399,6 +1399,20 @@ mod tests {
         }
     }
 
+    /// Polls `done` every 10 ms for up to 10 s; the caller asserts afterwards.
+    // A fixed sleep failed these tests on a loaded host, where the signal thread got too little
+    // CPU to finish one iteration inside it.
+    fn wait_until(done: impl Fn() -> bool) {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while !done() && std::time::Instant::now() < deadline {
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+    }
+
+    fn all_taps_updated(taps: &[Tap; 4]) -> bool {
+        taps.iter().all(|t| t.read().unwrap().generation > 0)
+    }
+
     #[test]
     fn run_loop_produces_tap_updates() {
         let config = Arc::new(RwLock::new(AppConfig::default()));
@@ -1414,8 +1428,7 @@ mod tests {
             run(config_clone, taps_clone, stats_clone, stop_rx);
         });
 
-        // Let the signal thread do a few iterations
-        std::thread::sleep(std::time::Duration::from_millis(150));
+        wait_until(|| all_taps_updated(&taps) && stats.read().unwrap().runs > 0);
         let _ = stop_tx.send(());
         handle.join().expect("signal thread should not panic");
 
@@ -1447,7 +1460,10 @@ mod tests {
             run_virtual(config_clone, taps_clone, stats_clone, stop_rx);
         });
 
-        std::thread::sleep(std::time::Duration::from_millis(250));
+        wait_until(|| {
+            let s = stats.read().unwrap();
+            all_taps_updated(&taps) && s.runs > 0 && s.ok > 0
+        });
         let _ = stop_tx.send(());
         handle.join().expect("virtual-loop thread should not panic");
 
@@ -1554,7 +1570,13 @@ mod tests {
             run_adaptive_ladder_with(config_clone, taps_clone, stats_clone, stop_rx, wide);
         });
 
-        std::thread::sleep(std::time::Duration::from_millis(500));
+        wait_until(|| {
+            let s = stats.read().unwrap();
+            all_taps_updated(&taps)
+                && s.runs > 0
+                && s.matrix_current.is_some()
+                && s.active_mode.is_some()
+        });
         {
             let s = stats.read().unwrap();
             assert!(s.matrix_current.is_some(), "ladder status should be set");
@@ -1612,7 +1634,10 @@ mod tests {
             run_testmatrix(config_clone, taps_clone, stats_clone, stop_rx);
         });
 
-        std::thread::sleep(std::time::Duration::from_millis(400));
+        wait_until(|| {
+            let s = stats.read().unwrap();
+            all_taps_updated(&taps) && s.runs > 0 && s.matrix_current.is_some()
+        });
         {
             // While running, the current-case label should be populated.
             let s = stats.read().unwrap();
