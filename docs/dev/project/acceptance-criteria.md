@@ -2,7 +2,7 @@
 project: openpulsehf
 doc: docs/dev/project/acceptance-criteria.md
 status: resolved
-last_updated: 2026-10-09
+last_updated: 2026-10-10
 ---
 
 # Acceptance criteria
