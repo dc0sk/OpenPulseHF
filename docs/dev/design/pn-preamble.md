@@ -643,6 +643,42 @@ path off a condemned anchor is not `unsettle`; not established here.
 **Lesson for any long preamble** (QPSK's parked longer preamble, pilots): length buys energy only
 up to the channel's coherence time; past it, combine in power.
 
+### The flag day (2026-10-10)
+
+**Wire.** `is_pn_mode` now selects PN-63 for every BPSK mode except BPSK31 and `BPSK250-RRC`
+(decision 25; the RRC path's Gardner+LMS trains on the alternating sequence and is off `hpx_hf`).
+BPSK250's template carries PN-63's constants under the shipped names (`PREAMBLE_RHO_THRESHOLD`
+0.315, `DELIVERED_FRAME_RHO_BOUND` 0.51); the alternating constants become `ALT_*`. The `pn-candidate`
+feature now builds `BpskPlugin::measurement_arms()`: `-PN` forces PN-63 (BPSK31's parked candidate) and
+`-ALT` forces the alternating run on BPSK63/100/250, so F1–F6's harnesses keep their control arm
+(their "shipped" arm is now `-ALT`). PN-63 is pinned symbol by symbol against a hand transcription
+(`preamble_seam_identity`).
+
+**Tests whose premise was `--++`, rewritten as the design said:**
+`the_gate_is_not_fooled_by_a_steady_tone` now asserts what the alternating preamble could not: no
+lone tone across fc ± 200 Hz (2 Hz steps) reaches BPSK250's threshold (worst ρ 0.248 at 1 440 Hz,
+threshold 0.315), with the same sweep on `BPSK250-ALT` fooled at 0.698 (threshold 0.40) as its
+falsifier. The P6 alias rescue fixture runs on `BPSK250-ALT`. Geometry pins follow the 63-symbol
+frame.
+
+**Two findings on the way, neither in the design:**
+- **The not-evidence edge at SL3 moved to the spectral arm.** PN-63 made SL3's recognition window
+  8 192 samples, exactly the spectral arm's minimum (16 × 512), and the spectral span runs past the
+  loud content, so at SL3 a failed burst counts from about 6.6 k samples (measured: 6 656 counts,
+  6 492 does not) instead of at 8 192. It errs toward counting fragments; idle flicker (≈ 1 000
+  samples) stays far below. The edge pin moved to SL4 (window 5 120), where total power decides it.
+- **The ARDOP/CLI one-shot receive could not take PN-63 off-frequency.** `receive_with_ack_hint`
+  (ARDOP adaptive IRS, CLI `arq`) demodulated a first frame at its raw offset and kept a failed
+  receive's AFC estimate, which on silence reads −400 Hz. Clean frames, fresh receiver, old path:
+  `--++` BPSK250 decoded to ±40 Hz, PN-63 BPSK250 failed at +10 Hz, PN-63 BPSK63 at +5 Hz; BPSK31
+  failed at −50 Hz on either preamble, so REQ-PHY-03 never held on this path. F1 measured the daemon's
+  entry, which settles first, so it could not see this. Fixed in the same PR: the frame is demodulated
+  at its own full estimate and a failed receive restores the correction
+  (`legacy_receive_carrier_offset`, every BPSK rung at ±20/±50 Hz, sabotage-verified). Clean-channel
+  evidence only. The engine's other one-shot receive entries (`update_afc_estimate` has about twenty
+  callers) still keep a failed receive's estimate; they were not audited here, and the work plan
+  parks that audit.
+
 ## Cost
 
 - Airtime +1.49 % on the rungs that take it.
