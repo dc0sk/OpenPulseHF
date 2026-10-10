@@ -2,7 +2,7 @@
 project: openpulsehf
 doc: docs/dev/design/pn-preamble.md
 status: draft
-last_updated: 2026-10-09
+last_updated: 2026-10-10
 ---
 
 # Replace the BPSK preamble with a PN-63 sync word (#1062) — revision 2
@@ -200,6 +200,16 @@ candidate), decode per frame: SL5 0.83 → 0.94 s (+14 %), SL4 0.92 → 1.27 s (
 inside the rule (decode + 0.52 s FSK4 ACK + 1 s ≤ 9 s), but **the rule is on the Pis, pending**.
 With the ≈ 5.9 s MFSK16 ACK SL2 would not fit (it barely fits today at ≈ 2.7 + 5.9 s); the MFSK16
 ACK follows only an SL1 recommendation, which this rule did not cover — noted, not re-scoped.
+
+**F1c, Pi half: PASS** (rpi51, 2026-10-10, `main`, release, `PROBE_READ=4096`; the commit line was
+not pasted, `main` has been 10c9ec9f since #1505; one Pi, because decode is CPU work and the two
+Pi 5 stations agreed within ~5 % on 2026-10-04 with rpi51 the slower). Decode per frame, shipped →
+PN: SL5 1.28 → 1.55 s (+21 %), SL4 1.54 → 2.17 s (+41 %), SL3 1.98 → 3.14 s (+59 %), SL2 3.63 →
+6.29 s (+73 %); SL6 (QPSK, unchanged) 0.31 s. The rule as written, on SL2: 6.29 + 0.52 + 1 = 7.81 s
+≤ 9 s. Since decision 25, PN-63 goes on SL3–SL5 only, where the worst case is SL3 at 4.66 s. The
+percentages match x86's; the Pi/x86 ratio is ≈ 2.0, not the ×1.5 the projection used. With the
+MFSK16 ACK the ISS's window does not hold SL3-PN either (3.14 s plus the ACK's ≈ 5.9 s), which,
+like SL2 today, is the SL1-recommendation case this rule never covered.
 
 **F2 — FAIL under the pre-registered rule (7b918cff); the sequence stops here for a decision.**
 `f15_bpsk250_pn63_constants`, release, 400 seeds per decode cell, same harness for both templates:

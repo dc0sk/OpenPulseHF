@@ -15,6 +15,18 @@ this ledger adds the design rationale and the actually-observed results per chan
 
 ---
 
+## 2026-10-10 — #1062 F1c on the station Pi: PASS (work plan M2)
+
+**Change.** None to code: the Pi half of F1c, the receive cost of the PN-63 candidate.
+
+**Decision.** F1c's rule (`docs/dev/design/pn-preamble.md`): Pi SL2 decode + 0.52 s FSK4 ACK + 1 s
+≤ 9 s. One Pi, rpi51, because decode is CPU work and the two Pi 5 stations agreed within ~5 %.
+
+**Tests → results.** `receive_cost_scaling` (`PROBE_PN=1`, `PROBE_ENTRY_RUNGS=1`, `PROBE_READ=4096`,
+release, rpi51, `main` at 10c9ec9f): decode per frame, shipped → PN, SL5 1.28 → 1.55 s, SL4 1.54 →
+2.17 s, SL3 1.98 → 3.14 s, SL2 3.63 → 6.29 s; all `ok=true`. PASS: 7.81 s on SL2. PN-63's rungs since
+decision 25 (SL3–SL5) peak at 4.66 s.
+
 ## 2026-10-09 — #1062 F6: synthetic fixtures for the capture-pinned defect classes (work plan M2)
 
 **Change.** The real-capture replay rows (#1351) go dark at the flag day. F6 replaces the ones that
