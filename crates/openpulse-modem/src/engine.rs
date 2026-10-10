@@ -5804,13 +5804,32 @@ impl ModemEngine {
         let samples = self.stage_capture_input(Some(mode), device)?;
         let samples = self.route_audio_stage(PipelineStage::InputCapture, samples)?;
 
+        let afc_before = self.afc_correction_hz;
         self.update_afc_estimate(mode, &samples.samples);
         self.emit_afc_update(mode);
+        let result = self.receive_with_ack_hint_at(mode, &samples.samples, afc_before);
+        if result.is_err() {
+            self.afc_correction_hz = afc_before;
+        }
+        result
+    }
 
+    /// [`receive_with_ack_hint`]'s decode, at this frame's own carrier estimate.
+    fn receive_with_ack_hint_at(
+        &mut self,
+        mode: &str,
+        samples: &[f32],
+        afc_before: f32,
+    ) -> Result<(Vec<u8>, AckType), ModemError> {
+        let frame_correction = if self.afc_enabled {
+            afc_before + self.last_afc_offset_hz.unwrap_or(0.0)
+        } else {
+            self.afc_correction_hz
+        };
         let mod_cfg = ModulationConfig {
             mode: mode.to_string(),
-            center_frequency: self.center_frequency + self.afc_correction_hz,
-            afc_correction_hz: self.afc_correction_hz,
+            center_frequency: self.center_frequency + frame_correction,
+            afc_correction_hz: frame_correction,
             ..ModulationConfig::default()
         };
 
@@ -5819,12 +5838,11 @@ impl ModemEngine {
             .get(mode)
             .ok_or_else(|| ModemError::PluginNotFound(mode.to_string()))?;
 
-        let llrs =
-            openpulse_modem_descramble_soft(plugin.demodulate_soft(&samples.samples, &mod_cfg)?);
+        let llrs = openpulse_modem_descramble_soft(plugin.demodulate_soft(samples, &mod_cfg)?);
         // Absolute SNR for the rate decision: the mode's calibrated symbol-domain estimate (M2M4
         // fallback inside `rx_snr_db`); the mean-|LLR| proxy reads ~-2 dB on a clean path and can't
         // drive the ladder.
-        let snr_db = self.rx_snr_db(mode, &samples.samples);
+        let snr_db = self.rx_snr_db(mode, samples);
 
         let wire_bytes: Vec<u8> = llrs
             .chunks(8)
