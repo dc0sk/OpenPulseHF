@@ -2,7 +2,7 @@
 project: openpulsehf
 doc: docs/dev/design/protocol-wire-spec.md
 status: living
-last_updated: 2026-10-01
+last_updated: 2026-10-10
 ---
 
 # Protocol & Handshake Wire Specification
@@ -31,10 +31,15 @@ speaks a JSON `HSCQ`/`HSAK` handshake; the binary handshake and its version byte
 later (#1189, after the #1147 and #1166 breaks), so the format was replaced, not versioned. On-air evidence for Release 1 (work plan M3)
 is recorded on this format.
 
-**What changes before 1.0, so it is not a surprise:**
-- **The preamble** (#1062): the alternating preamble is to be replaced, the recorded direction being
-  a PN sequence with N ≥ 63. It is a plugin-level change, out of this document's byte layout, but it
-  breaks interop with v0.17 builds. A second, short 2 m campaign follows it before 1.0.
+**The preamble changed on 2026-10-10 (#1062 flag day, work plan decision 22).** BPSK63, BPSK100 and
+BPSK250 (`hpx_hf` SL3–SL5) send a 63-symbol PN preamble (x⁶ + x + 1, the m-sequence as symbols)
+instead of the 32-symbol alternating run; BPSK31 (SL2) and `BPSK250-RRC` keep the alternating run
+(decision 25). It is a plugin-level change, outside this document's byte layout, and it breaks
+interop with every earlier build: an old receiver reports "invalid magic" on a new frame. The
+sequence is pinned in `plugins/bpsk/tests/preamble_seam_identity.rs`; the design and its validation
+are in `pn-preamble.md`. Release 1's on-air evidence (M3) is recorded on this format.
+
+**What can still change before 1.0, so it is not a surprise:**
 - Anything else the pre-1.0 window needs, under the §3 rule: the byte does not move, so two builds
   from different points fail with a garbled decode, not a clean version rejection. **Rebuild both ends
   in lockstep before any on-air session.**

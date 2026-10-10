@@ -40,7 +40,7 @@ fn engine() -> (ModemEngine, LoopbackBackend) {
     e.register_plugin(Box::new(BpskPlugin::new()))
         .expect("register");
     // The #1062 candidate's `-PN` modes, for the F5 probe below; no shipped mode changes.
-    e.register_plugin(Box::new(BpskPlugin::pn_candidate()))
+    e.register_plugin(Box::new(BpskPlugin::measurement_arms()))
         .expect("register");
     (e, lb)
 }

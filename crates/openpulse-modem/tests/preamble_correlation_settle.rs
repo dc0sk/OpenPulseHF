@@ -185,116 +185,62 @@ fn a_mode_without_a_template_is_unaffected() {
     );
 }
 
-/// A steady tone must NOT look like a preamble — and the frequency grid is what decides that.
+/// A steady tone must NOT look like BPSK250's preamble, at any frequency near the carrier (#1062).
 ///
-/// This is the constraint that sizes `PREAMBLE_RHO_GRID_HZ`, and it is not a compute trade. The
-/// BPSK preamble's 32 *bits* alternate, but NRZI flips phase only on a `1`, so the *symbols* are
-/// `--++` repeating: a square wave of period **four** symbols whose energy sits in lines at
-/// `fc ± baud/4` and odd harmonics (measured at BPSK250: ±62.5 Hz, ±187.5, ±312.5 — nothing at
-/// ±125). Correlating a *steady* carrier against it cancels between half-symbols, which is why a
-/// tone BETWEEN lines scores near zero — but a tone ON a line needs no rotation at all and scores
-/// ρ ≈ 0.70 at any grid width. Corrected 2026-08-03; this said `baud/2`, twice the true spacing.
-/// Measured here:
+/// Rewritten at the #1062 flag day. Its predecessor pinned the alternating `--++` preamble's flaw: a
+/// period-4 run is two spectral lines at `fc ± baud/4`, so a tone ON a line scored ρ ≈ 0.70 at any
+/// grid width and only the ±20 Hz grid kept tones BETWEEN lines out (`docs/dev/sharp-edges.md`,
+/// item 2, and `pn-preamble.md`). PN-63 has no lines, so the claim becomes the one the old test
+/// could not make: a lone tone swept across fc ± 200 Hz stays under the threshold everywhere.
 ///
-/// | grid half-width | tone BETWEEN lines | tone ON a line (`fc ± 62.5`) |
-/// |---|---|---|
-/// | ±20 Hz (shipped) | 0.017–0.042 | **0.700** |
-/// | ±160 Hz | 0.659 | 0.700 |
-/// | ±450 Hz (the full acquisition range) | 0.696 at every frequency | 0.700 |
-///
-/// **The second column does not depend on the grid**, which is why this test probes both. A tone
-/// landing on a line captures ~half the template's energy — ρ ≈ √0.5 — with no rotation needed, so
-/// narrowing the grid narrows the vulnerable bands around each line (±25 Hz at the shipped width)
-/// but cannot remove them. The deployed chain still refuses a *lone* tone, because the settle lands
-/// on it and parks it ~baud/4 from both rotated lines; sideband-symmetric interference gets no such
-/// protection (see `preamble_veto_interference`).
-///
-/// At ±160 Hz a birdie outscores this receiver's best measured real on-air frame (0.654). That is
-/// the measurement that rejected the otherwise-attractive design of searching the whole acquisition
-/// range as a detector and seeding the settle from it: our sync word is a few spectral lines, not a
-/// pseudo-random sequence, so it cannot survive being searched over its own line spacing. Raising
-/// the ceiling needs a different preamble, not a bigger grid — a wire-format change.
-///
-/// The repo has real exposure here: the second OTA rig was blocked by PC/USB birdies, not by the
-/// modem. This test fails if a future grid widening quietly reopens that.
+/// The falsifier is the same sweep, same grid rule, on the retired alternating template
+/// (`BPSK250-ALT`): it must be fooled somewhere, or the sweep cannot detect a fooling tone at all.
 #[test]
 fn the_gate_is_not_fooled_by_a_steady_tone() {
-    let p = BpskPlugin::new();
-    let cfg = ModulationConfig {
-        mode: "BPSK250".into(),
-        sample_rate: 8_000,
-        center_frequency: 1_500.0,
-        ..Default::default()
+    let sweep = |mode: &str| -> (f32, f32, f32) {
+        let p = if mode.ends_with("-ALT") {
+            BpskPlugin::measurement_arms()
+        } else {
+            BpskPlugin::new()
+        };
+        let cfg = ModulationConfig {
+            mode: mode.into(),
+            sample_rate: 8_000,
+            center_frequency: 1_500.0,
+            ..Default::default()
+        };
+        let template = p.preamble_template(&cfg).expect("template");
+        let tlen = template.samples.len();
+        // The shipped grid, built the way the engine builds it: step = 0.25*fs/tlen.
+        let step = (0.25 * 8_000.0 / tlen as f32).max(0.5);
+        let n = (template.rho_grid_hz / step).round() as i32;
+        let grid: Vec<f32> = (-n..=n).map(|k| k as f32 * step).collect();
+        let threshold = template.rho_threshold;
+        let mf = openpulse_dsp::acquisition::IqMatchedFilter::new(template.samples);
+        let (worst, at) = (-200..=200)
+            .step_by(2)
+            .map(|d| {
+                let f = 1_500.0 + d as f32;
+                (tone_rho(&mf, f, tlen, &grid), f)
+            })
+            .fold((0.0f32, 0.0f32), |acc, x| if x.0 > acc.0 { x } else { acc });
+        println!("{mode}: worst steady tone rho {worst:.3} at {at} Hz, threshold {threshold}");
+        (worst, at, threshold)
     };
-    let template = p.preamble_template(&cfg).expect("template");
-    let tlen = template.samples.len();
-    let threshold = template.rho_threshold;
-    let samples_for_spectrum = template.samples.clone();
-    // The shipped grid, built the way the engine builds it: step = 0.25*fs/tlen.
-    let step = (0.25 * 8_000.0 / tlen as f32).max(0.5);
-    let n = (template.rho_grid_hz / step).round() as i32;
-    let grid: Vec<f32> = (-n..=n).map(|k| k as f32 * step).collect();
-    let mf = openpulse_dsp::acquisition::IqMatchedFilter::new(template.samples);
 
-    // The probe frequencies are LOCATED FROM THE TEMPLATE'S OWN SPECTRUM, not written down.
-    //
-    // The previous list was 1250/1375/1500/1625/1750 — 125 Hz steps. The preamble's lines sit at
-    // ODD multiples of baud/4 (±62.5, ±187.5, ±312.5 for BPSK250: the bits alternate but NRZI
-    // flips only on a 1, so the SYMBOLS are `--++` repeating with a period of four), which put
-    // every one of those probes on an EVEN multiple — maximally far from every line. The test
-    // measured 0.017–0.043 and passed while a tone at 1437.5 scores 0.700. Hardcoding 1437.5
-    // instead would be the same bug one wire-format change later, so the peaks are found at run
-    // time and the sequence can change underneath this test without silently disarming it.
-    let peaks = template_line_offsets(&samples_for_spectrum, 8_000.0, 1_500.0);
+    let (worst, at, threshold) = sweep("BPSK250");
     assert!(
-        peaks.len() >= 2,
-        "no spectral lines found in the preamble template; the probe cannot locate its own targets \
-         and every assertion below would be vacuous"
+        worst < threshold,
+        "a steady tone at {at} Hz scores rho {worst:.3} against BPSK250's PN-63 template, at or above \
+         its threshold {threshold}: the veto would corroborate a birdie"
     );
 
-    // ON a line, the correlator IS fooled — that is a property of a two-line sync word, not a
-    // regression, and asserting otherwise would assert something false. What protects the deployed
-    // receiver is the AFC settle, which lands on a lone tone and so parks it ~baud/4 from both
-    // rotated lines; that is a SYSTEM property and is gated in `preamble_veto_interference`, not
-    // here. This test's job is the component claim its name makes, scoped honestly.
-    for &off in peaks.iter().take(2) {
-        let f = 1_500.0 + off;
-        let rho = tone_rho(&mf, f, tlen, &grid);
-        assert!(
-            rho > threshold,
-            "a tone at {f} Hz — ON the template's own spectral line at {off:+.1} Hz — scores only \
-             {rho:.3}. Either the preamble is no longer two-line (in which case this test's whole \
-             premise, and #1062's, needs re-deriving) or the probe is no longer finding the lines."
-        );
-    }
-
-    // BETWEEN the lines the correlator is not fooled, and that is what the shipped ±20 Hz grid
-    // buys: the vulnerable bands stay narrow instead of covering the passband.
-    for w in peaks.windows(2) {
-        let f = 1_500.0 + (w[0] + w[1]) / 2.0;
-        let rho = tone_rho(&mf, f, tlen, &grid);
-        assert!(
-            rho < threshold,
-            "a pure {f} Hz tone — BETWEEN the template's lines — scores rho {rho:.3}, at or above \
-             the settle threshold. The grid has been widened until it can rotate a line onto any \
-             frequency, and the gate can no longer tell a birdie from a preamble."
-        );
-    }
-
-    // The falsifier: widening the grid MUST break it, or the assertion above is passing for some
-    // unrelated reason and says nothing about the grid width.
-    let wide: Vec<f32> = (-40..=40).map(|k| k as f32 * 4.0).collect();
-    let tone: Vec<f32> = (0..tlen + 200)
-        .map(|k| (2.0 * std::f32::consts::PI * 1_500.0 * k as f32 / 8_000.0).cos())
-        .collect();
-    let (r, _) = mf
-        .search_normalized_over_frequency(&tone, 200, 0.05, 8_000.0, &wide)
-        .expect("search");
+    let (alt_worst, alt_at, alt_threshold) = sweep("BPSK250-ALT");
     assert!(
-        r.rho > threshold,
-        "a +-160 Hz grid left a pure tone at rho {:.3}; the narrow-grid assertions above are then \
-         not testing the grid width at all",
-        r.rho
+        alt_worst > alt_threshold,
+        "the alternating template's worst tone ({alt_worst:.3} at {alt_at} Hz) stays under its \
+         threshold {alt_threshold}: the sweep no longer finds the on-line tone that fools it, so the \
+         PN assertion above is not evidence"
     );
 }
 
@@ -316,9 +262,9 @@ fn the_bpsk_template_matches_the_front_of_a_real_frame() {
     let template = p
         .preamble_template(&cfg)
         .expect("BPSK must publish a preamble template");
-    // 31 of the 32 preamble symbols at 32 samples/symbol: the last is dropped because the
+    // 62 of the 63 PN-63 preamble symbols at 32 samples/symbol: the last is dropped because the
     // rectangular pulse crossfades a third of the first DATA symbol into it.
-    assert_eq!(template.samples.len(), 31 * 32);
+    assert_eq!(template.samples.len(), 62 * 32);
 
     let frame = p.modulate(b"payload does not matter", &cfg).unwrap();
     let mf = openpulse_dsp::acquisition::IqMatchedFilter::new(template.samples);
@@ -355,41 +301,6 @@ fn the_bpsk_template_matches_the_front_of_a_real_frame() {
          discriminating between waveforms",
         r2.rho
     );
-}
-
-/// Offsets, in Hz from `fc`, of the dominant spectral lines in a modulated preamble template.
-///
-/// Located from the template itself so a change of sync word moves the probe points with it. A
-/// hardcoded frequency here would go stale the moment the preamble changes and would then be
-/// testing a frequency the new template has no energy at — passing, and meaning nothing.
-fn template_line_offsets(samples: &[f32], fs: f32, fc: f32) -> Vec<f32> {
-    use rustfft::{num_complex::Complex, FftPlanner};
-    let n = 8_192;
-    let mut buf: Vec<Complex<f32>> = samples
-        .iter()
-        .map(|&v| Complex::new(v, 0.0))
-        .chain(std::iter::repeat_n(Complex::new(0.0, 0.0), n))
-        .take(n)
-        .collect();
-    FftPlanner::new().plan_fft_forward(n).process(&mut buf);
-    let bin_hz = fs / n as f32;
-    let mag: Vec<f32> = buf.iter().take(n / 2).map(|c| c.norm()).collect();
-    let peak = mag.iter().cloned().fold(0.0f32, f32::max);
-    // Local maxima above half the global peak, within +/-500 Hz of fc: the lines that carry enough
-    // energy for a tone landing on them to capture a large share of the correlation.
-    let mut out: Vec<f32> = (1..mag.len() - 1)
-        .filter(|&k| {
-            let f = k as f32 * bin_hz;
-            (f - fc).abs() <= 500.0
-                && mag[k] > peak * 0.5
-                && mag[k] >= mag[k - 1]
-                && mag[k] >= mag[k + 1]
-        })
-        .map(|k| k as f32 * bin_hz - fc)
-        .collect();
-    out.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
-    out.dedup_by(|a, b| (*a - *b).abs() < 10.0);
-    out
 }
 
 /// Peak rho of a pure tone at `f` against `mf`, over `grid`.

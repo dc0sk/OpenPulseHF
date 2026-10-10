@@ -53,7 +53,7 @@ fn engine(backend: &LoopbackBackend, level: SpeedLevel) -> ModemEngine {
     let mut e = ModemEngine::new(Box::new(backend.clone_shared()));
     e.register_plugin(Box::new(bpsk_plugin::BpskPlugin::new()))
         .unwrap();
-    e.register_plugin(Box::new(bpsk_plugin::BpskPlugin::pn_candidate()))
+    e.register_plugin(Box::new(bpsk_plugin::BpskPlugin::measurement_arms()))
         .unwrap();
     e.register_plugin(Box::new(qpsk_plugin::QpskPlugin::new()))
         .unwrap();

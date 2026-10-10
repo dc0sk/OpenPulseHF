@@ -29,6 +29,8 @@ mod common;
 /// One rung under test: its shipped and candidate modes, its ladder level and its SNR floor.
 #[derive(Clone, Copy)]
 struct Rung {
+    /// The arm F1–F5 measured as "shipped": the alternating preamble, `-ALT` on the rungs the
+    /// #1062 flag day moved to PN-63, still the wire on BPSK31.
     shipped: &'static str,
     candidate: &'static str,
     level: SpeedLevel,
@@ -43,19 +45,19 @@ const RUNGS: [Rung; 4] = [
         floor_db: 3.0,
     },
     Rung {
-        shipped: "BPSK63",
+        shipped: "BPSK63-ALT",
         candidate: "BPSK63-PN",
         level: SpeedLevel::Sl3,
         floor_db: 4.0,
     },
     Rung {
-        shipped: "BPSK100",
+        shipped: "BPSK100-ALT",
         candidate: "BPSK100-PN",
         level: SpeedLevel::Sl4,
         floor_db: 4.5,
     },
     Rung {
-        shipped: "BPSK250",
+        shipped: "BPSK250-ALT",
         candidate: "BPSK250-PN",
         level: SpeedLevel::Sl5,
         floor_db: 5.0,
@@ -96,7 +98,7 @@ fn rx_engine(mode: &'static str, level: SpeedLevel) -> ModemEngine {
     let mut e = ModemEngine::new(Box::new(LoopbackBackend::new()));
     e.register_plugin(Box::new(bpsk_plugin::BpskPlugin::new()))
         .unwrap();
-    e.register_plugin(Box::new(bpsk_plugin::BpskPlugin::pn_candidate()))
+    e.register_plugin(Box::new(bpsk_plugin::BpskPlugin::measurement_arms()))
         .unwrap();
     e.register_plugin(Box::new(fsk4_plugin::Fsk4Plugin::new()))
         .unwrap();
@@ -130,7 +132,7 @@ fn tx_frame(mode: &str, payload: &[u8]) -> Vec<f32> {
     let mut tx = ModemEngine::new(Box::new(bk.clone_shared()));
     tx.register_plugin(Box::new(bpsk_plugin::BpskPlugin::new()))
         .unwrap();
-    tx.register_plugin(Box::new(bpsk_plugin::BpskPlugin::pn_candidate()))
+    tx.register_plugin(Box::new(bpsk_plugin::BpskPlugin::measurement_arms()))
         .unwrap();
     tx.transmit_with_fec_mode(payload, mode, FecMode::Rs, None)
         .expect("transmit");
