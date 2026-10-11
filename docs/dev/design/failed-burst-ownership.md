@@ -188,6 +188,47 @@ Found by `grep -n "fn holds_an_ack_codeword" crates/openpulse-modem/src/engine.r
 linksim was found by `grep -rn "RxOutcome::Failed" crates apps --include=*.rs`. ARDOP was found by
 `grep -rn "receive_with_ack_hint" crates/openpulse-ardop/src`, because that grep cannot see it.
 
+## Round 3: measure before any rule (pre-registered 2026-10-11, before any output)
+
+The round-2 review pointed at the notch bank's own classifier. `NotchBank::band_filled` calls a
+block ours when more than 40 % of the protected band's bins sit 6 dB above the local median.
+`peaks_from_spectrum` finds peaks of ≥ 14 dB local prominence. Both run on 4 096-point Hann spectra
+(1.95 Hz bins). Both are scale-free, so they need no floor subtraction, no AGC correction and no
+resampling.
+
+**The statistic.** T is the fraction of a burst's analysis blocks that are **tone-dominated**. A
+block is tone-dominated when the band is *not* filled and an in-band peak of ≥ 14 dB prominence is
+present.
+- **Blocks:** 4 096 samples, hop 512, over the flushed burst's post-lead samples. The flushed burst
+  comes from `accumulate_capture`, so its boundaries are production's.
+- **Fidelity:** the classifier is a public method on `NotchBank`, so the probe and any later rule
+  call the same code (verification rule 5).
+
+**Hypothesis.** Our failing frames have few tone-dominated blocks: only the `--++` preamble lines
+(BPSK31) and the constant-phase tail. A CW, carrier or RTTY over has mostly tone-dominated blocks.
+
+**Cells.**
+- **Ours:** SL2–SL6, failing:
+  - `moderate_f1` at the floor − 2 and − 6 dB, at 0 and +50 Hz, wide and behind 250 Hz;
+  - the deterministic head piece (preamble only, 1 s) and tail piece (last 0.5 s of data plus the
+    tail);
+  - our frame plus an in-band carrier at −6, 0 and +6 dB relative to the frame.
+- **Foreign:** a steady carrier swept over the band, CW at 20 and 30 wpm (word-gap split included),
+  RTTY 170 Hz, and a carrier pair at fc ± baud/2, each at +6 and +12 dB.
+- **Sample:** 50 seeds per cell. All five idle recordings in `tests/captures/` are used, rotated by
+  seed.
+
+**Reported.** Per rung, the distribution of T for ours (min, p50, p95, max) and for each foreign
+class.
+
+**What decides round 3:**
+- **Go:** at SL3–SL6, the largest T of any failing frame of ours that is *not* under an in-band
+  carrier lies at least **0.3 below** the smallest T of the CW and carrier classes.
+- **Ours plus a carrier** is reported separately. Refusing those costs our NACK, so if they overlap
+  the foreign classes, round 3 must state that cost as a decision, not hide it in a threshold.
+- **No go:** without separation, #1460's remainder goes back to the maintainer with the three rounds'
+  evidence.
+
 ## Round 1 (2026-10-11, not implemented)
 
 Round 1 counted a failed RS burst only if one of its tried wires came within D bits of the 56 known
