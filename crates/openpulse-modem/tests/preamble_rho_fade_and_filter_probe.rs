@@ -120,7 +120,12 @@ fn rho_engine(mode: &str, window: &[f32]) -> Option<f32> {
 /// (samples, threshold, grid_hz) for either plugin.
 fn plugin_template(mode: &str) -> Option<(Vec<f32>, f32, f32)> {
     if mode.starts_with("BPSK") {
-        let t = bpsk_plugin::BpskPlugin::new().preamble_template(&cfg(mode))?;
+        let plugin = if mode.ends_with("-ALT") {
+            bpsk_plugin::BpskPlugin::measurement_arms()
+        } else {
+            bpsk_plugin::BpskPlugin::new()
+        };
+        let t = plugin.preamble_template(&cfg(mode))?;
         Some((t.samples, t.rho_threshold, t.rho_grid_hz))
     } else {
         let t = qpsk_plugin::QpskPlugin::new().preamble_template(&cfg(mode))?;
@@ -506,7 +511,7 @@ fn pn_template(mode: &str, chips: &[f32]) -> Option<Vec<f32>> {
     let full = bpsk_plugin::BpskPlugin::new().modulate(&bytes, &c).ok()?;
     let baud: f32 = mode.trim_start_matches("BPSK").parse().ok()?;
     let n = (FS / baud).round() as usize;
-    let start = n * bpsk_plugin::modulate::PREAMBLE_SYMS;
+    let start = n * bpsk_plugin::modulate::preamble_syms_for(mode);
     let span = n * (chips.len() - 1);
     (full.len() >= start + span).then(|| full[start..start + span].to_vec())
 }
@@ -1421,10 +1426,10 @@ fn f9_decode_conditioned_rho_tail() {
                     .register_plugin(Box::new(bpsk_plugin::BpskPlugin::new()))
                     .expect("register tx");
                 h.tx_engine
-                    .register_plugin(Box::new(bpsk_plugin::BpskPlugin::pn_candidate()))
+                    .register_plugin(Box::new(bpsk_plugin::BpskPlugin::measurement_arms()))
                     .expect("register tx");
                 h.rx_engine
-                    .register_plugin(Box::new(bpsk_plugin::BpskPlugin::pn_candidate()))
+                    .register_plugin(Box::new(bpsk_plugin::BpskPlugin::measurement_arms()))
                     .expect("register rx");
                 // F9_VETO=off registers the veto-disabled wrapper on the RECEIVER only, so the
                 // decoded set is chosen by the channel rather than partly by the subject of the
@@ -1975,37 +1980,46 @@ fn shipped_preamble_symbols(n: usize) -> Vec<f32> {
         .collect()
 }
 
-/// The synthesised template IS the shipped one at the shipped length — asserted, not claimed in prose.
+/// The synthesised templates ARE the plugin's, at the plugin's length — asserted, not claimed in prose.
 ///
 /// Deliberately NOT `#[ignore]`d. A research probe measuring the wrong artifact is worse than no
 /// probe, because it produces numbers that look like evidence; this one produced a table I was ready
-/// to reframe a wire-format issue around.
+/// to reframe a wire-format issue around. Two sequences since the #1062 flag day: the alternating
+/// run this file's probes were written for (now `BPSK250-ALT`), and PN-63, which BPSK250 ships.
 #[test]
 fn f12_synthesised_template_matches_the_shipped_one() {
-    let shipped = plugin_template("BPSK250")
-        .expect("BPSK250 publishes a template")
-        .0;
-    let built = pn_template(
-        "BPSK250",
-        &shipped_preamble_symbols(bpsk_plugin::modulate::PREAMBLE_SYMS),
-    )
-    .expect("synthesised template");
-    assert_eq!(
-        built.len(),
-        shipped.len(),
-        "synthesised template is a different length from the shipped one"
-    );
-    // `rho_of` needs a window strictly longer than the template (it searches lags), so pad the
-    // shipped template with silence rather than comparing equal lengths.
-    let mut window = shipped.clone();
-    window.extend(std::iter::repeat_n(0.0f32, 64));
-    let r = rho_of(&built, &window, 0.0).expect("correlation");
-    assert!(
-        r > 0.999,
-        "the synthesised template does not reproduce the shipped preamble (rho = {r:.4}). The first \
-         version of f12 scored 0.040 here — it measured alternating SYMBOLS while the wire carries \
-         alternating BITS, which NRZI turns into a period-four `--++` run."
-    );
+    let cases = [
+        (
+            "BPSK250-ALT",
+            shipped_preamble_symbols(bpsk_plugin::modulate::PREAMBLE_SYMS),
+        ),
+        (
+            "BPSK250",
+            openpulse_dsp::preamble::PreambleType::Pn63.sequence(),
+        ),
+    ];
+    for (mode, symbols) in cases {
+        let shipped = plugin_template(mode)
+            .unwrap_or_else(|| panic!("{mode} publishes a template"))
+            .0;
+        let built = pn_template("BPSK250", &symbols).expect("synthesised template");
+        assert_eq!(
+            built.len(),
+            shipped.len(),
+            "{mode}: synthesised template is a different length from the plugin's"
+        );
+        // `rho_of` needs a window strictly longer than the template (it searches lags), so pad the
+        // plugin's template with silence rather than comparing equal lengths.
+        let mut window = shipped.clone();
+        window.extend(std::iter::repeat_n(0.0f32, 64));
+        let r = rho_of(&built, &window, 0.0).expect("correlation");
+        assert!(
+            r > 0.999,
+            "{mode}: the synthesised template does not reproduce the plugin's preamble (rho = \
+             {r:.4}). The first version of f12 scored 0.040 here — it measured alternating SYMBOLS \
+             while the wire carries alternating BITS, which NRZI turns into a period-four `--++` run."
+        );
+    }
 }
 
 #[test]
@@ -2515,7 +2529,7 @@ fn decode_trial(mode: &'static str, t: &[f32], sps: usize, snr_db: f32, seed: u6
     let mut tx = openpulse_modem::engine::ModemEngine::new(Box::new(bk.clone_shared()));
     tx.register_plugin(Box::new(bpsk_plugin::BpskPlugin::new()))
         .unwrap();
-    tx.register_plugin(Box::new(bpsk_plugin::BpskPlugin::pn_candidate()))
+    tx.register_plugin(Box::new(bpsk_plugin::BpskPlugin::measurement_arms()))
         .unwrap();
     tx.transmit_with_fec_mode(&payload, mode, FecMode::Rs, None)
         .unwrap();
@@ -2538,7 +2552,7 @@ fn decode_trial(mode: &'static str, t: &[f32], sps: usize, snr_db: f32, seed: u6
     ));
     rx.register_plugin(Box::new(bpsk_plugin::BpskPlugin::new()))
         .unwrap();
-    rx.register_plugin(Box::new(bpsk_plugin::BpskPlugin::pn_candidate()))
+    rx.register_plugin(Box::new(bpsk_plugin::BpskPlugin::measurement_arms()))
         .unwrap();
     let ok = rx
         .decode_burst_with_fec(
@@ -2662,7 +2676,7 @@ fn f16_self_ambiguity_over_whitened_frames() {
             let mut tx = openpulse_modem::engine::ModemEngine::new(Box::new(bk.clone_shared()));
             tx.register_plugin(Box::new(bpsk_plugin::BpskPlugin::new()))
                 .unwrap();
-            tx.register_plugin(Box::new(bpsk_plugin::BpskPlugin::pn_candidate()))
+            tx.register_plugin(Box::new(bpsk_plugin::BpskPlugin::measurement_arms()))
                 .unwrap();
             tx.transmit_with_fec_mode(&payload, mode, FecMode::Rs, None)
                 .unwrap();

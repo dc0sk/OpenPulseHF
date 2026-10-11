@@ -470,7 +470,7 @@ fn register_all(engine: &mut ModemEngine) {
     // artifact (issue #934) rather than modem behaviour.
     let _ = engine.register_plugin(Box::new(mfsk16_plugin::Mfsk16Plugin::new()));
     #[cfg(feature = "pn-candidate")]
-    let _ = engine.register_plugin(Box::new(BpskPlugin::pn_candidate()));
+    let _ = engine.register_plugin(Box::new(BpskPlugin::measurement_arms()));
 }
 
 /// FSK4-ACK is the only profile-reachable mode that can't carry RS FEC; everything else

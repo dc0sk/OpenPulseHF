@@ -16,18 +16,27 @@ use openpulse_dsp::rrc::generate_rrc_coefficients;
 
 use crate::parse_baud_rate;
 
-/// Number of preamble symbols prepended to every transmission.
+/// Length of the alternating `--++` preamble, which BPSK31 and the `-RRC` mode still transmit.
 pub const PREAMBLE_SYMS: usize = 32;
-/// Preamble length of the #1062 PN-63 candidate (`docs/dev/design/pn-preamble.md`).
+/// Length of the PN-63 preamble on BPSK63, BPSK100 and BPSK250 (#1062, `docs/dev/design/pn-preamble.md`).
 pub(crate) const PN_PREAMBLE_SYMS: usize = 63;
 
-/// Whether `mode` is the #1062 PN-63 candidate (the `-PN` suffix, `pn-candidate` feature only).
+/// Whether `mode` transmits the PN-63 preamble (#1062 flag day, decision 25).
 ///
-/// A measurement arm, not a shipped mode: it exists so the candidate and the shipped preamble run
-/// through the same engine and daemon receive path in one build (design F1). Without the feature
-/// every mode is shipped and this is constantly false.
+/// BPSK31 keeps `--++` (F5 failed its cliff column) and so does the off-ladder `-RRC` mode, whose
+/// Gardner+LMS path trains on the alternating sequence. Two suffixes exist for measurement only,
+/// behind the `pn-candidate` feature: `-PN` forces PN-63 (BPSK31's parked candidate), `-ALT` forces
+/// `--++` (the pre-flag-day control arm the parity harnesses compare against).
 pub(crate) fn is_pn_mode(mode: &str) -> bool {
-    cfg!(feature = "pn-candidate") && mode.ends_with("-PN")
+    if cfg!(feature = "pn-candidate") {
+        if mode.ends_with("-PN") {
+            return true;
+        }
+        if mode.ends_with("-ALT") {
+            return false;
+        }
+    }
+    !mode.ends_with("-RRC") && !mode.starts_with("BPSK31")
 }
 
 /// Preamble length, in symbols, that `mode` transmits.
@@ -39,7 +48,7 @@ pub fn preamble_syms_for(mode: &str) -> usize {
     }
 }
 
-/// The preamble bits `mode` transmits: the shipped alternating run, or the NRZI pre-image of PN-63.
+/// The preamble bits `mode` transmits: the NRZI pre-image of PN-63, or the alternating run.
 pub fn preamble_bits_for(mode: &str) -> Vec<bool> {
     if is_pn_mode(mode) {
         pn63_preamble_bits()
@@ -229,7 +238,9 @@ pub fn bpsk_modulate_iq(
     Ok((i_bb, q_bb))
 }
 
-/// Minimum normalised preamble correlation ρ for a settle to be believed (#1049).
+/// The alternating preamble's veto threshold (#1049): BPSK250's until the #1062 flag day, now the
+/// `-ALT` control arm's. Its derivation, kept as recorded:
+///
 ///
 /// **Derived from the decode cliff, not from two captures.** The number in issue #1049 (0.40 from a
 /// real frame at ρ = 0.811 against a hot idle floor at 0.182) came from one capture whose carrier
@@ -262,9 +273,10 @@ pub fn bpsk_modulate_iq(
 ///
 /// What would falsify it: a mode or channel where a frame decodes at ρ below this. Re-measure the
 /// table per waveform family before extending the template beyond BPSK.
-pub const PREAMBLE_RHO_THRESHOLD: f32 = 0.40;
+pub const ALT_PREAMBLE_RHO_THRESHOLD: f32 = 0.40;
 
-/// The ρ a **delivered** BPSK250 frame is known to reach — the bound above which the runtime
+/// The alternating preamble's delivered-frame bound: BPSK250's until the #1062 flag day, now the
+/// `-ALT` control arm's. As recorded: the ρ a **delivered** BPSK250 frame is known to reach — the bound above which the runtime
 /// calibration stands the veto down instead of raising the threshold further (#1060, REQ-RX-03).
 ///
 /// **Provisional, and marked as such deliberately.** Measured 2026-08-17 by
@@ -288,20 +300,20 @@ pub const PREAMBLE_RHO_THRESHOLD: f32 = 0.40;
 /// until then a station whose noise pushes the derived threshold past this stands the veto down,
 /// which is the conservative direction — it reverts to energy-only detection rather than discarding
 /// frames.
-pub const DELIVERED_FRAME_RHO_BOUND: f32 = 0.50;
+pub const ALT_DELIVERED_FRAME_RHO_BOUND: f32 = 0.50;
 
-/// `BPSK250-PN`'s veto threshold (#1062 decision 23): the geometric mean of the worst measured
+/// BPSK250's veto threshold on PN-63 (#1062 decision 23): the geometric mean of the worst measured
 /// interferer (0.304, a DSB pair at fc ± 31.25 Hz) and the 3 dB decodable p01 (0.327), so the margin
 /// is 1.07, not the 1.2 the rule asked for, and is recorded as not met (`docs/dev/design/pn-preamble.md`).
 /// What would falsify it: an interferer above 0.315 or a delivered frame below it on a channel the
 /// rung runs on.
-pub const PN_PREAMBLE_RHO_THRESHOLD: f32 = 0.315;
+pub const PREAMBLE_RHO_THRESHOLD: f32 = 0.315;
 
-/// `BPSK250-PN`'s delivered-frame bound (#1062): f9 with the veto off through a 1250–1750 Hz mask
+/// BPSK250's delivered-frame bound on PN-63, for the runtime calibration (#1060, #1062): f9 with the veto off through a 1250–1750 Hz mask
 /// on `moderate_f1` at 5/10/20 dB, 120 seeds each, lowest decoded-ρ p01 (0.518) rounded down. Each
 /// p01 is a cell minimum (14–44 decodes per cell), so it bounds the measured population only.
 /// What would falsify it: a delivered PN frame below 0.51 on any channel this mode runs on.
-pub const PN_DELIVERED_FRAME_RHO_BOUND: f32 = 0.51;
+pub const DELIVERED_FRAME_RHO_BOUND: f32 = 0.51;
 
 /// Half-width of the residual-frequency grid the preamble correlation searches, in Hz.
 ///
@@ -780,7 +792,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
         let data = b"Hi";
         let samples = bpsk_modulate(data, &cfg).unwrap();
         let n = samples_per_symbol(8000.0, 100.0).unwrap(); // 80
-        let expected_syms = PREAMBLE_SYMS + data.len() * 8 + TAIL_SYMS;
+        let expected_syms = preamble_syms_for("BPSK100") + data.len() * 8 + TAIL_SYMS;
         assert_eq!(samples.len(), expected_syms * n);
     }
 

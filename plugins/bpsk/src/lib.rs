@@ -14,9 +14,12 @@
 //! ```text
 //! ┌────────────────┬────────────────────┬──────────┐
 //! │  preamble      │  data symbols      │  tail    │
-//! │  32 symbols    │  8 × N symbols     │ 8 syms   │
+//! │  63 symbols ¹  │  8 × N symbols     │ 8 syms   │
 //! └────────────────┴────────────────────┴──────────┘
 //! ```
+//!
+//! ¹ PN-63 (x⁶ + x + 1) on BPSK63/100/250; BPSK31 and `BPSK250-RRC` send 32 alternating-bit
+//! symbols (`--++`). See `docs/dev/design/pn-preamble.md`.
 //!
 //! Each bit is NRZI-encoded ("1" = phase flip, "0" = keep phase) and
 //! pulse-shaped with a 50% overlapping half-Hann crossfade to minimise
@@ -71,22 +74,32 @@ impl BpskPlugin {
         }
     }
 
-    /// The #1062 PN-63 candidate as its own plugin, named `BPSK-PN`, advertising only the `-PN` modes.
+    /// The #1062 measurement arms as their own plugin, named `BPSK-ARMS`: the `-PN` modes (PN-63 on
+    /// every rung, BPSK31's parked candidate among them) and the `-ALT` modes (the alternating
+    /// preamble the flag day retired from BPSK63/100/250, the parity harnesses' control).
     ///
     /// A separate instance rather than extra modes on [`Self::new`]: when several crates are tested in
     /// one cargo invocation a dev-only feature is unified across all of them, and extra advertised
     /// modes then appeared in every mode enumeration (the test matrix's coverage gate caught it).
     /// Here the feature changes nothing a shipped-mode caller can observe.
     ///
-    /// DORMANT(#1062): no production caller by design, a measurement arm until the flag day;
+    /// DORMANT(#1062): no production caller by design, measurement arms only;
     /// baselined in `reachability-baseline.txt`.
     #[cfg(feature = "pn-candidate")]
-    pub fn pn_candidate() -> Self {
+    pub fn measurement_arms() -> Self {
         let mut info = Self::make_info();
-        info.name = "BPSK-PN".to_string();
-        info.supported_modes = ["BPSK31-PN", "BPSK63-PN", "BPSK100-PN", "BPSK250-PN"]
-            .map(String::from)
-            .to_vec();
+        info.name = "BPSK-ARMS".to_string();
+        info.supported_modes = [
+            "BPSK31-PN",
+            "BPSK63-PN",
+            "BPSK100-PN",
+            "BPSK250-PN",
+            "BPSK63-ALT",
+            "BPSK100-ALT",
+            "BPSK250-ALT",
+        ]
+        .map(String::from)
+        .to_vec();
         Self {
             info,
             #[cfg(feature = "gpu")]
@@ -222,68 +235,42 @@ impl ModulationPlugin for BpskPlugin {
     /// To add a mode: derive its own threshold from its own noise column (across receive
     /// bandwidths) and its own decode column (on the channel that rung exists for), then list it.
     fn preamble_template(&self, config: &ModulationConfig) -> Option<PreambleTemplate> {
-        // The constants below were derived on BPSK250 and are named as such, so the engine rejects
-        // them for any other mode rather than silently inheriting. Two of them are mode-specific,
-        // not one: besides the threshold, PREAMBLE_RHO_GRID_HZ = 20 is safe only while the grid
-        // stays under half the preamble's line spacing (baud/2). At BPSK31 that spacing is 15.6 Hz
-        // and at BPSK63 31.25 Hz, so a +/-20 Hz grid can rotate SOME line onto ANY tone frequency
-        // and the veto would corroborate a steady tone wherever it sits.
+        // Each set of constants was derived on BPSK250 for one preamble and is named for its mode,
+        // so the engine rejects them for any other mode rather than silently inheriting. PN-63 has
+        // no line structure, so its grid bound is F2's measurement rather than baud/4.
         //
         // To add a mode: derive its own threshold (noise column across receive bandwidths, decode
-        // column on the channel that rung exists for) AND its own grid (bounded above by baud/4,
-        // below by the settle residual, measured at <= 0.3 Hz), then name it here.
+        // column on the channel that rung exists for), its own delivered-frame bound (f9) and its
+        // own grid, then name it here (`docs/dev/design/pn-preamble.md`, F2 and f9).
         const DERIVED_FOR: &str = "BPSK250";
-        // The PN candidate's constants are its own (#1062 decisions 23 and F2/f9); an aperiodic
-        // preamble has no line structure, so the baud/4 guard below does not apply to it.
-        const PN_DERIVED_FOR: &str = "BPSK250-PN";
-        if config.mode == PN_DERIVED_FOR {
-            let samples = modulate::bpsk_preamble_template(config).ok()?;
-            return Some(
-                PreambleTemplate::new(
-                    PN_DERIVED_FOR,
-                    samples,
-                    modulate::PN_PREAMBLE_RHO_THRESHOLD,
-                    modulate::PREAMBLE_RHO_GRID_HZ,
-                )
-                .with_delivered_frame_bound(modulate::PN_DELIVERED_FRAME_RHO_BOUND),
-            );
-        }
-        if config.mode != DERIVED_FOR {
-            return None;
-        }
-        // Mechanical form of the bound the comment above states, so activating a mode with an
-        // unsafe grid fails here instead of shipping. The preamble's lines sit at odd multiples of
-        // baud/4, so adjacent lines are baud/2 apart; a grid reaching half that spacing can rotate
-        // SOME line onto ANY frequency. Measured at the deployed geometry (grid centred where a
-        // locked settle puts it): BPSK31 rho 0.661 and BPSK63 0.701 against a 0.40 threshold, where
-        // BPSK250 sits at 0.042 — the settle's rescue is a coincidence of magnitudes that stops
-        // holding once baud/4 falls under the grid.
-        //
-        // Scoped to this plugin deliberately: baud/4 is a property of THIS preamble's period-4 line
-        // structure and would be wrong for a PN successor.
-        let baud = crate::parse_baud_rate(&config.mode).ok()?;
-        if modulate::PREAMBLE_RHO_GRID_HZ >= baud / 4.0 {
-            // Loud where someone would be editing this, safe-fail where it ships. Publishing
-            // nothing costs the energy-only settle; publishing this costs a veto that corroborates
-            // any steady tone, which is worse than having none.
-            debug_assert!(
-                false,
-                "{} would publish a preamble template whose grid (±{} Hz) reaches its first                  spectral line at baud/4 = {:.1} Hz — a steady tone at any frequency would                  corroborate. Derive a narrower grid for this mode before listing it.",
-                config.mode,
-                modulate::PREAMBLE_RHO_GRID_HZ,
-                baud / 4.0
-            );
-            return None;
-        }
+        let pn = match config.mode.as_str() {
+            DERIVED_FOR => true,
+            #[cfg(feature = "pn-candidate")]
+            "BPSK250-PN" => true,
+            #[cfg(feature = "pn-candidate")]
+            "BPSK250-ALT" => false,
+            _ => return None,
+        };
         let samples = modulate::bpsk_preamble_template(config).ok()?;
+        let (threshold, bound) = if pn {
+            (
+                modulate::PREAMBLE_RHO_THRESHOLD,
+                modulate::DELIVERED_FRAME_RHO_BOUND,
+            )
+        } else {
+            (
+                modulate::ALT_PREAMBLE_RHO_THRESHOLD,
+                modulate::ALT_DELIVERED_FRAME_RHO_BOUND,
+            )
+        };
         Some(
             PreambleTemplate::new(
-                DERIVED_FOR,
+                &config.mode,
                 samples,
-                modulate::PREAMBLE_RHO_THRESHOLD,
+                threshold,
                 modulate::PREAMBLE_RHO_GRID_HZ,
             )
-            .with_delivered_frame_bound(modulate::DELIVERED_FRAME_RHO_BOUND),
+            .with_delivered_frame_bound(bound),
         )
     }
 
@@ -306,7 +293,10 @@ impl ModulationPlugin for BpskPlugin {
 /// Parse the numeric baud rate from a mode string such as `"BPSK31"` or `"BPSK250-RRC"`.
 pub(crate) fn parse_baud_rate(mode: &str) -> Result<f32, ModemError> {
     // Strip trailing suffixes (-RRC) then parse leading digits after "BPSK".
-    let base = mode.trim_end_matches("-RRC").trim_end_matches("-PN");
+    let base = mode
+        .trim_end_matches("-RRC")
+        .trim_end_matches("-PN")
+        .trim_end_matches("-ALT");
     let digits: String = base.chars().skip_while(|c| !c.is_ascii_digit()).collect();
     match digits.as_str() {
         "31" => Ok(31.25),
@@ -528,10 +518,22 @@ mod tests {
         );
     }
 
-    /// The shipped modes transmit the shipped preamble, with or without the candidate feature.
+    /// The flag-day wire (#1062, decision 25), with or without the measurement feature: PN-63 on
+    /// BPSK63/100/250, the alternating run on BPSK31 and `BPSK250-RRC`.
     #[test]
-    fn shipped_modes_keep_the_alternating_preamble() {
-        for mode in ["BPSK31", "BPSK63", "BPSK100", "BPSK250"] {
+    fn the_wire_preamble_per_mode() {
+        for mode in ["BPSK63", "BPSK100", "BPSK250"] {
+            assert_eq!(
+                demodulate::expected_preamble_for(mode),
+                openpulse_dsp::preamble::PreambleType::Pn63.sequence(),
+                "{mode}"
+            );
+            assert_eq!(
+                modulate::preamble_syms_for(mode),
+                modulate::PN_PREAMBLE_SYMS
+            );
+        }
+        for mode in ["BPSK31", "BPSK250-RRC"] {
             assert_eq!(
                 modulate::preamble_bits_for(mode),
                 modulate::preamble_bits(modulate::PREAMBLE_SYMS),
@@ -540,80 +542,100 @@ mod tests {
         }
     }
 
-    /// The candidate transmits PN-63 as SYMBOLS: the NRZI encoding of its bits is the m-sequence
-    /// itself, not its integral (#1062 design, *Decision*).
-    #[cfg(feature = "pn-candidate")]
+    /// Every rung round-trips, and a PN rung's frame is 31 symbols longer than the alternating one
+    /// and says so in its geometry.
     #[test]
-    fn the_pn_candidate_transmits_the_m_sequence_as_symbols() {
-        let symbols = demodulate::expected_preamble_for("BPSK250-PN");
-        assert_eq!(
-            symbols,
-            openpulse_dsp::preamble::PreambleType::Pn63.sequence()
-        );
-        assert_eq!(symbols.len(), modulate::PN_PREAMBLE_SYMS);
-    }
-
-    /// Every candidate rung round-trips, and its frame is 31 symbols longer than the shipped one.
-    #[cfg(feature = "pn-candidate")]
-    #[test]
-    fn every_pn_candidate_rung_round_trips() {
-        let plugin = BpskPlugin::pn_candidate();
-        assert!(BpskPlugin::new()
-            .info()
-            .supported_modes
-            .iter()
-            .all(|m| !m.ends_with("-PN")));
-        let data = b"PN-63 candidate";
+    fn every_rung_round_trips_at_its_preamble_length() {
+        let plugin = BpskPlugin::new();
+        let data = b"PN-63 flag day";
+        let alt_len = || {
+            let mut bits = modulate::preamble_bits(modulate::PREAMBLE_SYMS);
+            bits.extend(modulate::bytes_to_bits(data));
+            bits.len() + modulate::TAIL_SYMS
+        };
         for base in ["BPSK31", "BPSK63", "BPSK100", "BPSK250"] {
-            let mode = format!("{base}-PN");
-            assert!(plugin.info().supported_modes.contains(&mode), "{mode}");
-            let pn = cfg(&mode);
-            let shipped = cfg(base);
-            let tx = plugin.modulate(data, &pn).unwrap();
-            assert_eq!(plugin.demodulate(&tx, &pn).unwrap(), data, "{mode}");
+            let c = cfg(base);
+            let tx = plugin.modulate(data, &c).unwrap();
+            assert_eq!(plugin.demodulate(&tx, &c).unwrap(), data, "{base}");
             let n = modulate::samples_per_symbol(8000.0, parse_baud_rate(base).unwrap()).unwrap();
-            let shipped_len = plugin.modulate(data, &shipped).unwrap().len();
-            assert_eq!(tx.len(), shipped_len + 31 * n, "{mode}");
-            let g = plugin.frame_geometry(&pn).unwrap();
-            assert_eq!(g.preamble_samples, 63 * n, "{mode}");
+            let syms = modulate::preamble_syms_for(base);
+            let extra = syms - modulate::PREAMBLE_SYMS;
+            assert_eq!(tx.len(), (alt_len() + extra) * n, "{base}");
+            let g = plugin.frame_geometry(&c).unwrap();
+            assert_eq!(g.preamble_samples, syms * n, "{base}");
         }
     }
 
-    /// Only `BPSK250-PN` publishes a PN template, with its own constants (#1062 decision 23, f9);
-    /// the slow PN rungs have none derived and publish nothing.
-    #[cfg(feature = "pn-candidate")]
+    /// Only BPSK250 publishes a template, with PN-63's constants (#1062 decision 23, f9); the
+    /// slow rungs have none derived and publish nothing.
     #[test]
-    fn only_bpsk250_pn_publishes_a_pn_template() {
-        let plugin = BpskPlugin::pn_candidate();
+    fn only_bpsk250_publishes_a_template() {
+        let plugin = BpskPlugin::new();
         let t = plugin
-            .preamble_template(&cfg("BPSK250-PN"))
-            .expect("BPSK250-PN template");
-        assert_eq!(t.for_mode, "BPSK250-PN");
-        assert_eq!(t.rho_threshold, modulate::PN_PREAMBLE_RHO_THRESHOLD);
-        assert_eq!(t.rho_grid_hz, modulate::PREAMBLE_RHO_GRID_HZ);
-        assert_eq!(
-            t.delivered_frame_rho_bound,
-            Some(modulate::PN_DELIVERED_FRAME_RHO_BOUND)
-        );
-        let shipped = BpskPlugin::new()
             .preamble_template(&cfg("BPSK250"))
             .expect("BPSK250 template");
-        assert_eq!(shipped.rho_threshold, modulate::PREAMBLE_RHO_THRESHOLD);
-        assert_eq!(
-            shipped.delivered_frame_rho_bound,
-            Some(modulate::DELIVERED_FRAME_RHO_BOUND)
-        );
-        assert_ne!(t.samples, shipped.samples);
-        for mode in ["BPSK31-PN", "BPSK63-PN", "BPSK100-PN"] {
+        assert_eq!(t.for_mode, "BPSK250");
+        assert_eq!(t.rho_threshold, 0.315);
+        assert_eq!(t.rho_grid_hz, modulate::PREAMBLE_RHO_GRID_HZ);
+        assert_eq!(t.delivered_frame_rho_bound, Some(0.51));
+        assert_eq!(t.samples.len(), 62 * 32);
+        for mode in ["BPSK31", "BPSK63", "BPSK100", "BPSK250-RRC"] {
             assert!(plugin.preamble_template(&cfg(mode)).is_none(), "{mode}");
         }
     }
 
-    #[cfg(feature = "pn-candidate")]
     fn cfg(mode: &str) -> ModulationConfig {
         ModulationConfig {
             mode: mode.to_string(),
             ..ModulationConfig::default()
+        }
+    }
+
+    /// The `pn-candidate` measurement arms (#1062 flag day).
+    #[cfg(feature = "pn-candidate")]
+    mod measurement_arm_tests {
+        use super::*;
+
+        /// The measurement arms: `-PN` is PN-63 on every rung, `-ALT` the retired alternating preamble.
+        #[test]
+        fn the_measurement_arms_round_trip() {
+            let plugin = BpskPlugin::measurement_arms();
+            assert!(BpskPlugin::new()
+                .info()
+                .supported_modes
+                .iter()
+                .all(|m| !m.ends_with("-PN") && !m.ends_with("-ALT")));
+            let data = b"measurement arm";
+            for mode in plugin.info().supported_modes.clone() {
+                let c = cfg(&mode);
+                let tx = plugin.modulate(data, &c).unwrap();
+                assert_eq!(plugin.demodulate(&tx, &c).unwrap(), data, "{mode}");
+                let want = if mode.ends_with("-PN") { 63 } else { 32 };
+                assert_eq!(modulate::preamble_syms_for(&mode), want, "{mode}");
+            }
+        }
+
+        /// The control arm keeps the alternating template and its own constants.
+        #[test]
+        fn the_alt_arm_keeps_the_alternating_template() {
+            let plugin = BpskPlugin::measurement_arms();
+            let alt = plugin
+                .preamble_template(&cfg("BPSK250-ALT"))
+                .expect("BPSK250-ALT template");
+            assert_eq!(alt.rho_threshold, modulate::ALT_PREAMBLE_RHO_THRESHOLD);
+            assert_eq!(
+                alt.delivered_frame_rho_bound,
+                Some(modulate::ALT_DELIVERED_FRAME_RHO_BOUND)
+            );
+            assert_eq!(alt.samples.len(), 31 * 32);
+            let pn = plugin.preamble_template(&cfg("BPSK250-PN")).unwrap();
+            assert_eq!(
+                pn.samples,
+                BpskPlugin::new()
+                    .preamble_template(&cfg("BPSK250"))
+                    .unwrap()
+                    .samples
+            );
         }
     }
 }

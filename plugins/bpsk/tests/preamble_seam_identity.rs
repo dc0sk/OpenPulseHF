@@ -14,8 +14,14 @@ use bpsk_plugin::demodulate::{
     bpsk_demodulate, bpsk_demodulate_with_expected, expected_preamble_symbols, expected_symbols_for,
 };
 use bpsk_plugin::modulate::{
-    bpsk_modulate, bpsk_modulate_with_preamble, preamble_bits, PREAMBLE_SYMS,
+    bpsk_modulate, bpsk_modulate_with_preamble, preamble_bits, preamble_bits_for,
+    preamble_syms_for, PREAMBLE_SYMS,
 };
+
+/// The expectation the demodulator derives for `mode`, built from the modulator's own bits.
+fn expected_preamble_for(mode: &str) -> Vec<f32> {
+    expected_symbols_for(&preamble_bits_for(mode))
+}
 use openpulse_core::plugin::{ModulationConfig, PulseShape};
 
 fn config(mode: &str) -> ModulationConfig {
@@ -50,6 +56,26 @@ fn the_shipped_preamble_bits_are_pinned_against_an_independent_transcription() {
     );
 }
 
+/// The PN-63 preamble BPSK63/100/250 transmit since the #1062 flag day, as SYMBOLS, written out
+/// by hand for the same reason as the pin above: BPSK250's ρ constants (0.315, 0.51) are scoped to
+/// this sequence.
+#[test]
+fn the_pn63_preamble_symbols_are_pinned_against_an_independent_transcription() {
+    let pinned: Vec<f32> = "+-+---+++--+--+-++-+++-++--++-+-+-++++++-----+----++---+-+--+++"
+        .chars()
+        .map(|c| if c == '+' { 1.0 } else { -1.0 })
+        .collect();
+    assert_eq!(pinned.len(), 63);
+    for mode in ["BPSK63", "BPSK100", "BPSK250"] {
+        assert_eq!(preamble_syms_for(mode), 63, "{mode}");
+        assert_eq!(
+            expected_preamble_for(mode),
+            pinned,
+            "{mode}: the PN-63 preamble changed — BPSK250's ρ constants must be re-derived"
+        );
+    }
+}
+
 #[test]
 fn the_preamble_parameter_actually_reaches_the_wire() {
     // Anti-vacuity tripwire. A seam that accepted the parameter and ignored it
@@ -57,9 +83,9 @@ fn the_preamble_parameter_actually_reaches_the_wire() {
     // shipped sequence. This one feeds a different sequence and requires the
     // transmitted samples to differ.
     let data = b"OPENPULSE parity seam";
-    let mut altered = preamble_bits(PREAMBLE_SYMS);
-    altered[1] = !altered[1];
     for mode in MODES {
+        let mut altered = preamble_bits_for(mode);
+        altered[1] = !altered[1];
         let cfg = config(mode);
         let shipped = bpsk_modulate(data, &cfg).expect("shipped modulate");
         let changed = bpsk_modulate_with_preamble(data, &cfg, &altered).expect("altered modulate");
@@ -88,9 +114,8 @@ fn the_parameterised_demodulator_reproduces_the_shipped_decode_exactly() {
         let cfg = config(mode);
         let tx = bpsk_modulate(data, &cfg).expect("modulate");
         let shipped = bpsk_demodulate(&tx, &cfg).expect("shipped demodulate");
-        let seamed =
-            bpsk_demodulate_with_expected(&tx, &cfg, &expected_preamble_symbols(PREAMBLE_SYMS))
-                .expect("seamed demodulate");
+        let seamed = bpsk_demodulate_with_expected(&tx, &cfg, &expected_preamble_for(mode))
+            .expect("seamed demodulate");
         assert_eq!(
             shipped, seamed,
             "{mode}: parameterised demodulator changed the decoded bytes"

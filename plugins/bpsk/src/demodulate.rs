@@ -1486,7 +1486,7 @@ mod tests {
     /// search, since most offsets in the wider span decode the same bytes noiselessly.
     #[test]
     fn the_expectation_parameter_actually_reaches_the_timing_lock() {
-        let wrong: Vec<f32> = (0..PREAMBLE_SYMS)
+        let wrong: Vec<f32> = (0..crate::modulate::PN_PREAMBLE_SYMS)
             .map(|i| {
                 if i.wrapping_mul(2_654_435_761) % 2 == 0 {
                     1.0
@@ -1501,7 +1501,7 @@ mod tests {
         };
         let tx = crate::modulate::bpsk_modulate(b"OPENPULSE parity seam", &cfg).expect("modulate");
         let (n, fc, fs) = (32, cfg.center_frequency, cfg.sample_rate as f32);
-        let shipped = expected_preamble_symbols(PREAMBLE_SYMS);
+        let shipped = expected_preamble_for("BPSK250");
         let right = timing_locks_with_expected(&tx, n, fc, fs, &shipped);
         let under_wrong = timing_locks_with_expected(&tx, n, fc, fs, &wrong);
         assert_ne!(
@@ -1517,11 +1517,18 @@ mod tests {
     /// wire bytes are fixed (magic, then whitening), and pinned here. The widened lock's arms must
     /// FAIL (else the fixture has no alias and proves nothing) and a restricted-lock arm must
     /// decode.
+    ///
+    /// Re-scoped at the #1062 flag day: PN-63's autocorrelation has no −2-symbol alias (an
+    /// m-sequence's off-peak is −1/63), so this fixture's alias exists only on the alternating
+    /// preamble: BPSK31, and here the `BPSK250-ALT` control arm, whose n = 32 the fixture needs. On
+    /// PN the two locks still differ when the widened one is negative, and the rescue arms are then
+    /// offered (`variant_zero_is_the_shipped_demodulate`'s noisy case).
+    #[cfg(feature = "pn-candidate")]
     #[test]
     fn the_restricted_lock_rescues_a_frame_the_widened_lock_aliases() {
         use openpulse_core::{fec::FecCodec, frame::Frame, scramble};
         let cfg = ModulationConfig {
-            mode: "BPSK250".into(),
+            mode: "BPSK250-ALT".into(),
             ..ModulationConfig::default()
         };
         let (uncoded_wire, payload) = framed_wire(7);
@@ -1552,7 +1559,7 @@ mod tests {
             let tx = crate::modulate::bpsk_modulate(&wire, &cfg).expect("modulate");
             let mut slice = vec![0.0f32; 52]; // δ = 1.625 symbols at n = 32
             slice.extend_from_slice(&tx);
-            let expected = expected_preamble_symbols(PREAMBLE_SYMS);
+            let expected = expected_preamble_for(&cfg.mode);
             let locks =
                 timing_locks_with_expected(&slice, 32, cfg.center_frequency, 8000.0, &expected);
             assert!(
@@ -1587,7 +1594,7 @@ mod tests {
     /// exercised) and lead 52 (1.625 symbols: the widened lock sits on the −2-symbol alias and the
     /// restricted lock rescues). Noiselessly the variant vectors must be identical; under noise the
     /// decode outcome must agree seed by seed.
-    #[cfg(feature = "gpu")]
+    #[cfg(all(feature = "gpu", feature = "pn-candidate"))]
     #[test]
     fn gpu_and_cpu_agree_where_the_two_timing_locks_differ() {
         use openpulse_channel::{awgn::AwgnChannel, AwgnConfig, ChannelModel};
@@ -1598,7 +1605,7 @@ mod tests {
             return;
         };
         let cfg = ModulationConfig {
-            mode: "BPSK250".into(),
+            mode: "BPSK250-ALT".into(),
             sample_rate: 8000,
             center_frequency: 1500.0,
             ..ModulationConfig::default()
@@ -1620,7 +1627,7 @@ mod tests {
                 32,
                 1500.0,
                 8000.0,
-                &expected_preamble_symbols(PREAMBLE_SYMS),
+                &expected_preamble_for(&cfg.mode),
             );
             assert_ne!(
                 locks.widened, locks.restricted as isize,
@@ -1697,7 +1704,7 @@ mod tests {
         } else {
             free_rs_strengthening(FecMode::Rs, plen + Frame::WIRE_OVERHEAD)
         };
-        let expected = expected_preamble_symbols(PREAMBLE_SYMS);
+        let expected = expected_preamble_for("BPSK250");
         let decodes = |variants: &[Vec<u8>], payload: &[u8]| {
             variants.iter().any(|b| {
                 let mut w = b.clone();
@@ -1717,7 +1724,7 @@ mod tests {
         let p0_variants = |x: &[f32]| -> Vec<Vec<u8>> {
             let off = find_timing_offset_with_expected(x, n, fc, fs, &expected);
             let (iv, qv) = demodulate_iq_at(x, n, fc, fs, off as isize);
-            variants_from_parts(iv, qv, true, PREAMBLE_SYMS).unwrap_or_default()
+            variants_from_parts(iv, qv, true, crate::modulate::PN_PREAMBLE_SYMS).unwrap_or_default()
         };
         let base = 3 * n;
         println!("\nTWOLOCK mode={mode} n={n} ch={ch} snr={snr} payload={plen}B fec={fec:?} frames={frames}");
@@ -1803,7 +1810,7 @@ mod tests {
         let tx = crate::modulate::bpsk_modulate(&wire, &cfg).expect("modulate");
         let mut slice = vec![0.0f32; 16]; // δ = n/2: the peak is inside both ranges
         slice.extend_from_slice(&tx);
-        let expected = expected_preamble_symbols(PREAMBLE_SYMS);
+        let expected = expected_preamble_for("BPSK250");
         let locks = timing_locks_with_expected(&slice, 32, cfg.center_frequency, 8000.0, &expected);
         assert_eq!(
             locks.widened, locks.restricted as isize,
@@ -1835,7 +1842,7 @@ mod tests {
         let mut led = vec![0.0f32; 8];
         led.extend_from_slice(&tx);
         let rx = awgn(&led, 20.0, 11);
-        let expected = expected_preamble_symbols(PREAMBLE_SYMS);
+        let expected = expected_preamble_for("BPSK250");
         let (raw_i, raw_q, crossfade) =
             symbol_stream_parts_with_expected(&rx, &cfg, &expected).expect("parts");
         assert!(
@@ -2008,9 +2015,9 @@ mod tests {
         let tx2 = crate::modulate::bpsk_modulate(&payload, &shifted).expect("modulate");
         let _ = tx;
         let (iv, qv) = demodulate_iq(&tx2, 32, cfg.center_frequency, 8000.0, 0);
-        let rx: Vec<Complex32> = iv[PREAMBLE_SYMS - 1..iv.len() - TAIL_SYMS]
+        let rx: Vec<Complex32> = iv[crate::modulate::PN_PREAMBLE_SYMS - 1..iv.len() - TAIL_SYMS]
             .iter()
-            .zip(&qv[PREAMBLE_SYMS - 1..qv.len() - TAIL_SYMS])
+            .zip(&qv[crate::modulate::PN_PREAMBLE_SYMS - 1..qv.len() - TAIL_SYMS])
             .map(|(&i, &q)| Complex32::new(i, q))
             .collect();
         let d = decisions_from_differential(&rx);
@@ -2061,7 +2068,24 @@ mod tests {
             let variants = bpsk_demodulate_variants(&rx, &cfg).expect("variants");
             let shipped = bpsk_demodulate(&rx, &cfg).expect("demodulate");
             assert_eq!(variants[0], shipped, "variant 0 must BE the shipped decode");
-            assert_eq!(variants.len(), 2, "BPSK250 crossfades, so it has two arms");
+            let locks = timing_locks_with_expected(
+                &rx,
+                32,
+                cfg.center_frequency,
+                cfg.sample_rate as f32,
+                &expected_preamble_for(&cfg.mode),
+            );
+            // Two arms per lock; the rescue lock's arms are dropped where they repeat a wire.
+            let arms = if locks.widened == locks.restricted as isize {
+                2..=2
+            } else {
+                2..=4
+            };
+            assert!(
+                arms.contains(&variants.len()),
+                "BPSK250 crossfades: two arms per distinct lock, got {} at {locks:?}",
+                variants.len()
+            );
         }
     }
 
@@ -2570,19 +2594,15 @@ mod carrier_dip_tiebreak {
         let c = cfg();
         let tx = bpsk_modulate(&payload, &c).expect("modulate");
         let n = samples_per_symbol(FS, BAUD).expect("sps");
-        let offset = find_timing_offset_with_expected(
-            &tx,
-            n,
-            FC,
-            FS,
-            &expected_preamble_symbols(PREAMBLE_SYMS),
-        );
+        let offset =
+            find_timing_offset_with_expected(&tx, n, FC, FS, &expected_preamble_for("BPSK250"));
         let bits = arm_bits(&tx, n, offset, true);
         assert!(
-            bits.len() > PREAMBLE_SYMS + TAIL_SYMS,
+            bits.len() > crate::modulate::PN_PREAMBLE_SYMS + TAIL_SYMS,
             "composed arm produced too few symbols to compare"
         );
-        let composed = bits_to_bytes(&bits[PREAMBLE_SYMS - 1..bits.len() - TAIL_SYMS]);
+        let composed =
+            bits_to_bytes(&bits[crate::modulate::PN_PREAMBLE_SYMS - 1..bits.len() - TAIL_SYMS]);
         let shipped = bpsk_demodulate(&tx, &c).expect("shipped demodulator");
         let k = shipped.len().min(composed.len());
         assert!(k > 0, "nothing to compare");
@@ -2695,7 +2715,7 @@ mod carrier_dip_tiebreak {
         let c = cfg();
         let tx = bpsk_modulate(&payload, &c).expect("modulate");
         let n = samples_per_symbol(FS, BAUD).expect("sps");
-        let expected = expected_preamble_symbols(PREAMBLE_SYMS);
+        let expected = expected_preamble_for("BPSK250");
 
         // Truth from the clean channel, with both arms required to agree.
         let off0 = find_timing_offset_with_expected(&tx, n, FC, FS, &expected);
@@ -2711,7 +2731,8 @@ mod carrier_dip_tiebreak {
         // Arm agreement alone is a SELF-CONSISTENT reference: both could agree and both be wrong.
         // Tie it to the payload the modulator was handed. Flagged in review as archetype A.
         assert_eq!(off0, 0, "a clean frame should lock at offset 0; got {off0}");
-        let recovered = bits_to_bytes(&truth[PREAMBLE_SYMS - 1..truth.len() - TAIL_SYMS]);
+        let recovered =
+            bits_to_bytes(&truth[crate::modulate::PN_PREAMBLE_SYMS - 1..truth.len() - TAIL_SYMS]);
         assert_eq!(
             &recovered[..payload.len().min(recovered.len())],
             &payload[..payload.len().min(recovered.len())],
@@ -3083,7 +3104,7 @@ mod carrier_dip_tiebreak {
         let c = cfg();
         let tx = bpsk_modulate(&payload, &c).expect("modulate");
         let n = samples_per_symbol(FS, BAUD).expect("sps");
-        let expected = expected_preamble_symbols(PREAMBLE_SYMS);
+        let expected = expected_preamble_for("BPSK250");
         let off0 = find_timing_offset_with_expected(&tx, n, FC, FS, &expected);
         let truth = arm_bits(&tx, n, off0, false);
 
@@ -3198,7 +3219,7 @@ mod carrier_dip_tiebreak {
         let c = cfg();
         let tx = bpsk_modulate(&payload, &c).expect("modulate");
         let n = samples_per_symbol(FS, BAUD).expect("sps");
-        let expected = expected_preamble_symbols(PREAMBLE_SYMS);
+        let expected = expected_preamble_for("BPSK250");
         let off0 = find_timing_offset_with_expected(&tx, n, FC, FS, &expected);
         assert_eq!(off0, 0);
         let truth = arm_bits(&tx, n, off0, false);
@@ -3209,7 +3230,7 @@ mod carrier_dip_tiebreak {
                 .count(),
             0
         );
-        let data_lo = PREAMBLE_SYMS - 1;
+        let data_lo = crate::modulate::PN_PREAMBLE_SYMS - 1;
         let data_hi = truth.len() - TAIL_SYMS;
         let recovered = bits_to_bytes(&truth[data_lo..data_hi]);
         assert_eq!(
@@ -3745,12 +3766,12 @@ mod carrier_dip_tiebreak {
         let c = cfg();
         let tx = bpsk_modulate(&payload, &c).expect("modulate");
         let n = samples_per_symbol(FS, BAUD).expect("sps");
-        let expected = expected_preamble_symbols(PREAMBLE_SYMS);
+        let expected = expected_preamble_for("BPSK250");
         let off0 = find_timing_offset_with_expected(&tx, n, FC, FS, &expected);
         assert_eq!(off0, 0);
         let truth = arm_bits(&tx, n, off0, false);
         let a = symbols_from_truth(&truth);
-        let data_lo = PREAMBLE_SYMS - 1;
+        let data_lo = crate::modulate::PN_PREAMBLE_SYMS - 1;
         let data_hi = truth.len() - TAIL_SYMS;
         assert_eq!(bits_to_bytes(&truth[data_lo..data_hi]), payload);
         let tx_rms = (tx.iter().map(|s| s * s).sum::<f32>() / tx.len() as f32).sqrt();
@@ -4073,7 +4094,7 @@ mod snr_decision_discriminator {
     //! `additive_snr_db_windowed` already documents that it "saturates once symbol errors are common"
     //! — this measures how much, and whether that is the whole story.
     use super::*;
-    use crate::modulate::{bytes_to_bits, preamble_bits};
+    use crate::modulate::bytes_to_bits;
     use openpulse_channel::{
         awgn::AwgnChannel, watterson::WattersonChannel, AwgnConfig, ChannelModel, WattersonConfig,
     };
@@ -4096,7 +4117,7 @@ mod snr_decision_discriminator {
     /// the clean-channel control below requires it to agree with the shipped decisions on every
     /// symbol, which fails if it is misaligned or wrong.
     fn truth(payload: &[u8]) -> Vec<f32> {
-        let mut bits = preamble_bits(PREAMBLE_SYMS);
+        let mut bits = crate::modulate::preamble_bits_for("BPSK250");
         bits.extend(bytes_to_bits(payload));
         bits.extend(std::iter::repeat_n(false, TAIL_SYMS));
         nrzi_encode(&bits)
@@ -4118,7 +4139,7 @@ mod snr_decision_discriminator {
     fn measure(audio: &[f32], truth: &[f32]) -> Option<Row> {
         let c = cfg();
         let (i_s, q_s) = symbol_stream(audio, &c).ok()?;
-        let range_start = PREAMBLE_SYMS - 1;
+        let range_start = crate::modulate::PN_PREAMBLE_SYMS - 1;
         let end = i_s.len().checked_sub(TAIL_SYMS)?;
         if range_start >= end {
             return None;
@@ -4214,7 +4235,7 @@ mod snr_decision_discriminator {
         let tx = crate::modulate::bpsk_modulate(&payload, &c).expect("modulate");
         let rms = (tx.iter().map(|x| x * x).sum::<f32>() / tx.len() as f32).sqrt();
         let sigma = rms / 10f32.powf(30.0 / 20.0);
-        let expected = expected_preamble_symbols(PREAMBLE_SYMS);
+        let expected = expected_preamble_for("BPSK250");
         let run = |lead: usize| {
             let mut st = 7u64;
             let mut u = || -> f32 {
@@ -4357,7 +4378,7 @@ mod snr_decision_discriminator {
                         n,
                         c.center_frequency,
                         c.sample_rate as f32,
-                        &expected_preamble_symbols(PREAMBLE_SYMS),
+                        &expected_preamble_for("BPSK250"),
                     );
                     if off == j {
                         locked += 1;

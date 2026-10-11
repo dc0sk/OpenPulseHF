@@ -4,7 +4,7 @@
 //! go dark whenever the wire changes (#1148 already darkened them; the PN preamble would again).
 //! Each class they pinned is reproduced here with a FRESHLY MODULATED frame in the same recording's
 //! own idle floor, at the recorded onset, carrier and level, so the fixture follows the wire. Every
-//! fixture runs on both `BPSK250` and the `BPSK250-PN` candidate. Plan, sabotages and results:
+//! fixture runs on both the shipped `BPSK250` (PN-63 since the flag day) and the retired `BPSK250-ALT`. Plan, sabotages and results:
 //! `docs/dev/design/pn-preamble.md`, *F6*.
 
 use std::time::Duration;
@@ -36,12 +36,12 @@ const GATE_ABS_MEAN_SQ: f32 = 0.0001;
 /// The replaced pin's condemnation bound (`the_settle_recovery_reaches_the_frame_without_crawling`).
 const MAX_CONDEMNATIONS: u64 = 2;
 
-/// The two arms: the shipped preamble and the flag day's.
-const ARMS: [&str; 2] = ["BPSK250", "BPSK250-PN"];
+/// The two arms: the alternating preamble the flag day retired (`-ALT`), and the shipped PN-63.
+const ARMS: [&str; 2] = ["BPSK250-ALT", "BPSK250"];
 
 fn plugin(mode: &str) -> BpskPlugin {
-    if mode.ends_with("-PN") {
-        BpskPlugin::pn_candidate()
+    if mode.ends_with("-ALT") {
+        BpskPlugin::measurement_arms()
     } else {
         BpskPlugin::new()
     }
@@ -179,7 +179,7 @@ fn an_uncoded_frame_in_the_1021_floor_decodes() {
 /// day's preamble, with the same fixture by reference. `BPSK250` runs in its own file.
 #[test]
 fn the_pn_receiver_never_settles_on_a_saturating_noise_floor() {
-    let mode = "BPSK250-PN";
+    let mode = "BPSK250";
     let hot = load_corpus(hot_fixture::CORPUS).expect("hot idle corpus");
     assert!(hot.mean_sq() > hot_fixture::GATE_CEILING_MEAN_SQ);
     for lead in hot_fixture::LEADS {
@@ -227,7 +227,7 @@ fn the_pn_receiver_never_settles_on_a_saturating_noise_floor() {
 /// on the flag day's preamble: the same leads, level and bound.
 #[test]
 fn a_pn_coded_frame_decodes_through_a_saturating_floor() {
-    let mode = "BPSK250-PN";
+    let mode = "BPSK250";
     let hot = load_corpus(hot_fixture::CORPUS).expect("hot idle corpus");
     assert!(hot.mean_sq() > hot_fixture::GATE_CEILING_MEAN_SQ);
     for lead in [80_000usize, 120_000] {
@@ -262,7 +262,7 @@ fn a_pn_coded_frame_decodes_through_a_saturating_floor() {
 /// keeps it from doing so, and the #1021 floor no longer gets a noise settle at all, so neither the
 /// floor fixture above nor any veto-on run can see a recovery that rewinds onto a condemned anchor.
 /// With the veto off, the saturating floor does put noise through: measured, the recovery reaches the
-/// frame after 66 condemnations on `BPSK250-PN`, and with `unsettle` rewinding to 0 (the pre-#1021
+/// frame after 66 condemnations on PN-63, and with `unsettle` rewinding to 0 (the pre-#1021
 /// code) it livelocks, 3 555 condemnations and no decode. The veto is off here on purpose, as a
 /// stand-in for any noise that passes it.
 #[test]

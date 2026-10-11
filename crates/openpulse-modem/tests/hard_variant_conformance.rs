@@ -225,9 +225,10 @@ fn bpsk_declares_its_second_arm() {
     let v = p
         .demodulate_variants(&awgn(&tx, 0.0, 3), &cfg)
         .expect("variants");
-    assert_eq!(
-        v.len(),
-        2,
+    // Two arms per timing lock; on PN-63 (#1062) the restricted lock can differ from the widened
+    // one under noise, and its arms are added where they are distinct wires (#1438 PR2).
+    assert!(
+        (2..=4).contains(&v.len()),
         "BPSK250 must offer the cancelled and uncancelled arms (#1428); it offered {}",
         v.len()
     );

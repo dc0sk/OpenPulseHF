@@ -689,30 +689,35 @@ fn a_flicker_is_judged_by_its_duration_not_its_reads() {
 
 /// The bound follows the session's CANDIDATES, not the whole profile, and sits exactly at their scan
 /// floor: a fade-split fragment as long as the floor is still evidence (#1452).
+///
+/// Pinned at SL4 since the #1062 flag day. PN-63 made SL3's window 8 192 samples, equal to the
+/// spectral arm's minimum (16 × 512), and the spectral span runs past the loud content (measured:
+/// a 6 656-sample failure counts at SL3, 6 492 does not), so at SL3 the spectral arm decides the
+/// edge and the total-power edge is not observable. SL4's window (5 120) sits under that minimum.
 #[test]
 fn the_not_evidence_bound_is_the_candidates_recognition_window() {
-    use openpulse_core::rate::SpeedLevel::{Sl3, Sl9};
-    let (f3, f9) = (hpx_window(Sl3), hpx_window(Sl9));
+    use openpulse_core::rate::SpeedLevel::{Sl4, Sl9};
+    let (f4, f9) = (hpx_window(Sl4), hpx_window(Sl9));
     assert!(
-        2_000 < f3 && f9 < 2_000,
-        "the fixture needs SL9's window ({f9}) < 2 000 < SL3's ({f3})"
+        2_000 < f4 && f9 < 2_000,
+        "the fixture needs SL9's window ({f9}) < 2 000 < SL4's ({f4})"
     );
-    let (_, ack) = ota_verdict(Some(Sl3), &[2_000]);
+    let (_, ack) = ota_verdict(Some(Sl4), &[2_000]);
     assert!(
         !ack,
-        "a 2 000-sample failure counted at SL3, whose window is {f3}"
+        "a 2 000-sample failure counted at SL4, whose window is {f4}"
     );
     let (_, ack) = ota_verdict(Some(Sl9), &[2_000]);
     assert!(
         ack,
         "a 2 000-sample failure was dropped at SL9, whose window is {f9}"
     );
-    let (_, ack) = ota_verdict(Some(Sl3), &[f3]);
-    assert!(ack, "a failure exactly at SL3's window ({f3}) was dropped");
-    let (_, ack) = ota_verdict(Some(Sl3), &[f3 - 1]);
+    let (_, ack) = ota_verdict(Some(Sl4), &[f4]);
+    assert!(ack, "a failure exactly at SL4's window ({f4}) was dropped");
+    let (_, ack) = ota_verdict(Some(Sl4), &[f4 - 1]);
     assert!(
         !ack,
-        "a failure one sample under SL3's window ({f3}) counted"
+        "a failure one sample under SL4's window ({f4}) counted"
     );
 }
 
