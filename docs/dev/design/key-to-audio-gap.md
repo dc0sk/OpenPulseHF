@@ -7,6 +7,17 @@ last_updated: 2026-10-11
 
 # The key-to-audio gap: open the output device outside the keyed window
 
+> **Round 1 (2026-10-11): not implemented**
+> ([`reviews/review-key-to-audio-gap.md`](../reviews/review-key-to-audio-gap.md)).
+> - **B** cannot be built as written: a cpal stream is `!Send`, and a session-long stream can play
+>   stale audio or key the rig silently.
+> - **A** holds the card's capture PCM, so a single-card receiver goes deaf.
+> - **The measured cost was not the production path.**
+>
+> Round 2 waits on the extended station probe (pass 1, pass 2, open by name, capture held). It will
+> combine A′ (the resolved name cached, pass 1 skipped), the same fix on the input side, and a
+> measured leader default. **Not a Release 1 blocker.**
+
 Work plan M2, *Key-to-audio gap*. Every keyed turn carries dead air between PTT and the first sample.
 It is about 1.3 s on the 2026-07-30 IC-9700 captures (`crates/openpulse-modem/tests/captures/README.md`).
 That is airtime on every turn and an uncontrolled implicit leader. **The fix moves work out of the
