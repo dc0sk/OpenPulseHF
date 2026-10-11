@@ -2,7 +2,7 @@
 project: openpulsehf
 doc: docs/dev/project/maintainer-todo.md
 status: draft
-last_updated: 2026-10-10
+last_updated: 2026-10-11
 ---
 
 # Maintainer TODO — what only you can do
@@ -13,26 +13,27 @@ asks first within each section. Report results in chat or as a comment on the li
 
 ## Now — unblocks Release 1 work
 
-- [ ] **Run the key-to-audio probe on both station Pis** (work plan M2, key-to-audio gap). The IC-9700
-  SDR captures suggest ~1.3 s of dead air between PTT and the first sample on every keyed turn; the
-  modulator is ruled out (≤ 26 ms), so this times the audio device path. It writes **silence**, so
-  nothing is radiated even with VOX on; PTT is not touched. It uses the output device the on-air daemon is configured with
-  (`[audio] device` in the config `run-onair-twin-ota.sh` writes; empty would mean the system
-  default, and then `PROBE_DEVICE` is left unset). Both Pis, because this times each station's own
-  audio device, and the two drive different rigs. A named device matters: production enumerates every
-  output device on each open only when a name is configured, and the on-air config always names one.
-  rpi51 on the system default (no config at the old path; `10c9ec9f`): enumerate 1066 / 530 / 483 /
-  485 / 582 ms, `open_output` 30–118 ms, write → drained − audio 132–144 ms. Enumeration would be
-  most of the ~1.3 s gap, if the station's named device enumerates the same way:
+- [ ] **Run the key-to-audio probe on rpi53** (work plan M2, key-to-audio gap). rpi51 is done (below).
+  It writes **silence**, so nothing is radiated even with VOX on, and PTT is not touched. The station
+  config does not exist until `run-onair-twin-ota.sh` has run, so the device name comes from your
+  on-air profile's `B_AUDIO_DEVICE`:
   ```bash
   git checkout main && git pull && git log --oneline -1
-  DEV=$(sed -n '/^\[audio\]/,/^\[/s/^device *= *"\(.*\)"/\1/p' ~/.config/openpulse-twin-ota/openpulse/config.toml)
-  env ${DEV:+PROBE_DEVICE="$DEV"} cargo test --release -p openpulse-audio \
+  DEV="<B_AUDIO_DEVICE from your on-air profile>"
+  env PROBE_DEVICE="$DEV" cargo test --release -p openpulse-audio \
     --features cpal-backend --lib key_to_audio -- --ignored --nocapture
   ```
-  If that file is missing, set `DEV` by hand to the station's `A_AUDIO_DEVICE` / `B_AUDIO_DEVICE` from
-  your on-air profile. Paste the five `run …` lines and the device name from each Pi. If enumeration or `open_output` is most of it, the fix
-  is opening the stream before keying (a PTT-timing change, so a design review first).
+  Paste the five `run …` lines and the device name.
+
+- [x] **Key-to-audio probe on rpi51** (done 2026-10-11, `09762a3a`, system default device, because
+  the station config does not exist yet). Five runs:
+  - enumerate 1 084 / 532 / 494 / 464 / 595 ms (16, then 9 devices);
+  - `open_output` 95 / 32 / 32 / 52 / 47 ms;
+  - write → drained − audio 133–144 ms.
+
+  A named device pays the enumeration on every open, whatever its name, so the gap per keyed turn is
+  about 0.65–1.3 s. That matches the ~1.3 s on the IC-9700 captures. The fix is designed next (work
+  plan M2).
 
 - [x] **Run the receive-cost probe with the PN-63 candidate on rpi51** (#1062 F1c; done 2026-10-10,
   `main`). Decode per frame, shipped → PN: SL5 1.28 → 1.55 s, SL4 1.54 → 2.17 s, SL3 1.98 → 3.14 s,
