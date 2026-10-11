@@ -313,6 +313,36 @@ impl NotchBank {
             && f <= self.params.protect_hi_hz
     }
 
+    /// Whether `block` is dominated by a narrowband tone between `lo_hz` and `hi_hz` (#1460): the
+    /// protected band is not filled, as a block of our own wideband signal fills it, and a peak of at
+    /// least `prominence_db` local prominence stands in that span. The same two tests the
+    /// persistence tracker uses, on one block, so a burst can be judged by the share of its blocks.
+    pub fn tone_dominated(&mut self, block: &[f32], lo_hz: f32, hi_hz: f32) -> bool {
+        if block.is_empty() {
+            return false;
+        }
+        let mag_db = self.spectrum_db(block);
+        if self.band_filled(&mag_db) {
+            return false;
+        }
+        self.peaks_from_spectrum(&mag_db, false)
+            .into_iter()
+            .any(|f| (lo_hz..=hi_hz).contains(&f))
+    }
+
+    /// Whether `block` holds a peak of at least `prominence_db` local prominence between `lo_hz` and
+    /// `hi_hz` (#1460), with no band-filled gate: [`Self::tone_dominated`]'s gate takes its noise
+    /// reference from the whole guard span, which behind a narrow receive filter is mostly stopband.
+    pub fn has_prominent_peak(&mut self, block: &[f32], lo_hz: f32, hi_hz: f32) -> bool {
+        if block.is_empty() {
+            return false;
+        }
+        let mag_db = self.spectrum_db(block);
+        self.peaks_from_spectrum(&mag_db, false)
+            .into_iter()
+            .any(|f| (lo_hz..=hi_hz).contains(&f))
+    }
+
     /// Confirmed external interferers (Hz) — seen during silence, so independent of our TX.
     pub fn external_interferers(&self) -> Vec<f32> {
         self.confirmed_external()

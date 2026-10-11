@@ -1,7 +1,7 @@
 ---
 project: openpulsehf
 doc: docs/dev/design/failed-burst-ownership.md
-status: draft
+status: resolved
 last_updated: 2026-10-11
 ---
 
@@ -228,6 +228,32 @@ class.
   the foreign classes, round 3 must state that cost as a decision, not hide it in a threshold.
 - **No go:** without separation, #1460's remainder goes back to the maintainer with the three rounds'
   evidence.
+
+### Round 3 result: NO GO
+
+The probe is `burst_tone_dominance_probe` (release, `--ignored`): SL5 at 5 seeds, then all rungs at
+3 seeds, all five idle recordings. Cells are as registered except the 250 Hz filter on our frames,
+which `ic9700-idle-250hz.wav` covers within the rotation. A second statistic was added after the
+first SL5 run showed why T fails: **P** is the share of blocks with any in-span peak of ≥ 14 dB
+prominence (`NotchBank::has_prominent_peak`, no band-filled gate).
+
+| | our bursts (all cells) | ours + carrier −6 dB | carrier sweep +6 dB | CW 20 wpm +6 dB | RTTY +6 dB |
+|---|---|---|---|---|---|
+| T, every rung | 0.000 max | ≤ 0.061 | **min 0.000** | **min 0.000** | **min 0.000** |
+| P, SL2 | **max 1.000** | 0–1.000 | min 0.983 | min 0.000 | min 0.160 |
+| P, SL3–SL5 | **max 1.000** | min 0.708 | min 0.984 | min 0.905 | min 0.861 |
+| P, SL6 | max 0.889 | min 0.984 | min 1.000 | min 0.914 | min 1.000 |
+
+- **Why T fails.** `band_filled` takes its noise reference as the median over the whole 200–3 600 Hz
+  guard. Behind the 250 Hz and 500 Hz rig filters that median is stopband, so the filter's own
+  passband noise "fills" our band, and a foreign carrier there reads T = 0 (traced per seed: 0 on
+  both filtered recordings, 0.37–0.98 on the wide ones).
+- **Why P fails.** Our own bursts carry prominent peaks: the recordings' own birdies, the
+  constant-phase tail, and the +50 Hz cells. An in-band carrier 6 dB under our frame already reads
+  0.7–1.0.
+
+The overlaps are structural, so more seeds can only widen the ranges. **By the pre-registered rule,
+#1460's remainder goes back to the maintainer with three rounds' evidence.**
 
 ## Round 1 (2026-10-11, not implemented)
 
