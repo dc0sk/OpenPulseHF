@@ -478,8 +478,9 @@ impl AudioOutputStream for CpalOutputStream {
 /// air on the rig. Writes SILENCE, so nothing is radiated even with VOX on.
 ///
 /// Run on the station, with the rig's output device name as the daemon is configured:
-/// `PROBE_DEVICE='<name>' cargo test --release -p openpulse-audio --features cpal-backend \
-///  --lib key_to_audio -- --ignored --nocapture` (omit `PROBE_DEVICE` for the default device).
+/// `PROBE_DEVICE='<name>' [PROBE_INPUT_DEVICE='<name>'] cargo test --release -p openpulse-audio \
+///  --features cpal-backend --lib key_to_audio -- --ignored --nocapture`. Without `PROBE_DEVICE` it
+///  opens the system default, which skips the enumeration a configured name pays (review item 5).
 #[cfg(test)]
 mod key_to_audio_probe {
     use super::*;
@@ -490,18 +491,52 @@ mod key_to_audio_probe {
     #[ignore = "station probe: needs a real output device; prints timings"]
     fn key_to_audio_by_stage() {
         let device = std::env::var("PROBE_DEVICE").ok();
+        let input = std::env::var("PROBE_INPUT_DEVICE").ok();
         let backend = CpalBackend::new();
         let config = AudioConfig::default();
         let silence = vec![0.0f32; config.sample_rate as usize / 2];
+        // Optional: hold the receiver's capture stream open, as a running station does (#1062
+        // key-to-audio review, items 6 and 7: an open stream changes what enumeration sees).
+        let _capture = input.as_deref().map(|name| {
+            backend
+                .open_input(Some(name), &config)
+                .expect("open the PROBE_INPUT_DEVICE capture stream")
+        });
+        println!(
+            "output {:?}, capture held open: {:?}",
+            device
+                .as_deref()
+                .unwrap_or("<system default: no enumeration on open>"),
+            input
+        );
+        let resolved = device.as_deref().map(|d| {
+            backend
+                .resolve_output_name(d)
+                .expect("resolve the output name")
+        });
         for run in 1..=5 {
+            // Pass 1, what `select_cpal_device` does first: every output device, named.
             let t = Instant::now();
-            let enumerated = backend
+            let names = backend
                 .host
                 .output_devices()
-                .map(|d| d.count())
+                .map(|d| d.filter_map(|d| d.name().ok()).count())
                 .unwrap_or(0);
-            let enumerate = t.elapsed();
+            let pass1 = t.elapsed();
 
+            // Pass 2 alone: `find` the resolved name, stopping at it. What a cached name still pays.
+            let t = Instant::now();
+            let found = resolved.as_deref().map(|r| {
+                backend
+                    .host
+                    .output_devices()
+                    .ok()
+                    .and_then(|mut d| d.find(|d| d.name().map(|n| n == r).unwrap_or(false)))
+                    .is_some()
+            });
+            let pass2 = t.elapsed();
+
+            // Production: `open_output` by the configured name, both passes plus the open.
             let t = Instant::now();
             let mut stream = backend
                 .open_output(device.as_deref(), &config)
@@ -516,9 +551,10 @@ mod key_to_audio_probe {
             let audio = Duration::from_secs_f64(silence.len() as f64 / config.sample_rate as f64);
             let first_pop = t.elapsed().saturating_sub(audio);
             println!(
-                "run {run}: enumerate {:>7.1} ms ({enumerated} devices) | open_output {:>7.1} ms | \
-                 write → drained − audio {:>7.1} ms | open + that {:>7.1} ms",
-                enumerate.as_secs_f64() * 1e3,
+                "run {run}: pass1 {:>7.1} ms ({names} devices) | pass2 find {:>7.1} ms (found {found:?}) | \
+                 open_output {:>7.1} ms | write → drained − audio {:>7.1} ms | key-to-audio ≈ {:>7.1} ms",
+                pass1.as_secs_f64() * 1e3,
+                pass2.as_secs_f64() * 1e3,
                 open.as_secs_f64() * 1e3,
                 first_pop.as_secs_f64() * 1e3,
                 (open + first_pop).as_secs_f64() * 1e3,
