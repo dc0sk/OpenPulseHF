@@ -317,6 +317,9 @@ impl NotchBank {
     /// protected band is not filled, as a block of our own wideband signal fills it, and a peak of at
     /// least `prominence_db` local prominence stands in that span. The same two tests the
     /// persistence tracker uses, on one block, so a burst can be judged by the share of its blocks.
+    ///
+    /// DORMANT(#1460): a measurement instrument for `burst_tone_dominance_probe`; round 3 found no
+    /// separation, so no evidence rule calls it. Baselined in `reachability-baseline.txt`.
     pub fn tone_dominated(&mut self, block: &[f32], lo_hz: f32, hi_hz: f32) -> bool {
         if block.is_empty() {
             return false;
@@ -333,6 +336,8 @@ impl NotchBank {
     /// Whether `block` holds a peak of at least `prominence_db` local prominence between `lo_hz` and
     /// `hi_hz` (#1460), with no band-filled gate: [`Self::tone_dominated`]'s gate takes its noise
     /// reference from the whole guard span, which behind a narrow receive filter is mostly stopband.
+    ///
+    /// DORMANT(#1460): as [`Self::tone_dominated`].
     pub fn has_prominent_peak(&mut self, block: &[f32], lo_hz: f32, hi_hz: f32) -> bool {
         if block.is_empty() {
             return false;
