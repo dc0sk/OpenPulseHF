@@ -5,7 +5,7 @@ status: draft
 last_updated: 2026-10-11
 ---
 
-# A failed burst is ladder evidence only if it looks like our frame (#1460)
+# A narrowband foreign over is not ladder evidence (#1460)
 
 Work plan M2, *Next, no maintainer input needed*, item 2. It follows
 [`reply-window-evidence.md`](reply-window-evidence.md) v3, which left this case open (*What it does not
@@ -21,7 +21,10 @@ changes when a NACK is keyed, so it is reviewed before it is built (decision 8).
 > - SL1 loses every acquisition failure;
 > - a refused frame of ours turns a NACK into ISS abandonment, on 2 m as well.
 >
-> **Not a Release 1 blocker.** The decision below stands as the round-1 text.
+> **Not a Release 1 blocker.** The maintainer kept #1460 in M2 (decision 21) and chose a round-2
+> design. **This is round 2, also not implemented** (round 2 review: the shipped half-Hann pulse puts
+> ~0.6 of our own frame's power in 4 bins, so C overlaps CW; floor subtraction is not implementable as
+> written). Round 3 starts from a measurement of the notch bank's in-band interferer state. Round 1's header rule is summarised at the end, under *Round 1*.
 
 ## Problem
 
@@ -30,98 +33,133 @@ During an OTA session, a burst that fails every candidate decode is ladder evide
 `on_rx_frame(Failed)` runs and the daemon keys a NACK, within its leaky budget of 3. Three in a row
 are one demotion step.
 
-The burst can be anything that opened the carrier detect. Since #1454's spectral detect, that
-includes foreign narrowband overs in the passband: CW, PSK31, RTTY. Each over longer than 0.5 s is one
-failed frame. A busy band therefore demotes a working session and keys NACKs into other stations'
-QSOs.
+Since #1454's spectral detect, a burst can be a foreign narrowband over in the passband: CW, a
+carrier, RTTY, PSK31. Each over longer than 0.5 s is one failed frame. A busy HF band therefore
+demotes a working session and keys NACKs into other stations' QSOs. That is the issue's "why now",
+and it is what this design addresses.
 
-## What can tell our frame from someone else's
+## The asymmetry that decides the shape (round 1, finding 4)
 
-Two signals, and only the second covers every rung where the problem lives:
+Getting this wrong costs very different amounts in the two directions:
+- **A foreign over that counts** costs one NACK and a third of a demotion step. The budget caps it
+  at 3 + 6 per hour.
+- **A frame of ours that is refused** gives the ISS silence. Two silent windows abandon the message
+  (`MAX_SILENT_ACK_WINDOWS` = 2, `server.rs:1948`), with no step-down. That happens on 2 m as well
+  as HF.
 
-1. **The preamble template (#1062).** Since the flag day BPSK250 publishes a PN-63 template that
-   refuses every lone tone across fc ± 200 Hz (worst ρ 0.248 against 0.315). It covers one rung, and
-   `rx_candidates()` has at most two rungs (the recommended one and the confirmed one), so a
-   template-only rule refuses a foreign burst only while the session sits at SL5. #1062 F3 also
-   measured the template matching whitened same-baud payload at up to about 0.5, so it does not refuse
-   a foreign BPSK250 data stream either.
-2. **The frame header in the clear.** SL1–SL6 carry `Rs` (`docs/mode-fec-ladder.md`). RS here is
-   systematic, and the hard wire handed to `decode_variants` is already descrambled
-   (`stage_demodulate_variants`). So a frame of ours, even one RS cannot correct, carries in its first
-   nine wire bytes the 4-byte big-endian length prefix (the top two bytes always 0 for any frame the
-   ladder sends), `OPLS`, and the version byte (1): **7 fixed bytes, 56 bits**. A foreign over
-   demodulates to bits uncorrelated with that header.
-
-SL7–SL14 (OFDM, `SC` and `LHR`) have no systematic header in the hard wire. They are wideband, so the
-spectral detect is not what gathers them, and #1460's narrowband overs are not their case.
+So the rule must not depend on finding evidence that a burst is ours, because a failing frame of ours
+is exactly the burst that hides that evidence. Fade-split pieces, a timing lock one symbol off, and an
+off-frequency first frame all lose their header (round 1, finding 4). **A burst is refused only on
+positive evidence that it is foreign.** Where there is no such evidence, today's rules decide.
 
 ## Decision (proposed)
 
-**Header evidence.** For each failed burst, the engine records the smallest Hamming distance, in
-bits, between the 56 known header bits and the corresponding bits of every wire it tried at an RS
-candidate. That covers every onset, arm and timing lock `decode_variants` saw for this burst, but only
-the first wire block's header, never the parity.
+**Spectral concentration.** For a failed burst that today's rules count, the engine computes **C**:
+the fraction of the in-band power held by the strongest **4** frequency bins of a Welch power
+spectrum.
+- **The spectrum** is taken over the post-lead samples, with Hann windows and 50 % overlap, and bins
+  **baud / 8** wide at the strongest candidate's baud.
+- **"In-band"** is fc ± (50 Hz + 1.5 × baud): the AFC range (REQ-PHY-03) plus the rung's main lobe.
+- **The noise floor** is first subtracted per bin. The floor is the learned idle floor the carrier
+  detect already keeps (#1452).
 
-A failed burst is ladder evidence, in addition to today's guards, only if one of these holds:
-- **(a)** some candidate is not an RS rung, in which case today's rules alone decide; or
-- **(b)** the burst's best header distance is at most **D** bits.
+A tone, a CW carrier or an RTTY pair puts nearly all its power in 1–2 lines, so C is near 1. A frame
+of ours spreads its power over a main lobe 2 × baud wide, which is 16 bins, so C is well below 1.
+Noise, fading and a carrier offset only spread a frame of ours further, so **a failing frame of ours
+cannot be pushed towards the foreign side**. The one thing that narrows it is a receive filter
+narrower than the rung, which M1 measures.
 
-**D** is set by measurement M1 below, before M2 is run.
+**The rule:**
+- A failed burst at a single-carrier RS rung, SL2–SL6, is **not** ladder evidence if C ≥ **θ_r**, the
+  per-rung threshold set by M1.
+- **SL1 (MFSK16) is unchanged** (round 1, finding 3). Its symbols are single tones, so a short piece
+  can be concentrated. It may join later, but only after its own M1.
+- **SL7+ (OFDM) is unchanged.** It is wideband, and the spectral detect does not gather it.
+- **With two candidates,** the burst is refused only if every candidate is in scope and refuses it.
 
-- **Where:** the distance is updated in `decode_variants`' failure arm, the one seam every hard RS
-  chain goes through. It is reset per burst in `ota_decode_and_ack_inner` and read at the existing
-  not-evidence guards.
-- **Not the template:** it covers one rung, and it is redundant where the header applies. It stays a
-  candidate refinement for later.
-- **Not a session ID:** a frame from another OpenPulseHF station carries the same header and still
-  counts. That is stated, not solved; the header has no session field.
-- **HARQ:** retention follows the evidence decision, as it already does (#1502), so a refused burst
-  retains no LLRs.
+This rule needs no demodulation and no onset, and it gives one number per burst. Round 1's findings
+1–3 do not arise:
+- there is no minimum over 10³ wires;
+- a steady tone is the case it catches by construction;
+- SL1 is out of scope.
+
+**What it does not refuse:** a foreign signal as wide as ours, such as another station's PSK31 at
+SL2, an OpenPulseHF frame, or a wideband data mode. Those still count. That is stated, not solved.
+
+**The template (round 1, finding 5)** is not used, because a low ρ is absence evidence, which is the
+round-1 trap again. A **high** ρ could later *override* a refusal, but no refused burst of ours has
+been measured to need one.
+
+**HARQ:** retention follows the evidence decision, as today (#1502).
 
 ## Measurements, pre-registered (rules fixed here, before any number exists)
 
 Every measurement runs through the production entry: `accumulate_capture`, the flush, then
-`ota_decode_burst`, as in `idle_flicker_is_not_evidence.rs`. Each runs on SL2–SL6 under the `fast`
-profile, locked at the rung.
+`ota_decode_burst`, under the `fast` profile, locked at each rung SL2–SL6. Every burst today's rules
+count has its C recorded.
 
-- **M1, own frames.** Our frames, failing:
-  - **Channels:** `moderate_f1` at the rung floor − 2 dB and − 4 dB, and AWGN 3 dB below the cliff.
-  - **Sample:** 200 seeds each, payload 64 B `Rs`, in the 250 Hz and wide idle recordings.
-  - **Recorded:** every failed burst that today's rules count, with its best header distance.
-  - **Rule:** **D** is the smallest distance that keeps at least **99 %** of those counted bursts, per
-    rung, taken as the maximum over rungs.
-  - **Fails if** that D exceeds **16** bits: at 16, a random 56-bit word lands within D with
-    probability about 2 × 10⁻⁴, the limit at which M2 can pass. The design then falls back to
-    template-only at SL5 and parks the rest.
-- **M2, foreign overs**, at the D from M1:
-  - **Signals:**
-    - CW, keyed at 20 wpm;
-    - real BPSK31 varicode text, a different modulation for SL3–SL6 and the same one for SL2;
-    - RTTY, 45.45 Bd 170 Hz;
-    - a carrier pair at fc ± 31.25 Hz.
-  - **Conditions:** each at +6, +12 and +20 dB over the idle, 60 s per cell, both idle recordings.
-  - **Rule:** **at most 1 %** of the failed bursts today's rules count may still count. A miss is
-    reported per signal and not averaged away.
-- **M3, cost.**
-  - **What:** the Hamming check is per wire, on 7 bytes; `receive_cost_scaling` re-measures decode
-    per frame on x86.
-  - **Rule:** no rung slower by more than 2 %.
+### M1, our frames, failing
+
+The cells are crossed (every channel with every filter and offset):
+- **Channels:** `moderate_f1` at the rung floor − 2, − 4 and − 6 dB, and AWGN 3 dB below the cliff.
+- **Filters:** wide (300–2 700 Hz), and **behind 500 Hz and 250 Hz** brick-wall receive filters
+  (`common::filter::band_limit`).
+- **Carrier offset:** 0 and +50 Hz.
+- **Sample:** 100 seeds per cell, payload 16–200 B `Rs`, in both idle recordings.
+- **Also:** the fade-split pieces of `marginal_frame_pieces`. In those, BPSK31 at the floor shreds
+  into short counted pieces.
+
+Two quantities are reported per rung:
+- C_max, the largest C of any counted burst;
+- the per-frame count of frames that key at least one NACK today but none under the rule, at the θ_r
+  below.
+
+**Rule:**
+- θ_r = min(C_max + **0.15**, 0.95).
+- **M1 passes only if not one** failing frame of ours, in any cell, loses its last NACK at θ_r.
+- **If C_max > 0.80 at a rung,** that rung leaves the rule's scope, because a 250 Hz filter
+  concentrates its own frames too far.
+
+### M2, foreign overs, at θ_r
+
+**Signals:**
+- a steady carrier, swept across the in-band span in steps of baud/8;
+- CW at 12, 20 and 30 wpm;
+- RTTY 45.45 Bd / 170 Hz, with one tone placed at fc ± baud/2;
+- a carrier pair at fc ± baud/2;
+- real BPSK31 varicode text.
+
+**Conditions:** each at +6, +12 and +20 dB over the idle, both idle recordings, until **at least 300
+counted bursts per cell**.
+
+**Reported:** per signal and rung, the refused fraction with its 95 % lower bound.
+
+**The claim:** a signal class is claimed as refused at a rung only if that lower bound is ≥ 0.99. The
+design **passes** if the steady carrier and CW are claimed at SL3–SL6. Every other cell is reported
+as measured and is neither averaged nor claimed.
+
+### M3, cost
+
+`receive_cost_scaling` re-measures decode per frame on x86. **Rule:** no rung slower by more than
+2 %. One Welch PSD per failed burst is the only new work.
 
 ## What it does not do (stated)
 
-- Another OpenPulseHF station's frames, ours or not, still count.
-- On SL7+ (OFDM), a foreign wideband over still counts; that was never #1460's narrowband case.
-- A frame of ours whose first block's header is lost entirely, for example a fade null over the first
-  2 s of BPSK31, is refused, where today it counts. M1 measures how often, and the 99 % rule bounds it.
+- Wideband foreign signals, foreign signals as wide as the rung, and other OpenPulseHF stations still
+  count.
+- SL1 and SL7+ are unchanged.
+- A refused foreign over still takes the receiver's time while it is decoded. This changes only what
+  happens after the decode fails.
 
 ## Tests (to write with the implementation)
 
-- `a_foreign_narrowband_over_is_not_evidence`: a CW and a PSK31 over at +12 dB, at SL3, through
-  `accumulate_capture`. It keys no ACK frame, and the rung holds. Sabotage: drop rule (b), and
-  the over counts.
-- `a_failing_frame_of_ours_is_still_evidence`: our SL3 frame at the floor − 4 dB fails and is still
-  answered. Sabotage: D = 0, and it is dropped.
-- The existing `idle_flicker_is_not_evidence` and `cap_flush_is_not_ladder_evidence` stay green.
+- `a_narrowband_foreign_over_is_not_evidence`: CW and a steady carrier at +12 dB, at SL3 and SL5,
+  through `accumulate_capture`. Neither keys an ACK frame, and the rung holds. Sabotage: θ_r = 1.0,
+  and both count.
+- `a_failing_frame_of_ours_behind_a_250hz_filter_is_still_evidence`: SL5 behind 250 Hz at the floor
+  − 4 dB fails and is still answered. This is the case closest to θ.
+- The existing `idle_flicker_is_not_evidence`, `cap_flush_is_not_ladder_evidence` and
+  `marginal_frame_pieces` stay green.
 
 ## Consumer
 
@@ -131,17 +169,32 @@ OTA arm's NACK keying (`on_ladder_burst`); the HARQ retention gate (#1502). Foun
 
 ## Prior art
 
-`reply-window-evidence.md` v3 and its three review rounds; the #1062 veto and F3's same-baud
-measurement; `holds_an_ack_codeword` (the ACK check, same shape: recognise a known codeword in a
-failed burst). Found by `grep -n "fn holds_an_ack_codeword\|fn decode_variants" crates/openpulse-modem/src/engine.rs`
-and `grep -n "^const MAGIC\|^const VERSION" crates/openpulse-core/src/frame.rs`.
+- `reply-window-evidence.md` v3 and its review rounds.
+- Round 1 of this design and its review.
+- The #1454 spectral busy test, which already judges per-band power against a learned per-bin floor
+  (`openpulse-dsp::noise_floor`).
+- The ACK check `holds_an_ack_codeword`, which has the same shape: recognise a class of non-evidence
+  in a failed burst.
+
+Found by `grep -n "fn holds_an_ack_codeword" crates/openpulse-modem/src/engine.rs` and
+`grep -rn "pub const WINDOW" crates/openpulse-dsp/src/noise_floor.rs`.
 
 ## Twins
 
 - **ARDOP** (`receive_with_ack_hint`) keys its NACK on any failed one-shot receive and does not use
-  the OTA evidence rules. It is unchanged by this, and stated here so a reader does not assume
-  otherwise.
+  the OTA evidence rules. It is unchanged by this.
 - **linksim** drives `on_rx_frame` directly, without bursts.
 
 linksim was found by `grep -rn "RxOutcome::Failed" crates apps --include=*.rs`. ARDOP was found by
 `grep -rn "receive_with_ack_hint" crates/openpulse-ardop/src`, because that grep cannot see it.
+
+## Round 1 (2026-10-11, not implemented)
+
+Round 1 counted a failed RS burst only if one of its tried wires came within D bits of the 56 known
+header bits. The review found four blocking flaws:
+- the false-match rate is minimised over 10³ wires;
+- a steady tone at baud/2 descrambles to 17 bits from the header;
+- SL1 fails before any wire exists;
+- refusing our own failing frame turns a NACK into ISS abandonment.
+
+Round 2 keeps round 1's diagnosis of the wire and drops its direction.

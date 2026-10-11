@@ -111,3 +111,84 @@ Not implemented. Findings 1–4 make the header-only rule unsafe as drafted. A r
 
 Since it does not block Release 1, where it lands (M2 under decision 21, or after M3) is the
 maintainer's call.
+
+---
+
+# Round 2 (2026-10-11): spectral concentration C
+
+This was the review of the round-2 text, which refused a failed burst at SL2–SL6 if the strongest 4
+bins of a baud/8 Welch PSD held at least θ_r of the in-band power. It was read-only. Its apparatus
+was a Python model of C that uses the shipped half-Hann crossfade pulse, NRZI, both preambles, the
+8-symbol tail, and a floor subtracted per bin. Each number is from one seed, so it is indicative; the
+shape result is deterministic.
+
+## Verdict
+
+**It does not block Release 1. Do not implement as written.**
+
+## Findings
+
+1. **Blocking: the spectrum premise is false for the shipped pulse.**
+   - The half-Hann crossfade is a Hann pulse of length 2T. Its main lobe is 2·baud wide null to
+     null, but only about 0.72·baud wide at −3 dB.
+   - The 4 strongest bins hold 0.58–0.64 of our own frame's power, noiselessly, at every rung.
+   - Failing pieces of our frames read 0.37–0.85:
+     - a BPSK31 piece that is mostly `--++` preamble reads 0.80, since its lines at ±baud/4 sit
+       exactly in bins ±2;
+     - a frame's data plus its constant-phase tail reads 0.85.
+   - So θ_r = C_max + 0.15 lands at 0.90–0.95, and SL2 leaves scope.
+   - Foreign signals at +12 dB:
+     - a tone reads 1.00;
+     - CW at 20 wpm reads 0.93–0.96 at SL3;
+     - CW at 30 wpm reads 0.87–0.90 at SL3;
+     - RTTY reads 0.53–0.82;
+     - a carrier pair reads 0.83.
+   - **CW at SL3 cannot be claimed**, so the design fails its own pass rule. What survives is
+     "tones and CW at 250 Bd".
+2. **Blocking: round 1's finding 4 is addressed in direction, not in substance.**
+   - Our failing frames (0.7–0.85) overlap CW, RTTY and carrier pairs (0.70–0.90).
+   - "Not one of 100 seeds" bounds the loss at about 3 % per cell, not 0.
+   - The losses correlate within a session, so two refused frames in a row lead to `PeerSilent`.
+3. **Blocking: the floor subtraction is not implementable as described.**
+   - The noise-floor levels are private.
+   - The floor has 15.625 Hz bins, which match none of the design's bin widths.
+   - The decoded burst is post-AGC, while the floor is pre-AGC. AGC is opt-in.
+   - Nothing is said for a cold floor (`None`), and the raw C can exceed 1 or read NaN without a
+     clamp.
+4. **Should fix: M1/M2.**
+   - Add deterministic head and tail pieces.
+   - Name the five idle recordings.
+   - Pre-register k as a measured choice; top-2 widens the tone margin and worsens the CW one.
+   - Three hundred bursts at a 0.99 lower bound means 0 misses.
+   - **CW word gaps split one over into one counted burst per word.** `rx_consecutive_nack` resets
+     only on a decode, so one minute of CW is 3–5 demotion steps today. That is a stronger "why now"
+     than the design states.
+   - The candidate baud is undefined when there are two candidates.
+5. **Should fix: guard interactions.**
+   - The ordering is right.
+   - The SL1+SL2 and SL6+SL7 candidate pairs are never refused, which should be stated.
+   - Tones longer than the 37.3 s cap are already not evidence (#1255).
+6. **Should fix: a stronger tool was missed.** The notch bank already measures narrowband prominence
+   at the seam, and it is on by default:
+   - `peaks_from_spectrum` is a local-median prominence test;
+   - `band_filled` tells our wideband signal apart from a lone tone;
+   - `in_band_interferers()` persists across silence blocks, including CW key-up gaps.
+
+   It is scale-free: no floor subtraction, no AGC mismatch, no resampling. Measure it before building
+   a second spectral estimator.
+7. **Park.**
+   - Work plan item 2 still says "template"; dropping it needs a decision-log line.
+   - "SL7+ is not gathered by the spectral detect" is wrong in general, though not load-bearing.
+   - Brick-wall filters barely move C (0.58 → 0.61–0.66).
+
+**Round 1's findings, per finding:**
+- Finding 1 (the minimum over 10³ wires) is resolved.
+- Finding 2 (a tone near the header) is resolved.
+- Finding 3 (SL1) is resolved by exclusion.
+- Finding 4 (ISS abandonment) is **not** resolved.
+
+## Disposition
+
+Not implemented. Round 3 is measurement-first: does the notch bank's in-band interferer state
+separate foreign narrowband overs from our failing frames, including our frame under a birdie? That
+is measured before any rule is written.
