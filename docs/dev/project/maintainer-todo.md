@@ -2,7 +2,7 @@
 project: openpulsehf
 doc: docs/dev/project/maintainer-todo.md
 status: draft
-last_updated: 2026-10-11
+last_updated: 2026-10-12
 ---
 
 # Maintainer TODO — what only you can do
@@ -24,6 +24,17 @@ asks first within each section. Report results in chat or as a comment on the li
     --features cpal-backend --lib key_to_audio -- --ignored --nocapture
   ```
   Paste the five `run …` lines and the device name.
+
+- [x] **Key-to-audio probe on rpi51, named device** (done 2026-10-12, `main` after #1508, by the rpi51
+  agent session). The station's device is **`plughw:CARD=CODEC,DEV=0`** (the IC-9700's USB codec);
+  use it as `A_AUDIO_DEVICE`. Capture held open on the same device. Five runs:
+  - pass 1 (all 16 devices, named) 525–540 ms;
+  - pass 2 (`find` the name) 42–45 ms;
+  - `open_output` by name 567–684 ms;
+  - drain overhead 138–144 ms;
+  - **key-to-audio 707–828 ms**.
+
+  No device vanished with the capture held. Design round 2 follows.
 
 - [x] **Key-to-audio probe on rpi51** (done 2026-10-11, `09762a3a`, system default device, because
   the station config does not exist yet). Five runs:

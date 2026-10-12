@@ -2,7 +2,7 @@
 project: openpulsehf
 doc: docs/dev/design/key-to-audio-gap.md
 status: draft
-last_updated: 2026-10-11
+last_updated: 2026-10-12
 ---
 
 # The key-to-audio gap: open the output device outside the keyed window
@@ -45,6 +45,23 @@ pays roughly 0.65–1.3 s per keyed turn, which matches the captures.
 The probe's own runs show a hazard: **the device count fell from 16 to 9 after the first run.**
 `select_cpal_device` already notes that retaining a device handle truncates ALSA's enumeration. That
 constrains option A below.
+
+**The production path, measured** (2026-10-12, rpi51, `plughw:CARD=CODEC,DEV=0`, the station's
+configured device, with its capture stream held open as on a running station; five runs):
+
+| stage | ms |
+|---|---|
+| pass 1: every output device, named (16 devices every run) | 525–540 |
+| pass 2: `find` the resolved name | 42–45 |
+| `open_output` by name (both passes plus the open) | 567–684 |
+| write → drained − audio (start-up + device latency) | 138–144 |
+| **key-to-audio** | **707–828** |
+
+What the measurement settles:
+- **The cost is enumeration.** `open_output` is pass 1 + pass 2, so the stream build is negligible.
+- **Pass 1 alone is about 75 % of the gap.**
+- **Holding the capture stream hid nothing.** All 16 devices were listed and the name was found in
+  every run, so round 1's finding 6 does not occur on this station's stack.
 
 ## Where the time sits
 
