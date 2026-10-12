@@ -14,9 +14,9 @@ last_updated: 2026-10-12
 > - **A** holds the card's capture PCM, so a single-card receiver goes deaf.
 > - **The measured cost was not the production path.**
 >
-> **Round 2 (2026-10-12) is below, under *Round 2*, for review.** It caches the resolved name
-> (option A′) on both directions, holds no device handle and no stream, and defines the leader check.
-> **Not a Release 1 blocker.**
+> **Round 2 (2026-10-12): reviewed, no blocking finding; revised for the review, ready to build.**
+> It caches the resolved name (option A′) on both directions and holds no device handle and no
+> stream. The leader is checked at G1 by SDR capture. **Not a Release 1 blocker.**
 
 Work plan M2, *Key-to-audio gap*. Every keyed turn carries dead air between PTT and the first sample.
 It is about 1.3 s on the 2026-07-30 IC-9700 captures (`crates/openpulse-modem/tests/captures/README.md`).
@@ -126,22 +126,39 @@ the first sample, and the release still waits on the device-reported drain of th
 system name.
 - **Miss:** `open_output(Some(sel))` and `open_input(Some(sel))` run today's full two-pass
   `select_cpal_device`, then store the resolved name.
-- **Hit:** they run **pass 2 only**: `find` the cached name, stopping at it. Pass 2 builds no name
-  list, so the hotplug-safe resolver does not run again.
-- **A failed hit** (the name not found, or `build_*_stream` failing on the found device): evict the
-  entry and fall back to the full two-pass resolve, **once**. A renamed or replugged card therefore
-  costs one ordinary open, as today.
+- **Hit:** they run **pass 2 only**: `find` the cached name over `host.devices()`, stopping at it.
+  `host.devices()` skips the per-device config query that `output_devices()` runs before the match;
+  the direction is already settled by the cached name. Each hit logs the cached name at `debug!`, so
+  it can be set beside the diagnostics' fresh resolve.
+- **A failed hit** (the name not found): evict the entry. The failed `find` has already named every
+  device, so those names go to `resolve_name_from` directly, and the fallback costs no second
+  enumeration. A renamed or replugged card therefore costs about one ordinary open, as today. A
+  `build_*_stream` failure on a found device evicts too and resolves in full once; that costs one
+  extra pass 2 before failing as today.
 - **What is held:** the cache stores a `String`, behind a `Mutex`, so `CpalBackend` stays
-  `Send + Sync`. **No `cpal::Device` and no stream is held between opens**, so round 1's findings
+  `Send + Sync`. The lock is held for the get and the insert only, never across an enumeration, and
+  a poisoned lock is recovered (`unwrap_or_else(|p| p.into_inner())`, as the file already does). **No `cpal::Device` and no stream is held between opens**, so round 1's findings
   1–4 (`!Send`, stale queued audio, silent keying, the capture PCM held) cannot arise. Every open
   still builds a fresh stream and drops it after its `flush`, exactly as today.
 - **`resolve_output_name` / `resolve_input_name`** (diagnostics) keep the full pass and ignore the
   cache, so they always show the live enumeration.
 
 **Expected effect, from the measurement above:**
-- **Per keyed turn:** pass 1 (525–540 ms) leaves the keyed window. Key-to-audio drops from
-  707–828 ms to about pass 2 + drain ≈ 180–190 ms.
+- **Per keyed turn:** pass 1 (525–540 ms) leaves the keyed window.
+- **What is left is not yet measured as key-to-first-sample.** Write → drained − audio (138–144 ms)
+  includes the silence pad, the drain margin and a poll, so it bounds the *end* of the stream. The
+  probe gains a first-sample stamp (the first callback that pops a non-zero sample), and the post-change
+  number is quoted from that, never from pass 2 + drain.
+- **Pass 2's cost is station-specific.** cpal opens a PCM pair per hint up to the match: 42 ms on
+  rpi51 means the CODEC hint sits near the front of `aplay -L`. Behind another card it grows by
+  ~30 ms per hint, and a selector that is itself a software hint (`default`, `pulse`) costs as much
+  as pass 1. The probe prints the match's hint index.
 - **The first open after start-up** still pays the full resolve, as today.
+- **Not the fix, though cheaper:** an empty `[audio] device` with ALSA's `default` pointed at the
+  CODEC skips enumeration today with no code. It is operator config, and the Pi's HDMI cards make
+  the default unsafe, so it stays a workaround.
+- **Fuller, parked:** a hint-based pass 1 (`alsa::device_name::HintIter`, no PCM opens). Pass 2
+  would remain, so the cache is the smaller change.
 
 **Input side (round 1, finding 9).** The same cache serves `open_input`, so the ACK listener's
 capture open and the RX tick's reopen after a transmit lose pass 1 too.
@@ -150,16 +167,22 @@ capture open and the RX tick's reopen after a transmit lose pass 1 too.
 - **After:** both shrink by the same pass-1 time on both stations, so the ACK still lands after the
   listener is open.
 - **The pinned claim** is relative: the listener's open must not grow relative to the sender's
-  key-to-audio. The hardware-loopback stage checks it with both stations on the new build.
+  key-to-audio. `listen_for_ack` sets its deadline before the capture open. The hardware-loopback
+  stage records **ACK onset minus listener open**, not only "ACK decoded", with both stations on the
+  new build.
+- **Known regression, mixed builds:** an old ISS with a new IRS loses ~0.5 s of ACK margin, since
+  the ACK starts earlier into an ISS still enumerating. The A1/A2 stations are rebuilt separately,
+  so both are updated before a session ("rebuild BOTH ends").
 
 **Leader (round 1, finding 10).**
-- **What changes:** the implicit leader shrinks from ~0.7 s to ~0.19 s plus `ptt_leader_ms`, which
-  defaults to 0.
-- **The IC-9700:** its T/R sequencing reads ~130 ms on the captures (UNCHECKED), which is below
-  0.19 s but without much margin.
+- **What changes:** the implicit leader shrinks from ~0.7 s to the key-to-first-sample time plus
+  `ptt_leader_ms`, which defaults to 0. That time is below 0.19 s and is measured, not assumed.
+- **The IC-9700:** its T/R sequencing reads ~130 ms on the captures (UNCHECKED). The margin is
+  unknown until both numbers are measured.
 - **No new default constant ships.**
-- **The hardware-loopback stage and G1 add a first-frames check:** the first frame of a keyed turn
-  must decode as often as the second. If it does not, `ptt_leader_ms` is set from that measurement.
+- **The check is at G1, on the rig,** because a hardware loopback has no T/R switch and a decode
+  ratio at 2 m SNR cannot see a clip that fails at HF SNR: an SDR capture, PTT click to first audio,
+  set against the T/R click pair. `ptt_leader_ms` is set from that measurement.
 - **This goes in the maintainer to-do with the change,** not as a guess in the code.
 
 **Tests (with the implementation):**
@@ -168,18 +191,16 @@ capture open and the RX tick's reopen after a transmit lose pass 1 too.
   - N opens of one selector run pass 1 once and pass 2 N times;
   - a hit whose name has vanished evicts and runs the full resolve once, then caches the new name;
   - output and input selectors with the same text are cached apart;
-  - an ambiguous selector is never cached.
+  - an ambiguous selector is never cached;
+  - a failed find feeds its names to the fallback, with no second enumeration;
+  - a miss after eviction caches the *new* name.
 - **The existing `select_cpal_device` resolver tests stay green.**
 - **The station probe re-runs** with the cache, expecting `open_output` ≈ pass 2 from the second run
-  on.
+  on, and reports key-to-first-sample and the match's hint index.
 
-**Review asked for:**
-- the hotplug path (a card renamed while cached);
-- whether pass 2's early-exit `find` can still open other devices' PCMs on the way to the match;
-- the `Mutex` across the ALSA calls;
-- the input side's interaction with `listen_for_ack`'s deadline;
-- whether any keyed path opens by a *different* selector string for the same device, which would
-  defeat the cache silently.
+**Reviewed** (round 2, [`reviews/review-key-to-audio-gap.md`](../reviews/review-key-to-audio-gap.md)):
+no blocking finding. The text above carries findings 1–6 and 9; hotplug, the wrong-device case and
+the cache key were checked and found fine.
 
 ## Consumer
 

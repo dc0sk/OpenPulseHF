@@ -2,7 +2,7 @@
 project: openpulsehf
 doc: docs/dev/reviews/review-key-to-audio-gap.md
 status: resolved
-last_updated: 2026-10-11
+last_updated: 2026-10-12
 ---
 
 # Review: the key-to-audio gap (round 1, 2026-10-11)
@@ -136,3 +136,92 @@ the receiver already holds (`open_input` once per session). Found by
 
 These open their own outputs and are not on the Release 1 keyed path. Each is stated, not changed.
 Found by the same `open_output(` grep.
+
+---
+
+# Round 2 (2026-10-12): cache the resolved name, never a handle
+
+The adversarial review (Fable) of the round-2 section of
+[`design/key-to-audio-gap.md`](../design/key-to-audio-gap.md). It was read-only, against the
+station measurement of 2026-10-12 (rpi51, `plughw:CARD=CODEC,DEV=0`, capture held: pass 1
+525–540 ms, pass 2 42–45 ms, open by name 567–684 ms, write → drained − audio 138–144 ms).
+
+## Prompt (round 2)
+
+Falsify round 2 with file:line in `cpal_backend.rs`, `engine.rs` (every `open_input`/`open_output`
+site, `listen_for_ack`, `stage_emit_output`), `server.rs` (rx tick, `keyed_transmit`) and cpal
+0.15's ALSA host:
+1. Does pass 2's early-exit `find` avoid the PCM opens of devices before the match? Can pass 2 be as
+   slow as pass 1?
+2. Hotplug, rename, renumbering, two identical cards: is "evict and retry once" enough, and can it
+   pick the wrong device silently?
+3. Does every keyed path use the same selector string for the same device?
+4. The `Mutex` across ALSA calls: deadlock or contention?
+5. The input side against `listen_for_ack`'s deadline.
+6. Is deferring the leader to a first-frames check safe, and what check is needed?
+7. Can anything key longer or shorter, or play the wrong audio?
+8. Does this block Release 1?
+
+## Verdict (round 2)
+
+**It does not block Release 1.** Round 2 removes round 1's four blocking defects, because every
+open still builds and drops a fresh stream. It changes neither when PTT is asserted or released nor
+what audio is written. Two claims in its reasoning are wrong (findings 1 and 2) and are corrected
+before it is built. Nothing is blocking.
+
+## Findings (round 2)
+
+### Should fix
+
+1. **"≈ 190 ms key-to-audio" is the wrong number.** Write → drained − audio runs from `write` to
+   `flush` returning: it includes the ~32 ms silence pad, the device-reported drain plus
+   `DRAIN_MARGIN`, and a 10 ms poll. It bounds the *end* of the stream, not the *first* sample, so it
+   must not be set against the IC-9700's ~130 ms. Measure the first sample: timestamp the first
+   callback that pops a non-zero sample, or read it off an SDR capture.
+2. **The first-frames check cannot see a T/R clip where the design put it.** A hardware loopback has
+   no T/R switch, and an equal decode ratio at 2 m SNR does not clear a clip that fails at HF SNR. The
+   check belongs at G1, on the rig: SDR capture, PTT click to first audio, against the T/R click pair,
+   and `ptt_leader_ms` is set from that.
+3. **Pass 2 depends on hint order.** cpal opens a playback and a capture PCM per hint, and
+   `output_devices()` runs an hw_params query per device, before the match. `find` drops each
+   non-match, so nothing is held, but every earlier hint pays. 42 ms means the CODEC hint sits near
+   the front; behind another card it grows by ~30 ms per hint, and a software-hint selector
+   (`default`, `pulse`) costs as much as pass 1. State it, print the match's hint index in the probe,
+   and use `host.devices()` in pass 2 (no per-device config query; the direction is already settled).
+4. **The not-found fallback is dearer than today, inside the keyed window.** A vanished name runs
+   pass 2 to exhaustion (≈ pass 1) and then the full resolve again, about twice today's error path.
+   Fix: a failed `find` has already named every device, so feed those names to `resolve_name_from`.
+5. **The ACK-window argument holds only with both stations on one build.** An old ISS and a new IRS
+   lose ~0.5 s of margin: the ACK starts earlier into an ISS still enumerating. Say so (the A1/A2
+   stations are rebuilt separately), and record ACK onset minus listener open at hardware loopback,
+   not just "ACK decoded". `listen_for_ack` sets its deadline before the capture open.
+6. **The `Mutex` is held for get and insert only**, never across the enumeration, and recovers from
+   poisoning (`unwrap_or_else(|p| p.into_inner())`, as the file already does). No two threads share a
+   backend on the Release 1 path today, so this is about not leaving a trap.
+
+### Park
+
+7. **Hotplug and wrong device:** no risk beyond `resolve_device`'s own. `CARD=` names survive
+   renumbering, unplug evicts and errors as today, and two identical cards behave as the exact match
+   does. A substring selector can keep an old pick where a fresh resolve would now say Ambiguous;
+   log the cached name at `debug!` on every hit.
+8. **`build_output_stream` failing on a hit** costs one extra pass 2, then fails as today. Our own
+   previous stream cannot cause EBUSY: `Stream::drop` joins its worker.
+9. **The cheaper alternative,** an empty `[audio] device` with ALSA's `default` pointed at the
+   CODEC, skips enumeration with no code. It is operator config, and the Pi's HDMI cards make the
+   default unsafe, so it is not the fix. The design says why.
+10. **A hint-based pass 1** (`alsa::device_name::HintIter`, no PCM opens) is still the fuller fix.
+    Pass 2 remains, so it does not remove finding 3.
+
+**Checked and fine:** the cache key (every daemon and ARDOP path uses one selector per direction);
+keys per direction are necessary; `AudioConfig` stays out of the key; PTT order and the #1367 drain
+are unchanged; no handle is held, so round 1's capture-PCM finding is closed; holding the capture
+stream hid nothing, consistent with `DeviceHandles::open`; diagnostics bypass the cache; the test
+shape (add: a failed find feeds the fallback, and a miss after eviction caches the new name); the
+CLI gains nothing, as the design says.
+
+## Disposition (round 2)
+
+The design text is revised for findings 1–6 and 9 (2026-10-12). Implementation follows in its own
+PR. It goes ahead without a further review round: no finding is blocking, and the corrections
+concern the claims and the error path, not the mechanism.
