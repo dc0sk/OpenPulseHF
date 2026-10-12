@@ -14,9 +14,9 @@ last_updated: 2026-10-12
 > - **A** holds the card's capture PCM, so a single-card receiver goes deaf.
 > - **The measured cost was not the production path.**
 >
-> Round 2 waits on the extended station probe (pass 1, pass 2, open by name, capture held). It will
-> combine A′ (the resolved name cached, pass 1 skipped), the same fix on the input side, and a
-> measured leader default. **Not a Release 1 blocker.**
+> **Round 2 (2026-10-12) is below, under *Round 2*, for review.** It caches the resolved name
+> (option A′) on both directions, holds no device handle and no stream, and defines the leader check.
+> **Not a Release 1 blocker.**
 
 Work plan M2, *Key-to-audio gap*. Every keyed turn carries dead air between PTT and the first sample.
 It is about 1.3 s on the 2026-07-30 IC-9700 captures (`crates/openpulse-modem/tests/captures/README.md`).
@@ -119,6 +119,67 @@ the first sample, and the release still waits on the device-reported drain of th
   and release checks run again at the hardware-loopback stage.
 - **Stream loss:** a stream error between frames reopens on the next write. Tested with a fault
   injected into the loopback backend.
+
+## Round 2 (2026-10-12): cache the resolved name, never a handle
+
+**Decision (proposed).** `CpalBackend` keeps a cache from (direction, selector) to the resolved
+system name.
+- **Miss:** `open_output(Some(sel))` and `open_input(Some(sel))` run today's full two-pass
+  `select_cpal_device`, then store the resolved name.
+- **Hit:** they run **pass 2 only**: `find` the cached name, stopping at it. Pass 2 builds no name
+  list, so the hotplug-safe resolver does not run again.
+- **A failed hit** (the name not found, or `build_*_stream` failing on the found device): evict the
+  entry and fall back to the full two-pass resolve, **once**. A renamed or replugged card therefore
+  costs one ordinary open, as today.
+- **What is held:** the cache stores a `String`, behind a `Mutex`, so `CpalBackend` stays
+  `Send + Sync`. **No `cpal::Device` and no stream is held between opens**, so round 1's findings
+  1–4 (`!Send`, stale queued audio, silent keying, the capture PCM held) cannot arise. Every open
+  still builds a fresh stream and drops it after its `flush`, exactly as today.
+- **`resolve_output_name` / `resolve_input_name`** (diagnostics) keep the full pass and ignore the
+  cache, so they always show the live enumeration.
+
+**Expected effect, from the measurement above:**
+- **Per keyed turn:** pass 1 (525–540 ms) leaves the keyed window. Key-to-audio drops from
+  707–828 ms to about pass 2 + drain ≈ 180–190 ms.
+- **The first open after start-up** still pays the full resolve, as today.
+
+**Input side (round 1, finding 9).** The same cache serves `open_input`, so the ACK listener's
+capture open and the RX tick's reopen after a transmit lose pass 1 too.
+- **Before:** the peer's ~0.7 s of dead air roughly cancelled the ~0.6 s the listener spent opening
+  by name.
+- **After:** both shrink by the same pass-1 time on both stations, so the ACK still lands after the
+  listener is open.
+- **The pinned claim** is relative: the listener's open must not grow relative to the sender's
+  key-to-audio. The hardware-loopback stage checks it with both stations on the new build.
+
+**Leader (round 1, finding 10).**
+- **What changes:** the implicit leader shrinks from ~0.7 s to ~0.19 s plus `ptt_leader_ms`, which
+  defaults to 0.
+- **The IC-9700:** its T/R sequencing reads ~130 ms on the captures (UNCHECKED), which is below
+  0.19 s but without much margin.
+- **No new default constant ships.**
+- **The hardware-loopback stage and G1 add a first-frames check:** the first frame of a keyed turn
+  must decode as often as the second. If it does not, `ptt_leader_ms` is set from that measurement.
+- **This goes in the maintainer to-do with the change,** not as a guess in the code.
+
+**Tests (with the implementation):**
+- **The cache logic is factored over two closures** (pass-1 names, pass-2 find-by-name), so it is
+  tested without hardware:
+  - N opens of one selector run pass 1 once and pass 2 N times;
+  - a hit whose name has vanished evicts and runs the full resolve once, then caches the new name;
+  - output and input selectors with the same text are cached apart;
+  - an ambiguous selector is never cached.
+- **The existing `select_cpal_device` resolver tests stay green.**
+- **The station probe re-runs** with the cache, expecting `open_output` ≈ pass 2 from the second run
+  on.
+
+**Review asked for:**
+- the hotplug path (a card renamed while cached);
+- whether pass 2's early-exit `find` can still open other devices' PCMs on the way to the match;
+- the `Mutex` across the ALSA calls;
+- the input side's interaction with `listen_for_ack`'s deadline;
+- whether any keyed path opens by a *different* selector string for the same device, which would
+  defeat the cache silently.
 
 ## Consumer
 
