@@ -192,3 +192,30 @@ shape result is deterministic.
 Not implemented. Round 3 is measurement-first: does the notch bank's in-band interferer state
 separate foreign narrowband overs from our failing frames, including our frame under a birdie? That
 is measured before any rule is written.
+
+## Consumer (of the design reviewed)
+
+The not-evidence guards in `ota_decode_and_ack_inner` → `on_rx_frame(RxOutcome::Failed)` → the daemon
+OTA arm's NACK keying (`on_ladder_burst`); the HARQ retention gate (#1502). Found by
+`grep -n "not ladder evidence" crates/openpulse-modem/src/engine.rs`.
+
+## Prior art (of the design reviewed)
+
+- `reply-window-evidence.md` v3 and its review rounds.
+- Round 1 of this design and its review.
+- The #1454 spectral busy test, which already judges per-band power against a learned per-bin floor
+  (`openpulse-dsp::noise_floor`).
+- The ACK check `holds_an_ack_codeword`, which has the same shape: recognise a class of non-evidence
+  in a failed burst.
+
+Found by `grep -n "fn holds_an_ack_codeword" crates/openpulse-modem/src/engine.rs` and
+`grep -rn "pub const WINDOW" crates/openpulse-dsp/src/noise_floor.rs`.
+
+## Twins (of the design reviewed)
+
+- **ARDOP** (`receive_with_ack_hint`) keys its NACK on any failed one-shot receive and does not use
+  the OTA evidence rules. It is unchanged by this.
+- **linksim** drives `on_rx_frame` directly, without bursts.
+
+linksim was found by `grep -rn "RxOutcome::Failed" crates apps --include=*.rs`. ARDOP was found by
+`grep -rn "receive_with_ack_hint" crates/openpulse-ardop/src`, because that grep cannot see it.

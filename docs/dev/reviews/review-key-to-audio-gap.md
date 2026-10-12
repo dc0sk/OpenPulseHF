@@ -11,6 +11,21 @@ This is the adversarial review (Fable) of [`design/key-to-audio-gap.md`](../desi
 as first drafted. It was read-only. The review is mandatory, because the design changes the TX path
 inside the keyed window and the PTT release timing (the #1367 drain).
 
+## Prompt
+
+Falsify, do not agree. Read the design, `cpal_backend.rs` (`open_output`, `select_cpal_device`,
+`CpalOutputStream` write/flush, the #1367 drain report, the probe), `loopback.rs`, the audio traits,
+`stage_emit_output` and every other `open_output` caller, the daemon's `keyed_transmit` and PTT
+release, and `drain-from-device-delay.md`. The questions:
+
+1. Is the measured breakdown correctly attributed to the production path?
+2. What breaks under option B (a persistent stream)?
+3. Is option A's enumeration-truncation hazard real, and does the probe detect it?
+4. Is option C correctly dismissed?
+5. Is the station probe sufficient to choose?
+6. Could either option key the transmitter longer, shorter, or with garbage audio?
+7. Does this block Release 1?
+
 ## Verdict
 
 **The gap does not block Release 1.** The link works with the dead air, and the cost is airtime plus
@@ -99,3 +114,25 @@ It is to be run with the station's configured name. Round 2 of the design follow
 - A′, or hint-based names;
 - the input-side fix;
 - a measured leader default.
+
+## Consumer (of the design reviewed)
+
+`ModemEngine::stage_emit_output` (every audio TX seam) and its callers inside `keyed_transmit` in
+`crates/openpulse-daemon/src/server.rs` (OTA send, ACKs, filexfer, beacons). Found by
+`grep -rn "open_output(" crates apps --include=*.rs` and `grep -n "keyed_transmit" crates/openpulse-daemon/src/server.rs`.
+
+## Prior art (of the design reviewed)
+
+`docs/dev/design/drain-from-device-delay.md` (#1367, how release waits for the drain);
+`select_cpal_device`'s two-pass enumeration and its truncation note; the persistent capture stream
+the receiver already holds (`open_input` once per session). Found by
+`grep -n "fn select_cpal_device\|fn open_input" crates/openpulse-audio/src/cpal_backend.rs`.
+
+## Twins (of the design reviewed)
+
+- The repeater's `open_output` wrapper (`crates/openpulse-repeater/src/lib.rs`).
+- The testbench's signal path.
+- linksim's GUI player.
+
+These open their own outputs and are not on the Release 1 keyed path. Each is stated, not changed.
+Found by the same `open_output(` grep.
