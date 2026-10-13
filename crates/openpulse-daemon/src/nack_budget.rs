@@ -98,6 +98,12 @@ pub(crate) fn decode_ota_burst(
     Ok((res, within_budget && callsign_valid))
 }
 
+// Declared here, not in `lib.rs`: `ptt_keys_every_daemon_transmit` scans `lib.rs` only up to its first
+// `#[cfg(test)]`, so a test module declared near its top hides the production code from that scan.
+#[cfg(test)]
+#[path = "ladder_evidence_probe.rs"]
+mod ladder_evidence_probe;
+
 #[cfg(test)]
 mod tests {
     use super::*;
