@@ -2,7 +2,7 @@
 project: openpulsehf
 doc: docs/dev/project/maintainer-todo.md
 status: draft
-last_updated: 2026-10-12
+last_updated: 2026-10-13
 ---
 
 # Maintainer TODO — what only you can do
@@ -13,17 +13,23 @@ asks first within each section. Report results in chat or as a comment on the li
 
 ## Now — unblocks Release 1 work
 
-- [ ] **Run the key-to-audio probe on rpi53** (work plan M2, key-to-audio gap). rpi51 is done (below).
-  It writes **silence**, so nothing is radiated even with VOX on, and PTT is not touched. The station
-  config does not exist until `run-onair-twin-ota.sh` has run, so the device name comes from your
-  on-air profile's `B_AUDIO_DEVICE`:
+- [ ] **After the device-name cache merges, re-run the key-to-audio probe on rpi51** (work plan M2,
+  key-to-audio gap; the rpi51 agent session can do it). It writes **silence** and does not touch PTT.
   ```bash
   git checkout main && git pull && git log --oneline -1
-  DEV="<B_AUDIO_DEVICE from your on-air profile>"
-  env PROBE_DEVICE="$DEV" cargo test --release -p openpulse-audio \
-    --features cpal-backend --lib key_to_audio -- --ignored --nocapture
+  env PROBE_DEVICE='plughw:CARD=CODEC,DEV=0' PROBE_INPUT_DEVICE='plughw:CARD=CODEC,DEV=0' \
+    cargo test --release -p openpulse-audio --features cpal-backend --lib key_to_audio -- --ignored --nocapture
   ```
-  Paste the five `run …` lines and the device name.
+  Expected: `open_output` near 45 ms from run 2 on (run 1 resolves in full). Paste the five `run …`
+  lines; they also give key-to-first-sample, the number the G1 leader check is set against.
+
+- [ ] **rpi53: one device listing, no probe.** rpi53 is the same Pi 5 on the same build, so the probe
+  would repeat rpi51's numbers. What differs per station is where the FT-818's sound card sits in
+  ALSA's device order, since a cached open still scans every device before it. No rig needed:
+  ```bash
+  aplay -L | grep -v '^ ' | nl
+  ```
+  Paste the output and say which line is the FT-818's interface.
 
 - [x] **Key-to-audio probe on rpi51, named device** (done 2026-10-12, `main` after #1508, by the rpi51
   agent session). The station's device is **`plughw:CARD=CODEC,DEV=0`** (the IC-9700's USB codec);

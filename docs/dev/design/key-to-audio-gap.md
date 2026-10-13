@@ -2,7 +2,7 @@
 project: openpulsehf
 doc: docs/dev/design/key-to-audio-gap.md
 status: draft
-last_updated: 2026-10-12
+last_updated: 2026-10-13
 ---
 
 # The key-to-audio gap: open the output device outside the keyed window
@@ -14,7 +14,8 @@ last_updated: 2026-10-12
 > - **A** holds the card's capture PCM, so a single-card receiver goes deaf.
 > - **The measured cost was not the production path.**
 >
-> **Round 2 (2026-10-12): reviewed, no blocking finding; revised for the review, ready to build.**
+> **Round 2 (2026-10-12): reviewed, no blocking finding; revised for the review; implemented
+> 2026-10-13** (`device_cache.rs`).
 > It caches the resolved name (option A′) on both directions and holds no device handle and no
 > stream. The leader is checked at G1 by SDR capture. **Not a Release 1 blocker.**
 
@@ -122,19 +123,21 @@ the first sample, and the release still waits on the device-reported drain of th
 
 ## Round 2 (2026-10-12): cache the resolved name, never a handle
 
-**Decision (proposed).** `CpalBackend` keeps a cache from (direction, selector) to the resolved
+**Decision.** `CpalBackend` keeps a cache from (direction, selector) to the resolved
 system name.
-- **Miss:** `open_output(Some(sel))` and `open_input(Some(sel))` run today's full two-pass
-  `select_cpal_device`, then store the resolved name.
-- **Hit:** they run **pass 2 only**: `find` the cached name over `host.devices()`, stopping at it.
-  `host.devices()` skips the per-device config query that `output_devices()` runs before the match;
-  the direction is already settled by the cached name. Each hit logs the cached name at `debug!`, so
+- **Miss:** `open_output(Some(sel))` and `open_input(Some(sel))` name every device, resolve the
+  selector, scan to the match, then store the resolved name (the old two-pass `select_cpal_device`).
+- **Hit:** they run **pass 2 only**: scan for the cached name, stopping at it. The scan stays on the
+  direction-filtered `output_devices()` / `input_devices()`, not `host.devices()` (review finding 3's
+  suggestion): a failed scan's names feed the fallback, and an unfiltered list would let an
+  input-only device resolve for output. What the per-device config query adds is UNCHECKED; the
+  probe re-run shows the whole scan. Each hit logs the cached name at `debug!`, so
   it can be set beside the diagnostics' fresh resolve.
 - **A failed hit** (the name not found): evict the entry. The failed `find` has already named every
   device, so those names go to `resolve_name_from` directly, and the fallback costs no second
   enumeration. A renamed or replugged card therefore costs about one ordinary open, as today. A
-  `build_*_stream` failure on a found device evicts too and resolves in full once; that costs one
-  extra pass 2 before failing as today.
+  `build_*_stream` (or the input's `play`) failing on a found device evicts the entry and returns
+  the error, as today; the next open resolves in full. It does not retry inside the keyed window.
 - **What is held:** the cache stores a `String`, behind a `Mutex`, so `CpalBackend` stays
   `Send + Sync`. The lock is held for the get and the insert only, never across an enumeration, and
   a poisoned lock is recovered (`unwrap_or_else(|p| p.into_inner())`, as the file already does). **No `cpal::Device` and no stream is held between opens**, so round 1's findings

@@ -15,6 +15,34 @@ this ledger adds the design rationale and the actually-observed results per chan
 
 ---
 
+## 2026-10-13 — Key-to-audio: cache the resolved device name, scan only to it (work plan M2)
+
+**Change.** An open by device name no longer names every device each time. `CpalBackend` caches the
+resolved system name per (direction, selector). A cached open scans the direction's devices only up
+to its match; that removes pass 1 (525–540 ms on rpi51) from every keyed transmit and every capture
+reopen. No `cpal::Device` or stream is held between opens.
+
+**Decision.** `docs/dev/design/key-to-audio-gap.md` round 2, reviewed with no blocking finding
+(`docs/dev/reviews/review-key-to-audio-gap.md`). Per the review: a vanished name resolves from the
+failed scan's own names, so there is no second enumeration in the keyed window (finding 4); the
+lock is held for get/insert only and recovers from poisoning (finding 6); a stream that fails to
+build evicts its name without retrying. The probe now reports key-to-first-sample and the match's
+index in device order (findings 1 and 3).
+
+**Implementation.** `crates/openpulse-audio/src/device_cache.rs` (`NameCache::select`, `evict`,
+`resolve_name_from`); `cpal_backend.rs` (`scan_devices` replaces `select_cpal_device`;
+`open_output_stream`; `stream_failed`; `OutQueue::first_played`, `first_sample_delay`).
+
+**Tests → results.** `device_cache::tests` (6): one full scan for N opens, a vanished name resolved
+without a second enumeration and its new name cached, an unplugged card evicted, directions cached
+apart, ambiguity never cached, eviction. All pass; sabotage-verified (no insert: 3 of 6 fail; a
+second enumeration on the fallback: 2 of 6 fail). The first run hung: a lock guard in the `match`
+scrutinee deadlocked the eviction, fixed by binding first. `openpulse-audio` with `cpal-backend`:
+37 passed, 0 failed, including the 4 ALSA `device_enumeration` tests; clippy clean on both feature
+sets. The station effect is pending the rpi51 probe re-run (maintainer to-do).
+
+---
+
 ## 2026-10-13 — #1460 round 4b: a failed burst moves the ladder only when its NACK is keyed (work plan M2)
 
 **Change.** A failed OTA burst whose NACK the daemon's budget will not key is no ladder evidence:

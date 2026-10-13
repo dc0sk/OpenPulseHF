@@ -15,55 +15,40 @@ use cpal::{Stream, StreamConfig};
 use tracing::{debug, warn};
 
 use openpulse_core::audio::{
-    resolve_device, AudioBackend, AudioConfig, AudioInputStream, AudioOutputStream, DeviceInfo,
-    DeviceResolution,
+    AudioBackend, AudioConfig, AudioInputStream, AudioOutputStream, DeviceInfo,
 };
 use openpulse_core::error::AudioError;
 
+use crate::device_cache::{resolve_name_from, Direction, NameCache, Scan};
 use crate::fault::StreamFault;
 
-/// Pick a cpal device matching `selector` using the hotplug-safe resolver ([`resolve_device`]):
-/// exact name → ALSA `CARD=` token → case-insensitive substring, refusing to guess on ambiguity.
-/// Survives a device reorder/rename that changes the exact system name.
+/// Enumerate up to the device named `target`, naming and dropping every device before it; `None`
+/// names them all. Selection by name is [`NameCache::select`]: the hotplug-safe resolver
+/// ([`resolve_device`](openpulse_core::audio::resolve_device)) over the names, then a second scan
+/// that keeps just the match.
 ///
-/// **Enumerates twice, on purpose.** cpal's ALSA enumeration is stateful: holding `cpal::Device`
-/// values alive while iterating silently truncates the list. On this host, naming each device and
-/// dropping it yields 39 devices; naming it and *retaining* it (what this function used to do) yields
-/// 18; collecting the devices first and naming them afterwards yields 4. The truncation is silent —
-/// the missing entries simply never arrive — so `openpulse devices` (which drops as it goes) listed
-/// devices that `--device` could not open, and `aloop_tx` was unreachable while `hwloop_tx` happened
-/// to survive. Pass 1 therefore takes names only and drops every device; pass 2 re-enumerates and
-/// retains just the single match.
-fn select_cpal_device<I, F>(mut enumerate: F, selector: &str) -> Result<cpal::Device, AudioError>
+/// **Never retain a device while enumerating.** cpal's ALSA enumeration is stateful: holding
+/// `cpal::Device` values alive while iterating silently truncates the list. On this host, naming each
+/// device and dropping it yields 39 devices; naming it and *retaining* it yields 18; collecting the
+/// devices first and naming them afterwards yields 4. The truncation is silent — the missing entries
+/// simply never arrive — so `openpulse devices` (which drops as it goes) listed devices that
+/// `--device` could not open, and `aloop_tx` was unreachable while `hwloop_tx` happened to survive.
+fn scan_devices<I>(devices: I, target: Option<&str>) -> Scan<cpal::Device>
 where
     I: Iterator<Item = cpal::Device>,
-    F: FnMut() -> Result<I, AudioError>,
 {
-    // Pass 1 — names only. Retaining a device here is what truncates the enumeration.
-    let names: Vec<String> = enumerate()?.filter_map(|d| d.name().ok()).collect();
-    let resolved = resolve_name_from(&names, selector)?;
-
-    // Pass 2 — fetch the one device we want, retaining nothing else.
-    enumerate()?
-        .find(|d| d.name().map(|n| n == resolved).unwrap_or(false))
-        .ok_or(AudioError::DeviceNotFound(resolved))
-}
-
-/// Apply the hotplug-safe resolver to an already-collected name list.
-fn resolve_name_from(names: &[String], selector: &str) -> Result<String, AudioError> {
-    match resolve_device(selector, names) {
-        DeviceResolution::Resolved(name) => {
-            if name != selector {
-                debug!("audio device '{selector}' resolved to '{name}' (hotplug-safe match)");
-            }
-            Ok(name)
+    let mut names = Vec::new();
+    for device in devices {
+        let Ok(name) = device.name() else { continue };
+        if Some(name.as_str()) == target {
+            return Scan {
+                found: Some(device),
+                names,
+            };
         }
-        DeviceResolution::Ambiguous(hits) => Err(AudioError::DeviceNotFound(format!(
-            "'{selector}' matches multiple devices ({}); set an exact name",
-            hits.join(", ")
-        ))),
-        DeviceResolution::NotFound => Err(AudioError::DeviceNotFound(selector.to_string())),
+        names.push(name);
     }
+    Scan { found: None, names }
 }
 
 // ── CpalBackend ───────────────────────────────────────────────────────────────
@@ -75,6 +60,7 @@ fn resolve_name_from(names: &[String], selector: &str) -> Result<String, AudioEr
 /// and on Windows WASAPI.
 pub struct CpalBackend {
     host: cpal::Host,
+    names: NameCache,
 }
 
 impl Default for CpalBackend {
@@ -88,11 +74,118 @@ impl CpalBackend {
     pub fn new() -> Self {
         Self {
             host: cpal::default_host(),
+            names: NameCache::default(),
         }
     }
 }
 
 impl CpalBackend {
+    /// `open_output` with the concrete stream, so the station probe can read its first-sample time.
+    fn open_output_stream(
+        &self,
+        device: Option<&str>,
+        config: &AudioConfig,
+    ) -> Result<CpalOutputStream, AudioError> {
+        let dev = match device {
+            None => self
+                .host
+                .default_output_device()
+                .ok_or_else(|| AudioError::DeviceNotFound("no default output device".into()))?,
+            Some(name) => self.names.select(Direction::Output, name, |target| {
+                let devices = self
+                    .host
+                    .output_devices()
+                    .map_err(|e| AudioError::Stream(e.to_string()))?;
+                Ok(scan_devices(devices, target))
+            })?,
+        };
+
+        let stream_config = StreamConfig {
+            channels: config.channels,
+            sample_rate: cpal::SampleRate(config.sample_rate),
+            buffer_size: match config.buffer_size {
+                Some(n) => cpal::BufferSize::Fixed(n),
+                None => cpal::BufferSize::Default,
+            },
+        };
+
+        let buf: Arc<Mutex<OutQueue>> = Arc::new(Mutex::new(OutQueue::default()));
+        let buf_read = Arc::clone(&buf);
+        let (rate, channels) = (config.sample_rate, config.channels.max(1) as usize);
+
+        let stream = dev
+            .build_output_stream(
+                &stream_config,
+                move |output: &mut [f32], info: &cpal::OutputCallbackInfo| {
+                    let mut guard = buf_read.lock().unwrap_or_else(|p| p.into_inner());
+                    let had_samples = !guard.samples.is_empty();
+                    if had_samples && guard.first_played.is_none() {
+                        let ts = info.timestamp();
+                        let delay = ts.playback.duration_since(&ts.callback).unwrap_or_default();
+                        guard.first_played = Some(std::time::Instant::now() + delay);
+                    }
+                    let mut last = 0usize;
+                    for (i, sample) in output.iter_mut().enumerate() {
+                        match guard.samples.pop_front() {
+                            Some(v) => {
+                                *sample = v;
+                                last = i;
+                            }
+                            None => *sample = 0.0,
+                        }
+                    }
+                    // Latch only on the transition to empty: every later callback pops nothing and
+                    // must not move the mark (#1367 review, finding 2).
+                    if had_samples && guard.samples.is_empty() {
+                        let ts = info.timestamp();
+                        guard.drained = Some(
+                            crate::flush::drain_after_callback(
+                                ts.playback.duration_since(&ts.callback),
+                                last / channels + 1,
+                                rate,
+                            )
+                            .map(|d| std::time::Instant::now() + d),
+                        );
+                    }
+                },
+                |err| warn!("cpal output error: {err}"),
+                None,
+            )
+            .map_err(|e| self.stream_failed(Direction::Output, device, e))?;
+
+        // play() is deferred to the first write(), so hosts that honour pause start with the
+        // frame buffered. On ALSA it changes nothing: cpal's worker starts the device on silence
+        // as soon as the stream is built (`play()` is only `pause(false)`), so the callback runs
+        // against an empty queue before any write — the drain mark latches only on a
+        // non-empty → empty transition for that reason (#1367 review, finding 4).
+        debug!(
+            "opened cpal output stream on '{}' (playback deferred to first write)",
+            dev.name().unwrap_or_default()
+        );
+
+        Ok(CpalOutputStream {
+            stream,
+            started: false,
+            buf,
+            sample_rate_hz: config.sample_rate,
+            channels: config.channels,
+            first_write: None,
+        })
+    }
+
+    /// A stream failed on a device opened by name: forget the name, so the next open resolves in full.
+    fn stream_failed(
+        &self,
+        direction: Direction,
+        selector: Option<&str>,
+        err: impl std::fmt::Display,
+    ) -> AudioError {
+        if let Some(selector) = selector {
+            self.names.evict(direction, selector);
+        }
+        AudioError::Stream(err.to_string())
+    }
+
     /// Resolve `selector` to the system name of an output device, without opening a stream.
     ///
     /// Exposed for diagnostics and for testing the resolver: opening a stream perturbs ALSA state,
@@ -193,14 +286,13 @@ impl AudioBackend for CpalBackend {
                 .host
                 .default_input_device()
                 .ok_or_else(|| AudioError::DeviceNotFound("no default input device".into()))?,
-            Some(name) => select_cpal_device(
-                || {
-                    self.host
-                        .input_devices()
-                        .map_err(|e| AudioError::Stream(e.to_string()))
-                },
-                name,
-            )?,
+            Some(name) => self.names.select(Direction::Input, name, |target| {
+                let devices = self
+                    .host
+                    .input_devices()
+                    .map_err(|e| AudioError::Stream(e.to_string()))?;
+                Ok(scan_devices(devices, target))
+            })?,
         };
 
         let stream_config = StreamConfig {
@@ -237,11 +329,11 @@ impl AudioBackend for CpalBackend {
                 },
                 None,
             )
-            .map_err(|e| AudioError::Stream(e.to_string()))?;
+            .map_err(|e| self.stream_failed(Direction::Input, device, e))?;
 
         stream
             .play()
-            .map_err(|e| AudioError::Stream(e.to_string()))?;
+            .map_err(|e| self.stream_failed(Direction::Input, device, e))?;
         debug!(
             "opened cpal input stream on '{}'",
             dev.name().unwrap_or_default()
@@ -259,86 +351,7 @@ impl AudioBackend for CpalBackend {
         device: Option<&str>,
         config: &AudioConfig,
     ) -> Result<Box<dyn AudioOutputStream>, AudioError> {
-        let dev = match device {
-            None => self
-                .host
-                .default_output_device()
-                .ok_or_else(|| AudioError::DeviceNotFound("no default output device".into()))?,
-            Some(name) => select_cpal_device(
-                || {
-                    self.host
-                        .output_devices()
-                        .map_err(|e| AudioError::Stream(e.to_string()))
-                },
-                name,
-            )?,
-        };
-
-        let stream_config = StreamConfig {
-            channels: config.channels,
-            sample_rate: cpal::SampleRate(config.sample_rate),
-            buffer_size: match config.buffer_size {
-                Some(n) => cpal::BufferSize::Fixed(n),
-                None => cpal::BufferSize::Default,
-            },
-        };
-
-        let buf: Arc<Mutex<OutQueue>> = Arc::new(Mutex::new(OutQueue::default()));
-        let buf_read = Arc::clone(&buf);
-        let (rate, channels) = (config.sample_rate, config.channels.max(1) as usize);
-
-        let stream = dev
-            .build_output_stream(
-                &stream_config,
-                move |output: &mut [f32], info: &cpal::OutputCallbackInfo| {
-                    let mut guard = buf_read.lock().unwrap_or_else(|p| p.into_inner());
-                    let had_samples = !guard.samples.is_empty();
-                    let mut last = 0usize;
-                    for (i, sample) in output.iter_mut().enumerate() {
-                        match guard.samples.pop_front() {
-                            Some(v) => {
-                                *sample = v;
-                                last = i;
-                            }
-                            None => *sample = 0.0,
-                        }
-                    }
-                    // Latch only on the transition to empty: every later callback pops nothing and
-                    // must not move the mark (#1367 review, finding 2).
-                    if had_samples && guard.samples.is_empty() {
-                        let ts = info.timestamp();
-                        guard.drained = Some(
-                            crate::flush::drain_after_callback(
-                                ts.playback.duration_since(&ts.callback),
-                                last / channels + 1,
-                                rate,
-                            )
-                            .map(|d| std::time::Instant::now() + d),
-                        );
-                    }
-                },
-                |err| warn!("cpal output error: {err}"),
-                None,
-            )
-            .map_err(|e| AudioError::Stream(e.to_string()))?;
-
-        // play() is deferred to the first write(), so hosts that honour pause start with the
-        // frame buffered. On ALSA it changes nothing: cpal's worker starts the device on silence
-        // as soon as the stream is built (`play()` is only `pause(false)`), so the callback runs
-        // against an empty queue before any write — the drain mark latches only on a
-        // non-empty → empty transition for that reason (#1367 review, finding 4).
-        debug!(
-            "opened cpal output stream on '{}' (playback deferred to first write)",
-            dev.name().unwrap_or_default()
-        );
-
-        Ok(Box::new(CpalOutputStream {
-            stream,
-            started: false,
-            buf,
-            sample_rate_hz: config.sample_rate,
-            channels: config.channels,
-        }))
+        Ok(Box::new(self.open_output_stream(device, config)?))
     }
 }
 
@@ -390,6 +403,19 @@ pub struct CpalOutputStream {
     buf: Arc<Mutex<OutQueue>>,
     sample_rate_hz: u32,
     channels: u16,
+    first_write: Option<std::time::Instant>,
+}
+
+impl CpalOutputStream {
+    /// From the first `write` to its first sample at the device's output, once it has played.
+    fn first_sample_delay(&self) -> Option<Duration> {
+        let played = self
+            .buf
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .first_played?;
+        Some(played.saturating_duration_since(self.first_write?))
+    }
 }
 
 /// The output queue and, in the same lock, when its last sample leaves the device (#1367).
@@ -402,10 +428,15 @@ pub struct CpalOutputStream {
 struct OutQueue {
     samples: VecDeque<f32>,
     drained: Option<Option<std::time::Instant>>,
+    /// When the first written sample reaches the device's output, as the first callback that pops
+    /// one reports it. Write → drained bounds the end of the stream, not its start (key-to-audio
+    /// round 2 review, finding 1).
+    first_played: Option<std::time::Instant>,
 }
 
 impl AudioOutputStream for CpalOutputStream {
     fn write(&mut self, samples: &[f32]) -> Result<(), AudioError> {
+        self.first_write.get_or_insert_with(std::time::Instant::now);
         {
             let mut guard = self.buf.lock().unwrap_or_else(|p| p.into_inner());
             guard.samples.extend(samples.iter().copied());
@@ -459,6 +490,12 @@ impl AudioOutputStream for CpalOutputStream {
                     .map(|at| at.saturating_duration_since(std::time::Instant::now()));
                 drop(guard);
                 std::thread::sleep(crate::flush::drain_wait(remaining));
+                if let Some(d) = self.first_sample_delay() {
+                    debug!(
+                        "first sample reached the output {:.1} ms after the first write",
+                        d.as_secs_f64() * 1e3
+                    );
+                }
                 return Ok(());
             }
             if std::time::Instant::now() >= deadline {
@@ -474,7 +511,7 @@ impl AudioOutputStream for CpalOutputStream {
 }
 
 /// Station probe for the key-to-audio gap (work plan M2): how long a transmit's output path takes
-/// before its first sample plays. Every keyed path asserts PTT before `open_output`, so this is dead
+/// before its first sample plays, with the device name cached from run 2 on. Every keyed path asserts PTT before `open_output`, so this is dead
 /// air on the rig. Writes SILENCE, so nothing is radiated even with VOX on.
 ///
 /// Run on the station, with the rig's output device name as the daemon is configured:
@@ -515,49 +552,47 @@ mod key_to_audio_probe {
                 .expect("resolve the output name")
         });
         for run in 1..=5 {
-            // Pass 1, what `select_cpal_device` does first: every output device, named.
+            // A full scan, what a cold open pays first: every output device, named. The match's
+            // index is its place in hint order, which sets what a cached open still pays (round 2
+            // review, finding 3).
             let t = Instant::now();
-            let names = backend
+            let names: Vec<String> = backend
                 .host
                 .output_devices()
-                .map(|d| d.filter_map(|d| d.name().ok()).count())
-                .unwrap_or(0);
+                .map(|d| d.filter_map(|d| d.name().ok()).collect())
+                .unwrap_or_default();
             let pass1 = t.elapsed();
+            let index = resolved
+                .as_deref()
+                .and_then(|r| names.iter().position(|n| n == r));
 
-            // Pass 2 alone: `find` the resolved name, stopping at it. What a cached name still pays.
-            let t = Instant::now();
-            let found = resolved.as_deref().map(|r| {
-                backend
-                    .host
-                    .output_devices()
-                    .ok()
-                    .and_then(|mut d| d.find(|d| d.name().map(|n| n == r).unwrap_or(false)))
-                    .is_some()
-            });
-            let pass2 = t.elapsed();
-
-            // Production: `open_output` by the configured name, both passes plus the open.
+            // Production: `open_output` by the configured name. Run 1 resolves in full and caches
+            // the name; later runs scan only up to it.
             let t = Instant::now();
             let mut stream = backend
-                .open_output(device.as_deref(), &config)
+                .open_output_stream(device.as_deref(), &config)
                 .expect("open_output");
             let open = t.elapsed();
 
-            // `flush` returns once the device reports the queue played out, so what the drain
-            // took beyond the audio's own length is start-up plus device latency.
+            // First sample at the device's output, as its callback reports it; and the drain, which
+            // bounds the end of the stream rather than its start.
             let t = Instant::now();
             stream.write(&silence).expect("write");
             let _ = stream.flush();
             let audio = Duration::from_secs_f64(silence.len() as f64 / config.sample_rate as f64);
-            let first_pop = t.elapsed().saturating_sub(audio);
+            let drained = t.elapsed().saturating_sub(audio);
+            let first = stream.first_sample_delay();
+            let ms = |d: Duration| d.as_secs_f64() * 1e3;
             println!(
-                "run {run}: pass1 {:>7.1} ms ({names} devices) | pass2 find {:>7.1} ms (found {found:?}) | \
-                 open_output {:>7.1} ms | write → drained − audio {:>7.1} ms | key-to-audio ≈ {:>7.1} ms",
-                pass1.as_secs_f64() * 1e3,
-                pass2.as_secs_f64() * 1e3,
-                open.as_secs_f64() * 1e3,
-                first_pop.as_secs_f64() * 1e3,
-                (open + first_pop).as_secs_f64() * 1e3,
+                "run {run}: full scan {:>7.1} ms ({} devices, match at index {index:?}) | \
+                 open_output {:>7.1} ms | write → first sample {} | write → drained − audio {:>7.1} ms | \
+                 key-to-first-sample {}",
+                ms(pass1),
+                names.len(),
+                ms(open),
+                first.map_or("n/a".into(), |d| format!("{:>7.1} ms", ms(d))),
+                ms(drained),
+                first.map_or("n/a".into(), |d| format!("{:>7.1} ms", ms(open + d))),
             );
         }
     }

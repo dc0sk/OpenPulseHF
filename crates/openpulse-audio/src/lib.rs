@@ -13,6 +13,9 @@ pub mod fault;
 
 pub mod flush;
 
+#[cfg(any(feature = "cpal-backend", test))]
+mod device_cache;
+
 #[cfg(feature = "cpal-backend")]
 pub mod cpal_backend;
 
