@@ -219,3 +219,66 @@ Found by `grep -n "fn holds_an_ack_codeword" crates/openpulse-modem/src/engine.r
 
 linksim was found by `grep -rn "RxOutcome::Failed" crates apps --include=*.rs`. ARDOP was found by
 `grep -rn "receive_with_ack_hint" crates/openpulse-ardop/src`, because that grep cannot see it.
+
+---
+
+# Round 4 (2026-10-13): cap the ladder damage of failures between decodes
+
+Fable, read-only, on the round-4 section of the design (at 522a8478). Prompt: falsify (1) the desync
+story and whether the budget's bursts are exactly `on_rx_frame`'s; (2) whether a two-rung fade is
+really lost today; (3) whether keeping `rx_confirmed` breaks the climb, lockstep, HARQ or the ACK;
+(4) whether one step is the right cap and its derivation sound; (5) the two-candidate receive cost
+on a Pi; (6) M1–M3; (7) whether it bounds #1460 honestly; (8) whether it blocks Release 1.
+
+## Verdict (round 4)
+
+**It does not block Release 1** (#1460's remainder is HF; A1/A2 run on 2 m). **Not implemented as
+written.**
+
+## Findings (round 4)
+
+1. **Blocking: two candidates per failing burst on a Pi push the NACK past the ACK window.** Under
+   the cap every burst of a fade fails both candidates, each paying offset 0, the onset scan, phase 2
+   and the HARQ demod. SL2 6.29 s plus SL3 3.14 s ≈ 9.4 s against the 9 s window, so the ISS times
+   out twice and goes `PeerSilent`. "Already the normal state after a climb" holds only for the
+   transient lost-climb-ACK case; under the cap it is the steady state of a fade.
+   `receive_cost_scaling` locks the level, so it measures one candidate.
+2. **Should fix: a two-rung fade is not lost today.** The leaked NACK (one per 10 min) carries the
+   then-current rung, the ISS adopts any ACK's level, and "abandoned" is per message, not per
+   session. Today a link needing k rungs recovers after about 10·(k−1) min; with a fixed cap the
+   leak says "one rung down" forever. Make the derivation real: one step per keyed NACK run, which
+   needs the daemon to tell the controller.
+3. **Should fix: the derivation cannot fail.** `OTA_NACK_BUDGET` is daemon-private and
+   `nack_threshold` is a profile field, so a constant 1 with a "3/3" comment is a doc-comment
+   fidelity claim (verification rule 5). The leak also breaks "the most steps the budget can
+   announce".
+4. **Should fix: M1's fallback is the wrong way round.** linksim decodes with the known TX mode, never
+   `rx_candidates`, and its ISS hears every NACK; its gate rows are 20 dB AWGN and moderate_f1, so M1
+   likely passes vacuously.
+5. **Should fix: M2 relaxes the registered falsifier** (zero demotions) and must say so; the SL2 → SL1
+   step still happens, after which every NACK is the ≈5 s MFSK16-ACK.
+6. **Should fix: unspecified state.** Does `rx_consecutive_nack` count while capped; does
+   `FastDownshift` count as the step; do `lock_level`, `set_level_bounds` and `start_ota_session`
+   reset it. `transient_failure_at_good_snr_keeps_the_nack_hysteresis` is the test that breaks, not
+   the one named. The module header, `NackStepDown`'s doc and the daemon's `rx_confirmed_level` status
+   field change meaning.
+7. **Should fix: state the oscillation and the residual.** One decode at the old rung undoes the step
+   (intended: "observation wins"), and at a fade edge it flips the ISS each cycle. QRM interleaved with
+   decodes still ratchets: three counted foreign bursts are −1, three clean decodes +1.
+
+**Park:** the evidence floor is the minimum over candidates, so a kept faster rung counts a little
+more flicker; HARQ retains foreign LLRs at both rungs (pre-existing, doubled while capped); the budget
+is charged when nothing keys (callsign invalid, PTT assert failed); the cost paragraph pointed at the
+wrong M3.
+
+**Checked and fine:** the desync story (`on_rx_frame(Failed)` runs before the budget, `NackStepDown`
+moves both, failure 6 steps silently); the budget's set is exactly `on_rx_frame`'s; lockstep and
+`never_desyncs_under_arbitrary_ack_loss` hold; the climb; CAP-33 is unaffected; ARDOP does not use the
+controller.
+
+## Disposition (round 4)
+
+Revised the same day as **round 4b** (in the design): a failure moves the ladder only when its NACK
+is keyed, which the daemon tells the engine before the decode. That replaces the fixed cap (findings
+2 and 3) and leaves linksim, which keys every NACK, unchanged (finding 4). Keeping the anchor is
+split off and gated on a two-candidate Pi measurement (finding 1).

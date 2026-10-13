@@ -22,8 +22,9 @@ changes when a NACK is keyed, so it is reviewed before it is built (decision 8).
 > - a refused frame of ours turns a NACK into ISS abandonment, on 2 m as well.
 >
 > **Not a Release 1 blocker.** The maintainer kept #1460 in M2 (decision 21) and chose a round-2
-> design. **Round 4 (2026-10-13) is a different approach, for review: see *Round 4*.** It caps
-> the ladder damage of any run of failures instead of classifying the burst.
+> design. **Round 4 (2026-10-13) stops classifying and bounds the damage instead; see *Round 4*.**
+> Its first draft (a fixed one-step cap) was reviewed and revised to **round 4b**: a failure moves
+> the ladder only when its NACK is keyed.
 >
 > **Round 2, also not implemented** (round 2 review: the shipped half-Hann pulse puts
 > ~0.6 of our own frame's power in 4 bins, so C overlaps CW; floor subtraction is not implementable as
@@ -283,59 +284,80 @@ Read from the code, not measured:
 - **Between sessions** (#1456), idle flicker that clears the 0.5 s floor does the same, and the
   peer's next frame arrives at a rung no longer tried.
 
-### Decision (proposed)
+### Round 4 review: not implemented as first drafted
 
-Two changes in `OtaRateController`, both in the `NackStepDown` branch:
-1. **At most one step down between decodes** (`MAX_STEPS_WITHOUT_DECODE` = 1). After it, further
-   failures answer `NackHold` at the stepped rung until a decode. The value is not fitted: it is
-   `OTA_NACK_BUDGET / nack_threshold` = 3 / 3, the most steps the budget can ever announce before it
-   mutes. A deeper step could only arrive silently or through a leaked NACK 10 min later, after the
-   ISS has abandoned (two silent windows).
-2. **The step moves the recommendation, not the anchor.** `rx_confirmed` stays at the last decoded
-   rung until a decode, as `FastDownshift` already does ("a lost downshift ACK can't desync the
-   receiver"). So after the step, both the rung the ISS was on and the rung the NACK asked for are
-   tried, whether or not the ISS heard the NACK.
+The first draft capped the ladder at one step between decodes and kept `rx_confirmed` at the last
+decoded rung ([review](../reviews/review-failed-burst-ownership.md), *Round 4*). Two findings
+changed it:
+- **Keeping the anchor doubles the decode work of every failing burst.** On a Pi at SL2+SL3 that is
+  about 9.4 s against the 9 s ACK window, so the ISS goes `PeerSilent` (finding 1, blocking).
+- **A fixed cap loses today's leak recovery.** A leaked NACK (one per 10 min) carries the current
+  rung, so a link needing k rungs recovers after about 10·(k−1) min today. A fixed one-step cap
+  would say "one rung down" forever, and its "3 / 3" derivation could not fail (findings 2 and 3).
 
-**What it does to a real fade.** A link that needs two rungs between decodes fails today as well:
-the second step is silent and the ISS abandons after two silent windows. With the cap it abandons
-the same way, one rung higher, with candidates that still match what it sends. A link that needs one
-rung is unchanged, except that the old rung stays a candidate until a decode.
+## Round 4b (2026-10-13): the ladder moves only on a failure the peer hears about
 
-**What it does to a foreign over.** One minute of CW costs at most one step and at most 3 NACKs
-plus the leak, against several steps today. The NACKs keyed into another QSO are unchanged: the
-budget already bounds them. **This does not close #1460**: a foreign over still counts as evidence,
-still keys up to 3 NACKs and still costs one step. It makes the cost bounded and recoverable.
+**Decision (proposed).** A failed burst whose NACK the daemon will **not** key (the budget is muted)
+is not ladder evidence: `on_rx_frame` answers it `NackHold` and does **not** add to
+`rx_consecutive_nack`. A failure whose NACK is keyed counts exactly as today.
+- **How the engine knows.** For a failed burst, the budget's verdict depends only on the listening
+  clock, which is known before the decode. The daemon calls a new
+  `NackBudget::would_key_failure(listening)` (no state change) and hands the answer to the engine
+  before `ota_decode_burst`; `ota_decode_and_ack_inner` passes it to `on_rx_frame`. A decode ignores
+  it, so the budget's own accounting after the decode is unchanged.
+- **No new constant.** The bound comes from the budget itself, so it follows `OTA_NACK_BUDGET`, the
+  leak and each profile's `nack_threshold` with nothing to keep in step.
+- **`rx_confirmed` still moves with the step,** as today. Only one candidate is decoded, so the
+  receive cost is today's.
 
-**Cost.** After a step, two candidates are decoded per burst instead of one until a decode. That is
-already the normal state after a climb recommendation, so the receive cost is inside today's
-envelope. UNCHECKED on the Pi at SL2 (the slowest decode); M3 measures it.
+**What it does.**
+- **The silent step is gone.** Failures 1–3 are keyed and NACK 3 announces the one step; failures
+  4–6 are muted and move nothing, so the candidates stay on the rung the ISS was told.
+- **The leak still recovers.** Each leaked NACK is a keyed failure and counts, so a link needing k
+  rungs steps one rung per `nack_threshold` leaked NACKs: about 30 min a rung where today it is
+  about 10 min (today's leaked NACK announces steps taken silently). Stated as the cost.
+- **A minute of CW** costs one step and 3 NACKs where today it costs 3–5 steps. Not a fix for
+  #1460: a foreign over still counts while the budget allows, and QRM interleaved with decodes
+  still ratchets (three counted foreign bursts −1, three clean decodes +1).
+- **#1456 between sessions:** at most one step from idle flicker, where today it walks on. The SL2 →
+  SL1 step still happens, after which every NACK is the ≈5 s MFSK16-ACK. This relaxes the
+  decay review's falsifier (zero demotions), and says so.
 
-### Measurements, pre-registered (rules fixed here, before any number exists)
+**State, specified.** `rx_consecutive_nack` does not count a muted failure; `rx_consecutive_ok` is
+still zeroed by it (a failure is still evidence against climbing). `FastDownshift` (dormant on air,
+#1438) is unchanged and ignores the flag. `lock_level`, `set_level_bounds` and `start_ota_session`
+need nothing new: there is no new counter. A caller with no budget (linksim, the unit tests) passes
+"keyed", which is today's behaviour.
 
-- **M1, linksim goodput.** The linksim models no NACK budget: its ISS hears every NACK, so it can
-  descend several rungs between decodes, which the daemon cannot. Run the linksim goodput gate and
-  the `ota_channel_adaptation` slow suite (CAP-33) before and after. **Rule:** the slow suite passes.
-  A goodput cell that drops by more than its gate tolerance is a cell that relied on two or more
-  steps between decodes; each is listed. If any gate row fails, the cap is made a controller option
-  that the daemon sets and linksim leaves off, and a budget model for linksim is parked as its own
-  item.
-- **M2, the #1456 falsifier** (from `review-nack-streak-decay.md`): a recorded 250 Hz idle at SL2
-  through `accumulate_capture` for 90 min, then a peer's SL2 frame and then a failing BPSK31 frame.
-  **Rule:** at most one step; the SL2 frame decodes (it is still a candidate); the failing frame
-  keys a NACK. Today's expected result, recorded for comparison: more than one step and the SL2 frame
-  fails.
-- **M3, CW at SL4:** one minute of 20 wpm CW, word gaps included, at +6 dB through
-  `accumulate_capture`. **Rule:** at most one step and at most 3 NACKs, and the next frame of ours at
-  the original rung decodes. Plus the two-candidate decode time at SL2 on x86 (Pi pending).
+**Split off, parked:** keeping `rx_confirmed` at the last decoded rung (the first draft's second
+change). It removes the desync after a *lost* NACK, which exists today. It needs a two-candidate
+failing-burst variant of `receive_cost_scaling` on rpi51 first, with the rule: SL2+SL3 and SL2+SL1
+each ≤ 7.48 s per burst (the F1c bound).
 
-### Tests (to write with the implementation)
+### Measurements, pre-registered (round 4b; rules fixed before any number exists)
 
-- Unit (`ota_rate.rs`): six failures without a decode give one step, and both rungs are candidates;
-  a decode resets the cap; a decode at the stepped rung moves the anchor; a lost NACK (the ISS stays
-  on the old rung) still decodes. Each fails with its half of the change reverted.
-- Daemon: M2 and M3 as integration tests through `accumulate_capture`.
-- Existing: `abstention_still_steps_down_at_the_nack_threshold`, the NACK-hysteresis tests and the
-  budget tests stay green; any that pinned two steps without a decode is rewritten with the reason.
+- **M1, linksim:** unchanged by construction (it keys every NACK, so every failure is keyed). The
+  goodput gate is run to show it, not as evidence for 4b. A budget model for linksim is parked.
+- **M2, the #1456 falsifier, relaxed:** a recorded 250 Hz idle at SL2 through `accumulate_capture`
+  for 90 min, then a failing BPSK31 frame. **Rule:** at most one step, and the failing frame keys a
+  NACK. Today's result is recorded beside it.
+- **M3, CW at SL4:** one minute of 20 wpm CW with word gaps at +6 dB through `accumulate_capture`.
+  **Rule:** at most one step and at most 3 NACKs, then a frame of ours at SL3 decodes.
+
+### Tests (with the implementation)
+
+- **Unit (`ota_rate.rs`):** six failures, the last three muted, give one step; a muted failure
+  leaves `rx_consecutive_nack` alone and still zeroes `rx_consecutive_ok`; three keyed failures
+  after the mute step again. Each fails with the flag ignored.
+- **Unit (`nack_budget.rs`):** `would_key_failure` agrees with `on_ladder_burst(false, t)` over a
+  run with leaks, and changes no state.
+- **Daemon:** M2 and M3 through `accumulate_capture`, each asserting the budget and the ladder.
+- **Docs that change meaning:** the module header and `NackStepDown`'s doc in `ota_rate.rs`.
+
+**Review asked for (round 4b):** is "the budget's verdict for a failure is known before the decode"
+true on every path (the leak, a decode-error return, the uncoded fallback)? Does skipping the count
+break anything that relies on `rx_consecutive_nack`? Is about 30 min a rung of leak recovery
+acceptable? Does this block Release 1?
 
 ### Consumer, prior art, twins (round 4)
 
@@ -347,11 +369,6 @@ envelope. UNCHECKED on the Pi at SL2 (the slowest decode); M3 measures it.
 - **Twins:** linksim's ISS loop (`apps/openpulse-linksim/src/lib.rs`, calls `on_rx_frame` with no
   budget, M1); the ARDOP TNC steps down on a missing ACK on its own and does not use this controller
   (UNCHECKED beyond `grep -rln OtaRateController`, which lists core, modem, daemon and linksim).
-
-**Review asked for:** is the desync story right (do muted failures really step silently, and is the
-budget's count the same set as `on_rx_frame`'s)? Is a two-rung fade really lost today? Does keeping
-the anchor break the climb or the lockstep invariant? Is one step the right cap? Does this block
-Release 1?
 
 ## Round 1 (2026-10-11, not implemented)
 
