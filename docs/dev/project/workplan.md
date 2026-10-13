@@ -2,7 +2,7 @@
 project: openpulsehf
 doc: docs/dev/project/workplan.md
 status: draft
-last_updated: 2026-10-12
+last_updated: 2026-10-13
 ---
 
 # Work plan — Release 1 ("basic modem")
@@ -140,9 +140,10 @@ payload format change, so M1 closed as a bug fix plus a declaration.
    - round 3, the notch classifier: blind behind narrow rig filters, or fooled by our own frames.
 
    The cost asymmetry favours counting. A foreign over that counts costs a NACK within the budget.
-   A refused frame of ours costs the message. Proposed instead: bound the damage, not classify it (a
-   cap on counted failures between decodes, related to the parked #1456 decay), or park until the HF
-   run. **#1460 evidence rule** on the flag-day template: a failed burst counts as ladder evidence only if
+   A refused frame of ours costs the message. **The maintainer chose to bound the damage (2026-10-13).**
+   Round 4b (`failed-burst-ownership.md`), reviewed twice, no blocking finding: a failed burst moves the
+   ladder only when its NACK is keyed, so one minute of CW costs one step instead of 3–5 and no step is
+   silent. Does not close #1460 (a foreign over still counts while the budget allows). Next: implement. **#1460 evidence rule** on the flag-day template: a failed burst counts as ladder evidence only if
    a candidate rung's template corroborates it; rungs without one keep the 0.5 s floor. Closes #1460.
 3. **Fixed 2026-10-11** (`the_plan_admits_a_window_exactly_when_the_correlator_can_measure_it`; the
    grid half was already fixed). **#1171** (the DDC arm's window gate compares decimated against passband lengths; its grid step may
@@ -216,6 +217,7 @@ Waiting on the maintainer (`maintainer-todo.md`): the key-to-audio probe, then F
 | 23 | 2026-10-06 | **#1062 F2: accept BPSK250's PN-63 threshold at a 1.07 margin. Amends F2's pre-registered 1.2.** PN-63 at ρ ≈ 0.315 refuses every measured interferer (worst 0.304) and keeps the 3 dB decodable p01 (0.327); the shipped `--++` at 0.40 passes the tone (0.699) and the DSB pair (0.981) and rejects more decodable frames (p05 0.490). Strictly better than today on both sides; the 1.2 was not met. The sequence continues at F3 | maintainer |
 | 24 | 2026-10-06 | **#1062 F3: keep x⁶ + x + 1.** F3 failed for all six degree-6 polynomials (whole-frame worst 0.52–0.65): the worst is chance correlation with whitened payload, set by frame length, so the rule was misframed and no N = 63 sequence meets it. Differences between polynomials are within payload-to-payload noise; x⁶ + x + 1 is already in production (pilot). Continue at F4 | maintainer |
 | 25 | 2026-10-07 | **#1062 F5: BPSK31 keeps the shipped `--++` preamble; the carrier detect is not changed for it. Amends decision 22's scope: PN-63 on SL3–SL5, not SL2.** F5's pre-registered consequence (parity fail → that rung keeps `--++`): BPSK31 failed its −14 dB AWGN cliff (345 / 298, −0.078), a carrier-detect gathering deficit, and passed every other column. Changing the shared carrier detect would touch every mode and the channel-busy check before keying, re-open #1454's idle-fitted constants and the slow suites, for a gain confined to 17 dB below the rung's floor, on a rung where PN buys nothing measured yet (no PN template on the slow rungs). BPSK63 and BPSK100 go to the flag day on PN-63; the cliff deficit is parked, not ruled out | maintainer |
+| 26 | 2026-10-13 | **#1460: bound the damage, do not classify.** After three classification rounds found no statistic separating a foreign over from a failing frame of ours, the remainder is handled by round 4b of `failed-burst-ownership.md`: a failed burst moves the ladder only when its NACK is keyed. Work plan item 2 no longer asks for template corroboration | maintainer |
 
 ## Open questions
 

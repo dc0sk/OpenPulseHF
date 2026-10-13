@@ -282,3 +282,44 @@ Revised the same day as **round 4b** (in the design): a failure moves the ladder
 is keyed, which the daemon tells the engine before the decode. That replaces the fixed cap (findings
 2 and 3) and leaves linksim, which keys every NACK, unchanged (finding 4). Keeping the anchor is
 split off and gated on a two-candidate Pi measurement (finding 1).
+
+---
+
+# Round 4b (2026-10-13): the ladder moves only on a keyed NACK
+
+Fable, read-only, at 405b7364. Prompt: falsify (1) that the budget's verdict for a failure is
+knowable before the decode on every path (the leak arithmetic, engine errors, the uncoded fallback,
+multi-frame bursts, the callsign and PTT-assert charge); (2) that skipping the count breaks nothing
+that reads `rx_consecutive_nack`; (3) the leak-recovery claim; (4) M1–M3 and the tests; (5) any
+round-4 finding left open; (6) whether it blocks Release 1.
+
+**Verdict: does not block Release 1; no blocking finding.** The first three NACKs are keyed at the
+same levels as today, so A1/A2 on 2 m see the same NACK stream.
+
+**Should fix, all taken into the design:**
+1. **The premise has two holes.** The budget is charged when the callsign is invalid or the PTT
+   assert fails, and nothing keys: a "keyed" verdict would step silently, on an unconfigured station
+   every time. The verdict folds in `local_callsign_valid()`; the PTT-assert case is the stated
+   residual.
+2. **The leak cost was understated.** Today a leaked NACK announces 2–3 rungs at once at minute 10.
+   Fix taken: a three-valued verdict (muted, keyed, leaked), and a leaked NACK steps on its own.
+   Recovery is then about k × 10 min.
+3. **`FastDownshift` ignoring the flag contradicts the rule.** Gated on it.
+4. **M2's NACK clause tests the budget, not 4b.** Reported, not scored.
+5. **Prove the wiring through the production entry.** M2 and M3 run through the rx tick and fail
+   with the verdict hard-wired; the `OtaRateDecision` event carries the verdict as a tripwire.
+6. **Specify the hand-over.** A take-at-entry field defaulting to "keyed", taken with `lead` and
+   `spans`.
+
+**Park:** a muted failure still zeroes the climb streak (pre-existing); the engine takes a verdict,
+never the budget (kept).
+
+**Checked and fine:** the verdict is knowable before the decode (`listening_samples` advances only in
+`accumulate_capture`, which the decode does not call); engine errors, not-evidence returns and the
+fallback never reach the budget; one burst is one `on_rx_frame`; nothing outside `ota_rate.rs` reads
+`rx_consecutive_nack`; linksim and the unit tests stay bit-for-bit; CAP-33 is unaffected; one
+candidate keeps today's receive cost.
+
+## Disposition (round 4b)
+
+Design revised for findings 1–6 (2026-10-13). Ready to implement; the work plan item records it.

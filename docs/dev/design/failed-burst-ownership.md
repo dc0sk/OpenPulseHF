@@ -301,10 +301,22 @@ changed it:
 is not ladder evidence: `on_rx_frame` answers it `NackHold` and does **not** add to
 `rx_consecutive_nack`. A failure whose NACK is keyed counts exactly as today.
 - **How the engine knows.** For a failed burst, the budget's verdict depends only on the listening
-  clock, which is known before the decode. The daemon calls a new
-  `NackBudget::would_key_failure(listening)` (no state change) and hands the answer to the engine
-  before `ota_decode_burst`; `ota_decode_and_ack_inner` passes it to `on_rx_frame`. A decode ignores
-  it, so the budget's own accounting after the decode is unchanged.
+  clock, which the decode does not advance, so it is known before the decode. The daemon calls a new
+  `NackBudget::failure_verdict(listening)` (no state change) returning **muted**, **keyed** or
+  **leaked** (keyed only by a leak credit). It folds in `local_callsign_valid()`, since an
+  unconfigured station keys nothing (round 4b review, finding 1).
+- **How it reaches the engine.** A set-before, take-at-entry field, like `last_flush_capped`:
+  `ota_decode_and_ack_inner` takes it at the top, with `lead` and `spans`, so an `Err` or a
+  not-evidence return leaves nothing stale for a later burst. Unset means **keyed**, which is
+  today's behaviour and what linksim and the unit tests get. The engine sees only the verdict, never
+  the budget (finding 6). A decode ignores it, so the budget's own accounting after the decode is
+  unchanged.
+- **A leaked NACK steps on its own.** A leak follows at least `nack_threshold` counted failures by
+  construction, so it is today's hysteresis, announced: one rung per leaked NACK (finding 2).
+- **`FastDownshift` is gated on the same verdict** (one `&&`), so a muted failure moves nothing on any
+  branch; it is dormant on air (#1438) but the rule is stated in code (finding 3).
+- **Residual silent step:** a `keyed_transmit` PTT-assert failure cannot be known before the decode.
+  The ladder steps while nothing keys. It is a rig fault, rare, and already logged.
 - **No new constant.** The bound comes from the budget itself, so it follows `OTA_NACK_BUDGET`, the
   leak and each profile's `nack_threshold` with nothing to keep in step.
 - **`rx_confirmed` still moves with the step,** as today. Only one candidate is decoded, so the
@@ -313,9 +325,11 @@ is not ladder evidence: `on_rx_frame` answers it `NackHold` and does **not** add
 **What it does.**
 - **The silent step is gone.** Failures 1–3 are keyed and NACK 3 announces the one step; failures
   4–6 are muted and move nothing, so the candidates stay on the rung the ISS was told.
-- **The leak still recovers.** Each leaked NACK is a keyed failure and counts, so a link needing k
-  rungs steps one rung per `nack_threshold` leaked NACKs: about 30 min a rung where today it is
-  about 10 min (today's leaked NACK announces steps taken silently). Stated as the cost.
+- **The leak still recovers, more slowly.** Each leaked NACK steps one rung, so a link needing k rungs
+  below where the mute began recovers after about k × 10 min. Today a leaked NACK announces every
+  step taken silently during the mute (at SL2, about 8 failures, 2–3 rungs, at once at minute 10).
+  That is the cost, stated: a climbed SL5 link that suddenly needs SL2 takes about 30 min, against
+  about 10 today.
 - **A minute of CW** costs one step and 3 NACKs where today it costs 3–5 steps. Not a fix for
   #1460: a foreign over still counts while the budget allows, and QRM interleaved with decodes
   still ratchets (three counted foreign bursts −1, three clean decodes +1).
@@ -324,8 +338,8 @@ is not ladder evidence: `on_rx_frame` answers it `NackHold` and does **not** add
   decay review's falsifier (zero demotions), and says so.
 
 **State, specified.** `rx_consecutive_nack` does not count a muted failure; `rx_consecutive_ok` is
-still zeroed by it (a failure is still evidence against climbing). `FastDownshift` (dormant on air,
-#1438) is unchanged and ignores the flag. `lock_level`, `set_level_bounds` and `start_ota_session`
+still zeroed by it (a failure is still evidence against climbing, so steady QRM still blocks the
+climb; part of what remains of #1460). `FastDownshift` is gated, above. `lock_level`, `set_level_bounds` and `start_ota_session`
 need nothing new: there is no new counter. A caller with no budget (linksim, the unit tests) passes
 "keyed", which is today's behaviour.
 
@@ -338,9 +352,10 @@ each ≤ 7.48 s per burst (the F1c bound).
 
 - **M1, linksim:** unchanged by construction (it keys every NACK, so every failure is keyed). The
   goodput gate is run to show it, not as evidence for 4b. A budget model for linksim is parked.
-- **M2, the #1456 falsifier, relaxed:** a recorded 250 Hz idle at SL2 through `accumulate_capture`
-  for 90 min, then a failing BPSK31 frame. **Rule:** at most one step, and the failing frame keys a
-  NACK. Today's result is recorded beside it.
+- **M2, the #1456 falsifier, relaxed:** a recorded 250 Hz idle at SL2 through the daemon's rx tick
+  for 90 min, then a failing BPSK31 frame. **Rule (4b):** at most one step. Whether the failing frame
+  keys a NACK is a property of the budget, not of 4b, so it is reported as #1456's present state,
+  not scored. Today's result is recorded beside it.
 - **M3, CW at SL4:** one minute of 20 wpm CW with word gaps at +6 dB through `accumulate_capture`.
   **Rule:** at most one step and at most 3 NACKs, then a frame of ours at SL3 decodes.
 
@@ -349,20 +364,23 @@ each ≤ 7.48 s per burst (the F1c bound).
 - **Unit (`ota_rate.rs`):** six failures, the last three muted, give one step; a muted failure
   leaves `rx_consecutive_nack` alone and still zeroes `rx_consecutive_ok`; three keyed failures
   after the mute step again. Each fails with the flag ignored.
-- **Unit (`nack_budget.rs`):** `would_key_failure` agrees with `on_ladder_burst(false, t)` over a
-  run with leaks, and changes no state.
-- **Daemon:** M2 and M3 through `accumulate_capture`, each asserting the budget and the ladder.
+- **Production path (seam rule 3):** M2 and M3 run through the daemon's rx tick (the `twin`
+  harness or an `rx_ticker`-level test), since `failure_verdict` is called in `server.rs`; each fails
+  with the verdict hard-wired to **keyed**. Tripwire: the engine's `OtaRateDecision` event carries
+  the verdict, and the tests assert it reads **muted** on failures 4–6.
+- **Unit (`nack_budget.rs`):** `failure_verdict` agrees with `on_ladder_burst(false, t)` over a run
+  with leaks, reports **leaked** exactly on a leak credit, and changes no state; an invalid
+  callsign reads **muted**.
 - **Docs that change meaning:** the module header and `NackStepDown`'s doc in `ota_rate.rs`.
 
-**Review asked for (round 4b):** is "the budget's verdict for a failure is known before the decode"
-true on every path (the leak, a decode-error return, the uncoded fallback)? Does skipping the count
-break anything that relies on `rx_consecutive_nack`? Is about 30 min a rung of leak recovery
-acceptable? Does this block Release 1?
+**Reviewed (round 4b):** no blocking finding; does not block Release 1. Findings 1–6 are folded in
+above ([review](../reviews/review-failed-burst-ownership.md), *Round 4b*).
 
 ### Consumer, prior art, twins (round 4)
 
 - **Consumer:** `OtaRateController::on_rx_frame` and `rx_candidates`, called by
-  `ota_decode_and_ack_inner` (engine) on every counted burst; the daemon keys what it returns. Found
+  `ota_decode_and_ack_inner` (engine) on every counted burst; the daemon tells the engine the
+  budget's verdict before the decode (4b) and keys what it returns. Found
   by `grep -rn "on_rx_frame\|rx_candidates()" crates apps --include=*.rs`.
 - **Prior art:** `nack-streak-decay.md` (parked: decay by spacing, and the falsifier M2 reuses);
   `nack_budget.rs` (#1456); `FastDownshift`'s keep-the-anchor rule in `ota_rate.rs`.
