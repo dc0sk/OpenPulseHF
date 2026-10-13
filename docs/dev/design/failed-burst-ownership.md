@@ -1,8 +1,8 @@
 ---
 project: openpulsehf
 doc: docs/dev/design/failed-burst-ownership.md
-status: resolved
-last_updated: 2026-10-11
+status: draft
+last_updated: 2026-10-13
 ---
 
 # A narrowband foreign over is not ladder evidence (#1460)
@@ -22,7 +22,10 @@ changes when a NACK is keyed, so it is reviewed before it is built (decision 8).
 > - a refused frame of ours turns a NACK into ISS abandonment, on 2 m as well.
 >
 > **Not a Release 1 blocker.** The maintainer kept #1460 in M2 (decision 21) and chose a round-2
-> design. **This is round 2, also not implemented** (round 2 review: the shipped half-Hann pulse puts
+> design. **Round 4 (2026-10-13) is a different approach, for review: see *Round 4*.** It caps
+> the ladder damage of any run of failures instead of classifying the burst.
+>
+> **Round 2, also not implemented** (round 2 review: the shipped half-Hann pulse puts
 > ~0.6 of our own frame's power in 4 bins, so C overlaps CW; floor subtraction is not implementable as
 > written). Round 3 starts from a measurement of the notch bank's in-band interferer state. Round 1's header rule is summarised at the end, under *Round 1*.
 
@@ -254,6 +257,101 @@ prominence (`NotchBank::has_prominent_peak`, no band-filled gate).
 
 The overlaps are structural, so more seeds can only widen the ranges. **By the pre-registered rule,
 #1460's remainder goes back to the maintainer with three rounds' evidence.**
+
+## Round 4 (2026-10-13): stop classifying, cap the damage
+
+The maintainer chose this after round 3's NO GO. Three rounds found no statistic that tells a foreign
+over from a failing frame of ours, so round 4 does not try. It bounds what **any** run of failures
+without a decode can do to the ladder, whatever caused them. It changes when the ladder steps down
+and so what a keyed NACK carries, so it is reviewed before it is built (decision 8).
+
+### What a run of failures does today
+
+Read from the code, not measured:
+- **Every counted failed burst** runs `on_rx_frame(Failed)` inside `ota_decode_burst`, before the
+  daemon's budget decides whether to key (`server.rs`, `ota_nack_budget.on_ladder_burst`). Every
+  `nack_threshold` (3) of them is one `NackStepDown`, which moves **both** `rx_confirmed` and
+  `rx_recommended` down a rung.
+- **The budget keys 3 NACKs** without a decode, then one per 10 min of listening (#1456). So
+  failures 1–3 are keyed and NACK 3 announces the first step; failures 4–6 are muted, and the second
+  step at failure 6 is **silent**.
+- **A silent step desyncs the receiver.** `rx_candidates` holds only `rx_recommended` and
+  `rx_confirmed`, both now two rungs down, while the ISS sends at the rung NACK 3 announced. Its
+  frames are no longer tried, so they fail too, and each third one walks the ladder down again.
+- **One minute of CW** is 3–5 demotion steps, because word gaps split one over into one counted
+  burst per word (round 2 review, finding 4). One leaked NACK then announces all of them at once.
+- **Between sessions** (#1456), idle flicker that clears the 0.5 s floor does the same, and the
+  peer's next frame arrives at a rung no longer tried.
+
+### Decision (proposed)
+
+Two changes in `OtaRateController`, both in the `NackStepDown` branch:
+1. **At most one step down between decodes** (`MAX_STEPS_WITHOUT_DECODE` = 1). After it, further
+   failures answer `NackHold` at the stepped rung until a decode. The value is not fitted: it is
+   `OTA_NACK_BUDGET / nack_threshold` = 3 / 3, the most steps the budget can ever announce before it
+   mutes. A deeper step could only arrive silently or through a leaked NACK 10 min later, after the
+   ISS has abandoned (two silent windows).
+2. **The step moves the recommendation, not the anchor.** `rx_confirmed` stays at the last decoded
+   rung until a decode, as `FastDownshift` already does ("a lost downshift ACK can't desync the
+   receiver"). So after the step, both the rung the ISS was on and the rung the NACK asked for are
+   tried, whether or not the ISS heard the NACK.
+
+**What it does to a real fade.** A link that needs two rungs between decodes fails today as well:
+the second step is silent and the ISS abandons after two silent windows. With the cap it abandons
+the same way, one rung higher, with candidates that still match what it sends. A link that needs one
+rung is unchanged, except that the old rung stays a candidate until a decode.
+
+**What it does to a foreign over.** One minute of CW costs at most one step and at most 3 NACKs
+plus the leak, against several steps today. The NACKs keyed into another QSO are unchanged: the
+budget already bounds them. **This does not close #1460**: a foreign over still counts as evidence,
+still keys up to 3 NACKs and still costs one step. It makes the cost bounded and recoverable.
+
+**Cost.** After a step, two candidates are decoded per burst instead of one until a decode. That is
+already the normal state after a climb recommendation, so the receive cost is inside today's
+envelope. UNCHECKED on the Pi at SL2 (the slowest decode); M3 measures it.
+
+### Measurements, pre-registered (rules fixed here, before any number exists)
+
+- **M1, linksim goodput.** The linksim models no NACK budget: its ISS hears every NACK, so it can
+  descend several rungs between decodes, which the daemon cannot. Run the linksim goodput gate and
+  the `ota_channel_adaptation` slow suite (CAP-33) before and after. **Rule:** the slow suite passes.
+  A goodput cell that drops by more than its gate tolerance is a cell that relied on two or more
+  steps between decodes; each is listed. If any gate row fails, the cap is made a controller option
+  that the daemon sets and linksim leaves off, and a budget model for linksim is parked as its own
+  item.
+- **M2, the #1456 falsifier** (from `review-nack-streak-decay.md`): a recorded 250 Hz idle at SL2
+  through `accumulate_capture` for 90 min, then a peer's SL2 frame and then a failing BPSK31 frame.
+  **Rule:** at most one step; the SL2 frame decodes (it is still a candidate); the failing frame
+  keys a NACK. Today's expected result, recorded for comparison: more than one step and the SL2 frame
+  fails.
+- **M3, CW at SL4:** one minute of 20 wpm CW, word gaps included, at +6 dB through
+  `accumulate_capture`. **Rule:** at most one step and at most 3 NACKs, and the next frame of ours at
+  the original rung decodes. Plus the two-candidate decode time at SL2 on x86 (Pi pending).
+
+### Tests (to write with the implementation)
+
+- Unit (`ota_rate.rs`): six failures without a decode give one step, and both rungs are candidates;
+  a decode resets the cap; a decode at the stepped rung moves the anchor; a lost NACK (the ISS stays
+  on the old rung) still decodes. Each fails with its half of the change reverted.
+- Daemon: M2 and M3 as integration tests through `accumulate_capture`.
+- Existing: `abstention_still_steps_down_at_the_nack_threshold`, the NACK-hysteresis tests and the
+  budget tests stay green; any that pinned two steps without a decode is rewritten with the reason.
+
+### Consumer, prior art, twins (round 4)
+
+- **Consumer:** `OtaRateController::on_rx_frame` and `rx_candidates`, called by
+  `ota_decode_and_ack_inner` (engine) on every counted burst; the daemon keys what it returns. Found
+  by `grep -rn "on_rx_frame\|rx_candidates()" crates apps --include=*.rs`.
+- **Prior art:** `nack-streak-decay.md` (parked: decay by spacing, and the falsifier M2 reuses);
+  `nack_budget.rs` (#1456); `FastDownshift`'s keep-the-anchor rule in `ota_rate.rs`.
+- **Twins:** linksim's ISS loop (`apps/openpulse-linksim/src/lib.rs`, calls `on_rx_frame` with no
+  budget, M1); the ARDOP TNC steps down on a missing ACK on its own and does not use this controller
+  (UNCHECKED beyond `grep -rln OtaRateController`, which lists core, modem, daemon and linksim).
+
+**Review asked for:** is the desync story right (do muted failures really step silently, and is the
+budget's count the same set as `on_rx_frame`'s)? Is a two-rung fade really lost today? Does keeping
+the anchor break the climb or the lockstep invariant? Is one step the right cap? Does this block
+Release 1?
 
 ## Round 1 (2026-10-11, not implemented)
 
