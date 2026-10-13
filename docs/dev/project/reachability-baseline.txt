@@ -547,3 +547,5 @@ additive_snr_db_windowed	crates/openpulse-dsp/src/constellation.rs
 # through receive_ack_with_short_fec_within (held stream + scan); the one-shot form stays pub for the six
 # integration tests that read a whole loopback ACK in one call, and as the timeout-0 path of _within.
 receive_ack_with_short_fec	crates/openpulse-modem/src/engine.rs
+tone_dominated	crates/openpulse-dsp/src/notch.rs
+has_prominent_peak	crates/openpulse-dsp/src/notch.rs

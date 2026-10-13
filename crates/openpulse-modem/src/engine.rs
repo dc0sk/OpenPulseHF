@@ -432,6 +432,14 @@ impl VetoCorrelator {
             Self::Ddc(f) => f.input_span(),
         }
     }
+
+    /// Shortest window, in passband samples, the correlator can measure (#1171).
+    fn min_window(&self) -> usize {
+        match self {
+            Self::Passband(f) => f.len() + 1,
+            Self::Ddc(f) => f.min_window(),
+        }
+    }
 }
 
 impl PreambleVeto {
@@ -8363,10 +8371,12 @@ impl ModemEngine {
         window: &[f32],
         settled_hz: f32,
     ) -> Option<(Vec<f32>, usize)> {
-        let tlen = veto.filter.len();
-        if window.len() <= tlen {
+        // In passband samples on both arms (#1171): the decimated length understated what the DDC
+        // arm needs, so a window between the two was planned and then measured nothing.
+        if window.len() < veto.filter.min_window() {
             return None;
         }
+        let tlen = veto.filter.len();
         let step = Self::preamble_grid_step(veto);
         let n = (veto.rho_grid_hz / step).round() as i32;
         let freqs: Vec<f32> = (-n..=n).map(|k| settled_hz + k as f32 * step).collect();
@@ -9830,6 +9840,35 @@ mod ddc_veto_arm {
             rho >= 0.9,
             "the Ddc correlator scored {rho:.3} against its OWN template; anything short of              near-unity means the mix, decimation or normalisation is wrong, not that the signal is"
         );
+    }
+
+    /// #1171: the plan admits a window exactly when the correlator can measure it. The gate compared
+    /// the window (passband samples) against the DECIMATED template length, so on the DDC arm a
+    /// window between that and the anti-alias FIR's full support passed the plan and then measured
+    /// nothing: `preamble_rho` read `None`, which its caller treats as "no opinion", and the veto
+    /// stood down silently instead of waiting for more samples.
+    #[test]
+    fn the_plan_admits_a_window_exactly_when_the_correlator_can_measure_it() {
+        let e = engine_with_long_template();
+        let veto = e.build_preamble_veto(MODE, FS).expect("veto");
+        let VetoCorrelator::Ddc(f) = &veto.filter else {
+            panic!("the long template must take the DDC arm");
+        };
+        let decimated = f.len();
+        let mut lens = vec![decimated, decimated + 1, f.input_span(), TEMPLATE_SAMPLES];
+        lens.extend((TEMPLATE_SAMPLES..TEMPLATE_SAMPLES + 256).step_by(16));
+        lens.push(TEMPLATE_SAMPLES + 4_096);
+        for len in lens {
+            let window: Vec<f32> = (0..len)
+                .map(|k| ((k * 7_919) % 97) as f32 / 97.0 - 0.5)
+                .collect();
+            let planned = e.preamble_search_plan(&veto, &window, 0.0).is_some();
+            let measured = e.preamble_rho(&veto, &window, 0.0).is_some();
+            assert_eq!(
+                planned, measured,
+                "a {len}-sample window: the plan says {planned}, the correlator measured {measured}"
+            );
+        }
     }
 
     /// THE GATE: no residual inside the grid's reach may cost more coherence than the quarter-cycle

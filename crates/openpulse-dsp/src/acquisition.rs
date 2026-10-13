@@ -1030,6 +1030,12 @@ impl DdcMatchedFilter {
         self.template.len() * self.decim
     }
 
+    /// Shortest input window the search can measure: one decimated lag needs the template's span
+    /// plus the anti-alias FIR's full support (`ddc_mix` keeps only the positions where it has it).
+    pub fn min_window(&self) -> usize {
+        self.template.len() * self.decim + self.taps.len()
+    }
+
     /// Returns `true` if the decimated template is empty.
     pub fn is_empty(&self) -> bool {
         self.template.is_empty()

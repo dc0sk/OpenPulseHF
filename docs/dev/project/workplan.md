@@ -2,7 +2,7 @@
 project: openpulsehf
 doc: docs/dev/project/workplan.md
 status: draft
-last_updated: 2026-10-10
+last_updated: 2026-10-12
 ---
 
 # Work plan — Release 1 ("basic modem")
@@ -112,7 +112,7 @@ payload format change, so M1 closed as a bug fix plus a declaration.
 | File-transfer receiver never asks for a missing fragment (found by the #1461 review): the sender's selective-repeat arm (`BlockAck { complete: false }`) is unreachable, because the daemon receiver only sends `complete: true` and has no fragment-gap timer. One faded fragment on HF fails the transfer at the 120 s block stall | done 2026-10-02 — also the lost ack, the lost NACK and the stall timers that did not scale with airtime (`design/filexfer-selective-repeat.md`, mandatory review; `filexfer_lossy_link`) |
 | OTA phase 2 decodes an off-frequency fallback frame as a ladder frame at SL1 (found 2026-10-02): the fallback mode rides phase 2 as an `Sl1` candidate, so a non-ladder frame recovered there moves the controller and is ACKed, the #1123 failure mode for off-frequency bursts. It also yields the first frame only | done 2026-10-03: a phase-2 fallback decode returns early as non-ladder traffic, with no ACK, no controller update, and the keying's following frames (`off_frequency_fallback_is_not_ladder`) |
 | PTT and station ID on the core path: #1257 (no leader delay before the first sample — done in its PR, default 0 until a rig is measured), #1334 (a flush timeout un-arms the station-ID timer — done in its PR), #1367 (200 ms sleep before PTT drop) | #1257, #1334 done; #1367 done 2026-10-02 in code (release waits for the device's reported drain plus 10 ms, capped at the old 200 ms; zero or no report → 200 ms; `design/drain-from-device-delay.md`, mandatory review); the tail and release checks run at the hardware-loopback stage and G1 |
-| Key-to-audio gap (found 2026-10-02 reading the IC-9700 SDR captures for #1257): every keyed path keys first and then modulates and opens the output inside the guard, so the rig carries dead air for the synthesis time before the first sample — about 1.3 s per frame on the 2026-07-30 run (clicks at −1.3 s, reading UNCHECKED; `tests/captures/README.md`). It is airtime on every turn and an uncontrolled implicit leader. Moving synthesis before the key changes when PTT asserts → design review first (decision 8). Measure the gap on the 2 m pair before deciding whether it blocks. **Synthesis ruled out 2026-10-05** (`tx_synthesis_cost`, x86, release): ≤ 12 ms for every rung through SL11 and both ACKs, 19–26 ms at SL12–14, so even 4× slower on a Pi it is under 0.1 s. What remains between the key and the first sample is the device path: `open_output` (with a configured device name it enumerates every output device), stream build and start-up. The station probe `key_to_audio_by_stage` (openpulse-audio, `cpal-backend`) times those stages; it needs a real device | open — station probe pending (maintainer TODO), then the design |
+| Key-to-audio gap (found 2026-10-02 reading the IC-9700 SDR captures for #1257): every keyed path keys first and then modulates and opens the output inside the guard, so the rig carries dead air for the synthesis time before the first sample — about 1.3 s per frame on the 2026-07-30 run (clicks at −1.3 s, reading UNCHECKED; `tests/captures/README.md`). It is airtime on every turn and an uncontrolled implicit leader. Moving synthesis before the key changes when PTT asserts → design review first (decision 8). Measure the gap on the 2 m pair before deciding whether it blocks. **Synthesis ruled out 2026-10-05** (`tx_synthesis_cost`, x86, release): ≤ 12 ms for every rung through SL11 and both ACKs, 19–26 ms at SL12–14, so even 4× slower on a Pi it is under 0.1 s. What remains between the key and the first sample is the device path: `open_output` (with a configured device name it enumerates every output device), stream build and start-up. The station probe `key_to_audio_by_stage` (openpulse-audio, `cpal-backend`) times those stages; it needs a real device | **measured 2026-10-11 on rpi51** (default device): enumeration 0.46–1.08 s, which a named device pays on every open, plus `open_output` 32–95 ms and drain 133–144 ms, so ~0.65–1.3 s per keyed turn. Design round 1 (`design/key-to-audio-gap.md`) was reviewed and not implemented. B, a session stream, is `!Send` and unsafe as written; A holds the capture PCM. **Production path measured 2026-10-12** (`plughw:CARD=CODEC,DEV=0`, capture held): 0.71–0.83 s, three quarters of it enumeration pass 1. **Round 2** (A′, the resolved name cached on both directions, no handle held) **reviewed 2026-10-12, no blocking finding**, and revised for it: first-sample timing, the leader checked at G1 by SDR capture, the fallback reusing the failed find's names. Next: implement A′. Not a Release 1 blocker |
 | Held-out tests swept 2026-10-02 (after #1480 broke `ota_channel_adaptation` unseen): every ignored test in the files #1480 touched was run. All passed except two. `ofdm_scfdma_bakeoff` is a multi-minute measurement that hit a 25 min timeout, so it has no verdict. `daemon_vs_cli_on_real_captures` fails with "the daemon arm entered the acquisition chain (174 settles)", identically before #1489, on the pre-#1148 replay corpus parked for re-recording (#1351). No gate runs ignored tests, so `slow-tests.sh` before a release is the only net | recorded; corpus row stays with #1351 |
 | #1304 (noise floor on OFDM52's wide band) — diagnose whether it breaks DCD on SL7–14 | done 2026-10-03: does not, since #1452's per-bin floor and burst hold. ~13 s of back-to-back OFDM52 frames on both wide-filter idles is one whole burst 8/8; with the hold disabled 8/8 split or end early (#1304's mechanism, reproduced). A single 255 B frame is too short to show it either way (`dcd_wideband_long_frame`) |
 | #1421 dependency update, security-relevant ones only | done 2026-10-02: `h2` 0.4.19 (RUSTSEC-2026-0258) and `rustls` 0.23.45 (RUSTSEC-2026-0285), both reached by `openpulse-cli` through `reqwest`; CI actions on their Node 24 majors, pinned by SHA. Left: `lru` and `event-listener` (unsound, no fixed release; only the post-release `openpulse-panel`/`openpulse-tui` reach them) and three yanked transitive crates |
@@ -126,16 +126,26 @@ payload format change, so M1 closed as a bug fix plus a declaration.
 
 **Next, no maintainer input needed** (set 2026-10-10, in this order; each is one PR):
 
-1. **#1062 flag day.** PN-63 becomes the production preamble on BPSK63, BPSK100 and BPSK250
+1. **Done 2026-10-11 (#1508).** **#1062 flag day.** PN-63 becomes the production preamble on BPSK63, BPSK100 and BPSK250
    (SL3–SL5, decision 25); BPSK31 keeps `--++`. BPSK250 publishes the PN template (threshold 0.315,
    grid ±20 Hz, delivered-frame bound 0.51); the `--++` constants retire with it. The tests whose
    premise is `--++` are rewritten, not re-run (design, *What changes*); the `pn-candidate`
    measurement arm retires or becomes the `--++` control; `protocol-wire-spec.md` and the
    acceptance rows that name geometry follow. Then **F7**: `scripts/gate.sh` and
    `scripts/slow-tests.sh` at one commit, disclosed rows only.
-2. **#1460 evidence rule** on the flag-day template: a failed burst counts as ladder evidence only if
+2. **Three rounds, none implemented; awaiting the maintainer's call** (`design/failed-burst-ownership.md`).
+   Each round was refuted by its own review or its own pre-registered measurement:
+   - round 1, a header match: foreign tones look like the header, and our failing frames lose theirs;
+   - round 2, spectral concentration: our frames are as concentrated as CW;
+   - round 3, the notch classifier: blind behind narrow rig filters, or fooled by our own frames.
+
+   The cost asymmetry favours counting. A foreign over that counts costs a NACK within the budget.
+   A refused frame of ours costs the message. Proposed instead: bound the damage, not classify it (a
+   cap on counted failures between decodes, related to the parked #1456 decay), or park until the HF
+   run. **#1460 evidence rule** on the flag-day template: a failed burst counts as ladder evidence only if
    a candidate rung's template corroborates it; rungs without one keep the 0.5 s floor. Closes #1460.
-3. **#1171** (the DDC arm's window gate compares decimated against passband lengths; its grid step may
+3. **Fixed 2026-10-11** (`the_plan_admits_a_window_exactly_when_the_correlator_can_measure_it`; the
+   grid half was already fixed). **#1171** (the DDC arm's window gate compares decimated against passband lengths; its grid step may
    be decim× too coarse): measure, then fix. It gates any template on the slow rungs, so it comes
    before the parked DDC-arm rows above.
 
