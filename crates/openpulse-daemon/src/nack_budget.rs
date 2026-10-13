@@ -6,6 +6,11 @@
 //! first failed frame got silence and its ISS abandoned after two silent windows. The count now also
 //! leaks one per `LEAK_SAMPLES` of listening time.
 
+use openpulse_core::error::ModemError;
+use openpulse_core::ota_rate::NackVerdict;
+use openpulse_modem::pipeline::AudioSamples;
+use openpulse_modem::{ModemEngine, OtaRxResult};
+
 /// Keyed NACKs allowed in a row with no decode and no leak.
 pub(crate) const OTA_NACK_BUDGET: u32 = 3;
 
@@ -20,6 +25,23 @@ pub(crate) struct NackBudget {
 }
 
 impl NackBudget {
+    /// What [`on_ladder_burst`](Self::on_ladder_burst) would do with a failure heard at `listening`,
+    /// without changing anything. Known before the decode, because the decode does not advance the
+    /// listening clock; the engine uses it so a muted failure moves no ladder (#1460 round 4b).
+    pub(crate) fn failure_verdict(&self, listening: u64) -> NackVerdict {
+        let leaks = listening.saturating_sub(self.leaked_to) / LEAK_SAMPLES;
+        let after_leak = self
+            .failures
+            .saturating_sub(u32::try_from(leaks).unwrap_or(u32::MAX));
+        if after_leak >= OTA_NACK_BUDGET {
+            NackVerdict::Muted
+        } else if self.failures >= OTA_NACK_BUDGET {
+            NackVerdict::Leaked
+        } else {
+            NackVerdict::Keyed
+        }
+    }
+
     /// Account one ladder burst heard at `listening` samples; true when its ACK may be keyed.
     pub(crate) fn on_ladder_burst(&mut self, decoded: bool, listening: u64) -> bool {
         let leaks = listening.saturating_sub(self.leaked_to) / LEAK_SAMPLES;
@@ -44,6 +66,43 @@ impl NackBudget {
         true
     }
 }
+
+/// One OTA burst through the receiver's ladder accounting, shared by `server::run`'s rx tick and the
+/// #1460 probes so they cannot drift apart. The budget's verdict reaches the engine before the decode
+/// (a station without a valid callsign keys nothing, so its failures are muted); the budget is
+/// charged after it. Returns the decode and whether its ACK may be keyed.
+pub(crate) fn decode_ota_burst(
+    engine: &mut ModemEngine,
+    budget: &mut NackBudget,
+    callsign_valid: bool,
+    burst: &AudioSamples,
+    session_id: &str,
+    mode: &str,
+) -> Result<(OtaRxResult, bool), ModemError> {
+    let verdict = if callsign_valid {
+        budget.failure_verdict(engine.listening_samples())
+    } else {
+        NackVerdict::Muted
+    };
+    engine.set_ota_failure_verdict(verdict);
+    // `mode` is this station's ACTIVE mode: what its own non-ladder traffic (station ID, filexfer,
+    // handshake, QSY, relay) is sent at. Passing it enables the uncoded fallback for exactly that
+    // traffic (#1123); without it an OTA-enabled daemon cannot receive any of it.
+    let res = engine.ota_decode_burst(burst, session_id, Some(mode))?;
+    // A ladder frame resets the budget and is always ACKed; a failed decode is a NACK, keyed only
+    // while the leaking budget allows. A `None` ack is non-ladder traffic the uncoded fallback
+    // recovered: no evidence about the ladder either way, so it leaves the budget alone (#1123).
+    let within_budget = res.ack.is_some()
+        && budget.on_ladder_burst(res.payload.is_some(), engine.listening_samples());
+    // Audit F6 (§97.119): without a valid MYID the daemon cannot auto-ID, so it keys no ACK.
+    Ok((res, within_budget && callsign_valid))
+}
+
+// Declared here, not in `lib.rs`: `ptt_keys_every_daemon_transmit` scans `lib.rs` only up to its first
+// `#[cfg(test)]`, so a test module declared near its top hides the production code from that scan.
+#[cfg(test)]
+#[path = "ladder_evidence_probe.rs"]
+mod ladder_evidence_probe;
 
 #[cfg(test)]
 mod tests {
@@ -85,6 +144,31 @@ mod tests {
         assert!(
             !b.on_ladder_burst(false, LEAK_SAMPLES + 5),
             "and allows one NACK"
+        );
+    }
+
+    #[test]
+    fn the_verdict_agrees_with_the_budget_and_changes_nothing() {
+        // Failures every 10 s for an hour, then a decode, then more failures: every verdict must
+        // match what the budget then does, and reading it must not move the budget.
+        let mut b = NackBudget::default();
+        let mut leaked = 0;
+        let times = (0..6 * LEAK_SAMPLES).step_by(8_000 * 10);
+        for (i, t) in times.enumerate() {
+            let decoded = i == 200;
+            let before = b.clone();
+            let verdict = b.failure_verdict(t);
+            assert_eq!(b, before, "reading the verdict changed the budget");
+            let keyed = b.on_ladder_burst(decoded, t);
+            if decoded {
+                continue;
+            }
+            assert_eq!(verdict != NackVerdict::Muted, keyed, "burst {i} at {t}");
+            leaked += usize::from(verdict == NackVerdict::Leaked);
+        }
+        assert!(
+            leaked >= 4,
+            "the run must exercise the leak ({leaked} leaked)"
         );
     }
 

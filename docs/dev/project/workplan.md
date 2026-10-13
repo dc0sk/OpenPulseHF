@@ -2,7 +2,7 @@
 project: openpulsehf
 doc: docs/dev/project/workplan.md
 status: draft
-last_updated: 2026-10-12
+last_updated: 2026-10-13
 ---
 
 # Work plan — Release 1 ("basic modem")
@@ -106,7 +106,7 @@ payload format change, so M1 closed as a bug fix plus a declaration.
 |---|---|
 | ~~Compression: unpack failure + REQ-CMP-03~~ — moved to M1 (decision 17) | moved |
 | ARDOP receive and host path: #1315 (ARQ ACK has no in-stream acquisition), #1385 (host frames > 255 B, no segmentation) | #1315 done 2026-10-02 (the ARDOP adaptive ISS and CLI `transmit_arq` listen through the OTA ACK listen's held-stream scan, 9 s window; `arq_ack_listen_holds_the_stream`); #1385 done 2026-10-02 (host blocks split into frame-sized chunks at the data port; each chunk is an ordinary frame and the host stream needs no reassembly; `host_block_larger_than_a_frame`) |
-| Ladder behaviour that A2 scores: #1456 (NACK streak has no time decay), #1460 (a burst with no preamble evidence keys a NACK), #1446 (linksim: BPSK31 after MFSK16 fails 19/19 — diagnose: ladder bug or sim bug) | #1456 done 2026-10-02: a failed burst needs 0.5 s of post-lead audio (capped at half a frame) to count, and an ACK on air is not evidence; measured idle flicker is 0.1–0.15 s, the counted pieces of a failing frame 4.2 s and up (`design/reply-window-evidence.md` v3, two review rounds; `idle_flicker_is_not_evidence`). #1460 narrowed: a foreign over longer than 0.5 s still counts; the preamble discriminator is #1062. #1446 **not reproducible** (closed) |
+| Ladder behaviour that A2 scores: #1456 (NACK streak has no time decay), #1460 (a burst with no preamble evidence keys a NACK), #1446 (linksim: BPSK31 after MFSK16 fails 19/19 — diagnose: ladder bug or sim bug) | #1456 done 2026-10-02: a failed burst needs 0.5 s of post-lead audio (capped at half a frame) to count, and an ACK on air is not evidence; measured idle flicker is 0.1–0.15 s, the counted pieces of a failing frame 4.2 s and up (`design/reply-window-evidence.md` v3, two review rounds; `idle_flicker_is_not_evidence`). #1460 narrowed, then bounded (round 4b, 2026-10-13): a foreign over longer than 0.5 s still counts, but costs at most one step and 3 NACKs per run of failures; see the M2 item's status note. #1446 **not reproducible** (closed) |
 | The daemon's NACK budget mutes the receiver after spaced idle flickers (found by the #1456 review): `consecutive_ota_nack` counts every keyed NACK and resets only on a decode, so after three flickers a failed first frame gets no NACK and the ISS abandons after 2 silent windows. HARQ also retains flicker LLRs before the evidence guards (SL7+) | mute done 2026-10-02 (the budget leaks one per 10 min of listening; `nack_budget.rs`); HARQ retention done 2026-10-03: a burst's LLRs are kept only once it clears the evidence guards. On 10 min of the recorded 250 Hz idle at SL7 and SL9, 240 non-evidence bursts were retained before and none after (`a_burst_that_is_not_evidence_retains_no_harq_llrs`) |
 | Data larger than one frame through the daemon: #1461. Measured 2026-10-02: a 4-fragment file in one keying delivered one fragment and stalled. Fixed: `decode_burst_frames` and the OTA fallback continue past each decoded frame (`design/multi-frame-burst-decode.md`, reviewed) | done 2026-10-02 (`twin_multi_fragment_file`, OTA off and on; `burst_carries_several_frames`) |
 | File-transfer receiver never asks for a missing fragment (found by the #1461 review): the sender's selective-repeat arm (`BlockAck { complete: false }`) is unreachable, because the daemon receiver only sends `complete: true` and has no fragment-gap timer. One faded fragment on HF fails the transfer at the 120 s block stall | done 2026-10-02 — also the lost ack, the lost NACK and the stall timers that did not scale with airtime (`design/filexfer-selective-repeat.md`, mandatory review; `filexfer_lossy_link`) |
@@ -140,10 +140,34 @@ payload format change, so M1 closed as a bug fix plus a declaration.
    - round 3, the notch classifier: blind behind narrow rig filters, or fooled by our own frames.
 
    The cost asymmetry favours counting. A foreign over that counts costs a NACK within the budget.
-   A refused frame of ours costs the message. Proposed instead: bound the damage, not classify it (a
-   cap on counted failures between decodes, related to the parked #1456 decay), or park until the HF
-   run. **#1460 evidence rule** on the flag-day template: a failed burst counts as ladder evidence only if
-   a candidate rung's template corroborates it; rungs without one keep the 0.5 s floor. Closes #1460.
+   A refused frame of ours costs the message. **The maintainer chose to bound the damage (2026-10-13).**
+   Round 4b (`failed-burst-ownership.md`), reviewed twice, no blocking finding: a failed burst moves the
+   ladder only when its NACK is keyed, so one minute of CW costs one step instead of 3–5 and no step is
+   silent. Does not close #1460 (a foreign over still counts while the budget allows). **Implemented
+   2026-10-13** (`NackVerdict`, `NackBudget::failure_verdict`, `muted_failures_move_no_ladder`). M2 and
+   M3 pass: a minute of CW at SL4 is 15 counted bursts, 3 NACKs and 1 step (5 steps today, derived);
+   90 min of 250 Hz idle at SL2 counts nothing either way. #1460's remainder: a foreign over still
+   costs one step and 3 NACKs, and QRM between decodes still blocks the climb.
+
+   **#1460 status note (2026-10-13).** Round 4b is merged. #1460 stays **open: bounded, not fixed**.
+   - **What 4b buys.** No step is taken without a NACK announcing it, so the receiver never stops
+     trying the rung its peer was told. A run of foreign failures costs at most one step and the
+     budget's 3 NACKs; before, one minute of CW cost about 5 steps (derived from M3's 15 bursts).
+   - **What remains.** (1) A foreign over longer than the 0.5 s floor still counts as a failed frame,
+     so it costs one step and keys up to 3 NACKs into another station's QSO per run of failures.
+     (2) A counted foreign burst still zeroes the climb streak, so a busy band holds the link at its
+     rung. (3) QRM interleaved with decodes still ratchets: three counted foreign bursts are −1,
+     three clean decodes +1.
+   - **Why it is not closed by classification.** Rounds 1–3 each tried to tell a foreign over from a
+     failing frame of ours and were refuted by their own review or pre-registered measurement; the
+     evidence is in `failed-burst-ownership.md`. The decoded-header check (parked, above) is the one
+     route left on record.
+   - **Release 1: not a blocker** (round 4 and 4b reviews): #1460's remainder is HF narrowband QRM,
+     and A1/A2 run on 2 m.
+   - **What decides closing it.** The HF run: a ladder trace (`OtaRateDecision` events) showing
+     `NackStepDown` with no peer frame on the air is #1460 costing a session. If the HF run shows
+     none, the maintainer can close #1460 as bounded; if it shows them, the parked header check is
+     the next design.
 3. **Fixed 2026-10-11** (`the_plan_admits_a_window_exactly_when_the_correlator_can_measure_it`; the
    grid half was already fixed). **#1171** (the DDC arm's window gate compares decimated against passband lengths; its grid step may
    be decim× too coarse): measure, then fix. It gates any template on the slow rungs, so it comes
@@ -216,6 +240,7 @@ Waiting on the maintainer (`maintainer-todo.md`): the key-to-audio probe, then F
 | 23 | 2026-10-06 | **#1062 F2: accept BPSK250's PN-63 threshold at a 1.07 margin. Amends F2's pre-registered 1.2.** PN-63 at ρ ≈ 0.315 refuses every measured interferer (worst 0.304) and keeps the 3 dB decodable p01 (0.327); the shipped `--++` at 0.40 passes the tone (0.699) and the DSB pair (0.981) and rejects more decodable frames (p05 0.490). Strictly better than today on both sides; the 1.2 was not met. The sequence continues at F3 | maintainer |
 | 24 | 2026-10-06 | **#1062 F3: keep x⁶ + x + 1.** F3 failed for all six degree-6 polynomials (whole-frame worst 0.52–0.65): the worst is chance correlation with whitened payload, set by frame length, so the rule was misframed and no N = 63 sequence meets it. Differences between polynomials are within payload-to-payload noise; x⁶ + x + 1 is already in production (pilot). Continue at F4 | maintainer |
 | 25 | 2026-10-07 | **#1062 F5: BPSK31 keeps the shipped `--++` preamble; the carrier detect is not changed for it. Amends decision 22's scope: PN-63 on SL3–SL5, not SL2.** F5's pre-registered consequence (parity fail → that rung keeps `--++`): BPSK31 failed its −14 dB AWGN cliff (345 / 298, −0.078), a carrier-detect gathering deficit, and passed every other column. Changing the shared carrier detect would touch every mode and the channel-busy check before keying, re-open #1454's idle-fitted constants and the slow suites, for a gain confined to 17 dB below the rung's floor, on a rung where PN buys nothing measured yet (no PN template on the slow rungs). BPSK63 and BPSK100 go to the flag day on PN-63; the cliff deficit is parked, not ruled out | maintainer |
+| 26 | 2026-10-13 | **#1460: bound the damage, do not classify.** After three classification rounds found no statistic separating a foreign over from a failing frame of ours, the remainder is handled by round 4b of `failed-burst-ownership.md`: a failed burst moves the ladder only when its NACK is keyed. Work plan item 2 no longer asks for template corroboration | maintainer |
 
 ## Open questions
 
