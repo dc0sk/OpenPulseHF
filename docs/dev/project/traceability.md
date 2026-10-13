@@ -43,7 +43,8 @@ frames after B climbs): verdicts keyed ×3 then muted, one `NackStepDown`, then 
 150 s. Sabotage: the daemon hard-wired to `Keyed` fails it, and shows the silent second step at
 failure 6. core + modem + daemon + linksim: 1 416 passed, 0 failed; workspace clippy clean. The
 test's stations use OFDM52 as their own mode: at BPSK250 one failed burst's uncoded-fallback scan
-took minutes in a debug build. M2 and M3 are still to run.
+took minutes in a debug build. `GATE: PASS 7cdb93b7 clean` (368 suites, 2 709 passed, 0 failed).
+M2 and M3 are still to run.
 
 ---
 
