@@ -51,7 +51,9 @@ Run: `cargo test --release -p openpulse-daemon --no-default-features --lib ladde
 --ignored --nocapture` → 2 passed, 0 failed (1 571 s). M3: one minute of 20 wpm CW at +6 dB at SL4 is
 15 counted failures, 3 keyed NACKs, 12 muted, 1 step, and an SL3 frame afterwards decodes (derived
 today: 5 steps). M2: 90 min of the 250 Hz idle at SL2 counts 0 failures (0 steps either way); a
-reversed SL2 frame afterwards keys a NACK.
+reversed SL2 frame afterwards keys a NACK. `GATE: PASS c0ada30a clean` (368 suites, 2 709 passed, 0 failed),
+after moving the probe's module declaration out of `lib.rs` (it hid `lib.rs` from
+`every_daemon_transmit_is_keyed`'s scan, whose own scope control failed: `GATE: FAIL f16a070b`).
 
 ---
 
