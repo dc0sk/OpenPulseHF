@@ -2,7 +2,7 @@
 project: openpulsehf
 doc: docs/dev/reviews/review-failed-burst-ownership.md
 status: resolved
-last_updated: 2026-10-11
+last_updated: 2026-10-13
 ---
 
 # Review: a failed burst is ladder evidence only if it looks like our frame (#1460), round 1
