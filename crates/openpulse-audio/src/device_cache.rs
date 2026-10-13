@@ -25,6 +25,41 @@ pub(crate) struct Scan<D> {
     pub(crate) names: Vec<String>,
 }
 
+/// Enumerate up to the device named `target`, naming and dropping every device before it; `None`
+/// names them all. Selection by name is [`NameCache::select`]: the hotplug-safe resolver
+/// ([`resolve_device`](openpulse_core::audio::resolve_device)) over the names, then a second scan
+/// that keeps just the match.
+///
+/// **Never retain a device while enumerating.** cpal's ALSA enumeration is stateful: holding
+/// `cpal::Device` values alive while iterating silently truncates the list. On this host, naming each
+/// device and dropping it yields 39 devices; naming it and *retaining* it yields 18; collecting the
+/// devices first and naming them afterwards yields 4. The truncation is silent — the missing entries
+/// simply never arrive — so `openpulse devices` (which drops as it goes) listed devices that
+/// `--device` could not open, and `aloop_tx` was unreachable while `hwloop_tx` happened to survive.
+pub(crate) fn scan<D, I>(
+    devices: I,
+    name: impl Fn(&D) -> Option<String>,
+    target: Option<&str>,
+) -> Scan<D>
+where
+    I: Iterator<Item = D>,
+{
+    let mut names = Vec::new();
+    for device in devices {
+        let Some(device_name) = name(&device) else {
+            continue;
+        };
+        if Some(device_name.as_str()) == target {
+            return Scan {
+                found: Some(device),
+                names,
+            };
+        }
+        names.push(device_name);
+    }
+    Scan { found: None, names }
+}
+
 /// Resolved names, keyed by direction and the configured selector.
 #[derive(Default)]
 pub(crate) struct NameCache {
@@ -73,11 +108,6 @@ impl NameCache {
         Ok(device)
     }
 
-    /// Forget `selector`'s name, so the next open resolves in full.
-    pub(crate) fn evict(&self, direction: Direction, selector: &str) {
-        self.lock().remove(&(direction, selector.to_string()));
-    }
-
     // Held for one get, insert or remove, never across an enumeration; a panic elsewhere must not
     // poison every later open.
     fn lock(&self) -> std::sync::MutexGuard<'_, HashMap<(Direction, String), String>> {
@@ -121,19 +151,11 @@ mod tests {
             }
         }
 
+        /// The production `scan`, over this host's names.
         fn scan(&self, target: Option<&str>) -> Result<Scan<String>, AudioError> {
             self.scans.borrow_mut().push(target.map(str::to_string));
-            let mut names = Vec::new();
-            for d in self.devices.borrow().iter() {
-                if Some(d.as_str()) == target {
-                    return Ok(Scan {
-                        found: Some(d.clone()),
-                        names,
-                    });
-                }
-                names.push(d.clone());
-            }
-            Ok(Scan { found: None, names })
+            let devices = self.devices.borrow().clone();
+            Ok(scan(devices.into_iter(), |d| Some(d.clone()), target))
         }
 
         fn open(&self, cache: &NameCache, dir: Direction, sel: &str) -> Result<String, AudioError> {
@@ -220,6 +242,9 @@ mod tests {
         host.open(&cache, Direction::Output, "CODEC").unwrap();
         host.open(&cache, Direction::Input, "CODEC").unwrap();
         assert_eq!(host.full_scans(), 2);
+        host.open(&cache, Direction::Output, "CODEC").unwrap();
+        host.open(&cache, Direction::Input, "CODEC").unwrap();
+        assert_eq!(host.full_scans(), 2, "each direction's name is a hit");
     }
 
     #[test]
@@ -233,12 +258,17 @@ mod tests {
     }
 
     #[test]
-    fn an_evicted_selector_resolves_in_full_on_the_next_open() {
-        let host = FakeHost::new(&[CODEC]);
-        let cache = NameCache::default();
-        host.open(&cache, Direction::Output, "CODEC").unwrap();
-        cache.evict(Direction::Output, "CODEC");
-        host.open(&cache, Direction::Output, "CODEC").unwrap();
-        assert_eq!(host.full_scans(), 2);
+    fn a_scan_stops_at_its_target_and_skips_unnamed_devices() {
+        let devices = vec![Some("hdmi"), None, Some(CODEC), Some("pulse")];
+        let hit = scan(
+            devices.clone().into_iter(),
+            |d| d.map(str::to_string),
+            Some(CODEC),
+        );
+        assert_eq!(hit.found, Some(Some(CODEC)));
+        assert_eq!(hit.names, vec!["hdmi"], "names before the match only");
+        let all = scan(devices.into_iter(), |d| d.map(str::to_string), None);
+        assert!(all.found.is_none());
+        assert_eq!(all.names, vec!["hdmi", CODEC, "pulse"]);
     }
 }

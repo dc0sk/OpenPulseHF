@@ -19,37 +19,8 @@ use openpulse_core::audio::{
 };
 use openpulse_core::error::AudioError;
 
-use crate::device_cache::{resolve_name_from, Direction, NameCache, Scan};
+use crate::device_cache::{resolve_name_from, scan, Direction, NameCache};
 use crate::fault::StreamFault;
-
-/// Enumerate up to the device named `target`, naming and dropping every device before it; `None`
-/// names them all. Selection by name is [`NameCache::select`]: the hotplug-safe resolver
-/// ([`resolve_device`](openpulse_core::audio::resolve_device)) over the names, then a second scan
-/// that keeps just the match.
-///
-/// **Never retain a device while enumerating.** cpal's ALSA enumeration is stateful: holding
-/// `cpal::Device` values alive while iterating silently truncates the list. On this host, naming each
-/// device and dropping it yields 39 devices; naming it and *retaining* it yields 18; collecting the
-/// devices first and naming them afterwards yields 4. The truncation is silent — the missing entries
-/// simply never arrive — so `openpulse devices` (which drops as it goes) listed devices that
-/// `--device` could not open, and `aloop_tx` was unreachable while `hwloop_tx` happened to survive.
-fn scan_devices<I>(devices: I, target: Option<&str>) -> Scan<cpal::Device>
-where
-    I: Iterator<Item = cpal::Device>,
-{
-    let mut names = Vec::new();
-    for device in devices {
-        let Ok(name) = device.name() else { continue };
-        if Some(name.as_str()) == target {
-            return Scan {
-                found: Some(device),
-                names,
-            };
-        }
-        names.push(name);
-    }
-    Scan { found: None, names }
-}
 
 // ── CpalBackend ───────────────────────────────────────────────────────────────
 
@@ -96,7 +67,7 @@ impl CpalBackend {
                     .host
                     .output_devices()
                     .map_err(|e| AudioError::Stream(e.to_string()))?;
-                Ok(scan_devices(devices, target))
+                Ok(scan(devices, |d| d.name().ok(), target))
             })?,
         };
 
@@ -151,7 +122,7 @@ impl CpalBackend {
                 |err| warn!("cpal output error: {err}"),
                 None,
             )
-            .map_err(|e| self.stream_failed(Direction::Output, device, e))?;
+            .map_err(|e| AudioError::Stream(e.to_string()))?;
 
         // play() is deferred to the first write(), so hosts that honour pause start with the
         // frame buffered. On ALSA it changes nothing: cpal's worker starts the device on silence
@@ -171,19 +142,6 @@ impl CpalBackend {
             channels: config.channels,
             first_write: None,
         })
-    }
-
-    /// A stream failed on a device opened by name: forget the name, so the next open resolves in full.
-    fn stream_failed(
-        &self,
-        direction: Direction,
-        selector: Option<&str>,
-        err: impl std::fmt::Display,
-    ) -> AudioError {
-        if let Some(selector) = selector {
-            self.names.evict(direction, selector);
-        }
-        AudioError::Stream(err.to_string())
     }
 
     /// Resolve `selector` to the system name of an output device, without opening a stream.
@@ -291,7 +249,7 @@ impl AudioBackend for CpalBackend {
                     .host
                     .input_devices()
                     .map_err(|e| AudioError::Stream(e.to_string()))?;
-                Ok(scan_devices(devices, target))
+                Ok(scan(devices, |d| d.name().ok(), target))
             })?,
         };
 
@@ -329,11 +287,11 @@ impl AudioBackend for CpalBackend {
                 },
                 None,
             )
-            .map_err(|e| self.stream_failed(Direction::Input, device, e))?;
+            .map_err(|e| AudioError::Stream(e.to_string()))?;
 
         stream
             .play()
-            .map_err(|e| self.stream_failed(Direction::Input, device, e))?;
+            .map_err(|e| AudioError::Stream(e.to_string()))?;
         debug!(
             "opened cpal input stream on '{}'",
             dev.name().unwrap_or_default()
@@ -490,7 +448,10 @@ impl AudioOutputStream for CpalOutputStream {
                     .map(|at| at.saturating_duration_since(std::time::Instant::now()));
                 drop(guard);
                 std::thread::sleep(crate::flush::drain_wait(remaining));
-                if let Some(d) = self.first_sample_delay() {
+                if let Some(d) = tracing::enabled!(tracing::Level::DEBUG)
+                    .then(|| self.first_sample_delay())
+                    .flatten()
+                {
                     debug!(
                         "first sample reached the output {:.1} ms after the first write",
                         d.as_secs_f64() * 1e3

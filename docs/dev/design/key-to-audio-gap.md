@@ -135,9 +135,14 @@ system name.
   it can be set beside the diagnostics' fresh resolve.
 - **A failed hit** (the name not found): evict the entry. The failed `find` has already named every
   device, so those names go to `resolve_name_from` directly, and the fallback costs no second
-  enumeration. A renamed or replugged card therefore costs about one ordinary open, as today. A
-  `build_*_stream` (or the input's `play`) failing on a found device evicts the entry and returns
-  the error, as today; the next open resolves in full. It does not retry inside the keyed window.
+  *full* enumeration (one scan to the new match follows, since nothing is retained). A renamed or replugged card therefore costs about one ordinary open, as today. A
+  `build_*_stream` or `play` failing on a found device keeps the entry and returns the error, as
+  today: the name was just matched exactly, so the failure (EBUSY, a bad rate) says nothing about
+  it, and evicting would only make the next keyed open pay a full enumeration (implementation
+  review, finding 3).
+- **A warm cache is stable:** a substring or `CARD=` selector keeps its pick when a second matching
+  device appears later, where a fresh resolve would say Ambiguous. `resolve_output_name`
+  (diagnostics) can then disagree with the keyed path; each hit logs its name at `debug!`.
 - **What is held:** the cache stores a `String`, behind a `Mutex`, so `CpalBackend` stays
   `Send + Sync`. The lock is held for the get and the insert only, never across an enumeration, and
   a poisoned lock is recovered (`unwrap_or_else(|p| p.into_inner())`, as the file already does). **No `cpal::Device` and no stream is held between opens**, so round 1's findings

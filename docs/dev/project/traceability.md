@@ -26,17 +26,19 @@ reopen. No `cpal::Device` or stream is held between opens.
 (`docs/dev/reviews/review-key-to-audio-gap.md`). Per the review: a vanished name resolves from the
 failed scan's own names, so there is no second enumeration in the keyed window (finding 4); the
 lock is held for get/insert only and recovers from poisoning (finding 6); a stream that fails to
-build evicts its name without retrying. The probe now reports key-to-first-sample and the match's
+build keeps the name, which was just matched exactly. The implementation was reviewed too (record in
+the review doc): the unit tests now drive the production `scan`, and the direction test asserts hits. The probe now reports key-to-first-sample and the match's
 index in device order (findings 1 and 3).
 
-**Implementation.** `crates/openpulse-audio/src/device_cache.rs` (`NameCache::select`, `evict`,
-`resolve_name_from`); `cpal_backend.rs` (`scan_devices` replaces `select_cpal_device`;
-`open_output_stream`; `stream_failed`; `OutQueue::first_played`, `first_sample_delay`).
+**Implementation.** `crates/openpulse-audio/src/device_cache.rs` (`scan`, generic over the device
+type; `NameCache::select`; `resolve_name_from`); `cpal_backend.rs` (`select_cpal_device` removed;
+`open_output_stream`; `OutQueue::first_played`, `first_sample_delay`, logged only at debug level).
 
 **Tests → results.** `device_cache::tests` (6): one full scan for N opens, a vanished name resolved
-without a second enumeration and its new name cached, an unplugged card evicted, directions cached
-apart, ambiguity never cached, eviction. All pass; sabotage-verified (no insert: 3 of 6 fail; a
-second enumeration on the fallback: 2 of 6 fail). The first run hung: a lock guard in the `match`
+without a second full enumeration and its new name cached, an unplugged card evicted, directions
+cached apart (each a hit afterwards), ambiguity never cached, and `scan` stopping at its target. All
+pass; sabotage-verified on the first version (no insert: 3 of 6 fail; a second enumeration on the
+fallback: 2 of 6 fail) and on `scan` (the match's own name pushed: 1 fails). The first run hung: a lock guard in the `match`
 scrutinee deadlocked the eviction, fixed by binding first. `openpulse-audio` with `cpal-backend`:
 37 passed, 0 failed, including the 4 ALSA `device_enumeration` tests; clippy clean on both feature
 sets. The station effect is pending the rpi51 probe re-run (maintainer to-do).
