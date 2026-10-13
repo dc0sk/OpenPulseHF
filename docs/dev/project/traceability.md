@@ -41,7 +41,8 @@ pass; sabotage-verified on the first version (no insert: 3 of 6 fail; a second e
 fallback: 2 of 6 fail) and on `scan` (the match's own name pushed: 1 fails). The first run hung: a lock guard in the `match`
 scrutinee deadlocked the eviction, fixed by binding first. `openpulse-audio` with `cpal-backend`:
 37 passed, 0 failed, including the 4 ALSA `device_enumeration` tests; clippy clean on both feature
-sets. The station effect is pending the rpi51 probe re-run (maintainer to-do).
+sets. `GATE: PASS 93fafb2b clean` (367 suites, 2 709 passed, 0 failed). The station effect is
+pending the rpi51 probe re-run (maintainer to-do).
 
 ---
 
