@@ -143,7 +143,9 @@ payload format change, so M1 closed as a bug fix plus a declaration.
    A refused frame of ours costs the message. **The maintainer chose to bound the damage (2026-10-13).**
    Round 4b (`failed-burst-ownership.md`), reviewed twice, no blocking finding: a failed burst moves the
    ladder only when its NACK is keyed, so one minute of CW costs one step instead of 3–5 and no step is
-   silent. Does not close #1460 (a foreign over still counts while the budget allows). Next: implement. **#1460 evidence rule** on the flag-day template: a failed burst counts as ladder evidence only if
+   silent. Does not close #1460 (a foreign over still counts while the budget allows). **Implemented
+   2026-10-13** (`NackVerdict`, `NackBudget::failure_verdict`, `muted_failures_move_no_ladder`). Next: M2
+   (90 min of recorded 250 Hz idle) and M3 (one minute of CW), which need the daemon rx tick. **#1460 evidence rule** on the flag-day template: a failed burst counts as ladder evidence only if
    a candidate rung's template corroborates it; rungs without one keep the 0.5 s floor. Closes #1460.
 3. **Fixed 2026-10-11** (`the_plan_admits_a_window_exactly_when_the_correlator_can_measure_it`; the
    grid half was already fixed). **#1171** (the DDC arm's window gate compares decimated against passband lengths; its grid step may

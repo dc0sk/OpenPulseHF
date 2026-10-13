@@ -15,6 +15,38 @@ this ledger adds the design rationale and the actually-observed results per chan
 
 ---
 
+## 2026-10-13 — #1460 round 4b: a failed burst moves the ladder only when its NACK is keyed (work plan M2)
+
+**Change.** A failed OTA burst whose NACK the daemon's budget will not key is no ladder evidence:
+the rate controller answers it `NackHold` without counting it. A leaked NACK steps on its own. Before,
+every counted failure ran the hysteresis, so failures 4–6 (muted) took a second step no NACK
+announced, and the receiver stopped trying the rung the sender had been told.
+
+**Decision.** Decision 26 (the maintainer: bound the damage, do not classify) and
+`docs/dev/design/failed-burst-ownership.md` *Round 4b*, reviewed twice with no blocking finding
+(`docs/dev/reviews/review-failed-burst-ownership.md`, rounds 4 and 4b). The first draft, a fixed
+one-step cap that also kept the anchor, was refused: two candidates per failing burst miss the ACK
+window on a Pi, and a fixed cap loses the leak's recovery.
+
+**Implementation.** `openpulse-core/src/ota_rate.rs` (`NackVerdict`, `on_rx_frame_with`; the muted
+early return also gates `FastDownshift`); `openpulse-daemon/src/nack_budget.rs`
+(`failure_verdict`, no state change); `server.rs` (the verdict, muted without a valid callsign,
+handed to the engine before `ota_decode_burst`); `openpulse-modem/src/engine.rs`
+(`set_ota_failure_verdict`, taken at the decode's entry); `event.rs` (`OtaRateDecision.verdict`,
+the tripwire).
+
+**Tests → results.** Core `ota_rate` 27 passed (new: muted failures move nothing but the climb
+streak; a muted failure does not fast-downshift; a leaked NACK steps; keyed is today's behaviour).
+`nack_budget` 5 passed (new: the verdict agrees with the budget over an hour with leaks and changes
+nothing). `muted_failures_move_no_ladder` (two real daemons; the forward channel time-reverses A's
+frames after B climbs): verdicts keyed ×3 then muted, one `NackStepDown`, then holds; 1 passed in
+150 s. Sabotage: the daemon hard-wired to `Keyed` fails it, and shows the silent second step at
+failure 6. core + modem + daemon + linksim: 1 416 passed, 0 failed; workspace clippy clean. The
+test's stations use OFDM52 as their own mode: at BPSK250 one failed burst's uncoded-fallback scan
+took minutes in a debug build. M2 and M3 are still to run.
+
+---
+
 ## 2026-10-10 — #1062 flag day: PN-63 on BPSK63/100/250, and the ARDOP/CLI receive at ±50 Hz (work plan M2)
 
 **Change.** BPSK63, BPSK100 and BPSK250 send the 63-symbol PN preamble; BPSK31 and `BPSK250-RRC` keep

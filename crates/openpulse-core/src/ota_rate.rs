@@ -19,6 +19,9 @@
 //! Because the node that *decides* the mode is the node that *demodulates* it, a
 //! lost ACK can never desync the two ends — it only delays the climb by one frame.
 //!
+//! The same holds going down only if every step is announced, so a failure moves the ladder only
+//! when its NACK is keyed ([`NackVerdict`], #1460).
+//!
 //! ## Two ways up: SNR, and evidence
 //!
 //! The climb has two independent triggers, and the invariant above holds for both because each
@@ -69,6 +72,25 @@ pub enum RxOutcome {
     Failed,
 }
 
+/// Whether the NACK for a failed frame will be keyed, as the receiver's NACK budget decides before
+/// the decode (#1460 round 4b, `docs/dev/design/failed-burst-ownership.md`).
+///
+/// The ladder moves only on a failure the peer hears about. A step taken on a muted failure is
+/// silent: the candidates leave the rung the sender was last told, so its frames fail too.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum NackVerdict {
+    /// The NACK is keyed within the budget. Today's behaviour, and the default for callers with no
+    /// budget (the link simulator, the unit tests).
+    #[default]
+    Keyed,
+    /// The NACK is keyed on a leak credit after a mute. It follows at least `nack_threshold`
+    /// counted failures, so it steps on its own: the hysteresis already ran, unannounced.
+    Leaked,
+    /// No NACK is keyed: the failure moves nothing.
+    Muted,
+}
+
 /// Which branch of [`OtaRateController::on_rx_frame`] produced a recommendation.
 ///
 /// Reporting the *reason* is the point, not the resulting level. The rate controller is among the
@@ -89,7 +111,8 @@ pub enum RateDecision {
     /// Failure the SNR does not explain; the consecutive-NACK hysteresis is counting and the
     /// recommendation has not moved yet.
     NackHold,
-    /// Failure the SNR does not explain, at the NACK threshold — step the anchor down one rung.
+    /// Failure the SNR does not explain, at the NACK threshold or on a leaked NACK — step the
+    /// anchor down one rung.
     NackStepDown,
     /// Decode, and the SNR estimate clears the confirmed rung's ceiling — climb one step.
     ClimbOnSnr,
@@ -404,6 +427,18 @@ impl OtaRateController {
     /// caller abstains instead of guessing, and `None` routes to the evidence-based paths that do
     /// not need a reading.
     pub fn on_rx_frame(&mut self, outcome: RxOutcome, snr_db: Option<f32>) -> RxAck {
+        self.on_rx_frame_with(outcome, snr_db, NackVerdict::Keyed)
+    }
+
+    /// [`on_rx_frame`](Self::on_rx_frame) with the NACK budget's verdict for a failure. A muted
+    /// failure answers `NackHold` and moves nothing but the climb streak; a leaked one steps at
+    /// once. A decode ignores the verdict.
+    pub fn on_rx_frame_with(
+        &mut self,
+        outcome: RxOutcome,
+        snr_db: Option<f32>,
+        verdict: NackVerdict,
+    ) -> RxAck {
         // While locked, keep both directions pinned and recommend the locked level.
         if let Some(l) = self.locked {
             let ack_type = match outcome {
@@ -421,6 +456,16 @@ impl OtaRateController {
                 // A failure is evidence against the rung, so the success streak restarts: the
                 // evidence-based climb must never be reachable by alternating pass/fail.
                 self.rx_consecutive_ok = 0;
+                // #1460 round 4b: a failure whose NACK is not keyed is no ladder evidence. Counting
+                // it stepped the ladder silently, and the next step announced (a leaked NACK) came
+                // several rungs at once, after the sender's frames had already stopped decoding.
+                if verdict == NackVerdict::Muted {
+                    return RxAck {
+                        ack_type: AckType::Nack,
+                        recommended_level: self.rx_recommended,
+                        decision: RateDecision::NackHold,
+                    };
+                }
                 // Asymmetric fast downshift: if the SNR estimate already explains the failure
                 // (the SNR-adequate level is below what we're recommending), jump the
                 // recommendation straight there instead of crawling down one rung per NACK
@@ -449,7 +494,9 @@ impl OtaRateController {
                     // otherwise-adequate SNR): keep the consecutive-NACK hysteresis so a single
                     // blip can't drop the rate, stepping the anchor down one rung at the threshold.
                     self.rx_consecutive_nack = self.rx_consecutive_nack.saturating_add(1);
-                    if self.rx_consecutive_nack >= self.profile.nack_threshold {
+                    if self.rx_consecutive_nack >= self.profile.nack_threshold
+                        || verdict == NackVerdict::Leaked
+                    {
                         self.rx_consecutive_nack = 0;
                         self.rx_confirmed = self.prev_mapped(self.rx_confirmed);
                         self.rx_recommended = self.rx_confirmed;
@@ -846,6 +893,81 @@ mod tests {
             c.rx_confirmed < before,
             "steps down one rung at the NACK threshold"
         );
+    }
+
+    /// A controller climbed a few rungs, so it has room to step down.
+    fn climbed() -> OtaRateController {
+        let mut c = ctrl();
+        let mut sender_tx = c.tx_level();
+        for _ in 0..10 {
+            sender_tx = c
+                .on_rx_frame(RxOutcome::Decoded(sender_tx), Some(HIGH_SNR))
+                .recommended_level;
+        }
+        assert!(c.rx_confirmed > c.levels[1], "room for two steps");
+        c
+    }
+
+    #[test]
+    fn muted_failures_move_nothing_but_the_climb_streak() {
+        // #1460 round 4b: three keyed failures announce one step; three more, muted by the budget,
+        // must not take a second, silent one. Without the verdict the sixth failure stepped again.
+        let mut c = climbed();
+        let start = c.rx_confirmed;
+        let n = c.profile.nack_threshold;
+        for _ in 0..n {
+            c.on_rx_frame_with(RxOutcome::Failed, None, NackVerdict::Keyed);
+        }
+        let stepped = c.rx_confirmed;
+        assert!(stepped < start, "keyed failures step at the threshold");
+        for _ in 0..n {
+            let ack = c.on_rx_frame_with(RxOutcome::Failed, None, NackVerdict::Muted);
+            assert_eq!(ack.decision, RateDecision::NackHold);
+            assert_eq!(ack.ack_type, AckType::Nack);
+        }
+        assert_eq!(
+            c.rx_confirmed, stepped,
+            "muted failures take no silent step"
+        );
+        assert_eq!(c.rx_recommended, stepped);
+        assert_eq!(c.rx_consecutive_nack, 0, "muted failures are not counted");
+        assert_eq!(
+            c.rx_consecutive_ok, 0,
+            "but they still stop the climb streak"
+        );
+    }
+
+    #[test]
+    fn a_muted_failure_does_not_fast_downshift() {
+        let mut c = climbed();
+        let before = c.rx_recommended;
+        let ack = c.on_rx_frame_with(RxOutcome::Failed, Some(LOW_SNR), NackVerdict::Muted);
+        assert_eq!(ack.decision, RateDecision::NackHold);
+        assert_eq!(c.rx_recommended, before);
+    }
+
+    #[test]
+    fn a_leaked_nack_steps_on_its_own() {
+        // The leak follows at least `nack_threshold` counted failures, so it announces one step.
+        let mut c = climbed();
+        let before = c.rx_confirmed;
+        let ack = c.on_rx_frame_with(RxOutcome::Failed, None, NackVerdict::Leaked);
+        assert_eq!(ack.decision, RateDecision::NackStepDown);
+        assert!(c.rx_confirmed < before);
+        assert_eq!(ack.recommended_level, c.rx_confirmed);
+    }
+
+    #[test]
+    fn keyed_is_todays_behaviour() {
+        let mut a = climbed();
+        let mut b = climbed();
+        for i in 0..7 {
+            let snr = (i % 2 == 0).then_some(HIGH_SNR);
+            let x = a.on_rx_frame(RxOutcome::Failed, snr);
+            let y = b.on_rx_frame_with(RxOutcome::Failed, snr, NackVerdict::Keyed);
+            assert_eq!(x.recommended_level, y.recommended_level);
+            assert_eq!(x.decision, y.decision);
+        }
     }
 
     #[test]

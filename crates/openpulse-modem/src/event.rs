@@ -1,7 +1,7 @@
 //! Real-time engine event types for the broadcast subscriber API.
 
 use openpulse_core::hpx::{HpxEvent, HpxState};
-use openpulse_core::ota_rate::RateDecision;
+use openpulse_core::ota_rate::{NackVerdict, RateDecision};
 use openpulse_core::rate::{RateEvent, RateTrigger, SpeedLevel};
 use serde::{Deserialize, Serialize};
 
@@ -57,6 +57,10 @@ pub enum EngineEvent {
         snr_db: Option<f32>,
         /// Which branch fired — the field that makes a transition attributable.
         decision: RateDecision,
+        /// The NACK budget's verdict the engine was handed for this burst (#1460 round 4b). On a
+        /// failure, `muted` is the tripwire that a failure moved no ladder; a decode ignores it.
+        #[serde(default)]
+        verdict: NackVerdict,
     },
     /// Rate adapter advanced after an ACK was applied.
     RateChange {

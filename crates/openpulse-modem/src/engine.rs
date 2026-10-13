@@ -28,7 +28,7 @@ use openpulse_core::fec::{
 use openpulse_core::frame::Frame;
 use openpulse_core::hpx::{HpxEvent, HpxSession, HpxState, HpxTransition};
 use openpulse_core::ldpc::{IterativeDecoder, LdpcCodec};
-use openpulse_core::ota_rate::{OtaRateController, RxOutcome};
+use openpulse_core::ota_rate::{NackVerdict, OtaRateController, RxOutcome};
 use openpulse_core::plugin::{ModulationConfig, PluginRegistry, PreambleTemplate};
 use openpulse_core::profile::SessionProfile;
 use openpulse_core::rate::OtaAggressiveness;
@@ -756,6 +756,10 @@ pub struct ModemEngine {
     /// by `ota_decode_and_ack_inner`, which must not treat a failed decode of such a slab as evidence
     /// about the rate ladder.
     last_flush_capped: bool,
+    /// The NACK budget's verdict for the next OTA burst, should it fail (#1460 round 4b). Set by the
+    /// daemon before the decode, taken at the decode's entry so no return path leaves it stale.
+    /// Unset is `Keyed`, today's behaviour.
+    next_failure_verdict: NackVerdict,
     /// Samples fed through `accumulate_capture`: this station's listening time. It stops while the
     /// daemon transmits, because the daemon drops the capture stream then.
     listening_samples: u64,
@@ -1145,6 +1149,7 @@ impl ModemEngine {
             rx_burst: Vec::new(),
             relay_mode: None,
             last_flush_capped: false,
+            next_failure_verdict: NackVerdict::Keyed,
             listening_samples: 0,
             shortest_frame_cache: Vec::new(),
             last_flush_lead: 0,
@@ -2516,6 +2521,12 @@ impl ModemEngine {
         })
     }
 
+    /// Hand the engine the NACK budget's verdict for the next OTA burst, should it fail: a muted
+    /// failure moves no ladder (#1460 round 4b). Taken by that burst's decode.
+    pub fn set_ota_failure_verdict(&mut self, verdict: NackVerdict) {
+        self.next_failure_verdict = verdict;
+    }
+
     /// Samples fed through [`accumulate_capture`](Self::accumulate_capture) since the engine was built:
     /// this station's listening time, which the daemon's NACK budget leaks against (#1456).
     pub fn listening_samples(&self) -> u64 {
@@ -3550,6 +3561,7 @@ impl ModemEngine {
         let lead = std::mem::take(&mut self.last_flush_lead);
         let onset_bound = std::mem::take(&mut self.last_flush_onset_bound);
         let spans = self.last_flush_spans.take();
+        let verdict = std::mem::take(&mut self.next_failure_verdict);
         let candidates: Vec<(SpeedLevel, String, FecMode)> = self
             .ota
             .as_ref()
@@ -4224,7 +4236,7 @@ impl ModemEngine {
                 (ack, Some((payload, mode)))
             }
             None => {
-                let ack = ota.on_rx_frame(RxOutcome::Failed, snr);
+                let ack = ota.on_rx_frame_with(RxOutcome::Failed, snr, verdict);
                 (ack, None)
             }
         };
@@ -4238,6 +4250,7 @@ impl ModemEngine {
             decoded_level,
             snr_db: snr,
             decision: rx_ack.decision,
+            verdict,
         });
         let ack_frame = AckFrame::new(rx_ack.ack_type, session_id)
             .with_recommended_level(rx_ack.recommended_level);

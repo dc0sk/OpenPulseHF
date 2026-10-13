@@ -1045,6 +1045,15 @@ pub async fn run(cfg: OpenpulseConfig, modem_backend: Box<dyn AudioBackend>) -> 
                     Ok(Some(burst)) if engine.ota_active() && !runtime_state.ota_suppressed_by_peer() => {
                         // Receiver-led OTA: decode the burst, then key PTT only to answer
                         // with the ACK carrying our absolute recommended_level.
+                        // #1460 round 4b: the ladder moves only on a failure whose NACK is keyed,
+                        // so the engine learns the budget's verdict before the decode. A station
+                        // with no valid callsign keys nothing, so its failures are muted too.
+                        let verdict = if runtime_state.local_callsign_valid() {
+                            ota_nack_budget.failure_verdict(engine.listening_samples())
+                        } else {
+                            openpulse_core::ota_rate::NackVerdict::Muted
+                        };
+                        engine.set_ota_failure_verdict(verdict);
                         match tokio::task::block_in_place(|| {
                             // `mode` is this station's ACTIVE mode — what its own non-ladder traffic
                             // (station ID, filexfer, handshake, QSY, relay) is transmitted at. Passing

@@ -24,7 +24,8 @@ changes when a NACK is keyed, so it is reviewed before it is built (decision 8).
 > **Not a Release 1 blocker.** The maintainer kept #1460 in M2 (decision 21) and chose a round-2
 > design. **Round 4 (2026-10-13) stops classifying and bounds the damage instead; see *Round 4*.**
 > Its first draft (a fixed one-step cap) was reviewed and revised to **round 4b**: a failure moves
-> the ladder only when its NACK is keyed.
+> the ladder only when its NACK is keyed. **4b implemented 2026-10-13**
+> (`muted_failures_move_no_ladder`); M2 and M3 are still to run.
 >
 > **Round 2, also not implemented** (round 2 review: the shipped half-Hann pulse puts
 > ~0.6 of our own frame's power in 4 bins, so C overlaps CW; floor subtraction is not implementable as

@@ -6,6 +6,8 @@
 //! first failed frame got silence and its ISS abandoned after two silent windows. The count now also
 //! leaks one per `LEAK_SAMPLES` of listening time.
 
+use openpulse_core::ota_rate::NackVerdict;
+
 /// Keyed NACKs allowed in a row with no decode and no leak.
 pub(crate) const OTA_NACK_BUDGET: u32 = 3;
 
@@ -20,6 +22,23 @@ pub(crate) struct NackBudget {
 }
 
 impl NackBudget {
+    /// What [`on_ladder_burst`](Self::on_ladder_burst) would do with a failure heard at `listening`,
+    /// without changing anything. Known before the decode, because the decode does not advance the
+    /// listening clock; the engine uses it so a muted failure moves no ladder (#1460 round 4b).
+    pub(crate) fn failure_verdict(&self, listening: u64) -> NackVerdict {
+        let leaks = listening.saturating_sub(self.leaked_to) / LEAK_SAMPLES;
+        let after_leak = self
+            .failures
+            .saturating_sub(u32::try_from(leaks).unwrap_or(u32::MAX));
+        if after_leak >= OTA_NACK_BUDGET {
+            NackVerdict::Muted
+        } else if self.failures >= OTA_NACK_BUDGET {
+            NackVerdict::Leaked
+        } else {
+            NackVerdict::Keyed
+        }
+    }
+
     /// Account one ladder burst heard at `listening` samples; true when its ACK may be keyed.
     pub(crate) fn on_ladder_burst(&mut self, decoded: bool, listening: u64) -> bool {
         let leaks = listening.saturating_sub(self.leaked_to) / LEAK_SAMPLES;
@@ -85,6 +104,31 @@ mod tests {
         assert!(
             !b.on_ladder_burst(false, LEAK_SAMPLES + 5),
             "and allows one NACK"
+        );
+    }
+
+    #[test]
+    fn the_verdict_agrees_with_the_budget_and_changes_nothing() {
+        // Failures every 10 s for an hour, then a decode, then more failures: every verdict must
+        // match what the budget then does, and reading it must not move the budget.
+        let mut b = NackBudget::default();
+        let mut leaked = 0;
+        let times = (0..6 * LEAK_SAMPLES).step_by(8_000 * 10);
+        for (i, t) in times.enumerate() {
+            let decoded = i == 200;
+            let before = b.clone();
+            let verdict = b.failure_verdict(t);
+            assert_eq!(b, before, "reading the verdict changed the budget");
+            let keyed = b.on_ladder_burst(decoded, t);
+            if decoded {
+                continue;
+            }
+            assert_eq!(verdict != NackVerdict::Muted, keyed, "burst {i} at {t}");
+            leaked += usize::from(verdict == NackVerdict::Leaked);
+        }
+        assert!(
+            leaked >= 4,
+            "the run must exercise the leak ({leaked} leaked)"
         );
     }
 

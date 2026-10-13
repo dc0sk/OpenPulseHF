@@ -213,6 +213,7 @@ pub(crate) fn apply_event(line: &str, shared: &Arc<Mutex<PanelState>>) {
                     decoded_level,
                     snr_db,
                     decision,
+                    ..
                 } => {
                     let outcome = if decoded_level.is_some() {
                         "ok"
