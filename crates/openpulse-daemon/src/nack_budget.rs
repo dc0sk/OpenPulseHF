@@ -6,7 +6,10 @@
 //! first failed frame got silence and its ISS abandoned after two silent windows. The count now also
 //! leaks one per `LEAK_SAMPLES` of listening time.
 
+use openpulse_core::error::ModemError;
 use openpulse_core::ota_rate::NackVerdict;
+use openpulse_modem::pipeline::AudioSamples;
+use openpulse_modem::{ModemEngine, OtaRxResult};
 
 /// Keyed NACKs allowed in a row with no decode and no leak.
 pub(crate) const OTA_NACK_BUDGET: u32 = 3;
@@ -62,6 +65,37 @@ impl NackBudget {
         self.failures += 1;
         true
     }
+}
+
+/// One OTA burst through the receiver's ladder accounting, shared by `server::run`'s rx tick and the
+/// #1460 probes so they cannot drift apart. The budget's verdict reaches the engine before the decode
+/// (a station without a valid callsign keys nothing, so its failures are muted); the budget is
+/// charged after it. Returns the decode and whether its ACK may be keyed.
+pub(crate) fn decode_ota_burst(
+    engine: &mut ModemEngine,
+    budget: &mut NackBudget,
+    callsign_valid: bool,
+    burst: &AudioSamples,
+    session_id: &str,
+    mode: &str,
+) -> Result<(OtaRxResult, bool), ModemError> {
+    let verdict = if callsign_valid {
+        budget.failure_verdict(engine.listening_samples())
+    } else {
+        NackVerdict::Muted
+    };
+    engine.set_ota_failure_verdict(verdict);
+    // `mode` is this station's ACTIVE mode: what its own non-ladder traffic (station ID, filexfer,
+    // handshake, QSY, relay) is sent at. Passing it enables the uncoded fallback for exactly that
+    // traffic (#1123); without it an OTA-enabled daemon cannot receive any of it.
+    let res = engine.ota_decode_burst(burst, session_id, Some(mode))?;
+    // A ladder frame resets the budget and is always ACKed; a failed decode is a NACK, keyed only
+    // while the leaking budget allows. A `None` ack is non-ladder traffic the uncoded fallback
+    // recovered: no evidence about the ladder either way, so it leaves the budget alone (#1123).
+    let within_budget = res.ack.is_some()
+        && budget.on_ladder_burst(res.payload.is_some(), engine.listening_samples());
+    // Audit F6 (§97.119): without a valid MYID the daemon cannot auto-ID, so it keys no ACK.
+    Ok((res, within_budget && callsign_valid))
 }
 
 #[cfg(test)]

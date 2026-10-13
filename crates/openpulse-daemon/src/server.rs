@@ -1044,42 +1044,21 @@ pub async fn run(cfg: OpenpulseConfig, modem_backend: Box<dyn AudioBackend>) -> 
                 let frames: Vec<Vec<u8>> = match burst {
                     Ok(Some(burst)) if engine.ota_active() && !runtime_state.ota_suppressed_by_peer() => {
                         // Receiver-led OTA: decode the burst, then key PTT only to answer
-                        // with the ACK carrying our absolute recommended_level.
-                        // #1460 round 4b: the ladder moves only on a failure whose NACK is keyed,
-                        // so the engine learns the budget's verdict before the decode. A station
-                        // with no valid callsign keys nothing, so its failures are muted too.
-                        let verdict = if runtime_state.local_callsign_valid() {
-                            ota_nack_budget.failure_verdict(engine.listening_samples())
-                        } else {
-                            openpulse_core::ota_rate::NackVerdict::Muted
-                        };
-                        engine.set_ota_failure_verdict(verdict);
+                        // with the ACK carrying our absolute recommended_level. The verdict, the
+                        // budget and the callsign check live in `decode_ota_burst` (#1460, #1456).
+                        let callsign_valid = runtime_state.local_callsign_valid();
                         match tokio::task::block_in_place(|| {
-                            // `mode` is this station's ACTIVE mode — what its own non-ladder traffic
-                            // (station ID, filexfer, handshake, QSY, relay) is transmitted at. Passing
-                            // it enables the uncoded fallback for exactly that traffic (#1123);
-                            // without it an OTA-enabled daemon cannot receive any of it.
-                            engine.ota_decode_burst(&burst, &ota_session_id, Some(&mode))
+                            crate::nack_budget::decode_ota_burst(
+                                &mut engine,
+                                &mut ota_nack_budget,
+                                callsign_valid,
+                                &burst,
+                                &ota_session_id,
+                                &mode,
+                            )
                         }) {
-                            Ok(res) => {
-                                // A LADDER frame resets the budget and is always ACKed; a failed decode
-                                // is a Nack — key it only while the leaking budget allows.
-                                //
-                                // A `None` ack means the uncoded fallback recovered non-ladder traffic.
-                                // That is not evidence about the rate ladder in either direction, so it
-                                // must leave the NACK budget alone (resetting it would credit the ladder
-                                // for a frame it did not decode) and must key nothing. Before #1123 such
-                                // a burst counted as a decode FAILURE, which drove `on_rx_frame(Failed)`
-                                // — including its hysteresis-free fast-downshift — and keyed a NACK at
-                                // the peer's own file transfer.
-                                let ladder_frame = res.ack.is_some();
-                                let decoded = res.payload.is_some();
-                                let within_budget = ladder_frame
-                                    && ota_nack_budget.on_ladder_burst(decoded, engine.listening_samples());
-                                // Audit F6 (§97.119): the ACK keys the transmitter; without a valid MYID
-                                // the daemon can't auto-ID, so decode the payload but don't send the ACK.
-                                if within_budget && runtime_state.local_callsign_valid()
-                                {
+                            Ok((res, key_ack)) => {
+                                if key_ack {
                                     // RAII guard (REQ-PTT-01): releases at block end / on unwind. On assert
                                     // failure `keyed` returns Err and we skip the ACK, leaving nothing keyed.
                                     // Skipping is correct; skipping SILENTLY is not — receiver-led ARQ then

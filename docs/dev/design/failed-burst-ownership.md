@@ -25,7 +25,7 @@ changes when a NACK is keyed, so it is reviewed before it is built (decision 8).
 > design. **Round 4 (2026-10-13) stops classifying and bounds the damage instead; see *Round 4*.**
 > Its first draft (a fixed one-step cap) was reviewed and revised to **round 4b**: a failure moves
 > the ladder only when its NACK is keyed. **4b implemented 2026-10-13**
-> (`muted_failures_move_no_ladder`); M2 and M3 are still to run.
+> (`muted_failures_move_no_ladder`); M2 and M3 pass (*Round 4b result*).
 >
 > **Round 2, also not implemented** (round 2 review: the shipped half-Hann pulse puts
 > ~0.6 of our own frame's power in 4 bins, so C overlaps CW; floor subtraction is not implementable as
@@ -359,6 +359,30 @@ each ≤ 7.48 s per burst (the F1c bound).
   not scored. Today's result is recorded beside it.
 - **M3, CW at SL4:** one minute of 20 wpm CW with word gaps at +6 dB through `accumulate_capture`.
   **Rule:** at most one step and at most 3 NACKs, then a frame of ours at SL3 decodes.
+
+### Round 4b result (2026-10-13): M2 and M3 PASS
+
+The probes are `ladder_evidence_probe` in `openpulse-daemon` (release, `--ignored`). They feed the
+recorded `ic9700-idle-250hz.wav` in daemon-sized reads through `accumulate_capture` and
+`nack_budget::decode_ota_burst`, the function `server::run`'s rx tick calls, so the probe and the
+daemon share the verdict, the budget and the callsign check by reference.
+
+| | counted failures | keyed NACKs | muted | steps (4b) | steps today (derived) | after |
+|---|---|---|---|---|---|---|
+| **M2**, 90 min idle at SL2 | 0 | 0 | 0 | **0** | 0 | the reversed SL2 frame fails and keys a NACK |
+| **M3**, 60 s of 20 wpm CW at +6 dB, SL4 | 15 | **3** | 12 | **1** | 5 (clamped at SL1) | our SL3 frame decodes |
+
+- **M3 discriminates.** One minute of CW with word gaps is 15 counted bursts. Under 4b, three key
+  and step once; the other twelve are muted and move nothing, so the SL3 frame decodes. Today's
+  column is derived (every counted failure in the hysteresis, one step per three), not run: five
+  steps from SL4 reach the SL1 floor, where an SL3 frame is no longer a candidate.
+- **M2 does not discriminate.** The #1456 evidence floor already keeps the 250 Hz idle out of the
+  ladder at SL2: zero counted failures in 90 minutes, so today and 4b both take no step. The same
+  event filter found 17 decisions across the two probes, so the zero is a measurement. The failing
+  frame after the idle keys a NACK (reported, not scored: a budget property).
+- **The leak caveat in M2's rule did not arise.** Under 4b each leaked NACK steps, so idle that
+  counted more than three failures per 10 min would step more than once in 90 minutes. Measured,
+  the idle counts none.
 
 ### Tests (with the implementation)
 

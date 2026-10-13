@@ -44,7 +44,14 @@ frames after B climbs): verdicts keyed ×3 then muted, one `NackStepDown`, then 
 failure 6. core + modem + daemon + linksim: 1 416 passed, 0 failed; workspace clippy clean. The
 test's stations use OFDM52 as their own mode: at BPSK250 one failed burst's uncoded-fallback scan
 took minutes in a debug build. `GATE: PASS 7cdb93b7 clean` (368 suites, 2 709 passed, 0 failed).
-M2 and M3 are still to run.
+
+**M2 and M3 (2026-10-13).** The rx tick's per-burst sequence moved into
+`nack_budget::decode_ota_burst`, which `server::run` and the new `ladder_evidence_probe` both call.
+Run: `cargo test --release -p openpulse-daemon --no-default-features --lib ladder_evidence_probe --
+--ignored --nocapture` → 2 passed, 0 failed (1 571 s). M3: one minute of 20 wpm CW at +6 dB at SL4 is
+15 counted failures, 3 keyed NACKs, 12 muted, 1 step, and an SL3 frame afterwards decodes (derived
+today: 5 steps). M2: 90 min of the 250 Hz idle at SL2 counts 0 failures (0 steps either way); a
+reversed SL2 frame afterwards keys a NACK.
 
 ---
 

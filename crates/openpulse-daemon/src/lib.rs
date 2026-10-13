@@ -10,6 +10,8 @@
 //! connection.  See [`protocol::encode_spectrum_frame`] for the wire format.
 
 pub mod audit;
+#[cfg(test)]
+mod ladder_evidence_probe;
 pub mod logbook;
 pub mod monitor;
 mod nack_budget;
