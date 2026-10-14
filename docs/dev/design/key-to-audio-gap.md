@@ -2,7 +2,7 @@
 project: openpulsehf
 doc: docs/dev/design/key-to-audio-gap.md
 status: draft
-last_updated: 2026-10-13
+last_updated: 2026-10-14
 ---
 
 # The key-to-audio gap: open the output device outside the keyed window
@@ -63,6 +63,28 @@ What the measurement settles:
 - **Pass 1 alone is about 75 % of the gap.**
 - **Holding the capture stream hid nothing.** All 16 devices were listed and the name was found in
   every run, so round 1's finding 6 does not occur on this station's stack.
+
+**The B station, measured** (2026-10-14, rpi53, the FT-818's USB sound interface,
+`plughw:CARD=CODEC,DEV=0`, `main` after #1510; FT-818 off, interface only; five runs each):
+
+| stage | capture not held | capture held | rpi51, held (above) |
+|---|---|---|---|
+| pass 1: every output device, named | 384.0 (8 devices) | 192.2–192.7 (8 devices) | 525–540 (16) |
+| pass 2: `find` the resolved name | 16–24 | 16–31 | 42–45 |
+| `open_output` by name | 425–457 | 239–256 | 567–684 |
+| write → drained − audio | 142.4–142.6 | 142.4–142.6 | 138–144 |
+| **key-to-audio** | **567–599** | **382–399** | **707–828** |
+
+- **The B station is not a copy of rpi51.** It lists 8 output devices to rpi51's 16, and its pass 1
+  is 192 ms against 525–540 ms under the same condition. The cache removes pass 1 on both, so the
+  saving is station-specific: about 0.19 s here, about 0.53 s on rpi51.
+- **Holding the capture stream halved pass 1** on rpi53 (384 → 192 ms) and hid no device: 8 listed
+  and the name found in every run. The mechanism is not established; the timings repeat to 0.1 ms
+  run to run, which points at fixed waits inside ALSA's device probing rather than computation.
+- **Pass 2 is 16 ms** although the CODEC is listed after both HDMI cards in `aplay -L`, so round 2's
+  ~30 ms-per-hint estimate (from rpi51) does not carry over as stated.
+- **Expected with the cache** (derived, not run): `open_output` ≈ pass 2 + the open, about 47–64 ms,
+  so key-to-audio about 0.19–0.21 s on rpi53, held. The post-merge probe settles it.
 
 ## Where the time sits
 

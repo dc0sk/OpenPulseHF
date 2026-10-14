@@ -2,7 +2,7 @@
 project: openpulsehf
 doc: docs/dev/reviews/review-key-to-audio-gap.md
 status: resolved
-last_updated: 2026-10-12
+last_updated: 2026-10-14
 ---
 
 # Review: the key-to-audio gap (round 1, 2026-10-11)

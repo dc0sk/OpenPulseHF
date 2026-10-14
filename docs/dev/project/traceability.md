@@ -41,8 +41,10 @@ pass; sabotage-verified on the first version (no insert: 3 of 6 fail; a second e
 fallback: 2 of 6 fail) and on `scan` (the match's own name pushed: 1 fails). The first run hung: a lock guard in the `match`
 scrutinee deadlocked the eviction, fixed by binding first. `openpulse-audio` with `cpal-backend`:
 37 passed, 0 failed, including the 4 ALSA `device_enumeration` tests; clippy clean on both feature
-sets. `GATE: PASS 93fafb2b clean` (367 suites, 2 709 passed, 0 failed). The station effect is
-pending the rpi51 probe re-run (maintainer to-do).
+sets. `GATE: PASS 93fafb2b clean` (367 suites, 2 709 passed, 0 failed). Before the cache, the B station
+(rpi53, FT-818 interface, capture held) measured key-to-audio 382–399 ms, pass 1 192 ms of it
+(2026-10-14); rpi51 707–828 ms, pass 1 525–540 ms. The station effect is pending the post-merge
+probe re-run on both stations (maintainer to-do).
 
 ---
 

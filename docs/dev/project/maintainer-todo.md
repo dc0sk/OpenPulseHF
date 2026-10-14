@@ -2,7 +2,7 @@
 project: openpulsehf
 doc: docs/dev/project/maintainer-todo.md
 status: draft
-last_updated: 2026-10-13
+last_updated: 2026-10-14
 ---
 
 # Maintainer TODO — what only you can do
@@ -13,23 +13,25 @@ asks first within each section. Report results in chat or as a comment on the li
 
 ## Now — unblocks Release 1 work
 
-- [ ] **After the device-name cache merges, re-run the key-to-audio probe on rpi51** (work plan M2,
-  key-to-audio gap; the rpi51 agent session can do it). It writes **silence** and does not touch PTT.
+- [ ] **After the device-name cache merges, re-run the key-to-audio probe on rpi51 and rpi53** (work
+  plan M2, key-to-audio gap; the rpi51 agent session can do rpi51). Same command on both stations. It writes **silence** and does not touch PTT.
   ```bash
   git checkout main && git pull && git log --oneline -1
   env PROBE_DEVICE='plughw:CARD=CODEC,DEV=0' PROBE_INPUT_DEVICE='plughw:CARD=CODEC,DEV=0' \
     cargo test --release -p openpulse-audio --features cpal-backend --lib key_to_audio -- --ignored --nocapture
   ```
-  Expected: `open_output` near 45 ms from run 2 on (run 1 resolves in full). Paste the five `run …`
+  Expected from run 2 on (run 1 resolves in full): `open_output` near 45 ms on rpi51 and 50–65 ms on
+  rpi53. Paste the five `run …`
   lines; they also give key-to-first-sample, the number the G1 leader check is set against.
 
-- [ ] **rpi53: one device listing, no probe.** rpi53 is the same Pi 5 on the same build, so the probe
-  would repeat rpi51's numbers. What differs per station is where the FT-818's sound card sits in
-  ALSA's device order, since a cached open still scans every device before it. No rig needed:
-  ```bash
-  aplay -L | grep -v '^ ' | nl
-  ```
-  Paste the output and say which line is the FT-818's interface.
+- [x] **Key-to-audio probe on rpi53, FT-818 interface** (done 2026-10-14, `main` after #1510). The
+  station's device is **`plughw:CARD=CODEC,DEV=0`** (the FT-818's USB sound interface; it appears only
+  with the interface plugged in); use it as `B_AUDIO_DEVICE`. The earlier note here, that rpi53 would
+  repeat rpi51's numbers, was wrong: it lists 8 output devices to rpi51's 16.
+  - capture not held: pass 1 384 ms, pass 2 16–24 ms, `open_output` 425–457 ms, drain 142.5 ms,
+    **key-to-audio 567–599 ms**;
+  - capture held: pass 1 192 ms, pass 2 16–31 ms, `open_output` 239–256 ms, drain 142.5 ms,
+    **key-to-audio 382–399 ms**. No device vanished.
 
 - [x] **Key-to-audio probe on rpi51, named device** (done 2026-10-12, `main` after #1508, by the rpi51
   agent session). The station's device is **`plughw:CARD=CODEC,DEV=0`** (the IC-9700's USB codec);
