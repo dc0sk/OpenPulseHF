@@ -2,15 +2,31 @@
 project: openpulsehf
 doc: docs/dev/onair-ic9700-ft818-setup.md
 status: living
-last_updated: 2026-07-24
+last_updated: 2026-10-14
 ---
 
-# On-air setup — IC-9700 (rpi51, stationary) ↔ FT-818 (laptop, portable)
+# On-air setup — IC-9700 (rpi51) ↔ FT-818 (rpi53)
 
 A second two-station 2 m pairing, on the same 144.640 MHz used before. Station A is the IC-9700 on
 `dc0sk-rpi51`, reached over the VPN tunnel; its configuration is unchanged from the earlier
 IC-9700 ↔ FT-991A campaign. Station B is new: a **Yaesu FT-818 + SCU-17 USB interface + LDG Z817
-tuner**, connected to this laptop and used portable.
+tuner**. It was set up portable on a laptop; since the station pair was fixed (2026-10-02) it runs on
+**`dc0sk-rpi53`**.
+
+**Station owner's rules for the FT-818 (2026-10-14), which this document and the tooling follow:**
+- **Low power, never increased.** Set **L1 (0.5 W)** on the front panel. Hamlib's FT-818 driver cannot
+  set power, so software cannot do it; the runners only ever *lower* a rig's power
+  (`scripts/lib/rig-power.sh`) and leave the FT-818's alone.
+- **The FRONT antenna (BNC) is selected and stays selected.** No tooling sends an antenna command.
+- **Mode is set on the rig** (DIG, DIG MODE = USER-U) and the runners send none for the FT-818
+  (`TEST_MODE_RIG_B=keep`).
+
+**Read over CAT on rpi53, 2026-10-14** (read-only; nothing keyed or changed): Hamlib 4.6.2, model 1041;
+CAT on the SCU-17's CP2105 first port (`…CP2105…-if00-port0`, `/dev/ttyUSB0` that boot) at **38400**
+baud; 144.600 MHz, mode USB 2200 Hz at the time; `l RFPOWER` reads `10` (not Hamlib's 0–1 scale, so
+not a power setting), `l RFPOWER_METER` is unsupported, and the antenna is not readable (`y`).
+Setting any level other than `BAND_SELECT` is unsupported. Audio: ALSA card `CODEC`
+(`plughw:CARD=CODEC,DEV=0`).
 
 Config profile: [`docs/config/onair-ic9700-ft818.example.sh`](../config/onair-ic9700-ft818.example.sh).
 Runner: `scripts/run-onair-ic9700-ft991a.sh` (rig-B-agnostic — the filename is historical). The
@@ -22,15 +38,13 @@ execution order and the *why* (fix the receive path first) live in
 ## ⚠️ Read first — two things about this specific station
 
 1. **The LDG Z817 does not work on 2 m.** It is an HF (≈1.8–54 MHz) autotuner; at 144 MHz it does
-   not tune and passes straight through in bypass. For this test the 2 m antenna on the rear SO-239
+   not tune and passes straight through in bypass. For this test the 2 m antenna on the front BNC
    **must present a usable SWR on its own** — the tuner cannot correct it here. If the Z817 is
    physically inline, confirm it is in bypass (it will not engage on 2 m) and check SWR on the FT-818
    before any keyed run.
-2. **The rear SO-239 at 2 m.** The FT-818's rear SO-239 is primarily an HF/6 m connector; the front
-   BNC is the intended VHF/UHF jack. The radio *can* be menu-set to route 2 m to the rear socket, but
-   SO-239/PL-259 is a lossy connector at 144 MHz — expect a little more feedline loss than the front
-   BNC would give. This is an operational choice (requested), not the factory default; just be aware
-   the link budget is slightly worse than a BNC 2 m feed.
+2. **The front BNC at 2 m.** The station owner's choice (2026-10-14), replacing the earlier request for
+   the rear SO-239: the front BNC is the FT-818's intended VHF/UHF jack. Confirm the per-band antenna
+   menu reads FRONT for 144 MHz before any keyed run; it cannot be read over CAT.
 
 ---
 
@@ -77,7 +91,7 @@ until they are real values.** (Offer: with the SCU-17 plugged in, this can be fi
 
 | Setting | Where | Value | Why |
 |---|---|---|---|
-| **Antenna (2 m)** | Menu → antenna-select item (the FRONT/REAR per-band setting; confirm the item number on your firmware) | **REAR (SO-239)** | Requested. Routes 144.640 MHz out the rear socket. See the caveat above. |
+| **Antenna (2 m)** | Menu → antenna-select item (the FRONT/REAR per-band setting; confirm the item number on your firmware) | **FRONT (BNC)** | The owner's rule: selected and stays selected. Not readable over CAT, so check it on the radio. |
 | Mode | mode button | **DIG** | The FT-818's data mode (there is no "PKT" mode as on the FT-991A) |
 | DIG MODE | Menu → "DIG MODE" | **USER-U** | Upper-sideband user-defined digital = the FT-818 equivalent of PKTUSB; puts the 1500 Hz audio carrier on USB |
 | DIG GAIN | Menu → "DIG GAIN" | ~50 (start) | Data input gain from the SCU-17 CODEC; sets ALC. Start mid, adjust to keep ALC just deflecting |
@@ -85,7 +99,7 @@ until they are real values.** (Offer: with the SCU-17 plugged in, this can be fi
 | CAT/DIG DATA source | Menu (DIG audio routing) | via DATA/ACC jack | The SCU-17 injects/receives audio on the DATA jack |
 | NB (noise blanker) | front panel / menu | **Off** | Distorts BPSK |
 | DSP NR | menu | **Off** | Distorts BPSK |
-| RF power | Menu → power / or the profile's `B_RFPOWER` | ~2–3 W | Low power for the test; the FT-818 is 6 W max |
+| RF power | Front panel → PWR | **L1 (0.5 W)** | The owner's rule: low power, never increased. Not settable over CAT; the runners never raise power |
 | Clarifier (RIT) | CLAR | **Off / 0 Hz** | Offsets RX |
 | Squelch | menu / knob | open (min) | Squelch gates the USB capture audio |
 
@@ -154,8 +168,8 @@ trust a rig-RX PASS unless the SDR corroborates it or gates 1–6 passed clean i
 ## What is new vs. the FT-991A pairing (so nothing silently drifts)
 
 - Station B rig: FT-818 (hamlib **1041**), DIG/**USER-U** mode (not PKT-U), **DIG GAIN** not PKT MIC
-  GAIN, and the **rear SO-239** antenna at 2 m.
-- Station B host: **this laptop, local** (`B_SSH=dc0sk@localhost`, needs sshd) — not a remote Pi.
+  GAIN, and the **front BNC** antenna at 2 m, at **L1 (0.5 W)**.
+- Station B host: **`dc0sk-rpi53`** (`B_SSH=dc0sk@dc0sk-rpi53`).
 - The **LDG Z817 is HF-only** and inert on 2 m; the antenna must be resonant on its own.
 - The **SDR is co-located** with the portable station, which is ideal for monitoring.
 - Everything on the IC-9700/rpi51 side is unchanged, including its unresolved USB-capture-during-TX

@@ -18,6 +18,8 @@
 set -uo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# shellcheck source=scripts/lib/rig-power.sh
+source "$REPO_ROOT/scripts/lib/rig-power.sh"
 
 # ── Profile (env, with safe defaults) ─────────────────────────────────────────
 A_SSH="${A_SSH:-}"; B_SSH="${B_SSH:-}"
@@ -35,7 +37,11 @@ A_AUDIO_DEVICE="${A_AUDIO_DEVICE:-default}"; B_AUDIO_DEVICE="${B_AUDIO_DEVICE:-d
 A_REPO_DIR="${A_REPO_DIR:-\$HOME/OpenPulseHF}"; B_REPO_DIR="${B_REPO_DIR:-\$HOME/OpenPulseHF}"
 # 2 m by default (decision 13: HF only with the release candidate). Override for an HF run.
 TEST_FREQ_HZ="${TEST_FREQ_HZ:-144640000}"; TEST_MODE_RIG="${TEST_MODE_RIG:-USB}"
-A_RFPOWER="${A_RFPOWER:-0.10}"; B_RFPOWER="${B_RFPOWER:-0.10}"
+# Per station; `keep` sends no mode (set it on the rig: the FT-818's DIG/USER-U has no safe CAT name).
+A_TEST_MODE_RIG="${A_TEST_MODE_RIG:-$TEST_MODE_RIG}"; B_TEST_MODE_RIG="${B_TEST_MODE_RIG:-$TEST_MODE_RIG}"
+# Power is only ever LOWERED to these, never raised (scripts/lib/rig-power.sh). Set one to empty
+# to leave that rig's power alone.
+A_RFPOWER="${A_RFPOWER-0.10}"; B_RFPOWER="${B_RFPOWER-0.10}"
 OTA_PROFILE="${OTA_PROFILE:-fast}"; START_MODE="${START_MODE:-BPSK250}"
 DAEMON_TCP_PORT="${DAEMON_TCP_PORT:-9000}"
 # Recorded explicitly in every station config, so the bundle's config snapshot attributes any effect
@@ -70,12 +76,16 @@ start_rigctld() {  # ssh_fn model cat_port cat_baud ptt_port ptt_type rigctld_po
         pgrep -x rigctld >/dev/null && echo '  [$label] rigctld ok' || { echo '  [$label] rigctld FAILED'; exit 1; }"
 }
 
-tune() {  # ssh_fn rigctld_port rfpower label
-    local sshfn="$1" port="$2" power="$3" label="$4"
-    echo "  [$label] tune → ${TEST_FREQ_HZ} Hz ${TEST_MODE_RIG}, power=${power}"
-    "$sshfn" "rigctl -m 2 -r 127.0.0.1:$port F ${TEST_FREQ_HZ} 2>/dev/null || echo '  [$label] WARN set freq'; \
-        rigctl -m 2 -r 127.0.0.1:$port M ${TEST_MODE_RIG} 3000 2>/dev/null || echo '  [$label] WARN set mode'; \
-        rigctl -m 2 -r 127.0.0.1:$port L RFPOWER ${power} 2>/dev/null || echo '  [$label] WARN set power'"
+tune() {  # ssh_fn rigctld_port rfpower mode label
+    local sshfn="$1" port="$2" power="$3" mode="$4" label="$5"
+    echo "  [$label] tune → ${TEST_FREQ_HZ} Hz, mode ${mode}"
+    "$sshfn" "rigctl -m 2 -r 127.0.0.1:$port F ${TEST_FREQ_HZ} 2>/dev/null || echo '  [$label] WARN set freq'"
+    if [[ "$mode" == "keep" ]]; then
+        echo "  [$label] mode: not touched; rig reads $("$sshfn" "rigctl -m 2 -r 127.0.0.1:$port m 2>/dev/null | head -n1" || echo unreadable)"
+    else
+        "$sshfn" "rigctl -m 2 -r 127.0.0.1:$port M ${mode} 3000 2>/dev/null || echo '  [$label] WARN set mode'"
+    fi
+    rig_power_lower_only "$sshfn" "127.0.0.1:$port" "$power" "$label"
 }
 
 write_config() {  # ssh_fn callsign grid audio_device ptt_backend rigctld_port label
@@ -170,8 +180,8 @@ do_run() {
     echo "== run =="
     start_rigctld ssh_a "$A_HAMLIB_MODEL" "$A_CAT_PORT" "$A_CAT_BAUD" "$A_PTT_PORT" "$A_PTT_TYPE" "$A_RIGCTLD_PORT" "$A_LABEL"
     start_rigctld ssh_b "$B_HAMLIB_MODEL" "$B_CAT_PORT" "$B_CAT_BAUD" "$B_PTT_PORT" "$B_PTT_TYPE" "$B_RIGCTLD_PORT" "$B_LABEL"
-    tune ssh_a "$A_RIGCTLD_PORT" "$A_RFPOWER" "$A_LABEL"
-    tune ssh_b "$B_RIGCTLD_PORT" "$B_RFPOWER" "$B_LABEL"
+    tune ssh_a "$A_RIGCTLD_PORT" "$A_RFPOWER" "$A_TEST_MODE_RIG" "$A_LABEL"
+    tune ssh_b "$B_RIGCTLD_PORT" "$B_RFPOWER" "$B_TEST_MODE_RIG" "$B_LABEL"
     write_config ssh_a "$CALLSIGN_A" "$GRID_A" "$A_AUDIO_DEVICE" "$A_RIGCTLD_PORT" "$A_LABEL"
     write_config ssh_b "$CALLSIGN_B" "$GRID_B" "$B_AUDIO_DEVICE" "$B_RIGCTLD_PORT" "$B_LABEL"
     launch_daemon ssh_a "$A_REPO_DIR" "$A_LABEL"

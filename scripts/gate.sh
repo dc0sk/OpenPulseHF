@@ -223,6 +223,8 @@ drift_check
 # parent, and an unrelated process must still wait. On a scratch lock file, so it
 # runs here while this gate holds the real one.
 run_step "host-build-lock self-test" bash scripts/test-host-build-lock.sh || rc_total=1
+# The on-air runners may lower a rig's power, never raise it (the station owner's rule, 2026-10-14).
+run_step "rig power: lower only" bash scripts/test-rig-power.sh || rc_total=1
 run_step "cargo fmt --check" cargo fmt --all -- --check || rc_total=1
 drift_check
 run_step "cargo clippy -D warnings" cargo clippy --workspace --no-default-features --all-targets -- -D warnings || rc_total=1

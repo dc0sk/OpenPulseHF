@@ -1,7 +1,7 @@
 ---
 title: On-Air Twin-OTA Scenario
 status: living
-last_updated: 2026-06-23
+last_updated: 2026-10-14
 ---
 
 # On-air twin-OTA scenario
@@ -36,7 +36,10 @@ channel. Both directions' levels/spectra show side by side in twinview.
 - Two stations, each with: a CAT/PTT-capable rig, `rigctld`/`rigctl` installed, a
   cpal-visible soundcard (e.g. a Digirig), and SSH access from your workstation.
 - A clear, **legal** frequency for both stations and an agreed test window; keep
-  power low (`A_RFPOWER`/`B_RFPOWER` default 0.10) for first passes.
+  power low (`A_RFPOWER`/`B_RFPOWER` default 0.10) for first passes. The runner only ever **lowers**
+  a rig's power to that value, never raises it (`scripts/lib/rig-power.sh`); set one empty to leave
+  that rig alone. `A_TEST_MODE_RIG`/`B_TEST_MODE_RIG` override `TEST_MODE_RIG` per station, and
+  `keep` sends no mode (the FT-818's DIG/USER-U is set on the rig).
 - Real callsigns (the daemon refuses to start as `N0CALL`).
 
 ## Setup

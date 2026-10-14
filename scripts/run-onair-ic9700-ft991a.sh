@@ -12,6 +12,8 @@
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# shellcheck source=scripts/lib/rig-power.sh
+source "$REPO_ROOT/scripts/lib/rig-power.sh"
 cd "$REPO_ROOT"
 
 # Defaults (overridden by profile)
@@ -64,8 +66,9 @@ fi
 IRS_STARTUP_WAIT="${IRS_STARTUP_WAIT:-10}"  # RX AFC settle ~6.4 s + margin (was 5, too short)
 KILL_WAIT="${KILL_WAIT:-12}"                # let the scanning decode finish before killing IRS (was a bare sleep 2)
 TX_TIMEOUT="${TX_TIMEOUT:-120}"
-A_RFPOWER="${A_RFPOWER:-0.05}"
-B_RFPOWER="${B_RFPOWER:-0.05}"
+# Power is only ever LOWERED to these, never raised (scripts/lib/rig-power.sh); empty leaves it.
+A_RFPOWER="${A_RFPOWER-0.05}"
+B_RFPOWER="${B_RFPOWER-0.05}"
 TELEMETRY_ENABLE="${TELEMETRY_ENABLE:-0}"
 TELEMETRY_SAMPLES="${TELEMETRY_SAMPLES:-40}"
 TELEMETRY_INTERVAL="${TELEMETRY_INTERVAL:-0.2}"
@@ -546,14 +549,16 @@ stop_rigctld_b() {
 
 tune_a() {
     echo "  [tune] ${A_LABEL} (A) -> ${A_FREQ_HZ} Hz ${TEST_MODE_RIG_A} (offset ${A_FREQ_OFFSET_HZ} Hz)"
-    ssh_a "rigctl -m 2 -r ${A_RIGCTLD_ADDR}:${A_RIGCTLD_PORT} F ${A_FREQ_HZ} 2>/dev/null || true; \
-        rigctl -m 2 -r ${A_RIGCTLD_ADDR}:${A_RIGCTLD_PORT} M ${TEST_MODE_RIG_A} 2400 2>/dev/null || true"
+    ssh_a "rigctl -m 2 -r ${A_RIGCTLD_ADDR}:${A_RIGCTLD_PORT} F ${A_FREQ_HZ} 2>/dev/null || true"
+    # `keep` sends no mode: the FT-818's DIG/USER-U is set on the rig.
+    [[ "$TEST_MODE_RIG_A" == "keep" ]] || ssh_a "rigctl -m 2 -r ${A_RIGCTLD_ADDR}:${A_RIGCTLD_PORT} M ${TEST_MODE_RIG_A} 2400 2>/dev/null || true"
 }
 
 tune_b() {
     echo "  [tune] ${B_LABEL} (B) -> ${B_FREQ_HZ} Hz ${TEST_MODE_RIG_B} (offset ${B_FREQ_OFFSET_HZ} Hz)"
-    ssh_b "rigctl -m 2 -r ${B_RIGCTLD_ADDR}:${B_RIGCTLD_PORT} F ${B_FREQ_HZ} 2>/dev/null || true; \
-        rigctl -m 2 -r ${B_RIGCTLD_ADDR}:${B_RIGCTLD_PORT} M ${TEST_MODE_RIG_B} 2400 2>/dev/null || true"
+    ssh_b "rigctl -m 2 -r ${B_RIGCTLD_ADDR}:${B_RIGCTLD_PORT} F ${B_FREQ_HZ} 2>/dev/null || true"
+    # `keep` sends no mode: the FT-818's DIG/USER-U is set on the rig.
+    [[ "$TEST_MODE_RIG_B" == "keep" ]] || ssh_b "rigctl -m 2 -r ${B_RIGCTLD_ADDR}:${B_RIGCTLD_PORT} M ${TEST_MODE_RIG_B} 2400 2>/dev/null || true"
 }
 
 save_rig_state_a() {
@@ -573,29 +578,31 @@ save_rig_state_b() {
 }
 
 apply_known_good_settings_a() {
-    ssh_a "rigctl -m 2 -r ${A_RIGCTLD_ADDR}:${A_RIGCTLD_PORT} L RFPOWER ${A_RFPOWER} >/dev/null 2>&1 || true; \
-        rigctl -m 2 -r ${A_RIGCTLD_ADDR}:${A_RIGCTLD_PORT} L COMP 0 >/dev/null 2>&1 || true; \
+    rig_power_lower_only ssh_a "${A_RIGCTLD_ADDR}:${A_RIGCTLD_PORT}" "${A_RFPOWER}" "${A_LABEL}"
+    ssh_a "rigctl -m 2 -r ${A_RIGCTLD_ADDR}:${A_RIGCTLD_PORT} L COMP 0 >/dev/null 2>&1 || true; \
         rigctl -m 2 -r ${A_RIGCTLD_ADDR}:${A_RIGCTLD_PORT} L MICGAIN 0.75 >/dev/null 2>&1 || true"
 }
 
 apply_known_good_settings_b() {
-    ssh_b "rigctl -m 2 -r ${B_RIGCTLD_ADDR}:${B_RIGCTLD_PORT} L RFPOWER ${B_RFPOWER} >/dev/null 2>&1 || true; \
-        rigctl -m 2 -r ${B_RIGCTLD_ADDR}:${B_RIGCTLD_PORT} L COMP 0 >/dev/null 2>&1 || true; \
+    rig_power_lower_only ssh_b "${B_RIGCTLD_ADDR}:${B_RIGCTLD_PORT}" "${B_RFPOWER}" "${B_LABEL}"
+    ssh_b "rigctl -m 2 -r ${B_RIGCTLD_ADDR}:${B_RIGCTLD_PORT} L COMP 0 >/dev/null 2>&1 || true; \
         rigctl -m 2 -r ${B_RIGCTLD_ADDR}:${B_RIGCTLD_PORT} L MICGAIN 0.75 >/dev/null 2>&1 || true"
 }
 
 restore_rig_state_a() {
     [[ -n "$A_SAVED_FREQ" && "$A_SAVED_FREQ" != "na" ]] && ssh_a "rigctl -m 2 -r ${A_RIGCTLD_ADDR}:${A_RIGCTLD_PORT} F ${A_SAVED_FREQ} >/dev/null 2>&1 || true"
-    [[ -n "$A_SAVED_MODE" && "$A_SAVED_MODE" != "na" ]] && ssh_a "rigctl -m 2 -r ${A_RIGCTLD_ADDR}:${A_RIGCTLD_PORT} M ${A_SAVED_MODE} 2400 >/dev/null 2>&1 || true"
-    [[ -n "$A_SAVED_RFPOWER" && "$A_SAVED_RFPOWER" != "na" ]] && ssh_a "rigctl -m 2 -r ${A_RIGCTLD_ADDR}:${A_RIGCTLD_PORT} L RFPOWER ${A_SAVED_RFPOWER} >/dev/null 2>&1 || true"
+    [[ "$TEST_MODE_RIG_A" != "keep" && -n "$A_SAVED_MODE" && "$A_SAVED_MODE" != "na" ]] && ssh_a "rigctl -m 2 -r ${A_RIGCTLD_ADDR}:${A_RIGCTLD_PORT} M ${A_SAVED_MODE} 2400 >/dev/null 2>&1 || true"
+    # Restoring the pre-run power only ever lowers it: a higher pre-run reading stays where the run left it.
+    [[ -n "$A_SAVED_RFPOWER" && "$A_SAVED_RFPOWER" != "na" ]] && rig_power_lower_only ssh_a "${A_RIGCTLD_ADDR}:${A_RIGCTLD_PORT}" "$A_SAVED_RFPOWER" "${A_LABEL}"
     [[ -n "$A_SAVED_MICGAIN" && "$A_SAVED_MICGAIN" != "na" ]] && ssh_a "rigctl -m 2 -r ${A_RIGCTLD_ADDR}:${A_RIGCTLD_PORT} L MICGAIN ${A_SAVED_MICGAIN} >/dev/null 2>&1 || true"
     [[ -n "$A_SAVED_COMP" && "$A_SAVED_COMP" != "na" ]] && ssh_a "rigctl -m 2 -r ${A_RIGCTLD_ADDR}:${A_RIGCTLD_PORT} L COMP ${A_SAVED_COMP} >/dev/null 2>&1 || true"
 }
 
 restore_rig_state_b() {
     [[ -n "$B_SAVED_FREQ" && "$B_SAVED_FREQ" != "na" ]] && ssh_b "rigctl -m 2 -r ${B_RIGCTLD_ADDR}:${B_RIGCTLD_PORT} F ${B_SAVED_FREQ} >/dev/null 2>&1 || true"
-    [[ -n "$B_SAVED_MODE" && "$B_SAVED_MODE" != "na" ]] && ssh_b "rigctl -m 2 -r ${B_RIGCTLD_ADDR}:${B_RIGCTLD_PORT} M ${B_SAVED_MODE} 2400 >/dev/null 2>&1 || true"
-    [[ -n "$B_SAVED_RFPOWER" && "$B_SAVED_RFPOWER" != "na" ]] && ssh_b "rigctl -m 2 -r ${B_RIGCTLD_ADDR}:${B_RIGCTLD_PORT} L RFPOWER ${B_SAVED_RFPOWER} >/dev/null 2>&1 || true"
+    [[ "$TEST_MODE_RIG_B" != "keep" && -n "$B_SAVED_MODE" && "$B_SAVED_MODE" != "na" ]] && ssh_b "rigctl -m 2 -r ${B_RIGCTLD_ADDR}:${B_RIGCTLD_PORT} M ${B_SAVED_MODE} 2400 >/dev/null 2>&1 || true"
+    # Restoring the pre-run power only ever lowers it: a higher pre-run reading stays where the run left it.
+    [[ -n "$B_SAVED_RFPOWER" && "$B_SAVED_RFPOWER" != "na" ]] && rig_power_lower_only ssh_b "${B_RIGCTLD_ADDR}:${B_RIGCTLD_PORT}" "$B_SAVED_RFPOWER" "${B_LABEL}"
     [[ -n "$B_SAVED_MICGAIN" && "$B_SAVED_MICGAIN" != "na" ]] && ssh_b "rigctl -m 2 -r ${B_RIGCTLD_ADDR}:${B_RIGCTLD_PORT} L MICGAIN ${B_SAVED_MICGAIN} >/dev/null 2>&1 || true"
     [[ -n "$B_SAVED_COMP" && "$B_SAVED_COMP" != "na" ]] && ssh_b "rigctl -m 2 -r ${B_RIGCTLD_ADDR}:${B_RIGCTLD_PORT} L COMP ${B_SAVED_COMP} >/dev/null 2>&1 || true"
 }

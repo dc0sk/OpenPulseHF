@@ -2,7 +2,7 @@
 # Profile for the IC-9700 <-> FT-818 pairing (2 m, 144.640 MHz).
 #
 #   Station A (stationary): IC-9700 on dc0sk-rpi51, reached over the VPN tunnel
-#   Station B (portable):   FT-818 + SCU-17 + LDG Z817, on THIS laptop (local)
+#   Station B:              FT-818 + SCU-17 + LDG Z817, on dc0sk-rpi53
 #
 # Usage:
 #   source docs/config/onair-ic9700-ft818.example.sh
@@ -15,8 +15,8 @@
 # The SCU-17 was NOT connected when this profile was written, so every value marked
 # TODO-CONFIRM must be filled in from the real hardware. Discovery commands are given
 # inline. See docs/dev/onair-ic9700-ft818-setup.md for the full station procedure,
-# including the FT-818 menu settings (rear antenna, DIG/USER-U mode) that are set on
-# the radio and are not configurable here.
+# including the FT-818 settings made on the radio and not configurable here: the FRONT antenna
+# (selected, and it stays selected), L1 power (0.5 W; never raised), DIG/USER-U mode.
 # ================================================================================
 
 # ── SSH targets ────────────────────────────────────────────────────────────────
@@ -24,7 +24,7 @@
 # at localhost — the laptop must run sshd and accept a key for the local user.
 #   Enable once:  sudo systemctl enable --now sshd   (and add your key to authorized_keys)
 export A_SSH="dc0sk@dc0sk-rpi51"          # over the VPN tunnel
-export B_SSH="dc0sk@localhost"            # FT-818 on this laptop
+export B_SSH="dc0sk@dc0sk-rpi53"          # FT-818 on rpi53
 export SSH_OPTS='-o BatchMode=yes -o ConnectTimeout=10 -o ServerAliveInterval=30'
 
 # ── Callsigns / labels ─────────────────────────────────────────────────────────
@@ -53,9 +53,10 @@ export A_RFPOWER=0.05                     # IC-9700: ~5 W of 100 W (0.5 would be
 # ── Station B — FT-818 + SCU-17 on THIS laptop ─────────────────────────────────
 # CAT serial port of the SCU-17. TODO-CONFIRM once plugged in:
 #   ls -l /dev/serial/by-id/    # the SCU-17 enumerates a virtual COM port for CAT
-export B_CAT_PORT="TODO-CONFIRM"          # e.g. /dev/serial/by-id/usb-Silicon_Labs_...-if00-port0
+# On rpi53 (2026-10-14) CAT answered on the CP2105's FIRST port (...CP2105...-if00-port0).
+export B_CAT_PORT="TODO-CONFIRM"          # the full /dev/serial/by-id/...CP2105...-if00-port0 path
 # FT-818 CAT rate — set the FT-818 menu "CAT RATE" to match. 38400 is responsive.
-export B_CAT_BAUD=38400                   # confirm against the FT-818 menu setting
+export B_CAT_BAUD=38400                   # read over CAT on rpi53, 2026-10-14
 # PTT: CAT keying via hamlib is the most robust (survives USB re-enumeration) and
 # matches Side A. The SCU-17's hardware RTS-PTT is the alternative (B_PTT_TYPE=RTS +
 # B_PTT_PORT = the SCU-17 serial port); pick ONE and verify with `calibrate ptt`.
@@ -66,15 +67,18 @@ export B_RIGCTLD_PORT=4532
 # SCU-17 USB Audio CODEC on this laptop. TODO-CONFIRM once plugged in:
 #   arecord -l | grep -i codec      # find the card
 #   ./target/release/openpulse --backend cpal devices | grep -i codec   # exact cpal name
-export B_AUDIO_DEVICE="TODO-CONFIRM"      # cpal device name of the SCU-17 CODEC
+export B_AUDIO_DEVICE="plughw:CARD=CODEC,DEV=0"   # the SCU-17 CODEC on rpi53 (2026-10-14)
 export B_AUDIO_DEVICE_LABEL="FT-818 SCU-17 USB Audio CODEC"
 export B_REPO_DIR='${HOME}/git/OpenPulseHF'
 export B_LOG_DIR='${HOME}/var/log/openpulse/on-air'
-export B_RFPOWER=0.5                      # ~2-3 W of the FT-818's 6 W; confirm on the rig
+# Empty: the runner sends no power to the FT-818. Set L1 (0.5 W) on the front panel; Hamlib cannot
+# set FT-818 power, and the runners only ever lower a rig's power (scripts/lib/rig-power.sh).
+export B_RFPOWER=""
 
 # ── Frequency / mode / 2 m safety guard (same as the earlier 2 m runs) ──────────
 export TEST_FREQ_HZ=144640000             # 144.640 MHz (moved off 144.651 to dodge a 1286 Hz birdie)
-export TEST_MODE_RIG="PKTUSB"             # IC-9700 side; the FT-818 uses DIG/USER-U (see the setup doc)
+export TEST_MODE_RIG_A="PKTUSB"           # IC-9700
+export TEST_MODE_RIG_B="keep"             # FT-818: no mode sent; DIG/USER-U is set on the radio
 export BAND2M_MIN_HZ=144500000            # the runner refuses to key outside this range
 export BAND2M_MAX_HZ=144750000
 

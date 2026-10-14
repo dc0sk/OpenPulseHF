@@ -15,6 +15,29 @@ this ledger adds the design rationale and the actually-observed results per chan
 
 ---
 
+## 2026-10-14 — On-air runners only ever lower a rig's power; the FT-818 keeps its front antenna (work plan M3)
+
+**Change.** The station owner's rules for the FT-818 on rpi53: low power, never increased; the front
+antenna stays selected; the mode is checked. `run-onair-twin-ota.sh` sent its profile's `RFPOWER`
+unconditionally, and `run-onair-ic9700-ft991a.sh` did too and restored the pre-run reading at cleanup,
+so either could raise a rig's power. Both now go through `rig_power_lower_only`
+(`scripts/lib/rig-power.sh`): power is sent only when the reading is in Hamlib's 0–1 scale and the
+request is strictly below it; anything else leaves the rig alone and logs why. The twin runner takes a
+mode per station, and `keep` (both runners) sends no mode, so the FT-818's DIG/USER-U set on the rig is
+not overwritten. The FT-818 profile and setup guide now say FRONT antenna (was REAR), L1 0.5 W on the
+front panel (was `B_RFPOWER=0.5`, about 3 W), mode `keep`, and station B on rpi53.
+
+**Evidence from the rig.** A read-only CAT check on rpi53 (2026-10-14): Hamlib 4.6.2 model 1041 cannot
+set any level but `BAND_SELECT`, reads `RFPOWER` as `10` (out of scale), and cannot read the antenna.
+
+**Tests → results.** `scripts/test-rig-power.sh`, new, in the gate: 8 helper cases, the no-request case
+reads nothing, an unreachable station under `set -euo pipefail` leaves power alone and does not end the
+run, and neither runner sends `L RFPOWER` directly → `RIG-POWER: PASS`. Before the runner edits it
+failed on both runners' direct sends; sabotage (allow raises; ignore the scale check; drop the
+`set -e` guard) each fails exactly the case that guards it.
+
+---
+
 ## 2026-10-14 — Key-to-audio after the device-name cache, measured on both stations (work plan M2)
 
 **Change.** None to code: the post-merge station measurement the cache's design registered.
