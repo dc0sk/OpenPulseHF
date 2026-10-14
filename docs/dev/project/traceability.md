@@ -15,6 +15,19 @@ this ledger adds the design rationale and the actually-observed results per chan
 
 ---
 
+## 2026-10-14 — Key-to-audio after the device-name cache, measured on both stations (work plan M2)
+
+**Change.** None to code: the post-merge station measurement the cache's design registered.
+
+**Tests → results.** `key_to_audio_by_stage` (release, `--ignored`), `main` at #1511, capture held, five
+runs per station, run by the maintainer. rpi51 + IC-9700: a cache hit opens in 99.4–101.3 ms (one run
+228.3 ms) against 567–684 ms before; the miss in run 1 takes 611.8 ms. rpi53 + FT-818: a hit opens in
+31.3–31.5 ms against 239–256 ms; the miss takes 223.6 ms. Write → first sample ≤ 0.1 ms on both. rpi51
+misses the 45 ms estimate; the hit path's per-device config query, left UNCHECKED in the design, is the
+likely cause (match index 3 against 1), not measured.
+
+---
+
 ## 2026-10-13 — Key-to-audio: cache the resolved device name, scan only to it (work plan M2)
 
 **Change.** An open by device name no longer names every device each time. `CpalBackend` caches the
