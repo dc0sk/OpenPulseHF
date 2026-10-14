@@ -86,6 +86,29 @@ What the measurement settles:
 - **Expected with the cache** (derived, not run): `open_output` ≈ pass 2 + the open, about 47–64 ms,
   so key-to-audio about 0.19–0.21 s on rpi53, held. The post-merge probe settles it.
 
+**After the cache, measured** (2026-10-14, `main` at #1511, capture held, five runs per station; run
+1 resolves in full, runs 2–5 are cache hits):
+
+| | rpi51 + IC-9700 | rpi53 + FT-818 |
+|---|---|---|
+| full scan, every device (16 / 8) | 514–541 ms | 192–193 ms |
+| match index | 3 | 1 |
+| `open_output`, run 1 (miss) | 611.8 ms | 223.6 ms |
+| `open_output`, runs 2–5 (hit) | **99.4–101.3 ms**, one 228.3 ms | **31.3–31.5 ms** |
+| write → first sample | ≤ 0.1 ms | ≤ 0.1 ms |
+| write → drained − audio | 143–146 ms | 142.4–142.6 ms |
+| **key-to-first-sample, hit** | **99–101 ms** (one 228) | **31 ms** |
+| before the cache (`open_output`, held) | 567–684 ms | 239–256 ms |
+
+- **The saving per keyed turn** is about 0.47–0.58 s on rpi51 and 0.21–0.22 s on rpi53.
+- **rpi53 beat the estimate** (31 ms against 47–64 ms). **rpi51 missed it** (about 100 ms against
+  45 ms). The design left the per-device config query on the hit path UNCHECKED, and the hit scans to
+  index 3 on rpi51 against index 1 on rpi53, so that query is the likely difference. No run timed it
+  alone, so this is the likely cause, not a measured one.
+- **rpi51's run 5 (228 ms)** is unexplained: one run in five.
+- **First sample:** the write is popped within 0.1 ms, so key-to-first-sample equals the open.
+  The 142–146 ms drain is device-side latency after the samples are taken, not start-up.
+
 ## Where the time sits
 
 `keyed_transmit` asserts PTT and then runs the transmit closure. Inside it come

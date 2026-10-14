@@ -13,16 +13,10 @@ asks first within each section. Report results in chat or as a comment on the li
 
 ## Now — unblocks Release 1 work
 
-- [ ] **After the device-name cache merges, re-run the key-to-audio probe on rpi51 and rpi53** (work
-  plan M2, key-to-audio gap; the rpi51 agent session can do rpi51). Same command on both stations. It writes **silence** and does not touch PTT.
-  ```bash
-  git checkout main && git pull && git log --oneline -1
-  env PROBE_DEVICE='plughw:CARD=CODEC,DEV=0' PROBE_INPUT_DEVICE='plughw:CARD=CODEC,DEV=0' \
-    cargo test --release -p openpulse-audio --features cpal-backend --lib key_to_audio -- --ignored --nocapture
-  ```
-  Expected from run 2 on (run 1 resolves in full): `open_output` near 45 ms on rpi51 and 50–65 ms on
-  rpi53. Paste the five `run …`
-  lines; they also give key-to-first-sample, the number the G1 leader check is set against.
+- [x] **Key-to-audio probe re-run after the cache, rpi51 and rpi53** (done 2026-10-14, `main` at
+  #1511, capture held). A cache hit opens in **99–101 ms on rpi51** (one run 228 ms) and **31 ms on
+  rpi53**, against 567–684 ms and 239–256 ms before; the first sample follows in ≤ 0.1 ms. Full table in
+  `design/key-to-audio-gap.md`, *After the cache, measured*.
 
 - [x] **Key-to-audio probe on rpi53, FT-818 interface** (done 2026-10-14, `main` after #1510). The
   station's device is **`plughw:CARD=CODEC,DEV=0`** (the FT-818's USB sound interface; it appears only
