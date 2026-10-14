@@ -47,10 +47,13 @@ export B_REPO_DIR='${HOME}/openpulse/OpenPulseHF'
 
 # ── RF parameters ─────────────────────────────────────────────────────────────
 # Pick a band/frequency legal for both stations; keep power low for first passes.
-export TEST_FREQ_HZ=14070000             # FILL IN (e.g. 14070000 / 7040000 / 144640000)
+export TEST_FREQ_HZ=144640000            # 2 m (decision 13: HF only with the release candidate)
+# export BAND_MIN_HZ=14000000; export BAND_MAX_HZ=14350000   # the runner refuses anything outside 2 m otherwise
 export TEST_MODE_RIG="USB"               # USB | PKTUSB depending on the rig
-export A_RFPOWER=0.10                     # 0.0–1.0 fraction of full power
-export B_RFPOWER=0.10
+# export B_TEST_MODE_RIG="keep"           # per station; `keep` sends no mode (FT-818: DIG/USER-U on the rig)
+# export B_TEST_MODE_EXPECT="..."         # with `keep`: the `rigctl m` reading; the run stops on a mismatch
+export A_RFPOWER=0.10                     # 0.0–1.0; the runner only LOWERS power to this, never raises it
+export B_RFPOWER=0.10                     # empty = leave this rig's power alone (FT-818: L1 on the panel)
 
 # ── OTA / modem ───────────────────────────────────────────────────────────────
 # fast = the full ladder (SL1-SL14, up to ~2 kHz); robust = the same ladder capped at SL6 (<= 500 Hz).

@@ -2,7 +2,7 @@
 project: openpulsehf
 doc: docs/openpulse-manual.md
 status: living
-last_updated: 2026-10-02
+last_updated: 2026-10-14
 ---
 
 # OpenPulseHF Complete Manual
@@ -1743,7 +1743,8 @@ Supporting scripts: `onair-preflight.sh` (env/binary/callsign checks),
 `onair-generate-report.sh` (Phase 5.5-reg markdown), `onair-bundle-evidence.sh`
 (timestamped evidence dir with `metadata.json`, SHA-256, git SHA). Key on-air
 vars: `A_SSH`/`B_SSH`, `CALLSIGN_A`/`CALLSIGN_B`, `*_HAMLIB_MODEL`, `*_CAT_PORT`,
-`*_PTT_TYPE`, `TEST_FREQ_HZ` (band-enforced), `A_RFPOWER`/`B_RFPOWER` (default 0.05).
+`*_PTT_TYPE`, `TEST_FREQ_HZ` (band-enforced), `A_RFPOWER`/`B_RFPOWER` (default 0.05; the runners
+only ever lower a rig's power to it, never raise it, and an empty value leaves the rig alone).
 
 ---
 
