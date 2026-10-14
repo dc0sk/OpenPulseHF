@@ -15,6 +15,39 @@ this ledger adds the design rationale and the actually-observed results per chan
 
 ---
 
+## 2026-10-13 — Key-to-audio: cache the resolved device name, scan only to it (work plan M2)
+
+**Change.** An open by device name no longer names every device each time. `CpalBackend` caches the
+resolved system name per (direction, selector). A cached open scans the direction's devices only up
+to its match; that removes pass 1 (525–540 ms on rpi51) from every keyed transmit and every capture
+reopen. No `cpal::Device` or stream is held between opens.
+
+**Decision.** `docs/dev/design/key-to-audio-gap.md` round 2, reviewed with no blocking finding
+(`docs/dev/reviews/review-key-to-audio-gap.md`). Per the review: a vanished name resolves from the
+failed scan's own names, so there is no second enumeration in the keyed window (finding 4); the
+lock is held for get/insert only and recovers from poisoning (finding 6); a stream that fails to
+build keeps the name, which was just matched exactly. The implementation was reviewed too (record in
+the review doc): the unit tests now drive the production `scan`, and the direction test asserts hits. The probe now reports key-to-first-sample and the match's
+index in device order (findings 1 and 3).
+
+**Implementation.** `crates/openpulse-audio/src/device_cache.rs` (`scan`, generic over the device
+type; `NameCache::select`; `resolve_name_from`); `cpal_backend.rs` (`select_cpal_device` removed;
+`open_output_stream`; `OutQueue::first_played`, `first_sample_delay`, logged only at debug level).
+
+**Tests → results.** `device_cache::tests` (6): one full scan for N opens, a vanished name resolved
+without a second full enumeration and its new name cached, an unplugged card evicted, directions
+cached apart (each a hit afterwards), ambiguity never cached, and `scan` stopping at its target. All
+pass; sabotage-verified on the first version (no insert: 3 of 6 fail; a second enumeration on the
+fallback: 2 of 6 fail) and on `scan` (the match's own name pushed: 1 fails). The first run hung: a lock guard in the `match`
+scrutinee deadlocked the eviction, fixed by binding first. `openpulse-audio` with `cpal-backend`:
+37 passed, 0 failed, including the 4 ALSA `device_enumeration` tests; clippy clean on both feature
+sets. `GATE: PASS 93fafb2b clean` (367 suites, 2 709 passed, 0 failed). Before the cache, the B station
+(rpi53, FT-818 interface, capture held) measured key-to-audio 382–399 ms, pass 1 192 ms of it
+(2026-10-14); rpi51 707–828 ms, pass 1 525–540 ms. The station effect is pending the post-merge
+probe re-run on both stations (maintainer to-do).
+
+---
+
 ## 2026-10-13 — #1460 round 4b: a failed burst moves the ladder only when its NACK is keyed (work plan M2)
 
 **Change.** A failed OTA burst whose NACK the daemon's budget will not key is no ladder evidence:

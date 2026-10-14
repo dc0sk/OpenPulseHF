@@ -2,7 +2,7 @@
 project: openpulsehf
 doc: docs/dev/reviews/review-key-to-audio-gap.md
 status: resolved
-last_updated: 2026-10-12
+last_updated: 2026-10-14
 ---
 
 # Review: the key-to-audio gap (round 1, 2026-10-11)
@@ -225,3 +225,34 @@ CLI gains nothing, as the design says.
 The design text is revised for findings 1–6 and 9 (2026-10-12). Implementation follows in its own
 PR. It goes ahead without a further review round: no finding is blocking, and the corrections
 concern the claims and the error path, not the mechanism.
+
+---
+
+# Implementation review (2026-10-13): the name cache
+
+Fable, read-only, on the implementing commit, against cpal 0.15.3's ALSA host. The prompt asked
+whether `scan_devices` can retain a device while enumerating, whether the cache lock is ever held
+across a scan, how each error path evicts, whether the first-sample stamp can change audio, flush or
+PTT release, whether the `open_output` split changes any caller, and whether the tests can fail.
+
+**Verdict: does not block Release 1; nothing blocking.** It changes how the device is found, not
+when PTT asserts or releases.
+
+**Should fix, all taken:**
+1. The test host's scan was a twin of `scan_devices`, and `scan_devices` had no test (verification
+   mechanic 5). `scan` is now generic over the device type, and the tests drive it.
+2. Three tests asserted a full-scan count that a cache that never inserts also produces. The
+   direction test now asserts that a second open in each direction is a hit; the eviction test
+   went with eviction (item 3).
+3. Evicting on a stream build or `play` failure bought nothing: the name was just matched exactly,
+   so the failure says nothing about it, and the next keyed open paid a full enumeration. Removed.
+
+**Park, two taken:** the first-sample debug line now reads its lock only when debug logging is
+on; the design says a vanished name costs no second *full* enumeration, and that a warm cache keeps
+a substring pick where a fresh resolve would say Ambiguous. Left as is: a reused stream would
+report its first-ever delay (every transmit opens a fresh one); the output's `play` failure in
+`write` does not evict (consistent now that nothing does).
+
+**Checked and fine:** no device is held across `next()`; only an exact-name match is returned; the
+lock is never held across a scan; every error path; the stamp touches neither the samples nor the
+#1367 drain latch; `open_output` delegates to an identical body, and the trait is unchanged.

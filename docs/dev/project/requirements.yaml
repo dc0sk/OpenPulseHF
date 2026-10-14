@@ -921,6 +921,7 @@ capabilities:
   CAP-62:
     code:
     - crates/openpulse-audio/src/cpal_backend.rs
+    - crates/openpulse-audio/src/device_cache.rs
     - crates/openpulse-audio/src/fault.rs
     - crates/openpulse-audio/src/flush.rs
     - crates/openpulse-audio/src/lib.rs
