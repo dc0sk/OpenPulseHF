@@ -596,6 +596,7 @@ restore_rig_state_a() {
     [[ -n "$A_SAVED_RFPOWER" && "$A_SAVED_RFPOWER" != "na" ]] && rig_power_lower_only ssh_a "${A_RIGCTLD_ADDR}:${A_RIGCTLD_PORT}" "$A_SAVED_RFPOWER" "${A_LABEL}"
     [[ -n "$A_SAVED_MICGAIN" && "$A_SAVED_MICGAIN" != "na" ]] && ssh_a "rigctl -m 2 -r ${A_RIGCTLD_ADDR}:${A_RIGCTLD_PORT} L MICGAIN ${A_SAVED_MICGAIN} >/dev/null 2>&1 || true"
     [[ -n "$A_SAVED_COMP" && "$A_SAVED_COMP" != "na" ]] && ssh_a "rigctl -m 2 -r ${A_RIGCTLD_ADDR}:${A_RIGCTLD_PORT} L COMP ${A_SAVED_COMP} >/dev/null 2>&1 || true"
+    return 0  # a false final test must not fail the function and abort cleanup under `set -e`
 }
 
 restore_rig_state_b() {
@@ -605,6 +606,7 @@ restore_rig_state_b() {
     [[ -n "$B_SAVED_RFPOWER" && "$B_SAVED_RFPOWER" != "na" ]] && rig_power_lower_only ssh_b "${B_RIGCTLD_ADDR}:${B_RIGCTLD_PORT}" "$B_SAVED_RFPOWER" "${B_LABEL}"
     [[ -n "$B_SAVED_MICGAIN" && "$B_SAVED_MICGAIN" != "na" ]] && ssh_b "rigctl -m 2 -r ${B_RIGCTLD_ADDR}:${B_RIGCTLD_PORT} L MICGAIN ${B_SAVED_MICGAIN} >/dev/null 2>&1 || true"
     [[ -n "$B_SAVED_COMP" && "$B_SAVED_COMP" != "na" ]] && ssh_b "rigctl -m 2 -r ${B_RIGCTLD_ADDR}:${B_RIGCTLD_PORT} L COMP ${B_SAVED_COMP} >/dev/null 2>&1 || true"
+    return 0  # a false final test must not fail the function and abort cleanup under `set -e`
 }
 
 build_on_a() {
@@ -695,8 +697,22 @@ cleanup_all() {
 # width. So this field is a SECONDARY record — the authoritative filter-width evidence is the
 # occupied bandwidth measured from the captured audio, which passed through the filter. Recording
 # both is the point: disagreement is the #1060 tell.
+# True when the station's Hamlib model takes Yaesu's ASCII CAT (`RG0;`): the FT-991/991A family.
+RG0_RAW_MODELS="${RG0_RAW_MODELS:-1035}"
+rg0_raw_ok() {  # model
+    local model="$1" m
+    for m in $RG0_RAW_MODELS; do [[ "$model" == "$m" ]] && return 0; done
+    return 1
+}
+
 read_rig_state_a() {
     local rc_a="rigctl -m 2 -r ${A_RIGCTLD_ADDR}:${A_RIGCTLD_PORT}"
+    # The raw `RG0;` read is Yaesu new-CAT (ASCII) only. Sent to the FT-817/818 (5-byte binary CAT)
+    # it desynchronises the command framing, so it is gated on the model.
+    local rgraw_a="echo na"
+    if rg0_raw_ok "$A_HAMLIB_MODEL"; then
+        rgraw_a="${rc_a} w 'RG0;' 2>/dev/null | tr -cd '[:print:]' | sed -n 's/.*RG0\\([0-9][0-9][0-9]\\);.*/\\1/p' | tail -n1 || echo na"
+    fi
     ssh_a "
         _mode_out=\$(${rc_a} m 2>/dev/null | grep -v Hamlib || echo na)
         _sink_vol=\$(pactl get-sink-volume @DEFAULT_SINK@ 2>/dev/null \
@@ -715,7 +731,7 @@ read_rig_state_a() {
         printf 'SQL:%s\n'      \"\$(${rc_a} l SQL      2>/dev/null | grep -v Hamlib | tail -n1 || echo na)\"
         printf 'VOX:%s\n'      \"\$(${rc_a} l VOX      2>/dev/null | grep -v Hamlib | tail -n1 || echo na)\"
         printf 'RFGAIN:%s\n'   \"\$(${rc_a} l RFGAIN   2>/dev/null | grep -v Hamlib | tail -n1 || echo na)\"
-        printf 'RFGAINRAW:%s\n' \"\$(${rc_a} w 'RG0;' 2>/dev/null | tr -cd '[:print:]' | sed -n 's/.*RG0\\([0-9][0-9][0-9]\\);.*/\\1/p' | tail -n1 || echo na)\"
+        printf 'RFGAINRAW:%s\n' \"\$(${rgraw_a})\"
         printf 'PREAMP:%s\n'   \"\$(${rc_a} l PREAMP   2>/dev/null | grep -v Hamlib | tail -n1 || echo na)\"
         printf 'SWR:%s\n'      \"\$(${rc_a} l SWR      2>/dev/null | grep -v Hamlib | tail -n1 || echo na)\"
         printf 'STRENGTH:%s\n' \"\$(${rc_a} l STRENGTH 2>/dev/null | grep -v Hamlib | tail -n1 || echo na)\"
@@ -726,6 +742,12 @@ read_rig_state_a() {
 
 read_rig_state_b() {
     local rc_b="rigctl -m 2 -r ${B_RIGCTLD_ADDR}:${B_RIGCTLD_PORT}"
+    # The raw `RG0;` read is Yaesu new-CAT (ASCII) only. Sent to the FT-817/818 (5-byte binary CAT)
+    # it desynchronises the command framing, so it is gated on the model.
+    local rgraw_b="echo na"
+    if rg0_raw_ok "$B_HAMLIB_MODEL"; then
+        rgraw_b="${rc_b} w 'RG0;' 2>/dev/null | tr -cd '[:print:]' | sed -n 's/.*RG0\\([0-9][0-9][0-9]\\);.*/\\1/p' | tail -n1 || echo na"
+    fi
     ssh_b "
         _mode_out=\$(${rc_b} m 2>/dev/null | grep -v Hamlib || echo na)
         _src_vol=\$(pactl get-source-volume @DEFAULT_SOURCE@ 2>/dev/null \
@@ -744,7 +766,7 @@ read_rig_state_b() {
         printf 'SQL:%s\n'      \"\$(${rc_b} l SQL      2>/dev/null | grep -v Hamlib | tail -n1 || echo na)\"
         printf 'VOX:%s\n'      \"\$(${rc_b} l VOX      2>/dev/null | grep -v Hamlib | tail -n1 || echo na)\"
         printf 'RFGAIN:%s\n'   \"\$(${rc_b} l RFGAIN   2>/dev/null | grep -v Hamlib | tail -n1 || echo na)\"
-        printf 'RFGAINRAW:%s\n' \"\$(${rc_b} w 'RG0;' 2>/dev/null | tr -cd '[:print:]' | sed -n 's/.*RG0\\([0-9][0-9][0-9]\\);.*/\\1/p' | tail -n1 || echo na)\"
+        printf 'RFGAINRAW:%s\n' \"\$(${rgraw_b})\"
         printf 'PREAMP:%s\n'   \"\$(${rc_b} l PREAMP   2>/dev/null | grep -v Hamlib | tail -n1 || echo na)\"
         printf 'SWR:%s\n'      \"\$(${rc_b} l SWR      2>/dev/null | grep -v Hamlib | tail -n1 || echo na)\"
         printf 'STRENGTH:%s\n' \"\$(${rc_b} l STRENGTH 2>/dev/null | grep -v Hamlib | tail -n1 || echo na)\"
@@ -899,7 +921,7 @@ preflight_check() {
     for _entry in "${A_LABEL}:${a_rfpower}" "${B_LABEL}:${b_rfpower}"; do
         local _lbl="${_entry%%:*}" _val="${_entry#*:}"
         if [[ "$_val" != "na" ]] && [[ "$(_pf_lt "$_val" 0.01)" == "1" ]]; then
-            echo "  ERROR: ${_lbl} rfpower=${_val} is effectively 0 — set A_RFPOWER/B_RFPOWER in the profile" >&2
+            echo "  ERROR: ${_lbl} rfpower=${_val} is effectively 0 — raise it on the rig (the runner only lowers power)" >&2
             fail=1
         fi
     done
@@ -916,11 +938,24 @@ preflight_check() {
         fail=1
     fi
 
-    # --- WARN: mode should match TEST_MODE_RIG ---
-    for _entry in "${A_LABEL}:${a_mode}" "${B_LABEL}:${b_mode}"; do
-        local _lbl="${_entry%%:*}" _val="${_entry#*:}"
-        if [[ "$_val" != "na" && "$_val" != "${TEST_MODE_RIG}" && "$_val" != "USB" ]]; then
-            echo "  WARN: ${_lbl} mode=${_val} — expected ${TEST_MODE_RIG} or USB" >&2
+    # --- Mode, per station. A station on `keep` (mode set on the rig, e.g. the FT-818's DIG/USER-U)
+    # must name the reading it expects in TEST_MODE_EXPECT_A/B, and a mismatch stops the run: the
+    # FT-818 in USB keys with no DATA-jack audio. Otherwise the reading should be the mode sent.
+    for _entry in "A:${A_LABEL}:${a_mode}:${TEST_MODE_RIG_A}:${TEST_MODE_EXPECT_A:-}" \
+                  "B:${B_LABEL}:${b_mode}:${TEST_MODE_RIG_B}:${TEST_MODE_EXPECT_B:-}"; do
+        local _side _lbl _val _sent _expect
+        IFS=: read -r _side _lbl _val _sent _expect <<< "$_entry"
+        if [[ "$_sent" == "keep" ]]; then
+            if [[ -z "$_expect" ]]; then
+                echo "  ERROR: ${_lbl} mode is 'keep' but TEST_MODE_EXPECT_${_side} is unset. Set the mode on" >&2
+                echo "         the rig, read it (rigctl m), and put that reading in TEST_MODE_EXPECT_${_side}." >&2
+                fail=1
+            elif [[ "$_val" != "$_expect" ]]; then
+                echo "  ERROR: ${_lbl} mode reads '${_val}', expected '${_expect}' (set on the rig)" >&2
+                fail=1
+            fi
+        elif [[ "$_val" != "na" && "$_val" != "$_sent" && "$_val" != "USB" ]]; then
+            echo "  WARN: ${_lbl} mode=${_val} — expected ${_sent} or USB" >&2
         fi
     done
 

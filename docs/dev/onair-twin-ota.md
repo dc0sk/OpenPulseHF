@@ -39,7 +39,10 @@ channel. Both directions' levels/spectra show side by side in twinview.
   power low (`A_RFPOWER`/`B_RFPOWER` default 0.10) for first passes. The runner only ever **lowers**
   a rig's power to that value, never raises it (`scripts/lib/rig-power.sh`); set one empty to leave
   that rig alone. `A_TEST_MODE_RIG`/`B_TEST_MODE_RIG` override `TEST_MODE_RIG` per station, and
-  `keep` sends no mode (the FT-818's DIG/USER-U is set on the rig).
+  `keep` sends no mode (the FT-818's DIG/USER-U is set on the rig); with `keep`, `*_TEST_MODE_EXPECT`
+  must name the `rigctl m` reading or the run stops before anything is keyed. The runner refuses a
+  `TEST_FREQ_HZ` outside `BAND_MIN_HZ`–`BAND_MAX_HZ` (default 144.500–144.750 MHz): another band would
+  also switch a rig's per-band settings, the FT-818's antenna among them.
 - Real callsigns (the daemon refuses to start as `N0CALL`).
 
 ## Setup

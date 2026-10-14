@@ -46,12 +46,22 @@ READING=0.5; SENT=()
 rig_power_lower_only fake_station 127.0.0.1:4532 "" test >/dev/null
 [[ "${#SENT[@]}" == 0 ]] || { echo "FAIL: no request still sent: ${SENT[*]}"; fails=$((fails + 1)); }
 
-# Neither runner may send RFPOWER except through the helper: a bare `L RFPOWER` is the old defect.
-for f in scripts/run-onair-twin-ota.sh scripts/run-onair-ic9700-ft991a.sh; do
-    if grep -n 'L RFPOWER' "$f"; then
-        echo "FAIL: $f sends RFPOWER directly; use rig_power_lower_only"
-        fails=$((fails + 1))
-    fi
-done
+# No script may set power except through the helper: a direct send is the old defect. Every script
+# under scripts/ is scanned (comment lines skipped), for Hamlib's `L`/`\set_level` and the raw CAT
+# power commands (Yaesu `PC`, Icom hex). A level held in a variable (`L $lvl`) is not caught.
+SENDS_POWER='(\\set_level|(^|[^A-Za-z_])L)[[:space:]"'"'"']+RFPOWER|w[[:space:]]+['"'"'"](PC[0-9]|\\0x)'
+scan() { grep -nE "$SENDS_POWER" | grep -vE '^[^:]*:[0-9]+:[[:space:]]*#|^[0-9]+:[[:space:]]*#'; }
+# Positive control (verification mechanic 4): the filter must find every planted form.
+planted=$'rigctl L RFPOWER 0.5\nx \\set_level RFPOWER 1\nrigctl L  RFPOWER 1\nrigctl "L" RFPOWER 1\nrigctl w \'PC005;\''
+found="$(printf '%s\n' "$planted" | scan | wc -l)"
+[[ "$found" == 5 ]] || { echo "FAIL: the power-send filter found $found of 5 planted sends"; fails=$((fails + 1)); }
+hits="$(grep -rnE "$SENDS_POWER" --include='*.sh' scripts \
+    | grep -v '^scripts/lib/rig-power.sh:\|^scripts/test-rig-power.sh:' \
+    | grep -vE '^[^:]+:[0-9]+:[[:space:]]*#')"
+if [[ -n "$hits" ]]; then
+    printf '%s\n' "$hits"
+    echo "FAIL: a script sends RF power directly; use rig_power_lower_only"
+    fails=$((fails + 1))
+fi
 
 if [[ "$fails" == 0 ]]; then echo "RIG-POWER: PASS"; else echo "RIG-POWER: FAIL ($fails)"; exit 1; fi

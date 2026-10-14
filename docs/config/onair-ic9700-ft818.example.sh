@@ -12,17 +12,14 @@
 # Station B". Everything rig-B-specific is set below; no script edit is needed.
 #
 # ============================ CONFIRM BEFORE THE RUN ============================
-# The SCU-17 was NOT connected when this profile was written, so every value marked
-# TODO-CONFIRM must be filled in from the real hardware. Discovery commands are given
-# inline. See docs/dev/onair-ic9700-ft818-setup.md for the full station procedure,
+# Values marked TODO-CONFIRM must be filled in from the real hardware; discovery commands are
+# given inline. Read on rpi53 (2026-10-14): CAT baud, audio device, the CAT port's interface. See docs/dev/onair-ic9700-ft818-setup.md for the full station procedure,
 # including the FT-818 settings made on the radio and not configurable here: the FRONT antenna
 # (selected, and it stays selected), L1 power (0.5 W; never raised), DIG/USER-U mode.
 # ================================================================================
 
 # ── SSH targets ────────────────────────────────────────────────────────────────
-# A is remote over the VPN. B is THIS laptop; the runner always uses ssh, so B points
-# at localhost — the laptop must run sshd and accept a key for the local user.
-#   Enable once:  sudo systemctl enable --now sshd   (and add your key to authorized_keys)
+# A is remote over the VPN; B is rpi53. The runner reaches both over ssh.
 export A_SSH="dc0sk@dc0sk-rpi51"          # over the VPN tunnel
 export B_SSH="dc0sk@dc0sk-rpi53"          # FT-818 on rpi53
 export SSH_OPTS='-o BatchMode=yes -o ConnectTimeout=10 -o ServerAliveInterval=30'
@@ -50,9 +47,9 @@ export A_AUDIO_DEVICE_LABEL="IC-9700 USB Audio CODEC (PulseAudio)"
 export A_REPO_DIR='${HOME}/git/OpenPulseHF'
 export A_RFPOWER=0.05                     # IC-9700: ~5 W of 100 W (0.5 would be ~50 W — do not)
 
-# ── Station B — FT-818 + SCU-17 on THIS laptop ─────────────────────────────────
+# ── Station B — FT-818 + SCU-17 on rpi53 ─────────────────────────────────
 # CAT serial port of the SCU-17. TODO-CONFIRM once plugged in:
-#   ls -l /dev/serial/by-id/    # the SCU-17 enumerates a virtual COM port for CAT
+#   ls -l /dev/serial/by-id/    # the SCU-17's CP2105 has two ports; CAT is the FIRST (-if00-port0)
 # On rpi53 (2026-10-14) CAT answered on the CP2105's FIRST port (...CP2105...-if00-port0).
 export B_CAT_PORT="TODO-CONFIRM"          # the full /dev/serial/by-id/...CP2105...-if00-port0 path
 # FT-818 CAT rate — set the FT-818 menu "CAT RATE" to match. 38400 is responsive.
@@ -64,7 +61,7 @@ export B_PTT_TYPE="CAT"
 export B_PTT_PORT=""                      # only needed if B_PTT_TYPE=RTS (the SCU-17 port)
 export B_RIGCTLD_ADDR="127.0.0.1"
 export B_RIGCTLD_PORT=4532
-# SCU-17 USB Audio CODEC on this laptop. TODO-CONFIRM once plugged in:
+# SCU-17 USB Audio CODEC on rpi53. Found with:
 #   arecord -l | grep -i codec      # find the card
 #   ./target/release/openpulse --backend cpal devices | grep -i codec   # exact cpal name
 export B_AUDIO_DEVICE="plughw:CARD=CODEC,DEV=0"   # the SCU-17 CODEC on rpi53 (2026-10-14)
@@ -79,6 +76,9 @@ export B_RFPOWER=""
 export TEST_FREQ_HZ=144640000             # 144.640 MHz (moved off 144.651 to dodge a 1286 Hz birdie)
 export TEST_MODE_RIG_A="PKTUSB"           # IC-9700
 export TEST_MODE_RIG_B="keep"             # FT-818: no mode sent; DIG/USER-U is set on the radio
+# What `rigctl m` reads once DIG/USER-U is set on the FT-818. TODO-CONFIRM on the rig: Hamlib may
+# report it as RTTY (unverified). The run stops if the reading differs or this is unset.
+export TEST_MODE_EXPECT_B="TODO-CONFIRM"
 export BAND2M_MIN_HZ=144500000            # the runner refuses to key outside this range
 export BAND2M_MAX_HZ=144750000
 
@@ -93,7 +93,7 @@ export TELEMETRY_SAMPLES=40
 export TELEMETRY_INTERVAL=0.2
 
 # ── Notes carried into the report metadata ─────────────────────────────────────
-export ON_AIR_FIRST_PASS_NOTE="IC-9700(rpi51,stationary) <-> FT-818(laptop,portable), 2 m 144.640, low power, agreed window"
+export ON_AIR_FIRST_PASS_NOTE="IC-9700(rpi51,stationary) <-> FT-818(rpi53), 2 m 144.640, low power, agreed window"
 
 # The rpi51<->rpi52 audio-loopback regression from the FT-991A profile is NOT wired
 # here (rpi52 is not part of this pairing). Leave it disabled.

@@ -63,11 +63,12 @@ do not skip it.
 
 ---
 
-## Station B — FT-818 + SCU-17, on this laptop
+## Station B — FT-818 + SCU-17, on rpi53
 
 The SCU-17 presents, over one USB cable: a **USB Audio CODEC** (TX/RX audio via the FT-818 DATA/ACC
-jack) and a **virtual COM port for CAT** (to the FT-818 CAT jack). PTT is either CAT keying over that
-COM port or the SCU-17's hardware RTS line.
+jack) and a **CP2105 dual USB serial bridge**: two ports, of which the **first** (`…-if00-port0`)
+answered CAT at 38400 baud on rpi53 (2026-10-14). PTT is either CAT keying over that port or the
+SCU-17's hardware RTS line.
 
 ### B.1 — Discover the device names (do this once the SCU-17 is plugged in)
 
@@ -84,7 +85,7 @@ lsusb | grep -iE 'burr|texas|silicon|ftdi'
 ```
 
 Put the results into `B_AUDIO_DEVICE` and `B_CAT_PORT` in the config profile. **These are marked
-`TODO-CONFIRM` there because the interface was not connected when the profile was written — do not run
+`TODO-CONFIRM` there until read from the hardware — do not run
 until they are real values.** (Offer: with the SCU-17 plugged in, this can be filled in interactively.)
 
 ### B.2 — FT-818 radio settings (set on the radio; not configurable from software)
@@ -127,27 +128,26 @@ Run in this order; stop on the first failure.
 1. **VPN + SSH reachability.**
    ```bash
    ssh dc0sk@dc0sk-rpi51 'echo rpi51 ok'        # over the VPN
-   ssh dc0sk@localhost   'echo laptop ok'       # Station B is local; needs sshd on the laptop
+   ssh dc0sk@dc0sk-rpi53 'echo rpi53 ok'        # Station B
    ```
-2. **cpal audio really works on the laptop** (presence of the binary is not capability):
+2. **cpal audio really works on rpi53** (presence of the binary is not capability):
    ```bash
    ./scripts/onair-preflight.sh --strict        # now includes a `--backend cpal devices` probe
    ```
-3. **Phase G0 — the FT-818 receive floor is clean** (the conducted-RFI check; this laptop is exactly
-   where the earlier campaign found birdies). With **no TX anywhere and the SDR stopped**:
+3. **Phase G0 — the FT-818 receive floor is clean** (the conducted-RFI check; the earlier campaign
+   found birdies on the laptop that hosted this station then). With **no TX anywhere and the SDR stopped**:
    ```bash
    # once B_AUDIO_DEVICE is known, point the ALSA capture at the SCU-17 CODEC:
-   scripts/onair-rx-idle-floor.sh plughw:CARD=<SCU17-CODEC>,DEV=0
+   scripts/onair-rx-idle-floor.sh plughw:CARD=CODEC,DEV=0   # the SCU-17 CODEC on rpi53
    ```
-   Exit 0 = clean. If it fails with birdies in 300–2600 Hz, this laptop is conducting RFI into the
+   Exit 0 = clean. If it fails with birdies in 300–2600 Hz, the host is conducting RFI into the
    SCU-17 audio (the documented rig→rig blocker) — apply galvanic USB isolation on the SCU-17 link
    and re-run until it passes. Do the same idle check on the IC-9700 side over SSH.
 4. **Signal-chain gates 1–6** from [onair-signal-chain-verification.md](onair-signal-chain-verification.md),
    with Station B now the FT-818: CAT connectivity, a tone deflecting ALC, a synchronized RX capture
    ≥ 0.005 mean-sq (Gate 3, both directions), carrier at 1500 Hz, one BPSK250 frame decoded.
-5. **SDR monitor up** (`scripts/onair-sdr/sdr_capture.py`) — the RSP2pro on this laptop is co-located
-   with the portable FT-818, so it independently monitors every burst and is the arbiter of any
-   rig-RX result.
+5. **SDR monitor up** (`scripts/onair-sdr/sdr_capture.py`): the RSP2pro independently monitors every
+   burst and is the arbiter of any rig-RX result.
 
 ---
 
@@ -155,7 +155,8 @@ Run in this order; stop on the first failure.
 
 ```bash
 source docs/config/onair-ic9700-ft818.example.sh
-# fill B_CAT_PORT and B_AUDIO_DEVICE first (they are TODO-CONFIRM)
+# fill B_CAT_PORT first (TODO-CONFIRM); set the FT-818 to DIG/USER-U on the radio, read it with
+# `rigctl -m 2 -r 127.0.0.1:4532 m`, and put that reading in TEST_MODE_EXPECT_B, or the run stops
 ./scripts/run-onair-ic9700-ft991a.sh supervise --quick     # BPSK250 x {none, rs, soft-concatenated}
 ```
 

@@ -36,6 +36,22 @@ run, and neither runner sends `L RFPOWER` directly → `RIG-POWER: PASS`. Before
 failed on both runners' direct sends; sabotage (allow raises; ignore the scale check; drop the
 `set -e` guard) each fails exactly the case that guards it.
 
+**Review → fixes** (`docs/dev/reviews/review-rig-power-lower-only.md`, Fable, read-only; not a Release 1
+blocker). Six should-fix findings were taken:
+- the FT-818 profile's dropped global mode aborted every run; the check is now per station;
+- the twin runner had no band guard, and a frequency on another band would switch the FT-818's
+  antenna; it now refuses anything outside 2 m by default;
+- the raw FT-991A `RG0;` command reached the FT-818's binary CAT; it is now gated on the model;
+- `keep` now requires the expected mode reading and stops the run on a mismatch;
+- the tripwire now scans every script, with a positive control;
+- stale docs were corrected.
+
+The pre-existing cleanup abort under `set -e` was also fixed. Re-run: `bash scripts/test-rig-power.sh`
+→ `RIG-POWER: PASS`; a script planted with a direct `L RFPOWER` fails it. The `RG0;` command for model
+1035 is byte-identical to before (a stand-in `ssh_b` prints it); the per-station mode checks pass on
+four cases each (USB against an expected RTTY stops the run; a match passes; `keep` with no expected
+reading stops; a non-`keep` mismatch warns).
+
 ---
 
 ## 2026-10-14 — Key-to-audio after the device-name cache, measured on both stations (work plan M2)

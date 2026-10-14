@@ -37,8 +37,13 @@ A_AUDIO_DEVICE="${A_AUDIO_DEVICE:-default}"; B_AUDIO_DEVICE="${B_AUDIO_DEVICE:-d
 A_REPO_DIR="${A_REPO_DIR:-\$HOME/OpenPulseHF}"; B_REPO_DIR="${B_REPO_DIR:-\$HOME/OpenPulseHF}"
 # 2 m by default (decision 13: HF only with the release candidate). Override for an HF run.
 TEST_FREQ_HZ="${TEST_FREQ_HZ:-144640000}"; TEST_MODE_RIG="${TEST_MODE_RIG:-USB}"
-# Per station; `keep` sends no mode (set it on the rig: the FT-818's DIG/USER-U has no safe CAT name).
+# Per station; `keep` sends no mode (set it on the rig: the FT-818's DIG/USER-U has no safe CAT name),
+# and then *_TEST_MODE_EXPECT must name the reading (`rigctl m`) or the run stops before any keying.
 A_TEST_MODE_RIG="${A_TEST_MODE_RIG:-$TEST_MODE_RIG}"; B_TEST_MODE_RIG="${B_TEST_MODE_RIG:-$TEST_MODE_RIG}"
+A_TEST_MODE_EXPECT="${A_TEST_MODE_EXPECT:-}"; B_TEST_MODE_EXPECT="${B_TEST_MODE_EXPECT:-}"
+# The run refuses a frequency outside this range. A frequency on another band would also switch a
+# rig's per-band settings, the FT-818's FRONT/REAR antenna among them. Widen it only for an HF run.
+BAND_MIN_HZ="${BAND_MIN_HZ:-144500000}"; BAND_MAX_HZ="${BAND_MAX_HZ:-144750000}"
 # Power is only ever LOWERED to these, never raised (scripts/lib/rig-power.sh). Set one to empty
 # to leave that rig's power alone.
 A_RFPOWER="${A_RFPOWER-0.10}"; B_RFPOWER="${B_RFPOWER-0.10}"
@@ -61,6 +66,8 @@ ssh_b() { ssh ${SSH_OPTS} "${B_SSH}" "$@"; }
 
 preflight() {
     [[ -n "$A_SSH" && -n "$B_SSH" ]] || die "A_SSH/B_SSH unset — source the profile first"
+    (( TEST_FREQ_HZ >= BAND_MIN_HZ && TEST_FREQ_HZ <= BAND_MAX_HZ )) \
+        || die "TEST_FREQ_HZ=${TEST_FREQ_HZ} is outside ${BAND_MIN_HZ}-${BAND_MAX_HZ}; set BAND_MIN_HZ/BAND_MAX_HZ for another band"
     [[ "$CALLSIGN_A" != "N0CALL" && "$CALLSIGN_B" != "N0CALL" ]] || die "set real callsigns"
     command -v ssh >/dev/null || die "ssh not found"
 }
@@ -76,12 +83,20 @@ start_rigctld() {  # ssh_fn model cat_port cat_baud ptt_port ptt_type rigctld_po
         pgrep -x rigctld >/dev/null && echo '  [$label] rigctld ok' || { echo '  [$label] rigctld FAILED'; exit 1; }"
 }
 
-tune() {  # ssh_fn rigctld_port rfpower mode label
-    local sshfn="$1" port="$2" power="$3" mode="$4" label="$5"
+tune() {  # ssh_fn rigctld_port rfpower mode expected_reading label; non-zero stops the run
+    local sshfn="$1" port="$2" power="$3" mode="$4" expect="$5" label="$6" now
     echo "  [$label] tune → ${TEST_FREQ_HZ} Hz, mode ${mode}"
     "$sshfn" "rigctl -m 2 -r 127.0.0.1:$port F ${TEST_FREQ_HZ} 2>/dev/null || echo '  [$label] WARN set freq'"
     if [[ "$mode" == "keep" ]]; then
-        echo "  [$label] mode: not touched; rig reads $("$sshfn" "rigctl -m 2 -r 127.0.0.1:$port m 2>/dev/null | head -n1" || echo unreadable)"
+        now="$("$sshfn" "rigctl -m 2 -r 127.0.0.1:$port m 2>/dev/null | head -n1" || true)"
+        echo "  [$label] mode: not touched; rig reads '${now:-unreadable}'"
+        if [[ -z "$expect" ]]; then
+            echo "  [$label] ERROR: mode is 'keep' but its *_TEST_MODE_EXPECT is unset; read the mode set on the rig and put it there" >&2
+            return 1
+        elif [[ "$now" != "$expect" ]]; then
+            echo "  [$label] ERROR: mode reads '${now:-unreadable}', expected '${expect}' (set on the rig)" >&2
+            return 1
+        fi
     else
         "$sshfn" "rigctl -m 2 -r 127.0.0.1:$port M ${mode} 3000 2>/dev/null || echo '  [$label] WARN set mode'"
     fi
@@ -180,8 +195,10 @@ do_run() {
     echo "== run =="
     start_rigctld ssh_a "$A_HAMLIB_MODEL" "$A_CAT_PORT" "$A_CAT_BAUD" "$A_PTT_PORT" "$A_PTT_TYPE" "$A_RIGCTLD_PORT" "$A_LABEL"
     start_rigctld ssh_b "$B_HAMLIB_MODEL" "$B_CAT_PORT" "$B_CAT_BAUD" "$B_PTT_PORT" "$B_PTT_TYPE" "$B_RIGCTLD_PORT" "$B_LABEL"
-    tune ssh_a "$A_RIGCTLD_PORT" "$A_RFPOWER" "$A_TEST_MODE_RIG" "$A_LABEL"
-    tune ssh_b "$B_RIGCTLD_PORT" "$B_RFPOWER" "$B_TEST_MODE_RIG" "$B_LABEL"
+    tune ssh_a "$A_RIGCTLD_PORT" "$A_RFPOWER" "$A_TEST_MODE_RIG" "$A_TEST_MODE_EXPECT" "$A_LABEL" \
+        || die "station A failed its mode check; nothing was keyed"
+    tune ssh_b "$B_RIGCTLD_PORT" "$B_RFPOWER" "$B_TEST_MODE_RIG" "$B_TEST_MODE_EXPECT" "$B_LABEL" \
+        || die "station B failed its mode check; nothing was keyed"
     write_config ssh_a "$CALLSIGN_A" "$GRID_A" "$A_AUDIO_DEVICE" "$A_RIGCTLD_PORT" "$A_LABEL"
     write_config ssh_b "$CALLSIGN_B" "$GRID_B" "$B_AUDIO_DEVICE" "$B_RIGCTLD_PORT" "$B_LABEL"
     launch_daemon ssh_a "$A_REPO_DIR" "$A_LABEL"
