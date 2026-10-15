@@ -205,7 +205,7 @@ fn build_ptt(
 ) -> anyhow::Result<Box<dyn PttController + Send>> {
     // #1258: the ONE builder, shared with the daemon. #1285: a config error refuses startup and an
     // unreachable backend refuses every key until it reconnects — never `NoOpPtt`, which keys.
-    openpulse_ardop::ptt_from_spec(&openpulse_radio::ptt_builder::PttSpec {
+    openpulse_radio::ptt_builder::build_ptt_or_retrying(&openpulse_radio::ptt_builder::PttSpec {
         backend: &cfg.modem.ptt_backend,
         rigctld_addr: &cfg.radio.rigctld_addr,
         device: &cfg.modem.ptt_device,

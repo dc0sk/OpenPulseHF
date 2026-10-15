@@ -15,6 +15,53 @@ this ledger adds the design rationale and the actually-observed results per chan
 
 ---
 
+## 2026-10-15 — Review follow-ups: lower-only station keyers, TNC PTT fails closed, stale comments
+
+- **Requirement/change:** the open points of the documentation review
+  (`docs/dev/reviews/review-docs-revision-2026-10-15.md`) and the code issues its ledger entry
+  listed. (1) `scripts/onair-sdr/keyplay.py` / `keyplay_meter.py` wrote the requested power up to
+  20 W, so they could raise a rig's power, against the station owner's 2026-10-14 rule that tooling
+  only lowers it; `cap_during_tx.sh` sent them to rpi53 by default, which now carries the FT-818
+  (binary CAT). (2) The ARDOP and KISS TNCs fell back to a controller that keys on any PTT build
+  error — #1285 fixed the daemon only. (3) `run-onair-ic9700-ft991a.sh` defaulted to 145.650 MHz,
+  outside its own 2 m guard. (4) Stale comments (`profile.rs`, `handshake_wire.rs`, the config
+  template's `rig_b`), and the CLI's `--pki-url` default (8787) not matching `pki-tooling` (8080).
+  (5) The book PDF predated the revised text. Serves M3 (station tooling) and M2 (the TNC is on the
+  release path).
+- **Design decisions:** the keyers read `PC;` first and write only a lower value, verified; a
+  request at or above the setting keys at the setting; `ID;` is the first byte and on a mismatch
+  nothing more is sent (no unkey either — nothing was keyed). The TNC builder lives in
+  `openpulse_radio::ptt_builder::build_ptt_or_retrying` beside `RetryingPtt`, so the two TNCs
+  cannot drift: config error → refuse to start, unreachable → refuse every key and retry,
+  `"none"` → keys. "GPIO not compiled in" and a CM108 pin out of range are `Config` errors, as the
+  module doc already said. The earlier review's finding 4 (the A/B runner ignores
+  `TEST_MODE_EXPECT` under `keep`) was wrong: `preflight_check` enforces it; the on-air plan is
+  corrected.
+- **Implementation:** `scripts/onair-sdr/keyplay.py`, `keyplay_meter.py` (`lower_power_only`,
+  `gate`, `main`, SIGTERM handler, 5–20 W ceiling), `cap_during_tx.sh` (`STATION` required);
+  `scripts/test-rig-power.sh` (fake-rig drive of both keyers; Python `PC`-write scan with positive
+  and negative controls); `scripts/run-onair-ic9700-ft991a.sh` (`TEST_FREQ_HZ` 144640000);
+  `crates/openpulse-radio/src/ptt_builder.rs` (`build_ptt_or_retrying`), `gpio.rs`, `cm108.rs`;
+  `crates/openpulse-ardop/src/main.rs`, `crates/openpulse-kiss/src/main.rs`;
+  `crates/openpulse-cli/src/cli.rs`; comments in `profile.rs`, `handshake_wire.rs`,
+  `openpulse-config/src/lib.rs`; docs: on-air plan item 9, `scripts/onair-sdr/README.md`, manual,
+  book (+ PDF rebuilt with `scripts/build-book-pdf.sh`, 152 pages), CLI guide.
+- **Tests:** `RIG-POWER` (`scripts/test-rig-power.sh`, run by `gate.sh`): 11 fake-rig cases per
+  keyer plus the scan controls. `ptt_builder::retry_tests`: `a_tnc_with_an_unreachable_backend_refuses_the_key`,
+  `a_tnc_with_no_ptt_configured_still_keys`, `a_tnc_config_error_is_returned_not_swallowed`,
+  `a_cm108_pin_out_of_range_is_a_config_error`, `gpio_not_compiled_in_is_a_config_error`.
+- **Results (run):** `RIG-POWER: PASS`. Sabotages, each restored by `cmp`: keyer without the
+  lower-only guard → FAIL (`raised=True`); keyer that unkeys after a failed ID → FAIL on the FT-818
+  and FT-991 cases; planted f-string `PC` write → FAIL; builder falling back to `no_ptt` on an
+  unreachable backend → `a_tnc_with_an_unreachable_backend_refuses_the_key` FAILED, the `"none"`
+  control passing. `cargo test -p openpulse-radio -p openpulse-ardop -p openpulse-kiss
+  --no-default-features`: rc=0 (radio lib 65, generic CAT 11, rigctld 10; ARDOP lib 9, integration
+  24, PTT and capture suites 2–3 each; KISS lib 3, integration 9, PTT 3, capture 2; 0 failed).
+  `cargo test -p openpulse-daemon --no-default-features --lib ptt`: 15 passed. Clippy
+  (`-D warnings`, all targets) on radio, ardop, kiss, core, daemon, cli, config: clean. `cargo fmt
+  --check`: clean. Review: `docs/dev/reviews/review-review-followups-2026-10-15.md` (no Release 1
+  blocker; 7 should-fix, 4 nits, all taken).
+
 ## 2026-10-15 — Documentation revised against the code: README, user docs, living dev docs
 
 **Change.** Docs only. Every user-facing doc and the living dev docs were checked against the code on

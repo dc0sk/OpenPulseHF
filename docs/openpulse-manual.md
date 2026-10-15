@@ -1659,8 +1659,8 @@ in [§2.5](#25-ardop-tnc-drop-in-path).
 > keyed duration. Those bound the damage; they are not a substitute for controlling who can reach the
 > port.
 >
-> **PTT backend failure.** The ARDOP TNC handles an unusable `ptt_backend` the way the daemon does
-> (#1285). A configuration error (a mistyped backend, `rts`/`dtr` with no `ptt_device`) stops it at
+> **PTT backend failure.** The ARDOP TNC (and the KISS TNC) handle an unusable `ptt_backend` the way
+> the daemon does (#1285). A configuration error (a mistyped backend, `rts`/`dtr` with no `ptt_device`) stops it at
 > startup: `[modem] ptt_backend is unusable; refusing to start rather than transmit into an unkeyed
 > rig`. A real backend that is merely unreachable (rigctld not up yet) starts it with a controller
 > that refuses every key and retries the connection; each refused transmission is skipped and

@@ -69,7 +69,7 @@ impl GpioPtt {
         #[cfg(not(all(target_os = "linux", feature = "gpio")))]
         {
             let _ = (chip, offset, active_low);
-            Err(PttError::Serial(
+            Err(PttError::Config(
                 "GPIO PTT not compiled in; rebuild with --features gpio".into(),
             ))
         }

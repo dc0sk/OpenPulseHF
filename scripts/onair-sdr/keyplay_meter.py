@@ -10,6 +10,7 @@ Usage:   python3 keyplay_meter.py <wav_path> <max_watts>
 Env:     OPHF_PORT, OPHF_BAUD, OPHF_ADEV (see keyplay.py)
 """
 import os
+import signal
 import subprocess
 import sys
 import time
@@ -41,6 +42,7 @@ def meter(s, idx):
         return -1
 
 FT991A_ID = os.environ.get("OPHF_RIG_ID", "ID0670;")  # Yaesu CAT reference; not yet read off this rig
+MIN_W = 5  # the FT-991A's lowest PC setting
 MAX_W = 20  # protects the attenuator on the SDR path
 
 
@@ -70,18 +72,19 @@ def gate(s, want):
     """Refuse to key unless this is an FT-991A, in band, idle, at or below `want` and MAX_W."""
     rid = ask(s, "ID;", 0.15)
     if rid != FT991A_ID:
-        return "ABORT not an FT-991A (ID reads %r); this keyer speaks only its ASCII CAT" % rid, -1
+        # Send nothing more: ASCII CAT into another rig (an FT-818 speaks 5-byte binary) is noise.
+        return "ABORT not an FT-991A (ID reads %r); this keyer speaks only its ASCII CAT" % rid, -1, 0, False
     fa = ask(s, "FA;", 0.15)
     hz = int(fa[2:11]) if fa.startswith("FA") and len(fa) >= 12 else -1
     if not (144_000_000 <= hz <= 146_000_000):
-        return "ABORT band %s" % fa, hz
+        return "ABORT band %s" % fa, hz, 0, True
     tx = ask(s, "TX;", 0.15)
     if tx != "TX0;":
-        return "ABORT not idle %s" % tx, hz
+        return "ABORT not idle %s" % tx, hz, 0, True
     w = lower_power_only(s, want)
     if w > MAX_W or w > want:
-        return "ABORT power %dW (requested at most %dW; this keyer never raises power)" % (w, want), hz
-    return None, hz
+        return "ABORT power %dW (requested at most %dW; this keyer never raises power)" % (w, want), hz, w, True
+    return None, hz, w, True
 
 
 def force_rx():
@@ -102,14 +105,24 @@ def force_rx():
 
 
 
+def on_sigterm(signum, frame):
+    # `timeout` sends SIGTERM; exiting through SystemExit runs the `finally` that unkeys.
+    sys.exit(128 + signum)
+
+
 def main(wav, want):
+    if not MIN_W <= want <= MAX_W:
+        print("ABORT max_watts %d outside %d..%d" % (want, MIN_W, MAX_W))
+        return 3
+    signal.signal(signal.SIGTERM, on_sigterm)
     s = op()
     time.sleep(0.2)
-    why, _ = gate(s, want)
+    why, _, w, touched = gate(s, want)
     if why:
         print(why)
         s.close()
-        force_rx()
+        if touched:
+            force_rx()
         return 3
     po = []
     alc = []

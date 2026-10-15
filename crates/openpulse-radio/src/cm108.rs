@@ -78,7 +78,7 @@ impl Cm108Ptt {
     /// to auto-detect the first CM108-family device (Linux). Leaves PTT released.
     pub fn open(device: &str, gpio: u8) -> Result<Self, PttError> {
         if !(1..=8).contains(&gpio) {
-            return Err(PttError::Serial(format!(
+            return Err(PttError::Config(format!(
                 "CM108 GPIO pin {gpio} out of range 1..=8"
             )));
         }

@@ -24,17 +24,19 @@ There are **two hosts**:
   so **no rigctld is required** on the station.
 
 **FT-991A only.** The station scripts speak the FT-991A's ASCII CAT (`TX1;`, `PC020;`) on
-`OPHF_PORT` (default `/dev/ttyUSB0`, 38400 baud). They do not drive the FT-818, which uses
-Yaesu's binary CAT. The first thing they send is `ID;`, and they stop unless the rig answers
-`ID0670;` (FT-991A, from Yaesu's CAT reference; not yet read off the station's rig — if it
-answers otherwise, check the rig and set `OPHF_RIG_ID`). `cap_during_tx.sh` has no default `STATION`: set it to the FT-991A's host
-(rpi53 now carries the FT-818 of the 2 m pair).
+`OPHF_PORT` (default `/dev/ttyUSB0`, 38400 baud). They do not drive the FT-818, which uses Yaesu's
+binary CAT. The first thing they send is `ID;`, and unless the rig answers `ID0670;` they stop
+without sending another byte. `ID0670;` is the FT-991A's reply per Yaesu's CAT reference and has
+not yet been read off the station's rig; if the rig answers otherwise, check it and set
+`OPHF_RIG_ID`. `cap_during_tx.sh` has no default `STATION`: set it to the FT-991A's host (rpi53 now
+carries the FT-818 of the 2 m pair).
 
 **Power is only ever lowered.** The `<max_watts>` argument is a ceiling. The keyers read the rig's
 power (`PC;`) first; when the request is below it they lower it and verify the read-back, and when
 it is at or above it they leave it and key at the rig's setting. They never raise power (the
 station owner's 2026-10-14 rule, as in `scripts/lib/rig-power.sh`) and refuse to key above 20 W,
-when the power cannot be read, or when lowering did not take. They also refuse unless the rig
+when the power cannot be read, or when lowering did not take; `<max_watts>` must be 5–20. A
+`SIGTERM` (as from `cap_during_tx.sh`'s `timeout`) still runs the unkey. They also refuse unless the rig
 reads 144–146 MHz and idle. `scripts/test-rig-power.sh` drives both keyers against a fake rig.
 
 > **Warning:** this keys a real transmitter. Transmit into a dummy load / attenuator, stay
