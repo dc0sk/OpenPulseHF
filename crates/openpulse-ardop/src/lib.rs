@@ -10,10 +10,12 @@ mod bridge;
 mod command;
 mod data;
 pub mod error;
+mod ptt;
 mod state;
 
 pub use bridge::{spawn_worker, ModemBridge};
 pub use error::ArdopError;
+pub use ptt::ptt_from_spec;
 pub use state::TncState;
 
 use std::sync::Arc;

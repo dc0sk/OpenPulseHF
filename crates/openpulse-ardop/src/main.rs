@@ -4,7 +4,7 @@ use openpulse_audio::loopback::LoopbackBackend;
 use openpulse_core::relay::{RelayForwarder, RelayTrustPolicy};
 use openpulse_core::trust_store_file::load_trust_store_from_file;
 use openpulse_modem::ModemEngine;
-use openpulse_radio::{NoOpPtt, PttController};
+use openpulse_radio::PttController;
 
 #[cfg(feature = "cpal")]
 use openpulse_audio::CpalBackend;
@@ -193,40 +193,28 @@ async fn main() -> anyhow::Result<()> {
         config,
         trust_store,
         relay_forwarder,
-        build_ptt(&cfg),
+        build_ptt(&cfg)?,
     )
     .run()
     .await?;
     Ok(())
 }
 
-fn build_ptt(cfg: &openpulse_config::OpenpulseConfig) -> Box<dyn PttController + Send> {
-    // #1258: the ONE builder. This match handled `vox`, `rigctld` and `none` only, so `rts`, `dtr`,
-    // `cm108` and `gpio` — all documented in `[modem]`, which is captioned "shared by all TNC
-    // binaries", and all supported by the daemon — fell through to `NoOpPtt`. An operator who
-    // validated `ptt_backend = "cm108"` against the daemon and then started this TNC on the same
-    // config got an unkeyed rig.
-    //
-    // Fail-open is PRESERVED here (this returns a controller, never an error) so the dedupe changes
-    // no behaviour; whether an unusable backend should refuse startup is #1285.
-    match openpulse_radio::ptt_builder::build_ptt(&openpulse_radio::ptt_builder::PttSpec {
+fn build_ptt(
+    cfg: &openpulse_config::OpenpulseConfig,
+) -> anyhow::Result<Box<dyn PttController + Send>> {
+    // #1258: the ONE builder, shared with the daemon. #1285: a config error refuses startup and an
+    // unreachable backend refuses every key until it reconnects — never `NoOpPtt`, which keys.
+    openpulse_ardop::ptt_from_spec(&openpulse_radio::ptt_builder::PttSpec {
         backend: &cfg.modem.ptt_backend,
         rigctld_addr: &cfg.radio.rigctld_addr,
         device: &cfg.modem.ptt_device,
         gpio_pin: cfg.modem.ptt_gpio,
-    }) {
-        Ok(Some(ctrl)) => {
-            tracing::info!(backend = %cfg.modem.ptt_backend, "PTT controller ready");
-            ctrl
-        }
-        Ok(None) => Box::new(NoOpPtt::new()),
-        Err(e) => {
-            tracing::warn!(
-                backend = %cfg.modem.ptt_backend,
-                error = %e,
-                "PTT unavailable; using NoOpPtt — this TNC will transmit without keying the rig"
-            );
-            Box::new(NoOpPtt::new())
-        }
-    }
+    })
+    .map_err(|e| {
+        anyhow::anyhow!(
+            "[modem] ptt_backend is unusable; refusing to start rather than transmit into an \
+             unkeyed rig — fix [modem] in config: {e}"
+        )
+    })
 }
