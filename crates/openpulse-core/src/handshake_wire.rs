@@ -332,8 +332,9 @@ pub struct FrameSpans<'a> {
 
 /// Split a received frame into its signed prefix, body and signature.
 ///
-/// Validates magic, version and declared length before anything downstream looks at the body. A v1
-/// (`0x01`) frame is rejected here by version, which is why no caller needs a dual-decode path.
+/// Validates magic, version and declared length before anything downstream looks at the body. A
+/// frame whose version byte is not `WIRE_VERSION` is rejected here, so no caller needs a
+/// dual-decode path; the old JSON handshake has no binary magic and fails the magic check first.
 pub fn split_frame<'a>(
     bytes: &'a [u8],
     magic: &[u8; 4],

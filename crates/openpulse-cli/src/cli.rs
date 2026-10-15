@@ -66,8 +66,8 @@ pub struct Cli {
     #[arg(long, global = true, default_value = "info")]
     pub log: String,
 
-    /// PKI API base URL used by identity/trust diagnostics.
-    #[arg(long, global = true, default_value = "http://127.0.0.1:8787")]
+    /// PKI API base URL used by identity/trust diagnostics (`pki-tooling` binds 8080 by default).
+    #[arg(long, global = true, default_value = "http://127.0.0.1:8080")]
     pub pki_url: String,
 
     /// PTT backend: none | rts | dtr | vox | rigctld | cm108 | gpio.

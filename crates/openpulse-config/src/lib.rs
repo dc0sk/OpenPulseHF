@@ -1175,8 +1175,8 @@ meter_poll_ms = 500
 # [radio.rig_a] remains UNUSED — the primary rig is the top-level [radio] config above; rig_a is
 # reserved for the planned multi-rig refactor (roadmap "Config/feature gaps").
 
-# Secondary rig: the daemon reads ONLY its rigctld_addr, for the cross-band repeater's TX PTT.
-# Uncomment to enable the repeater's second rig.
+# Secondary rig: the cross-band repeater's TX PTT. The daemon reads its rigctld_addr, backend and
+# serial_port (#1260); rigctld_addr must differ from the main rig's. Uncomment to enable it.
 # [radio.rig_b]
 # rigctld_addr = "127.0.0.1:4533"
 
