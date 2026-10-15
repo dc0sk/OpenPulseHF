@@ -78,9 +78,9 @@ The sections below were written 2026-07-23. These changes to them are in force:
 9. **Runner safety rules (2026-10-14).** `run-onair-twin-ota.sh` and `run-onair-ic9700-ft991a.sh`
    only ever **lower** a rig's RF power (`scripts/lib/rig-power.sh`: `L RFPOWER` is sent only when
    the request is below the current reading; the FT-818 is never touched, since Hamlib cannot set its
-   power). Mode is per station, and `keep` sends none; the twin runner then requires the expected mode
-   reading (`*_TEST_MODE_EXPECT`) or stops before keying, while `run-onair-ic9700-ft991a.sh` does
-   not check it. Both refuse a frequency outside
+   power). Mode is per station, and `keep` sends none; both runners then require the expected mode reading
+   (`*_TEST_MODE_EXPECT`, or `TEST_MODE_EXPECT_A/B` in `run-onair-ic9700-ft991a.sh`'s
+   `preflight_check`) or stop before keying. The A/B runner's default frequency is 144.640 MHz. Both refuse a frequency outside
    **144.500–144.750 MHz** unless the band limits are widened for an HF run — another band would also
    switch the rig's per-band settings, the FT-818's antenna among them.
 

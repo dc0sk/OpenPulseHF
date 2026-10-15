@@ -38,7 +38,7 @@ B_PTT_PORT="${B_PTT_PORT:-/dev/ttyUSB0}"
 B_PTT_TYPE="${B_PTT_TYPE:-RTS}"
 B_RIGCTLD_ADDR="${B_RIGCTLD_ADDR:-127.0.0.1}"
 B_RIGCTLD_PORT="${B_RIGCTLD_PORT:-4532}"
-TEST_FREQ_HZ="${TEST_FREQ_HZ:-145650000}"
+TEST_FREQ_HZ="${TEST_FREQ_HZ:-144640000}"  # the 2 m test frequency (work plan M3), inside the band guard below
 # Per-side dial trim (Hz) to null a real rig-to-rig crystal offset so the received
 # audio carrier lands on 1500 Hz. Two independent rigs on 2 m routinely differ by
 # tens of Hz (~1 ppm = 145 Hz at 144.6 MHz), which is at/over BPSK250's +-62.5 Hz

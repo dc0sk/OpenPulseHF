@@ -6,15 +6,16 @@
 # see README.md), and reports the capture summary when both finish.
 #
 # Usage:
-#   cap_during_tx.sh <center_hz> <fs_hz> <dur_s> <rfgr> <ifgr> <out.cf32> <wav_basename> <watts>
+#   cap_during_tx.sh <center_hz> <fs_hz> <dur_s> <rfgr> <ifgr> <out.cf32> <wav_basename> <max_watts>
 #
 # Env:
-#   STATION       ssh target of the station (default dc0sk-rpi53)
+#   STATION       ssh target of the FT-991A station (required; no default — the keyer speaks only
+#                 the FT-991A's ASCII CAT, and the old default host now carries the FT-818)
 #   STATION_WAVDIR directory on the station holding the WAVs (default /tmp)
 #   KEYPLAY       path to keyplay.py on the station (default /tmp/keyplay.py)
 set -u
 HERE="$(cd "$(dirname "$0")" && pwd)"
-STATION="${STATION:-dc0sk-rpi53}"
+STATION="${STATION:?set STATION to the FT-991A station (ssh target)}"
 WAVDIR="${STATION_WAVDIR:-/tmp}"
 KEYPLAY="${KEYPLAY:-/tmp/keyplay.py}"
 

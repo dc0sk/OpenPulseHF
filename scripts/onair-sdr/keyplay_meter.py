@@ -6,7 +6,7 @@ on the FT-991A's 0-255 CAT meter scale — used for drive-backoff sweeps (vary t
 WAV's audio level, watch ALC vs ACPR). Same safety gates and bulletproof unkey
 as keyplay.py.
 
-Usage:   python3 keyplay_meter.py <wav_path> <watts>
+Usage:   python3 keyplay_meter.py <wav_path> <max_watts>
 Env:     OPHF_PORT, OPHF_BAUD, OPHF_ADEV (see keyplay.py)
 """
 import os
@@ -20,8 +20,6 @@ PORT = os.environ.get("OPHF_PORT", "/dev/ttyUSB0")
 BAUD = int(os.environ.get("OPHF_BAUD", "38400"))
 ADEV = os.environ.get("OPHF_ADEV", "plughw:CARD=CODEC,DEV=0")
 WATCHDOG_S = 8.0
-WAV = sys.argv[1]
-PW = int(sys.argv[2])
 
 
 def op():
@@ -42,23 +40,48 @@ def meter(s, idx):
     except ValueError:
         return -1
 
+FT991A_ID = os.environ.get("OPHF_RIG_ID", "ID0670;")  # Yaesu CAT reference; not yet read off this rig
+MAX_W = 20  # protects the attenuator on the SDR path
+
 
 def watts(pc):
     try:
-        return int(pc[2:5])
+        return int(pc[2:5]) if pc.startswith("PC") and pc.endswith(";") else 999
     except ValueError:
         return 999
 
 
-def set_power(s, val):
+def lower_power_only(s, want):
+    """Lower the rig's power to `want` watts, never raise it; return the watts it will key at."""
+    now = watts(ask(s, "PC;", 0.2))
+    if now == 999 or want >= now:
+        return now
     pc = ""
     for _ in range(4):
-        s.write(("PC%03d;" % val).encode())
-        time.sleep(0.6)
+        s.write(("PC%03d;" % want).encode())
+        time.sleep(0.6)  # PC needs >=0.5s to settle before read-back
         pc = ask(s, "PC;", 0.2)
-        if watts(pc) == val:
-            return pc
-    return pc
+        if watts(pc) == want:
+            break
+    return watts(pc)
+
+
+def gate(s, want):
+    """Refuse to key unless this is an FT-991A, in band, idle, at or below `want` and MAX_W."""
+    rid = ask(s, "ID;", 0.15)
+    if rid != FT991A_ID:
+        return "ABORT not an FT-991A (ID reads %r); this keyer speaks only its ASCII CAT" % rid, -1
+    fa = ask(s, "FA;", 0.15)
+    hz = int(fa[2:11]) if fa.startswith("FA") and len(fa) >= 12 else -1
+    if not (144_000_000 <= hz <= 146_000_000):
+        return "ABORT band %s" % fa, hz
+    tx = ask(s, "TX;", 0.15)
+    if tx != "TX0;":
+        return "ABORT not idle %s" % tx, hz
+    w = lower_power_only(s, want)
+    if w > MAX_W or w > want:
+        return "ABORT power %dW (requested at most %dW; this keyer never raises power)" % (w, want), hz
+    return None, hz
 
 
 def force_rx():
@@ -78,42 +101,46 @@ def force_rx():
     return "?"
 
 
-s = op()
-time.sleep(0.2)
-if ask(s, "TX;", 0.15) != "TX0;":
-    print("ABORT not idle")
-    sys.exit(3)
-if watts(set_power(s, PW)) != PW:
-    print("ABORT power")
-    force_rx()
-    sys.exit(3)
 
-po = []
-alc = []
-proc = None
-try:
-    s.write(b"TX1;")
-    t0 = time.monotonic()
-    time.sleep(0.3)
-    proc = subprocess.Popen(["aplay", "-q", "-D", ADEV, WAV])
-    while proc.poll() is None and (time.monotonic() - t0) < WATCHDOG_S:
-        po.append(meter(s, "RM2"))  # RM2 = power out
-        alc.append(meter(s, "RM4"))  # RM4 = ALC
-        time.sleep(0.25)
-    proc.wait(timeout=WATCHDOG_S)
-finally:
-    if proc and proc.poll() is None:
-        proc.kill()
-    force_rx()
-
-po = [x for x in po if x >= 0]
-alc = [x for x in alc if x >= 0]
-print(
-    "METER PO_mean=%.1f PO_pk=%d ALC_mean=%.1f ALC_pk=%d"
-    % (
-        sum(po) / max(1, len(po)),
-        max(po or [0]),
-        sum(alc) / max(1, len(alc)),
-        max(alc or [0]),
+def main(wav, want):
+    s = op()
+    time.sleep(0.2)
+    why, _ = gate(s, want)
+    if why:
+        print(why)
+        s.close()
+        force_rx()
+        return 3
+    po = []
+    alc = []
+    proc = None
+    try:
+        s.write(b"TX1;")
+        t0 = time.monotonic()
+        time.sleep(0.3)
+        proc = subprocess.Popen(["aplay", "-q", "-D", ADEV, wav])
+        while proc.poll() is None and (time.monotonic() - t0) < WATCHDOG_S:
+            po.append(meter(s, "RM2"))  # RM2 = power out
+            alc.append(meter(s, "RM4"))  # RM4 = ALC
+            time.sleep(0.25)
+        proc.wait(timeout=WATCHDOG_S)
+    finally:
+        if proc and proc.poll() is None:
+            proc.kill()
+        force_rx()
+    po = [x for x in po if x >= 0]
+    alc = [x for x in alc if x >= 0]
+    print(
+        "METER PO_mean=%.1f PO_pk=%d ALC_mean=%.1f ALC_pk=%d"
+        % (
+            sum(po) / max(1, len(po)),
+            max(po or [0]),
+            sum(alc) / max(1, len(alc)),
+            max(alc or [0]),
+        )
     )
-)
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1], int(sys.argv[2])))
