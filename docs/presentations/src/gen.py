@@ -91,14 +91,14 @@ def band(h): return ('<draw:frame draw:style-name="band" svg:x="0cm" svg:y="0cm"
 
 # Agenda leads, then the use cases, then the rest — motivation after structure.
 LEDES = {
-    "Where it sits": "One binary, seven layers — and exactly one of them is a plugin boundary.",
+    "Where it sits": "Seven layers, one engine for every front-end — and exactly one layer is a plugin boundary.",
     "Difference 2 — the ladder adapts on EVIDENCE":
         "Fourteen rungs. It climbs on decodes, not on an SNR estimate that a fade can flatten.",
     "Testing — six layers":
         "Each layer is cheaper than the one above it, and proves less. Both halves matter.",
     "Performance — measured on simulated channels":
         "Decode rate on a Watterson moderate_f1 fade. The zeros are the interesting part.",
-    "Wo es sitzt": "Ein Programm, sieben Ebenen — und genau eine davon ist eine Plugin-Grenze.",
+    "Wo es sitzt": "Sieben Ebenen, eine Engine für jedes Frontend — und genau eine Ebene ist eine Plugin-Grenze.",
     "Unterschied 2 — die Leiter steigt nach BELEGEN":
         "Vierzehn Stufen. Sie steigt nach Dekodierungen, nicht nach einer Schätzung.",
     "Testen — sechs Ebenen":
@@ -132,7 +132,7 @@ cov = [f'<draw:page draw:name="Cover" draw:master-page-name="Default">', band(H)
        ["An open, plugin-based HF software modem", "",
         "Architecture · Implementation · Verification · Status"]),
   tbox(2.0, 10.6, 17.0, 2.4, "CoverMeta",
-       ["Simon Keimer (DC0SK)   ·   v0.16.0 (pre-1.0)", URL]),
+       ["Simon Keimer (DC0SK)   ·   " + ("auf dem Weg zu Release 1 (v0.17.0)" if LANG == "de" else "toward Release 1 (v0.17.0)"), URL]),
   qr(21.4, 5.1, 4.9),
   tbox(21.4, 10.25, 4.9, 0.8, "QrCap", ["Project repository"]),
   '</draw:page>']

@@ -31,7 +31,7 @@ def _label(tbox, x, y, w, h, para, lines):
 def evidence_stack(tbox, lang="en"):
     """Slide 'Testing — six layers': the evidence tiers as a stack.
 
-    Source: CLAUDE.md 'Acceptance criteria' + docs/dev/virtual-loopback.md. The ordering is the
+    Source: docs/dev/project/acceptance-criteria.md + docs/dev/virtual-loopback.md. The ordering is the
     project's own evidence hierarchy — cheap/fast/proves-little at the base, expensive/slow/
     conclusive at the top. The right-hand column is what each tier CANNOT prove, which is the part
     that makes the hierarchy load-bearing rather than decorative.
@@ -43,7 +43,7 @@ def evidence_stack(tbox, lang="en"):
             ("virtual loopback", "one clock, no analog path",            "cannot see sample-rate offset"),
             ("channel sim",      "Watterson fade, Gilbert-Elliott burst", "the model is not the ionosphere"),
             ("integration",      "crate boundaries, real seams",          "buffer IS the frame — no search"),
-            ("unit",             "2408 tests, seconds to run",            "nothing about the wire"),
+            ("unit",             "pure functions, seconds to run",        "nothing about the wire"),
         ],
         "de": [
             ("On-Air",           "echtes HF, echte Geräte, echte Ausbreitung", "langsam, wetterabhängig, kaum wiederholbar"),
@@ -51,7 +51,7 @@ def evidence_stack(tbox, lang="en"):
             ("virtueller Loop",  "eine Taktquelle, kein Analogpfad",      "sieht keinen Abtastratenversatz"),
             ("Kanalsimulation",  "Watterson-Schwund, Gilbert-Elliott",    "das Modell ist nicht die Ionosphäre"),
             ("Integration",      "Crate-Grenzen, echte Nahtstellen",      "Puffer IST der Frame — keine Suche"),
-            ("Unit",             "2408 Tests, Sekunden Laufzeit",         "nichts über die Luftschnittstelle"),
+            ("Unit",             "reine Funktionen, Sekunden Laufzeit",   "nichts über die Luftschnittstelle"),
         ],
     }[lang]
     x0, top, rw, rh, gap = 1.4, 3.55, 12.2, 1.42, 0.20
@@ -76,7 +76,8 @@ def evidence_stack(tbox, lang="en"):
 def fade_bars(tbox, lang="en"):
     """Slide 'Performance': decode rate on a Watterson moderate_f1 fade.
 
-    Source: CLAUDE.md → 'An HF ladder calibrated on AWGN is not an HF ladder' and the #923 entry.
+    Source: docs/dev/sharp-edges.md, the #923 entries (coherent QPSK 0.00 to 40 dB, QPSK250-D ~0.65
+    at 20 dB; BPSK31 @3 dB 0.00 -> 0.25 -> 1.00 with RsStrong below 191 B).
     The point of the figure is NOT that the bars are long — it is that the two ZERO bars are rungs
     the ladder shipped with, and that the fix in each case was FEC or differential encoding rather
     than a better tracker.
@@ -128,7 +129,8 @@ def fade_bars(tbox, lang="en"):
 def stack_blocks(tbox, lang="en"):
     """Slide 'Where it sits': the layer stack, with what is pluggable marked.
 
-    Source: CLAUDE.md crate map. Only the boxes that correspond to real crates are drawn.
+    Source: docs/dev/crate-map.md. Only the boxes that correspond to real crates are drawn. "10
+    plugins" is `ls plugins/` (64qam bpsk fsk4 js8 mfsk16 ofdm pilot psk8 qpsk scfdma).
     """
     layers = {
         "en": [
@@ -136,7 +138,7 @@ def stack_blocks(tbox, lang="en"):
             ("Protocol",     "ARDOP TNC · KISS/AX.25 · B2F · filexfer · QSY · JS8",  "own"),
             ("Session",      "HPX state machine · ARQ/HARQ · rate ladder · trust",   "own"),
             ("Modem",        "ModemEngine · scheduler · CSMA/DCD · diagnostics",     "own"),
-            ("Waveform",     "16 plugins — BPSK … 64QAM, OFDM, SC-FDMA, MFSK16",     "plug"),
+            ("Waveform",     "10 plugins — BPSK … 64QAM, OFDM, SC-FDMA, MFSK16",     "plug"),
             ("DSP",          "RRC · PLL · Gardner · LMS/DFE · noise floor",          "own"),
             ("I/O",          "CPAL audio · PTT: serial, VOX, rigctld, CM108, GPIO",  "own"),
         ],
@@ -145,7 +147,7 @@ def stack_blocks(tbox, lang="en"):
             ("Protokoll",    "ARDOP-TNC · KISS/AX.25 · B2F · Dateitransfer · QSY",    "own"),
             ("Session",      "HPX-Zustandsautomat · ARQ/HARQ · Ratenleiter · Trust",  "own"),
             ("Modem",        "ModemEngine · Scheduler · CSMA/DCD · Diagnose",         "own"),
-            ("Wellenform",   "16 Plugins — BPSK … 64QAM, OFDM, SC-FDMA, MFSK16",      "plug"),
+            ("Wellenform",   "10 Plugins — BPSK … 64QAM, OFDM, SC-FDMA, MFSK16",      "plug"),
             ("DSP",          "RRC · PLL · Gardner · LMS/DFE · Rauschflur",            "own"),
             ("E/A",          "CPAL-Audio · PTT: seriell, VOX, rigctld, CM108, GPIO",  "own"),
         ],
@@ -170,7 +172,9 @@ def stack_blocks(tbox, lang="en"):
 def ladder_steps(tbox, lang="en"):
     """Slide 'the ladder adapts on EVIDENCE': hpx_hf as a staircase.
 
-    Source: docs/mode-fec-ladder.md hpx_hf row + CLAUDE.md #934. Rungs are compressed to the
+    Source: the hpx_hf table in docs/mode-fec-ladder.md (crates/openpulse-core/src/profile.rs) and
+    docs/dev/sharp-edges.md #934. SL7 = OFDM52, SL11 = OFDM52-64QAM soft-concatenated, SL14 =
+    OFDM52-64QAM LDPC r~8/9. Rungs are compressed to the
     families that matter for the talk; the caption says so rather than implying all 14 are drawn.
     """
     # SIX rungs, not seven. Seven gave 3.5 cm columns, and the two longest labels then ran into
@@ -179,13 +183,13 @@ def ladder_steps(tbox, lang="en"):
     steps = {
         "en": [
             ("SL1", "MFSK16", "non-coherent"), ("SL2", "BPSK31 +FEC", "entry rung"),
-            ("SL6", "QPSK250-D", "differential"), ("SL8", "OFDM52", "multicarrier"),
-            ("SL11", "OFDM52-16QAM", ""), ("SL14", "64QAM r\u22488/9", "top rung"),
+            ("SL6", "QPSK250-D", "differential"), ("SL7", "OFDM52", "multicarrier"),
+            ("SL11", "64QAM", "OFDM52"), ("SL14", "64QAM r\u22488/9", "top rung"),
         ],
         "de": [
             ("SL1", "MFSK16", "nicht-kohärent"), ("SL2", "BPSK31 +FEC", "Einstiegsstufe"),
-            ("SL6", "QPSK250-D", "differenziell"), ("SL8", "OFDM52", "Mehrträger"),
-            ("SL11", "OFDM52-16QAM", ""), ("SL14", "64QAM r\u22488/9", "oberste Stufe"),
+            ("SL6", "QPSK250-D", "differenziell"), ("SL7", "OFDM52", "Mehrträger"),
+            ("SL11", "64QAM", "OFDM52"), ("SL14", "64QAM r\u22488/9", "oberste Stufe"),
         ],
     }[lang]
     x0, base, sw, sh = 1.9, 11.4, 4.05, 1.85
