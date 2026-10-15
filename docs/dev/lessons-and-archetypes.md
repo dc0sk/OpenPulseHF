@@ -2,7 +2,7 @@
 project: openpulsehf
 doc: docs/dev/lessons-and-archetypes.md
 status: living
-last_updated: 2026-08-08
+last_updated: 2026-10-15
 ---
 
 # Lessons ↔ defect archetypes
@@ -22,8 +22,8 @@ measured numbers — mapped to the general shape. Two reasons it exists:
 2. **Know where to look first.** An archetype this codebase has repeated is one it is *prone* to —
    a scan should start where we have already bled.
 
-The authoritative long-form write-ups remain in **[`../../CLAUDE.md`](../../CLAUDE.md) → "Known
-sharp edges"** and the point-in-time **[archetype scan](reviews/archetype-scan-2026-07-29.md)** (18
+The authoritative long-form write-ups remain in **[`sharp-edges.md`](sharp-edges.md)** ("Known
+sharp edges", moved out of `CLAUDE.md` on 2026-09-30) and the point-in-time **[archetype scan](reviews/archetype-scan-2026-07-29.md)** (18
 findings, all closed); this doc distills and indexes them by shape rather than restating them. New
 lessons: add the one-line operator note to [`memories.md`](memories.md) and, if it is a new *shape*
 or a new instance of a known one, a bullet here.
@@ -93,7 +93,8 @@ see.*
   (`accumulate_capture`, what `server::run`'s `rx_ticker` actually uses). The original receiver-notch
   bug put the transform in `stage_capture_input` only: covered the `receive`-family tests, never ran
   in the daemon. Tripwire: `notch_blocks_processed()` stays 0 if an enabled feature skips a path.
-  See the **Cross-cutting RX/TX checklist** in CLAUDE.md.
+  See the **RX/TX seam checklist** in CLAUDE.md and the RX/TX seam edges in
+  [`sharp-edges.md`](sharp-edges.md).
 - **`transmit_iq` bypasses the wire-whitening seam (scan #8).** 13 of 15 modulate sites go through
   `stage_modulate_payload` (whitens); `transmit_iq` reaches `plugin.modulate_iq()` via
   `route_wire_stage`, which applies no transform, while RX un-whitens unconditionally → `invalid
@@ -131,7 +132,7 @@ slow/coded end of the ladder, all invisible to gates whose fixture never grows t
 the defect fires.
 - **A flat 30 s burst cap force-flushed mid-frame (scan #1).** BPSK31+Rs = 66.6 s,
   BPSK63+Rs = 33.3 s both exceeded the cap → carrier force-split into two preamble-less bursts on
-  every normal frame. Reachable on the daemon default (`hpx_hf`, SL2). The cap and the ladder's
+  every normal frame. Reachable on the daemon default (`hpx_hf`, SL2; today the `fast` profile). The cap and the ladder's
   actual frame lengths were two numbers nobody had compared.
   **Fixed:** the flat cap became a per-mode `ModemEngine::burst_cap_samples` with the 30 s figure
   demoted to a runaway *floor* (`BURST_MAX_CAP_SAMPLES`, `openpulse-modem/src/engine.rs`), gated by
@@ -148,7 +149,8 @@ the defect fires.
   unscrambled with a different permutation than the transmitter used. The **organizing lesson of the
   whole scan**: the sentence *"`RsInterleaved` is untouched since it deinterleaves first and needs
   the exact length"* was written as a reason to skip a sibling arm and it **described the defect** —
-  now a CLAUDE.md rule: *a reason to skip a sibling deserves the same measurement as the fix.*
+  now a recorded lesson in [`sharp-edges.md`](sharp-edges.md): *a reason to skip a sibling deserves
+  the same measurement as the fix.*
 
 ### #9 Subject-conditioned sample — the sample was selected by an outcome the subject influenced
 - **Threshold-tuning measured only among inputs that decoded (#1049/#1053).** Asking whether raising
@@ -205,7 +207,9 @@ would refute it. This is where the expensive weeks go.*
   The regression gate `every_profile_rung_decodes_clean_with_its_fec` measures decode on a
   **noiseless** channel, where uncoded decode always succeeds — so reintroducing the exact
   missing-FEC bug it names leaves it green. (Scope corrected on measurement: one profile actually
-  defective, not nine — most derived their floors uncoded.)
+  defective, not nine — most derived their floors uncoded. Since work plan decision 18 only `fast`
+  and `robust` exist; the noise-floor twin `every_profile_rung_decodes_at_its_floor_with_its_fec`
+  is the gate that sees missing FEC.)
 - **HARQ goodput gate discards the decode result (scan #12).** `harq_rate_selection_watterson.rs`
   computes goodput from arithmetic over the decision struct and `let _ = ` the decode — green with
   **0 of 105 frames** actually decoding (confirmed by instrumentation).
@@ -262,6 +266,7 @@ would refute it. This is where the expensive weeks go.*
   the old ones.
 - **When a bug took several wrong hypotheses:** name its archetype, add the instance here, and check
   siblings for the same shape (cluster 1 was one shape in five places).
-- **Mining for new archetypes:** CLAUDE.md's "Known sharp edges" and the DSP acquisition playbook are
+- **Mining for new archetypes:** [`sharp-edges.md`](sharp-edges.md) and the
+  [DSP acquisition playbook](dsp-acquisition-playbook.md) are
   the richest corpus; abstract an entry past its domain and, if the abstract shape is not yet in the
   general `defect-archetypes` skill, it is a candidate to contribute upstream (domain-neutralised).

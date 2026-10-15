@@ -2,7 +2,7 @@
 project: openpulsehf
 doc: docs/mode-fec-ladder.md
 status: living
-last_updated: 2026-10-01
+last_updated: 2026-10-15
 ---
 
 # Mode and FEC ladder — how the modem chooses a waveform and a code
@@ -16,8 +16,14 @@ OpenPulseHF picks an operating point along **two independent axes**:
 
 A link's usable operating point is the highest-throughput combination whose
 **post-FEC** error rate is acceptable at the link's SNR and fading profile. The
-adaptive rate controller walks the modulation axis automatically; the FEC is
-chosen per session/use-case (and, for the dense modes, is not optional).
+adaptive rate controller walks the modulation axis automatically. On the Release 1
+ladder (`hpx_hf`, §4) each rung carries a fixed FEC, so the rung choice sets both
+axes at once; a fixed mode (`[modem] mode`) takes its FEC from the session or use-case
+(and, for the dense modes, FEC is not optional).
+
+Release 1 ships the `hpx_hf` ladder only (§4). Modes outside it (`PILOT-*`, SC-FDMA,
+single-carrier 8PSK/64QAM) stay selectable as fixed modes but are not part of Release 1;
+the sections that discuss them record measurements and design history.
 
 ---
 
@@ -66,7 +72,7 @@ noise), and it needs FEC to mop up the symbol each slip still costs.
 This is why **phase margin, not baud rate, orders the modes by fade-robustness**: non-coherent
 MFSK16 > BPSK (±90°) > QPSK (±45°) > 8PSK (±22.5°). Differential pays for itself at QPSK and
 **does not** at 8PSK, where ±22.5° cannot absorb the noise doubling (measured — see §4 and
-CLAUDE.md → *Known sharp edges*). `MFSK16` is the non-coherent extreme: it needs no carrier
+`docs/dev/sharp-edges.md`). `MFSK16` is the non-coherent extreme: it needs no carrier
 phase at all, which is why it is the sub-floor deep-fade rung (SL1 of `hpx_hf`).
 
 **Pilot-framed single-carrier (`PILOT-*`).** A third single-carrier family
@@ -243,7 +249,25 @@ RS(255,223), `SC` = `SoftConcatenated`, `LHR` = `LdpcHighRate`
 | SL13 | OFDM52-32QAM | LHR | 6426 | 19 | 22 | |
 | SL14 | OFDM52-64QAM | LHR | 7710 | 20 | — | ladder top; gated admission |
 
-`initial_level = SL2`, `nack_threshold = 3`.
+`initial_level = SL2`, `nack_threshold = 3`. The BPSK rungs carry `Rs`, upgraded per frame to
+`RsStrong` where it costs no extra RS block (see the design points). The ARDOP TNC floors its
+adaptive ladder at SL2 (no MFSK16 there).
+
+**Preamble per rung.** Each rung's frame opens with its own sync sequence. The #1062 flag day
+(2026-10-10, `docs/dev/design/pn-preamble.md`) changed SL3–SL5. It is not the only break against
+v0.16.0: every frame is now whitened (#1027, fixed in #1148; v0.16.0 has none), so a v0.16.0 station and a current station do
+not decode each other's frames on any rung.
+
+| Rungs | Mode | Preamble | Source |
+|---|---|---|---|
+| SL1 | MFSK16 | three 7-symbol Costas sync blocks interleaved with the data tones | `plugins/mfsk16/src/lib.rs` |
+| SL2 | BPSK31 | 32 alternating-bit symbols (`--++`) | `plugins/bpsk/src/modulate.rs` (`PREAMBLE_SYMS`) |
+| SL3–SL5 | BPSK63, BPSK100, BPSK250 | PN-63 m-sequence, x⁶+x+1, 63 symbols at the rung's baud | `plugins/bpsk/src/modulate.rs` (`is_pn_mode`, `PN_PREAMBLE_SYMS`) |
+| SL6 | QPSK250-D | its own 16-symbol designed sequence | `plugins/qpsk/src/modulate.rs` (`preamble_symbols`) |
+| SL7–SL14 | OFDM52 family | Schmidl-Cox timing preamble | `plugins/ofdm/src/demodulate.rs` |
+
+BPSK31 kept `--++` because the PN candidate failed its cliff column in the design's F5 measurement;
+the off-ladder `BPSK250-RRC` also keeps it.
 
 Design points:
 
@@ -257,16 +281,18 @@ Design points:
   to the whole ladder: *differential needs FEC*. BPSK is differentially decoded, so it rides the
   fade rotation, but the symbols a carrier slip costs still have to be corrected. Uncoded, these
   rungs decode ~0 % at their own floors (BPSK31 @3 dB **0.00**, BPSK63 @4 dB 0.00, BPSK250 @5 dB
-  0.00); with `RsStrong` they work (BPSK31 @3 dB **1.00**, BPSK63 @4 dB 0.83, BPSK250 @8 dB 1.00).
+  0.00); coded they work (BPSK31 @3 dB **1.00** with `RsStrong`, BPSK63 @4 dB 0.83, BPSK250 @8 dB
+  1.00).
   The floors did not move — they were always fading-appropriate; the rungs simply lacked the code.
-- **Why `RsStrong` and not `RsInterleaved`.** (§2 used to bill `RsInterleaved` as "best for HF
-  burst/fading" without qualification; it is now corrected there to say the same thing this section
-  measured.) Measured, `RsInterleaved` is **inert** (BPSK250 on `moderate_f1` @5/8 dB: 0.17/0.58 —
-  identical to plain `Rs`): a ≤223-byte payload is *one* RS block, and a single block is
-  position-agnostic, so there is nothing to interleave. Code **strength** is the lever, and
-  `RsStrong` is **free on the wire** for payloads ≤191 B — RS(255,223) and RS(255,191) both emit a
-  255-byte block, so BPSK250+Rs and BPSK250+RsStrong have identical airtime (8.32 s at 64 B).
-  Interleaving only earns its place across *multiple* blocks.
+- **Why `Rs` with a free `RsStrong` upgrade, and not `RsInterleaved`.** Measured, `RsInterleaved`
+  is **inert** (BPSK250 on `moderate_f1` @5/8 dB: 0.17/0.58 — identical to plain `Rs`): a
+  ≤223-byte payload is *one* RS block, and a single block is position-agnostic, so there is nothing
+  to interleave. Code **strength** is the lever. `RsStrong` (t=32) is stronger on a fade but is free
+  on the wire only while the payload fits one RS(255,191) block; at 192–223 B it doubles the airtime
+  and drops `hpx_hf`'s AWGN goodput below the CI floor. So the BPSK rungs carry **`Rs`**, and each
+  frame is upgraded to **`RsStrong`** when that costs no extra RS block
+  (`openpulse_core::fec::free_rs_strengthening`). Interleaving only earns its place across
+  *multiple* blocks.
 - **Above SL6 the ladder is OFDM, because phase margin runs out.** The coherent single-carrier
   rungs that used to sit here are not rescuable: FEC does not help (QPSK250+Rs is also 0.00 — the
   defect is carrier tracking, not errors), and differential does not scale to 8PSK (8PSK500-D
@@ -278,8 +304,8 @@ Design points:
 - **The dense rungs are OFDM, not SC-FDMA.** At equal gross rate OFDM's CP rides frequency-selective
   fading that SC-FDMA's channel estimator cannot represent — measured, `moderate_f1` @20 dB 16QAM:
   OFDM 0.88 vs SCFDMA 0.35 (§7). The `SCFDMA26-32QAM` narrowband rung was dropped for the same
-  reason it never earned its slot: 0.00/0.17/0.17 at 8/12/16 dB. It still lives in
-  `hpx_wideband_hd`. (`OFDM16` is the most fade-robust OFDM mode and the narrowest at 625 Hz, but
+  reason it never earned its slot: 0.00/0.17/0.17 at 8/12/16 dB; it remains a fixed mode only.
+  (`OFDM16` is the most fade-robust OFDM mode and the narrowest at 625 Hz, but
   its ~401 net bps sits *below* SL6, so it has no monotonic slot here.)
 - **High-rate LDPC only at the top.** SL12–SL14 re-use SL9–SL11's modes at r≈8/9. Below the top,
   buying rate with code rate costs +4…+8 dB of floor — a worse trade than climbing one modulation
@@ -294,14 +320,16 @@ Design points:
 ## 5. Which mode/FEC combinations make sense
 
 Robustness (left) vs throughput (right). "Net bps" is gross × code-rate (the
-retransmit cost is on top of that). Recommended HF pairings:
+retransmit cost is on top of that). This table is for **fixed-mode** use; the adaptive ladder
+(§4) makes these choices itself. The coherent single-carrier rows (QPSK500, 8PSK500) were
+measured on AWGN and hardware loopback; on a fading HF path they decode ~0 % (§4). Pairings:
 
 | Operating regime | Mode | FEC | ~Net bps | Why |
 |---|---|---|---|---|
 | Weak signal, NVIS, QRM | BPSK31–250 | `Rs` (`RsStrong` where frames stay ≤ 191 B) | 25–220 | Interleaving is inert at this frame size — code strength is the lever |
 | Solid HF, ~2 kHz | QPSK500 / SCFDMA52 | `Rs` (or `SoftConcatenated`) | ~900 / ~2 500 | Workhorse; soft optional |
 | Good HF, want more | 8PSK500 / SCFDMA52-8PSK | `SoftConcatenated` | ~660 / ~1 900 | 8PSK needs the soft-coding gain |
-| Marginal-SNR dense (the `hpx_wideband_hd` SL9–11 fallback) | **SCFDMA26-16QAM / -32QAM** | **`SoftConcatenated`** | ~1 270 / ~1 590 | **+3 dB narrowing + soft FEC — hardware-validated reliable** |
+| Marginal-SNR dense (fixed mode; formerly `hpx_wideband_hd`'s SL9–11) | **SCFDMA26-16QAM / -32QAM** | **`SoftConcatenated`** | ~1 270 / ~1 590 | **+3 dB narrowing + soft FEC — hardware-validated reliable** |
 | High SNR, ~2 kHz, max data | SCFDMA52-16QAM/-32QAM | `SoftConcatenated` | ~2 540 / ~3 180 | Soft FEC closes them where hard RS can't |
 | Very high SNR (≥25 dB) | SCFDMA52-64QAM / 64QAM2000-RRC | `SoftConcatenated` / `Ldpc` | ~3 800 / ~5 300 | Only on excellent links / on-air with margin. **`SCFDMA52-64QAM` is marginal even on a clean cable** — see below |
 
@@ -409,7 +437,8 @@ power survives a peak-limited transmitter). Representative measurements:
 **Decisions (the OFDM higher-order ladder, not the SC-FDMA pilot redesign):**
 
 - **OFDM is the high-throughput / high-reliability HF path**, via a higher-order ladder
-  (`OFDM52-{8PSK,16QAM,32QAM,64QAM}`, ~4.3–8.7 kbps gross) in `hpx_ofdm_hf` (§4). OFDM's
+  (`OFDM52-{8PSK,16QAM,32QAM,64QAM}`, ~4.3–8.7 kbps gross), first built as the `hpx_ofdm_hf`
+  profile and now `hpx_hf`'s SL8–SL14 (§4). OFDM's
   CP + per-subcarrier equalization handle frequency-selective HF multipath natively — a
   dead subcarrier costs only its own bits, with **no DFT-despread noise enhancement**.
   This is the industry choice for HF data (VARA HF, Mercury, ARDOP).

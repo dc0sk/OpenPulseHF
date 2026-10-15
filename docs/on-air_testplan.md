@@ -2,10 +2,26 @@
 project: openpulsehf
 doc: docs/on-air_testplan.md
 status: living
-last_updated: 2026-10-01
+last_updated: 2026-10-15
 ---
 
 # OpenPulseHF On-Air Test Plan
+
+> **Superseded for Release 1.** The on-air campaign Release 1 (`v0.17.0`) needs is work plan
+> milestone **M3** in [`docs/dev/project/workplan.md`](dev/project/workplan.md), sequenced in
+> [`docs/dev/onair-execution-plan.md`](dev/onair-execution-plan.md). It runs on **2 m first**
+> (144.640 MHz) with the station pair **rpi51 + IC-9700** (A) and **rpi53 + FT-818 + Yaesu
+> SCU-17** (B): G0–G3, A1, A2, A4/A5, one Pat session through the ARDOP TNC, and the F8 corpus
+> re-record. Station setup is [`docs/dev/onair-ic9700-ft818-setup.md`](dev/onair-ic9700-ft818-setup.md);
+> the runners are `scripts/run-onair-ic9700-ft991a.sh` (rig-B-agnostic despite its name, with
+> `docs/config/onair-ic9700-ft818.example.sh`) and `scripts/run-onair-twin-ota.sh`. Both refuse a
+> frequency outside 144.500–144.750 MHz by default and only ever lower rig power
+> (`scripts/lib/rig-power.sh`). HF comes only with the release candidate (M4, decision 13).
+>
+> **Follow those documents, not this one, for M3.** What follows is the older HF matrix (TX500/KX3
+> pair, 40/20/17/10 m), kept as reference for the M4 HF run. It has not been re-verified end to end;
+> where it disagrees with the execution plan, the execution plan wins. Known stale points are
+> marked inline.
 
 This document describes how two licensed amateur radio operators set up their stations,
 verify the software stack, and execute a structured series of on-air tests using
@@ -13,7 +29,7 @@ OpenPulseHF. All tests should be completed before any public release or the Phas
 regulatory compliance report is filed.
 
 **Status:** Pending station setup by both operators.  
-**Prerequisite gate:** `cargo test --workspace --no-default-features` passes on both machines.  
+**Prerequisite gate:** `scripts/gate.sh` reports `GATE: PASS` on the commit both stations run.  
 **Execution order:** this document is the *matrix* (what to run). The *sequence* — which phase to run
 first and why the receive path must be fixed before anything else — is in
 [onair-execution-plan.md](dev/onair-execution-plan.md). Start there.
@@ -40,7 +56,9 @@ Each station needs:
 - A computer running Linux, macOS, or Windows with Rust installed
 - A USB or built-in sound card connected to the transceiver's audio in/out
 - A transceiver capable of SSB (USB) operation on the test bands
-- PTT control: serial cable (RTS/DTR), VOX, or rigctld-compatible rig
+- PTT control: rigctld-compatible rig, VOX, CM108, a GPIO line, or a serial cable (RTS/DTR). The
+  serial and GPIO backends need the `serial` / `gpio` cargo features, which the build commands
+  below do not enable
 - An antenna appropriate for each test band
 
 Recommended audio interface: any interface with separate TX/RX audio and hardware PTT,
@@ -108,7 +126,7 @@ Generated JSON reports now include explicit preflight metadata:
 For a full runbook execution in one command (matrix + evidence bundle + markdown report):
 
 ```bash
-source config/onair-stations.sh
+source docs/config/onair-stations.example.sh   # copy and fill in first
 ./scripts/run-onair-validation-flow.sh --quick --label 20m-bpsk250 --notes path/to/operator-notes.txt
 ```
 
@@ -278,10 +296,10 @@ Recommended test frequencies (check current band plans and IARU region):
 
 | Band | Suggested dial (USB) | Max mode (baud-limited) | Notes |
 |------|----------------------|-------------------------|-------|
-| 40m  | 7.070 MHz            | BPSK250                 | 300-baud limit below 28 MHz (FCC) |
-| 20m  | 14.070 MHz           | BPSK250                 | Same limit; busy Winlink band |
-| 17m  | 18.100 MHz           | BPSK250                 | Quieter; good for initial tests |
-| 10m  | 28.120 MHz           | QPSK500 / 8PSK500       | No baud limit; use for high-speed tests |
+| 40m  | 7.070 MHz            | full `fast` ladder      | every `hpx_hf` rung is ≤ 250 baud per carrier |
+| 20m  | 14.070 MHz           | full `fast` ladder      | busy Winlink band |
+| 17m  | 18.100 MHz           | full `fast` ladder      | Quieter; good for initial tests |
+| 10m  | 28.120 MHz           | full `fast` ladder      | No baud limit above 28 MHz (FCC) |
 
 CEPT operators: QPSK500 and higher modes are permitted provided occupied bandwidth
 stays within the authorised emission designator. Verify per national band plan.
@@ -450,19 +468,14 @@ not a valid test of it.
 
 **Goal:** Verify that the station ID interval requirement is met during long sessions.
 
-Run a continuous receive session for 25 minutes. The transceiver should transmit the
-station callsign in CW or voice at 10-minute intervals.
-
-```bash
-# Long-running IRS session with full protocol trace
-RUST_LOG=debug ./target/release/openpulse-tnc --mode BPSK250 --backend cpal
-```
-
-Observe that the operator manually transmits station ID at least twice during the session.
-Log the exact times in the compliance report.
+The daemon and the ARDOP TNC send the station ID themselves (`DE <callsign>` in the active mode,
+every `[station] auto_id_interval_secs`, default 600 s, plus a sign-off ID after
+`auto_id_signoff_idle_secs` of quiet; the TNC adds a Morse ID with `CWID TRUE`). A station that is
+only receiving sends no ID. Run a session that **transmits** for 25 minutes and check the log for
+`transmitted station ID` lines. This is check A4 in the execution plan.
 
 **Pass criteria:**
-- Station ID transmitted at T+0, T+10, T+20 minutes (at minimum)
+- Station ID transmitted at least every 10 minutes while transmitting, and once at the end
 - No transmission exceeds 10 minutes without an ID
 - All IDs audible and readable to a monitoring station
 
@@ -473,11 +486,11 @@ Log the exact times in the compliance report.
 Before filing the Phase 5.5-reg regulatory compliance report, confirm:
 
 - [ ] Occupied bandwidth measured with an SDR or spectrum analyser for each mode
-- [ ] BPSK31 ≤ 50 Hz, BPSK250 ≤ 260 Hz, QPSK500 ≤ 540 Hz, 64QAM500 ≤ 540 Hz, 64QAM2000-RRC ≤ 2700 Hz (±10%)
+- [ ] Measured bandwidths recorded for the `hpx_hf` rungs used (`robust` stays ≤ 500 Hz; `fast` reaches ≈2031 Hz on the OFDM rungs). The per-mode limits that stood here (QPSK500, 64QAM500, 64QAM2000-RRC) were for modes not on the Release 1 ladder
 - [ ] Station ID transmitted at ≤10-minute intervals throughout all sessions
 - [ ] No unattended automatic transmissions without valid automatic control authority
 - [ ] Test log includes date, time, frequency, mode, power, and both callsigns
-- [ ] QPSK500 and higher modes only used on bands without 300-baud symbol rate limits
+- [ ] Fixed modes above 300 baud (e.g. QPSK500) only used where the symbol-rate rule allows (every `hpx_hf` rung is ≤ 250 baud per carrier; see `docs/regulatory.md`)
 
 ---
 

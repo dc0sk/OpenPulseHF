@@ -2,7 +2,7 @@
 project: openpulsehf
 doc: docs/openpulse-manual.md
 status: living
-last_updated: 2026-10-14
+last_updated: 2026-10-15
 ---
 
 # OpenPulseHF Complete Manual
@@ -10,17 +10,32 @@ last_updated: 2026-10-14
 This manual is the operator, integrator, and engineering reference for OpenPulseHF.
 It is written as a practical guide first and a technical reference second.
 
-It describes **v0.15.0**. See [docs/releasenotes.md](releasenotes.md) for the per-release history.
+It describes current `main` (workspace version 0.16.0) on the way to **Release 1 = `v0.17.0`**,
+which is not yet cut. The last release is v0.16.0 (2026-07-18). See
+[docs/releasenotes.md](releasenotes.md) for the per-release history and
+[docs/dev/project/workplan.md](dev/project/workplan.md) for the Release 1 plan.
 
-> **Interop notice — v0.15.0 requires both ends to be v0.15.0.**
-> From v0.15.0 the transmitter opportunistically upgrades `Rs` to the stronger `RsStrong`
-> (RS(255,191), t=32) on any frame where the stronger code fits the same number of 255-byte RS
-> blocks — free on the wire, and it roughly doubles how often the weak rungs decode on a fade
-> (BPSK31 at 3 dB: 0.25 → 1.00). A v0.15.0 receiver tries both codes and lets the CRC decide; a
-> **pre-v0.15.0 receiver does not**, so a v0.15.0 station transmitting to an older one can lose
-> small frames on the weak rungs. Update both ends of a link.
-> Implementation: `openpulse_core::fec::free_rs_strengthening`, applied in
-> `ModemEngine`'s transmit path and dual-decoded on receive.
+**Release 1 scope.** In: `openpulse-server` (daemon) and the `openpulse` CLI, the ARDOP TNC
+(`openpulse-tnc`), the `hpx_hf` ladder SL1–SL14 with its plugins (MFSK16 including its K=3 return
+channel, BPSK, QPSK250-D, OFDM52, FSK4 ACK) and each rung's FEC, session compression, the PTT
+backends, station ID, and the signed classical handshake. Everything else in this manual still
+exists in the code but is **not part of Release 1**: it ships disabled or experimental, with no
+release gate. That covers mesh, repeater, relay, discovery/JS8, file transfer, QSY, FreeDV auth,
+Winlink B2F and the CMS gateway, the KISS TNC, the PQ handshake, GPU acceleration, the panel and TUI,
+and the plugins not on `hpx_hf` (8PSK, 64QAM, SC-FDMA, pilot). Sections on those features say so.
+
+> **Interop notice — v0.16.0 and v0.17 (current `main`) do not interoperate on any rung.**
+> They do not decode each other's frames on any rung, and their handshakes are incompatible:
+> update both ends of a link. Three changes since v0.16.0 cause this: every transmitted frame is
+> now whitened (#1027, keystream fixed in #1148, 2026-08-21); the signed handshake became binary
+> and does not decode the JSON one (#1147, 2026-08-23); and on 2026-10-10 (#1062, PR #1508) BPSK63, BPSK100 and
+> BPSK250 (SL3–SL5) moved to a **PN-63** preamble (x⁶+x+1), while BPSK31 and `BPSK250-RRC` keep the
+> alternating `--++` preamble and QPSK250-D keeps its own sequence. The full v0.17 wire format is
+> declared in [docs/dev/design/protocol-wire-spec.md](dev/design/protocol-wire-spec.md).
+>
+> Since v0.15.0 the transmitter also upgrades `Rs` to the stronger `RsStrong` (RS(255,191), t=32)
+> on any frame where the stronger code fits the same number of 255-byte RS blocks, and the receiver
+> tries both codes. Implementation: `openpulse_core::fec::free_rs_strengthening`.
 
 Safety and compliance note:
 - OpenPulseHF can run modes and features that are not legal in all jurisdictions or all bands.
@@ -58,27 +73,29 @@ Cross-reference:
 ### 1.1 Product Scope
 
 OpenPulseHF is a Rust workspace implementing:
-- A plugin-based modem stack (multiple modulation families)
-- Adaptive ARQ/session behavior (HPX)
+- A plugin-based modem stack (multiple modulation families; Release 1 uses those on `hpx_hf`)
+- Adaptive ARQ/session behavior (HPX) on one rate ladder with two profiles, `fast` and `robust`
 - Multiple FEC and compression strategies
 - Signed transfer and trust workflows
-- Interop surfaces (ARDOP TCP, KISS TCP, B2F/Winlink gateway)
-- Advanced features (QSY, relay, mesh, daemon/panel/TUI)
+- Interop surfaces: the ARDOP TCP TNC (Release 1); KISS TCP and the B2F/Winlink gateway (experimental)
+- The daemon and CLI (Release 1); QSY, relay, mesh, panel and TUI (experimental)
 
 ### 1.2 Mode and Waveform Specification
 
-The modulation catalog spans 10 plugin families:
+The modulation catalog spans 10 plugin families. Only MFSK16, BPSK, QPSK (`QPSK250-D`), OFDM
+(`OFDM52` family) and FSK4 are on the Release 1 ladder; the rest are selectable as fixed modes but
+not part of Release 1.
 
-- **BPSK** (`bpsk`) — BPSK31, BPSK63, BPSK100, BPSK250, BPSK250-RRC; weak-signal to narrowband HF. Differentially (NRZI) decoded, which is why it survives HF fading where coherent PSK does not.
+- **BPSK** (`bpsk`) — BPSK31, BPSK63, BPSK100, BPSK250, BPSK250-RRC; weak-signal to narrowband HF. Differentially (NRZI) decoded, which is why it survives HF fading where coherent PSK does not. BPSK63/100/250 use a PN-63 preamble; BPSK31 and BPSK250-RRC use `--++`.
 - **QPSK** (`qpsk`) — QPSK125/250/500/1000/2000/9600 with `-RRC` and `-HF` variants, plus the **differential** `QPSK250-D` / `QPSK500-D`.
-- **8PSK** (`psk8`) — 8PSK500/1000/2000/9600, with `-RRC` variants and the `8PSK1000-HF`/`-HF-RRC` pair; Gray-coded.
-- **64QAM** (`64qam`) — 64QAM500/1000/2000-RRC; max-log-MAP soft demodulator.
+- **8PSK** (`psk8`, not on `hpx_hf`) — 8PSK500/1000/2000/9600, with `-RRC` variants and the `8PSK1000-HF`/`-HF-RRC` pair; Gray-coded.
+- **64QAM** (`64qam`, not on `hpx_hf`) — 64QAM500/1000/2000-RRC; max-log-MAP soft demodulator.
 - **FSK4** (`fsk4`) — FSK4-ACK; the ACK control channel only.
 - **MFSK16** (`mfsk16`) — `MFSK16` and `MFSK16-ACK`: constant-envelope non-coherent 16-GFSK weak-signal sub-floor waveform (REQ-WSIG-01). Self-acquiring, needs no carrier phase; it is `hpx_hf`'s deep-fade rung SL1.
 - **OFDM** (`ofdm`) — OFDM16/52 (QPSK) plus the OFDM52 higher-order ladder (8PSK/16QAM/32QAM/64QAM — the HF high-throughput path).
-- **SC-FDMA** (`scfdma`) — SCFDMA16/52 (QPSK), the SCFDMA26/52 higher-order ladders, SCFDMA52-64QAM(-P4).
-- **Pilot** (`pilot`) — `PILOT-{QPSK,8PSK,16QAM,32APSK}{500,1000}` plus their `-RRC` variants and `2000-RRC`; pilot-framed single-carrier with pilot-aided carrier recovery (cycle-slip-immune, sample-rate-offset-robust); soft-capable. Selectable as fixed modes only; the four `hpx_pilot*` session profiles were deleted 2026-10-01.
-- **JS8** (`js8`) — JS8-compatible 8-GFSK weak-signal waveform used by the station-discovery and rendezvous subsystem ([§4.9](#49-js8-station-discovery-and-rendezvous)), not by the data ladder. Registered in the daemon, not in the CLI's data-mode registry.
+- **SC-FDMA** (`scfdma`, not on `hpx_hf`) — SCFDMA16/52 (QPSK), the SCFDMA26/52 higher-order ladders, SCFDMA52-64QAM(-P4).
+- **Pilot** (`pilot`, not on `hpx_hf`) — `PILOT-{QPSK,8PSK,16QAM,32APSK}{500,1000}` plus their `-RRC` variants and `2000-RRC`; pilot-framed single-carrier with pilot-aided carrier recovery (cycle-slip-immune, sample-rate-offset-robust); soft-capable. Selectable as fixed modes only; the four `hpx_pilot*` session profiles were deleted 2026-10-01.
+- **JS8** (`js8`, experimental) — JS8-compatible 8-GFSK weak-signal waveform used by the station-discovery and rendezvous subsystem ([§4.9](#49-js8-station-discovery-and-rendezvous)), not by the data ladder. Registered in the daemon, not in the CLI's data-mode registry.
 
 The plain rectangular `QPSK2000` is registered but **RRC-superseded**, and `8PSK2000` is no longer advertised at all (#1359) — use `-RRC` for both. For the authoritative per-mode table (baud, bits/symbol, gross bps, occupied bandwidth) see the [README modulation-modes table](../README.md#modulation-types); for the HF mode/FEC selection ladder see [mode-fec-ladder.md](mode-fec-ladder.md). `openpulse modes` prints the live registry.
 
@@ -88,29 +105,37 @@ The plain rectangular `QPSK2000` is registered but **RRC-superseded**, and `8PSK
 
 #### 1.2.1 The `hpx_hf` ladder (primary HF profile)
 
-The `hpx_hf` ladder is the single rate ladder for a real ≤2700 Hz HF SSB channel. Profile `fast` runs all of it, `SL1–SL14`; profile `robust` runs the same ladder capped at SL6 (≤500 Hz). The ladder and **every rung is
+The `hpx_hf` ladder is the single rate ladder for a real ≤2700 Hz HF SSB channel. There are exactly
+two session profiles on it: `fast` (the default) runs all of it, `SL1–SL14`, up to ≈2031 Hz occupied;
+`robust` runs the same ladder capped at SL6 (≤500 Hz, single-carrier). A `fast` and a `robust`
+station interoperate. The ten other profile names that existed before 2026-10-01 were deleted with
+no aliases: an unknown name is rejected with the list of valid names. Modes those profiles used
+remain selectable as fixed modes (`[modem] mode`). The ladder and **every rung is
 FEC-coded** (on a fade there is no useful uncoded rung — an uncoded BPSK31 entry rung decoded 0 % of
 fading frames at every SNR tested). Above SL6 the ladder is OFDM: the coherent single-carrier mid
 rungs it replaced decoded ~0 % on `moderate_f1` at any SNR up to 40 dB, and neither FEC nor
 differential encoding rescues them (differential does not scale to 8PSK). Source of truth:
 `SessionProfile::fast` in `crates/openpulse-core/src/profile.rs`.
 
-| SL | Mode | FEC | SNR floor (dB) | Note |
-|---|---|---|---|---|
-| 1 | `MFSK16` | `Rs` | — | non-coherent sub-floor deep-fade rung |
-| 2 | `BPSK31` | `Rs` | 3 | `initial_level` |
-| 3 | `BPSK63` | `Rs` | 4 | |
-| 4 | `BPSK100` | `Rs` | 4.5 | |
-| 5 | `BPSK250` | `Rs` | 5 | |
-| 6 | `QPSK250-D` | `Rs` | 7 | differential — coherent QPSK250 is 0 % on a fade |
-| 7 | `OFDM52` | `SoftConcatenated` | 9 | first multicarrier rung |
-| 8 | `OFDM52-8PSK` | `SoftConcatenated` | 10 | |
-| 9 | `OFDM52-16QAM` | `SoftConcatenated` | 12 | |
-| 10 | `OFDM52-32QAM` | `SoftConcatenated` | 14 | |
-| 11 | `OFDM52-64QAM` | `SoftConcatenated` | 16 | |
-| 12 | `OFDM52-16QAM` | `LdpcHighRate` | 18 | MODCOD: same modulation, r≈8/9 |
-| 13 | `OFDM52-32QAM` | `LdpcHighRate` | 19 | |
-| 14 | `OFDM52-64QAM` | `LdpcHighRate` | 20 | ladder top |
+| SL | Mode | FEC | Net bps | SNR floor (dB) | Note |
+|---|---|---|---|---|---|
+| 1 | `MFSK16` | `Rs` | ~9 | — | non-coherent sub-floor deep-fade rung |
+| 2 | `BPSK31` | `Rs` | 27 | 3 | `initial_level`; `--++` preamble |
+| 3 | `BPSK63` | `Rs` | 54 | 4 | PN-63 preamble |
+| 4 | `BPSK100` | `Rs` | 87 | 4.5 | PN-63 preamble |
+| 5 | `BPSK250` | `Rs` | 219 | 5 | PN-63 preamble |
+| 6 | `QPSK250-D` | `Rs` | 437 | 7 | differential — coherent QPSK250 is 0 % on a fade; `robust` stops here |
+| 7 | `OFDM52` | `SoftConcatenated` | 1264 | 9 | first multicarrier rung |
+| 8 | `OFDM52-8PSK` | `SoftConcatenated` | 1895 | 10 | |
+| 9 | `OFDM52-16QAM` | `SoftConcatenated` | 2527 | 12 | |
+| 10 | `OFDM52-32QAM` | `SoftConcatenated` | 3159 | 14 | |
+| 11 | `OFDM52-64QAM` | `SoftConcatenated` | 3790 | 16 | |
+| 12 | `OFDM52-16QAM` | `LdpcHighRate` | 5141 | 18 | MODCOD: same modulation, r≈8/9 |
+| 13 | `OFDM52-32QAM` | `LdpcHighRate` | 6426 | 19 | |
+| 14 | `OFDM52-64QAM` | `LdpcHighRate` | 7710 | 20 | ladder top |
+
+The BPSK rungs carry `Rs`, upgraded per frame to `RsStrong` where that costs no extra RS block. The
+ARDOP TNC registers no MFSK16, so its adaptive ladder is floored at SL2.
 
 Two things an operator should know about these numbers:
 
@@ -125,9 +150,9 @@ Two things an operator should know about these numbers:
   (`crates/openpulse-core/src/ota_rate.rs`) therefore also climbs after `ACK_CLIMB_THRESHOLD` (3)
   consecutive clean decodes, and never demotes below a level that just decoded.
 
-> **Validation status.** The whole HF-fade arc (v0.13.0–v0.15.0) is validated against the
-> **Watterson channel simulator only** (`openpulse-channel`), not on the air. Real-RF validation is
-> still an open gate — see [§1.7](#17-current-non-code-gate-status).
+> **Validation status.** The HF-fade arc is validated against the **Watterson channel simulator
+> only** (`openpulse-channel`), not on the air. Real-RF validation is still an open gate — see
+> [§1.7](#17-current-non-code-gate-status).
 
 ### 1.3 FEC Specification
 
@@ -146,10 +171,9 @@ Available FEC/session protection modes include:
 Operational guidance:
 - HF bursty channels usually favor RS/concatenated profiles; the dense modes require a **soft** code.
 - High-quality links can use lighter overhead profiles.
-- **Opportunistic `RsStrong` (v0.15.0).** Where the profile selects `Rs`, the transmitter upgrades to
+- **Opportunistic `RsStrong` (since v0.15.0).** Where the profile selects `Rs`, the transmitter upgrades to
   `RsStrong` per frame **only when the stronger code occupies the same number of 255-byte RS blocks**,
-  so airtime can never regress; the receiver tries both. See the interop notice at the top of this
-  manual — both ends must be v0.15.0.
+  so airtime can never regress; the receiver tries both.
 - **`RsInterleaved` is inert on a single-block payload.** A payload of ≤223 bytes is one RS codeword,
   and a single codeword is position-agnostic, so there is nothing for the interleaver to spread
   (measured: identical decode rates to bare `Rs`). Code *strength* is the lever at that size;
@@ -163,8 +187,13 @@ Session-layer compression in `openpulse-core` (`compression.rs`):
 - Zstd with an embedded HPX dictionary (dictionary ID carried to catch version skew)
 
 Behavior:
-- Compression can be negotiated in signed handshake context.
+- Session compression is part of Release 1 and off by default: `[compression] enabled = false`.
+  It compresses the daemon's OTA session payloads before transmission. The receive side always
+  decompresses a packed frame, so enabling it on one station is safe.
 - `compress_if_smaller()` picks the smaller of LZ4/Zstd and falls back to the original bytes.
+- A packed frame that fails to unpack is a frame integrity error: it is dropped, counted and logged
+  (REQ-CMP-05), never delivered.
+- The zstd frame header carries the dictionary id, so dictionary skew is caught without a wire change.
 
 This is distinct from the B2F/Winlink message compression in [§2.7](#27-winlinkb2f-path): B2F Type D
 is Gzip, and **B2F Type C (LZHUF) is not supported** — the implementation was deleted in v0.15.0 and
@@ -173,12 +202,16 @@ an inbound Type C proposal is answered `Reject`.
 ### 1.5 Session, Security, and Trust Specification
 
 Security and trust layers include:
-- Ed25519-signed handshake and signed transfer manifest verification
-- Post-quantum handshake support (ML-DSA-44 signatures, ML-KEM-768 key encapsulation)
-- Hybrid signing mode (classical + PQ)
+- Ed25519-signed handshake (Release 1) and signed transfer manifest verification
+- Post-quantum handshake support (ML-DSA-44 signatures, ML-KEM-768 key encapsulation) — not part of
+  Release 1
+- Hybrid signing mode (classical + PQ) — not part of Release 1
 - Trust classification and policy profiles
 
 ### 1.6 Advanced Feature Specification
+
+None of these is part of Release 1. They exist in the code, ship disabled or experimental, and have
+no release gate.
 
 - QSY frequency agility (signed, freshness-stamped frame exchange authenticated to the handshake
   peer; candidate scanning and switch coordination)
@@ -194,13 +227,20 @@ Security and trust layers include:
 
 ### 1.7 Current Non-Code Gate Status
 
-Code implementation is broad and test-backed. Two gates remain open, and both need real radios:
+Code implementation is broad and test-backed. The Release 1 gates that remain open need real radios.
+Test stages run in this order: virtual audio, hardware loopback, **2 m** on air (IC-9700 ↔ FT-818 at
+144.640 MHz; station A = rpi51 + IC-9700, station B = rpi53 + FT-818 + SCU-17), then HF only with the
+release candidate.
 
-- **On-air regulatory validation/reporting workflow** (station-ID audit, compliance report).
+- **On-air validation on 2 m** (work plan milestone M3): the on-air gates, the A1/A2 acceptance runs,
+  an ARDOP session with Pat, and the regulatory station-ID record. Open.
+- **On-air follow-ups from M2**: measuring the PTT leader at the first gate and re-measuring the
+  receive cost on the Pi. Waiting on the rigs.
 - **On-air validation of the HF-fade work.** Everything in [§1.2.1](#121-the-hpx_hf-ladder-primary-hf-profile)
   is measured against the Watterson channel simulator only.
 
-Release readiness is tracked in [docs/dev/project/release-1.0-criteria.md](dev/project/release-1.0-criteria.md).
+Release 1 readiness is tracked in [docs/dev/project/workplan.md](dev/project/workplan.md); the
+fuller 1.0 criteria are in [docs/dev/project/release-1.0-criteria.md](dev/project/release-1.0-criteria.md).
 A reproducible SPDX software bill of materials is committed as `SBOM.spdx.json` and regenerated with
 `scripts/generate-sbom.sh`.
 
@@ -214,19 +254,23 @@ Cross-reference:
 ### 2.1 Basic Local Validation (No RF Hardware)
 
 ```bash
-cargo build --release
+cargo build --release -p openpulse-cli
 openpulse modes
 openpulse devices
-openpulse --backend loopback transmit "CQ CQ TEST" --mode BPSK100
-openpulse --backend loopback receive --mode BPSK100
+# Hardware-free round trips (the loopback backend is in-process, so a loopback transmit in one
+# process and a loopback receive in another never meet):
+openpulse adaptive --profile fast --channel awgn --snr 12 --frames 8
+openpulse --backend loopback --log error benchmark run
 ```
 
 ### 2.2 Mode Recommendation by SNR
 
 ```bash
-openpulse mode-advisor --snr 12
-openpulse mode-advisor --snr 20
+openpulse mode-advisor --snr 12                    # profile from [modem] profile, default fast
+openpulse mode-advisor --snr 20 --profile robust   # robust never goes above SL6
 ```
+
+See [docs/cli-mode-advisor-guide.md](cli-mode-advisor-guide.md).
 
 ### 2.3 Session Metrics Export
 
@@ -239,17 +283,28 @@ openpulse session-metrics --format text
 
 ```bash
 openpulse monitor --mode BPSK100
-openpulse monitor --mode QPSK500
+openpulse monitor --mode QPSK250-D
 ```
 
 ### 2.5 ARDOP TNC Drop-In Path
 
+The ARDOP-compatible TNC (`openpulse-tnc`, Release 1) is the path for Pat and other Winlink
+clients. Build it with audio and start it on the loopback interface:
+
 ```bash
-openpulse --backend loopback receive --mode BPSK250
-openpulse --backend loopback transmit "ARDOP-path smoke test" --mode BPSK250
+cargo build --release -p openpulse-ardop --features cpal
+openpulse-tnc --backend cpal      # cmd port 8515, data port 8516 on 127.0.0.1 ([ardop] in config.toml)
 ```
 
-Use this smoke test to validate equivalent modem behavior before connecting external ARDOP-compatible clients through dedicated bridge services.
+It reads `[audio] device`, `[modem] mode` (default `BPSK250`), `[modem] ptt_backend` /
+`ptt_device` / `ptt_gpio` / `ptt_leader_ms`, `[station] auto_id_interval_secs`, and `[ardop]`.
+What it does today:
+
+- Receives on real audio (#1310), and the ARQ ACK listen holds its capture stream and scans it (#1315).
+- A host data block larger than one modem frame is split into frame-sized chunks, in order, and all
+  of them go on the air (#1385).
+- Station ID: the TNC sends its own periodic and sign-off ID (`[station] auto_id_*`) using the
+  host's `MYID`; without a valid `MYID` (not `N0CALL`) it refuses to transmit.
 
 **Adaptive ARQ (opt-in).** By default the ARDOP TNC runs fixed-mode, and the host hints `ARQBW` /
 `ARQTIMEOUT` are accepted-and-echoed but inert. Enable the adaptive ARQ session to make them
@@ -259,29 +314,38 @@ effective — the rate ladder then adapts, `ARQBW` caps it to a max occupied ban
 ```toml
 [ardop]
 enable_adaptive_arq = true       # default false (fixed-mode)
-adaptive_profile = "fast"        # "fast" or "robust"; an empty or unknown name is an error
+adaptive_profile = "fast"        # "fast" (default) or "robust"; an empty or unknown name is an error
 ```
+
+- `ARQBW` sizes the ladder from each registered plugin's own occupied bandwidth, not from a separate
+  table.
+- The adaptive ladder is floored at SL2 (`BPSK31`): the TNC registers no MFSK16 and has no K=3 ACK, so
+  NACK exhaustion retries at BPSK31 instead of SL1.
 
 ### 2.6 KISS TNC Drop-In Path
 
+Not part of Release 1 (experimental).
+
 ```bash
-openpulse --backend loopback receive --mode BPSK250
-openpulse broadcast --payload "KISS-path smoke test" --mode BPSK250 --ttl 1 --callsign N0CALL
+cargo build --release -p openpulse-kiss --features cpal
+openpulse-kisstnc --backend cpal --mode BPSK250    # KISS over TCP on 127.0.0.1:8100 ([kiss] in config.toml)
 ```
 
-Use this baseline modem check before attaching APRS/AX.25 software through dedicated KISS bridge services.
+Attach APRS/AX.25 software to the TCP port.
 
 ### 2.7 Winlink/B2F Path
 
-Winlink traffic does not go through the `openpulse` CLI. Two binaries carry it:
+Winlink traffic does not go through the `openpulse` CLI. Two binaries carry it. The ARDOP TNC is
+Release 1; the direct CMS gateway and the in-tree B2F implementation are not part of Release 1
+(experimental):
 
 ```bash
 # Direct TCP to a Winlink CMS (no radio) — ISS proposals + IRS reply in one connection
 openpulse-gateway --host cms.winlink.org --port 8772 --callsign N0CALL \
   send --to K5ABC --subject "Test" --message "Hello over OpenPulse"
 
-# ARDOP-compatible TNC for Pat and other Winlink clients (over RF)
-openpulse-tnc --bind 127.0.0.1 --cmd-port 8515 --data-port 8516 --mode QPSK500
+# ARDOP-compatible TNC for Pat and other Winlink clients (over RF; Pat speaks B2F itself)
+openpulse-tnc --bind 127.0.0.1 --cmd-port 8515 --data-port 8516 --mode BPSK250 --backend cpal
 ```
 
 Protocol notes an operator should know:
@@ -303,6 +367,8 @@ Protocol notes an operator should know:
 
 ### 2.8 Mesh Daemon Start
 
+Not part of Release 1 (experimental).
+
 ```bash
 openpulse beacon --mode BPSK250 --interval 60 --callsign N0CALL --ttl 1
 openpulse broadcast --payload "mesh relay probe" --mode BPSK250 --ttl 3 --callsign N0CALL
@@ -319,6 +385,8 @@ openpulse session log --follow --follow-timeout-ms 5000
 ```
 
 ### 2.10 FreeDV Authenticated Voice Use Case
+
+Not part of Release 1 (experimental).
 
 Use this path when voice traffic is carried by FreeDV and you want cryptographic station-identity beacons alongside voice frames.
 
@@ -346,6 +414,8 @@ cargo test --workspace --no-default-features
 ```
 
 ### 2.12 PKI Tooling Service Quick Start
+
+`pki-tooling` is not a Release 1 component.
 
 Use this subchapter when you need a local trust-bundle service for identity, moderation,
 and trust publication workflows.
@@ -446,10 +516,17 @@ Standard execution chain:
 
 #### A. Interactive transmit and receive
 
+Run the receiver on one station and the transmitter on the other (or on two sound cards cabled
+together). Both ends must use the same mode and `--fec`:
+
 ```bash
-openpulse --backend default transmit "status report" --mode BPSK250
-openpulse --backend default receive --mode BPSK250
+openpulse receive --mode BPSK250 --fec rs --listen-ms 60000 --device plughw:CARD=CODEC,DEV=0
+openpulse --ptt rigctld --rig 127.0.0.1:4532 transmit "status report" --mode BPSK250 --fec rs \
+  --device plughw:CARD=CODEC,DEV=0
 ```
+
+`transmit` refuses, before keying, a frame whose airtime exceeds the 180 s PTT watchdog. See
+[§3.7](#37-ptt-and-transmit-behaviour) for how keying works.
 
 #### B. Session lifecycle operations
 
@@ -468,6 +545,8 @@ openpulse benchmark run --min-pass-rate 1.0 --max-mean-transitions 20.0
 ```
 
 #### D. Broadcast and beacon patterns
+
+Not part of Release 1 (relay/mesh path, experimental).
 
 ```bash
 openpulse broadcast --payload "network status" --mode BPSK250 --ttl 2 --callsign N0CALL
@@ -518,13 +597,18 @@ openpulse config init > ~/.config/openpulse/config.toml
 ```
 
 Recommended baseline:
+- A real `[station] callsign` (the daemon refuses to start on an empty callsign or `N0CALL`)
 - Conservative fixed HF mode to start (`[modem] mode = "BPSK250"`, the built-in default)
 - Adaptive profile `[modem] profile = "fast"` (also the default) for HF; `robust` (the same ladder
-  capped at SL6, ≤500 Hz) for poor conditions or limited gear. An unknown name fails with the list of
-  valid names.
-- Explicit backend selection
+  capped at SL6, ≤500 Hz) for poor conditions or limited gear. Only these two names exist; any other
+  fails with the list of valid names.
+- Explicit backend and device selection (`[audio] backend = "cpal"`, `[audio] device = "plughw:CARD=...,DEV=0"`)
+- `[modem] ptt_backend` set for your rig, and `ptt_leader_ms` measured rather than guessed
 - Trust policy set to balanced/strict according to operation
 - Logging level set to `info` for field work, `debug` for issue triage
+
+The keys and defaults are listed in [§12.1](#121-openpulse-runtime-config-configtoml).
+
 
 ### 3.6 Interoperability Cookbook
 
@@ -532,10 +616,8 @@ This section focuses on interoperability checks for existing TNC/modem endpoints
 
 #### A. ARDOP-compatible interoperability path
 
-```bash
-openpulse --backend loopback receive --mode BPSK250
-openpulse --backend loopback transmit "ARDOP replacement validation" --mode BPSK250
-```
+Start `openpulse-tnc` as in [§2.5](#25-ardop-tnc-drop-in-path) and point the client at
+127.0.0.1:8515 (command) / 8516 (data).
 
 Typical client expectations to validate:
 - Command port responds to VERSION/STATE/LISTEN/CONNECT sequence.
@@ -544,10 +626,8 @@ Typical client expectations to validate:
 
 #### B. KISS/AX.25 TCP interoperability path
 
-```bash
-openpulse --backend loopback receive --mode BPSK250
-openpulse broadcast --payload "AX25 replacement validation" --mode BPSK250 --ttl 1 --callsign N0CALL
-```
+Not part of Release 1 (experimental). Start `openpulse-kisstnc` as in
+[§2.6](#26-kiss-tnc-drop-in-path) and point the client at 127.0.0.1:8100.
 
 Validation checklist:
 - KISS FEND/FESC byte-stuffing behavior is preserved.
@@ -560,17 +640,41 @@ Operational note:
 #### C. Standard operational script examples
 
 ```bash
-# station startup
-openpulse --backend default receive --mode BPSK250
+# station B: listen
+openpulse receive --mode BPSK250 --fec rs --listen-ms 120000
 
-# second terminal: transmit smoke test
-openpulse --backend default transmit "OPHF link check" --mode BPSK250
+# station A: transmit smoke test
+openpulse --ptt rigctld transmit "OPHF link check" --mode BPSK250 --fec rs
 
 # diagnostics snapshot
 openpulse session state --diagnostics --format json
 openpulse trust policy show
 openpulse session-metrics --format json
 ```
+
+### 3.7 PTT and transmit behaviour
+
+The CLI, the daemon and the ARDOP TNC all key through one path (`SharedPtt` in `openpulse-radio`):
+
+- **Backends:** `none`, `vox`, `rigctld`, `rts`, `dtr`, `cm108`, `gpio` (CLI `--ptt`, config
+  `[modem] ptt_backend`; `rts`/`dtr` need the `serial` feature and `gpio` the `gpio` feature).
+- **Leader:** `[modem] ptt_leader_ms` (CLI `--ptt-leader-ms`) waits that long between the PTT edge
+  and the first sample, so the rig's key-up does not clip the preamble. Default `0`. No default value
+  is shipped because none has been measured; measure your rig before setting it.
+- **Release** waits for the audio device's reported drain plus 10 ms, never longer than the fixed
+  200 ms wait it replaced, so the tail of a frame is not cut off and the key is not held longer than
+  before.
+- **One key at a time:** a second key while the transmitter is keyed is refused; it does not share
+  the first one's hold.
+- **Watchdog:** a keyed hold is force-released after 180 s. The CLI refuses a single frame that would
+  need longer, before keying.
+- **Unusable backend (daemon):** a mistyped or not-compiled-in `ptt_backend` stops the daemon at
+  startup; a real backend that is unreachable (rigctld not up yet, device unplugged) refuses every
+  emission until it reconnects. The ARDOP TNC does not do this yet: if its PTT backend cannot be
+  built it logs a warning and continues without keying the rig.
+- **Device open:** the first open of a named audio device enumerates every device to find it; the
+  resolved name is then cached, so later keyed opens skip the enumeration. Measured key-to-first-sample
+  with the cache: about 100 ms on rpi51 and 31 ms on rpi53 (567–684 ms and 239–256 ms before).
 
 Cross-reference:
 - For advanced transport behaviors (relay/mesh/QSY/signed workflows), continue to [Chapter 4](#chapter-4-advanced-manual).
@@ -580,7 +684,9 @@ Cross-reference:
 
 ## Chapter 4: Advanced Manual
 
-This chapter covers advanced behaviors and high-leverage workflows.
+This chapter covers advanced behaviors and high-leverage workflows. Except for the signed classical
+handshake in [§4.6](#46-signed-transfers-and-handshake-modes), nothing in this chapter is part of
+Release 1: each feature is off by default or experimental, with no release gate.
 
 ### 4.1 QSY Mode (Frequency Agility)
 
@@ -601,12 +707,12 @@ openpulse qsy status
 openpulse qsy init --rig 127.0.0.1:4532
 ```
 
-Config example:
+Off by default (`[qsy] enabled = false`). Config example:
 
 ```toml
 [qsy]
 enabled = true
-allow_trustlevels = ["verified", "psk_verified"]
+allow_trustlevels = ["verified", "psk_verified", "reduced"]   # the default list
 bandplan_mode = "ham-iaru-r1"
 bandplan_awareness_enabled = true
 enforce_max_channel_width = true
@@ -627,7 +733,7 @@ Key behaviors:
 - Route scoring and best-route selection
 - Envelope-origin authentication (a forged or unsigned `src_peer_id` is rejected at the relay)
 
-There is **no `openpulse relay` CLI subcommand**. Relay is configured in `config.toml` and runs
+Off by default (`[relay] enabled = false`). There is **no `openpulse relay` CLI subcommand**. Relay is configured in `config.toml` and runs
 inside the daemon, the mesh daemon, and the ARDOP/KISS bridges when enabled:
 
 ```toml
@@ -683,6 +789,9 @@ Operational pattern:
 - Multi-hop relay paths are selected by score and policy constraints
 
 ### 4.4 Dual-Transceiver and Cross-Band Repeater
+
+Off by default (`[repeater] enabled = false`). The generic serial CAT backend in §4.4.1 is a
+separate, general rig-control option.
 
 Model:
 - `rig_a`: receive/primary side
@@ -749,7 +858,8 @@ openpulse monitor --mode BPSK250
 
 ### 4.5 Custom Zstd Dictionary Training
 
-Dictionary trainer is available at `tools/openpulse-dict-trainer`.
+Dictionary trainer is available at `tools/openpulse-dict-trainer`. It is a development tool, not
+part of Release 1.
 
 Operational examples:
 
@@ -768,8 +878,8 @@ Integration note:
 ### 4.6 Signed Transfers and Handshake Modes
 
 Capabilities:
-- Classical signed handshake + manifest
-- PQ-capable and hybrid handshake variants
+- Classical signed handshake + manifest (the classical handshake is Release 1)
+- PQ-capable and hybrid handshake variants (not part of Release 1)
 - **Over-the-air signed handshake on connect (daemon).** A `ConnectPeer` initiates a signed
   `ConReq`/`ConAck` exchange over RF: the initiator transmits a signed `ConReq` (SAR-fragmented,
   since the frame exceeds one modem frame), the responder verifies it and replies with a signed
@@ -808,6 +918,8 @@ Cross-reference:
 
 ### 4.7 FreeDV Authenticated Voice Integration
 
+Not part of Release 1 (experimental).
+
 Purpose:
 - Add authenticated identity signaling to FreeDV voice operation without changing FreeDV codec internals.
 
@@ -830,7 +942,7 @@ Cross-reference:
 Purpose:
 - Send a file directly to another OpenPulse station over RF, without a Winlink CMS in the path.
 
-Off by default. Enable and bound it in `config.toml`:
+Off by default and not part of Release 1 (experimental). Enable and bound it in `config.toml`:
 
 ```toml
 [file_transfer]
@@ -861,6 +973,7 @@ Operational notes:
   radio's watchdog and yields the channel between bursts.
 - A partially-received transfer resumes from its `.partial` blocks within `partial_ttl_hours`.
 - Payloads are hashed and verified; a tampered transfer fails verification rather than being delivered.
+- A transfer survives a lost fragment, a lost ack and a long block.
 - **On-air validation is deferred.** The protocol is exercised over loopback, the modem, and the
   twin-daemon rig, not over RF.
 
@@ -872,7 +985,7 @@ Purpose:
 - Find other OpenPulse stations on a shared JS8 calling frequency, then negotiate a move to a working
   channel and hand off to a signed HPX connection.
 
-Off by default, and TX is gated: beaconing requires an explicit mode, a configured callsign, the host
+Off by default and not part of Release 1 (experimental). TX is gated: beaconing requires an explicit mode, a configured callsign, the host
 clock within ±2 s of UTC, and a clear channel. **The operator remains responsible for §97.221
 automatic-control compliance** — see [docs/regulatory.md](regulatory.md).
 
@@ -1009,7 +1122,7 @@ Compared with closed or single-focus stacks, OpenPulseHF offers:
 
 - Flexible deployment from local loopback to daemon/panel operations
 - Rich diagnostics and event streaming for troubleshooting
-- Multiple operating profiles from conservative to high-throughput paths
+- Two session profiles on one ladder: `robust` (≤500 Hz, single-carrier) and `fast` (the full ladder)
 
 ### 6.4 Engineering Advantages
 
@@ -1275,10 +1388,43 @@ Sections in the typed schema (`crates/openpulse-config/src/lib.rs`), all optiona
 `[monitor]`.
 
 Precedence: CLI flag > config file > built-in default. `openpulse config init` writes a fully
-commented template.
+commented template. A missing file means all defaults.
 
 Default location:
-- `~/.config/openpulse/config.toml`
+- `~/.config/openpulse/config.toml` (Linux; macOS `~/Library/Application Support/openpulse/`)
+
+Keys an operator most often sets (defaults from `crates/openpulse-config/src/lib.rs`):
+
+| Key | Default | Meaning |
+|---|---|---|
+| `[station] callsign` | `"N0CALL"` | The daemon refuses to start on `N0CALL`, an empty callsign, or one too long for the handshake |
+| `[station] identity_key_path` | `""` (= `~/.config/openpulse/identity.key`) | Ed25519 seed for the signed handshake; generated on first run |
+| `[station] auto_id_interval_secs` | `600` | Periodic station ID while transmitting; `0` disables |
+| `[station] auto_id_signoff_idle_secs` | `10` | Sign-off ID after this much TX quiet; `0` disables |
+| `[station] tx_log_path` | `"~/.local/share/openpulse/tx-log.ndjson"` | Regulatory TX record, one JSON object per frame; empty disables |
+| `[audio] backend` | `"default"` | `cpal`, `loopback`, or `default` (cpal if compiled in) |
+| `[audio] device` | `""` (system default) | Resolved by exact name, then ALSA `CARD=` token, then substring |
+| `[modem] mode` | `"BPSK250"` | Fixed mode when no adaptive session runs |
+| `[modem] profile` | `"fast"` | `fast` or `robust`; anything else is rejected |
+| `[modem] ptt_backend` | `"none"` | `none`, `rts`, `dtr`, `vox`, `rigctld`, `cm108`, `gpio` |
+| `[modem] ptt_device` / `ptt_gpio` | `""` / `3` | Device path or `chip:line` for device backends; CM108 GPIO pin |
+| `[modem] ptt_leader_ms` | `0` | Wait between PTT edge and first sample; measure the rig first |
+| `[modem] ota_enabled` | `false` | Daemon starts a receiver-led OTA rate session at launch |
+| `[modem] ota_profile` | `""` (= `profile`) | Profile for the OTA session |
+| `[modem] ota_min_level` / `ota_max_level` / `ota_lock_level` | `""` | Bound or lock the OTA ladder (e.g. `"SL3"`, `"SL10"`) |
+| `[modem] ota_aggressiveness` | `""` | `conservative`/`balanced`/`aggressive`; overrides `ota_min_backlog` and `ota_upgrade_hold_frames` |
+| `[modem] dcd_squelch` | `0.0` (off) | Operator floor under the adaptive squelch; per-band values in `dcd_squelch_bands` |
+| `[modem] notch_enabled` / `agc_enabled` / `cessb_enabled` | `true` / `false` / `true` | Receiver notch, receiver AGC, CE-SSB TX conditioning |
+| `[radio] cat_backend` / `rigctld_addr` | `"rigctld"` / `"127.0.0.1:4532"` | CAT control; `"none"` for no CAT |
+| `[ardop] enable_adaptive_arq` / `adaptive_profile` | `false` / `"fast"` | ARDOP TNC adaptive ARQ ([§2.5](#25-ardop-tnc-drop-in-path)) |
+| `[ardop] bind_addr` / `cmd_port` / `data_port` | `"127.0.0.1"` / `8515` / `8516` | ARDOP TNC ports |
+| `[daemon] tcp_port` / `websocket_port` | `9000` / `9001` | Daemon control ports, bound to 127.0.0.1 |
+| `[compression] enabled` | `false` | Session payload compression |
+| `[observability] audit_mode` / `archive_dir` | `false` / `"~/.local/share/openpulse/audit"` | Audit-mode recording for `openpulse audit-bundle` |
+| `[logging] level` / `file` | `"info"` / unset | Log level (`RUST_LOG` overrides it in the daemon and TNC); optional rolling log file |
+
+The sections for experimental features (`[repeater]`, `[relay]`, `[mesh]`, `[qsy]`, `[kiss]`,
+`[file_transfer]`, `[discovery]`, `[monitor]`, `[logbook]`) all default to disabled.
 
 Example file:
 - [docs/config/openpulse.config.toml](config/openpulse.config.toml)
@@ -1299,8 +1445,12 @@ Example file:
 Purpose:
 - Configures station A/B connection, callsigns, PTT backend, and optional audio/rigctld parameters for on-air scripts.
 
-Example file:
-- [docs/config/onair-stations.example.sh](config/onair-stations.example.sh)
+Example files (index: [docs/config/README.md](config/README.md)):
+- [docs/config/onair-ic9700-ft818.example.sh](config/onair-ic9700-ft818.example.sh): the current 2 m station pair
+- [docs/config/onair-twin-ota.example.sh](config/onair-twin-ota.example.sh): two daemons with OTA rate-stepping
+- [docs/config/onair-stations.example.sh](config/onair-stations.example.sh): generic pair for `run-onair-tests.sh`
+
+The runner variables are described in [§13.2 F](#f-on-air-rigs-real-rf).
 
 ### 12.4 Radio CAT Rig Definition Files
 
@@ -1317,6 +1467,7 @@ Example files:
 
 ### 12.5 OpenPulse Panel
 
+- Not part of Release 1 (experimental).
 - `openpulse-panel` is a native desktop app (iced). It takes no config file and no CLI
   arguments: launch it, enter the daemon control-port address in the connection field
   (default `127.0.0.1:9000`, TCP; `ws://…:9001` for WebSocket), and click Connect.
@@ -1340,7 +1491,11 @@ rig. Examples use real flags, subcommands, and environment variables only.
     for loopback/CI. Optional `serial` (RTS/DTR PTT), `generic-serial` (scripted CAT), `gpio`.
   - `openpulse-tui`: feature `cpal-backend` (off by default).
   - `openpulse-tnc`, `openpulse-kisstnc`, `openpulse-mesh`, `openpulse-server`,
-    `openpulse-testbench`: feature `cpal` (off by default; `openpulse-server` also has `gpu` on by default).
+    `openpulse-testbench`: feature `cpal` (off by default; `openpulse-server` also has `gpu` on by default,
+    which uses a GPU when one is found and the CPU otherwise; GPU acceleration is not part of Release 1).
+  - `openpulse-tnc` and `openpulse-kisstnc` also take `serial`, `generic-serial` and `gpio` for PTT.
+  - Cross-compiled aarch64 builds are `--no-default-features` and have no audio: build radio binaries
+    on the Raspberry Pi itself (see [raspberry-pi-4-5-tuning-and-benchmarks.md](raspberry-pi-4-5-tuning-and-benchmarks.md)).
   - `openpulse-gateway`, `openpulse-dict-trainer`, `pki-tooling`: no audio feature.
   - `openpulse-linksim`: features `gui` and `serve` (both opt-in; `gpu` on by default).
 - **CI / hardware-free** builds and tests always pass `--no-default-features`.
@@ -1351,14 +1506,14 @@ rig. Examples use real flags, subcommands, and environment variables only.
 
 | Binary | Crate | Role | Hardware-audio build |
 |---|---|---|---|
-| `openpulse` | openpulse-cli | CLI: transmit/receive, ARQ, adaptive, diagnostics, daemon control | `cargo build --release -p openpulse-cli` (default) |
-| `openpulse-tui` | openpulse-tui | Live terminal dashboard (HPX/AFC/rate/DCD) | `--features cpal-backend` |
-| `openpulse-server` | openpulse-daemon | Background daemon; NDJSON control on TCP 9000 / WS 9001 | `--features cpal` |
-| `openpulse-tnc` | openpulse-ardop | ARDOP-compatible TCP TNC (Pat/Winlink) | `--features cpal` |
-| `openpulse-kisstnc` | openpulse-kiss | KISS/AX.25 TCP TNC | `--features cpal` |
-| `openpulse-gateway` | openpulse-gateway | Direct TCP Winlink CMS gateway (no radio) | n/a |
-| `openpulse-mesh` | openpulse-mesh | Mesh broadcast/relay daemon | *(loopback only — see below)* |
-| `openpulse-panel` | openpulse-panel | iced operator panel (connects to the daemon) | n/a (control client) |
+| `openpulse` | openpulse-cli | **Release 1.** CLI: transmit/receive, ARQ, adaptive, diagnostics, daemon control | `cargo build --release -p openpulse-cli` (default) |
+| `openpulse-tui` | openpulse-tui | Experimental. Live terminal dashboard (HPX/AFC/rate/DCD) | `--features cpal-backend` |
+| `openpulse-server` | openpulse-daemon | **Release 1.** Background daemon; NDJSON control on TCP 9000 / WS 9001 | `--features cpal` |
+| `openpulse-tnc` | openpulse-ardop | **Release 1.** ARDOP-compatible TCP TNC (Pat/Winlink) | `--features cpal` |
+| `openpulse-kisstnc` | openpulse-kiss | Experimental. KISS/AX.25 TCP TNC | `--features cpal` |
+| `openpulse-gateway` | openpulse-gateway | Experimental. Direct TCP Winlink CMS gateway (no radio) | n/a |
+| `openpulse-mesh` | openpulse-mesh | Experimental. Mesh broadcast/relay daemon | *(loopback only — see below)* |
+| `openpulse-panel` | openpulse-panel | Experimental. iced operator panel (connects to the daemon) | n/a (control client) |
 | `openpulse-twinview` | openpulse-twinview | egui both-directions viewer over two daemons | n/a (control client) |
 | `openpulse-testbench` | openpulse-testbench | egui 4-column signal-path scope | `--features cpal` (live capture) |
 | `openpulse-testmatrix` | openpulse-testmatrix | Mode × channel test-matrix runner (no audio) | n/a |
@@ -1370,18 +1525,20 @@ rig. Examples use real flags, subcommands, and environment variables only.
 #### `openpulse` (CLI)
 
 Global flags: `--backend <default|loopback|cpal>`, `--log <level>`,
-`--ptt <none|rts|dtr|vox|rigctld|cm108|gpio>`,
+`--ptt <none|rts|dtr|vox|rigctld|cm108|gpio|generic>`,
 `--rig <serial path | rigctld addr | /dev/hidrawN | chip:line>`, `--rig-file <toml>`,
-`--max-power <watts>` (default 100), `--pki-url <url>` (default `http://127.0.0.1:8787`).
+`--ptt-leader-ms <ms>` (default 0), `--max-power <watts>` (default 100),
+`--pki-url <url>` (default `http://127.0.0.1:8787`). Full reference: [docs/cli-guide.md](cli-guide.md).
 
 ```bash
-# Local loopback transmit / receive (no hardware)
-openpulse --backend loopback transmit "Hello World" --mode BPSK250 --fec rs
-openpulse --backend loopback receive --mode BPSK250 --listen-ms 5000 --fec rs
+# Transmit / receive over real audio (receiver first; same mode and --fec on both ends)
+openpulse receive --mode BPSK250 --fec rs --listen-ms 60000
+openpulse --ptt rigctld --ptt-leader-ms 0 transmit "Hello World" --mode BPSK250 --fec rs
 
 # Inventory
-openpulse modes        # list modulation modes
-openpulse devices      # list audio devices
+openpulse modes            # list modulation modes
+openpulse modes --airtime  # MODE<TAB>SECONDS for the largest frame per mode
+openpulse devices          # list audio devices
 
 # Mode recommendation for a measured SNR (no hardware)
 openpulse mode-advisor --snr 12.0 --profile fast
@@ -1397,7 +1554,8 @@ openpulse arq send --payload "Test message" --mode BPSK250 --retries 3   # stati
 openpulse monitor --mode BPSK250 | jq .
 openpulse --backend loopback --log error benchmark run
 
-# On-device calibration (audio level, PTT latency, AFC)
+# Calibration: `ptt` keys the configured backend and measures latency; `audio` and `afc` are
+# self-checks on the in-memory loopback
 openpulse --ptt rts --rig /dev/ttyUSB0 calibrate ptt --output ptt.json
 # Guided ALC drive tuning (keys the TX — needs --features cpal-backend + rigctld; use a dummy load).
 # Steps TX attenuation until the rig's ALC sits in a moderate band, so a high-PAPR multicarrier
@@ -1412,12 +1570,12 @@ openpulse config init > ~/.config/openpulse/config.toml
 # Package audit-mode artifacts (events.ndjson, snapshot.json, logs) into a .tar.gz
 openpulse audit-bundle --help
 
-# Control a running openpulse-server daemon (OTA adaptive rate-stepping)
+# Control a running openpulse-server daemon (OTA adaptive rate-stepping); --addr goes before the subcommand
 openpulse daemon --addr 127.0.0.1:9000 ota-start --profile robust
 openpulse daemon ota-bounds --min SL3 --max SL10
 openpulse daemon ota-hysteresis --min-backlog 128 --upgrade-hold-frames 3
 openpulse daemon ota-aggressiveness balanced   # conservative|balanced|aggressive (sets A2/A3 together)
-openpulse daemon set-dcd-squelch 0.05          # raise the squelch above a noisy band's floor
+openpulse daemon set-dcd-squelch 0.05          # floor under the adaptive squelch (ignore weak traffic); 0 = off
 openpulse daemon set-tx-attenuation 6          # TX attenuation dB for the current band (0 = none)
 openpulse daemon set-tx-attenuation 6 --band 20m   # ...or a named band
 openpulse daemon ota-lock --level SL6
@@ -1433,6 +1591,9 @@ openpulse daemon set-logbook true    # automatic ADIF logbook (one record per QS
 
 #### `openpulse-tui`
 
+Not part of Release 1 (experimental). Flags: `--mode` (default `BPSK100`), `--backend` (default
+`loopback`), `--log` (default `warn`).
+
 ```bash
 # Loopback dashboard (default backend); requires a real callsign in config.toml
 openpulse-tui --mode BPSK250
@@ -1444,11 +1605,18 @@ Keys: `q`/Ctrl+C quit · `p` pause · ↑/↓ scroll · `Q` toggle QSY · `b` cy
 #### `openpulse-server` (daemon)
 
 Config-file driven (`~/.config/openpulse/config.toml`); no CLI flags. Reads
-`[daemon]` (TCP 9000, WS 9001, `receive_tick_ms` 50), `[modem]` (incl. `ota_*`),
-`[audio]`, `[radio]` (incl. `cat_backend`), `[repeater]`, `[qsy]`, `[relay]`, `[trust]`.
+`[daemon]` (TCP 9000, WS 9001, `receive_tick_ms` 50), `[station]`, `[modem]` (incl. `ota_*` and
+`ptt_*`), `[audio]`, `[radio]` (incl. `cat_backend`), `[compression]`, `[observability]`,
+`[logging]`, and the experimental sections (`[repeater]`, `[qsy]`, `[relay]`, `[discovery]`,
+`[file_transfer]`, …). Log level: `RUST_LOG` if set, else `[logging] level`.
+
+It refuses to start on: an empty `[station] callsign`, `N0CALL`, or a callsign over the handshake's
+length limit; a `[modem] ptt_backend` that is mistyped or not compiled in; an unknown `ota_profile`
+when `ota_enabled = true`; and an enabled repeater without a usable `[radio.rig_b]`. PTT behaviour
+is in [§3.7](#37-ptt-and-transmit-behaviour).
 
 ```bash
-# Production (real audio + GPU auto-detect)
+# Production (real audio; GPU used if found)
 cargo build --release -p openpulse-daemon --features cpal
 openpulse-server          # serves control on 127.0.0.1:9000 (TCP) and :9001 (WS)
 # Pair with the panel or the CLI daemon subcommands above.
@@ -1456,15 +1624,20 @@ openpulse-server          # serves control on 127.0.0.1:9000 (TCP) and :9001 (WS
 
 #### `openpulse-tnc` (ARDOP) and `openpulse-kisstnc` (KISS)
 
-CLI flags override `config.toml`; `RUST_LOG` sets verbosity.
+CLI flags (`--bind`, `--mode`, `--backend`, and `--cmd-port`/`--data-port` or `--port`) override
+`config.toml`; `RUST_LOG` sets verbosity, else `[logging] level`. The ARDOP TNC is Release 1; the
+KISS TNC is experimental.
 
 ```bash
 # ARDOP TNC for Pat (cmd 8515 / data 8516) — loopback: Pat runs on this host
-openpulse-tnc --bind 127.0.0.1 --cmd-port 8515 --data-port 8516 --mode QPSK500 --backend cpal
+openpulse-tnc --bind 127.0.0.1 --cmd-port 8515 --data-port 8516 --mode BPSK250 --backend cpal
 
 # KISS/AX.25 TNC (TCP 8100)
-openpulse-kisstnc --bind 127.0.0.1 --port 8100 --mode BPSK500 --backend cpal
+openpulse-kisstnc --bind 127.0.0.1 --port 8100 --mode BPSK250 --backend cpal
 ```
+
+ARDOP TNC behaviour (adaptive ARQ, `ARQBW`, the SL2 floor, host blocks larger than one frame) is
+in [§2.5](#25-ardop-tnc-drop-in-path).
 
 > **Binding a TNC off-loopback grants transmit control to the network.** Both interfaces implement
 > third-party protocols (ARDOP, KISS/AX.25) that have **no authentication in their specifications**,
@@ -1485,6 +1658,10 @@ openpulse-kisstnc --bind 127.0.0.1 --port 8100 --mode BPSK500 --backend cpal
 > host is dropped if that client disconnects, and the shared watchdog force-releases past the max
 > keyed duration. Those bound the damage; they are not a substitute for controlling who can reach the
 > port.
+>
+> **PTT backend failure.** Unlike the daemon, the ARDOP TNC does not refuse an unusable
+> `ptt_backend`: it logs `PTT unavailable; using NoOpPtt — this TNC will transmit without keying
+> the rig` and continues. Check the startup log for `PTT controller ready` before going on air.
 >
 > **PTT ownership.** The TNC keys from `[modem] ptt_backend` and emits `PTT TRUE` / `PTT FALSE` as
 > asynchronous events for hosts that drive their own rig. If you let the TNC key, set Pat's
@@ -1508,10 +1685,10 @@ openpulse-gateway --host cms.winlink.org --port 8772 --callsign N0CALL \
 
 ```bash
 # Requires [mesh] enabled = true in config.toml
-openpulse-mesh --mode BPSK500 --max-hops 5 --backend loopback
+openpulse-mesh --mode BPSK250 --max-hops 5 --backend loopback
 ```
 
-> **`openpulse-mesh` cannot use a real audio backend** (#1251). It has no PTT controller (so `[modem] ptt_backend` is unread), no carrier sense, and no station-ID timer, and its beacon carries no callsign field — so it is not an on-air station and `--backend cpal` is refused with that reason rather than degrading silently to loopback. To relay on air, run the relay inside `openpulse-daemon`, which keys, senses and identifies.
+> **`openpulse-mesh` cannot use a real audio backend** (#1251). It has no PTT controller (so `[modem] ptt_backend` is unread), no carrier sense, and no station-ID timer, and its beacon carries no callsign field — so it is not an on-air station and `--backend cpal` is refused with that reason rather than degrading silently to loopback. To relay on air, run the relay inside the daemon (`openpulse-server`), which keys, senses and identifies.
 
 
 #### `openpulse-panel`
@@ -1546,13 +1723,13 @@ openpulse-testbench
 cargo build --release -p openpulse-testmatrix
 openpulse-testmatrix                              # quick tier → docs/test-reports/
 openpulse-testmatrix --full --output ./reports    # all channels × payloads
-openpulse-testmatrix --bench-only --bench-frames 100 --bench-payload 200
+openpulse-testmatrix --bench --bench-only --bench-frames 100 --bench-payload 200
 ```
 
 #### `openpulse-linksim` and `openpulse-linksim-gui`
 
 ```bash
-# Single run: QPSK ladder on AWGN 15 dB, RS FEC, 128-byte payloads
+# Single run: the fast hpx_hf ladder on AWGN 15 dB, RS FEC, 128-byte payloads
 openpulse-linksim --profile fast --channel awgn --fec rs --payload 128 --frames 40 --snr 15.0
 # SNR sweep with a table, then JSON
 openpulse-linksim --channel watterson-moderate --sweep "10.0:20.0:1.0"
@@ -1636,7 +1813,7 @@ above (control ports 9000 / 9002).
 ```bash
 scripts/setup-twin-loopback.sh          # snd-aloop + aloop_a/aloop_b PCMs (sudo)
 scripts/run-twin-station-audio.sh        # builds --features cpal, starts both daemons
-OTA=1 MODE=QPSK500 scripts/run-twin-station-audio.sh   # with OTA rate-stepping
+OTA=1 PROFILE=fast scripts/run-twin-station-audio.sh   # with OTA rate-stepping (MODE= sets the start mode, default BPSK250)
 ```
 
 Generate continuous traffic to watch in the panels (sends random-data messages to
@@ -1710,20 +1887,30 @@ unclipped; higher clips line-level input. Other vars: `TX_BYPATH`/`RX_BYPATH`,
 Two-machine, two-clock, analog-cable scenario — the pre-on-air regression gate.
 
 ```bash
-scripts/deploy-rpi-pair.sh               # cross-compiles aarch64, rsyncs binaries to both stations
+# Build cpal binaries ON each Pi (a cross-compiled build has no audio backend):
+ssh dc0sk@dc0sk-rpi51 'cd ~/git/OpenPulseHF && cargo build --release -p openpulse-cli'
 scripts/run-loopback-rpi51-rpi52.sh --quick
 scripts/run-loopback-rpi51-rpi52.sh --full
 ```
-Key vars: `ISS_SSH`/`IRS_SSH` (TX/RX stations), `ISS_DEVICE`/`IRS_DEVICE`
-(`plughw:CARD=Device,DEV=0`), `IRS_STARTUP_WAIT`, `TX_TIMEOUT`, `FEC`, `TIER`.
+Key vars: `ISS_SSH`/`IRS_SSH` (TX/RX stations), `ISS_BIN`/`IRS_BIN` (binary paths on each Pi),
+`ISS_DEVICE`/`IRS_DEVICE` (`plughw:CARD=Device,DEV=0`), `IRS_STARTUP_WAIT`, `TX_TIMEOUT`, `FEC`,
+`TIER`. `scripts/deploy-rpi-pair.sh` cross-compiles `--no-default-features` binaries with **no audio
+backend**; it refuses to run unless `ALLOW_NO_AUDIO_DEPLOY=1`, and its binaries cannot transmit or
+receive over a radio or cable.
 
 #### F. On-air rigs (real RF)
 
-Profiles live in `docs/config/onair-*.example.sh`; callsigns must not be `N0CALL`.
-The FT-991A must use **CAT PTT** (`B_PTT_TYPE="CAT"`), not RTS.
+Profiles live in `docs/config/onair-*.example.sh` (index: [docs/config/README.md](config/README.md));
+callsigns must not be `N0CALL`. Release 1 is tested on **2 m** first; HF waits for the release
+candidate. The current pair is station A = rpi51 + IC-9700 and station B = rpi53 + FT-818 + SCU-17,
+on 144.640 MHz. The FT-991A must use **CAT PTT** (`B_PTT_TYPE="CAT"`), not RTS.
 
 ```bash
-# IC-9700 (TX) ↔ FT-991A (RX), 2 m, dual-SSH
+# IC-9700 (A) ↔ FT-818 (B), 2 m, dual-SSH. The runner takes any station B; its name is historical.
+source docs/config/onair-ic9700-ft818.example.sh     # fill in every TODO-CONFIRM first
+scripts/run-onair-ic9700-ft991a.sh supervise --quick --label 2m-test
+
+# IC-9700 (A) ↔ FT-991A (B), 2 m, the earlier pair
 source docs/config/onair-ic9700-ft991a.example.sh
 scripts/run-onair-ic9700-ft991a.sh supervise --quick --label 2m-test
 
@@ -1741,10 +1928,29 @@ with cpal audio) — see [docs/dev/onair-twin-ota.md](dev/onair-twin-ota.md).
 Supporting scripts: `onair-preflight.sh` (env/binary/callsign checks),
 `run-onair-validation-flow.sh` (preflight → matrix → bundle → report),
 `onair-generate-report.sh` (Phase 5.5-reg markdown), `onair-bundle-evidence.sh`
-(timestamped evidence dir with `metadata.json`, SHA-256, git SHA). Key on-air
-vars: `A_SSH`/`B_SSH`, `CALLSIGN_A`/`CALLSIGN_B`, `*_HAMLIB_MODEL`, `*_CAT_PORT`,
-`*_PTT_TYPE`, `TEST_FREQ_HZ` (band-enforced), `A_RFPOWER`/`B_RFPOWER` (default 0.05; the runners
-only ever lower a rig's power to it, never raise it, and an empty value leaves the rig alone).
+(timestamped evidence dir with `metadata.json`, SHA-256, git SHA).
+
+Key on-air variables (`scripts/run-onair-ic9700-ft991a.sh`; the twin-OTA runner's names in brackets):
+
+- `A_SSH`/`B_SSH`, `CALLSIGN_A`/`CALLSIGN_B`, `*_HAMLIB_MODEL`, `*_CAT_PORT`, `*_CAT_BAUD`,
+  `*_PTT_TYPE` (`CAT` or `RTS`), `*_PTT_PORT`, `*_AUDIO_DEVICE`.
+- `TEST_FREQ_HZ`, plus per-side dial trims `A_FREQ_OFFSET_HZ`/`B_FREQ_OFFSET_HZ` to null a
+  rig-to-rig crystal offset.
+- **2 m band guard:** `TEST_FREQ_HZ` and both trimmed frequencies must lie within
+  `BAND2M_MIN_HZ`–`BAND2M_MAX_HZ` (default 144 500 000–144 750 000) [`BAND_MIN_HZ`/`BAND_MAX_HZ`,
+  same default, checked against `TEST_FREQ_HZ`], or the runner exits before touching a rig.
+- **Rig mode:** `TEST_MODE_RIG` for both, or `TEST_MODE_RIG_A`/`TEST_MODE_RIG_B` per side
+  [`A_TEST_MODE_RIG`/`B_TEST_MODE_RIG`]. The value `keep` sends no mode, for a rig whose mode is
+  set on its panel (the FT-818's DIG/USER-U). A `keep` side must name the `rigctl m` reading it
+  expects in `TEST_MODE_EXPECT_A`/`TEST_MODE_EXPECT_B` [`A_TEST_MODE_EXPECT`/`B_TEST_MODE_EXPECT`];
+  if that is unset or the rig reads differently, the run stops before keying.
+- **Power:** `A_RFPOWER`/`B_RFPOWER` (Hamlib 0–1 scale; default 0.05 [0.10]). The runners only ever
+  lower a rig's power to this value, never raise it, including when restoring the saved setting at
+  cleanup; an empty value leaves that rig's power alone (`scripts/lib/rig-power.sh`). The FT-818's
+  power cannot be set over Hamlib: set it on the radio.
+- [twin-OTA only] `OTA_PROFILE` (default `fast`), `START_MODE` (`BPSK250`), `PTT_LEADER_MS` (0),
+  `NOTCH_ENABLED`/`AGC_ENABLED`/`CESSB_ENABLED`.
+- `scripts/run-onair-tx500-kx3.sh` (HF) has no band guard and does not change rig power.
 
 ---
 

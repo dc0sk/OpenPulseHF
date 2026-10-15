@@ -2,7 +2,7 @@
 project: openpulsehf
 doc: docs/openpulse-book.md
 status: living
-last_updated: 2026-10-02
+last_updated: 2026-10-15
 ---
 
 # The OpenPulseHF Book
@@ -10,11 +10,14 @@ last_updated: 2026-10-02
 *A complete technical account of an amateur-radio HF software modem — the waveforms, the physics, the
 software, and how to run it.*
 
-**Covers v0.15.0.** Every technical claim in this book is traceable to a file, symbol, test or
-measured result in the repository at that release. Where a number is quoted it carries its
-conditions; where something is unverified or planned it is labelled as such. See
+**Written at v0.15.0; revised 2026-10-15 against `main` (workspace version 0.16.0).** Release 1 is
+`v0.17.0` and has not been cut yet. Every technical claim in this book is traceable to a file,
+symbol, test or measured result in the repository. Where a number is quoted it carries its
+conditions; where something is unverified or planned it is labelled as such. Where a statement
+describes v0.15.0 history rather than the current tree, the text says so. See
 [Provenance and honest limits](#provenance-and-honest-limits) at the end for how that was enforced,
-and for what it does *not* cover.
+and for what it does *not* cover. The PDF edition (`docs/openpulse-book.pdf`) predates this
+revision.
 
 ---
 
@@ -50,7 +53,10 @@ a test can pass while proving nothing.
 A word on what this book is not. The adaptive HF-fade behaviour described throughout is validated
 against the Watterson channel *simulator*. It has not yet been proven on the air. That distinction is
 maintained everywhere it matters, because the project has already been caught once by a simulator
-that was itself wrong.
+that was itself wrong. The first release, Release 1 (`v0.17.0`), is scoped to the `hpx_hf` ladder,
+its FEC, session compression, the daemon and CLI, and the ARDOP TNC; it is to be proven on 2 m
+before HF (§1.10). Everything else described here exists in the code but ships disabled or
+experimental.
 
 ---
 
@@ -134,6 +140,7 @@ established is marked, not softened.
     - [2A.5.5 The dedicated frequency-acquisition stage](#2a55-the-dedicated-frequency-acquisition-stage)
     - [2A.5.6 The Costas/PLL core](#2a56-the-costaspll-core)
     - [2A.5.7 Acquire-then-track, and the playbook rules](#2a57-acquire-then-track-and-the-playbook-rules)
+    - [2A.5.8 The streaming receive chain after v0.16.0](#2a58-the-streaming-receive-chain-after-v0160)
   - [2A.6 Timing recovery and equalisation](#2a6-timing-recovery-and-equalisation)
     - [2A.6.1 Gardner, and why it is not enough](#2a61-gardner-and-why-it-is-not-enough)
     - [2A.6.2 The LMS/DFE equaliser](#2a62-the-lmsdfe-equaliser)
@@ -227,7 +234,7 @@ established is marked, not softened.
   - [3.6 Build, features, and gates](#36-build-features-and-gates)
     - [3.6.1 Feature matrix](#361-feature-matrix)
     - [3.6.2 The canonical gate set](#362-the-canonical-gate-set)
-    - [3.6.3 CI: configured, and deliberately disabled](#363-ci-configured-and-deliberately-disabled)
+    - [3.6.3 CI: what runs, and what blocks a merge](#363-ci-what-runs-and-what-blocks-a-merge)
   - [3.7 What to take away](#37-what-to-take-away)
 - [Chapter 4 — Use cases, setup and configuration](#chapter-4-use-cases-setup-and-configuration)
   - [4.1 Scenario 1 — bench validation with no radio](#41-scenario-1-bench-validation-with-no-radio)
@@ -290,9 +297,18 @@ bytes; an ARQ/HARQ retransmission layer with soft-decision combining; an Ed25519
 post-quantum) session handshake with a trust store; multi-hop relay with trust-weighted route
 scoring; QSY frequency-agility negotiation; JS8-compatible station discovery; a peer-to-peer file
 transfer protocol; and compatibility front-ends — an ARDOP-style TCP TNC and a KISS/AX.25 TNC — so
-existing software such as Winlink clients can drive it without knowing it exists. Version 0.15.0
-spans 41 workspace crates: 24 core and protocol crates, 10 modulation plugins, 5 applications, plus
-PKI tooling and a dictionary trainer.
+existing software such as Winlink clients can drive it without knowing it exists. The workspace
+(version 0.16.0) spans 41 crates: 24 core and protocol crates, 10 modulation plugins, 5
+applications, plus PKI tooling and a dictionary trainer.
+
+Not all of that ships in the first release. **Release 1 (`v0.17.0`, work plan decision 1)** covers
+the daemon and CLI, the ARDOP TNC, the `hpx_hf` ladder SL1–SL14 with its plugins (MFSK16 including
+its K=3 return channel, BPSK, QPSK250-D, OFDM52, the FSK4 ACK), each rung's FEC, session
+compression, the PTT backends, station ID and the signed classical handshake. Mesh, repeater,
+relay, JS8 discovery, file transfer, QSY, FreeDV auth, Winlink B2F and the CMS gateway, KISS, the
+post-quantum handshake, GPU acceleration, the panel and TUI, and the plugins not on `hpx_hf` (psk8,
+64qam, scfdma, pilot) remain in the code but are not part of Release 1: they ship disabled or
+experimental, with no release gate. This chapter describes all of it and marks which is which.
 
 Two things define the project's character. First, every waveform is a plugin behind one trait, so
 the same engine, FEC, ARQ and session machinery serve BPSK31 and OFDM52-64QAM alike. Second, the
@@ -311,7 +327,7 @@ The repository's own OSI mapping (`docs/osi-layer-map.md`) is the clearest orien
   L7    │ APPLICATION   CLI · TUI · Panel (iced) · Testbench · Daemon             │
         │               ARDOP TNC · KISS TNC · B2F/Winlink · CMS gateway · FreeDV │
         ├───────────────────────────────────────────────────────────────────────┤
-  L6    │ PRESENTATION  Compression (LZ4 / gzip) · Signing + manifests            │
+  L6    │ PRESENTATION  Compression (LZ4/zstd, gzip) · Signing + manifests        │
         │               PQ crypto (ML-DSA/ML-KEM) · Control-channel encryption    │
         ├───────────────────────────────────────────────────────────────────────┤
   L5    │ SESSION       HPX state machine · Signed + PQ handshake · Trust store   │
@@ -357,18 +373,22 @@ Three implementation points matter to anyone touching the chain:
 
 ### 1.2 The waveform catalogue
 
-Ten modulation plugin crates live under `plugins/`. Their declared mode strings, taken verbatim from
-each plugin's `PluginInfo::supported_modes`, total 78 (hand-counted from source). Nine of the ten
-plugins are registered in the CLI's runtime registry: `openpulse modes` prints 73 modes, because
-`Js8Plugin` — the `ModulationPlugin` implementation in `plugins/js8` — is registered nowhere. The
-JS8 waveform is instead driven by direct `js8_plugin::` calls from `openpulse-discovery` and the
-daemon (§1.6.5), so it is a waveform of the stack but not a selectable modem mode:
+Ten modulation plugin crates live under `plugins/`. Their advertised mode strings, taken verbatim
+from each plugin's `PluginInfo::supported_modes`, total 73 (hand-counted from source on
+2026-10-15; it was 78 at v0.15.0, before #1359 stopped advertising the 9600-baud modes and plain
+`8PSK2000`). Nine of the ten plugins are registered in the CLI's runtime registry
+(`crates/openpulse-cli/src/plugins.rs`), so `openpulse modes` lists 68 modes (hand count, not a
+captured run), because `Js8Plugin` — the `ModulationPlugin` implementation in `plugins/js8` — is
+registered nowhere. The JS8 waveform is instead driven by direct `js8_plugin::` calls from
+`openpulse-discovery` and the daemon (§1.6.5), so it is a waveform of the stack but not a selectable
+modem mode. Release 1 uses only the modes on the `hpx_hf` ladder (§1.4.1) plus `FSK4-ACK` and
+`MFSK16-ACK`; every other mode stays selectable as a fixed mode but is outside the release gate:
 
 | Plugin | Modes | Count |
 |---|---|---|
 | `bpsk` | `BPSK31`, `BPSK63`, `BPSK100`, `BPSK250`, `BPSK250-RRC` | 5 |
-| `qpsk` | `QPSK125`, `QPSK250`, `QPSK250-D`, `QPSK500`, `QPSK500-D`, `QPSK1000`, `QPSK1000-HF`, `QPSK1000-HF-RRC`, `QPSK500-RRC`, `QPSK1000-RRC`, `QPSK2000`, `QPSK2000-RRC`, `QPSK9600`, `QPSK9600-RRC` | 14 |
-| `psk8` | `8PSK500`, `8PSK1000`, `8PSK1000-HF`, `8PSK1000-HF-RRC`, `8PSK500-RRC`, `8PSK1000-RRC`, `8PSK2000`, `8PSK2000-RRC`, `8PSK9600`, `8PSK9600-RRC` | 10 |
+| `qpsk` | `QPSK125`, `QPSK250`, `QPSK250-D`, `QPSK500`, `QPSK500-D`, `QPSK1000`, `QPSK1000-HF`, `QPSK1000-HF-RRC`, `QPSK500-RRC`, `QPSK1000-RRC`, `QPSK2000`, `QPSK2000-RRC` | 12 |
+| `psk8` | `8PSK500`, `8PSK1000`, `8PSK1000-HF`, `8PSK1000-HF-RRC`, `8PSK500-RRC`, `8PSK1000-RRC`, `8PSK2000-RRC` | 7 |
 | `64qam` | `64QAM500`, `64QAM1000`, `64QAM2000-RRC` | 3 |
 | `fsk4` | `FSK4-ACK` (the ACK control channel) | 1 |
 | `mfsk16` | `MFSK16`, `MFSK16-ACK` | 2 |
@@ -407,15 +427,15 @@ band), and the two must not be mixed.
 | SCFDMA52 family | — | 2–6 | ~2 889–8 667 | ~2 031 | SC-FDMA, DFT-CE pilots |
 | QPSK2000-RRC / 8PSK2000-RRC | 2 000 | 2/3 | 4 000/6 000 | ~2 700 | Single-carrier + RRC |
 | 64QAM2000-RRC | 2 000 | 6 | 12 000 | ~2 700 | Requires SNR ≥ 25 dB |
-| QPSK9600-RRC / 8PSK9600-RRC | 9 600 | 2/3 | 19 200/28 800 | ~13 000 | **Deferred (post-1.0)**: VHF/UHF, needs ≥ 38.4 kHz Fs |
+| QPSK9600-RRC / 8PSK9600-RRC | 9 600 | 2/3 | 19 200/28 800 | ~13 000 | **Not advertised** since #1359: needs a ≥ 38.4 kHz audio path; DSP kept dormant |
 
 Registered but deliberately outside every profile:
 
-- **`QPSK2000` and `8PSK2000` (plain, non-RRC)** — superseded by their `-RRC` variants. The source
-  comments are blunt: at 4 samples/symbol the plain crossfade pulse leaves 8PSK2000 ISI-limited at
-  ~5–13 % raw BER *with perfect AFC* ("not viable for engine / on-air decode",
-  `plugins/psk8/src/lib.rs`), and QPSK2000 at ~0.4 % residual BER plus an unreliable AFC settle
-  (`plugins/qpsk/src/lib.rs`).
+- **`QPSK2000` (plain, non-RRC)** — superseded by `QPSK2000-RRC`: at 4 samples/symbol the plain
+  crossfade pulse leaves ~0.4 % residual BER plus an unreliable AFC settle
+  (`plugins/qpsk/src/lib.rs`). Plain **`8PSK2000`** is worse — ISI-limited at ~5–13 % raw BER
+  *with perfect AFC* ("not viable for engine / on-air decode", `plugins/psk8/src/lib.rs`) — and
+  since #1359 it is no longer advertised at all; its implementation and tests are kept.
 - **`SCFDMA52-P2`** — low-PAPR demonstrator: Zadoff-Chu-phase pilots cut envelope-CCDF PAPR by
   ~2.15 dB (8.85 → 6.70) at the same geometry and rate.
 - **`SCFDMA52-LP`** — low-PAPR demonstrator, ~2 dB lower mean PAPR (11.9 → 9.7), but its single-tap
@@ -456,9 +476,9 @@ rendezvous subsystem (§1.6.5).
 
 `FecMode` (`crates/openpulse-core/src/fec.rs`) offers ten codecs. Which one runs is set per ladder
 rung by the session profile (§1.4) or explicitly by the caller via
-`transmit_with_fec_mode`/`receive_with_fec_mode`; `Turbo`, `Concatenated`, `RsInterleaved` and
-`ShortRs` appear in no shipped profile and are caller-selectable options (`ShortRs` is the
-ACK/control-frame codec).
+`transmit_with_fec_mode`/`receive_with_fec_mode`; `Turbo`, `Concatenated`, `RsInterleaved`,
+`Ldpc` and `ShortRs` appear in neither shipped profile and are caller-selectable options (`ShortRs`
+is the ACK/control-frame codec).
 
 | Mode | Code | Rate | Decisions | Note |
 |---|---|---|---|---|
@@ -512,9 +532,11 @@ ship, both on the single `hpx_hf` ladder: `fast` (the full ladder, SL1–SL14, u
 `robust` (the same ladder capped at SL6 — MFSK16, BPSK31–250, QPSK250-D — all coded, single-carrier,
 ≤500 Hz, for poor conditions or limited gear). Both carry the same ladder fingerprint, so a `fast`
 and a `robust` station interoperate; the robust side never climbs past SL6. The configured default
-is `[modem] profile = "fast"`. An unknown name fails with the list of valid names; the earlier
-profiles were deleted (2026-10-01) without aliases, and their modes remain selectable as fixed modes
-(`[modem] mode`).
+is `[modem] profile = "fast"`. An unknown name fails with the list of valid names; the ten earlier
+profiles were deleted on 2026-10-01 (work plan decision 18) without aliases, and their modes remain
+selectable as fixed modes (`[modem] mode`). The cap is local policy, excluded from the ladder
+fingerprint (`max_level` in `profile.rs`). The ARDOP TNC floors its own adaptive ladder at SL2,
+because it registers no MFSK16 (`crates/openpulse-ardop/src/main.rs`).
 
 #### 1.4.1 `hpx_hf` — the primary HF ladder (SL1–SL14)
 
@@ -548,6 +570,16 @@ Everything above SL6 is OFDM because the coherent single-carrier modes that used
 decode ~0 % on Watterson `moderate_f1` at any SNR up to 40 dB (simulator; §1.9), while OFDM's
 cyclic prefix rides the delay spread and its per-subcarrier pilots track the fade.
 
+**v0.16.0 and v0.17 do not interoperate.** A v0.16.0 station and a current-`main` (v0.17 wire
+format) station do not decode each other's frames on any rung, and their handshakes are
+incompatible. There are several breaks: v0.16.0 sent unwhitened frames, and every frame is now
+whitened (added in #1027, keystream fixed by #1148 on 2026-08-21) (`wire_for_modulation` → `openpulse_core::scramble` in
+`crates/openpulse-modem/src/engine.rs`); #1147 (2026-08-23) replaced the JSON handshake with a binary
+one that rejects the old format (§2B.3.1); and on 2026-10-10 (#1062, PR #1508) BPSK63, BPSK100 and
+BPSK250 moved to a 63-symbol PN-63 preamble (x⁶+x+1), while BPSK31 keeps its 32-symbol alternating
+`--++` preamble and QPSK250-D keeps its own designed sequence (§2A.3.1). The v0.17 wire format is
+declared in `docs/dev/design/protocol-wire-spec.md`; run the same build at both ends.
+
 The ladder-wide dead-rung tripwire is `hpx_hf_rungs_survive_fade` (modem tests), three assertions:
 `every_rung_decodes_on_moderate_f1` requires ≥ 0.25 of 12 frames at floor + 4 dB — excluding SL1
 (MFSK16, ~17 s per frame, covered by its own sub-floor gates) and the three `LdpcHighRate` rungs,
@@ -577,7 +609,13 @@ phase margin — MFSK16 (non-coherent) > BPSK (±90°) > QPSK (±45°) > 8PSK (�
 
 #### 1.4.3 The other ladders, briefly
 
-These profiles were deleted on 2026-10-01; the table is kept as design history.
+**None of these exists any more.** These ten profiles were deleted on 2026-10-01 by work plan
+decision 18, with no aliases: naming one in
+`[modem] profile`, `--profile` or `[ardop] adaptive_profile` is rejected with the list of valid
+names. The table is kept as design history, because several measurements in this book were taken on
+them. Their modes are still selectable as fixed modes, and a few of their rung sets survive as test
+apparatus built with `SessionProfile::from_rungs` (for example the link simulator's
+`apparatus:ofdm`, the former `hpx_ofdm_hf`).
 
 | Profile | Rungs | Character |
 |---|---|---|
@@ -617,6 +655,29 @@ receiver-led rate controller on `moderate_f1` at 20 dB and asserts delivery rati
 average level ≥ 3.0 — pre-fix it sat at ~1.5. Every earlier fade gate called the demodulator
 directly and so proved only that the rungs decode, which they did.
 
+**What counts as evidence against a rung (#1456, #1460).** The other half of the controller is the
+failure path, and since v0.16.0 it is narrower in three ways, all measured on recorded on-air idle:
+
+1. **Not every failed burst is a failure.** Behind a narrow receive filter, idle band noise flickers
+   over the squelch for two or three reads; at SL6 such a flicker cleared the rung's recognition
+   window about 214 times an hour, and three in a row demoted the ladder. A failed burst now counts
+   only if the carrier detect held it for at least the candidates' recognition window and it has at
+   least `EVIDENCE_FLOOR_SAMPLES` (4000 samples, 0.5 s, or half the shortest candidate frame where
+   that is less) after its lead (`crates/openpulse-modem/src/engine.rs`). A burst that holds an
+   FSK4 ACK codeword is not ladder evidence either: an ACK clears that floor at every rung, and two
+   idle OTA stations would otherwise NACK each other's NACKs.
+2. **The receiver's NACKs are budgeted.** `crates/openpulse-daemon/src/nack_budget.rs` allows three
+   keyed NACKs in a row with no decode (`OTA_NACK_BUDGET = 3`); a decode resets the count, and one
+   failure leaks away per 10 minutes of listening, which bounds idle keying at 3 + 6 NACKs per hour.
+   Before #1456 the count reset only on a decode, so three idle failures muted the receiver until
+   the next decode, and the peer's first real failed frame got silence.
+3. **A failed burst moves the ladder only when its NACK is keyed** (#1460 round 4b). The budget's
+   verdict — `NackVerdict::Keyed`, `Leaked` or `Muted` in `crates/openpulse-core/src/ota_rate.rs` —
+   reaches the controller before the decode. A muted failure moves nothing; a leaked NACK, which
+   follows at least `nack_threshold` counted failures, steps down at once. The reason is the
+   lockstep invariant: a step the sender never hears about moves the receiver's candidates off the
+   rung the sender is still using. #1460 stays open; this bounds the defect, it does not close it.
+
 A related boundary is pinned deliberately: the ladder's SNR scales are **per-waveform-family**.
 Single-carrier PSK (post-#934) reads approximately true channel SNR; the OFDM/SC-FDMA estimators
 saturate near ~16 dB (ZF noise enhancement on faded subcarriers) and physically cannot report the
@@ -655,6 +716,11 @@ Comparative claims here are limited to what the repository substantiates.
 
 ### 1.6 The protocol surfaces
 
+Release 1 ships the daemon and its control protocol (§1.6.8) and the ARDOP TNC (§1.6.1). Every
+other surface in this section — KISS, B2F/Winlink and the CMS gateway, QSY, JS8 discovery, file
+transfer, mesh, repeater and relay — is in the code but not part of Release 1: it ships disabled or
+experimental and has no release gate.
+
 #### 1.6.1 ARDOP-compatible TNC (`openpulse-tnc`)
 
 ASCII command port plus a `u16` big-endian length-prefixed binary data port; defaults
@@ -664,6 +730,16 @@ ASCII command port plus a `u16` big-endian length-prefixed binary data port; def
 `CONNECT_MESH`, `WAVEFORM`. `VERSION` answers `VERSION 1.0-OpenPulseHF`. Adaptive ARQ over this
 bridge is opt-in (`[ardop] enable_adaptive_arq = false` by default — fixed-mode operation is the
 historical behaviour).
+
+Changes since v0.16.0 that matter to a Pat user: the TNC now receives on real audio — one capture
+stream held across ticks instead of a one-shot read per tick (#1310); the ARQ ACK listen holds its
+stream and scans it (#1315); a host block larger than one modem frame is split into frame-sized
+chunks and all of them go on the air (#1385); and `ARQBW` sizes its ladder cap from the registered
+plugins rather than a stale bandwidth table. Two limits remain. The adaptive ladder is floored at SL2
+because the TNC registers no MFSK16 and has no K=3 robust ACK. And with
+`enable_adaptive_arq = true` the receive path is still the old one-shot read, which cannot
+accumulate a frame across reads on a callback backend; the TNC logs a warning saying so
+(`crates/openpulse-ardop/src/bridge.rs`).
 
 #### 1.6.2 KISS/AX.25 TNC (`openpulse-kisstnc`)
 
@@ -747,8 +823,9 @@ discovery (`EnableDiscovery`, `ListStations`, `RendezvousWith`).
 The stack secures two distinct links, at different layers (`docs/osi-layer-map.md`):
 
 - **The on-air peer link** (L5–L6): a signed handshake — CONREQ/CONACK frames whose transmitted
-  bytes are Ed25519-signed and evaluated against a trust store — plus an optional in-band
-  post-quantum handshake (`pq_handshake.rs`): ML-DSA-44 signatures (1 312-byte public keys,
+  bytes are Ed25519-signed and evaluated against a trust store — plus an in-band post-quantum
+  handshake (`pq_handshake.rs`; implemented and tested, but wired into no production path and not
+  part of Release 1, §2B.7): ML-DSA-44 signatures (1 312-byte public keys,
   2 420-byte signatures) and ML-KEM-768 key encapsulation, transported over SAR because the frames
   outgrow a single 255-byte payload. `SigningMode::Hybrid` signs with Ed25519 *and* ML-DSA-44
   simultaneously. Downstream of the handshake: authenticated rate ACKs (an ECDH-derived keyed MAC;
@@ -767,7 +844,7 @@ does not, by itself, stop anyone from talking.
 
 | Tool | Framework | What it is |
 |---|---|---|
-| `openpulse` (CLI) | clap | Subcommands: `transmit`, `receive`, `devices`, `modes`, `mode-advisor`, `session-metrics`, `audit-bundle`, `identity`, `trust`, `diagnose`, `session`, `benchmark`, `monitor`, `adaptive`, `arq`, `config`, `broadcast`, `beacon`, `qsy`, `calibrate`, `daemon`; global flags for backend, PTT (`none/rts/dtr/vox/rigctld/cm108/gpio`), rig address, and `--max-power` |
+| `openpulse` (CLI) | clap | Subcommands: `transmit`, `receive`, `devices`, `modes`, `mode-advisor`, `session-metrics`, `audit-bundle`, `identity`, `trust`, `diagnose`, `session`, `benchmark`, `monitor`, `adaptive`, `arq`, `config`, `broadcast`, `beacon`, `qsy`, `calibrate`, `daemon`; global flags for backend, PTT (`none/rts/dtr/vox/rigctld/cm108/gpio`, plus `generic`), rig address, `--ptt-leader-ms` and `--max-power` |
 | `openpulse-tui` | ratatui | Three panels: colour-coded HPX state; AFC/rate meters + DCD energy bar; scrollable transitions log |
 | `openpulse-panel` | iced | Operator GUI over the daemon control port: band controls, spectrum/waterfall/ladder, tabs (`Info`, `Stats`, `Files`, `Config`, `Messages`, `Discovery`, `Log`); the earlier egui panel was retired 2026-07 |
 | `openpulse-testbench` | egui | Four-column live signal path — TX / noise / mixed / RX — with per-tap FFT spectrum + waterfall, 7 channel models, optional live capture |
@@ -790,7 +867,8 @@ the BPSK, QPSK, 8PSK, 64QAM and SC-FDMA plugins behind a `gpu` feature, with aut
 fallback (every GPU call returns `Option<T>` so failure is detectable). Honest caveats: OFDM is
 *not* GPU-accelerated; the GPU LDPC path is reserved for future work (an `ldpc_bp.rs` module
 exists but `FecMode::Ldpc` uses the CPU codec); and the `gpu` feature is outside the routine test
-gates, so it receives less exercise.
+gates, so it receives less exercise. GPU acceleration, the panel and the TUI are not part of
+Release 1; the CLI, the daemon and the link simulator (as a gate) are the tools the release relies on.
 
 ### 1.9 Selected measurements, with their conditions
 
@@ -811,7 +889,7 @@ measurements.
 | JS8 NORMAL weak-signal floor | 11/12 at −18 dB; floor −21 dB | deterministic AWGN, 2 500 Hz ref BW; gate ≥ 6/8 at −18 dB |
 | `LdpcHighRate` vs `SoftConcatenated` floor cost | +4…+8 dB for 2.03× rate, per SC-FDMA mode | AWGN, 62 B payload, 90 % frame-success; why code rate is the *last* lever |
 | CE-SSB average-power gain | +1.6/+2.7/+3.8 dB in channel-sim (OFDM52 at 2.5/2.0/1.5 × rms), zero BER cost; **+1.18 dB confirmed on-air** | FT-991A, 2 m, 20 W via attenuator; software ACPR + SDR spectral-mask check |
-| Goodput floors (regression gates) | `hpx_hf` AWGN 20 dB ≥ 250 bps (baseline ~397); `hpx_ofdm_hf` AWGN ≥ 600 (~919); `hpx_ofdm_hf` `moderate_f1` 25 dB ≥ 280 (~414) (profile `hpx_ofdm_hf` deleted 2026-10-01) | linksim, 200 B frames, 40 frames, seeded |
+| Goodput floors (regression gates) | `fast` (`hpx_hf`) AWGN 20 dB ≥ 250 bps (baseline 331); `apparatus:ofdm` (the former `hpx_ofdm_hf` rungs) AWGN ≥ 600 (893); same, `moderate_f1` 25 dB ≥ 360 (555) | linksim `mod goodput_gate`, 200 B frames, 40 frames, seed 5; baselines re-measured 2026-07-30 and recorded in the assertion messages |
 | Benchmark harness gate | 100 % pass, mean_transitions ≤ 20 | `benchmark_integration`; CLI: `benchmark run` + `jq` check |
 
 CE-SSB deserves its scope stated exactly, because the project's own `docs/features.md` once got it
@@ -826,17 +904,30 @@ the envelope is high-PAPR *and* the decision margins are loose." The config defa
 
 ### 1.10 What this does not do yet
 
-An honest inventory, as of v0.15.0.
+An honest inventory, as of 2026-10-15 (workspace version 0.16.0, last release v0.16.0 on
+2026-07-18).
+
+**Release 1 is not cut yet.** The plan of record is `docs/dev/project/workplan.md`. Release 1 is
+`v0.17.0` (decision 14); `1.0` stays reserved for the full criteria in
+`docs/dev/project/release-1.0-criteria.md`. Its scope is the one given at the start of this chapter.
+Milestone state: M0 (governance reset) is done; M1, the v0.17 wire format, was done on 2026-10-01;
+M2, the release path, has its code items done (2026-10-14), with two on-air follow-ups — measuring
+the PTT leader on the rigs and re-measuring receive cost on the Raspberry Pi — waiting on the
+radios; M3, on air on 2 m (gates G0–G3, acceptance runs A1, A2, A4/A5, a Pat session through the
+ARDOP TNC, and a re-recorded F8 corpus), is open; M4 is cutting `v0.17.0`.
 
 **Not validated on the air.** The entire v0.13.0–v0.15.0 HF-fade arc — the `hpx_hf` ladder's
 differential SL6, the OFDM upper rungs, the evidence-based climb, MFSK16's sub-floor gains — is
-validated against the Watterson simulator only. The draft 1.0 criteria
-(`docs/dev/project/release-1.0-criteria.md`, itself marked "Draft for review — nothing here is
-agreed yet") make the point sharply: v0.14.1 already caught the simulator misleading the project
-once, and "A 1.0 that ships fade behaviour no one has heard on a radio is making a claim it has
-not earned." The 1.0 gate demands a real two-station HF QSO on `hpx_hf`, the ladder observed
-climbing and demoting on a real fading channel, and an end-to-end Winlink message over RF.
-Requirement coverage stands at 118 of 141 covered, 16 gaps, 7 planned for 1.x.
+validated against the Watterson simulator only. Decision 13 fixes the test stages: virtual audio →
+hardware loopback → **2 m** (IC-9700 ↔ FT-818 at 144.640 MHz; the station pair is rpi51 + IC-9700
+and rpi53 + FT-818 + Yaesu SCU-17) → HF, and HF only with the release candidate. Release 1 is gated
+on A1 and A2 on 2 m. A 2 m path is not an HF path: it tests the radios, PTT, levels and the receive
+chain on air, not ionospheric fading. The 1.0 criteria make the general point sharply: v0.14.1
+already caught the simulator misleading the project once, and "A 1.0 that ships fade behaviour no
+one has heard on a radio is making a claim it has not earned." The 1.0 gate demands a real
+two-station HF QSO on `hpx_hf`, the ladder observed climbing and demoting on a real fading channel,
+and an end-to-end Winlink message over RF. That document records requirement coverage at v0.15.0 as
+118 of 141 covered, 16 gaps, 7 planned for 1.x; the figure was not re-derived for this revision.
 
 **Off by default (opt-in), from `crates/openpulse-config/src/lib.rs`:**
 
@@ -850,6 +941,10 @@ Requirement coverage stands at 118 of 141 covered, 16 gaps, 7 planned for 1.x.
 | ADIF logbook | `[logbook] enabled` | `false` |
 | Session compression | `[compression] enabled` | `false` |
 | Cross-band repeater | `[repeater] enabled` | `false` |
+| ARDOP adaptive ARQ | `[ardop] enable_adaptive_arq` | `false` |
+| Auto-QSY on interference | `[qsy] auto_qsy_on_interference` | `false` |
+| Control-channel auth on loopback | `[control_security] require_auth` | `false` (mandatory on non-loopback regardless) |
+| PTT leader delay | `[modem] ptt_leader_ms` | `0` (no wait between the PTT edge and the first sample) |
 
 The **receiver auto-notch** (`[modem] notch_enabled`) left this list on 2026-08-01 and is now **on by
 default**. It had been opt-in since it was built, and was therefore switched off in every recorded
@@ -860,18 +955,18 @@ is never notched. (Both claims were re-derived on 2026-08-22: one receive path d
 active mode and protected a band four times too wide, so the notch could not reach the interferer
 the original measurement named. The default stands and its evidence is now attributable — see the
 ledger.)
-| ARDOP adaptive ARQ | `[ardop] enable_adaptive_arq` | `false` |
-| Auto-QSY on interference | `[qsy] auto_qsy_on_interference` | `false` |
-| Control-channel auth on loopback | `[control_security] require_auth` | `false` (mandatory on non-loopback regardless) |
 
 **Removed, deferred, or reserved:**
 
+- **Ten session profiles were removed** (decision 18, 2026-10-01). Only `fast` and `robust` exist;
+  there are no aliases (§1.4.3).
 - **Winlink Type C (LZHUF) is removed** (PR #948); inbound Type C proposals are answered `Reject`.
   Restoring it requires a captured genuine RMS Type C blob to validate against.
 - **JS8 discovery Phase H** (on-air) and **file transfer Phase F** (on-air) — the only remaining
   phases of FF-15/FF-16, both hardware/on-air-gated.
 - **On-air regulatory validation** (Phase 5.5-reg) — deferred, no target date.
-- **`QPSK9600-RRC` / `8PSK9600-RRC`** — deferred post-1.0 (VHF/UHF; need ≥ 38.4 kHz sample rate).
+- **`QPSK9600-RRC` / `8PSK9600-RRC`** — no longer advertised (#1359; VHF/UHF, need ≥ 38.4 kHz
+  sample rate, which no operator-reachable config provides); the DSP is kept dormant.
 - **Wide-channel VHF/UHF (REQ-BW-01..07)** — an explicit 1.x non-goal.
 - **Relay envelope authentication at intermediate hops** — blocked on a key-distribution design
   decision; 1.0 requires it be documented, not solved. The relay allow-list is defence-in-depth
@@ -881,12 +976,15 @@ ledger.)
   such in the config source.
 - **Proprietary-protocol compatibility (REQ-PERF-05/06)** — out of scope pending legal review.
 
-**Process status.** The maintainer-supplied figure for the suite is 2 146 passing tests under
-`cargo test --workspace --no-default-features` (not independently re-run for this chapter). The
-quality gates — clippy with warnings-as-errors, the benchmark harness, the goodput floors, the
-doc-ladder equality test — exist and are run locally; the GitHub Actions workflow automation is
-disabled by the maintainer's deliberate choice, so passing gates are a local discipline rather
-than a badge.
+**Process status.** The maintainer-supplied figure at v0.15.0 was 2 146 passing tests under
+`cargo test --workspace --no-default-features`; it was not re-run for this book, and the suite has
+grown since. The workspace gate is now `scripts/gate.sh`, whose `GATE:` line is the only verdict the
+project quotes. Per `CLAUDE.md`, nothing blocks a merge on it: it runs post-merge on `main`
+(`.github/workflows/post-merge-gate.yml`), on `release/**` and on manual dispatch, and the
+maintainer runs it daily and before every tag (decision 9). The checks required on `main` are the
+traceability job and the two benchmark jobs. The slow acceptance suites (the receiver notch
+REQ-QRM-01, the OTA rate controller CAP-33, the spectral-busy decode counts) are held out of the gate
+and run by `scripts/slow-tests.sh`.
 
 ### 1.11 A note on method
 
@@ -915,7 +1013,8 @@ grepped.
 One caveat governs everything that follows and is repeated where it matters: **all fading-performance
 figures in this chapter were measured against the Watterson channel simulator**
 (`crates/openpulse-channel`), not on air. The v0.13.0–v0.15.0 HF-fade work is simulation-validated;
-on-air validation is a separately tracked, deferred phase.
+on-air validation is the open milestone M3 of the Release 1 plan, on 2 m first and on HF only with
+the release candidate (§1.10).
 
 ### 2A.1 The audio path — sample rate, bandwidth, analytic signals
 
@@ -945,9 +1044,10 @@ run at this rate (`docs/mode-fec-ladder.md` §8):
 
 The 9600-baud wide modes show both constraints biting at once: 9600 baud × (1 + 0.35 RRC rolloff)
 ≈ 13 kHz occupied — over three times Nyquist — and at 8 kHz you get 0.83 samples per symbol, which
-cannot be demodulated at all. Those modes stay registered (for a future higher-rate transport) and
-the loopback and test-matrix runners skip them with a stated reason rather than dropping them
-silently (`docs/mode-fec-ladder.md` §8).
+cannot be demodulated at all. Since #1359 those modes are no longer advertised by their plugins —
+no operator-reachable config builds a 48 kHz `ModulationConfig` — but their DSP and 48 kHz loopback
+tests are kept, dormant, for a future higher-rate transport (`plugins/qpsk/src/lib.rs`,
+`plugins/psk8/src/lib.rs`).
 
 Consumer soundcards clock 48 kHz (or 44.1 kHz), not 8 kHz; ALSA's `plug` layer resamples 8 ↔ 48 kHz
 and cpal opens the device at 8 kHz. A chirp probe confirmed the resampler is flat well past 3 kHz
@@ -1177,9 +1277,26 @@ Frame layout:
 ```text
 ┌────────────────┬────────────────────┬──────────┐
 │  preamble      │  data symbols      │  tail    │
-│  32 symbols    │  8 × N symbols     │  8 syms  │
+│  63 symbols ¹  │  8 × N symbols     │  8 syms  │
 └────────────────┴────────────────────┴──────────┘
+¹ PN-63 on BPSK63/100/250; 32 alternating symbols (`--++`) on BPSK31 and BPSK250-RRC
 ```
+
+The preamble changed on 2026-10-10 (#1062, PR #1508, `docs/dev/design/pn-preamble.md`): BPSK63,
+BPSK100 and BPSK250 — rungs SL3–SL5 — now send a 63-symbol maximal-length sequence from the
+polynomial x⁶+x+1. What the design claims for it is refusal and placement, not a lower noise
+floor: the old alternating pattern matched a copy of itself shifted two symbols at ρ = 1.000, so
+correlation could not place a frame, and a steady tone on one of its spectral lines scored ρ ≈ 0.70,
+so a failed burst could never be shown not to be ours. BPSK31 (SL2) keeps the 32-symbol
+alternating `--++` preamble, and so does `BPSK250-RRC`. It is one of several wire breaks since
+v0.16.0 — the frame whitener (#1148) and the binary handshake (#1147) are others — so a v0.16.0
+station and current `main` do not decode each other's frames on any rung (§1.4.1). `FrameGeometry` reports the preamble
+length per mode (`preamble_syms_for`), and only BPSK250 publishes a preamble-correlation template
+(`preamble_template`) with constants measured for PN-63; the other rungs fall back to energy-only
+acquisition. The demodulator also offers two hard-decision arms — with and without the crossfade-ISI
+cancellation of §2A.4.2 — at each of two timing locks, through `demodulate_variants`, and the engine
+keeps the first that passes RS and CRC, because neither arm wins on both AWGN and `moderate_f1`
+(#1428, #1438).
 
 Each bit is **NRZI-encoded** — "1" flips the phase, "0" keeps it — and pulse-shaped with a 50 %
 overlapping half-Hann crossfade to minimise occupied bandwidth (`lib.rs` header). NRZI makes BPSK
@@ -1204,7 +1321,9 @@ match (b0, b1) {
 
 In the `-D` modes the dibit selects a **phase increment**; the phase reference is the last preamble
 symbol, derived from `preamble_symbols()` rather than hardcoded — "a preamble change must move both
-ends together or every `-D` frame silently decodes to noise" (`modulate.rs`). The decoder computes
+ends together or every `-D` frame silently decodes to noise" (`modulate.rs`). The 2026-10-10
+BPSK preamble change (§2A.3.1) did not touch QPSK: `QPSK250-D` keeps its own designed sequence.
+The decoder computes
 the conjugate product of adjacent symbols and quantises the phase step to the nearest π/2:
 
 ```rust
@@ -1468,15 +1587,19 @@ amplified by only `1/(1 − β²) = 1.125`, i.e. +0.5 dB (function doc, `demodul
 
 ### 2A.5 Acquisition and carrier recovery
 
-Blind acquisition — recovering timing, frequency and phase simultaneously from a 16-symbol
-preamble — is the single most-churned and most-misdiagnosed area of the modem (60+ AFC/carrier
-commits; the project's DSP playbook in `CLAUDE.md` exists because of it). The chain, all in
-`crates/openpulse-modem/src/engine.rs`, is:
+Blind acquisition — recovering timing, frequency and phase simultaneously from a short preamble —
+is the single most-churned and most-misdiagnosed area of the modem (60+ AFC/carrier commits; the
+project's DSP playbook, now `docs/dev/dsp-acquisition-playbook.md`, exists because of it). The
+scanning chain, all in `crates/openpulse-modem/src/engine.rs`, is:
 
 ```text
 audio ──► energy gate ──► refine_onset ──► afc_mini_settle ──► decode ──► carrier tracker
           (presence)      (where exactly)  (coarse CFO)                   (fine CFO + phase)
 ```
+
+On the daemon's streaming path a burst gatherer sits in front of it: the carrier detect at the
+`InputCapture` seam decides when a burst starts and ends, and only a flushed burst is scanned. That
+front half changed substantially after v0.16.0 and is described in §2A.5.8.
 
 #### 2A.5.1 The engine chain
 
@@ -1613,6 +1736,54 @@ For channels whose Doppler is itself changing, `crates/openpulse-dsp/src/doppler
 provides `DopplerTracker` (phase-slope estimation across symbol windows, returning a rate in Hz/s
 with a confidence) and `AdaptiveAfcLoopBandwidth`, which adjusts the PLL loop bandwidth from SNR
 and Doppler rate.
+
+#### 2A.5.8 The streaming receive chain after v0.16.0
+
+The daemon does not scan a fixed buffer. Its receive tick calls `accumulate_capture`, which routes
+each read through the `InputCapture` seam (§2A.12.1) and gathers audio into a burst while the carrier
+detect says the channel is busy; when it says idle again, the burst is flushed and decoded. Every
+change below sits on that path.
+
+- **The carrier detect's floor follows the band behind any receive filter (#1452).** The squelch
+  compares each block's RMS against a noise floor times `DCD_SQUELCH_MARGIN = 1.25`. The floor
+  (`openpulse_dsp::noise_floor`) is now each FFT bin's noise level tracked over time and summed —
+  the noise power the block RMS actually sees. The older estimator took a percentile *across* the
+  300–2700 Hz bins as if the noise were white; behind a 250 or 500 Hz filter most of those bins are
+  stopband, so the floor collapsed to its clamp and the squelch lost its meaning. The tracker is
+  held while a burst is gathered, so a long frame cannot raise it, and `[modem] dcd_squelch` is now
+  a lower bound on the adaptive squelch, never a replacement for it.
+- **A spectral busy criterion catches weak frames (#1454).** Total power alone misses a narrow frame
+  that adds little to a wide passband. A second test, OR'd with it, slides a 62.5 Hz band across
+  312–2703 Hz and opens the burst when one band is at least 4.5 times its own floor in 3 of the last
+  4 analysis windows (256 ms), and holds it while the capped 8-window mean stays at 2.5 or more.
+  The thresholds were set from three recorded idles, on which the open condition never fired. A
+  burst this test opens gets a pre-trigger ring of 16 windows prepended, so the detector's lag does
+  not cost the frame its preamble.
+- **Every frame of a multi-frame burst is decoded (#1461).** A sender keys once and sends fragments
+  back to back (file transfer, a multi-fragment handshake), so the accumulator hands them over as
+  one burst. `decode_burst_frames` and `decode_following_frames` now walk the burst frame by frame,
+  using the exact airtime of each decoded frame to place the next, at the carrier correction the
+  first frame committed. Before this, a four-fragment file through two daemons delivered one
+  fragment and stalled.
+- **Off-frequency first frames are cheaper: AFC is estimated before the onset scan.** In the OTA
+  arm, the coded onset scan used to run at the old carrier correction and acquire the carrier only
+  after failing at every onset, which an off-frequency frame always does. Measured at +50 Hz on a
+  fresh receiver (x86 release, `receive_cost_scaling`), SL2 took 23.9 s to decode against 1.9 s on
+  frequency, past a Raspberry Pi's 9 s ACK window. Now one settle at the burst's trigger point
+  (`acquire_at_onset`) decides whether the burst is off frequency, and the scan runs at that
+  correction first — including offset 0, which the earlier offset-0 attempt had only tried at the
+  old correction. Inside the 2 Hz deadband nothing changes.
+- **The uncoded fallback tries ranked onsets first** (`docs/dev/design/fallback-onset-ranking.md`).
+  Non-ladder traffic — station ID, handshake, QSY, file-transfer fragments — is decoded by an
+  uncoded fallback whose exhaustive onset scan ran on every coded ladder burst and was measured at
+  77–91 % of the daemon's decode time. A mode with a preamble template now tries only its
+  `FALLBACK_RANKED_ONSETS = 4` best-correlating onsets there, earliest first; the exhaustive scan
+  runs only after the coded scan has also failed, so a control frame ranked below four is delayed,
+  not lost.
+
+A burst the gatherer flushes is not automatically evidence about the ladder: a failed one must also
+pass the evidence rules of §1.4.4 before it can cost a NACK. The acquisition edges that still bite
+are listed in `docs/dev/sharp-edges.md`.
 
 ### 2A.6 Timing recovery and equalisation
 
@@ -2236,7 +2407,7 @@ mode/FEC/floor/ceiling table is pinned against `docs/mode-fec-ladder.md` by
 
 (One documentation footnote, in the spirit of this book's ground rules: `hpx_hf`'s ASCII comment
 table in `profile.rs` does match the code rung for rung, but the *prose* around it has drifted. Its
-doc-comment header still advertises "SL2–SL19" and says high-rate LDPC "appears as SL15–SL17"; a
+doc comment on `fast()` still describes the dense rungs as "SL10–SL19", soft-concatenated "up to SL15", with LDPC "only above SL15", and a body comment says high-rate LDPC "appears as SL15–SL17" (re-checked 2026-10-15); a
 later comment says "SL2–SL5 carry `RsStrong` (t=32)" where the code assigns `Rs`, with `RsStrong`
 applied opportunistically per frame by `free_rs_strengthening`; and the comment above `snr_floors`
 says "SL7 (OFDM52) = 10" where the code assigns 9.0. `ladder_doc_matches_profile` has two tests —
@@ -2517,10 +2688,13 @@ The station's long-term identity is a 32-byte Ed25519 seed at `[station] identit
 (default `~/.config/openpulse/identity.key`). New keys come from `OsRng`, written with
 `create_new(true).mode(0o600)` — atomically, so the file never exists under a looser umask, with an
 `AlreadyExists` branch that re-reads a concurrent winner's file. Existing files are
-permission-validated (owner-only, REQ-CTL-05) and must be exactly 32 bytes. One posture wart:
-if the key *fails to load*, the daemon warns and falls back to a **random ephemeral seed**
-(`server.rs`) — failing open into an unrecognisable identity rather than refusing to start, the
-opposite of the trust store's fail-closed load (§2B.4.4).
+permission-validated (owner-only, REQ-CTL-05) and must be exactly 32 bytes. If an existing key
+*fails to load* — group- or world-readable, the wrong length, unreadable — the daemon **refuses to
+start** (`load_station_seed`, `crates/openpulse-daemon/src/server.rs`; audit 2026-07-19, #7;
+test `an_unusable_identity_key_fails_closed`). This corrects the v0.15.0 edition of this book, which
+described the earlier behaviour: a warning and a random ephemeral seed, failing open into an
+identity no peer could recognise. Both the identity key and the trust store (§2B.4.4) now fail
+closed.
 
 ### 2B.4 The trust model
 
@@ -2844,7 +3018,8 @@ integration test asserts both sides agree; that is all. More broadly, a grep acr
 `apps/` and `plugins/` finds **no production caller of `pq_handshake` outside `openpulse-core`**:
 an implemented, tested protocol layer not yet wired into the daemon or any front-end. Where
 `docs/features.md` marks it "Implemented", read "the crate exists and passes its tests", not "in
-use on the air".
+use on the air". (Re-checked on 2026-10-15: still no caller outside `openpulse-core`. The PQ
+handshake is explicitly out of Release 1 scope.)
 
 #### 2B.7.3 What post-quantum costs on an HF channel
 
@@ -2934,7 +3109,7 @@ CI's `--no-default-features`). `KeychainStore::available()` probes an entry and 
 #### 2B.8.3 The station identity key
 
 Covered in §2B.3.4: a 32-byte Ed25519 seed, generated atomically at `0o600`, permission-validated
-on load — but failing *open* to a random ephemeral identity on a load error.
+on load, and failing *closed* — the daemon refuses to start — on a load error.
 
 #### 2B.8.4 PKI trust-bundle signing
 
@@ -2949,7 +3124,10 @@ JSONB round-trip, which does not preserve key order — and it excludes `is_curr
 
 ### 2B.9 What is NOT protected
 
-An honest security chapter ends with the gaps. Every item below is verified against v0.15.0 source.
+An honest security chapter ends with the gaps. Every item below was verified against v0.15.0
+source; items 4, 5 and 8 were re-checked against `main` on 2026-10-15, and item 8 had changed. Of
+the surfaces below, only the signed classical handshake and the authenticated rate ACK are part of
+Release 1; the PQ handshake, relay and the WebSocket port are not.
 
 1. **On-air payloads are cleartext — by design and by law.** There is no confidentiality on RF
    under §97.113(a)(4)/§97.309(a)(4). Anything you send, the world can read.
@@ -2977,8 +3155,9 @@ An honest security chapter ends with the gaps. Every item below is verified agai
    consults the verified-peer record, and the QSY gate reads `rf_peer_trust()` — the trust of
    whichever peer was verified this session — rather than binding to the specific station whose
    QSY frame arrived.
-8. **The station identity key fails open**: a load error yields a random ephemeral identity, not a
-   startup refusal — the opposite posture to the trust store's fail-closed load.
+8. **~~The station identity key fails open.~~ Fixed:** at v0.15.0 a load error yielded a random
+   ephemeral identity; the daemon now refuses to start instead, matching the trust store's
+   fail-closed load (§2B.3.4). Kept in this list so the item numbers stay stable.
 9. **The ACK authenticator is 24 bits** — a considered trade for a 5-byte frame, adequate against
    casual forgery, not a 128-bit MAC.
 10. **The keystore master password is held in memory as a `String`**; no zeroisation was found in
@@ -2992,14 +3171,15 @@ An honest security chapter ends with the gaps. Every item below is verified agai
 
 ### 2B.10 Test evidence
 
-All runs executed against v0.15.0 (`main` @ `21baaec`) with `--no-default-features`. The CI, Docs
-Checks and doc-stamping workflows are `disabled_manually` by the maintainer's deliberate choice
-(confirmed via the GitHub Actions API); these gates run locally.
+All runs executed against v0.15.0 (`main` @ `21baaec`) with `--no-default-features`, and not
+re-run for the 2026-10-15 revision. At the time the CI, Docs Checks and doc-stamping workflows were
+`disabled_manually` (confirmed then via the GitHub Actions API); since then the workspace gate runs
+post-merge on `main` (§3.6.3).
 `cargo test -p openpulse-core --lib`: 316 passed. Integration suites: `handshake_integration` 22,
 `pq_handshake_integration` 16, `manifest_integration` 6, `peer_descriptor_integration` 9. Crate
 suites: `openpulse-linksec` 8, `openpulse-keystore` 5 (in ~2.2 s — Argon2 is deliberately slow).
 
-Acceptance-criteria rows from `CLAUDE.md` covered by this part, tests confirmed present in the
+Acceptance-criteria rows (now in `docs/dev/project/acceptance-criteria.md`) covered by this part, tests confirmed present in the
 tree: relay origin authentication (`authenticated_relay_forwarding`,
 `impersonated_origin_rejected_at_relay` — `crates/openpulse-mesh/tests/mesh_loopback.rs`);
 handshake replay freshness (`handshake::tests`, six cases); SAR poison resistance
@@ -3009,11 +3189,11 @@ handshake replay freshness (`handshake::tests`, six cases); SAR poison resistanc
 
 ## Chapter 3 — Computer science: architecture and implementation
 
-For the operator, this chapter explains why OpenPulseHF behaves the way it does as a program: why one binary (`openpulse-server`) does almost everything, why a new waveform arrives as a "plugin", and why the project can claim its HF-fade behaviour is tested without ever keying a transmitter. For the developer, it is a navigation chart: where the code lives, how the layers depend on each other, how to add a mode, and — most importantly — the testing discipline the project has learned the hard way. Everything in this chapter cites a file, symbol, or test in the tree at v0.15.0; measured numbers carry their conditions, and the fade results are all from the Watterson channel *simulator*, not on-air operation.
+For the operator, this chapter explains why OpenPulseHF behaves the way it does as a program: why one binary (`openpulse-server`) does almost everything, why a new waveform arrives as a "plugin", and why the project can claim its HF-fade behaviour is tested without ever keying a transmitter. For the developer, it is a navigation chart: where the code lives, how the layers depend on each other, how to add a mode, and — most importantly — the testing discipline the project has learned the hard way. Everything in this chapter cites a file, symbol, or test in the tree; it was written at v0.15.0 and its counts, line numbers and the plugin trait were re-measured against `main` on 2026-10-15. Measured numbers carry their conditions, and the fade results are all from the Watterson channel *simulator*, not on-air operation.
 
 ### 3.1 The workspace: 41 crates, one strict layering
 
-OpenPulseHF is a single Cargo workspace of 41 crates (`Cargo.toml`, `resolver = "2"`), versioned as a unit — every crate is `0.15.0`, licence GPL-3.0-or-later (`[workspace.package]`). Total source across `crates/*/src`, `apps/*/src` and `plugins/*/src` is about 108 000 lines.
+OpenPulseHF is a single Cargo workspace of 41 crates (`Cargo.toml`, `resolver = "2"`), versioned as a unit — every crate is `0.16.0`, licence GPL-3.0-or-later (`[workspace.package]`). Total source across `crates/*/src`, `apps/*/src` and `plugins/*/src` is about 134 000 lines (about 108 000 at v0.15.0).
 
 The dependency graph is a strict layering, verified from the individual `Cargo.toml` files:
 
@@ -3056,38 +3236,37 @@ One deliberate wrinkle: `openpulse-daemon` is declared in `[workspace.dependenci
 
 The project's stated convention is "one concept per file; prefer small focused modules over large files" (CLAUDE.md). The size distribution (`wc -l` over all `src/*.rs`) shows where that convention has held and where it has lost:
 
-| Lines | File |
-|---|---|
-| 5713 | `crates/openpulse-modem/src/engine.rs` |
-| 5245 | `crates/openpulse-daemon/src/lib.rs` |
-| 2712 | `crates/openpulse-daemon/src/server.rs` |
-| 2082 | `plugins/qpsk/src/demodulate.rs` |
-| 1974 | `apps/openpulse-panel/src/ui.rs` |
-| 1784 | `apps/openpulse-testmatrix/src/bench.rs` |
-| 1637 | `apps/openpulse-testbench/src/signal_path.rs` |
-| 1614 | `apps/openpulse-linksim/src/gui.rs` |
-| 1601 | `crates/openpulse-config/src/lib.rs` |
-| 1480 | `apps/openpulse-linksim/src/lib.rs` |
+| Lines (2026-10-15) | Lines (v0.15.0) | File |
+|---|---|---|
+| 10378 | 5713 | `crates/openpulse-modem/src/engine.rs` |
+| 7376 | 5245 | `crates/openpulse-daemon/src/lib.rs` |
+| 4514 | — | `plugins/bpsk/src/demodulate.rs` |
+| 3746 | 2712 | `crates/openpulse-daemon/src/server.rs` |
+| 2082 | 2082 | `plugins/qpsk/src/demodulate.rs` |
+| 1967 | 1974 | `apps/openpulse-panel/src/ui.rs` |
+| 1784 | 1784 | `apps/openpulse-testmatrix/src/bench.rs` |
+| 1738 | 1637 | `apps/openpulse-testbench/src/signal_path.rs` |
+| 1727 | 1480 | `apps/openpulse-linksim/src/lib.rs` |
+| 1726 | 1601 | `crates/openpulse-config/src/lib.rs` |
 
-`engine.rs` and `daemon/lib.rs` are the two accretion points. The `ModemEngine` struct (`engine.rs:271-401`) carries 47 fields, and the file declares 155 `pub fn` items on the engine's impls (counts taken by `grep` over the struct body and the file; a few of those methods sit in test-support impls). This is the measurable cost of a design in which one object owns the audio backend, the plugin registry, the pipeline scheduler, AFC state, the rate/ARQ machinery, DCD/CSMA, TX conditioning, the regulatory transmit log, and the RX front end. The chapter returns to how the project keeps this tractable (the seam rule, §3.3.3); it does not pretend the strain is not there.
+`engine.rs` and `daemon/lib.rs` are the two accretion points, and both have grown by roughly half since v0.15.0 — most of `engine.rs`'s growth is the streaming receive chain of §2A.5.8. The `ModemEngine` struct (`engine.rs`, `pub struct ModemEngine`) now carries 94 fields (47 at v0.15.0), and the file declares 165 `pub fn` items (155 at v0.15.0; counts taken by `grep` over the struct body and the file, and a few of those methods sit in test-support impls). This is the measurable cost of a design in which one object owns the audio backend, the plugin registry, the pipeline scheduler, AFC state, the rate/ARQ machinery, DCD/CSMA, TX conditioning, the regulatory transmit log, and the RX front end. The chapter returns to how the project keeps this tractable (the seam rule, §3.3.3); it does not pretend the strain is not there.
 
 ### 3.2 The plugin system
 
-To an operator, a "mode" like `BPSK250` or `OFDM52-16QAM` is a menu entry. Internally, every mode string is owned by exactly one *modulation plugin*: a compiled-in Rust object implementing one trait, registered at startup, and looked up by mode name for every transmit and receive. There is **no dynamic loading** — no `.so` files, no ABI boundary. Plugins are statically linked and registered by explicit `register_plugin(Box::new(...))` calls (the daemon does this in `server.rs:108-127`). The versioning machinery below is forward-looking for out-of-tree plugins; in-tree it has never had to reject anything, since all ten shipped plugins declare `"1.0"`.
+To an operator, a "mode" like `BPSK250` or `OFDM52-16QAM` is a menu entry. Internally, every mode string is owned by exactly one *modulation plugin*: a compiled-in Rust object implementing one trait, registered at startup, and looked up by mode name for every transmit and receive. There is **no dynamic loading** — no `.so` files, no ABI boundary. Plugins are statically linked and registered by explicit `register_plugin(Box::new(...))` calls (the daemon does this in `server::run`, `crates/openpulse-daemon/src/server.rs`). The versioning machinery below is forward-looking for out-of-tree plugins; in-tree every shipped plugin declares `"3.0"` against a framework at `3.1.0`, so it rejects nothing.
 
 #### 3.2.1 The trait
 
 Everything lives in one file, `crates/openpulse-core/src/plugin.rs`. Abbreviated but verbatim:
 
 ```rust
-/// Current plugin trait version. Format: `<major>.<minor>.<patch>`
-pub const PLUGIN_TRAIT_VERSION: &str = "2.0.0";
+pub const PLUGIN_TRAIT_VERSION: &str = "3.1.0";
 
 pub trait ModulationPlugin: Send + Sync {
     /// Return this plugin's static metadata.
     fn info(&self) -> &PluginInfo;
 
-    /// Encode `data` bytes into a vector of normalised audio samples (-1.0 … +1.0).
+    /// Encode `data` bytes into a vector of normalised audio samples (`-1.0 … +1.0`).
     fn modulate(&self, data: &[u8], config: &ModulationConfig) -> Result<Vec<f32>, ModemError>;
 
     /// Decode audio samples back to the original bytes.
@@ -3098,11 +3277,14 @@ pub trait ModulationPlugin: Send + Sync {
 
     fn demodulate_soft(&self, samples: &[f32], config: &ModulationConfig)
         -> Result<Vec<f32>, ModemError> { /* hard-slice fallback, see below */ }
+    fn demodulate_variants(&self, samples: &[f32], config: &ModulationConfig)
+        -> Result<Vec<Vec<u8>>, ModemError> { Ok(vec![self.demodulate(samples, config)?]) }
     fn frame_geometry(&self, _config: &ModulationConfig) -> Option<FrameGeometry> { None }
-    fn supports_soft_demod(&self) -> bool { false }
+    fn supports_soft_demod(&self, mode: &str) -> bool { false }
     fn supports_mode(&self, mode: &str) -> bool { /* case-insensitive supported_modes match */ }
     fn estimate_afc_hz(&self, _s: &[f32], _c: &ModulationConfig) -> Option<f32> { None }
     fn estimate_snr_db(&self, _s: &[f32], _c: &ModulationConfig) -> Option<f32> { None }
+    fn preamble_template(&self, _c: &ModulationConfig) -> Option<PreambleTemplate> { None }
     fn acquire_copy_offset(&self, _s: &[f32], _c: &ModulationConfig) -> Option<usize> { None }
     fn occupied_bandwidth_hz(&self, _mode: &str) -> Option<f32> { None }
     fn modulate_iq(&self, data: &[u8], config: &ModulationConfig)
@@ -3110,13 +3292,23 @@ pub trait ModulationPlugin: Send + Sync {
 }
 ```
 
+Three entries differ from this book's v0.15.0 listing, which showed trait version `2.0.0`.
+`supports_soft_demod` now takes the mode, because one plugin can have soft output for some modes and
+not others (QPSK's `-D` modes have none). `demodulate_variants` lets a plugin offer
+several hard-decision wires for one slice, best first; `variants[0]` must equal `demodulate`
+byte-for-byte, and the engine keeps the first variant that passes FEC and CRC (BPSK uses it for its
+two decision arms, §2A.3.1). `preamble_template` publishes a mode's modulated preamble *together
+with* the ρ threshold and search grid measured for that mode, in a `PreambleTemplate` whose
+`for_mode` field the engine checks, so a threshold derived for one mode cannot silently be inherited
+by another.
+
 Three design decisions carry weight:
 
 **Plugins are stateless.** The trait is `Send + Sync` and every method takes `&self`. There is no per-call mutable state, so one plugin instance is safely shared across threads — the daemon's multi-mode receive monitor relies on this explicitly (`crates/openpulse-daemon/src/monitor.rs:11`). Any state a demodulator needs (PLL phase, equalizer taps) is local to the call.
 
-**Two methods are required; everything else degrades gracefully.** The default `demodulate_soft` is four lines: call `demodulate`, then map each hard bit to ±1.0 (`plugin.rs:162-173`). That is why the engine can offer soft-decision FEC to every mode without every plugin implementing an LLR path — and why `supports_soft_demod()` defaults to `false`, so the engine can warn when a soft-FEC mode is paired with a plugin that only fakes LLRs.
+**Two methods are required; everything else degrades gracefully.** The default `demodulate_soft` is four lines: call `demodulate`, then map each hard bit to ±1.0 (`plugin.rs:299-310`). That is why the engine can offer soft-decision FEC to every mode without every plugin implementing an LLR path — and why `supports_soft_demod(mode)` defaults to `false`, so the engine can warn when a soft-FEC mode is paired with a plugin that only fakes LLRs.
 
-**The soft path has a written contract.** The trait doc (`plugin.rs:131-154`) specifies the LLR convention in three clauses, each with a named enforcing test:
+**The soft path has a written contract.** The trait doc (`plugin.rs:250-298`) specifies the LLR convention in three clauses, each with a named enforcing test:
 
 1. *Sign*: positive means "bit more likely 0"; hard-slicing every LLR with `fec::hard_decide` (`is_sign_negative`, LSB-first per byte) must reproduce `demodulate()`'s bytes exactly — enforced for **every mode of every registered plugin** by `crates/openpulse-modem/tests/soft_demod_conformance.rs`. This book said `bit = llr <= 0` until 2026-09-13; that is a fourth convention, disagreeing with the engine's slicer at `+0.0` and with `ldpc.rs`/`turbo.rs`'s `l < 0.0` as well. The sweep also fails on any exactly-zero LLR, which has no convention-independent decision.
 2. *Scale*: per-plugin, deliberately not normalised across plugins; cross-mode combining must weight per frame (`combine_llrs_weighted`), never add raw LLRs from different plugins.
@@ -3124,16 +3316,16 @@ Three design decisions carry weight:
 
 This is a pattern worth naming: the contract lives in the trait doc *and* in a cross-plugin conformance test, so a new plugin cannot quietly invert the sign convention or emit uncalibrated LLRs and still pass the suite.
 
-`FrameGeometry` (`plugin.rs:96-109`) exists because of a specific recorded bug. Before it existed, the engine guessed frame dimensions from trailing digits of the mode name — *"wrong for every mode whose name does not end in its baud rate (OFDM52's 52 is a subcarrier count; SCFDMA52-64QAM-P4 parsed as 4 baud) — and assumed a 32-symbol preamble (true only for BPSK)"* (`plugin.rs:90-95`, verbatim). The heuristic still exists as a fallback (`ModemEngine::frame_scan_geometry`, `engine.rs:1397-1434`); every production plugin should override `frame_geometry`.
+`FrameGeometry` (`plugin.rs:109-130`) exists because of a specific recorded bug. Before it existed, the engine guessed frame dimensions from trailing digits of the mode name — *"wrong for every mode whose name does not end in its baud rate (OFDM52's 52 is a subcarrier count; SCFDMA52-64QAM-P4 parsed as 4 baud) — and assumed a 32-symbol preamble (true only for BPSK)"* (`plugin.rs:113-116`, verbatim). The heuristic still exists as a fallback (`ModemEngine::frame_scan_geometry`, `engine.rs:2874-2909`); every production plugin should override `frame_geometry`.
 
 #### 3.2.2 Version gate and registry
 
-Every plugin declares `trait_version_required: "<major>.<minor>"` in its `PluginInfo`. `PluginRegistry::register` validates it (`plugin.rs:291-338`): compatible iff `framework_major == plugin_major && framework_minor >= plugin_minor`; a malformed string is a distinct `PluginError::InvalidTraitVersionFormat`. Four registry tests pin both outcomes (`plugin.rs:422-460`).
+Every plugin declares `trait_version_required: "<major>.<minor>"` in its `PluginInfo`. `PluginRegistry::register` validates it (`plugin.rs:477-525`): compatible iff `framework_major == plugin_major && framework_minor >= plugin_minor`; a malformed string is a distinct `PluginError::InvalidTraitVersionFormat`. Four registry tests pin both outcomes (`plugin.rs:602-677`).
 
 The registry itself is deliberately unclever — a `Vec<Box<dyn ModulationPlugin>>` with a linear reverse scan:
 
 ```rust
-// plugin.rs:341-347
+// plugin.rs:527-533
 pub fn get(&self, mode: &str) -> Option<&dyn ModulationPlugin> {
     self.plugins.iter()
         .rev() // later registrations take precedence
@@ -3142,16 +3334,16 @@ pub fn get(&self, mode: &str) -> Option<&dyn ModulationPlugin> {
 }
 ```
 
-Later registrations shadow earlier ones for the same mode string — pinned by the test `later_registration_shadows_earlier_for_the_same_mode` (`plugin.rs:410-420`). With ten plugins and a total of 78 mode strings (that total is a sum over the ten verified `supported_modes` vectors), linear scan is a non-issue, and the shadowing rule gives tests a clean way to substitute an instrumented plugin.
+Later registrations shadow earlier ones for the same mode string — pinned by the test `later_registration_shadows_earlier_for_the_same_mode` (`plugin.rs:620-630`). With ten plugins and a total of 73 advertised mode strings (that total is a sum over the ten verified `supported_modes` vectors; 78 at v0.15.0), linear scan is a non-issue, and the shadowing rule gives tests a clean way to substitute an instrumented plugin.
 
-The ten plugins and their mode counts: BPSK (5), QPSK (14), 8PSK (10), 64QAM (3), FSK4 (1: `FSK4-ACK`), MFSK16 (2), OFDM (6), SC-FDMA (12), Pilot (20), JS8 (5). Most modes are manually selectable only; the adaptive `hpx_hf` ladder uses SL1–SL14, with MFSK16 at SL1.
+The ten plugins and their mode counts: BPSK (5), QPSK (12), 8PSK (7), 64QAM (3), FSK4 (1: `FSK4-ACK`), MFSK16 (2), OFDM (6), SC-FDMA (12), Pilot (20), JS8 (5). Most modes are manually selectable only; the adaptive `hpx_hf` ladder uses SL1–SL14, with MFSK16 at SL1, and only the plugins on that ladder (BPSK, QPSK for `QPSK250-D`, OFDM, MFSK16, FSK4) are part of Release 1.
 
 #### 3.2.3 Writing a new plugin
 
 The smallest real plugin in the tree is the ACK-channel plugin, `plugins/fsk4/src/lib.rs`, and it is the template to copy. The complete recipe:
 
 1. **Crate**: new directory under `plugins/`, depending on `openpulse-core` and (usually) `openpulse-dsp`. Add it to the workspace `members`.
-2. **`PluginInfo`**: name, version (`env!("CARGO_PKG_VERSION")`), description, `supported_modes`, and `trait_version_required: "2.0"`.
+2. **`PluginInfo`**: name, version (`env!("CARGO_PKG_VERSION")`), description, `supported_modes`, and `trait_version_required: "3.0"`.
 3. **Implement the trait** — `Fsk4Plugin` in full is ~35 lines of trait impl:
 
 ```rust
@@ -3183,11 +3375,11 @@ impl ModulationPlugin for Fsk4Plugin {
 }
 ```
 
-   Note what FSK4 deliberately does *not* override: `demodulate_soft` stays at the ±1.0 default, and the doc comment explains why that is acceptable (the ACK channel always uses hard-decision short-block FEC and never carries LDPC/turbo payloads) — and that `supports_soft_demod() == false` lets the engine warn on an accidental soft-FEC pairing.
-4. **Register it** wherever it should be usable: `engine.register_plugin(Box::new(MyPlugin::new()))` in the daemon (`server.rs:108-127`), the CLI, and the testmatrix, as applicable.
+   Note what FSK4 deliberately does *not* override: `demodulate_soft` stays at the ±1.0 default, and the doc comment explains why that is acceptable (the ACK channel always uses hard-decision short-block FEC and never carries LDPC/turbo payloads) — and that `supports_soft_demod(mode) == false` lets the engine warn on an accidental soft-FEC pairing.
+4. **Register it** wherever it should be usable: `engine.register_plugin(Box::new(MyPlugin::new()))` in the daemon (`server.rs:137-177`), the CLI (`crates/openpulse-cli/src/plugins.rs`), and the testmatrix, as applicable.
 5. **Tests**: an in-crate loopback round-trip (every plugin has one), and — if the plugin claims soft output — it will automatically face `soft_demod_conformance` and `llr_calibration` in `openpulse-modem`. "Automatically" became true on 2026-09-13: the conformance test swept a hand-written list of 14 (plugin, mode) pairs until then, so a new mode faced it only if somebody added it. If the mode is meant for HF use, it must also face a fading test; §3.5 explains why an AWGN-only validation is not accepted for ladder rungs.
 
-Before touching a demodulator, read the "DSP acquisition & carrier-recovery playbook" in CLAUDE.md — blind acquisition is the most-churned area of the modem, and the playbook's first rule (diagnose an "AFC" failure with a swept-applied-correction experiment before blaming the estimator) has repeatedly relocated bugs from the accused component to the real one.
+Before touching a demodulator, read the DSP acquisition and carrier-recovery playbook (`docs/dev/dsp-acquisition-playbook.md`) — blind acquisition is the most-churned area of the modem, and the playbook's first rule (diagnose an "AFC" failure with a swept-applied-correction experiment before blaming the estimator) has repeatedly relocated bugs from the accused component to the real one.
 
 ### 3.3 The engine pipeline
 
@@ -3195,7 +3387,7 @@ Before touching a demodulator, read the "DSP acquisition & carrier-recovery play
 
 #### 3.3.1 Five stages, honestly single-threaded
 
-The pipeline decomposition is explicit as types (`crates/openpulse-modem/src/pipeline.rs:8-16`):
+The pipeline decomposition is explicit as types (`crates/openpulse-modem/src/pipeline.rs:9-16`):
 
 ```rust
 /// Logical modem pipeline stages.
@@ -3216,10 +3408,10 @@ An honesty point the code itself makes: `PipelineScheduler` does **not** run sta
 
 A transmit call runs: CSMA check (pre-encode, so a deferral does not burn a sequence number) → frame encode (`Frame` envelope: magic `OPLS`, version, 16-bit sequence, 8-bit length, payload ≤ 255 B, CRC-16 — 10 bytes total overhead, `frame.rs`) → FEC encode per the selected `FecMode` → plugin `modulate` → `stage_emit_output`.
 
-`stage_emit_output` (`engine.rs:4934-4976`) is the TX front-end seam, the mirror image of the RX seam below: it applies TX attenuation → CE-SSB peak-to-average conditioning *only when the mode benefits* → tanh limiter → spectrum tap → write → flush → regulatory TX log (`record_tx_frame`). The CE-SSB gate is a code-level fact worth quoting because documentation got it wrong twice before the code was made the authority:
+`stage_emit_output` (`engine.rs:8132-8176`) is the TX front-end seam, the mirror image of the RX seam below: it applies TX attenuation → CE-SSB peak-to-average conditioning *only when the mode benefits* → tanh limiter → spectrum tap → write → flush → regulatory TX log (`record_tx_frame`). The CE-SSB gate is a code-level fact worth quoting because documentation got it wrong twice before the code was made the authority:
 
 ```rust
-// engine.rs:701-717
+// engine.rs:1647-1662
 pub fn cessb_benefits(mode: &str) -> bool {
     let m = mode.to_ascii_uppercase();
     if !m.starts_with("OFDM") { return false; }
@@ -3232,7 +3424,7 @@ That is: **OFDM16 and OFDM52 only**. All SC-FDMA modes are excluded (single-carr
 
 #### 3.3.3 The InputCapture seam — the load-bearing idea
 
-Every receive path in the system funnels its raw samples through `route_audio_stage(PipelineStage::InputCapture, …)` exactly once, and the entire receiver front end lives *there* — not in any of the 19 `InputCapture` call sites (`route_audio_stage` is called 40 times in total across all five stages). From `engine.rs:5149-5175`, with two explanatory comments abridged:
+Every receive path in the system funnels its raw samples through `route_audio_stage(PipelineStage::InputCapture, …)` exactly once, and the entire receiver front end lives *there* — not in any of the 19 `InputCapture` call sites (`route_audio_stage` is called 40 times in total across all five stages). From `engine.rs:8739-8771`, with explanatory comments and the notch's frequency bookkeeping abridged:
 
 ```rust
 // The receiver front end lives at this single seam: every capture path funnels its raw
@@ -3260,7 +3452,7 @@ if stage == PipelineStage::InputCapture && !self.input_prerouted {
 
 Four details to internalise:
 
-1. **Fixed order.** DC block (always on) → notch (optional) → **DCD** → AGC (optional). DCD is placed before the AGC deliberately: *"the AGC only normalises the level for the demodulator; the squelch/CSMA must see the real channel energy"* (`engine.rs:5168-5169`). An AGC-boosted noise floor would otherwise latch the squelch open permanently.
+1. **Fixed order.** DC block (always on) → notch (optional) → **DCD** → AGC (optional). DCD is placed before the AGC deliberately: *"the AGC only normalises the level for the demodulator; the squelch/CSMA must see the real channel energy"* (`engine.rs:8761-8762`). An AGC-boosted noise floor would otherwise latch the squelch open permanently.
 2. **Tripwire counters.** `dc_blocks_processed`, `notch_blocks_processed`, `agc_blocks_processed`, `dcd_blocks_processed`, each with a public getter. Their documented purpose: an enabled feature that never runs on a given path — for instance a new capture path that skips the seam — leaves its counter at 0, and a test can assert the counter incremented on the production path. This is a *runtime assertion that the seam rule has not been violated*.
 3. **`input_prerouted`** suppresses double application: `decode_burst` re-scans a burst that `accumulate_routed` already front-end-processed, and the stateful AGC and the DCD latch must not run a second time per scan slice.
 4. **Why the seam exists at all**: it was built after a real bug. The receiver notch was originally placed in `stage_capture_input` only — which covered every `receive*`-family test but **never ran in the daemon**, because the daemon uses a different capture entry. That incident produced the seam, the tripwires, and the five-point checklist discussed in §3.5.2.
@@ -3270,9 +3462,9 @@ Four details to internalise:
 The seam matters because captured audio reaches the demodulator by two distinct routes:
 
 - **The `receive*` family** — `stage_capture_input` → decode. Opens a stream, reads once, decodes. This is what tests and the CLI use.
-- **The daemon's streaming path** — `accumulate_capture` (`engine.rs:1347`) → `accumulate_routed` → `decode_burst`. This is what `server::run`'s receive ticker actually calls in production.
+- **The daemon's streaming path** — `accumulate_capture` (`engine.rs:2628`) → `accumulate_routed` → `decode_burst`. This is what `server::run`'s receive ticker actually calls in production.
 
-`accumulate_routed` (`engine.rs:1363-1393`) is a DCD-gated burst gatherer: it routes each tick's samples through the InputCapture seam, accumulates into `rx_burst` while carrier energy exceeds the DCD threshold, and flushes the whole burst when the carrier drops (or a size cap is hit). The rationale is hardware, recorded in the code (`engine.rs:1340-1346`): cpal is a callback backend whose stream needs tens of milliseconds to start delivering after `play()`, so reopening a stream every tick never warms up on real hardware. `decode_burst` then scans onset offsets across the burst lead-in, because a DCD-detected burst is not sample-accurate and the demodulator settles AFC on the window start.
+`accumulate_routed` (`engine.rs:2644-2823`) is a DCD-gated burst gatherer: it routes each tick's samples through the InputCapture seam, accumulates into `rx_burst` while carrier energy exceeds the DCD threshold, and flushes the whole burst when the carrier drops (or a size cap is hit). The rationale is hardware, recorded in the code (`engine.rs:2622-2627`): cpal is a callback backend whose stream needs tens of milliseconds to start delivering after `play()`, so reopening a stream every tick never warms up on real hardware. `decode_burst` then scans onset offsets across the burst lead-in, because a DCD-detected burst is not sample-accurate and the demodulator settles AFC on the window start.
 
 The existence of two entry families is not a footnote — it is *the* recurring source of "wired at one seam, not all paths" bugs, and the reason the acceptance table requires a test through the production entry (`crates/openpulse-modem/tests/ota_production_capture_path.rs`), not just the convenient one. That test's own header records that the gap is not hypothetical: an audit finding (the OTA decode loop re-running the InputCapture front end) shipped unnoticed precisely because nothing tested the production path.
 
@@ -3285,17 +3477,17 @@ For the developer, the daemon is where three distinct concurrency models meet, a
 #### 3.4.1 The entry point and dependency injection
 
 ```rust
-// crates/openpulse-daemon/src/server.rs:44
+// crates/openpulse-daemon/src/server.rs:74
 pub async fn run(cfg: OpenpulseConfig, modem_backend: Box<dyn AudioBackend>) -> Result<(), String>
 ```
 
 The audio backend is a *parameter*, not something `run` constructs. The binary passes the config-selected backend; a test harness passes a `LoopbackBackend` whose shared sample buffers it bridges. This single signature is what makes the twin-daemon rig (§3.5.4) possible: two completely real daemons in one process, joined at their loopback taps.
 
-Startup: build the `ModemEngine`, set the callsign and declared TX power (without which the Part-97 transmit log would stamp an empty callsign and 0 W on every frame), optionally initialise a `GpuContext` behind `#[cfg(feature = "gpu")]`, then register nine plugins (BPSK, FSK4, MFSK16, OFDM, 8PSK, 64QAM, QPSK, SC-FDMA, Pilot — `server.rs:108-127`). JS8 is *not* registered as a `ModulationPlugin` in the daemon; the discovery subsystem transmits JS8 beacon audio through a separate `transmit_raw_audio` seam. GPU-capable plugins go through a two-arm `macro_rules! register_gpu_plugin` that constructs `Plugin::with_gpu(ctx)` when a context exists and falls back to `Plugin::new()` otherwise; `GpuContext::init()` returns `Option<Arc<Self>>`, so a missing adapter is a logged, normal outcome, never an error.
+Startup: build the `ModemEngine`, set the callsign and declared TX power (without which the Part-97 transmit log would stamp an empty callsign and 0 W on every frame), optionally initialise a `GpuContext` behind `#[cfg(feature = "gpu")]`, then register nine plugins (BPSK, FSK4, MFSK16, OFDM, 8PSK, 64QAM, QPSK, SC-FDMA, Pilot — `server.rs:137-177`). JS8 is *not* registered as a `ModulationPlugin` in the daemon; the discovery subsystem transmits JS8 beacon audio through a separate `transmit_raw_audio` seam. GPU-capable plugins go through a two-arm `macro_rules! register_gpu_plugin` that constructs `Plugin::with_gpu(ctx)` when a context exists and falls back to `Plugin::new()` otherwise; `GpuContext::init()` returns `Option<Arc<Self>>`, so a missing adapter is a logged, normal outcome, never an error.
 
 #### 3.4.2 The main loop: fair `select!`, and PTT defence in depth
 
-The daemon's heart is a `tokio::select!` loop (`server.rs:670-…`) with three arms, and the comment on its first line is a design decision:
+The daemon's heart is a `tokio::select!` loop (`server.rs:845-…`) with three arms, and the comment on its first line is a design decision:
 
 ```rust
 loop {
@@ -3312,17 +3504,26 @@ The receive ticker runs at `cfg.daemon.receive_tick_ms` (default **50 ms**, `Dae
 
 Because a stuck-keyed transmitter is a real-world hazard (a babbling station, an overheating PA), PTT release has **three independent mechanisms**, each documented in place:
 
-1. An **independent OS thread** watchdog (`runtime_state.ptt.spawn_watchdog(...)`, `server.rs:603-611`) that force-releases on a max-duration deadline *"even while this async command loop is blocked inside a long handler (a QSY scan or an OTA send-retry burst), which the cooperative `select!` arm below cannot do."* It holds a `Weak` to the shared PTT state and exits when the daemon drops it.
+1. An **independent OS thread** watchdog (`runtime_state.ptt.spawn_watchdog(...)`, `server.rs:776`) that force-releases on a max-duration deadline *"even while this async command loop is blocked inside a long handler (a QSY scan or an OTA send-retry burst), which the cooperative `select!` arm below cannot do."* It holds a `Weak` to the shared PTT state and exits when the daemon drops it.
 2. The cooperative `watchdog_ticker` arm above, decoupled from the rx tick so a command flood cannot starve it.
 3. An idempotent belt-and-braces poll at the head of every rx tick.
 
 On top of that, every keyed transmit uses an RAII guard — `ptt.keyed(...)` returns a guard that releases at block end or on unwind (REQ-PTT-01), and returns `Err` on assert failure so the transmit is skipped rather than left keyed.
 
-One receive tick, in order (`server.rs:725-984`): watchdog poll → read active mode → under `block_in_place`, read the (lazily opened, held-open) capture stream and feed `engine.accumulate_capture(...)` → if an OTA rate session is active, `ota_decode_burst` and answer with an authenticated ACK (capped by a consecutive-Nack budget of 3, and gated on a valid callsign, since the ACK keys the transmitter) — otherwise the multi-mode monitor and `decode_burst` → unpack compression (the frame is self-describing, so RX always unpacks regardless of the local `[compression]` setting) → route bytes into handshake/SAR/QSY/file-transfer handlers → drain queued file fragments as one keyed burst → discovery tick (a due JS8 beacon is transmitted here, where the PTT controller lives) → metrics, spectrum tap, OTA status (~1 Hz), and periodic station ID (armed by polling the engine's `frames_transmitted` delta, so no `note_tx()` call has to be threaded through every transmit site; never auto-IDs as `N0CALL`).
+**One keying path for every front-end.** The watchdog, the deadline and the guard live in `SharedPtt` (`crates/openpulse-radio/src/shared_ptt.rs`), not in the daemon, so the daemon, the ARDOP and KISS TNCs, the cross-band repeater and, since #1299, the CLI all key through the same core; the daemon's `crate::ptt` is a thin adapter over it. Four behaviours of that core matter on air:
+
+- **A second key is refused.** Keying an already-keyed `SharedPtt` returns `PttError::AlreadyKeyed` naming the holder; the guard, not a thread id, owns the key, so one guard's release cannot drop another's key (#1263).
+- **An unusable PTT backend refuses every emission.** A configuration error — a mistyped `ptt_backend`, an `rts`/`dtr` backend with no `ptt_device` — stops the daemon at startup (#1285) rather than transmitting into an unkeyed rig. A real backend that is merely unreachable (rigctld not yet up) yields a controller that refuses to key and retries the connection, so nothing is emitted until it is back.
+- **Leader.** `[modem] ptt_leader_ms` (CLI `--ptt-leader-ms`, default 0) is a wait after the PTT edge and before the first sample (#1257), so a rig's key-up does not clip the preamble. It runs once per key, after the `PTT TRUE` notification, so a host keying its own rig on that event gets the same head start. The cross-band repeater's second rig and `openpulse calibrate` do not apply it. The right value is per rig and is still to be measured on the M3 station pair.
+- **Drain-based release.** PTT used to be released a fixed 200 ms after the software queue emptied. It now waits for the audio device's own report of when the last sample leaves, plus 10 ms for the codec FIFO, and never longer than the old 200 ms (#1367, `crates/openpulse-audio/src/flush.rs`). A reported delay of zero is not trusted — cpal reports an underrun as 0 — and gets the full 200 ms.
+
+The key-to-first-sample time also fell for a different reason: the resolved audio device name is now cached (`crates/openpulse-audio/src/device_cache.rs`), so an output opened while keyed skips the full device enumeration. Measured on the M3 stations, key-to-first-sample dropped from 567–684 ms to about 100 ms on rpi51 and from 239–256 ms to about 31 ms on rpi53.
+
+One receive tick, in order (`server.rs:922-1367`): watchdog poll → read active mode → under `block_in_place`, read the (lazily opened, held-open) capture stream and feed `engine.accumulate_capture(...)` → if an OTA rate session is active, `ota_decode_burst` and answer with an authenticated ACK (capped by the leaking keyed-NACK budget of `nack_budget.rs`, §1.4.4, and gated on a valid callsign, since the ACK keys the transmitter) — otherwise the multi-mode monitor and `decode_burst_frames`, which returns every frame of a multi-frame burst (§2A.5.8) → unpack compression (the frame is self-describing, so RX always unpacks regardless of the local `[compression]` setting) → route bytes into handshake/SAR/QSY/file-transfer handlers → drain queued file fragments as one keyed burst → discovery tick (a due JS8 beacon is transmitted here, where the PTT controller lives) → metrics, spectrum tap, OTA status (~1 Hz), and periodic station ID (armed by polling the engine's `frames_transmitted` delta, so no `note_tx()` call has to be threaded through every transmit site; never auto-IDs as `N0CALL`).
 
 #### 3.4.3 Shared state and channels
 
-The daemon's shared state is a set of named `Arc` aliases (`daemon/src/lib.rs:443-470`), all tokio primitives:
+The daemon's shared state is a set of named `Arc` aliases (`daemon/src/lib.rs:580-605`), all tokio primitives:
 
 ```rust
 pub type SharedMode           = Arc<Mutex<String>>;
@@ -3336,7 +3537,7 @@ pub type SharedMessageStore   = Arc<Mutex<MessageStore>>;
 
 The discipline is legible in the choices: `SpectrumTap` is the one `RwLock` — many readers (every connected client), one writer (the rx tick) — everything else is `Mutex`; `ValidModes` is captured once at startup from `engine.plugins().list()` so a bad `SetMode` is rejected before it mutates anything. Channels: a `broadcast::channel::<ControlEvent>(256)` fans events out to all clients; an `mpsc::channel::<ControlCommand>(64)` funnels commands from all clients into the single main loop. A background task republishes engine events (`engine.subscribe()`) onto the control broadcast, handling `RecvError::Lagged(n)` by warning and continuing — the correct treatment of a slow broadcast subscriber. `ClientCtx` bundles the per-client handles into one clonable struct.
 
-The control protocol itself (`protocol.rs`) is NDJSON over TCP — externally-tagged serde enums, 30 `ControlEvent` variants and 41 `ControlCommand` variants (`protocol.rs:114` and `:342`) — plus a binary side-channel for spectrum frames (magic `OPSP`). The same protocol runs over two transports: plaintext TCP for loopback, or a Noise-encrypted channel (`openpulse-linksec`, PSK-authenticated) for non-loopback binds, selected by an `enum ClientWriter { Plain(...), Noise(...) }`; when control auth is required — a PSK on the TCP port, or a non-loopback WebSocket bind — the unauthenticated WebSocket listener is not spawned at all (`ws_disabled_for_auth`, `server.rs:1168`), so it cannot bypass the gate.
+The control protocol itself (`protocol.rs`) is NDJSON over TCP — externally-tagged serde enums, 32 `ControlEvent` variants and 41 `ControlCommand` variants (`protocol.rs:116` and `:376`) — plus a binary side-channel for spectrum frames (magic `OPSP`). The same protocol runs over two transports: plaintext TCP for loopback, or a Noise-encrypted channel (`openpulse-linksec`, PSK-authenticated) for non-loopback binds, selected by an `enum ClientWriter { Plain(...), Noise(...) }`; when control auth is required — a PSK on the TCP port, or a non-loopback WebSocket bind — the unauthenticated WebSocket listener is not spawned at all (`ws_disabled_for_auth`, `server.rs:1580`), so it cannot bypass the gate.
 
 #### 3.4.4 Three concurrency models, on purpose
 
@@ -3348,7 +3549,7 @@ There is no single threading model; there are three, layered:
 | Engine calls from async | `tokio::task::block_in_place` | the engine is entirely synchronous; a real audio backend blocks until samples arrive |
 | PTT watchdog, TNC bridge workers, twin-rig bridge | OS threads | must run even when the async loop is blocked; or the worker is inherently synchronous |
 
-The `block_in_place` wrapping has a documented consequence (`twin.rs:56-57`): the daemon *"must run on a multi-thread Tokio runtime: the daemon receive tick uses `block_in_place`, which panics on a current-thread runtime"* — so every test that drives the daemon uses `#[tokio::test(flavor = "multi_thread")]`.
+The `block_in_place` wrapping has a documented consequence (`twin.rs:150`): the daemon *"must run on a multi-thread Tokio runtime: the daemon receive tick uses `block_in_place`, which panics on a current-thread runtime"* — so every test that drives the daemon uses `#[tokio::test(flavor = "multi_thread")]`.
 
 The ARDOP TNC bridge (`crates/openpulse-ardop/src/bridge.rs`) is a compact study in mixing primitives *by purpose* rather than by fashion: `Arc<std::sync::Mutex<ModemEngine>>` (a blocking mutex held across blocking DSP by a sync worker thread), `Arc<tokio::sync::RwLock<TncState>>` (read by async command handlers), a `std::sync::RwLock<String>` for the mode string the sync worker reads, `tokio::sync::broadcast` for fan-out to clients, a bounded `std::sync::mpsc::sync_channel(64)` for the async→sync TX handoff, and atomics for flags. The KISS bridge mirrors it.
 
@@ -3356,21 +3557,21 @@ One caveat for readers of CLAUDE.md: its stated convention ("`Arc<RwLock<T>>` fo
 
 ### 3.5 Testing strategy: why the project tests the way it does
 
-The operator-level summary: OpenPulseHF's entire test suite runs with no radio, no sound card, and no network — `cargo test --workspace --no-default-features` — because every physical dependency has a software stand-in: a loopback audio backend, a channel simulator (Watterson fading, Gilbert-Elliott bursts, AWGN, QRN/QRM), and a rig that runs two *real* daemons against each other in one process. The traceability ledger's 2026-07-18 entry records the suite at **2146 passed, 0 failed** (recorded there as an actually-run result; this book did not re-run the full suite, but did re-verify one crate: `openpulse-core --lib`, 316 passed). The corollary rule is absolute: *never add tests that require real audio hardware*. And to be equally plain about the limits: the v0.13.0–v0.15.0 HF-fade results below are validated against the Watterson channel **simulator**, not on the air.
+The operator-level summary: OpenPulseHF's entire test suite runs with no radio, no sound card, and no network — `cargo test --workspace --no-default-features` — because every physical dependency has a software stand-in: a loopback audio backend, a channel simulator (Watterson fading, Gilbert-Elliott bursts, AWGN, QRN/QRM), and a rig that runs two *real* daemons against each other in one process. The traceability ledger's 2026-07-18 entry records the suite at **2146 passed, 0 failed** (recorded there as an actually-run result; this book did not re-run the full suite, but at v0.15.0 did re-verify one crate: `openpulse-core --lib`, 316 passed). The suite has grown since, and its current verdict is whatever `scripts/gate.sh` last printed on its `GATE:` line; this revision ran neither. The corollary rule is absolute: *never add tests that require real audio hardware*. And to be equally plain about the limits: the v0.13.0–v0.15.0 HF-fade results below are validated against the Watterson channel **simulator**, not on the air.
 
 What makes the strategy worth a section is not the harness inventory but the three lessons encoded in it.
 
 #### 3.5.1 Test the contract inline; test the physics in `tests/`
 
-Unit tests live inline (`#[cfg(test)] mod tests`) and pin *contracts*: the LLR sign convention, the registry shadowing rule, frame-codec round trips, the device-resolution rule that ambiguity refuses to guess (`ambiguous_match_refuses_to_guess` in `openpulse-core/src/audio.rs`). Integration tests live in `tests/` directories and pin *behaviour under channel physics*: fade decode rates, ladder climb, LLR calibration. `crates/openpulse-modem/tests/` alone holds 91 integration test files.
+Unit tests live inline (`#[cfg(test)] mod tests`) and pin *contracts*: the LLR sign convention, the registry shadowing rule, frame-codec round trips, the device-resolution rule that ambiguity refuses to guess (`ambiguous_match_refuses_to_guess` in `openpulse-core/src/audio.rs`). Integration tests live in `tests/` directories and pin *behaviour under channel physics*: fade decode rates, ladder climb, LLR calibration. `crates/openpulse-modem/tests/` alone holds 163 integration test files (91 at v0.15.0).
 
 #### 3.5.2 The seam rule: prove the wiring, not the function
 
-The rule, from CLAUDE.md's cross-cutting RX/TX checklist, quotable in full:
+The rule, from the RX/TX seam checklist (now abbreviated in `CLAUDE.md`; this is the v0.15.0 wording), quotable in full:
 
 > When adding a feature that must run on every receive or transmit: (1) trace top-down from the binary — `server::run`'s `rx_ticker`/`tx` path, not just the engine API — to find what the running daemon actually calls; (2) place the transform at the single shared seam (`route_audio_stage(InputCapture)` for RX), never in one of the many caller functions; (3) never claim "covers all paths" from a callers-grep — prove it with a test that fails without the wiring; (4) add a runtime tripwire (a processed-block counter) and assert it increments on the production path; (5) add at least one test through the production entry (`accumulate_capture` or the twin daemon harness), not only the convenience seam.
 
-Every one of those five points has a concrete artefact in the tree: the seam itself (`engine.rs:5153`), the four tripwire counters with public getters, and the production-entry test `ota_production_capture_path.rs` (OFDM52-16QAM, `SoftConcatenated` FEC, 800-sample tick chunks, 30 trials, 3 HARQ attempts, 10 dB SNR on Watterson `moderate_f1`). The rule was paid for: the receiver notch shipped wired into `stage_capture_input`, passed every `receive`-family test, and never ran in the daemon.
+Every one of those five points has a concrete artefact in the tree: the seam itself (`engine.rs:8743`), the four tripwire counters with public getters, and the production-entry test `ota_production_capture_path.rs` (OFDM52-16QAM, `SoftConcatenated` FEC, 800-sample tick chunks, 30 trials, 3 HARQ attempts, 10 dB SNR on Watterson `moderate_f1`). The rule was paid for: the receiver notch shipped wired into `stage_capture_input`, passed every `receive`-family test, and never ran in the daemon.
 
 The generalisable insight for any codebase: a correct transform in the wrong place passes every test that calls the transform. Only a test through the production entry point, plus a runtime counter, distinguishes "the function works" from "the system runs the function".
 
@@ -3378,7 +3579,7 @@ The generalisable insight for any codebase: a correct transform in the wrong pla
 
 A test's name is a claim, and the project has been burned — three times, per its own memory notes — by tests whose assertions established less than their names claimed. The countermeasure is **sabotage verification**: after writing a test, deliberately break the thing it guards and watch it fail. The traceability ledger records the practice repeatedly; the cleanest worked example: with one expected CAT frame replaced by `DE AD BE EF`, the assertion failed showing the real bytes (`left: [254, 254, 148, 224, 28, 0, 1, 253]`) — *"proving the log is genuinely populated rather than compared empty-to-empty."*
 
-The failure mode it guards against is the **vacuous gate**. `docs/dev/project/release-1.0-criteria.md` makes "no known vacuously-passing gate" release criterion D3, and lists five found and fixed (`bpsk_hardening` SNR sweep, `tx_limiter`, CAT `write_log`, `fec_decision_gate`, `relay_empty_buffer`); the ledger entry of 2026-07-18 repairs six, four of which are the same ones — **seven distinct gates** to date. The criterion is not a count but a standard: that a fresh sweep finds no more. Real examples, each with its specific defect (all from the ledger):
+The failure mode it guards against is the **vacuous gate**. `docs/dev/project/release-1.0-criteria.md` makes "no known vacuously-passing gate" release criterion D3, and lists five found and fixed (`bpsk_hardening` SNR sweep, `tx_limiter`, CAT `write_log`, `fec_decision_gate`, `relay_empty_buffer`); the ledger entry of 2026-07-18 repairs six, four of which are the same ones — **seven distinct gates** as of v0.15.0 (not re-counted for this revision). The criterion is not a count but a standard: that a fresh sweep finds no more. Real examples, each with its specific defect (all from the ledger):
 
 | Test | Defect |
 |---|---|
@@ -3411,13 +3612,13 @@ Four harnesses form a ladder of increasing realism, and the design rule that run
 
 2. **The benchmark harness** (`crates/openpulse-modem/src/benchmark.rs`) — replays HPX state-machine events and gates on `passed == total && mean_transitions <= 20.0` (run via the CLI, checked with `jq`). Its limitation is stated by the gate built to complement it: it exercises the session state machine with no modem in the loop.
 
-3. **`openpulse-linksim`** — a two-station bidirectional ARQ simulator measuring *effective two-way transfer rate* including ACK air time, turnaround, and retransmission. Its header states the crucial property: rate control is **not reimplemented** — it drives the *shared* receiver-led `OtaRateController` and the *same* `ModemEngine::rx_snr_db` estimator the daemon uses (which is `pub` for exactly this reason, per its doc comment). This harness hosts the **goodput regression gate** (`mod goodput_gate`, four tests): the full modulate → channel → demodulate → FEC → rate-control stack, seeded and deterministic, asserting effective bps stays above ~65 % of a measured baseline — e.g. `psk_ladder_goodput_floor_awgn` asserts ≥ 250 bps on AWGN 20 dB against a ~397 bps baseline noted in the assertion message (baseline figures are comments, not runtime-computed). Its companion `psk_ladder_climbs_off_the_entry_rung_on_a_fade` (Watterson `moderate_f1` @ 20 dB, simulator) asserts `delivery_ratio > 0.9` *and* `avg_level >= 3.0` — deliberately a level, not a bps figure, because bps on a short run is dominated by the slow rungs during the climb. That test's doc comment records why it exists: it is *"the gate whose absence hid #934 for two releases"* — every earlier fade gate called the demodulator directly and proved the rungs *decode*, while the real rate controller kept the link pinned on its entry rung at ~5 bps. The gate goes through the controller because the bug lived in the controller.
+3. **`openpulse-linksim`** — a two-station bidirectional ARQ simulator measuring *effective two-way transfer rate* including ACK air time, turnaround, and retransmission. Its header states the crucial property: rate control is **not reimplemented** — it drives the *shared* receiver-led `OtaRateController` and the *same* `ModemEngine::rx_snr_db` estimator the daemon uses (which is `pub` for exactly this reason, per its doc comment). This harness hosts the **goodput regression gate** (`mod goodput_gate`, four tests): the full modulate → channel → demodulate → FEC → rate-control stack, seeded and deterministic, asserting effective bps stays above ~65 % of a measured baseline — e.g. `psk_ladder_goodput_floor_awgn` asserts ≥ 250 bps on AWGN 20 dB against a 331 bps baseline (re-measured 2026-07-30; ~397 in the v0.15.0 edition) noted in the assertion message (baseline figures are comments, not runtime-computed). Its companion `psk_ladder_climbs_off_the_entry_rung_on_a_fade` (Watterson `moderate_f1` @ 20 dB, simulator) asserts `delivery_ratio > 0.9` *and* `avg_level >= 3.0` — deliberately a level, not a bps figure, because bps on a short run is dominated by the slow rungs during the climb. That test's doc comment records why it exists: it is *"the gate whose absence hid #934 for two releases"* — every earlier fade gate called the demodulator directly and proved the rungs *decode*, while the real rate controller kept the link pinned on its entry rung at ~5 bps. The gate goes through the controller because the bug lived in the controller.
 
 4. **The twin-daemon rig** (`crates/openpulse-daemon/src/twin.rs`) — the top of the ladder, and the clearest statement of the philosophy, verbatim from its header: *"Both daemons run the REAL `crate::server::run` stack — `RateAdapter`, `HpxReactor`, OTA rate-stepping, QSY, repeater — unlike `openpulse-linksim`, which reimplements the policy layers."* `spawn_bridged_pair` starts two genuine daemons on their own threads, bridges A's loopback TX through a forward channel model into B's loopback RX and vice versa, and returns two live control-port addresses — so two real panel GUIs can attach, one per station, and watch both directions. The acceptance gate for file transfer runs here: `cargo test -p openpulse-daemon --test twin_daemon_bridge a_file_crosses`.
 
 #### 3.5.5 The acceptance table and the traceability ledger
 
-Two artefacts close the loop between claims and evidence. CLAUDE.md's acceptance-criteria table maps ~53 requirements to named tests, under the rule *"write the test first, confirm it fails, implement until it passes; do not mark a task done if its test does not exist."* And `docs/dev/project/traceability.md` (6888 lines, newest first) records each substantive change as a chain — requirement → design decision → implementation → tests → **test results, actually run** — with the enforcement clause that makes it non-vacuous: the results link must be a real run with pass/fail counts, *"never 'covered' asserted from a callers-grep."* The deliberate anti-bureaucracy decision is stated alongside: no separate heavyweight matrix that rots; the chain lives in the artefacts that already travel with the change (commits, PRs, the ledger, the acceptance table).
+Two artefacts close the loop between claims and evidence. The acceptance-criteria table (`docs/dev/project/acceptance-criteria.md`, moved out of CLAUDE.md) maps requirements to named tests, one row each, under the rule *"write the test first, confirm it fails, implement until it passes; do not mark a task done if its test does not exist."* And `docs/dev/project/traceability.md` (18 569 lines on 2026-10-15, newest first) records each substantive change as a chain — requirement → design decision → implementation → tests → **test results, actually run** — with the enforcement clause that makes it non-vacuous: the results link must be a real run with pass/fail counts, *"never 'covered' asserted from a callers-grep."* The deliberate anti-bureaucracy decision is stated alongside: no separate heavyweight matrix that rots; the chain lives in the artefacts that already travel with the change (commits, PRs, the ledger, the acceptance table).
 
 Even the acceptance table itself is subject to the vacuous-claim discipline: the "every `hpx_hf` rung" row was found to over-claim (see the table in §3.5.3) and was corrected to say what the test actually sweeps.
 
@@ -3434,7 +3635,7 @@ All read from the manifests:
 | `openpulse-audio` | `cpal-backend` | `[]` (off) |
 | `openpulse-cli` | `cpal-backend`, `serial`, `generic-serial`, `gpio` | `["cpal-backend"]` — **CPAL on by default** |
 | `openpulse-daemon` | `gpu`, `cpal`, `serial`, `generic-serial`, `gpio` | `["gpu"]` |
-| `openpulse-ardop` / `openpulse-kiss` | `cpal` | off |
+| `openpulse-ardop` / `openpulse-kiss` | `cpal`, `serial`, `generic-serial`, `gpio` (#1258) | off |
 | `apps/openpulse-testbench` | `cpal` | off |
 | `openpulse-radio` | `serial` (→ `serialport`), `generic-serial`, `gpio` (→ `gpiocdev`) | `[]` |
 | `plugins/{bpsk,qpsk,psk8,64qam,scfdma}` | `gpu` (→ `openpulse-gpu`) | `[]` |
@@ -3453,29 +3654,32 @@ cargo test  --workspace --no-default-features
 cargo clippy --workspace --no-default-features --all-targets -- -D warnings
 cargo fmt --all -- --check
 cross check --workspace --target aarch64-unknown-linux-gnu --no-default-features   # Raspberry Pi
+scripts/gate.sh                                                  # the workspace gate; quote only its GATE: line
+scripts/slow-tests.sh                                            # held-out acceptance suites (~35 + 48 + 5 min)
 ```
 
 `--all-targets` on clippy is not decoration — without it, test code is never linted, and CLAUDE.md records exactly that mechanism letting an unused binding sit in `session_key.rs`. A documented fallback excludes `pki-tooling` (which drags in sqlx/database machinery) when the local toolchain cannot build it.
 
-#### 3.6.3 CI: configured, and deliberately disabled
+#### 3.6.3 CI: what runs, and what blocks a merge
 
-`.github/workflows/ci.yml` defines eight jobs — the full test/audit runner (`pr-hook-long-runner`), cross-compile check, core and full workspace gates, a compile-only macOS build (the comment notes macOS runners as a 10x cost multiplier), the GPU rot-guard, a Pi5 smoke profile, and a `workflow_dispatch`-only, `continue-on-error` virtual-loopback smoke run. But `gh workflow list --all` reports the CI, docs-checks and doc-stamping workflows as `disabled_manually`, and the git hooks path points at an empty no-hooks directory. This is the maintainer's deliberate arrangement on a single-maintainer project: **the gates are run locally, by hand, before every PR** — the traceability ledger's per-change "test results (actually run)" lines are the enforcement record, in place of a green checkmark. A contributor should treat the command set above as mandatory pre-PR, because nothing in the hosted pipeline will run it for them.
+**This section was rewritten on 2026-10-15; the v0.15.0 edition described every hosted workflow as disabled.** The arrangement now, per `CLAUDE.md`'s verification mechanics: the workspace gate is `scripts/gate.sh`, and a pass/fail claim is quoted only from its `GATE:` line (`GATE: INVALID` means the tree moved during the run). It runs post-merge on every push to `main` (`.github/workflows/post-merge-gate.yml`, deliberately with no docs-only exemption, because the gate also checks doc frontmatter and the ledger), on `release/**`, and on manual dispatch — detection, not prevention, since nothing blocks a merge on it. Work plan decision 9 asks the maintainer to run it once a day and before every tag. The checks required on `main` are the traceability job (`traceability.yml`) and the two benchmark jobs (`benchmark.yml`: `validate-benchmark-artifacts`, `check-benchmark-regressions`). `ci.yml` defines the pull-request jobs — the long test/audit runner (`pr-hook-long-runner`), an aarch64 cross-compile check, a compile-only macOS build, a Pi5 smoke profile and a dispatch-only virtual-loopback smoke run — and skips docs-only changes; whether each workflow is currently enabled on GitHub was not checked for this revision. Locally, the pre-push hook (`.cargo-husky/hooks/pre-push`) tests the crates with changed files and, when `openpulse-core`, `-dsp` or `-modem` changed, all their reverse dependents. The gate does not run the `#[ignore]`d acceptance suites; `scripts/slow-tests.sh` does, and it must be run before any change to the receiver notch, the OTA rate controller, the carrier detect or the acquisition chain, and before a release.
 
 ### 3.7 What to take away
 
 Five load-bearing ideas, each anchored to an artefact:
 
 1. **One seam per cross-cutting concern.** RX front-end DSP lives at `route_audio_stage(InputCapture)`; TX conditioning at `stage_emit_output`; each with tripwire counters and a production-entry test. A transform in a caller instead of the seam is a latent daemon bug that the convenient tests cannot see.
-2. **The gate must be able to fail.** Sabotage-verify new tests; add control tests to threshold assertions; when a test's claim outruns its assertions, fix the gate or fix the claim. Seven vacuous gates have been found and repaired to date.
+2. **The gate must be able to fail.** Sabotage-verify new tests; add control tests to threshold assertions; when a test's claim outruns its assertions, fix the gate or fix the claim. Seven vacuous gates had been found and repaired by v0.15.0.
 3. **Harnesses share production code.** The linksim drives the real rate controller and the real SNR estimator; the twin rig runs the real `server::run`. Reimplemented policy in a harness is how a harness lies.
 4. **Prepared, not premature — and honest about it.** The pipeline scheduler defines the threading boundary without threading; the plugin version gate defines the compatibility contract without a dynamic ABI. Both say so in their own doc comments.
-5. **The strain is real and measured.** A 5713-line engine with 47 fields and 155 `pub fn` items, and a hand-maintained producer↔consumer invariant in the FEC dispatch — recorded as "Invariant (audit G-7)" at `engine.rs:2842`, where the demodulator populates exactly one of `raw_wire`/`llrs` and each match arm's `.unwrap()` is guarded only by that pairing — are the running costs of the current architecture. Knowing where they are is part of being able to extend the codebase.
+5. **The strain is real and measured.** A 10 378-line engine with 94 fields and 165 `pub fn` items, and a hand-maintained producer↔consumer invariant in the FEC dispatch — recorded as "Invariant (audit G-7)" at `engine.rs:5701`, where the demodulator populates exactly one of `raw_wire`/`llrs` and each match arm's `.unwrap()` is guarded only by that pairing — are the running costs of the current architecture. Knowing where they are is part of being able to extend the codebase.
 
 ## Chapter 4 — Use cases, setup and configuration
 
 This chapter is the practical one: twelve scenarios, each self-contained, each with
-copy-pasteable commands and configuration that use the real key names and real defaults from
-version 0.15.0 of the code. Scenarios that need hardware say so at the top in bold; everything
+copy-pasteable commands and configuration that use the real key names and real defaults. It was
+written at version 0.15.0; every command, flag and config key below was re-checked against `main`
+(workspace 0.16.0) on 2026-10-15 by reading the CLI and config sources, not by running them. Scenarios that need hardware say so at the top in bold; everything
 else runs on a bare Linux machine with a Rust toolchain.
 
 Two conventions used throughout:
@@ -3493,6 +3697,15 @@ One caveat that applies to the whole chapter: the HF-fade performance work in v0
 (the `hpx_hf` ladder, the differential QPSK rung, the OFDM mid-rungs) is validated against the
 Watterson channel *simulator*. None of it has been validated on the air yet; on-air regulatory
 validation, JS8 discovery Phase H and file-transfer Phase F all remain open.
+
+A second caveat on scope. Scenarios 1–3, 6 and 12 use what Release 1 (`v0.17.0`) ships: the CLI,
+the daemon, the ARDOP TNC and the `hpx_hf` ladder. Scenarios 4, 5 and 7–11 — KISS, the Winlink
+gateway, mesh/relay/repeater, QSY, JS8 discovery, file transfer, the panel and TUI — describe
+features that exist in the code but are not part of Release 1; they ship disabled or experimental
+and have no release gate. And build the same commit at both ends of any link: v0.16.0 and current
+`main` do not decode each other's frames on any rung, and their handshakes are incompatible — the
+frame whitener (#1148), the binary handshake (#1147) and the PN-63 BPSK preamble (§2A.3.1) all
+changed since v0.16.0.
 
 ### 4.1 Scenario 1 — bench validation with no radio
 
@@ -3513,14 +3726,16 @@ for the bench. (The default CLI build *does* include CPAL — see §4.2.1.)
 Confirm the binary and the mode registry:
 
 ```sh
-./target/release/openpulse --version    # openpulse 0.15.0
+./target/release/openpulse --version    # openpulse 0.16.0 (until v0.17.0 is cut)
 ./target/release/openpulse --backend loopback --log error modes
 ./target/release/openpulse --backend loopback --log error devices
 ```
 
 `devices` on the loopback build prints a single virtual device supporting 8000, 16000, 44100
 and 48000 Hz. `modes` prints the full registered mode registry — BPSK, QPSK (including the
-differential `-D` variants), 8PSK, 64QAM, OFDM, SC-FDMA, PILOT, MFSK16 and FSK4-ACK families.
+differential `-D` variants), 8PSK, 64QAM, OFDM, SC-FDMA, PILOT, MFSK16 and FSK4-ACK families;
+`modes --airtime` prints one `MODE<TAB>SECONDS` line per mode, the airtime of the largest frame it
+can send.
 
 #### 4.1.2 First transmit (loopback)
 
@@ -3567,7 +3782,9 @@ adaptive session: profile=fast channel=awgn frames=6 payload=64B
   final: level=SL8 mode=OFDM52-8PSK | 6/6 frames decoded, 6 transitions, ~23 bps
 ```
 
-Every `fast` session starts at SL2 (`BPSK31+Rs`) and climbs one rung per clean decode.
+(Output captured at v0.15.0; its format was re-checked against `commands/adaptive.rs` for this
+revision, the numbers were not re-run.) Every `fast` session starts at SL2 (`BPSK31+Rs`) and climbs
+one rung per clean decode.
 The `~23 bps` figure is the *effective* rate of this six-frame run including the climb
 through the slow rungs — do not read it as a steady-state throughput. `--channel` also
 accepts `clean`, `watterson-good-f1` and `watterson-poor-f1`; pass `--seed` for determinism
@@ -3602,18 +3819,20 @@ This emits a JSON report of ten HPX state-machine scenarios:
 { "total": 10, "passed": 10, "failed": 0, "mean_transitions": 5.1, "mean_wall_ms": 0.0, "scenarios": [ ... ] }
 ```
 
-The regression gate (run locally — the repository's GitHub CI workflows are disabled by the
-maintainer's deliberate choice, so these gates are operator-run):
+The regression gate (the same check runs as a required job on `main`, `benchmark.yml`; run it
+locally before a PR):
 
 ```sh
 openpulse --backend loopback --log error benchmark run > /tmp/bench.json
 jq '.passed == .total and .mean_transitions <= 20.0' /tmp/bench.json   # must print true
 ```
 
-The full CI-equivalent suite, if you want the whole workspace validated:
+The full workspace suite, if you want the whole workspace validated — and the gate the project
+quotes, which wraps it with lint, format and documentation checks:
 
 ```sh
 cargo test --workspace --no-default-features
+scripts/gate.sh          # quote the result only from its GATE: line
 ```
 
 #### 4.1.6 The virtual audio loopback (two real processes, one machine)
@@ -3628,6 +3847,9 @@ hardware  two USB soundcards + analog cable      -> adds a real analog path
                                                    (NOT dual clocks: measured +0.10 ppm)
 on-air    real radios                            -> adds RF
 ```
+
+For Release 1 the on-air rung is split in two: 2 m first (IC-9700 ↔ FT-818), HF only with the
+release candidate (§1.10).
 
 Setup and run:
 
@@ -3701,7 +3923,10 @@ prints `note: cpal backend not compiled in; falling back to loopback` to stderr)
 ```
 
 PTT and CAT are separate concerns: the modem asserts PTT through one of seven backends, and
-(optionally) reads/sets frequency and meters through the CAT layer.
+(optionally) reads/sets frequency and meters through the CAT layer. Every front-end keys through
+the same `SharedPtt` core (§3.4.2): a second key while one is held is refused, and a mistyped
+`[modem] ptt_backend` stops the daemon at startup rather than letting it transmit into an unkeyed
+rig.
 
 | `--ptt` / `[modem] ptt_backend` | Mechanism | Needs |
 |---|---|---|
@@ -3711,14 +3936,17 @@ PTT and CAT are separate concerns: the modem asserts PTT through one of seven ba
 | `rigctld` | Hamlib CAT PTT over TCP | rigctld at `--rig addr:port` |
 | `cm108` | CM108 sound-chip GPIO | `/dev/hidrawN` (empty = autodetect); GPIO pin `[modem] ptt_gpio` (default `3`, "the near-universal default") |
 | `gpio` | Linux GPIO character device | `--rig chip:line[:active_low]` (e.g. `gpiochip0:17`); needs a `--features gpio` build |
-| `generic` | TOML-defined serial CAT command set | `--rig <serial>` **and** `--rig-file <toml>`; Unix-only, `--features generic-serial` build. Present in code but absent from the `--ptt` help string — treat it as an undocumented option |
+| `generic` | TOML-defined serial CAT command set | **CLI only** (`crates/openpulse-cli/src/radio.rs`): `--rig <serial>` **and** `--rig-file <toml>`; Unix-only, `--features generic-serial` build. Absent from the `--ptt` help string, and the daemon's `[modem] ptt_backend` rejects it — the daemon builds PTT through `openpulse_radio::ptt_builder`, which has no `generic` arm |
 
 **Leader.** `[modem] ptt_leader_ms` (CLI `--ptt-leader-ms`) is a wait between the PTT edge and the
 first sample, so the rig's key-up does not clip the preamble (#1257). It applies once per key, not
 per frame, on the daemon, both TNCs and `openpulse transmit`, and it runs after the `PTT TRUE` event, so a host keying its own rig
 gets the same head start. The default is `0`; measure the rig before setting it. Not covered: the cross-band repeater's
 second rig (`rig_b`) keys with no leader, and `openpulse calibrate` keys its own instrument paths
-without one.
+without one. At the other end of the burst, PTT is released when the audio device reports its last
+sample played, plus 10 ms, and never later than 200 ms after the queue empties (#1367). The first
+key after start-up is no longer slow either: the resolved device name is cached, so a keyed open
+skips the full device enumeration (§3.4.2 has the measured numbers).
 
 Shipped rig-definition files for the generic backend: `docs/config/rig-icom-ic7300.toml` and
 `docs/config/rig-yaesu-ft817.toml`. Shipped example station configs:
@@ -3754,7 +3982,8 @@ tx_limiter_threshold = 0.0   # 0.0 = disabled; soft limiter s -> t*tanh(s/t)
 mode = "BPSK250"             # default fixed mode
 profile = "fast"             # "fast" (SL1–SL14) or "robust" (SL1–SL6); the SpeedLevel ladder (SL1 MFSK16 ... SL14 OFDM52-64QAM+LdpcHighRate)
 ptt_backend = "rigctld"      # none|rts|dtr|vox|rigctld|cm108|gpio
-ptt_device = ""              # serial path (rts/dtr) or /dev/hidrawN (cm108)
+ptt_device = ""              # serial path (rts/dtr), /dev/hidrawN (cm108) or chip:line (gpio)
+ptt_leader_ms = 0            # wait after the PTT edge before the first sample; measure your rig
 dcd_squelch = 0.0            # operator floor under the adaptive squelch: raises it, never lowers it (0 = off)
 
 [radio]
@@ -3863,6 +4092,13 @@ adaptive_profile = "fast"
 That comment is worth reading twice: with `enable_adaptive_arq = false` (the default), the
 host commands `ARQBW` and `ARQTIMEOUT` are accepted and echoed **but inert**. Set it to
 `true` (and pick `adaptive_profile`, `fast` or `robust`) to let the rate ladder drive the link.
+Two things to know before you do: the TNC's adaptive ladder starts at SL2, never MFSK16, and in
+adaptive mode the receive path is still a one-shot read that cannot gather a frame across reads on a
+real sound card — the TNC logs a warning saying so (§1.6.1). The fixed-mode default is the path that
+received real audio after #1310 and #1315.
+
+The ARDOP TNC is part of Release 1, and a Pat session through it on 2 m is one of the M3 on-air
+items still open.
 
 The implemented host command set (`crates/openpulse-ardop/src/command.rs`): `VERSION`
 (replies `VERSION 1.0-OpenPulseHF`), `MYID`, `LISTEN`, `CONNECT`, `DISCONNECT`, `ABORT`,
@@ -3872,14 +4108,15 @@ length-prefixed binary, both directions.
 
 On the message layer: OpenPulseHF's B2F implementation supports Winlink **Type D (Gzip)
 proposals only**. Type C (LZHUF) is not supported — the LH5 implementation was removed in
-v0.15.0 because it was never validated against a real RMS Express/RMS Gateway Type C blob,
+v0.15.0 (PR #948) because it was never validated against a real RMS Express/RMS Gateway Type C blob,
 and an inbound Type C proposal is now answered `Reject` rather than risking a silent corrupt
 decode (`crates/openpulse-b2f/src/compress.rs`, `session.rs`; the `ProposalType::C` wire
 variant survives only so an inbound proposal can be parsed and rejected).
 
 ### 4.4 Scenario 4 — KISS/AX.25 TNC
 
-**Hardware required for RF use.** `openpulse-kisstnc` (crate `openpulse-kiss`) is a TCP KISS
+**Not part of Release 1** (KISS ships experimental, no release gate). **Hardware required for RF
+use.** `openpulse-kisstnc` (crate `openpulse-kiss`) is a TCP KISS
 TNC with AX.25 UI framing, for packet-style clients:
 
 ```sh
@@ -3906,7 +4143,8 @@ properly even for KISS use.
 
 ### 4.5 Scenario 5 — Winlink CMS gateway (no radio)
 
-**No radio required — this is a plain Internet TCP path**, useful for testing your Winlink
+**Not part of Release 1** (Winlink B2F and the gateway are outside the release gate). **No radio
+required — this is a plain Internet TCP path**, useful for testing your Winlink
 message flow end-to-end before RF, or as a fallback when no RF path exists.
 
 `openpulse-gateway` speaks the B2F session protocol directly to a Winlink CMS over TCP:
@@ -3964,8 +4202,8 @@ Two-station link — profile fast | 20 frames × 64 B | FEC Rs | turnaround 250 
           fast |      AWGN 20dB |    100% |   63.4 bps | avg SL 10.0 | final SL14 |  161.6 s
 ```
 
-Again: 63.4 bps is the effective rate of a 20-frame run *including* the climb from SL2, not
-a steady-state figure. Useful flags: `--channel` (includes `qrm` with `--qrm-tones
+(Output captured at v0.15.0, not re-run.) Again: 63.4 bps is the effective rate of a 20-frame run
+*including* the climb from SL2, not a steady-state figure. Useful flags: `--channel` (includes `qrm` with `--qrm-tones
 "freq:amp"` pairs), `--sweep start:stop:step` for SNR sweeps, `--seed` (default 49374),
 `--turnaround` (default 0.25 s), `--max-attempts` (default 6), `--json`, and `--no-cessb`,
 whose help string is the precise statement of CE-SSB scope: it "only affects QPSK-subcarrier
@@ -4005,6 +4243,9 @@ clocks" (its default mode is `BPSK250`, chosen as "robust on the hardware rig").
 dual-card rig shares one clock in practice — measured +0.10 ppm.
 
 ### 4.7 Scenario 7 — mesh, relay and repeater
+
+**Not part of Release 1.** All three ship disabled, and under triage rule 1 of the work plan a
+defect in them does not block the release — which is also why they must stay off by default.
 
 Three related but distinct capabilities:
 
@@ -4078,6 +4319,10 @@ backend = "rigctld"               # refuses to start on a collision, because two
 serial_port = ""                  # SharedPtts would key and release one transmitter
 ```
 
+The daemon builds rig_b's PTT from `backend`, `rigctld_addr` and `serial_port`
+(`crates/openpulse-daemon/src/server.rs`). The generated config template says it reads only
+`rigctld_addr`; the code reads all three.
+
 `enabled = true` means *running*: the daemon starts the repeater at startup, exactly as the JS8
 discovery beacon starts from its own config. The default is `false`, so the automatic transmit
 service is off unless you write the line.
@@ -4119,7 +4364,8 @@ refactor.)
 
 ### 4.8 Scenario 8 — QSY frequency agility
 
-QSY lets two authenticated stations negotiate a coordinated frequency change (signed
+**Not part of Release 1** (ships disabled). QSY lets two authenticated stations negotiate a
+coordinated frequency change (signed
 QSY_REQ/QSY_LIST frames, candidate scanning, a timed switchover). It is off by default and
 gated on trust:
 
@@ -4164,7 +4410,7 @@ openpulse daemon reject-qsy <TOKEN>
 
 ### 4.9 Scenario 9 — JS8 discovery and rendezvous
 
-**Off by default, and deliberately so.** The FF-15 feature set — a native JS8-compatible
+**Not part of Release 1. Off by default, and deliberately so.** The FF-15 feature set — a native JS8-compatible
 8-GFSK waveform, heartbeat/`@OPULSE`-hint beaconing, and a two-message Propose/Accept
 rendezvous that hands off into an HPX connection on a working channel — is fully shipped in
 code (Phases A–G) but has **not** been validated on the air (Phase H remains open). The TX
@@ -4214,7 +4460,9 @@ simulator gate, like everything else in this feature.
 
 ### 4.10 Scenario 10 — file transfer
 
-The `OPFX` direct P2P file-transfer protocol (FF-16, Phases A–E shipped; on-air Phase F
+**Not part of Release 1** (experimental, off by default). Since v0.16.0 a transfer survives a lost
+fragment, a lost ack and a long block, and a multi-fragment burst is decoded in full (§2A.5.8). The
+`OPFX` direct P2P file-transfer protocol (FF-16, Phases A–E shipped; on-air Phase F
 deferred) moves files over an established HPX session with block-level resume, manifest
 verification and operator consent. Off by default:
 
@@ -4256,6 +4504,8 @@ file crosses two real daemons).
 ### 4.11 Scenario 11 — operator panel, TUI, testbench
 
 #### 4.11.1 The daemon these frontends talk to
+
+The daemon is part of Release 1; the panel, the TUI and the testbench in §4.11.2–4.11.4 are not.
 
 `openpulse-server` (crate `openpulse-daemon` — note the binary name differs from the crate
 name) takes **no CLI flags at all**: it is entirely config-file driven. It refuses to start
@@ -4358,7 +4608,7 @@ diagnostic option block: `--format <text|...>` (default `text`), `--verbose`,
 `--diagnostics`, `--no-color`, `--timeout <s>` (default `5`).
 
 Note `trust revoke` takes a **named** `--station-or-key` flag, not a positional argument
-(the current `docs/cli-guide.md` shows a positional; the binary rejects it).
+(`docs/cli-guide.md` showed a positional at the time of writing; the binary rejects it).
 
 #### 4.12.3 Audit bundles
 
@@ -4410,8 +4660,8 @@ cargo run -p openpulse-testmatrix --no-default-features -- --full --output docs/
 # Matrix, then the throughput benchmark:
 cargo run -p openpulse-testmatrix --no-default-features -- --bench --bench-frames 50 --bench-payload 223
 
-# Throughput benchmark only (skips the matrix pass):
-cargo run -p openpulse-testmatrix --no-default-features -- --bench-only --bench-frames 50 --bench-payload 223
+# Throughput benchmark only (skips the matrix pass; --bench-only requires --bench):
+cargo run -p openpulse-testmatrix --no-default-features -- --bench --bench-only --bench-frames 50 --bench-payload 223
 ```
 
 `--bench-payload` defaults to 128; its help documents a 223-byte ceiling — the RS(255,223)
@@ -4425,13 +4675,13 @@ default is `docs/test-reports`, but the `scripts/run-test-matrix.sh` wrapper arc
 The HPX conformance benchmark and its `jq` gate are in §4.1.5. The other locally-run
 regression gates worth knowing by name: the linksim goodput gate
 (`cargo test -p openpulse-linksim goodput_gate` — `hpx_hf` AWGN-20 dB effective throughput
-floor 250 bps against a ~397 bps baseline, 200-byte payload, 40 frames, seed 5) and the
+floor 250 bps against a 331 bps baseline, 200-byte payload, 40 frames, seed 5) and the
 fade-survival gate (`cargo test -p openpulse-modem --test hpx_hf_rungs_survive_fade`). Both
 are Watterson-simulator gates.
 
 ### 4.13 Troubleshooting
 
-All symptoms below are real strings or verified behaviours from the 0.15.0 tree.
+All symptoms below are real strings or verified behaviours; they were re-checked against the source of `main` on 2026-10-15.
 
 | Symptom | Cause | Fix |
 |---|---|---|
@@ -4439,7 +4689,11 @@ All symptoms below are real strings or verified behaviours from the 0.15.0 tree.
 | TNC/daemon transmits but nothing reaches the radio; log shows `cpal backend not compiled in (build with --features cpal); using loopback` | binary built without its `cpal` feature, config says `backend = "cpal"` | rebuild with the crate's feature: `--features cpal` (ardop/kiss/daemon/mesh/testbench) or `--features cpal-backend` (tui) |
 | Same as above but **no warning at all** | binary built without `cpal`, config says `backend = "default"` — this fallback is silent | same rebuild; prefer `backend = "cpal"` in config so at least a warning fires |
 | `Error: unknown backend 'X'` (CLI) / `unknown audio backend 'X' — use 'default', 'cpal', or 'loopback'` (TNC binaries) | typo in `--backend` | valid values: `loopback`, `default`, `cpal` |
-| daemon exits immediately: `invalid callsign N0CALL in configuration; set [station].callsign before starting daemon` | callsign never set | edit `[station] callsign` — the daemon and mesh daemon both refuse to start on `N0CALL` |
+| daemon exits immediately: `invalid [station].callsign: callsign is the placeholder N0CALL; set it before starting daemon` (also `callsign is empty`, or over the handshake's byte limit) | callsign never set, empty, or too long | edit `[station] callsign` — the daemon and mesh daemon both refuse to start on `N0CALL` |
+| daemon exits: `[modem] ptt_backend is unusable; refusing to start rather than transmit into an unkeyed rig` | a PTT configuration error, e.g. a mistyped backend name or `rts`/`dtr` without `ptt_device` (#1285) | fix `[modem]`; valid backends are `none`, `rts`, `dtr`, `vox`, `rigctld`, `cm108`, `gpio` |
+| daemon refuses to start over the identity key | `identity.key` exists but is group/world-readable, the wrong length or unreadable — it now fails closed | `chmod 600` the key, or move a corrupt one aside so a new identity is generated (peers will see a new key) |
+| `--profile hpx_hf` (or any old profile name) rejected | the ten older profiles were deleted with no aliases (decision 18) | use `fast` or `robust` |
+| two stations hear each other but nothing decodes, or the handshake fails | one runs v0.16.0, the other current `main`: they do not interoperate on any rung (whitener #1148, binary handshake #1147, PN-63 preamble #1062) | build the same commit at both ends |
 | `openpulse-mesh` exits: `mesh is disabled in config; set [mesh] enabled = true to start` | mesh off (default) | set `[mesh] enabled = true` |
 | daemon refuses to start with control auth required and no key | fail-closed PSK gate | export `OPENPULSE_CONTROL_PSK` (64 hex chars = 32 bytes) for daemon *and* panel |
 | identity key refused at load (`InsecureSecretPermissions`) | `~/.config/openpulse/identity.key` group/world-readable | `chmod 600 ~/.config/openpulse/identity.key` |
@@ -4447,13 +4701,13 @@ All symptoms below are real strings or verified behaviours from the 0.15.0 tree.
 | `run-loopback-virtual.sh`: `ERROR: cpal CLI not found at ...` | loopback rig needs a CPAL CLI build | `cargo build --release -p openpulse-cli` |
 | spurious AFC corrections on a wired/direct-USB audio path | AFC misbehaves on near-zero-offset signals | pass `--no-afc` to `receive` |
 | Pat sends `ARQBW`/`ARQTIMEOUT`, TNC echoes them, nothing changes | `[ardop] enable_adaptive_arq = false` (default): those hints are accepted-and-echoed no-ops | set `enable_adaptive_arq = true` and an `adaptive_profile` |
-| `openpulse beacon ... --max-hops 2` → `error: unexpected argument '--max-hops' found` | doc drift in `docs/cli-guide.md`; the flag is `--ttl` | `openpulse beacon --callsign <CALL> --ttl 2` |
+| `openpulse beacon ... --max-hops 2` → `error: unexpected argument '--max-hops' found` | doc drift (older copies of `docs/cli-guide.md`); the flag is `--ttl` | `openpulse beacon --callsign <CALL> --ttl 2` |
 | `openpulse trust revoke FOO` → `error: unexpected argument 'FOO' found` | doc drift; the argument is a named flag | `openpulse trust revoke --station-or-key FOO` |
 | CPAL build fails on Linux with ALSA errors | missing ALSA headers | `sudo apt-get install libasound2-dev` |
 | audio device "not found" after replug/reboot | device renamed/reordered by the OS | leave `[audio] device` as a stable substring or the ALSA `CARD=` token — resolution is exact name → `CARD=` token → case-insensitive substring |
 | `qsy status` shows `Compliance exception: bandplan-awareness override is active` | you set `bandplan_awareness_enabled = false` (default is `true`) | intentional override — restore `true` unless you accept responsible-operator duty |
 | inbound file offer rejected on air with `feature-disabled` | `[file_transfer] enabled = false` (default) | set `enabled = true`; offers still require operator `accept-file` unless `auto_accept_max_bytes > 0` |
-| Winlink peer proposes Type C and the session rejects it | Type C (LZHUF) is not supported in 0.15.0 — inbound Type C proposals are answered `Reject` by design | none needed; OpenPulseHF↔OpenPulseHF and Type-D-capable peers use Gzip |
+| Winlink peer proposes Type C and the session rejects it | Type C (LZHUF) is not supported (removed in v0.15.0) — inbound Type C proposals are answered `Reject` by design | none needed; OpenPulseHF↔OpenPulseHF and Type-D-capable peers use Gzip |
 | `run-test-matrix.sh` archives nothing | binary default `--output docs/test-reports` vs wrapper reading `docs/dev/test-reports/latest/` | pass `--output docs/dev/test-reports` |
 
 ### 4.14 Where to go next
@@ -4467,6 +4721,7 @@ All symptoms below are real strings or verified behaviours from the 0.15.0 tree.
   responsibility applies throughout.
 - Regulatory posture (station ID, §97.221 considerations for discovery beaconing):
   `docs/regulatory.md`.
+- What Release 1 contains and where it stands: `docs/dev/project/workplan.md`.
 
 ---
 
@@ -4484,6 +4739,14 @@ hundred and forty-eight lines below the release note retracting that exact claim
 acceptance tests named for "loopback correctness" that never called the receive path at all. A book is
 a worse place for that failure than a README, because nobody greps a book against the source.
 
+**The 2026-10-15 revision.** The book was brought up to `main` (workspace 0.16.0, Release 1 in
+preparation) by re-reading the code behind each statement that had changed: the profiles and
+ladder, the PN-63 preamble and the other wire breaks, the streaming receive chain (§2A.5.8), the
+rate controller's failure path (§1.4.4), PTT and transmit (§3.4.2), the plugin trait, and every
+command and config key in Chapter 4. Counts and line numbers in Chapter 3 were re-measured. No
+command was executed for this revision, sample outputs captured at v0.15.0 are marked as such, and
+measured figures quoted from v0.15.0 that were not re-derived say so. The PDF edition predates it.
+
 **What remains unverified.** Three figures quoted in Chapter 2A trace only to the project's own
 engineering notes rather than to a test or a source comment: a correlation-window energy value in the
 normalised-acquisition discussion, one endpoint of a sync-fix decode figure, and a CPU-cost ratio for
@@ -4495,12 +4758,15 @@ total is likewise taken as reported.
 simulator. The project's own history shows why that matters: in v0.14.1 the link simulator was found
 unable to transmit its own sub-floor rung, which had made a working link read as total failure, and
 every fade measurement taken before that fix was suspect. On-air validation is the first gate in
-`docs/dev/project/release-1.0-criteria.md` and it has not been passed.
+`docs/dev/project/release-1.0-criteria.md` and it has not been passed; for Release 1 it is
+milestone M3, on 2 m first, and still open.
 
 **What is off by default.** JS8 discovery and rendezvous, direct file transfer, the mesh and repeater
-roles, QSY frequency agility, and audit mode all ship disabled. Chapter 4 marks each one.
+roles, QSY frequency agility, and audit mode all ship disabled. Chapter 4 marks each one, and marks
+which scenarios are outside Release 1.
 
 **Where to go next.** `docs/openpulse-manual.md` is the operator reference and goes deeper on
 day-to-day commands. `docs/mode-fec-ladder.md` is the authoritative rung table, gated against the code.
 `docs/dev/design/protocol-wire-spec.md` is the wire format. `CLAUDE.md` carries the engineering
-contract and the "known sharp edges" that much of Chapter 2A elaborates.
+contract and points to `docs/dev/sharp-edges.md`, the "known sharp edges" that much of Chapter 2A
+elaborates.

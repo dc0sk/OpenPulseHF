@@ -2,24 +2,79 @@
 project: openpulsehf
 doc: docs/trust-store-file-format.md
 status: living
-last_updated: 2026-04-24
+last_updated: 2026-10-15
 ---
 
 # Trust-Store File Format and Migration Policy
 
 ## Purpose
 
-This document defines:
+This document has two parts:
 
-- the on-disk trust-store file format consumed by OpenPulseHF components
-- version-compatibility rules for trust-store readers/writers
-- required migration procedures between trust-store format versions
+- **The format in use today** (`schema_version` `1.0.0`): what `openpulse-cli` writes and what the
+  daemon and the TNC binaries read. This part is checked against the code.
+- **A planned signed format** (`format_version`, with provenance, signatures and a migration
+  policy). **None of it is implemented**: no reader or writer in the repo uses these fields. It is
+  kept as the design target for importing `pki-tooling` trust bundles.
 
 It complements:
 
-- docs/pki-tooling-api.md (trust-bundle export schema)
-- docs/pki-tooling-data-model.md (canonical entities and DB migration policy)
-- docs/pki-tooling-trust-policy.md (trust decision semantics)
+- docs/dev/pki/pki-tooling-api.md (trust-bundle export schema)
+- docs/dev/pki/pki-tooling-data-model.md (canonical entities and DB migration policy)
+- docs/dev/pki/pki-tooling-trust-policy.md (trust decision semantics)
+
+## Format in use today (schema 1.0.0)
+
+**Writer:** `openpulse-cli trust import|revoke` (`crates/openpulse-cli/src/state.rs`,
+`LocalTrustStore`). **Readers:** the CLI itself, and `openpulse-daemon`, `openpulse-tnc` (ARDOP)
+and the KISS TNC through `openpulse_core::trust_store_file::load_trust_store_from_file`.
+
+**Location.** The CLI keeps `trust-store.json` in its config directory: `$OPENPULSE_CONFIG_DIR`,
+else `$XDG_CONFIG_HOME/openpulse`, else `~/.config/openpulse`. The daemon and the TNCs read the
+file named by `[trust] store_path`; when that is empty they start with an empty store (they do not
+fall back to the CLI's path).
+
+**Permissions.** The file must be owner-only (e.g. `600`). Readers refuse a file with any group or
+other permission bits; the CLI sets owner-only permissions when it writes.
+
+**Shape:**
+
+```json
+{
+  "schema_version": "1.0.0",
+  "records": [
+    {
+      "station_id": "W1ABC",
+      "key_id": "<64 hex chars: the Ed25519 verifying key>",
+      "trust": "full",
+      "source": "out_of_band",
+      "status": "active",
+      "reason": "operator_import",
+      "updated_at_ms": 1760486400000
+    }
+  ]
+}
+```
+
+- `trust`: `full`, `marginal`, `unknown`, `untrusted` or `revoked`.
+- `source`: `out_of_band` or `over_air`.
+- The daemon and TNC loader reads only `schema_version`, `station_id`, `key_id` and `trust`; it
+  ignores the other fields. A record whose `key_id` is not 64 hex characters is skipped with a
+  warning.
+
+**Load failures.** A missing file is an empty store. If the file exists but cannot be read or
+parsed, the daemon refuses to start (an empty store would drop revocations); the ARDOP TNC logs a
+warning and starts with an empty store. The ARDOP TNC does not run the signed handshake, so it
+never consults the store to authenticate a peer.
+
+**Not enforced today:** `schema_version` is required but its value is not checked, there is no
+signature, and writes are a plain file write, not staged-then-renamed.
+
+---
+
+## Planned signed format (not implemented)
+
+Everything below is design, not code.
 
 ## Scope
 
@@ -113,7 +168,7 @@ Rules:
 - `signed_payload_sha256` must be computed over canonical JSON for all top-level fields except `signature`.
 - Signature verification failure must fail closed: importer must reject update and keep prior active store.
 
-## Minimal example (v1)
+## Minimal example (planned format)
 
 ```json
 {

@@ -2,22 +2,29 @@
 project: openpulsehf
 doc: docs/dev/project/release-1.0-criteria.md
 status: living
-last_updated: 2026-09-30
+last_updated: 2026-10-15
 ---
 
 # What 1.0 means
 
-> **Release 1 comes first (2026-09-30).** A narrower first release — the `hpx_hf` ladder, FEC,
-> compression, daemon + CLI and the ARDOP TNC, gated on A1 + A2 on HF — is planned in
-> [`workplan.md`](workplan.md). This document still defines 1.0.
+> **Release 1 comes first.** A narrower first release, numbered **`v0.17.0`** (work plan decision
+> 14) — the `hpx_hf` ladder with its `fast` and `robust` profiles, each rung's FEC, session
+> compression, daemon + CLI, the ARDOP TNC, PTT backends, station ID and the signed classical
+> handshake — is planned in [`workplan.md`](workplan.md). It is gated on **A1 + A2 on 2 m**
+> (IC-9700 ↔ FT-818, 144.640 MHz) and then confirmed on HF with the release candidate (decision 13).
+> **A3 (Winlink) is not part of Release 1** (decision 1). This document still defines **1.0**, and
+> the A-series below still requires HF for 1.0; nothing here gates `v0.17.0` except where the work
+> plan cites it (§A2 scoring).
 
 **Draft, except for the *Decided by the maintainer* section below — those four are settled.** This
 exists because "pre-1.x" was undefinable:
 the only reference to 1.x anywhere in the repo was backlog item 12 ("wide-channel, targeted at a
 future 1.x"), so there was no bar to plan against. This proposes one.
 
-Current version: **v0.15.0**. Requirement coverage: **118 of 141 ✅ covered, 16 ⚠ gap, 7 📝 planned
-(1.x)** per [traceability-matrix.md](traceability-matrix.md).
+Current version: workspace **0.16.0**; last release **v0.16.0** (2026-07-18); Release 1 =
+`v0.17.0`, not yet cut. Requirement coverage is read from the registry
+([requirements.yaml](requirements.yaml)); the readable [traceability-matrix.md](traceability-matrix.md)
+showed 124 ✅ covered, 16 ⚠ gap and 7 📝 planned (1.x) rows on 2026-10-15, and lags the registry.
 
 ---
 
@@ -54,7 +61,9 @@ marked as a judgement call. Nothing here should require interpretation to score.
 | A4 | Station ID cadence verified on air against the operator's national rules | Regulatory checklist run, exceptions documented |
 | A5 | PTT keying verified fail-safe on the real rig (release on error, release on abort) | Deliberate fault injection during an on-air window |
 
-**A1–A3 are the gate.** A4–A5 are safety items that must also pass, but they are checks rather than
+**A1–A3 are the gate for 1.0.** For Release 1 (`v0.17.0`) the gate is A1 + A2 on 2 m, with A4/A5
+checked and an ARDOP Pat session over the air (work plan M3), then A1 + A2 repeated on HF with the
+release candidate (M4); A3 is out of Release 1 scope. A4–A5 are safety items that must also pass, but they are checks rather than
 discoveries.
 
 #### A2 scoring (revised 2026-08-05 — see *Decided by the maintainer*)
@@ -163,11 +172,11 @@ not "no known weaknesses" — it is **no undocumented ones**.
 
 ### D — Test integrity
 
-The suite is large (2146 passing). Size is not the property that matters.
+The suite is large. Size is not the property that matters.
 
 | # | Criterion | How it is scored |
 |---|---|---|
-| D1 | Every acceptance-criteria row names a test that exists, runs as written, and asserts the property claimed | Each command in the CLAUDE.md table executed and returning a non-zero test count |
+| D1 | Every acceptance-criteria row names a test that exists, runs as written, and asserts the property claimed | Each command in the acceptance table ([acceptance-criteria.md](acceptance-criteria.md), moved out of `CLAUDE.md` 2026-09-30) executed and returning a non-zero test count |
 | D2 | Coverage is **measured** and a threshold agreed | No coverage tooling exists in the tree today — this is new work |
 | D3 | No known vacuously-passing gate | Five have been found and fixed (`bpsk_hardening` SNR sweep, `tx_limiter`, CAT `write_log`, `fec_decision_gate`, `relay_empty_buffer`); the criterion is that a fresh sweep finds no more |
 | D4 | The benchmark and goodput regression gates pass at the release commit | `benchmark run` 10/10 with `mean_transitions ≤ 20`; `goodput_gate` |
@@ -235,10 +244,14 @@ Group 2 is the cheapest and is currently blocking nothing but itself. Group 1 se
    - The critical path to 1.0 runs through the rigs, not the modem. Work that cannot be validated
      on air does not shorten the release.
    - The FT-991A receive-path blocker (A→B fails offline too, so it is in the receiver) is on the
-     critical path, and so is FF-15 Phase H.
+     critical path, and so is FF-15 Phase H. *(2026-10-15: superseded on both points. The station
+     pair is now rpi51 + IC-9700 and rpi53 + FT-818 + SCU-17 (2026-10-02), and FF-15 Phase H is an
+     explicit non-goal below and outside Release 1.)*
    - Any wire-format change (#1062) re-opens the on-air evidence, because the recorded corpus in
      `crates/openpulse-modem/tests/captures/` contains the **old** preamble — so the corpus must be
-     re-recorded after the break, and the campaign run against the final format.
+     re-recorded after the break, and the campaign run against the final format. *(2026-10-15:
+     #1062 landed — PN-63 preamble on BPSK63/100/250, flag day 2026-10-10, PR #1508; BPSK31 keeps
+     `--++`. The corpus re-record (F8) is in work plan M3.)*
 
 2. **The wire format may change freely until 1.0 is tagged — and that is the reason to maximise
    maturity before tagging** (decided 2026-08-03). The tag is the irreversible act; the on-air
@@ -258,8 +271,9 @@ Group 2 is the cheapest and is currently blocking nothing but itself. Group 1 se
    campaign can be run with and without it and the difference attributed — the repo's standing
    ablation discipline applied to the deployment surface. The flags already exist
    (`modem.notch_enabled`, `modem.agc_enabled`, `modem.cessb_enabled` in `openpulse-config`); what is
-   missing is an on-air runner that sweeps them and records which combination produced each evidence
-   bundle.
+   missing is an on-air runner that sweeps them. *(Since 2026-10-02 `onair-bundle-evidence.sh`
+   records `notch_enabled`/`agc_enabled`/`cessb_enabled` in each bundle, work plan M2; the sweep is
+   still open.)*
 
 4. **A2 is scored on correct response, not on a transition count** (decided 2026-08-05). Natural
    fading cannot be controlled, so requiring "≥3 transitions driven by real channel conditions" made
@@ -283,10 +297,19 @@ Group 2 is the cheapest and is currently blocking nothing but itself. Group 1 se
    CEPT/EU, BNetzA and Ofcom. Claiming fewer is faster and more honest than claiming all four.
 4. **If an add-on cannot be proven on air by 1.0, does it ship off by default or get removed?**
    Off-by-default keeps the code path alive but makes 1.0's shipped configuration the bare modem.
+   *(Answered for the notch and Release 1 by work plan decision 10: it ships on, with REQ-QRM-01
+   disclosed as unproven since `884d96ed` (#1457); fix post-release.)*
 
 ---
 
 ## Status and sequencing — snapshot 2026-08-18
+
+> **Superseded as a plan (2026-10-15).** This section is a dated snapshot. Sequencing and status now
+> live in [`workplan.md`](workplan.md). Since it was written: #1081 attribution landed
+> (`OtaRateDecision` events, retained with `observability.audit_mode`); the G0 isolators are in place
+> (2026-10-01); the #1147 binary handshake encoding and the #1148 period-511 whitener are in the code (after v0.16.0, unreleased);
+> #1062 landed as PN-63 on SL3–SL5 (2026-10-10); A1/A2 move to 2 m for Release 1 (decision 13).
+> The text below is kept as written.
 
 Written after the maintainer asked three questions: are we going in circles, what is left, and does
 it make sense to keep building without testing against recordings and noise sources when other

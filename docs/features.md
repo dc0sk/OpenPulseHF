@@ -2,13 +2,20 @@
 project: openpulsehf
 doc: docs/features.md
 status: living
-last_updated: 2026-10-01
+last_updated: 2026-10-15
 ---
 
 # OpenPulseHF — Feature Reference
 
 This document describes every major feature of OpenPulseHF: what is implemented, what
 is pending, and — for non-obvious algorithms — the mathematics behind the design choices.
+
+**Release 1 (`v0.17.0`, in preparation)** covers only part of this document: the daemon and CLI,
+the ARDOP TNC, the `hpx_hf` ladder (SL1–SL14) and its plugins (MFSK16, BPSK, QPSK250-D, OFDM52,
+FSK4 ACK), each rung's FEC, session compression, PTT backends, station ID and the signed classical
+handshake. Sections on anything else — post-quantum handshake, relay and routing, Winlink B2F and
+gateway, KISS, GPU, TUI, mesh, QSY — describe code that exists and is tested but is **experimental
+and not part of Release 1**; those sections say so.
 
 **Legend:**  ✅ Implemented   🔄 In progress   🔲 Planned
 
@@ -38,12 +45,14 @@ is pending, and — for non-obvious algorithms — the mathematics behind the de
 
 ## Waveform Modes
 
-OpenPulseHF ships modulation modes across 8 plugin families (BPSK, QPSK, 8PSK,
-64QAM, FSK4, OFDM, SC-FDMA, Pilot), including `-RRC`/`-HF` single-carrier variants and the
-OFDM/SC-FDMA higher-order ladders. The authoritative per-mode table — baud,
-bits/symbol, gross bps, occupied bandwidth — is the
-[README modulation-modes table](../README.md#modulation-types); the HF mode/FEC
-selection ladder is in [mode-fec-ladder.md](mode-fec-ladder.md). `openpulse modes`
+OpenPulseHF ships modulation modes across 10 plugin families (MFSK16, BPSK, QPSK, 8PSK,
+64QAM, FSK4, OFDM, SC-FDMA, Pilot, JS8), including `-RRC`/`-HF` single-carrier variants and the
+OFDM/SC-FDMA higher-order ladders. Only the modes on the `hpx_hf` ladder — MFSK16, BPSK31/63/100/250,
+QPSK250-D, OFDM52 and its 8PSK/16QAM/32QAM/64QAM variants — plus the FSK4-ACK and MFSK16-ACK return
+channels are part of Release 1; the rest are selectable as fixed modes but experimental. The
+per-rung table is the [README ladder table](../README.md#the-hpx_hf-ladder-release-1), the other
+modes are in the [README's other-modes table](../README.md#other-modulation-modes-not-part-of-release-1),
+and the selection logic is in [mode-fec-ladder.md](mode-fec-ladder.md). `openpulse modes`
 prints the live registry. (Plain rectangular `QPSK2000` is registered but
 RRC-superseded; `8PSK2000` is no longer advertised at all since #1359 — use `-RRC`.)
 
@@ -56,9 +65,11 @@ session profiles were deleted 2026-10-01). See the
 [pilot-framed waveform](dev/design/hpx-waveform-design.md#pilot-framed-waveform) note.
 
 All modes target an 8 kHz audio sample rate and a nominal 1500 Hz carrier, fitting
-within a standard SSB passband.  Effective throughput figures are approximate; overhead
-includes a per-frame preamble (32 symbols for BPSK, 16 symbols for QPSK/8PSK/64QAM)
-plus an 8-symbol tail.  Actual throughput also depends on frame length, FEC mode, and
+within a standard SSB passband.  Effective throughput figures are approximate; single-carrier
+overhead includes a per-frame preamble plus an 8-symbol tail.  The preamble is 63 symbols of PN-63
+(x⁶+x+1) on BPSK63, BPSK100 and BPSK250 since the #1062 flag day (2026-10-10, a wire break against
+v0.16.0 on SL3–SL5), 32 symbols of alternating `--++` on BPSK31 and BPSK250-RRC, and 16 symbols on
+QPSK/8PSK/64QAM.  Actual throughput also depends on frame length, FEC mode, and
 channel conditions.  RRC modes use α = 0.35; their bandwidth is ~35% wider than the
 non-RRC equivalent at the same baud rate.
 
@@ -130,7 +141,7 @@ Hann windowing but without the ISI penalty that full windowing creates.
 
 ### GPU-accelerated modulation
 
-✅ When compiled with `--features gpu`, modulation sample rendering is offloaded to the
+✅ (not part of Release 1) When compiled with `--features gpu`, modulation sample rendering is offloaded to the
 GPU via `wgpu` compute shaders (WGSL).  The CPU still handles bit-to-symbol mapping
 (NRZI encoding); only the per-sample carrier multiplication is GPU-accelerated.
 
@@ -148,8 +159,8 @@ envelope toward a target level, raising average power at a fixed peak without th
 overshoot a naive limiter would produce.
 
 OpenPulseHF applies CE-SSB as an **optional, default-on, per-mode TX conditioner**,
-gated by `ModemEngine::cessb_benefits` to the high-PAPR multicarrier families
-(`OFDM*`, `SCFDMA*`). It is a no-op for single-carrier PSK/QAM — whose
+gated by `ModemEngine::cessb_benefits` to the QPSK-subcarrier OFDM modes (`OFDM16`,
+`OFDM52`; on the Release 1 ladder that is SL7 only). It is a no-op for single-carrier PSK/QAM — whose
 amplitude-sensitive constellations would only pay EVM for no power gain — and for
 near-constant-envelope BPSK (nothing to clip). It runs in `stage_emit_output` after TX
 attenuation and before the tanh limiter, with a peak-restore rescale so the freed
@@ -334,8 +345,22 @@ minimum-metric terminal state.
 **Trade-off vs RS:** At 1 % random bit-error rate, `ConvCodec` achieves a post-decode
 BER of ~0.04 %, while RS fails because random errors exceed the 16-byte-per-block
 capacity.  At HF burst-error profiles the opposite is true — RS + interleaver is
-superior.  The engine exposes both; `ConvCodec` is recommended for VHF/UHF paths;
-RS is the default for HF.
+superior.  The engine exposes both.
+
+### FEC on the `hpx_hf` ladder
+
+✅ **Implemented** — `crates/openpulse-core/src/{fec,ldpc}.rs`, assigned per rung in `profile.rs`
+
+Every Release 1 rung runs with FEC; there is no uncoded rung.
+
+| Rungs | FEC | Notes |
+|-------|-----|-------|
+| SL1–SL6 (MFSK16, BPSK31–250, QPSK250-D) | `Rs`, RS(255,223) | The BPSK rungs upgrade per frame to `RsStrong`, RS(255,191) with t=32, where that costs no extra RS block |
+| SL7–SL11 (OFDM52 … OFDM52-64QAM) | `SoftConcatenated` | K=7 convolutional code decoded by soft Viterbi from demodulator LLRs, RS(255,223) outer; overhead ≈2.28× |
+| SL12–SL14 (OFDM52-16/32/64QAM) | `LdpcHighRate` | LDPC r≈8/9 (k=1024, n=1152), PEG graph, soft-decision; the same constellations as SL9–SL11 at a lighter code |
+
+ACK and control frames use `ShortRs` (8 ECC bytes, t=4). Rate-1/2 `Ldpc`, hard-decision
+`Concatenated` and `Turbo` exist but are not on the ladder.
 
 ---
 
@@ -346,7 +371,9 @@ RS is the default for HF.
 ### ACK taxonomy
 
 Each received frame is acknowledged with one of eight ACK types, conveyed via a 5-byte
-FSK4 frame (20 symbols at 100 baud = **200 ms on air**):
+FSK4 frame (20 symbols at 100 baud = **200 ms on air**; protected with short-block RS on the
+over-the-air path it is 13 bytes, about 0.52 s). When the receiver recommends SL1, the ACK goes out
+on the MFSK16 return channel (`MFSK16-ACK`) instead:
 
 | Code | Type | Meaning |
 |------|------|---------|
@@ -365,10 +392,10 @@ CRC-8/SMBUS.
 
 ### Rate ladder
 
-The `RateAdapter` state machine maps ACK events to speed level transitions across
-20 levels (SL1–SL20):
+The `RateAdapter` state machine maps ACK events to speed level transitions. `SpeedLevel` has 20
+slots (SL1–SL20), but the shipped profiles cap it: `fast` at SL14, `robust` at SL6.
 
-- **AckUp**: step up (ceiling SL20)
+- **AckUp**: step up (to the profile's top rung)
 - **AckDown**: step down (floor SL2; SL1 only reached after 3 consecutive NACKs at SL2
   as a chirp-fallback emergency)
 - **Nack**: increment NACK counter; after `nack_threshold` (default 3) consecutive
@@ -388,9 +415,25 @@ Two `SessionProfile`s ship, both on the single `hpx_hf` rate ladder; the
   non-linear PAs). The ladder fingerprint is the same, so `fast` and `robust` stations
   interoperate; the robust side never climbs past SL6.
 
-The ARDOP TNC floors its adaptive ladder at SL2 (it has no MFSK16). The earlier profiles
-(`hpx500`, `hpx_modcod`, `hpx_pilot*`, `hpx_ofdm_hf`, `hpx_wideband*`, `hpx_narrowband`) were
-deleted 2026-10-01 without aliases; their modes remain selectable as fixed modes.
+The ARDOP TNC floors its adaptive ladder at SL2 (it has no MFSK16). The ten earlier profiles
+(`hpx500`, `hpx_modcod`, `hpx_pilot*`, `hpx_ofdm_hf`, `hpx_wideband*`, `hpx_narrowband`, …) were
+deleted 2026-10-01 without aliases; an unknown name is rejected with the list of valid names, and
+their modes remain selectable as fixed modes.
+
+Adaptive operation is opt-in: the daemon runs the ladder with `[modem] ota_enabled = true` (default
+`false`, fixed mode `BPSK250`), the ARDOP TNC with `[ardop] enable_adaptive_arq = true`.
+
+### Ladder evidence (since v0.16.0)
+
+What moves the ladder was tightened before Release 1:
+
+- Idle flicker and an ACK on air are not evidence of a failed frame (#1456): a failed burst needs
+  0.5 s of audio after the leader before it counts.
+- A failed burst moves the ladder only when its NACK is keyed (#1460, round 4b). #1460 stays open:
+  a foreign over longer than 0.5 s can still count, but costs at most one step and 3 NACKs per run
+  of failures.
+- The daemon's NACK budget leaks one per 10 minutes of listening, so spaced flickers no longer mute
+  the receiver; HARQ keeps a burst's LLRs only once it clears the evidence checks.
 
 ---
 
@@ -451,7 +494,7 @@ The receiver verifies the manifest before passing data to the application layer.
 
 ## Post-Quantum Cryptography
 
-✅ **Implemented** — `crates/openpulse-core/src/pq_handshake.rs`
+✅ **Implemented, not part of Release 1** — `crates/openpulse-core/src/pq_handshake.rs`
 
 ### Algorithms
 
@@ -482,8 +525,10 @@ channel.  The shared secret is available for session key derivation.
 ### SAR transport for large PQ frames
 
 The combined PQ CONREQ frame (classical key + ML-DSA-44 key + ML-KEM-768 key + both
-signatures + JSON body) exceeds the 255-byte frame payload limit.  The SAR layer
-(see below) fragments it automatically; the integration tests `pq_conreq_serialized_size_fits_in_sar_capacity` and `sar_roundtrip_of_pq_conreq` verify the full PQ handshake survives SAR fragmentation and reassembly.
+signatures + binary body) exceeds the 255-byte frame payload limit.  The SAR layer
+(see below) fragments it automatically; the integration test `sar_roundtrip_of_pq_conreq`
+(`crates/openpulse-core/tests/pq_handshake_integration.rs`) verifies the PQ CONREQ survives SAR
+fragmentation and reassembly.
 
 ---
 
@@ -495,7 +540,7 @@ signatures + JSON body) exceeds the 255-byte frame payload limit.  The SAR layer
 |-----------|----------|----------------|
 | LZ4 | Session-layer payload compression | `lz4_flex` (pure Rust) |
 | Zstd + HPX dictionary | Session-layer payload compression; the `u32` is the dictionary ID, carried to catch version skew | `zstd`, `CompressionAlgorithm::Zstd(u32)` |
-| Gzip | B2F Type-D message compression | `flate2` |
+| Gzip | B2F Type-D message compression (not part of Release 1) | `flate2` |
 | ~~LZHUF LH5~~ | B2F Type-C — **not supported**, removed in PR #948 | — |
 
 ### Session-layer LZ4
@@ -504,9 +549,12 @@ The `compress_if_smaller()` function compresses the payload and returns the orig
 bytes unchanged if the compressed form is not smaller.  This prevents negative
 compression on short or already-compressed payloads.
 
-The compression algorithm selected is negotiated in the Ed25519-signed CONREQ/CONACK
-handshake — it is part of the signed body, so a man-in-the-middle cannot downgrade the
-compression selection without invalidating the signature.
+Session compression is opt-in (`[compression] enabled`, default `false`) and configured locally.
+It is **not** negotiated in the handshake: that field was removed in #1166 because nothing consumed
+it. A packed frame is self-describing (zstd's own frame header carries the dictionary ID, and a
+mismatch is refused), so the receiver always unpacks it and one station can enable compression on
+its own. A packed frame that fails to unpack is a frame integrity error — dropped, counted and
+logged with the decoder's reason (REQ-CMP-05).
 
 ### Type C (LZHUF) — not supported
 
@@ -565,7 +613,7 @@ all sense a clear channel at the same instant.
 
 ## Multi-Hop Relay and Trust-Weighted Routing
 
-✅ **Implemented** — `crates/openpulse-core/src/{relay,peer_cache,wire_query,query_propagation}.rs`
+✅ **Implemented, not part of Release 1** — `crates/openpulse-core/src/{relay,peer_cache,wire_query,query_propagation}.rs`
 
 ### Relay forwarding
 
@@ -628,7 +676,7 @@ Wire message types:
 
 ## Winlink / B2F Integration
 
-✅ **Implemented** — `crates/openpulse-b2f/`, `crates/openpulse-b2f-driver/`, `crates/openpulse-gateway/`
+✅ **Implemented, not part of Release 1** — `crates/openpulse-b2f/`, `crates/openpulse-b2f-driver/`, `crates/openpulse-gateway/`. (Release 1 reaches Winlink through Pat and the ARDOP TNC instead.)
 
 ### B2F protocol state machine
 
@@ -638,8 +686,8 @@ Station (IRS) roles, implementing the Winlink B2F (Binary 2 Forward) protocol:
 1. **Handshake**: WL2K connection banner exchange; FNV-1a session key derivation.
 2. **Proposal exchange**: ISS sends `FC` (file proposal) frames listing pending
    messages; IRS responds with `FS` (file select) frames accepting or deferring each.
-3. **Transfer**: ISS sends accepted message blobs; each blob is compressed (Gzip or
-   LZHUF depending on type flag) and prefixed with an RFC-5322-like ASCII header.
+3. **Transfer**: ISS sends accepted message blobs; each blob is Gzip-compressed (Type D)
+   and prefixed with an RFC-5322-like ASCII header. Type C (LZHUF) proposals are rejected.
 4. **Completion**: ISS sends `FF` (finished) after all blobs; session role reverses
    for IRS→ISS transfer.
 
@@ -659,7 +707,7 @@ radio hardware is required.  The gateway performs:
 
 ### ARDOP-compatible command/data port
 
-✅ **Implemented** — `crates/openpulse-ardop/` (`openpulse-tnc` binary)
+✅ **Implemented, part of Release 1** — `crates/openpulse-ardop/` (`openpulse-tnc` binary)
 
 The TNC presents two TCP ports (default 8515 cmd / 8516 data) speaking the ARDOP
 ASCII line protocol.  Implemented commands:
@@ -668,30 +716,36 @@ ASCII line protocol.  Implemented commands:
 `BUFFER` · `PTT` · `GRIDSQUARE` · `ARQBW` · `ARQTIMEOUT` · `CWID` · `SENDID` ·
 `FECSEND` · `FECRCV` · `PING` · `CLOSE`
 
-`FECSEND` and `FECRCV` enable FEC-framed unconnected transmissions used by `pat` for
-Winlink message delivery.  `BUFFER` accurately tracks the pending TX byte count so
-`pat` can poll for drain confirmation.
+`FECSEND` and `FECRCV` enable FEC-framed unconnected transmissions.  `BUFFER` tracks the
+pending TX byte count so `pat` can poll for drain confirmation.
+
+Adaptive ARQ is opt-in (`[ardop] enable_adaptive_arq`, profile `[ardop] adaptive_profile`, `fast`
+or `robust`); without it the TNC runs a fixed mode and `ARQBW`/`ARQTIMEOUT` are accepted and echoed.
+With it, `ARQBW` caps the ladder using each mode's bandwidth as the plugin reports it, and the
+ladder floors at SL2. Since v0.16.0 the TNC receives on real audio (#1310), its ARQ ACK listen holds
+the receive stream and scans it (#1315), and host blocks larger than one frame are split into
+frames at the data port (#1385).
 
 ### KISS / AX.25
 
-✅ **Implemented** — `crates/openpulse-kiss/` (`openpulse-kisstnc` binary)
+✅ **Implemented, not part of Release 1** — `crates/openpulse-kiss/` (`openpulse-kisstnc` binary)
 
 Full KISS byte-stuffing (`FEND`/`FESC`/`TFEND`/`TFESC`) and AX.25 UI frame
-encoding/decoding.  Compatible with any KISS-capable application (Dire Wolf, aprx,
-Xastir).
+encoding/decoding, for KISS-capable applications.
 
 ---
 
 ## GPU Compute Acceleration
 
-✅ **Implemented** (opt-in, per-plugin `--features gpu`) — `crates/openpulse-gpu/`,
+✅ **Implemented, not part of Release 1** (per-plugin `gpu` feature) — `crates/openpulse-gpu/`,
 wired into **5 plugins**: `bpsk`, `qpsk`, `psk8`, `64qam`, `scfdma` (OFDM has no GPU
 path). Six WGSL compute kernels run on any wgpu-compatible GPU (Vulkan, Metal, DX12,
 WebGPU): `bpsk_modulate`, `bpsk_demodulate`, `timing_search` (the BPSK trio),
 `rrc_fir` (the RRC matched filter, BPSK/QPSK/8PSK/64QAM), `soft_demod` (8PSK/64QAM
-soft LLRs), and `fft256` (SC-FDMA batched FFT). The GPU is API-only (`with_gpu`),
-exercised by tests; `scripts/gate.sh`'s `--all-features` pass builds + lints the feature so it
-doesn't rot. The BPSK modulate path, as one example, is three stages:
+soft LLRs), and `fft256` (SC-FDMA batched FFT). `openpulse-server` and `openpulse-linksim`
+enable `gpu` by default and register the GPU-capable plugins `with_gpu` when an adapter is found;
+CI and the test gates build `--no-default-features` (CPU only), and `scripts/gate.sh`'s
+`--all-features` pass builds and lints the feature so it doesn't rot. The BPSK modulate path, as one example, is three stages:
 
 1. **Byte-to-bit expansion**: 64-thread workgroups extract LSB-first bits from input
    bytes in parallel.
@@ -761,6 +815,7 @@ after every significant state change.  Events are serialisable as NDJSON
 | Event | Trigger |
 |-------|---------|
 | `AfcUpdate` | Every receive call (if plugin supports AFC); includes `offset_hz` and `correction_hz` |
+| `OtaRateDecision` | Every OTA rate-controller decision, including holds |
 | `RateChange` | ACK applied to an active adaptive session |
 | `DcdChange` | Channel busy/clear transition |
 | `HpxTransition` | HPX state machine step |
@@ -774,7 +829,7 @@ predate the field deserialise without error.
 
 ### TUI
 
-✅ **Implemented** — `crates/openpulse-tui/` (`openpulse-tui` binary)
+✅ **Implemented, not part of Release 1** — `crates/openpulse-tui/` (`openpulse-tui` binary)
 
 Three-panel ratatui interface: HPX state (colour-coded), AFC offset + correction +
 DCD energy bar, scrollable transition log.  Keyboard: `q` quit, `p` pause, ↑↓ scroll.
@@ -788,13 +843,13 @@ DCD energy bar, scrollable transition log.  Keyboard: `q` quit, `p` pause, ↑�
 GitHub Actions release workflow ships static x86-64 musl binaries and aarch64 `.deb`
 packages for `openpulse-tnc`, `openpulse-kisstnc`, and `openpulse-server` on `v*` tag push.
 
-### 6.3 — Network mesh daemon ✅ Done (PR #120, #121)
+### 6.3 — Network mesh daemon ✅ Done (PR #120, #121) — not part of Release 1
 
 `openpulse-mesh` daemon ships `RelayForwarder`, `QueryForwarder`, peer discovery beacons,
 store-and-forward relay, and peer cache population from beacon responses.  `CONNECT_MESH`
 ARDOP extension command directs `ModemEngine` into mesh mode.
 
-### FF-1 — Operator-initiated QSY negotiation ✅ Done (PR #140, #141)
+### FF-1 — Operator-initiated QSY negotiation ✅ Done (PR #140, #141) — not part of Release 1
 
 Five-frame Ed25519-signed, freshness-stamped ASCII protocol (QSY_REQ / QSY_LIST / QSY_VOTE / QSY_ACK /
 QSY_REJECT); `QsySession` state machine and `QsyScanner` in `crates/openpulse-qsy`.
@@ -811,7 +866,7 @@ stream; `ModemEngine::transmit_iq()` dispatches via it with CPU fallback.
 All previously listed stubs are now closed:
 
 - **8PSK soft demapping** ✅ Done — `demodulate_soft()` implements Gray-coded max-log-MAP demapping.
-- **CLI manifest verify** ✅ Done — `manifest verify` is wired to `verify_manifest()` in the library.
+- **CLI manifest verification** ✅ Done — wired to the library's `verify_manifest()` (`crates/openpulse-cli/src/commands/session.rs`).
 
 ### V1.x — Wider-than-3 kHz channel support (10 m HF / VHF / UHF) 🔲 Planned
 

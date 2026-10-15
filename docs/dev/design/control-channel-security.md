@@ -2,7 +2,7 @@
 project: openpulsehf
 doc: docs/dev/design/control-channel-security.md
 status: living
-last_updated: 2026-07-07
+last_updated: 2026-10-15
 ---
 
 # Control-channel security (REQ-CTL)
@@ -14,7 +14,9 @@ PQ handshake), which is already secured.
 ## Threat model
 
 The control channel (TCP `:9000`, WebSocket `:9001`) commands the **transmitter**: PTT, frequency,
-mode, transmit, messaging, repeater. Today it is plaintext NDJSON with no authentication.
+mode, transmit, messaging, repeater. It was plaintext NDJSON with no authentication when this design
+was written; on loopback it still is by default. The TCP port now authenticates and encrypts when
+authentication is required (see *Implementation slices*).
 
 - **Default (loopback bind):** low risk — reachable only from the same host.
 - **Non-loopback bind** (the legitimate "operate the panel from another machine" case): the port is
@@ -74,15 +76,23 @@ accessible file; on write, **enforce** owner-only. Generalise the existing prece
 
 1. **Shared permission helper** — lift the `validate`/`enforce` owner-only logic out of `openpulse-cli`
    into a shared module (e.g. `openpulse-config`); apply it to the existing identity key + trust store
-   load paths on both daemon and clients. Small, testable, immediate value.
+   load paths on both daemon and clients. Small, testable, immediate value. *Shipped:*
+   `crates/openpulse-config/src/secret_file.rs`; the daemon refuses a group/world-readable station
+   key (`server.rs`, REQ-CTL-05).
 2. **File keystore + master password** — Argon2id + AEAD keystore type with `open(master)` / `store` /
    `load`, owner-only files via slice 1. Unit-tested round-trip + wrong-password rejection.
 3. **System keychain backend** — `keyring`-backed store behind a trait; fall back to slice 2.
 4. **Noise-PSK transport** — `crates/openpulse-linksec` (`NoiseHandshake`/`NoiseTransport`, NNpsk0)
-   + the `auth_required` gate + `[control_security]` config (`require_auth`, `psk_key_id`) shipped;
-   **remaining:** wire the handshake+framing into the daemon TCP/WS server and the panel client, and
-   enforce fail-closed PTT for unauthenticated clients. This transport integration touches the live
-   networking and is done as a separate, live-validated step.
+   + the `auth_required` gate + `[control_security]` config (`require_auth`, `psk_key_id`) shipped.
+   **As of 2026-10-15:** the daemon's TCP control port runs the Noise handshake when authentication
+   is required (non-loopback bind or `require_auth`) and drops a client that fails it (fail closed);
+   the daemon refuses to start if authentication is required and no PSK is set. The panel's TCP
+   transport speaks the same Noise channel. The WebSocket port has no Noise path: it is disabled
+   whenever TCP authentication is required (`ws_disabled_for_auth`), so it cannot become an
+   unauthenticated side door. **Remaining:** the PSK comes from the `OPENPULSE_CONTROL_PSK`
+   environment variable (64 hex chars) on both daemon and panel; keystore-backed loading
+   (`psk_key_id` → `openpulse-keystore`) is not wired; setting `psk_key_id` logs a startup warning that it is inert. The CLI's daemon client has no Noise path, so
+   it works only against an unauthenticated (loopback) control port.
 
 Each slice ships behind config, off by default, with the traceability chain (CAP-68).
 
@@ -90,5 +100,5 @@ Each slice ships behind config, off by default, with the traceability chain (CAP
 
 - Auth scheme: **Noise NNpsk0** (rustls has no external PSK; OpenSSL would add a C dep). *Shipped.*
 - Keystore KDF/AEAD: **Argon2id + ChaCha20-Poly1305**. *Shipped (slice 2).*
-- Panel master password: read the OS keychain first, prompt in-UI only as a fallback. *For the
-  transport-wiring step.*
+- Panel master password: read the OS keychain first, prompt in-UI only as a fallback. *Not yet
+  implemented; the panel reads the PSK from the environment today.*

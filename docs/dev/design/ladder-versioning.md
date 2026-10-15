@@ -2,7 +2,7 @@
 project: openpulsehf
 doc: docs/dev/design/ladder-versioning.md
 status: living
-last_updated: 2026-07-01
+last_updated: 2026-10-15
 ---
 
 # Rate-ladder versioning & backward compatibility
@@ -19,21 +19,27 @@ same `SessionProfile` mapping `SpeedLevel → (mode, FEC)`. If two code versions
 profile name* differently, they silently disagree: the sender transmits *its* SL7, the receiver tries
 to decode *its* SL7, and the exchange fails or the ladder thrashes.
 
-This is not hypothetical. PR #611 added per-level FEC to `hpx_hf` (SL7–SL11). A pre-#611 station and a
-post-#611 station now map SL7–SL11 to different (mode, FEC) pairs — a wire incompatibility with no
-detection today.
+This is not hypothetical. PR #611 added per-level FEC to `hpx_hf` (SL7–SL11), so a pre-#611 station
+and a post-#611 station mapped SL7–SL11 to different (mode, FEC) pairs. The fingerprint below was
+built to detect exactly that.
+
+**Today (2026-10-15)** there is one ladder, `hpx_hf` (SL1–SL14, `crates/openpulse-core/src/profile.rs`),
+run as two profiles: `fast` (the whole ladder) and `robust` (the same ladder capped at SL6). The cap is
+local policy, not mapping, so `fast` and `robust` have the same fingerprint and interoperate. The ten
+earlier profile names were deleted on 2026-10-01 with no aliases.
 
 ## Policy: freeze published ladders; version changes
 
-**Pre-first-release (now):** there is no shipped release, so there are no in-field peers to stay
+**Before Release 1 (`v0.17.0`, now):** `v0.16.0` is tagged but the v0.17 wire format makes no
+compatibility promise to it (`protocol-wire-spec.md`), so there are no in-field peers to stay
 compatible with. The ladder — including a mode's internal DSP (constellation, pulse shaping) — may be
 **reworked in place** as often as needed; the goal is to reach the first release with a *single*
 ladder, not a versioned family. Every station rebuilds from source, so no diversity exists. (Example:
-PR #616 re-Gray-coded the cross-32QAM constellation in place — a wire change the fingerprint does *not*
-detect, since it hashes mode *strings*, not a mode's internal DSP. Fine pre-release; see the caveat
-below.)
+PR #616 re-Gray-coded the cross-32QAM constellation in place, and the #1062 flag day (2026-10-10)
+replaced the BPSK63/100/250 preamble with PN-63 — both wire changes the fingerprint does *not* detect,
+since it hashes mode *strings*, not a mode's internal DSP. Fine pre-release; see the caveat below.)
 
-**At and after the first release, a published ladder is a wire contract. Do not mutate it in place.**
+**From Release 1 on, a published ladder is a wire contract. Do not mutate it in place.**
 
 - Changing any `(level → mode)` or `(level → FEC)` entry of a shipped profile, or adding/removing a
   step, is a **breaking wire change**. It must ship as a **new named profile** (e.g. `hpx_hf_v2`),
@@ -50,32 +56,28 @@ below.)
 changes iff the mapping changes, so it detects ladder drift automatically — a station can't forget to
 "bump the version".
 
-- The daemon logs its active ladder fingerprint at OTA startup (`ladder_fingerprint=…`). Operators can
+- The daemon logs its active ladder fingerprint at OTA startup (`ladder_fingerprint=…`, `server.rs`). Operators can
   diff it across two stations to confirm they will interoperate.
 - **Caveat — the fingerprint covers mode *strings*, not a mode's internal DSP.** Two builds that map
-  `SL10 → "SCFDMA52-32QAM"` fingerprint the same even if the *constellation bit-mapping or pulse
+  `SL10 → "OFDM52-32QAM"` fingerprint the same even if the *constellation bit-mapping or pulse
   shaping* of that mode changed on the wire (as in #616). Pre-release that's harmless; **post-release,
   a mode's PHY is also frozen** — a wire-affecting DSP change to a shipped mode must ship under a new
   mode name (so the fingerprint moves), exactly like a ladder change ships under a new profile name.
 - **Handshake guard (shipped):** the signed `ConReq`/`ConAck` advertise `(profile_name,
-  profile_fingerprint)` in the signature-covered body (skip-serialized when unset, so un-advertised
-  frames stay byte-identical to legacy — full signature compatibility). On a completed handshake the
+  profile_fingerprint)` in the signature-covered body (empty name and fingerprint `0` mean "not
+  advertised"; `protocol-wire-spec.md` §3.1–3.2). On a completed handshake the
   daemon compares the peer's fingerprint to ours and records `VerifiedPeer.profile_compatible`. On a
   **positive mismatch** (both sides advertised, fingerprints differ) it disables OTA rate-stepping for
   that peer (`RuntimeControlState::ota_suppressed_by_peer` → fixed-mode fallback for both TX and RX) —
   detection instead of silent desync. OTA **without** a handshake, or with a compatible / un-advertised
   peer, is unaffected (the guard fires only on a positive mismatch), preserving today's behaviour.
 
-### Compatibility characteristic (same as the earlier `grid`/`fec`/`compression` fields)
+### Compatibility characteristic
 
-`skip_serializing_if` makes the canonical JSON byte-identical to a legacy frame **only when the field
-is unset** (name `""`, fp `0`). When a station *does* advertise a ladder, the signed canonical
-includes the new fields, so a **pre-#615 verifier — which can't reconstruct those fields — will fail
-the signature** and reject the frame. This is the established trade-off for every additive signed
-field here, and it degrades gracefully: the signed handshake is *additive* (the local `ConnectPeer`
-trust eval and un-guarded OTA still run), so a new advertising station and an old station simply fall
-back to today's un-verified, un-guarded behaviour rather than mis-decoding. Two pre-#615 peers, two
-post-#615 peers, and old→new(non-advertising) all verify normally.
+Since the binary handshake (#1147, #1189) the two fields are always present in the signed body; there
+is no JSON form and no skip-serialization, so the earlier "byte-identical to legacy when unset" property
+no longer applies. A station built before the binary handshake cannot decode a current handshake at
+all (`WIRE_VERSION` `0x01`, frozen until 1.0). Rebuild both ends from the same commit.
 
 ## Chosen approach (2026-07-01)
 

@@ -2,19 +2,122 @@
 project: openpulsehf
 doc: docs/dev/project/changelog.md
 status: living
-last_updated: 2026-07-22
+last_updated: 2026-10-15
 ---
 
 # Changelog
 
-> Phase/roadmap history lives in [roadmap.md](roadmap.md); this file tracks
-> user-visible changes. "Unreleased" = merged to `main`, not yet in a tagged release.
+> Phase/roadmap history lives in [roadmap.md](roadmap.md) and the plan in
+> [workplan.md](workplan.md); this file tracks user-visible changes. "Unreleased" = merged to `main`, not yet in a tagged release.
 
 ## Unreleased
 
-Merged to `main` since v0.16.0; not yet tagged. Two arcs dominate: the **transmit-safety audit
-fix-down** (#971–#988) and the **loopback re-validation on real audio** (#989–#1012), which found
-several live defects and — at the end — retracted a long-standing misattribution.
+Merged to `main` since v0.16.0 (2026-07-18); not yet tagged. The workspace version is still
+`0.16.0`. The next tag is **Release 1, `v0.17.0`** (work plan decision 14), cut after the on-air
+milestone M3 on 2 m; see [workplan.md](workplan.md). Issue and PR numbers below are on the tracker;
+the full requirement → design → tests → results chain for each change is in
+[traceability.md](traceability.md).
+
+### Summary 2026-07-25 → 2026-10-14 (written 2026-10-15)
+
+**Wire format — breaks against v0.16.0.** A v0.16.0 station and a current `main` station do not
+interoperate. The v0.17 wire format is declared in `docs/dev/design/protocol-wire-spec.md` (M1).
+
+- **Preamble (#1062, flag day 2026-10-10, PR #1508).** BPSK63, BPSK100 and BPSK250 (SL3–SL5) use a
+  **PN-63** preamble (x⁶+x+1); BPSK31 keeps `--++` (decision 25); QPSK250-D keeps its designed
+  sequence. Neither version decodes the other's SL3–SL5 frames.
+- **Handshake is binary (#1147).** CONREQ/CONACK, classical and PQ, are a binary format (wire
+  version `0x01`, frozen until 1.0); the JSON format is not decoded. A maximal CONREQ is 236 B and
+  fits one SAR fragment (v1's JSON was ~752 B in three). The signature covers the transmitted bytes. The unused FEC and
+  compression negotiation fields are deleted (#1166).
+- **Whitener period 511 (#1148).** The scrambler delivered a 21-bit period instead of the documented
+  x⁹+x⁵+1; it is fixed, with a period gate. The recorded replay corpus predates it; four replay rows
+  are ignored until the re-record (#1351).
+- **Version tokens on every on-air format:** QSY lines (#1162), the rendezvous codec (#1163),
+  `WireEnvelope`'s version byte now authoritative (#1164), the FreeDV auth beacon (#1206). `AckFrame`
+  rejects non-zero reserved bits 7:5 (#1165; not a break, no encoder sets them). The station-id cap
+  is 18 and `dst_station` is off the CONACK (#1191).
+- **Compression (REQ-CMP-05, decision 17).** A packed frame that fails to unpack is an integrity
+  error: dropped, counted and logged, never delivered. zstd's own frame header carries the dictionary
+  ID, so no wire change was needed.
+
+**Profiles (decision 18, 2026-10-01, #1480).** Exactly two session profiles on the one `hpx_hf`
+ladder: **`fast`** (default, SL1–SL14, up to ≈2031 Hz) and **`robust`** (the same ladder capped at SL6,
+≤500 Hz, single-carrier, all coded). The other ten profile names are deleted with **no aliases**; an
+unknown name is rejected with the list of valid names. Their modes stay selectable as fixed modes
+(`[modem] mode`). A `fast` and a `robust` station interoperate. The ARDOP TNC floors its adaptive
+ladder at SL2. Earlier, `hpx_narrowband_hd` was retired because its modes could never modulate at
+8 kHz (#1359).
+
+**Receive.**
+- The daemon's streaming path runs the acquisition chain (#1118); the AFC settle is corroborated by
+  preamble correlation, not energy alone (#1049), and the correlation threshold is calibrated to the
+  station's own noise, standing down to energy-only where it would pass the delivered-frame bound
+  (#1060, REQ-RX-02/03).
+- The carrier detect's floor tracks the band noise (REQ-DCD-01) and follows the band behind any
+  receive filter (#1452); a spectral busy criterion gathers weak frames total power cannot see
+  (#1454); a total-power burst keeps its frame's start (#1443); a wideband transmission does not
+  close its own burst (#1304).
+- Every frame of a multi-frame burst is decoded (#1461).
+- An off-frequency first frame is cheaper: one settle at the burst's trigger sets the onset scan's
+  AFC correction first (at +50 Hz, SL2 decode 23.9 s → 2.2 s, x86). The uncoded fallback tries the
+  top four preamble-ranked onsets first, and its exhaustive scan runs only after the coded scan fails
+  (SL2 4.61 → 1.84 s per decode, x86). An off-frequency fallback frame is non-ladder traffic in
+  phase 2 too.
+- An OTA-enabled daemon receives uncoded non-ladder frames again (#1123); the rate-control SNR is
+  measured on the span that decoded (#1142); the RX burst cap covers the rung the peer sends (#1249);
+  the FSK4 ACK is found inside a noisy capture (#1177); BPSK's timing search no longer locks early
+  (#1438).
+- The receiver notch ships on by default (REQ-QRM-01); its acceptance row is disclosed as unproven
+  since `884d96ed` (#1457, decision 10).
+
+**Rate ladder evidence.** Idle flicker and an ACK on air are not ladder evidence (#1456); the NACK
+budget leaks one per 10 min of listening, so spaced flickers no longer mute the receiver; HARQ keeps
+only bursts that count as evidence. A failed burst moves the ladder only when its NACK is keyed
+(#1460 round 4b): a minute of CW costs one step and three NACKs instead of about five steps. #1460
+stays open, bounded not fixed.
+
+**PTT and transmit.**
+- One `SharedPtt` keying path for every front-end: daemon (#1262), ARDOP (#1250), KISS (#1259), the
+  cross-band repeater (#1260) and the CLI (#1299), built by one PTT builder (#1258). A second key is
+  refused (#1263); an unusable PTT backend refuses every emission (#1285); a PTT fault stops the OTA
+  send without claiming delivery (#1295).
+- `[modem] ptt_leader_ms` sets a leader delay before the first sample (#1257, default 0). PTT
+  release waits for the audio device's reported drain plus 10 ms, never longer than the old 200 ms
+  (#1367). A flush timeout still counts the frame for station ID (#1334).
+- The resolved audio device name is cached, so a keyed open skips the full device enumeration
+  (#1511). Measured key-to-first-sample with the cache: ~100 ms on rpi51, ~31 ms on rpi53 (before:
+  567–684 ms and 239–256 ms).
+
+**ARDOP TNC.** Receives on real audio (#1310; the KISS TNC too); the ARQ ACK listen holds its stream
+and scans it (#1315); host blocks larger than one frame go on the air as frame-sized chunks (#1385);
+`ARQBW` sizes modes from the plugin, not a stale table.
+
+**File transfer (experimental, not part of Release 1).** A transfer survives a lost fragment, a lost
+ack and a long block; the receiver asks for missing fragments and the stall timers scale with
+airtime (REQ-FX-05).
+
+**Security.** Every station-key signature is bound to a registered signing domain (#1193,
+REQ-SEC-13); the daemon refuses unsigned QSY lines and checks them against the handshake peer
+(#1252, REQ-SEC-14). Dependency updates for RUSTSEC-2026-0258 (`h2`) and RUSTSEC-2026-0285
+(`rustls`) (#1421).
+
+**On-air tooling.** The runners only ever lower a rig's RF power (`scripts/lib/rig-power.sh`); the
+twin runner takes a mode per station, `keep` sends none, and it refuses a frequency outside 2 m by
+default. The evidence bundle records rig state (filter width, frequency trim,
+`notch_enabled`/`agc_enabled`/`cessb_enabled`), and the twin runner enables
+`observability.audit_mode` so `OtaRateDecision` events are retained for A2.
+
+**Process.** `scripts/gate.sh` runs post-merge on `main`, and traceability plus the benchmark jobs are
+required checks (#1144). The pre-push hook tests the reverse dependents of `openpulse-core`, `-dsp`
+and `-modem` (#1473). `docs/dev/project/requirements.yaml` is the enforced requirements registry.
+
+### 2026-07-18 → 2026-07-24
+
+Two arcs dominate this first week: the **transmit-safety audit fix-down** (#971–#988) and the
+**loopback re-validation on real audio** (#989–#1012), which found several live defects and — at the
+end — retracted a long-standing misattribution. The requirement-id normalisation (#1229) landed
+later and is listed here because it renames ids used throughout.
 
 ### Changed — requirement ids normalised to `REQ-<CAT>-NN` (#1229)
 

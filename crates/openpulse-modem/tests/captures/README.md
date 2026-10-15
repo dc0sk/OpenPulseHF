@@ -31,7 +31,7 @@ very property these files exist to preserve.
 | `ic9700-frame-bpsk250-rs-whitened.wav` | IC-9700 receiving an FT-991A `BPSK250\|rs` frame over 2 m at 5 W from a **whitening** build, payload `DUALCAP TEST 1`, 144.600 MHz, 2026-07-29 | burst t≈10.3–18.6 s (8.3 s), 7.2 dB above floor; carrier **1502.42 Hz** (+2.42, drift −0.3 Hz over the burst); spectral spread ≥0.481 in **every** window | **The artifact that closed #1021.** It arrived byte-perfect (0 errors in all 255 when diffed against the reconstructed transmitted wire) and still would not decode: the receiver had settled AFC on idle noise at sample 96 and the recovery re-settled there forever. Asserted by `the_real_on_air_frame_decodes`. |
 | `ic9700-frame-bpsk250-none-whitened.wav` | Same link, same whitening build, minutes after the `rs` capture — `BPSK250\|none`, 144.600 MHz, 5 W, 2026-07-29 | 0.9 s burst, 7.3 dB above floor, carrier **1502.44 Hz** (+2.44) | **The control, and the corpus's former missing piece.** Holds margin, propagation, frequency and levels constant against the failing `rs` capture. It **decodes** (`DUALCAP TEST 1`) and is asserted by `a_real_on_air_frame_decodes_end_to_end` — the first end-to-end decode in this suite against audio a radio actually produced. |
 | `ic9700-idle-wide-500hz-control.wav` | IC-9700 on `dc0sk-rpi51`, 144.600 MHz PKTUSB, 2026-08-17, 45 s, wide filter (measured −20 dB band **2470 Hz**), CAT-set via `rigctl -m 3081` | mean-square **1.36e-2**; BPSK250 peak ρ **0.227** over 45 s, 0.173 over its first 3 s | **The same-session control for the two narrow captures below.** Same rig, same level, same minute — the only variable is the filter width, which is what makes the narrow rows interpretable. |
-| `ic9700-idle-500hz.wav` | Same session, **500 Hz filter** (measured −20 dB band **554 Hz**) | mean-square **5.09e-3**; BPSK250 peak ρ **0.413** over 45 s, 0.319 over 3 s | **The #1060 fixture.** ρ exceeds the shipped `PREAMBLE_RHO_THRESHOLD = 0.40` within an ordinary listening window, so the correlation veto stops discriminating for a narrow-filter station. Also the missing narrow-bandwidth noise column #1059 asks for. Carries this rig's conducted-RFI line at ~1651 Hz; notching it *raises* ρ to 0.433, so the filter is the mechanism, not the birdie. |
+| `ic9700-idle-500hz.wav` | Same session, **500 Hz filter** (measured −20 dB band **554 Hz**) | mean-square **5.09e-3**; BPSK250 peak ρ **0.413** over 45 s, 0.319 over 3 s | **The #1060 fixture.** ρ exceeds the then-shipped `--++` threshold of 0.40 (now `ALT_PREAMBLE_RHO_THRESHOLD`; the PN-63 preamble's `PREAMBLE_RHO_THRESHOLD` is 0.315) within an ordinary listening window, so the correlation veto stops discriminating for a narrow-filter station. Also the missing narrow-bandwidth noise column #1059 asks for. Carries this rig's conducted-RFI line at ~1651 Hz; notching it *raises* ρ to 0.433, so the filter is the mechanism, not the birdie. |
 | `ic9700-idle-250hz.wav` | Same session, **250 Hz filter** (measured −20 dB band **309 Hz**) | mean-square **2.06e-3**; BPSK250 peak ρ **0.579** over 45 s, 0.505 over 3 s | The second point on the bandwidth axis: the ρ ceiling keeps climbing as the filter narrows, and at 250 Hz it exceeds 0.40 even in a 3 s listen. |
 | `sdr-ic9700tx-bpsk250-rs-1.wav` | **SDR** (RSPdx, off-air, Antenna A, centre 144.600 MHz, fs 192 kHz, RFGR 22 / IFGR 40) receiving an **IC-9700** `BPSK250\|rs` transmission over 2 m at 5 W, payload `RFGAINFIX RS TEST`, 2026-07-30 | carrier **1513.1 Hz**, SNR ≈55.7 dB, burst t≈9.0–19.0 s | **The IC-9700's TRANSMIT chain, proven.** Recorded during the same keyed run whose FT-991A rig-audio capture FAILED. Decodes. Asserted by `the_ic9700_transmit_chain_decodes_off_air_from_an_independent_receiver`. |
 | `sdr-ic9700tx-bpsk250-rs-2.wav` | Same SDR setup and link, payload `TRIMSIGN RS TEST`, B's dial at 144 599 936, 2026-07-30 | carrier **1512.2 Hz**, SNR ≈47.4 dB | Second of three. The **distinct payload is the anti-vacuity control** — a test decoding one fixed string could pass by returning a constant. |
@@ -115,13 +115,21 @@ are `#[ignore]`d until the corpus is re-recorded:
 * `the_ic9700_transmit_chain_decodes_off_air_from_an_independent_receiver`
 * `the_settle_recovery_reaches_the_frame_without_crawling`
 
-They also carry the **pre-#1062 preamble**, so re-recording is worth doing **once**, after the whole
-wire-break package has landed, rather than after each PR in it.
+They also carry the **pre-#1062 preamble**. The #1062 flag day landed on 2026-10-10: BPSK63, BPSK100
+and BPSK250 now send a PN-63 preamble (BPSK31 keeps `--++`), so these BPSK250 frames are two wire
+formats behind. The re-record is item **F8** of work plan milestone M3, on the 2 m pair
+(rpi51 + IC-9700, rpi53 + FT-818); see `docs/dev/project/workplan.md`.
+
+The ρ figures in the corpus table were measured against the `--++` BPSK250 template, before the
+flag day. Read them as the record that motivated #1062, not as the current template's numbers.
 
 **Do not delete these files.** The corpus-integrity gates still run against them (levels, carrier
 placement, sample rate), and the idle and tone captures carry no wire content at all — they are
 unaffected by any format change and still back the #1060 ρ work, the squelch/noise-floor gates and
 every "synthesize a frame inside real recorded noise" test, all of which stay green.
+
+The FT-991A captures come from a rig that is no longer in the 2 m station pair (2026-10-02); they
+stay as recorded evidence.
 
 Any `#[ignore = "verification"]` harness that prints decode or condemnation columns from these
 frame captures (G9 in `preamble_veto_interference.rs`, `snr_lead_in_bias`, the H1/H2 probes in

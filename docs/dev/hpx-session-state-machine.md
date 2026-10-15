@@ -2,7 +2,7 @@
 project: openpulsehf
 doc: docs/dev/hpx-session-state-machine.md
 status: living
-last_updated: 2026-04-24
+last_updated: 2026-10-15
 ---
 
 # HPX Session State Machine Specification
@@ -13,6 +13,25 @@ last_updated: 2026-04-24
 > Companion specs: [Protocol & Handshake Wire Specification](design/protocol-wire-spec.md) (the
 > byte layouts of the frames this state machine drives) and the
 > [Peer Query and Relay Wire Schema](peer-query-relay-wire.md).
+
+> **Implementation status (2026-10-15).** `crates/openpulse-core/src/hpx.rs` implements the eight
+> states, the event set (without `relay_route_failed`), the transition matrix and the reason codes
+> below, with `MAX_RECOVERY_ATTEMPTS = 4` and `MAX_ARQ_RETRIES_PER_CHUNK = 6`. What drives it in
+> production is narrower than this spec:
+> - `ModemEngine::begin_secure_session` (called by the daemon's `ConnectPeer`, the ARDOP TNC's
+>   `CONNECT` and the CLI `session` commands) walks `idle → discovery → training → active_transfer`
+>   in one call after the local trust evaluation, or raises `signature_verification_failed`.
+>   `end_secure_session` walks `local_cancel → teardown → idle`.
+> - The signed handshake on the air (CONREQ/CONACK) runs beside it in the daemon, with its own 30 s
+>   timeout (`HANDSHAKE_TIMEOUT`) and ±120 s timestamp freshness.
+> - The phase timeouts in *Timing Constraints* are not implemented as timers, and no production path
+>   raises `discovery_timeout`, `training_timeout`, `quality_drop`, `recovery_*` or any relay event;
+>   only the benchmark harness, the link simulator (`apps/openpulse-linksim/src/serve.rs`) and tests do. There is no training phase on the air: both ends run
+>   the same `hpx_hf` ladder and the data receiver chooses the rate per frame
+>   (`crates/openpulse-core/src/ota_rate.rs`, `docs/dev/design/architecture.md`).
+> - The session id is a `u64` (the CONREQ's creation time in ms) on the wire and
+>   `"{timestamp:016x}-{n:04x}"` inside the reactor, not a 128-bit UUID.
+> - Relay (`relay_active`) is not part of Release 1.
 
 ---
 
@@ -54,16 +73,16 @@ This specification is independent of underlying modulation plugins, audio backen
 | Term | Definition |
 |---|---|
 | **Session** | A logical bidirectional connection between two peer stations |
-| **Session ID** | 128-bit identifier assigned at session start; used in all frames |
+| **Session ID** | Identifier assigned at session start (as built: `u64` on the wire, see the status note) |
 | **Peer** | Another OpenPulse instance capable of HPX mode |
-| **Profile** | A modulation+coding+power+bandwidth configuration (e.g., "HPX1200-QPSK-FEC") |
+| **Profile** | A session profile on the `hpx_hf` ladder; as built, `fast` or `robust` |
 | **Capability** | A set of profiles a peer supports (discovered in training phase) |
 | **Training** | Phase where peers discover each other and negotiate optimal profile |
 | **ARQ** | Automatic Repeat reQuest; retransmission of failed chunks |
 | **Manifest** | Signed summary of all data transferred in a session |
 | **Relay** | An intermediate peer that forwards frames between two non-adjacent peers |
 | **Trust Policy** | Set of rules determining whether a peer or relay is acceptable |
-| **State** | One of the 9 defined session states |
+| **State** | One of the 8 defined session states |
 | **Event** | Trigger that causes a state transition (e.g., `discovery_ok`) |
 | **Reason Code** | Numeric identifier explaining why a transition occurred or failed |
 
@@ -96,7 +115,7 @@ This specification is independent of underlying modulation plugins, audio backen
 **Entry**: `start_session` event.
 
 **Actions**:
-- Assign unique session_id (128-bit UUID)
+- Assign unique session_id
 - Transmit discovery message with local identity + signature
 - Wait for peer's discovery acknowledgment
 

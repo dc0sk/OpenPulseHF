@@ -2,7 +2,7 @@
 project: openpulsehf
 doc: scripts/onair-sdr/README.md
 status: living
-last_updated: 2026-06-24
+last_updated: 2026-10-15
 ---
 
 # On-air SDR spectral-measurement toolset
@@ -23,7 +23,18 @@ There are **two hosts**:
   `keyplay.py` / `keyplay_meter.py` (copy them there). Direct Yaesu CAT is used,
   so **no rigctld is required** on the station.
 
-> ⚠️ This keys a real transmitter. Transmit into a dummy load / attenuator, stay
+**FT-991A only.** The station scripts speak the FT-991A's ASCII CAT (`TX1;`, `PC020;`) on
+`OPHF_PORT` (default `/dev/ttyUSB0`, 38400 baud). They do not drive the FT-818, which uses
+Yaesu's binary CAT. `cap_during_tx.sh` defaults `STATION` to `dc0sk-rpi53`, which now hosts the
+FT-818 of the 2 m pair (2026-10-02); set `STATION` to the FT-991A's host.
+
+**Power is set, not only lowered.** `keyplay.py` writes the requested watts (`PC`) and aborts if
+the read-back is above 20 W or differs from the request, so it can raise the rig's power. That is
+outside the station owner's 2026-10-14 rule that tooling only ever lowers power, which the main
+on-air runners follow (`scripts/lib/rig-power.sh`). Set the rig's power yourself first and pass
+that same value. It refuses to key unless the rig reads 144–146 MHz and idle.
+
+> **Warning:** this keys a real transmitter. Transmit into a dummy load / attenuator, stay
 > in-band and low-power, and observe your licence conditions.
 
 ## RF path and the front-end-overload trap

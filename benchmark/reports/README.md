@@ -2,12 +2,14 @@
 project: openpulsehf
 doc: benchmark/reports/README.md
 status: living
-last_updated: 2026-05-02
+last_updated: 2026-10-15
 ---
 
 # Benchmark Reports
 
-This directory stores human-readable summaries generated from benchmark result artifacts.
+This directory is for human-readable summaries of benchmark result artifacts. It holds no reports
+today. Test-matrix reports go to `docs/test-reports/` and on-air reports to
+`docs/dev/test-reports/`.
 
 Suggested naming:
 

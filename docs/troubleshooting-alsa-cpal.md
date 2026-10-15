@@ -2,79 +2,88 @@
 project: openpulsehf
 doc: docs/troubleshooting-alsa-cpal.md
 status: living
-last_updated: 2026-05-17
+last_updated: 2026-10-15
 ---
 
 # Troubleshooting ALSA and CPAL Audio Setup
 
-This guide covers common audio backend setup and runtime issues for OpenPulse on ALSA (Linux), PipeWire (Linux), CoreAudio (macOS), and WASAPI (Windows) platforms.
+This guide covers audio backend setup and runtime issues for OpenPulse. Linux (ALSA, with
+PulseAudio or PipeWire on top) is the platform the project builds, tests and operates on
+(Raspberry Pi 4/5 stations and x86 hosts). macOS is only compile-checked in CI, without the audio
+backend; Windows is not built in CI. The macOS and Windows sections below are generic cpal advice,
+not project-verified procedures.
+
+Binary names used below: `openpulse` (CLI), `openpulse-server` (daemon), `openpulse-tnc` (ARDOP TNC).
 
 ## Platform Overview
 
-OpenPulse uses the **`cpal`** (Cross-Platform Audio Library) crate to abstract audio hardware. On each platform:
+OpenPulse uses the **`cpal`** crate for audio hardware. The CLI has it on by default (feature
+`cpal-backend`); the daemon and the ARDOP TNC need `--features cpal`. A build without it has only the
+in-memory loopback backend.
 
-| Platform | Backend | Common Issues |
+| Platform | cpal host | Common issues |
 |---|---|---|
-| **Linux (PulseAudio/ALSA)** | ALSA device enumeration, PipeWire via ALSA emulation | Device not found, permission issues, ALSA config corruption |
-| **Linux (modern)** | PipeWire (via ALSA emulation) | PipeWire daemon not running, ALSA config mismatch |
-| **macOS** | CoreAudio (coreaudio-sys) | Device not found, permission restrictions, USB device handling |
-| **Windows** | WASAPI (Windows Audio Session API) | Device enumeration delays, exclusive mode conflicts, driver issues |
+| **Linux** | ALSA (PulseAudio/PipeWire reached through their ALSA plugins, e.g. the `pulse` device) | Device not found, device held by another client, wrong card picked, `hw:` device rejects 8 kHz |
+| **macOS** | CoreAudio | Not exercised by the project (no audio CI) |
+| **Windows** | WASAPI | Not exercised by the project |
+
+The modem runs at 8 kHz and opens the device at that rate. On Linux use a `plughw:` device or the
+`pulse` device so ALSA or the sound server converts the rate; a raw `hw:` device that does not
+support 8 kHz fails to open.
 
 ---
 
 ## General Diagnostics
 
-### 1. Verify OpenPulse can detect backends and devices
+### 1. Verify OpenPulse can see the backend and devices
 
 ```bash
-# List available plugins (should show BPSK at minimum)
-openpulse-cli plugins list
-
-# Verify backend flags are available in the current binaries
+# Is the backend flag there, and which audio devices does cpal see?
 openpulse --help | grep backend
-openpulse-kisstnc --help | grep backend
 openpulse-tnc --help | grep backend
+openpulse --backend cpal devices
 
-# List detected audio devices from the CLI
-openpulse devices
+# Registered modulation modes (the CLI has no plugin-listing command; modes is the equivalent)
+openpulse modes
 ```
 
-### 2. Check if cpal was compiled with audio support
+`openpulse devices` names every device the same way the transmit and receive paths resolve them,
+so a name it prints is a name `--device` / `[audio] device` can open.
+
+### 2. Check the binary was built with cpal
 
 ```bash
-cargo build --manifest-path pki-tooling/Cargo.toml --features cpal-backend --verbose
-# Look for log output confirming ALSA/WASAPI/CoreAudio crate compilation
+cargo build --release -p openpulse-cli                       # cpal-backend is on by default
+cargo build --release -p openpulse-daemon --features cpal    # daemon
+cargo build --release -p openpulse-ardop --features cpal     # ARDOP TNC
 ```
 
-### 3. Check OpenPulse was compiled with cpal backend
-
-```bash
-cargo build --features cpal-backend --verbose 2>&1 | grep -i audio
-# Expected: successful compilation of openpulse-audio with cpal enabled
-```
+A CLI built `--no-default-features` prints `note: cpal backend not compiled in; falling back to
+loopback` when run with the default backend. The ARDOP TNC logs a warning and uses loopback if
+`--backend cpal` is requested without the feature.
 
 ---
 
-## Linux (ALSA / PipeWire)
+## Linux (ALSA / PulseAudio / PipeWire)
 
-### Issue: "No audio devices found" or "DeviceNotFound"
+### Issue: "No audio devices found" or the device does not open
 
-**Symptoms**: 
-- `openpulse-cli transmit ...` fails with `DeviceNotFound` or similar
-- `list_devices()` returns empty vector
+**Symptoms**:
+- `openpulse devices` prints `No audio devices found.`
+- `openpulse transmit ...` / `receive ...` fails to open the configured device
 
 **Root causes**:
-- ALSA is not installed or misconfigured
-- PipeWire daemon has crashed or is not running (modern Linux)
-- ALSA config is corrupted
-- udev rules are missing (permission issues)
+- ALSA userspace missing or misconfigured
+- The card is held exclusively by another client (often PulseAudio/PipeWire holding a USB CODEC)
+- Permission on `/dev/snd/*`
+- The selector names a device that is not present
 
 **Solutions**:
 
-1. **Check ALSA is installed**:
+1. **Install ALSA userspace and headers**:
    ```bash
-   # Debian/Ubuntu
-   sudo apt-get install alsa-utils libasound2 libasound2-dev
+   # Debian/Ubuntu/Raspberry Pi OS
+   sudo apt-get install alsa-utils libasound2-dev
 
    # Fedora/RHEL
    sudo dnf install alsa-utils alsa-lib-devel
@@ -85,453 +94,224 @@ cargo build --features cpal-backend --verbose 2>&1 | grep -i audio
 
 2. **Verify ALSA can enumerate devices**:
    ```bash
-   aplay -L          # List output devices
-   arecord -L        # List input devices
+   aplay -L          # output devices
+   arecord -L        # input devices
+   arecord -l        # cards and their CARD= names
    ```
-   If no devices appear, proceed to step 3.
 
-3. **Reset ALSA state**:
+3. **Check for a sound server holding the card.** If PulseAudio or PipeWire owns a USB CODEC, a
+   `hw:`/`plughw:` open fails while the server runs. Either select the server's device (`pulse`)
+   or stop the server for that card. Example: the IC-9700's CODEC on rpi51 is held by PulseAudio,
+   so that station uses `pulse`.
    ```bash
-   # Reset ALSA mixer and configuration
-   sudo alsamixer    # Interactive: press 'u' to unmute, check levels
-   sudo alsactl init # Reset to defaults
+   systemctl --user status pulseaudio pipewire
+   fuser -v /dev/snd/*
    ```
 
-4. **Check PipeWire (modern Linux)**:
-   ```bash
-   # Check if PipeWire is running
-   systemctl --user status pipewire
-
-   # If not running, start it
-   systemctl --user start pipewire
-
-   # Enable on boot
-   systemctl --user enable pipewire
-   ```
-
-5. **Verify user is in audio group**:
+4. **Verify the user is in the audio group**:
    ```bash
    groups | grep audio
-   # If 'audio' is missing:
-   sudo usermod -aG audio $USER
-   # Then log out and back in (or: su - $USER)
+   sudo usermod -aG audio $USER   # then log out and back in
    ```
 
-6. **Check for device permission issues**:
+5. **Check device permissions**:
    ```bash
    ls -la /dev/snd/
-   # Expected: your user should have read+write on /dev/snd/pcmC*D0p and /dev/snd/pcmC*D0c
-   # If not, check udev rules:
-   cat /etc/udev/rules.d/60-alsa.rules | grep snd
+   # your user needs read+write on /dev/snd/pcmC*D0p and /dev/snd/pcmC*D0c
    ```
 
-7. **Rebuild OpenPulse with ALSA backend**:
-   ```bash
-   cargo clean
-   cargo build --features cpal-backend
-   cargo test -p openpulse-modem
-   ```
-
-### Issue: ALSA lib warnings (e.g., "Unknown PCM cards" or "Disabling PulseAudio")
+### Issue: the wrong card is used
 
 **Symptoms**:
-- Stderr is flooded with ALSA lib warnings during startup
-- Warnings like `confmisc.c: Cannot connect to /tmp/speech-dispatcher-<UID>`
+- Audio goes to onboard audio or HDMI instead of the radio interface
+- Works until a USB device is replugged or the card order changes
+
+**Root cause**: no device selected, so the OS default is used. On a multi-card host that is
+whichever card the OS prefers.
+
+**Solutions**:
+
+1. Select the device explicitly. The CLI takes `--device <NAME>` on `transmit`, `receive` and
+   `arq`; the daemon and the ARDOP TNC read `[audio] device` in `config.toml`:
+   ```toml
+   [audio]
+   backend = "cpal"
+   device = "plughw:CARD=CODEC,DEV=0"
+   ```
+   ```bash
+   openpulse receive --mode BPSK250 --device plughw:CARD=CODEC,DEV=0 --listen-ms 60000
+   ```
+
+2. Prefer the stable `CARD=` form over an index (`hw:1,0`). The selector is resolved in three
+   steps: an exact device name, then the ALSA `CARD=` token, then a case-insensitive substring. So
+   a card whose index shifts, or that the OS renames (e.g. gains a `(2)` suffix), still resolves.
+   An ambiguous match is refused rather than guessed.
+
+3. The first open of a named device enumerates every device to find it (about 0.5 s on rpi51);
+   the resolved name is then cached, so later opens in the same process skip the enumeration. This
+   matters for transmit: the daemon and TNC key PTT before opening the output, and the cache keeps
+   that gap short. If a repeat open is slow, the name no longer matches and is being re-resolved.
+
+### Issue: ALSA lib warnings on stderr
+
+**Symptoms**:
+- Stderr shows ALSA lib warnings at startup (e.g. `Unknown PCM cards`, `confmisc.c: ...`)
 - Operation works but is noisy
 
-**Root cause**: ALSA libraries have stale config or are trying to load unavailable modules.
+**Root cause**: ALSA config references cards or plugins that are not present. cpal enumerates
+every PCM, and ALSA prints a warning for each one it cannot open.
 
 **Solutions**:
 
-1. **Suppress warnings (non-breaking)**:
+1. **Clean up `~/.asoundrc`**: back it up, then remove stale entries.
    ```bash
-   # Set ALSA_CARD to the desired card (or check with `aplay -L`):
-   ALSA_CARD=0 openpulse-cli receive BPSK31
-
-   # Or silence all ALSA lib output:
-   LIBASOUND_CONFDIR=/dev/null openpulse-cli receive BPSK31
-   ```
-
-2. **Clean up ALSA config**:
-   ```bash
-   # Backup your current config
    cp ~/.asoundrc ~/.asoundrc.bak
-
-   # Remove or simplify ~/.asoundrc to remove stale entries
-   rm ~/.asoundrc
-   # Or edit it to only include devices you actively use
    ```
+   Keep entries written by the project's setup scripts (`scripts/setup-virtual-loopback.sh` adds
+   `aloop_tx`/`aloop_rx`) if you use those rigs.
 
-3. **Check ALSA config in system directories**:
+2. **Check system ALSA config** for references to unavailable services:
    ```bash
    grep -r "speech-dispatcher" /etc/alsa/ ~/.asoundrc 2>/dev/null
-   # Remove any references to unavailable services
    ```
 
-### Issue: Device always selected is "default" or "hw:0,0" (mono or low quality)
+### Issue: capture level wrong, or level moves during a frame
 
 **Symptoms**:
-- OpenPulse works but audio quality is poor
-- Sample rate is stuck at 8000 Hz when higher rates are available
-- Mono output when stereo is expected
+- Weak or no decodes although the signal is audible
+- Phase-only modes decode but amplitude-carrying modes fail
 
-**Root cause**: ALSA default device is configured to a low-fidelity profile (e.g., modem or USB fallback).
+**Root cause**: capture gain too low, clipped, or a USB adapter's capture AGC is on. An AGC moves the
+level during a frame, which hurts every mode that carries bits in amplitude.
 
 **Solutions**:
-
-1. **List available devices and their capabilities**:
-   ```bash
-   aplay -L | head -20
-   arecord -L | head -20
-   # Look for entries like "default", "front", "surround51", etc.
-   ```
-
-2. **Set a better default device**:
-   ```bash
-   # Edit ~/.asoundrc and add:
-   defaults.pcm.card 0    # Replace 0 with your desired card number
-   defaults.ctl.card 0
-   ```
-
-3. **For OpenPulse, explicitly specify device** (future enhancement):
-   ```bash
-   # Current: no option, uses first device
-   # Planned: --audio-device hw:0,0 flag
-   openpulse-cli receive --audio-device plughw:0,0 BPSK31
-   ```
+1. Set capture gain with `alsamixer` (F4 for capture) and check the level in a short `arecord`
+   capture. (`openpulse calibrate audio` runs on the in-memory loopback, not on your device.)
+2. Turn off the adapter's capture AGC. USB mixer state is not persistent: re-check after every
+   replug. The dual-card rig's `scripts/setup-dualcard-loopback.sh` does this and verifies it.
 
 ---
 
 ## macOS (CoreAudio)
 
-### Issue: USB audio device not detected
+Not exercised by the project; CI only compile-checks macOS without the audio backend. Generic
+cpal/CoreAudio advice:
 
-**Symptoms**:
-- USB microphone or speaker is plugged in but does not appear in device list
-- `aplay -L` equivalent not available on macOS
-
-**Root causes**:
-- CoreAudio cache is stale
-- USB device permissions not granted
-- Device is in exclusive mode (claimed by another app)
-
-**Solutions**:
-
-1. **Check System Settings audio devices**:
-   ```bash
-   # Open System Settings > Sound
-   # Verify your device appears in both Input and Output tabs
-   ```
-
-2. **Restart CoreAudio daemon**:
-   ```bash
-   sudo launchctl stop com.apple.audio.coreaudiod
-   sudo launchctl start com.apple.audio.coreaudiod
-   ```
-
-3. **Clear CoreAudio cache**:
-   ```bash
-   rm -rf ~/Library/Preferences/com.apple.audio.coreaudiod.plist
-   rm -rf ~/Library/Caches/com.apple.audio.*
-   # Then restart CoreAudio
-   sudo launchctl stop com.apple.audio.coreaudiod
-   sleep 2
-   sudo launchctl start com.apple.audio.coreaudiod
-   ```
-
-4. **Check device permissions** (App Sandbox / Gatekeeper):
-   ```bash
-   # If OpenPulse is blocked by security restrictions:
-   # System Settings > Security & Privacy > Microphone: Allow OpenPulse
-   # System Settings > Security & Privacy > Privacy tab
-   ```
-
-5. **Close other audio apps**:
-   - GarageBand, Logic Pro, Audacity, or other audio software may claim exclusive access
-   - Close them before running OpenPulse
-
-### Issue: Sample rate mismatch or "cannot open device"
-
-**Symptoms**:
-- Error: "The specified device is not open"
-- Audio distortion or crackles
-- Sample rate conversion errors
-
-**Root cause**: CoreAudio default sample rate doesn't match OpenPulse request.
-
-**Solutions**:
-
-1. **Check current system sample rate**:
-   ```bash
-   # Use Audio Midi Setup (built-in app)
-   open /Applications/Utilities/Audio\ MIDI\ Setup.app
-   # Right-click your device, check sample rate (should be 44100 or 48000)
-   ```
-
-2. **Set a compatible sample rate**:
-   ```bash
-   # In Audio MIDI Setup, set all devices to 48000 Hz
-   ```
-
-3. **Build OpenPulse with 48kHz as default**:
-   ```bash
-   # Edit crates/openpulse-core/src/audio.rs
-   # Change: sample_rate: 8000, to sample_rate: 48000,
-   # Rebuild: cargo build --features cpal-backend
-   ```
+- Confirm the device appears in System Settings > Sound (input and output) and in Audio MIDI Setup.
+- Grant microphone access to the terminal you run `openpulse` from (System Settings > Privacy &
+  Security > Microphone).
+- Close other applications that may hold the device.
 
 ---
 
 ## Windows (WASAPI)
 
-### Issue: "No audio devices found" or long enumeration delay
+Not built or tested by the project. Generic cpal/WASAPI advice:
 
-**Symptoms**:
-- Startup hangs for 5–30 seconds before failing
-- No devices detected even though devices appear in Windows Settings
-- `openpulse-cli` command-line tools are slow to start
-
-**Root causes**:
-- Audio driver is outdated or corrupt
-- WASAPI device enumeration is slow (known issue on some systems)
-- Realtek or other vendor audio drivers have incompatibilities with cpal
-
-**Solutions**:
-
-1. **Update audio drivers**:
-   ```powershell
-   # Windows 11/10: Settings > Update & Security > Optional Updates
-   # Look for "Audio" or soundcard driver updates
-   # Or: Device Manager > Audio inputs and outputs > Right-click > Update driver
-   ```
-
-2. **Disable problematic audio enhancements**:
-   ```powershell
-   # Right-click volume icon > Open Volume mixer
-   # Advanced > App volume and device preferences
-   # Disable "audio enhancements" for OpenPulse
-   ```
-
-3. **Clear WASAPI cache**:
-   ```powershell
-   # Remove cached device list (warning: will be regenerated)
-   $AppData = $env:APPDATA
-   Remove-Item "$AppData\..\Local\Microsoft\Windows\Caches\*Audio*" -Force -ErrorAction SilentlyContinue
-   ```
-
-4. **Rebuild with WASAPI debugging**:
-   ```bash
-   # Rebuild with verbose logging
-   RUST_LOG=debug cargo build --features cpal-backend --release
-   ./target/release/openpulse-cli receive BPSK31 2>&1 | grep -i wasapi
-   ```
-
-### Issue: Device in use / "already open" error
-
-**Symptoms**:
-- Error: "The audio device is in exclusive use"
-- Cannot open both input and output simultaneously
-- Other apps can use the device but OpenPulse cannot
-
-**Root cause**: Device is in exclusive mode, or another app is using it.
-
-**Solutions**:
-
-1. **Close conflicting applications**:
-   - Discord, Skype, streaming apps (OBS, Elgato)
-   - Browser tabs with audio
-   - Background recording/streaming services
-
-2. **Disable exclusive mode in audio settings**:
-   ```powershell
-   # Right-click volume icon > Open Volume mixer
-   # Device properties > Advanced > Exclusive mode
-   # Uncheck "Allow applications to take exclusive control"
-   ```
-
-3. **Check for stuck/zombie processes**:
-   ```powershell
-   tasklist | findstr /i audio  # May show "WaveOutMix" or similar
-   # Use Task Manager to close if stuck
-   ```
+- Update the audio driver; disable "audio enhancements" on the radio interface.
+- Disable "Allow applications to take exclusive control" on the device if another application
+  holds it.
+- Close applications that use the device (conferencing, streaming, other modem software).
 
 ---
 
 ## Cross-Platform Runtime Issues
 
-### Issue: Crackling, stuttering, or glitches during transmission
+### Issue: transmit stalls or fails with "output buffer did not drain"
 
-**Symptoms**:
-- Audio output has clicks, pops, or brief silences
-- Regular pattern of glitches (e.g., every 2–5 seconds)
-- CPU usage is high (>50% for a single-thread modem operation)
+**Root cause**: the output device stopped consuming samples. The drain deadline is computed from
+the queued audio (its duration plus 25 % plus 5 s, at least 5 s, at most 600 s), so it always
+exceeds the audio it waits on; when it fires, the driver is stuck, not slow.
+
+**Solutions**: check that nothing else holds the device, that the USB interface is still present
+(`arecord -l`), and that the device is not suspended by a sound server.
+
+### Issue: crackling, stuttering, or glitches during transmission
+
+**Root causes**: buffer underruns from CPU load or CPU throttling.
+
+**Solutions**:
+1. Reduce CPU load; close other applications.
+2. On Linux, check the CPU governor:
+   ```bash
+   cat /sys/devices/system/cpu/cpu0/cpufreq/scaling_governor
+   echo performance | sudo tee /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor
+   ```
+   On a Raspberry Pi see [raspberry-pi-4-5-tuning-and-benchmarks.md](raspberry-pi-4-5-tuning-and-benchmarks.md).
+3. The cpal buffer size is not configurable.
+
+### Issue: transmit works but receive hears nothing
 
 **Root causes**:
-- Buffer underruns (audio consumed faster than produced)
-- System CPU overload
-- Driver latency issues
-- Sample rate mismatch
+- Input muted or level too low
+- The input is a different device from the one the radio feeds
+- Loopback backend used across two processes
 
 **Solutions**:
 
-1. **Increase buffer size** (if configurable in future releases):
+1. **Check input levels** (`alsamixer`, F4).
+2. **Test the input directly**:
    ```bash
-   # Current: uses cpal defaults (~512 samples)
-   # Planned: --buffer-size 2048 or similar flag
+   arecord -D plughw:CARD=CODEC,DEV=0 -d 5 -f S16_LE -r 8000 test.wav && aplay test.wav
    ```
-
-2. **Reduce CPU load**:
-   ```bash
-   # Close other applications
-   # Disable unneeded services
-   # Use task affinity to pin OpenPulse to one core
-   ```
-
-3. **Check system CPU throttling**:
-   ```bash
-   # Linux
-   cat /sys/devices/system/cpu/cpu0/cpufreq/scaling_driver
-   # If "powersave", try:
-   echo performance | sudo tee /sys/devices/system/cpu/cpu0/cpufreq/scaling_governor
-
-   # Windows
-   # Settings > System > Power & sleep > Power plan > High performance
-   ```
-
-4. **Verify sample rate consistency**:
-   ```bash
-   # Ensure all devices use the same sample rate (8000, 16000, 48000)
-   # Mismatches force real-time resampling, causing artifacts
-   ```
-
-### Issue: No audio output or intermittent reception
-
-**Symptoms**:
-- Transmit works but receive fails silently
-- Audio appears on device but OpenPulse doesn't "hear" it
-- Intermittent reception (works sometimes, fails others)
-
-**Root causes**:
-- Input device is muted or level is too low
-- Device is not set as default
-- Buffer is not flushed before read
-- Timing/synchronization issue
-
-**Solutions**:
-
-1. **Check input device levels**:
-   ```bash
-   # Linux
-   alsamixer  # Press F4 to view capture levels, set to ~80%
-
-   # macOS
-   # Open Audio Midi Setup > Select device > Check input level
-
-   # Windows
-   # Right-click volume > Open Volume mixer > Confirm input level
-   ```
-
-2. **Test input device directly**:
-   ```bash
-   # Linux
-   arecord -d 5 test.wav && aplay test.wav  # Record 5 sec, play back
-
-   # macOS
-   afrecord -d 5 -f WAVE -b 16 test.wav && afplay test.wav
-
-   # Windows (PowerShell)
-   # Use built-in voice recorder or:
-   # https://github.com/PowerShell/PowerShell/wiki/Audio-recording-on-Windows
-   ```
-
-3. **Verify input device is selected**:
-   ```bash
-   # Set as system default (all platforms)
-   # Then re-run OpenPulse
-   ```
-
-4. **Check for loopback misconfiguration**:
-   ```bash
-   # If using loopback backend for testing:
-   # Loopback is only for transmit→receive within same process
-   # For real HF work, use hardware audio device
-   ```
+3. **Select the input explicitly** with `--device` or `[audio] device` (see above).
+4. **Loopback is in-process only.** `--backend loopback` is an in-memory buffer; a loopback
+   `transmit` in one process and a loopback `receive` in another never meet. Use real audio, an
+   `snd-aloop` virtual loopback ([§13.2 C in the manual](openpulse-manual.md#c-virtual-single-clock-loopback-snd-aloop-one-host-no-radio)),
+   or the hardware-free commands (`openpulse adaptive`, `openpulse --backend loopback benchmark run`).
 
 ---
 
 ## Audio Backend Selection and Fallback
 
-### Preference order (cpal auto-selection)
-
-If OpenPulse detects multiple backends:
-
-1. **Linux**:
-   - PipeWire (if available and running)
-   - ALSA (fallback)
-   - PulseAudio (legacy, if enabled in cpal)
-
-2. **macOS**:
-   - CoreAudio (only option)
-
-3. **Windows**:
-   - WASAPI (only option for modern Windows)
-
-### Force a specific backend
-
-Current releases do not expose backend selection flags. Future enhancement:
-
-```bash
-# Planned (not yet available):
-openpulse-cli --audio-backend alsa receive BPSK31
-openpulse-cli --audio-backend pipewire receive BPSK31
-```
-
-For now, to force ALSA on Linux:
-
-```bash
-# Set environment variable (cpal may respect this):
-ALSA_CARD=0 openpulse-cli receive BPSK31
-```
+`--backend` (CLI) and `[audio] backend` (daemon, TNC) take `default`, `cpal` or `loopback`.
+`default` means cpal when compiled in, loopback otherwise. Within cpal, OpenPulse uses the
+platform's default cpal host: ALSA on Linux, CoreAudio on macOS, WASAPI on Windows. There is no
+option to pick a different cpal host; on Linux, reach PulseAudio or PipeWire through their ALSA
+device (`pulse`, or `pipewire` where installed).
 
 ---
 
 ## Testing Audio Configuration
 
-### Loopback test (software-only)
+### Software-only check
 
 ```bash
-# Create a loopback connection to verify modulation/demodulation
-openpulse-cli transmit "Hello World" BPSK100 --backend loopback
-openpulse-cli receive BPSK100 --backend loopback
+# In-process: modulate, demodulate and rate-adapt over a simulated channel
+openpulse adaptive --profile fast --channel awgn --snr 12 --frames 8
+openpulse --backend loopback --log error benchmark run
 ```
 
 ### Real audio device test
 
-```bash
-# Connect a speaker to the output device
-# Connect a microphone to the input device
-# Transmit a known signal:
-openpulse-cli transmit "TEST" BPSK31
+Cable the output of one interface to the input of another (or use two stations), then:
 
-# Then receive in another terminal:
-openpulse-cli receive BPSK31
-# Should decode "TEST"
+```bash
+# Receiver first
+openpulse receive --mode BPSK250 --fec rs --device <RX_DEVICE> --listen-ms 60000
+
+# Then, in another terminal or on the other host
+openpulse transmit "TEST" --mode BPSK250 --fec rs --device <TX_DEVICE>
+# The receiver should print "TEST"
 ```
+
+For a no-cable virtual path use `scripts/setup-virtual-loopback.sh` and
+`scripts/run-loopback-virtual.sh` (manual §13.2 C).
 
 ---
 
 ## Reporting Audio Issues
 
-If you encounter audio issues not covered above, please report:
+If you encounter audio issues not covered above, report:
 
-1. **OS and version**: `uname -a` (Linux), `sw_vers` (macOS), Windows version
-2. **Audio device**: `aplay -L` (Linux), Audio MIDI Setup (macOS), Windows Settings
-3. **OpenPulse and cpal versions**: `cargo tree | grep -E "openpulse|cpal"`
-4. **Full error output**:
+1. **OS and version**: `uname -a`, distribution, sound server (`pactl info` / `pw-cli info`)
+2. **Audio devices**: `aplay -L`, `arecord -l`, and `openpulse --backend cpal devices`
+3. **OpenPulse and cpal versions**: `openpulse --version` and `cargo tree -i cpal`
+4. **Full output at debug level**:
    ```bash
-   RUST_LOG=debug openpulse-cli receive BPSK31 2>&1 > openpulse-debug.log
+   openpulse --log debug receive --mode BPSK250 --listen-ms 30000 > openpulse-debug.log 2>&1
    ```
-5. **Steps to reproduce**: Clear sequence of commands that trigger the issue
+   The daemon and the TNC take their level from `RUST_LOG` if set, else `[logging] level`.
+5. **Steps to reproduce**: the exact commands and config excerpt
 
 Report to: [OpenPulseHF GitHub Issues](https://github.com/dc0sk/OpenPulseHF/issues)
-

@@ -2,7 +2,7 @@
 project: openpulsehf
 doc: AGENTS.md
 status: living
-last_updated: 2026-06-07
+last_updated: 2026-10-15
 ---
 
 # Agent Safety Rules
@@ -58,7 +58,7 @@ If accidental cleanup happens:
 
 ## Agent Workflow Safeguards
 
-This section captures merge and recovery safeguards previously documented in docs/AGENTS.md.
+This section captures the merge and recovery safeguards documented in full in docs/dev/AGENTS.md.
 
 ### Scope
 
@@ -108,10 +108,11 @@ OpenPulseHF is a multi-crate Rust workspace for HF modem and protocol tooling, i
 
 ### Workspace Architecture
 
-- Core crates: crates/openpulse-core, crates/openpulse-dsp, crates/openpulse-modem, crates/openpulse-channel, crates/openpulse-audio, crates/openpulse-radio
-- Protocol and service crates: crates/openpulse-ardop, crates/openpulse-kiss, crates/openpulse-b2f, crates/openpulse-b2f-driver, crates/openpulse-gateway, crates/openpulse-qsy, crates/openpulse-daemon, crates/openpulse-mesh, crates/openpulse-repeater
-- Tooling and apps: crates/openpulse-cli, crates/openpulse-tui, apps/openpulse-testbench, apps/openpulse-testmatrix, apps/openpulse-panel, pki-tooling
-- Modulation plugins: plugins/bpsk, plugins/qpsk, plugins/psk8, plugins/64qam, plugins/fsk4, plugins/ofdm, plugins/scfdma
+- Core crates: crates/openpulse-core, crates/openpulse-dsp, crates/openpulse-modem, crates/openpulse-channel, crates/openpulse-audio, crates/openpulse-radio, crates/openpulse-config, crates/openpulse-gpu, crates/openpulse-keystore, crates/openpulse-linksec
+- Protocol and service crates: crates/openpulse-ardop, crates/openpulse-kiss, crates/openpulse-b2f, crates/openpulse-b2f-driver, crates/openpulse-gateway, crates/openpulse-qsy, crates/openpulse-daemon, crates/openpulse-mesh, crates/openpulse-repeater, crates/openpulse-discovery, crates/openpulse-freedv-auth, crates/openpulse-filexfer
+- Tooling and apps: crates/openpulse-cli, crates/openpulse-tui, apps/openpulse-testbench, apps/openpulse-testmatrix, apps/openpulse-panel, apps/openpulse-twinview, apps/openpulse-linksim, tools/openpulse-dict-trainer, pki-tooling
+- Modulation plugins: plugins/mfsk16, plugins/bpsk, plugins/qpsk, plugins/ofdm, plugins/fsk4 (the `hpx_hf` ladder), plugins/psk8, plugins/64qam, plugins/scfdma, plugins/pilot, plugins/js8
+- Full crate map and Release 1 scope: docs/dev/crate-map.md
 
 ### Preferred Discovery Workflow
 
@@ -125,7 +126,8 @@ OpenPulseHF is a multi-crate Rust workspace for HF modem and protocol tooling, i
 Use these commands by default unless a task explicitly requires a different scope.
 
 - Format check: cargo fmt --all -- --check
-- Lint gate: cargo clippy --workspace --no-default-features -- -D warnings
+- Lint gate: cargo clippy --workspace --no-default-features --all-targets -- -D warnings
+- Workspace gate: scripts/gate.sh (quote results only from its `GATE:` line)
 - Test gate: cargo test --workspace --no-default-features
 
 If full workspace checks are blocked by local constraints, use scoped fallback gates documented in CLAUDE.md.

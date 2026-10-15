@@ -2,48 +2,60 @@
 project: openpulsehf
 doc: docs/README.md
 status: living
-last_updated: 2026-05-15
+last_updated: 2026-10-15
 ---
 
 # Documentation Index
 
-Canonical documentation lives in the files listed below.
+User-facing documentation for OpenPulseHF. Developer, design and planning documents are indexed
+separately in [dev/README.md](dev/README.md). Release 1 (`v0.17.0`) scope and status are summarised
+in the [top-level README](../README.md#status).
 
-## Index
+## Start here
 
-### CLI and user-facing behavior
+- [overview.md](overview.md): what OpenPulseHF is, Release 1 scope and status, in one page
+- [openpulse-abstract.md](openpulse-abstract.md): short abstract for different audiences
+- [openpulse-manual.md](openpulse-manual.md): operator, integration and technical manual
+- [openpulse-book.md](openpulse-book.md): complete technical account (also as [PDF](openpulse-book.pdf))
 
-- [docs/openpulse-manual.md](openpulse-manual.md): complete operator, integration, and technical manual (11 chapters)
-- [docs/openpulse-manual.md#212-pki-tooling-service-quick-start](openpulse-manual.md#212-pki-tooling-service-quick-start): PKI tooling quick-start with startup and API examples
-- [docs/cli-guide.md](cli-guide.md): CLI usage and options
-- [docs/cli-mode-advisor-guide.md](cli-mode-advisor-guide.md): mode advisor workflow
-- [docs/cli-ux-identity-trust-diagnostics.md](cli-ux-identity-trust-diagnostics.md): identity/trust diagnostics UX and exit codes
-- [docs/features.md](features.md): feature and mode reference
-- [docs/overview.md](overview.md): project summary and context
-- [docs/use-case-deployment-guide.md](use-case-deployment-guide.md): deployment patterns and operator scenarios
+## Modes, features and the protocol stack
 
-### Security, trust, and regulatory
+- [mode-fec-ladder.md](mode-fec-ladder.md): the `hpx_hf` ladder, the `fast`/`robust` profiles, and how a mode and FEC are chosen
+- [features.md](features.md): feature reference with the mathematics behind non-obvious algorithms
+- [osi-layer-map.md](osi-layer-map.md): where each crate sits in the OSI model
+- [non-gpl-interfacing.md](non-gpl-interfacing.md): TCP, WebSocket and subprocess interfaces for non-GPL software
 
-- [docs/trust-store-file-format.md](trust-store-file-format.md): trust-store serialization format
-- [docs/regulatory.md](regulatory.md): regulatory analysis by jurisdiction
-- [docs/regulatory-compliance-checklist.md](regulatory-compliance-checklist.md): compliance checklist and implementation notes
-- [docs/on-air_testplan.md](on-air_testplan.md): on-air validation plan and evidence checklist
+## CLI and configuration
 
-### Operations and troubleshooting
+- [cli-guide.md](cli-guide.md): CLI usage and options
+- [cli-mode-advisor-guide.md](cli-mode-advisor-guide.md): mode advisor workflow
+- [cli-ux-identity-trust-diagnostics.md](cli-ux-identity-trust-diagnostics.md): identity/trust diagnostics and exit codes
+- [config/README.md](config/README.md): example configuration files (`openpulse.config.toml`, rig definitions, on-air station scripts, PKI environment)
+- [openpulse-manual.md#212-pki-tooling-service-quick-start](openpulse-manual.md#212-pki-tooling-service-quick-start): PKI tooling quick start (not part of Release 1)
+- [use-case-deployment-guide.md](use-case-deployment-guide.md): deployment patterns and operator scenarios
 
-- [docs/troubleshooting-alsa-cpal.md](troubleshooting-alsa-cpal.md): audio backend troubleshooting
-- [docs/raspberry-pi-4-5-tuning-and-benchmarks.md](raspberry-pi-4-5-tuning-and-benchmarks.md): Raspberry Pi operational tuning
+## Security, trust and regulatory
 
-### Release notes
+- [trust-store-file-format.md](trust-store-file-format.md): trust-store serialisation format
+- [regulatory.md](regulatory.md): regulatory analysis by jurisdiction
+- [regulatory-compliance-checklist.md](regulatory-compliance-checklist.md): compliance checklist and implementation notes
 
-- [docs/releasenotes.md](releasenotes.md): externally facing release summaries
+## On air, operations and troubleshooting
 
-### Marketing
+- [on-air_testplan.md](on-air_testplan.md): on-air validation plan and evidence checklist
+- [troubleshooting-alsa-cpal.md](troubleshooting-alsa-cpal.md): audio backend troubleshooting
+- [raspberry-pi-4-5-tuning-and-benchmarks.md](raspberry-pi-4-5-tuning-and-benchmarks.md): Raspberry Pi tuning
 
-- [docs/marketing/banner.md](marketing/banner.md): banner copy and assets
-- [docs/marketing/flyer.md](marketing/flyer.md): flyer content
-- [docs/marketing/presentation.md](marketing/presentation.md): presentation materials
+## Releases
 
-### Developer and planning docs
+- [releasenotes.md](releasenotes.md): user-facing release notes, including the unreleased changes toward `v0.17.0`
+- [../CHANGELOG.md](../CHANGELOG.md): pointer to the canonical changelogs, plus the 0.1.0–0.2.0 history
 
-- [docs/dev/README.md](dev/README.md): development, architecture, planning, and validation index
+## Presentations
+
+- [presentations/](presentations/): overview slide decks (`OpenPulseHF-Overview.odp`, German `OpenPulseHF-Overview-DE.odp`) and their generator sources
+
+## Developer and planning docs
+
+- [dev/README.md](dev/README.md): development, architecture, planning and validation index
+- [dev/project/workplan.md](dev/project/workplan.md): the Release 1 work plan, milestones and decision log

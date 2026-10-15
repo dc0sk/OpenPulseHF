@@ -5,7 +5,8 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 > **Canonical changelog:** the current, per-release changelog is
 > [`docs/dev/project/changelog.md`](docs/dev/project/changelog.md) (technical) and
-> [`docs/releasenotes.md`](docs/releasenotes.md) (user-facing) — those cover **v0.2.1 through v0.4.0**
+> [`docs/releasenotes.md`](docs/releasenotes.md) (user-facing) — those cover every release through
+> **v0.16.0** (2026-07-18), plus an *Unreleased* section for the work toward v0.17.0 (Release 1),
 > and are updated with every release. This root file is retained for its detailed 0.1.0–0.2.0 history and
 > the pre-0.2.1 unreleased backlog below; do not treat the `[Unreleased]` section here as current.
 

@@ -2,10 +2,18 @@
 project: openpulsehf
 doc: docs/dev/project/roadmap.md
 status: living
-last_updated: 2026-10-01
+last_updated: 2026-10-15
 ---
 
 # Roadmap
+
+> **History, not the plan.** Since 2026-09-30 the plan of record is
+> [`workplan.md`](workplan.md): Release 1 (`v0.17.0`) scope, milestones M0–M4, triage rules and the
+> decision log. Where this file and the work plan disagree, the work plan wins. This file keeps the
+> phase-by-phase record of what shipped, with PR numbers; it no longer schedules work. Features it
+> lists as shipped that are outside Release 1 scope (work plan decision 1: mesh, repeater, relay,
+> discovery/JS8, file transfer, QSY, FreeDV auth, Winlink B2F/gateway, KISS, PQ handshake, GPU,
+> panel/TUI, plugins not on `hpx_hf`) still exist in the code but ship disabled or experimental.
 
 ## Scope policy
 
@@ -146,7 +154,8 @@ Phase 3.5-substitute (sound-loopback channel simulation) is done (PR #89):
 - 6 channel-loopback integration tests (clean, AWGN 20 dB, Watterson F1/F2, Gilbert-Elliott with/without FEC).
 - These replace on-air validation as the CI gate for loopback correctness.
 
-Remaining on-air items (**in active execution as of 2026-06** — see [onair-status.md](../onair-status.md)):
+Remaining on-air items (superseded by work plan milestone M3, on **2 m**, and the HF run with the
+release candidate in M4 — see [workplan.md](workplan.md)):
 - Conduct on-air tests on IARU-aligned frequencies for each supported bandwidth class.
 - Verify station identification behaviour at 10-minute intervals under long sessions.
 - Test relay node automatic control point interface.
@@ -154,9 +163,9 @@ Remaining on-air items (**in active execution as of 2026-06** — see [onair-sta
 
 ---
 
-## Phase 4 — Ecosystem and Long-term (Active)
+## Phase 4 — Ecosystem and Long-term ✅ Done
 
-**Active phase.** Phase 4.2, 4.1, 4.3, 4.4, and 4.5 shipped.
+Phase 4.2, 4.1, 4.3, 4.4, and 4.5 shipped.
 
 ### 4.2 — Observability and automation ✅ Done (PR #92)
 - `EngineEvent` broadcast channel in `ModemEngine` — 8 event variants (AFC update, rate change, DCD flip, HPX transition, frame TX/RX, session start/end).
@@ -203,9 +212,9 @@ Remaining on-air items (**in active execution as of 2026-06** — see [onair-sta
 
 ## Phase 5 — Integration and Release Readiness (Completed)
 
-All Phase 5 items shipped. On-air regulatory validation (Phase 5.5-reg) is
-**in active execution as of 2026-06** (see [onair-status.md](../onair-status.md)); no
-hardware gate blocks further development.
+All Phase 5 items shipped. On-air regulatory validation (Phase 5.5-reg) is superseded by work plan
+milestone M3 (on air on 2 m: G0–G3, A1, A2, A4/A5, an ARDOP Pat session) — see
+[workplan.md](workplan.md).
 
 ### 5.1 — B2F session driver ✅ Done (PR #98)
 - `crates/openpulse-b2f-driver`: `B2fDriver`, `DataPort`, `CmdPort`; `run_iss()` / `run_irs()` lifecycle.
@@ -236,7 +245,7 @@ hardware gate blocks further development.
 - `AudioSource` enum (`Synthetic` / `LiveCapture`); `run_live()` opens system input at 8 kHz mono.
 - Source combo disabled while running; panel labels reflect live mode.
 
-### 5.5-reg — On-air regulatory validation *(in active execution, 2026-06 — see [onair-status.md](../onair-status.md))*
+### 5.5-reg — On-air regulatory validation *(superseded by work plan M3 — see [workplan.md](workplan.md))*
 Conduct on-air tests on IARU-aligned frequencies, verify station ID at 10-minute intervals,
 test relay automatic control point interface, publish compliance report as release artefact.
 
@@ -1870,40 +1879,35 @@ regenerate after a profile change, run the printer named in that test.
 
 Which plugin owns each profile-reachable mode. The "profile slot" column is an **informational
 snapshot, not gated** — the authoritative per-level mapping is the (gated) SessionProfile table above
-plus `profile.rs`; this column just says roughly where each mode is used. The mode → plugin half is
-stable (a mode's owning plugin does not change).
+plus `profile.rs`. Both profiles run the one `hpx_hf` ladder; `robust` stops at SL6.
 
 | Mode | Plugin | Profile slot (informational) |
 |---|---|---|
-| MFSK16 | mfsk16-plugin | hpx_hf SL1 (non-coherent sub-floor) |
-| BPSK31/63/100/250 | bpsk-plugin | hpx_hf SL2–SL5 (all RS-coded — RF-6); BPSK250/QPSK250 also `hpx_modcod` SL2–SL5 |
-| QPSK250 | qpsk-plugin | hpx500 SL5, hpx_modcod SL4–SL5 |
-| QPSK250-D | qpsk-plugin | hpx_hf SL6 (differential — RF-6) |
-| QPSK500/1000 | qpsk-plugin | hpx500 SL6; hpx_modcod SL6–SL7; hpx_narrowband/hpx_wideband SL8–SL9 |
-| QPSK2000-RRC | qpsk-plugin | hpx_narrowband SL10 |
-| 8PSK1000 | psk8-plugin | hpx_wideband SL11 |
-| 8PSK2000-RRC | psk8-plugin | hpx_narrowband SL11 |
-| OFDM52/OFDM52-{8PSK,16QAM,32QAM,64QAM} | ofdm-plugin | hpx_hf SL7–SL14 (SC then high-rate LDPC — RF-6) |
-| OFDM16/OFDM52/OFDM52-{8PSK,16QAM,32QAM,64QAM} | ofdm-plugin | hpx_ofdm_hf SL5–SL10 |
-| PILOT-QPSK/8PSK/16QAM/32APSK500(/1000)(-RRC) | pilot-plugin | hpx_pilot / _rrc / _fast / _fast_rrc SL2–SL5 |
-| SCFDMA26-{8PSK,16QAM,32QAM} | scfdma-plugin | hpx_wideband_hd SL9–SL11 (narrowband fallback) |
-| SCFDMA52-{16QAM,32QAM,64QAM} | scfdma-plugin | hpx_wideband_hd SL12–SL14 |
-| 64QAM2000-RRC | 64qam-plugin | hpx_wideband_hd SL15 |
+| MFSK16 | mfsk16-plugin | SL1, `fast` and `robust` (non-coherent sub-floor) |
+| BPSK31/63/100/250 | bpsk-plugin | SL2–SL5, `fast` and `robust` (all RS-coded — RF-6; PN-63 preamble on SL3–SL5 since the #1062 flag day) |
+| QPSK250-D | qpsk-plugin | SL6, `fast` and `robust` (differential — RF-6) |
+| OFDM52/OFDM52-{8PSK,16QAM,32QAM,64QAM} | ofdm-plugin | SL7–SL14, `fast` only (SC, then high-rate LDPC on SL12–SL14 — RF-6) |
 
 ### Modes in plugins but not in any profile (manual-select only — intentional)
 
-These modes are registered and usable via explicit mode selection (CLI `--mode`, daemon `SetMode`,
-linksim/testbench) but are **deliberately not** in any adaptive `SessionProfile` ladder — not an
-oversight. The 64QAM/dense-pilot variants are aggressive VHF/UHF or research waveforms without a rung
-in the HF ladders. Adding any to a profile is a mode-scope decision (measure it against the
-neighbouring rung first — see the "code rate is the last lever" note), not a gap to close. The claim
-"in no profile" is **gated** by `tests/roadmap_profile_table.rs` — a mode listed here that later joins
-a ladder (as BPSK100 did in the RF-6 re-seat, moving it out of this list) fails the build.
+These modes are registered and usable via explicit mode selection (`[modem] mode`, CLI `--mode`,
+daemon `SetMode`, linksim/testbench) but are **deliberately not** in either adaptive `SessionProfile`
+— not an oversight. Most of them were rungs of the ten profiles deleted by work plan decision 18
+(2026-10-01); they stay selectable as fixed modes. Adding any to a profile is a mode-scope decision
+(measure it against the neighbouring rung first — see the "code rate is the last lever" note), not a
+gap to close. The claim "in no profile" is **gated** by `tests/roadmap_profile_table.rs` — a mode
+listed here that later joins a ladder (as BPSK100 did in the RF-6 re-seat, moving it out of this
+list) fails the build. The list is not exhaustive; the plugins' `supported_modes` are.
 
 | Mode | Plugin | Note |
 |---|---|---|
+| QPSK125 / QPSK250 / QPSK500 / QPSK1000 / QPSK2000-RRC | qpsk-plugin | Coherent QPSK; former `hpx500`/`hpx_modcod`/`hpx_narrowband` rungs |
+| 8PSK500 / 8PSK1000 / 8PSK2000-RRC | psk8-plugin | Former `hpx_wideband`/`hpx_narrowband` rungs; not on `hpx_hf` |
+| OFDM16 | ofdm-plugin | Former `hpx_ofdm_hf` rung |
+| PILOT-QPSK500 / PILOT-8PSK500 / PILOT-16QAM500 / PILOT-32APSK500 | pilot-plugin | Former `hpx_pilot*` rungs; not on `hpx_hf` |
+| SCFDMA26-8PSK / SCFDMA52-16QAM / SCFDMA52-64QAM | scfdma-plugin | Former `hpx_wideband_hd` rungs; not on `hpx_hf` |
 | SCFDMA52-64QAM-P4 | scfdma-plugin | Dense-pilot research variant; no profile slot |
-| 64QAM500 / 64QAM1000 | 64qam-plugin | Aggressive VHF/UHF; manual-select only |
+| 64QAM500 / 64QAM1000 / 64QAM2000-RRC | 64qam-plugin | Aggressive VHF/UHF; manual-select only |
 
 ### Daemon-level implementation gaps (2026-05-19 — both resolved 2026, PR #321)
 
@@ -2234,7 +2238,7 @@ Build order revised per the 2026-07-14 Fable design review (see traceability):
    real daemons pinned at SL1, a message crosses via a `mode == "MFSK16"` data frame and B's K=3 MFSK16-ACK
    that A recovers by union-listening (A's `OtaStatus` reports `tx_mode == "MFSK16"`). The 17 s frame is 17 s
    of *samples* over the non-real-time loopback bridge, so it runs in ~1 s. The snd-aloop real-audio rig
-   validates the same over a sound card: `OTA=1 OTA_LOCK=SL1 PROFILE=hpx_hf ./scripts/run-twin-station-audio.sh`
+   validates the same over a sound card: `OTA=1 OTA_LOCK=SL1 PROFILE=fast ./scripts/run-twin-station-audio.sh`
    (new `OTA_LOCK` knob). **Deferred (needs mid-test channel control):** the *dynamic* entry+exit boundary —
    a live deep fade dropping the ladder to SL1 then recovering. Shipped waveform state (`MFSK16`
    broadcast/beacon + explicit mode) stands.
@@ -2242,12 +2246,14 @@ Build order revised per the 2026-07-14 Fable design review (see traceability):
 ### Features shipped (no longer deferred)
 
 - LDPC: real rate-1/2 min-sum belief propagation shipped in PR #187. The "LDPC stub" entry below is obsolete.
-- SCFDMA52-16QAM through SCFDMA52-64QAM: all assigned to `hpx_wideband_hd` (PRs #316, #320).
-- 64QAM2000-RRC: assigned to `hpx_wideband_hd` SL15 (PR #320).
+- SCFDMA52-16QAM through SCFDMA52-64QAM: were assigned to `hpx_wideband_hd` (PRs #316, #320); that
+  profile was deleted by work plan decision 18, and the modes are fixed-mode only.
+- 64QAM2000-RRC: was `hpx_wideband_hd` SL15 (PR #320); fixed-mode only since decision 18.
 
 ### Features that remain fully in scope regardless of mode deferral
 
-All of the following improve SNR, PAPR, or link reliability and are never deferred:
+All of the following improve SNR, PAPR, or link reliability and stay in the code. Which of them ship
+enabled in Release 1 is set by the work plan's scope (decision 1), not by this list:
 - SC-FDMA DFT spreading (3–4 dB PAPR improvement over OFDM)
 - MMSE equalization (SNR improvement at weak subcarriers vs ZF)
 - Reed-Solomon + block interleaving (burst-error resilience)

@@ -25,18 +25,29 @@ forward mode's gross rate.
 ## CLI
 
 ```bash
-# Single run
-cargo run -p openpulse-linksim -- --profile hpx_hf --channel awgn --snr 15 --fec rs
+# Single run (defaults: --profile fast --channel awgn --snr 15 --fec rs --frames 40)
+cargo run -p openpulse-linksim -- --profile fast --channel awgn --snr 15 --fec rs
 
 # SNR sweep (start:stop:step dB) → effective-rate table
-cargo run -p openpulse-linksim -- --profile hpx500 --channel awgn --sweep 0:24:4 --frames 30
+cargo run -p openpulse-linksim -- --profile robust --channel awgn --sweep 0:24:4 --frames 30
 
 # Watterson fading, JSON output
-cargo run -p openpulse-linksim -- --profile hpx_hf --channel watterson-moderate --snr 18 --json
+cargo run -p openpulse-linksim -- --profile fast --channel watterson-moderate --snr 18 --json
 ```
 
+Profiles: the operator profiles `fast` and `robust` (both on the `hpx_hf` ladder), plus two
+experiment-only ladders, `apparatus:wide-qpsk` and `apparatus:ofdm`, kept so older measurements
+and gates can be re-run. Any other name is rejected with the list.
+
 Channels: `clean`, `awgn`, `watterson-good`, `watterson-moderate`, `watterson-poor`,
-`gilbert-elliott`. FEC: `none`, `rs`, `rs-strong`, `soft`.
+`gilbert-elliott`, `flat-fading`, `qrm` (tones from `--qrm-tones`). `--reverse-channel` sets the
+ACK channel separately. FEC: `none`, `rs`, `rs-interleaved`, `rs-strong`, `concatenated`, `soft`,
+`ldpc`, `ldpc-high-rate`, `turbo`. Other knobs: `--compression`, `--notch` (receiver auto-notch),
+`--no-cessb`. Run with `--help` for the full list.
+
+**Goodput floors.** Unit tests in `src/lib.rs` hold the AWGN 20 dB goodput of the `hpx_hf`
+ladder to at least 75 % of its 331 bps baseline, and the `apparatus:ofdm` ladder to its own
+floors; they run in the normal workspace test suite.
 
 ## GUI (live visualizer)
 
@@ -64,8 +75,8 @@ success), so the two windows agree.
 The panel is a **monitor** here: operator-only controls (messages, QSY, rig CAT, PTT,
 RF-connect) are inert (no real peer), and its mode selector has no effect because the link is
 adaptive — the **profile / ladder is driven from the linksim GUI** (or the `--profile` flag in
-headless mode), and the sim steps the mode up and down on its own. The panel has no profile
-concept because the daemon control protocol exposes modes, not profiles.
+headless mode), and the sim steps the mode up and down on its own. The panel shows modes, not
+profiles: it has no profile selector.
 
 There are two ways to serve it:
 
@@ -87,7 +98,7 @@ waterfall scroll. Useful when you only want the panel.
 
 ```bash
 cargo run -p openpulse-linksim --features serve -- \
-    --serve 127.0.0.1:9000 --profile hpx_hf --channel awgn --snr 12
+    --serve 127.0.0.1:9000 --profile fast --channel awgn --snr 12
 ```
 
 ## Library

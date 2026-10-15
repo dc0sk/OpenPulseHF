@@ -2,12 +2,14 @@
 project: openpulsehf
 doc: docs/dev/design/testbench-design.md
 status: living
-last_updated: 2026-05-02
+last_updated: 2026-10-15
 ---
 
 # Testbench Design
 
 This document specifies the design and architecture of `openpulse-testbench`, a local Linux GUI application for performance and regression testing of OpenPulseHF modulation modes under realistic HF channel conditions.
+
+**Status (2026-10-15).** The testbench (`apps/openpulse-testbench`) is a developer tool, not part of Release 1. As built it has more audio sources than this design: the direct-plugin synthetic path described below, a virtual loop through two real `ModemEngine`s (`ChannelSimHarness`), the testmatrix run, an adaptive-ladder run over a `SessionProfile` (`fast` or `robust`), and, with the `cpal` feature, live capture and a dual-card hardware loop (`AudioSource` in `apps/openpulse-testbench/src/state.rs`). The source files differ from the manifest at the end of this document.
 
 ## Purpose and scope
 
@@ -17,7 +19,7 @@ The testbench provides:
 - A configurable noise injection pipeline supporting QRN, QRM, QSB, chirp, AWGN, and composite channel models, each with both named profiles and free-form parameter sliders.
 - Reproducible and random noise runs via an explicit seed parameter.
 - Regression testing across modulation modes (BPSK31/63/100/250, QPSK125/250/500), FEC codecs, speed-reduction ladders, and fallback modulation paths.
-- Integration with the channel models defined in `docs/benchmark-harness.md` (Watterson and Gilbert-Elliott parameter sets).
+- Integration with the channel models defined in `docs/dev/benchmark-harness.md` (Watterson and Gilbert-Elliott parameter sets).
 
 The testbench runs entirely locally on Linux. It does not require a real radio or soundcard; it uses an in-process audio tap architecture. Optional integration with the ALSA `snd-aloop` virtual loopback driver is planned for a later phase (see Phase E in the implementation plan).
 
@@ -27,10 +29,10 @@ The testbench runs entirely locally on Linux. It does not require a real radio o
 
 The following analysis documents inform testbench design decisions, in particular the SNR sweep range, channel model selection, and regression test mode design. They are maintained separately from this document and should be consulted for the underlying rationale behind parameter choices made here.
 
-- `docs/wsjtx-analysis.md` — WSJTX weak-signal techniques: LDPC codes, Costas array synchronisation, 40th-percentile noise floor estimation, multi-pass decoding, SNR thresholds for FT8/JT65/Q65
-- `docs/js8call-analysis.md` — JS8Call speed ladder parameters (source-derived), ARQ protocol commands, store-and-forward relay design, SNR floor comparison between JS8 modes and HPX modes
-- `docs/vara-research.md` — VARA HF OFDM structure, 11-level adaptive rate ladder, ACK taxonomy, Turbo FEC, KISS/TCP interface, single-carrier vs OFDM comparison
-- `docs/pactor-research.md` — PACTOR Memory-ARQ, 1.25 s ARQ cycle, concatenated convolutional FEC, CAZAC training sequences, stride-based block interleaver
+- `docs/dev/research/wsjtx-analysis.md` — WSJTX weak-signal techniques: LDPC codes, Costas array synchronisation, 40th-percentile noise floor estimation, multi-pass decoding, SNR thresholds for FT8/JT65/Q65
+- `docs/dev/research/js8call-analysis.md` — JS8Call speed ladder parameters (source-derived), ARQ protocol commands, store-and-forward relay design, SNR floor comparison between JS8 modes and HPX modes
+- `docs/dev/research/vara-research.md` — VARA HF OFDM structure, 11-level adaptive rate ladder, ACK taxonomy, Turbo FEC, KISS/TCP interface, single-carrier vs OFDM comparison
+- `docs/dev/research/pactor-research.md` — PACTOR Memory-ARQ, 1.25 s ARQ cycle, concatenated convolutional FEC, CAZAC training sequences, stride-based block interleaver
 
 ---
 
@@ -173,7 +175,7 @@ For `generate_noise` (standalone Noise tap): noise is generated at the configure
 
 ### Gilbert-Elliott burst error model
 
-Two-state Markov model for burst interference. See `docs/benchmark-harness.md` for the full model definition. The Good state injects low-level AWGN; the Bad state injects high-level AWGN.
+Two-state Markov model for burst interference. See `docs/dev/benchmark-harness.md` for the full model definition. The Good state injects low-level AWGN; the Bad state injects high-level AWGN.
 
 **Behaviour**: maintains a state variable (Good/Bad). On each sample, draws a uniform random value and transitions states with the configured probabilities. In the current state, generates a noise sample from the corresponding AWGN at `snr_good_db` (Good) or `snr_bad_db` (Bad).
 
@@ -188,7 +190,7 @@ Two-state Markov model for burst interference. See `docs/benchmark-harness.md` f
 | `snr_good_db` | `f32` | Background AWGN SNR in Good state (default: 20.0 dB) |
 | `snr_bad_db` | `f32` | AWGN SNR in Bad state (default: 3.0 dB) |
 
-**Named profiles** (directly from `docs/benchmark-harness.md`):
+**Named profiles** (directly from `docs/dev/benchmark-harness.md`):
 
 | Profile name | `p_g` | `p_b` | `p_gb` | `p_bg` | Mean burst (symbols) | Mean gap (symbols) |
 |---|---|---|---|---|---|---|
@@ -201,7 +203,7 @@ Two-state Markov model for burst interference. See `docs/benchmark-harness.md` f
 
 ### Watterson HF channel model
 
-ITU-R F.1487 two-ray ionospheric channel model. See `docs/benchmark-harness.md` for the full model definition.
+ITU-R F.1487 two-ray ionospheric channel model. See `docs/dev/benchmark-harness.md` for the full model definition.
 
 **Behaviour**: The channel produces a fading multipath signal by summing two independently fading signal replicas. Each replica's complex fading envelope is generated by:
 
@@ -220,7 +222,7 @@ Ray 2 is delayed by `round(delay_spread_ms × sample_rate / 1000.0)` samples via
 | `snr_db` | `f32` | Background AWGN SNR at receiver input (dB) |
 | `snr_variation_db` | `f32` | Optional ±random SNR variation per block (0 = disabled) |
 
-**Named profiles** (directly from `docs/benchmark-harness.md`):
+**Named profiles** (directly from `docs/dev/benchmark-harness.md`):
 
 | Profile name | `doppler_spread_hz` | `delay_spread_ms` | Typical `snr_db` |
 |---|---|---|---|
@@ -478,13 +480,15 @@ The signal path loops indefinitely: modulate → inject noise → demodulate →
 
 ### SNR sweep mode
 
-A configurable SNR sweep: runs N decodes at each SNR step from `snr_start` to `snr_end` in `snr_step` increments. Default range: −30 dB to +30 dB in 1 dB steps, 20 decodes per step. For each step, records the decode success rate, BER, and decode pass (first or second pass). Results are logged to the event log and optionally saved as a JSON report. This produces the empirical SNR floor for each mode (see `docs/js8call-analysis.md` for expected floor estimates by mode).
+A configurable SNR sweep: runs N decodes at each SNR step from `snr_start` to `snr_end` in `snr_step` increments. Default range: −30 dB to +30 dB in 1 dB steps, 20 decodes per step. For each step, records the decode success rate, BER, and decode pass (first or second pass). Results are logged to the event log and optionally saved as a JSON report. This produces the empirical SNR floor for each mode (see `docs/dev/research/js8call-analysis.md` for expected floor estimates by mode).
 
 ### Speed reduction ladder
 
-Tests the HPX rate ladder under degrading channel conditions. The ladder is:
+Tests the HPX rate ladder under degrading channel conditions. The ladder in the original design was:
 
 `BPSK31 → BPSK63 → BPSK100 → BPSK250 → QPSK125 → QPSK250 → QPSK500`
+
+As built, the adaptive-ladder source runs a real `SessionProfile` instead — the `hpx_hf` ladder (MFSK16, BPSK31–250, QPSK250-D, OFDM52 rungs) as `fast`, or capped at SL6 as `robust`.
 
 The test starts at the fastest configured mode. When the decode success rate drops below a configurable threshold (default: 80% over 10 consecutive runs), the mode steps down one level. The event log records each transition and the SNR at transition time.
 

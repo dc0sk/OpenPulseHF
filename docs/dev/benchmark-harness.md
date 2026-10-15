@@ -2,7 +2,7 @@
 project: openpulsehf
 doc: docs/dev/benchmark-harness.md
 status: living
-last_updated: 2026-05-01
+last_updated: 2026-10-15
 ---
 
 # HPX Benchmark Harness Specification
@@ -10,6 +10,32 @@ last_updated: 2026-05-01
 ## Purpose
 
 This document defines the benchmark execution contract used to validate HPX performance and support parity or better claims against incumbent modems.
+
+## Implementation status (2026-10-15)
+
+This is a specification; most of it is not built. What exists and runs:
+
+- **`benchmark run`** (`crates/openpulse-modem/src/benchmark.rs`, CLI `openpulse benchmark run`):
+  replays a fixed corpus of 10 HPX session-state scenarios and emits JSON with `passed`, `total` and
+  `mean_transitions`. It exercises the session state machine, not a channel model. Its gate
+  (`passed == total` and `mean_transitions <= 20.0`) is the "CI benchmark regression gate" in
+  `CLAUDE.md`, and runs in `.github/workflows/ci.yml`:
+  ```sh
+  cargo run -p openpulse-cli --no-default-features -- --backend loopback --log error benchmark run >/tmp/bench.json
+  jq '.passed == .total and .mean_transitions <= 20.0' /tmp/bench.json  # must print true
+  ```
+- **Artifact gates** (`.github/workflows/benchmark.yml`, every pull request; two required checks):
+  `scripts/validate-benchmark-artifacts.sh` validates the scenario YAMLs and any committed result
+  JSON, and `scripts/check-benchmark-regressions.sh` compares committed aggregates under
+  `benchmark/results/aggregate/` with `benchmark/baselines/`. The only code that writes an
+  aggregate is `openpulse-testmatrix --item6-gate` (`bench::write_item6_aggregate`, the
+  `HF2300-AWGN30-ITEM6` row); nothing executes the other scenario YAMLs or writes raw results.
+- **Goodput** is gated separately by `goodput_gate` in `apps/openpulse-linksim` (two-station ARQ
+  through the real engine), and mode × channel coverage by `openpulse-testmatrix`.
+
+The scenario catalog below, the reduced/full CI suites and the HPX500/HPX2300 mode names predate
+the Release 1 profiles: since work plan decision 18 the only session profiles are `fast` and
+`robust` on the `hpx_hf` ladder. Read the scenario names as bandwidth classes.
 
 ## Harness principles
 
@@ -205,7 +231,7 @@ Includes all scenarios and stress variants with multi-seed sweeps.
 
 Gate rules:
 
-- Must satisfy thresholds in docs/high-performance-mode.md.
+- Must satisfy thresholds in docs/dev/high-performance-mode.md.
 - Regressions must block release-candidate tagging.
 
 ## Baseline management

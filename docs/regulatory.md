@@ -2,7 +2,7 @@
 project: openpulsehf
 doc: docs/regulatory.md
 status: living
-last_updated: 2026-07-11
+last_updated: 2026-10-15
 ---
 
 # Regulatory Compliance
@@ -10,6 +10,8 @@ last_updated: 2026-07-11
 This document analyses the amateur radio regulatory requirements applicable to OpenPulseHF transmissions. Compliance is a hard requirement before any on-air use. The analysis covers the primary jurisdictions of current interest: United States (FCC Part 97), European Union and CEPT member states, and the United Kingdom. It also covers IARU band plan recommendations.
 
 This document is informational — it does not replace consulting the current licence conditions or regulations in force for a specific jurisdiction. Regulations change; operators are responsible for verifying currency.
+
+**What the software does and does not enforce** is summarised in [Transmitter safeguards in the software](#transmitter-safeguards-in-the-software) below. In short: it identifies the station, refuses to key under a missing or placeholder callsign, and bounds every key-down with a watchdog; it does **not** set transmit power or check band edges. Release 1 (`v0.17.0`) is tested on **2 m** first (144.640 MHz), then on HF with the release candidate.
 
 ## United States — FCC Part 97
 
@@ -21,21 +23,28 @@ All transmissions by US-licensed amateur stations on amateur frequencies are gov
 
 - Maximum 300 baud on a single carrier for most HF amateur sub-bands.
 
-All current OpenPulseHF single-carrier modes comply:
+> **Check the current rule text.** The FCC's Report and Order in WT Docket 16-239 (adopted late
+> 2023) removed the HF symbol-rate limit from §97.307(f); the table below is kept as a conservative
+> per-carrier check. This paragraph is not checked against the eCFR here — verify the rule in force.
 
-| Mode | Baud rate | Compliant |
-|------|-----------|-----------|
-| BPSK31 | 31.25 | Yes |
-| BPSK63 | 62.5 | Yes |
-| BPSK100 | 100.0 | Yes |
-| BPSK250 | 250.0 | Yes |
-| QPSK125 | 125.0 | Yes (2 bits/symbol, not 2 baud) |
-| QPSK250 | 250.0 | Yes |
-| QPSK500 | 500.0 | Yes — QPSK symbol rate equals baud rate; 500 baud exceeds limit in restricted sub-bands. Verify per-band before use. |
+Every mode on the Release 1 `hpx_hf` ladder stays at or below 250 baud per carrier (values from the
+plugins):
 
-Note: the 300 baud limit applies to the *symbol rate* (baud), not the *bit rate* (bps). QPSK500 transmits 500 symbols per second regardless of the 2 bits/symbol. On bands where the 300-baud limit applies, QPSK500 is non-compliant. Operators must verify the specific band and sub-band before use.
+| Rung | Mode | Symbol rate per carrier | ≤ 300 baud |
+|------|------|-------------------------|------------|
+| SL1 | MFSK16 | 31.25 baud (16 tones, 31.25 Hz spacing) | Yes |
+| SL2 | BPSK31 | 31.25 | Yes |
+| SL3 | BPSK63 | 62.5 | Yes |
+| SL4 | BPSK100 | 100 | Yes |
+| SL5 | BPSK250 | 250 | Yes |
+| SL6 | QPSK250-D | 250 | Yes |
+| SL7–SL14 | OFDM52 family | ≈27.8 baud per subcarrier (8000 / (256 + 32) samples) | Yes |
+| ACK | FSK4 | 100 | Yes |
 
-For OFDM modes (future HPX profiles): the 300-baud limit applies *per carrier*. VARA's 42-baud/carrier OFDM complies despite 52 carriers. Any future OFDM or multi-carrier mode in OpenPulseHF must verify per-carrier baud rate.
+The 300-baud figure applies to the *symbol rate* (baud), not the *bit rate* (bps), and for a
+multi-carrier mode it applies *per carrier*. Fixed modes outside the Release 1 ladder can exceed it:
+`QPSK500` and the 500/1000/2000-baud single-carrier and `PILOT-*` modes run above 300 baud.
+Operators who select such a mode as a fixed mode must check the band and sub-band rules first.
 
 **§97.307(a):** Occupied bandwidth must not exceed that necessary for the information rate and type of emission in use. For HF narrowband digital modes, the occupied bandwidth should be 500 Hz or less for narrow profiles and should remain within the authorised sub-band.
 
@@ -53,10 +62,23 @@ OpenPulseHF transmissions are not encoded to obscure content. The protocol speci
 
 **§97.119(b)(2):** When transmitting in a digital code, identification must be given in the same digital code used for the communication, in the international Morse code, or in telephony in the English language.
 
-OpenPulseHF requirements:
-- The station call sign must be included in session handshake frames and in periodic in-band identification beacons at intervals not exceeding 10 minutes.
-- The identification must be decodable by any station running OpenPulseHF (or any open implementation of the protocol) without special decryption.
-- Signed identity records in the trust store satisfy this requirement if the callsign is included in plaintext in the signed payload.
+What OpenPulseHF implements (REQ-REG-10; `crates/openpulse-core/src/station_id.rs`):
+- **Periodic ID.** The daemon and the ARDOP TNC run a `StationIdTimer`. Once the station has
+  transmitted, it sends `DE <callsign>` as a data frame in the active mode at least every
+  `[station] auto_id_interval_secs` (default `600`, i.e. 10 minutes). The ID is plain text, not
+  encrypted, so any station running an open implementation can decode it.
+- **End-of-exchange ID.** After `[station] auto_id_signoff_idle_secs` of no TX (default `10`), a
+  final sign-off ID goes out. A station that has not transmitted since its last ID sends none.
+- **CW ID.** The ARDOP TNC appends a Morse ID (`crates/openpulse-core/src/cw_id.rs`: 18 WPM,
+  700 Hz tone) in the same keyed burst when the host sends `CWID TRUE`; `SENDID` requests a one-shot
+  ID. The daemon sends the digital ID only.
+- **No ID, no key.** Auto-ID is disabled for an empty callsign or the placeholder `N0CALL`. The
+  ARDOP TNC refuses every keyed emission under such a callsign; the daemon's autonomous responders
+  (handshake reply, relay, QSY, file transfer) refuse to key without a valid callsign.
+- **A missed ID is loud.** If the PTT assert fails, the daemon logs an `error` that the §97.119 ID
+  has not gone out. If another emission holds the key, the ID is deferred, not skipped.
+- `auto_id_interval_secs = 0` disables auto-ID entirely; the operator then carries the §97.119
+  obligation by hand.
 
 ### §97.221 — Automatically controlled digital stations
 
@@ -95,7 +117,7 @@ callsign, and ±2 s clock-skew gates. The design maps to the rule as follows:
 |---|---|---|
 | Automatic control point can terminate transmissions | The daemon control surface (`DisableDiscovery`, `DisableRepeater`, daemon stop, PTT release) terminates all automatic TX immediately; PTT hardware release is synchronous | Keep a reachable control point (local or the control port) able to stop the daemon |
 | Station can be turned off by the control operator at any time | Every automatic-TX feature is **off by default** and gated behind an explicit enable; discovery defaults to `rx_only` (no TX at all). Two features (the JS8 beacon and the cross-band repeater) *start from config alone* once enabled, with no further command — that is what "enabled" means for an unattended station — and `DisableDiscovery` / `DisableRepeater` remain the control point for stopping them | Enable automatic TX only when acting as, or in contact with, the control operator |
-| ≤ 100 W PEP output | OpenPulse does not set transmit power; power is the rig's setting via the operator | Configure the rig ≤ 100 W PEP for automatic operation |
+| ≤ 100 W PEP output | OpenPulse does not set transmit power; power is the rig's setting via the operator. Per-band TX audio attenuation (`SetTxAttenuation`) only lowers drive | Configure the rig ≤ 100 W PEP for automatic operation |
 | Third-party retransmission only when authorised | The relay/repeater retransmits third-party traffic; the discovery beacon is **first-party** (the station announcing its own presence/capabilities), not third-party | Ensure relay/repeat operation is authorised for the band/mode in use |
 | Identify per §97.119 | The periodic auto-ID timer (`StationIdTimer`, REQ-REG-10 / CAP-66) keys the configured callsign at the required interval on the daemon and ARDOP TX paths; verified by `station_id_txcount` | Configure a valid callsign; verify ID on the air |
 
@@ -116,11 +138,44 @@ discovery off `rx_only` **and** this documentation is reviewed for their jurisdi
 
 | Rule | Requirement | OpenPulseHF status |
 |------|-------------|-------------------|
-| §97.307(f) | ≤300 baud/carrier below 28 MHz | Current modes compliant; QPSK500 needs per-band verification |
+| §97.307(f) | ≤300 baud/carrier below 28 MHz (verify whether still in force) | Every `hpx_hf` rung ≤ 250 baud/carrier; some fixed modes (e.g. QPSK500) exceed 300 baud |
 | §97.309(a)(4) | Unspecified codes: technical info available | Compliant by design (open spec) |
-| §97.119 | ID every 10 min and at end of transmission | Must be implemented in session and relay modes |
+| §97.119 | ID every 10 min and at end of transmission | Implemented: periodic + sign-off auto-ID on the daemon and ARDOP TNC paths (default 600 s); optional CW ID on the TNC; no keying under `N0CALL` |
 | §97.221 | Automatic control point for unattended relay/beacon | Design safeguards documented above (control-point termination, off-by-default, auto-ID, ≤100 W operator responsibility); operator verifies per jurisdiction |
 | §97.313 | Minimum necessary power | Operational guidance; not a software constraint |
+
+---
+
+## Transmitter safeguards in the software
+
+These are the controls the code enforces today, checked against the source. They support the
+operator's compliance; they do not replace it.
+
+| Safeguard | What it does | Where |
+|---|---|---|
+| Single keying path | Every front-end (daemon, ARDOP TNC, KISS TNC, repeater) keys through one `SharedPtt`. A second key while keyed is refused and touches no hardware | `crates/openpulse-radio/src/shared_ptt.rs` |
+| PTT watchdog | An independent thread force-releases any key held longer than `DEFAULT_PTT_MAX` (180 s). This is an engineering bound against a hung transmit, not a regulatory limit | same |
+| Unusable PTT backend | A misconfigured `[modem] ptt_backend` stops the daemon at start-up. A configured backend that is unreachable (e.g. rigctld down) gets a controller that refuses to key and keeps retrying, so nothing is sent into an unkeyed rig | `crates/openpulse-daemon/src/server.rs`, `crates/openpulse-radio/src/ptt_builder.rs` |
+| PTT release timing | Release waits for the audio device's reported drain plus 10 ms, never longer than 200 ms, so the tail of a frame is not cut | `crates/openpulse-audio/src/flush.rs` |
+| Station ID | See §97.119 above | `station_id.rs`, `cw_id.rs` |
+| Transmit power | **Not set by the software.** The operator sets power on the rig | — |
+| Band edges | **Not checked on transmit.** `SetFreq` tunes the rig through rigctld without a band-plan check; `[qsy] bandplan_mode` applies only to the experimental QSY feature | `crates/openpulse-daemon/src/lib.rs` |
+
+**On-air test runners.** The two runners used for Release 1 on-air testing,
+`scripts/run-onair-ic9700-ft991a.sh` and `scripts/run-onair-twin-ota.sh`:
+
+- **only ever lower RF power, never raise it** (`scripts/lib/rig-power.sh`, station owner's rule
+  of 2026-10-14). A requested power is sent only when the rig's current reading is a number in
+  Hamlib's 0–1 scale and the request is strictly below it; otherwise power is left alone and the
+  log says why. The cleanup step that restores the pre-run reading goes through the same
+lower-only rule, so it cannot raise power either. The FT-818's Hamlib driver
+  cannot set power, so it is never touched;
+- **refuse a frequency outside a 2 m window by default**: 144.500–144.750 MHz
+  (`BAND2M_MIN_HZ`/`BAND2M_MAX_HZ` in the IC-9700 runner, `BAND_MIN_HZ`/`BAND_MAX_HZ` in the twin
+  runner). The default test frequency is 144.640 MHz. Widening the window is an explicit operator
+  action, needed only for an HF run.
+
+The older `scripts/run-onair-tx500-kx3.sh` runner has neither guard.
 
 ---
 
@@ -155,7 +210,7 @@ Unlike FCC Part 97, CEPT does not impose a blanket 300-baud symbol rate limit. I
 - Narrowband digital sub-bands (analogous to US practice) are defined in the IARU Region 1 band plan and observed by most administrations.
 - There is no per-carrier baud rate limit: an OFDM signal with 52 carriers at 42 baud/carrier is equally permitted as a single-carrier signal at 42 baud, provided the total occupied bandwidth is within limits.
 
-OpenPulseHF implication: QPSK500 and future HPX modes are likely compliant with most EU administrations from a symbol rate perspective; the binding constraint is occupied bandwidth.
+OpenPulseHF implication: from a symbol-rate perspective the `hpx_hf` ladder and the faster fixed modes are likely compliant with most EU administrations; the binding constraint is occupied bandwidth (≤ 500 Hz for the `robust` profile, up to ≈2031 Hz for `fast`).
 
 ### EU/CEPT transmitter power — country-specific limits
 
@@ -192,7 +247,7 @@ Current conditions of particular relevance:
 - Automatic/unattended operation: permitted under the Full licence subject to the station being under the control of the licensee and identifiable.
 - The Ofcom licence permits use of the CEPT T/R 61-01 visiting procedure for visiting licensees from most countries, meaning foreign operators with a valid CEPT licence can operate in the UK.
 
-UK-specific OpenPulseHF note: identification interval of 15 minutes (not 10) should be the default when operating from a UK station. The implementation should allow the identification interval to be configured. (Some secondary guidance has cited a 20-minute interval for the UK; operators should treat 15 minutes as the conservative default and verify the current Ofcom Amateur Licence terms, which take precedence.)
+UK-specific OpenPulseHF note: the identification interval is configurable (`[station] auto_id_interval_secs`). The default is 600 s (10 minutes), which also meets a 15-minute requirement; a UK station may set `900`. (Some secondary guidance has cited a 20-minute interval for the UK; operators should treat 15 minutes as the conservative default and verify the current Ofcom Amateur Licence terms, which take precedence.)
 
 UK transmitter power: Ofcom permits up to **1 kW ERP** on the HF amateur bands, with no reduction applied in UK territory (in contrast to some EU national limits above).
 
@@ -226,8 +281,8 @@ The IARU (International Amateur Radio Union) publishes band plans for Regions 1 
 
 OpenPulseHF should publish recommended dial frequencies for each supported bandwidth class aligned with the IARU band plan:
 
-- **HPX500 / BPSK31/63/250 (≤500 Hz occupied BW):** operate in the narrowband digital sub-bands listed above.
-- **HPX2300 (≈2300 Hz occupied BW):** operate in sub-bands designated for wider digital modes where available (e.g. 14.099–14.112 MHz on 20 m, subject to national regulations). Verify with national band plans — not all administrations extend wide-band digital permission to the same segments.
+- **`robust` profile (SL1–SL6, ≤ 500 Hz occupied BW):** operate in the narrowband digital sub-bands listed above.
+- **`fast` profile (up to ≈2031 Hz occupied BW once it climbs onto the OFDM rungs):** operate in sub-bands designated for wider digital modes where available (e.g. 14.099–14.112 MHz on 20 m, subject to national regulations). Verify with national band plans — not all administrations extend wide-band digital permission to the same segments.
 - **Relay nodes:** 10.147–10.150 MHz (30 m) is internationally recognised for automatic digital stations. Coordination with other automatic stations on the frequency is expected.
 
 ### Non-interference obligation
@@ -295,9 +350,11 @@ Before any release that enables on-air transmission, the following must be confi
 
 - [ ] All transmitted modes have documented symbol rates and occupied bandwidths.
 - [ ] Symbol rate per carrier verified ≤ 300 baud for all modes intended for use below 28 MHz (US FCC §97.307(f)).
-- [ ] In-band station identification implemented and transmitting callsign in decodable form at ≤ 10-minute intervals (≤ 15-minute UK).
-- [ ] Identification interval is user-configurable.
+- [ ] In-band station identification transmitting callsign in decodable form at ≤ 10-minute intervals (≤ 15-minute UK) — implemented; verify on the air.
+- [ ] Identification interval is user-configurable — implemented (`auto_id_interval_secs`).
 - [ ] Protocol specification is publicly available and technically sufficient for decoding.
 - [ ] Relay/automatic control point interface documented and tested.
 - [ ] Documentation recommends IARU-aligned operating frequencies.
-- [ ] Release notes state applicable jurisdiction limitations (e.g. QPSK500 frequency restrictions).
+- [ ] Release notes state applicable jurisdiction limitations (e.g. fixed modes above 300 baud).
+
+The itemised checklist with evidence is `docs/regulatory-compliance-checklist.md`.

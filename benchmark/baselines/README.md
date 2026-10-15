@@ -2,7 +2,7 @@
 project: openpulsehf
 doc: benchmark/baselines/README.md
 status: living
-last_updated: 2026-05-02
+last_updated: 2026-10-15
 ---
 
 # Benchmark Baselines
@@ -11,7 +11,7 @@ This directory stores baseline aggregate benchmark artifacts used for regression
 
 Expected file type:
 
-- JSON aggregate report objects compatible with docs/benchmark-harness.md.
+- JSON aggregate report objects compatible with `docs/dev/benchmark-harness.md`.
 
 Required key fields for matching:
 
@@ -22,9 +22,8 @@ Suggested naming:
 
 - <scenario_id>--<mode_under_test>.json
 
-Example:
+Example (the only baseline committed today):
 
-- HF500-NOM-01--HPX500.json
 - HF2300-WATTERSON-F1-ITEM6--VARA-HF-REFERENCE.json
 
 Item 6 direct parity reference:
@@ -34,6 +33,18 @@ Item 6 direct parity reference:
 
 Notes:
 
-- Regression checks compare candidate aggregate results under benchmark/results/aggregate against matching baseline objects in this directory.
+- `scripts/check-benchmark-regressions.sh benchmark/baselines benchmark/results/aggregate` compares
+  each candidate aggregate in `benchmark/results/aggregate/` against the baseline with the same
+  `scenario_id` and `mode_under_test`. It fails on `success_rate` below 0.95, a `median_goodput_bps`
+  drop of more than 5 %, or a `p95_completion_time_ms` rise of more than 10 %.
+- The "Benchmark gates" workflow (`.github/workflows/benchmark.yml`) runs that script and
+  `scripts/validate-benchmark-artifacts.sh` on every pull request. Both read **committed** JSON;
+  nothing is measured in CI, so the check moves only when someone commits a new aggregate. The
+  committed VARA-reference candidate (median goodput 7300 bps, p95 1300 ms) sits within the 5 % / 10 %
+  bounds of its baseline.
+- The CLI benchmark gate (`openpulse benchmark run`, `passed == total` and `mean_transitions <= 20`)
+  is a separate job in `.github/workflows/ci.yml` and does not use this directory.
 - Missing candidate files are treated as skip.
-- Missing baselines are warning-only by default, and can be made mandatory with REQUIRE_BASELINE=1.
+- Missing baselines are warning-only by default, and can be made mandatory with `REQUIRE_BASELINE=1`.
+  `HF2300-AWGN30-ITEM6--SCFDMA52-64QAM-P4.json` in `results/aggregate/` has no baseline today, so it
+  produces a warning.
