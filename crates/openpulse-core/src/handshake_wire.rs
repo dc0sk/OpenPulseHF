@@ -332,8 +332,10 @@ pub struct FrameSpans<'a> {
 
 /// Split a received frame into its signed prefix, body and signature.
 ///
-/// Validates magic, version and declared length before anything downstream looks at the body. A v1
-/// (`0x01`) frame is rejected here by version, which is why no caller needs a dual-decode path.
+/// Validates magic, version and declared length before anything downstream looks at the body. A
+/// frame whose version byte is not `WIRE_VERSION` is rejected here, so no caller needs a
+/// dual-decode path. v0.16.0's JSON CONREQ/CONACK carry the same magic and version `0x01`, so they
+/// pass both checks and fail on the length or body decode instead (see `WIRE_VERSION`).
 pub fn split_frame<'a>(
     bytes: &'a [u8],
     magic: &[u8; 4],

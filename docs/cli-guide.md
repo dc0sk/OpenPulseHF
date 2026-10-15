@@ -131,7 +131,7 @@ Notes:
 
 ## Identity commands
 
-These query the PKI service at `--pki-url` (default `http://127.0.0.1:8787`); `pki-tooling` is not
+These query the PKI service at `--pki-url` (default `http://127.0.0.1:8080`); `pki-tooling` is not
 a Release 1 crate. See [cli-ux-identity-trust-diagnostics.md](cli-ux-identity-trust-diagnostics.md).
 
 - `openpulse identity show <STATION_OR_RECORD_ID>`
@@ -213,7 +213,7 @@ Global (accepted before or after the subcommand):
 
 - `--backend <default|cpal|loopback>`: audio backend (default `default`: cpal when compiled in, else loopback).
 - `--log <LEVEL>`: `error`, `warn`, `info` (default), `debug`, `trace`.
-- `--pki-url <URL>`: PKI service base URL (default `http://127.0.0.1:8787`).
+- `--pki-url <URL>`: PKI service base URL (default `http://127.0.0.1:8080`).
 - `--ptt <none|rts|dtr|vox|rigctld|cm108|gpio|generic>`: PTT control method (default `none`).
   - `none`: no PTT (loopback, testing).
   - `rts` / `dtr`: assert serial RTS or DTR; `--rig` is the serial port (e.g. `/dev/ttyUSB0`). Needs the `serial` feature.

@@ -162,34 +162,24 @@ async fn main() -> anyhow::Result<()> {
     // used it — no controller, `[modem] ptt_backend` unread, nothing logged — so an operator running
     // the APRS path with `ptt_backend = "rigctld"` played audio into an unkeyed transceiver and only
     // VOX worked. `[modem]` is captioned "shared by all TNC binaries".
-    let ptt =
-        match openpulse_radio::ptt_builder::build_ptt(&openpulse_radio::ptt_builder::PttSpec {
+    // #1285: a config error refuses startup; an unreachable backend refuses every key until it
+    // reconnects. The old fallback to no controller keyed, so audio went into an unkeyed rig.
+    let ptt = openpulse_radio::ptt_builder::build_ptt_or_retrying(
+        &openpulse_radio::ptt_builder::PttSpec {
             backend: &cfg.modem.ptt_backend,
             rigctld_addr: &cfg.radio.rigctld_addr,
             device: &cfg.modem.ptt_device,
             gpio_pin: cfg.modem.ptt_gpio,
-        }) {
-            Ok(Some(ctrl)) => {
-                tracing::info!(backend = %cfg.modem.ptt_backend, "PTT controller ready");
-                Some(ctrl)
-            }
-            Ok(None) => {
-                tracing::info!("no PTT backend configured; relying on VOX or a manually keyed rig");
-                None
-            }
-            Err(e) => {
-                // Fail-open matches the other front-ends today. Whether an unusable backend should
-                // refuse startup is #1285, decided there rather than diverging here.
-                tracing::warn!(
-                    backend = %cfg.modem.ptt_backend,
-                    error = %e,
-                    "PTT unavailable; this TNC will transmit WITHOUT keying the rig"
-                );
-                None
-            }
-        };
+        },
+    )
+    .map_err(|e| {
+        anyhow::anyhow!(
+            "[modem] ptt_backend is unusable; refusing to start rather than transmit into an \
+             unkeyed rig — fix [modem] in config: {e}"
+        )
+    })?;
 
-    KissServer::with_ptt(engine, config, trust_store, relay_forwarder, ptt)
+    KissServer::with_ptt(engine, config, trust_store, relay_forwarder, Some(ptt))
         .run()
         .await?;
     Ok(())

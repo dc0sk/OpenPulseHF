@@ -81,6 +81,42 @@ pub fn no_ptt() -> Box<dyn PttController + Send> {
     Box::new(NoOpPtt::new())
 }
 
+/// Build a TNC's PTT controller: a config error is returned, an unreachable backend refuses keys.
+///
+/// For front-ends that need a controller, never `None` (the ARDOP and KISS TNCs). Falling back to
+/// [`no_ptt`] on a build error is the #1285 fail-open: it keys, so the TNC played audio into an
+/// unkeyed rig. A config error cannot self-heal, so the caller refuses to start; a real backend that
+/// is merely unreachable gets [`RetryingPtt`], which refuses every key until it reconnects, and the
+/// caller's keyed transmit then skips the emission. `"none"` still keys (VOX or a hand key).
+pub fn build_ptt_or_retrying(
+    spec: &PttSpec<'_>,
+) -> Result<Box<dyn PttController + Send>, PttError> {
+    match build_ptt(spec) {
+        Ok(Some(ctrl)) => {
+            tracing::info!(backend = %spec.backend, "PTT controller ready");
+            Ok(ctrl)
+        }
+        Ok(None) => {
+            tracing::info!("no PTT backend configured; relying on VOX or a manually keyed rig");
+            Ok(no_ptt())
+        }
+        Err(e @ PttError::Config(_)) => Err(e),
+        Err(e) => {
+            tracing::warn!(
+                backend = %spec.backend,
+                error = %e,
+                "PTT backend unreachable; every emission will be REFUSED until it reconnects"
+            );
+            Ok(Box::new(RetryingPtt::new(OwnedPttSpec {
+                backend: spec.backend.to_string(),
+                rigctld_addr: spec.rigctld_addr.to_string(),
+                device: spec.device.to_string(),
+                gpio_pin: spec.gpio_pin,
+            })))
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -349,5 +385,75 @@ mod retry_tests {
             "an unreachable backend must not report AlreadyKeyed: the station ID defers on that and \
              would retry a dead rig every tick"
         );
+    }
+
+    fn tnc_spec<'a>(backend: &'a str, rigctld_addr: &'a str) -> PttSpec<'a> {
+        PttSpec {
+            backend,
+            rigctld_addr,
+            device: "",
+            gpio_pin: 3,
+        }
+    }
+
+    fn keys(ctrl: Box<dyn PttController + Send>) -> bool {
+        SharedPtt::new(Some(ctrl), Duration::from_secs(180))
+            .keyed(None)
+            .is_ok()
+    }
+
+    /// The #1285 defect in the TNCs: an unreachable backend became `NoOpPtt`, which keys.
+    #[test]
+    fn a_tnc_with_an_unreachable_backend_refuses_the_key() {
+        let ctrl = build_ptt_or_retrying(&tnc_spec("rigctld", "127.0.0.1:1"))
+            .expect("an unreachable backend must still start the TNC");
+        assert!(
+            !keys(ctrl),
+            "an unreachable PTT backend must REFUSE the key, so nothing is radiated unkeyed"
+        );
+    }
+
+    /// The control: `"none"` means VOX or a hand key, and must still key.
+    #[test]
+    fn a_tnc_with_no_ptt_configured_still_keys() {
+        for backend in ["none", ""] {
+            let ctrl =
+                build_ptt_or_retrying(&tnc_spec(backend, "127.0.0.1:1")).expect("none builds");
+            assert!(keys(ctrl), "ptt_backend = {backend:?} must key");
+        }
+    }
+
+    /// A typo cannot self-heal: the TNC refuses to start.
+    #[test]
+    fn a_tnc_config_error_is_returned_not_swallowed() {
+        assert!(matches!(
+            build_ptt_or_retrying(&tnc_spec("rigctl", "127.0.0.1:4532")),
+            Err(PttError::Config(_))
+        ));
+    }
+
+    /// A CM108 pin outside 1..=8 can never work, so it is a config error, not a retry.
+    #[test]
+    fn a_cm108_pin_out_of_range_is_a_config_error() {
+        let spec = PttSpec {
+            backend: "cm108",
+            rigctld_addr: "",
+            device: "/dev/hidraw-none",
+            gpio_pin: 9,
+        };
+        assert!(matches!(build_ptt(&spec), Err(PttError::Config(_))));
+    }
+
+    /// GPIO PTT absent from the build can never work, so it is a config error, not a retry.
+    #[cfg(not(all(target_os = "linux", feature = "gpio")))]
+    #[test]
+    fn gpio_not_compiled_in_is_a_config_error() {
+        let spec = PttSpec {
+            backend: "gpio",
+            rigctld_addr: "",
+            device: "gpiochip0:17",
+            gpio_pin: 3,
+        };
+        assert!(matches!(build_ptt(&spec), Err(PttError::Config(_))));
     }
 }

@@ -1528,7 +1528,7 @@ Global flags: `--backend <default|loopback|cpal>`, `--log <level>`,
 `--ptt <none|rts|dtr|vox|rigctld|cm108|gpio|generic>`,
 `--rig <serial path | rigctld addr | /dev/hidrawN | chip:line>`, `--rig-file <toml>`,
 `--ptt-leader-ms <ms>` (default 0), `--max-power <watts>` (default 100),
-`--pki-url <url>` (default `http://127.0.0.1:8787`). Full reference: [docs/cli-guide.md](cli-guide.md).
+`--pki-url <url>` (default `http://127.0.0.1:8080`). Full reference: [docs/cli-guide.md](cli-guide.md).
 
 ```bash
 # Transmit / receive over real audio (receiver first; same mode and --fec on both ends)
@@ -1659,9 +1659,13 @@ in [§2.5](#25-ardop-tnc-drop-in-path).
 > keyed duration. Those bound the damage; they are not a substitute for controlling who can reach the
 > port.
 >
-> **PTT backend failure.** Unlike the daemon, the ARDOP TNC does not refuse an unusable
-> `ptt_backend`: it logs `PTT unavailable; using NoOpPtt — this TNC will transmit without keying
-> the rig` and continues. Check the startup log for `PTT controller ready` before going on air.
+> **PTT backend failure.** The ARDOP TNC (and the KISS TNC) handle an unusable `ptt_backend` the way
+> the daemon does (#1285). A configuration error (a mistyped backend, `rts`/`dtr` with no `ptt_device`) stops it at
+> startup: `[modem] ptt_backend is unusable; refusing to start rather than transmit into an unkeyed
+> rig`. A real backend that is merely unreachable (rigctld not up yet) starts it with a controller
+> that refuses every key and retries the connection; each refused transmission is skipped and
+> reported to the host as `FAULT PTT assert failed`. Check the startup log for
+> `PTT controller ready` before going on air.
 >
 > **PTT ownership.** The TNC keys from `[modem] ptt_backend` and emits `PTT TRUE` / `PTT FALSE` as
 > asynchronous events for hosts that drive their own rig. If you let the TNC key, set Pat's

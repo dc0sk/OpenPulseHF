@@ -177,11 +177,11 @@ impl SessionProfile {
 
     /// `fast`: the full `hpx_hf` rate ladder (SL1–SL14), ~9 bps to 7.7 kbps, up to ≈2031 Hz occupied.
     ///
-    /// Every mode here fits within the 2700 Hz HF channel-width limit (SCFDMA52-* is ≈2031 Hz), so the
-    /// ladder spans weak-signal BPSK31 all the way to 64QAM SC-FDMA at code rate ≈8/9.  The dense rungs
-    /// (SL10–SL19) always run FEC-protected: soft-concatenated up to SL15, then high-rate LDPC for the
-    /// top four — see the table in the body for the mode/FEC/rate/floor of every rung and for why LDPC
-    /// appears only above SL15.  For poor conditions or limited gear use
+    /// Every mode here fits within the 2700 Hz HF channel-width limit (OFDM52-* is ≈2031 Hz), so the
+    /// ladder spans the MFSK16 sub-floor and weak-signal BPSK31 all the way to 64QAM OFDM at code rate
+    /// ≈8/9.  The OFDM rungs (SL7–SL14) always run FEC-protected: soft-concatenated up to SL11, then
+    /// high-rate LDPC for the top three — see the table in the body for the mode/FEC/rate/floor of
+    /// every rung and for why LDPC appears only above SL11.  For poor conditions or limited gear use
     /// [`robust`](Self::robust), the same ladder capped at SL6.
     pub fn fast() -> Self {
         // Finer HF ladder (research #2, docs/dev/research/ladder-granularity.md). Fills the old
@@ -259,8 +259,9 @@ impl SessionProfile {
         //
         // ~6 dB for 2× the rate is a *worse* trade than climbing one modulation order (8PSK→16QAM buys
         // 1.33× for ~2 dB), so wherever a denser mode still exists, `SoftConcatenated` on it wins. The
-        // exception is the top: 64QAM is the densest constellation the plugin has, so above SL15 the
-        // only remaining lever is code rate. Hence LHR appears as SL15–SL17 and nowhere below.
+        // exception is the top: 64QAM is the densest constellation the plugin has, so above SL11 the
+        // only remaining lever is code rate. Hence LHR appears as SL12–SL14 and nowhere below. (The
+        // table was measured on the SCFDMA modes the ladder used then; the OFDM52 rungs replaced them.)
         let mut modes = [None; 21];
         // SL1 is the non-coherent MFSK16 sub-floor rung — the actual waveform for the deep-fade
         // ChirpFallback path (3 NACKs at SL2), reached only under sustained failure. Constant-envelope
@@ -302,11 +303,12 @@ impl SessionProfile {
         modes[SpeedLevel::Sl13 as usize] = Some("OFDM52-32QAM");
         modes[SpeedLevel::Sl14 as usize] = Some("OFDM52-64QAM");
         // Per-level FEC (MODCOD). **Every rung is coded** — on a fade there is no such thing as a
-        // useful uncoded rung here. SL2–SL5 carry `RsStrong` (t=32): differential BPSK rides the fade
-        // rotation but still needs a code to fix the symbols a slip costs (#923's law), and RsStrong is
-        // free on the wire for payloads ≤191 B (same 255-byte block as Rs). SL6 = differential
-        // QPSK250-D + Rs. SL7+ are OFDM at soft-concatenated FEC (they only ever run FEC-protected; the
-        // soft LLRs are per-subcarrier |H|²-weighted, which is where OFDM's fade advantage is realised).
+        // useful uncoded rung here. SL1–SL6 carry `Rs`, upgraded per frame to `RsStrong` (t=32) only
+        // where that costs no extra RS block (`free_rs_strengthening`): differential BPSK rides the fade
+        // rotation but still needs a code to fix the symbols a slip costs (#923's law). SL6 = differential
+        // QPSK250-D. SL7–SL11 are OFDM at soft-concatenated FEC and SL12–SL14 at high-rate LDPC (they
+        // only ever run FEC-protected; the soft LLRs are per-subcarrier |H|²-weighted, which is where
+        // OFDM's fade advantage is realised).
         // Assigned from `tests/snr_floor_calibration.rs::calibrate_fade_aware_ladder`.
         let mut fec_modes = [None; 21];
         fec_modes[SpeedLevel::Sl1 as usize] = Some(FecMode::Rs); // MFSK16 sub-floor: one RS block

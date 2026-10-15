@@ -13,7 +13,7 @@ This document defines user-facing CLI behavior for identity and trust diagnostic
 and records where the current `openpulse` CLI (`crates/openpulse-cli`) meets or departs from it.
 
 Release 1 status: the signed classical handshake is part of Release 1. The PKI service these
-commands query (`pki-tooling`, default `--pki-url http://127.0.0.1:8787`) is not a Release 1
+commands query (`pki-tooling`, default `--pki-url http://127.0.0.1:8080`) is not a Release 1
 crate; the `identity`, `trust show`/`explain` and `diagnose` commands need it running.
 
 Goals:
