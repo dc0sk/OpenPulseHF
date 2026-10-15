@@ -16,8 +16,8 @@ symbol, test or measured result in the repository. Where a number is quoted it c
 conditions; where something is unverified or planned it is labelled as such. Where a statement
 describes v0.15.0 history rather than the current tree, the text says so. See
 [Provenance and honest limits](#provenance-and-honest-limits) at the end for how that was enforced,
-and for what it does *not* cover. The PDF edition (`docs/openpulse-book.pdf`) predates this
-revision.
+and for what it does *not* cover. The PDF edition (`docs/openpulse-book.pdf`) is rendered from this
+text by `scripts/build-book-pdf.sh`.
 
 ---
 
@@ -3513,7 +3513,7 @@ On top of that, every keyed transmit uses an RAII guard — `ptt.keyed(...)` ret
 **One keying path for every front-end.** The watchdog, the deadline and the guard live in `SharedPtt` (`crates/openpulse-radio/src/shared_ptt.rs`), not in the daemon, so the daemon, the ARDOP and KISS TNCs, the cross-band repeater and, since #1299, the CLI all key through the same core; the daemon's `crate::ptt` is a thin adapter over it. Four behaviours of that core matter on air:
 
 - **A second key is refused.** Keying an already-keyed `SharedPtt` returns `PttError::AlreadyKeyed` naming the holder; the guard, not a thread id, owns the key, so one guard's release cannot drop another's key (#1263).
-- **An unusable PTT backend refuses every emission.** A configuration error — a mistyped `ptt_backend`, an `rts`/`dtr` backend with no `ptt_device` — stops the daemon at startup (#1285) rather than transmitting into an unkeyed rig. A real backend that is merely unreachable (rigctld not yet up) yields a controller that refuses to key and retries the connection, so nothing is emitted until it is back.
+- **An unusable PTT backend refuses every emission.** A configuration error — a mistyped `ptt_backend`, an `rts`/`dtr` backend with no `ptt_device` — stops the daemon and the ARDOP TNC at startup (#1285) rather than transmitting into an unkeyed rig. A real backend that is merely unreachable (rigctld not yet up) yields a controller that refuses to key and retries the connection, so nothing is emitted until it is back.
 - **Leader.** `[modem] ptt_leader_ms` (CLI `--ptt-leader-ms`, default 0) is a wait after the PTT edge and before the first sample (#1257), so a rig's key-up does not clip the preamble. It runs once per key, after the `PTT TRUE` notification, so a host keying its own rig on that event gets the same head start. The cross-band repeater's second rig and `openpulse calibrate` do not apply it. The right value is per rig and is still to be measured on the M3 station pair.
 - **Drain-based release.** PTT used to be released a fixed 200 ms after the software queue emptied. It now waits for the audio device's own report of when the last sample leaves, plus 10 ms for the codec FIFO, and never longer than the old 200 ms (#1367, `crates/openpulse-audio/src/flush.rs`). A reported delay of zero is not trusted — cpal reports an underrun as 0 — and gets the full 200 ms.
 
@@ -4690,7 +4690,7 @@ All symptoms below are real strings or verified behaviours; they were re-checked
 | Same as above but **no warning at all** | binary built without `cpal`, config says `backend = "default"` — this fallback is silent | same rebuild; prefer `backend = "cpal"` in config so at least a warning fires |
 | `Error: unknown backend 'X'` (CLI) / `unknown audio backend 'X' — use 'default', 'cpal', or 'loopback'` (TNC binaries) | typo in `--backend` | valid values: `loopback`, `default`, `cpal` |
 | daemon exits immediately: `invalid [station].callsign: callsign is the placeholder N0CALL; set it before starting daemon` (also `callsign is empty`, or over the handshake's byte limit) | callsign never set, empty, or too long | edit `[station] callsign` — the daemon and mesh daemon both refuse to start on `N0CALL` |
-| daemon exits: `[modem] ptt_backend is unusable; refusing to start rather than transmit into an unkeyed rig` | a PTT configuration error, e.g. a mistyped backend name or `rts`/`dtr` without `ptt_device` (#1285) | fix `[modem]`; valid backends are `none`, `rts`, `dtr`, `vox`, `rigctld`, `cm108`, `gpio` |
+| daemon or `openpulse-tnc` exits: `[modem] ptt_backend is unusable; refusing to start rather than transmit into an unkeyed rig` | a PTT configuration error, e.g. a mistyped backend name or `rts`/`dtr` without `ptt_device` (#1285) | fix `[modem]`; valid backends are `none`, `rts`, `dtr`, `vox`, `rigctld`, `cm108`, `gpio` |
 | daemon refuses to start over the identity key | `identity.key` exists but is group/world-readable, the wrong length or unreadable — it now fails closed | `chmod 600` the key, or move a corrupt one aside so a new identity is generated (peers will see a new key) |
 | `--profile hpx_hf` (or any old profile name) rejected | the ten older profiles were deleted with no aliases (decision 18) | use `fast` or `robust` |
 | two stations hear each other but nothing decodes, or the handshake fails | one runs v0.16.0, the other current `main`: they do not interoperate on any rung (whitener #1148, binary handshake #1147, PN-63 preamble #1062) | build the same commit at both ends |
@@ -4745,7 +4745,8 @@ ladder, the PN-63 preamble and the other wire breaks, the streaming receive chai
 rate controller's failure path (§1.4.4), PTT and transmit (§3.4.2), the plugin trait, and every
 command and config key in Chapter 4. Counts and line numbers in Chapter 3 were re-measured. No
 command was executed for this revision, sample outputs captured at v0.15.0 are marked as such, and
-measured figures quoted from v0.15.0 that were not re-derived say so. The PDF edition predates it.
+measured figures quoted from v0.15.0 that were not re-derived say so. The PDF edition was rebuilt
+from this revision on 2026-10-15.
 
 **What remains unverified.** Three figures quoted in Chapter 2A trace only to the project's own
 engineering notes rather than to a test or a source comment: a correlation-window energy value in the
