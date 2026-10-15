@@ -2,17 +2,30 @@
 project: openpulsehf
 doc: docs/dev/README.md
 status: living
-last_updated: 2026-06-17
+last_updated: 2026-10-15
 ---
 
 # Development and Planning Documentation
 
 This index contains development-oriented, planning, architecture, protocol-spec, research, and validation artifacts moved from docs root.
 
+## Start here
+
+- [CLAUDE.md](../../CLAUDE.md): the agent contract and docs index of record (build and test commands, where things are, rules)
+- [docs/dev/project/workplan.md](project/workplan.md): **the plan of record** — Release 1 (`v0.17.0`) scope, milestones M0–M4, triage rules, decision log. Where another doc disagrees, the work plan wins
+- [docs/dev/project/maintainer-todo.md](project/maintainer-todo.md): what waits on the maintainer (hardware runs, decisions)
+- [docs/dev/project/acceptance-criteria.md](project/acceptance-criteria.md): requirement → acceptance test command, one row each
+- [docs/dev/sharp-edges.md](sharp-edges.md): known sharp edges (FEC boundaries, ladder, SNR/LLR, acquisition, capture level, RX/TX seams)
+- [docs/dev/dsp-acquisition-playbook.md](dsp-acquisition-playbook.md): DSP acquisition and carrier-recovery playbook
+- [docs/dev/verification-mechanics.md](verification-mechanics.md): verification mechanics in full (`scripts/gate.sh`, evidence rules)
+- [docs/dev/adversarial-review.md](adversarial-review.md): when a second-model review is mandatory, and why
+- [docs/dev/crate-map.md](crate-map.md): full crate map and feature-track status
+
 ## Planning and release governance
 
-- [docs/dev/project/roadmap.md](project/roadmap.md): phased execution history and roadmap status
-- [docs/dev/project/backlog.md](project/backlog.md): open and deferred follow-up work
+- [docs/dev/project/release-1.0-criteria.md](project/release-1.0-criteria.md): what 1.0 requires (Release 1 is a narrower first release)
+- [docs/dev/project/roadmap.md](project/roadmap.md): phase-by-phase history of what shipped (no longer schedules work; superseded by the work plan)
+- [docs/dev/project/backlog.md](project/backlog.md): parked and deferred follow-up work (`post-release` unless the work plan says otherwise)
 - [docs/dev/archive/backlog-fec-improvements.md](archive/backlog-fec-improvements.md): FEC follow-up backlog (frozen research)
 - [docs/dev/archive/backlog-waveforms.md](archive/backlog-waveforms.md): waveform follow-up backlog (frozen research)
 - [docs/dev/requirements.md](requirements.md): functional and non-functional requirements
@@ -47,8 +60,10 @@ This index contains development-oriented, planning, architecture, protocol-spec,
 - [docs/dev/sbom.md](sbom.md): software bill of materials policy
 - [docs/dev/memories.md](memories.md): distilled lessons and operator notes
 - [docs/dev/lessons-and-archetypes.md](lessons-and-archetypes.md): OpenPulse's sharp edges mapped to the general defect-archetype shapes (bridge to the external coding-agent-skills library)
-- [docs/dev/onair-status.md](onair-status.md): on-air validation status, blockers, and debugging findings (Phase 5.5-reg)
+- [docs/dev/onair-execution-plan.md](onair-execution-plan.md): the sequenced on-air plan for Release 1 (M3 on 2 m, gates G0–G3, A1/A2/A4/A5, ARDOP Pat session)
+- [docs/dev/onair-ic9700-ft818-setup.md](onair-ic9700-ft818-setup.md): the 2 m station pair (rpi51 + IC-9700, rpi53 + FT-818 + SCU-17)
 - [docs/dev/onair-signal-chain-verification.md](onair-signal-chain-verification.md): RF signal-chain preflight checklist
+- [docs/dev/onair-status.md](onair-status.md): superseded 2026-06 on-air status snapshot, kept as a debugging record
 
 ## PKI tooling
 
@@ -89,4 +104,6 @@ This index contains development-oriented, planning, architecture, protocol-spec,
 - [docs/dev/reviews/review-260517.md](reviews/review-260517.md): review record
 - [docs/dev/reviews/review-260524.md](reviews/review-260524.md): review record
 - [docs/dev/reviews/review-260531.md](reviews/review-260531.md): review record
+- [docs/dev/reviews/governance-review-2026-09-30.md](reviews/governance-review-2026-09-30.md): governance review that the Release 1 work plan answers
+- [docs/dev/reviews/](reviews/): all other review and audit records
 - [docs/dev/test-reports/README.md](test-reports/README.md): validation and benchmark report index

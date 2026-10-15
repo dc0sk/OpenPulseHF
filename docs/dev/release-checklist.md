@@ -2,12 +2,19 @@
 project: openpulsehf
 doc: docs/dev/release-checklist.md
 status: living
-last_updated: 2026-09-13
+last_updated: 2026-10-15
 ---
 
 # Release Checklist Template
 
-Use this checklist when preparing a new release of OpenPulse. This guide covers version bumping from a current stable release (e.g., `2.3.0`) to a new version (e.g., `2.4.0` for minor, `2.3.1` for patch, or `3.0.0` for major).
+Use this checklist when preparing a new release of OpenPulse. This guide covers version bumping from a current stable release (e.g., `2.3.0`) to a new version (e.g., `2.4.0` for minor, `2.3.1` for patch, or `3.0.0` for major). The version numbers in the examples are placeholders.
+
+**Current state (2026-10-15):** workspace `0.16.0`, last release v0.16.0 (2026-07-18). The next release
+is **Release 1, `v0.17.0`**, cut in work plan milestone M4 ([`project/workplan.md`](project/workplan.md)):
+a release candidate `v0.17.0-rc.1` first (full gate + `scripts/slow-tests.sh` at one commit, known-red
+rows disclosed), an HF run with the RC, then release notes and the tag. The work plan's M4 rows take
+precedence over the generic steps below. `1.0` is reserved for
+[`project/release-1.0-criteria.md`](project/release-1.0-criteria.md).
 
 ## Pre-Release Planning (1 week before)
 
@@ -38,13 +45,15 @@ Use this checklist when preparing a new release of OpenPulse. This guide covers 
   git checkout -b release/v<version>
   ```
 
-- [ ] **Verify all tests pass on main**
+- [ ] **Verify the gates pass at the release commit** (quote results only from the `GATE:` line;
+  see `CLAUDE.md`, *Verification mechanics*)
   ```bash
-  cargo test --all
-  cargo test --all --features cpal-backend
-  cargo fmt --all -- --check  # Verify formatting
-  cargo clippy --all -- -D warnings  # Lint checks
+  scripts/gate.sh                     # workspace gate: fmt, clippy, tests (--no-fail-fast), trace and doc checks
+  scripts/slow-tests.sh               # held-out acceptance suites gate.sh does NOT run
+  cargo run -p openpulse-cli --no-default-features -- --backend loopback --log error benchmark run >/tmp/bench.json
+  jq '.passed == .total and .mean_transitions <= 20.0' /tmp/bench.json   # must print true
   ```
+  Disclose any known-red row in the release notes (for Release 1: the notch row, #1457, decision 10).
 
 - [ ] **Regenerate the SBOM** (on every version bump)
   ```bash
@@ -86,21 +95,9 @@ Use this checklist when preparing a new release of OpenPulse. This guide covers 
   version = "2.4.0"  # ← Update here
   ```
 
-- [ ] **Each crate's `Cargo.toml`**
-  ```bash
-  # Update version field in:
-  # - crates/openpulse-core/Cargo.toml
-  # - crates/openpulse-audio/Cargo.toml
-  # - crates/openpulse-modem/Cargo.toml
-  # - crates/openpulse-cli/Cargo.toml
-  # - plugins/bpsk/Cargo.toml
-  # - ... other crates
-  ```
-
-  ```toml
-  [package]
-  version = "2.4.0"  # ← Update here
-  ```
+- [ ] **Member crates** inherit it (`version.workspace = true`) — nothing to edit. Three carry their
+  own version and are not bumped with the workspace: `pki-tooling` (`0.2.0`),
+  `crates/openpulse-keystore` and `tools/openpulse-dict-trainer`.
 
 - [ ] **Verify version consistency**
   ```bash
@@ -123,7 +120,10 @@ Use this checklist when preparing a new release of OpenPulse. This guide covers 
 
 ### 3. Update Changelog
 
-- [ ] **`docs/CHANGELOG.md`**
+- [ ] **`docs/dev/project/changelog.md`** (the canonical technical changelog; the root
+  `CHANGELOG.md` keeps only the 0.1.0–0.2.0 history). REQ-DOC-01 requires it and
+  `docs/releasenotes.md` on every version bump; `scripts/check-version-bump-docs.sh <base-ref> <head-ref>`
+  checks it.
   - [ ] Add new version section at the top
   - [ ] Use format:
     ```markdown
@@ -174,10 +174,8 @@ form previously documented here (`bash scripts/stamp-doc-last-updated.sh`, "upda
 
 ## Testing Before Release
 
-- [ ] **Run full test suite**
-  ```bash
-  cargo test --all
-  ```
+- [ ] **Run full test suite** (`scripts/gate.sh`, above; it runs
+  `cargo test --workspace --no-default-features --no-fail-fast`)
 
 - [ ] **Run integration tests**
   ```bash
@@ -186,16 +184,17 @@ form previously documented here (`bash scripts/stamp-doc-last-updated.sh`, "upda
   ```
 
 - [ ] **Test CLI on multiple platforms** (if you have access)
-  - [ ] Linux: `cargo build --features cpal-backend && ./target/debug/openpulse-cli --version`
-  - [ ] macOS: `cargo build --features cpal-backend && ./target/debug/openpulse-cli --version`
+  - [ ] Linux: `cargo build -p openpulse-cli && ./target/debug/openpulse --version`
+  - [ ] macOS: `cargo build -p openpulse-cli && ./target/debug/openpulse --version`
+  - [ ] Raspberry Pi (aarch64): `cross check --workspace --target aarch64-unknown-linux-gnu --no-default-features`
   - [ ] Windows (if applicable): same
 
-- [ ] **Test a sample workflow end-to-end**
+- [ ] **Test a sample workflow end-to-end** (the loopback backend is in-process, so a transmit in one
+  process is not heard by a receive in another; the benchmark exercises TX→RX in one process)
   ```bash
-  cargo build --features cpal-backend --release
-  ./target/release/openpulse-cli transmit "Hello" BPSK31 --backend loopback
-  ./target/release/openpulse-cli receive BPSK31 --backend loopback
-  # (Note: --backend flag is illustrative; actual CLI may vary)
+  cargo build -p openpulse-cli --release
+  ./target/release/openpulse --backend loopback --log error benchmark run
+  # On-air evidence for Release 1 comes from work plan M3/M4, not from this smoke test.
   ```
 
 - [ ] **Verify documentation builds** (if using a doc builder like mdBook)
@@ -342,19 +341,21 @@ If you're distributing pre-built binaries:
   ```bash
   # Example: Linux
   tar czf openpulse-v2.4.0-linux-x86_64.tar.gz \
-    target/release/openpulse-cli \
+    target/release/openpulse \
+    target/release/openpulse-server \
+    target/release/openpulse-tnc \
     README.md \
     LICENSE
 
   # Example: macOS
   tar czf openpulse-v2.4.0-macos-x86_64.tar.gz \
-    target/release/openpulse-cli \
+    target/release/openpulse \
     README.md \
     LICENSE
 
   # Example: Windows (if applicable)
   zip openpulse-v2.4.0-windows-x86_64.zip \
-    target/release/openpulse-cli.exe \
+    target/release/openpulse.exe \
     README.md \
     LICENSE
   ```
@@ -396,7 +397,7 @@ If you're distributing pre-built binaries:
 For bug-fix-only patch releases, follow the same checklist but:
 
 - [ ] **Skip breaking change discussions** (no API changes allowed)
-- [ ] **Update only docs/CHANGELOG.md** (minimal entry)
+- [ ] **Update only `docs/dev/project/changelog.md` and `docs/releasenotes.md`** (minimal entries)
 - [ ] **Use the same release checklist** but fast-track PR review
 - [ ] **Merge and tag immediately** after review passes (no draft phase)
 
@@ -477,7 +478,7 @@ v2.0.0 → major (breaking change)
 ### Major Release Checklist
 
 - [ ] Breaking changes are documented in `docs/releasenotes.md` with migration guide
-- [ ] `docs/plugin-trait-versioning.md` is updated (if trait changed)
+- [ ] `docs/dev/plugin-trait-versioning.md` is updated (if trait changed)
 - [ ] All existing plugins tested to ensure incompatibility is clear
 - [ ] Documentation examples are updated to reflect breaking changes
 

@@ -2,14 +2,19 @@
 project: openpulsehf
 doc: docs/cli-ux-identity-trust-diagnostics.md
 status: living
-last_updated: 2026-04-26
+last_updated: 2026-10-15
 ---
 
 # CLI UX Specification for Identity and Trust Diagnostics
 
 ## Purpose
 
-This document defines user-facing CLI behavior for identity and trust diagnostics in OpenPulseHF.
+This document defines user-facing CLI behavior for identity and trust diagnostics in OpenPulseHF,
+and records where the current `openpulse` CLI (`crates/openpulse-cli`) meets or departs from it.
+
+Release 1 status: the signed classical handshake is part of Release 1. The PKI service these
+commands query (`pki-tooling`, default `--pki-url http://127.0.0.1:8787`) is not a Release 1
+crate; the `identity`, `trust show`/`explain` and `diagnose` commands need it running.
 
 Goals:
 
@@ -54,12 +59,24 @@ Out of scope:
 
 - `openpulse trust show <station-or-record-id>`
   - prints trust recommendation and evidence summary
+- `openpulse trust explain <station-or-record-id>`
+  - prints reasoned decision trace for current trust state
 - `openpulse trust policy show`
   - prints active policy profile and version
 - `openpulse trust policy set <strict|balanced|permissive>`
-  - updates local policy profile
-- `openpulse trust explain <station-or-record-id>`
-  - prints reasoned decision trace for current trust state
+  - updates local policy profile (persisted in `trust-policy.json`)
+- `openpulse trust import --station-id <id> --key-id <id> [--trust <level>] [--source <source>]`
+  - adds or updates a local trust-store record; `--trust` is one of `full`, `marginal`,
+    `unknown` (default), `untrusted`, `revoked`; `--source` is `out_of_band` (default) or
+    `over_air`
+- `openpulse trust list`
+  - lists local trust-store records
+- `openpulse trust revoke --station-or-key <id> [--reason <text>]`
+  - marks a local record revoked (default reason `operator_revoked`)
+
+The local trust store and policy live in the CLI config directory: `$OPENPULSE_CONFIG_DIR`, else
+`$XDG_CONFIG_HOME/openpulse`, else `~/.config/openpulse` (`trust-store.json`,
+`trust-policy.json`).
 
 ### Group: `diagnose`
 
@@ -77,7 +94,13 @@ All identity/trust diagnostic commands must support:
 - `--format text|json` (default: text)
 - `--verbose` (adds evidence and validation detail)
 - `--no-color` (disable terminal color)
-- `--timeout <seconds>`
+- `--timeout <seconds>` (default 5)
+
+The CLI also accepts `--diagnostics` on these commands (shared option set).
+
+Current implementation: all five options are accepted. The CLI emits no colour, so `--no-color`
+changes nothing. `--timeout` is echoed in the output (`timeout_seconds` with `--verbose`) but does
+not yet bound the PKI request.
 
 ## Output model
 
@@ -89,15 +112,19 @@ Text output format:
 2. key-value detail lines
 3. optional recommendation block
 
+As implemented, text mode prints `STATUS: <decision>`, then `status:`, `reason_code:`, one line
+per `details` key (values JSON-encoded), and `recommendation:`.
+
 Example:
 
 ```text
 STATUS: reduced
-peer: W1ABC
-trust_state: unknown
-connection_trust_level: reduced
+status: warn
 reason_code: over_air_certificate_without_psk
-recommendation: request out-of-band certificate verification before data transfer
+peer: "W1ABC"
+trust_state: "unknown"
+certificate_source: "over_air"
+recommendation: Request out-of-band certificate verification before data transfer.
 ```
 
 ### JSON mode
@@ -105,7 +132,8 @@ recommendation: request out-of-band certificate verification before data transfe
 JSON output shape:
 
 - `status` (ok, warn, fail)
-- `decision` (verified, psk-verified, reduced, unverified, low, rejected)
+- `decision` (for trust decisions: verified, pskverified, reduced, unverified, low, rejected;
+  other commands use their own values, e.g. `missing`, `imported`, `unavailable`)
 - `reason_code`
 - `details` (object)
 - `recommendation`
@@ -138,6 +166,11 @@ Rules:
 - `trust explain` returns `0` for `warn` and `2` for `fail`.
 - `diagnose session` returns highest-severity code among sub-checks.
 
+As implemented: `status: fail` exits `2`, `ok` and `warn` exit `0`, an unreachable PKI service
+exits `3` (`reason_code: pki_service_unreachable`), and a usage or argument error exits non-zero
+through clap or the CLI's error path. `diagnose session` is currently the same trust decision as
+`diagnose handshake` plus a PKI audit record, not a roll-up of separate sub-checks.
+
 ## Decision diagnostics requirements
 
 Every trust decision command must emit:
@@ -149,6 +182,10 @@ Every trust decision command must emit:
 - final connection trust level
 
 If decision is downgraded, output must include a single primary reason code plus optional secondary notes.
+
+As implemented, trust decisions carry `trust_state`, `certificate_source`, `policy_profile` and
+`policy_profile_version` in `details`, plus `evidence_classes` and `effective_revocation_state`
+from the PKI record. `trust explain` (and `diagnose` with `--verbose`) adds `secondary_notes`.
 
 ## Command examples
 
@@ -174,6 +211,12 @@ Minimum normalized codes:
 - `invalid_manifest_schema`
 
 Text mode must show one primary code. JSON mode must include `reason_code` and optional `sub_reasons[]`.
+
+Implemented codes include all of the above except `signature_verification_failed` and
+`invalid_manifest_schema`; `diagnose manifest` reports `no_manifest_for_session`,
+`manifest_read_error`, `sender_not_in_trust_store`, `key_id_not_parseable_as_pubkey`,
+`signature_valid` and `signature_invalid` instead. `sub_reasons[]` is not emitted; secondary
+detail goes in `details.secondary_notes`.
 
 ## Conformance expectations
 

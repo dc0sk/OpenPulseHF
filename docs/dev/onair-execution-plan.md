@@ -2,7 +2,7 @@
 project: openpulsehf
 doc: docs/dev/onair-execution-plan.md
 status: living
-last_updated: 2026-10-02
+last_updated: 2026-10-15
 ---
 
 # On-air execution plan
@@ -31,13 +31,20 @@ The sections below were written 2026-07-23. These changes to them are in force:
    not fade**, so A2's climb and demotion are driven by induced level changes (TX power,
    attenuation), recorded per §A2; Release 1 claims the controller responds correctly, not that it
    is characterised on a fading path. The release candidate then repeats A1/A2 on HF (M4).
-2. **Evidence must be recorded on the v0.17 wire format.** M1 changes only the compressed payload
-   (the zstd dictionary ID); the preamble stays as it is for v0.17 and changes before 1.0 (#1062,
-   decision 16). G0, G1 and 2 m plumbing runs can and should happen now. A1/A2 bundles count once M1
-   has landed, since compression is on in those runs. The replay-corpus re-record (#1351) and a second
-   2 m campaign follow #1062, before 1.0.
+2. **Evidence must be recorded on the v0.17 wire format, with the #1062 preamble.** M1 landed
+   2026-10-01. #1062 moved into Release 1 (decision 22) and its flag day landed 2026-10-10 (#1508):
+   BPSK63, BPSK100 and BPSK250 (SL3–SL5) send a PN-63 preamble, BPSK31 keeps `--++`, QPSK250-D keeps
+   its own. Together with the earlier whitener (#1148) and binary-handshake (#1147) breaks, no build
+   before these talks to a current one, so **both stations run the same commit**, and a bundle recorded before the flag day does not count for A1/A2. G0, G1 and 2 m
+   plumbing runs can happen now. #1062's on-air check (F8) and the replay-corpus re-record (#1351) are
+   part of M3.
 3. **Development runs use the 2 m pair** (IC-9700 ↔ FT-818, 144.640 MHz,
-   [onair-ic9700-ft818-setup.md](onair-ic9700-ft818-setup.md)). The HF run with the release candidate
+   [onair-ic9700-ft818-setup.md](onair-ic9700-ft818-setup.md)). The pair was fixed 2026-10-02:
+   station A is **rpi51 + IC-9700**, station B is **rpi53 + FT-818 + Yaesu SCU-17**. The FT-818's
+   owner set three rules (2026-10-14) that the tooling follows: the **FRONT** (BNC) antenna stays
+   selected and no tooling sends an antenna command; power is **L1 (0.5 W)** set on the rig and never
+   raised; the mode is set on the rig (**DIG, DIG MODE = USER-U**) and the runners send none for it
+   (`TEST_MODE_RIG_B=keep`). The HF run with the release candidate
    needs an HF-capable pair — the IC-9700 is VHF/UHF only; on record: FT-991A 008924A1, IC-705,
    FT-818, and the TX500/KX3 pair (`run-onair-tx500-kx3.sh`). The pair and band are picked when the RC
    is cut. §4's "40 m NVIS" note describes that later run, not the development campaign.
@@ -53,10 +60,14 @@ The sections below were written 2026-07-23. These changes to them are in force:
    `<report>-evidence/`, and warns if a station retained no events. The configs also state
    `notch_enabled`, `agc_enabled`, `cessb_enabled` and `ptt_leader_ms` explicitly (item 7). The
    script's default frequency is now 144.640 MHz (decision 13); it was 14.070 MHz.
-6. **Code items on the on-air path, in M2:** #1257 (no leader delay between PTT edge and first
-   sample — host-keyed rigs clip the preamble), #1334 (a flush timeout un-arms the station-ID timer),
-   #1367 (200 ms sleep before PTT drop), #1456 and #1460 (idle noise feeding the NACK streak — they
-   break A2's stability clause).
+6. **Code items on the on-air path, in M2 — code done 2026-10-14:** #1257 (`[modem] ptt_leader_ms`,
+   default 0; the leader is checked at G1 by SDR capture before it is raised), #1334 (a flush timeout
+   no longer un-arms the station-ID timer), #1367 (PTT release waits for the device's reported drain
+   plus 10 ms, capped at the old 200 ms), #1456 (idle flicker and an ACK on air are not ladder
+   evidence), #1460 (bounded by round 4b, 2026-10-13: a failure moves the ladder only when its NACK is
+   keyed; #1460 stays open — a foreign over still costs one step and up to 3 NACKs). The keyed-open
+   device-name cache cut key-to-first-sample to ~100 ms on rpi51 and ~31 ms on rpi53. **Waiting on
+   the rigs:** the PTT leader at G1 and the Pi receive-cost re-measure.
 7. **Add-on DSP.** The receiver notch ships **on** (decision 10) with its acceptance row disclosed as
    unproven since `884d96ed` (#1457). Per release-criteria decision 3, record `notch_enabled`,
    `agc_enabled` and `cessb_enabled` in every bundle so an effect can be attributed; a runner that
@@ -64,6 +75,13 @@ The sections below were written 2026-07-23. These changes to them are in force:
 8. **Still to check, not re-derived here:** whether the one-shot receive "retry window misalignment"
    (onair-status.md Issue B, §2) is still live after the #1310/#1384 burst-path fixes. The A2 runner
    uses the daemon streaming path, which that item does not affect. UNCHECKED.
+9. **Runner safety rules (2026-10-14).** `run-onair-twin-ota.sh` and `run-onair-ic9700-ft991a.sh`
+   only ever **lower** a rig's RF power (`scripts/lib/rig-power.sh`: `L RFPOWER` is sent only when
+   the request is below the current reading; the FT-818 is never touched, since Hamlib cannot set its
+   power). Mode is per station, and `keep` sends none (the run then requires the expected mode
+   reading, `*_TEST_MODE_EXPECT`, or stops before keying). Both refuse a frequency outside
+   **144.500–144.750 MHz** unless the band limits are widened for an HF run — another band would also
+   switch the rig's per-band settings, the FT-818's antenna among them.
 
 
 **Read this first, because it changes the order of everything below:** the modem, every shipping
@@ -213,10 +231,11 @@ SSH-pair runner, now on the real `transmit`/`receive` CLI). Both build/require a
 each Pi — do **not** deploy via `deploy-rpi-pair.sh` (no-audio; it now refuses by default).
 
 **Station pairings** (each has a config profile + a setup doc):
-- IC-9700 (rpi51) ↔ FT-991A (dd2zm) — [signal-chain-verification](onair-signal-chain-verification.md).
-- IC-9700 (rpi51, stationary) ↔ FT-818 + SCU-17 (this laptop, portable) —
+- IC-9700 (rpi51) ↔ FT-991A (dd2zm) — [signal-chain-verification](onair-signal-chain-verification.md). The
+  earlier campaign's pair; not the Release 1 development pair.
+- **Release 1 pair:** IC-9700 (rpi51) ↔ FT-818 + SCU-17 (rpi53; first set up portable on a laptop) —
   [onair-ic9700-ft818-setup.md](onair-ic9700-ft818-setup.md), profile
-  `docs/config/onair-ic9700-ft818.example.sh`. 2 m 144.640 MHz; SDR co-located with the portable end.
+  `docs/config/onair-ic9700-ft818.example.sh`. 2 m 144.640 MHz; FT-818 on its FRONT antenna at L1.
 
 Sequence:
 1. **SDR up first, always.** Start `scripts/onair-sdr/sdr_capture.py` on the dev host so every TX is
@@ -253,8 +272,8 @@ exercises the *adaptive* ladder rather than fixed-mode cases. Confirm it uses th
 `openpulse-server` (it does; the control-client CLI it also builds is deliberately no-audio and only
 talks to the daemon).
 
-Watch for the **two-scale SNR boundary** (CLAUDE.md): SL2–SL6 report true channel SNR, SL7+ report a
-saturation-bounded plugin SNR. The evidence climb is what carries the ladder across that boundary — a
+Watch for the **two-scale SNR boundary** ([sharp-edges.md](sharp-edges.md)): SL2–SL6 report true
+channel SNR, SL7+ report a saturation-bounded plugin SNR. The evidence climb is what carries the ladder across that boundary — a
 real fade is exactly where you would see it either work or stall, so this is also a validation of the
 #934 evidence-based climb on real conditions.
 
@@ -356,9 +375,11 @@ scanning receive or route the matrix through the daemon streaming path. Filed he
 ## 9. Critical path, one line
 
 **Release 1 (re-baselined 2026-09-30, test stages 2026-10-01):** virtual audio → hardware loopback →
-G0/G1 on the **2 m** pair (isolators fitted; G3 confirms RX is clean) → *wait for M1 (compression dictionary ID)* →
-A1 both directions on 2 m → A2 per §A2 scoring with induced level changes (after the two tooling gaps
-are closed) → the ARDOP Pat session → release candidate → **HF run with the RC** → tag `v0.17.0`.
+G0/G1 on the **2 m** pair (isolators fitted; G3 confirms RX is clean; the PTT leader checked by SDR
+capture) → A1 both directions on 2 m, both stations on the same post-flag-day commit (M1 and #1062
+have landed; the two tooling gaps are closed) → A2 per §A2 scoring with induced level changes → F8
+and the corpus re-record → the ARDOP Pat session → release candidate → **HF run with the RC** → tag
+`v0.17.0`.
 A4/A5 run alongside. A3 follows for 1.0.
 
 Previously: **G0 (kill the RX RFI) → G1 (seven gates pass) → A1 (one rig→rig decode) → A2 (ladder on a real fade)

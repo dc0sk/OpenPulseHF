@@ -2,26 +2,67 @@
 project: openpulsehf
 doc: docs/dev/design/hpx-waveform-design.md
 status: living
-last_updated: 2026-10-01
+last_updated: 2026-10-15
 ---
 
 # HPX Waveform Design
 
-This document defines the waveform architecture for the HPX protocol family: the rate ladder, modulation class selection rationale, ACK frame design, and Memory-ARQ specification. It draws on the comparative analysis in docs/vara-research.md, docs/ardop-research.md, and docs/pactor-research.md.
+This document defines the waveform architecture for the HPX protocol family: the rate ladder, modulation class selection rationale, ACK frame design, and Memory-ARQ specification. It draws on the comparative analysis in docs/dev/research/vara-research.md, docs/dev/research/ardop-research.md, and docs/dev/research/pactor-research.md.
 
 Parameters marked **[proposed]** are design targets requiring simulation validation before implementation. Parameters marked **[confirmed]** are derived from first principles or from validated incumbent designs.
 
-> **Implementation status (2026).** This is the original design ladder (notional speed
-> levels SL1–11 in design notation). The shipped profiles in
-> `crates/openpulse-core/src/profile.rs` (`fast` and `robust`, both on the `hpx_hf` ladder; the
-> earlier `hpx_ofdm_hf`, `hpx_wideband_hd` etc. were deleted 2026-10-01)
-> realise it with the registered plugin modes — single-carrier BPSK/QPSK/8PSK/64QAM and
-> the OFDM / SC-FDMA multicarrier families. At higher baud the single-carrier modes use
-> **root-raised-cosine (`-RRC`) pulse shaping** for carrier-offset robustness: the
-> mid-2026 carrier-recovery work made the RRC modes plus 8PSK500/1000 acquire and decode
-> through a realistic ±50 Hz offset (the plain rectangular `QPSK2000`/`8PSK2000` are
-> RRC-superseded). See [architecture.md](architecture.md) and the
-> [README modulation-modes table](../../README.md#modulation-types).
+> **Implementation status (2026-10-15).** This is the original design ladder (notional speed
+> levels SL1–11 in design notation, HPX500/HPX2300 classes). It is kept as design history; the
+> **[proposed]** tables below are not what was built. What ships is one ladder, `hpx_hf`
+> (`crates/openpulse-core/src/profile.rs`), run as exactly two session profiles: **`fast`** (default,
+> SL1–SL14, up to ≈2031 Hz) and **`robust`** (the same ladder capped at SL6, ≤500 Hz, single-carrier,
+> all coded). The ten earlier profile names (`hpx_ofdm_hf`, `hpx_wideband_hd`, `hpx_pilot*` and the
+> rest) were deleted 2026-10-01 with no aliases; their modes stay selectable as fixed modes. The ARDOP
+> TNC floors its adaptive ladder at SL2.
+>
+> | SL | Mode | FEC | net bps | floor dB |
+> |---|---|---|---|---|
+> | 1 | MFSK16 | Rs | ~9 | none (sub-floor deep-fade rung) |
+> | 2 | BPSK31 | Rs | 27 | 3 (initial level) |
+> | 3 | BPSK63 | Rs | 54 | 4 |
+> | 4 | BPSK100 | Rs | 87 | 4.5 |
+> | 5 | BPSK250 | Rs | 219 | 5 |
+> | 6 | QPSK250-D | Rs | 437 | 7 |
+> | 7 | OFDM52 | SC (soft concatenated) | 1264 | 9 |
+> | 8 | OFDM52-8PSK | SC | 1895 | 10 |
+> | 9 | OFDM52-16QAM | SC | 2527 | 12 |
+> | 10 | OFDM52-32QAM | SC | 3159 | 14 |
+> | 11 | OFDM52-64QAM | SC | 3790 | 16 |
+> | 12 | OFDM52-16QAM | LDPC high-rate (r≈8/9) | 5141 | 18 |
+> | 13 | OFDM52-32QAM | LDPC high-rate | 6426 | 19 |
+> | 14 | OFDM52-64QAM | LDPC high-rate | 7710 | 20 |
+>
+> The BPSK rungs carry `Rs`, upgraded per frame to `RsStrong` where it costs no extra RS block.
+> BPSK63/100/250 send a PN-63 preamble since the #1062 flag day (2026-10-10); BPSK31 keeps `--++`;
+> QPSK250-D keeps its own designed 16-symbol sequence (`pn-preamble.md`).
+>
+> Where the build departs from this design:
+> - **Sub-floor rung.** SL1 is non-coherent 16-GFSK (`MFSK16`, 500 Hz, ~17 s per frame), not a chirp,
+>   and it carries data.
+> - **OFDM.** The OFDM rungs use 52 subcarriers at 31.25 Hz spacing (FFT 256, CP 32 at 8 kHz,
+>   ≈2031 Hz, `plugins/ofdm`), not the ≤16-subcarrier design below, with coherent per-subcarrier
+>   LS+ZF equalisation. There is no differential OFDM rung; the single-carrier/OFDM boundary is
+>   SL6/SL7.
+> - **ACK.** The 5-byte ACK is ShortFEC-coded to 13 bytes and sent on `FSK4-ACK` with no preamble
+>   (100 baud, ≈520 ms), not 20 symbols in 200 ms; SL1 uses three `MFSK16-ACK` copies plus one FSK4
+>   copy. The ACK carries an absolute `recommended_level`, and the **data receiver** leads the rate
+>   (`OtaRateController`, `crates/openpulse-core/src/ota_rate.rs`), not the ISS as below. See
+>   `protocol-wire-spec.md` §5.
+> - **No status byte, no ARQ cycle.** Frames are `OPLS` frames (`protocol-wire-spec.md` §1); there is
+>   no PACTOR-style status byte and no fixed 1.25 s cycle — each frame is ACKed when it ends.
+> - **Compression** is LZ4 or zstd with a shared dictionary, wrapped per message as `OPZ1` (§7.1 of
+>   the wire spec), not Huffman/Pseudo-Markov in a status byte.
+> - **FEC** is Reed-Solomon with interleaving on the single-carrier rungs and soft concatenated / LDPC
+>   on OFDM, not rate-5/6 convolutional.
+>
+> The `-RRC` single-carrier modes, 8PSK, 64QAM, SC-FDMA and the pilot-framed family described in
+> [architecture.md](architecture.md) and below exist as fixed modes but are not on `hpx_hf` and are not
+> part of Release 1.
 
 ---
 
@@ -81,6 +122,8 @@ The ACK frame design (4FSK, independent of data modulation) ensures that rate ad
 ---
 
 ## Pilot-framed waveform
+
+Not on `hpx_hf` and not part of Release 1; kept as the design record of an experimental family.
 
 The `PILOT-*` modes (`plugins/pilot`) are an as-built single-carrier family that
 recovers the carrier differently from the BPSK/QPSK/8PSK modes above: instead of a
@@ -196,7 +239,7 @@ Any path  | SL1: Chirp   ~100 bps        |
           |  (CONREQ only)                |
 ```
 
-SNR thresholds are indicative. Actual switching thresholds must be determined by simulation using Watterson M1/M2 channel models (see docs/benchmark-harness.md).
+SNR thresholds are indicative. Actual switching thresholds must be determined by simulation using Watterson M1/M2 channel models (see docs/dev/benchmark-harness.md).
 
 ---
 
@@ -425,7 +468,7 @@ The waveform features described here depend on each other and on platform capabi
 
 ## Benchmark integration
 
-Each speed level must have a corresponding benchmark scenario defined in docs/benchmark-harness.md:
+Each speed level must have a corresponding benchmark scenario defined in docs/dev/benchmark-harness.md:
 
 - SL2–5 (single-carrier): add to HF500 scenario family with Watterson M1/M2 and Gilbert-Elliott moderate/heavy burst profiles.
 - SL6–7 (small OFDM): add HF500-OFDM-01 through HF500-OFDM-04.

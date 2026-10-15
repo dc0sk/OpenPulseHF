@@ -2,10 +2,16 @@
 project: openpulsehf
 doc: docs/dev/plugin-commercial-interface.md
 status: living
-last_updated: 2026-05-09
+last_updated: 2026-10-15
 ---
 
 # Commercial and Third-Party Plugin Interface
+
+> **Status (2026-10-15): proposal; nothing in Approaches A or B is built.** There is no
+> `openpulse-plugin-host` crate, no C ABI and no IPC adapter in the workspace; this work is
+> `post-release` under the [work plan](project/workplan.md). Approach C works today. Of its
+> integration points, only the ARDOP TNC is part of Release 1 (`v0.17.0`); KISS, the Winlink
+> gateway and the B2F driver exist but are experimental and not part of Release 1.
 
 ## Problem statement
 
@@ -100,7 +106,7 @@ int op_demodulate_soft(
 
 ### Rust host loader (`openpulse-plugin-host`, LGPL)
 
-A new crate `crates/openpulse-plugin-host` provides:
+A new crate `crates/openpulse-plugin-host` (proposed; does not exist) would provide:
 
 ```rust
 pub struct DynPlugin { /* libloading::Library handle + resolved symbols */ }
@@ -180,10 +186,10 @@ path for commercial applications that treat OpenPulseHF as a transparent bearer.
 
 | Interface | Suitable for | Notes |
 |---|---|---|
-| ARDOP TCP data port (8516) | General proprietary data | u16-BE length-prefixed frames |
-| KISS TCP port (8100) | AX.25 payloads | KISS byte-stuffing, arbitrary PID |
-| `openpulse-gateway` CLI | Winlink-style messages | `--message` from stdin or file |
-| B2F driver library | Embedded Winlink clients | Rust API; compile against crate |
+| ARDOP TCP data port (8516) | General proprietary data | u16-BE length-prefixed frames; Release 1 |
+| KISS TCP port (8100) | AX.25 payloads | KISS byte-stuffing, arbitrary PID; experimental |
+| `openpulse-gateway send` | Winlink-style messages | `--message`, or the body from stdin; experimental |
+| B2F driver library | Embedded Winlink clients | Rust API; compile against crate; experimental |
 
 ---
 

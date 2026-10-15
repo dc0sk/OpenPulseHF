@@ -2,7 +2,7 @@
 project: openpulsehf
 doc: docs/dev/design/protocol-wire-spec.md
 status: living
-last_updated: 2026-10-10
+last_updated: 2026-10-15
 ---
 
 # Protocol & Handshake Wire Specification
@@ -33,11 +33,13 @@ is recorded on this format.
 
 **The preamble changed on 2026-10-10 (#1062 flag day, work plan decision 22).** BPSK63, BPSK100 and
 BPSK250 (`hpx_hf` SL3–SL5) send a 63-symbol PN preamble (x⁶ + x + 1, the m-sequence as symbols)
-instead of the 32-symbol alternating run; BPSK31 (SL2) and `BPSK250-RRC` keep the alternating run
-(decision 25). It is a plugin-level change, outside this document's byte layout, and it breaks
-interop with every earlier build: an old receiver reports "invalid magic" on a new frame. The
-sequence is pinned in `plugins/bpsk/tests/preamble_seam_identity.rs`; the design and its validation
-are in `pn-preamble.md`. Release 1's on-air evidence (M3) is recorded on this format.
+instead of the 32-symbol NRZI alternating run (`--++` as symbols); BPSK31 (SL2) and the off-ladder
+`BPSK250-RRC` keep `--++` (decision 25; `is_pn_mode` in `plugins/bpsk/src/modulate.rs`). QPSK250-D
+(SL6) keeps its own 16-symbol designed sequence (`preamble_symbols` in `plugins/qpsk/src/modulate.rs`).
+It is a plugin-level change, outside this document's byte layout, and it breaks interop on SL3–SL5
+with every earlier build, `v0.16.0` included: an old receiver reports "invalid magic" on a new frame.
+The sequence is pinned in `plugins/bpsk/tests/preamble_seam_identity.rs`; the design and its
+validation are in `pn-preamble.md`. Release 1's on-air evidence (M3) is recorded on this format.
 
 **What can still change before 1.0, so it is not a surprise:**
 - Anything else the pre-1.0 window needs, under the §3 rule: the byte does not move, so two builds
@@ -322,8 +324,8 @@ Inputs, all fixed:
 | signing seed | 32 × `0x01` |
 | `station_id` / `dst_station` | `W1AW` / `K2XYZ` |
 | `signing_modes` | `[Normal, Psk]` = `0x01, 0x02` |
-| `session_id` | `W1AW-1700000000000` |
-| `station_grid` / `profile_name` | `FN31pr` / `hpx_hf` |
+| `session_id` | `1700000000000` (u64) |
+| `station_grid` / `profile_name` | `FN31pr` / `hpx_hf` (an opaque string to the encoder; the live profile names are `fast` and `robust`) |
 | `profile_fingerprint` | `0x0123456789ABCDEF` |
 | `timestamp_ms` | `1700000000000` |
 | `kex_pubkey` | 32 × `0x42` |
@@ -353,7 +355,8 @@ with *each other*, so it passes just as happily when both drift together — whi
 format change does. Verified by sabotage: swapping two body fields in **both** the encoder and the
 decoder leaves all 16 round-trip and tamper tests passing, and fails only here.
 
-**PQ**: the PQ CONREQ is pinned by digest (SHA-256 `015a1aa8…`, 5060 B) rather than inline hex.
+**PQ**: the PQ CONREQ is pinned by digest (SHA-256 `6281f74a…`, 5049 B; `PQ_CONREQ_KAT_SHA256` and
+`PQ_CONREQ_KAT_LEN` in `handshake_kat.rs`) rather than inline hex.
 ML-DSA-44 signing in this build was **measured** deterministic, so the whole frame pins. The PQ
 **CONACK** has no vector and cannot have one: its `kem_ciphertext` comes from `encapsulate()`, which
 is randomised by design.
@@ -389,8 +392,9 @@ Outside the signed span, flipping one bit would change how many trailing bytes a
 the classical signature — and that bit would itself be unsigned. The decoder cross-checks the actual
 trailer length against the signed flag, so a truncated or padded frame cannot be re-split.
 
-**These frames do NOT fit one fragment, and are not expected to.** A PQ CONREQ is ~5 kB ≈ 2.7 min at
-BPSK250 — not deployable on this link. PQ is in the v2 format so that the format is **finished**, and
+**These frames do NOT fit one fragment, and are not expected to.** The KAT PQ CONREQ is 5049 B, 21 SAR
+fragments at 251 B, against one for a classical CONREQ — not deployable on this link. No PQ-handshake
+airtime has been measured, so none is quoted here. The PQ handshake is not part of Release 1. PQ is in the v2 format so that the format is **finished**, and
 wiring PQ later is not a second wire break; it is not a shipping feature, and the test suite asserts
 the multi-fragment property rather than letting a green run imply otherwise.
 
@@ -414,7 +418,12 @@ Component sizes:
 ## 5. ACK frame (FSK4)
 
 Source: `crates/openpulse-core/src/ack.rs` · driven by the rate/ACK taxonomy (CAP-32). A fixed
-**5-byte** frame, sent on the `FSK4-ACK` waveform (20 symbols @ 100 baud ≈ 200 ms on air).
+**5-byte** frame. On the air it is ShortFEC-coded first (RS, 8 ECC bytes, 5 → 13 bytes;
+`ShortFecCodec`) and sent on the `FSK4-ACK` waveform: 2 bits per symbol at 100 baud, no preamble, so
+52 symbols ≈ 520 ms (`ModemEngine::transmit_ack_with_short_fec`). When the recommended level is the
+sub-floor rung (SL1), the ACK goes out as one leading FSK4-ACK copy plus three `MFSK16-ACK` copies
+0.5 s apart in one keying, which the receiver union-decodes (`transmit_ack_mfsk16_k3`,
+`decode_ack_from_llr_copies`).
 
 ```
 byte 0:  bits[2:0] ACK type │ bit[3] has_reverse_ack │ bit[4] has_recommended_level │ bits[7:5] reserved (MUST be 0; rejected)
@@ -422,6 +431,9 @@ bytes 1–2: session_hash (u16 BE)  — 16-bit FNV-1a of session_id (anti-collis
 byte 3:  bits[2:0] reverse_ack (iff bit[3] of byte 0) │ bits[7:3] recommended_level (iff bit[4])
 byte 4:  CRC-8/SMBUS over bytes 0–3
 ```
+
+When the handshake established a session key (§3.2a), bytes 1, 2 and 4 carry a 24-bit truncated
+HMAC-SHA256 over bytes 0 and 3 instead of `session_hash` and the CRC (`encode_authenticated`).
 
 ACK types (byte 0 bits[2:0]):
 
@@ -543,15 +555,19 @@ the testmatrix note in the traceability matrix.)
 
 ### 7.3 Trust & signing modes (`trust.rs`, CAP-04)
 
-Signing modes `Normal` / `Psk` / `Pq` / `Hybrid` (increasing strength; PQ=4, Hybrid=5). Trust levels
-`Verified` / `PskVerified` / `Unknown` / `Reduced` / `Revoked`; policy profiles `Strict` / `Balanced`
-/ `Permissive` set the minimum acceptable trust. See the HPX spec's *Security Gates* section.
+Signing modes and their frozen wire codes: `Normal` 0x01, `Psk` 0x02, `Relaxed` 0x03, `Paranoid`
+0x04, `Pq` 0x05, `Hybrid` 0x06 (`SigningMode::to_wire`). Strength ranks for selection: `Relaxed` 1,
+`Normal`/`Psk` 2, `Paranoid` 3, `Pq` 4, `Hybrid` 5. Key trust (`PublicKeyTrustLevel`): `Full` /
+`Marginal` / `Unknown` / `Untrusted` / `Revoked`; the resolved connection trust
+(`ConnectionTrustLevel`) runs `Rejected` < `Low` < `Unverified` < `Reduced` < `PskVerified` <
+`Verified`. Policy profiles `Strict` / `Balanced` / `Permissive` set the minimum acceptable trust. See the HPX spec's *Security Gates* section.
 
 ---
 
 ## 8. Direct file transfer (`OPFX`)
 
-Source: `crates/openpulse-filexfer` · design `docs/dev/design/file-transfer-plan.md` (FF-16). A
+**Experimental, not part of Release 1** (work plan decision 1); registered here so the emission is
+documented. Source: `crates/openpulse-filexfer` · design `docs/dev/design/file-transfer-plan.md` (FF-16). A
 self-describing binary protocol for offering, transferring, and cryptographically verifying a file
 over an RF session. Registered here to satisfy the "determinable emissions" openness requirement.
 

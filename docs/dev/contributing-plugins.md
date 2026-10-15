@@ -2,12 +2,18 @@
 project: openpulsehf
 doc: docs/dev/contributing-plugins.md
 status: living
-last_updated: 2026-04-24
+last_updated: 2026-10-15
 ---
 
 # Contributing a Modulation Plugin
 
 This guide explains how to create, test, and submit a new modulation plugin for OpenPulse.
+
+> **Release 1 note (2026-10-15).** Release 1 (`v0.17.0`) ships only the plugins on the `hpx_hf`
+> ladder (MFSK16, BPSK, QPSK250-D, OFDM52, FSK4 ACK); see the
+> [work plan](project/workplan.md). A new plugin is `post-release` work unless the work plan says
+> otherwise. A plugin that changes what goes on the air on a ladder rung is a wire-format change and
+> needs the mandatory design review in `CLAUDE.md` (*Adversarial review*) before implementing.
 
 ## Overview
 
@@ -29,10 +35,9 @@ A modulation plugin implements the `ModulationPlugin` trait (defined in `openpul
 
 ## Prerequisites
 
-1. **Rust toolchain** (stable 2021 edition or later)
+1. **Rust toolchain** — pinned by `rust-toolchain.toml` (1.97.1); check with
    ```bash
-   rustup update stable
-   cargo --version  # Should be 1.70+
+   ./scripts/check-toolchain.sh
    ```
 
 2. **Familiarity with**:
@@ -44,7 +49,8 @@ A modulation plugin implements the `ModulationPlugin` trait (defined in `openpul
    ```bash
    git clone https://github.com/dc0sk/OpenPulseHF.git
    cd OpenPulseHF
-   cargo build --features cpal-backend
+   cargo build --workspace                       # CPAL audio on by default; needs libasound2-dev on Linux
+   cargo test --workspace --no-default-features  # what CI runs; no audio hardware needed
    ```
 
 ---
@@ -74,6 +80,10 @@ pub trait ModulationPlugin: Send + Sync {
 
     /// Check if this plugin handles a specific mode string.
     fn supports_mode(&self, mode: &str) -> bool { … }
+
+    // … plus default-implemented methods a plugin may override, among them
+    // `demodulate_soft` (LLRs for the soft FEC decoders) and `preamble_template`
+    // (for the receiver's correlation veto). See `crates/openpulse-core/src/plugin.rs`.
 }
 ```
 
@@ -86,7 +96,7 @@ pub struct PluginInfo {
     pub description: String,             // one-liner
     pub author: String,                  // you!
     pub supported_modes: Vec<String>,    // e.g., ["ARDOP1200", "ARDOP2400"]
-    pub trait_version_required: String,  // current framework major.minor, e.g. "2.0"
+    pub trait_version_required: String,  // framework major.minor, e.g. "3.0" (PLUGIN_TRAIT_VERSION is "3.1.0")
 }
 ```
 
@@ -94,9 +104,11 @@ pub struct PluginInfo {
 
 ```rust
 pub struct ModulationConfig {
-    pub center_frequency: f32,  // Hz (e.g., 1500)
-    pub sample_rate: u32,       // Hz (e.g., 8000)
-    pub mode: String,           // Mode selector (e.g., "BPSK31")
+    pub center_frequency: f32,   // Hz (e.g., 1500)
+    pub sample_rate: u32,        // Hz (e.g., 8000)
+    pub mode: String,            // Mode selector (e.g., "BPSK31")
+    pub pulse_shape: PulseShape, // envelope; plugins select it from the mode string
+    pub afc_correction_hz: f32,  // AFC correction the engine already applied to center_frequency
 }
 ```
 
@@ -160,7 +172,7 @@ impl MymodePlugin {
                     "MyMode1200".to_string(),
                     "MyMode2400".to_string(),
                 ],
-                trait_version_required: "2.0".to_string(),
+                trait_version_required: "3.0".to_string(),
             },
         }
     }
@@ -411,50 +423,51 @@ cargo test --lib
 
 ## Step 5: Integration with OpenPulse
 
-### 5a. Update `plugins/Cargo.toml` (workspace)
+### 5a. Add the crate to the workspace
 
-If there's a workspace toml, add your plugin:
+Add it to `members` in the root `Cargo.toml` (and, if other crates depend on it, to
+`[workspace.dependencies]`):
 
 ```toml
 members = [
-    "bpsk",
-    "mymode_plugin",
+    # …
+    "plugins/bpsk",
+    "plugins/mymode_plugin",
 ]
 ```
 
+Use `license.workspace = true` and `version.workspace = true` in the plugin's own `Cargo.toml`, as
+the existing plugins do.
+
 ### 5b. Update CLI to register your plugin
 
-Edit `crates/openpulse-cli/src/main.rs`:
+There is no shared registrar: each front-end lists its plugins. The CLI's list is
+`register_all` in `crates/openpulse-cli/src/plugins.rs`:
 
 ```rust
-// Add import
 use mymode_plugin::MymodePlugin;
 
-// Register in engine setup
-let mut engine = ModemEngine::new(audio);
-engine
-    .register_plugin(Box::new(BpskPlugin::new()))
-    .context("failed to register BPSK plugin")?;
 engine
     .register_plugin(Box::new(MymodePlugin::new()))
     .context("failed to register MyMode plugin")?;
 ```
 
-Update `crates/openpulse-cli/Cargo.toml`:
-
-```toml
-[dependencies]
-mymode_plugin = { path = "../plugins/mymode_plugin" }
-```
+Add the dependency to `crates/openpulse-cli/Cargo.toml` (`mymode_plugin = { path = "../../plugins/mymode_plugin" }`)
+and register the plugin in every other full registrar: the daemon (`server.rs` and `monitor.rs`),
+the TUI, linksim and the test matrix. `crates/openpulse-core/tests/plugin_registration_parity.rs`
+names those files (`FULL_REGISTRARS`) and checks that their lists agree; it fails until every one
+carries the plugin.
 
 ### 5c. Test end-to-end
 
 ```bash
 cd OpenPulseHF
-cargo build --features cpal-backend
-cargo run -p openpulse-cli -- transmit "TEST" MyMode1200
-cargo run -p openpulse-cli -- receive MyMode1200
+cargo test --workspace --no-default-features
+cargo run -p openpulse-cli -- --backend loopback modes   # the new mode strings should be listed
 ```
+
+The loopback backend is in-process, so a `transmit` in one process is not heard by a `receive` in
+another; prove the round trip with a test through `ModemEngine` (see `crates/openpulse-modem/tests/`).
 
 ---
 
@@ -510,12 +523,13 @@ Before submitting, verify:
 
 - [ ] Plugin crate compiles without warnings: `cargo build -p mymode_plugin`
 - [ ] All unit tests pass: `cargo test -p mymode_plugin --lib`
-- [ ] Plugin integrates with CLI: `cargo build -p openpulse-cli --features cpal-backend`
-- [ ] Plugin is properly registered and can be enumerated
-- [ ] Mode strings are recognized: `cargo run -p openpulse-cli -- receive MyMode1200` (should not error on unknown mode)
-- [ ] Basic modulate/demodulate works: `cargo run -p openpulse-cli -- transmit "X" MyMode1200 && cargo run -p openpulse-cli -- receive MyMode1200`
+- [ ] Plugin integrates with CLI: `cargo build -p openpulse-cli`
+- [ ] Plugin is registered in every front-end list and `plugin_registration_parity` passes
+- [ ] Mode strings are listed: `cargo run -p openpulse-cli -- --backend loopback modes`
+- [ ] Basic modulate/demodulate works: a `ModemEngine` round-trip test passes
+- [ ] Workspace gate passes: `scripts/gate.sh` (quote only its `GATE:` line)
 - [ ] No unsafe code (unless documented and audited)
-- [ ] Trait version compatibility is declared: `trait_version_required: "2.0"` (must match the
+- [ ] Trait version compatibility is declared: `trait_version_required: "3.0"` (must match the
       framework's `PLUGIN_TRAIT_VERSION` major, and be ≤ its minor)
 
 ---
@@ -547,8 +561,9 @@ git push -u origin feat/mymode-plugin
 
 ### 8d. Address CI feedback
 
-- Compilation must succeed on all platforms (Linux, macOS, Windows)
-- Tests must pass: `cargo test -p mymode_plugin`
+- Compilation must succeed on Linux and macOS, and cross-check for Raspberry Pi
+  (`cross check --workspace --target aarch64-unknown-linux-gnu --no-default-features`)
+- Tests must pass: `cargo test -p mymode_plugin` and `scripts/gate.sh`
 - Documentation must be clear
 - Code style must follow Rust conventions (checked by `cargo fmt`)
 
@@ -648,9 +663,9 @@ A future FSK plugin would:
 
 ## License
 
-Your plugin must be compatible with OpenPulseHF's license (see `LICENSE` file in the repository). Typically:
-- Code: Apache 2.0 or GPL-compatible
-- Documentation: CC-BY-4.0
+Your plugin must be compatible with OpenPulseHF's license, GPL-3.0-or-later (see `LICENSE` and the
+workspace `Cargo.toml`). An in-tree plugin uses `license.workspace = true`. For plugins kept outside
+the tree under another license, see [plugin-commercial-interface.md](plugin-commercial-interface.md).
 
 ---
 

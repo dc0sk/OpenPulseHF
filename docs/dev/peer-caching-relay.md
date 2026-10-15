@@ -2,7 +2,7 @@
 project: openpulsehf
 doc: docs/dev/peer-caching-relay.md
 status: living
-last_updated: 2026-04-23
+last_updated: 2026-10-15
 ---
 
 # Peer Caching, Query, and Multi-Hop Relay
@@ -11,6 +11,15 @@ last_updated: 2026-04-23
 
 This document defines OpenPulseHF requirements and design constraints for peer discovery cache, query semantics, and multi-hop transfer relay.
 
+> **Not part of Release 1.** Peer cache, query propagation and relay forwarding exist in
+> `openpulse-core` (`peer_cache.rs`, `query_propagation.rs`, `relay.rs`, `wire_query.rs`) and in the
+> experimental crates `openpulse-mesh` and `openpulse-discovery`, but Release 1 (`v0.17.0`) ships them
+> disabled or experimental (work plan decision 1). The items below are requirements, not a
+> description of shipped behaviour. As built, a `PeerRecord` holds `peer_id`, `capability_mask`,
+> `route_quality`, `trust_level`, `revision`, `updated_at_ms` and `callsign_hash`; several fields
+> listed below (identity key fingerprint, link-metric summary, quarantine of conflicting records) are
+> not in it.
+
 ## Scope
 
 - Discover and cache peer identity and capability records.
@@ -18,7 +27,7 @@ This document defines OpenPulseHF requirements and design constraints for peer d
 - Route transfers through multiple relay hops when direct links are unavailable or inefficient.
 - Preserve signed-transfer and trust-policy guarantees over relay paths.
 
-Wire-level envelope and message schema details are specified in docs/peer-query-relay-wire.md.
+Wire-level envelope and message schema details are specified in docs/dev/peer-query-relay-wire.md.
 
 ## Peer cache model
 
@@ -29,7 +38,7 @@ Each peer cache entry should include:
 - peer_id
 - callsign or operator label
 - identity key fingerprint
-- supported modes (for example HPX500, HPX2300)
+- supported capabilities (as built: the `capability_mask` bits registered in `peer-query-relay-wire.md`)
 - last_seen timestamp
 - trust status
 - observed link metrics summary
@@ -80,7 +89,7 @@ Queries should support filters for:
 - Hop trust and end-to-end signer trust are evaluated independently.
 - Route admission requires each selected relay to satisfy minimum trust policy.
 - Multi-hop manifests should include relay-path commitments to prevent silent route rewriting.
-- Post-quantum-capable signatures must be supported for route and transfer metadata under configured policy.
+- Post-quantum-capable signatures must be supported for route and transfer metadata under configured policy. (Not implemented: route and relay signatures are Ed25519 only.)
 
 ## Observability
 

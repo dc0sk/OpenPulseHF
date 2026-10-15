@@ -4,6 +4,9 @@ The 262 144-entry word/substring dictionary JS8Call's `JSC` text coder uses, emb
 [`crate::jsc`]'s `jsc_decompress` (general JS8 free-text decode). Ported verbatim from GPL-3.0
 JS8Call `jsc_map.cpp` (license-compatible with this repo).
 
+The JS8 plugin and the discovery feature it serves are experimental and not part of Release 1
+(`v0.17.0`).
+
 ## Format
 
 zlib-compressed, decompressing to `[count:u32 LE][ (len:u8)(latin1 bytes) × count ]` — one entry per

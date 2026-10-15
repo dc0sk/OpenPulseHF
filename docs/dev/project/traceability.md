@@ -15,6 +15,39 @@ this ledger adds the design rationale and the actually-observed results per chan
 
 ---
 
+## 2026-10-15 — Documentation revised against the code: README, user docs, living dev docs
+
+**Change.** Docs only. Every user-facing doc and the living dev docs were checked against the code on
+`main` (7a100654) and brought current. Records were not touched: reviews, archives, resolved design
+rounds, this ledger's earlier entries and test reports.
+
+**What changed:**
+- Release 1 = `v0.17.0` status, scope and milestones.
+- The two profiles `fast`/`robust`, and the ladder and per-rung preambles.
+- **Interoperability:** v0.16.0 and current `main` do not decode each other's frames on any rung and
+  their handshakes differ. Caused by #1148 (the whitener), #1147 (the binary handshake) and #1062
+  (the PN-63 preamble). Earlier drafts said only SL3–SL5 break; that was corrected before commit.
+- PTT, transmit and receive behaviour as built; config keys and CLI flags taken from the code.
+- Claims removed as false or unverifiable:
+  - commands and flags that do not exist;
+  - superlatives;
+  - third-party compatibility lists;
+  - a trust-store format that was never implemented.
+
+**Found in passing, not changed here (code):**
+- `scripts/onair-sdr/keyplay.py` speaks FT-991A ASCII CAT and can raise RF power (cap 20 W), while
+  its default station is now rpi53's FT-818;
+- the ARDOP TNC transmits unkeyed (`NoOpPtt`) when its PTT backend is unusable (#1285), where the
+  daemon refuses;
+- `run-onair-ic9700-ft991a.sh`'s built-in default frequency is outside its own band guard;
+- stale doc comments in `crates/openpulse-core/src/profile.rs`;
+- the CLI's default `--pki-url` port (8787) differs from pki-tooling's bind (8080).
+
+**Tests → results.** `validate-doc-frontmatter.sh` → `DOCFRONT: PASS`; `check-doc-stamps.sh` → PASS;
+`check-ledger-order.sh` → PASS; `trace.sh check` → `TRACE: PASS`. No code changed.
+
+---
+
 ## 2026-10-14 — On-air runners only ever lower a rig's power; the FT-818 keeps its front antenna (work plan M3)
 
 **Change.** The station owner's rules for the FT-818 on rpi53: low power, never increased; the front

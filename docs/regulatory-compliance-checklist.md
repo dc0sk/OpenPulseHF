@@ -2,7 +2,7 @@
 project: openpulsehf
 doc: docs/regulatory-compliance-checklist.md
 status: living
-last_updated: 2026-06-17
+last_updated: 2026-10-15
 ---
 
 # OpenPulseHF Regulatory Compliance Checklist
@@ -22,6 +22,22 @@ Compliance verification covers:
 
 > Rationale and derivations for every item below are in [`docs/regulatory.md`](regulatory.md).
 
+## What the software does today (checked 2026-10-15)
+
+Several requirements below were written in May 2026 as proposals for the software. This table says
+which exist in the code. Items marked **not implemented** are operator actions today.
+
+| Item | Status | Where |
+|---|---|---|
+| Station callsign | `[station] callsign` in `config.toml` (`~/.config/openpulse/` on Linux). The placeholder `N0CALL` disables auto-ID and blocks keying on the ARDOP TNC and the daemon's autonomous responders | `crates/openpulse-config`, `crates/openpulse-core/src/station_id.rs` |
+| Periodic + sign-off station ID | **Implemented** on the daemon and the ARDOP TNC: `DE <callsign>` in the active mode every `auto_id_interval_secs` (default 600) while transmitting, and after `auto_id_signoff_idle_secs` (default 10) of quiet. Optional Morse CW ID on the TNC (`CWID TRUE`) | `station_id.rs`, `cw_id.rs` |
+| Per-frame TX record | **Implemented**: every emitted frame appends callsign, UTC timestamp (ms), mode, declared power and frame sequence to `[station] tx_log_path` (default `~/.local/share/openpulse/tx-log.ndjson`), wired in the daemon | `crates/openpulse-core/src/tx_metadata.rs`, `crates/openpulse-daemon/src/server.rs` |
+| Declared TX power | `[station] tx_power_watts` (daemon, TNCs) and the CLI's global `--max-power` (default 100) are **recorded only**. The modem cannot measure PA output and does not limit power | `crates/openpulse-modem/src/engine.rs` |
+| Callsign or timestamp in the wire frame header | **Not implemented.** The frame is `OPLS` magic, version, sequence, length, payload, CRC-16. "Frame header v2" below is a proposal | `crates/openpulse-core/src/frame.rs` |
+| Power validation against band or jurisdiction, `--jurisdiction` flag | **Not implemented** | — |
+| Band-edge check on transmit | **Not implemented** in the daemon. The on-air test runners refuse a frequency outside 144.500–144.750 MHz by default and only ever lower rig power (`scripts/lib/rig-power.sh`) | `scripts/run-onair-ic9700-ft991a.sh`, `scripts/run-onair-twin-ota.sh` |
+| PTT watchdog, single keying path | **Implemented**: one `SharedPtt`, a second key refused, force-release after 180 s | `crates/openpulse-radio/src/shared_ptt.rs` |
+
 ---
 
 ## Part I: United States — FCC Part 97
@@ -37,23 +53,20 @@ Analysis and band/power tables: see [`docs/regulatory.md` § United States — F
 
 ### TX Power Limits
 
-**Compliance Requirement 1.2**: OpenPulseHF shall:
-- [  ] Accept `--max-power <watts>` CLI flag (default: 100 W)
-- [  ] Validate power against band allocation at TX time
-- [  ] Warn if requested power exceeds 1500 W (log as ERROR)
-- [  ] Enforce hard cap: refuse TX if `--max-power > jurisdiction_max`
-- [  ] Include actual TX power in session log
-
-**Implementation Note**: Most amateur stations operate < 100 W. The CLI default of 100 W is conservative and suitable for initial testing.
+**Compliance Requirement 1.2**: Power is set on the rig by the operator. OpenPulseHF:
+- [x] Accepts `--max-power <watts>` on the CLI (default 100) and `[station] tx_power_watts` in config — recorded, not enforced
+- [  ] Validate power against band allocation at TX time — not implemented
+- [  ] Warn if requested power exceeds 1500 W — not implemented
+- [  ] Refuse TX above a jurisdiction maximum — not implemented
+- [x] Records the declared TX power for every frame in the TX log (not a measured value)
 
 ### Station Identification
 
-**Compliance Requirement 1.3**: OpenPulseHF shall:
-- [  ] Log station callsign (`station_id`) in every transmitted frame (header field)
-- [  ] Log transmission timestamp (millisecond precision) in every frame
-- [  ] Emit identification beacon (callsign only) every 10 minutes if TX is continuous
-- [  ] Include callsign in session metadata (public / logged)
-- [  ] Configuration: station callsign read from `~/.config/openpulse/config.toml` under `[station]` section
+**Compliance Requirement 1.3**: OpenPulseHF:
+- [  ] Carries the callsign in every transmitted frame header — not implemented; the callsign goes out in the periodic and sign-off ID frames and in the signed handshake
+- [x] Logs callsign and a millisecond UTC timestamp for every transmitted frame in the local TX log
+- [x] Sends a station ID at least every 10 minutes while transmitting, and a sign-off ID at the end
+- [x] Reads the callsign from `config.toml` under `[station]`
 
 ### Operating Modes
 
@@ -90,28 +103,31 @@ Analysis, country-specific power limits, and band tables: see [`docs/regulatory.
 CEPT harmonises at 1 kW ERP for HF; several countries enforce lower limits (full table in [`docs/regulatory.md`](regulatory.md#eucept-transmitter-power--country-specific-limits)).
 
 **Compliance Requirement 2.2**: EU operation shall:
-- [  ] Accept `--max-power <watts>` CLI flag with country-specific default (e.g., `de` → 750 W, `fr` → 1000 W)
-- [  ] Validate against national limits at TX time
-- [  ] Log actual TX power in session metadata
-- [  ] For cross-border mobile operation: use most restrictive limit (e.g., if roaming Germany: 750 W)
+- [  ] Country-specific power default — not implemented; set power on the rig
+- [  ] Validate against national limits at TX time — not implemented
+- [x] Declared TX power recorded per frame in the TX log
+- [  ] For cross-border mobile operation: use the most restrictive limit (operator action; e.g. roaming in Germany: 750 W)
 
 ### Station Identification
 
 **Compliance Requirement 2.3**: EU operation shall:
-- [  ] Log station callsign (e.g., `DL1ABC/0`) in every frame header
-- [  ] Include `/0` or `/m` suffix if mobile or portable (optional, country-dependent)
-- [  ] Log timestamp (millisecond precision) in every frame
+- [x] Callsign (e.g. `DL1ABC/P`) sent in the station ID and logged per frame in the TX log (not in the frame header)
+- [  ] Include `/P` or `/M` suffix if portable or mobile (operator action: put it in `[station] callsign`; country-dependent)
+- [x] Millisecond timestamp logged per frame in the TX log
 - [  ] Include locator (4-digit grid square) in session metadata if available (e.g., `JO62VC`)
 
 ### Regulatory Approval
 
 National regulators vary in requirements for experimental operation:
 
-| Country | Approval Required | Contact |
-|---|---|---|
-| Germany (BNetzA) | Yes, for new modes | https://www.bundesnetzagentur.de/amateurfunk |
-| France (ANFR) | Case-by-case | https://www.anfr.fr/particuliers/radio-amateur |
-| UK (Ofcom) | Yes, for RSGB license holders | See Part III |
+The "approval required" column that stood here was not sourced and has been removed. Check
+with the regulator before operating a new mode:
+
+| Country | Contact |
+|---|---|
+| Germany (BNetzA) | https://www.bundesnetzagentur.de/amateurfunk |
+| France (ANFR) | https://www.anfr.fr/particuliers/radio-amateur |
+| UK (Ofcom) | See Part III |
 
 **Compliance Requirement 2.4**: Before EU on-air deployment:
 - [  ] Obtain written approval from national regulator if testing new digital modes
@@ -128,7 +144,7 @@ Analysis, licensing background, and band table: see [`docs/regulatory.md` § Uni
 ### Frequency Allocations and Licensing
 
 **Compliance Requirement 3.1**: UK operation shall:
-- [  ] Hold valid RSGB full license (or reciprocal foreign license recognized by Ofcom)
+- [  ] Hold a valid Ofcom amateur licence (or a foreign licence Ofcom recognises)
 - [  ] Confirm frequency against Ofcom UK Band Plan (https://www.ofcom.org.uk/amateur-radio/licensing)
 - [  ] Verify power limits per band (all HF bands: 1 kW max)
 - [  ] Log callsign with `/M` suffix if mobile or `/P` if portable
@@ -138,8 +154,7 @@ Analysis, licensing background, and band table: see [`docs/regulatory.md` § Uni
 Ofcom permits up to 1 kW ERP on HF amateur bands, with no UK-territory reduction (see [`docs/regulatory.md`](regulatory.md#united-kingdom--ofcom-amateur-licence)).
 
 **Compliance Requirement 3.2**: UK TX power shall:
-- [  ] Accept `--max-power <watts>` CLI flag (Ofcom default: 1000 W)
-- [  ] Validate against 1 kW hard limit
+- [  ] Set power on the rig within the licence limit (the software does not set or validate power)
 - [  ] For field portable operation: power must match antenna setup (e.g., wire dipole + 100 W tuner)
 - [  ] Document power in session metadata and on-air announcements
 
@@ -148,43 +163,34 @@ Ofcom permits up to 1 kW ERP on HF amateur bands, with no UK-territory reduction
 > Identification interval: treat 15 minutes as the conservative default per [`docs/regulatory.md`](regulatory.md#united-kingdom--ofcom-amateur-licence); verify the current Ofcom Amateur Licence terms, which take precedence.
 
 **Compliance Requirement 3.3**: UK operation shall:
-- [  ] Log station callsign (e.g., `G4ABC`, `M0XYZ/0`) in every frame header
-- [  ] Include `/M` or `/P` suffix if portable/mobile (as registered with Ofcom)
-- [  ] Log timestamp (millisecond precision) in every frame
+- [x] Callsign (e.g. `G4ABC`, `M0XYZ/P`) sent in the station ID and logged per frame in the TX log
+- [  ] Include `/M` or `/P` suffix if portable/mobile (operator action, in `[station] callsign`)
+- [  ] Set `[station] auto_id_interval_secs` to the interval you need (default 600 s meets a 15-minute rule)
+- [x] Millisecond timestamp logged per frame in the TX log
 - [  ] Store session metadata with callsign, date, time, band, mode, power for operator records
 
 ### Experimentation Approval
 
 **Compliance Requirement 3.4**: UK novel-mode operation:
 - [  ] Check Ofcom website (https://www.ofcom.org.uk) for current guidance on experimental digital modes
-- [  ] If new mode approval required: contact RSGB technical committee for endorsement letter
-- [  ] Include endorsement letter with Ofcom inquiry
-- [  ] Most modern digital modes (PSK31, RTTY, FT8, etc.) are pre-approved; OpenPulseHF should document mode as "Adaptive HARQ-rate QAM over HF" and submit if uncertain
+- [  ] If uncertain, ask Ofcom (or the RSGB for advice) before operating; describe the mode with the published protocol and ladder (`docs/dev/design/protocol-wire-spec.md`, `docs/mode-fec-ladder.md`)
 
 ---
 
 ## Part IV: Technical Compliance Implementation
 
-### CLI Flags
+### CLI flags (proposal; only `--max-power` exists)
 
-```bash
-openpulse-cli transmit \
-  --frequency 14.100 \
-  --mode BPSK250 \
-  --max-power 100 \
-  --jurisdiction us \
-  --station-id W5ABC \
-  [--message <file>]
-
-# Flags:
-# --max-power <watts>       TX power limit (default: 100)
-# --jurisdiction {us|de|fr|uk}  Compliance zone (default: us)
-# --station-id <callsign>   Station callsign (read from config if absent)
-```
+The May 2026 proposal was `openpulse-cli transmit --frequency … --mode … --max-power … --jurisdiction
+… --station-id …`. Today only the global `--max-power <watts>` exists (default 100), and it is
+recorded in the TX log, not enforced. There is no `--jurisdiction` or `--station-id` flag; the
+callsign comes from `[station] callsign`.
 
 ### Frame Header Extension
 
-**Frame Header v2** (proposed):
+**Frame Header v2** (proposed, not implemented; the v0.17 wire format is
+`docs/dev/design/protocol-wire-spec.md`). Changing the frame header is a wire-format change and
+needs a design review before implementation:
 
 ```
 Bytes 0-3:   Magic "OPHF"
@@ -202,7 +208,9 @@ Bytes 29-:   Payload + FEC
 
 ### Session Metadata JSON
 
-Every session shall produce:
+Proposed, not implemented. What exists is the per-frame TX log (`[station] tx_log_path`, one JSON
+object per frame: `station_id`, `timestamp_ms`, `mode`, `power_watts`, `frame_sequence`). The
+proposal was that every session produce:
 
 ```json
 {
@@ -230,9 +238,9 @@ Before any on-air transmission:
 
 - [ ] **License**: Valid amateur radio license in operating jurisdiction
 - [ ] **Frequency**: Confirmed against band allocation and band plan
-- [ ] **Power**: `--max-power` set ≤ jurisdiction limit; documented in session
-- [ ] **Callsign**: Station ID configured in `config.toml`; tested in frame headers
-- [ ] **Timestamp**: Verified that frame timestamps are synchronized with NTP
+- [ ] **Power**: set on the rig ≤ jurisdiction limit; `[station] tx_power_watts` set to the declared value for the TX log
+- [ ] **Callsign**: `[station] callsign` set (not `N0CALL`); station ID heard on the air
+- [ ] **Timestamp**: host clock synchronised with NTP (the TX log uses the host clock)
 - [ ] **Operating Plan**: Written plan with test objectives, duration, expected band impact
 - [ ] **Regulatory Approval**: Obtained if required (EU new modes; Ofcom experimental use)
 - [ ] **Interference Coordination**: Checked with local radio club / reflector for conflicts
@@ -273,3 +281,4 @@ Before any on-air transmission:
 |---|---|---|---|
 | 1.0 | 2026-05-14 | Agent | Initial comprehensive checklist; FCC/CEPT/Ofcom sections; CLI/frame header specs |
 | 1.1 | 2026-06-17 | Agent | Deduplicated against `docs/regulatory.md`; removed duplicated prose analysis and band/power tables (now sole-sourced in `regulatory.md`); retained all actionable compliance requirements, technical implementation specs, and sign-off items |
+| 1.2 | 2026-10-15 | Agent | Added the status-against-code table; marked unimplemented proposals (power enforcement, `--jurisdiction`, frame header v2, session JSON); recorded implemented auto-ID, CW ID and TX log; removed the unsourced approval-required column and the RSGB-licence wording |

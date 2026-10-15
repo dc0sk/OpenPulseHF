@@ -2,7 +2,7 @@
 project: openpulsehf
 doc: docs/dev/high-performance-mode.md
 status: living
-last_updated: 2026-04-23
+last_updated: 2026-10-15
 ---
 
 # High-Performance Mode Analysis
@@ -12,6 +12,15 @@ last_updated: 2026-04-23
 This document defines the target characteristics for a new OpenPulseHF mode family intended to perform as well as, or better than, established amateur-radio data modems in practical operation.
 
 The scope is first-principles design and public-source-driven engineering. It does not assume proprietary protocol internals.
+
+**Status (2026-10-15).** These are the original targets; they are not Release 1's gate. What Release 1
+(`v0.17.0`) must show is in `docs/dev/project/workplan.md` (milestones M0–M4, on-air acceptance A1/A2
+on 2 m) and `docs/dev/project/acceptance-criteria.md`; `docs/dev/project/release-1.0-criteria.md`
+covers 1.0. The "M1" below is this document's own first milestone, not the work plan's M1 (the v0.17
+wire format). As built, HPX is one adaptive ladder, `hpx_hf` (SL1–SL14: MFSK16, BPSK31–250,
+QPSK250-D, OFDM52 with soft concatenated and high-rate LDPC coding), run as two profiles, `fast` and
+`robust`; see `docs/dev/design/architecture.md` and `docs/mode-fec-ladder.md`. Peer cache, query,
+relay and GPU acceleration exist as code but are not part of Release 1.
 
 ## Problem statement
 
@@ -41,7 +50,7 @@ OpenPulseHF HPX mode (working name) must prioritize the following metrics:
 
 All competitive claims must be backed by repeatable benchmark suites.
 
-Harness details, scenario IDs, and schema contract are defined in docs/benchmark-harness.md.
+Harness details, scenario IDs, and schema contract are defined in docs/dev/benchmark-harness.md.
 
 ### Channel profiles
 
@@ -106,6 +115,8 @@ The first milestone uses explicit, testable thresholds. Values can tighten over 
 
 ### GPU acceleration model
 
+Not part of Release 1; `openpulse-gpu` is experimental and the CPU path is the shipped one.
+
 - HPX should support optional GPU acceleration for selected DSP kernels where benchmarks show net throughput or latency gains.
 - GPU acceleration must use open frameworks (preferred: Vulkan via wgpu; optional: OpenCL backends).
 - GPU mode must remain functionally equivalent to CPU mode for protocol behavior and signed-transfer verification outcomes.
@@ -114,7 +125,8 @@ The first milestone uses explicit, testable thresholds. Values can tighten over 
 ### Adaptive modulation and coding
 
 - Support mode adaptation across modulation/coding combinations during session.
-- Include at least one robust low-rate profile and one high-throughput profile.
+- Include at least one robust low-rate profile and one high-throughput profile. (Built: `robust`, the
+  ladder capped at SL6, ≤500 Hz; `fast`, the whole ladder, up to ≈2031 Hz.)
 - Add coding-rate agility and interleaver-depth control with bounded latency.
 
 ### Link adaptation and resilience
@@ -125,6 +137,8 @@ The first milestone uses explicit, testable thresholds. Values can tighten over 
 - Include configurable burst interleaving for fading resistance.
 
 ### Peer cache, query, and relay
+
+Not part of Release 1 (work plan decision 1); the code ships disabled or experimental.
 
 - HPX should support peer capability caching for faster route and mode selection.
 - HPX should support query-based peer discovery with bounded propagation controls.
@@ -188,4 +202,4 @@ OpenPulseHF HPX must support cryptographically signed transfers with an operator
 - HPX meets or exceeds defined baseline targets in at least two channel profiles.
 - Signed transfer handshake and manifest verification pass conformance tests.
 - CLI exposes HPX mode and trust-related options with documented behavior.
-- HPX session state conformance passes against docs/hpx-session-state-machine.md.
+- HPX session state conformance passes against docs/dev/hpx-session-state-machine.md.

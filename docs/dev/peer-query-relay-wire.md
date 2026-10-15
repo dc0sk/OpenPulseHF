@@ -2,7 +2,7 @@
 project: openpulsehf
 doc: docs/dev/peer-query-relay-wire.md
 status: living
-last_updated: 2026-04-23
+last_updated: 2026-10-15
 ---
 
 # Peer Query and Relay Wire Schema
@@ -10,6 +10,13 @@ last_updated: 2026-04-23
 ## Purpose
 
 This document defines an initial wire-level message schema for peer discovery queries, route discovery, and multi-hop relay transfer envelopes.
+
+> **Not part of Release 1.** The `OPHF` envelope and its payloads are implemented in
+> `crates/openpulse-core/src/wire_query.rs` (with `relay.rs` and `query_propagation.rs`) and used by
+> the experimental crates (`openpulse-mesh`, `openpulse-discovery`, the relay paths). Release 1
+> (`v0.17.0`) ships them disabled or experimental (work plan decision 1), and the v0.17 wire format
+> declaration (`design/protocol-wire-spec.md`) does not freeze this schema. Sections marked
+> *not implemented* are design only.
 
 > Companion specs: the [Protocol & Handshake Wire Specification](design/protocol-wire-spec.md)
 > (base frame, SAR, signed handshake, ACK) and the
@@ -82,7 +89,9 @@ Notes:
 - 0x01: retry
 - 0x02: reject
 
-### sig_mode
+### sig_mode, sig_alg (not implemented)
+
+No code encodes or decodes these registries; see *Signature and algorithm metadata* below.
 
 - 0x00: classical
 - 0x01: pq
@@ -150,7 +159,8 @@ Required fields:
   - capability_mask (u32)
   - last_seen_ms (u64)
   - trust_state (enum)
-  - descriptor_signature (variable)
+  - sig_len (u16)
+  - descriptor_signature (sig_len bytes)
 
 ## route_discovery_request payload
 
@@ -161,6 +171,8 @@ Required fields:
 - max_hops (u8)
 - required_capability_mask (u32)
 - policy_flags (u16)
+- path_count (u8) and accumulated_path[path_count × 32B]: the peer ids the request was forwarded
+  through, each forwarder appending its own. A 47-byte header-only payload decodes to an empty path.
 
 ## route_discovery_response payload
 
@@ -226,7 +238,10 @@ Required fields:
 - trust_decision (enum)
 - policy_reference (u16)
 
-## Signature and algorithm metadata
+## Signature and algorithm metadata (not implemented)
+
+As built, signed payloads carry a length-prefixed Ed25519 signature and no algorithm metadata, and the
+envelope signature is Ed25519 only. The design below is unimplemented:
 
 Each signed payload must include signature metadata:
 
@@ -245,7 +260,8 @@ Supported algorithm families for initial draft:
 
 - Receivers maintain a bounded replay window keyed by src_peer_id, session_id, and nonce.
 - Messages with duplicate nonce in active window are rejected.
-- hop_limit decrements at each relay and message is dropped at 0.
+- Each relay increments hop_index and drops the message once hop_index reaches hop_limit (hop_limit
+  itself is not changed; `RelayForwarder`, `QueryForwarder`).
 - route_id plus hop_index continuity checks reject looped or reordered relay flows.
 
 ## Compatibility and extension rules
@@ -270,7 +286,10 @@ Supported algorithm families for initial draft:
   The reason table above already reserved `0x0001: unsupported_version` for this rejection.
 - New payload fields are appended and identified by TLV extension blocks.
 
-## TLV extension block registry (initial)
+## TLV extension block registry (not implemented)
+
+No decoder parses TLV blocks today; a payload longer than its fixed layout is decoded per message
+type (for example the route_discovery_request path above).
 
 TLV blocks are encoded as type(u16), length(u16), value(bytes).
 

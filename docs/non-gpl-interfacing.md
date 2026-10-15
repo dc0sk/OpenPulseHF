@@ -2,7 +2,7 @@
 project: openpulsehf
 doc: docs/non-gpl-interfacing.md
 status: living
-last_updated: 2026-05-23
+last_updated: 2026-10-15
 ---
 
 # Non-GPL Interfacing Methods
@@ -20,6 +20,10 @@ interoperate with OpenPulseHF without being subject to the GPL:
 
 The interfaces below all sit on the safe side of one or both of those boundaries.
 
+Release 1 (`v0.17.0`) covers the ARDOP TNC, the daemon control ports and the CLI. The KISS TNC,
+the Winlink CMS gateway and `pki-tooling` exist in the code but are experimental and not part of
+Release 1.
+
 ---
 
 ## Interface summary
@@ -28,12 +32,12 @@ The interfaces below all sit on the safe side of one or both of those boundaries
 |---|---|---|---|
 | [ARDOP command port](#ardop-tnc-tcp-interface) | ASCII line (ARDOP) | `127.0.0.1:8515` | Pat, Winlink Express, any ARQ app |
 | [ARDOP data port](#ardop-tnc-tcp-interface) | `u16 BE` length-framed binary | `127.0.0.1:8516` | Payload bytes in both directions |
-| [KISS/AX.25 TCP TNC](#kissax25-tcp-tnc) | KISS framing over TCP | `127.0.0.1:8100` | APRS clients, Direwolf-compatible apps |
+| [KISS/AX.25 TCP TNC](#kissax25-tcp-tnc) | KISS framing over TCP | port `8100` | APRS clients, Direwolf-compatible apps (experimental) |
 | [Daemon TCP control port](#daemon-control-port-ndjson--tcp) | NDJSON lines | `127.0.0.1:9000` | Events + commands; operator panel |
 | [Daemon WebSocket endpoint](#daemon-websocket-endpoint) | JSON over WebSocket | `127.0.0.1:9001` | Browser / Electron clients |
-| [PKI tooling REST API](#pki-tooling-rest-api) | HTTP/JSON | `127.0.0.1:8080` (default; configurable via `PKI_BIND_ADDR`) | Trust-bundle and key management |
+| [PKI tooling REST API](#pki-tooling-rest-api) | HTTP/JSON | `127.0.0.1:8080` (default; configurable via `PKI_BIND_ADDR`) | Trust-bundle and key management (experimental) |
 | [CLI subprocess](#cli-subprocess) | stdin / stdout | — | Pipe-based scripting |
-| [Winlink CMS gateway](#winlink-cms-gateway) | B2F over TCP | `cms.winlink.org:8772` | Outbound gateway; no local server |
+| [Winlink CMS gateway](#winlink-cms-gateway) | B2F over TCP | `cms.winlink.org:8772` | Outbound gateway; no local server (experimental) |
 
 ---
 
@@ -42,13 +46,17 @@ The interfaces below all sit on the safe side of one or both of those boundaries
 `openpulse-tnc` (`crates/openpulse-ardop`) exposes two TCP ports:
 
 - **Command port** (default 8515) — ASCII line protocol.  Compatible with
-  [Pat](https://getpat.io/), Winlink Express, JS8Call, and any ARDOP-aware application.
-  Supported commands: `VERSION`, `MYID`, `LISTEN`, `CONNECT`, `DISCONNECT`, `ABORT`,
-  `STATE`, `BUFFER`, `PTT`, `FECSEND`, `FECRCV`, `CONNECT_MESH`, `WAVEFORM`, `PING`, `CLOSE`.
-  Accepted for client compatibility but **not applied** (validated + echoed only):
-  `GRIDSQUARE` (informational), `ARQBW` / `ARQTIMEOUT` (OpenPulseHF self-manages bandwidth and
-  timeout via its adaptive rate ladder, not a host hint). `CWID` / `SENDID` are stubs (warn-logged).
-  See `docs/dev/project/roadmap.md` → "TNC command-surface audit".
+  [Pat](https://getpat.io/) and other ARDOP-aware applications.
+  Commands (`crates/openpulse-ardop/src/command.rs`): `VERSION`, `MYID`, `LISTEN`, `CONNECT`,
+  `DISCONNECT`, `ABORT`, `STATE`, `BUFFER`, `PTT`, `GRIDSQUARE`, `ARQBW`, `ARQTIMEOUT`, `CWID`,
+  `SENDID`, `FECSEND`, `FECRCV`, `CONNECT_MESH`, `WAVEFORM`, `PING`, `CLOSE`.
+  `GRIDSQUARE` is informational (stored and echoed). `ARQBW` (200/500/1000/2000) caps the
+  adaptive ladder and `ARQTIMEOUT` (30–600 s) drops an idle connection, but only when adaptive ARQ
+  is on (`[ardop] enable_adaptive_arq = true`, default `false`); in fixed-mode operation they are
+  accepted and echoed. The adaptive ladder (`[ardop] adaptive_profile`, default `fast`) is floored
+  at SL2, so the TNC never uses MFSK16. `CWID TRUE|FALSE` turns the Morse CW ID on or off;
+  `SENDID` sends a one-shot ID at the next frame boundary (plus a CW ID when `CWID` is on).
+  `CONNECT_MESH` belongs to the experimental mesh feature.
 - **Data port** (default 8516) — binary `u16 BE` length-prefixed frames in both
   directions.  Send a 2-byte big-endian length followed by that many payload bytes;
   receive frames in the same format.
@@ -56,7 +64,7 @@ The interfaces below all sit on the safe side of one or both of those boundaries
 Any application that speaks the ARDOP wire protocol can connect without needing any
 OpenPulseHF source code or headers.  The command port is unauthenticated and
 bind-address–restricted to `127.0.0.1` by default; change `[ardop] bind_addr` in the
-config file to expose it on a LAN interface.
+config file (or pass `openpulse-tnc --bind`) to expose it on a LAN interface.
 
 ---
 
@@ -77,29 +85,36 @@ and any application that can connect to a KISS TNC over TCP.
 `openpulse-daemon` (`crates/openpulse-daemon`) exposes a NDJSON-over-TCP control port
 (default `127.0.0.1:9000`).  Each line is a UTF-8 JSON object terminated by `\n`.
 
-**Receiving events** — connect and read lines; each is a serialised `ControlEvent`:
+**Receiving events** — connect and read lines; each is a serialised `ControlEvent`, tagged by
+a snake_case `type` field. Modem engine events arrive wrapped in `engine_event`:
 
 ```json
-{"type":"ModeChanged","mode":"QPSK500"}
-{"type":"RxData","hex":"48656c6c6f"}
-{"type":"SessionStarted","session_id":"a1b2c3d4","peer":"W1AW"}
+{"type":"engine_event","event":{"type":"frame_received","mode":"BPSK250","bytes":64}}
+{"type":"ptt_changed","active":true}
 ```
 
-**Sending commands** — write a JSON-serialised `ControlCommand` followed by `\n`:
+**Sending commands** — write a JSON-serialised `ControlCommand` followed by `\n`, tagged by a
+snake_case `cmd` field. The server replies with a `CommandResponse`:
 
 ```json
-{"SetMode":{"mode":"BPSK250"}}
-{"Transmit":{"data_hex":"48656c6c6f"}}
-{"SetConfig":{"config":{"qsy_enabled":true,"bandplan_mode":"ham-iaru-r1"}}}
+{"cmd":"set_mode","mode":"BPSK250"}
+{"cmd":"send_message","to":"W1AW","subject":"test","body":"hello"}
+{"cmd":"start_ota_session","profile":"fast"}
 ```
 
 The full `ControlCommand` and `ControlEvent` schemas are defined in
 `crates/openpulse-daemon/src/protocol.rs`.  Both types carry `#[derive(Serialize, Deserialize)]`
 so the JSON schema is stable and machine-readable.
 
-**Spectrum subscription** — send `{"SubscribeSpectrum":{"fps":10}}` and the daemon
-begins interleaving binary power-spectrum frames (4-byte magic `SPEC` + `u16 BE` bin
-count + `f32 LE` array) alongside the NDJSON event stream on the same connection.
+**Spectrum subscription** — send `{"cmd":"subscribe_spectrum","fps":10}` and the daemon
+begins interleaving binary power-spectrum frames (4-byte magic `OPSP` + `u16 LE` bin count +
+`u32 LE` sample rate + `f32 LE` bins) alongside the NDJSON event stream on the same connection.
+A reader tells them apart by the first byte: `{` is JSON, `O` is a spectrum frame.
+
+**Authentication** — on a loopback bind the control port is open by default. On a non-loopback
+bind, PSK authentication and encryption (`openpulse-linksec`, Noise) are mandatory; set
+`[control_security] require_auth = true` to force them on loopback too. The PSK comes from the
+`OPENPULSE_CONTROL_PSK` environment variable.
 
 ---
 
@@ -107,8 +122,8 @@ count + `f32 LE` array) alongside the NDJSON event stream on the same connection
 
 The daemon also exposes an identical interface over WebSocket (default
 `127.0.0.1:9001`).  Text frames carry NDJSON events and command responses; binary
-frames carry spectrum data.  This is the interface used by the `openpulse-panel` egui
-operator panel and is suitable for browser or Electron clients.
+frames carry spectrum data.  This is the interface used by the `openpulse-panel` operator
+panel (iced; experimental) and is suitable for browser or Electron clients.
 
 ---
 
@@ -129,17 +144,20 @@ Key endpoints:
 
 | Method | Path | Auth | Description |
 |---|---|---|---|
-| `GET` | `/api/v1/trust-bundles` | None | List published trust bundles |
+| `GET` | `/api/v1/trust-bundles/current` | None | Fetch the current trust bundle |
 | `GET` | `/api/v1/trust-bundles/{bundle_id}` | None | Fetch a bundle by ID |
+| `GET` | `/api/v1/identities/{record_id}`, `/api/v1/identities:lookup` | None | Identity lookup |
+| `GET` | `/api/v1/revocations` | None | List revocations |
 | `GET` | `/api/v1/signing-key` | None | Retrieve the service Ed25519 public key |
 | `POST` | `/api/v1/submissions` | None | Public submission intake (validation/moderation pipeline) |
 | `POST` | `/api/v1/trust-bundles` | Bearer | Publish a new trust bundle |
 | `PATCH` | `/api/v1/trust-bundles/{bundle_id}/promote` | Bearer | Promote a bundle to active |
 | `POST` | `/api/v1/revocations` | Bearer | Record a key revocation |
+| `GET` | `/api/v1/moderation/queue` | Bearer | Read the moderation queue |
 | `POST` | `/api/v1/moderation/{submission_id}/decision` | Bearer | Post a moderation outcome |
 | `POST` | `/api/v1/session-audit-events` | Bearer | Submit an audit event |
 
-Any HTTP client library in any language can consume this API.  Response bodies are
+The route table is `build_router` in `pki-tooling/src/lib.rs`. Any HTTP client library in any language can consume this API.  Response bodies are
 `application/json`.
 
 ---

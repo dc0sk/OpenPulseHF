@@ -2,10 +2,112 @@
 project: openpulsehf
 doc: docs/releasenotes.md
 status: living
-last_updated: 2026-07-18
+last_updated: 2026-10-15
 ---
 
 # Release Notes
+
+## Unreleased — toward v0.17.0 (Release 1)
+
+Not yet tagged; `main` still reports version 0.16.0. This section collects what an operator will
+notice when updating from v0.16.0.
+
+The next release is **Release 1**, numbered `v0.17.0`. It is deliberately narrow: the daemon and
+CLI, the ARDOP TNC for Pat, the `hpx_hf` rate ladder (SL1–SL14) with FEC on every rung, session
+compression, PTT, station ID and the signed classical handshake. Everything else in the workspace —
+mesh, repeater, relay, discovery/JS8, file transfer, QSY, FreeDV auth, Winlink B2F and the gateway,
+KISS, the post-quantum handshake, GPU, panel and TUI, and the plugins not on `hpx_hf` — still exists
+but ships disabled or experimental, with no release gate. The plan is in
+`docs/dev/project/workplan.md`. Release 1 is being tested on air on 2 m before the tag; HF follows
+with the release candidate.
+
+### Interoperability: update both ends
+
+- **v0.16.0 and v0.17 do not talk to each other at all.** A v0.16.0 station and a station on
+  current `main` do not decode each other's frames on **any** rung, and their handshakes are
+  incompatible. Update both ends of every link. The breaks, all in the planned pre-1.0 window:
+  - **the frame whitener** (#1148): its sequence repeated every 21 bits instead of 511; the fixed
+    sequence changes every transmitted frame;
+  - **the handshake** (#1147): CONREQ/CONACK are now binary, version `0x02`; `0x01` is rejected.
+    Station IDs may now be up to 18 characters (#1191);
+  - **the preamble on SL3–SL5** (#1062, 2026-10-10): BPSK63, BPSK100 and BPSK250 send a 63-symbol
+    PN-63 preamble (x⁶+x+1) instead of the alternating `--++` run. BPSK31 keeps `--++` and QPSK250-D
+    keeps its sequence;
+  - smaller ones: version tokens on the wire envelope, QSY lines, the rendezvous codec and the
+    FreeDV auth beacon (#1164, #1162, #1163, #1206), and ACK reserved bits now enforced (#1165).
+- **Profiles renamed and removed, no aliases.** There are now exactly two session profiles on the
+  one `hpx_hf` ladder: `fast` (the default, SL1–SL14, up to ≈2031 Hz) and `robust` (the same ladder
+  capped at SL6, ≤500 Hz, single-carrier, all coded). `hpx_hf` is now called `fast`, and the ten
+  other earlier names (`hpx500`, `hpx_modcod`, `hpx_pilot*`, `hpx_ofdm_hf`, `hpx_wideband*`,
+  `hpx_narrowband`, …) are deleted. None has an alias: a config or command line that names one is
+  rejected with the list of valid names. Change it to
+  `fast` or `robust`. Modes from the old profiles are still selectable as fixed modes with
+  `[modem] mode`. A `fast` and a `robust` station interoperate; the robust side never climbs past
+  SL6. The ARDOP TNC floors its adaptive ladder at SL2.
+- The v0.17 wire format is written down in `docs/dev/design/protocol-wire-spec.md`.
+
+### Receiving
+
+- The carrier detect's noise floor follows the band behind whatever receive filter the rig has
+  (#1452), and a spectral busy criterion picks up weak frames the energy test missed (#1454).
+- Every frame of a multi-frame burst is decoded, not just the first (#1461). Data larger than one
+  frame now gets through the daemon in one keying.
+- A first frame that arrives off frequency is much cheaper to decode: the receiver estimates the
+  carrier offset first instead of scanning every onset at the wrong frequency.
+- The uncoded fallback tries the best-ranked onsets first and runs its exhaustive scan only after
+  the coded scan fails. On x86 that took a coded frame's decode from 4.6 s to 1.8 s at SL2 and from
+  2.2 s to 0.2 s at SL6.
+- A packed (compressed) frame that fails to unpack is treated as an integrity error: dropped,
+  counted and logged (REQ-CMP-05).
+
+### The rate ladder
+
+- Idle-channel flicker and an ACK on the air no longer count as a failed frame (#1456).
+- A failed burst moves the rate ladder only when its NACK is actually keyed (#1460). This bounds
+  the problem rather than fixing it: a foreign transmission longer than 0.5 s can still cost one
+  step. #1460 stays open.
+
+### PTT and transmit
+
+- New `[modem] ptt_leader_ms` (and `--ptt-leader-ms`): a delay between the PTT edge and the first
+  sample, so a slow rig does not clip the preamble (#1257). Default 0; measure your rig before
+  setting it.
+- PTT release waits for the audio device's reported drain plus 10 ms, never longer than the old
+  fixed 200 ms (#1367).
+- Every front-end keys through one shared PTT path. A second key while keyed is refused, and an
+  unusable PTT backend refuses every transmission.
+- The resolved audio device name is cached, so keying no longer re-enumerates every audio device.
+  Measured key-to-first-sample: about 100 ms on rpi51 and 31 ms on rpi53, down from 567–684 ms and
+  239–256 ms.
+
+### ARDOP TNC
+
+- Receives on real audio (#1310).
+- The ARQ ACK listen holds its receive stream and scans it for the ACK (#1315).
+- Host blocks larger than one frame go on the air, split into frames (#1385).
+- `ARQBW` sizes modes from the plugins' own bandwidths, not a stale table, so it no longer caps
+  `fast` below what the host allowed.
+
+### Experimental features
+
+- File transfer (not part of Release 1) survives a lost fragment, a lost ack and a long block.
+
+### Security
+
+- Dependency updates for RUSTSEC-2026-0258 (`h2`) and RUSTSEC-2026-0285 (`rustls`).
+
+### On-air tooling
+
+- The on-air runners only ever lower a rig's RF power, never raise it (`scripts/lib/rig-power.sh`).
+- Per-station rig mode settings, where `keep` sends no mode and leaves the rig as set, and a 2 m
+  band guard.
+
+### Migration
+
+- **Update both ends of every link** (SL3–SL5 preamble).
+- **Replace any old profile name** in `[modem] profile`, `[modem] ota_profile`,
+  `[ardop] adaptive_profile` or `--profile` with `fast` or `robust`.
+- Nothing else in an existing configuration needs to change; `ptt_leader_ms` defaults to 0.
 
 ## v0.16.0 — 2026-07-18
 

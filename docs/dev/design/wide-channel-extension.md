@@ -2,7 +2,7 @@
 project: openpulsehf
 doc: docs/dev/design/wide-channel-extension.md
 status: living
-last_updated: 2026-10-01
+last_updated: 2026-10-15
 ---
 
 # Extending OpenPulseHF to 12.5 kHz and 25 kHz channels — design + action list
@@ -12,18 +12,25 @@ to wide channels of **12.5 kHz** and **25 kHz** (VHF/UHF-class widths). From a r
 audio/sample-rate path, the OFDM/SC-FDMA plugins, the bandplan guardrails, and the channel-sim stack.
 No code was changed.
 
+**Status (2026-10-15): post-release.** None of this serves a Release 1 milestone. Release 1's 2 m test
+stage (IC-9700 ↔ FT-818) runs the HF `hpx_hf` ladder in an SSB-width audio channel, not a wide
+channel. Findings re-checked against `main` on 2026-10-15; line-number citations were replaced by
+symbol names because they had drifted.
+
 ## Executive summary
 
 **Feasibility is good — much groundwork already exists.** The codebase already has (a) sample-rate-
 parameterized single-carrier plugins with 9600-baud modes explicitly designed for "UHF/VHF — 12.5 kHz
-HD (requires 48 kHz audio)" and tested at 48 kHz (`plugins/qpsk/src/lib.rs:68`, `plugins/psk8/src/lib.rs:66`);
+HD (requires 48 kHz audio)" and tested at 48 kHz (the mode tables in `plugins/qpsk/src/lib.rs` and
+`plugins/psk8/src/lib.rs`, where the 9600-baud modes are no longer advertised since #1359);
 (b) session profiles for 12.5 kHz channels (`hpx_narrowband`, deleted 2026-10-01; `hpx_narrowband_hd` until its retirement in #1359); and (c) a TX
 I/Q-to-SDR seam (`ModulationPlugin::modulate_iq`, `AudioBackend::open_iq_output`, engine IQ transmit).
-The requirements doc already demands a 48 kHz-capable audio backend (`docs/dev/requirements.md:34`).
+The requirements doc already demands a 48 kHz-capable audio backend (`docs/dev/requirements.md`,
+REQ-PHY-01).
 
 **What blocks it today:** the engine is pinned to 8 kHz via `AudioConfig::default()` at every audio/DSP
-site (`engine.rs:477,673,1237,1357,1468,1779,1843,2318,2440,2583`), with **no `sample_rate` field in the
-user config**; the OFDM/SC-FDMA plugins **hard-reject any rate ≠ 8000**; the bandplan guardrail knows
+site (31 occurrences in `crates/openpulse-modem/src/engine.rs` on 2026-10-15), with **no `sample_rate`
+field in the user config**; the OFDM/SC-FDMA plugins **hard-reject any rate ≠ 8000**; the bandplan guardrail knows
 only HF bands (any VHF/UHF frequency fails `FrequencyOutOfBand`); and the channel-sim/calibration stack
 defaults to 8 kHz Watterson HF presets.
 
@@ -36,8 +43,8 @@ audio/IQ; 25 kHz occupied real audio marginally exceeds 48 kHz Nyquist headroom 
 ## Current-state findings (cited)
 
 **Sample rate — 8 kHz is the de-facto hard-coded engine rate.** `AudioConfig::default()` →
-`sample_rate: 8000` (`audio.rs:36`), and the engine never reads a configured rate — it calls
-`AudioConfig::default()` at ≥8 sites. The `[audio]` config has no `sample_rate` field. Backends are
+`sample_rate: 8000` (`crates/openpulse-core/src/audio.rs`), and the engine never reads a configured
+rate — it calls `AudioConfig::default()` throughout. The `[audio]` config has no `sample_rate` field. Backends are
 already rate-agnostic (cpal opens at whatever the config says; loopback advertises 8/16/44.1/48 kHz).
 Plugins split into **rate-parameterized** (BPSK/QPSK/8PSK/64QAM/pilot/FSK4 — compute
 `samples_per_symbol(fs, baud)`; QPSK9600/8PSK9600 already pass 48 kHz tests) and **rate-pinned** (OFDM,

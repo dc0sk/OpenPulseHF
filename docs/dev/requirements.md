@@ -2,7 +2,7 @@
 project: openpulsehf
 doc: docs/dev/requirements.md
 status: living
-last_updated: 2026-10-01
+last_updated: 2026-10-15
 ---
 
 # Requirements
@@ -11,6 +11,12 @@ last_updated: 2026-10-01
 > decision → implementation → tests → result → assets → PRs) live in
 > [traceability-matrix.md](project/traceability-matrix.md). Each requirement below maps to a
 > `REQ-<CAT>-NN` ID in that matrix's Requirements table.
+>
+> **Source of truth:** the requirements registry
+> [`project/requirements.yaml`](project/requirements.yaml), checked against the tree by
+> `scripts/trace.sh` inside `scripts/gate.sh`. This page is the readable text; where the two disagree
+> on an ID's statement, status or coverage, the registry wins. **Release 1 scope** (which of these
+> ship enabled in `v0.17.0`) is set by [`project/workplan.md`](project/workplan.md), decision 1.
 
 ## Functional requirements
 
@@ -109,6 +115,10 @@ last_updated: 2026-10-01
 - **REQ-SEC-13** — Every context the station identity key signs must be bound to a registered signing
   domain, so a signature made for one context cannot verify as another. Signing outside the registry
   must fail the workspace clippy gate rather than the review.
+- **REQ-SEC-14** — A control frame that steers the transmitter must be authenticated to the peer the
+  session handshake established and carry a signed freshness bound. An unsigned, forged or stale
+  frame must be refused without keying the transmitter or mutating session state. Authentication is
+  the floor; which trust levels an operator then accepts is policy.
 - **REQ-PQ-01** — A post-quantum-safe signature method must be supported for identity and transfer-signing workflows.
 - **REQ-PQ-02** — The implementation should support a hybrid signature mode (classical + post-quantum) during migration.
 - **REQ-PQ-03** — Initial post-quantum-safe default should target ML-DSA (FIPS 204) where available.
@@ -221,7 +231,7 @@ Regulatory compliance is a hard requirement for any transmission on amateur radi
 - **REQ-REG-11** — IARU band plans are non-binding recommendations but are widely observed to avoid mutual interference.
 - **REQ-REG-12** — Region 2 (Americas) and Region 1 (Europe/Africa/Middle East) both designate sub-bands for HF narrowband digital modes (e.g. 14.070–14.099 MHz on 20 m).
 - **REQ-REG-13** — OpenPulseHF documentation should recommend operating frequencies aligned with IARU band plan digital sub-bands for each supported band.
-- **REQ-REG-14** — Wide-band HPX2300 profiles should operate in segments where wide-band digital modes are plan-consistent (e.g. 14.099–14.112 MHz on 20 m where permitted by national administration).
+- **REQ-REG-14** — Wide-band HPX2300 profiles should operate in segments where wide-band digital modes are plan-consistent (e.g. 14.099–14.112 MHz on 20 m where permitted by national administration). *(The `hpx2300` profile was deleted by work plan decision 18; the wide-band case today is the `fast` profile's OFDM52 rungs, SL7–SL14, ≈2031 Hz.)*
 
 ## Competitive performance requirements
 
@@ -288,7 +298,7 @@ decision (REQ-BW-01).
 
 Idle-time discovery of other OpenPulse stations on the shared JS8 calling frequency, and negotiated
 handoff from JS8 to a native HPX session. Shipped (Phases A–G); only on-air validation (Phase H) is
-deferred. Design and locked decisions D1–D7 in `docs/dev/design/js8-discovery-rendezvous-plan.md`;
+deferred. Not part of Release 1 (work plan decision 1); ships off by default. Design and locked decisions D1–D7 in `docs/dev/design/js8-discovery-rendezvous-plan.md`;
 capability rows CAP-70 in the traceability matrix.
 
 - The station shall implement a native JS8-compatible weak-signal waveform (8-GFSK, 79 symbols,
@@ -316,7 +326,8 @@ capability rows CAP-70 in the traceability matrix.
 ## Direct peer-to-peer file transfer requirements (FF-16)
 
 Sending a file to a connected peer over an RF session, with cryptographic end-to-end verification.
-Shipped (Phases A–E); on-air validation (Phase F) is deferred. Design and locked decisions D1–D5 in
+Shipped (Phases A–E); on-air validation (Phase F) is deferred. Experimental and not part of
+Release 1 (work plan decision 1). Design and locked decisions D1–D5 in
 `docs/dev/design/file-transfer-plan.md`; capability row CAP-71 in the traceability matrix.
 
 - The station shall send a file to a connected peer over an RF session using a dedicated framed
@@ -335,6 +346,9 @@ Shipped (Phases A–E); on-air validation (Phase F) is deferred. Design and lock
   interrupted transfer from the last completed block. (REQ-FX-05)
 - Transmission shall be airtime-bounded into bursts so PTT keying stays within the radio's watchdog
   limit and the channel is yielded between bursts. (REQ-FX-06)
+- Progress reporting at both ends: block-level progress events surfaced to the operator. (REQ-FX-07)
+- Safe storage: received filenames sanitised against traversal and control characters before any
+  disk write. (REQ-FX-08)
 
 ## Reference-derived requirements (software-defined modem study, 2026-07-14)
 
@@ -430,6 +444,10 @@ in the roadmap; each is a candidate, not a committed deliverable.
   capture stream (off the shared `InputCapture` tap) rather than committing to one mode, for a
   discovery/monitor role. Acceptance: a loopback test injecting two different modes into one capture
   buffer and decoding both in one tick. (REQ-RX-01)
+- When per-window correlation statistics are available, the receiver shall derive the
+  preamble-correlation threshold from them rather than using the published constant alone. (REQ-RX-02)
+- When the derived correlation threshold would exceed the mode's published delivered-frame rho bound,
+  the receiver shall stand down to energy-only frame detection rather than veto. (REQ-RX-03)
 - Audio device selection shall be **hotplug-safe**, surviving OS renaming/reorder by keying on a stable
   device identity rather than an ordinal index or path. Acceptance: a test that a configured device
   resolves after a simulated reorder. (REQ-DEV-01)

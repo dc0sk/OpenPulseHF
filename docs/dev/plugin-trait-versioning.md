@@ -2,7 +2,7 @@
 project: openpulsehf
 doc: docs/dev/plugin-trait-versioning.md
 status: living
-last_updated: 2026-09-23
+last_updated: 2026-10-15
 ---
 
 # Plugin Trait Versioning and Compatibility
@@ -60,8 +60,10 @@ See `docs/dev/project/traceability.md` for rationale and migrations.
 
 The trait version is:
 - **Canonical source**: hardcoded in `crates/openpulse-core/src/plugin.rs` as the constant `PLUGIN_TRAIT_VERSION`.
-- **Published in**: each framework release's `docs/releasenotes.md`.
-- **Declared by plugins**: in `PluginInfo::trait_version_compatibility` (see § Plugin Declaration below).
+- **Published in**: intended for each framework release's `docs/releasenotes.md`; as of
+  2026-10-15 the release notes do not yet state it.
+- **Declared by plugins**: in `PluginInfo::trait_version_required` (see § Plugin Declaration below).
+  Every in-tree plugin declares `"3.0"`.
 
 ## Compatibility Rules
 
@@ -348,7 +350,10 @@ The OpenPulse project commits to the following:
 
 ## Audit and Observability
 
-Plugin version compatibility should be observable:
+Plugin version compatibility should be observable. **None of the three items below is implemented
+as of 2026-10-15**: `PluginRegistry::register` logs nothing, and the CLI has no plugin-listing
+command with trait versions (`openpulse modes` lists mode strings only). A failed registration
+returns `PluginError::IncompatibleTraitVersion` naming both versions.
 
 - Registry startup logs include: `Loaded plugin BPSK (version X.Y, trait version required 1.0, framework trait version 1.1) ✓`.
 - On incompatibility, error message includes: plugin name, required trait version, current framework trait version, and pointer to migration guide.

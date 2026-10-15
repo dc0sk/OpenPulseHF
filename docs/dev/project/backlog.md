@@ -2,10 +2,16 @@
 project: openpulsehf
 doc: docs/dev/project/backlog.md
 status: living
-last_updated: 2026-09-14
+last_updated: 2026-10-15
 ---
 
 # Backlog
+
+> **The plan of record is [`workplan.md`](workplan.md).** It decides what is worked on: every open
+> item belongs to a Release 1 milestone (M0–M4) or to `post-release`. Nothing in this file is
+> scheduled unless the work plan says so. Every item below is `post-release` under the work plan's
+> scope (decision 1) except where noted; the issue tracker's `post-release` and
+> `post-release-rerank` labels are the live list.
 
 **Scope:** this file is the register of *open* work. What 1.0 requires (and explicitly does not) is
 proposed in [release-1.0-criteria.md](release-1.0-criteria.md). Completed work lives in
@@ -25,7 +31,11 @@ Completed research is archived in docs/dev/archive/ (FEC evaluation, waveform ev
 
 Ordered by priority.  Items marked **[deferred]** have no target date.
 
-### 8 — Operator transmit-settings auto-tune and restore
+### 8 — Operator transmit-settings auto-tune and restore (`post-release`)
+
+Partly covered since 2026-10-14: the on-air runners only ever lower a rig's RF power
+(`scripts/lib/rig-power.sh`) and keep or check the rig's mode per station. A general
+snapshot-and-restore helper is still open.
 
 Add an OpenPulse helper that snapshots the current rig transmit settings before a test window, applies the known-good data-mode settings for the session, and restores the original values when the run ends.
 
@@ -42,7 +52,7 @@ Why:
 - compression and mic gain are easy to leave in a bad state between operator sessions
 - restoring the original state lowers operator risk and keeps the radios ready for the next task
 
-### 9 — Integrated tuner on high SWR (explicit opt-in)
+### 9 — Integrated tuner on high SWR (explicit opt-in) (`post-release`)
 
 Add an explicit operator-controlled setting to allow integrated tuner operation when SWR exceeds a configured threshold during on-air runs.
 
@@ -73,10 +83,11 @@ Closed by CAP-68 for the TCP control channel: `openpulse-linksec` Noise `NNpsk0`
 OS-keychain `SecretStore`), and owner-only secret-file enforcement. The earlier "open decision:
 TLS-PSK vs Noise" was resolved in favour of Noise and is no longer open.
 
-**Still open:** WebSocket transport auth/encryption, and sourcing the control PSK from the keystore
-rather than config. Detail in [traceability-matrix.md](traceability-matrix.md) (CAP-68, slice 4).
+**Still open (`post-release`):** WebSocket transport auth/encryption. Sourcing the control PSK from
+the keystore was **closed by decision** (#1234, maintainer 2026-09-20): the PSK stays in
+`OPENPULSE_CONTROL_PSK`, and `openpulse-keystore` stays unwired. Detail in [traceability-matrix.md](traceability-matrix.md) (CAP-68, slice 4).
 
-### 12 — Wide-channel (VHF/UHF) 12.5/25 kHz support (REQ-BW-01..07) — release 1.x
+### 12 — Wide-channel (VHF/UHF) 12.5/25 kHz support (REQ-BW-01..07) — `post-release`, after 1.0
 
 Extend the modem beyond its ~2.7 kHz HF SSB channel to 12.5 kHz and 25 kHz VHF/UHF-class channels.
 Targeted at a future **1.x** release. Feasibility + phased action list in
@@ -94,59 +105,35 @@ OFDM/SC-FDMA at 48/96 kHz; RX-IQ path) + `hpx_wide12`/`hpx_wide25` ladders. Phas
 Why:
 
 - much groundwork already exists (rate-parameterized single-carrier plugins, 9600-baud modes, the TX
-  IQ seam, and `hpx_narrowband_hd`), but 8 kHz is de-facto hard-coded in the engine so the wide
-  profiles cannot run;
+  IQ seam), but 8 kHz is de-facto hard-coded in the engine so wide modes cannot run; since work plan
+  decision 18 the only profiles are `fast` and `robust`, so a wide ladder would be a new profile;
 - the deepest question is RF architecture, not code — a wide linear waveform passes neither an SSB
   rig's 3 kHz path nor an FM class-C PA, so a direct-IQ SDR path (RX half missing) or linear exciter
   is required. This must be decided before implementation.
 
-### 13 — FF-15 JS8 discovery: Phase H (on-air) **[deferred]**
+### 13 — FF-15 JS8 discovery: Phase H (on-air) **[deferred]** (`post-release`; discovery/JS8 is outside Release 1)
 
 Phases A–G are shipped (PRs #744–#805); only on-air validation remains. Off by default behind
 `[discovery] mode` + a callsign + the ±2 s clock-skew / DCD / self-ID gates. Needs real radios.
 
-### 14 — FF-16 file transfer: Phase F (on-air) **[deferred]**
+### 14 — FF-16 file transfer: Phase F (on-air) **[deferred]** (`post-release`; file transfer is experimental in Release 1)
 
-Phases A–E are shipped (PRs #730–#743, #787); only on-air validation remains. Needs real radios.
+Phases A–E are shipped (PRs #730–#743, #787); since 2026-10-02 a transfer also survives a lost
+fragment, a lost ack and a long block (`filexfer_lossy_link`). Only on-air validation remains. Needs
+real radios. Work plan decision 19 may turn file transfer on for the M4 UI client; that decision is
+taken there, not here.
 
 ### 15 — Modem audit deferred findings (issue #917) **[deferred]**
 
 Tail of the 2026-07-16 modem loose-ends audit; the cpal double-capture item is hardware-gated.
 
-### In active execution
+### On-air validation — moved to the work plan
 
-| Item | Status |
-|---|---|
-| On-air regulatory validation (Phase 5.5-reg) | In active execution (see [onair-status.md](../onair-status.md)) — started 2026-06-10 |
-
-#### On-air regulatory validation execution checklist
-
-This checklist is being worked through as part of the active on-air execution; see
-[onair-status.md](../onair-status.md) for current progress.  Run it to completion before
-marking Phase 5.5-reg complete.
-
-1. Operator and station readiness
-  - Confirm licensed control operator is assigned for each test window.
-  - Confirm frequency plan uses IARU-aligned allocations for each target region.
-  - Confirm station ID cadence meets local rules (10-minute interval and end-of-contact).
-2. Hardware and software readiness
-  - Verify audio/PTT path with `openpulse-kisstnc` or `openpulse-tnc` using CPAL backend.
-  - Verify rig CAT/PTT control and fail-safe PTT release behavior.
-  - Capture exact software revision (`git rev-parse HEAD`) and active config snapshot.
-3. Required test matrix (minimum)
-  - HF narrowband baseline: BPSK250 and QPSK500 on clean and typical live channel conditions.
-  - Adaptive profile run: confirm ACK/NACK-driven transitions remain policy-safe on-air.
-  - Gateway/interoperability run: one end-to-end message session with logs retained.
-4. Evidence capture
-  - Record timestamped logs, selected frequencies, mode transitions, and operator notes.
-  - Export benchmark/test artifacts to `docs/dev/test-reports/on-air/` with scenario labels.
-  - Build a per-run evidence bundle with `./scripts/onair-bundle-evidence.sh`.
-  - Use `--require-report --require-config --require-preflight` for compliance runs.
-  - Document any compliance exceptions and mitigations.
-5. Completion criteria
-  - No unresolved compliance exceptions.
-  - Stable on-air sessions across the required matrix.
-  - Follow-up docs updated: `docs/dev/project/roadmap.md`, `docs/releasenotes.md`, and compliance notes.
+The former "On-air regulatory validation (Phase 5.5-reg)" execution checklist is superseded by work
+plan milestone **M3** (on air on **2 m**, IC-9700 ↔ FT-818: G0–G3, A1, A2, A4/A5, one ARDOP Pat
+session) and the HF run with the release candidate in **M4** (decision 13). The gate procedure is in
+[onair-execution-plan.md](../onair-execution-plan.md); what waits on the maintainer is in
+[maintainer-todo.md](maintainer-todo.md).
 
 ---
 
