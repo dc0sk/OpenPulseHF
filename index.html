@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>OpenPulseHF — OSI architecture &amp; abstract</title>
-<meta name="description" content="OpenPulseHF is a resilient, open-source HF software modem in Rust: it turns any SSB shortwave transceiver into a long-range digital link — no towers, no internet, no satellites.">
+<meta name="description" content="OpenPulseHF is a resilient, open-source HF/VHF software modem in Rust: it turns an SSB transceiver and a sound interface into an adaptive long-range data link, with FEC on every rung — no towers, no internet, no satellites.">
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📡</text></svg>">
 <style>
   :root{
@@ -231,14 +231,14 @@
       <span class="id"><b>OpenPulseHF</b> · HF software modem · OSI architecture</span>
     </div>
     <h1>The stack that keeps a link alive when <span class="hl">everything else is down</span>.</h1>
-    <p class="thesis">A resilient, open-source software modem that turns any SSB shortwave transceiver
-      into a long-range digital link — carrying text, files and structured messages with no towers,
+    <p class="thesis">A resilient, open-source software modem that turns an SSB transceiver and a sound
+      interface into an adaptive, long-range data link — carrying messages and data with no towers,
       no internet and no satellites.</p>
     <div class="meta">
       <span class="chip sig">Rust · open source</span>
-      <span class="chip">Adaptive HF waveforms</span>
-      <span class="chip">FEC + ARQ</span>
-      <span class="chip">Post-quantum ready</span>
+      <span class="chip">Adaptive 14-rung ladder</span>
+      <span class="chip">FEC on every rung + ARQ</span>
+      <span class="chip">ARDOP TNC for Pat</span>
       <span class="chip">Raspberry Pi → desktop</span>
       <span class="chip">GPL v3</span>
     </div>
@@ -271,13 +271,14 @@
   <div class="planes">
     <div class="plane">
       <span class="tag">On-air / RF peer link</span>
-      <p>Authenticates the <b>remote station</b> over the radio: Ed25519 signed handshake, an optional
-        post-quantum path (ML-DSA / ML-KEM), and a trust store.</p>
+      <p>Authenticates the <b>remote station</b> over the radio: Ed25519 signed handshake and a trust
+        store (Release 1), plus an experimental post-quantum path (ML-DSA / ML-KEM, not part of
+        Release 1).</p>
     </div>
     <div class="plane">
       <span class="tag">Local control channel</span>
       <p>Authenticates the <b>operator client</b> that commands the transmitter: a PSK-authenticated,
-        encrypted Noise channel between the daemon and the operator panel.</p>
+        encrypted Noise channel between the daemon and its control clients.</p>
     </div>
   </div>
 </section>
@@ -285,209 +286,258 @@
 <section class="wrap abstract">
   <div class="sechead"><p class="eyebrow">Abstract</p><h2>What OpenPulseHF is</h2></div>
   <p>OpenPulseHF is a software-defined data modem and messaging stack for HF (shortwave) radio. It
-    turns an ordinary SSB transceiver and a computer sound interface into a resilient digital link over
-    hundreds to thousands of kilometres — <strong>without any intervening infrastructure</strong>. At
-    its core is an <strong>adaptive modem</strong> that measures the channel and steps its speed and
-    modulation up or down to keep the link alive as propagation changes. Messages are protected by
-    forward error correction and automatic retransmission; station identities and message integrity by
-    modern cryptographic signatures, including post-quantum-safe options.</p>
+    turns an ordinary SSB transceiver and a computer sound interface into a digital link that, on HF,
+    can span hundreds to thousands of kilometres — <strong>without any intervening infrastructure</strong>.
+    At its core is an <strong>adaptive modem</strong> that measures the channel and steps its speed and
+    modulation up or down a single 14-rung ladder to keep the link alive as propagation changes.
+    Messages are protected by forward error correction on every rung and automatic retransmission;
+    station identities by Ed25519 signatures, with an experimental post-quantum option.</p>
+  <p>The first release (<strong>Release 1, <code>v0.17.0</code></strong>) is deliberately narrow: the
+    ladder, session compression, the background daemon and CLI, and an ARDOP-compatible TNC for Pat
+    (Winlink). The much larger rest of the workspace ships disabled or experimental.</p>
 </section>
 
 <section class="wrap">
   <div class="sechead"><p class="eyebrow">Status</p><h2>Where the project is now</h2></div>
-  <p class="lede">A multi-crate Rust workspace: DSP primitives and adaptive rate profiles through
-    ARDOP/KISS TNC interfaces, B2F/Winlink support, QSY frequency agility, mesh networking and
-    post-quantum key exchange. All tests run against a deterministic loopback backend — no audio
-    hardware is required to build or test.</p>
+  <p class="lede">A multi-crate Rust workspace whose first release is deliberately narrow: one adaptive
+    rate ladder with FEC on every rung, session compression, the daemon and CLI, and an
+    ARDOP-compatible TNC for Pat. The rest of the stack — KISS/AX.25, Winlink B2F and the CMS gateway,
+    QSY, mesh, relay, repeater, JS8 discovery, file transfer, the post-quantum handshake, GPU kernels
+    and the GUIs — is in the code but ships disabled or experimental. All tests run against a
+    deterministic loopback backend — no audio hardware is required to build or test.</p>
 
   <div class="release">
-    <span class="ver">🔧 v0.12.2 · released 17 July 2026</span>
-    <h3>Weak-signal receive gets measurably better at pulling frames out of a fading channel</h3>
-    <p><b>HARQ soft-combining across retransmissions was quietly throwing away most of its own
-      gain</b> — it discarded retained soft-decision data whose length varied between bursts (which it
-      does, on every fade), and an abandoned message's data could dilute the next one's. Both fixed:
-      decode rate on a moderate HF fade rises <b>0.840 → 0.957</b> where a single burst manages 0.582.</p>
-    <p><b>The weak-signal sub-floor rung (MFSK16) now gets HARQ too</b>, worth about <b>2.5 dB</b>
-      there — it decodes frames at −6 dB that no single transmission ever recovers, which is exactly
-      where a link has nothing else left. Also: <code>openpulse session --diagnostics</code> now reports
-      a real <code>afc_offset_hz</code> instead of always <code>null</code>. No wire, config or API
-      change; nothing to do to upgrade.</p>
-    <p class="prior"><b>v0.4.0</b> — JS8-based station discovery + rendezvous and direct signed P2P
-      file transfer. &nbsp;·&nbsp; <b>v0.3.0</b> — signed Ed25519 handshake over the air on connect,
-      automatic ADIF logbook, opt-in ARDOP adaptive ARQ, reworked operator panel.
-      &nbsp;·&nbsp; <b>v0.2.1</b> — CE-SSB transmit envelope conditioning (+1.18 dB confirmed on-air).</p>
+    <span class="ver">In progress · Release 1 = v0.17.0 · not yet tagged</span>
+    <h3>One ladder, one TNC, tested on air on 2 m before the tag</h3>
+    <p><b>In Release 1:</b> <code>openpulse-daemon</code> (binary <code>openpulse-server</code>),
+      <code>openpulse-cli</code> (binary <code>openpulse</code>) and the ARDOP TNC
+      (<code>openpulse-ardop</code>, binary <code>openpulse-tnc</code>); the <code>hpx_hf</code> ladder
+      SL1–SL14 and its plugins (MFSK16 with its return channel, BPSK, QPSK250-D, OFDM52, FSK4 ACK);
+      each rung's FEC; session compression; PTT backends; station ID; the signed classical (Ed25519)
+      handshake.</p>
+    <p><b>Not in Release 1</b> (still in the code; ships disabled or experimental, with no release
+      gate): mesh, repeater, relay, discovery/JS8, file transfer, QSY, FreeDV auth, Winlink B2F and the
+      CMS gateway, KISS, the post-quantum handshake, GPU acceleration, the operator panel and TUI, and
+      the plugins not on <code>hpx_hf</code> (<code>psk8</code>, <code>64qam</code>,
+      <code>scfdma</code>, <code>pilot</code>).</p>
+    <p><b>Where it stands (15 October 2026):</b> M0 (governance reset) and M1 (v0.17 wire format,
+      1 October) are done. M2 (release path) is done in code as of 14 October; its on-air follow-ups
+      — the PTT leader measured at gate G1 and a Raspberry Pi receive-cost re-measure — wait for the
+      radios. <b>Next is M3: on air on 2 m</b> (IC-9700 ↔ FT-818, 144.640 MHz) — gates G0–G3, the
+      A1/A2/A4/A5 runs and a Pat session over the ARDOP TNC. HF follows only with the release
+      candidate; M4 cuts <code>v0.17.0</code>. <code>main</code> still reports version 0.16.0.</p>
+    <p><b>Update both ends of a link: v0.16.0 and v0.17 do not talk to each other at all.</b> Every
+      transmitted frame is now whitened (added after v0.16.0 in #1027, fixed in #1148), the signed
+      handshake became binary (#1147), and since 10 October (#1062) BPSK63, BPSK100 and BPSK250
+      (SL3–SL5) send a PN-63 preamble. Profiles changed too: there are now exactly two, <code>fast</code> and
+      <code>robust</code>; the ten earlier names were deleted with no aliases.</p>
+  </div>
+
+  <div class="release" style="margin-top:14px">
+    <span class="ver">Latest release · v0.16.0 · 18 July 2026</span>
+    <h3>A documentation and test-integrity release</h3>
+    <p>It shipped <a href="https://github.com/dc0sk/OpenPulseHF/blob/main/docs/openpulse-book.md">the
+      OpenPulseHF book</a> and a rewritten
+      <a href="https://github.com/dc0sk/OpenPulseHF/blob/main/docs/openpulse-manual.md">operator
+      manual</a>, and replaced acceptance tests that could not fail with real AWGN round-trips. The
+      modem itself was unchanged from v0.15.0. What changed since, for operators: the
+      <a href="https://github.com/dc0sk/OpenPulseHF/blob/main/docs/releasenotes.md">release notes</a>,
+      <i>Unreleased</i> section.</p>
+    <p class="prior"><b>v0.15.0</b> — Winlink stack hardening: one live DoS fixed, an aggregate
+      decompression cap, per-operation read deadlines. &nbsp;·&nbsp; <b>v0.4.0</b> — JS8-based station
+      discovery and rendezvous, signed P2P file transfer, OFDM re-seat and HARQ soft-combining.
+      &nbsp;·&nbsp; <b>v0.3.0</b> — signed handshake over the air on connect, automatic ADIF logbook,
+      opt-in ARDOP adaptive ARQ, generic serial CAT. &nbsp;·&nbsp; <b>v0.2.1</b> — CE-SSB transmit
+      envelope conditioning for the high-PAPR multicarrier modes.</p>
   </div>
 
   <div class="stats">
-    <div class="stat"><div class="v">40+</div><div class="k">registered modulation modes</div></div>
-    <div class="stat"><div class="v">31 → 12k</div><div class="k">gross bps, BPSK31 → 64QAM2000-RRC</div></div>
-    <div class="stat"><div class="v">9</div><div class="k">FEC schemes, RS → LDPC → Turbo</div></div>
-    <div class="stat"><div class="v">12</div><div class="k">adaptive rate profiles</div></div>
-    <div class="stat"><div class="v">6</div><div class="k">wgpu GPU DSP kernels</div></div>
-    <div class="stat"><div class="v">7</div><div class="k">simulated channel models</div></div>
+    <div class="stat"><div class="v">14</div><div class="k">rungs on the <code>hpx_hf</code> ladder, SL1–SL14</div></div>
+    <div class="stat"><div class="v">~9 → 7.7k</div><div class="k">net bps, MFSK16 → OFDM52-64QAM + LDPC</div></div>
+    <div class="stat"><div class="v">2</div><div class="k">session profiles, <code>fast</code> and <code>robust</code></div></div>
+    <div class="stat"><div class="v">3</div><div class="k">FEC families on the ladder: RS → soft-concatenated → LDPC</div></div>
+    <div class="stat"><div class="v">5</div><div class="k">plugins in Release 1, of 10 in the workspace</div></div>
+    <div class="stat"><div class="v">2 m</div><div class="k">first on-air stage (M3); HF with the release candidate</div></div>
   </div>
 </section>
 
 <section class="wrap">
-  <div class="sechead"><p class="eyebrow">Why OpenPulseHF</p><h2>Firsts and near-firsts in open-source amateur digital modes</h2></div>
-  <p class="lede">Several capabilities here do not exist elsewhere in open HF software — or exist only
-    as stubs. These are the ones with working implementations behind them.</p>
+  <div class="sechead"><p class="eyebrow">Why OpenPulseHF</p><h2>Notable capabilities</h2></div>
+  <p class="lede">Only the first three are part of Release 1. The others are implemented and tested in
+    simulation, but ship disabled or experimental.</p>
 
   <div class="feats">
     <div class="feat">
-      <h3>Post-quantum link security</h3>
-      <p>ML-DSA-44 signing + ML-KEM-768 key encapsulation negotiated in-band. Hybrid mode signs with
-        both Ed25519 and ML-DSA-44 simultaneously. No other open HF modem does this.</p>
-    </div>
-    <div class="feat">
-      <h3>SC-FDMA waveform on HF</h3>
-      <p>Single-Carrier FDMA — the LTE uplink waveform — brought to HF with DFT-CE pilot-aided channel
-        estimation and MMSE equalization.</p>
-    </div>
-    <div class="feat">
-      <h3>Working LDPC belief propagation</h3>
-      <p>Real rate-1/2 min-sum belief propagation — not a stub. First open-source HF software modem
-        with working LDPC.</p>
+      <h3>One adaptive ladder, coded on every rung</h3>
+      <p><code>hpx_hf</code>, SL1–SL14: MFSK16 → coded BPSK → differential QPSK250-D → OFDM52 up to
+        64QAM with high-rate LDPC (r≈8/9), ~9 bps to 7.7 kbps. ACK/NACK- and SNR-driven. Part of
+        Release 1.</p>
     </div>
     <div class="feat">
       <h3>LLR-accumulating ARQ</h3>
       <p>Soft LLR values accumulate across retransmissions (PACTOR-style Memory-ARQ), turning each
-        retry into a soft combining gain.</p>
-    </div>
-    <div class="feat">
-      <h3>Pilot-framed carrier recovery</h3>
-      <p>A single-carrier family (<code>PILOT-QPSK500</code>…<code>PILOT-32APSK500</code>, up to DVB-S2
-        32APSK) whose known in-band pilots drive carrier tracking instead of a decision-directed Costas
-        loop — cycle-slip-immune on dense constellations and robust to soundcard sample-rate offset.</p>
-    </div>
-    <div class="feat">
-      <h3>64QAM with soft demodulation</h3>
-      <p>Gray-coded 64QAM with a max-log-MAP soft demodulator. An aggressive constellation for VHF/UHF
-        links with proper soft FEC backing.</p>
-    </div>
-    <div class="feat">
-      <h3>GPU-accelerated DSP</h3>
-      <p>Six wgpu compute kernels (BPSK modulate/demodulate, timing search, RRC FIR matched filter,
-        256-pt FFT, soft LLR demod) accelerating BPSK, QPSK, 8PSK, 64QAM and SC-FDMA — all with
-        automatic CPU fallback.</p>
+        retry into a soft combining gain. Part of Release 1.</p>
     </div>
     <div class="feat">
       <h3>CE-SSB conditioning for data modes</h3>
-      <p>Controlled-Envelope SSB (Hershberger W9GR, QEX 2014) — a voice-SSB technique — applied as an
-        adaptive per-mode TX conditioner that raises average power at fixed PEP on high-PAPR
-        multicarrier modes. Confirmed <b>+1.18 dB on-air</b>, with no added splatter on QPSK OFDM.
-        Believed to be the first open-source HF <i>data</i> modem to do this.</p>
+      <p>Controlled-Envelope SSB (Hershberger W9GR, QEX 2014) — a voice-SSB technique — applied as a
+        per-mode TX conditioner on the QPSK-subcarrier OFDM modes (OFDM52 on the ladder; the denser
+        OFDM and all SC-FDMA modes are excluded). <b>+1.18 dB</b> average power measured on air at
+        fixed PEP (FT-991A, 2 m). Part of Release 1, default on.</p>
     </div>
     <div class="feat">
-      <h3>JS8-based discovery + rendezvous</h3>
-      <p>When idle, a station QSYs to the band's JS8 calling frequency and participates as a real JS8
-        station (native 8-GFSK / LDPC(174,87) — not a JS8Call bridge), marking itself with an in-band
-        <code>@OPULSE</code> hint. Off by default; RX-only until the operator opts into TX.</p>
+      <h3><span class="tag-def">experimental</span>Post-quantum handshake</h3>
+      <p>ML-DSA-44 + ML-KEM-768 in the ConReq/ConAck frames; Hybrid mode signs with both Ed25519 and
+        ML-DSA-44. Not part of Release 1.</p>
     </div>
     <div class="feat">
-      <h3>Signed-manifest P2P file transfer</h3>
-      <p>Offer/accept file transfer over an RF session with an inline signed <code>TransferManifest</code>
-        + SHA-256 verified against the peer's handshake key — a tampered or wrong-key file is
-        quarantined with an UNVERIFIED badge. VarAC's file transfer does not do this.</p>
+      <h3><span class="tag-def">experimental</span>SC-FDMA on HF</h3>
+      <p>DFT-spread OFDM with DFT-CE pilot channel estimation and MMSE equalisation. The
+        frequency-interleaved pilots limit the realised PAPR advantage; OFDM, not SC-FDMA, is the
+        high-throughput path. Not part of Release 1.</p>
     </div>
     <div class="feat">
-      <h3>Ed25519-signed QSY frequency agility</h3>
-      <p>A signed QSY_REQ/LIST/VOTE/ACK wire protocol with initiator and responder roles wired into the
-        daemon; SNR-ranked channel-list negotiation and rig CAT control via rigctld.</p>
+      <h3><span class="tag-def">experimental</span>Pilot-framed single carrier</h3>
+      <p><code>PILOT-*</code> modes up to DVB-S2 32APSK: known in-band pilots drive carrier tracking
+        instead of a decision-directed loop. Not part of Release 1.</p>
     </div>
     <div class="feat">
-      <h3>FreeDV authenticated voice</h3>
-      <p>Ed25519-signed authentication beacons transmitted via the FreeDV Qt-GUI UDP data port
-        (<code>openpulse-freedv-auth</code>) — no FreeDV fork required.</p>
+      <h3><span class="tag-def">experimental</span>GPU-accelerated DSP</h3>
+      <p>wgpu compute kernels (BPSK modulate/demodulate, timing search, RRC FIR matched filter,
+        256-pt FFT, soft LLR demod) with automatic CPU fallback, behind the <code>gpu</code> feature.
+        Not part of Release 1.</p>
+    </div>
+    <div class="feat">
+      <h3><span class="tag-def">experimental</span>Ed25519-signed QSY frequency agility</h3>
+      <p>A signed QSY_REQ/LIST/VOTE/ACK protocol, verified against the handshake peer, with initiator
+        and responder in the daemon and rig CAT via rigctld. Not part of Release 1.</p>
+    </div>
+    <div class="feat">
+      <h3><span class="tag-def">experimental</span>Relay, mesh, repeater</h3>
+      <p>Trust-weighted multi-hop relay with query propagation, mesh re-broadcast with authenticated
+        beacons, and a cross-band repeater. Not part of Release 1.</p>
+    </div>
+    <div class="feat">
+      <h3><span class="tag-def">experimental</span>JS8-based discovery + rendezvous</h3>
+      <p>A native JS8 waveform (8-GFSK, LDPC(174,87)) to find OpenPulse stations on the JS8 calling
+        frequency, marked by an <code>@OPULSE</code> hint, and negotiate a working frequency. Off by
+        default; RX-only until the operator opts into TX. Not part of Release 1.</p>
+    </div>
+    <div class="feat">
+      <h3><span class="tag-def">experimental</span>Signed P2P file transfer</h3>
+      <p>Offer/accept transfer with an inline signed <code>TransferManifest</code> + SHA-256 checked
+        against the peer's handshake key; a failed check quarantines the file. Not part of
+        Release 1.</p>
+    </div>
+    <div class="feat">
+      <h3><span class="tag-def">experimental</span>FreeDV authentication</h3>
+      <p>Ed25519-signed beacons for FreeDV voice via the FreeDV GUI's UDP data port
+        (<code>openpulse-freedv-auth</code>) — no FreeDV fork. Not part of Release 1.</p>
     </div>
   </div>
 
-  <p class="caveat"><b>Validation status:</b> on-air regulatory validation (spectral mask) has not been
-    completed. Except for the CE-SSB average-power confirmation above, all tests use loopback and
-    simulated-channel paths only.</p>
+  <p class="caveat"><b>On-air status:</b> a first rig-to-rig decode on 2 m passed on 28 July 2026
+    (phase A1, on the pre-v0.17 format), and the CE-SSB power and spectrum checks were made on real
+    RF. The Release 1 on-air campaign (M3) has not run yet. Fade performance on HF is validated in the
+    Watterson simulator only.</p>
 </section>
 
 <section class="wrap modes">
-  <div class="sechead"><p class="eyebrow">Modulation modes</p><h2>The full ladder, 31 bps to 12 kbps</h2></div>
-  <p class="lede">Sorted by occupied bandwidth. The mode-name number is the <b>baud</b> rate for
-    single-carrier modes; SC-FDMA/OFDM modes are named by data-subcarrier count and span
-    <code>total_SCs × 31.25 Hz</code>. The <code>PILOT-*</code> modes are a pilot-framed single-carrier
-    family: known in-band pilot symbols drive carrier recovery (cycle-slip-immune,
-    sample-rate-offset-robust) instead of a decision-directed Costas loop.</p>
+  <div class="sechead"><p class="eyebrow">Modulation modes</p><h2>The <code>hpx_hf</code> ladder, ~9 bps to 7.7 kbps</h2></div>
+  <p class="lede">Release 1 has one rate ladder, SL1–SL14, with forward error correction on every rung.
+    An adaptive session walks it up and down, driven by ACK/NACK feedback and per-level SNR gates.
+    Adaptive operation is opt-in: <code>[modem] ota_enabled = true</code> on the daemon (default fixed
+    mode <code>BPSK250</code>), <code>[ardop] enable_adaptive_arq = true</code> on the ARDOP TNC.</p>
 
   <div class="tblwrap">
     <table>
       <thead>
         <tr>
-          <th>Mode</th><th>Plugin</th><th class="num">Baud</th><th class="num">Bits/sym</th>
-          <th class="num">Gross bps</th><th class="num">Occ. BW</th><th>Waveform</th><th>Notes</th>
+          <th class="num">SL</th><th>Mode</th><th>Plugin</th><th>FEC</th><th class="num">Net bps</th>
+          <th class="num">SNR floor (dB)</th><th class="num">Declared BW (Hz)</th><th>Preamble</th>
         </tr>
       </thead>
       <tbody>
-        <tr class="grp"><td colspan="8">Narrowband · ≤ 550 Hz</td></tr>
-        <tr><td class="mode">BPSK31</td><td class="plug">bpsk</td><td class="num">31.25</td><td class="num">1</td><td class="num">31</td><td class="num">~50</td><td>Single-carrier</td><td class="note">Weak-signal narrowband HF</td></tr>
-        <tr><td class="mode">BPSK63</td><td class="plug">bpsk</td><td class="num">62.5</td><td class="num">1</td><td class="num">63</td><td class="num">~70</td><td>Single-carrier</td><td class="note"></td></tr>
-        <tr><td class="mode">BPSK100</td><td class="plug">bpsk</td><td class="num">100</td><td class="num">1</td><td class="num">100</td><td class="num">~110</td><td>Single-carrier</td><td class="note"></td></tr>
-        <tr><td class="mode">QPSK125</td><td class="plug">qpsk</td><td class="num">125</td><td class="num">2</td><td class="num">250</td><td class="num">~140</td><td>Single-carrier</td><td class="note"></td></tr>
-        <tr><td class="mode">BPSK250</td><td class="plug">bpsk</td><td class="num">250</td><td class="num">1</td><td class="num">250</td><td class="num">~275</td><td>Single-carrier (+RRC)</td><td class="note"></td></tr>
-        <tr><td class="mode">QPSK250</td><td class="plug">qpsk</td><td class="num">250</td><td class="num">2</td><td class="num">500</td><td class="num">~275</td><td>Single-carrier</td><td class="note"></td></tr>
-        <tr><td class="mode">FSK4-ACK</td><td class="plug">fsk4</td><td class="num">100</td><td class="num">2</td><td class="num">200</td><td class="num">~400</td><td>4-FSK</td><td class="note">ACK control channel only</td></tr>
-        <tr><td class="mode">QPSK500</td><td class="plug">qpsk</td><td class="num">500</td><td class="num">2</td><td class="num">1&nbsp;000</td><td class="num">~550</td><td>Single-carrier (+RRC)</td><td class="note"></td></tr>
-        <tr><td class="mode">8PSK500</td><td class="plug">psk8</td><td class="num">500</td><td class="num">3</td><td class="num">1&nbsp;500</td><td class="num">~550</td><td>Single-carrier (+RRC)</td><td class="note">Gray-coded</td></tr>
-        <tr><td class="mode">64QAM500</td><td class="plug">64qam</td><td class="num">500</td><td class="num">6</td><td class="num">3&nbsp;000</td><td class="num">~550</td><td>Single-carrier</td><td class="note"></td></tr>
-        <tr><td class="mode">PILOT-QPSK500</td><td class="plug">pilot</td><td class="num">500</td><td class="num">2</td><td class="num">1&nbsp;000</td><td class="num">~550</td><td>Single-carrier (pilot-framed)</td><td class="note">In-band pilots → cycle-slip-immune carrier tracking; SRO-robust</td></tr>
-        <tr><td class="mode">PILOT-8PSK500</td><td class="plug">pilot</td><td class="num">500</td><td class="num">3</td><td class="num">1&nbsp;500</td><td class="num">~550</td><td>Single-carrier (pilot-framed)</td><td class="note">Gray-coded; pilot-aided</td></tr>
-        <tr><td class="mode">PILOT-16QAM500</td><td class="plug">pilot</td><td class="num">500</td><td class="num">4</td><td class="num">2&nbsp;000</td><td class="num">~550</td><td>Single-carrier (pilot-framed)</td><td class="note">Pilot-amplitude-referenced demap</td></tr>
-        <tr><td class="mode">PILOT-32APSK500</td><td class="plug">pilot</td><td class="num">500</td><td class="num">5</td><td class="num">2&nbsp;500</td><td class="num">~550</td><td>Single-carrier (pilot-framed)</td><td class="note">DVB-S2 32APSK geometry</td></tr>
+        <tr class="grp"><td colspan="8">Sub-floor · deep-fade rung</td></tr>
+        <tr><td class="num">1</td><td class="mode">MFSK16</td><td class="plug">mfsk16</td><td>RS</td><td class="num">~9</td><td class="num">none</td><td class="num">500</td><td class="note">7-symbol Costas sync</td></tr>
 
-        <tr class="grp"><td colspan="8">Mid-band · 625 Hz – 1.1 kHz</td></tr>
-        <tr><td class="mode">OFDM16</td><td class="plug">ofdm</td><td class="num">—</td><td class="num">2</td><td class="num">~889</td><td class="num">~625</td><td>OFDM (16 SCs, QPSK)</td><td class="note">LS + ZF; ≡ SCFDMA16 throughput</td></tr>
-        <tr><td class="mode">SCFDMA16</td><td class="plug">scfdma</td><td class="num">—</td><td class="num">2</td><td class="num">~889</td><td class="num">~625</td><td>SC-FDMA (16 SCs, QPSK)</td><td class="note">DFT-CE + MMSE</td></tr>
-        <tr><td class="mode">SCFDMA26-8PSK</td><td class="plug">scfdma</td><td class="num">—</td><td class="num">3</td><td class="num">~2&nbsp;167</td><td class="num">~1&nbsp;000</td><td>SC-FDMA (26 SCs, 8PSK)</td><td class="note">Narrowband HOM (+3 dB/SC)</td></tr>
-        <tr><td class="mode">SCFDMA26-16QAM</td><td class="plug">scfdma</td><td class="num">—</td><td class="num">4</td><td class="num">~2&nbsp;889</td><td class="num">~1&nbsp;000</td><td>SC-FDMA (26 SCs, 16QAM)</td><td class="note">Narrowband HOM (+3 dB/SC)</td></tr>
-        <tr><td class="mode">SCFDMA26-32QAM</td><td class="plug">scfdma</td><td class="num">—</td><td class="num">5</td><td class="num">~3&nbsp;611</td><td class="num">~1&nbsp;000</td><td>SC-FDMA (26 SCs, cross-32QAM)</td><td class="note">Narrowband HOM (+3 dB/SC)</td></tr>
-        <tr><td class="mode">QPSK1000</td><td class="plug">qpsk</td><td class="num">1&nbsp;000</td><td class="num">2</td><td class="num">2&nbsp;000</td><td class="num">~1&nbsp;100</td><td>Single-carrier (+RRC/HF)</td><td class="note"></td></tr>
-        <tr><td class="mode">8PSK1000</td><td class="plug">psk8</td><td class="num">1&nbsp;000</td><td class="num">3</td><td class="num">3&nbsp;000</td><td class="num">~1&nbsp;100</td><td>Single-carrier (+RRC/HF)</td><td class="note"></td></tr>
-        <tr><td class="mode">64QAM1000</td><td class="plug">64qam</td><td class="num">1&nbsp;000</td><td class="num">6</td><td class="num">6&nbsp;000</td><td class="num">~1&nbsp;100</td><td>Single-carrier</td><td class="note"></td></tr>
+        <tr class="grp"><td colspan="8">Coded single carrier · ≤ 500 Hz · the <code>robust</code> profile tops out at SL6</td></tr>
+        <tr><td class="num">2</td><td class="mode">BPSK31</td><td class="plug">bpsk</td><td>RS</td><td class="num">27</td><td class="num">3</td><td class="num">62.5</td><td class="note">32-symbol <code>--++</code> run · initial level</td></tr>
+        <tr><td class="num">3</td><td class="mode">BPSK63</td><td class="plug">bpsk</td><td>RS</td><td class="num">54</td><td class="num">4</td><td class="num">125</td><td class="note">PN-63 (x⁶+x+1) since #1062</td></tr>
+        <tr><td class="num">4</td><td class="mode">BPSK100</td><td class="plug">bpsk</td><td>RS</td><td class="num">87</td><td class="num">4.5</td><td class="num">200</td><td class="note">PN-63 (x⁶+x+1) since #1062</td></tr>
+        <tr><td class="num">5</td><td class="mode">BPSK250</td><td class="plug">bpsk</td><td>RS</td><td class="num">219</td><td class="num">5</td><td class="num">500</td><td class="note">PN-63 (x⁶+x+1) since #1062</td></tr>
+        <tr><td class="num">6</td><td class="mode">QPSK250-D</td><td class="plug">qpsk</td><td>RS</td><td class="num">437</td><td class="num">7</td><td class="num">500</td><td class="note">Designed 16-symbol sequence · differential QPSK</td></tr>
 
-        <tr class="grp"><td colspan="8">Wideband · ~2 031 Hz (multicarrier)</td></tr>
-        <tr><td class="mode">OFDM52</td><td class="plug">ofdm</td><td class="num">—</td><td class="num">2</td><td class="num">~2&nbsp;889</td><td class="num">~2&nbsp;031</td><td>OFDM (52 SCs, QPSK)</td><td class="note">≡ SCFDMA52 throughput; OFDM trades PAPR for per-SC EQ</td></tr>
-        <tr><td class="mode">OFDM52-8PSK</td><td class="plug">ofdm</td><td class="num">—</td><td class="num">3</td><td class="num">~4&nbsp;333</td><td class="num">~2&nbsp;031</td><td>OFDM (52 SCs, 8PSK)</td><td class="note">OFDM higher-order ladder — the HF high-throughput path</td></tr>
-        <tr><td class="mode">OFDM52-16QAM</td><td class="plug">ofdm</td><td class="num">—</td><td class="num">4</td><td class="num">~5&nbsp;778</td><td class="num">~2&nbsp;031</td><td>OFDM (52 SCs, 16QAM)</td><td class="note">OFDM higher-order ladder</td></tr>
-        <tr><td class="mode">OFDM52-32QAM</td><td class="plug">ofdm</td><td class="num">—</td><td class="num">5</td><td class="num">~7&nbsp;222</td><td class="num">~2&nbsp;031</td><td>OFDM (52 SCs, cross-32QAM)</td><td class="note">OFDM higher-order ladder</td></tr>
-        <tr><td class="mode">OFDM52-64QAM</td><td class="plug">ofdm</td><td class="num">—</td><td class="num">6</td><td class="num">~8&nbsp;667</td><td class="num">~2&nbsp;031</td><td>OFDM (52 SCs, 64QAM)</td><td class="note">OFDM higher-order ladder</td></tr>
-        <tr><td class="mode">SCFDMA52</td><td class="plug">scfdma</td><td class="num">—</td><td class="num">2</td><td class="num">~2&nbsp;889</td><td class="num">~2&nbsp;031</td><td>SC-FDMA (52 SCs, QPSK)</td><td class="note">Adaptive pilot density</td></tr>
-        <tr><td class="mode">SCFDMA52-P2</td><td class="plug">scfdma</td><td class="num">—</td><td class="num">2</td><td class="num">~2&nbsp;889</td><td class="num">~2&nbsp;031</td><td>SC-FDMA (52 SCs, PN pilots)</td><td class="note"><b>Low-PAPR</b> SCFDMA52: Zadoff-Chu-phase pilots cut envelope-CCDF PAPR ~2.15 dB (8.85→6.70) at the same geometry/rate <b>and keep full DFT-CE</b> (beats the flat-CE SCFDMA52-LP); demonstrator, not in any profile</td></tr>
-        <tr><td class="mode">SCFDMA52-LP</td><td class="plug">scfdma</td><td class="num">—</td><td class="num">2</td><td class="num">~3&nbsp;389</td><td class="num">~2&nbsp;031</td><td>SC-FDMA (61 SCs, localized)</td><td class="note"><b>Low-PAPR</b> demonstrator (~2 dB lower mean PAPR: 11.9→9.7 — mostly from 4 pilots vs 13, only ~0.5 dB from localization); single-tap flat-channel CE ⇒ AWGN/flat/well-timed <b>only</b> (silently mis-decodes on selectivity/tilt/timing error), not in any profile</td></tr>
-        <tr><td class="mode">SCFDMA52-8PSK</td><td class="plug">scfdma</td><td class="num">—</td><td class="num">3</td><td class="num">~4&nbsp;333</td><td class="num">~2&nbsp;031</td><td>SC-FDMA (52 SCs, 8PSK)</td><td class="note"></td></tr>
-        <tr><td class="mode">SCFDMA52-16QAM</td><td class="plug">scfdma</td><td class="num">—</td><td class="num">4</td><td class="num">~5&nbsp;778</td><td class="num">~2&nbsp;031</td><td>SC-FDMA (52 SCs, 16QAM)</td><td class="note"></td></tr>
-        <tr><td class="mode">SCFDMA52-32QAM</td><td class="plug">scfdma</td><td class="num">—</td><td class="num">5</td><td class="num">~7&nbsp;222</td><td class="num">~2&nbsp;031</td><td>SC-FDMA (52 SCs, cross-32QAM)</td><td class="note"></td></tr>
-        <tr><td class="mode">SCFDMA52-64QAM</td><td class="plug">scfdma</td><td class="num">—</td><td class="num">6</td><td class="num">~8&nbsp;667</td><td class="num">~2&nbsp;031</td><td>SC-FDMA (52 SCs, 64QAM)</td><td class="note"></td></tr>
-        <tr><td class="mode">SCFDMA52-64QAM-P4</td><td class="plug">scfdma</td><td class="num">—</td><td class="num">6</td><td class="num">~8&nbsp;167</td><td class="num">~2&nbsp;031</td><td>SC-FDMA (49 SCs, dense pilots)</td><td class="note"></td></tr>
+        <tr class="grp"><td colspan="8">OFDM52 · 52 subcarriers · ~2 031 Hz · soft-concatenated FEC</td></tr>
+        <tr><td class="num">7</td><td class="mode">OFDM52</td><td class="plug">ofdm</td><td>soft-concatenated</td><td class="num">1&nbsp;264</td><td class="num">9</td><td class="num">2&nbsp;031</td><td class="note">Schmidl-Cox symbol</td></tr>
+        <tr><td class="num">8</td><td class="mode">OFDM52-8PSK</td><td class="plug">ofdm</td><td>soft-concatenated</td><td class="num">1&nbsp;895</td><td class="num">10</td><td class="num">2&nbsp;031</td><td class="note">Schmidl-Cox symbol</td></tr>
+        <tr><td class="num">9</td><td class="mode">OFDM52-16QAM</td><td class="plug">ofdm</td><td>soft-concatenated</td><td class="num">2&nbsp;527</td><td class="num">12</td><td class="num">2&nbsp;031</td><td class="note">Schmidl-Cox symbol</td></tr>
+        <tr><td class="num">10</td><td class="mode">OFDM52-32QAM</td><td class="plug">ofdm</td><td>soft-concatenated</td><td class="num">3&nbsp;159</td><td class="num">14</td><td class="num">2&nbsp;031</td><td class="note">Schmidl-Cox symbol</td></tr>
+        <tr><td class="num">11</td><td class="mode">OFDM52-64QAM</td><td class="plug">ofdm</td><td>soft-concatenated</td><td class="num">3&nbsp;790</td><td class="num">16</td><td class="num">2&nbsp;031</td><td class="note">Schmidl-Cox symbol</td></tr>
 
-        <tr class="grp"><td colspan="8">Wideband single-carrier · ~2 700 Hz</td></tr>
-        <tr><td class="mode">QPSK2000-RRC</td><td class="plug">qpsk</td><td class="num">2&nbsp;000</td><td class="num">2</td><td class="num">4&nbsp;000</td><td class="num">~2&nbsp;700</td><td>Single-carrier + RRC</td><td class="note"></td></tr>
-        <tr><td class="mode">8PSK2000-RRC</td><td class="plug">psk8</td><td class="num">2&nbsp;000</td><td class="num">3</td><td class="num">6&nbsp;000</td><td class="num">~2&nbsp;700</td><td>Single-carrier + RRC</td><td class="note"></td></tr>
-        <tr><td class="mode">64QAM2000-RRC</td><td class="plug">64qam</td><td class="num">2&nbsp;000</td><td class="num">6</td><td class="num">12&nbsp;000</td><td class="num">~2&nbsp;700</td><td>Single-carrier + RRC</td><td class="note">Requires SNR ≥ 25 dB</td></tr>
-
-        <tr class="grp"><td colspan="8">VHF / UHF · deferred post-1.0</td></tr>
-        <tr class="deferred"><td class="mode">QPSK9600-RRC</td><td class="plug">qpsk</td><td class="num">9&nbsp;600</td><td class="num">2</td><td class="num">19&nbsp;200</td><td class="num">~13&nbsp;000</td><td>Single-carrier + RRC</td><td class="note"><span class="tag-def">deferred</span>VHF/UHF, needs ≥38.4 kHz Fs</td></tr>
-        <tr class="deferred"><td class="mode">8PSK9600-RRC</td><td class="plug">psk8</td><td class="num">9&nbsp;600</td><td class="num">3</td><td class="num">28&nbsp;800</td><td class="num">~13&nbsp;000</td><td>Single-carrier + RRC</td><td class="note"><span class="tag-def">deferred</span>VHF/UHF, needs ≥38.4 kHz Fs</td></tr>
+        <tr class="grp"><td colspan="8">OFDM52 · high-rate LDPC (r≈8/9)</td></tr>
+        <tr><td class="num">12</td><td class="mode">OFDM52-16QAM</td><td class="plug">ofdm</td><td>LDPC high-rate</td><td class="num">5&nbsp;141</td><td class="num">18</td><td class="num">2&nbsp;031</td><td class="note">Schmidl-Cox symbol</td></tr>
+        <tr><td class="num">13</td><td class="mode">OFDM52-32QAM</td><td class="plug">ofdm</td><td>LDPC high-rate</td><td class="num">6&nbsp;426</td><td class="num">19</td><td class="num">2&nbsp;031</td><td class="note">Schmidl-Cox symbol</td></tr>
+        <tr><td class="num">14</td><td class="mode">OFDM52-64QAM</td><td class="plug">ofdm</td><td>LDPC high-rate</td><td class="num">7&nbsp;710</td><td class="num">20</td><td class="num">2&nbsp;031</td><td class="note">Schmidl-Cox symbol</td></tr>
       </tbody>
     </table>
   </div>
 
-  <p class="tblnote">The single-carrier modes also have <code>-RRC</code> (α = 0.35, ~+35 % bandwidth) and
-    <code>-HF</code> tuning variants not all listed here. The <code>-RRC</code> variants are the
-    operational, carrier-offset-robust ones at 2000 baud: the plain rectangular <code>QPSK2000</code> /
-    <code>8PSK2000</code> are registered but <b>RRC-superseded</b> — their crossfade pulse is ISI-limited
-    at 4 samples/symbol, so use <code>-RRC</code>.</p>
-  <p class="tblnote">Each <code>PILOT-*</code> mode also has a <code>-RRC</code> variant (~half the
-    occupied bandwidth) and <code>1000</code> / <code>2000-RRC</code> baud rungs — e.g.
-    <code>PILOT-16QAM1000-RRC</code> — all selectable by name and surfaced by the
-    <code>hpx_pilot{,_rrc,_fast,_fast_rrc}</code> profiles.</p>
-  <p class="tblnote">The mode/FEC selection ladder and which combinations are usable on HF is documented
-    in <a href="https://github.com/dc0sk/OpenPulseHF/blob/main/docs/mode-fec-ladder.md">docs/mode-fec-ladder.md</a>.</p>
+  <p class="tblnote">The BPSK rungs carry RS(255,223), upgraded per frame to RS(255,191) where that
+    costs no extra RS block. ACKs go out on FSK4-ACK (<code>fsk4</code>, 300 Hz) or, when the receiver
+    recommends SL1, on the MFSK16 return channel. "Declared BW" is what the plugin reports and what
+    ARDOP <code>ARQBW</code> sizes against; for the single-carrier modes it is a conservative
+    2 × baud. <b>Wire break:</b> v0.16.0 and v0.17 do not talk to each other on any rung —
+    update both ends of a link.</p>
+
+  <h3 style="font-size:1.05rem; font-weight:670; margin:30px 0 12px">Two session profiles, one ladder</h3>
+  <div class="tblwrap">
+    <table>
+      <thead>
+        <tr><th>Profile</th><th>SL range</th><th>Top mode</th><th>Occupied BW</th><th>Use when</th></tr>
+      </thead>
+      <tbody>
+        <tr><td class="mode">fast (default)</td><td>SL1–SL14</td><td>OFDM52-64QAM + LDPC r≈8/9</td><td>up to ≈2&nbsp;031 Hz</td><td class="note">Good conditions, a 2.4 kHz SSB filter, a linear PA</td></tr>
+        <tr><td class="mode">robust</td><td>SL1–SL6</td><td>QPSK250-D</td><td>≤ 500 Hz</td><td class="note">Poor conditions or limited gear (narrow filters, small or non-linear PAs); single-carrier, all coded</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="tblnote"><code>robust</code> is the same ladder capped at SL6, so a <code>fast</code> and a
+    <code>robust</code> station interoperate; the robust side never climbs past SL6. The ten earlier
+    profile names (<code>hpx500</code>, <code>hpx_modcod</code>, <code>hpx_pilot*</code>,
+    <code>hpx_ofdm_hf</code>, <code>hpx_wideband*</code>, <code>hpx_narrowband</code>, …) were deleted
+    on 1 October 2026 with no aliases; <code>hpx_hf</code> is now <code>fast</code>, and any other name
+    is rejected with the list of valid names. The ARDOP TNC floors its adaptive ladder at SL2 (it has
+    no MFSK16).</p>
+
+  <h3 style="font-size:1.05rem; font-weight:670; margin:30px 0 12px">Other modes · not part of Release 1</h3>
+  <div class="tblwrap">
+    <table>
+      <thead>
+        <tr><th>Plugin</th><th>Modes</th><th>Notes</th></tr>
+      </thead>
+      <tbody>
+        <tr><td class="plug">bpsk</td><td class="note">BPSK250-RRC</td><td class="note">Off-ladder; keeps the <code>--++</code> preamble</td></tr>
+        <tr><td class="plug">qpsk</td><td class="note">QPSK125, QPSK250, QPSK500, QPSK500-D, QPSK1000, QPSK1000-HF, QPSK2000, plus <code>-RRC</code> variants</td><td class="note">QPSK250 is coherent; the ladder uses the differential QPSK250-D</td></tr>
+        <tr><td class="plug">ofdm</td><td class="note">OFDM16</td><td class="note">16 subcarriers, QPSK; LS + ZF</td></tr>
+        <tr><td class="plug">psk8</td><td class="note">8PSK500, 8PSK1000, 8PSK1000-HF, plus <code>-RRC</code> variants, 8PSK2000-RRC</td><td class="note">Gray-coded</td></tr>
+        <tr><td class="plug">64qam</td><td class="note">64QAM500, 64QAM1000, 64QAM2000-RRC</td><td class="note">Up to 12&nbsp;000 bps gross; 64QAM2000-RRC needs a very clean channel</td></tr>
+        <tr><td class="plug">scfdma</td><td class="note">SCFDMA16, SCFDMA26-{8PSK,16QAM,32QAM}, SCFDMA52, SCFDMA52-P2, SCFDMA52-LP, SCFDMA52-{8PSK,16QAM,32QAM,64QAM}, SCFDMA52-64QAM-P4</td><td class="note">DFT-CE + MMSE; SCFDMA52-P2 and -LP are low-PAPR demonstrators (-LP is flat-channel CE only and mis-decodes on selective channels)</td></tr>
+        <tr><td class="plug">pilot</td><td class="note">PILOT-{QPSK,8PSK,16QAM,32APSK} at 500/1000 baud and <code>-RRC</code>, plus 2000-RRC</td><td class="note">Pilot-framed single carrier; up to DVB-S2 32APSK</td></tr>
+        <tr><td class="plug">js8</td><td class="note">JS8-SLOW, JS8-NORMAL, JS8-FAST, JS8-TURBO, JS8-ULTRA</td><td class="note">8-GFSK; discovery only, RX-only by default</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <p class="tblnote">These are registered and selectable as fixed modes (<code>[modem] mode</code>), but
+    are not on the Release 1 ladder and carry no release gate; <code>openpulse modes</code> prints the
+    live registry. At 2000 baud use the <code>-RRC</code> variants: plain rectangular
+    <code>QPSK2000</code> is registered but RRC-superseded, and <code>8PSK2000</code> is no longer
+    advertised (#1359), because the crossfade pulse is ISI-limited at 4 samples/symbol. The 9600-baud
+    <code>QPSK9600-RRC</code> / <code>8PSK9600-RRC</code> waveforms keep their code but are not
+    advertised: they need ≥ 38.4 kHz audio and the engine runs at 8 kHz (post-1.0).</p>
+  <p class="tblnote">The full rationale for the ladder, its FEC choices and its floors is in
+    <a href="https://github.com/dc0sk/OpenPulseHF/blob/main/docs/mode-fec-ladder.md">docs/mode-fec-ladder.md</a>.</p>
 </section>
 
 <section class="wrap">
@@ -497,25 +547,26 @@
 
 <section class="wrap">
   <div class="sechead"><p class="eyebrow">Operator interfaces</p><h2>Five ways to drive it</h2></div>
+  <p class="lede">In Release 1 you drive the modem from the CLI against the background daemon
+    (<code>openpulse-server</code>), or from Pat through the ARDOP TNC (<code>openpulse-tnc</code>). The
+    GUIs are not part of Release 1; two of them are developer tools.</p>
   <div class="tblwrap">
     <table>
-      <thead><tr><th>Interface</th><th>Description</th></tr></thead>
+      <thead><tr><th>Interface</th><th>Release 1</th><th>Description</th></tr></thead>
       <tbody>
-        <tr><td><b>Operator panel</b><br><code>openpulse-panel</code></td>
-            <td>Full <b>iced</b> GUI on the daemon control port (TCP/WS): controls band (connection, PTT,
-              mode/frequency, RF peer, toggles, TX-atten/squelch, OTA, QSY), live spectrum + waterfall +
-              rate ladder, tabbed lower panel. Dark/Light/Contrast/System themes.</td></tr>
-        <tr><td><b>Twin-station view</b><br><code>openpulse-twinview</code></td>
-            <td>egui both-directions viewer — one window over two daemons; per-station spectrum/waterfall
-              plus rate/OTA/HPX readouts, so both link directions show at once.</td></tr>
-        <tr><td><b>TUI</b><br><code>openpulse-tui</code></td>
-            <td>ratatui terminal UI — colour-coded HPX state, AFC/rate meters, DCD energy bar,
-              scrollable transitions log.</td></tr>
-        <tr><td><b>CLI</b><br><code>openpulse-cli</code></td>
-            <td>Transmit, receive, benchmark, monitor, config init, calibrate (audio/PTT/AFC).</td></tr>
-        <tr><td><b>Signal testbench</b><br><code>openpulse-testbench</code></td>
-            <td>egui 4-column live view: TX / channel / mixed / RX; waterfall, spectrum, scatter;
-              7 channel models; SNR slider.</td></tr>
+        <tr><td><b>CLI</b><br><code>openpulse</code></td><td>yes</td>
+            <td>transmit, receive, modes, devices, mode-advisor, adaptive, arq, benchmark, monitor,
+              calibrate, config init, and <code>daemon …</code> to control a running
+              <code>openpulse-server</code>.</td></tr>
+        <tr><td><b>Operator panel</b><br><code>openpulse-panel</code></td><td>no</td>
+            <td><b>iced</b> GUI on the daemon control port: controls, spectrum, waterfall, rate ladder,
+              messages, event log.</td></tr>
+        <tr><td><b>TUI</b><br><code>openpulse-tui</code></td><td>no</td>
+            <td>ratatui terminal UI: HPX state, AFC/rate meters, DCD energy bar, transitions log.</td></tr>
+        <tr><td><b>Twin-station view</b><br><code>openpulse-twinview</code></td><td>dev tool</td>
+            <td>egui viewer over two daemons, so both link directions show at once.</td></tr>
+        <tr><td><b>Signal testbench</b><br><code>openpulse-testbench</code></td><td>dev tool</td>
+            <td>egui TX / channel / mixed / RX views with waterfall, spectrum and scatter.</td></tr>
       </tbody>
     </table>
   </div>
@@ -526,7 +577,7 @@
   <p class="lede">The test suite runs entirely against a deterministic loopback backend. No audio
     hardware, radio or station is required to build or test.</p>
 
-<pre><span class="c"># Toolchain preflight (required: rustc >= 1.94.0)</span>
+<pre><span class="c"># Toolchain preflight (required: rustc >= 1.97.1)</span>
 ./scripts/check-toolchain.sh
 
 <span class="c"># Build (requires libasound2-dev on Linux for the CPAL audio feature)</span>
@@ -536,45 +587,68 @@ cargo build --workspace
 cargo test --workspace --no-default-features
 
 <span class="c"># Lint</span>
-cargo clippy --workspace --no-default-features -- -D warnings
-cargo fmt --all -- --check</pre>
+cargo clippy --workspace --no-default-features --all-targets -- -D warnings
+cargo fmt --all -- --check
+
+<span class="c"># Workspace gate (quote results only from its GATE: line)</span>
+scripts/gate.sh
+
+<span class="c"># Benchmark regression gate</span>
+cargo run -p openpulse-cli --no-default-features -- --backend loopback --log error benchmark run
+
+<span class="c"># Automated mode × channel test matrix (outputs to docs/test-reports/)</span>
+cargo run -p openpulse-testmatrix --no-default-features</pre>
 
   <h3 style="font-size:1.05rem; font-weight:670; margin:26px 0 8px">Try it without a radio</h3>
   <p class="lede" style="margin-bottom:16px">A purely rig-less demo to get a first impression of the
-    GUIs and the adaptive modem. None of it transmits on the air.</p>
+    GUIs and the adaptive modem. None of it needs a radio or sound card, and none of it transmits.</p>
 
 <pre><span class="c"># Two-station ARQ link simulator GUI — simulates BOTH stations over a virtual
-# HF channel. Tweak SNR / channel model / mode live and watch the ladder adapt.</span>
+# HF channel. Change SNR / channel model / mode live and watch the ladder adapt.</span>
 cargo run -p openpulse-linksim --features gui --bin openpulse-linksim-gui
 
-<span class="c"># Want the operator panel too? The simulator stands in for the daemon.</span>
+<span class="c"># With the operator panel: --serve makes the simulator speak the daemon control
+# protocol. Press Run in the simulator, then Connect in the panel (default 127.0.0.1:9000).</span>
 cargo run -p openpulse-linksim --features "gui,serve" --bin openpulse-linksim-gui -- --serve 127.0.0.1:9000
-cargo run -p openpulse-panel   <span class="c"># in another terminal → Connect</span></pre>
+cargo run -p openpulse-panel   <span class="c"># in another terminal</span></pre>
+
+  <p class="tblnote">For on-air operation, build the daemon or TNC with audio (<code>--features cpal</code>
+    on <code>openpulse-daemon</code> and <code>openpulse-ardop</code>; the CLI has it by default) plus
+    the PTT feature your backend needs (<code>serial</code> for RTS/DTR, <code>gpio</code>), and
+    configure <code>~/.config/openpulse/config.toml</code> — see the
+    <a href="https://github.com/dc0sk/OpenPulseHF/blob/main/docs/config/openpulse.config.toml">example
+    config</a>, the <a href="https://github.com/dc0sk/OpenPulseHF/blob/main/docs/openpulse-manual.md">operator
+    manual</a> and the <a href="https://github.com/dc0sk/OpenPulseHF/blob/main/docs/on-air_testplan.md">on-air
+    test plan</a>.</p>
 </section>
 
 <section class="wrap">
   <div class="sechead"><p class="eyebrow">Interoperability</p><h2>Talking to other software</h2></div>
   <p class="lede">OpenPulseHF is GPL v3, but these interfaces let non-GPL software interoperate without
     GPL obligations — each sits behind a process or network protocol boundary. Note that plugins which
-    statically link <code>openpulse-core</code> are derivative works and must be GPL-compatible.</p>
+    statically link <code>openpulse-core</code> are derivative works and must be GPL-compatible; the only
+    supported path for a proprietary DSP backend is a separate process bridged over one of these
+    interfaces.</p>
   <div class="tblwrap">
     <table>
-      <thead><tr><th>Interface</th><th>Transport</th><th>Description</th></tr></thead>
+      <thead><tr><th>Interface</th><th>Transport</th><th>Release 1</th><th>Description</th></tr></thead>
       <tbody>
-        <tr><td><b>ARDOP TNC</b></td><td><code>TCP 8515/8516</code></td>
-            <td>ARDOP ASCII command protocol; Pat, Winlink Express and JS8Call compatible</td></tr>
-        <tr><td><b>KISS/AX.25 TNC</b></td><td><code>TCP 8100</code></td>
-            <td>Standard KISS framing; works with Xastir, YAAC, APRX, Linux AX.25 tools</td></tr>
-        <tr><td><b>Daemon control port</b></td><td><code>NDJSON / TCP 9000</code></td>
+        <tr><td><b>ARDOP TNC</b><br><code>openpulse-tnc</code></td><td><code>TCP 8515/8516</code></td><td>yes</td>
+            <td>ARDOP ASCII command protocol, as used by Pat — including GRIDSQUARE, ARQBW, ARQTIMEOUT,
+              CWID, SENDID and PING</td></tr>
+        <tr><td><b>Daemon control port</b></td><td><code>NDJSON / TCP 9000</code></td><td>yes</td>
             <td>Full event stream + control commands; operator panel and scripting</td></tr>
-        <tr><td><b>Daemon WebSocket</b></td><td><code>JSON / WS 9001</code></td>
+        <tr><td><b>Daemon WebSocket</b></td><td><code>JSON / WS 9001</code></td><td>yes</td>
             <td>Same protocol as the TCP port; browser and Electron clients</td></tr>
-        <tr><td><b>PKI REST API</b></td><td><code>HTTP/JSON 8080</code></td>
-            <td>Trust-bundle and key-management endpoints; read-only routes unauthenticated</td></tr>
-        <tr><td><b>CLI subprocess</b></td><td><code>stdin / stdout</code></td>
+        <tr><td><b>CLI subprocess</b></td><td><code>stdin / stdout</code></td><td>yes</td>
             <td>NDJSON output; invocation crosses the process boundary</td></tr>
-        <tr><td><b>Winlink CMS gateway</b></td><td><code>B2F / TCP 8772</code></td>
-            <td>Outbound-only client to cms.winlink.org</td></tr>
+        <tr><td><b>KISS/AX.25 TNC</b><br><code>openpulse-kisstnc</code></td><td><code>TCP 8100</code></td><td>no</td>
+            <td>Standard KISS framing, AX.25 UI frames</td></tr>
+        <tr><td><b>Winlink CMS gateway</b><br><code>openpulse-gateway</code></td><td><code>B2F / TCP 8772</code></td><td>no</td>
+            <td>Outbound-only client to cms.winlink.org (CMS is proprietary); B2F Type D (gzip) only —
+              Type C/LZHUF is unsupported and inbound Type C proposals are rejected</td></tr>
+        <tr><td><b>PKI REST API</b></td><td><code>HTTP/JSON 8080</code></td><td>no</td>
+            <td>Trust-bundle and key-management endpoints; read-only routes unauthenticated</td></tr>
       </tbody>
     </table>
   </div>
@@ -630,9 +704,9 @@ cargo run -p openpulse-panel   <span class="c"># in another terminal → Connect
     {n:7,cls:"Application",name:"Application",role:"user-facing apps & protocols",
      parts:["CLI","TUI","Panel (iced)","Testbench","Daemon","ARDOP TNC","KISS TNC","B2F / Winlink","CMS gateway","FreeDV-Auth"]},
     {n:6,cls:"Presentation",name:"Presentation",role:"representation · compression · encryption",
-     parts:["Compression (LZ4 / gzip / LZHUF)","Ed25519 signing + manifests","Post-quantum (ML-DSA / ML-KEM)","Control-channel encryption (Noise)","CE-SSB conditioning"]},
+     parts:["Compression (LZ4 / Zstd + dictionary / gzip)","Ed25519 signing + manifests","Post-quantum (ML-DSA / ML-KEM)","Control-channel encryption (Noise)","CE-SSB conditioning"]},
     {n:5,cls:"Session",name:"Session",role:"session setup & security context",
-     parts:["HPX state machine","Signed + PQ handshake","Trust store & policy","Adaptive session profiles","Secure session lifecycle"]},
+     parts:["HPX state machine","Signed handshake (+ experimental PQ)","Trust store & policy","Adaptive session profiles","Secure session lifecycle"]},
     {n:4,cls:"Transport",name:"Transport",role:"reliable delivery · segmentation · rate",
      parts:["ARQ / HARQ retransmission","SAR segment / reassemble","ACK taxonomy","Rate adaptation (speed ladder)"]},
     {n:3,cls:"Network",name:"Network",role:"addressing · routing · relay",
@@ -655,10 +729,10 @@ cargo run -p openpulse-panel   <span class="c"># in another terminal → Connect
 
   // ---- audience cards ----
   var aud=[
-    {who:"Radio amateurs",h:"An open HF data mode",p:"An adaptive speed ladder, strong FEC and ARQ, and bridges to Pat/Winlink, KISS and AX.25. Runs on a Raspberry Pi, keys most rigs over CAT, with a live waterfall + constellation panel — and no closed-source parts."},
+    {who:"Radio amateurs",h:"An open HF data mode",p:"A 14-rung adaptive speed ladder with FEC on every rung, LLR-accumulating ARQ, and an ARDOP-compatible TNC for Pat/Winlink. Runs on a Raspberry Pi and keys the rig over serial RTS/DTR, VOX, rigctld, CM108 or GPIO PTT — with no closed-source parts. KISS/AX.25 and the GUIs exist as experimental extras."},
     {who:"IT & comms professionals",h:"A last-resort data bearer",p:"A layered, testable Rust stack with a hardware-free channel simulator in CI. OS-keychain or Argon2id key storage, permission-checked key files, and an authenticated, encrypted operator channel. Works when IP networks don't."},
     {who:"Authorities & civil service",h:"Infrastructure-independent",p:"Long-range data on modest hardware and open standards when power, cellular and internet are degraded or gone. Auditable, self-hostable and vendor-independent — for business-continuity and preparedness."},
-    {who:"Civil protection · police · rescue",h:"Emergency communications",p:"Structured messages, forms and small files over HF between fixed and field stations, adapting to propagation automatically. Multi-hop reach, frequency-agility, Winlink workflows, battery-friendly, with auto station-ID and per-contact logging."},
+    {who:"Civil protection · police · rescue",h:"Emergency communications",p:"Structured messages, forms and small files over HF between fixed and field stations, adapting to propagation automatically. Winlink workflows via Pat, auto station-ID and per-contact logging; multi-hop relay and frequency agility exist as experimental features."},
     {who:"Military & defence",h:"Resilient in contested environments",p:"Adaptive HF beyond terrestrial and satellite reach, with modern FEC and equalization, an explicit and inspectable security model, an opt-in post-quantum path, and an encrypted operator channel. Open-source and auditable."}
   ];
   var cards=document.getElementById('cards');
