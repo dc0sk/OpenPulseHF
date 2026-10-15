@@ -34,7 +34,7 @@ The sections below were written 2026-07-23. These changes to them are in force:
 2. **Evidence must be recorded on the v0.17 wire format, with the #1062 preamble.** M1 landed
    2026-10-01. #1062 moved into Release 1 (decision 22) and its flag day landed 2026-10-10 (#1508):
    BPSK63, BPSK100 and BPSK250 (SL3–SL5) send a PN-63 preamble, BPSK31 keeps `--++`, QPSK250-D keeps
-   its own. Together with the earlier whitener (#1148) and binary-handshake (#1147) breaks, no build
+   its own. Together with the earlier whitener (#1027/#1148) and binary-handshake (#1147) breaks, no build
    before these talks to a current one, so **both stations run the same commit**, and a bundle recorded before the flag day does not count for A1/A2. G0, G1 and 2 m
    plumbing runs can happen now. #1062's on-air check (F8) and the replay-corpus re-record (#1351) are
    part of M3.
@@ -78,8 +78,9 @@ The sections below were written 2026-07-23. These changes to them are in force:
 9. **Runner safety rules (2026-10-14).** `run-onair-twin-ota.sh` and `run-onair-ic9700-ft991a.sh`
    only ever **lower** a rig's RF power (`scripts/lib/rig-power.sh`: `L RFPOWER` is sent only when
    the request is below the current reading; the FT-818 is never touched, since Hamlib cannot set its
-   power). Mode is per station, and `keep` sends none (the run then requires the expected mode
-   reading, `*_TEST_MODE_EXPECT`, or stops before keying). Both refuse a frequency outside
+   power). Mode is per station, and `keep` sends none; the twin runner then requires the expected mode
+   reading (`*_TEST_MODE_EXPECT`) or stops before keying, while `run-onair-ic9700-ft991a.sh` does
+   not check it. Both refuse a frequency outside
    **144.500–144.750 MHz** unless the band limits are widened for an HF run — another band would also
    switch the rig's per-band settings, the FT-818's antenna among them.
 

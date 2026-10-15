@@ -26,9 +26,10 @@ with the release candidate.
 - **v0.16.0 and v0.17 do not talk to each other at all.** A v0.16.0 station and a station on
   current `main` do not decode each other's frames on **any** rung, and their handshakes are
   incompatible. Update both ends of every link. The breaks, all in the planned pre-1.0 window:
-  - **the frame whitener** (#1148): its sequence repeated every 21 bits instead of 511; the fixed
-    sequence changes every transmitted frame;
-  - **the handshake** (#1147): CONREQ/CONACK are now binary, version `0x02`; `0x01` is rejected.
+  - **the frame whitener** (#1027, #1148): v0.16.0 sends unwhitened frames; every frame is now
+    whitened, with the 511-bit sequence #1148 fixed;
+  - **the handshake** (#1147): CONREQ/CONACK are now binary (wire version `0x01`, frozen until 1.0); the JSON
+    handshake is not decoded.
     Station IDs may now be up to 18 characters (#1191);
   - **the preamble on SL3–SL5** (#1062, 2026-10-10): BPSK63, BPSK100 and BPSK250 send a 63-symbol
     PN-63 preamble (x⁶+x+1) instead of the alternating `--++` run. BPSK31 keeps `--++` and QPSK250-D

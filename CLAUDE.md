@@ -96,7 +96,8 @@ gated on A1 + A2 on **2 m** (IC-9700 ↔ FT-818, 144.640 MHz), then confirmed on
 candidate (test stages: virtual audio → hardware loopback → 2 m → HF). Everything else ships disabled
 or experimental. Status: M0 governance and M1 v0.17 wire format done; M2 release path code done
 (on-air follow-ups wait on the rigs); M3 on air on 2 m open, needs the radios; M4 cuts `v0.17.0`.
-The wire format broke against v0.16.0 on SL3–SL5 (PN-63 preamble, #1062, 2026-10-10). The plan,
+v0.16.0 and current `main` do not interoperate on any rung (whitener #1027/#1148, binary handshake
+#1147, PN-63 preamble on SL3–SL5 #1062). The plan,
 milestones and triage rules are in
 [`docs/dev/project/workplan.md`](docs/dev/project/workplan.md). **Work that serves no milestone there
 is `post-release`**; a PR says which milestone it serves and updates that milestone's status line.

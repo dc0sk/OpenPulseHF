@@ -26,9 +26,9 @@ and the plugins not on `hpx_hf` (8PSK, 64QAM, SC-FDMA, pilot). Sections on those
 
 > **Interop notice — v0.16.0 and v0.17 (current `main`) do not interoperate on any rung.**
 > They do not decode each other's frames on any rung, and their handshakes are incompatible:
-> update both ends of a link. Three changes since v0.16.0 cause this: the frame whitener applied
-> to every transmitted frame changed (#1148, 2026-08-21); the signed handshake became binary v0x02
-> and rejects v1 (#1147, 2026-08-23); and on 2026-10-10 (#1062, PR #1508) BPSK63, BPSK100 and
+> update both ends of a link. Three changes since v0.16.0 cause this: every transmitted frame is
+> now whitened (#1027, keystream fixed in #1148, 2026-08-21); the signed handshake became binary
+> and does not decode the JSON one (#1147, 2026-08-23); and on 2026-10-10 (#1062, PR #1508) BPSK63, BPSK100 and
 > BPSK250 (SL3–SL5) moved to a **PN-63** preamble (x⁶+x+1), while BPSK31 and `BPSK250-RRC` keep the
 > alternating `--++` preamble and QPSK250-D keeps its own sequence. The full v0.17 wire format is
 > declared in [docs/dev/design/protocol-wire-spec.md](dev/design/protocol-wire-spec.md).

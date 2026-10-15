@@ -51,8 +51,8 @@ the [README](../README.md#the-hpx_hf-ladder-release-1).
 The v0.17 wire format is declared in
 [dev/design/protocol-wire-spec.md](dev/design/protocol-wire-spec.md). Since 2026-10-10 (#1062)
 BPSK63, BPSK100 and BPSK250 (SL3–SL5) use a PN-63 preamble; BPSK31 keeps its `--++` preamble and
-QPSK250-D its designed sequence. That is one of several breaks against v0.16.0: the frame whitener
-was also fixed (#1148) and the handshake is now binary (#1147), so a v0.16.0 station and a current
+QPSK250-D its designed sequence. That is one of several breaks against v0.16.0: every frame is
+now whitened (#1027, fixed in #1148; v0.16.0 has no whitener) and the handshake is now binary (#1147), so a v0.16.0 station and a current
 station do not decode each other's frames on any rung. Update both ends of a link together.
 
 ## Status (2026-10-15)

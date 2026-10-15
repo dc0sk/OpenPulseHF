@@ -26,7 +26,7 @@ last_updated: 2026-10-15
 >   timeout (`HANDSHAKE_TIMEOUT`) and ±120 s timestamp freshness.
 > - The phase timeouts in *Timing Constraints* are not implemented as timers, and no production path
 >   raises `discovery_timeout`, `training_timeout`, `quality_drop`, `recovery_*` or any relay event;
->   only the benchmark harness and tests do. There is no training phase on the air: both ends run
+>   only the benchmark harness, the link simulator (`apps/openpulse-linksim/src/serve.rs`) and tests do. There is no training phase on the air: both ends run
 >   the same `hpx_hf` ladder and the data receiver chooses the rate per frame
 >   (`crates/openpulse-core/src/ota_rate.rs`, `docs/dev/design/architecture.md`).
 > - The session id is a `u64` (the CONREQ's creation time in ms) on the wire and

@@ -67,8 +67,8 @@ milestones and decisions are in [`docs/dev/project/workplan.md`](docs/dev/projec
   over the ARDOP TNC. HF follows only with the release candidate. M4 cuts `v0.17.0`.
 - **No interoperability with v0.16.0.** A v0.16.0 station and a current `main` station do not
   decode each other's frames on any rung, and their handshakes are incompatible. The breaks came in
-  the planned pre-1.0 window: the frame whitener was fixed (#1148), the handshake became a binary
-  format, version 0x02 (#1147), and since 2026-10-10 BPSK63, BPSK100 and BPSK250 (SL3–SL5) send a
+  the planned pre-1.0 window: every frame is now whitened (added in #1027 after v0.16.0, keystream
+  fixed in #1148), the handshake became a binary format (#1147), and since 2026-10-10 BPSK63, BPSK100 and BPSK250 (SL3–SL5) send a
   PN-63 preamble (#1062). Update both ends of a link together.
 - **Profiles changed.** There are now exactly two session profiles, `fast` and `robust` (see
   [Adaptive rate profiles](#adaptive-rate-profiles)). The ten earlier profile names were deleted with

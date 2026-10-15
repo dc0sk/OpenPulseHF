@@ -572,8 +572,8 @@ cyclic prefix rides the delay spread and its per-subcarrier pilots track the fad
 
 **v0.16.0 and v0.17 do not interoperate.** A v0.16.0 station and a current-`main` (v0.17 wire
 format) station do not decode each other's frames on any rung, and their handshakes are
-incompatible. There are several breaks: #1148 (2026-08-21) changed the frame whitener applied to
-every transmitted frame (`wire_for_modulation` → `openpulse_core::scramble` in
+incompatible. There are several breaks: v0.16.0 sent unwhitened frames, and every frame is now
+whitened (added in #1027, keystream fixed by #1148 on 2026-08-21) (`wire_for_modulation` → `openpulse_core::scramble` in
 `crates/openpulse-modem/src/engine.rs`); #1147 (2026-08-23) replaced the JSON handshake with a binary
 one that rejects the old format (§2B.3.1); and on 2026-10-10 (#1062, PR #1508) BPSK63, BPSK100 and
 BPSK250 moved to a 63-symbol PN-63 preamble (x⁶+x+1), while BPSK31 keeps its 32-symbol alternating

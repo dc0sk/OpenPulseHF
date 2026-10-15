@@ -255,7 +255,7 @@ adaptive ladder at SL2 (no MFSK16 there).
 
 **Preamble per rung.** Each rung's frame opens with its own sync sequence. The #1062 flag day
 (2026-10-10, `docs/dev/design/pn-preamble.md`) changed SL3–SL5. It is not the only break against
-v0.16.0: the whitener fix (#1148) changes every frame, so a v0.16.0 station and a current station do
+v0.16.0: every frame is now whitened (#1027, fixed in #1148; v0.16.0 has none), so a v0.16.0 station and a current station do
 not decode each other's frames on any rung.
 
 | Rungs | Mode | Preamble | Source |

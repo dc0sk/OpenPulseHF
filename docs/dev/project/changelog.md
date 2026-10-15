@@ -26,9 +26,9 @@ interoperate. The v0.17 wire format is declared in `docs/dev/design/protocol-wir
 - **Preamble (#1062, flag day 2026-10-10, PR #1508).** BPSK63, BPSK100 and BPSK250 (SL3–SL5) use a
   **PN-63** preamble (x⁶+x+1); BPSK31 keeps `--++` (decision 25); QPSK250-D keeps its designed
   sequence. Neither version decodes the other's SL3–SL5 frames.
-- **Handshake is binary (#1147).** CONREQ/CONACK, classical and PQ, are a binary format, version
-  `0x02`; `0x01` is rejected with no dual decode. A classical CONREQ fits one SAR fragment (241 B,
-  was 710 B in three fragments). The signature covers the transmitted bytes. The unused FEC and
+- **Handshake is binary (#1147).** CONREQ/CONACK, classical and PQ, are a binary format (wire
+  version `0x01`, frozen until 1.0); the JSON format is not decoded. A maximal CONREQ is 236 B and
+  fits one SAR fragment (v1's JSON was ~752 B in three). The signature covers the transmitted bytes. The unused FEC and
   compression negotiation fields are deleted (#1166).
 - **Whitener period 511 (#1148).** The scrambler delivered a 21-bit period instead of the documented
   x⁹+x⁵+1; it is fixed, with a period gate. The recorded replay corpus predates it; four replay rows
