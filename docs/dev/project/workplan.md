@@ -2,7 +2,7 @@
 project: openpulsehf
 doc: docs/dev/project/workplan.md
 status: draft
-last_updated: 2026-10-15
+last_updated: 2026-10-17
 ---
 
 # Work plan — Release 1 ("basic modem")
@@ -242,6 +242,7 @@ Waiting on the maintainer (`maintainer-todo.md`): the key-to-audio probe, then F
 | 24 | 2026-10-06 | **#1062 F3: keep x⁶ + x + 1.** F3 failed for all six degree-6 polynomials (whole-frame worst 0.52–0.65): the worst is chance correlation with whitened payload, set by frame length, so the rule was misframed and no N = 63 sequence meets it. Differences between polynomials are within payload-to-payload noise; x⁶ + x + 1 is already in production (pilot). Continue at F4 | maintainer |
 | 25 | 2026-10-07 | **#1062 F5: BPSK31 keeps the shipped `--++` preamble; the carrier detect is not changed for it. Amends decision 22's scope: PN-63 on SL3–SL5, not SL2.** F5's pre-registered consequence (parity fail → that rung keeps `--++`): BPSK31 failed its −14 dB AWGN cliff (345 / 298, −0.078), a carrier-detect gathering deficit, and passed every other column. Changing the shared carrier detect would touch every mode and the channel-busy check before keying, re-open #1454's idle-fitted constants and the slow suites, for a gain confined to 17 dB below the rung's floor, on a rung where PN buys nothing measured yet (no PN template on the slow rungs). BPSK63 and BPSK100 go to the flag day on PN-63; the cliff deficit is parked, not ruled out | maintainer |
 | 26 | 2026-10-13 | **#1460: bound the damage, do not classify.** After three classification rounds found no statistic separating a foreign over from a failing frame of ours, the remainder is handled by round 4b of `failed-burst-ownership.md`: a failed burst moves the ladder only when its NACK is keyed. Work plan item 2 no longer asks for template corroboration | maintainer |
+| 27 | 2026-10-17 | **Release 1 on-air hardware: rpi51 + IC-9700 (A), rpi53 + FT-818 (B), and an SDRplay RSPdx on rpi51 as the independent witness.** The FT-991A over the remote Pi is not used for Release 1; it stays a possible later option, since it adds nothing the 2 m pair needs. The witness beside station A arbitrates A's receive and checks A's transmission, not B's receive; it must not overload or starve rpi51's decoder (`onair-execution-plan.md`, *The witness*) | maintainer |
 
 ## Open questions
 

@@ -2,7 +2,7 @@
 project: openpulsehf
 doc: docs/dev/onair-ic9700-ft818-setup.md
 status: living
-last_updated: 2026-10-14
+last_updated: 2026-10-17
 ---
 
 # On-air setup — IC-9700 (rpi51) ↔ FT-818 (rpi53)
@@ -135,7 +135,8 @@ Run in this order; stop on the first failure.
    ./scripts/onair-preflight.sh --strict        # now includes a `--backend cpal devices` probe
    ```
 3. **Phase G0 — the FT-818 receive floor is clean** (the conducted-RFI check; the earlier campaign
-   found birdies on the laptop that hosted this station then). With **no TX anywhere and the SDR stopped**:
+   found birdies on the laptop that hosted this station then). With **no TX anywhere and the SDR stopped**
+   (then again on station A with the RSPdx streaming — it shares rpi51's USB with the IC-9700):
    ```bash
    # once B_AUDIO_DEVICE is known, point the ALSA capture at the SCU-17 CODEC:
    scripts/onair-rx-idle-floor.sh plughw:CARD=CODEC,DEV=0   # the SCU-17 CODEC on rpi53
@@ -146,8 +147,11 @@ Run in this order; stop on the first failure.
 4. **Signal-chain gates 1–6** from [onair-signal-chain-verification.md](onair-signal-chain-verification.md),
    with Station B now the FT-818: CAT connectivity, a tone deflecting ALC, a synchronized RX capture
    ≥ 0.005 mean-sq (Gate 3, both directions), carrier at 1500 Hz, one BPSK250 frame decoded.
-5. **SDR monitor up** (`scripts/onair-sdr/sdr_capture.py`): the RSP2pro independently monitors every
-   burst and is the arbiter of any rig-RX result.
+5. **SDR monitor up** (`scripts/onair-sdr/sdr_capture.py` on rpi51): the RSPdx independently monitors
+   every burst. It arbitrates station A's receive (B → A); for A → B it checks A's transmission, not
+   B's receive. Attenuate it against the IC-9700 next to it, and capture per burst at a low rate so
+   it does not compete with station A's decoder — see
+   [onair-execution-plan.md](onair-execution-plan.md), *The witness*.
 
 ---
 
@@ -172,6 +176,7 @@ trust a rig-RX PASS unless the SDR corroborates it or gates 1–6 passed clean i
   GAIN, and the **front BNC** antenna at 2 m, at **L1 (0.5 W)**.
 - Station B host: **`dc0sk-rpi53`** (`B_SSH=dc0sk@dc0sk-rpi53`).
 - The **LDG Z817 is HF-only** and inert on 2 m; the antenna must be resonant on its own.
-- The **SDR is co-located** with the portable station, which is ideal for monitoring.
+- The **SDR** is an RSPdx on **rpi51**, beside station A, not with the portable station
+  (decision 27). The FT-991A is not part of this campaign.
 - Everything on the IC-9700/rpi51 side is unchanged, including its unresolved USB-capture-during-TX
   caveat (Gate 3 covers it).
