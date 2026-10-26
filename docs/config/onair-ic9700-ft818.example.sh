@@ -68,7 +68,11 @@ export B_RIGCTLD_PORT=4532
 # SCU-17 USB Audio CODEC on rpi53. Found with:
 #   arecord -l | grep -i codec      # find the card
 #   ./target/release/openpulse --backend cpal devices | grep -i codec   # exact cpal name
-export B_AUDIO_DEVICE="plughw:CARD=CODEC,DEV=0"   # the SCU-17 CODEC on rpi53 (2026-10-14)
+# "pulse", as on station A: the modem then goes through PipeWire, whose default source and sink
+# onair-setup-audio-routing.sh points at the SCU-17 CODEC at the levels below. With a direct
+# plughw:CARD=CODEC,DEV=0 (the ALSA name, 2026-10-14) the modem bypassed PipeWire, so neither the
+# 0.15 TX drive nor the 0.45 capture level applied to it (review-station-readiness-2026-10-26.md).
+export B_AUDIO_DEVICE="pulse"
 export B_AUDIO_DEVICE_LABEL="FT-818 SCU-17 USB Audio CODEC"
 export B_REPO_DIR='${HOME}/git/OpenPulseHF'
 export B_LOG_DIR='${HOME}/var/log/openpulse/on-air'
@@ -95,9 +99,10 @@ export B_TX_SINK_VOLUME=0.15              # documented FT-818 drive
 
 # ── Witness SDR and preflight ──────────────────────────────────────────────────
 export WITNESS_SDR_SIDE=A                 # the RSPdx is on rpi51 (decision 27)
-# The #1060 stand-down proof fails on every machine since the PN-63 preamble (its 250 Hz fixture
-# now has a separating threshold, 0.468 < 0.51): stale fixture, not a station fault. Skip it until
-# the fixture is replaced.
+# The #1060 stand-down proof failed on rpi53 (cause not captured) and, run on x86 in release on
+# 2026-10-26, failed its own precondition: the 250 Hz fixture derived 0.468, below the PN-63
+# delivered-frame bound 0.51, so it no longer reaches the stand-down path (traceability.md,
+# 2026-10-26). Skipped until the fixture is replaced (work plan M3 parking line).
 export SKIP_RHO_STANDDOWN=1
 
 # ── Timing (corrected values) ──────────────────────────────────────────────────

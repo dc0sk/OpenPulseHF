@@ -10,7 +10,9 @@ last_updated: 2026-10-26
 > **Dry run — results not accepted** (maintainer, 2026-10-26). The session hit too many station
 > problems for its results to count. The stations are being prepared to a checked state first:
 > [onair-ic9700-ft818-setup.md](onair-ic9700-ft818-setup.md), *Station preparation*. The #1060 proof's
-> failure is a stale fixture, not a station fault (it fails on x86 in release too).
+> failure is not a station fault: run on x86 in release on 2026-10-26 it failed its own precondition
+> (the 250 Hz fixture derives 0.468, below the PN-63 bound 0.51), so the fixture no longer reaches
+> the path it proves.
 
 Branch checked out on both Pis: `decision-27-local` = `origin/claude/affectionate-brahmagupta-sdn8qg` @ `87c5abe0`
 (decision 27 docs, on top of `main` 8fe05837; not merged to `main`). Callsign DC0SK. Only one transmission

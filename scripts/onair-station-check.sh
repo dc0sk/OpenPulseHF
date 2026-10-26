@@ -54,7 +54,7 @@ on() { local target="$1"; shift; ssh ${SSH_OPTS} "$target" "$@"; }
 # ── Control host ────────────────────────────────────────────────────────────────
 echo "== control host: $(hostname)"
 LOCAL_SHA="$(git -C "$REPO_ROOT" rev-parse HEAD 2>/dev/null || echo none)"
-if [[ -n "$(git -C "$REPO_ROOT" status --porcelain 2>/dev/null)" ]]; then
+if [[ -n "$(git -C "$REPO_ROOT" status --porcelain --untracked-files=no 2>/dev/null)" ]]; then
     bad "control checkout has uncommitted changes; a session runs on a committed tree"
 else
     ok "control checkout clean at ${LOCAL_SHA:0:8}"
@@ -69,16 +69,23 @@ read -r -d '' REMOTE <<'REMOTE_EOF'
 # bash must parse all of it before any command runs, or a command that reads stdin eats the rest.
 main() {
 set -u
-repo="$(eval echo "$1")"; cat_port="$2"; model="$3"; baud="$4"; rigctld_port="$5"
-expect_mode="$6"; codec="$7"; want_sdr="$8"; band_lo="$9"; band_hi="${10}"
+# The repo dir arrives as the profile's literal '${HOME}/...': substitute HOME, never eval.
+repo="${1/#'${HOME}'/$HOME}"; cat_port="$2"; model="$3"; baud="$4"; rigctld_port="$5"
+expect_mode="$6"; mode_is_keep="$7"; codec="$8"; want_sdr="$9"; band_lo="${10}"; band_hi="${11}"
+ptt_port="${12}"; skip_rho="${13}"
 p() { echo "PASS|$1"; }; f() { echo "FAIL|$1"; }; i() { echo "INFO|$1"; }
 
-if [[ -d "$repo/.git" ]]; then
+i "host: $(. /etc/os-release 2>/dev/null; echo "${PRETTY_NAME:-unknown OS}"), $(rigctl --version 2>/dev/null | head -1)"
+if sha="$(git -C "$repo" rev-parse HEAD 2>/dev/null)"; then
     p "repo at $repo"
-    echo "SHA|$(git -C "$repo" rev-parse HEAD)"
-    [[ -z "$(git -C "$repo" status --porcelain)" ]] && p "checkout clean" || f "checkout has uncommitted changes"
+    echo "SHA|$sha"
+    if status="$(git -C "$repo" status --porcelain --untracked-files=no 2>/dev/null)"; then
+        [[ -z "$status" ]] && p "checkout clean" || f "checkout has uncommitted changes"
+    else
+        f "git status failed in $repo"
+    fi
 else
-    f "no repo at $repo"
+    f "no git checkout at $repo"
 fi
 
 for c in cargo rigctl rigctld arecord wpctl pactl python3 timeout; do
@@ -87,16 +94,18 @@ done
 python3 -c 'import numpy, scipy' 2>/dev/null && p "python3 numpy + scipy (G0 analyser)" \
     || f "python3 numpy/scipy missing (apt install python3-numpy python3-scipy)"
 
-# Release binaries, cpal, callsign: the existing preflight. The #1060 proof is skipped: its fixture
-# is stale against the PN-63 preamble (2026-10-26) and fails on every machine.
+# Release binaries, cpal, callsign: the existing preflight. SKIP_RHO_STANDDOWN comes from the
+# profile (the #1060 proof's fixture failed on 2026-10-26; work plan parking).
 if [[ -x "$repo/scripts/onair-preflight.sh" ]]; then
-    out="$(cd "$repo" && SKIP_RHO_STANDDOWN=1 scripts/onair-preflight.sh --strict 2>&1)"; rc=$?
+    out="$(cd "$repo" && SKIP_RHO_STANDDOWN="$skip_rho" scripts/onair-preflight.sh --strict 2>&1)"; rc=$?
     summary="$(printf '%s\n' "$out" | grep '^Summary:' | tail -1)"
     if [[ $rc -eq 0 ]]; then p "onair-preflight --strict: ${summary}"; else
         f "onair-preflight --strict: ${summary:-no summary}"
         printf '%s\n' "$out" | grep '^\[FAIL\]' | sed 's/^\[FAIL\] /INFO|  preflight: /'
     fi
 fi
+[[ -x "$repo/target/release/openpulse-server" ]] && p "openpulse-server built (the daemon path)" \
+    || f "openpulse-server missing: cargo build --release -p openpulse-daemon --features cpal --bin openpulse-server"
 
 if [[ -z "$cat_port" || "$cat_port" == TODO* ]]; then
     f "CAT port not set in the profile"
@@ -108,13 +117,19 @@ else
     for d in /dev/serial/by-id/*; do [[ -e "$d" ]] && i "  present: $d"; done
 fi
 
-# Read-only CAT: frequency and mode. Through rigctld when it holds the port, else directly.
-if pgrep -x rigctld >/dev/null 2>&1; then
+# Read-only CAT: frequency and mode, through a rigctld listening on the profile's port when there is
+# one. Opening the tty directly raises DTR/RTS, and on a rig whose PTT port is a sibling interface
+# (the IC-9700's _B port, the SCU-17's second CP2105 port) RTS keys the transmitter, so the direct
+# open is refused for the PTT port and for any second interface (-if01-).
+reading=""
+if ss -ltn 2>/dev/null | grep -q ":${rigctld_port}[[:space:]]"; then
     reading="$(timeout 15 rigctl -m 2 -r "127.0.0.1:${rigctld_port}" f m 2>/dev/null)"
 elif [[ -e "$cat_port" ]]; then
-    reading="$(timeout 15 rigctl -m "$model" -r "$cat_port" -s "$baud" f m 2>/dev/null)"
-else
-    reading=""
+    if [[ -n "$ptt_port" && "$cat_port" == "$ptt_port" ]] || [[ "$cat_port" == *-if01-* ]]; then
+        f "refusing to open ${cat_port} directly: it is the PTT port or a second interface, and opening it can key the rig"
+    else
+        reading="$(timeout 15 rigctl -m "$model" -r "$cat_port" -s "$baud" f m 2>/dev/null)"
+    fi
 fi
 freq="$(printf '%s\n' "$reading" | sed -n 1p)"; mode="$(printf '%s\n' "$reading" | sed -n 2p)"
 if [[ "$freq" =~ ^[0-9]+$ ]]; then
@@ -122,12 +137,15 @@ if [[ "$freq" =~ ^[0-9]+$ ]]; then
     if (( freq < band_lo || freq > band_hi )); then
         i "  dial is outside ${band_lo}-${band_hi}; the runner tunes inside it before keying"
     fi
-    if [[ -z "$expect_mode" || "$expect_mode" == TODO* ]]; then
-        f "no expected mode in the profile (TEST_MODE_EXPECT_* / TEST_MODE_RIG_*); the reading is '${mode}'"
+    if [[ "$mode_is_keep" != 1 ]]; then
+        # The runner sets this side's mode itself before keying, so a different reading now is fine.
+        i "  mode is set by the runner (${expect_mode:-?}); reads '${mode}' now"
+    elif [[ -z "$expect_mode" || "$expect_mode" == TODO* ]]; then
+        f "mode is 'keep' but TEST_MODE_EXPECT_* is unset; the reading is '${mode}'"
     elif [[ "$mode" == "$expect_mode" ]]; then
-        p "mode matches the profile: ${mode}"
+        p "mode matches the profile: ${mode} (set on the rig, sent by nothing)"
     else
-        f "mode reads '${mode}', profile expects '${expect_mode}'"
+        f "mode reads '${mode}', profile expects '${expect_mode}' (set it on the rig)"
     fi
 else
     f "CAT read failed (no frequency); is the rig on and the CAT rate right?"
@@ -141,19 +159,20 @@ if [[ "$want_sdr" == 1 ]]; then
         || f "python3 SoapySDR missing (apt install python3-soapysdr)"
     systemctl is-active --quiet sdrplay 2>/dev/null && p "sdrplay API service active" \
         || f "sdrplay API service not active (install the SDRplay API with bash; systemctl status sdrplay)"
-    if timeout 20 SoapySDRUtil --find="driver=sdrplay" 2>/dev/null | grep -qi "driver *= *sdrplay"; then
+    if timeout 20 SoapySDRUtil --find="driver=sdrplay" 2>&1 | grep -q '^Found device'; then
         p "SoapySDRPlay3 finds the SDR"
     else
         f "SoapySDRPlay3 does not find an SDRplay device (module built? SoapySDRUtil --info lists modules)"
     fi
 fi
+echo "END|"
 }
 main "$@" </dev/null
 REMOTE_EOF
 
 check_side() {
     local side="$1" target="$2" repo="$3" cat_port="$4" model="$5" baud="$6" rport="$7"
-    local expect="$8" codec="$9" sdr="${10}"
+    local expect="$8" keep="$9" codec="${10}" sdr="${11}" ptt="${12}" audio="${13}"
     echo
     echo "== station ${side}: ${target}"
     if ! on "$target" true 2>/dev/null; then
@@ -161,17 +180,25 @@ check_side() {
         return
     fi
     ok "SSH to ${target} without a password"
-    local line remote_sha=""
+    local line remote_sha="" ended=0 args
+    # ssh joins its arguments into one string for the remote shell: quote each one for it.
+    args="$(printf ' %q' "$repo" "$cat_port" "$model" "$baud" "$rport" "$expect" "$keep" "$codec" \
+        "$sdr" "${BAND2M_MIN_HZ:-144500000}" "${BAND2M_MAX_HZ:-144750000}" "$ptt" "${SKIP_RHO_STANDDOWN:-0}")"
     while IFS= read -r line; do
         case "$line" in
             PASS\|*) ok "${line#PASS|}" ;;
             FAIL\|*) bad "${line#FAIL|}" ;;
             INFO\|*) info "${line#INFO|}" ;;
             SHA\|*) remote_sha="${line#SHA|}" ;;
+            END\|*) ended=1 ;;
         esac
-    done < <(on "$target" bash -s -- "'$repo'" "'$cat_port'" "'$model'" "'$baud'" "'$rport'" \
-        "'$expect'" "'$codec'" "'$sdr'" "'${BAND2M_MIN_HZ:-144500000}'" "'${BAND2M_MAX_HZ:-144750000}'" \
-        <<<"$REMOTE")
+    done < <(on "$target" "bash -s --${args}" <<<"$REMOTE" 2>&1)
+    # A remote script that aborts part-way prints fewer checks and no END: that is a failure, not a
+    # shorter list of passes.
+    [[ $ended -eq 1 ]] || bad "the checks on ${target} did not run to the end; the station's results above are incomplete"
+    if [[ "$audio" != "pulse" ]]; then
+        bad "audio device is '${audio}', not 'pulse': the modem bypasses PipeWire, so the routed volumes and --levels do not apply to it"
+    fi
     if [[ -n "$remote_sha" && "$remote_sha" == "$LOCAL_SHA" ]]; then
         ok "same commit as the control host (${LOCAL_SHA:0:8})"
     elif [[ -n "$remote_sha" ]]; then
@@ -182,17 +209,21 @@ check_side() {
 expected_mode() {   # $1 = what the runner sends, $2 = the expected reading under `keep`
     if [[ "$1" == "keep" ]]; then echo "${2:-}"; else echo "${1:-}"; fi
 }
+is_keep() { [[ "${1:-}" == "keep" ]] && echo 1 || echo 0; }
 
 SDR_SIDE="${WITNESS_SDR_SIDE:-}"
+[[ -n "$SDR_SIDE" ]] || info "WITNESS_SDR_SIDE unset: no station's SDR is checked"
 DEFAULT_REPO='${HOME}/git/OpenPulseHF'   # literal: expanded on the station
 check_side A "$A_SSH" "${A_REPO_DIR:-$DEFAULT_REPO}" "${A_CAT_PORT:-}" "${A_HAMLIB_MODEL:-}" \
     "${A_CAT_BAUD:-}" "${A_RIGCTLD_PORT:-4532}" \
-    "$(expected_mode "${TEST_MODE_RIG_A:-}" "${TEST_MODE_EXPECT_A:-}")" "${A_CODEC_MATCH:-Codec}" \
-    "$([[ "$SDR_SIDE" == A ]] && echo 1 || echo 0)"
+    "$(expected_mode "${TEST_MODE_RIG_A:-}" "${TEST_MODE_EXPECT_A:-}")" "$(is_keep "${TEST_MODE_RIG_A:-}")" \
+    "${A_CODEC_MATCH:-Codec}" "$([[ "$SDR_SIDE" == A ]] && echo 1 || echo 0)" "${A_PTT_PORT:-}" \
+    "${A_AUDIO_DEVICE:-pulse}"
 check_side B "$B_SSH" "${B_REPO_DIR:-$DEFAULT_REPO}" "${B_CAT_PORT:-}" "${B_HAMLIB_MODEL:-}" \
     "${B_CAT_BAUD:-}" "${B_RIGCTLD_PORT:-4532}" \
-    "$(expected_mode "${TEST_MODE_RIG_B:-}" "${TEST_MODE_EXPECT_B:-}")" "${B_CODEC_MATCH:-Codec}" \
-    "$([[ "$SDR_SIDE" == B ]] && echo 1 || echo 0)"
+    "$(expected_mode "${TEST_MODE_RIG_B:-}" "${TEST_MODE_EXPECT_B:-}")" "$(is_keep "${TEST_MODE_RIG_B:-}")" \
+    "${B_CODEC_MATCH:-Codec}" "$([[ "$SDR_SIDE" == B ]] && echo 1 || echo 0)" "${B_PTT_PORT:-}" \
+    "${B_AUDIO_DEVICE:-pulse}"
 
 # ── Audio routing and levels (existing scripts) ─────────────────────────────────
 echo

@@ -26,7 +26,8 @@ CAT on the SCU-17's CP2105 first port (`…CP2105…-if00-port0`, `/dev/ttyUSB0`
 baud; 144.600 MHz, mode USB 2200 Hz at the time; `l RFPOWER` reads `10` (not Hamlib's 0–1 scale, so
 not a power setting), `l RFPOWER_METER` is unsupported, and the antenna is not readable (`y`).
 Setting any level other than `BAND_SELECT` is unsupported. Audio: ALSA card `CODEC`
-(`plughw:CARD=CODEC,DEV=0`).
+(`plughw:CARD=CODEC,DEV=0`); the modem uses it through PipeWire (`B_AUDIO_DEVICE="pulse"`), so
+the routed levels apply.
 
 Config profile: [`docs/config/onair-ic9700-ft818.example.sh`](../config/onair-ic9700-ft818.example.sh).
 Runner: `scripts/run-onair-ic9700-ft991a.sh` (rig-B-agnostic — the filename is historical). The
@@ -59,7 +60,8 @@ as root and from cloning and building third-party code without an explicit rule.
    A key on rpi51 itself needs no agent forwarding. If the key has a passphrase, load it into an
    agent in the shell the session runs in; a forwarded agent reaches only the shell `sshd` started.
 2. **Packages.** On rpi51: `scripts/install-rpi-build-deps.sh --with-onair --with-sdr`. On rpi53:
-   `scripts/install-rpi-build-deps.sh --with-onair`.
+   `scripts/install-rpi-build-deps.sh --with-onair`. The package names are Debian's; rpi53 ran
+   Hamlib 4.6.2, newer than bookworm's 4.5.5, so record each Pi's OS release (the check prints it).
 3. **The witness SDR on rpi51** (decision 27). Install the SDRplay API (3.15.2 was used) from
    SDRplay's download with **bash** (`sh` fails on its installer), then
    `sudo systemctl enable --now sdrplay`. Build the SoapySDR module from source:
@@ -78,9 +80,11 @@ as root and from cloning and building third-party code without an explicit rule.
    cargo build --release -p openpulse-gateway
    ```
 5. **Config:** `~/.config/openpulse/config.toml` on both with the callsign set (preflight checks it).
-6. **Profile:** on rpi51, an untracked local profile that sources
-   `docs/config/onair-ic9700-ft818.example.sh` and sets what the example cannot know — at least
-   `B_CAT_PORT` (the station check lists the by-id paths on rpi53 while it is unset).
+6. **Profile:** on rpi51, a local profile **outside the repo** (e.g. `~/onair-local/ic9700-ft818.sh`)
+   that sources `docs/config/onair-ic9700-ft818.example.sh` and sets what the example cannot know —
+   at least `B_CAT_PORT`, the **`-if00-port0`** path of the SCU-17's CP2105 (the station check lists
+   the by-id paths on rpi53 while it is unset). Never the second port (`-if01-`): RTS on it keys
+   the FT-818's data PTT, and the check refuses to open it.
 7. **Audio routing and levels, after every reboot** (PipeWire volumes do not survive one):
    `scripts/onair-setup-audio-routing.sh`. The profile carries the 2026-10-26 levels.
 8. **Check:** `scripts/onair-station-check.sh`, then, with **both rigs on and nothing

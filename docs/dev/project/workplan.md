@@ -193,6 +193,7 @@ Waiting on the maintainer (`maintainer-todo.md`): the key-to-audio probe, then F
 | A2 **on 2 m**: climb (new mode then decodes), demotion, stability — scored per `release-1.0-criteria.md` §A2, both stations' logs + capture, `observability.audit_mode` on. A 2 m line-of-sight link does not fade, so the climb and demotion are driven by **induced level changes** (TX power, attenuation), which §A2 allows and requires to be recorded | open |
 | A4 (station ID cadence) and A5 (PTT fail-safe) checks | open |
 | ARDOP: one Pat session over the air through the TNC | open |
+| Parking (2026-10-26): the #1060 stand-down proof (`rho_calibration_receive::the_veto_stands_down_when_no_threshold_separates`) fails its own precondition at c702573f (x86, release, 407 s) — the 250 Hz fixture derives 0.468 < the delivered-frame bound 0.51 set for PN-63 in #1505; which change moved it is not established, so it no longer reaches the stand-down path. Skipped in the on-air preflight (`SKIP_RHO_STANDDOWN=1`), so REQ-RX-03's production-path proof runs nowhere until a fixture without a separating threshold replaces it, under review; then add it to `slow-tests.sh` | parked |
 | Re-rank every `post-release-rerank` issue against what the air showed | after A2 |
 
 **Exit:** evidence bundles for A1, A2, A4, A5 and the ARDOP session in

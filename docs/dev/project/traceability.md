@@ -15,6 +15,37 @@ this ledger adds the design rationale and the actually-observed results per chan
 
 ---
 
+## 2026-10-26 — On-air station readiness check; the first 2 m session is a dry run
+
+- **Requirement/change:** the maintainer did not accept the first 2 m session (2026-10-26, run on
+  rpi53, `docs/dev/onair-session-2026-10-26.md`): station problems dominated — no SSH key between
+  the Pis, the witness SDR's SoapySDR module never built, scipy missing for G0, PipeWire volumes lost
+  on reboot, the CAT port and FT-818 mode reading TODO in the profile, a preflight proof that could
+  not pass. Stations are to be prepared to a checked state, and sessions run on rpi51. Serves M3.
+- **Design decisions:** one read-only check run from the control host, reusing the existing checks
+  (`onair-preflight.sh`, `onair-setup-audio-routing.sh --verify`, `onair-rx-level-check.sh`) rather
+  than restating them; CAT is read (`f`, `m`) and never set; a station's checks end with a sentinel,
+  so a remote abort is a failure, not fewer passes; the direct CAT open is refused on a PTT or second
+  interface, because opening a tty raises RTS and that keys the rig on those ports. Station B moves
+  to `pulse` audio: on `plughw` its modem bypassed PipeWire, so the 0.15 TX drive and the capture
+  level never applied to it.
+- **Implementation:** `scripts/onair-station-check.sh` (new); `scripts/install-rpi-build-deps.sh`
+  (`--with-onair`, `--with-sdr`); `docs/config/onair-ic9700-ft818.example.sh` (mode reading PKTUSB,
+  levels, `B_AUDIO_DEVICE=pulse`, `WITNESS_SDR_SIDE=A`, `SKIP_RHO_STANDDOWN=1`);
+  `docs/dev/onair-ic9700-ft818-setup.md` (*Station preparation*); the session record, the M3 row,
+  the weekly log and a parking line in `docs/dev/project/workplan.md`.
+- **Tests and results (run):** the check against fake stations (an `ssh` that runs the remote half
+  locally, fake `rigctl`/`arecord`): the expected FAIL for a dirty checkout, missing scipy, preflight
+  failures, an unreachable host, a station cut after four lines (no `END`), a `-if01-` CAT port, a
+  side not on `pulse`, and a `keep` mismatch; INFO for a runner-set mode; a profile value with a
+  single quote survives. Not run against the real Pis. The #1060 stand-down proof
+  (`cargo test --release -p openpulse-modem --no-default-features --test rho_calibration_receive
+  -- --ignored the_veto_stands_down`) on x86 at c702573f: FAILED in 407 s, rc 101, on its
+  precondition — the 250 Hz fixture derived 0.46772602, not above the delivered-frame bound 0.51 —
+  so it no longer reaches the stand-down path. Which change moved it is not established. Review:
+  `docs/dev/reviews/review-station-readiness-2026-10-26.md` (no Release 1 blocker; 1 must-fix,
+  7 should-fix, 5 nits, all taken).
+
 ## 2026-10-15 — Review follow-ups: lower-only station keyers, TNC PTT fails closed, stale comments
 
 - **Requirement/change:** the open points of the documentation review
