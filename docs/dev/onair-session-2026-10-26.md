@@ -1,7 +1,7 @@
 ---
 project: openpulsehf
 doc: docs/dev/onair-session-2026-10-26.md
-status: living
+status: resolved
 last_updated: 2026-10-26
 ---
 

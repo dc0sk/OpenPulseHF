@@ -2,7 +2,7 @@
 project: openpulsehf
 doc: docs/dev/project/workplan.md
 status: draft
-last_updated: 2026-10-17
+last_updated: 2026-10-26
 ---
 
 # Work plan — Release 1 ("basic modem")
@@ -188,7 +188,7 @@ Waiting on the maintainer (`maintainer-todo.md`): the key-to-audio probe, then F
 | Item | Status |
 |---|---|
 | Test stages in order (decision 13): virtual audio → hardware loopback → **2 m** (IC-9700 ↔ FT-818, 144.640 MHz) → HF only with the release candidate (M4) | — |
-| G0–G3 per the re-baselined plan on the 2 m pair (isolators fitted; G3 decides whether the RFI is gone) | open |
+| G0–G3 per the re-baselined plan on the 2 m pair (isolators fitted; G3 decides whether the RFI is gone) | started 2026-10-26 (`onair-session-2026-10-26.md`): Gate 1 PASS on both, Gate 2 PASS (FT-818 → IC-9700); G0 FAIL on both with no strong birdies (B: broadband floor over the analyser's absolute limit; A: weak lines); Gate 3 next |
 | A1: two-station exchange **on 2 m** in both directions, logs retained | open |
 | A2 **on 2 m**: climb (new mode then decodes), demotion, stability — scored per `release-1.0-criteria.md` §A2, both stations' logs + capture, `observability.audit_mode` on. A 2 m line-of-sight link does not fade, so the climb and demotion are driven by **induced level changes** (TX power, attenuation), which §A2 allows and requires to be recorded | open |
 | A4 (station ID cadence) and A5 (PTT fail-safe) checks | open |
@@ -257,6 +257,7 @@ None open. (Version number → decision 14; the four "close?" issues → decisio
 | 2026-09-28 | M1 done: #1062 after v0.17 (#1476); compression needs no wire change, unpack fix merged (#1477); v0.17 format declared | triage approval pending | dict-ID wire change (measured unnecessary) |
 | 2026-09-28 | Profiles decided (decision 18); UI client added to M4, last (decision 19) | triage approval pending | ten profiles; the `hpx_*` names |
 | 2026-09-28 | Profiles shipped (#1480); PTT leader delay (#1481) and flush-timeout count (#1482) merged; receive cost diagnosed (#1483); triage approved and labelled (decision 20) | Pi receive-cost numbers (rpi51/rpi53); dual-card drain measurement for #1367 | — |
+| 2026-10-26 | First 2 m session: Gates 1–2 pass, the FT-818 heard at S9+51 dB on the IC-9700; release builds on both Pis | G0 idle floor fails on both (no strong birdies); SoapySDRPlay3 not built on rpi51 | — |
 
 ---
 

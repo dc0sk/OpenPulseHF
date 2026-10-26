@@ -2,7 +2,7 @@
 project: openpulsehf
 doc: docs/dev/onair-ic9700-ft818-setup.md
 status: living
-last_updated: 2026-10-17
+last_updated: 2026-10-26
 ---
 
 # On-air setup — IC-9700 (rpi51) ↔ FT-818 (rpi53)
@@ -180,3 +180,15 @@ trust a rig-RX PASS unless the SDR corroborates it or gates 1–6 passed clean i
   (decision 27). The FT-991A is not part of this campaign.
 - Everything on the IC-9700/rpi51 side is unchanged, including its unresolved USB-capture-during-TX
   caveat (Gate 3 covers it).
+
+---
+
+## Session log
+
+One record per session; each holds the station state, results, gotchas and open items.
+
+- **2026-10-26** — [onair-session-2026-10-26.md](onair-session-2026-10-26.md) (run on rpi53):
+  Gate 1 PASS on both stations, Gate 2 PASS (FT-818 at L1 heard at S9+51 dB on the IC-9700);
+  G0 FAIL on both, level not birdies (rpi53: flat −36 dBFS floor over the analyser's −40 dBFS
+  absolute limit, max line prominence 4 dB; rpi51: 48 weak lines at 4–16 dB on a −44 dBFS
+  floor). Gate 3 is next. Preflight now builds the #1060 proof with `--release`.
