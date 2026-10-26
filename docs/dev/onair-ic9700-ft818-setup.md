@@ -35,6 +35,69 @@ execution order and the *why* (fix the receive path first) live in
 
 ---
 
+## Station preparation — before a session counts
+
+The 2026-10-26 session on rpi53 was a **dry run**; its results are not accepted (maintainer,
+2026-10-26). It found the stations not ready: no SSH key between the Pis, the witness SDR's
+SoapySDR module never built, scipy missing for G0, PipeWire volumes lost on reboot, the CAT port
+and the FT-818 mode reading still TODO in the profile, and a preflight proof that cannot pass.
+Sessions run **on rpi51** from now on, as the control host. A session counts only after
+`scripts/onair-station-check.sh` passes on both stations and the manual list below is ticked.
+
+Steps 1–3 need `sudo`, a password or a download from outside the repo. Do them yourself before
+starting a Claude Code session; an agent session is (rightly) blocked from running downloaded code
+as root and from cloning and building third-party code without an explicit rule.
+
+1. **SSH from rpi51 to both stations, including itself** (the runner reaches station A over ssh
+   too). On rpi51:
+   ```bash
+   ssh-keygen -t ed25519                     # if ~/.ssh/id_ed25519 does not exist
+   ssh-copy-id dc0sk@dc0sk-rpi51             # itself
+   ssh-copy-id dc0sk@dc0sk-rpi53
+   ssh -o BatchMode=yes dc0sk@dc0sk-rpi53 true && ssh -o BatchMode=yes dc0sk@dc0sk-rpi51 true && echo ok
+   ```
+   A key on rpi51 itself needs no agent forwarding. If the key has a passphrase, load it into an
+   agent in the shell the session runs in; a forwarded agent reaches only the shell `sshd` started.
+2. **Packages.** On rpi51: `scripts/install-rpi-build-deps.sh --with-onair --with-sdr`. On rpi53:
+   `scripts/install-rpi-build-deps.sh --with-onair`.
+3. **The witness SDR on rpi51** (decision 27). Install the SDRplay API (3.15.2 was used) from
+   SDRplay's download with **bash** (`sh` fails on its installer), then
+   `sudo systemctl enable --now sdrplay`. Build the SoapySDR module from source:
+   ```bash
+   git clone https://github.com/pothosware/SoapySDRPlay3 && cd SoapySDRPlay3
+   mkdir build && cd build && cmake .. && make && sudo make install && sudo ldconfig
+   SoapySDRUtil --find="driver=sdrplay"      # must list the RSPdx; if not: sudo systemctl restart sdrplay
+   ```
+4. **One commit on both stations, built in release with real audio** (on each Pi):
+   ```bash
+   cd ~/git/OpenPulseHF && git fetch && git checkout <the session's commit>
+   cargo build --release -p openpulse-cli --features cpal-backend
+   cargo build --release -p openpulse-ardop --features cpal
+   cargo build --release -p openpulse-kiss --features cpal
+   cargo build --release -p openpulse-daemon --features cpal --bin openpulse-server
+   cargo build --release -p openpulse-gateway
+   ```
+5. **Config:** `~/.config/openpulse/config.toml` on both with the callsign set (preflight checks it).
+6. **Profile:** on rpi51, an untracked local profile that sources
+   `docs/config/onair-ic9700-ft818.example.sh` and sets what the example cannot know — at least
+   `B_CAT_PORT` (the station check lists the by-id paths on rpi53 while it is unset).
+7. **Audio routing and levels, after every reboot** (PipeWire volumes do not survive one):
+   `scripts/onair-setup-audio-routing.sh`. The profile carries the 2026-10-26 levels.
+8. **Check:** `scripts/onair-station-check.sh`, then, with **both rigs on and nothing
+   transmitting**, `scripts/onair-station-check.sh --levels`. A rig that is off gives a silent floor
+   that passes trivially. Fix every FAIL before the session.
+9. **Manual list** (printed by the check; not readable over CAT): FT-818 FRONT antenna, L1,
+   DIG/USER-U, CAT rate; the FT-818 away from the 2026-10-26 noise source; TOT on both rigs; the
+   IC-9700 settings in [onair-signal-chain-verification.md](onair-signal-chain-verification.md); the
+   RSPdx attenuated against the IC-9700 and its maximum input rating checked; antennas connected.
+
+**Still to decide before G0 counts:** how G0 is judged. The analyser fails any in-band peak above
+−40 dBFS as well as any line 15 dB above the floor, and it captures raw ALSA, which bypasses the
+PipeWire volume the runner uses. On 2026-10-26 rpi53 failed on the absolute level alone (flat
+−36 dBFS floor, 4 dB max prominence); rpi51 had one line at 16 dB.
+
+---
+
 ## ⚠️ Read first — two things about this specific station
 
 1. **The LDG Z817 does not work on 2 m.** It is an HF (≈1.8–54 MHz) autotuner; at 144 MHz it does

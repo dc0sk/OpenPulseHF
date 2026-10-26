@@ -6,15 +6,23 @@ set -euo pipefail
 
 MIN_RUST="1.97.1"
 WITH_HAMLIB=0
+WITH_ONAIR=0
+WITH_SDR=0
 
 usage() {
   cat <<'EOF'
-Usage: scripts/install-rpi-build-deps.sh [--with-hamlib]
+Usage: scripts/install-rpi-build-deps.sh [--with-hamlib] [--with-onair] [--with-sdr]
 
 Installs missing system packages required to build OpenPulseHF on Raspberry Pi OS.
 
 Options:
   --with-hamlib   Also install hamlib utilities (rigctld/rigctl) for on-air scripts
+  --with-onair    Also install what the on-air scripts call: python3 numpy/scipy (G0 analyser),
+                  PipeWire/Pulse tools (wpctl, pactl, parecord). Implies --with-hamlib
+  --with-sdr      Also install the SoapySDR stack for the witness SDR (Python bindings, tools,
+                  headers, and what SoapySDRPlay3 needs to build). The SDRplay API itself is a
+                  proprietary download and SoapySDRPlay3 is built from source: see
+                  docs/dev/onair-ic9700-ft818-setup.md (Station preparation)
   -h, --help      Show this help
 EOF
 }
@@ -23,6 +31,15 @@ while [[ $# -gt 0 ]]; do
   case "$1" in
     --with-hamlib)
       WITH_HAMLIB=1
+      shift
+      ;;
+    --with-onair)
+      WITH_ONAIR=1
+      WITH_HAMLIB=1
+      shift
+      ;;
+    --with-sdr)
+      WITH_SDR=1
       shift
       ;;
     -h|--help)
@@ -102,6 +119,23 @@ OPENPULSE_RUNTIME_PACKAGES=(
 
 HAMLIB_PACKAGES=()
 
+# What the on-air scripts call on a station. Found missing on rpi53 on 2026-10-26: scipy for the G0
+# analyser (onair-rx-idle-floor.py) and pactl/parecord for the audio routing and captures.
+ONAIR_PACKAGES=(
+  python3-numpy
+  python3-scipy
+  pulseaudio-utils
+  wireplumber
+)
+
+# The witness SDR (decision 27: an RSPdx on rpi51). SoapySDRPlay3 builds against libsoapysdr-dev.
+SDR_PACKAGES=(
+  python3-soapysdr
+  soapysdr-tools
+  libsoapysdr-dev
+  libusb-1.0-0-dev
+)
+
 resolve_hamlib_package() {
   local candidate
   for candidate in hamlib-utils libhamlib-utils; do
@@ -129,6 +163,16 @@ if [[ $WITH_HAMLIB -eq 1 ]]; then
   fi
   mapfile -t missing_hamlib < <(collect_missing "${HAMLIB_PACKAGES[@]}")
   missing_all+=("${missing_hamlib[@]}")
+fi
+
+if [[ $WITH_ONAIR -eq 1 ]]; then
+  mapfile -t missing_onair < <(collect_missing "${ONAIR_PACKAGES[@]}")
+  missing_all+=("${missing_onair[@]}")
+fi
+
+if [[ $WITH_SDR -eq 1 ]]; then
+  mapfile -t missing_sdr < <(collect_missing "${SDR_PACKAGES[@]}")
+  missing_all+=("${missing_sdr[@]}")
 fi
 
 # Remove empty entries and duplicates.

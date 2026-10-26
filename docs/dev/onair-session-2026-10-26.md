@@ -7,6 +7,11 @@ last_updated: 2026-10-26
 
 # On-air session wrap-up, 2026-10-26 (run on rpi53, Station B)
 
+> **Dry run — results not accepted** (maintainer, 2026-10-26). The session hit too many station
+> problems for its results to count. The stations are being prepared to a checked state first:
+> [onair-ic9700-ft818-setup.md](onair-ic9700-ft818-setup.md), *Station preparation*. The #1060 proof's
+> failure is a stale fixture, not a station fault (it fails on x86 in release too).
+
 Branch checked out on both Pis: `decision-27-local` = `origin/claude/affectionate-brahmagupta-sdn8qg` @ `87c5abe0`
 (decision 27 docs, on top of `main` 8fe05837; not merged to `main`). Callsign DC0SK. Only one transmission
 sequence was made: two bounded 4 s tones from the FT-818 at L1. Nothing else keyed.

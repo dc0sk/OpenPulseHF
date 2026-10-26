@@ -1,0 +1,231 @@
+#!/usr/bin/env bash
+# Station readiness check for an on-air pair, run from the control host (for the 2 m pair: rpi51).
+#
+# WHY THIS EXISTS
+#   The first 2 m session (2026-10-26, docs/dev/onair-session-2026-10-26.md) lost most of its time to
+#   station state, not to the modem: no SSH key between the Pis, a SoapySDR module that was never
+#   built, scipy missing for the G0 analyser, PipeWire volumes lost on reboot, a CAT port and a mode
+#   reading still marked TODO in the profile, and a preflight proof that could not pass. Each was
+#   found by hitting it. This script checks all of them up front, on both stations, before a session
+#   counts. It reuses the existing checks (onair-preflight.sh, onair-setup-audio-routing.sh --verify,
+#   onair-rx-level-check.sh) rather than restating them.
+#
+# IT KEYS NOTHING AND CHANGES NOTHING. CAT is read (`f`, `m`) and never set; audio is verified, not
+# routed; the idle-level capture runs only with --levels, and only while nothing transmits.
+#
+# Usage:
+#   source docs/config/onair-ic9700-ft818.example.sh
+#   scripts/onair-station-check.sh             # everything except the idle-level capture
+#   scripts/onair-station-check.sh --levels    # plus the idle RX level check (no TX anywhere)
+#
+# Profile variables it reads: A_SSH/B_SSH/SSH_OPTS, A_/B_REPO_DIR, A_/B_CAT_PORT, A_/B_CAT_BAUD,
+# A_/B_HAMLIB_MODEL, A_/B_RIGCTLD_PORT, TEST_MODE_RIG_A/B, TEST_MODE_EXPECT_A/B, BAND2M_MIN/MAX_HZ,
+# A_/B_CODEC_MATCH, and WITNESS_SDR_SIDE (A, B or empty; which station hosts the SDR).
+#
+# Exit: 0 = every automated check passed, 1 = at least one failed, 2 = usage error.
+# The MANUAL list printed at the end is never checked by software; work through it on the rigs.
+set -uo pipefail
+
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+LEVELS=0
+for arg in "$@"; do
+    case "$arg" in
+        --levels) LEVELS=1 ;;
+        -h|--help) sed -n '2,27p' "$0"; exit 0 ;;
+        *) echo "unknown argument: $arg" >&2; exit 2 ;;
+    esac
+done
+
+if [[ -z "${A_SSH:-}" || -z "${B_SSH:-}" ]]; then
+    echo "error: A_SSH and B_SSH are unset — source the station profile first" >&2
+    exit 2
+fi
+SSH_OPTS="${SSH_OPTS:--o BatchMode=yes -o ConnectTimeout=10}"
+
+PASS=0
+FAIL=0
+ok() { echo "[PASS] $1"; PASS=$((PASS + 1)); }
+bad() { echo "[FAIL] $1"; FAIL=$((FAIL + 1)); }
+info() { echo "[INFO] $1"; }
+
+# shellcheck disable=SC2086
+on() { local target="$1"; shift; ssh ${SSH_OPTS} "$target" "$@"; }
+
+# ── Control host ────────────────────────────────────────────────────────────────
+echo "== control host: $(hostname)"
+LOCAL_SHA="$(git -C "$REPO_ROOT" rev-parse HEAD 2>/dev/null || echo none)"
+if [[ -n "$(git -C "$REPO_ROOT" status --porcelain 2>/dev/null)" ]]; then
+    bad "control checkout has uncommitted changes; a session runs on a committed tree"
+else
+    ok "control checkout clean at ${LOCAL_SHA:0:8}"
+fi
+
+# ── Per station ─────────────────────────────────────────────────────────────────
+# The remote half runs as one script per station, so each check is one round trip and the output
+# arrives as PASS|/FAIL|/INFO| lines. Arguments are positional and the repo dir is expanded remotely
+# (the profile holds it as a literal '${HOME}/...').
+read -r -d '' REMOTE <<'REMOTE_EOF'
+# One function, called with stdin from /dev/null: the script itself arrives on stdin (`bash -s`), so
+# bash must parse all of it before any command runs, or a command that reads stdin eats the rest.
+main() {
+set -u
+repo="$(eval echo "$1")"; cat_port="$2"; model="$3"; baud="$4"; rigctld_port="$5"
+expect_mode="$6"; codec="$7"; want_sdr="$8"; band_lo="$9"; band_hi="${10}"
+p() { echo "PASS|$1"; }; f() { echo "FAIL|$1"; }; i() { echo "INFO|$1"; }
+
+if [[ -d "$repo/.git" ]]; then
+    p "repo at $repo"
+    echo "SHA|$(git -C "$repo" rev-parse HEAD)"
+    [[ -z "$(git -C "$repo" status --porcelain)" ]] && p "checkout clean" || f "checkout has uncommitted changes"
+else
+    f "no repo at $repo"
+fi
+
+for c in cargo rigctl rigctld arecord wpctl pactl python3 timeout; do
+    command -v "$c" >/dev/null 2>&1 && p "command: $c" || f "missing command: $c"
+done
+python3 -c 'import numpy, scipy' 2>/dev/null && p "python3 numpy + scipy (G0 analyser)" \
+    || f "python3 numpy/scipy missing (apt install python3-numpy python3-scipy)"
+
+# Release binaries, cpal, callsign: the existing preflight. The #1060 proof is skipped: its fixture
+# is stale against the PN-63 preamble (2026-10-26) and fails on every machine.
+if [[ -x "$repo/scripts/onair-preflight.sh" ]]; then
+    out="$(cd "$repo" && SKIP_RHO_STANDDOWN=1 scripts/onair-preflight.sh --strict 2>&1)"; rc=$?
+    summary="$(printf '%s\n' "$out" | grep '^Summary:' | tail -1)"
+    if [[ $rc -eq 0 ]]; then p "onair-preflight --strict: ${summary}"; else
+        f "onair-preflight --strict: ${summary:-no summary}"
+        printf '%s\n' "$out" | grep '^\[FAIL\]' | sed 's/^\[FAIL\] /INFO|  preflight: /'
+    fi
+fi
+
+if [[ -z "$cat_port" || "$cat_port" == TODO* ]]; then
+    f "CAT port not set in the profile"
+    for d in /dev/serial/by-id/*; do [[ -e "$d" ]] && i "  present: $d"; done
+elif [[ -e "$cat_port" ]]; then
+    p "CAT port present: $cat_port"
+else
+    f "CAT port missing: $cat_port"
+    for d in /dev/serial/by-id/*; do [[ -e "$d" ]] && i "  present: $d"; done
+fi
+
+# Read-only CAT: frequency and mode. Through rigctld when it holds the port, else directly.
+if pgrep -x rigctld >/dev/null 2>&1; then
+    reading="$(timeout 15 rigctl -m 2 -r "127.0.0.1:${rigctld_port}" f m 2>/dev/null)"
+elif [[ -e "$cat_port" ]]; then
+    reading="$(timeout 15 rigctl -m "$model" -r "$cat_port" -s "$baud" f m 2>/dev/null)"
+else
+    reading=""
+fi
+freq="$(printf '%s\n' "$reading" | sed -n 1p)"; mode="$(printf '%s\n' "$reading" | sed -n 2p)"
+if [[ "$freq" =~ ^[0-9]+$ ]]; then
+    p "CAT reads: ${freq} Hz, mode ${mode:-?}"
+    if (( freq < band_lo || freq > band_hi )); then
+        i "  dial is outside ${band_lo}-${band_hi}; the runner tunes inside it before keying"
+    fi
+    if [[ -z "$expect_mode" || "$expect_mode" == TODO* ]]; then
+        f "no expected mode in the profile (TEST_MODE_EXPECT_* / TEST_MODE_RIG_*); the reading is '${mode}'"
+    elif [[ "$mode" == "$expect_mode" ]]; then
+        p "mode matches the profile: ${mode}"
+    else
+        f "mode reads '${mode}', profile expects '${expect_mode}'"
+    fi
+else
+    f "CAT read failed (no frequency); is the rig on and the CAT rate right?"
+fi
+
+arecord -l 2>/dev/null | grep -qi "$codec" && p "capture card matching '${codec}'" \
+    || f "no capture card matching '${codec}' (arecord -l)"
+
+if [[ "$want_sdr" == 1 ]]; then
+    python3 -c 'import SoapySDR' 2>/dev/null && p "python3 SoapySDR bindings" \
+        || f "python3 SoapySDR missing (apt install python3-soapysdr)"
+    systemctl is-active --quiet sdrplay 2>/dev/null && p "sdrplay API service active" \
+        || f "sdrplay API service not active (install the SDRplay API with bash; systemctl status sdrplay)"
+    if timeout 20 SoapySDRUtil --find="driver=sdrplay" 2>/dev/null | grep -qi "driver *= *sdrplay"; then
+        p "SoapySDRPlay3 finds the SDR"
+    else
+        f "SoapySDRPlay3 does not find an SDRplay device (module built? SoapySDRUtil --info lists modules)"
+    fi
+fi
+}
+main "$@" </dev/null
+REMOTE_EOF
+
+check_side() {
+    local side="$1" target="$2" repo="$3" cat_port="$4" model="$5" baud="$6" rport="$7"
+    local expect="$8" codec="$9" sdr="${10}"
+    echo
+    echo "== station ${side}: ${target}"
+    if ! on "$target" true 2>/dev/null; then
+        bad "cannot reach ${target} with ${SSH_OPTS} (key-based SSH from this host is required)"
+        return
+    fi
+    ok "SSH to ${target} without a password"
+    local line remote_sha=""
+    while IFS= read -r line; do
+        case "$line" in
+            PASS\|*) ok "${line#PASS|}" ;;
+            FAIL\|*) bad "${line#FAIL|}" ;;
+            INFO\|*) info "${line#INFO|}" ;;
+            SHA\|*) remote_sha="${line#SHA|}" ;;
+        esac
+    done < <(on "$target" bash -s -- "'$repo'" "'$cat_port'" "'$model'" "'$baud'" "'$rport'" \
+        "'$expect'" "'$codec'" "'$sdr'" "'${BAND2M_MIN_HZ:-144500000}'" "'${BAND2M_MAX_HZ:-144750000}'" \
+        <<<"$REMOTE")
+    if [[ -n "$remote_sha" && "$remote_sha" == "$LOCAL_SHA" ]]; then
+        ok "same commit as the control host (${LOCAL_SHA:0:8})"
+    elif [[ -n "$remote_sha" ]]; then
+        bad "commit ${remote_sha:0:8} differs from the control host's ${LOCAL_SHA:0:8}; build both ends from one commit"
+    fi
+}
+
+expected_mode() {   # $1 = what the runner sends, $2 = the expected reading under `keep`
+    if [[ "$1" == "keep" ]]; then echo "${2:-}"; else echo "${1:-}"; fi
+}
+
+SDR_SIDE="${WITNESS_SDR_SIDE:-}"
+DEFAULT_REPO='${HOME}/git/OpenPulseHF'   # literal: expanded on the station
+check_side A "$A_SSH" "${A_REPO_DIR:-$DEFAULT_REPO}" "${A_CAT_PORT:-}" "${A_HAMLIB_MODEL:-}" \
+    "${A_CAT_BAUD:-}" "${A_RIGCTLD_PORT:-4532}" \
+    "$(expected_mode "${TEST_MODE_RIG_A:-}" "${TEST_MODE_EXPECT_A:-}")" "${A_CODEC_MATCH:-Codec}" \
+    "$([[ "$SDR_SIDE" == A ]] && echo 1 || echo 0)"
+check_side B "$B_SSH" "${B_REPO_DIR:-$DEFAULT_REPO}" "${B_CAT_PORT:-}" "${B_HAMLIB_MODEL:-}" \
+    "${B_CAT_BAUD:-}" "${B_RIGCTLD_PORT:-4532}" \
+    "$(expected_mode "${TEST_MODE_RIG_B:-}" "${TEST_MODE_EXPECT_B:-}")" "${B_CODEC_MATCH:-Codec}" \
+    "$([[ "$SDR_SIDE" == B ]] && echo 1 || echo 0)"
+
+# ── Audio routing and levels (existing scripts) ─────────────────────────────────
+echo
+echo "== audio routing (scripts/onair-setup-audio-routing.sh --verify)"
+if "$REPO_ROOT/scripts/onair-setup-audio-routing.sh" --verify; then
+    ok "both stations route to their CODEC at the profile's volumes"
+else
+    bad "audio routing or volumes differ from the profile; PipeWire volumes do not survive a reboot — re-run scripts/onair-setup-audio-routing.sh"
+fi
+if [[ $LEVELS -eq 1 ]]; then
+    echo
+    echo "== idle RX level (scripts/onair-rx-level-check.sh) — nothing may transmit now"
+    if "$REPO_ROOT/scripts/onair-rx-level-check.sh"; then
+        ok "idle RX level lets the energy gate discriminate on both stations"
+    else
+        bad "idle RX level check failed"
+    fi
+else
+    info "idle RX level not checked (add --levels, with no TX anywhere and both rigs ON)"
+fi
+
+cat <<'MANUAL'
+
+== MANUAL — not readable over CAT; confirm on the rigs before the session counts
+  [ ] FT-818: FRONT antenna selected at 2 m, L1 (0.5 W), DIG/USER-U, CAT RATE matches the profile
+  [ ] FT-818: away from the local noise source found on 2026-10-26 (S8–S9 floor)
+  [ ] Both rigs: TX time-out timer (TOT) enabled — the A5 backstop
+  [ ] IC-9700: the required settings in onair-signal-chain-verification.md (DATA MOD USB, AF output)
+  [ ] RSPdx: a fixed attenuator or measured isolation against the IC-9700 beside it; its maximum
+      input rating checked in SDRplay's datasheet (UNCHECKED in the repo)
+  [ ] Antennas connected (Diamond RH3 on the FT-818); the agreed window and frequency announced
+MANUAL
+
+echo
+echo "Summary: PASS=${PASS} FAIL=${FAIL}"
+[[ $FAIL -eq 0 ]]

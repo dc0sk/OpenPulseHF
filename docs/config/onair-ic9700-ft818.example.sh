@@ -19,8 +19,10 @@
 # ================================================================================
 
 # ── SSH targets ────────────────────────────────────────────────────────────────
-# A is remote over the VPN; B is rpi53. The runner reaches both over ssh.
-export A_SSH="dc0sk@dc0sk-rpi51"          # over the VPN tunnel
+# The runner reaches both stations over ssh, including the one it runs on. From 2026-10-26 the
+# session runs ON rpi51 (the control host), so rpi51 needs key-based ssh to itself and to rpi53:
+# docs/dev/onair-ic9700-ft818-setup.md, Station preparation, step 1. scripts/onair-station-check.sh verifies it.
+export A_SSH="dc0sk@dc0sk-rpi51"          # this host when the session runs on rpi51
 export B_SSH="dc0sk@dc0sk-rpi53"          # FT-818 on rpi53
 export SSH_OPTS='-o BatchMode=yes -o ConnectTimeout=10 -o ServerAliveInterval=30'
 
@@ -50,8 +52,10 @@ export A_RFPOWER=0.05                     # IC-9700: ~5 W of 100 W (0.5 would be
 # ── Station B — FT-818 + SCU-17 on rpi53 ─────────────────────────────────
 # CAT serial port of the SCU-17. TODO-CONFIRM once plugged in:
 #   ls -l /dev/serial/by-id/    # the SCU-17's CP2105 has two ports; CAT is the FIRST (-if00-port0)
-# On rpi53 (2026-10-14) CAT answered on the CP2105's FIRST port (...CP2105...-if00-port0).
-export B_CAT_PORT="TODO-CONFIRM"          # the full /dev/serial/by-id/...CP2105...-if00-port0 path
+# On rpi53 (2026-10-14) CAT answered on the CP2105's FIRST port (...CP2105...-if00-port0); on
+# 2026-10-26 that was the CP2105 with serial 00B5B685. scripts/onair-station-check.sh lists the
+# by-id paths present on rpi53 while this is unset: copy the -if00-port0 one here.
+export B_CAT_PORT="TODO-CONFIRM"          # the full /dev/serial/by-id/...CP2105...00B5B685-if00-port0 path
 # FT-818 CAT rate — set the FT-818 menu "CAT RATE" to match. 38400 is responsive.
 export B_CAT_BAUD=38400                   # read over CAT on rpi53, 2026-10-14
 # PTT: CAT keying via hamlib is the most robust (survives USB re-enumeration) and
@@ -76,11 +80,25 @@ export B_RFPOWER=""
 export TEST_FREQ_HZ=144640000             # 144.640 MHz (moved off 144.651 to dodge a 1286 Hz birdie)
 export TEST_MODE_RIG_A="PKTUSB"           # IC-9700
 export TEST_MODE_RIG_B="keep"             # FT-818: no mode sent; DIG/USER-U is set on the radio
-# What `rigctl m` reads once DIG/USER-U is set on the FT-818. TODO-CONFIRM on the rig: Hamlib may
-# report it as RTTY (unverified). The run stops if the reading differs or this is unset.
-export TEST_MODE_EXPECT_B="TODO-CONFIRM"
+# What `rigctl m` reads once DIG/USER-U is set on the FT-818: PKTUSB (passband 0), read on rpi53 on
+# 2026-10-26 with Hamlib 4.6.2. The run stops if the reading differs.
+export TEST_MODE_EXPECT_B="PKTUSB"
 export BAND2M_MIN_HZ=144500000            # the runner refuses to key outside this range
 export BAND2M_MAX_HZ=144750000
+
+# ── Audio levels (PipeWire; lost on reboot — scripts/onair-setup-audio-routing.sh re-applies) ──
+# Capture levels measured on 2026-10-26 so the idle floor sits under the energy gate's ceiling
+# (onair-rx-level-check.sh: idle mean-sq 0.000500 on A, 0.000518 on B, ceiling 0.00107).
+export A_RX_SOURCE_VOLUME=0.44
+export B_RX_SOURCE_VOLUME=0.45
+export B_TX_SINK_VOLUME=0.15              # documented FT-818 drive
+
+# ── Witness SDR and preflight ──────────────────────────────────────────────────
+export WITNESS_SDR_SIDE=A                 # the RSPdx is on rpi51 (decision 27)
+# The #1060 stand-down proof fails on every machine since the PN-63 preamble (its 250 Hz fixture
+# now has a separating threshold, 0.468 < 0.51): stale fixture, not a station fault. Skip it until
+# the fixture is replaced.
+export SKIP_RHO_STANDDOWN=1
 
 # ── Timing (corrected values) ──────────────────────────────────────────────────
 export IRS_STARTUP_WAIT=10                # RX AFC settle ~6.4 s + margin
