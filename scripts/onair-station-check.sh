@@ -74,6 +74,9 @@ repo="${1/#'${HOME}'/$HOME}"; cat_port="$2"; model="$3"; baud="$4"; rigctld_port
 expect_mode="$6"; mode_is_keep="$7"; codec="$8"; want_sdr="$9"; band_lo="${10}"; band_hi="${11}"
 ptt_port="${12}"; skip_rho="${13}"
 p() { echo "PASS|$1"; }; f() { echo "FAIL|$1"; }; i() { echo "INFO|$1"; }
+# A non-interactive ssh shell does not read the rustup PATH set in an interactive profile
+# (rpi53, 2026-10-26: cargo in ~/.cargo/bin, "missing command: cargo").
+[[ -f "$HOME/.cargo/env" ]] && . "$HOME/.cargo/env"
 
 i "host: $(. /etc/os-release 2>/dev/null; echo "${PRETTY_NAME:-unknown OS}"), $(rigctl --version 2>/dev/null | head -1)"
 if sha="$(git -C "$repo" rev-parse HEAD 2>/dev/null)"; then
@@ -121,15 +124,26 @@ fi
 # one. Opening the tty directly raises DTR/RTS, and on a rig whose PTT port is a sibling interface
 # (the IC-9700's _B port, the SCU-17's second CP2105 port) RTS keys the transmitter, so the direct
 # open is refused for the PTT port and for any second interface (-if01-).
+# Up to three tries: Hamlib's FT-818 backend takes ~2 s to open the port and on 2026-10-26 returned
+# no frequency once and an empty mode once, with a full read on the next try.
 reading=""
+cat_cmd=()
 if ss -ltn 2>/dev/null | grep -q ":${rigctld_port}[[:space:]]"; then
-    reading="$(timeout 15 rigctl -m 2 -r "127.0.0.1:${rigctld_port}" f m 2>/dev/null)"
+    cat_cmd=(rigctl -m 2 -r "127.0.0.1:${rigctld_port}" f m)
 elif [[ -e "$cat_port" ]]; then
     if [[ -n "$ptt_port" && "$cat_port" == "$ptt_port" ]] || [[ "$cat_port" == *-if01-* ]]; then
         f "refusing to open ${cat_port} directly: it is the PTT port or a second interface, and opening it can key the rig"
     else
-        reading="$(timeout 15 rigctl -m "$model" -r "$cat_port" -s "$baud" f m 2>/dev/null)"
+        cat_cmd=(rigctl -m "$model" -r "$cat_port" -s "$baud" f m)
     fi
+fi
+if [[ ${#cat_cmd[@]} -gt 0 ]]; then
+    for try in 1 2 3; do
+        reading="$(timeout 15 "${cat_cmd[@]}" 2>/dev/null)"
+        [[ "$(printf '%s\n' "$reading" | sed -n 1p)" =~ ^[0-9]+$ && -n "$(printf '%s\n' "$reading" | sed -n 2p)" ]] && break
+        sleep 1
+    done
+    [[ $try -gt 1 ]] && i "  CAT read needed ${try} tries"
 fi
 freq="$(printf '%s\n' "$reading" | sed -n 1p)"; mode="$(printf '%s\n' "$reading" | sed -n 2p)"
 if [[ "$freq" =~ ^[0-9]+$ ]]; then

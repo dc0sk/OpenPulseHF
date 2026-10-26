@@ -274,3 +274,33 @@ mode empty vs expected PKTUSB. FT-818 idle mean_sq 0.000495 vs gate 0.001486: OK
 make cargo reachable over non-interactive ssh on rpi53; build SoapySDRPlay3 on rpi51; set the FT-818
 mode; then rerun the check.
 
+
+---
+
+## Task 2 — rerun the readiness check after the maintainer's fixes (status: open)
+
+Read-only again; nothing transmits. Both rigs on.
+
+**Before starting, ask the maintainer whether these are done** (they need sudo, a password or a
+third-party build, so the session does not do them). If any is not, record which and stop.
+- rpi51: `ssh-keygen -t ed25519` (if no key) and `ssh-copy-id dc0sk@dc0sk-rpi51`; then
+  `ssh -o BatchMode=yes dc0sk@dc0sk-rpi51 true` succeeds.
+- rpi53: `sudo apt install python3-scipy`.
+- rpi51: SoapySDRPlay3 built and installed (*Station preparation*, step 3) and the RSPdx plugged in;
+  `SoapySDRUtil --find="driver=sdrplay"` lists it.
+
+Then:
+1. Fast-forward both Pis to the latest `origin/claude/affectionate-brahmagupta-sdn8qg`. The check now
+   reads `~/.cargo/env` itself (cargo was missing on rpi53's non-interactive PATH) and retries a CAT
+   read up to three times.
+2. Commit mismatch from task 1: in one check run rpi53 reported `8fe05837` while `git rev-parse` there
+   gave `32aeb276`. Report, on rpi53, `git -C ~/git/OpenPulseHF rev-parse HEAD`, `git -C
+   ~/git/OpenPulseHF branch -vv`, and `ls -d ~/git/*/` (is there a second checkout?), and the value of
+   `B_REPO_DIR` after sourcing the local profile.
+3. `source ~/onair-local/ic9700-ft818.sh && scripts/onair-setup-audio-routing.sh`, then
+   `scripts/onair-station-check.sh --levels` (nothing transmitting). Paste the output in full.
+4. Go through the MANUAL list with the maintainer and record each answer.
+
+### Results
+
+_(station session: append here)_
