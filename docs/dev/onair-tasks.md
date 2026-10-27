@@ -1324,3 +1324,27 @@ rig with ALC is worth ruling in or out: untested here. Also untested: a tone or 
 FT-818 transmit command; default unchanged (`scripts/run-onair-ic9700-ft991a.sh`, 4 lines). **Not proven useful**: it did not help.
 Open decision: A->B (the IC-9700 transmits) as the receive-side differential, or look at the FT-818 transmit chain (ALC reading, SCU-17 drive, a
 frame with a ~1.5 s lead-in). Nothing further transmitted.
+
+#### Tone test through the modem-less chain (2026-10-27 ~14:05-14:09 local): the start-up loss depends on the TX drive (sink volume), not on the modem or on a cold start
+
+Method (maintainer go; every PTT was CAT via rigctld on rpi53; L1 0.5 W, 144.640 MHz; nothing raised): a 4 s, 1500 Hz tone,
+amplitude 0.88 (RMS 0.62 like the modem), played with `paplay` on rpi53 to the default (SCU-17) sink right after `T 1`;
+RSPdx recording alongside (192 kHz, RFGR 22, IFGR 40, 0 % clipping); envelope = power in 1300-1700 Hz, 20 ms steps. PTT 0 after
+every run, rigctld stopped, sink restored to 0.15 with `onair-setup-audio-routing.sh` (both stations RESULT pass).
+| run | sink volume | sink state at start | rise -25 -> -3 dB | on-air time above -25 dB (tone = 4.00 s) |
+|---|---|---|---|---|
+| T1 (first) | 0.15 | SUSPENDED | 0.34 s | 3.28 s |
+| T2 (8 s later) | 0.07 (set 0.075, `wpctl` shows 0.07) | SUSPENDED | 0.02 s | **4.00 s** |
+| A (cold) | 0.15 | SUSPENDED | 0.34 s | 3.28 s |
+| B (8 s after A) | 0.15 | SUSPENDED | 0.34 s | 3.28 s |
+| C (40 s idle) | 0.15 | SUSPENDED | 0.34 s | 3.28 s |
+Four of four runs at 0.15 show the same loss (about 0.72 s of the start is below -25 dB, then a 0.34 s rise; ~1.05 s in all, the same ~1.05 s
+ramp as the modem frames); the single run at the lower volume has none. Warm vs cold makes no difference (the sink reads SUSPENDED at the
+start of every run, including the "warm" one: the idle suspend is shorter than 8 s). **So the start-up loss depends on the TX drive.**
+At the profile's documented drive (`B_TX_SINK_VOLUME=0.15`) the FT-818 (through the SCU-17) suppresses the start of the transmission for
+about one second; at half that drive it does not. The mechanism is not established (ALC attack/limit on a full-scale tone at the codec,
+the rig's own protection, or the codec level). Combined with the modem frames (preamble in that first second, correlation
+0.18-0.29 < 0.31) this is the leading explanation of the Gate 6 / Gate 3 decode failures. NOT yet shown: a modem frame decoding at the lower drive,
+and what the lower drive does to the received level at the IC-9700.
+Proposed next (lowering only): rerun Gate 6 B->A with the FT-818 sink at 0.075 (`wpctl set-volume @DEFAULT_AUDIO_SINK@ 0.075` on rpi53 before the run;
+restore with `onair-setup-audio-routing.sh`).
