@@ -1366,3 +1366,20 @@ So the FT-818 transmission is good at 0.075 and bad at 0.15 (startup loss in the
 path: preamble found, frame wrong. Not yet examined: the IC-9700's audio for this frame (the runner records none). Next differential: record the rig audio
 with the dual-capture script at the same drive and decode it offline; candidates are the IC-9700 USB audio (AGC SLOW, 0.44 source volume, filter) or the
 level at the lower drive. The FT-818 drive in the profile (`B_TX_SINK_VOLUME` 0.15, `docs/config/onair-ic9700-ft818.example.sh`) is probably wrong for this chain.
+
+#### Dual capture at FT-818 sink 0.075 (maintainer go, 2026-10-27 ~15:35 local): BOTH copies DECODE OFFLINE, exact payload
+
+`B_TX_SINK_VOLUME=0.075 scripts/onair-setup-audio-routing.sh` (rpi53 `sink_vol=0.07`), rigctld on rpi53 (`144640000 PKTUSB 0 0`),
+`SDR_FS=192000 SDR_RFGR=22 scripts/onair-dual-capture.sh gate6-b2a-bpsk250-none BPSK250 none 'G6-0123456789-ABCDEFGHIJKLMNOPQRSTUVWXYZ-abcdefghijklmnopqrstuv-END'`
+(67 bytes, FEC none). rc=0. SWR check keyed briefly: `SWR = 1 (limit 3.0)`. `Transmitted 67 bytes in BPSK250 mode (fec=None).` PTT 0 after, rigctld stopped, routing
+restored to 0.15 on both (RESULT pass). Captures (gitignored, not committed), `docs/dev/test-reports/on-air/captures/`:
+`gate6-b2a-bpsk250-none.cf32` 46080000 B, `gate6-b2a-bpsk250-none-rig48k.wav` 5373996 B, `gate6-b2a-bpsk250-none-tx.log` 4264 B.
+- **RSPdx (RFGR 22, 0.00 % clip):** burst at 8.7 s, 2.74 s above -25 dB, rise 0.02 s (no start-up loss). Offline decode (same scratch harness): `DECODED 67 bytes: "G6-0123456789-...-END"` = the sent payload.
+- **IC-9700 USB audio (parecord, 48 kHz -> 8 kHz):** `DECODED 67 bytes: "G6-0123456789-ABCDEFGHIJKLMNOPQRSTUVWXYZ-abcdefghijklmnopqrstuv-END"` = the sent payload.
+  Level: burst windows 0.36-0.48e-3 against a median of 0.066e-3 (ratio 7.2; 11 windows > 3x). The audio is shaped by the IC-9700's SLOW AGC: the floor creeps up
+  (0.01 -> 0.1e-3) over the ~10 s before the burst and drops to **0.00 for ~5 s right after it** (receiver gain pulled down by the +55 dB signal, recovering over the 6 s AGC time).
+**Meaning:** the transmit chain (at drive 0.075), the RF path and the IC-9700's audio are fine; the modem decodes both copies. The Gate 6 runner's LIVE receive on
+station A (`openpulse receive` via cpal `pulse`) still failed on the same kind of frame (run 12: preamble accepted, `invalid magic` x70). The offline path
+(`ChannelSimHarness::feed_capture` + `receive_with_timeout`) is not the production live path, so a live-receive-path fault is now the leading suspect, to be separated from
+the AGC pumping above. Proposed decisive test (not run): a Gate-6 B->A run at drive 0.075 with a `parecord` of the same default source running on station A alongside the
+live IRS, then decode the parecord WAV offline: offline OK + live FAIL = live receive path.
