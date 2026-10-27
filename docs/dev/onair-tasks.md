@@ -806,3 +806,39 @@ audio output level, which more TX power would not fix. The station rules in this
 from ever being increased; I did not do or recommend that.
 Suggested next steps for the maintainer (front panel): SQL fully CCW; raise USB AF Level (and AF if it scales
 USB) in steps, re-record an idle capture and a transmit, aim for burst mean_sq ~0.005 without clipping.
+
+#### Gate 3 third run (2026-10-27) after SQL=0 and RF gain back at 1 — transmitted; criterion still NOT met (4.9x)
+
+Maintainer: USB AF Level was already at 100% (also during the first runs); SQL set to 0; RF gain restored to 1
+(CAT: SQL 0, RF 1, mode PKTUSB, AGC 2). Fresh **go** given. rigctld before keying: `144640000 / PKTUSB / 0 / 0`.
+```
+==> Preflight
+    TX dc0sk@dc0sk-rpi53 on 144640000 Hz, PTT released
+    SDR RSPdx, Antenna A, centre 144640000 Hz, fs 192000, RFGR 12 IFGR 40
+==> Antenna check: brief keyed SWR reading
+    SWR = 1 (limit 3.0)
+==> Starting SDR capture (30s)
+==> Starting rig USB-audio capture on dc0sk@dc0sk-rpi51 (30s)
+==> Transmitting: mode=BPSK250 fec=rs payload='DC0SK GATE3'
+    Transmitted 11 bytes in BPSK250 mode (fec=Rs).
+    PTT after TX: 0
+==> Waiting for captures to finish
+
+==> Results
+    SDR IQ : /home/dc0sk/git/OpenPulseHF/docs/dev/test-reports/on-air/captures/gate3-b2a-bpsk250.cf32 (46080000 bytes)
+             cfg: f=144.6400MHz RFGR=12 IFGR=40 ant=Antenna A RFGR range 0, 27
+             captured 30.00s peak=0.2054 rms=0.0320 clip=0.00% OK
+    rig aud: /home/dc0sk/git/OpenPulseHF/docs/dev/test-reports/on-air/captures/gate3-b2a-bpsk250-rig48k.wav (28.0s @ 48000Hz)  mean_sq=0.000202  peak=0.043
+```
+Ratio: `windows=111 idle(median)=0.000104 peak=0.000504 ratio=4.9 loud_windows=0`. PTT after: 0; rigctld stopped.
+Analysis: the result is the same as run 2 (peak 0.043, ratio 4.9). Burst = 32 windows, mean_sq 0.000457 vs
+noise 0.000104: burst-over-noise SNR about 5.3 dB in the CODEC audio, while the RSPdx saw a strong signal
+(peak 0.2054, rms 0.0320). So SQL and RF gain were not what limited it; USB AF was already at 100%. Levers
+that remain: (1) the PipeWire capture volume `A_RX_SOURCE_VOLUME=0.44` (software; raising it scales signal and
+noise together, helps the energy gate's absolute level but not the ratio); the CODEC has no ALSA capture
+control (`amixer -c CODEC`: PCM playback only); (2) the 5.3 dB itself: IC-9700 AGC/filter/noise (NR 0.031,
+AGC 2, DATA filter width) or the signal reaching the IC-9700 being weak relative to its audio noise; an
+IC-9700 S-meter (`l RAWSTR`/`l STRENGTH`) read DURING a transmit would show the RF level; (3) the criterion
+itself: 5x peak-window over the whole-capture median measures a ~8 s burst in a 28 s capture and a flat-AGC
+receiver; whether it is the right test for this chain is for the cloud session. Not changed: FT-818 power.
+Captures overwritten in place (gitignored, not committed): same three paths as run 2.
