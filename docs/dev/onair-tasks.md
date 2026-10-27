@@ -1383,3 +1383,20 @@ station A (`openpulse receive` via cpal `pulse`) still failed on the same kind o
 (`ChannelSimHarness::feed_capture` + `receive_with_timeout`) is not the production live path, so a live-receive-path fault is now the leading suspect, to be separated from
 the AGC pumping above. Proposed decisive test (not run): a Gate-6 B->A run at drive 0.075 with a `parecord` of the same default source running on station A alongside the
 live IRS, then decode the parecord WAV offline: offline OK + live FAIL = live receive path.
+
+#### Gate 6 B->A: **PASS** (maintainer go, 2026-10-27 ~15:50 local) — FT-818 sink 0.075, parecord of the same source beside the live receiver
+
+`B_TX_SINK_VOLUME=0.075 scripts/onair-setup-audio-routing.sh` (rpi53 `sink_vol=0.07`), then, with `parecord` on station A (default source = IC-9700 CODEC, 48 kHz stereo,
+150 s, running beside the live receiver) and the RSPdx (RFGR 22) recording:
+`TELEMETRY_ENABLE=0 scripts/run-onair-ic9700-ft991a.sh supervise --single-case 'BPSK250|none|64' --reverse`, rc=0:
+```
+  [BPSK250                fec=none               payload=  64B] ... PASS
+==> Results: 1/1 passed, 0 failed.
+    Report: docs/dev/test-reports/onair-2026-10-27T135003.json   ("result":"pass","fail_reason":"","iss_exit":0)
+```
+Live IRS log: 0 preamble rejections, 48 `invalid magic` lines (retries before the frame), then the payload was observed. PTT 0, nothing left running, routing restored to 0.15.
+Gate 6 as written is `"result": "pass"` in the run's JSON: **met for B -> A**, with these conditions (all lowering or unchanged): FT-818 sink 0.075 (not the profile's 0.15),
+VFO B = VFO A, `TELEMETRY_ENABLE=0`, IC-9700 AGC SLOW, PKTUSB/DIG on the FT-818, a `parecord` running beside the receiver.
+Caveats: a **single** pass. The only difference from the failed run 12 at the same drive is the extra `parecord` on station A (an unexplained effect; keeping the CODEC capture
+stream active before/while the live receiver opens it is a candidate, not shown). Reproducibility is not established. The SDR copy of this run was recorded, not decoded.
+A -> B (step 2 of the task, the IC-9700 transmits, FT-818 receives) has not been run. Proposed: repeat B->A twice without the parecord to see whether the pass holds, then A->B.
