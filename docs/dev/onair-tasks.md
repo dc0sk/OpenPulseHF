@@ -1217,3 +1217,37 @@ Diagnosis of the IRS log (`/tmp/openpulse-irs-BPSK250-none.log` on rpi51, 317 `i
   the same receive path, and the rho values on a repeat.
 Not retried (task rule). **A -> B (step 2) not run.** Committed with this entry: the runner fix, the JSON report,
 the rig-state files and the evidence bundle `docs/dev/test-reports/on-air/bundle-2026-10-27T102310Z-ic9700-ft991a-quick`.
+
+#### Offline decode of the Gate 3 captures, the RSPdx question, and the retry with the IC-9700 attenuator on (maintainer, 2026-10-27)
+
+**Offline decode (nothing transmitted).** The Gate 3 run-4 captures (`BPSK250|rs`, payload `DC0SK GATE3`) were
+converted to 8 kHz mono (rig audio: `resample_poly` 48k->8k; RSPdx IQ: keep 0..4 kHz positive baseband, 2*real,
+`resample_poly` 192k->8k) and replayed through the production receive path with a scratch integration test
+(`ChannelSimHarness::feed_capture` + `receive_with_fec_mode_timeout("BPSK250", Rs, 40 s)`; the scratch file was
+deleted, not committed). **Control:** a synthetic transmit of the same payload through the same harness decodes
+(`CONTROL: Ok("DC0SK GATE3")`), so the harness is sound.
+- Rig audio (IC-9700 CODEC): `NOT DECODED: FEC error: RS correction failed at block 0: TooManyErrors`.
+- RSPdx IQ (RFGR 12, IFGR 40): the same `RS correction failed at block 0: TooManyErrors`.
+- Both captures show the same spectrum: burst 7.5 s (rig) / 8.8 s (SDR), 90% of the power in 237-238 Hz, i.e. a
+  BPSK250 signal; the frame is FOUND (RS runs) but has too many bit errors on **both** independent receivers.
+**Answer to "was everything decodable on the RSPdx?": no.** Only the Gate 3 run-4 SDR capture exists (the Gate 6 runs
+record no SDR audio), and it does not decode. Caveats: the SDR was at RFGR 12, which the corpus README says
+saturates the RSPdx front end ("an overloaded SDR is not a neutral witness"); with a ~40-50 dB signal from an indoor
+transmitter it may be saturated, so the SDR result alone does not exonerate the receivers. I did not re-record at RFGR
+22-27 (two attempts to run `sdr_capture.py` at RFGR 27 / 192 kHz alongside the runner failed with
+`activateStream() - Init() failed: sdrplay_api_Fail`, as on the first attempt; the 480M link was fine before).
+
+**Retry with the attenuator.** First attempt had NO attenuator: `rigctl L ATT 12` is rejected by the IC-9700
+(`Command rejected by the rig`; the only attenuator step hamlib lists is 10 dB), and `l ATT` read back 0, so
+run `onair-2026-10-27T113719` is not an attenuator test (same failure, IRS str_max 52). With `rigctl L ATT 10`
+(read back 10; idle STRENGTH -47..-52 -> -54) I retried (go as the maintainer asked): run
+`docs/dev/test-reports/onair-2026-10-27T114123.json`: **FAIL, "IRS: payload not observed in receiver output"**,
+ISS `ptt_on=2`, IRS str_max **44** (was 56), 310 `invalid magic` lines, preamble correlation rho 0.197 / 0.197 / 0.271
+(< 0.31), AFC correction ~2.7 Hz. PTT 0 on A after, nothing left running on either Pi. I set `ATT` back to 0.
+**The IC-9700 front-end-overload hypothesis is falsified** by this: 12 dB less signal at the receiver, identical
+failure. Together with the SDR (a second receiver, also undecodable) the fault is most likely on the transmit side:
+the FT-818's modulation as produced through the SCU-17 at the runner's `--device pulse` path (TX sink volume 0.15),
+e.g. distortion/clipping or ALC action (the ISS telemetry reads `alc>0=0, rfm>0=0`, i.e. the meters say nothing).
+Not tested: the same frame from the IC-9700 (A -> B, the other direction, which would show whether the modem and
+receive chain are fine), a lower/higher TX drive, the FT-818's TX audio quality on a scope or against the SDR at
+RFGR 22+. Gate 6 B -> A has now failed three times and was not retried further; A -> B not run.
