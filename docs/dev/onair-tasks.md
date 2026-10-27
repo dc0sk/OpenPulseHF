@@ -1492,10 +1492,10 @@ Memory: `ft818-hamlib-vfo-toggle.md`.
 4. Decide the live-receiver question: energy gate vs AGC-compressed audio (IC-9700 SLOW AGC, FT-818 AGC), with the IRS audio recorded by the runner.
 5. Review the two runner edits before they merge.
 
-## Addendum 2026-10-27 (evening): remote station "landline" (FT-991A, dd2zm@192.168.121.211) — requirements check and 2 m antenna check
+## Addendum 2026-10-27 (evening): remote FT-991A station — requirements check and 2 m antenna check
 
-Context: the maintainer offered a remote station (FT-991A on a Pi, reachable over WireGuard) as a quieter IRS than the FT-818. Constraints given: the Pi runs from an SD card (limit wear and space), build locally and transfer binaries over ssh, 5 W maximum TX power.
-Host key: ED25519 `SHA256:XXXsw+2H5VTCgFedzbXCP/sWU4Tf+YVgAaf3gEm967A`, confirmed by the maintainer and pinned in rpi51's `known_hosts`. The host was unreachable for a few minutes at first (ping 100 % loss), then came back without any change on our side.
+Context: the maintainer offered a remote station (FT-991A on a Pi, reached over a VPN) as a quieter IRS than the FT-818. Constraints given: the Pi runs from an SD card (limit wear and space), build locally and transfer binaries over ssh, 5 W maximum TX power.
+Host key confirmed by the maintainer and pinned in rpi51's `known_hosts` (address, login and fingerprint kept out of the repo). The host was unreachable for a few minutes at first (ping 100 % loss), then came back without any change on our side.
 
 ### Requirements check (read-only)
 | Requirement | State |
@@ -1507,7 +1507,7 @@ Host key: ED25519 `SHA256:XXXsw+2H5VTCgFedzbXCP/sWU4Tf+YVgAaf3gEm967A`, confirme
 | CAT/PTT | OK. CP2105 serial 008924A1: CAT `-if00-port0` (ttyUSB0), PTT `-if01-port0` (ttyUSB1), both match `docs/config/onair-ic9700-ft991a.example.sh`. Hamlib 1035 at 38400 answers |
 | Layout | OK. `~/openpulse/OpenPulseHF/{scripts,target/release}` exists (scripts empty) |
 | Binaries | STALE. `openpulse` and `openpulse-tnc` are dated 2026-07-30; they must be replaced before any on-air run (`openpulse-server` is absent; local build is current, no crate change since 2026-10-26) |
-| Other use | The host also runs Landline (Firefox session, VNC on 5900, ~/git/landline, ~/landline-hil). Not touched |
+| Other use | The host is also used for other work. Not touched |
 
 ### FT-991A state
 It was OFF (CAT standby, `PS0`); every read was refused ("Rig is not powered on"). Powered on with `set_powerstat 1` by the maintainer's permission. Found: VFO A 438.8876 MHz in a mode Hamlib cannot read (`m` returns Protocol error, probably C4FM), VFO B 145.787 MHz, RFPOWER 0.05 (5 W), AGC 2, no split, PTT 0. Left on VFO A 144.640064 MHz PKTUSB 3000 (the profile's 64 Hz trim is already included), RFPOWER 0.05. Previous VFO A (438.8876 MHz, mode unknown) was not restored.
@@ -1538,7 +1538,7 @@ Final state: both rigs PTT 0; IC-9700 144.640000 MHz PKTUSB (restored after FM);
 ### Next steps for this station (needs the maintainer on site)
 1. Check what is on the FT-991A's V/UHF connector and the position of any coax switch.
 2. Repeat the 5 W carrier check (needs the maintainer's go per run); expect a visible rise on the IC-9700 (or the RSPdx on rpi51).
-3. Then deploy fresh `openpulse`/`openpulse-server` and the scripts over ssh (about 33 MB), run `scripts/onair-station-check.sh` with a profile whose `B_SSH` is `dd2zm@192.168.121.211`, and set the Codec volumes with `scripts/onair-setup-audio-routing.sh`. Profile: `docs/config/onair-ic9700-ft991a.example.sh` already matches this host (the real address is not in it; use a local copy in `~/onair-local/`).
+3. Then deploy fresh `openpulse`/`openpulse-server` and the scripts over ssh (about 33 MB), run `scripts/onair-station-check.sh` with a local profile whose `B_SSH` is that host, and set the Codec volumes with `scripts/onair-setup-audio-routing.sh`. Profile: `docs/config/onair-ic9700-ft991a.example.sh` already matches this host (the real address is not in it; use a local copy in `~/onair-local/`).
 4. Task 4 B -> A / A -> B can then be repeated with the FT-991A as IRS, at 5 W maximum on both sides, ideally with an RS-protected mode.
 
 **Reviewed (cloud session, 2026-10-27):** accepted as recorded. Taken into the profile: FT-818 drive
