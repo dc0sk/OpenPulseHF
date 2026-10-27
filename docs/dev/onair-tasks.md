@@ -505,3 +505,65 @@ is closed (one checkout; `8fe05837` is `main`, not seen again). The first run pa
 level at exactly 0 with the rig off: `onair-rx-level-check.sh` now fails a floor below 1e-7 as "no
 audio from the rig". Open before any keyed task: the FT-818 manual items, and how G0 is judged.
 
+---
+
+## Task 3 — G0 by prominence, then Gate 3 B → A (status: open)
+
+**Maintainer decisions (2026-10-27):** the FT-818 items are confirmed (FRONT antenna, L1, DIG/USER-U,
+CAT rate 38400) except the noise source: no quiet location yet. G0 is judged on line prominence only.
+
+Fast-forward both Pis to the latest branch first, and `source ~/onair-local/ic9700-ft818.sh` in the
+shell you work in.
+
+### Part A — G0, nothing transmits
+
+Both rigs on, nothing transmitting anywhere. `OPHF_ABS_DBFS=0` turns the absolute limit off, so only
+prominence decides.
+1. Station B: `ssh dc0sk@dc0sk-rpi53 'cd ~/git/OpenPulseHF && OPHF_ABS_DBFS=0 scripts/onair-rx-idle-floor.sh plughw:CARD=CODEC,DEV=0'`
+2. Station A with the RSPdx **stopped**: `OPHF_ABS_DBFS=0 scripts/onair-rx-idle-floor.sh plughw:CARD=CODEC,DEV=0`
+3. Station A with the RSPdx **streaming** (decision 27: it shares rpi51's USB with the IC-9700). Start
+   `python3 scripts/onair-sdr/sdr_capture.py 144640000 250000 20 12 40 /tmp/g0-sdr.cf32 &`, wait 3 s,
+   run step 2's command again (its "SDR is running" warning is expected here), then `wait`.
+4. If a device is busy (PipeWire holding the CODEC), report it and stop; do not kill audio services.
+
+Paste each output in full. **Stop here (status `blocked`) if any of the three FAILs**, and report the
+lines it lists; the maintainer decides. Otherwise continue to Part B.
+
+### Part B — Gate 3, the FT-818 transmits one BPSK250 frame (keys a transmitter)
+
+The FT-818 at L1 transmits once for a few seconds, plus a 0.4 s antenna (SWR) check. The RSPdx on
+rpi51 and the IC-9700's USB audio record it.
+1. `scripts/onair-station-check.sh` must PASS (it checks the FT-818's mode reads PKTUSB). If not, stop.
+2. Start rigctld for the FT-818 on rpi53 and confirm it reads 144.640 MHz, PKTUSB and PTT 0:
+   ```bash
+   ssh dc0sk@dc0sk-rpi53 "nohup rigctld -m 1041 -r '$B_CAT_PORT' -s 38400 -t 4532 >/tmp/rigctld-b.log 2>&1 &"
+   ssh dc0sk@dc0sk-rpi53 'sleep 3; rigctl -m 2 -r 127.0.0.1:4532 f m t'
+   ```
+3. **Ask the maintainer for a go** in this session, stating: FT-818 at L1 into the Diamond RH3, 144.640
+   MHz, one BPSK250 frame plus a 0.4 s SWR check. Key nothing without that go.
+4. Run (the SDR records on this host; nothing here touches power or mode):
+   ```bash
+   SDR_FS=192000 SDR_RFGR=12 scripts/onair-dual-capture.sh gate3-b2a-bpsk250 BPSK250 rs 'DC0SK GATE3'
+   ```
+5. Afterwards, whatever happened: `ssh dc0sk@dc0sk-rpi53 'rigctl -m 2 -r 127.0.0.1:4532 t'` must read
+   `0`; then stop that rigctld (`pkill -x rigctld` on rpi53 is fine — it matches the process name, not
+   this shell).
+6. Gate 3's criterion — the rig capture's loudest 250 ms window at least 5× its quiet level:
+   ```bash
+   python3 - docs/dev/test-reports/on-air/captures/gate3-b2a-bpsk250-rig48k.wav <<'EOP'
+   import sys, wave, numpy as np
+   w = wave.open(sys.argv[1], "rb"); fs, ch = w.getframerate(), w.getnchannels()
+   x = np.frombuffer(w.readframes(w.getnframes()), dtype="<i2").astype(float)[0::ch] / 32768
+   n = fs // 4; m = np.array([np.mean(x[i:i + n] ** 2) for i in range(0, len(x) - n, n)])
+   idle, peak = np.median(m), m.max()
+   print(f"windows={len(m)} idle(median)={idle:.6f} peak={peak:.6f} ratio={peak / max(idle, 1e-12):.1f} "
+         f"loud_windows={(m > 5 * idle).sum()}")
+   EOP
+   ```
+7. Paste the dual-capture output in full (including the SDR `captured … OK/OVERLOAD` line), the PTT
+   read, and the ratio line. Do **not** commit the `.cf32` / `.wav` captures; list their paths and sizes.
+
+### Results
+
+_(station session: append here)_
+

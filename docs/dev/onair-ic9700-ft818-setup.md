@@ -95,10 +95,12 @@ as root and from cloning and building third-party code without an explicit rule.
    IC-9700 settings in [onair-signal-chain-verification.md](onair-signal-chain-verification.md); the
    RSPdx attenuated against the IC-9700 and its maximum input rating checked; antennas connected.
 
-**Still to decide before G0 counts:** how G0 is judged. The analyser fails any in-band peak above
-−40 dBFS as well as any line 15 dB above the floor, and it captures raw ALSA, which bypasses the
-PipeWire volume the runner uses. On 2026-10-26 rpi53 failed on the absolute level alone (flat
-−36 dBFS floor, 4 dB max prominence); rpi51 had one line at 16 dB.
+**G0 is judged on line prominence only for this campaign** (maintainer, 2026-10-27): run the
+analyser with `OPHF_ABS_DBFS=0`, which no in-band peak can exceed, so only a line 15 dB or more over
+the floor fails. The absolute −40 dBFS limit failed a flat floor on 2026-10-26, and the raw ALSA
+capture bypasses the PipeWire level the modem uses. The FT-818 has not yet found a quiet location
+(maintainer, 2026-10-27): its broadband floor stays high, which costs sensitivity, not decodes, on a
+2 m line-of-sight path that delivered S9+51 dB.
 
 ---
 
