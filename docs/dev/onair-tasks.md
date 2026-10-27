@@ -277,7 +277,7 @@ mode; then rerun the check.
 
 ---
 
-## Task 2 — rerun the readiness check after the maintainer's fixes (status: open)
+## Task 2 — rerun the readiness check after the maintainer's fixes (status: done)
 
 Read-only again; nothing transmits. Both rigs on.
 
@@ -303,4 +303,200 @@ Then:
 
 ### Results
 
-_(station session: append here)_
+**Status: done** (check passes; MANUAL list partly unconfirmed, see item 4). Nothing transmitted.
+
+**Prerequisites** (maintainer confirmed all three done): rpi51 ssh to itself, rpi53 python3-scipy, SoapySDRPlay3 + RSPdx.
+Verified: `ssh -o BatchMode=yes dc0sk@dc0sk-rpi51 true` rc=0; rpi53 scipy 1.15.3;
+`SoapySDRUtil --find="driver=sdrplay"` -> `Found device 0 / driver = sdrplay / label = SDRplay Dev0 RSPdx 2003052C43 / serial = 2003052C43`.
+
+**1.** Both Pis fast-forwarded to `a20e0fe1`.
+
+**2. Commit mismatch (rpi53).**
+```
+HEAD a20e0fe16f17900f99f0827bc13dc784c73fa693
+* claude/affectionate-brahmagupta-sdn8qg a20e0fe1 [origin/claude/affectionate-brahmagupta-sdn8qg] fix(onair): station check loads ~/.cargo/env and retries flaky CAT reads; task 2 (M3)
+  decision-27-local                      3cd019d6 [origin/claude/affectionate-brahmagupta-sdn8qg: behind 6] docs: record the 2026-10-26 on-air session on the 2 m pair (M3)
+  main                                   8fe05837 [origin/main] fix: lower-only station keyers, TNC PTT fails closed, review follow-ups (M2/M3) (#1515)
+/home/dc0sk/git/OpenPulseHF/
+```
+Only one checkout under `~/git/`. `B_REPO_DIR=${HOME}/git/OpenPulseHF` after sourcing the profile. The 8fe05837
+seen in task 1 was probably the cargo-less ssh path reading a different state; it did not recur (check reports
+"same commit as the control host (a20e0fe1)"). Not proven further.
+
+**3. Routing** (`onair-setup-audio-routing.sh`, rc=0) and **check** (`--levels`).
+First run, IC-9700 was off (CAT failed after 3 tries, idle mean_sq exactly 0.000000, Summary PASS=42 FAIL=1):
+```
+==> IC-9700 (dc0sk@dc0sk-rpi51) — set routing (match='Codec', tx-vol=0.15, rx-vol=0.44)
+    RESULT pass sink=85 src=83 default_sink=85 default_src=83 sink_vol=0.15 src_vol=0.44
+==> FT-818 (dc0sk@dc0sk-rpi53) — set routing (match='Codec', tx-vol=0.15, rx-vol=0.45)
+    RESULT pass sink=57 src=58 default_sink=57 default_src=58 sink_vol=0.15 src_vol=0.45
+
+PASS: both stations' default sink+source point at their rig CODEC; TX level set.
+      The runner's --device pulse will now reach the radios. Re-run --verify anytime.
+== control host: DC0SK-RPI51
+[PASS] control checkout clean at a20e0fe1
+
+== station A: dc0sk@dc0sk-rpi51
+[PASS] SSH to dc0sk@dc0sk-rpi51 without a password
+[INFO] host: Debian GNU/Linux 13 (trixie), rigctl Hamlib 4.6.2 2025-02-09T21:03:50Z SHA=870364 64-bit
+[PASS] repo at /home/dc0sk/git/OpenPulseHF
+[PASS] checkout clean
+[PASS] command: cargo
+[PASS] command: rigctl
+[PASS] command: rigctld
+[PASS] command: arecord
+[PASS] command: wpctl
+[PASS] command: pactl
+[PASS] command: python3
+[PASS] command: timeout
+[PASS] python3 numpy + scipy (G0 analyser)
+[PASS] onair-preflight --strict: Summary: PASS=11 WARN=0 FAIL=0
+[PASS] openpulse-server built (the daemon path)
+[PASS] CAT port present: /dev/serial/by-id/usb-Silicon_Labs_CP2102N_USB_to_UART_Bridge_Controller_IC-9700_13012889_A-if00-port0
+[INFO]   CAT read needed 3 tries
+[FAIL] CAT read failed (no frequency); is the rig on and the CAT rate right?
+[PASS] capture card matching 'Codec'
+[PASS] python3 SoapySDR bindings
+[PASS] sdrplay API service active
+[PASS] SoapySDRPlay3 finds the SDR
+[PASS] same commit as the control host (a20e0fe1)
+
+== station B: dc0sk@dc0sk-rpi53
+[PASS] SSH to dc0sk@dc0sk-rpi53 without a password
+[INFO] host: Debian GNU/Linux 13 (trixie), rigctl Hamlib 4.6.2 2025-02-09T21:03:50Z SHA=870364 64-bit
+[PASS] repo at /home/dc0sk/git/OpenPulseHF
+[PASS] checkout clean
+[PASS] command: cargo
+[PASS] command: rigctl
+[PASS] command: rigctld
+[PASS] command: arecord
+[PASS] command: wpctl
+[PASS] command: pactl
+[PASS] command: python3
+[PASS] command: timeout
+[PASS] python3 numpy + scipy (G0 analyser)
+[PASS] onair-preflight --strict: Summary: PASS=11 WARN=0 FAIL=0
+[PASS] openpulse-server built (the daemon path)
+[PASS] CAT port present: /dev/serial/by-id/usb-Silicon_Labs_CP2105_Dual_USB_to_UART_Bridge_Controller_00B5B685-if00-port0
+[PASS] CAT reads: 144640000 Hz, mode PKTUSB
+[PASS] mode matches the profile: PKTUSB (set on the rig, sent by nothing)
+[PASS] capture card matching 'Codec'
+[PASS] same commit as the control host (a20e0fe1)
+
+== audio routing (scripts/onair-setup-audio-routing.sh --verify)
+==> IC-9700 (dc0sk@dc0sk-rpi51) — verify routing (match='Codec', tx-vol=0.15, rx-vol=0.44)
+    RESULT pass sink=85 src=83 default_sink=85 default_src=83 sink_vol=0.15 src_vol=0.44
+==> FT-818 (dc0sk@dc0sk-rpi53) — verify routing (match='Codec', tx-vol=0.15, rx-vol=0.45)
+    RESULT pass sink=57 src=58 default_sink=57 default_src=58 sink_vol=0.15 src_vol=0.45
+
+PASS: both stations' default sink+source point at their rig CODEC; TX level set.
+      The runner's --device pulse will now reach the radios. Re-run --verify anytime.
+[PASS] both stations route to their CODEC at the profile's volumes
+
+== idle RX level (scripts/onair-rx-level-check.sh) — nothing may transmit now
+==> RX capture-level check (idle; no TX anywhere). Gate must be able to discriminate.
+  IC-9700: idle mean_sq=0.000000  gate threshold=0.000100  (on the absolute floor — signal must clear 0.0001)
+  FT-818: idle mean_sq=0.000430  gate threshold=0.001291  OK
+
+PASS: both stations' idle floor leaves the energy gate free to discriminate.
+[PASS] idle RX level lets the energy gate discriminate on both stations
+
+== MANUAL — not readable over CAT; confirm on the rigs before the session counts
+  [ ] FT-818: FRONT antenna selected at 2 m, L1 (0.5 W), DIG/USER-U, CAT RATE matches the profile
+  [ ] FT-818: away from the local noise source found on 2026-10-26 (S8–S9 floor)
+  [ ] Both rigs: TX time-out timer (TOT) enabled — the A5 backstop
+  [ ] IC-9700: the required settings in onair-signal-chain-verification.md (DATA MOD USB, AF output)
+  [ ] RSPdx: a fixed attenuator or measured isolation against the IC-9700 beside it; its maximum
+      input rating checked in SDRplay's datasheet (UNCHECKED in the repo)
+  [ ] Antennas connected (Diamond RH3 on the FT-818); the agreed window and frequency announced
+
+Summary: PASS=42 FAIL=1
+```
+After the maintainer powered the IC-9700 on, rerun (rc=0, PASS=43 FAIL=0):
+```
+== control host: DC0SK-RPI51
+[PASS] control checkout clean at a20e0fe1
+
+== station A: dc0sk@dc0sk-rpi51
+[PASS] SSH to dc0sk@dc0sk-rpi51 without a password
+[INFO] host: Debian GNU/Linux 13 (trixie), rigctl Hamlib 4.6.2 2025-02-09T21:03:50Z SHA=870364 64-bit
+[PASS] repo at /home/dc0sk/git/OpenPulseHF
+[PASS] checkout clean
+[PASS] command: cargo
+[PASS] command: rigctl
+[PASS] command: rigctld
+[PASS] command: arecord
+[PASS] command: wpctl
+[PASS] command: pactl
+[PASS] command: python3
+[PASS] command: timeout
+[PASS] python3 numpy + scipy (G0 analyser)
+[PASS] onair-preflight --strict: Summary: PASS=11 WARN=0 FAIL=0
+[PASS] openpulse-server built (the daemon path)
+[PASS] CAT port present: /dev/serial/by-id/usb-Silicon_Labs_CP2102N_USB_to_UART_Bridge_Controller_IC-9700_13012889_A-if00-port0
+[PASS] CAT reads: 144640000 Hz, mode PKTUSB
+[INFO]   mode is set by the runner (PKTUSB); reads 'PKTUSB' now
+[PASS] capture card matching 'Codec'
+[PASS] python3 SoapySDR bindings
+[PASS] sdrplay API service active
+[PASS] SoapySDRPlay3 finds the SDR
+[PASS] same commit as the control host (a20e0fe1)
+
+== station B: dc0sk@dc0sk-rpi53
+[PASS] SSH to dc0sk@dc0sk-rpi53 without a password
+[INFO] host: Debian GNU/Linux 13 (trixie), rigctl Hamlib 4.6.2 2025-02-09T21:03:50Z SHA=870364 64-bit
+[PASS] repo at /home/dc0sk/git/OpenPulseHF
+[PASS] checkout clean
+[PASS] command: cargo
+[PASS] command: rigctl
+[PASS] command: rigctld
+[PASS] command: arecord
+[PASS] command: wpctl
+[PASS] command: pactl
+[PASS] command: python3
+[PASS] command: timeout
+[PASS] python3 numpy + scipy (G0 analyser)
+[PASS] onair-preflight --strict: Summary: PASS=11 WARN=0 FAIL=0
+[PASS] openpulse-server built (the daemon path)
+[PASS] CAT port present: /dev/serial/by-id/usb-Silicon_Labs_CP2105_Dual_USB_to_UART_Bridge_Controller_00B5B685-if00-port0
+[PASS] CAT reads: 144640000 Hz, mode PKTUSB
+[PASS] mode matches the profile: PKTUSB (set on the rig, sent by nothing)
+[PASS] capture card matching 'Codec'
+[PASS] same commit as the control host (a20e0fe1)
+
+== audio routing (scripts/onair-setup-audio-routing.sh --verify)
+==> IC-9700 (dc0sk@dc0sk-rpi51) — verify routing (match='Codec', tx-vol=0.15, rx-vol=0.44)
+    RESULT pass sink=87 src=82 default_sink=87 default_src=82 sink_vol=0.15 src_vol=0.44
+==> FT-818 (dc0sk@dc0sk-rpi53) — verify routing (match='Codec', tx-vol=0.15, rx-vol=0.45)
+    RESULT pass sink=57 src=58 default_sink=57 default_src=58 sink_vol=0.15 src_vol=0.45
+
+PASS: both stations' default sink+source point at their rig CODEC; TX level set.
+      The runner's --device pulse will now reach the radios. Re-run --verify anytime.
+[PASS] both stations route to their CODEC at the profile's volumes
+
+== idle RX level (scripts/onair-rx-level-check.sh) — nothing may transmit now
+==> RX capture-level check (idle; no TX anywhere). Gate must be able to discriminate.
+  IC-9700: idle mean_sq=0.000110  gate threshold=0.000331  OK
+  FT-818: idle mean_sq=0.000510  gate threshold=0.001530  OK
+
+PASS: both stations' idle floor leaves the energy gate free to discriminate.
+[PASS] idle RX level lets the energy gate discriminate on both stations
+
+== MANUAL — not readable over CAT; confirm on the rigs before the session counts
+  [ ] FT-818: FRONT antenna selected at 2 m, L1 (0.5 W), DIG/USER-U, CAT RATE matches the profile
+  [ ] FT-818: away from the local noise source found on 2026-10-26 (S8–S9 floor)
+  [ ] Both rigs: TX time-out timer (TOT) enabled — the A5 backstop
+  [ ] IC-9700: the required settings in onair-signal-chain-verification.md (DATA MOD USB, AF output)
+  [ ] RSPdx: a fixed attenuator or measured isolation against the IC-9700 beside it; its maximum
+      input rating checked in SDRplay's datasheet (UNCHECKED in the repo)
+  [ ] Antennas connected (Diamond RH3 on the FT-818); the agreed window and frequency announced
+
+Summary: PASS=43 FAIL=0
+```
+
+**4. MANUAL list (maintainer answers).**
+- FT-818 front antenna / L1 / DIG-USER-U / CAT rate, and away from the 2026-10-26 noise source: **NOT all confirmed**
+  (maintainer did not say which; ask again before any session counts).
+- TOT on both rigs and IC-9700 required settings (DATA MOD USB, AF output): confirmed.
+- RSPdx attenuation/isolation, max input rating, antennas connected, window announced: confirmed.
+
