@@ -2,7 +2,7 @@
 project: openpulsehf
 doc: docs/dev/onair-ic9700-ft818-setup.md
 status: living
-last_updated: 2026-10-26
+last_updated: 2026-10-27
 ---
 
 # On-air setup — IC-9700 (rpi51) ↔ FT-818 (rpi53)
@@ -259,3 +259,11 @@ One record per session; each holds the station state, results, gotchas and open 
   G0 FAIL on both, level not birdies (rpi53: flat −36 dBFS floor over the analyser's −40 dBFS
   absolute limit, max line prominence 4 dB; rpi51: 48 weak lines at 4–16 dB on a −44 dBFS
   floor). Gate 3 is next. Preflight now builds the #1060 proof with `--release`.
+- **2026-10-26 — not accepted** (maintainer): a dry run; station preparation was set up instead.
+- **2026-10-27 — readiness** (`docs/dev/onair-tasks.md`, tasks 1–2, run on rpi51):
+  `scripts/onair-station-check.sh --levels` PASS=43 FAIL=0 on `a20e0fe1` — both Pis on Debian 13 with
+  Hamlib 4.6.2, the same commit, strict preflight, CAT and mode, the RSPdx found by SoapySDRPlay3,
+  routing at the profile levels, idle RX 0.000110 (IC-9700) and 0.000510 (FT-818). Manual list:
+  TOT, IC-9700 settings, RSPdx attenuation and rating, antennas confirmed; the FT-818 items (front
+  antenna, L1, DIG/USER-U, CAT rate, away from the noise source) not yet confirmed. A first run with the
+  IC-9700 off passed its idle level at exactly 0; the level check now fails digital silence.

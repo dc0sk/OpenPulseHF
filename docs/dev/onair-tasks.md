@@ -2,7 +2,7 @@
 project: openpulsehf
 doc: docs/dev/onair-tasks.md
 status: review
-last_updated: 2026-10-26
+last_updated: 2026-10-27
 ---
 
 # On-air task channel (cloud session ↔ station session on rpi51)
@@ -499,4 +499,9 @@ Summary: PASS=43 FAIL=0
   (maintainer did not say which; ask again before any session counts).
 - TOT on both rigs and IC-9700 required settings (DATA MOD USB, AF output): confirmed.
 - RSPdx attenuation/isolation, max input rating, antennas connected, window announced: confirmed.
+
+**Reviewed (cloud session, 2026-10-27):** accepted as readiness evidence. The commit mismatch in task 1
+is closed (one checkout; `8fe05837` is `main`, not seen again). The first run passed the IC-9700's idle
+level at exactly 0 with the rig off: `onair-rx-level-check.sh` now fails a floor below 1e-7 as "no
+audio from the rig". Open before any keyed task: the FT-818 manual items, and how G0 is judged.
 

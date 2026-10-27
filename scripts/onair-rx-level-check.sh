@@ -50,6 +50,11 @@ DURATION="${DURATION:-5}"
 MAX_THRESHOLD=0.0032
 ABS_THRESHOLD=0.0001
 IDLE_MAX=0.00107   # MAX_THRESHOLD / 3
+# Below this the capture is digital silence: the rig is off, muted or squelched, and its floor would
+# otherwise pass "on the absolute floor" (2026-10-27: an IC-9700 that was off read exactly 0). Working
+# rigs read 1.1e-4 (IC-9700, 2026-10-27) to 5e-4 (FT-818) and 1.25e-4 (FT-991A); one 16-bit LSB of
+# noise is ~1e-9. A rig quieter than this is not delivering receive audio worth trusting.
+SILENT_MAX=0.0000001
 
 if [[ -z "$A_SSH" || -z "$B_SSH" ]]; then
     echo "ERROR: A_SSH and B_SSH must be set (source the on-air profile first)." >&2
@@ -99,8 +104,13 @@ _check_side() {
         echo "  ${label}: FAIL — could not capture idle audio from the rig CODEC" >&2
         return 1
     fi
-    awk -v m="$meansq" -v lim="$IDLE_MAX" -v maxt="$MAX_THRESHOLD" -v abst="$ABS_THRESHOLD" -v lbl="$label" '
+    awk -v m="$meansq" -v lim="$IDLE_MAX" -v maxt="$MAX_THRESHOLD" -v abst="$ABS_THRESHOLD" -v lbl="$label" \
+        -v silent="$SILENT_MAX" '
     BEGIN {
+        if (m < silent) {
+            printf "  %s: idle mean_sq=%.8f  FAIL — no audio from the rig (off, muted or squelched?)\n", lbl, m
+            exit 1
+        }
         thr = m * 3.0
         clamped = 0
         if (thr > maxt) { thr = maxt; clamped = 1 }

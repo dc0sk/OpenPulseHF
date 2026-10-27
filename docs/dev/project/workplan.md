@@ -2,7 +2,7 @@
 project: openpulsehf
 doc: docs/dev/project/workplan.md
 status: draft
-last_updated: 2026-10-26
+last_updated: 2026-10-27
 ---
 
 # Work plan — Release 1 ("basic modem")
@@ -188,7 +188,7 @@ Waiting on the maintainer (`maintainer-todo.md`): the key-to-audio probe, then F
 | Item | Status |
 |---|---|
 | Test stages in order (decision 13): virtual audio → hardware loopback → **2 m** (IC-9700 ↔ FT-818, 144.640 MHz) → HF only with the release candidate (M4) | — |
-| G0–G3 per the re-baselined plan on the 2 m pair (isolators fitted; G3 decides whether the RFI is gone) | open. The 2026-10-26 session was a dry run, not accepted (`onair-session-2026-10-26.md`). The stations are being prepared to a checked state first (`onair-ic9700-ft818-setup.md`, *Station preparation*; `scripts/onair-station-check.sh`); sessions now run on rpi51 |
+| G0–G3 per the re-baselined plan on the 2 m pair (isolators fitted; G3 decides whether the RFI is gone) | open. The 2026-10-26 session was a dry run, not accepted (`onair-session-2026-10-26.md`). Station readiness PASS on 2026-10-27 (43/0, `onair-tasks.md` task 2) except the FT-818 manual items; G0's judgement and Gate 3 are next; sessions run on rpi51 |
 | A1: two-station exchange **on 2 m** in both directions, logs retained | open |
 | A2 **on 2 m**: climb (new mode then decodes), demotion, stability — scored per `release-1.0-criteria.md` §A2, both stations' logs + capture, `observability.audit_mode` on. A 2 m line-of-sight link does not fade, so the climb and demotion are driven by **induced level changes** (TX power, attenuation), which §A2 allows and requires to be recorded | open |
 | A4 (station ID cadence) and A5 (PTT fail-safe) checks | open |
