@@ -1418,3 +1418,20 @@ showed energy. PTT 0 on A after, nothing left running. Not examined: the FT-818'
 level at the SCU-17 (`B_RX_SOURCE_VOLUME` 0.45). The FT-818 idle floor was checked earlier (G0 pass, mean_sq ~0.0004, gate ~0.0013).
 Proposed next (keys the IC-9700, ~5 W): a parecord on rpi53 beside the live receiver plus the RSPdx, then decode the FT-818's audio offline, as was done for B->A.
 Not retried.
+
+#### Gate 6 A->B with captures, IC-9700 at ~1 W (maintainer set it; `l RFPOWER` 0.0117647, not raised by the runner) — FAIL; the FT-818 hears the frame but at a poor SNR
+
+Maintainer notes: IC-9700 set to 1 W (distance 15 m horizontal, ~7 m vertical); FT-818 AF volume (speaker) is 0. Maintainer go given.
+`scripts/onair-setup-audio-routing.sh` (both pass at 0.15 / 0.44 / 0.45), `parecord` (48 kHz stereo, 150 s) on rpi53 beside the live receiver, RSPdx (RFGR 22) recording,
+`scripts/run-onair-ic9700-ft991a.sh supervise --single-case 'BPSK250|none|64'`, rc=1, report `docs/dev/test-reports/onair-2026-10-27T145514.json`:
+**FAIL "IRS: payload not observed in receiver output"**; `[IC-9700] power: left as is (reading '0.0117647', requested 0.05; this script only lowers power)`.
+Live IRS on the FT-818 (rpi53): 1255 chunks, **0 first-energy, 0 rejections, 0 `invalid magic`** (never triggered). PTT 0 on A after, nothing left running.
+- **RSPdx (off-air, 144.640 MHz): the 1 W frame is strong** (peak 0.0871, 51.6 dB over baseline) and **DECODES offline: `DECODED 64 bytes: "tM1OJIElXL2TaU9YvFvt1hiA4iF7RMu1exG2dBzwFpgwSD16QP53WJgsRYbwu5QB"`**
+  (random payload, not logged by the runner, so equality with the sent one is not checked). The IC-9700 transmission is fine.
+- **FT-818 audio (parecord, 48 kHz, 2 ch identical): the burst IS in it.** 2.65 s flat envelope, abrupt start, carrier **1495.8 Hz** (2fc line 46.6 dB over median), in 1300-1700 Hz 22.3 dB vs 10.7 dB
+  noise (about 11 dB), in 1000-2000 Hz about 8 dB over the noise envelope. But: steady noise floor of mean_sq ~4.1e-4 (constant over 120 s), and **during the burst the FT-818's AGC pulls the OTHER bands
+  DOWN by 13-14 dB** (300-1000 Hz 14.5 -> -4.7 dB, 1700-3000 Hz 12.4 -> -1.0 dB), so the broadband mean_sq rises only ~2.2x (0.00091 vs 0.00041 over 10 x 0.25 s windows), under the energy gate's 3x floor rule, which is a
+  plausible reason the live receiver never triggered. **The offline decode of this audio also failed: `NOT DECODED: no decodable frame within 30000 ms`** (same harness that decoded the SDR copy).
+- Reading: the transmit and the link are good; the FT-818's received audio is noise-limited (a high steady floor, the local noise source noted for the FT-818 in the manual list) and an unfavourable AGC for this
+  frame, with no FEC (the repo's own rule: "there is no useful uncoded rung"). Not tested: the same A->B with an RS-protected mode, the FT-818 AGC/ATT/IPO settings, a quieter location for the FT-818, or the
+  IC-9700 at higher power (the maintainer chose 1 W; the earlier 5 W A->B run also detected no energy on the FT-818). Not retried.
