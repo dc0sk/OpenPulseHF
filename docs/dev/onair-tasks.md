@@ -1435,3 +1435,59 @@ Live IRS on the FT-818 (rpi53): 1255 chunks, **0 first-energy, 0 rejections, 0 `
 - Reading: the transmit and the link are good; the FT-818's received audio is noise-limited (a high steady floor, the local noise source noted for the FT-818 in the manual list) and an unfavourable AGC for this
   frame, with no FEC (the repo's own rule: "there is no useful uncoded rung"). Not tested: the same A->B with an RS-protected mode, the FT-818 AGC/ATT/IPO settings, a quieter location for the FT-818, or the
   IC-9700 at higher power (the maintainer chose 1 W; the earlier 5 W A->B run also detected no energy on the FT-818). Not retried.
+
+---
+
+## Summary of the 2026-10-26/27 station session (Tasks 1-4), written 2026-10-27 at the maintainer's request
+
+**Bottom line.** B -> A (FT-818 transmits, IC-9700 receives) works at 1 of 4 attempts at a lowered FT-818 drive and not at all at the profile's drive; A -> B (IC-9700 transmits, FT-818 receives) fails
+because the FT-818's receive audio is noise-limited. The IC-9700's transmission and the RF link are good (the RSPdx decodes every frame sent at the lowered drive and the 1 W A->B frame).
+
+### What now works / was fixed
+| Finding | Evidence |
+|---|---|
+| Station readiness: both Pis build at one commit, SSH, packages, SDR (RSPdx stream needs a 480M USB link), routing, CAT, idle levels | Task 2: `onair-station-check.sh --levels` PASS=43 FAIL=0; Task 4 Part A: PASS=46 FAIL=0 |
+| G0 (receive path hears a signal) passes on both stations, judged by prominence | Task 3 Part A |
+| Gate 3 B -> A (rig-audio loudest window >= 5x quiet) met only after the IC-9700 AGC was set to SLOW | 7.9x (was 4.9x); the SDR showed ~S9+55 dB at the IC-9700 |
+| Gate 5 (carrier of the received BPSK250) | 1503.6 Hz, +3.6 Hz (limit +-50) |
+| Gate 4 (modem receive path chunking, station A) | 200-sample chunks, 40/s, 8000 Hz |
+| Runner bug: `pgrep -f` matched its own ssh command, killed the session (rc 255) before every keyed run | fixed at 6 sites (`[o]penpulse`), reproduced with a harmless `sleep`; **needs adversarial review before merge** |
+| Hamlib FT-818 backend toggles VFO A/B on every `rigctl` client call; VFO B was 7.077 MHz, so the antenna relay swapped front/rear socket (the audible clicks) | `rigctld -vvvvv` logs; maintainer confirmed the 40 m switch; VFO B now = A; runner telemetry off (`TELEMETRY_ENABLE=0`) |
+| **FT-818 drive: at the profile's `B_TX_SINK_VOLUME=0.15` the first ~1 s of every transmission is lost/ramped (preamble gone); at 0.075 it is clean** | tone tests (4/4 at 0.15 lose 0.72 s + 0.34 s ramp; 0.075 none); RSPdx envelope flat 2.64 s of 2.65 s; modem's own envelope is flat |
+
+### Gate 6 results
+| Run | Result |
+|---|---|
+| B -> A, drive 0.15, runs 1-8 (telemetry on/off, VFO fixed, leader, sink awake, attenuator) | all FAIL (preamble correlation 0.18-0.29 < 0.31) |
+| B -> A, drive 0.075, run 12 | FAIL (preamble accepted, `invalid magic`) |
+| B -> A, drive 0.075, dual capture | not a runner run; **IC-9700 audio and RSPdx both decode offline to the exact payload** |
+| B -> A, drive 0.075, with `parecord` beside the receiver | **PASS** (`onair-2026-10-27T135003.json`) |
+| B -> A, drive 0.075, two repeats without parecord | 1 PASS (`...T143955`), 1 FAIL (`...T144154`, receiver saw no energy at all) |
+| A -> B, IC-9700 ~5 W | FAIL (FT-818 never detected energy) |
+| A -> B, IC-9700 ~1 W, with captures | FAIL; RSPdx decodes it, FT-818 audio does not (see below) |
+
+### Ruled out (with the experiment that ruled it out)
+- Wrong binaries / one-sided rebuild: identical sha256 on both Pis, no code change since.
+- IC-9700 front-end overload (10 dB attenuator on: S-meter 56 -> 44, same failure). Note: the first attenuator attempt (`L ATT 12`) was rejected by the rig; only `L ATT 10` took.
+- PTT leader (800 ms): the ramp is unchanged. SCU-17 sink waking from suspend: a running silent stream made no difference. Cold vs warm start: no difference.
+- The modem's own TX envelope: flat (synthetic, 2.652 s, RMS 0.59-0.64, peak 1.0).
+- SQL/RF gain/USB AF level on the IC-9700 (USB AF was already 100 %). More FT-818 power: never needed and not done.
+- The FT-818 antenna: not tuned/needed; the tuner is off on the rear socket.
+
+### Open / unexplained
+1. **B -> A is not reliable at 0.075** (2 of 4 live runs passed; the failures: preamble OK then `invalid magic`, and once no energy detected). The IC-9700's SLOW AGC (6 s) pulls the gain down after strong signals (audio drops to ~0 for ~5 s after a burst); the burst in its audio is small (mean_sq ~0.0004) next to the energy gate (3x floor, 0.0001 minimum). The pass with `parecord` running is unexplained.
+2. **A -> B: the FT-818's audio is noise-limited.** Steady floor mean_sq ~4.1e-4 (S8-S9 QRM; the maintainer cannot identify the noise source and reports QRM at S8 again); the burst is only ~11 dB over it in 1300-1700 Hz, its AGC pumps (other bands -13/-14 dB during the burst, so broadband rises only 2.2x against the gate's 3x), no FEC. It does not decode, live or offline.
+3. Why the FT-818 needs a drive of 0.075 (ALC? codec? rig protection) is not established; `B_TX_SINK_VOLUME` in `docs/config/onair-ic9700-ft818.example.sh` (0.15) is probably wrong for this chain.
+4. The runner logs no sent payload (so "decoded payload equals sent payload" is not checked), records no receiver audio, and its routing check hard-codes the profile's TX volume.
+
+### Rules and records
+No transmission above the FT-818's L1 (0.5 W); FT-818 power and mode never set by the session; IC-9700 never raised (now ~1 W, set by the maintainer). The sink was only ever lowered, restored to 0.15 afterwards each time.
+Code changes on the branch, both to the keyed-path runner and unreviewed: the `pgrep` fix and an optional `ISS_PTT_LEADER_MS` hook (it did not help; remove or keep, maintainer's call). Reports and bundles are under `docs/dev/test-reports/` (captures are gitignored).
+Memory: `ft818-hamlib-vfo-toggle.md`.
+
+### Suggested next steps (for the maintainer / cloud session)
+1. Remote or quieter location for the FT-818 side, or a verified noise source; QRM at S8 limits every A -> B result.
+2. Make 0.075 (or an explicitly measured drive) the FT-818 TX drive in the profile and the routing script's `--verify`; find out why 0.15 loses the first second.
+3. Test A -> B and B -> A with an RS-protected mode; the uncoded rung has no margin on this chain.
+4. Decide the live-receiver question: energy gate vs AGC-compressed audio (IC-9700 SLOW AGC, FT-818 AGC), with the IRS audio recorded by the runner.
+5. Review the two runner edits before they merge.
