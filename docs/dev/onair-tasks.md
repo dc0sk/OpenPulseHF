@@ -1024,3 +1024,90 @@ FT-818 is never sent a power level). The RSPdx stays connected through its atten
 
 _(station session: append here)_
 
+
+**Part A (nothing transmitted). Both Pis fast-forwarded to `407be1c6`. IC-9700 `l AGC` = 3 (SLOW).**
+
+**A1.** `onair-station-check.sh --levels`, rc=0, **Summary: PASS=46 FAIL=0**. Non-PASS lines:
+```
+== control host: DC0SK-RPI51
+== station A: dc0sk@dc0sk-rpi51
+[INFO] host: Debian GNU/Linux 13 (trixie), rigctl Hamlib 4.6.2 2025-02-09T21:03:50Z SHA=870364 64-bit
+[INFO]   mode is set by the runner (PKTUSB); reads 'PKTUSB' now
+== station B: dc0sk@dc0sk-rpi53
+[INFO] host: Debian GNU/Linux 13 (trixie), rigctl Hamlib 4.6.2 2025-02-09T21:03:50Z SHA=870364 64-bit
+== audio routing (scripts/onair-setup-audio-routing.sh --verify)
+==> IC-9700 (dc0sk@dc0sk-rpi51) — verify routing (match='Codec', tx-vol=0.15, rx-vol=0.44)
+    RESULT pass sink=87 src=82 default_sink=87 default_src=82 sink_vol=0.15 src_vol=0.44
+==> FT-818 (dc0sk@dc0sk-rpi53) — verify routing (match='Codec', tx-vol=0.15, rx-vol=0.45)
+    RESULT pass sink=57 src=58 default_sink=57 default_src=58 sink_vol=0.15 src_vol=0.45
+PASS: both stations' default sink+source point at their rig CODEC; TX level set.
+      The runner's --device pulse will now reach the radios. Re-run --verify anytime.
+== idle RX level (scripts/onair-rx-level-check.sh) — nothing may transmit now
+==> RX capture-level check (idle; no TX anywhere). Gate must be able to discriminate.
+  IC-9700: idle mean_sq=0.000077  gate threshold=0.000230  OK
+  FT-818: idle mean_sq=0.000404  gate threshold=0.001213  OK
+PASS: both stations' idle floor leaves the energy gate free to discriminate.
+== MANUAL — not readable over CAT; confirm on the rigs before the session counts
+  [ ] FT-818: FRONT antenna selected at 2 m, L1 (0.5 W), DIG/USER-U, CAT RATE matches the profile
+  [ ] FT-818: away from the local noise source found on 2026-10-26 (S8–S9 floor)
+  [ ] Both rigs: TX time-out timer (TOT) enabled — the A5 backstop
+  [ ] IC-9700: the required settings in onair-signal-chain-verification.md (DATA MOD USB, AF output)
+  [ ] RSPdx: a fixed attenuator or measured isolation against the IC-9700 beside it; its maximum
+      input rating checked in SDRplay's datasheet (UNCHECKED in the repo)
+  [ ] Antennas connected (Diamond RH3 on the FT-818); the agreed window and frequency announced
+Summary: PASS=46 FAIL=0
+```
+**A2 Gate 5 (from the Gate 3 capture, run 4), PASS:**
+```
+burst 7.5s  2fc line 3007.2 Hz  carrier 1503.6 Hz  offset +3.6 Hz
+```
+**A3 Gate 4 (station A, modem receive path, `--device pulse`), PASS on the doc's criteria.** `rc=1` is the expected
+"no decodable frame" (nothing was transmitting):
+```
+Error: receive failed / Caused by: demodulation failed: no decodable frame within 10000 ms
+```
+`opened cpal input stream on 'pulse'`, then `received N accumulated audio samples` lines (first 40 shown; the log's
+chunk lines are the only ones the grep matched besides ALSA noise):
+```
+ALSA lib pcm_dmix.c:973:(snd_pcm_dmix_open) The dmix plugin supports only playback stream
+ALSA lib pcm_dmix.c:973:(snd_pcm_dmix_open) The dmix plugin supports only playback stream
+ALSA lib pcm_dmix.c:973:(snd_pcm_dmix_open) The dmix plugin supports only playback stream
+ALSA lib pcm_dmix.c:973:(snd_pcm_dmix_open) The dmix plugin supports only playback stream
+ALSA lib pcm_dsnoop.c:541:(snd_pcm_dsnoop_open) The dsnoop plugin supports only capture stream
+ALSA lib pcm_dmix.c:973:(snd_pcm_dmix_open) The dmix plugin supports only playback stream
+ALSA lib pcm_dmix.c:973:(snd_pcm_dmix_open) The dmix plugin supports only playback stream
+ALSA lib pcm_dsnoop.c:541:(snd_pcm_dsnoop_open) The dsnoop plugin supports only capture stream
+2026-10-27T09:51:23.945423Z DEBUG opened cpal input stream on 'pulse'
+2026-10-27T09:51:23.965972Z DEBUG received 200 accumulated audio samples
+2026-10-27T09:51:23.996241Z DEBUG received 400 accumulated audio samples
+2026-10-27T09:51:24.016359Z DEBUG received 600 accumulated audio samples
+2026-10-27T09:51:24.036529Z DEBUG received 800 accumulated audio samples
+2026-10-27T09:51:24.076834Z DEBUG received 1000 accumulated audio samples
+2026-10-27T09:51:24.096990Z DEBUG received 1200 accumulated audio samples
+2026-10-27T09:51:24.117124Z DEBUG received 1400 accumulated audio samples
+2026-10-27T09:51:24.147278Z DEBUG received 1600 accumulated audio samples
+2026-10-27T09:51:24.167412Z DEBUG received 1800 accumulated audio samples
+2026-10-27T09:51:24.187554Z DEBUG received 2000 accumulated audio samples
+2026-10-27T09:51:24.227803Z DEBUG received 2200 accumulated audio samples
+2026-10-27T09:51:24.247942Z DEBUG received 2400 accumulated audio samples
+2026-10-27T09:51:24.268079Z DEBUG received 2600 accumulated audio samples
+2026-10-27T09:51:24.298313Z DEBUG received 2800 accumulated audio samples
+2026-10-27T09:51:24.318435Z DEBUG received 3000 accumulated audio samples
+2026-10-27T09:51:24.338585Z DEBUG received 3200 accumulated audio samples
+2026-10-27T09:51:24.378858Z DEBUG received 3400 accumulated audio samples
+2026-10-27T09:51:24.399025Z DEBUG received 3600 accumulated audio samples
+2026-10-27T09:51:24.419195Z DEBUG received 3800 accumulated audio samples
+2026-10-27T09:51:24.449412Z DEBUG received 4000 accumulated audio samples
+2026-10-27T09:51:24.469562Z DEBUG received 4200 accumulated audio samples
+2026-10-27T09:51:24.489732Z DEBUG received 4400 accumulated audio samples
+2026-10-27T09:51:24.530058Z DEBUG received 4600 accumulated audio samples
+2026-10-27T09:51:24.550233Z DEBUG received 4800 accumulated audio samples
+2026-10-27T09:51:24.570405Z DEBUG received 5000 accumulated audio samples
+2026-10-27T09:51:24.590599Z DEBUG received 5200 accumulated audio samples
+2026-10-27T09:51:24.620886Z DEBUG received 5400 accumulated audio samples
+2026-10-27T09:51:24.641548Z DEBUG received 5600 accumulated audio samples
+2026-10-27T09:51:24.681958Z DEBUG received 5800 accumulated audio samples
+2026-10-27T09:51:24.702364Z DEBUG received 6000 accumulated audio samples
+2026-10-27T09:51:24.722569Z DEBUG received 6200 accumulated audio samples
+```
+Derived from all 400 chunk lines: chunk 200 samples (<= 2048), 40 chunks/s (>= 4), 8000 Hz over 9.98 s.
