@@ -1430,7 +1430,7 @@ run_matrix() {
 
         if [[ "$REVERSE" == "1" ]]; then
             # 1) Start IRS receiver on Station A.
-            ssh_a "pids=\$(pgrep -f '${ar}/target/release/openpulse .*receive' || true); \
+            ssh_a "pids=\$(pgrep -f '${ar}/target/release/[o]penpulse .*receive' || true); \
                 for pid in \$pids; do \
                     [[ \"\$pid\" != \"\$\$\" ]] && kill \"\$pid\" 2>/dev/null || true; \
                 done; \
@@ -1448,7 +1448,7 @@ run_matrix() {
             sleep "${IRS_STARTUP_WAIT}"
 
             local irs_alive
-            irs_alive="$(ssh_a "pgrep -f '${ar}/target/release/openpulse .*receive' >/dev/null && echo yes || echo no" || echo no)"
+            irs_alive="$(ssh_a "pgrep -f '${ar}/target/release/[o]penpulse .*receive' >/dev/null && echo yes || echo no" || echo no)"
             if [[ "$irs_alive" != "yes" ]]; then
                 local irs_boot_log
                 irs_boot_log="$(ssh_a "tail -n 80 '${a_irs_log}' 2>/dev/null || true" || true)"
@@ -1512,7 +1512,7 @@ run_matrix() {
                 || iss_exit=$?
 
             sleep "${KILL_WAIT}"
-            ssh_a "pids=\$(pgrep -f '${ar}/target/release/openpulse .*receive' || true); \
+            ssh_a "pids=\$(pgrep -f '${ar}/target/release/[o]penpulse .*receive' || true); \
                 for pid in \$pids; do \
                     [[ \"\$pid\" != \"\$\$\" ]] && kill \"\$pid\" 2>/dev/null || true; \
                 done"
@@ -1538,7 +1538,7 @@ run_matrix() {
             fi
         else
             # 1) Start IRS receiver on Station B.
-            ssh_b "pids=\$(pgrep -f '${br}/target/release/openpulse .*receive' || true); \
+            ssh_b "pids=\$(pgrep -f '${br}/target/release/[o]penpulse .*receive' || true); \
                 for pid in \$pids; do \
                     [[ \"\$pid\" != \"\$\$\" ]] && kill \"\$pid\" 2>/dev/null || true; \
                 done; \
@@ -1556,7 +1556,7 @@ run_matrix() {
             sleep "${IRS_STARTUP_WAIT}"
 
             local irs_alive
-            irs_alive="$(ssh_b "pgrep -f '${br}/target/release/openpulse .*receive' >/dev/null && echo yes || echo no" || echo no)"
+            irs_alive="$(ssh_b "pgrep -f '${br}/target/release/[o]penpulse .*receive' >/dev/null && echo yes || echo no" || echo no)"
             if [[ "$irs_alive" != "yes" ]]; then
                 local irs_boot_log
                 irs_boot_log="$(ssh_b "tail -n 80 '${b_irs_log}' 2>/dev/null || true" || true)"
@@ -1585,7 +1585,7 @@ run_matrix() {
                 || iss_exit=$?
 
             sleep "${KILL_WAIT}"
-            ssh_b "pids=\$(pgrep -f '${br}/target/release/openpulse .*receive' || true); \
+            ssh_b "pids=\$(pgrep -f '${br}/target/release/[o]penpulse .*receive' || true); \
                 for pid in \$pids; do \
                     [[ \"\$pid\" != \"\$\$\" ]] && kill \"\$pid\" 2>/dev/null || true; \
                 done"

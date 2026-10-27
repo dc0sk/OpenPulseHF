@@ -1,0 +1,118 @@
+# Example OpenPulse runtime config.
+# Typical location: ~/.config/openpulse/config.toml
+
+[station]
+callsign = "DC0SK"
+grid_square = "AA00"
+
+[audio]
+backend = "default"
+tx_limiter_threshold = 0.0
+
+[modem]
+mode = "BPSK250"
+ptt_backend = "none"
+
+[radio]
+rigctld_addr = "127.0.0.1:4532"
+
+[radio.rig_a]
+rigctld_addr = "127.0.0.1:4532"
+backend = "rigctld"
+serial_port = ""
+rig_file = ""
+
+# Uncomment for cross-band repeater operation. rigctld_addr must differ from [radio]
+# rigctld_addr above: rig_b is a SECOND transmitter, and pointing both at one rigctld
+# makes each side key and release the other's PTT. The daemon refuses to start on that
+# collision when repeater.enabled = true (#1260) — and note that leaving the address
+# line commented out while uncommenting the header produces exactly that collision,
+# since the default is the main rig's address.
+# [radio.rig_b]
+# rigctld_addr = "127.0.0.1:4533"
+# backend = "rigctld"
+# serial_port = ""
+# rig_file = ""
+
+[repeater]
+# `true` starts the repeater at daemon startup; the runtime enable/disable commands are a
+# switch on top of it, not a second thing you must also do.
+enabled = false
+mode = "BPSK250"
+tx_hang_ms = 500
+# rig_b's sound card. Empty = OS default, which on a two-card station is probably the main
+# rig. Must not equal [audio] device (#1007: one card, one capture stream).
+tx_device = ""
+# Carrier-sense rig_b's band before keying it (#1325). Default true.
+carrier_sense = true
+# true = hold PTT ACROSS relayed frames rather than dropping it between them. The key is
+# taken on the first frame, extended by each subsequent one, and released after 180 s of
+# silence — not held from session start (#1260).
+full_duplex = false
+
+[ardop]
+bind_addr = "127.0.0.1"
+cmd_port = 8515
+data_port = 8516
+
+[kiss]
+bind_addr = "127.0.0.1"
+port = 8100
+
+[logging]
+level = "info"
+# Optional persistent log file (REQ-OBS-02): logs are also appended to a daily-rolled
+# file (<path>.YYYY-MM-DD) in addition to stdout. `~` is expanded. Read by openpulse-daemon.
+# RUST_LOG still overrides `level`.
+# file = "~/.local/share/openpulse/openpulse.log"
+
+[observability]
+# Audit mode (REQ-OBS-01): when enabled, openpulse-daemon records its control-event stream
+# to <archive_dir>/events.ndjson for later analysis. Off by default. `~` is expanded.
+audit_mode = false
+archive_dir = "~/.local/share/openpulse/audit"
+
+[control_security]
+# Control-channel PSK auth + encryption (REQ-CTL-01/02). Auth is ALWAYS required on a
+# non-loopback daemon bind; `require_auth` forces it on loopback too. When auth is required the
+# daemon refuses to start without a PSK (fail closed). The 32-byte PSK is currently supplied via the
+# OPENPULSE_CONTROL_PSK env var (64 hex chars). `psk_key_id` below is INERT today (#1234):
+# nothing reads it; the daemon warns at startup if you set it to a non-default value.
+require_auth = false
+psk_key_id = "control-psk"
+
+[relay]
+enabled = false
+max_hops = 3
+store_forward_ttl_s = 300
+deny_list = []
+
+[trust]
+store_path = ""
+
+[mesh]
+enabled = false
+max_hops = 3
+relay_policy = "balanced"
+store_forward_ttl_s = 300
+beacon_interval_s = 60
+peer_cache_capacity = 256
+peer_cache_ttl_s = 3600
+
+[qsy]
+enabled = false
+allow_trustlevels = ["verified", "psk_verified"]
+bandplan_mode = "ham-iaru-r1"
+bandplan_awareness_enabled = true
+enforce_max_channel_width = true
+enforce_segment_conventions = true
+candidate_freqs_hz = [7074000, 7076000, 7104000]
+scan_dwell_ms = 500
+switchover_offset_s = 5
+
+[daemon]
+tcp_bind_addr = "127.0.0.1"
+tcp_port = 9000
+websocket_bind_addr = "127.0.0.1"
+websocket_port = 9001
+receive_tick_ms = 50

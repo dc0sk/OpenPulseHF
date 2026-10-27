@@ -1133,3 +1133,87 @@ no rigctld on B, none on A. The IRS receiver the runner started on A (`/tmp/open
 Cause of the rc=255 not established: the runner died between starting the IRS on A and the ISS ssh to B (script is
 `set -euo pipefail`; an unguarded command in the --reverse block, e.g. around the telemetry or the ISS ssh, is
 the suspect, unproven). Per the task, not retried. **A -> B (step 2) not run.**
+
+#### Gate 6 B -> A, retry (maintainer: "try to find the reason and retry") — runner bug found and fixed; transmitted; **decode FAILED**
+
+**Reason for the rc=255 (found, reproduced, fixed).** `bash -x` trace: the script dies at line 1446, the `ssh_a` that
+launches the IRS receiver. That ssh returned **255**: its remote command starts with
+`pgrep -f '<repo>/target/release/openpulse .*receive'`, and `pgrep -f` also matches the remote `bash -c` command
+line (which contains that very text) and its `$(...)` subshell; the kill loop excludes only the remote shell's own
+`$$`, so it kills another process of the ssh session and ssh exits 255; `set -e` then aborts the runner. Reproduced
+with a harmless `nohup sleep` in place of the modem: `ssh rc=255`; with the pattern written `[o]penpulse` the same
+probe gave `rc=0` on both Pis. The same self-match made the later "IRS alive?" check (`pgrep -f ... && echo yes`)
+always report `yes` (it matched itself). Fix: `release/openpulse .*receive` -> `release/[o]penpulse .*receive` at all 6
+sites (both directions, the twins at lines 1433, 1451, 1515, 1541, 1559, 1588); `bash -n` ok. It does not touch PTT,
+power, mode or what is transmitted, but it IS an edit to the keyed-path runner and has not had the adversarial review
+the repo asks for: please review before merging. The first, failed run (`onair-2026-10-27T095245`) never keyed.
+
+**The retry** (maintainer's go, FT-818 L1, one 64-byte BPSK250 frame, no FEC): the runner completed, the FT-818 keyed:
+`Transmitted 64 bytes in BPSK250 mode (fec=None).`, telemetry `ptt_on=2`, IRS S-meter max 56 (dB re S9). Result in
+`docs/dev/test-reports/onair-2026-10-27T102028.json`: `"result":"fail","fail_reason":"IRS: payload not observed in
+receiver output"`, `0/1 passed`. PTT 0 on A after; no rigctld or openpulse left on either Pi. Runner's own summary and
+IRS log (head/tail) are above in this entry's raw output below.
+```
+==> On-air test matrix (tier=quick, 1 cases)
+    ISS: FT-818 on dc0sk@dc0sk-rpi53   callsign=DC0SK
+    IRS: IC-9700 on dc0sk@dc0sk-rpi51   callsign=DC0SK
+    Freq: 144640000 Hz (A:PKTUSB, B:keep) (2m enforced)
+    Report: docs/dev/test-reports/onair-2026-10-27T102028.json
+  [BPSK250                fec=none               payload=  64B] ... FAIL (IRS: payload not observed in receiver output)
+    IRS log head:
+    IRS log tail:
+      2026-10-27T10:21:26.668255Z DEBUG AFC: raw_estimate=0.0Hz correction=4.2Hz total_offset=4.2Hz
+      2026-10-27T10:21:26.668258Z DEBUG AFC full-retry: pos=127232 correction=4.2Hz
+      2026-10-27T10:21:26.671309Z  INFO received 75715 audio samples
+      2026-10-27T10:21:26.681482Z DEBUG demodulated 287 bytes
+      2026-10-27T10:21:26.687313Z DEBUG AFC: raw_estimate=-0.2Hz correction=4.2Hz total_offset=3.9Hz
+      2026-10-27T10:21:26.687324Z DEBUG AFC full-retry: pos=127232 FAILED: frame encoding/decoding error: invalid magic
+      2026-10-27T10:21:26.690591Z DEBUG AFC: raw_estimate=4.0Hz correction=4.0Hz total_offset=7.9Hz
+      2026-10-27T10:21:26.693865Z DEBUG AFC: raw_estimate=-0.1Hz correction=3.9Hz total_offset=3.7Hz
+      2026-10-27T10:21:26.697168Z DEBUG AFC: raw_estimate=-0.0Hz correction=3.9Hz total_offset=3.8Hz
+      2026-10-27T10:21:26.700458Z DEBUG AFC: raw_estimate=-0.0Hz correction=3.8Hz total_offset=3.8Hz
+      2026-10-27T10:21:26.703728Z DEBUG AFC: raw_estimate=-0.0Hz correction=3.8Hz total_offset=3.8Hz
+      2026-10-27T10:21:26.707005Z DEBUG AFC: raw_estimate=-0.0Hz correction=3.8Hz total_offset=3.8Hz
+      2026-10-27T10:21:26.707014Z DEBUG AFC full-retry: pos=127264 correction=3.8Hz
+      2026-10-27T10:21:26.710167Z  INFO received 75715 audio samples
+      2026-10-27T10:21:26.720363Z DEBUG demodulated 287 bytes
+      2026-10-27T10:21:26.726165Z DEBUG AFC: raw_estimate=0.0Hz correction=3.8Hz total_offset=3.9Hz
+      2026-10-27T10:21:26.726176Z DEBUG AFC full-retry: pos=127264 FAILED: frame encoding/decoding error: invalid magic
+      2026-10-27T10:21:26.729474Z DEBUG AFC: raw_estimate=4.1Hz correction=4.1Hz total_offset=8.3Hz
+      2026-10-27T10:21:26.732737Z DEBUG AFC: raw_estimate=-0.1Hz correction=4.1Hz total_offset=4.0Hz
+      2026-10-27T10:21:26.736007Z DEBUG AFC: raw_estimate=-0.0Hz correction=4.1Hz total_offset=4.0Hz
+      2026-10-27T10:21:26.739289Z DEBUG AFC: raw_estimate=-0.0Hz correction=4.1Hz total_offset=4.1Hz
+      2026-10-27T10:21:26.742549Z DEBUG AFC: raw_estimate=-0.0Hz correction=4.1Hz total_offset=4.1Hz
+      2026-10-27T10:21:26.745811Z DEBUG AFC: raw_estimate=-0.0Hz correction=4.1Hz total_offset=4.1Hz
+      2026-10-27T10:21:26.745815Z DEBUG AFC full-retry: pos=127296 correction=4.1Hz
+      2026-10-27T10:21:26.749008Z  INFO received 75715 audio samples
+    telemetry: ISS(ptt_on=2, pcm=na, mixer="  Playback channels: Front Left - Front Right", alc>0=0, rfm>0=0) IRS(str_max=56)
+==> Results: 0/1 passed, 1 failed.
+    Report: docs/dev/test-reports/onair-2026-10-27T102028.json
+Evidence bundle created: docs/dev/test-reports/on-air/bundle-2026-10-27T102310Z-ic9700-ft991a-quick
+- metadata: docs/dev/test-reports/on-air/bundle-2026-10-27T102310Z-ic9700-ft991a-quick/metadata.json
+- report: docs/dev/test-reports/on-air/bundle-2026-10-27T102310Z-ic9700-ft991a-quick/onair-2026-10-27T102028.json
+- config snapshot: docs/dev/test-reports/on-air/bundle-2026-10-27T102310Z-ic9700-ft991a-quick/config.toml.snapshot
+==> Cleanup
+  [IC-9700] power: left as is (reading '0.0470588', requested 0.0470588; this script only lowers power)
+  [FT-818] power: left as is (reading '10', requested 10; this script only lowers power)
+  [IC-9700 rigctld] stopping on A
+  [FT-818 rigctld] stopping on B
+  done
+```
+Diagnosis of the IRS log (`/tmp/openpulse-irs-BPSK250-none.log` on rpi51, 317 `invalid magic` lines):
+- Energy was detected, but the preamble gate rejected it: `settle at onset=126080 rejected: preamble correlation
+  rho=0.209 < 0.31 ... energy without a preamble`; further onsets rho 0.285, 0.285, 0.286 (just under 0.31); then the AFC
+  full-retry decodes "287 bytes" that fail `frame encoding/decoding error: invalid magic`. AFC correction about 4 Hz.
+- NOT a one-sided rebuild (CLAUDE.md's usual suspect for "invalid magic"): `target/release/openpulse` has the identical
+  sha256 prefix `52ce8717b53ffb5b` and mtime (2026-10-26 18:12) on both Pis, and `git diff 32aeb276 HEAD -- crates plugins
+  Cargo.toml Cargo.lock` is empty.
+- The ISS side's ALC and RF-meter telemetry read 0 (`alc>0=0, rfm>0=0`, `pcm=na`): the meters are not informative.
+- Differences from the Gate 3 capture that WAS strong (7.9x): FEC none vs RS, 64 B vs 11 B (longer, no coding gain),
+  and the runner's route (IRS through `--device pulse` at src vol 0.44).
+- Hypothesis, unproven: the IC-9700 sees S9+55 dB; its front end/audio may be compressing or distorting a signal that
+  strong, lowering the preamble correlation just under the 0.31 threshold. An FT-818 -> IC-9700 attenuator or the
+  IC-9700's attenuator (`ATT`) would test it; I changed nothing. Not tested: decoding the Gate 3 capture offline through
+  the same receive path, and the rho values on a repeat.
+Not retried (task rule). **A -> B (step 2) not run.** Committed with this entry: the runner fix, the JSON report,
+the rig-state files and the evidence bundle `docs/dev/test-reports/on-air/bundle-2026-10-27T102310Z-ic9700-ft991a-quick`.
