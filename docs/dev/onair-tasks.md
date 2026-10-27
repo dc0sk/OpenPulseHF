@@ -628,3 +628,19 @@ then rerun step 3. Cause of the first `Init() failed` not established.
 strong content outside 300–2600 Hz on the IC-9700 capture; not examined.
 
 
+
+#### Task 3 retry after `sudo systemctl restart sdrplay` (maintainer, 2026-10-27) — still blocked
+
+`SoapySDRUtil --find="driver=sdrplay"` lists the RSPdx again, but `sdr_capture.py 144640000 250000 20 12 40`
+fails the same way (no capture file written):
+```
+[INFO] Using format CF32.
+[ERROR] error in activateStream() - Init() failed: sdrplay_api_Fail
+```
+The G0 run made alongside it (floor -42.9 dBFS, PASS) is again not a streaming reading. `journalctl -u sdrplay`
+for the attempt: `SelectDevice: ERROR: InitialiseMappingTableFromFile error -1: invalid filename`, then the
+stream thread starts and exits when the script is stopped. `lsusb -t` shows the RSPdx (Dev 025, `1df7:3030`)
+on bus 002 behind a hub, `Driver=[none]`, at **12M (full speed)**; the RSPdx needs USB 2.0 high speed
+(480M), so the likely cause is the link speed (cable, hub port or the shared hub with the IC-9700 CODEC on
+bus 001/004 aside). Not proven: I did not change the port. Suggest replugging the RSPdx directly into a
+different rpi51 port with a short high-quality cable, check `lsusb -t` shows 480M, then rerun step 3.
