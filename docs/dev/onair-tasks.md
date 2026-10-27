@@ -716,3 +716,65 @@ check `openpulse --backend cpal devices` on rpi53 for the name the modem sees (e
 the device.
 Captures (gitignored, not committed), in `docs/dev/test-reports/on-air/captures/`:
 `gate3-b2a-bpsk250.cf32` 46080000 B, `gate3-b2a-bpsk250-rig48k.wav` 5373996 B, `gate3-b2a-bpsk250-tx.log` 2793 B.
+
+#### Task 3 Gate 3 rerun (2026-10-27) after `libasound2-plugins` on rpi53 — transmitted; criterion NOT met (4.9x < 5x)
+
+rpi53 `devices` now lists `pipewire`, `pulse`, `default`; routing set, both RESULT pass (TX 0.15, RX 0.44 / 0.45).
+Maintainer gave a fresh **go** (FT-818 at L1, RH3, 144.640 MHz, one BPSK250 frame + 0.4 s SWR check).
+rigctld before keying (f, m, t, passband): `144640000 / PKTUSB / 0 / 0`.
+```
+==> Preflight
+    TX dc0sk@dc0sk-rpi53 on 144640000 Hz, PTT released
+    SDR RSPdx, Antenna A, centre 144640000 Hz, fs 192000, RFGR 12 IFGR 40
+==> Antenna check: brief keyed SWR reading
+    SWR = 1 (limit 3.0)
+==> Starting SDR capture (30s)
+==> Starting rig USB-audio capture on dc0sk@dc0sk-rpi51 (30s)
+==> Transmitting: mode=BPSK250 fec=rs payload='DC0SK GATE3'
+    Transmitted 11 bytes in BPSK250 mode (fec=Rs).
+    PTT after TX: 0
+==> Waiting for captures to finish
+==> Results
+    SDR IQ : /home/dc0sk/git/OpenPulseHF/docs/dev/test-reports/on-air/captures/gate3-b2a-bpsk250.cf32 (46080000 bytes)
+             cfg: f=144.6400MHz RFGR=12 IFGR=40 ant=Antenna A RFGR range 0, 27
+             captured 30.00s peak=0.2654 rms=0.0450 clip=0.00% OK
+    rig aud: /home/dc0sk/git/OpenPulseHF/docs/dev/test-reports/on-air/captures/gate3-b2a-bpsk250-rig48k.wav (28.0s @ 48000Hz)  mean_sq=0.000189  peak=0.043
+Both captures succeeded. To turn them into corpus entries:
+  1. Prepare the rig audio for the corpus (48k stereo -> 8k mono, anti-aliased).
+     This capture is ALREADY on disk, so decimate it in place — do NOT call
+     onair-record-capture.sh, which always records a NEW live capture (passing it 0
+     seconds records nothing at all):
+       python3 - '/home/dc0sk/git/OpenPulseHF/docs/dev/test-reports/on-air/captures/gate3-b2a-bpsk250-rig48k.wav' crates/openpulse-modem/tests/captures/<rig>-gate3-b2a-bpsk250.wav <<'EOP'
+       import sys, wave, struct, numpy as np
+       from scipy.signal import resample_poly
+       src, dst = sys.argv[1], sys.argv[2]
+       w = wave.open(src, "rb"); n, ch, fs = w.getnframes(), w.getnchannels(), w.getframerate()
+       x = np.frombuffer(w.readframes(n), dtype="<i2").astype(np.float64)[0::ch] / 32768.0; w.close()
+       y = resample_poly(x, 1, fs // 8000)
+       o = wave.open(dst, "wb"); o.setnchannels(1); o.setsampwidth(2); o.setframerate(8000)
+       o.writeframes(struct.pack("<%dh" % len(y), *np.clip(y*32768, -32768, 32767).astype(int))); o.close()
+       EOP
+  2. Add a row to crates/openpulse-modem/tests/captures/README.md recording PROVENANCE
+     (rig, frequency, mode, FEC, payload, level settings, date) and the property the file
+     is meant to preserve. A capture with no recorded expectation cannot be asserted against.
+  3. The payload transmitted was: 'DC0SK GATE3'
+     A rig capture WITH a known payload is the corpus's missing piece: it is the only thing
+     that can assert an end-to-end DECODE against real audio.
+```
+PTT after: `0`; rigctld on rpi53 stopped (`rigctld stopped`).
+
+Gate 3 criterion (loudest 250 ms window >= 5x the quiet level, rig capture):
+```
+windows=111 idle(median)=0.000104 peak=0.000511 ratio=4.9 loud_windows=0
+```
+**Result:** the frame WAS transmitted (`Transmitted 11 bytes in BPSK250 mode (fec=Rs)`), and the RSPdx saw it
+(peak 0.2654, rms 0.0450, against peak 0.0076, rms 0.0015 in the no-TX run: ~35x in rms-amplitude terms).
+The IC-9700's audio capture did not meet the criterion: ratio **4.9** (< 5.0), `loud_windows=0`
+(peak 0.000511 vs median 0.000104). Whole-capture mean_sq rose 0.000106 -> 0.000189 and peak stayed 0.043,
+so the IC-9700 audio barely carries the signal. Gate 3 as written: **not met** (marginally). Not examined:
+the IC-9700 receive level / AF output / squelch (the manual list's IC-9700 settings), signal level at the
+IC-9700 (SDR shows a strong signal, so the antenna path is fine), and the 250 ms window vs a ~1 s BPSK250
+frame. Decode of the capture not attempted (outside the task).
+Captures (gitignored, not committed), `docs/dev/test-reports/on-air/captures/`: `gate3-b2a-bpsk250.cf32`
+46080000 B, `gate3-b2a-bpsk250-rig48k.wav` 5373996 B, `gate3-b2a-bpsk250-tx.log` 4168 B,
+`gate3-b2a-bpsk250.cf32.log` 990 B.
