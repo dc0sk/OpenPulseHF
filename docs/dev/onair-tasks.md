@@ -842,3 +842,20 @@ IC-9700 S-meter (`l RAWSTR`/`l STRENGTH`) read DURING a transmit would show the 
 itself: 5x peak-window over the whole-capture median measures a ~8 s burst in a 28 s capture and a flat-AGC
 receiver; whether it is the right test for this chain is for the cloud session. Not changed: FT-818 power.
 Captures overwritten in place (gitignored, not committed): same three paths as run 2.
+
+#### IC-9700 settings and RF level, read-only (maintainer asked, 2026-10-27)
+
+CAT reads (nothing set): mode PKTUSB (width unreadable, hamlib 0; the idle capture's -20 dB band was 152-2818 Hz,
+so 1500 Hz is inside it), AGC 2 (hamlib enum: FAST), AGC_TIME 0.3, NR func off (level 0.031 unused), NB off,
+ANF off, MN off, COMP off, preamp 0, att 0, RF 1, SQL 0, AF 0.0039, PBT_IN/OUT 0.502 (centred), RIT off, dual
+watch off, sat mode off, OVF_STATUS 0 (no overload), STRENGTH -51, RAWSTR 1.
+RF level at the RSPdx, from `gate3-b2a-bpsk250.cf32` (run 3), 0.5 s windows, 500-2500 Hz offset vs a 6-8 kHz
+reference band: noise windows differ by 0.1-1 dB; the burst (about t=9..18 s) sits **41 dB above the quiet
+in-band level, 47-52 dB above the reference band** (reference band also rises with the burst, so the true SNR
+is at least ~40 dB). So the RF signal is very strong; the IC-9700 audio shows only ~5.3 dB burst-over-noise.
+Reading: with a ~40-50 dB RF signal the receiver's FAST AGC holds the audio near a fixed output level, so the
+CODEC audio burst-over-idle ratio is set by the AGC target against the idle noise (AGC at full gain, S3-level
+band noise), not by the signal strength; more TX power, SQL or RF gain cannot move it. Nothing misconfigured
+was found. Options (maintainer/cloud decision, not applied): AGC to SLOW or OFF on the IC-9700 (changes the
+level behaviour; with AGC off a 40-50 dB signal may clip the CODEC, use RF gain/att to bring it down), or
+treat the 5x criterion as not applicable to an AGC-levelled chain and judge Gate 3 by decode of the capture.
