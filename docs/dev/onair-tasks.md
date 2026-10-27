@@ -778,3 +778,31 @@ frame. Decode of the capture not attempted (outside the task).
 Captures (gitignored, not committed), `docs/dev/test-reports/on-air/captures/`: `gate3-b2a-bpsk250.cf32`
 46080000 B, `gate3-b2a-bpsk250-rig48k.wav` 5373996 B, `gate3-b2a-bpsk250-tx.log` 4168 B,
 `gate3-b2a-bpsk250.cf32.log` 990 B.
+
+#### IC-9700 receive-settings check after the Gate 3 rerun (read-only; maintainer asked, 2026-10-27)
+
+Direct `rigctl -m 3081 -r $A_CAT_PORT -s 115200` reads (no rigctld running, nothing set, `t` = 0):
+```
+f 144640000 | m PKTUSB 0 | l AF 0.00784314 | l SQL 0.203922 | l RF 1 | l STRENGTH -54 | l NB 0
+l NR 0.0313726 | l PREAMP 0 | l ATT 0 | l AGC 2 | l RFPOWER 0.0470588 | l MICGAIN 0.74902 | l RAWSTR 0
+```
+`NOTCHF`, `IF` are not hamlib levels on this backend. Per-250 ms mean_sq of the rig capture (L channel; R is
+silent), x1e-3: windows 0-39 and 72-111 are 0.08-0.12 (noise); **windows 40-71 (8 s) are 0.20-0.51, mean about
+0.40**, i.e. the burst is there, consistently ~4x the noise, which is why `peak/median` is 4.9 and
+`> 5*median` counts none. Spectrum of the capture: 1000-2000 Hz holds 80 dB against 64 dB at 300-1000 Hz and
+63 dB at 2-3 kHz; above 3 kHz 15-18 dB. So the signal is in the passband where BPSK250 at 1500 Hz belongs.
+Findings:
+- Signal level at the CODEC is low: burst mean_sq ~0.0004; `onair-signal-chain-verification.md` (Gate 4) wants
+  a peak mean_sq >= 0.005 for the energy gate, ~10x more. The chain is aligned, the level is not.
+- AF reads 0.0078 (2/255): the AF knob is at the bottom. On the IC-9700 the USB audio level is the menu
+  item USB AF Level (MENU > SET > Connectors), whether the AF knob also scales the USB output is not verified
+  here. Both are front-panel checks (UNCHECKED: the menu values are not readable over CAT).
+- SQL reads 0.204; the doc wants minimum (off). The idle floor is nonzero, so squelch is not gating the audio
+  fully, but fix it anyway.
+- NR level 0.031 (noise reduction possibly on) and AGC 2: the doc does not specify them; left as found.
+- Mode PKTUSB, RF 1, preamp/attenuator 0: as expected. IC-9700 RF power 0.047 (~5 W, tx only, irrelevant here).
+FT-818 power: not touched and not needed. The RSPdx measured a strong signal; the shortfall is the IC-9700
+audio output level, which more TX power would not fix. The station rules in this file keep the FT-818's power
+from ever being increased; I did not do or recommend that.
+Suggested next steps for the maintainer (front panel): SQL fully CCW; raise USB AF Level (and AF if it scales
+USB) in steps, re-record an idle capture and a transmit, aim for burst mean_sq ~0.005 without clipping.
