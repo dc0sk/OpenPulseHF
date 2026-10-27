@@ -1491,3 +1491,52 @@ Memory: `ft818-hamlib-vfo-toggle.md`.
 3. Test A -> B and B -> A with an RS-protected mode; the uncoded rung has no margin on this chain.
 4. Decide the live-receiver question: energy gate vs AGC-compressed audio (IC-9700 SLOW AGC, FT-818 AGC), with the IRS audio recorded by the runner.
 5. Review the two runner edits before they merge.
+
+## Addendum 2026-10-27 (evening): remote station "landline" (FT-991A, dd2zm@192.168.121.211) — requirements check and 2 m antenna check
+
+Context: the maintainer offered a remote station (FT-991A on a Pi, reachable over WireGuard) as a quieter IRS than the FT-818. Constraints given: the Pi runs from an SD card (limit wear and space), build locally and transfer binaries over ssh, 5 W maximum TX power.
+Host key: ED25519 `SHA256:XXXsw+2H5VTCgFedzbXCP/sWU4Tf+YVgAaf3gEm967A`, confirmed by the maintainer and pinned in rpi51's `known_hosts`. The host was unreachable for a few minutes at first (ping 100 % loss), then came back without any change on our side.
+
+### Requirements check (read-only)
+| Requirement | State |
+|---|---|
+| Platform | OK. aarch64, Debian 13, glibc 2.41, same as rpi51: the locally built release binaries run unchanged |
+| Disk | OK. `/` is the SD card (mmcblk0p2): 44 GB free of 58 GB (22 % used). `/tmp` is tmpfs, so scratch writes cost no wear. 7.8 GB RAM, 2 GB swap |
+| Tools | OK: rigctld/rigctl (Hamlib 4.6.2), wpctl, arecord/aplay, python3, ffmpeg, ALSA device `pulse`. Missing: `pactl` (runner telemetry only), `scipy` (G0 analyser only), `jq`, `cargo` (not needed, we build locally) |
+| Audio | OK. PipeWire/WirePlumber active; PCM2903B Audio CODEC is default sink (vol 0.15) and source (vol 1.00), as in the profile |
+| CAT/PTT | OK. CP2105 serial 008924A1: CAT `-if00-port0` (ttyUSB0), PTT `-if01-port0` (ttyUSB1), both match `docs/config/onair-ic9700-ft991a.example.sh`. Hamlib 1035 at 38400 answers |
+| Layout | OK. `~/openpulse/OpenPulseHF/{scripts,target/release}` exists (scripts empty) |
+| Binaries | STALE. `openpulse` and `openpulse-tnc` are dated 2026-07-30; they must be replaced before any on-air run (`openpulse-server` is absent; local build is current, no crate change since 2026-10-26) |
+| Other use | The host also runs Landline (Firefox session, VNC on 5900, ~/git/landline, ~/landline-hil). Not touched |
+
+### FT-991A state
+It was OFF (CAT standby, `PS0`); every read was refused ("Rig is not powered on"). Powered on with `set_powerstat 1` by the maintainer's permission. Found: VFO A 438.8876 MHz in a mode Hamlib cannot read (`m` returns Protocol error, probably C4FM), VFO B 145.787 MHz, RFPOWER 0.05 (5 W), AGC 2, no split, PTT 0. Left on VFO A 144.640064 MHz PKTUSB 3000 (the profile's 64 Hz trim is already included), RFPOWER 0.05. Previous VFO A (438.8876 MHz, mode unknown) was not restored.
+
+### 2 m antenna check
+Read-only first: the S-meter on 144.640 MHz reads a flat -54 dB (S0), six samples; not conclusive either way.
+Then a short unmodulated FM carrier (the script `RFPOWER` check aborts unless it reads 0.05; PTT is released by a trap on every exit path), PTT via CAT, once with a too-short monitor, once properly timed. The IC-9700 on rpi51 (144.640 MHz FM, no rigctld, direct `rigctl -m 3081`) logged STRENGTH twice a second, clocks of both hosts agree within 4 ms.
+
+Run 2 (the valid one), remote side, raw:
+```
+RFPOWER before: 0.05
+f=144640064 m=FM 16000
+RFPOWER after mode change: 0.05
+18:42:08.507 PTT on
+18:42:09.066 PTT on returned
+18:42:09.070 PTT/SWR/PO/ALC: 1 1 0.053 1
+18:42:09.581 PTT/SWR/PO/ALC: 1 1 0.053 1
+18:42:10.093 PTT/SWR/PO/ALC: 1 1 0.053 1
+18:42:11.209 PTT off returned
+mode restored: PKTUSB 3000
+```
+IC-9700 (rpi51), same window: 18:42:03 to 18:42:52, 96 samples of STRENGTH between -41 and -26 dB re S9, mean about -32. No rise during 18:42:08.5-11.2 (samples then: -38 -36 -32 -34 -32 -35 -28). Run 1 (7 s monitor, probably before the carrier): same noise, same remote readings (PO 0.053, SWR 1, ALC 1).
+
+**Result: the 2 m antenna check FAILED.** The FT-991A delivers ~5.3 W with SWR 1 (the Hamlib figure on the FT-991A's meter scale), but nothing is received on the IC-9700, where a 5 W carrier from about 10 km should be far above the -32 dB noise. Most likely the V/UHF connector feeds a dummy load or an antenna path that is not the 2 m antenna (coax switch, HF-only antenna); a broken antenna would show a high SWR rather than 1. This is an inference: the cabling was not seen, and the IC-9700 antenna being the weak side is not excluded, but the IC-9700 received the FT-818 and earlier transmissions this session. Nothing was transmitted beyond the two ~3 s, 5 W carriers.
+
+Final state: both rigs PTT 0; IC-9700 144.640000 MHz PKTUSB (restored after FM); no rigctld, openpulse or other helper left running on either host. Scripts used: scratch only, not committed.
+
+### Next steps for this station (needs the maintainer on site)
+1. Check what is on the FT-991A's V/UHF connector and the position of any coax switch.
+2. Repeat the 5 W carrier check (needs the maintainer's go per run); expect a visible rise on the IC-9700 (or the RSPdx on rpi51).
+3. Then deploy fresh `openpulse`/`openpulse-server` and the scripts over ssh (about 33 MB), run `scripts/onair-station-check.sh` with a profile whose `B_SSH` is `dd2zm@192.168.121.211`, and set the Codec volumes with `scripts/onair-setup-audio-routing.sh`. Profile: `docs/config/onair-ic9700-ft991a.example.sh` already matches this host (the real address is not in it; use a local copy in `~/onair-local/`).
+4. Task 4 B -> A / A -> B can then be repeated with the FT-991A as IRS, at 5 W maximum on both sides, ideally with an RS-protected mode.
