@@ -972,7 +972,7 @@ block, ~8.2 s at 250 bit/s.
 
 ---
 
-## Task 4 — Gates 4 and 5 without keying, then Gate 6 both ways (status: open)
+## Task 4 — Gates 4 and 5 without keying, then Gate 6 both ways (status: blocked)
 
 Fast-forward both Pis and `source ~/onair-local/ic9700-ft818.sh`. The IC-9700's AGC stays on SLOW.
 
@@ -1111,3 +1111,25 @@ ALSA lib pcm_dsnoop.c:541:(snd_pcm_dsnoop_open) The dsnoop plugin supports only 
 2026-10-27T09:51:24.722569Z DEBUG received 6200 accumulated audio samples
 ```
 Derived from all 400 chunk lines: chunk 200 samples (<= 2048), 40 chunks/s (>= 4), 8000 Hz over 9.98 s.
+
+**Part B, 1. B -> A (maintainer go given): FAILED BEFORE ANY TRANSMISSION, status blocked.**
+`scripts/run-onair-ic9700-ft991a.sh supervise --single-case 'BPSK250|none|64' --reverse` exited **rc=255** after the
+preflight reported "Pre-flight OK" and printed the case header; no JSON report was written
+(`docs/dev/test-reports/onair-2026-10-27T095245.json` does not exist), no summary, no IRS log excerpt. The last output:
+```
+  [BPSK250                fec=none               payload=  64B] ... ==> Cleanup
+  [IC-9700] power: left as is (reading '0.0470588', requested 0.0470588; this script only lowers power)
+  [FT-818] power: left as is (reading '10', requested 10; this script only lowers power)
+  [IC-9700 rigctld] stopping on A
+  [FT-818 rigctld] stopping on B
+  done
+```
+Preflight WARNs (from the same run): FT-818 passband=0 Hz ("digital modes need >= 2400 Hz"), IC-9700 PulseAudio
+output volume 15% "may be too low", FT-818 NB/NR unreadable, IC-9700 and FT-818 RF GAIN unreadable over CAT (UNVERIFIED),
+`rig_set_level` "Feature not available" (hamlib trace). The FT-818 rfpower reads 10 (its CAT scale); not sent anything.
+Evidence nothing was keyed: no `/tmp/openpulse-iss-BPSK250-none.log` or telemetry log on rpi53; PTT 0 on A after;
+no rigctld on B, none on A. The IRS receiver the runner started on A (`/tmp/openpulse-irs-BPSK250-none.log`,
+`--listen-ms 16000`) was still running ~minutes later; I killed that one process (PID 3445232, the runner's).
+Cause of the rc=255 not established: the runner died between starting the IRS on A and the ISS ssh to B (script is
+`set -euo pipefail`; an unguarded command in the --reverse block, e.g. around the telemetry or the ISS ssh, is
+the suspect, unproven). Per the task, not retried. **A -> B (step 2) not run.**
