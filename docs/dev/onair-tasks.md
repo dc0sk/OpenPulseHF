@@ -1547,8 +1547,9 @@ Final state: both rigs PTT 0; IC-9700 144.640000 MHz PKTUSB (restored after FM);
 `B_TX_SINK_VOLUME=0.075` and `TELEMETRY_ENABLE=0`; into the station check's manual list and the
 runbook: the FT-818's VFO B on the test frequency. The two runner edits stay on the branch until
 reviewed with the next keyed-path change: the `[o]penpulse` fix is correct (the pattern can no longer
-match the ssh command line that carries it); the `ISS_PTT_LEADER_MS` hook did not help (maintainer to
-decide keep or remove). No new task until the maintainer chooses between the FT-818 pair with an
+match the ssh command line that carries it); the `ISS_PTT_LEADER_MS` hook did not help and is **kept for
+now** (maintainer, 2026-10-27; its default changes nothing). The redacted host details stay in the
+branch history (maintainer: not a problem; the rule is to keep such details out from here on). No new task until the maintainer chooses between the FT-818 pair with an
 RS-protected mode now and waiting for the FT-991A's antenna check.
 
 ---
