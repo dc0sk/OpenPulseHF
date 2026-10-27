@@ -93,7 +93,9 @@ as root and from cloning and building third-party code without an explicit rule.
    transmitting**, `scripts/onair-station-check.sh --levels`. A rig that is off gives a silent floor
    that passes trivially. Fix every FAIL before the session.
 9. **Manual list** (printed by the check; not readable over CAT): FT-818 FRONT antenna, L1,
-   DIG/USER-U, CAT rate; the FT-818 away from the 2026-10-26 noise source; TOT on both rigs; the
+   DIG/USER-U, CAT rate; **FT-818 VFO B on the test frequency** (Hamlib's FT-817/818 backend toggles
+   VFO A/B on every CAT read to read VFO B, so a VFO B on HF briefly puts the rig on HF — and onto its
+   other antenna socket — at every read; a read during a transmission would transmit there); the FT-818 away from the 2026-10-26 noise source; TOT on both rigs; the
    IC-9700 settings in [onair-signal-chain-verification.md](onair-signal-chain-verification.md); the
    RSPdx attenuated against the IC-9700 and its maximum input rating checked; antennas connected.
 
@@ -275,3 +277,14 @@ One record per session; each holds the station state, results, gotchas and open 
   stations, station A also with the RSPdx streaming. Gate 3 B → A met at 7.9x on the fourth run, once
   the IC-9700's AGC was SLOW (FAST held the burst at 4.9x); the FT-818 at L1 arrives at S9+55 dB.
   Fixed on the way: the RSPdx at 480M, `libasound2-plugins` on rpi53 for the `pulse` device.
+- **2026-10-27 — Gates 4–6** (`docs/dev/onair-tasks.md`, task 4 and its summary): station check
+  46/0; Gate 5 carrier +3.6 Hz; Gate 4 200-sample chunks at 40/s. Gate 6 is **not reliable**: B → A
+  passed 2 of 4 live runs, and only at the FT-818 drive 0.075 (at 0.15 the FT-818 loses the first ~1 s
+  of every transmission); A → B failed both runs, the FT-818's received audio being noise-limited (S8
+  local QRM) and AGC-pumped, uncoded. Found and fixed: the runner's `pgrep -f` matched its own ssh
+  command (rc 255 before any keying; `[o]penpulse`, unreviewed); Hamlib's VFO toggle on the FT-818
+  with VFO B on 40 m (VFO B set to the test frequency, telemetry off). Ruled out with an experiment
+  each: one-sided rebuild, IC-9700 front-end overload (10 dB attenuator), PTT leader, sink suspend,
+  the modem's own envelope. The FT-991A remote station was checked as an alternative receiver; its
+  2 m antenna path failed a 5 W carrier check (nothing received at the IC-9700) and waits for an
+  on-site look.

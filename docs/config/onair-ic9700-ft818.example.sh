@@ -98,7 +98,11 @@ export BAND2M_MAX_HZ=144750000
 # (onair-rx-level-check.sh: idle mean-sq 0.000500 on A, 0.000518 on B, ceiling 0.00107).
 export A_RX_SOURCE_VOLUME=0.44
 export B_RX_SOURCE_VOLUME=0.45
-export B_TX_SINK_VOLUME=0.15              # documented FT-818 drive
+# FT-818 drive 0.075, measured 2026-10-27: at 0.15 the FT-818 (through the SCU-17) suppresses the first
+# ~1 s of every transmission (4 of 4 tone tests lost 0.72 s, then a 0.34 s rise; the preamble goes with
+# it); at 0.075 the envelope is flat from the first 20 ms and the RSPdx decodes every frame. Why 0.15
+# does this (ALC, codec, rig protection) is not established. onair-tasks.md, task 4.
+export B_TX_SINK_VOLUME=0.075
 
 # ── Witness SDR and preflight ──────────────────────────────────────────────────
 export WITNESS_SDR_SIDE=A                 # the RSPdx is on rpi51 (decision 27)
@@ -114,7 +118,11 @@ export KILL_WAIT=12
 export TX_TIMEOUT=120
 
 # ── Telemetry ──────────────────────────────────────────────────────────────────
-export TELEMETRY_ENABLE=1
+# Off: Hamlib's FT-817/818 backend toggles VFO A/B on every rigctl client call to read VFO B, so the
+# runner's telemetry loop (t, ALC, RF meter, ~3 calls per 0.2 s) swapped the FT-818 between VFOs while it
+# transmitted; with VFO B on 7.077 MHz that is the 40 m band (2026-10-27, rigctld -vvvvv). Keep VFO B on
+# the test frequency on the rig, and do not poll the FT-818 during a transmission.
+export TELEMETRY_ENABLE=0
 export TELEMETRY_SAMPLES=40
 export TELEMETRY_INTERVAL=0.2
 

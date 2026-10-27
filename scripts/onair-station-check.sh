@@ -278,6 +278,8 @@ cat <<'MANUAL'
 
 == MANUAL — not readable over CAT; confirm on the rigs before the session counts
   [ ] FT-818: FRONT antenna selected at 2 m, L1 (0.5 W), DIG/USER-U, CAT RATE matches the profile
+  [ ] FT-818: VFO B on the same 2 m frequency as VFO A — Hamlib toggles VFO A/B on every CAT read, so
+      a VFO B on HF puts the rig on HF for a moment at every read (7.077 MHz found on 2026-10-27)
   [ ] FT-818: away from the local noise source found on 2026-10-26 (S8–S9 floor)
   [ ] Both rigs: TX time-out timer (TOT) enabled — the A5 backstop
   [ ] IC-9700: the required settings in onair-signal-chain-verification.md (DATA MOD USB, AF output)

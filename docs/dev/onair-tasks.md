@@ -1540,3 +1540,12 @@ Final state: both rigs PTT 0; IC-9700 144.640000 MHz PKTUSB (restored after FM);
 2. Repeat the 5 W carrier check (needs the maintainer's go per run); expect a visible rise on the IC-9700 (or the RSPdx on rpi51).
 3. Then deploy fresh `openpulse`/`openpulse-server` and the scripts over ssh (about 33 MB), run `scripts/onair-station-check.sh` with a profile whose `B_SSH` is `dd2zm@192.168.121.211`, and set the Codec volumes with `scripts/onair-setup-audio-routing.sh`. Profile: `docs/config/onair-ic9700-ft991a.example.sh` already matches this host (the real address is not in it; use a local copy in `~/onair-local/`).
 4. Task 4 B -> A / A -> B can then be repeated with the FT-991A as IRS, at 5 W maximum on both sides, ideally with an RS-protected mode.
+
+**Reviewed (cloud session, 2026-10-27):** accepted as recorded. Taken into the profile: FT-818 drive
+`B_TX_SINK_VOLUME=0.075` and `TELEMETRY_ENABLE=0`; into the station check's manual list and the
+runbook: the FT-818's VFO B on the test frequency. The two runner edits stay on the branch until
+reviewed with the next keyed-path change: the `[o]penpulse` fix is correct (the pattern can no longer
+match the ssh command line that carries it); the `ISS_PTT_LEADER_MS` hook did not help (maintainer to
+decide keep or remove). No new task until the maintainer chooses between the FT-818 pair with an
+RS-protected mode now and waiting for the FT-991A's antenna check.
+
