@@ -1462,6 +1462,9 @@ run_matrix() {
             fi
 
             # 2) Send from ISS on Station B.
+            # The FT-818's output takes ~0.5 s to reach full level after PTT; a leader keeps that off the preamble (#1257).
+            local iss_leader_arg=""
+            [[ -n "${ISS_PTT_LEADER_MS:-}" ]] && iss_leader_arg="--ptt-leader-ms ${ISS_PTT_LEADER_MS}"
             local tel_iss_pid=""
             local tel_irs_pid=""
             local b_tel_log="/tmp/openpulse-telemetry-iss-${MODE}-${FEC}.log"
@@ -1503,6 +1506,7 @@ run_matrix() {
                     --log info \
                     --ptt rigctld \
                     --rig ${B_RIGCTLD_ADDR}:${B_RIGCTLD_PORT} \
+                    ${iss_leader_arg} \
                     transmit \
                     --mode '${MODE}' \
                     --fec "${FEC//_/-}" \

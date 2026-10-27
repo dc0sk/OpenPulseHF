@@ -1303,3 +1303,24 @@ B was 144.640460). Report `docs/dev/test-reports/onair-2026-10-27T123418.json`: 
 output"**; ISS modulated 74 bytes -> 21216 samples (2.65 s) and `Transmitted 64 bytes in BPSK250 mode (fec=None)` at 12:35:00.6Z; IRS:
 58 preamble rejections (rho 0.199-0.245 < 0.31, correction 0.0 Hz), 150 `invalid magic`. PTT 0 on A, nothing running. The
 maintainer listened to the relays during this run (observation to be added by the maintainer).
+
+#### Gate 6 B->A runs 6-8 (2026-10-27): the FT-818's on-air envelope ramps up over ~1 s; not the leader, not the sink; the modem's own TX envelope is flat
+
+All three runs FAIL the same way (`IRS: payload not observed`, preamble rho 0.18-0.29 < 0.31, `invalid magic` ~300-350 lines):
+run 6 `onair-2026-10-27T124112.json` (RSPdx at RFGR 22, 192 kHz, `TELEMETRY_ENABLE=0`), run 7 `...T124715.json`
+(`ISS_PTT_LEADER_MS=800`), run 8 `...T125449.json` (leader 800 ms + a silent `paplay` stream holding rpi53's SCU-17 sink RUNNING instead
+of SUSPENDED; stopped afterwards, sink IDLE). PTT 0, nothing running, after each. Hook added to the runner (see below).
+**RSPdx (RFGR 22, clip 0.00%) offline decode of run 6:** `NOT DECODED: invalid magic` (the SDR copy fails too).
+**Measured on the SDR IQ** (band 1000-2200 Hz power, 20 ms steps), same in all three runs: the signal is a correct BPSK250
+(carrier 1525.0 Hz via the 2fc line, `|z|^2` line at exactly 250.0 Hz, 90% power band 1401-1643 Hz) but its **amplitude rises smoothly
+by ~30 dB over ~1.05 s (-25 dB -> -3 dB re the flat level: 1.08 / 1.08 / 1.04 s)**, then is flat for 1.60 s, then stops abruptly;
+ramp + flat = 2.65 s = the audio length. So the preamble (the first ~0.25-1 s) goes out 30 dB down and is not acquirable.
+**Not the PTT leader** (800 ms made no difference to the ramp), **not the sink waking from suspend** (a running silent stream made no difference),
+**not the modem**: the modem's own synthetic transmit of a 64-byte BPSK250|none frame, tapped at the loopback, is 21216 samples = 2.652 s with a FLAT
+envelope (RMS per 100 ms 0.592-0.640, peak 1.000 = full scale). So the ramp appears downstream of the modem's samples: the audio
+server at 0.15 volume, the SCU-17 codec, the FT-818's modulator/ALC, or its power path. Peak 1.0 into a 0.15 sink and a
+rig with ALC is worth ruling in or out: untested here. Also untested: a tone or longer lead-in, a different TX drive, another transmit audio device.
+**Runner change** (keyed-path script, needs the adversarial review before merge): `ISS_PTT_LEADER_MS` env, when set, adds `--ptt-leader-ms N` to the
+FT-818 transmit command; default unchanged (`scripts/run-onair-ic9700-ft991a.sh`, 4 lines). **Not proven useful**: it did not help.
+Open decision: A->B (the IC-9700 transmits) as the receive-side differential, or look at the FT-818 transmit chain (ALC reading, SCU-17 drive, a
+frame with a ~1.5 s lead-in). Nothing further transmitted.
