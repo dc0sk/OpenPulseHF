@@ -859,3 +859,11 @@ band noise), not by the signal strength; more TX power, SQL or RF gain cannot mo
 was found. Options (maintainer/cloud decision, not applied): AGC to SLOW or OFF on the IC-9700 (changes the
 level behaviour; with AGC off a 40-50 dB signal may clip the CODEC, use RF gain/att to bring it down), or
 treat the 5x criterion as not applicable to an AGC-levelled chain and judge Gate 3 by decode of the capture.
+
+#### IC-9700 AGC set to SLOW (maintainer request, 2026-10-27)
+
+`rigctl -m 3081 ... L AGC 3` (hamlib SLOW): read back `l AGC` 2 -> 3, `l AGC_TIME` 0.3 -> 6, mode still PKTUSB,
+PTT 0. Maintainer context: the RSPdx antennas and the FT-818 are indoors at the same level (so the RSPdx's ~40-50
+dB reflects a short indoor path); the IC-9700 antenna is outdoors a few metres higher, so the RF level at the
+IC-9700 is NOT known from the SDR. An IC-9700 S-meter read during a transmit (`l STRENGTH`, `l RAWSTR`) is the
+missing measurement. A second FT-818 antenna was offered by the maintainer; not used. Not rerun yet.
