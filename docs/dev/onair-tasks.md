@@ -644,3 +644,75 @@ on bus 002 behind a hub, `Driver=[none]`, at **12M (full speed)**; the RSPdx nee
 (480M), so the likely cause is the link speed (cable, hub port or the shared hub with the IC-9700 CODEC on
 bus 001/004 aside). Not proven: I did not change the port. Suggest replugging the RSPdx directly into a
 different rpi51 port with a short high-quality cable, check `lsusb -t` shows 480M, then rerun step 3.
+
+#### Task 3 final run (2026-10-27) — Part A passes, Part B blocked (TX failed before keying)
+
+**Part A step 3 — PASS** after the maintainer replugged the RSPdx (`lsusb -t`: `1df7:3030 … Driver=[none], 480M`).
+SDR streaming (`sdr_capture.py 144640000 250000 20 12 40`, rc=0) with the idle-floor check run during it:
+```
+WARNING: an openpulse / SDR / aplay process is running. This capture must be IDLE
+         (no TX anywhere, SDR stopped) or the floor reading is meaningless.
+==> Capturing 5s of idle RX audio from 'plughw:CARD=CODEC,DEV=0' at 48000 Hz ...
+==> Analysing idle floor ...
+capture:        /tmp/onair-rx-idle-48000.wav
+duration:       5.00 s @ 48000 Hz
+overall RMS:     -18.3 dBFS
+band policed:   300-2600 Hz
+broadband floor: -42.6 dBFS (median in-band)
+occupied band:    2666 Hz (152-2818) at -20 dB  <- the FILTER WIDTH; hamlib reports 0 on an IC-9700, so record this one
+criteria:       prominence >= 15 dB  OR  level >= 0 dBFS  (max allowed: 0)
+
+PASS: idle floor is clean in the modem passband; the receive path can hear.
+
+G0 PASS for 'plughw:CARD=CODEC,DEV=0'. This rig's receive path can hear a signal in the passband.
+```
+SDR: `captured 20.00s peak=0.0029 rms=0.0009 clip=0.00% OK` (`/tmp/g0-sdr.cf32`, 40000000 bytes).
+Part A is complete: B PASS, A (RSPdx stopped) PASS, A (RSPdx streaming) PASS.
+
+**Part B.** Station check: first run PASS=41 FAIL=1 (rpi53 behind on commit, docs-only; fast-forwarded to
+`86d2fc56`); after the rigctld was started the check's FT-818 CAT read FAILs because my rigctld holds the
+serial port (expected; the same check passed CAT 144640000 Hz PKTUSB on the run before). rigctld on rpi53:
+```
+144640000
+PKTUSB
+0
+0
+```
+(f, m, t; the extra `0` is the passband). Maintainer gave the **go** (FT-818 at L1, RH3, 144.640 MHz, one
+BPSK250 frame + 0.4 s SWR check). Dual capture:
+```
+==> Preflight
+    TX dc0sk@dc0sk-rpi53 on 144640000 Hz, PTT released
+    SDR RSPdx, Antenna A, centre 144640000 Hz, fs 192000, RFGR 12 IFGR 40
+==> Antenna check: brief keyed SWR reading
+    SWR = 1 (limit 3.0)
+==> Starting SDR capture (30s)
+==> Starting rig USB-audio capture on dc0sk@dc0sk-rpi51 (30s)
+==> Transmitting: mode=BPSK250 fec=rs payload='DC0SK GATE3'
+    PTT after TX: 0
+==> Waiting for captures to finish
+==> Results
+    TRANSMIT: FAILED (ssh exit 0; no 'Transmitted N bytes' line in /home/dc0sk/git/OpenPulseHF/docs/dev/test-reports/on-air/captures/gate3-b2a-bpsk250-tx.log)
+              Nothing was keyed, so BOTH captures below contain only ambient noise.
+              Do not use them as evidence. Common cause: TX_REPO_DIR points at the
+              wrong station's layout (it defaults to Station B's).
+    SDR IQ : /home/dc0sk/git/OpenPulseHF/docs/dev/test-reports/on-air/captures/gate3-b2a-bpsk250.cf32 (46080000 bytes)
+             cfg: f=144.6400MHz RFGR=12 IFGR=40 ant=Antenna A RFGR range 0, 27
+             captured 30.00s peak=0.0076 rms=0.0015 clip=0.00% OK
+    rig aud: /home/dc0sk/git/OpenPulseHF/docs/dev/test-reports/on-air/captures/gate3-b2a-bpsk250-rig48k.wav (28.0s @ 48000Hz)  mean_sq=0.000106  peak=0.044
+No transmission took place; the captures hold ambient noise only and are NOT evidence.
+```
+Ratio line: `windows=111 idle(median)=0.000106 peak=0.000130 ratio=1.2 loud_windows=0`
+
+**Result: the SWR check keyed (SWR = 1, limit 3.0), but the BPSK250 frame was NOT transmitted.** The TX log:
+`Error: transmit failed / Caused by: audio error: device not found: pulse` (preceded by a WARN that the
+bandplan guardrail's rigctld frequency read failed with `Resource temporarily unavailable`, and ALSA noise).
+The captures hold ambient noise only (ratio 1.2) and are NOT evidence; Gate 3's >=5x criterion is not met.
+PTT after: 0; rigctld on rpi53 stopped and confirmed gone.
+Likely cause, unproven: on rpi53 the cpal build cannot open a device named `pulse` (the profile sets
+`B_AUDIO_DEVICE=pulse`, whereas the earlier station A runs used it). Next for the maintainer/cloud session:
+check `openpulse --backend cpal devices` on rpi53 for the name the modem sees (e.g. `default`, or
+`pipewire`), and whether the pipewire-alsa/pulse ALSA plugin is installed there. I did not retry or change
+the device.
+Captures (gitignored, not committed), in `docs/dev/test-reports/on-air/captures/`:
+`gate3-b2a-bpsk250.cf32` 46080000 B, `gate3-b2a-bpsk250-rig48k.wav` 5373996 B, `gate3-b2a-bpsk250-tx.log` 2793 B.
