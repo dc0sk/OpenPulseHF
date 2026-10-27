@@ -1251,3 +1251,31 @@ e.g. distortion/clipping or ALC action (the ISS telemetry reads `alc>0=0, rfm>0=
 Not tested: the same frame from the IC-9700 (A -> B, the other direction, which would show whether the modem and
 receive chain are fine), a lower/higher TX drive, the FT-818's TX audio quality on a scope or against the SDR at
 RFGR 22+. Gate 6 B -> A has now failed three times and was not retried further; A -> B not run.
+
+#### FT-818 clicks during transmit: hamlib toggles VFO A/B on every rigctl client call; VFO B is on 40 m (2026-10-27, maintainer observation + rigctld -vvvvv log)
+
+**Observation (maintainer).** During the modem's transmit the FT-818's relay clicked at least once a second; during the
+PTT pattern test (CAT `T 1` for 5.8 s, then 5 x ~1 s) there were clicks before the key-up and key-down clicks:
+"3 x (click, 200 ms, click, 500 ms)" before the TX in step A, and clicks before the TX click in step C. SCU-17 PTT LED
+dark under CAT keying (expected: it follows RTS, not CAT). The maintainer **confirms the rig switches to 40 m**.
+**Cause (read from `rigctld -m 1041 -vvvvv`, `/tmp/rigctld-b-v.log` and `-v2.log` on rpi53; read-only, nothing keyed).**
+The hamlib FT-817/818 backend, on every new rigctl client connection, reads the frequency of both VFOs; to read VFO B
+it sends the CAT VFO-toggle command (`00 00 00 00 81`, `ft817_set_vfo VFOB`), reads, and toggles back (`ft817_set_vfo
+VFOA`). Counted per client call, for each of `t`, `l ALC_METER`, `l RFPOWER_METER`, `l STRENGTH`, `m`, `f`: **2 VFO
+toggles, every time**. VFO B's frequency read from the rig is BCD `00 70 77 00` = **7.077 MHz**; VFO A is 144.640 MHz.
+So each rigctl call swaps the FT-818 to 7.077 MHz and back, at about 0.7 s per CAT round trip.
+**Why this plausibly broke the on-air frames.** The runner's telemetry (`TELEMETRY_ENABLE=1`, set in
+`docs/config/onair-ic9700-ft818.example.sh:117`, 40 samples at 0.2 s) runs three rigctl calls (`t`, `l ALC_METER`,
+`l RFPOWER_METER`) in a loop on the FT-818 WHILE the modem transmits, i.e. about 6 VFO toggles per cycle during the
+frame. The ISS telemetry also reads `ALC=` and `RFM=` empty, so those calls were failing. Every Gate 6 B->A run and
+the modem's own bandplan frequency read (`rigctld I/O error: Resource temporarily unavailable`, seen at TX start) share
+this. Whether the FT-818 actually radiated on 40 m, or refused the toggle while keyed, is NOT established; a frame
+that swaps VFO mid-transmission is not decodable, which fits "frame found, RS TooManyErrors" on two independent
+receivers and the preamble correlation 0.2-0.29. Not tested: a transmit with `TELEMETRY_ENABLE=0`.
+**Safety note:** VFO B at 7.077 MHz means any toggle that lands while keyed can transmit on 40 m into the 2 m antenna.
+Recommended before any further keyed run (maintainer/cloud decision, nothing applied): (1) `TELEMETRY_ENABLE=0` for
+every keyed FT-818 run (the profile exports 1); (2) set the FT-818's VFO B to 144.640 MHz on the rig, so a toggle
+cannot land on HF; (3) a hamlib setting or a persistent single rigctld client instead of per-call `rigctl` for the
+FT-818; (4) the modem and the Gate 3 dual-capture script should not poll the FT-818 over rigctld during TX. The Gate 3
+frame (run 4) was sent with only the modem's connection plus the SWR check and also failed offline decode, so check
+what else touched rigctld then. No further transmissions were done after this finding.
