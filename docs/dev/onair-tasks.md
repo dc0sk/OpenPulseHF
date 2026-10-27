@@ -867,3 +867,96 @@ PTT 0. Maintainer context: the RSPdx antennas and the FT-818 are indoors at the 
 dB reflects a short indoor path); the IC-9700 antenna is outdoors a few metres higher, so the RF level at the
 IC-9700 is NOT known from the SDR. An IC-9700 S-meter read during a transmit (`l STRENGTH`, `l RAWSTR`) is the
 missing measurement. A second FT-818 antenna was offered by the maintainer; not used. Not rerun yet.
+
+#### Gate 3 fourth run (2026-10-27) — IC-9700 AGC SLOW, S-meter sampled during TX — **criterion MET (7.9x)**
+
+Fresh **go** given. Routing RESULT pass on both; rigctld before keying `144640000 / PKTUSB / 0 / 0`.
+```
+==> Preflight
+    TX dc0sk@dc0sk-rpi53 on 144640000 Hz, PTT released
+    SDR RSPdx, Antenna A, centre 144640000 Hz, fs 192000, RFGR 12 IFGR 40
+==> Antenna check: brief keyed SWR reading
+    SWR = 1 (limit 3.0)
+==> Starting SDR capture (30s)
+==> Starting rig USB-audio capture on dc0sk@dc0sk-rpi51 (30s)
+==> Transmitting: mode=BPSK250 fec=rs payload='DC0SK GATE3'
+    Transmitted 11 bytes in BPSK250 mode (fec=Rs).
+    PTT after TX: 0
+==> Waiting for captures to finish
+==> Results
+    SDR IQ : /home/dc0sk/git/OpenPulseHF/docs/dev/test-reports/on-air/captures/gate3-b2a-bpsk250.cf32 (46080000 bytes)
+             cfg: f=144.6400MHz RFGR=12 IFGR=40 ant=Antenna A RFGR range 0, 27
+             captured 30.00s peak=0.2098 rms=0.0320 clip=0.00% OK
+    rig aud: /home/dc0sk/git/OpenPulseHF/docs/dev/test-reports/on-air/captures/gate3-b2a-bpsk250-rig48k.wav (28.0s @ 48000Hz)  mean_sq=0.000147  peak=0.043
+```
+Ratio: `windows=111 idle(median)=0.000063 peak=0.000500 ratio=7.9 loud_windows=30 peak_sample=0.043`. PTT after: 0; rigctld stopped.
+Gate 3 (loudest 250 ms window >= 5x quiet level): **7.9x, 30 loud windows: met.** Change from run 3 (4.9x, 0 loud
+windows): the quiet median fell 0.000104 -> 0.000063 with AGC SLOW, the burst peak stayed 0.000500 (peak sample
+0.043 both times). So AGC was the lever; SQL/RF/USB AF were not.
+IC-9700 `l STRENGTH` (dB re S9) sampled about every 0.5 s by a loop of direct rigctl reads while the capture ran (55 reads,
+counts of each value, sorted): idle -50..-44 (about 20 reads), rising through -42..+1 during the key-up, then
+**+22, +30, +39, +49, +50, +53, +54 (x3), +55 (x9), +56 (x3)** during the burst. So the signal at the IC-9700 is
+about S9+55 dB (very strong; the outdoor antenna is not weak at all). Raw samples (epoch, dB):
+```
+1793093947.976 -47
+1793093948.493 -49
+1793093949.011 -45
+1793093949.525 -47
+1793093950.042 -50
+1793093950.566 -36
+1793093951.079 -40
+1793093951.592 -45
+1793093952.104 -49
+1793093952.617 -49
+1793093953.130 -2
+1793093953.641 1
+1793093954.153 1
+1793093954.665 -5
+1793093955.179 -11
+1793093955.693 -17
+1793093956.215 -22
+1793093956.740 -26
+1793093957.259 -29
+1793093957.774 -33
+1793093958.288 -37
+1793093958.803 -42
+1793093959.320 -45
+1793093959.837 -47
+1793093960.354 -39
+1793093960.874 -44
+1793093961.390 -48
+1793093961.903 -46
+1793093962.418 -47
+1793093962.936 -44
+1793093963.451 -47
+1793093963.963 -44
+1793093964.476 -44
+1793093964.992 -48
+1793093965.505 1
+1793093966.020 53
+1793093966.541 49
+1793093967.059 54
+1793093967.573 54
+1793093968.090 55
+1793093968.608 56
+1793093969.126 56
+1793093969.646 56
+1793093970.162 55
+1793093970.677 55
+1793093971.192 55
+1793093971.709 55
+1793093972.224 55
+1793093972.742 55
+1793093973.254 55
+1793093973.767 55
+1793093974.287 50
+1793093974.806 39
+1793093975.321 30
+1793093975.838 22
+```
+Because the signal is S9+55 dB, a second antenna on the FT-818 is not needed for this gate, and the receiver is
+being driven hard (OVF_STATUS not sampled during the burst: UNCHECKED). Decode of the capture not attempted.
+Captures (gitignored, not committed), same paths: `gate3-b2a-bpsk250.cf32` 46080000 B,
+`gate3-b2a-bpsk250-rig48k.wav` 5373996 B, `gate3-b2a-bpsk250-tx.log`.
+Task 3 status left as `blocked` in the heading by the earlier run: Part A and Part B now both pass; the cloud
+session sets it to done.
