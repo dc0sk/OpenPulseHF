@@ -1,0 +1,7 @@
+ M docs/dev/test-reports/rig-state-postrun-a.txt
+ M docs/dev/test-reports/rig-state-postrun-b.txt
+ M docs/dev/test-reports/rig-state-preflight-a.txt
+ M docs/dev/test-reports/rig-state-preflight-b.txt
+?? docs/dev/test-reports/on-air/bundle-2026-10-27T131850Z-ic9700-ft991a-quick/
+?? docs/dev/test-reports/onair-2026-10-27T131735.json
+?? pki-tooling/Cargo.lock

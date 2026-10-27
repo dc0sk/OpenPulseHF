@@ -1348,3 +1348,21 @@ the rig's own protection, or the codec level). Combined with the modem frames (p
 and what the lower drive does to the received level at the IC-9700.
 Proposed next (lowering only): rerun Gate 6 B->A with the FT-818 sink at 0.075 (`wpctl set-volume @DEFAULT_AUDIO_SINK@ 0.075` on rpi53 before the run;
 restore with `onair-setup-audio-routing.sh`).
+
+#### Gate 6 B->A with the FT-818 sink at 0.075 (maintainer go, 2026-10-27 ~15:17 local): transmit chain FIXED (RSPdx decodes it), IC-9700 receive still FAILS
+
+The runner's `--verify` routing check wants the profile's drive, so the lowered drive was set the supported way for this one run:
+`B_TX_SINK_VOLUME=0.075 scripts/onair-setup-audio-routing.sh` (rpi53 RESULT `sink_vol=0.07`), the same variable exported for the run, then
+`TELEMETRY_ENABLE=0 scripts/run-onair-ic9700-ft991a.sh supervise --single-case 'BPSK250|none|64' --reverse` (no leader), RSPdx recording at
+RFGR 22. Afterwards the variable was unset and the routing script restored both stations (RESULT pass, `sink_vol=0.15`). PTT 0, no rigctld or
+openpulse left. (A first attempt at `wpctl set-volume 0.075` alone was refused by the runner's routing check before anything keyed.)
+- Report `docs/dev/test-reports/onair-2026-10-27T131735.json`: **FAIL "IRS: payload not observed"**, ISS `Transmitted 64 bytes in BPSK250 mode (fec=None)`.
+  IRS: **0 preamble rejections** (was 20-58) and `invalid magic` 70 (was 300-350): acquisition now works; the frame still fails.
+- **RSPdx envelope at 0.075: flat for the whole frame, 2.64 s above -25 dB of a 2.65 s frame, rise 0.00 s (was ~1.05 s of loss/ramp at 0.15).**
+- **Offline decode of the RSPdx copy (RFGR 22, 8 kHz, same scratch harness, no FEC): `DECODED 64 bytes`** -
+  `"HPa1u8RmJfLd5MC53QLIqVR6Ly07J9RWmu6cVDuBDQGrhrZNZnRF5DvY6tLq2tbs"`. A 64-byte alphanumeric string through the frame's magic and CRC is not chance; the runner
+  does not log the random payload it sends, so equality with the sent payload is NOT checked (a gap in the runner).
+So the FT-818 transmission is good at 0.075 and bad at 0.15 (startup loss in the first ~1 s, taking the preamble). The remaining failure is in the IC-9700 receive
+path: preamble found, frame wrong. Not yet examined: the IC-9700's audio for this frame (the runner records none). Next differential: record the rig audio
+with the dual-capture script at the same drive and decode it offline; candidates are the IC-9700 USB audio (AGC SLOW, 0.44 source volume, filter) or the
+level at the lower drive. The FT-818 drive in the profile (`B_TX_SINK_VOLUME` 0.15, `docs/config/onair-ic9700-ft818.example.sh`) is probably wrong for this chain.
