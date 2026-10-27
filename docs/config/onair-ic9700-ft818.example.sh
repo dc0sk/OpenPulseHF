@@ -48,6 +48,9 @@ export A_AUDIO_DEVICE="pulse"
 export A_AUDIO_DEVICE_LABEL="IC-9700 USB Audio CODEC (PulseAudio)"
 export A_REPO_DIR='${HOME}/git/OpenPulseHF'
 export A_RFPOWER=0.05                     # IC-9700: ~5 W of 100 W (0.5 would be ~50 W — do not)
+# IC-9700 AGC SLOW (Hamlib reads 3). With FAST the USB audio held a S9+55 dB burst at 4.9x the idle
+# floor and Gate 3 failed; SLOW gave 7.9x (2026-10-27). Set on the rig; the station check reads it.
+export A_EXPECT_AGC=3
 
 # ── Station B — FT-818 + SCU-17 on rpi53 ─────────────────────────────────
 # CAT serial port of the SCU-17. TODO-CONFIRM once plugged in:

@@ -960,3 +960,67 @@ Captures (gitignored, not committed), same paths: `gate3-b2a-bpsk250.cf32` 46080
 `gate3-b2a-bpsk250-rig48k.wav` 5373996 B, `gate3-b2a-bpsk250-tx.log`.
 Task 3 status left as `blocked` in the heading by the earlier run: Part A and Part B now both pass; the cloud
 session sets it to done.
+
+**Reviewed (cloud session, 2026-10-27):** done. G0 PASS on all three runs (prominence only): FT-818
+floor −37.2 dBFS, IC-9700 −43.1 dBFS with the RSPdx stopped and −42.6 with it streaming. Gate 3 B → A
+**met at 7.9x** (30 loud windows) on run 4, with the IC-9700's AGC on SLOW; the FT-818 at L1 arrives at
+S9+55 dB. Fixed along the way: the RSPdx must enumerate at 480M (it failed at 12M); rpi53 needed
+`libasound2-plugins` for the ALSA `pulse` device. Taken into the tooling: the installer adds
+`libasound2-plugins`; the station check fails a station without the `pulse` device and reads the
+IC-9700's AGC against `A_EXPECT_AGC=3`. The ~8 s burst is expected: 11 bytes plus RS fill one 255-byte
+block, ~8.2 s at 250 bit/s.
+
+---
+
+## Task 4 — Gates 4 and 5 without keying, then Gate 6 both ways (status: open)
+
+Fast-forward both Pis and `source ~/onair-local/ic9700-ft818.sh`. The IC-9700's AGC stays on SLOW.
+
+### Part A — nothing transmits
+
+1. `scripts/onair-station-check.sh --levels` must PASS (it now also checks the IC-9700's AGC reads 3
+   and that `pulse` exists as an ALSA device on both). Paste the summary and any FAIL lines.
+2. **Gate 5 from the Gate 3 capture** (no new transmission): the carrier of the received BPSK250 burst.
+   Squaring BPSK removes the modulation and leaves a line at twice the carrier:
+   ```bash
+   python3 - docs/dev/test-reports/on-air/captures/gate3-b2a-bpsk250-rig48k.wav <<'EOP'
+   import sys, wave, numpy as np
+   w = wave.open(sys.argv[1], "rb"); fs, ch = w.getframerate(), w.getnchannels()
+   x = np.frombuffer(w.readframes(w.getnframes()), dtype="<i2").astype(float)[0::ch] / 32768
+   n = fs // 4; m = np.array([np.mean(x[i:i + n] ** 2) for i in range(0, len(x) - n, n)])
+   loud = np.where(m > 3 * np.median(m))[0]
+   seg = x[loud[0] * n:(loud[-1] + 1) * n]
+   sq = seg ** 2; sq -= sq.mean()
+   spec = np.abs(np.fft.rfft(sq * np.hanning(len(sq)))); f = np.fft.rfftfreq(len(sq), 1 / fs)
+   band = (f > 2000) & (f < 4000); k = np.argmax(spec[band]); f2 = f[band][k]
+   print(f"burst {len(seg) / fs:.1f}s  2fc line {f2:.1f} Hz  carrier {f2 / 2:.1f} Hz  offset {f2 / 2 - 1500:+.1f} Hz")
+   EOP
+   ```
+   Pass: carrier 1500 Hz ± 50 Hz.
+3. **Gate 4 on station A**, the modem's own receive path at the device the runner uses:
+   ```bash
+   target/release/openpulse --backend cpal --log debug --ptt none receive --mode BPSK250        --listen-ms 10000 --device pulse > /tmp/gate4.log 2>&1; echo rc=$?
+   grep -iE 'chunk|samples|callback|stream|rate' /tmp/gate4.log | head -40
+   ```
+   Paste that, and if the grep finds nothing, the first 40 lines of `/tmp/gate4.log`. Pass (from the
+   signal-chain doc): chunks ≤ 2048 samples, ≥ 4 per second, about the nominal sample rate. Do not tune
+   anything if it looks wrong; report.
+
+### Part B — Gate 6, one 64-byte BPSK250 frame each way (keys both transmitters)
+
+Gate 6 as written: `"result": "pass"` in the run's JSON report. The runner starts and stops rigctld,
+reads the band guard and the mode, and only ever lowers power (the IC-9700 to `A_RFPOWER=0.05`; the
+FT-818 is never sent a power level). The RSPdx stays connected through its attenuator.
+1. **B → A (the FT-818 transmits).** Ask the maintainer for a go (FT-818 at L1, 144.640 MHz, one
+   BPSK250 frame, 64 bytes, no FEC), then:
+   `scripts/run-onair-ic9700-ft991a.sh supervise --single-case 'BPSK250|none|64' --reverse`
+2. **A → B (the IC-9700 transmits).** Ask for a separate go (IC-9700 lowered to ~5 W if it reads
+   higher; one frame), then the same command without `--reverse`.
+3. After each: PTT reads 0 on both rigs, and no rigctld left running. Paste the runner's summary, the
+   result line of each JSON report (`ls -t docs/dev/test-reports/on-air/ | head -3`), and on a fail the
+   IRS log tail it prints. Do not retry a failed direction without asking.
+
+### Results
+
+_(station session: append here)_
+

@@ -20,7 +20,7 @@
 #
 # Profile variables it reads: A_SSH/B_SSH/SSH_OPTS, A_/B_REPO_DIR, A_/B_CAT_PORT, A_/B_CAT_BAUD,
 # A_/B_HAMLIB_MODEL, A_/B_RIGCTLD_PORT, TEST_MODE_RIG_A/B, TEST_MODE_EXPECT_A/B, BAND2M_MIN/MAX_HZ,
-# A_/B_CODEC_MATCH, and WITNESS_SDR_SIDE (A, B or empty; which station hosts the SDR).
+# A_/B_CODEC_MATCH, A_/B_EXPECT_AGC (optional AGC reading), and WITNESS_SDR_SIDE (A, B or empty).
 #
 # Exit: 0 = every automated check passed, 1 = at least one failed, 2 = usage error.
 # The MANUAL list printed at the end is never checked by software; work through it on the rigs.
@@ -72,7 +72,7 @@ set -u
 # The repo dir arrives as the profile's literal '${HOME}/...': substitute HOME, never eval.
 repo="${1/#'${HOME}'/$HOME}"; cat_port="$2"; model="$3"; baud="$4"; rigctld_port="$5"
 expect_mode="$6"; mode_is_keep="$7"; codec="$8"; want_sdr="$9"; band_lo="${10}"; band_hi="${11}"
-ptt_port="${12}"; skip_rho="${13}"
+ptt_port="${12}"; skip_rho="${13}"; expect_agc="${14}"; audio="${15}"
 p() { echo "PASS|$1"; }; f() { echo "FAIL|$1"; }; i() { echo "INFO|$1"; }
 # A non-interactive ssh shell does not read the rustup PATH set in an interactive profile
 # (rpi53, 2026-10-26: cargo in ~/.cargo/bin, "missing command: cargo").
@@ -127,19 +127,19 @@ fi
 # Up to three tries: Hamlib's FT-818 backend takes ~2 s to open the port and on 2026-10-26 returned
 # no frequency once and an empty mode once, with a full read on the next try.
 reading=""
-cat_cmd=()
+cat_cmd=()   # the rigctl invocation without its commands
 if ss -ltn 2>/dev/null | grep -q ":${rigctld_port}[[:space:]]"; then
-    cat_cmd=(rigctl -m 2 -r "127.0.0.1:${rigctld_port}" f m)
+    cat_cmd=(rigctl -m 2 -r "127.0.0.1:${rigctld_port}")
 elif [[ -e "$cat_port" ]]; then
     if [[ -n "$ptt_port" && "$cat_port" == "$ptt_port" ]] || [[ "$cat_port" == *-if01-* ]]; then
         f "refusing to open ${cat_port} directly: it is the PTT port or a second interface, and opening it can key the rig"
     else
-        cat_cmd=(rigctl -m "$model" -r "$cat_port" -s "$baud" f m)
+        cat_cmd=(rigctl -m "$model" -r "$cat_port" -s "$baud")
     fi
 fi
 if [[ ${#cat_cmd[@]} -gt 0 ]]; then
     for try in 1 2 3; do
-        reading="$(timeout 15 "${cat_cmd[@]}" 2>/dev/null)"
+        reading="$(timeout 15 "${cat_cmd[@]}" f m 2>/dev/null)"
         [[ "$(printf '%s\n' "$reading" | sed -n 1p)" =~ ^[0-9]+$ && -n "$(printf '%s\n' "$reading" | sed -n 2p)" ]] && break
         sleep 1
     done
@@ -165,8 +165,22 @@ else
     f "CAT read failed (no frequency); is the rig on and the CAT rate right?"
 fi
 
+# AGC, where the profile names one (IC-9700: SLOW, Hamlib 3 — on 2026-10-27 FAST held the burst at
+# 4.9x the idle floor in the USB audio and Gate 3 failed; SLOW gave 7.9x). Read, never set.
+if [[ -n "$expect_agc" && ${#cat_cmd[@]} -gt 0 ]]; then
+    agc="$(timeout 15 "${cat_cmd[@]}" l AGC 2>/dev/null | tail -n1)"
+    if [[ "$agc" == "$expect_agc" ]]; then p "AGC reads ${agc} as the profile expects"
+    else f "AGC reads '${agc}', profile expects ${expect_agc} (set it on the rig)"; fi
+fi
+
 arecord -l 2>/dev/null | grep -qi "$codec" && p "capture card matching '${codec}'" \
     || f "no capture card matching '${codec}' (arecord -l)"
+# The modem opens "pulse" as an ALSA device; without the ALSA pulse plugin it does not exist and the
+# transmit dies with "device not found: pulse" (rpi53, 2026-10-27).
+if [[ "$audio" == "pulse" ]]; then
+    aplay -L 2>/dev/null | grep -qx pulse && p "ALSA device 'pulse' present" \
+        || f "no ALSA device 'pulse' (apt install libasound2-plugins)"
+fi
 
 if [[ "$want_sdr" == 1 ]]; then
     python3 -c 'import SoapySDR' 2>/dev/null && p "python3 SoapySDR bindings" \
@@ -186,7 +200,7 @@ REMOTE_EOF
 
 check_side() {
     local side="$1" target="$2" repo="$3" cat_port="$4" model="$5" baud="$6" rport="$7"
-    local expect="$8" keep="$9" codec="${10}" sdr="${11}" ptt="${12}" audio="${13}"
+    local expect="$8" keep="$9" codec="${10}" sdr="${11}" ptt="${12}" audio="${13}" agc="${14}"
     echo
     echo "== station ${side}: ${target}"
     if ! on "$target" true 2>/dev/null; then
@@ -197,7 +211,8 @@ check_side() {
     local line remote_sha="" ended=0 args
     # ssh joins its arguments into one string for the remote shell: quote each one for it.
     args="$(printf ' %q' "$repo" "$cat_port" "$model" "$baud" "$rport" "$expect" "$keep" "$codec" \
-        "$sdr" "${BAND2M_MIN_HZ:-144500000}" "${BAND2M_MAX_HZ:-144750000}" "$ptt" "${SKIP_RHO_STANDDOWN:-0}")"
+        "$sdr" "${BAND2M_MIN_HZ:-144500000}" "${BAND2M_MAX_HZ:-144750000}" "$ptt" "${SKIP_RHO_STANDDOWN:-0}" \
+        "$agc" "$audio")"
     while IFS= read -r line; do
         case "$line" in
             PASS\|*) ok "${line#PASS|}" ;;
@@ -232,12 +247,12 @@ check_side A "$A_SSH" "${A_REPO_DIR:-$DEFAULT_REPO}" "${A_CAT_PORT:-}" "${A_HAML
     "${A_CAT_BAUD:-}" "${A_RIGCTLD_PORT:-4532}" \
     "$(expected_mode "${TEST_MODE_RIG_A:-}" "${TEST_MODE_EXPECT_A:-}")" "$(is_keep "${TEST_MODE_RIG_A:-}")" \
     "${A_CODEC_MATCH:-Codec}" "$([[ "$SDR_SIDE" == A ]] && echo 1 || echo 0)" "${A_PTT_PORT:-}" \
-    "${A_AUDIO_DEVICE:-pulse}"
+    "${A_AUDIO_DEVICE:-pulse}" "${A_EXPECT_AGC:-}"
 check_side B "$B_SSH" "${B_REPO_DIR:-$DEFAULT_REPO}" "${B_CAT_PORT:-}" "${B_HAMLIB_MODEL:-}" \
     "${B_CAT_BAUD:-}" "${B_RIGCTLD_PORT:-4532}" \
     "$(expected_mode "${TEST_MODE_RIG_B:-}" "${TEST_MODE_EXPECT_B:-}")" "$(is_keep "${TEST_MODE_RIG_B:-}")" \
     "${B_CODEC_MATCH:-Codec}" "$([[ "$SDR_SIDE" == B ]] && echo 1 || echo 0)" "${B_PTT_PORT:-}" \
-    "${B_AUDIO_DEVICE:-pulse}"
+    "${B_AUDIO_DEVICE:-pulse}" "${B_EXPECT_AGC:-}"
 
 # ── Audio routing and levels (existing scripts) ─────────────────────────────────
 echo

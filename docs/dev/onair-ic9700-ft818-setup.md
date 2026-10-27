@@ -62,7 +62,9 @@ as root and from cloning and building third-party code without an explicit rule.
 2. **Packages.** On rpi51: `scripts/install-rpi-build-deps.sh --with-onair --with-sdr`. On rpi53:
    `scripts/install-rpi-build-deps.sh --with-onair`. The package names are Debian's; rpi53 ran
    Hamlib 4.6.2, newer than bookworm's 4.5.5, so record each Pi's OS release (the check prints it).
-3. **The witness SDR on rpi51** (decision 27). Install the SDRplay API (3.15.2 was used) from
+3. **The witness SDR on rpi51** (decision 27). Plug the RSPdx into a port where `lsusb -t` shows it at
+   **480M**: at 12M (full speed, behind a hub) its stream fails with `Init() failed: sdrplay_api_Fail`
+   (2026-10-27). Install the SDRplay API (3.15.2 was used) from
    SDRplay's download with **bash** (`sh` fails on its installer), then
    `sudo systemctl enable --now sdrplay`. Build the SoapySDR module from source:
    ```bash
@@ -269,3 +271,7 @@ One record per session; each holds the station state, results, gotchas and open 
   TOT, IC-9700 settings, RSPdx attenuation and rating, antennas confirmed; the FT-818 items (front
   antenna, L1, DIG/USER-U, CAT rate, away from the noise source) not yet confirmed. A first run with the
   IC-9700 off passed its idle level at exactly 0; the level check now fails digital silence.
+- **2026-10-27 — G0 and Gate 3** (`docs/dev/onair-tasks.md`, task 3): G0 PASS on prominence on both
+  stations, station A also with the RSPdx streaming. Gate 3 B → A met at 7.9x on the fourth run, once
+  the IC-9700's AGC was SLOW (FAST held the burst at 4.9x); the FT-818 at L1 arrives at S9+55 dB.
+  Fixed on the way: the RSPdx at 480M, `libasound2-plugins` on rpi53 for the `pulse` device.

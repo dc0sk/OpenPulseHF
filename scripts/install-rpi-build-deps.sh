@@ -126,6 +126,7 @@ ONAIR_PACKAGES=(
   python3-scipy
   pulseaudio-utils
   wireplumber
+  libasound2-plugins   # the ALSA "pulse" device the modem opens; missing on rpi53 on 2026-10-27
 )
 
 # The witness SDR (decision 27: an RSPdx on rpi51). SoapySDRPlay3 builds against libsoapysdr-dev.
