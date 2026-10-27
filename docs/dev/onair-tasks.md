@@ -1400,3 +1400,21 @@ VFO B = VFO A, `TELEMETRY_ENABLE=0`, IC-9700 AGC SLOW, PKTUSB/DIG on the FT-818,
 Caveats: a **single** pass. The only difference from the failed run 12 at the same drive is the extra `parecord` on station A (an unexplained effect; keeping the CODEC capture
 stream active before/while the live receiver opens it is a candidate, not shown). Reproducibility is not established. The SDR copy of this run was recorded, not decoded.
 A -> B (step 2 of the task, the IC-9700 transmits, FT-818 receives) has not been run. Proposed: repeat B->A twice without the parecord to see whether the pass holds, then A->B.
+
+#### Repeats (B->A) and Gate 6 A->B (maintainer go, 2026-10-27 ~15:40-15:45 local)
+
+**B->A repeats, no parecord, FT-818 sink 0.075 (`B_TX_SINK_VOLUME=0.075` via the routing script; restored to 0.15 afterwards, RESULT pass), `TELEMETRY_ENABLE=0`, RSPdx not run.**
+- Repeat 1 `docs/dev/test-reports/onair-2026-10-27T143955.json`: **PASS** (live IRS 0 preamble rejections, 45 `invalid magic` lines before the frame decoded).
+- Repeat 2 `docs/dev/test-reports/onair-2026-10-27T144154.json`: **FAIL "IRS: payload not observed"**. The ISS transmitted (`Transmitted 64 bytes in BPSK250 mode (fec=None).` at 14:42:36Z);
+  the IRS logged 1200 audio chunks but **0 first-energy attempts, 0 preamble rejections, 0 `invalid magic`**: the receiver never detected energy (a missed frame, not a corrupted one).
+- So B->A at 0.075 is 2 of 3 so far (the run with the parecord, repeat 1: pass; run 12 and repeat 2: fail). Not reliable. Candidates, none shown: the burst is small in the IC-9700 audio (mean_sq
+  ~0.0004 against an adaptive gate of 3x the floor and a 0.0001 absolute minimum) and the SLOW AGC (6 s) pulls the gain down after strong signals; the live receiver opens its capture stream per run.
+PTT 0 on A, no rigctld or openpulse left on either Pi after each.
+
+**Gate 6 A->B (the IC-9700 transmits at ~5 W, the FT-818 receives): FAIL.** `scripts/run-onair-ic9700-ft991a.sh supervise --single-case 'BPSK250|none|64'` (no `--reverse`, FT-818 sink at the profile 0.15, which does not matter for RX),
+report `docs/dev/test-reports/onair-2026-10-27T144424.json`: **FAIL "IRS: payload not observed in receiver output"**. IC-9700 power left as is (reads 0.0470588 = ~5 W; the runner only lowers),
+FT-818 power not touched. ISS (IC-9700) `Transmitted 64 bytes in BPSK250 mode (fec=None).` IRS (FT-818 on rpi53): 1253 chunks, **0 first-energy, 0 rejections, 0 `invalid magic`**: the FT-818 receive audio never
+showed energy. PTT 0 on A after, nothing left running. Not examined: the FT-818's received audio (the runner records none), its AF/volume and squelch (not readable over CAT; the manual list), the RX
+level at the SCU-17 (`B_RX_SOURCE_VOLUME` 0.45). The FT-818 idle floor was checked earlier (G0 pass, mean_sq ~0.0004, gate ~0.0013).
+Proposed next (keys the IC-9700, ~5 W): a parecord on rpi53 beside the live receiver plus the RSPdx, then decode the FT-818's audio offline, as was done for B->A.
+Not retried.
