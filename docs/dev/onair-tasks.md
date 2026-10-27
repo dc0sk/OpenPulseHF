@@ -1295,3 +1295,11 @@ Remaining suspects: FT-818 transmit audio quality/level through the SCU-17 at th
 or the FT-818's own modulation, and the 64-byte no-FEC frame being long/unprotected vs the 11-byte RS frame of
 Gate 3 (that one also failed offline). Next differential, not run: A->B (IC-9700 transmits, FT-818 receives), and the
 RSPdx at RFGR 22+ recording the FT-818 audio. Not retried.
+
+#### Gate 6 B->A, 5th run (2026-10-27 ~13:35 local), VFO B = VFO A = 144.640000 MHz, telemetry off — FAIL, same signature
+
+Maintainer set VFO B equal to A (verified: `f m v t` = `144640000 PKTUSB VFOA 0`, VFO B BCD `14 46 40 00` in all 19 reads; before that
+B was 144.640460). Report `docs/dev/test-reports/onair-2026-10-27T123418.json`: **FAIL, "IRS: payload not observed in receiver
+output"**; ISS modulated 74 bytes -> 21216 samples (2.65 s) and `Transmitted 64 bytes in BPSK250 mode (fec=None)` at 12:35:00.6Z; IRS:
+58 preamble rejections (rho 0.199-0.245 < 0.31, correction 0.0 Hz), 150 `invalid magic`. PTT 0 on A, nothing running. The
+maintainer listened to the relays during this run (observation to be added by the maintainer).
