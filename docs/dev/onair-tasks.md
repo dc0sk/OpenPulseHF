@@ -1279,3 +1279,19 @@ cannot land on HF; (3) a hamlib setting or a persistent single rigctld client in
 FT-818; (4) the modem and the Gate 3 dual-capture script should not poll the FT-818 over rigctld during TX. The Gate 3
 frame (run 4) was sent with only the modem's connection plus the SWR check and also failed offline decode, so check
 what else touched rigctld then. No further transmissions were done after this finding.
+
+#### Gate 6 B->A rerun after VFO B -> 144.640 MHz and TELEMETRY_ENABLE=0 (maintainer go, 2026-10-27) — still FAIL
+
+Maintainer set the FT-818's VFO B to 144.640 MHz (verified from the rig: VFO B BCD `14 46 40 00`, same as A) and noticed the
+noise floor dropped to S5. A first attempt was refused by the runner's preflight (FT-818 mode read `USB`, expected `PKTUSB`;
+nothing keyed); the maintainer set DIG on the rig; `f m t` then read `144640000 PKTUSB 0`. Run
+`TELEMETRY_ENABLE=0 scripts/run-onair-ic9700-ft991a.sh supervise --single-case 'BPSK250|none|64' --reverse`:
+rc=1, `docs/dev/test-reports/onair-2026-10-27T122722.json` **FAIL, "IRS: payload not observed in receiver output"**;
+ISS `Transmitted 64 bytes in BPSK250 mode (fec=None)`; IRS: 33 preamble rejections, rho 0.18-0.29 (< 0.31), 192
+`invalid magic`, AFC correction 0.0 Hz. Same signature as before, so the VFO toggles + telemetry polling were not (the
+only) cause. PTT 0, nothing left running. The modem's own bandplan read at TX start still logs `rigctld I/O error:
+Resource temporarily unavailable` (it polls rigctld once, a slow CAT round trip, now harmless for the VFO).
+Remaining suspects: FT-818 transmit audio quality/level through the SCU-17 at the runner's pulse path (TX sink 0.15)
+or the FT-818's own modulation, and the 64-byte no-FEC frame being long/unprotected vs the 11-byte RS frame of
+Gate 3 (that one also failed offline). Next differential, not run: A->B (IC-9700 transmits, FT-818 receives), and the
+RSPdx at RFGR 22+ recording the FT-818 audio. Not retried.
