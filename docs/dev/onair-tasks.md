@@ -19,7 +19,9 @@ Rules for the station session, every task:
 - The station safety rules hold throughout: the FT-818's power is never increased; its FRONT antenna
   stays selected; the mode is checked before keying.
 - Paste raw command output into the results (fenced blocks); do not summarise it away. Results that
-  contain secrets (keys, passwords) are redacted.
+  contain secrets (keys, passwords) are redacted. **This branch is public:** never record IP addresses,
+  logins, host keys, or anything about a host that is not the project's own (rpi51, rpi53) — name such a
+  host by its role ("the remote FT-991A station") and keep its details in `~/onair-local/`.
 - Commit only this file and session records; push to `claude/affectionate-brahmagupta-sdn8qg`.
 
 ---
@@ -1548,4 +1550,47 @@ reviewed with the next keyed-path change: the `[o]penpulse` fix is correct (the 
 match the ssh command line that carries it); the `ISS_PTT_LEADER_MS` hook did not help (maintainer to
 decide keep or remove). No new task until the maintainer chooses between the FT-818 pair with an
 RS-protected mode now and waiting for the FT-991A's antenna check.
+
+---
+
+## Task 5 — FT-818 at its new location: readiness, G0, then Gate 6 with RS both ways (status: open)
+
+Planned for 2026-10-28, after the maintainer relocates the FT-818 away from the S8–S9 local noise. The
+FT-991A station is out of scope until it is accessible (about 2026-10-30).
+
+Fast-forward both Pis and `source ~/onair-local/ic9700-ft818.sh`. The profile now sets the FT-818 drive
+to 0.075 and telemetry off; the IC-9700 stays on AGC SLOW (and at the ~1 W the maintainer set; the
+runner only lowers).
+
+### Part A — nothing transmits
+
+1. Ask the maintainer to confirm, on the FT-818 at its new place: FRONT antenna, L1, DIG/USER-U, CAT
+   rate 38400, and **VFO B on 144.640 MHz** (Hamlib toggles VFO A/B on every CAT read). Record the
+   answers.
+2. `scripts/onair-setup-audio-routing.sh`, then `scripts/onair-station-check.sh --levels`. Paste the
+   summary and any non-PASS line.
+3. G0 on the FT-818 (prominence only):
+   `ssh dc0sk@dc0sk-rpi53 'cd ~/git/OpenPulseHF && OPHF_ABS_DBFS=0 scripts/onair-rx-idle-floor.sh plughw:CARD=CODEC,DEV=0'`.
+   Compare its broadband floor and the station check's FT-818 idle mean-sq with 2026-10-26/27 (floor
+   −37 dBFS, idle mean-sq ~4.1e-4): did the move lower the noise? Paste the output.
+
+### Part B — Gate 6 with RS, three frames each way (keys both transmitters)
+
+The uncoded rung has no margin on this chain (task 4); this repeats Gate 6 with RS so the result says
+whether the link works, not whether one uncoded frame survived. Record the receiving station's audio
+beside the live receiver each time (as on 2026-10-27), so a failed live run can be decoded offline.
+1. **B → A** (the FT-818 transmits). Ask the maintainer for a go covering three runs (or one go per run,
+   as they prefer), then three times:
+   `scripts/run-onair-ic9700-ft991a.sh supervise --single-case 'BPSK250|rs|64' --reverse`
+2. **A → B** (the IC-9700 transmits). A separate go, then three times without `--reverse`.
+3. After every run: PTT 0 on both rigs, no rigctld or openpulse left running. Per run, report the JSON
+   result line, the IRS log's first-energy / rejection / `invalid magic` counts, and the offline decode of
+   the recorded IRS audio (decoded payload or the error).
+4. **Stop and report** (status `blocked`) on anything safety-related: a relay click on the FT-818 during a
+   transmission, PTT not reading 0, a frequency or mode other than 144.640 MHz PKTUSB before keying.
+   Do not retry a failed direction beyond its three runs without asking.
+
+### Results
+
+_(station session: append here)_
 
