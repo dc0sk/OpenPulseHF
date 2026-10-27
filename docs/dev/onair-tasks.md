@@ -507,7 +507,7 @@ audio from the rig". Open before any keyed task: the FT-818 manual items, and ho
 
 ---
 
-## Task 3 — G0 by prominence, then Gate 3 B → A (status: open)
+## Task 3 — G0 by prominence, then Gate 3 B → A (status: blocked)
 
 **Maintainer decisions (2026-10-27):** the FT-818 items are confirmed (FRONT antenna, L1, DIG/USER-U,
 CAT rate 38400) except the noise source: no quiet location yet. G0 is judged on line prominence only.
@@ -565,5 +565,66 @@ rpi51 and the IC-9700's USB audio record it.
 
 ### Results
 
-_(station session: append here)_
+**Status: blocked at Part A step 3.** Steps 1 and 2 PASS; the SDR would not stream, so step 3 was not
+achieved; Part B (keys a transmitter) not started. Nothing transmitted.
+
+Both Pis fast-forwarded to `7c7bdaa5`.
+
+**Step 1, station B (rpi53), OPHF_ABS_DBFS=0**, rc=0:
+```
+==> Capturing 5s of idle RX audio from 'plughw:CARD=CODEC,DEV=0' at 48000 Hz ...
+==> Analysing idle floor ...
+capture:        /tmp/onair-rx-idle-48000.wav
+duration:       5.00 s @ 48000 Hz
+overall RMS:     -12.8 dBFS
+band policed:   300-2600 Hz
+broadband floor: -37.2 dBFS (median in-band)
+occupied band:    2707 Hz (41-2748) at -20 dB  <- the FILTER WIDTH; hamlib reports 0 on an IC-9700, so record this one
+criteria:       prominence >= 15 dB  OR  level >= 0 dBFS  (max allowed: 0)
+
+PASS: idle floor is clean in the modem passband; the receive path can hear.
+
+G0 PASS for 'plughw:CARD=CODEC,DEV=0'. This rig's receive path can hear a signal in the passband.
+```
+**Step 2, station A (rpi51), RSPdx stopped**, rc=0:
+```
+==> Capturing 5s of idle RX audio from 'plughw:CARD=CODEC,DEV=0' at 48000 Hz ...
+==> Analysing idle floor ...
+capture:        /tmp/onair-rx-idle-48000.wav
+duration:       5.00 s @ 48000 Hz
+overall RMS:     -18.5 dBFS
+band policed:   300-2600 Hz
+broadband floor: -43.1 dBFS (median in-band)
+occupied band:    2666 Hz (152-2818) at -20 dB  <- the FILTER WIDTH; hamlib reports 0 on an IC-9700, so record this one
+criteria:       prominence >= 15 dB  OR  level >= 0 dBFS  (max allowed: 0)
+
+PASS: idle floor is clean in the modem passband; the receive path can hear.
+
+G0 PASS for 'plughw:CARD=CODEC,DEV=0'. This rig's receive path can hear a signal in the passband.
+```
+**Step 3, station A with the RSPdx streaming: NOT ACHIEVED.** `sdr_capture.py` failed to start the stream:
+```
+[INFO] devIdx: 0
+[INFO] SerNo: 2003052C43
+[INFO] hwVer: 4
+[INFO] rspDuoMode: 0
+[INFO] tuner: 1
+[INFO] rspDuoSampleFreq: 0.000000
+[INFO] Using format CF32.
+[ERROR] error in activateStream() - Init() failed: sdrplay_api_Fail
+```
+The process then hung (I killed it, PID 2469020, mine). The idle-floor run made meanwhile printed the expected
+"SDR is running" warning only because that hung process existed; it is NOT a reading with the SDR streaming
+(floor -43.0 dBFS, PASS, same as step 2), so it does not count. A retry after the kill:
+```
+RuntimeError: SoapySDR::Device::make() no driver specified and no enumeration results
+```
+`systemctl is-active sdrplay` = active, `lsusb` still lists `1df7:3030 SDRplay RSPdx`. So the sdrplay API
+service is wedged after the first failed `activateStream` (the same service did enumerate the device fine
+in Task 2). Needs the maintainer: `sudo systemctl restart sdrplay` (and, if it persists, replug the RSPdx),
+then rerun step 3. Cause of the first `Init() failed` not established.
+
+**Note for Part A:** station A's overall RMS is -18.5 dBFS against a -43 dBFS in-band floor, so there is
+strong content outside 300–2600 Hz on the IC-9700 capture; not examined.
+
 
