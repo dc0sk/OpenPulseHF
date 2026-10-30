@@ -1533,7 +1533,7 @@ mode restored: PKTUSB 3000
 ```
 IC-9700 (rpi51), same window: 18:42:03 to 18:42:52, 96 samples of STRENGTH between -41 and -26 dB re S9, mean about -32. No rise during 18:42:08.5-11.2 (samples then: -38 -36 -32 -34 -32 -35 -28). Run 1 (7 s monitor, probably before the carrier): same noise, same remote readings (PO 0.053, SWR 1, ALC 1).
 
-**Result: the 2 m antenna check FAILED.** The FT-991A delivers ~5.3 W with SWR 1 (the Hamlib figure on the FT-991A's meter scale), but nothing is received on the IC-9700, where a 5 W carrier from about 10 km should be far above the -32 dB noise. Most likely the V/UHF connector feeds a dummy load or an antenna path that is not the 2 m antenna (coax switch, HF-only antenna); a broken antenna would show a high SWR rather than 1. This is an inference: the cabling was not seen, and the IC-9700 antenna being the weak side is not excluded, but the IC-9700 received the FT-818 and earlier transmissions this session. Nothing was transmitted beyond the two ~3 s, 5 W carriers.
+**Result of 2026-10-27 (SUPERSEDED by the retest below: the maintainer had the station checked and a 2 m antenna IS connected, so the dummy-load inference is withdrawn):** the 2 m antenna check did not show a signal. The FT-991A delivers ~5.3 W with SWR 1 (the Hamlib figure on the FT-991A's meter scale), but nothing is received on the IC-9700, where a 5 W carrier from about 10 km should be far above the -32 dB noise. Most likely the V/UHF connector feeds a dummy load or an antenna path that is not the 2 m antenna (coax switch, HF-only antenna); a broken antenna would show a high SWR rather than 1. This is an inference: the cabling was not seen, and the IC-9700 antenna being the weak side is not excluded, but the IC-9700 received the FT-818 and earlier transmissions this session. Nothing was transmitted beyond the two ~3 s, 5 W carriers.
 
 Final state: both rigs PTT 0; IC-9700 144.640000 MHz PKTUSB (restored after FM); no rigctld, openpulse or other helper left running on either host. Scripts used: scratch only, not committed.
 
@@ -1553,6 +1553,26 @@ branch history (maintainer: not a problem; the rule is to keep such details out 
 RS-protected mode now and waiting for the FT-991A's antenna check.
 
 ---
+
+### Retest 2026-10-30: the FT-991A radiates and the IC-9700 hears it
+The remote station had stalled during updates and was rebooted; the maintainer had its 2 m antenna checked on site ("there was an antenna connected for 2 m"). Someone also left the FT-991A on 144.799 MHz FM, power on, RFPOWER still 0.05. What changed in the cabling between 2026-10-27 and today is not known, so why nothing was received on 10-27 is open (the IC-9700 was in the same state: ATT 0, preamp 0, AGC SLOW, ~1.2 W). The route to the station changed (address and host key kept out of the repo, as above).
+
+Same script and limits as before (one ~3 s unmodulated FM carrier, 5 W, PTT by CAT, a trap releases PTT, RFPOWER 0.05 verified before keying). Remote side, raw:
+```
+18:38:13.368 PTT on        18:38:13.944 PTT/SWR/PO/ALC: 1 1 0.053 1
+18:38:14.449 PTT/SWR/PO/ALC: 1 1 0.053 1       18:38:14.959 PTT/SWR/PO/ALC: 1 1 0.053 1
+18:38:16.070 PTT off returned     mode restored: PKTUSB 3000
+```
+IC-9700 on rpi51 (144.640 MHz FM, STRENGTH twice a second): -36 at 18:38:13.19, **+23 dB re S9 on every sample from 18:38:13.69 to 18:38:15.18**, -31 at 18:38:15.67, noise -30 to -38 around it. A clean step: **the carrier is received S9+23 dB at rpi51.**
+RSPdx on rpi51 (`sdr_capture.py 144590000 192000 40 22 40`, Antenna A, RFGR 22, 40 s, clip 0 %, carrier expected at +50064 Hz): **no carrier.** The per-0.5 s spectra show no rise at the keyed time; keyed (15.5-19 s) minus quiet (4-7.5 s) spectrum: largest smoothed rise 2.3 dB at -4153 Hz (noise), median 0.02 dB. At RFGR 22 the RSPdx is too insensitive for this path (or its antenna is poor), so it cannot be the second receiver for this station without a much lower RFGR (there is no local transmitter now; keep RFGR 22 whenever rpi51's own rig transmits).
+SWR 1 with 5.3 W is consistent with a working antenna.
+
+Final state: both rigs PTT 0; IC-9700 144.640000 MHz PKTUSB; FT-991A on 144.640064 MHz PKTUSB, RFPOWER 0.05; nothing running on either host. Scratch scripts only, not committed.
+
+### Next for this station
+1. Deploy fresh `openpulse`/`openpulse-server` and the scripts to it (about 33 MB), then `scripts/onair-station-check.sh` with a local profile and `scripts/onair-setup-audio-routing.sh` (Codec volumes are already 0.15 sink / 1.00 source).
+2. Check the audio chain first (idle floor, TX drive and FT-991A ALC), 5 W maximum.
+3. Then A -> B and B -> A with the FT-991A as IRS, RS-protected; for an RSPdx copy use a much lower RFGR.
 
 ## Task 5 — FT-818 at its new location: readiness, G0, then Gate 6 with RS both ways (status: open)
 
