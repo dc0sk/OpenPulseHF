@@ -1619,6 +1619,20 @@ Same settings, `supervise --single-case 'BPSK250|rs|64' --reverse`, IC-9700 audi
 | 3 | `onair-2026-10-30T184935.json` | PASS | -11 | 2.20e-5 | +6.4 dB | 1470 Hz |
 All three burst at t = 71-79.5 s of the recording, 5-95 % band 1359-1582 Hz. FT-991A ALC is still UNVERIFIED (telemetry reads 0). Final state: both rigs PTT 0, nothing running. **B -> A works with the FT-991A as ISS at 5 W; A -> B stays blocked on the FT-991A's DATA-USB receive audio.**
 
+#### FT-991A receive width test (maintainer's go; no transmission): the DATA-USB audio band is set by the WIDTH index and tops out at ~1.7 kHz
+CAT `SH0nn;` (WIDTH) written and read back in DATA-USB (PTT 0 throughout, 8 s of idle `arecord` per value, Welch spectrum, dB per Hz relative; the original value 16 was restored on every exit path):
+| SH0 index | readback | 100-300 | 300-600 | 600-900 | 900-1200 | 1200-1500 | 1500-1800 | 1800-2400 | 2400-3000 Hz |
+|---|---|---|---|---|---|---|---|---|---|
+| 4 | 4 | -94 | -96 | -101 | -106 | -108 | -111 | -113 | -118 (nearly silent) |
+| 8 | 8 | -85 | -100 | -105 | -109 | -113 | -115 | -117 | -122 |
+| 12 | 12 | -75 | -69 | -79 | -102 | -109 | -112 | -115 | -120 |
+| **16 (runner's state)** | 16 | -75 | -68 | -68 | -70 | -81 | **-103** | -109 | -115 |
+| 17 (the maximum) | 17 | -75 | -68 | -67 | -68 | -70 | -81 | -104 | -110 |
+| 18 | **17 (clamped)** | | | | | | | | |
+The upper edge of the audio follows the width index (about 750 Hz at 12, 1.4 kHz at 16, 1.7 kHz at 17). **In DATA-USB the rig accepts 0-17 only** (14, 15, 17 take; 18-21 read back 17), **in plain USB 0-21** (default 20, audio flat to ~3 kHz). So even at the maximum the DATA-USB receive audio ends at ~1.7 kHz, which cuts the upper half of a BPSK250 signal centred on 1500 Hz (the A -> B symptom). The data-mode LCUT/HCUT menus (066/068: 300/3000 Hz) are not the limit.
+Hamlib maps the passband to the index: in DATA-USB `M PKTUSB 2400` -> SH 16 (what the runner sets) and `M PKTUSB 3000` -> SH 17. Not a fix by itself: 17 still ends at ~1.7 kHz. Side effects of the test, undone: the USB-mode width was written 21 and restored to 20; DATA-USB restored to 16; the mode toggles changed the DATA-USB width to 17 once (Hamlib's 3000 Hz), restored to 16.
+**Candidate for the A -> B direction: receive in plain USB** (`TEST_MODE_RIG_B=USB` in the profile, the runner already supports a per-side mode). USB audio is flat to ~3 kHz and arrives through the same USB CODEC. It is untested live; B -> A (the FT-991A transmitting) must stay in DATA-USB because the USB-codec transmit audio is only taken in the data modes (DATA IN SELECT = REAR, menu 070). Open: why the FT-991A's DATA-USB width table ends so low; not looked up in the manual.
+
 ## Task 5 — FT-818 at its new location: readiness, G0, then Gate 6 with RS both ways (status: open)
 
 Planned for 2026-10-28, after the maintainer relocates the FT-818 away from the S8–S9 local noise. The
