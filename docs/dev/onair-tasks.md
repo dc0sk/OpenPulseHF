@@ -1607,8 +1607,17 @@ Suggested next steps (needs the maintainer at the FT-991A): (1) look at the menu
 
 ### 2026-10-30 evening, B -> A with the FT-991A as ISS: **PASS** (1 run)
 Maintainer's go for ONE run. `supervise --single-case 'BPSK250|rs|64' --reverse`, report `onair-2026-10-30T183903.json`: 144.640000 MHz (A) / 144.640064 MHz (B, +64 Hz trim, the example's value again), FT-991A at RFPOWER 0.05 (5 W, the maintainer's cap; the IC-9700 receives), TX sink 0.15, DATA-USB. Result `[BPSK250 fec=rs payload=64B] ... PASS` — the runner passes only when the sent payload text is found in the IRS (IC-9700) receiver output. Telemetry: IRS strength max -11; the ISS side's `alc>0` and `rfm>0` read 0 (not readable, so the FT-991A's ALC is UNVERIFIED).
-IC-9700 audio recorded beside the live receiver (`arecord -D pulse`): floor mean_sq 2.0e-5, burst t = 71.0-79.5 s at +7.0 dB, **carrier centroid 1467.6 Hz, 5-95 % band 1359-1582 Hz**: a signal near its nominal 1500 Hz, nothing like the 1370 Hz of the A -> B recordings. So the FT-991A's transmit chain and the IC-9700's receive chain are fine at 5 W; the open fault is the FT-991A's DATA-USB receive audio (previous section). One run is one data point: the three-run pattern of Task 5 was not done.
+IC-9700 audio recorded beside the live receiver (`arecord -D pulse`): floor mean_sq 2.0e-5, burst t = 71.0-79.5 s at +7.0 dB, **carrier centroid 1467.6 Hz, 5-95 % band 1359-1582 Hz**: a signal near its nominal 1500 Hz, nothing like the 1370 Hz of the A -> B recordings. So the FT-991A's transmit chain and the IC-9700's receive chain are fine at 5 W; the open fault is the FT-991A's DATA-USB receive audio (previous section). One run is one data point, so two more followed (see below).
 Final state: both rigs PTT 0, nothing running; FT-991A PKTUSB 144.640064 MHz; IC-9700 PKTUSB 144.640000 MHz at ~1.2 W (set by the maintainer, never raised).
+
+#### B -> A repeats (maintainer's go for two more): 3 of 3 PASS
+Same settings, `supervise --single-case 'BPSK250|rs|64' --reverse`, IC-9700 audio recorded each time:
+| run | report | result | IRS strength max | IC-9700 floor mean_sq | burst over floor | carrier centroid |
+|---|---|---|---|---|---|---|
+| 1 | `onair-2026-10-30T183903.json` | PASS | -11 | 1.97e-5 | +7.0 dB | 1468 Hz |
+| 2 | `onair-2026-10-30T184659.json` | PASS | -12 | 2.08e-5 | +6.7 dB | 1472 Hz |
+| 3 | `onair-2026-10-30T184935.json` | PASS | -11 | 2.20e-5 | +6.4 dB | 1470 Hz |
+All three burst at t = 71-79.5 s of the recording, 5-95 % band 1359-1582 Hz. FT-991A ALC is still UNVERIFIED (telemetry reads 0). Final state: both rigs PTT 0, nothing running. **B -> A works with the FT-991A as ISS at 5 W; A -> B stays blocked on the FT-991A's DATA-USB receive audio.**
 
 ## Task 5 — FT-818 at its new location: readiness, G0, then Gate 6 with RS both ways (status: open)
 
