@@ -1574,6 +1574,37 @@ Final state: both rigs PTT 0; IC-9700 144.640000 MHz PKTUSB; FT-991A on 144.6400
 2. Check the audio chain first (idle floor, TX drive and FT-991A ALC), 5 W maximum.
 3. Then A -> B and B -> A with the FT-991A as IRS, RS-protected; for an RSPdx copy use a much lower RFGR.
 
+### 2026-10-30 evening: station deployed; Gate 6 A -> B with the FT-991A as IRS — 2 runs, both FAIL; the FT-991A's DATA-USB receive audio is cut at ~1.5 kHz
+Deployed (maintainer's go): `openpulse` and `openpulse-tnc` (sha256 identical to rpi51's: `52ce8717…c1a3`, `94abc4b6…bd2e`) plus `scripts/` (61 files) to `~/openpulse/OpenPulseHF` on the station, 36 MB on the SD card (44 GB free); the July binaries were kept as `*.jul30`. A local profile (outside the repo) sources `onair-ic9700-ft991a.example.sh` and sets `B_SSH`, `A_RX_SOURCE_VOLUME=0.44`, `SKIP_RHO_STANDDOWN=1`.
+`scripts/onair-station-check.sh`: station A all PASS; audio routing PASS on both (TX 0.15; RX 0.44 / 1.00); `onair-rx-level-check.sh`: IC-9700 idle mean_sq 7.7e-5 (gate 2.3e-4), FT-991A 1.6e-4 (gate 4.9e-4) — the remote site is quiet (the FT-818's old floor was ~4.1e-4). Station B fails only what a non-git deployment lacks: no git checkout, no `pactl`, no `scipy`, no `openpulse-server`, no `config.toml`/`kisstnc`/`gateway` (preflight). `pactl` and `scipy` were not installed (sudo, SD writes); the runner ran without them.
+
+Two keyed runs, `supervise --single-case 'BPSK250|rs|64'` (A -> B, the IC-9700 transmits ~1.2 W: the runner "only lowers power", it did not raise the IC-9700 to the profile's 0.05; the maintainer's go covered the runs). The IRS audio was recorded beside the live receiver (`arecord -D pulse`, 48 kHz, 150 s, tmpfs; the files stay local).
+| run | report | dials (A / B) | result |
+|---|---|---|---|
+| 1 | `onair-2026-10-30T180753.json` | **144.600000 / 144.600064 MHz** (+64 Hz trim) | FAIL: RS `TooManyErrors`, AFC total offset about -127 Hz |
+| 2 | `onair-2026-10-30T181132.json` | 144.640000 / 144.639937 MHz (-63 Hz trim) | FAIL: RS `TooManyErrors`, AFC total offset about -125 Hz |
+**My error:** run 1 went out on 144.600 MHz, not the project's 144.640 MHz: my local profile sourced the FT-991A example, whose `TEST_FREQ_HZ` is 144600000 (the FT-818 example uses 144.640). It is inside the profile's 2 m guard (144.500-144.750 MHz) but was not the announced frequency. The local profile now sets 144640000.
+**The trim guess was wrong too:** I read the 127 Hz as a dial error and moved B's trim from +64 to -63 Hz for run 2. The offset did not change.
+
+Recorded FT-991A audio (burst at t = 72-80 s in both): RMS 0.047 / 0.039 against a floor of 0.013 / 0.012, i.e. about 10-11 dB over the floor; spectral centroid **1372 / 1361 Hz** (expected carrier 1500 Hz), 5-95 % power band 1089-1502 / 1049-1594 Hz. A 127 Hz dial change moved nothing. This is exactly the finding of 2026-07-30 in `crates/openpulse-modem/tests/captures/README.md` ("the FT-991A's received carrier sat at ~1372 Hz regardless of its dial", the RSPdx decoded the same transmissions at 1511-1513 Hz): the fault is in the FT-991A's receive chain, not in the transmitter or the modem. No SDR copy was recorded today.
+
+**What fixes the audio band (measured, no transmission):** the Welch spectrum of the idle receive audio (dB per Hz, relative; 8 s each, the same dial, only the mode changed over CAT and restored):
+| Hz | DATA-USB (PKTUSB) | USB |
+|---|---|---|
+| 100-400 | -71 | -82 |
+| 700-1000 | -68 | -81 |
+| 1300 | -73 | -82 |
+| 1600 | **-89** | -84 |
+| 1900 | **-105** | -86 |
+| 2500 | -110 | -90 |
+| 2800 | -114 | -94 |
+| 3100 | -116 | -112 (edge at ~3 kHz) |
+Idle RMS 0.0134 (DATA-USB) vs 0.0038 (USB). In DATA-USB the passband ends at ~1.5 kHz with a steep skirt (a BPSK250 signal at 1500 Hz loses its upper half, so the carrier "moves" to ~1370 Hz and the AFC pulls to -125 Hz with RS failing); in plain USB the audio is flat to ~3 kHz. The same cut shows in the noise of both live runs (run 1: -80 dB at 1450, -90 at 1600, -102 at 1750). CAT reads (nothing written): mode `MD0C` (DATA-USB), `SH0`=16, `NA0`=0, `IS0`=+0000, contour off, `NR0`/`NB0` off, `BC0` off, `GT0`=5, `PA0`=2; menus `EX037`=1 (DATA MODE OTHERS), `EX038`=1, `EX039`=+00, `EX040`=0, `EX041`=00, `EX042`=0, `EX043`=00, `EX044`=0, `EX045`=1, `EX046`=000, `EX047`=0, `EX048`=1. The menu numbering is from memory of the FT-991A CAT manual, UNCHECKED; the low/high-cut menus read as OFF, so the cause of the 1.5 kHz edge is not identified.
+Rig state afterwards (read back over CAT after the mode test): FT-991A PKTUSB at 144.640064 MHz, PTT 0; IC-9700 PKTUSB, PTT 0; nothing running on either host.
+
+**Why this matters:** every B-side receive result on this rig in DATA-USB is wrong by design (A -> B cannot work until the receive band is fixed); a B -> A direction would not be affected by this (B transmits, A receives). Do not repeat the A -> B runs until the cause is fixed.
+Suggested next steps (needs the maintainer at the FT-991A): (1) look at the menu items 037-048 on the rig and at the DSP settings in DATA-USB (WIDTH / SHIFT / the data-mode filter), compare with USB; (2) re-measure the idle spectrum as above after each change (no transmission needed: `arecord` 8 s, Welch) — the passband must reach at least 2 kHz; (3) only then repeat one A -> B run, with an RSPdx copy at a lower RFGR; (4) B -> A (the FT-991A transmits, the IC-9700 receives) can be tried independently, at 5 W maximum, but its TX audio path (DATA IN = REAR, `EX045`=1) was not examined.
+
 ## Task 5 — FT-818 at its new location: readiness, G0, then Gate 6 with RS both ways (status: open)
 
 Planned for 2026-10-28, after the maintainer relocates the FT-818 away from the S8–S9 local noise. The
