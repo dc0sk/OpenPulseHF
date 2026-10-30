@@ -1656,6 +1656,20 @@ Verdicts: the mechanism (DATA-USB receive audio band-limited; USB fine) CONFIRME
 - **The 700 Hz readout shift is the CW pitch.** Raw `MD02;` / `MD0C;` toggles (2 s apart, no Hamlib): with `KP40;` (700 Hz) the USB readout is 144639364 for a DATA-USB 144640064 (-700 Hz); with `KP20;` (500 Hz) it is 144639564 (-500 Hz); back in DATA-USB it reads 144640064 again both times. Raw toggling changes the width by itself (USB 14, DATA-USB 16 on this rig). CW pitch restored to `KP40;`, rig restored (DATA-USB, `FA144640064`, `SH016`, PTT 0). So the readout shift in USB follows the CW pitch (EX059 reads 1: probably CW FREQ DISPLAY = pitch offset, UNCHECKED against the manual; a menu value the maintainer could look up). Whether the RF carrier moves with it or only the display is still open: the two measured carriers fit "readout true in both modes" only loosely.
 - **The review's prime suspect is refuted as stated:** the maintainer's manual lists 064 OTHER DISP (SSB) and 065 OTHER SHIFT (SSB) as -3000..+3000 Hz in 10 Hz steps with default **0 Hz**, and both read +0000, i.e. at the default. So the DATA passband centred near 0 Hz is the factory behaviour with these menus untouched. Whether a non-zero 065 moves the passband (and the carrier) is untested; 062 (DATA MODE, reads 1) and 063 (PSK TONE, reads 0) are not yet identified from the manual.
 
+#### Menu sweep on the FT-991A (maintainer: "try whatever values you can set on your own"; no transmission): OTHER SHIFT +1500 centres the DATA-USB passband
+CAT `EXnnn<value>;` written and read back (DATA-USB, width 16, 8 s idle `arecord` each, Welch 4096; -10 dB band edges of the smoothed spectrum; originals 062=1, 063=0, 064=+0000, 065=+0000, written back through a trap and read back; dial readout `FA144640064` unchanged in every case; PTT 0; only menus 062-065 touched):
+| setting | -10 dB band | -20 dB band |
+|---|---|---|
+| baseline (defaults) | 199-1266 Hz | 141-1383 |
+| **065 OTHER SHIFT = +1500** | **293-2648 Hz** | 223-2801 |
+| 065 = -1500 | silent (rms 1e-4) | |
+| 064 OTHER DISP = +1500 | 199-1254 Hz | 141-1383 (no effect on the audio) |
+| 062 = 0 (DATA MODE: the other value than 1), PSK TONE 063 = 0 | 211-2180 Hz | 152-2332 |
+| 062 = 0, 063 = 1 | **293-2648 Hz** (same as 065 +1500) | 223-2801 |
+| 062 = 0, 063 = 2 | 492-3363 Hz | 398-3551 |
+So the DATA-USB passband centre is set by OTHER SHIFT (SSB) (or, equivalently, by DATA MODE = PSK with PSK TONE 1500 Hz), the reviewer's "mis-centred" reading was right: with +1500 the band covers 293-2648 Hz, enough for a 1500 Hz BPSK250 signal. (The meaning of 062's two values was inferred from the menu position; the manual's names were not looked up.) **Untested on the air:** whether the shift also moves the receive or transmit RF relative to the dial (the CAT dial readout did not change); that decides where the received carrier lands in the audio and whether B -> A still transmits on 144.640 MHz. The next A -> B (receive) run in DATA-USB, with 065 = +1500 and no USB workaround, answers the receive half; a B -> A check afterwards must be watched for frequency (IC-9700 audio centroid and the CAT readout).
+Final state after the sweep: menus 062-065 back at 1 / 0 / +0000 / +0000, FT-991A DATA-USB 144640064 SH 16, PTT 0.
+
 ## Task 5 — FT-818 at its new location: readiness, G0, then Gate 6 with RS both ways (status: open)
 
 Planned for 2026-10-28, after the maintainer relocates the FT-818 away from the S8–S9 local noise. The
