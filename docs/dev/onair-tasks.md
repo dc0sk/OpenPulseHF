@@ -2315,7 +2315,7 @@ End state: PTT 0 on both rigs, nothing running; FT-991A read back `EX065+1500; F
   Also passed: `BPSK250|none` both ways (B → A 1 of 2) and `QPSK250-D|rs` A → B once, with the longer
   kill wait. **Whether B → A without a witness is acceptable for A1 is for the maintainer to decide.**
 
-## Task 11 — A2 on the FT-991A pair: the daemon rate ladder, induced level changes, both directions (status: open)
+## Task 11 — A2 on the FT-991A pair: the daemon rate ladder, induced level changes, both directions (status: blocked — twin OTA script's dial read-back takes the Hamlib banner line; nothing keyed, see Results)
 
 **Goal.** Release 1 criterion **A2** (`docs/dev/project/release-1.0-criteria.md` §A2): in the
 receiver-led direction, show all three of:
@@ -2408,6 +2408,15 @@ c9e152f32d6b8d5548551b255865b9c45c198b96739672b02eab9dee56fdc373  scripts/twin-t
 - `scripts/onair-setup-audio-routing.sh --verify`: PASS on both stations (A: sink_vol 0.15, src_vol 0.44; B: sink_vol 0.15, src_vol 1.00).
 - Nothing else on either station uses a rig's CAT port or audio device: no rigctld, openpulse, arecord or other recorder running on rpi51 or station B (`pgrep`, and no open handle on the CAT serial devices on B).
 
-_(Part B: pending, one go)_
+**Part B run 1 (maintainer's go, 2026-10-31): aborted by the script before any keying.** Start 17:3x UTC: RSPdx capture `sdr_capture.py 144620000 62500 960 22 40` accepted 62.5 kS/s, then `OTA_PROFILE=robust TRAFFIC_FROM=A TRAFFIC_SIZE=64 TRAFFIC_INTERVAL=2 TRAFFIC_DURATION=900 scripts/run-onair-twin-ota.sh run`. The byte-identity check passed (same three sha256 on both stations), both rigctld started, and then:
+```
+  [IC-9700] tune -> 144640000 Hz (TEST_FREQ_HZ 144640000 + 0), mode PKTUSB
+rigctld: Hamlib 4.6.2 2025-02-09T21:03:50Z SHA=870364 64-bit
+  [IC-9700] ERROR: dial reads 'rigctld: Hamlib 4.6.2 2025-02-09T21:03:50Z SHA=870364 64-bit', expected 144640000
+ERROR: station A failed its dial or mode check; nothing was keyed
+```
+**Cause (read from `scripts/run-onair-twin-ota.sh` `tune()`, line ~109):** the dial is read as `rigctl -m 2 -r 127.0.0.1:<port> f 2>/dev/null | head -n1`, and on this Hamlib (4.6.2) the first stdout line of that call is the `rigctld: Hamlib ... SHA=...` banner, not the frequency (the Gate 6 runner takes the last line instead, `| tail -n1`). Not patched here: the task file says to commit only this file and session records, and a script change is for the cloud session (it keys the transmitters' pre-flight, so it also needs the standing adversarial review). The same `head -n1` is used for the mode read-back at line ~115.
+
+Nothing was keyed: no PTT, no daemon, no traffic. Afterwards: `run-onair-twin-ota.sh cleanup` run (rigctld stopped on both stations), the RSPdx capture killed (it had been running ~1 min; the partial file `~/onair-captures/2026-10-31/a2-ab.cf32` on rpi51 is discarded), PTT 0 on both rigs, FT-991A RFPOWER 0.05 and dial 144641564, IC-9700 RFPOWER 0.0117647. **Status: blocked** (Part B/C not run).
 
 
