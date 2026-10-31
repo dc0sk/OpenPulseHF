@@ -1827,7 +1827,7 @@ warns when a report it wrote does not parse. The 20 reports are left as recorded
 are intact. Next: A1 (two-station exchange) and A2 on the FT-991A pair, per `release-1.0-criteria.md` §A.
 
 
-## Task 7 — A1 on the FT-991A pair: the quick tier both ways, with the RSPdx witness and evidence bundles (status: blocked — 2 of 6 runs; A -> B soft_concatenated fails, see Results)
+## Task 7 — A1 on the FT-991A pair: the quick tier both ways, with the RSPdx witness and evidence bundles (status: superseded by task 8 — 2 of 6 runs PASS; A -> B soft_concatenated fails, see Results and the review below)
 
 **Goal.** Release 1 criterion **A1** on 2 m (`docs/dev/project/release-1.0-criteria.md` §A,
 `docs/dev/onair-execution-plan.md` §3): modes on the `hpx_hf` ladder decode **rig → rig in both
@@ -1923,4 +1923,93 @@ Failure detail, full IRS log on station B: first-energy attempt: 319; fec attemp
 - Suggested next station run, on the maintainer's go: re-run A -> B `soft_concatenated` once with the FT-991A audio recorded beside the live receiver (`arecord`, 48 kHz, as in the task 6 recordings) and decode it offline with the same build; and/or the same case B -> A.
 
 _(runs 4-6: pending, one go each)_
+
+**Reviewed (cloud session, 2026-10-31), task 7:** two findings.
+
+1. **`BPSK250|soft_concatenated` is not a rung of the `hpx_hf` ladder.** SL5 is BPSK250 with **RS**
+   (`crates/openpulse-core/src/profile.rs`, `fec_modes`). Soft-concatenated FEC is used only on the OFDM
+   rungs SL7–SL11. The quick tier's third case was never an A1 case. It has also **never passed on the
+   air**: all 14 reports carrying it since 2026-06-06 fail, on every pair.
+2. **What breaks it, reproduced in process.** The off-air checks, at the same commit, all decode it:
+   - a clean channel, AWGN at 30, 15 and 8 dB, a 180° carrier phase, ±2.8 Hz and 20 Hz offsets;
+   - the streaming receive the CLI uses (`receive_with_fec_mode_timeout`), with silence or noise padded
+     around the frame, including 15 s of trailing noise (≈7900 LLRs, the on-air count).
+
+   Two things do not fit:
+   - The answer to the maintainer's question: **a frequency offset at the FT-991A is not it.** 20 Hz
+     decodes, and the station's AFC read 2.8 Hz.
+   - **A sample-clock offset between the stations is.** Soft-concatenated fails from **±150–200 ppm**
+     (`route_with_sro`), with **exactly the on-air error**, `decoded length prefix (…) exceeds
+     available bits`. RS at the same payload decodes up to +400 and −300 ppm (it failed at −400). The
+     soft-concatenated frame is twice as long (16.9 s against 8.4 s in simulation), and the drift
+     accumulates over the frame.
+
+   **Not yet known: the real clock offset between the two stations.** Unless it is above about 150 ppm,
+   this explanation is wrong. Task 8 measures it before anything else keys.
+   (Scratch test, not committed: `BPSK250` × {Rs, SoftConcatenated} × the routes above.)
+
+A1 goes on with ladder MODCODs only, in task 8: SL5 `BPSK250|rs` (2 of 2 so far A → B) and SL6
+`QPSK250-D|rs`, with the uncoded `BPSK250|none` kept as the baseline.
+
+## Task 8 — measure the stations' clock offset (nothing transmits), then finish A1 with ladder MODCODs (status: open)
+
+Station B is the remote FT-991A, and its station rules apply: 5 W at most, ask the maintainer before
+**every** run that keys, and record nothing about that host here. Same local profile as task 7. The IC-9700
+stays at RFPOWER ≤ 0.05; its normal value is 0.0118 (~1.2 W).
+
+### Part A — the sample-clock offset of each station (nothing transmits)
+The modem gets its audio through PipeWire's `pulse` device, so measure what that device delivers. On
+**each** station, with the rig on and receiving, do the following.
+1. Record whether the clock is synchronised: `timedatectl show -p NTPSynchronized` (or `chronyc
+   tracking`). It must be synchronised. The measurement uses the system clock as the reference.
+2. Save this as `/tmp/rate.py`:
+   ```python
+   import sys, time
+   nominal = float(sys.argv[1]); dur = float(sys.argv[2]); skip = 10.0
+   t0 = time.monotonic(); n = 0; pts = []
+   f = sys.stdin.buffer
+   while True:
+       b = f.read(4800)
+       if not b: break
+       n += len(b) // 2; t = time.monotonic() - t0
+       if t > skip: pts.append((t, n))
+       if t > dur: break
+   k = len(pts); tm = sum(p[0] for p in pts) / k; nm = sum(p[1] for p in pts) / k
+   slope = sum((p[0]-tm)*(p[1]-nm) for p in pts) / sum((p[0]-tm)**2 for p in pts)
+   res = [p[1] - (nm + slope*(p[0]-tm)) for p in pts]
+   print(f"rate={slope:.3f} Hz  ppm={(slope/nominal-1)*1e6:+.1f}  points={k}  span={pts[-1][0]-pts[0][0]:.0f}s  resid_max={max(map(abs,res)):.0f} samples")
+   ```
+   It fits samples received against time. In the cloud session it read **+245.6 ppm** for a generator
+   running at a known +250 ppm (25 s span).
+3. Run `timeout 620 arecord -q -D pulse -f S16_LE -r 48000 -c 1 -t raw | python3 /tmp/rate.py 48000 600`.
+   Use the same device and rate the modem uses. Nothing else may use that audio device meanwhile. Run it
+   on both stations **at the same time**, and quote both lines.
+4. Report:
+   - each station's ppm, and **the offset between them** (A − B);
+   - whether `|A − B|` is above 150 ppm.
+
+   Then run it **once more on both** (another 10 min) to show it repeats.
+
+The playback side is assumed to run on the same clock as the capture side (one card). Say if anything
+on the station contradicts that. This decides between two cases:
+- **above about 150 ppm:** the clock offset explains the soft-concatenated failure;
+- **well below:** it does not, and the cause is still open.
+
+Either way, Part B goes on: A1 does not depend on it.
+
+### Part B — finish A1 with ladder MODCODs (keys transmitters: one go per run)
+Same procedure as task 7, Part B: an RSPdx capture per run, a notes file per run, and an evidence bundle
+per run. The station check and binary check from task 7, Part A still hold if the commit on rpi51 is
+unchanged; otherwise repeat them.
+1. A → B `QPSK250-D|rs|64` (SL6).
+2. B → A, with `--reverse`: `BPSK250|none|64`, `BPSK250|rs|64` (SL5), `QPSK250-D|rs|64` (SL6), in that order.
+
+A failed run gets one more try with the maintainer's go. A second failure of the same case stops the
+task; report it. Task 7's A → B `none` and `rs` passes count; do not repeat them.
+
+End state, whatever happened:
+- PTT 0 on both rigs, nothing running;
+- recorded: the FT-991A's 065, dial and RFPOWER, and the IC-9700's RFPOWER.
+
+### Results
 
