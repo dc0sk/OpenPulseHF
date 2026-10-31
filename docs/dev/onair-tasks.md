@@ -2531,6 +2531,8 @@ captured 150.00s peak=0.0539 rms=0.0083 clip=0.00% OK
 
 **Before Part G (maintainer, 2026-10-31):** the SRH-771 on the RSPdx was replaced by the SRH-805S ("as we had it before"), and the maintainer says it is **on port B**; whether it is extended was not stated. Part G's rule is that no resonant antenna may be on port B (or an attenuator must be in its line) while the IC-9700 transmits, so **Part G is not started**: it waits for the maintainer to disconnect port B (or move the 805S to port A, where RFGR 22 is the known-safe setting) and say so.
 
+**Part G precondition (maintainer, 2026-10-31):** an SRH-805S had been on both RSPdx ports; the maintainer then confirmed in this session: "no antenna connected to port B now". Recorded as the disconnect confirmation (port A keeps its SRH-805S; RFGR 22 is the safe setting there).
+
 **Reviewed (cloud session, 2026-10-31), task 11's third attempt:** stopping was right under the rule as
 written, but the rule was wrong. What happened:
 1. **The runner hung after `traffic started`.** It started the traffic with `cd … && nohup … &`, which
