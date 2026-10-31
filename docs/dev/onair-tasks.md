@@ -2315,7 +2315,7 @@ End state: PTT 0 on both rigs, nothing running; FT-991A read back `EX065+1500; F
   Also passed: `BPSK250|none` both ways (B → A 1 of 2) and `QPSK250-D|rs` A → B once, with the longer
   kill wait. **Whether B → A without a witness is acceptable for A1 is for the maintainer to decide.**
 
-## Task 11 — A2 on the FT-991A pair: the daemon rate ladder, induced level changes, both directions (status: open — Part D first: measure the receive cost on both stations; then Part B only if station B is fast enough)
+## Task 11 — A2 on the FT-991A pair: the daemon rate ladder, induced level changes, both directions (status: open — Parts D, E, F, G in order; then Part B only if station B is fast enough)
 
 **Goal.** Release 1 criterion **A2** (`docs/dev/project/release-1.0-criteria.md` §A2): in the
 receiver-led direction, show all three of:
@@ -2522,4 +2522,46 @@ sent. After the run or any abort, run `cleanup` and quote its output.
 
 If station B's SL2 decode is 7.5 s or more, **do not run Part B**. Report the tables; that is a
 decision for the maintainer and the cloud session.
+
+**Added (cloud session, 2026-10-31, at the maintainer's request).** The maintainer fits a better 2 m
+antenna to the RSPdx's **port B** to witness B → A. A witness in both directions is preferred, not
+mandatory. ACKs have **never** been seen on the air in this campaign: every A1 and Gate 6 run is one-way,
+because the receiver runs with `--ptt none`. Order: D, E, F, G, then Part B if D allows it.
+
+### Part E — RSPdx port B, idle check (nothing transmits)
+The capture script selects the port with `OPHF_SDR_ANT`. The RSPdx's maximum input rating is still
+UNCHECKED in our docs. A 2 m band-pass filter in front of port B, if available, helps against the
+broadband overload seen at RFGR 0 (task 10).
+1. With nothing transmitting on either station, make one 10 s capture at each of RFGR 22, 15, 10 and 5:
+   `OPHF_SDR_ANT="Antenna B" scripts/onair-sdr/sdr_capture.py 144620000 62500 10 <RFGR> 40 /tmp/portb-<RFGR>.cf32`.
+   Stop as soon as one reports clipping above 0.00 %.
+2. Report, per capture, its result line (peak, rms, clip %). Name the **lowest RFGR with 0.00 %
+   clipping**; Part F uses it. Say whether a filter is fitted.
+
+### Part F — the B → A witness on port B (keys the FT-991A only: one go)
+The runner's receiver on station A uses `--ptt none`, so the IC-9700 does not key in this run.
+1. Start the capture on port B at Part E's RFGR, 20 kHz below the frequency:
+   `OPHF_SDR_ANT="Antenna B" scripts/onair-sdr/sdr_capture.py 144620000 62500 150 <RFGR> 40 ~/onair-captures/2026-10-31/a1-ba-rs-portb.cf32`.
+2. Run `scripts/run-onair-ic9700-ft991a.sh supervise --single-case 'BPSK250|rs|64' --reverse`.
+3. Report the same items as task 9: result, report path, the burst in the capture (time, offset,
+   level over the floor, clip %), and station A's receiver log. Bundle it. This is the A1 B → A run with
+   a witness. The burst is expected near +21.5 kHz.
+
+### Part G — the ACK leg on its own (keys both rigs: one go)
+This shows whether the ACKs work on air, without depending on station B's decode speed. **B sends**, so
+rpi51 does the frame decodes and B only decodes the short FSK4 ACKs. **Before this run, disconnect
+the port-B antenna or put an attenuator on it:** the IC-9700 transmits ACKs a metre from the RSPdx.
+Port A at RFGR 22 is the known-safe witness setting, and capturing is optional.
+1. Run `deploy` again; only the script changed since the last deploy.
+2. Run `OTA_PROFILE=robust TRAFFIC_FROM=B TRAFFIC_SIZE=64 TRAFFIC_INTERVAL=2 TRAFFIC_DURATION=420 DAEMON_LOG_LEVEL=debug scripts/run-onair-twin-ota.sh run`,
+   with no drive changes. It is an ACK check, not A2.
+3. Commit the evidence as in Part B, step 4, redacted and gzipped. From the events, report:
+   - station A: the number of `ota_rate_decision` events with `"verdict":"keyed"` (ACKs sent), and the
+     `ptt_changed` count;
+   - station B: the `ptt_changed` count; whether `OTA send abandoned` appears in `daemon-b.log`;
+     whether any `ota_status` follows a `ptt_changed` `false` within ~10 s (an ACK applied); whether
+     B's `tx_level` ever changes.
+4. Then run `cleanup` and quote it.
+
+Stop rules as for Part B. After Part G, go on to Part B only if Part D's condition holds.
 
