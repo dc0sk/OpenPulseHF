@@ -2564,6 +2564,11 @@ The runner's receiver on station A uses `--ptt none`, so the IC-9700 does not ke
    a witness. The burst is expected near +21.5 kHz.
 
 ### Part G — the ACK leg on its own (keys both rigs: one go)
+**STOP before this part. Tell the maintainer: "Disconnect the SRH-771 from the RSPdx's port B now (or
+put an attenuator in its line); the IC-9700 is about to transmit."** Wait until the maintainer confirms
+it is done, and record the confirmation. Do not ask for the go to key until then. The same applies
+before **any** later run in which the IC-9700 transmits (A → B, or any daemon run) while the whip is on
+port B.
 This shows whether the ACKs work on air, without depending on station B's decode speed. **B sends**, so
 rpi51 does the frame decodes and B only decodes the short FSK4 ACKs. **Before this run, disconnect
 the port-B antenna or put an attenuator on it:** the IC-9700 transmits ACKs a metre from the RSPdx.
