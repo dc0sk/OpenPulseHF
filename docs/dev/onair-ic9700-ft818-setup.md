@@ -2,7 +2,7 @@
 project: openpulsehf
 doc: docs/dev/onair-ic9700-ft818-setup.md
 status: living
-last_updated: 2026-10-27
+last_updated: 2026-10-31
 ---
 
 # On-air setup — IC-9700 (rpi51) ↔ FT-818 (rpi53)
@@ -288,3 +288,8 @@ One record per session; each holds the station state, results, gotchas and open 
   the modem's own envelope. The FT-991A remote station was checked as an alternative receiver; its
   2 m antenna path failed a 5 W carrier check (nothing received at the IC-9700) and waits for an
   on-site look.
+- **2026-10-30 — the remote FT-991A as station B** (`docs/dev/onair-tasks.md`, task 4 addenda): its 2 m
+  path works (S9+23 dB at the IC-9700 at 5 W). Gate 6 B → A (FT-991A transmits, RS): **3 of 3 PASS**.
+  A → B fails in DATA-USB: the FT-991A's data-mode receive passband is centred near 0 Hz; plain USB
+  passed once; menu 065 OTHER SHIFT +1500 centres the passband but moves the dial relation by 1500 Hz.
+  One run went out on 144.600 MHz from the FT-991A example profile; fixed to 144.640.

@@ -45,7 +45,10 @@ export B_RIGCTLD_PORT=4532
 # 2m safety guard for this test window (script enforces this range)
 export BAND2M_MIN_HZ=144500000
 export BAND2M_MAX_HZ=144750000
-export TEST_FREQ_HZ=144600000
+# 144.640 MHz, the project's 2 m test frequency (as in onair-ic9700-ft818.example.sh). This was
+# 144600000, and on 2026-10-30 a session that sourced this profile transmitted on 144.600 MHz instead
+# of the announced frequency (inside the band guard, but not the agreed one).
+export TEST_FREQ_HZ=144640000
 export TEST_MODE_RIG="PKTUSB"
 
 # Per-side dial trim to null the measured rig-to-rig crystal offset (Gate 5).
@@ -55,6 +58,12 @@ export TEST_MODE_RIG="PKTUSB"
 # corrects the actual crystal difference and aligns BOTH directions (received carrier
 # measured back at 1501.5 Hz). Re-measure with Gate 5 if a rig or its TCXO changes.
 export A_FREQ_OFFSET_HZ=0
+# Caution (2026-10-30): the 1436 Hz behind this trim was measured with the FT-991A RECEIVING in DATA-USB,
+# whose receive passband is mis-centred (it ends near half the filter width, ~1.4 kHz at the runner's
+# SH 16) and pins the spectral centroid low. The trim may be partly that artefact; B -> A at +64 put the
+# FT-991A's carrier at ~1468 Hz on the IC-9700. Re-measure on a correctly centred receive path.
+# Also: with menu 065 OTHER SHIFT (SSB) = +1500 (centres the DATA-USB passband) the dial must sit
+# 1500 Hz higher for the same RF, i.e. B_FREQ_OFFSET_HZ = 1500 + trim — untested for transmit.
 export B_FREQ_OFFSET_HZ=64
 
 # IC-9700 audio prerequisites for digital USB TX (set on the radio UI):

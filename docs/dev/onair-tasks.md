@@ -2,7 +2,7 @@
 project: openpulsehf
 doc: docs/dev/onair-tasks.md
 status: review
-last_updated: 2026-10-27
+last_updated: 2026-10-31
 ---
 
 # On-air task channel (cloud session ↔ station session on rpi51)
@@ -26,7 +26,7 @@ Rules for the station session, every task:
 
 ---
 
-## Task 1 — station readiness, read-only (status: blocked)
+## Task 1 — station readiness, read-only (status: blocked; superseded by task 2)
 
 Nothing in this task transmits. Both rigs should be **on** (CAT and the idle level need them).
 
@@ -509,7 +509,7 @@ audio from the rig". Open before any keyed task: the FT-818 manual items, and ho
 
 ---
 
-## Task 3 — G0 by prominence, then Gate 3 B → A (status: blocked)
+## Task 3 — G0 by prominence, then Gate 3 B → A (status: done)
 
 **Maintainer decisions (2026-10-27):** the FT-818 items are confirmed (FRONT antenna, L1, DIG/USER-U,
 CAT rate 38400) except the noise source: no quiet location yet. G0 is judged on line prominence only.
@@ -974,7 +974,7 @@ block, ~8.2 s at 250 bit/s.
 
 ---
 
-## Task 4 — Gates 4 and 5 without keying, then Gate 6 both ways (status: blocked)
+## Task 4 — Gates 4 and 5 without keying, then Gate 6 both ways (status: done)
 
 Fast-forward both Pis and `source ~/onair-local/ic9700-ft818.sh`. The IC-9700's AGC stays on SLOW.
 
@@ -1599,7 +1599,7 @@ Recorded FT-991A audio (burst at t = 72-80 s in both): RMS 0.047 / 0.039 against
 | 2500 | -110 | -90 |
 | 2800 | -114 | -94 |
 | 3100 | -116 | -112 (edge at ~3 kHz) |
-Idle RMS 0.0134 (DATA-USB) vs 0.0038 (USB). In DATA-USB the passband ends at ~1.5 kHz with a steep skirt (a BPSK250 signal at 1500 Hz loses its upper half, so the carrier "moves" to ~1370 Hz and the AFC pulls to -125 Hz with RS failing); in plain USB the audio is flat to ~3 kHz. The same cut shows in the noise of both live runs (run 1: -80 dB at 1450, -90 at 1600, -102 at 1750). CAT reads (nothing written): mode `MD0C` (DATA-USB), `SH0`=16, `NA0`=0, `IS0`=+0000, contour off, `NR0`/`NB0` off, `BC0` off, `GT0`=5, `PA0`=2; the extended-menu reads I first reported (`EX037`..`EX048`, read as DATA MODE / PSK TONE / OTHER DISP / OTHER SHIFT / DATA LCUT / DATA HCUT / DATA IN / DATA PORT) were **wrong: the maintainer checked the manual and menu 037 is MIC SCAN**; my menu numbering came from memory and was never verified, so those values say nothing about the data-mode filter and the statement that the low/high-cut menus 'read as OFF' is WITHDRAWN. **Checked by the maintainer against the manual (2026-10-30):** 066 DATA LCUT FREQ = 300 Hz, 067 DATA LCUT SLOPE = 18 dB/oct, 068 DATA HCUT FREQ = 3000 Hz, 069 DATA HCUT SLOPE = 18 dB/oct, 070 DATA IN SELECT = REAR, 071 DATA PTT SELECT = DAKY; these match the raw dump below (066=05, 067=1, 068=47, 069=1, 070=1, 071=0 or 1: 100 Hz + 4 x 50 Hz = 300 Hz, 700 Hz + 46 x 50 Hz = 3000 Hz). **So the data-mode cuts are the defaults and do not cause the 1.5 kHz edge.** By position, 062-065 are probably DATA MODE (=1, OTHERS), PSK TONE (=0), OTHER DISP (+0000), OTHER SHIFT (+0000) — UNCHECKED. The cause of the 1.5 kHz edge is not identified. Raw dump of the rig's menu table (`rigctl w 'EXnnn;'`, nnn = 001-153, read-only, 2026-10-30, reply = `EXnnn` + value; to be matched to the manual's names by the maintainer): `EX0010300; EX0020700; EX0033000; EX0040; EX0051; EX0060; EX0070; EX00811; EX0093; EX010050; EX011050; EX0123; EX0130; EX01430; EX015000; EX0160; EX0170000; EX0180; EX0190; EX0200; EX0210; EX0220; EX0230; EX0241; EX02500; EX026050; EX027+0000; EX0282; EX0293; EX0300; EX0313; EX0321; EX0330; EX0340; EX035+05; EX03610; EX0371; EX0381; EX039+00; EX0400;  EX04100; EX0420; EX04300; EX0440; EX0451; EX046000; EX0470; EX0481; EX049050; EX05004; EX0511; EX05211; EX0531; EX054029; EX0550; EX0560; EX0570200; EX0582; EX0591; EX0600; EX0610; EX0621; EX0630; EX064+0000; EX065+0000; EX06605; EX0671; EX06847; EX0691; EX0701; EX0710; EX0721; EX073075; EX0740; EX075070; EX0760; EX0770; EX078050; EX0790; EX0800100;  EX0811000; EX0820600; EX08307600; EX0841; EX0850; EX0860; EX087G0GJ7; EX0880; EX0890; EX0900; EX0911; EX09205; EX0931; EX09447; EX0951; EX0960; EX0970; EX0980; EX099050; EX1000; EX1011; EX10201; EX1030; EX10447; EX1050; EX1060; EX107028; EX1080; EX1091; EX1100; EX1111; EX112+00; EX11310; EX1141; EX1150; EX11605; EX1173; EX1186; EX11903; EX120-08;  EX12102; EX12202; EX123-03; EX12403; EX12514; EX126+08; EX12702; EX12802; EX129+00; EX13001; EX13102; EX132+00; EX13301; EX13416; EX135+10; EX13601; EX137099; EX138005; EX139005; EX140005; EX1411; EX1421; EX143010; EX1440100; EX145050; EX146080; EX1470100; EX148000; EX1490; EX1500; EX15114537500; EX1520; EX153000; `
+Idle RMS 0.0134 (DATA-USB) vs 0.0038 (USB). In DATA-USB the passband ends at ~1.5 kHz with a steep skirt (a BPSK250 signal at 1500 Hz loses its upper half, so the carrier "moves" to ~1370 Hz and the AFC pulls to -125 Hz with RS failing); in plain USB the audio is flat to ~3 kHz. The same cut shows in the noise of both live runs (run 1: -80 dB at 1450, -90 at 1600, -102 at 1750). CAT reads (nothing written): mode `MD0C` (DATA-USB), `SH0`=16, `NA0`=0, `IS0`=+0000, contour off, `NR0`/`NB0` off, `BC0` off, `GT0`=5, `PA0`=2; the extended-menu reads I first reported (`EX037`..`EX048`, read as DATA MODE / PSK TONE / OTHER DISP / OTHER SHIFT / DATA LCUT / DATA HCUT / DATA IN / DATA PORT) were **wrong: the maintainer checked the manual and menu 037 is MIC SCAN**; my menu numbering came from memory and was never verified, so those values say nothing about the data-mode filter and the statement that the low/high-cut menus 'read as OFF' is WITHDRAWN. **Checked by the maintainer against the manual (2026-10-30):** 066 DATA LCUT FREQ = 300 Hz, 067 DATA LCUT SLOPE = 18 dB/oct, 068 DATA HCUT FREQ = 3000 Hz, 069 DATA HCUT SLOPE = 18 dB/oct, 070 DATA IN SELECT = REAR, 071 DATA PTT SELECT = DAKY; these match the raw dump below (066=05, 067=1, 068=47, 069=1, 070=1, 071=0 or 1: 100 Hz + 4 x 50 Hz = 300 Hz, 700 Hz + 46 x 50 Hz = 3000 Hz). **So the data-mode cuts are the defaults and do not cause the 1.5 kHz edge.** By position, 062-065 are probably DATA MODE (=1, OTHERS), PSK TONE (=0), OTHER DISP (+0000), OTHER SHIFT (+0000) — UNCHECKED. The cause of the 1.5 kHz edge is not identified. Raw dump of the rig's menu table (`rigctl w 'EXnnn;'`, nnn = 001-153, read-only, 2026-10-30, reply = `EXnnn` + value; to be matched to the manual's names by the maintainer): `EX0010300; EX0020700; EX0033000; EX0040; EX0051; EX0060; EX0070; EX00811; EX0093; EX010050; EX011050; EX0123; EX0130; EX01430; EX015000; EX0160; EX0170000; EX0180; EX0190; EX0200; EX0210; EX0220; EX0230; EX0241; EX02500; EX026050; EX027+0000; EX0282; EX0293; EX0300; EX0313; EX0321; EX0330; EX0340; EX035+05; EX03610; EX0371; EX0381; EX039+00; EX0400;  EX04100; EX0420; EX04300; EX0440; EX0451; EX046000; EX0470; EX0481; EX049050; EX05004; EX0511; EX05211; EX0531; EX054029; EX0550; EX0560; EX0570200; EX0582; EX0591; EX0600; EX0610; EX0621; EX0630; EX064+0000; EX065+0000; EX06605; EX0671; EX06847; EX0691; EX0701; EX0710; EX0721; EX073075; EX0740; EX075070; EX0760; EX0770; EX078050; EX0790; EX0800100;  EX0811000; EX0820600; EX08307600; EX0841; EX0850; EX0860; EX087G0GJ7; EX0880; EX0890; EX0900; EX0911; EX09205; EX0931; EX09447; EX0951; EX0960; EX0970; EX0980; EX099050; EX1000; EX1011; EX10201; EX1030; EX10447; EX1050; EX1060; EX107028; EX1080; EX1091; EX1100; EX1111; EX112+00; EX11310; EX1141; EX1150; EX11605; EX1173; EX1186; EX11903; EX120-08;  EX12102; EX12202; EX123-03; EX12403; EX12514; EX126+08; EX12702; EX12802; EX129+00; EX13001; EX13102; EX132+00; EX13301; EX13416; EX135+10; EX13601; EX137099; EX138005; EX139005; EX140005; EX1411; EX1421; EX143010; EX1440100; EX145050; EX146080; EX1470100; EX148000; EX1490; EX1500; EX15114537500; EX1520; EX153000; `
 Rig state afterwards (read back over CAT after the mode test): FT-991A PKTUSB at 144.640064 MHz, PTT 0; IC-9700 PKTUSB, PTT 0; nothing running on either host.
 
 **Why this matters:** every B-side receive result on this rig in DATA-USB is wrong by design (A -> B cannot work until the receive band is fixed); a B -> A direction would not be affected by this (B transmits, A receives). Do not repeat the A -> B runs until the cause is fixed.
@@ -1711,6 +1711,50 @@ beside the live receiver each time (as on 2026-10-27), so a failed live run can 
 4. **Stop and report** (status `blocked`) on anything safety-related: a relay click on the FT-818 during a
    transmission, PTT not reading 0, a frequency or mode other than 144.640 MHz PKTUSB before keying.
    Do not retry a failed direction beyond its three runs without asking.
+
+### Results
+
+_(station session: append here)_
+
+**Reviewed (cloud session, 2026-10-31), FT-991A work of 2026-10-30:** accepted. B → A with the FT-991A
+transmitting (5 W, DATA-USB, RS): **3 of 3 PASS** — the first direction that is reliable. A → B fails in
+DATA-USB because the FT-991A's data-mode receive passband is centred near 0 Hz (edge ≈ W/2), cutting a
+1500 Hz BPSK250 signal; plain USB passed 1 of 1; menu 065 OTHER SHIFT (SSB) = +1500 centres the
+data passband (293–2648 Hz) and moves the received signal to ~3 kHz at an unchanged dial. Fixed in the
+repo: `onair-ic9700-ft991a.example.sh` now uses 144.640 MHz (it said 144.600, which the session
+transmitted on once), and notes that its +64 Hz trim was measured through the mis-centred filter. The
+raw menu dump's NUL bytes are now spaces (the file read as binary). **The FT-991A was left at 065 = +1500:
+do not key it without the dial offset of task 6.** Task 5 (FT-818 relocated) stays open for when the FT-818
+has moved.
+
+---
+
+## Task 6 — FT-991A both ways with one setting: OTHER SHIFT +1500 and the dial 1500 Hz up (status: open)
+
+Hypothesis from task 4's last run: with 065 = +1500 the FT-991A receives a signal at audio
+`RF − dial + 1500`, so `B_FREQ_OFFSET_HZ = 1500 + 64 = 1564` puts the IC-9700's signal back at 1500 Hz.
+Whether its **transmit** follows the same shift is unknown: if it does, the same offset keeps B → A on
+frequency and no runner change is needed; if not, B → A lands ~1.5 kHz high (still inside the 2 m guard)
+and fails. Station B here is the remote FT-991A; the station rules apply (5 W maximum, ask before every
+keyed step, nothing about that host in this file). Use the local profile that sources
+`onair-ic9700-ft991a.example.sh` (it now says 144.640 MHz) and `export B_FREQ_OFFSET_HZ=1564`.
+
+### Part A — nothing transmits
+1. Read back on the FT-991A: `EX065` (+1500 expected), RFPOWER 0.05, PTT 0, mode, dial. Record.
+2. `scripts/onair-station-check.sh` with that profile. Name which FAILs are only the non-git deployment's
+   (no checkout, no `pactl`/`scipy`, no `openpulse-server`); anything else is a real FAIL — stop.
+
+### Part B — keys transmitters, one go per step
+1. **A → B, one run** (the IC-9700 transmits, ~1.2 W):
+   `scripts/run-onair-ic9700-ft991a.sh supervise --single-case 'BPSK250|rs|64'`, the FT-991A's audio
+   recorded beside the live receiver. Report the result line and the burst's carrier (2fc line method of
+   task 4, Gate 5). Expect ~1500 Hz. If it fails, stop.
+2. **B → A, one run** (the FT-991A transmits, 5 W), same settings, with `--reverse`, the IC-9700's audio
+   recorded. **If the IC-9700's carrier is not within 1500 ± 100 Hz, or nothing is received: stop** — the
+   transmit does not follow the shift. Then restore `EX065+0000;` (read back) and report; B → A keeps
+   working in the old setting (065 = 0, offset 64) and A → B keeps the plain-USB recipe.
+3. **If both pass:** two more runs each way (three per direction in total), same settings.
+4. End state, whatever happened: PTT 0 on both, nothing running, and record the FT-991A's 065 and dial.
 
 ### Results
 
