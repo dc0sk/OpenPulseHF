@@ -1922,7 +1922,10 @@ Failure detail, full IRS log on station B: first-energy attempt: 319; fec attemp
 - Maintainer's question: **is there a receive offset (or similar) at the FT-991A?** What the evidence says: the IRS log's AFC `raw_estimate` is 0.0-2.8 Hz (correction 2.8 Hz), i.e. the carrier is where the receiver expects it, and `none`/`rs` decode through the same chain with 065 = +1500; so a plain frequency offset is unlikely. Not excluded: a passband/amplitude effect that only soft decoding sees (the DATA-USB filter shape, the +1500 shift moving the 1500 +/- 250 Hz BPSK250 spectrum to the passband's lower slope, AGC or audio level as LLR scale), or a soft-concatenated rung problem unrelated to the station (the A -> B 'soft_concatenated' case has not been run on any other pair in this task). **The FT-991A's receive audio was not recorded in these runs**, so it cannot be replayed offline; the RSPdx captures (on rpi51, not committed) carry the RF only.
 - Suggested next station run, on the maintainer's go: re-run A -> B `soft_concatenated` once with the FT-991A audio recorded beside the live receiver (`arecord`, 48 kHz, as in the task 6 recordings) and decode it offline with the same build; and/or the same case B -> A.
 
-_(runs 4-6: pending, one go each)_
+**Run 1 of 4 — A -> B (IC-9700 transmits ~1.2 W, FT-991A receives), `QPSK250-D|rs|64` (maintainer's go, 2026-10-31), RSPdx capture beside it:** **FAIL**
+`Report: docs/dev/test-reports/onair-2026-10-31T151749.json`; frequencies read back at the runner's pre-flight as for run 1 (IC-9700 144640000 Hz, FT-991A 144641564 Hz). SDR capture (`~/onair-captures/2026-10-31/a1-ab-qpsk-rs.cf32` on rpi51, 230400000 bytes, sha256 `4cf469f8...58bcf4`, RFGR 22, IFGR 40): `captured 150.00s peak=0.1955 rms=0.0054 clip=0.00% OK`. Burst at t = 75.25-80.75 s, **peak 51499.9 Hz above the LO**, 53.1 dB over the floor, -20 dB span 51344 51735 Hz. Not decoded (witness only). PTT 0 on both rigs, nothing running. Bundle: ``.
+
+_(runs 2-4: pending, one go each)_
 
 **Reviewed (cloud session, 2026-10-31), task 7:** two findings.
 
@@ -2024,6 +2027,6 @@ B (FT-991A):  rate=47993.692 Hz  ppm=-131.4  points=11799  span=590s  resid_max=
 ```
 **Offset A - B: +73.4 ppm (pass 1), +74.3 ppm (pass 2); it repeats and is below 150 ppm.** Both stations read negative against the system clock (A -58, B -131 ppm). By the task's rule this is "well below": the clock offset does not explain the soft-concatenated failure on its own, and the cause stays open. Caveats: the residual maximum is ~3500 samples (~73 ms) on both, i.e. arecord delivers in bursts, so the fit is of the long-term slope only; this measures the capture clock of each station, not the playback side (assumed to share the card's clock; nothing on the stations contradicted that, but it was not measured, e.g. the IC-9700's playback clock is not checked against its capture clock).
 
-_(Part B runs: pending, one go each)_
+_(runs 1-4: pending, one go each)_
 
 
