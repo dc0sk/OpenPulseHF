@@ -1753,7 +1753,7 @@ has moved.
 
 ---
 
-## Task 6 — FT-991A both ways with one setting: OTHER SHIFT +1500 and the dial 1500 Hz up (status: open — two runs left)
+## Task 6 — FT-991A both ways with one setting: OTHER SHIFT +1500 and the dial 1500 Hz up (status: open — one run left)
 
 **Progress (cloud session, 2026-10-31):** the station session ran this before it was written (on its
 branch `onair-retest-1030`, now merged into this one): A → B with 065 = +1500 and
@@ -1792,5 +1792,19 @@ keyed step, nothing about that host in this file). Use the local profile that so
 
 ### Results
 
-_(station session: append here)_
+**Part A (2026-10-31, nothing transmitted).** Local profile `~/onair-local/ic9700-ft991a.sh` (it had overridden `B_FREQ_OFFSET_HZ=64`; that line is removed, the example's 1564 applies; `B_FREQ_OFFSET_HZ=1564` confirmed after sourcing). Remote FT-991A read back by CAT:
+```
+EX065+1500;  MD0C;  SH016;  FA144640064;  RFPOWER 0.05  PTT 0
+```
+`scripts/onair-station-check.sh`, commit 58433ebb on both: `Summary: PASS=33 FAIL=5`. The five FAILs are all the remote station's non-git deployment: no git checkout, no `pactl`, no numpy/scipy, `onair-preflight --strict` (PASS=6 WARN=1 FAIL=3: missing config.toml, openpulse-kisstnc, openpulse-gateway) and `openpulse-server` not built. Nothing else failed; the runner does not use these. The MANUAL list printed is the FT-818 one (not applicable here).
+
+**Part B, B -> A run 1 of 2 more (maintainer's go, 2026-10-31).** `scripts/run-onair-ic9700-ft991a.sh supervise --single-case 'BPSK250|rs|64' --reverse`, IC-9700 audio recorded beside the live receiver (`arecord -D pulse`, 48 kHz):
+```
+freq = 144640000 Hz [expected 144640000]   (IC-9700, IRS)
+freq = 144641564 Hz [expected 144641564]   (FT-991A, ISS)
+[BPSK250 fec=rs payload=64B] ... PASS      Report: docs/dev/test-reports/onair-2026-10-31T093803.json
+```
+Burst at t = 72.0-80.0 s, level ~5x the idle mean-square (1.98e-5; the IC-9700 source is quiet, not saturated). Carrier by the 2fc line method on 72.5-80 s: **2fc line at 2996.7 Hz, carrier 1498.4 Hz** (peak/median 279; Welch maximum 1464.8 Hz, the data sidebands) — inside 1500 +/- 100 Hz, so the transmit follows the shift. PTT 0 on both rigs afterwards, no rigctld/openpulse left running.
+
+_(run 2 of 2 pending)_
 
