@@ -2511,6 +2511,15 @@ End state: PTT 0 on both rigs, nothing running; FT-991A read back `EX065+1500;FA
 
 **Port B status (maintainer, 2026-10-31, asked after the 4th Part B attempt):** nothing was connected to the RSPdx's port B during that run (the maintainer connects the SRH-771 only when told to), so the IC-9700's transmissions in run 4 did not reach a resonant whip; that capture used port A. **Part E is waiting for the maintainer to connect the SRH-771 to port B** and say whether it is extended or collapsed and whether a 2 m band-pass filter is fitted; I have not started Part E, F or G.
 
+**Part E (2026-10-31, nothing transmitted; PTT 0 on both rigs, no daemon, rigctld or capture running).** Port B antenna, as the maintainer told me: the Diamond SRH-771 is connected directly to port B and **it is not telescopic: always extended** (the cloud session's "telescopic" was wrong). No 2 m band-pass filter was mentioned by the maintainer (none fitted as far as I know; not asked again). One 10 s capture each, `OPHF_SDR_ANT="Antenna B" sdr_capture.py 144620000 62500 10 <RFGR> 40`:
+```
+RFGR 22: cfg: f=144.6200MHz RFGR=22 IFGR=40 ant=Antenna B RFGR range 0, 27   captured 10.00s peak=0.0006 rms=0.0002 clip=0.00% OK
+RFGR 15: cfg: f=144.6200MHz RFGR=15 IFGR=40 ant=Antenna B RFGR range 0, 27   captured 10.00s peak=0.0014 rms=0.0003 clip=0.00% OK
+RFGR 10: cfg: f=144.6200MHz RFGR=10 IFGR=40 ant=Antenna B RFGR range 0, 27   captured 10.00s peak=0.0049 rms=0.0009 clip=0.00% OK
+RFGR  5: cfg: f=144.6200MHz RFGR=5  IFGR=40 ant=Antenna B RFGR range 0, 27   captured 10.00s peak=0.0544 rms=0.0080 clip=0.00% OK
+```
+**The lowest RFGR with 0.00 % clipping is 5** (the lowest I tried; I did not go below it). The rms rises 40 times from RFGR 22 to 5 (0.0002 to 0.0080), and the spectrum median rises from -33.8 dB to -1.1 dB, so the extra gain mainly adds noise and off-channel energy: at RFGR 5 the strongest lines are at -12188 Hz and +23746 Hz (about +8 to +9 dB over the median), not at the 144.6415 MHz channel (+21.5 kHz: +1.9 dB). On port B there is no constant line at +21.527 kHz; the strong constant line of the port A captures (task 11 Part B) is not there. Part F would use RFGR 5. The captures were not kept (10 s each, idle). Part F, G not started (Part G needs the whip disconnected first).
+
 **Reviewed (cloud session, 2026-10-31), task 11's third attempt:** stopping was right under the rule as
 written, but the rule was wrong. What happened:
 1. **The runner hung after `traffic started`.** It started the traffic with `cd … && nohup … &`, which
