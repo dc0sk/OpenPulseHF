@@ -1697,7 +1697,11 @@ for s in ("a", "b"):
 print(json.dumps({"stations": state, "drift_between_reads": drift}, indent=2))
 RIGPY
 )"
-    rig_state_json="${rig_state_json:-{\"stations\":{},\"drift_between_reads\":[],\"error\":\"rig state block could not be built\"}}"
+    # Not `${rig_state_json:-{...}}`: the first `}` in the default closes the expansion, so a BUILT block
+    # got the rest of the default appended and 20 reports of 2026-10-27..31 are not valid JSON.
+    if [[ -z "$rig_state_json" ]]; then
+        rig_state_json='{"stations":{},"drift_between_reads":[],"error":"rig state block could not be built"}'
+    fi
 
     cat > "${report}" <<JSON
 {
@@ -1719,6 +1723,9 @@ RIGPY
   "cases": [${results_json}]
 }
 JSON
+    if ! python3 -c 'import json, sys; json.load(open(sys.argv[1]))' "${report}" 2>/dev/null; then
+        echo "WARN: ${report} is not valid JSON; the results above stand, but tools reading it will fail" >&2
+    fi
 
     echo ""
     echo "==> Results: ${pass}/${total} passed, ${fail} failed."

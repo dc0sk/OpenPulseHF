@@ -1818,3 +1818,11 @@ Burst at t = 71.5-80.0 s, ~5.2x the idle mean-square (1.98e-5); **2fc line at 29
 
 **End state:** FT-991A `EX065+1500`, dial `FA144640064` (the runner restores it after each run; the next run sets 144641564), DATA-USB `SH016`, RFPOWER 0.05; PTT 0 on both rigs, nothing running.
 
+**Reviewed (cloud session, 2026-10-31), task 6:** done. With 065 = +1500 and `B_FREQ_OFFSET_HZ=1564` the
+FT-991A pair passes Gate 6 with RS **3 of 3 in each direction** (B → A carriers 1498.4 and 1496.7 Hz on the
+IC-9700). Found while reviewing: the runner wrote 20 of the 40 recent reports as invalid JSON — the
+`${rig_state_json:-{...}}` default closed at its first `}` and appended the rest of the default to a
+built rig-state block. Fixed in `scripts/run-onair-ic9700-ft991a.sh` (plain `if`), and the runner now
+warns when a report it wrote does not parse. The 20 reports are left as recorded; their result fields
+are intact. Next: A1 (two-station exchange) and A2 on the FT-991A pair, per `release-1.0-criteria.md` §A.
+
