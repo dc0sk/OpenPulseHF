@@ -2726,3 +2726,11 @@ End state, whatever happened:
 
 ### Results
 
+**Part A (2026-10-31, nothing transmitted; no daemon, rigctld, capture or recorder running before).** rpi51 commit `b070c43a`. Step 1, `arecord -q -D pulse -f S16_LE -r 48000 -c 1 -d 5 /tmp/t.wav` on each station:
+```
+rpi51:     which arecord = /usr/bin/arecord   file size 480044 bytes
+station B: which arecord = /usr/bin/arecord   file size 480044 bytes
+```
+(5 s x 48000 x 2 bytes + the 44-byte header = 480044 on both; the files were deleted.) Step 2 on rpi51: `scipy 1.15.3`, `numpy 2.2.4` import fine.
+
+
