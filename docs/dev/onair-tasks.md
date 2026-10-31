@@ -14,7 +14,7 @@ task, sets the status to `done` (or `blocked`, saying why), commits and pushes. 
 tells the cloud session, which pulls, reads the results and writes the next task.
 
 Rules for the station session, every task:
-- Work only the open task. Never key a transmitter unless the task says so, and then only after
+- **Pull first, every time** (`git fetch` and fast-forward), then work only the open task. Never key a transmitter unless the task says so, and then only after
   asking the maintainer in that session first.
 - The station safety rules hold throughout: the FT-818's power is never increased; its FRONT antenna
   stays selected; the mode is checked before keying.
@@ -1675,7 +1675,11 @@ Rig prepared by CAT (`EX065+1500;`, read back; `FA144640064`, `MD0C`, `SH016`, P
 Consequence (hypothesis from this one recording, to be tested): with 065 = +1500 the B dial must be 1500 Hz higher for the same RF (dial = test frequency + 1500 + trim, i.e. `B_FREQ_OFFSET_HZ=1564`, a profile-only change; 144.6416 MHz is inside the runner's 144.500-144.750 MHz guard); the transmitted RF at B's audio of 1500 Hz is then the same as before (`RF = dial - 1500 + 1500`), so B -> A would not move on the air, but that is untested. The CAT readout of the dial did not change with the shift.
 State left: 065 = +1500 on the FT-991A (the other menus at their originals), DATA-USB `FA144640064` `SH016`, PTT 0 on both rigs, nothing running. **Do not key the FT-991A in this state** (its dial would put the transmission 1500 Hz off the intended frequency).
 
-## Task 5 — FT-818 at its new location: readiness, G0, then Gate 6 with RS both ways (status: open)
+## Task 5 — FT-818 at its new location: readiness, G0, then Gate 6 with RS both ways (status: superseded)
+
+**Superseded (2026-10-31):** worked on 2026-10-30 with the remote FT-991A in place of the FT-818 (see
+the task 4 addenda and task 6). The FT-818 relocation becomes a new task when it has moved; do not work
+this one.
 
 Planned for 2026-10-28, after the maintainer relocates the FT-818 away from the S8–S9 local noise. The
 FT-991A station is out of scope until it is accessible (about 2026-10-30).
