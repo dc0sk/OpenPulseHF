@@ -1826,3 +1826,59 @@ built rig-state block. Fixed in `scripts/run-onair-ic9700-ft991a.sh` (plain `if`
 warns when a report it wrote does not parse. The 20 reports are left as recorded; their result fields
 are intact. Next: A1 (two-station exchange) and A2 on the FT-991A pair, per `release-1.0-criteria.md` §A.
 
+
+## Task 7 — A1 on the FT-991A pair: the quick tier both ways, with the RSPdx witness and evidence bundles (status: open)
+
+**Goal.** Release 1 criterion **A1** on 2 m (`docs/dev/project/release-1.0-criteria.md` §A,
+`docs/dev/onair-execution-plan.md` §3): modes on the `hpx_hf` ladder decode **rig → rig in both
+directions**, both stations run **one commit**, and each run's JSON report and its SDR capture are kept
+by `scripts/onair-bundle-evidence.sh`. Station B is the remote FT-991A. Its station rules apply: 5 W at
+most, ask the maintainer before **every** run that keys, and record nothing about that host here. Use the
+local profile from task 6 (sources `onair-ic9700-ft991a.example.sh`; 065 = +1500, `B_FREQ_OFFSET_HZ=1564`).
+
+The quick tier is three cases: `BPSK250|none|64`, `BPSK250|rs|64`, `BPSK250|soft_concatenated|64`. Run
+them **one case per run** (`--single-case`), so each run has its own report, its own SDR capture and its
+own go from the maintainer: 3 runs A → B, then 3 runs B → A.
+
+### Part A — nothing transmits
+1. Pull. Report `git rev-parse --short HEAD` on rpi51.
+2. Bring station B to the same build. Use the runner's `setup`, which builds on A and copies `openpulse` and
+   `openpulse-tnc` to B. Then print `sha256sum` of both binaries on both stations. **They must match; if
+   they do not, stop.**
+3. Read back on the FT-991A: `EX065` (+1500), mode, `SH`, dial, RFPOWER (≤ 0.05), PTT 0. On the IC-9700:
+   RFPOWER (≤ 0.05), AGC (SLOW), PTT 0. Record.
+4. `scripts/onair-station-check.sh` with the profile. Expect the five FAILs of task 6, all from the
+   non-git deployment; name them. Any other FAIL: stop.
+5. RSPdx on rpi51: confirm it enumerates (`SoapySDRUtil --find`, `Found device`). Make a 10 s
+   test capture, `sdr_capture.py 144590000 192000 10 22 40 <file>`, and report its clip %. Do this only
+   while nothing transmits.
+
+### Part B — keys transmitters: six runs, one go each
+For every run:
+- Start the RSPdx capture on rpi51 in the background just before the runner:
+  `scripts/onair-sdr/sdr_capture.py 144590000 192000 150 22 40 ~/onair-captures/<date>/<run>.cf32`. The LO
+  is 50 kHz below 144.640 MHz, so the burst is expected near +51.5 kHz.
+- Run `scripts/run-onair-ic9700-ft991a.sh supervise --single-case '<case>'` (A → B), or the same with
+  `--reverse` (B → A).
+- Record:
+  - the runner's frequency and result lines and the report path;
+  - from the capture, the burst's time, its offset from the LO, its level over the floor, and the clip %.
+  - If you still have the offline SDR decode harness from 2026-10-27, decode the capture and quote the
+    result. If not, say "not decoded". The SDR copy is the witness, not the gate.
+- Write a notes file covering:
+  - the direction and case;
+  - the commit and the binaries' sha256;
+  - the FT-991A read-back from Part A;
+  - the SDR capture's path on rpi51, with its size, sha256, RFGR and clip %.
+- Then bundle the run:
+  `scripts/onair-bundle-evidence.sh --report <report.json> --notes <notes> --label a1-<ab|ba>-<case-short> --require-report`.
+  Commit the bundle directory. Do **not** commit the `.cf32` capture, which is too large; keep it on rpi51.
+
+Order: A → B `none`, `rs`, `soft_concatenated`; then B → A in the same order. **A failed run does not
+stop the task.** Record it, and run that case once more with the maintainer's go. If it fails twice,
+stop and report.
+
+End state, whatever happened: PTT 0 on both rigs, nothing running, and the FT-991A's 065, dial and
+RFPOWER recorded.
+
+### Results
