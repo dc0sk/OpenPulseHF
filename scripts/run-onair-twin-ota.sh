@@ -106,13 +106,15 @@ tune() {  # ssh_fn rigctld_port rfpower mode expected_reading label dial_hz; non
     local sshfn="$1" port="$2" power="$3" mode="$4" expect="$5" label="$6" dial="$7" now
     echo "  [$label] tune → ${dial} Hz (TEST_FREQ_HZ ${TEST_FREQ_HZ} + $(( dial - TEST_FREQ_HZ ))), mode ${mode}"
     "$sshfn" "rigctl -m 2 -r 127.0.0.1:$port F ${dial} 2>/dev/null || echo '  [$label] WARN set freq'"
-    now="$("$sshfn" "rigctl -m 2 -r 127.0.0.1:$port f 2>/dev/null | head -n1" || true)"
+    # Hamlib 4.6.2's rigctl can print a `rigctld: Hamlib ...` banner line before the reading (task 11),
+    # so take the all-digit line, not the first one.
+    now="$("$sshfn" "rigctl -m 2 -r 127.0.0.1:$port f 2>/dev/null | grep -E '^[0-9]+\$' | tail -n1" || true)"
     if [[ "$now" != "$dial" ]]; then
         echo "  [$label] ERROR: dial reads '${now:-unreadable}', expected ${dial}" >&2
         return 1
     fi
     if [[ "$mode" == "keep" ]]; then
-        now="$("$sshfn" "rigctl -m 2 -r 127.0.0.1:$port m 2>/dev/null | head -n1" || true)"
+        now="$("$sshfn" "rigctl -m 2 -r 127.0.0.1:$port m 2>/dev/null | grep -v '^rigctld:' | head -n1" || true)"
         echo "  [$label] mode: not touched; rig reads '${now:-unreadable}'"
         if [[ -z "$expect" ]]; then
             echo "  [$label] ERROR: mode is 'keep' but its *_TEST_MODE_EXPECT is unset; read the mode set on the rig and put it there" >&2
@@ -123,6 +125,12 @@ tune() {  # ssh_fn rigctld_port rfpower mode expected_reading label dial_hz; non
         fi
     else
         "$sshfn" "rigctl -m 2 -r 127.0.0.1:$port M ${mode} ${RIG_PASSBAND_HZ} 2>/dev/null || echo '  [$label] WARN set mode'"
+        # Read the mode back: a failed set used to warn and key anyway (review of task 11's fixes).
+        now="$("$sshfn" "rigctl -m 2 -r 127.0.0.1:$port m 2>/dev/null | grep -v '^rigctld:' | head -n1" || true)"
+        if [[ "$now" != "$mode" ]]; then
+            echo "  [$label] ERROR: mode reads '${now:-unreadable}' after setting '${mode}'" >&2
+            return 1
+        fi
     fi
     rig_power_lower_only "$sshfn" "127.0.0.1:$port" "$power" "$label"
 }
@@ -163,11 +171,13 @@ EOF"
 build_remote() {  # ssh_fn repo_dir label
     local sshfn="$1" repo="$2" label="$3"
     echo "  [$label] building openpulse-server --features cpal + openpulse CLI (may take a while)…"
-    # Server needs cpal (real audio); the CLI is only used as a control client
-    # (ota-status), so build it lean with --no-default-features.
-    "$sshfn" "cd $repo && \
+    # A non-interactive ssh shell may not have cargo on PATH (task 11): use ~/.cargo/bin as the Gate 6
+    # runner's a_cargo() does. The CLI is built WITH audio (cpal-backend), the same build
+    # run-onair-ic9700-ft991a.sh puts there, so `deploy` does not replace station B's audio CLI with a
+    # lean one (task 11); as a control client (ota-status) either build works.
+    "$sshfn" "cd $repo && PATH=\$HOME/.cargo/bin:\$PATH && \
         cargo build --release -p openpulse-daemon --features cpal --bin openpulse-server >/tmp/twin-ota-build.log 2>&1 && \
-        cargo build --release -p openpulse-cli --no-default-features --bin openpulse >>/tmp/twin-ota-build.log 2>&1 \
+        cargo build --release -p openpulse-cli --features cpal-backend --bin openpulse >>/tmp/twin-ota-build.log 2>&1 \
         && echo '  [$label] build ok' || { tail -8 /tmp/twin-ota-build.log; exit 1; }"
 }
 

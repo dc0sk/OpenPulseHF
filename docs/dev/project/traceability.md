@@ -48,6 +48,15 @@ this ledger adds the design rationale and the actually-observed results per chan
   mismatch copies nothing, a daemon that does not start stops both stations, and the FT-818
   profile's variable names are read. The fake harness was re-run with a B that starts empty: all
   seven cases behave as recorded there.
+- **Follow-up (task 11's first attempt, nothing keyed):** fixes in `tune()` and `build_remote`:
+  - Hamlib 4.6.2's `rigctld:` banner made the dial read-back refuse; the dial is now the all-digit
+    line, and the mode read-back skips the banner;
+  - cargo is found in `~/.cargo/bin`;
+  - the CLI is built with audio, as the Gate 6 runner builds it;
+  - a mode the runner sets is now read back, and a mismatch refuses.
+
+  Second review round in the same review file: no blocker; 2 should-fix findings, both taken. The
+  harness was re-run with the banner printed on every command.
 
 ## 2026-10-26 — On-air station readiness check; the first 2 m session is a dry run
 

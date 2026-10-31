@@ -98,3 +98,35 @@ Re-run against the fake harness after the fixes (B starts with no checkout):
 - The FT-818 names leave the mode alone and check it (rc 0).
 
 Not run on air.
+
+## Follow-up: fixes after the first on-air attempt (task 11, 2026-10-31)
+
+Task 11's first run stopped before keying. Its dial read-back took `rigctl f | head -n1`, and on
+station A (Hamlib 4.6.2) the first line was the `rigctld: Hamlib 4.6.2 … SHA=…` banner. `deploy` also
+could not find cargo in a non-interactive ssh shell. And it copied the lean CLI over station B's audio CLI,
+which `run-onair-ic9700-ft991a.sh` needs. The fixes:
+- the dial is the all-digit line (`grep -E '^[0-9]+$' | tail -n1`);
+- the mode is the first line after dropping `rigctld:` lines;
+- `build_remote` puts `~/.cargo/bin` on PATH and builds the CLI with `--features cpal-backend`, the same
+  build as the Gate 6 runner.
+
+A second Fable round on that diff found no blocker, and it does not block Release 1. Every path it
+built refuses to key. It had two should-fix findings, both taken:
+- **(a)** The fake `rigctl` printed the banner only for `f` and `m`, so the power path was not tested
+  with it. The banner is now printed for every command; power reads 0.10 and is lowered to 0.05 on
+  both stations.
+- **(b)** A mode the runner sets was not read back; a failed set warned and keyed anyway
+  (pre-existing). It is now read back, and a mismatch refuses: a rig stuck in USB refused before
+  anything keyed.
+
+Its two nits needed no change: the CLI build matches the Gate 6 runner's (checked), and the PATH
+prefix works though it differs from that runner's probe.
+
+Harness re-run:
+- `deploy` finds cargo only in `~/.cargo/bin` and builds with the two expected commands;
+- `run` tunes A to 144640000 and B to 144641564;
+- a wrong dial refuses;
+- `keep` passes when the mode matches and refuses when it does not;
+- a stuck mode refuses.
+
+Not run on air.

@@ -2315,7 +2315,7 @@ End state: PTT 0 on both rigs, nothing running; FT-991A read back `EX065+1500; F
   Also passed: `BPSK250|none` both ways (B → A 1 of 2) and `QPSK250-D|rs` A → B once, with the longer
   kill wait. **Whether B → A without a witness is acceptable for A1 is for the maintainer to decide.**
 
-## Task 11 — A2 on the FT-991A pair: the daemon rate ladder, induced level changes, both directions (status: blocked — twin OTA script's dial read-back takes the Hamlib banner line; nothing keyed, see Results)
+## Task 11 — A2 on the FT-991A pair: the daemon rate ladder, induced level changes, both directions (status: open — rerun Part A step 2, then Parts B and C, with the fixed runner)
 
 **Goal.** Release 1 criterion **A2** (`docs/dev/project/release-1.0-criteria.md` §A2): in the
 receiver-led direction, show all three of:
@@ -2419,4 +2419,20 @@ ERROR: station A failed its dial or mode check; nothing was keyed
 
 Nothing was keyed: no PTT, no daemon, no traffic. Afterwards: `run-onair-twin-ota.sh cleanup` run (rigctld stopped on both stations), the RSPdx capture killed (it had been running ~1 min; the partial file `~/onair-captures/2026-10-31/a2-ab.cf32` on rpi51 is discarded), PTT 0 on both rigs, FT-991A RFPOWER 0.05 and dial 144641564, IC-9700 RFPOWER 0.0117647. **Status: blocked** (Part B/C not run).
 
+**Reviewed (cloud session, 2026-10-31), task 11's first attempt:** thanks for stopping. All three
+findings are fixed in `scripts/run-onair-twin-ota.sh`, with a second review round
+(`docs/dev/reviews/review-twin-ota-ft991a-2026-10-31.md`, follow-up section):
+- the dial read-back takes the all-digit line, so the banner no longer breaks it; the mode read-back
+  skips the banner too;
+- a mode the runner sets is now also read back, and a mismatch refuses before keying;
+- `deploy` finds cargo in `~/.cargo/bin` itself, so the `~/.bashrc` line on rpi51 is no longer needed
+  (keep it or restore the backup, as the maintainer prefers);
+- `deploy` now builds the CLI **with audio** (`cpal-backend`), the same build the Gate 6 runner puts
+  there, so it no longer leaves station B with the lean CLI.
+
+**Next, in this task:**
+1. Pull and **run `deploy` again**, which also puts the audio CLI back on station B. Quote the
+   three sha256 lines; they must match.
+2. Do Part A steps 3–4 again only if anything changed since.
+3. Then Part B and Part C as written, one go each.
 
