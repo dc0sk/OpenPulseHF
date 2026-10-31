@@ -2315,7 +2315,7 @@ End state: PTT 0 on both rigs, nothing running; FT-991A read back `EX065+1500; F
   Also passed: `BPSK250|none` both ways (B → A 1 of 2) and `QPSK250-D|rs` A → B once, with the longer
   kill wait. **Whether B → A without a witness is acceptable for A1 is for the maintainer to decide.**
 
-## Task 11 — A2 on the FT-991A pair: the daemon rate ladder, induced level changes, both directions (status: open — Part D done; next Parts E, F, G, then Part B)
+## Task 11 — A2 on the FT-991A pair: the daemon rate ladder, induced level changes, both directions (status: open — Part D done; a Part B run (4th attempt) was made before Parts E-G were written and decoded nothing at SL2, see Results; next Parts E, F, G)
 
 **Goal.** Release 1 criterion **A2** (`docs/dev/project/release-1.0-criteria.md` §A2): in the
 receiver-led direction, show all three of:
@@ -2492,6 +2492,22 @@ After every run, and after any abort, run `cleanup` and quote its output. Every 
 | Sl2 | BPSK31 | 66.6 s | 3675.9 | 7095.5 |
 
 (Full lines, with the frame length, accumulate time and read counts, are in the probe output; e.g. SL2 BPSK31: frame 532480 samples = 66.6 s audio, accumulate 29.5 ms on rpi51 against 70.9 ms on station B.) **Station B's SL2 decode is 7095.5 ms, below 7.5 s, by about 0.4 s;** rpi51 needs 3675.9 ms. Station B is about 1.9-2.0 times slower than rpi51 on every rung. The ISS waits 9 s for the ACK (`ota_ack_timeout_ms`): at SL2 station B's decode alone takes ~79 % of that, before the ACK frame's own transmit time. Part B is therefore allowed by the task's rule, with little margin.
+
+**Part B run 1, fourth attempt (maintainer's go, 2026-10-31, commit `b519fe79`, `DAEMON_LOG_LEVEL=debug`):** `deploy` first (the same three sha256 on both stations), then `OTA_PROFILE=robust TRAFFIC_FROM=A TRAFFIC_SIZE=64 TRAFFIC_INTERVAL=2 TRAFFIC_DURATION=900 scripts/run-onair-twin-ota.sh run`, traffic from 20:12:00 UTC to the end of the 900 s window (20:27 UTC); RSPdx capture `144620000 62500 960 22 40` (62.5 kS/s accepted, 480000000 bytes, clip 0.00 %). The run completed normally, the report has the 5-second polling lines (all `<no status>` while a frame is in flight, as the cloud session said they would be) and `evidence: 5664 audit events` (A), `4964` (B). No stop rule applied. `cleanup`: `[IC-9700] daemon and rigctld stopped; PTT 0 sent while rigctld ran`, `[FT-991A] daemon and rigctld stopped; PTT 0 sent while rigctld ran`, no ERROR.
+
+**Induced drive changes (IC-9700 TX sink, `A_TX_SINK_VOLUME`, via `onair-setup-audio-routing.sh`, rc 0 each; the controller held 0.15 until the 540 s deadline because no level change had happened):**
+```
+20:21:01 UTC  A_TX_SINK_VOLUME=0.02
+20:22:03 UTC  A_TX_SINK_VOLUME=0
+20:23:34 UTC  A_TX_SINK_VOLUME=0.15   (schedule done)
+```
+**Result: none of the three A2 clauses was shown. The ladder never climbed.** Evidence (`docs/dev/test-reports/onair-twin-ota-20261031-211200-evidence/`, redacted and gzipped, plus the report `.log` next to it, the schedule above as `drive-schedule-a.log`):
+- Station A (ISS): 78 `ota_status` events, all `tx_level SL2, rx_recommended SL2, rx_confirmed SL2`; 351 `message_received`, 32 `ptt_changed`; **no `ota_rate_decision` events at all** (A never received an ACK or NACK it acted on).
+- Station B (IRS): 7 `ota_rate_decision`: 3 x `Sl2 -> Sl2 nack_hold (keyed)`, 1 x `Sl2 -> Sl1 nack_step_down (keyed)`, 3 x `Sl1 -> Sl1 nack_hold (muted)`; `decoded_level null`, `snr_db null` in every one; 64 `ota_status` (56 at `SL2/SL2/SL2`, 8 at `tx_level SL2, rx_recommended SL1, rx_confirmed SL1`); 10 `ptt_changed` (five NACK transmissions). B never decoded an A frame.
+- B's debug daemon log (8.2 MB, 1432 `fec attempt FAILED`, 0 `fec attempt OK`): 1213 `FEC data length N is shorter than one 255-byte block`, 132 `mode=MFSK16 ... MFSK16 acquisition failed`, 60 `BPSK31 ... no data symbols after preamble`, 27 `BPSK31 ... signal too short`. The attempts print `fec demod: mode=BPSK31 fec=Rs soft=false wire_bytes=46` (a frame needs a 255-byte RS block); the live path shows no `first-energy attempt` and no `AFC settling` line (0 of each), unlike the CLI receiver of the Gate 6 runs. I did not look further.
+- The RSPdx is no witness here either: no activity above 6 dB in the +19.5..23.5 kHz band (maximum 3.1 dB over the median), and a narrow search at 21.46-21.56 kHz finds a strong **constant** line at +21527 Hz (about 58 dB over its neighbours, varying by 5 dB over the 960 s, no bursts), so A's BPSK31 cannot be separated from it. That line is at A's expected carrier (144.6415 MHz); I did not find out what it is.
+
+End state: PTT 0 on both rigs, nothing running; FT-991A read back `EX065+1500;FA144641564;0.05 0`; IC-9700 `0.0117647 0`; `--verify`: PASS: both stations' default sink+source point at their rig CODEC; TX level set.. **Status: blocked** again (Part C not run): at SL2 the FT-991A station did not decode a single frame from the IC-9700 in 15 minutes, although it decodes the CLI's BPSK31-and-up frames in the Gate 6 runs.
 
 **Reviewed (cloud session, 2026-10-31), task 11's third attempt:** stopping was right under the rule as
 written, but the rule was wrong. What happened:
