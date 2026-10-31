@@ -2091,7 +2091,7 @@ End state, whatever happened:
 
 ### Results
 
-**Part A — receiver logs (2026-10-31, nothing transmitted).** Copied from station B's log directory to `docs/dev/test-reports/on-air/irs-logs-2026-10-31/`, ANSI colour codes stripped, user name, host name and home path of that host replaced by `station-B`, then `gzip -9`. Check on the redacted text before compression: `grep -ciE "<user>|<host>|landline|myfritz|/home/[a-z]|<dotted quad>"` gave 0 for all four (the pattern `/home/[a-z]` matches a known instance, checked separately). Each file is the **latest** run of its case on station B: the QPSK file is task 8's second failure (15:46 UTC), the soft_concatenated file task 7's third attempt (12:20 UTC, 4.7 W), the `rs` and `none` files task 7's passes. The last line of the two pass logs is the decoded 64-byte test payload (untimestamped).
+**Part A — receiver logs (2026-10-31, nothing transmitted).** Copied from station B's log directory to `docs/dev/test-reports/on-air/irs-logs-2026-10-31/`, ANSI colour codes stripped, user name, host name and home path of that host replaced by `station-B`, then `gzip -9`. Check on the redacted text before compression: a case-insensitive grep for the user name, host name, alias fragments, any `/home/<name>` path and dotted quads gave 0 for all four (the pattern `/home/[a-z]` matches a known instance, checked separately). Each file is the **latest** run of its case on station B: the QPSK file is task 8's second failure (15:46 UTC), the soft_concatenated file task 7's third attempt (12:20 UTC, 4.7 W), the `rs` and `none` files task 7's passes. The last line of the two pass logs is the decoded 64-byte test payload (untimestamped).
 
 | file | lines | first timestamp | last timestamp |
 |---|---|---|---|
