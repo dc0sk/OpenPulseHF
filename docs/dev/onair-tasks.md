@@ -1882,3 +1882,17 @@ End state, whatever happened: PTT 0 on both rigs, nothing running, and the FT-99
 RFPOWER recorded.
 
 ### Results
+
+**Part A (2026-10-31, nothing transmitted).**
+- rpi51 commit `91cf0922` on `claude/affectionate-brahmagupta-sdn8qg`.
+- `scripts/run-onair-ic9700-ft991a.sh setup` (cpal release build on A, binaries streamed to station B, `ALLOW_TUNER_ON_HIGH_SWR=0` so nothing keyed; both rigctld stopped afterwards, none running). Binary checksums, **identical on both stations**:
+```
+52ce8717b53ffb5b93f4738554e9e71b8a5a1f52f64fe4c877d7b64c6072c1a3  openpulse
+94abc4b64cb1bcc8734780e492523357490a8d1b6582c006e2e40adc30afbd2e  openpulse-tnc
+```
+- FT-991A (after setup): `EX065+1500; MD0C; SH016; FA144641564;` RFPOWER 0.05, PTT 0. IC-9700: RFPOWER 0.0117647 (~1.2 W), AGC 3 (SLOW), PTT 0, 144640000 Hz PKTUSB.
+- `scripts/onair-station-check.sh`: `Summary: PASS=33 FAIL=5`. The five FAILs are the non-git deployment's, as in task 6: no git checkout on B, no `pactl` on B, no numpy/scipy on B, `onair-preflight --strict` on B (missing config/kisstnc/gateway), `openpulse-server` not built on B. No other FAIL.
+- RSPdx: `Found device 0`, driver sdrplay, RSPdx. 10 s test capture `sdr_capture.py 144590000 192000 10 22 40`: `peak=0.0020 rms=0.0005 clip=0.00% OK` (nothing transmitting).
+
+_(Part B runs: pending, one go each)_
+
