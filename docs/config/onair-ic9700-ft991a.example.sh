@@ -66,6 +66,11 @@ export A_FREQ_OFFSET_HZ=0
 # (read back `EX065;` -> EX065+1500;): with 065 at 0 this offset puts the transmission 1.5 kHz off.
 export B_FREQ_OFFSET_HZ=1564
 
+# scripts/run-onair-twin-ota.sh (the A2 daemon runner) reads this profile too. It sends this passband
+# with the mode; 2400 is the passband run-onair-ic9700-ft991a.sh uses (its own default is 3000).
+# Station B has no checkout: copy the daemon to it with that runner's `deploy` before a `run`.
+export RIG_PASSBAND_HZ=2400
+
 # IC-9700 audio prerequisites for digital USB TX (set on the radio UI):
 # - DATA MOD = USB
 # - USB MOD Level > 0 (start around mid-scale)

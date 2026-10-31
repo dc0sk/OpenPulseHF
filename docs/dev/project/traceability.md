@@ -15,6 +15,35 @@ this ledger adds the design rationale and the actually-observed results per chan
 
 ---
 
+## 2026-10-31 — The A2 daemon runner drives the FT-991A pair (work plan M3)
+
+- **Requirement/change:** A2 on 2 m (`release-1.0-criteria.md` §A2) runs through
+  `scripts/run-onair-twin-ota.sh`, which could not drive the FT-991A pair. It had one dial for both
+  rigs, but the FT-991A needs +1564 Hz (task 6). It built on each station, but the remote station
+  has no checkout. And it sent traffic only from A, but A2 needs both directions.
+- **Design decisions:**
+  - `A_/B_FREQ_OFFSET_HZ` have the same meaning as in `run-onair-ic9700-ft991a.sh`.
+  - Each dial must be in band and read back equal to the dial that was set, or nothing keys.
+  - `deploy` builds on A and copies the binaries to B, in the shape that runner uses.
+  - `run` refuses to start unless both `openpulse-server` binaries are byte-identical: A1/A2 count
+    only on one commit.
+  - `TRAFFIC_FROM=A|B` picks the sender, and both daemons' OTA status is polled.
+  - The passband is a setting, still 3000 by default; the FT-991A profile sets 2400.
+- **Implementation:** `scripts/run-onair-twin-ota.sh`, `docs/config/onair-ic9700-ft991a.example.sh`,
+  the M3 A1/A2 rows in `docs/dev/project/workplan.md`.
+- **Tests and results (run):** against a fake `ssh`/`rigctl`/`cargo` harness:
+  - `run` before `deploy` refuses, rc 1, with the binaries missing.
+  - `deploy` gives identical sha256 on both stations, rc 0.
+  - `run` with `TRAFFIC_FROM=B` tunes A to 144640000 and B to 144641564 PKTUSB 2400, and sends the
+    traffic to the A callsign, rc 0. The `TRAFFIC_FROM=A` default is unchanged.
+  - An out-of-band offset refuses, rc 1.
+  - `TRAFFIC_FROM=C` refuses, rc 1.
+  - A dial read back wrong refuses before anything keys, rc 1.
+  - Not run on air.
+- **Review:** mandatory, because the runner keys transmitters. It was running when this was
+  committed; its findings and dispositions follow in a later commit, and the runner is not used on
+  air before then.
+
 ## 2026-10-26 — On-air station readiness check; the first 2 m session is a dry run
 
 - **Requirement/change:** the maintainer did not accept the first 2 m session (2026-10-26, run on

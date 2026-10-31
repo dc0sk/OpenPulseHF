@@ -14,7 +14,11 @@
 #
 # Usage:
 #   source docs/config/onair-twin-ota.example.sh
-#   ./scripts/run-onair-twin-ota.sh <setup|run|supervise|status|cleanup>
+#   ./scripts/run-onair-twin-ota.sh <setup|deploy|run|supervise|status|cleanup>
+#
+# `deploy` is for a station B with no checkout or cargo (the remote FT-991A): it builds on A and
+# copies openpulse-server and openpulse into B's ${B_REPO_DIR}/target/release. `run` refuses to key
+# unless both stations' openpulse-server binaries are byte-identical (A1/A2 need one commit).
 set -uo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -37,6 +41,12 @@ A_AUDIO_DEVICE="${A_AUDIO_DEVICE:-default}"; B_AUDIO_DEVICE="${B_AUDIO_DEVICE:-d
 A_REPO_DIR="${A_REPO_DIR:-\$HOME/OpenPulseHF}"; B_REPO_DIR="${B_REPO_DIR:-\$HOME/OpenPulseHF}"
 # 2 m by default (decision 13: HF only with the release candidate). Override for an HF run.
 TEST_FREQ_HZ="${TEST_FREQ_HZ:-144640000}"; TEST_MODE_RIG="${TEST_MODE_RIG:-USB}"
+# Per-station dial offset from TEST_FREQ_HZ: the FT-991A with OTHER SHIFT (065) = +1500 needs +1564
+# (task 6, docs/dev/onair-tasks.md). Same meaning as in run-onair-ic9700-ft991a.sh.
+A_FREQ_OFFSET_HZ="${A_FREQ_OFFSET_HZ:-0}"; B_FREQ_OFFSET_HZ="${B_FREQ_OFFSET_HZ:-0}"
+A_FREQ_HZ=$(( TEST_FREQ_HZ + A_FREQ_OFFSET_HZ )); B_FREQ_HZ=$(( TEST_FREQ_HZ + B_FREQ_OFFSET_HZ ))
+# Passband sent with the mode (`M <mode> <passband>`); the FT-991A's known-good filter is 2400.
+RIG_PASSBAND_HZ="${RIG_PASSBAND_HZ:-3000}"
 # Per station; `keep` sends no mode (set it on the rig: the FT-818's DIG/USER-U has no safe CAT name),
 # and then *_TEST_MODE_EXPECT must name the reading (`rigctl m`) or the run stops before any keying.
 A_TEST_MODE_RIG="${A_TEST_MODE_RIG:-$TEST_MODE_RIG}"; B_TEST_MODE_RIG="${B_TEST_MODE_RIG:-$TEST_MODE_RIG}"
@@ -55,6 +65,9 @@ NOTCH_ENABLED="${NOTCH_ENABLED:-true}"; AGC_ENABLED="${AGC_ENABLED:-false}"; CES
 PTT_LEADER_MS="${PTT_LEADER_MS:-0}"   # #1257; measure the rig before raising it
 TRAFFIC_INTERVAL="${TRAFFIC_INTERVAL:-2}"; TRAFFIC_SIZE="${TRAFFIC_SIZE:-128}"
 TRAFFIC_DURATION="${TRAFFIC_DURATION:-120}"
+# Which station sends the traffic (the ISS); the other is the receiver that leads the rate.
+# A2 needs both directions: one run with A, one with B.
+TRAFFIC_FROM="${TRAFFIC_FROM:-A}"
 OUTPUT_DIR="${OUTPUT_DIR:-docs/dev/test-reports}"
 
 ACTION="${1:-supervise}"
@@ -66,8 +79,12 @@ ssh_b() { ssh ${SSH_OPTS} "${B_SSH}" "$@"; }
 
 preflight() {
     [[ -n "$A_SSH" && -n "$B_SSH" ]] || die "A_SSH/B_SSH unset — source the profile first"
-    (( TEST_FREQ_HZ >= BAND_MIN_HZ && TEST_FREQ_HZ <= BAND_MAX_HZ )) \
-        || die "TEST_FREQ_HZ=${TEST_FREQ_HZ} is outside ${BAND_MIN_HZ}-${BAND_MAX_HZ}; set BAND_MIN_HZ/BAND_MAX_HZ for another band"
+    local f
+    for f in "$A_FREQ_HZ" "$B_FREQ_HZ"; do
+        (( f >= BAND_MIN_HZ && f <= BAND_MAX_HZ )) \
+            || die "dial ${f} Hz (TEST_FREQ_HZ ${TEST_FREQ_HZ} + offset) is outside ${BAND_MIN_HZ}-${BAND_MAX_HZ}; set BAND_MIN_HZ/BAND_MAX_HZ for another band"
+    done
+    [[ "$TRAFFIC_FROM" == "A" || "$TRAFFIC_FROM" == "B" ]] || die "TRAFFIC_FROM must be A or B, not '${TRAFFIC_FROM}'"
     [[ "$CALLSIGN_A" != "N0CALL" && "$CALLSIGN_B" != "N0CALL" ]] || die "set real callsigns"
     command -v ssh >/dev/null || die "ssh not found"
 }
@@ -83,10 +100,15 @@ start_rigctld() {  # ssh_fn model cat_port cat_baud ptt_port ptt_type rigctld_po
         pgrep -x rigctld >/dev/null && echo '  [$label] rigctld ok' || { echo '  [$label] rigctld FAILED'; exit 1; }"
 }
 
-tune() {  # ssh_fn rigctld_port rfpower mode expected_reading label; non-zero stops the run
-    local sshfn="$1" port="$2" power="$3" mode="$4" expect="$5" label="$6" now
-    echo "  [$label] tune → ${TEST_FREQ_HZ} Hz, mode ${mode}"
-    "$sshfn" "rigctl -m 2 -r 127.0.0.1:$port F ${TEST_FREQ_HZ} 2>/dev/null || echo '  [$label] WARN set freq'"
+tune() {  # ssh_fn rigctld_port rfpower mode expected_reading label dial_hz; non-zero stops the run
+    local sshfn="$1" port="$2" power="$3" mode="$4" expect="$5" label="$6" dial="$7" now
+    echo "  [$label] tune → ${dial} Hz (TEST_FREQ_HZ ${TEST_FREQ_HZ} + $(( dial - TEST_FREQ_HZ ))), mode ${mode}"
+    "$sshfn" "rigctl -m 2 -r 127.0.0.1:$port F ${dial} 2>/dev/null || echo '  [$label] WARN set freq'"
+    now="$("$sshfn" "rigctl -m 2 -r 127.0.0.1:$port f 2>/dev/null | head -n1" || true)"
+    if [[ "$now" != "$dial" ]]; then
+        echo "  [$label] ERROR: dial reads '${now:-unreadable}', expected ${dial}" >&2
+        return 1
+    fi
     if [[ "$mode" == "keep" ]]; then
         now="$("$sshfn" "rigctl -m 2 -r 127.0.0.1:$port m 2>/dev/null | head -n1" || true)"
         echo "  [$label] mode: not touched; rig reads '${now:-unreadable}'"
@@ -98,7 +120,7 @@ tune() {  # ssh_fn rigctld_port rfpower mode expected_reading label; non-zero st
             return 1
         fi
     else
-        "$sshfn" "rigctl -m 2 -r 127.0.0.1:$port M ${mode} 3000 2>/dev/null || echo '  [$label] WARN set mode'"
+        "$sshfn" "rigctl -m 2 -r 127.0.0.1:$port M ${mode} ${RIG_PASSBAND_HZ} 2>/dev/null || echo '  [$label] WARN set mode'"
     fi
     rig_power_lower_only "$sshfn" "127.0.0.1:$port" "$power" "$label"
 }
@@ -147,6 +169,26 @@ build_remote() {  # ssh_fn repo_dir label
         && echo '  [$label] build ok' || { tail -8 /tmp/twin-ota-build.log; exit 1; }"
 }
 
+# Build on A, then copy the two binaries into B's repo-shaped directory (B needs no checkout or cargo).
+deploy_a_to_b() {
+    build_remote ssh_a "$A_REPO_DIR" "$A_LABEL"
+    echo "  [$B_LABEL] copying openpulse-server + openpulse from $A_LABEL → $B_REPO_DIR/target/release"
+    ssh_b "mkdir -p $B_REPO_DIR/target/release" || die "cannot create $B_REPO_DIR/target/release on $B_LABEL"
+    ssh_a "tar -C $A_REPO_DIR/target/release -cf - openpulse-server openpulse" \
+        | ssh_b "tar -C $B_REPO_DIR/target/release -xf -"
+    same_daemon_binaries || die "copy to $B_LABEL did not produce identical binaries"
+}
+
+# Both daemons must be the same build: v0.16.0 and later commits do not interoperate, and A1/A2
+# evidence counts only when both stations run one commit.
+same_daemon_binaries() {
+    local ha hb
+    ha="$(ssh_a "sha256sum $A_REPO_DIR/target/release/openpulse-server 2>/dev/null | cut -d' ' -f1" || true)"
+    hb="$(ssh_b "sha256sum $B_REPO_DIR/target/release/openpulse-server 2>/dev/null | cut -d' ' -f1" || true)"
+    echo "  openpulse-server sha256: $A_LABEL ${ha:-missing}, $B_LABEL ${hb:-missing}"
+    [[ -n "$ha" && "$ha" == "$hb" ]]
+}
+
 launch_daemon() {  # ssh_fn repo_dir label
     local sshfn="$1" repo="$2" label="$3"
     echo "  [$label] launching openpulse-server (control 127.0.0.1:$DAEMON_TCP_PORT)"
@@ -190,15 +232,23 @@ do_setup() {
     echo "setup complete."
 }
 
+do_deploy() {
+    preflight
+    echo "== deploy =="
+    deploy_a_to_b
+    echo "deploy complete."
+}
+
 do_run() {
     preflight
     echo "== run =="
+    same_daemon_binaries || die "the two stations' openpulse-server differ or one is missing (run setup or deploy); nothing was keyed"
     start_rigctld ssh_a "$A_HAMLIB_MODEL" "$A_CAT_PORT" "$A_CAT_BAUD" "$A_PTT_PORT" "$A_PTT_TYPE" "$A_RIGCTLD_PORT" "$A_LABEL"
     start_rigctld ssh_b "$B_HAMLIB_MODEL" "$B_CAT_PORT" "$B_CAT_BAUD" "$B_PTT_PORT" "$B_PTT_TYPE" "$B_RIGCTLD_PORT" "$B_LABEL"
-    tune ssh_a "$A_RIGCTLD_PORT" "$A_RFPOWER" "$A_TEST_MODE_RIG" "$A_TEST_MODE_EXPECT" "$A_LABEL" \
-        || die "station A failed its mode check; nothing was keyed"
-    tune ssh_b "$B_RIGCTLD_PORT" "$B_RFPOWER" "$B_TEST_MODE_RIG" "$B_TEST_MODE_EXPECT" "$B_LABEL" \
-        || die "station B failed its mode check; nothing was keyed"
+    tune ssh_a "$A_RIGCTLD_PORT" "$A_RFPOWER" "$A_TEST_MODE_RIG" "$A_TEST_MODE_EXPECT" "$A_LABEL" "$A_FREQ_HZ" \
+        || die "station A failed its dial or mode check; nothing was keyed"
+    tune ssh_b "$B_RIGCTLD_PORT" "$B_RFPOWER" "$B_TEST_MODE_RIG" "$B_TEST_MODE_EXPECT" "$B_LABEL" "$B_FREQ_HZ" \
+        || die "station B failed its dial or mode check; nothing was keyed"
     write_config ssh_a "$CALLSIGN_A" "$GRID_A" "$A_AUDIO_DEVICE" "$A_RIGCTLD_PORT" "$A_LABEL"
     write_config ssh_b "$CALLSIGN_B" "$GRID_B" "$B_AUDIO_DEVICE" "$B_RIGCTLD_PORT" "$B_LABEL"
     launch_daemon ssh_a "$A_REPO_DIR" "$A_LABEL"
@@ -212,23 +262,32 @@ run openpulse-twinview on your workstation:
   ssh ${SSH_OPTS} -N -L 9002:127.0.0.1:${DAEMON_TCP_PORT} ${B_SSH} &
   cargo run -p openpulse-twinview 127.0.0.1:9000 127.0.0.1:9002
 
-Driving OTA traffic from ${A_LABEL} for ${TRAFFIC_DURATION}s …
 EOF
+    local iss_fn iss_repo iss_label to_call irs_fn irs_repo irs_label
+    if [[ "$TRAFFIC_FROM" == "A" ]]; then
+        iss_fn=ssh_a; iss_repo="$A_REPO_DIR"; iss_label="$A_LABEL"; to_call="$CALLSIGN_B"
+        irs_fn=ssh_b; irs_repo="$B_REPO_DIR"; irs_label="$B_LABEL"
+    else
+        iss_fn=ssh_b; iss_repo="$B_REPO_DIR"; iss_label="$B_LABEL"; to_call="$CALLSIGN_A"
+        irs_fn=ssh_a; irs_repo="$A_REPO_DIR"; irs_label="$A_LABEL"
+    fi
+    echo "Driving OTA traffic from ${iss_label} to ${irs_label} for ${TRAFFIC_DURATION}s …"
 
-    # Drive traffic from A's control port (background, time-boxed) and poll A's OTA
-    # TX level every 5 s so the report shows the rate ladder climbing on the air.
+    # Drive traffic from the ISS's control port (background, time-boxed) and poll both daemons'
+    # OTA status every 5 s, so the report shows the sender's level and the receiver's recommendation.
     local report="${OUTPUT_DIR}/onair-twin-ota-$(date +%Y%m%d-%H%M%S).log"
     mkdir -p "$OUTPUT_DIR"
-    echo "# on-air twin-OTA  freq=${TEST_FREQ_HZ} profile=${OTA_PROFILE} A=${CALLSIGN_A}→B=${CALLSIGN_B} dur=${TRAFFIC_DURATION}s" | tee "$report"
-    ssh_a "cd $A_REPO_DIR && nohup timeout ${TRAFFIC_DURATION} \
-        env ADDR=127.0.0.1:${DAEMON_TCP_PORT} TO=${CALLSIGN_B} INTERVAL=${TRAFFIC_INTERVAL} SIZE=${TRAFFIC_SIZE} \
+    echo "# on-air twin-OTA  freq=${TEST_FREQ_HZ} dials A=${A_FREQ_HZ} B=${B_FREQ_HZ} profile=${OTA_PROFILE} traffic ${iss_label}→${irs_label} dur=${TRAFFIC_DURATION}s" | tee "$report"
+    "$iss_fn" "cd $iss_repo && nohup timeout ${TRAFFIC_DURATION} \
+        env ADDR=127.0.0.1:${DAEMON_TCP_PORT} TO=${to_call} INTERVAL=${TRAFFIC_INTERVAL} SIZE=${TRAFFIC_SIZE} \
         bash scripts/twin-traffic.sh </dev/null >/tmp/twin-ota-traffic.log 2>&1 & echo '  traffic started'"
 
     local end=$(( $(date +%s) + TRAFFIC_DURATION ))
     while [ "$(date +%s)" -lt "$end" ]; do
-        local snap
-        snap=$(ssh_a "$A_REPO_DIR/target/release/openpulse daemon --addr 127.0.0.1:${DAEMON_TCP_PORT} ota-status 2>/dev/null" || true)
-        echo "$(date +%H:%M:%S)  A: ${snap:-<no status>}" | tee -a "$report"
+        local snap rsnap
+        snap=$("$iss_fn" "$iss_repo/target/release/openpulse daemon --addr 127.0.0.1:${DAEMON_TCP_PORT} ota-status 2>/dev/null" || true)
+        rsnap=$("$irs_fn" "$irs_repo/target/release/openpulse daemon --addr 127.0.0.1:${DAEMON_TCP_PORT} ota-status 2>/dev/null" || true)
+        echo "$(date +%H:%M:%S)  ISS ${iss_label}: ${snap:-<no status>}  |  IRS ${irs_label}: ${rsnap:-<no status>}" | tee -a "$report"
         sleep 5
     done
 
@@ -257,9 +316,10 @@ do_cleanup() {
 
 case "$ACTION" in
     setup) do_setup ;;
+    deploy) do_deploy ;;
     run) do_run ;;
     supervise) do_setup && do_run ;;
     status) do_status ;;
     cleanup) do_cleanup ;;
-    *) die "unknown action '$ACTION' (setup|run|supervise|status|cleanup)" ;;
+    *) die "unknown action '$ACTION' (setup|deploy|run|supervise|status|cleanup)" ;;
 esac
