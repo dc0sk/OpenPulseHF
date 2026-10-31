@@ -49,11 +49,13 @@ A_FREQ_HZ=$(( TEST_FREQ_HZ + A_FREQ_OFFSET_HZ )); B_FREQ_HZ=$(( TEST_FREQ_HZ + B
 RIG_PASSBAND_HZ="${RIG_PASSBAND_HZ:-3000}"
 # Per station; `keep` sends no mode (set it on the rig: the FT-818's DIG/USER-U has no safe CAT name),
 # and then *_TEST_MODE_EXPECT must name the reading (`rigctl m`) or the run stops before any keying.
-A_TEST_MODE_RIG="${A_TEST_MODE_RIG:-$TEST_MODE_RIG}"; B_TEST_MODE_RIG="${B_TEST_MODE_RIG:-$TEST_MODE_RIG}"
-A_TEST_MODE_EXPECT="${A_TEST_MODE_EXPECT:-}"; B_TEST_MODE_EXPECT="${B_TEST_MODE_EXPECT:-}"
+# Falls back to run-onair-ic9700-ft991a.sh's names (TEST_MODE_RIG_B, ...), which the FT-818 profile sets:
+# without that, sourcing it sent `M USB` to an FT-818 whose mode is set on the rig.
+A_TEST_MODE_RIG="${A_TEST_MODE_RIG:-${TEST_MODE_RIG_A:-$TEST_MODE_RIG}}"; B_TEST_MODE_RIG="${B_TEST_MODE_RIG:-${TEST_MODE_RIG_B:-$TEST_MODE_RIG}}"
+A_TEST_MODE_EXPECT="${A_TEST_MODE_EXPECT:-${TEST_MODE_EXPECT_A:-}}"; B_TEST_MODE_EXPECT="${B_TEST_MODE_EXPECT:-${TEST_MODE_EXPECT_B:-}}"
 # The run refuses a frequency outside this range. A frequency on another band would also switch a
 # rig's per-band settings, the FT-818's FRONT/REAR antenna among them. Widen it only for an HF run.
-BAND_MIN_HZ="${BAND_MIN_HZ:-144500000}"; BAND_MAX_HZ="${BAND_MAX_HZ:-144750000}"
+BAND_MIN_HZ="${BAND_MIN_HZ:-${BAND2M_MIN_HZ:-144500000}}"; BAND_MAX_HZ="${BAND_MAX_HZ:-${BAND2M_MAX_HZ:-144750000}}"
 # Power is only ever LOWERED to these, never raised (scripts/lib/rig-power.sh). Set one to empty
 # to leave that rig's power alone.
 A_RFPOWER="${A_RFPOWER-0.10}"; B_RFPOWER="${B_RFPOWER-0.10}"
@@ -169,24 +171,31 @@ build_remote() {  # ssh_fn repo_dir label
         && echo '  [$label] build ok' || { tail -8 /tmp/twin-ota-build.log; exit 1; }"
 }
 
-# Build on A, then copy the two binaries into B's repo-shaped directory (B needs no checkout or cargo).
+# What a station needs to run: the daemon, the control CLI (ota-status) and the traffic injector.
+RUN_FILES="target/release/openpulse-server target/release/openpulse scripts/twin-traffic.sh"
+
+# Build on A, then copy RUN_FILES into B's repo-shaped directory (B needs no checkout or cargo).
 deploy_a_to_b() {
-    build_remote ssh_a "$A_REPO_DIR" "$A_LABEL"
-    echo "  [$B_LABEL] copying openpulse-server + openpulse from $A_LABEL → $B_REPO_DIR/target/release"
-    ssh_b "mkdir -p $B_REPO_DIR/target/release" || die "cannot create $B_REPO_DIR/target/release on $B_LABEL"
-    ssh_a "tar -C $A_REPO_DIR/target/release -cf - openpulse-server openpulse" \
-        | ssh_b "tar -C $B_REPO_DIR/target/release -xf -"
-    same_daemon_binaries || die "copy to $B_LABEL did not produce identical binaries"
+    local ma mb
+    ma="$(ssh_a "uname -m" || true)"; mb="$(ssh_b "uname -m" || true)"
+    [[ -n "$ma" && "$ma" == "$mb" ]] || die "$A_LABEL is '${ma:-unreachable}', $B_LABEL is '${mb:-unreachable}': a binary built on A will not run on B"
+    build_remote ssh_a "$A_REPO_DIR" "$A_LABEL" || die "build on $A_LABEL failed; nothing copied"
+    echo "  [$B_LABEL] copying ${RUN_FILES} from $A_LABEL → $B_REPO_DIR"
+    ssh_b "mkdir -p $B_REPO_DIR/target/release $B_REPO_DIR/scripts" || die "cannot create $B_REPO_DIR on $B_LABEL"
+    ssh_a "tar -C $A_REPO_DIR -cf - ${RUN_FILES}" | ssh_b "tar -C $B_REPO_DIR -xf -"
+    same_run_files || die "copy to $B_LABEL did not produce identical files"
 }
 
-# Both daemons must be the same build: v0.16.0 and later commits do not interoperate, and A1/A2
-# evidence counts only when both stations run one commit.
-same_daemon_binaries() {
-    local ha hb
-    ha="$(ssh_a "sha256sum $A_REPO_DIR/target/release/openpulse-server 2>/dev/null | cut -d' ' -f1" || true)"
-    hb="$(ssh_b "sha256sum $B_REPO_DIR/target/release/openpulse-server 2>/dev/null | cut -d' ' -f1" || true)"
-    echo "  openpulse-server sha256: $A_LABEL ${ha:-missing}, $B_LABEL ${hb:-missing}"
-    [[ -n "$ha" && "$ha" == "$hb" ]]
+# Both stations must run the same build: v0.16.0 and later commits do not interoperate, and A1/A2
+# evidence counts only when both stations run one commit. A missing file is a mismatch.
+same_run_files() {
+    local ha hb n
+    ha="$(ssh_a "cd $A_REPO_DIR && sha256sum ${RUN_FILES} 2>/dev/null" || true)"
+    hb="$(ssh_b "cd $B_REPO_DIR && sha256sum ${RUN_FILES} 2>/dev/null" || true)"
+    echo "  $A_LABEL:"; echo "${ha:-    (none)}" | sed 's/^/    /'
+    echo "  $B_LABEL:"; echo "${hb:-    (none)}" | sed 's/^/    /'
+    n="$(printf '%s\n' "$ha" | grep -c .)"
+    [[ "$n" -eq 3 && "$ha" == "$hb" ]]
 }
 
 launch_daemon() {  # ssh_fn repo_dir label
@@ -227,8 +236,8 @@ collect_evidence() {  # report_path
 do_setup() {
     preflight
     echo "== setup =="
-    build_remote ssh_a "$A_REPO_DIR" "$A_LABEL"
-    build_remote ssh_b "$B_REPO_DIR" "$B_LABEL"
+    build_remote ssh_a "$A_REPO_DIR" "$A_LABEL" || die "build on $A_LABEL failed"
+    build_remote ssh_b "$B_REPO_DIR" "$B_LABEL" || die "build on $B_LABEL failed"
     echo "setup complete."
 }
 
@@ -242,7 +251,7 @@ do_deploy() {
 do_run() {
     preflight
     echo "== run =="
-    same_daemon_binaries || die "the two stations' openpulse-server differ or one is missing (run setup or deploy); nothing was keyed"
+    same_run_files || die "the stations' daemon, CLI or traffic script differ or one is missing; nothing was keyed. Copy A's build to B with deploy (two separate builds need not be byte-identical)"
     start_rigctld ssh_a "$A_HAMLIB_MODEL" "$A_CAT_PORT" "$A_CAT_BAUD" "$A_PTT_PORT" "$A_PTT_TYPE" "$A_RIGCTLD_PORT" "$A_LABEL"
     start_rigctld ssh_b "$B_HAMLIB_MODEL" "$B_CAT_PORT" "$B_CAT_BAUD" "$B_PTT_PORT" "$B_PTT_TYPE" "$B_RIGCTLD_PORT" "$B_LABEL"
     tune ssh_a "$A_RIGCTLD_PORT" "$A_RFPOWER" "$A_TEST_MODE_RIG" "$A_TEST_MODE_EXPECT" "$A_LABEL" "$A_FREQ_HZ" \
@@ -251,8 +260,9 @@ do_run() {
         || die "station B failed its dial or mode check; nothing was keyed"
     write_config ssh_a "$CALLSIGN_A" "$GRID_A" "$A_AUDIO_DEVICE" "$A_RIGCTLD_PORT" "$A_LABEL"
     write_config ssh_b "$CALLSIGN_B" "$GRID_B" "$B_AUDIO_DEVICE" "$B_RIGCTLD_PORT" "$B_LABEL"
-    launch_daemon ssh_a "$A_REPO_DIR" "$A_LABEL"
-    launch_daemon ssh_b "$B_REPO_DIR" "$B_LABEL"
+    # A dead daemon on one side would leave the other keying to nobody: stop both and end the run.
+    launch_daemon ssh_a "$A_REPO_DIR" "$A_LABEL" || { do_cleanup; die "$A_LABEL daemon did not start; both stopped"; }
+    launch_daemon ssh_b "$B_REPO_DIR" "$B_LABEL" || { do_cleanup; die "$B_LABEL daemon did not start; both stopped"; }
 
     cat <<EOF
 

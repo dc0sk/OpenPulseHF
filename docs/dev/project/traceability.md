@@ -40,9 +40,14 @@ this ledger adds the design rationale and the actually-observed results per chan
   - `TRAFFIC_FROM=C` refuses, rc 1.
   - A dial read back wrong refuses before anything keys, rc 1.
   - Not run on air.
-- **Review:** mandatory, because the runner keys transmitters. It was running when this was
-  committed; its findings and dispositions follow in a later commit, and the runner is not used on
-  air before then.
+- **Review:** `docs/dev/reviews/review-twin-ota-ft991a-2026-10-31.md`. It found no path that keys
+  wrongly and does not block Release 1; there were 3 should-fix findings, 3 nits and 1 unconfirmed.
+  Six were taken; the seventh, the FT-818 VFO toggling, is unchanged with the reason recorded. The
+  biggest: `TRAFFIC_FROM=B` sent nothing, because `deploy` did not copy `twin-traffic.sh`. Now
+  `deploy` copies and hashes the daemon, the CLI and the traffic script. A failed build or a CPU
+  mismatch copies nothing, a daemon that does not start stops both stations, and the FT-818
+  profile's variable names are read. The fake harness was re-run with a B that starts empty: all
+  seven cases behave as recorded there.
 
 ## 2026-10-26 — On-air station readiness check; the first 2 m session is a dry run
 
