@@ -2733,4 +2733,13 @@ station B: which arecord = /usr/bin/arecord   file size 480044 bytes
 ```
 (5 s x 48000 x 2 bytes + the 44-byte header = 480044 on both; the files were deleted.) Step 2 on rpi51: `scipy 1.15.3`, `numpy 2.2.4` import fine.
 
+**Run G2 (B sends; maintainer's go, 2026-10-31, port B empty).** `deploy` (the same three sha256 on both stations: `52ce8717...`, `c9e152f3...`, `f3e06d11...`), no daemon or rigctld running before on either station, `events.ndjson` deleted on both stations with the daemons stopped, then `OTA_PROFILE=robust TRAFFIC_FROM=B TRAFFIC_SIZE=64 TRAFFIC_INTERVAL=2 TRAFFIC_DURATION=300 DAEMON_LOG_LEVEL=debug scripts/run-onair-twin-ota.sh run`, both daemons ok, traffic from about 21:51:50 UTC for 300 s. Recordings (`arecord -q -D pulse -f S16_LE -r 48000 -c 1 -d 360`), started just before `run`:
+```
+rpi51:     start 21:51:16.794677405 UTC   /tmp/rx-a-g2.wav   34560044 bytes (360 s)
+station B: start 21:51:17.154050399 UTC   /tmp/rx-b-g2.wav   34560044 bytes (360 s)
+```
+Decimated by 6 (`resample_poly(x, 1, 6)`, 48 kHz to 8 kHz, the command of the task), gzipped, in `docs/dev/test-reports/on-air/rx-audio-2026-11-01/`: `rx-a-g2-8k.wav.gz` 4276234 bytes (8000 Hz, 360.0 s, rms 296.4, peak 704), `rx-b-g2-8k.wav.gz` 1148235 bytes (8000 Hz, 360.0 s, rms 244.8, peak 5346). The 48 kHz originals were deleted from /tmp on station B (kept on rpi51 in /tmp: `rx-a-g2.wav` sha256 `ff4eff90...`, `rx-b-g2.wav` `f617aa29...`). The recording start times are the `date -u` printed just before `arecord`; the first byte of each file is that time plus a few ms of startup, not measured.
 
+Report `onair-twin-ota-20261031-225133.log`, evidence in `docs/dev/test-reports/onair-twin-ota-20261031-225133-evidence/` (redacted, gzipped; the events files hold only this run): 1402 audit events (A), 1379 (B). `cleanup`: `[IC-9700] daemon and rigctld stopped; PTT 0 sent while rigctld ran`, `[FT-991A] daemon and rigctld stopped; PTT 0 sent while rigctld ran`, no ERROR. Counts as in task 11 Part G:
+- **Station A (IRS, the IC-9700):** `"verdict":"keyed"` decisions **4** (1 x `Sl2 -> Sl2 hold` with `decoded_level Sl2`, 2 x `nack_hold`, 1 x `nack_step_down Sl2 -> Sl1`), plus 4 x `nack_hold muted` at Sl1: **the same decision sequence as task 11 Part G**; `ptt_changed` 10; `ota_status` 111 (99 at `SL2/SL2/SL2`, 12 at `tx SL2, recommended SL1, confirmed SL1`).
+- **Station B (ISS, the FT-991A):** `ptt_changed` 9, `frame_transmitted` 4, `ota_status` 5, all `SL2/SL2/SL2`, **its `tx_level` never changes**; no `ota_rate_decision`; `OTA send abandoned` once in `daemon-b.log` (21:55:18 UTC); none in `daemon-a.log`.
