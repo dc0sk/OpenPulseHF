@@ -1675,11 +1675,31 @@ Rig prepared by CAT (`EX065+1500;`, read back; `FA144640064`, `MD0C`, `SH016`, P
 Consequence (hypothesis from this one recording, to be tested): with 065 = +1500 the B dial must be 1500 Hz higher for the same RF (dial = test frequency + 1500 + trim, i.e. `B_FREQ_OFFSET_HZ=1564`, a profile-only change; 144.6416 MHz is inside the runner's 144.500-144.750 MHz guard); the transmitted RF at B's audio of 1500 Hz is then the same as before (`RF = dial - 1500 + 1500`), so B -> A would not move on the air, but that is untested. The CAT readout of the dial did not change with the shift.
 State left: 065 = +1500 on the FT-991A (the other menus at their originals), DATA-USB `FA144640064` `SH016`, PTT 0 on both rigs, nothing running. **Do not key the FT-991A in this state** (its dial would put the transmission 1500 Hz off the intended frequency).
 
-## Task 5 — FT-818 at its new location: readiness, G0, then Gate 6 with RS both ways (status: superseded)
+#### A -> B in DATA-USB with OTHER SHIFT +1500 and the dial +1500 Hz (maintainer's go, 2026-10-31): 3 of 3 PASS
+Setup: `EX065+1500;` (read back before each run), `MD0C`, `SH016`, the IC-9700 ~1.2 W on 144.640 MHz (it had auto-powered-off overnight; the maintainer powered it on), the FT-991A receive-only; runner `supervise --single-case 'BPSK250|rs|64'` with `B_FREQ_OFFSET_HZ=1564` (dial 144641564, readback matched). Reports `onair-2026-10-31T074544.json`, `...T080943.json`, `...T081139.json`: each `PASS` (payload observed in the IRS output). PTT 0 on both rigs afterwards; the runner's cleanup left the FT-991A dial at 144640064.
+Evidence tier: hardware-in-the-loop, 3 runs, one payload size, one day, no audio recording of these runs. It confirms the hypothesis of the previous section (with 065 = +1500 the dial is the signal centre and must be 1500 Hz higher) for A -> B. **Not tested: B -> A with 065 = +1500** (expected to stay on frequency, but if the FT-991A transmits with the shifted dial it may not; do not key it without a check against the IC-9700 or the RSPdx). Not tested: the falsifier (USB, narrow width, should fail); 065 = +1500 on other modes.
 
-**Superseded (2026-10-31):** worked on 2026-10-30 with the remote FT-991A in place of the FT-818 (see
-the task 4 addenda and task 6). The FT-818 relocation becomes a new task when it has moved; do not work
-this one.
+#### FT-991A menu settings and what they do — consolidated reference (so these do not get lost)
+| Item | Value / effect | Source |
+|---|---|---|
+| SH0 (receive width index) in DATA-USB | accepts 0-17 only; the audio upper edge is about half the index width, the filter is centred near 0 Hz, so at index 16 the passband is only ~0-1.7 kHz and the 1.5 kHz BPSK carrier sits at its edge. Hamlib `M PKTUSB 2400` sets 16, `3000` sets 17 | measured (idle sweeps), Fable-reviewed |
+| SH0 in plain USB | accepts up to 21 (default 20); audio flat to ~3 kHz. The runner's `M USB 2400` sets 14 | measured |
+| 065 OTHER SHIFT (SSB) | -3000..+3000 Hz, 10 Hz steps, default 0. At +1500 the DATA-USB idle passband is 293-2648 Hz, but the received signal moves up by the shift (carrier at ~3 kHz), so the dial must be shift higher: `B_FREQ_OFFSET_HZ=64+1500` | measured; manual line quoted by the maintainer |
+| 064 OTHER DISP (SSB) | -3000..+3000 Hz, 10 Hz steps, default 0; display offset only (left at 0) | manual line quoted by the maintainer |
+| 062 / 063 | probably DATA MODE (reads 1, OTHERS) and PSK TONE (0 = 1000 Hz); 062 = 0 with 063 = 1 gives the same 293-2648 Hz band as 065 +1500. **Names are not verified against the manual** | inferred from the EX dump |
+| 066-069 DATA LCUT/HCUT | at defaults (LCUT 300 Hz / 18 dB, HCUT 3000 Hz / 18 dB), so not the cause | maintainer's manual values, readback |
+| 070 / 071 | DATA IN SELECT = REAR, DATA PTT SELECT = DAKY | maintainer's manual values |
+| `KP` (CW pitch) | the dial readout differs between USB and DATA-USB by the CW pitch (`KP40` = 700 Hz, `KP20` = 500 Hz); this is the 700 Hz mode-readback difference the runner's pre-flight flags | measured |
+| 037 | is MIC SCAN per the manual, not what was assumed earlier; EX numbering was withdrawn (raw dump in `exdump`, see the menu-sweep section) | maintainer |
+Recipes that work: **B -> A** in DATA-USB with the +64 Hz trim (065 = 0): 3 of 3 pass (previous sections). **A -> B** either in plain USB (dial 144640000, `TEST_MODE_RIG_B=keep TEST_MODE_EXPECT_B=USB B_FREQ_OFFSET_HZ=0`, 1 run) or in DATA-USB with 065 = +1500 and `B_FREQ_OFFSET_HZ=1564` (3 runs). Before B -> A again with 065 = +1500, set the dial back (or set 065 = 0) and check the frequency on air.
+State left: 065 set back to 0 (read back `EX065+0000`) on the FT-991A, other menus at their originals, DATA-USB `FA144640064` `SH016`, PTT 0 on both rigs, nothing running; the stock +64 Hz trim applies again.
+
+#### B -> A in DATA-USB with OTHER SHIFT +1500 and the dial +1500 Hz (maintainer's go, 2026-10-31): PASS (1 run)
+`EX065+1500;` set and read back, `MD0C`, `SH016`, runner `supervise --single-case 'BPSK250|rs|64' --reverse` with `B_FREQ_OFFSET_HZ=1564` (dial 144641564, readback matched; the FT-991A transmits at 5 W): report `onair-2026-10-31T091111.json`, `PASS`. So with 065 = +1500 and the dial 1500 Hz higher the transmitted RF is on 144.640 MHz as predicted (the IC-9700 decoded it), and **one setting now works both ways: 065 = +1500, `B_FREQ_OFFSET_HZ=1564`** (A -> B 3 of 3, B -> A 1 of 1). Evidence: hardware-in-the-loop, 1 run in this direction; the frequency was inferred from the decode, not measured on the RSPdx. 065 was left at +1500 and the dial at 144641564; PTT 0 on both rigs.
+
+## Task 5 — FT-818 at its new location: readiness, G0, then Gate 6 with RS both ways (status: superseded 2026-10-31 — the maintainer uses the FT-991A station instead; the FT-818 steps below are not planned)
+
+FT-991A equivalent: B -> A 4 of 4 PASS (065 = 0, +64 Hz trim); A -> B 3 of 3 PASS (065 = +1500, dial +1500) plus 1 in plain USB; see the sections above. Open there: one consistent setting for both directions (B -> A with 065 = +1500 is untested), IRS log counts and offline decodes per run.
 
 Planned for 2026-10-28, after the maintainer relocates the FT-818 away from the S8–S9 local noise. The
 FT-991A station is out of scope until it is accessible (about 2026-10-30).
@@ -1733,7 +1753,17 @@ has moved.
 
 ---
 
-## Task 6 — FT-991A both ways with one setting: OTHER SHIFT +1500 and the dial 1500 Hz up (status: open)
+## Task 6 — FT-991A both ways with one setting: OTHER SHIFT +1500 and the dial 1500 Hz up (status: open — two runs left)
+
+**Progress (cloud session, 2026-10-31):** the station session ran this before it was written (on its
+branch `onair-retest-1030`, now merged into this one): A → B with 065 = +1500 and
+`B_FREQ_OFFSET_HZ=1564`: **3 of 3 PASS**; B → A with the same setting: **1 of 1 PASS** — the transmit follows
+the shift, so **one setting works both ways** and 065 **stays at +1500**. The profile
+(`onair-ic9700-ft991a.example.sh`) now makes that the standard. **What is left of this task:** Part A, and
+Part B step 3 for B → A only — **two more B → A runs** (three in total), each with the IC-9700's audio
+recorded and its carrier reported. Work on this branch (`claude/affectionate-brahmagupta-sdn8qg`) from now
+on, not `onair-retest-1030`.
+
 
 Hypothesis from task 4's last run: with 065 = +1500 the FT-991A receives a signal at audio
 `RF − dial + 1500`, so `B_FREQ_OFFSET_HZ = 1500 + 64 = 1564` puts the IC-9700's signal back at 1500 Hz.

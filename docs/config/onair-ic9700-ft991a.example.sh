@@ -58,13 +58,13 @@ export TEST_MODE_RIG="PKTUSB"
 # corrects the actual crystal difference and aligns BOTH directions (received carrier
 # measured back at 1501.5 Hz). Re-measure with Gate 5 if a rig or its TCXO changes.
 export A_FREQ_OFFSET_HZ=0
-# Caution (2026-10-30): the 1436 Hz behind this trim was measured with the FT-991A RECEIVING in DATA-USB,
-# whose receive passband is mis-centred (it ends near half the filter width, ~1.4 kHz at the runner's
-# SH 16) and pins the spectral centroid low. The trim may be partly that artefact; B -> A at +64 put the
-# FT-991A's carrier at ~1468 Hz on the IC-9700. Re-measure on a correctly centred receive path.
-# Also: with menu 065 OTHER SHIFT (SSB) = +1500 (centres the DATA-USB passband) the dial must sit
-# 1500 Hz higher for the same RF, i.e. B_FREQ_OFFSET_HZ = 1500 + trim — untested for transmit.
-export B_FREQ_OFFSET_HZ=64
+# The FT-991A's DATA-USB receive passband is centred near 0 Hz at the factory setting (it ends near half
+# the filter width, ~1.4 kHz at the runner's SH 16), which cuts a 1500 Hz BPSK250 signal: A -> B failed.
+# Menu 065 OTHER SHIFT (SSB) = +1500 centres it (293-2648 Hz) and moves the dial relation by 1500 Hz in
+# BOTH directions, so the dial sits 1500 Hz above the test frequency plus the 64 Hz trim. Measured
+# 2026-10-31: A -> B 3 of 3, B -> A 1 of 1 PASS (onair-tasks.md, task 6). REQUIRES 065 = +1500 on the rig
+# (read back `EX065;` -> EX065+1500;): with 065 at 0 this offset puts the transmission 1.5 kHz off.
+export B_FREQ_OFFSET_HZ=1564
 
 # IC-9700 audio prerequisites for digital USB TX (set on the radio UI):
 # - DATA MOD = USB
