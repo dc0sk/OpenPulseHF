@@ -1926,10 +1926,11 @@ Failure detail, full IRS log on station B: first-energy attempt: 319; fec attemp
 `Report: docs/dev/test-reports/onair-2026-10-31T151749.json`; frequencies read back at the runner's pre-flight as for run 1 (IC-9700 144640000 Hz, FT-991A 144641564 Hz). SDR capture (`~/onair-captures/2026-10-31/a1-ab-qpsk-rs.cf32` on rpi51, 230400000 bytes, sha256 `4cf469f8...58bcf4`, RFGR 22, IFGR 40): `captured 150.00s peak=0.1955 rms=0.0054 clip=0.00% OK`. Burst at t = 75.25-80.75 s, **peak 51499.9 Hz above the LO**, 53.1 dB over the floor, -20 dB span 51344 51735 Hz. Not decoded (witness only). PTT 0 on both rigs, nothing running. Bundle: ``.
 Failure detail, full IRS log on station B (5216 lines): 38 `first-energy attempt`, 390 `fec attempt FAILED` (the lines I read were `FEC error: FEC data length 0/1 is shorter than one 255-byte block` with `fec demod: ... soft=false wire_bytes=1 llrs=0`, samples 816-848, i.e. attempts on a tail of the buffer, not on the burst), 0 `fec attempt OK`, 0 `invalid magic`, 0 `rejected`. I did not read the attempts made at the burst's onset; only the first three FAILED lines were inspected. The SDR shows a clean 5.5 s burst at +51500 Hz, 53.1 dB over the floor. One more try of this case is allowed on the maintainer's go; a second failure stops the task.
 
-**Run 1 of 4 — A -> B (IC-9700 transmits ~1.2 W, FT-991A receives), `QPSK250-D|rs|64` (maintainer's go, 2026-10-31), RSPdx capture beside it:** **FAIL**
+**Run 1 of 4, retry (second failure) — A -> B (IC-9700 transmits ~1.2 W, FT-991A receives), `QPSK250-D|rs|64` (maintainer's go, 2026-10-31), RSPdx capture beside it:** **FAIL**
 `Report: docs/dev/test-reports/onair-2026-10-31T154555.json`; frequencies read back at the runner's pre-flight as for run 1 (IC-9700 144640000 Hz, FT-991A 144641564 Hz). SDR capture (`~/onair-captures/2026-10-31/a1-ab-qpsk-rs2.cf32` on rpi51, 230400000 bytes, sha256 `1ba3839f...1335cf`, RFGR 22, IFGR 40): `captured 150.00s peak=0.0946 rms=0.0052 clip=0.00% OK`. Burst at t = 75.5-81.0 s, **peak 51559.6 Hz above the LO**, 53.5 dB over the floor, -20 dB span 51343 51727 Hz. Not decoded (witness only). PTT 0 on both rigs, nothing running. Bundle: `docs/dev/test-reports/on-air/bundle-2026-10-31T154820Z-a1t8-ab-qpsk-rs2`.
+Failure detail, full IRS log on station B (5622 lines): 19 `first-energy attempt` (**all 19 with `window_complete=false`**; AFC settling done at onset=93320, correction 0.0 Hz), 471 `fec attempt FAILED`, every one `FEC error: FEC data length N is shorter than one 255-byte block` (`fec demod: mode=QPSK250-D fec=Rs soft=false`, `wire_bytes` 0-9, `samples` 568-20704), 0 `fec attempt OK`, 0 `invalid magic`, 0 `rejected`. SDR: clean 5.5 s burst at +51560 Hz, 53.5 dB over the floor. Same signature as the first attempt. **Two failures of this case: the task stops here; runs 2-4 (B -> A) are not started.** Observation for the cloud session, not a diagnosis: the receiver never has a complete window for this rung (about 0.4 s of audio at most per attempt, wire bytes < 10), while the burst is 5.5 s long; compare with the BPSK250 `rs` pass in the same chain.
 
-_(runs 2-4: pending, one go each)_
+**Status: blocked (two failures of A -> B `QPSK250-D|rs|64`).** Runs 2-4 (B -> A) not started. End state: PTT 0 on both rigs, nothing running; FT-991A `EX065+1500`, dial `FA144641564` (read back; the runner left it at the test setting), RFPOWER 0.05; IC-9700 RFPOWER 0.0117647.
 
 **Reviewed (cloud session, 2026-10-31), task 7:** two findings.
 
@@ -1958,7 +1959,7 @@ _(runs 2-4: pending, one go each)_
 A1 goes on with ladder MODCODs only, in task 8: SL5 `BPSK250|rs` (2 of 2 so far A → B) and SL6
 `QPSK250-D|rs`, with the uncoded `BPSK250|none` kept as the baseline.
 
-## Task 8 — measure the stations' clock offset (nothing transmits), then finish A1 with ladder MODCODs (status: open)
+## Task 8 — measure the stations' clock offset (nothing transmits), then finish A1 with ladder MODCODs (status: blocked — A -> B QPSK250-D|rs fails twice; see Results)
 
 Station B is the remote FT-991A, and its station rules apply: 5 W at most, ask the maintainer before
 **every** run that keys, and record nothing about that host here. Same local profile as task 7. The IC-9700
