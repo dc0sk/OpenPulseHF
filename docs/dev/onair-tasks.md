@@ -2691,10 +2691,10 @@ bursts. Feed the recorded audio through the daemon's receive entry (`accumulate_
 `ota_decode_burst`). Levels, profile and settings stay **as in task 11**.
 
 ### Part A — nothing transmits
-1. Pull. Check that `arecord -D pulse` works on both stations **while** the daemon holds the same device.
-   Start a daemon with `run-onair-twin-ota.sh`? No: test it with a plain 5 s `arecord` while nothing
-   else runs, then trust PipeWire to share the device. Report `which arecord` and the result line on
-   both stations.
+1. Pull. On both stations, with nothing else running, make a 5 s test recording
+   (`arecord -q -D pulse -f S16_LE -r 48000 -c 1 -d 5 /tmp/t.wav`) and report `which arecord` and the
+   file size. PipeWire shares the device with the daemon during the runs; task 6 recorded beside a live
+   receiver the same way.
 2. Check `python3 -c 'import scipy, numpy'` on rpi51; it is needed for step 3 of Part B.
 
 ### Part B — two runs, each keys both rigs: one go each
