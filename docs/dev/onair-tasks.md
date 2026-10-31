@@ -2240,3 +2240,15 @@ End state, whatever happened:
 
 ### Results
 
+**Part A (maintainer's go, 2026-10-31): B -> A `BPSK250|rs|64`, RSPdx at full gain.** Before the run: IC-9700 PTT 0, RFPOWER 0.0117647, 144640000 Hz PKTUSB, its receiver started with `--ptt none` (runner line 1552), nothing else running. Capture `sdr_capture.py 144590000 192000 150 0 30` (RFGR range printed: 0, 27):
+```
+freq = 144640000 Hz [expected 144640000]   (IC-9700, IRS)
+freq = 144641564 Hz [expected 144641564]   (FT-991A, ISS)
+[BPSK250 fec=rs payload=64B] ... PASS      Report: docs/dev/test-reports/onair-2026-10-31T171010.json
+captured 150.00s peak=1.0818 rms=0.6129 clip=0.96% OVERLOAD
+```
+**The burst is still not visible:** 2.9 dB over the median 49-54 kHz floor, no block more than 6 dB above it. At this gain the front end is overloaded (clip 0.96 %, rms 0.61 against 0.0005 at RFGR 22): the strongest spectral line is at 0 Hz (+26 dB over the median, DC), i.e. broadband energy (not one carrier) saturates it, so the capture is not a witness in this direction at this gain either. Nothing else was raised. Capture `~/onair-captures/2026-10-31/a1-ba-rs10.cf32` on rpi51 (230400000 bytes, sha256 `93a4a7c6...3d3b61`). Station A's receiver log, 2521 lines, 17:10:31.03-17:10:50.99 UTC, ends `fec attempt OK: mode=BPSK250 fec=Rs samples=67352 payload=64 bytes`: `docs/dev/test-reports/on-air/irs-logs-2026-10-31/irsA-ba-BPSK250-rs-run10.log.gz`. Bundle: `docs/dev/test-reports/on-air/bundle-2026-10-31T171226Z-a1t10-ba-rs`. PTT 0 on both rigs, nothing running.
+
+_(Part B: pending, one go)_
+
+
