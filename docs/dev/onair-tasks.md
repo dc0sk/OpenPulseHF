@@ -2315,7 +2315,7 @@ End state: PTT 0 on both rigs, nothing running; FT-991A read back `EX065+1500; F
   Also passed: `BPSK250|none` both ways (B → A 1 of 2) and `QPSK250-D|rs` A → B once, with the longer
   kill wait. **Whether B → A without a witness is acceptable for A1 is for the maintainer to decide.**
 
-## Task 11 — A2 on the FT-991A pair: the daemon rate ladder, induced level changes, both directions (status: blocked — Parts D, E, F, G done; Part B (4th attempt) decoded nothing at SL2 on station B and the ACK leg showed B never applying an ACK; for the cloud session, see Results)
+## Task 11 — A2 on the FT-991A pair: the daemon rate ladder, induced level changes, both directions (status: done — Parts D–G and Part B run 1 done; A2 not shown; superseded by task 12)
 
 **Goal.** Release 1 criterion **A2** (`docs/dev/project/release-1.0-criteria.md` §A2): in the
 receiver-led direction, show all three of:
@@ -2644,4 +2644,85 @@ so B is about 2× slower on every rung. Part B is allowed. The margin, from the 
 
 So Part G's ACK leg (B sends, rpi51 decodes) comes first. If Part B then fails with late ACKs, the
 cause is already named.
+
+**Reviewed (cloud session, 2026-10-31), task 11 Parts B (4th), E, F, G:** thanks for the careful
+counts, and for stopping for the whip. Three findings, then task 12.
+
+1. **A2 fails in the daemons' receive, not in the stations or the runner.** In Part G station A (rpi51,
+   the fast Pi) did decode B's first SL2 frame, but much too late:
+   - B's frame ended at about 21:27:10.4 (B's TX metadata line). Its 9 s ACK window closed at 21:27:20.2
+     (`OTA ACK not received within window`).
+   - A had the whole burst at once. Its first attempt, at 21:27:10.7, used `samples=537048` and failed
+     only on `RS … TooManyErrors`.
+   - It then worked through **267 FEC attempts in 30 s**, with corrections jumping between −19.6 and
+     +11.7 Hz. Many windows were 1–6 bytes short of the RS block, because the burst ended at the frame's
+     end and a later onset loses the tail.
+   - It decoded at 21:27:40.9 and sent its ACK at 21:27:42.5, 22 s after B had stopped listening.
+
+   The probe's 3.7 s is one decode of a synthetic frame; real audio costs far more attempts. So **the
+   9 s window is missed on the fast Pi too.** The Pi 4 only makes it worse.
+2. **Station B's daemon receive breaks A's frames into fragments.** In Part B, B's log has 1432 FEC
+   attempts, 0 OK, and median windows of 52 032 samples (6.5 s) against a 532 480-sample frame (66.6 s).
+   The bursts were recognised in pieces of 200–6200 samples (`longest total-power run 200`). B's
+   `dcd_change` energy reads about 0.06, against about 0.006 on A. **UNCHECKED** whether that is the
+   capture level (B's source is at 1.00, A's at 0.44) or something in B's daemon. B's CLI receiver
+   decodes the same chain fine in every A1 run, so it is the daemon path that differs.
+3. **The witness for B → A cannot be done with an antenna at rpi51.** Port B with the SRH-771 at RFGR 5
+   showed nothing (Part F), while the IC-9700 decoded the same run. The FT-991A's 5 W reaches the
+   IC-9700 through its own antenna, not through a whip indoors. A witness would need a protected tap on
+   the IC-9700's feed line. That is hardware, and the maintainer's decision.
+
+   Also noted: on **port A** a strong **constant** line sits at +21 527 Hz, i.e. 144.6415 MHz, the
+   test channel itself. It is absent on port B. UNCHECKED what it is: a local spur coupling into port A's
+   antenna or cable is likely. It could also reach the IC-9700 as a tone near 1.5 kHz; the receiver's
+   auto-notch is on.
+
+What A2 needs now is **engine work on real audio**, and that needs recordings of the real audio. Task 12
+collects them. Nothing else changes.
+
+## Task 12 — record the real receive audio beside both daemons, for offline reproduction (status: open)
+
+Station B is the remote FT-991A, and its station rules apply: 5 W at most, ask the maintainer before
+**every** run, and record nothing about that host here. **The RSPdx's port B stays empty.** The IC-9700
+transmits in both runs: Part G's rule.
+
+Purpose: reproduce, offline in the cloud session, (a) A's 30 s SL2 decode and (b) B's fragmented
+bursts. Feed the recorded audio through the daemon's receive entry (`accumulate_capture`, then
+`ota_decode_burst`). Levels, profile and settings stay **as in task 11**.
+
+### Part A — nothing transmits
+1. Pull. Check that `arecord -D pulse` works on both stations **while** the daemon holds the same device.
+   Start a daemon with `run-onair-twin-ota.sh`? No: test it with a plain 5 s `arecord` while nothing
+   else runs, then trust PipeWire to share the device. Report `which arecord` and the result line on
+   both stations.
+2. Check `python3 -c 'import scipy, numpy'` on rpi51; it is needed for step 3 of Part B.
+
+### Part B — two runs, each keys both rigs: one go each
+For **each** run, start a recording on **both** stations just before `run`, for the traffic duration
+plus 60 s:
+`arecord -q -D pulse -f S16_LE -r 48000 -c 1 -d <seconds> /tmp/rx-<station>-<run>.wav`.
+
+1. **Run G2 (B sends, as task 11 Part G):** `deploy` first, then
+   `OTA_PROFILE=robust TRAFFIC_FROM=B TRAFFIC_SIZE=64 TRAFFIC_INTERVAL=2 TRAFFIC_DURATION=300 DAEMON_LOG_LEVEL=debug scripts/run-onair-twin-ota.sh run`.
+2. **Run B2 (A sends):** the same, with `TRAFFIC_FROM=A`.
+3. After each run, on rpi51, decimate each recording to the modem's rate and gzip it. Copy station B's file
+   to rpi51 first. Then:
+   `python3 -c "import sys,numpy as n,scipy.io.wavfile as w,scipy.signal as s; r,x=w.read(sys.argv[1]); y=s.resample_poly(x.astype(n.float32),1,6); w.write(sys.argv[2],8000,n.clip(y,-32768,32767).astype(n.int16))" in.wav out-8k.wav && gzip -9 out-8k.wav`.
+
+   Commit the `-8k.wav.gz` files under `docs/dev/test-reports/on-air/rx-audio-2026-11-01/`, named
+   `rx-<a|b>-<g2|b2>-8k.wav.gz`. For each file, record its size and the recording's UTC start time to the
+   second. Use `date -u +%T.%N` printed just before `arecord`.
+4. Commit the evidence as in task 11 (events, daemon logs, configs, report), redacted and gzipped.
+   **Truncate both stations' `events.ndjson` before each run**: delete the file while the daemons are
+   stopped. That way the evidence holds only that run.
+5. `cleanup` after each run; quote it.
+
+Report the counts as in task 11 Part G for each run. Analysis is for the cloud session.
+
+End state, whatever happened:
+- PTT 0 on both rigs, nothing running;
+- recorded: the FT-991A's 065, dial and RFPOWER, and the IC-9700's RFPOWER;
+- port B empty.
+
+### Results
 
