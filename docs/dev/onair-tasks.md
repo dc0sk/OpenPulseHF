@@ -2036,7 +2036,10 @@ B (FT-991A):  rate=47993.692 Hz  ppm=-131.4  points=11799  span=590s  resid_max=
 `Report: docs/dev/test-reports/onair-2026-10-31T163547.json`; frequencies read back at the runner's pre-flight as for run 1 (IC-9700 144640000 Hz, FT-991A 144641564 Hz). SDR capture (`~/onair-captures/2026-10-31/a1-ba-rs9.cf32` on rpi51, 230400000 bytes, sha256 `212170b1...4b2f60`, RFGR 22, IFGR 40): `captured 150.00s peak=0.0859 rms=0.0007 clip=0.00% OK`. Burst at t = none detected s, **peak n/a Hz above the LO**, 0.8 dB over the floor, -20 dB span n/a Hz. Not decoded (witness only). PTT 0 on both rigs, nothing running. Bundle: `docs/dev/test-reports/on-air/bundle-2026-10-31T163811Z-a1t9-ba-rs9`.
 No burst is visible in the RSPdx capture (max 0.8 dB over the 49-54 kHz floor; the receiver at RFGR 22 is too insensitive for the FT-991A's 5 W over this path, as noted before), so the capture is no witness for this direction. Station A's (IC-9700) receiver log, 2522 lines, 16:36:07.97-16:36:27.92 UTC, ends with `fec attempt OK: mode=BPSK250 fec=Rs samples=68184 payload=64 bytes` (568 `first-energy` lines before it): `docs/dev/test-reports/on-air/irs-logs-2026-10-31/irsA-ba-BPSK250-rs.log.gz` (ANSI codes stripped; nothing of station B in it).
 
-_(runs 2-2: pending, one go each)_
+**Run 2 of 2 — B -> A (FT-991A transmits 5 W, IC-9700 receives), `BPSK250|none|64` (maintainer's go, 2026-10-31), RSPdx capture beside it:** **FAIL**
+`Report: docs/dev/test-reports/onair-2026-10-31T163957.json`; frequencies read back at the runner's pre-flight as for run 1 (IC-9700 144640000 Hz, FT-991A 144641564 Hz). SDR capture (`~/onair-captures/2026-10-31/a1-ba-none9.cf32` on rpi51, 230400000 bytes, sha256 `655b392a...e011cc`, RFGR 22, IFGR 40): `captured 150.00s peak=0.0286 rms=0.0005 clip=0.00% OK`. Burst at t = none detected s, **peak n/a Hz above the LO**, 0.6 dB over the floor, -20 dB span n/a Hz. Not decoded (witness only). PTT 0 on both rigs, nothing running. Bundle: `docs/dev/test-reports/on-air/bundle-2026-10-31T164220Z-a1t9-ba-none9`.
+
+_(both runs done)_
 
 **Reviewed (cloud session, 2026-10-31), task 8:**
 - **Clock offset A − B is +74 ppm, and it repeats.** That is below the ±150–200 ppm where
