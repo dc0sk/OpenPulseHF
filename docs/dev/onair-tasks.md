@@ -2013,3 +2013,17 @@ End state, whatever happened:
 
 ### Results
 
+**Part A — sample-clock offset (2026-10-31, nothing transmitted).** Both stations NTP-synchronised (`NTPSynchronized=yes` on each). `/tmp/rate.py` as in the task (first launch failed with an `IndentationError` because the markdown block keeps its 3-space indent; dedented and restarted, no measurement lost). `arecord -D pulse -f S16_LE -r 48000 -c 1`, both stations at the same time, rigs on and receiving, no other user of the audio device:
+```
+pass 1 (14:55:54-15:05:55 UTC)
+A (IC-9700):  rate=47997.219 Hz  ppm=-57.9   points=11801  span=590s  resid_max=3469 samples
+B (FT-991A):  rate=47993.699 Hz  ppm=-131.3  points=11799  span=590s  resid_max=3569 samples
+pass 2 (15:06:05-15:16:06 UTC)
+A (IC-9700):  rate=47997.260 Hz  ppm=-57.1   points=11801  span=590s  resid_max=3423 samples
+B (FT-991A):  rate=47993.692 Hz  ppm=-131.4  points=11799  span=590s  resid_max=3556 samples
+```
+**Offset A - B: +73.4 ppm (pass 1), +74.3 ppm (pass 2); it repeats and is below 150 ppm.** Both stations read negative against the system clock (A -58, B -131 ppm). By the task's rule this is "well below": the clock offset does not explain the soft-concatenated failure on its own, and the cause stays open. Caveats: the residual maximum is ~3500 samples (~73 ms) on both, i.e. arecord delivers in bursts, so the fit is of the long-term slope only; this measures the capture clock of each station, not the playback side (assumed to share the card's clock; nothing on the stations contradicted that, but it was not measured, e.g. the IC-9700's playback clock is not checked against its capture clock).
+
+_(Part B runs: pending, one go each)_
+
+
