@@ -2315,7 +2315,7 @@ End state: PTT 0 on both rigs, nothing running; FT-991A read back `EX065+1500; F
   Also passed: `BPSK250|none` both ways (B → A 1 of 2) and `QPSK250-D|rs` A → B once, with the longer
   kill wait. **Whether B → A without a witness is acceptable for A1 is for the maintainer to decide.**
 
-## Task 11 — A2 on the FT-991A pair: the daemon rate ladder, induced level changes, both directions (status: open — rerun Part A step 2, then Parts B and C, with the fixed runner)
+## Task 11 — A2 on the FT-991A pair: the daemon rate ladder, induced level changes, both directions (status: blocked — twin OTA script's daemon check/cleanup use pgrep -x on a 16-char name; nothing keyed, see Results)
 
 **Goal.** Release 1 criterion **A2** (`docs/dev/project/release-1.0-criteria.md` §A2): in the
 receiver-led direction, show all three of:
@@ -2426,6 +2426,18 @@ f3e06d1193ecc84966a290e15065e86ec82cb5c5953172fbefc8c59a2280d675  target/release
 c9e152f32d6b8d5548551b255865b9c45c198b96739672b02eab9dee56fdc373  scripts/twin-traffic.sh
 ```
 `onair-setup-audio-routing.sh --verify`: PASS on both (A sink 0.15 / src 0.44, B sink 0.15 / src 1.00). Nothing has keyed or been changed on the rigs since the read-backs above (FT-991A `EX065+1500`, dial 144641564, RFPOWER 0.05, PTT 0; IC-9700 RFPOWER 0.0117647), no daemon or rigctld running. The `~/.bashrc` line on rpi51 (backup `~/.bashrc.bak-task11`) is still in place, pending the maintainer's choice to keep or restore.
+
+**Part B run 1, second attempt (maintainer's go, 2026-10-31, commit `9ff3c1b8`): aborted by the script before any traffic.** The dial and mode read-backs now pass (`tune` for both rigs ran through, powers left as they were). Then:
+```
+  [IC-9700] launching openpulse-server (control 127.0.0.1:9000)
+pgrep: pattern that searches for process name longer than 15 characters will result in zero matches
+Try `pgrep -f' option to match against the complete command line.
+  [IC-9700] daemon FAILED
+== cleanup ==
+stopped daemons and rigctld on both stations.
+ERROR: IC-9700 daemon did not start; both stopped
+```
+**Cause (read from `scripts/run-onair-twin-ota.sh`):** `openpulse-server` is 16 characters and Linux truncates a process name to 15, so `pgrep -x openpulse-server` (line 217, the post-launch check; also `do_status`, line 326) and `pkill -x openpulse-server` (lines 214, 332, 333, i.e. `launch_daemon` and `cleanup`) never match. The daemon **had started** on rpi51; the check said FAILED, and the `cleanup` that followed **did not stop it** (it printed "stopped daemons" regardless). I found it still running (and the rigctld), killed both and the RSPdx capture by PID, and verified: no `openpulse-server`, `rigctld` or `sdr_capture` left on rpi51 or station B, PTT 0 on both rigs. The lone daemon ran about 1.5 minutes without a peer or traffic; its log has no PTT line and the TX metadata log has no entry, so nothing was transmitted. Station B's daemon was never launched. The partial RSPdx file was deleted. Not patched here (script change, same rule as before); the cloud session should use `pgrep -f`/`pkill -f` with a pattern that cannot match the shell itself (or `-x openpulse-serve`), and make `cleanup` report what it actually killed. **Status: blocked** (Part B/C not run).
 
 **Reviewed (cloud session, 2026-10-31), task 11's first attempt:** thanks for stopping. All three
 findings are fixed in `scripts/run-onair-twin-ota.sh`, with a second review round
