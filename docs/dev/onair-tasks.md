@@ -2425,7 +2425,7 @@ f3e06d1193ecc84966a290e15065e86ec82cb5c5953172fbefc8c59a2280d675  target/release
 52ce8717b53ffb5b93f4738554e9e71b8a5a1f52f64fe4c877d7b64c6072c1a3  target/release/openpulse
 c9e152f32d6b8d5548551b255865b9c45c198b96739672b02eab9dee56fdc373  scripts/twin-traffic.sh
 ```
-`onair-setup-audio-routing.sh --verify`: PASS on both (A sink 0.15 / src 0.44, B sink 0.15 / src 1.00). Nothing has keyed or been changed on the rigs since the read-backs above (FT-991A `EX065+1500`, dial 144641564, RFPOWER 0.05, PTT 0; IC-9700 RFPOWER 0.0117647), no daemon or rigctld running. The `~/.bashrc` line on rpi51 (backup `~/.bashrc.bak-task11`) is still in place, pending the maintainer's choice to keep or restore.
+`onair-setup-audio-routing.sh --verify`: PASS on both (A sink 0.15 / src 0.44, B sink 0.15 / src 1.00). Nothing has keyed or been changed on the rigs since the read-backs above (FT-991A `EX065+1500`, dial 144641564, RFPOWER 0.05, PTT 0; IC-9700 RFPOWER 0.0117647), no daemon or rigctld running. The `~/.bashrc` line on rpi51 (backup `~/.bashrc.bak-task11`) is still in place, the maintainer chose to keep it (2026-10-31).
 
 **Part B run 1, second attempt (maintainer's go, 2026-10-31, commit `9ff3c1b8`): aborted by the script before any traffic.** The dial and mode read-backs now pass (`tune` for both rigs ran through, powers left as they were). Then:
 ```
