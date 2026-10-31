@@ -2165,5 +2165,78 @@ No burst in the RSPdx capture (0.6 dB), no witness. Station A's receiver log: 14
 
 **Status: done.** Part A done; Part B: B -> A `BPSK250|rs|64` PASS (1 run), B -> A `BPSK250|none|64` FAIL then PASS. End state: PTT 0 on both rigs, nothing running; FT-991A read back `EX065+1500; FA144641564; RFPOWER 0.05`; IC-9700 RFPOWER 0.0117647.
 
+**Reviewed (cloud session, 2026-10-31), task 9:**
+- **A1 on SL5 now has a pass in each direction.** Both runs used one build and kept their report,
+  bundle and receiver log:
+  - A → B `BPSK250|rs|64`, 2 of 2 (task 7);
+  - B → A `BPSK250|rs|64`, 1 of 1 (task 9).
 
+  Missing: **the witness for B → A.** The RSPdx at RFGR 22 shows nothing (0.8 dB) of the FT-991A's
+  5 W, as it did on 10-30. In this direction only the FT-991A transmits; the runner's receiver keys
+  nothing (`--ptt none`). So the RSPdx can run at full gain without risk to its front end. Task 10
+  repeats that one run so.
+- **The uncoded `none` B → A passed 1 of 2.** The failed attempt found the frame (AFC −2 Hz) and ended
+  `invalid magic`: a thin margin without FEC, as in task 4. It is the baseline, not a ladder case.
+- **Why `QPSK250-D|rs` fails: the receiver stops reading audio.** It is not CPU lag on the remote
+  station. The log's per-second buffer extent shows it:
+  - The receiver settles on the burst at 15:46:27.7 (`onset=93320`, only 680 samples into it).
+  - From **15:46:30** the buffer's end is fixed at about 115 900 samples (14.5 s of audio, 2.8 s into
+    a 5.5 s burst).
+  - For the next 14 s the `AFC full-retry` walks forward through that frozen buffer at about 1050
+    samples per second, one 32-sample step every ~30 ms, without reading new audio. The runner kills
+    the receiver mid-walk.
+
+  In `receive_with_timeout_fec` (`crates/openpulse-modem/src/engine.rs`, around lines 5000–5030) the
+  full-buffer retry runs when `!long_frame || !planner.is_settled()`. QPSK250-D's 4 s frame is not
+  "long", so the retry runs even while the receiver is settled on a frame that is still arriving.
+  Its in-pass budget is the length of the whole buffer, which includes the 11.7 s of idle before
+  the burst. So it may block for up to 14.5 s. The runner kills the receiver `KILL_WAIT` = 12 s after
+  the sender exits.
+
+  The in-process harnesses deliver the whole buffer in the first read, so they cannot show this.
+  The BPSK logs do not show it either:
+  - `rs` and soft-concatenated each ran one retry pass on idle noise **before** their burst, then
+    settled, and their buffers grew to the end;
+  - soft-concatenated reached complete windows (to 226 759 samples) and still failed, so its
+    failure is a decode failure, not starvation. It stays open and is parked; it is off the ladder.
+
+  **This explanation can be tested:** if it holds, a longer `KILL_WAIT` lets the receiver read its
+  backlog after the pass and decode. That is the diagnostic in task 10. UNCHECKED: whether the cpal
+  input keeps the audio that arrives during the pass, or drops it.
+
+## Task 10 — A1's B → A on SL5 with the witness at full gain, then the QPSK starvation test (status: open)
+
+Station B is the remote FT-991A, and its station rules apply: 5 W at most, ask the maintainer before
+**every** run that keys, and record nothing about that host here. Same local profile as before.
+
+### Part A — B → A `BPSK250|rs|64` with the RSPdx at full gain (keys the FT-991A only: one go)
+In this direction the IC-9700 does not transmit (the runner's receiver uses `--ptt none`), so the
+RSPdx's front end is safe at full gain.
+1. Start the capture with **RFGR 0** (the RSPdx's minimum reduction; the script prints the device's
+   range) and **IFGR 30**:
+   `sdr_capture.py 144590000 192000 150 0 30 ~/onair-captures/2026-10-31/a1-ba-rs10.cf32`.
+   Before the run, check that the IC-9700 is **not** set to transmit and that nothing else keys it.
+2. Run `scripts/run-onair-ic9700-ft991a.sh supervise --single-case 'BPSK250|rs|64' --reverse`.
+3. Record the same items as task 9, including the burst's level over the floor and the clip %. Bundle
+   it, and keep station A's receiver log as in task 9.
+
+If the burst is still not visible, say so. Do not raise anything else to make it visible.
+
+### Part B — diagnostic: A → B `QPSK250-D|rs|64` with a longer kill wait (keys both directions of the link: one go)
+This tests the task 9 review's explanation. It is not an A1 run.
+1. Run `KILL_WAIT=45 scripts/run-onair-ic9700-ft991a.sh supervise --single-case 'QPSK250-D|rs|64'`, with the
+   RSPdx at the task 9 settings (RFGR 22, IFGR 40), since the IC-9700 transmits here.
+2. Copy station B's `irs-QPSK250-D-rs.log`, redact as in task 9 and gzip it, then report:
+   - the result line;
+   - the per-second table of the largest `samples=` and `pos=` values;
+   - whether the buffer's end resumes growing after the retry pass, and when;
+   - whether any `fec attempt OK` follows.
+
+One run only, whatever the result.
+
+End state, whatever happened:
+- PTT 0 on both rigs, nothing running;
+- recorded: the FT-991A's 065, dial and RFPOWER, and the IC-9700's RFPOWER.
+
+### Results
 
