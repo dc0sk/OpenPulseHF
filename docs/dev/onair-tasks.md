@@ -2032,7 +2032,10 @@ B (FT-991A):  rate=47993.692 Hz  ppm=-131.4  points=11799  span=590s  resid_max=
 ```
 **Offset A - B: +73.4 ppm (pass 1), +74.3 ppm (pass 2); it repeats and is below 150 ppm.** Both stations read negative against the system clock (A -58, B -131 ppm). By the task's rule this is "well below": the clock offset does not explain the soft-concatenated failure on its own, and the cause stays open. Caveats: the residual maximum is ~3500 samples (~73 ms) on both, i.e. arecord delivers in bursts, so the fit is of the long-term slope only; this measures the capture clock of each station, not the playback side (assumed to share the card's clock; nothing on the stations contradicted that, but it was not measured, e.g. the IC-9700's playback clock is not checked against its capture clock).
 
-_(runs 1-4: pending, one go each)_
+**Run 1 of 2 — B -> A (FT-991A transmits 5 W, IC-9700 receives), `BPSK250|rs|64` (maintainer's go, 2026-10-31), RSPdx capture beside it:** **PASS**
+`Report: docs/dev/test-reports/onair-2026-10-31T163547.json`; frequencies read back at the runner's pre-flight as for run 1 (IC-9700 144640000 Hz, FT-991A 144641564 Hz). SDR capture (`~/onair-captures/2026-10-31/a1-ba-rs9.cf32` on rpi51, 230400000 bytes, sha256 `212170b1...4b2f60`, RFGR 22, IFGR 40): `captured 150.00s peak=0.0859 rms=0.0007 clip=0.00% OK`. Burst at t = none detected s, **peak n/a Hz above the LO**, 0.8 dB over the floor, -20 dB span n/a Hz. Not decoded (witness only). PTT 0 on both rigs, nothing running. Bundle: `docs/dev/test-reports/on-air/bundle-2026-10-31T163811Z-a1t9-ba-rs9`.
+
+_(runs 2-2: pending, one go each)_
 
 **Reviewed (cloud session, 2026-10-31), task 8:**
 - **Clock offset A − B is +74 ppm, and it repeats.** That is below the ±150–200 ppm where
@@ -2151,6 +2154,6 @@ the last 15:
 ```
 **Last log line:** `2026-10-31T15:46:44.293796Z` UTC; the log file's modification time on station B is 16:46:44.289 CET = 15:46:44.289 UTC, the same instant. **The runner's kill time is not logged.** The runner kills the receiver `KILL_WAIT` (12 s) after the transmitter exits, so the kill came at or after 15:46:44; the last line is an attempt in the middle of a descending `samples=` sequence (5920, 5952, 5984, ... 6496), so the receiver was still in its scan when it stopped writing. The first attempt in the log is at 15:46:27.7, i.e. the scan had run ~16.6 s for a 5.5 s burst. Observation only, no diagnosis: the BPSK passes end with `fec attempt OK` within a fraction of a second of the first attempt.
 
-_(Part B runs: pending, one go each)_
+_(runs 1-2: pending, one go each)_
 
 
