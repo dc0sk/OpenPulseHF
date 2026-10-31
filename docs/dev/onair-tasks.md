@@ -2394,3 +2394,20 @@ End state, whatever happened:
 
 ### Results
 
+**Part A (2026-10-31, nothing transmitted).**
+- rpi51 commit `2744f4a2` (branch `claude/affectionate-brahmagupta-sdn8qg`).
+- First `scripts/run-onair-twin-ota.sh deploy` failed before building: `bash: line 1: cargo: command not found` (the script's ssh to rpi51 itself runs a non-interactive shell with `PATH=/usr/local/bin:/usr/bin:/bin:/usr/games`; the task-7 runner finds cargo itself, this one does not). With the maintainer's choice, one line was added at the top of rpi51's `~/.bashrc` (`[ -d "$HOME/.cargo/bin" ] && PATH="$HOME/.cargo/bin:$PATH"`, backup `~/.bashrc.bak-task11`; outside the repo, not committed). A repo fix is for the cloud session: `build_remote` should find cargo as `a_cargo()` does in the Gate 6 runner.
+- Second `deploy`: `build ok`, copied; sha256 on both stations **match**:
+```
+f3e06d1193ecc84966a290e15065e86ec82cb5c5953172fbefc8c59a2280d675  target/release/openpulse-server
+e7ab737fe8d78f7d0e7531ec1ff248c63ec521e83c0becb16bfa971e79da4508  target/release/openpulse
+c9e152f32d6b8d5548551b255865b9c45c198b96739672b02eab9dee56fdc373  scripts/twin-traffic.sh
+```
+- **Side effect to know about:** this deploy overwrote station B's `target/release/openpulse` with the lean CLI (`--no-default-features`, no audio) in place of the cpal build that task 7's `setup` put there. The Gate 6 runner (`run-onair-ic9700-ft991a.sh`) needs the cpal one on B: run its `setup` again before any further Gate 6 run.
+- Read-backs: FT-991A `EX065+1500; MD0C; SH016; FA144641564;` RFPOWER 0.05, PTT 0. IC-9700 RFPOWER 0.0117647, AGC 3 (SLOW), PTT 0, 144640000 Hz PKTUSB.
+- `scripts/onair-setup-audio-routing.sh --verify`: PASS on both stations (A: sink_vol 0.15, src_vol 0.44; B: sink_vol 0.15, src_vol 1.00).
+- Nothing else on either station uses a rig's CAT port or audio device: no rigctld, openpulse, arecord or other recorder running on rpi51 or station B (`pgrep`, and no open handle on the CAT serial devices on B).
+
+_(Part B: pending, one go)_
+
+
