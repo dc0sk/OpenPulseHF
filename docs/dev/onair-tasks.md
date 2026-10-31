@@ -2520,6 +2520,15 @@ RFGR  5: cfg: f=144.6200MHz RFGR=5  IFGR=40 ant=Antenna B RFGR range 0, 27   cap
 ```
 **The lowest RFGR with 0.00 % clipping is 5** (the lowest I tried; I did not go below it). The rms rises 40 times from RFGR 22 to 5 (0.0002 to 0.0080), and the spectrum median rises from -33.8 dB to -1.1 dB, so the extra gain mainly adds noise and off-channel energy: at RFGR 5 the strongest lines are at -12188 Hz and +23746 Hz (about +8 to +9 dB over the median), not at the 144.6415 MHz channel (+21.5 kHz: +1.9 dB). On port B there is no constant line at +21.527 kHz; the strong constant line of the port A captures (task 11 Part B) is not there. Part F would use RFGR 5. The captures were not kept (10 s each, idle). Part F, G not started (Part G needs the whip disconnected first).
 
+**Part F (maintainer's go, 2026-10-31): B -> A `BPSK250|rs|64`, RSPdx port B at RFGR 5.** Capture `OPHF_SDR_ANT="Antenna B" sdr_capture.py 144620000 62500 150 5 40 ~/onair-captures/2026-10-31/a1-ba-rs-portb.cf32`; then `scripts/run-onair-ic9700-ft991a.sh supervise --single-case 'BPSK250|rs|64' --reverse` (IC-9700 receiver `--ptt none`, so it did not key):
+```
+freq = 144640000 Hz [expected 144640000]   (IC-9700, IRS)
+freq = 144641564 Hz [expected 144641564]   (FT-991A, ISS)
+[BPSK250 fec=rs payload=64B] ... PASS      Report: docs/dev/test-reports/onair-2026-10-31T211542.json
+captured 150.00s peak=0.0539 rms=0.0083 clip=0.00% OK
+```
+**The burst is not visible even on port B:** in 0.25 s blocks of the 21.0-22.0 kHz band (where the signal is expected, +21.5 kHz), the ratio against the 18-20 kHz and 23.5-25.5 kHz reference bands never rises more than 2.2 dB above its median (0 blocks above +6 dB). I did not raise anything else. Capture `~/onair-captures/2026-10-31/a1-ba-rs-portb.cf32` on rpi51 (75000000 bytes, sha256 `9f263321...57d48d0`), clip 0.00 %. Station A's receiver log, 2557 lines, 21:16:02.89-21:16:23.02 UTC, ends `fec attempt OK: mode=BPSK250 fec=Rs samples=67368 payload=64 bytes`: `docs/dev/test-reports/on-air/irs-logs-2026-10-31/irsA-ba-BPSK250-rs-portb.log.gz`. Bundle: `docs/dev/test-reports/on-air/bundle-2026-10-31T211755Z-t11f-ba-rs-portb`. PTT 0 on both rigs, nothing running. So the B -> A transmission is decoded by the IC-9700 (a second PASS with the same chain) but the RSPdx, with the whip, does not see it at RFGR 5. Part G not started (it needs the whip disconnected first).
+
 **Reviewed (cloud session, 2026-10-31), task 11's third attempt:** stopping was right under the rule as
 written, but the rule was wrong. What happened:
 1. **The runner hung after `traffic started`.** It started the traffic with `cd … && nohup … &`, which
