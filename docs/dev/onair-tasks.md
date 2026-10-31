@@ -2541,6 +2541,10 @@ mandatory. ACKs have **never** been seen on the air in this campaign: every A1 a
 because the receiver runs with `--ptt none`. Order: D, E, F, G, then Part B if D allows it.
 
 ### Part E — RSPdx port B, idle check (nothing transmits)
+**Port B antenna (maintainer, 2026-10-31):** a Diamond SRH-771, a telescopic 2 m/70 cm whip, connected
+directly to port B. Record whether it is extended or collapsed, and keep it that way for Parts E and F.
+It is resonant on 2 m, so it couples the IC-9700's transmissions strongly: Part G's disconnect rule
+matters.
 The capture script selects the port with `OPHF_SDR_ANT`. The RSPdx's maximum input rating is still
 UNCHECKED in our docs. A 2 m band-pass filter in front of port B, if available, helps against the
 broadband overload seen at RFGR 0 (task 10).
