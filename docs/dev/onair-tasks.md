@@ -2507,7 +2507,7 @@ written, but the rule was wrong. What happened:
    Note the executable path it prints (`target/release/deps/receive_cost_scaling-…`).
 2. Run it on rpi51:
    `PROBE_READ=4096 PROBE_ENTRY_RUNGS=1 <exe> --ignored --nocapture`.
-   Quote the per-rung decode times, at least SL1–SL6.
+   Quote the per-rung decode times. With `PROBE_ENTRY_RUNGS` the probe runs SL6–SL2 at 24 bytes, which is one RS block, the same frame length as the 64-byte traffic. SL1 is not in it.
 3. Copy the same executable to station B (`/tmp`), run it there the same way, and quote the times.
    Stop the daemons first (`cleanup`), so nothing else loads either Pi.
 4. Report both tables side by side, and say whether station B's SL2 decode is below **7.5 s**.
