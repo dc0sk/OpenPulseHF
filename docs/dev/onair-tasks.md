@@ -1827,7 +1827,7 @@ warns when a report it wrote does not parse. The 20 reports are left as recorded
 are intact. Next: A1 (two-station exchange) and A2 on the FT-991A pair, per `release-1.0-criteria.md` §A.
 
 
-## Task 7 — A1 on the FT-991A pair: the quick tier both ways, with the RSPdx witness and evidence bundles (status: open)
+## Task 7 — A1 on the FT-991A pair: the quick tier both ways, with the RSPdx witness and evidence bundles (status: blocked — 2 of 6 runs; A -> B soft_concatenated fails, see Results)
 
 **Goal.** Release 1 criterion **A1** on 2 m (`docs/dev/project/release-1.0-criteria.md` §A,
 `docs/dev/onair-execution-plan.md` §3): modes on the `hpx_hf` ladder decode **rig → rig in both
@@ -1916,6 +1916,11 @@ Failure detail, full IRS log on station B: 545 `first-energy attempt`, 544 `fec 
 **Run 3 of 6, third attempt at ~4.7 W (maintainer raised the IC-9700 to RFPOWER 0.0470588 by CAT, read back; go given for this diagnostic outside the two-attempt limit) — A -> B (IC-9700 transmits ~1.2 W, FT-991A receives), `BPSK250|soft_concatenated|64` (maintainer's go, 2026-10-31), RSPdx capture beside it:** **FAIL**
 `Report: docs/dev/test-reports/onair-2026-10-31T121956.json`; frequencies read back at the runner's pre-flight as for run 1 (IC-9700 144640000 Hz, FT-991A 144641564 Hz). SDR capture (`~/onair-captures/2026-10-31/a1-ab-sc3.cf32` on rpi51, 230400000 bytes, sha256 `2cccde6a...457fcd`, RFGR 22, IFGR 40): `captured 150.00s peak=0.0761 rms=0.0208 clip=0.00% OK`. Burst at t = 75.5-93.75 s, **peak 51542.7 Hz above the LO**, 59.6 dB over the floor, -20 dB span 51343 51721 Hz. Not decoded (witness only). PTT 0 on both rigs, nothing running. Bundle: `docs/dev/test-reports/on-air/bundle-2026-10-31T122206Z-a1-ab-sc3`.
 Failure detail, full IRS log on station B: first-energy attempt: 319; fec attempt FAILED: 415; invalid magic: 0; rejected: 222; fec attempt OK: 0; decoded length prefix: 344;  The SDR burst is 59.6 dB over the floor (5.5 dB more than the ~1.2 W attempts, as the power change predicts) and 18.25 s long at +51543 Hz: **the failure does not depend on the IC-9700 power (1.2 W vs 4.7 W); same `decoded length prefix` signature.** Runs 4-6 (B -> A) still not started. IC-9700 left at RFPOWER 0.0470588 (about 4.7 W) pending the maintainer's decision.
+
+**Status: blocked — for the cloud session (maintainer, 2026-10-31).** The IC-9700 is back at RFPOWER 0.0117647 (~1.2 W, read back, PTT 0). Runs 4-6 (B -> A) are not started. What the cloud session should look at:
+- A -> B `none` and `rs` PASS; `soft_concatenated` FAILS three times (1.2 W, 1.2 W, 4.7 W) with an identical signature: no `fec attempt OK`, no `invalid magic`, ~530 `decoded length prefix (...) exceeds available bits`, `fec demod: ... soft=true ... llrs=~6950-7000` per attempt. The SDR witness shows a clean 18.25 s burst at +51.52-51.54 kHz each time, so the transmission is on the air and on frequency.
+- Maintainer's question: **is there a receive offset (or similar) at the FT-991A?** What the evidence says: the IRS log's AFC `raw_estimate` is 0.0-2.8 Hz (correction 2.8 Hz), i.e. the carrier is where the receiver expects it, and `none`/`rs` decode through the same chain with 065 = +1500; so a plain frequency offset is unlikely. Not excluded: a passband/amplitude effect that only soft decoding sees (the DATA-USB filter shape, the +1500 shift moving the 1500 +/- 250 Hz BPSK250 spectrum to the passband's lower slope, AGC or audio level as LLR scale), or a soft-concatenated rung problem unrelated to the station (the A -> B 'soft_concatenated' case has not been run on any other pair in this task). **The FT-991A's receive audio was not recorded in these runs**, so it cannot be replayed offline; the RSPdx captures (on rpi51, not committed) carry the RF only.
+- Suggested next station run, on the maintainer's go: re-run A -> B `soft_concatenated` once with the FT-991A audio recorded beside the live receiver (`arecord`, 48 kHz, as in the task 6 recordings) and decode it offline with the same build; and/or the same case B -> A.
 
 _(runs 4-6: pending, one go each)_
 
