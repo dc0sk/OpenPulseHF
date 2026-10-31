@@ -1753,7 +1753,7 @@ has moved.
 
 ---
 
-## Task 6 — FT-991A both ways with one setting: OTHER SHIFT +1500 and the dial 1500 Hz up (status: open — one run left)
+## Task 6 — FT-991A both ways with one setting: OTHER SHIFT +1500 and the dial 1500 Hz up (status: done)
 
 **Progress (cloud session, 2026-10-31):** the station session ran this before it was written (on its
 branch `onair-retest-1030`, now merged into this one): A → B with 065 = +1500 and
@@ -1806,5 +1806,15 @@ freq = 144641564 Hz [expected 144641564]   (FT-991A, ISS)
 ```
 Burst at t = 72.0-80.0 s, level ~5x the idle mean-square (1.98e-5; the IC-9700 source is quiet, not saturated). Carrier by the 2fc line method on 72.5-80 s: **2fc line at 2996.7 Hz, carrier 1498.4 Hz** (peak/median 279; Welch maximum 1464.8 Hz, the data sidebands) — inside 1500 +/- 100 Hz, so the transmit follows the shift. PTT 0 on both rigs afterwards, no rigctld/openpulse left running.
 
-_(run 2 of 2 pending)_
+**B -> A run 2 of 2 more (same go, asked again 2026-10-31):** same command and settings, IC-9700 audio recorded:
+```
+freq = 144640000 Hz [expected 144640000]   (IC-9700, IRS)
+freq = 144641564 Hz [expected 144641564]   (FT-991A, ISS)
+[BPSK250 fec=rs payload=64B] ... PASS      Report: docs/dev/test-reports/onair-2026-10-31T094137.json
+```
+Burst at t = 71.5-80.0 s, ~5.2x the idle mean-square (1.98e-5); **2fc line at 2993.5 Hz, carrier 1496.7 Hz** (peak/median 262) — inside 1500 +/- 100 Hz. PTT 0 on both rigs, nothing running.
+
+**Summary: B -> A with 065 = +1500 and `B_FREQ_OFFSET_HZ=1564`: 3 of 3 PASS** (the earlier run `onair-2026-10-31T091111.json` plus the two above, carriers 1498.4 and 1496.7 Hz); **A -> B: 3 of 3 PASS** (2026-10-31 runs `T074544`, `T080943`, `T081139`). The carrier of the first B -> A run was not recorded; the two recorded ones are ~3 Hz apart. Not done: the A -> B carrier via the 2fc method (task text asks only B -> A for the remaining runs); one payload size, one day.
+
+**End state:** FT-991A `EX065+1500`, dial `FA144640064` (the runner restores it after each run; the next run sets 144641564), DATA-USB `SH016`, RFPOWER 0.05; PTT 0 on both rigs, nothing running.
 
