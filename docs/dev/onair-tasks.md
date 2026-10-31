@@ -1902,5 +1902,8 @@ freq = 144641564 Hz [expected 144641564]   (FT-991A, IRS)
 ```
 SDR capture (`~/onair-captures/2026-10-31/a1-ab-none.cf32` on rpi51, 230400000 bytes, sha256 `401caa19...9d0272`, RFGR 22, IFGR 40): `captured 150.00s peak=0.2537 rms=0.0046 clip=0.00% OK`. Burst at t = 75.75-79.75 s, **peak 51535 Hz above the LO**, 53.5 dB over the floor, -20 dB span 51341-51727 Hz. Not decoded (witness only). PTT 0 on both rigs, nothing running. Bundle: `docs/dev/test-reports/on-air/bundle-2026-10-31T115148Z-a1-ab-none` (the capture is not committed).
 
-_(runs 2-6: pending, one go each)_
+**Run 2 of 6 — A -> B (IC-9700 transmits ~1.2 W, FT-991A receives), `BPSK250|rs|64` (maintainer's go, 2026-10-31), RSPdx capture beside it:** **PASS**
+`Report: docs/dev/test-reports/onair-2026-10-31T120521.json`; frequencies read back at the runner's pre-flight as for run 1 (IC-9700 144640000 Hz, FT-991A 144641564 Hz). SDR capture (`~/onair-captures/2026-10-31/a1-ab-rs.cf32` on rpi51, 230400000 bytes, sha256 `854f3958...457be0`, RFGR 22, IFGR 40): `captured 150.00s peak=0.1483 rms=0.0080 clip=0.00% OK`. Burst at t = 75.5-85.25 s, **peak 51522.9 Hz above the LO**, 54.1 dB over the floor, -20 dB span 51341 51723 Hz. Not decoded (witness only). PTT 0 on both rigs, nothing running. Bundle: `docs/dev/test-reports/on-air/bundle-2026-10-31T120740Z-a1-ab-rs`.
+
+_(runs 3-6: pending, one go each)_
 
