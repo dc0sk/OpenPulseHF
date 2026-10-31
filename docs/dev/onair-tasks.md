@@ -2481,6 +2481,18 @@ review round (follow-up 2 in `docs/dev/reviews/review-twin-ota-ft991a-2026-10-31
 After every run, and after any abort, run `cleanup` and quote its output. Every station must read
 "stopped", with no ERROR line.
 
+**Part D (2026-10-31, nothing transmitted), commit `b519fe79`.** Daemons stopped first (`cleanup`: both "stopped", PTT 0 not sent because rigctld was not running, no ERROR). Probe built on rpi51 (`cargo test --release -p openpulse-modem --no-default-features --test receive_cost_scaling --no-run`, executable `target/release/deps/receive_cost_scaling-0792a41ff1171eb8`, sha256 `48129007...ad186`, the same on both stations). Run as `PROBE_READ=4096 PROBE_ENTRY_RUNGS=1 <exe> --ignored --nocapture` (SL6-SL2, 24 bytes = one RS block); on station B the executable was copied to `/tmp` (tmpfs) and removed afterwards. Station B is a Raspberry Pi 4 Model B (4 cores); rpi51 is the control Pi. All ten decodes `ok=true`.
+
+| rung | mode | audio | rpi51 decode (ms) | station B decode (ms) |
+|---|---|---|---|---|
+| Sl6 | QPSK250-D | 4.2 s | 353.7 | 707.0 |
+| Sl5 | BPSK250 | 8.4 s | 1566.5 | 3117.7 |
+| Sl4 | BPSK100 | 21.1 s | 2252.6 | 4563.6 |
+| Sl3 | BPSK63 | 33.8 s | 3288.2 | 6320.2 |
+| Sl2 | BPSK31 | 66.6 s | 3675.9 | 7095.5 |
+
+(Full lines, with the frame length, accumulate time and read counts, are in the probe output; e.g. SL2 BPSK31: frame 532480 samples = 66.6 s audio, accumulate 29.5 ms on rpi51 against 70.9 ms on station B.) **Station B's SL2 decode is 7095.5 ms, below 7.5 s, by about 0.4 s;** rpi51 needs 3675.9 ms. Station B is about 1.9-2.0 times slower than rpi51 on every rung. The ISS waits 9 s for the ACK (`ota_ack_timeout_ms`): at SL2 station B's decode alone takes ~79 % of that, before the ACK frame's own transmit time. Part B is therefore allowed by the task's rule, with little margin.
+
 **Reviewed (cloud session, 2026-10-31), task 11's third attempt:** stopping was right under the rule as
 written, but the rule was wrong. What happened:
 1. **The runner hung after `traffic started`.** It started the traffic with `cd … && nohup … &`, which
