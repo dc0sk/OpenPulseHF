@@ -1959,7 +1959,7 @@ Failure detail, full IRS log on station B (5622 lines): 19 `first-energy attempt
 A1 goes on with ladder MODCODs only, in task 8: SL5 `BPSK250|rs` (2 of 2 so far A → B) and SL6
 `QPSK250-D|rs`, with the uncoded `BPSK250|none` kept as the baseline.
 
-## Task 8 — measure the stations' clock offset (nothing transmits), then finish A1 with ladder MODCODs (status: blocked — A -> B QPSK250-D|rs fails twice; see Results)
+## Task 8 — measure the stations' clock offset (nothing transmits), then finish A1 with ladder MODCODs (status: superseded by task 9 — clock offset +74 ppm; A -> B QPSK250-D|rs fails twice; see Results and the review below)
 
 Station B is the remote FT-991A, and its station rules apply: 5 W at most, ask the maintainer before
 **every** run that keys, and record nothing about that host here. Same local profile as task 7. The IC-9700
@@ -2034,4 +2034,60 @@ B (FT-991A):  rate=47993.692 Hz  ppm=-131.4  points=11799  span=590s  resid_max=
 
 _(runs 1-4: pending, one go each)_
 
+**Reviewed (cloud session, 2026-10-31), task 8:**
+- **Clock offset A − B is +74 ppm, and it repeats.** That is below the ±150–200 ppm where
+  soft-concatenated starts failing in process. The clock offset alone does not explain that failure,
+  which stays open; it is not an A1 case.
+- **`QPSK250-D|rs` decodes in process.** Through the same streaming receive
+  (`receive_with_fec_mode_timeout`) it decodes clean, padded with silence, and padded with 15 s of
+  noise (scratch test, not committed). So the rung works off the air.
+- **The station log shows a real-time effect.** No attempt ever had a complete window, and the
+  longest attempt was 20 704 samples (2.6 s) for a 5.5 s burst. Either the receiver's buffer stopped
+  growing 2.6 s into the frame, or its loop fell that far behind the audio. The receiver is killed
+  `KILL_WAIT` = 12 s after the sender exits. A loop that lags by more than that would produce exactly
+  this. The receiver's log is needed to tell the two apart. On station B the runner writes it to
+  `${B_LOG_DIR}/irs-<MODE>-<FEC>.log`, overwritten per mode and FEC, so the latest run of each case
+  is still there.
+- **A1 can close on SL5.** `docs/dev/onair-execution-plan.md` §3 sets the A1 exit at "≥1 mode decodes
+  rig → rig", with the JSON and the SDR capture retained. SL5 `BPSK250|rs` has passed A → B twice
+  (task 7). It needs B → A with the witness and a bundle. Task 6's three B → A passes predate the
+  witness and the bundles, so they do not count.
+
+## Task 9 — receiver logs for the two failing cases (nothing transmits), then A1's B → A on SL5 (status: open)
+
+Station B is the remote FT-991A, and its station rules apply: 5 W at most, ask the maintainer before
+**every** run that keys, and record nothing about that host here. Same local profile as tasks 7 and 8.
+
+### Part A — copy the receiver logs (nothing transmits)
+1. From station B's `${B_LOG_DIR}` (after sourcing the profile), copy these to
+   `docs/dev/test-reports/on-air/irs-logs-2026-10-31/`:
+   - `irs-QPSK250-D-rs.log` (task 8, second failure);
+   - `irs-BPSK250-soft_concatenated.log` (task 7, third attempt);
+   - `irs-BPSK250-rs.log` (the pass);
+   - `irs-BPSK250-none.log` (the pass).
+
+   **Before committing**, replace any user name, host name, home path or address of that host with
+   `station-B`, then grep the copies to show that nothing is left. Compress each file with `gzip -9`.
+   Report each file's line count and its first and last timestamp.
+2. From the QPSK log, quote:
+   - the first 15 and the last 15 lines that contain `first-energy attempt`, `fec attempt` or
+     `AFC settling`;
+   - the line count of `fec attempt FAILED` per value of `samples=`, the top 10 (`grep -o 'samples=[0-9]*' | sort | uniq -c | sort -rn | head`).
+3. Note the date and time in the receiver's last log line, and the time the runner killed it.
+
+### Part B — A1, B → A on SL5 (keys transmitters: one go per run)
+Same procedure as task 7, Part B: an RSPdx capture per run, a notes file per run, and an evidence bundle
+per run. The RSPdx sits beside station A here, so it hears what the IC-9700 receives.
+1. B → A `BPSK250|rs|64` (SL5): `scripts/run-onair-ic9700-ft991a.sh supervise --single-case 'BPSK250|rs|64' --reverse`.
+2. B → A `BPSK250|none|64` (the uncoded baseline), the same way.
+
+A failed run gets one more try with the maintainer's go. A second failure of the same case stops the
+task. After each run, also copy station A's receiver log, which is on rpi51: the path is in the runner's
+output. Compress it with gzip and store it in the same `irs-logs-2026-10-31/` directory.
+
+End state, whatever happened:
+- PTT 0 on both rigs, nothing running;
+- recorded: the FT-991A's 065, dial and RFPOWER, and the IC-9700's RFPOWER.
+
+### Results
 
