@@ -130,3 +130,47 @@ Harness re-run:
 - a stuck mode refuses.
 
 Not run on air.
+
+## Follow-up 2: the daemon's process name and cleanup (task 11, second attempt, 2026-10-31)
+
+Task 11's second attempt passed the read-backs, then reported the started daemon as FAILED. The
+cause: `pgrep -x openpulse-server` never matches, because the kernel keeps 15 characters of a
+process name. `cleanup` used the same name with `pkill`, so it left the daemon running while
+printing "stopped". The station session killed it by hand; nothing was transmitted. The harness
+missed this because its `pgrep`/`pkill` were stubs that always succeeded.
+
+The fixes:
+- `DAEMON_COMM=openpulse-serve` is used with `pgrep`/`pkill -x`.
+- `cleanup` works per station, in this order:
+  1. stop the daemon (TERM, poll 5 s, then KILL);
+  2. send PTT 0 through rigctld while it still runs;
+  3. stop rigctld the same way;
+  4. report survivors, a failed PTT-off or an unreachable station as an ERROR, return non-zero, and
+     say whether PTT 0 was actually sent.
+
+A third Fable round found no blocker, and it does not block Release 1. It confirmed the ordering is
+needed: the daemon has no SIGTERM handler, so TERM skips its PTT guard and rigctld would hold PTT.
+Findings:
+- **should-fix, taken:** after a failed launch the abort said "both stopped" whatever cleanup found.
+  `abort_after_launch` now uses cleanup's result.
+- **should-fix (apparatus), taken:** both fake stations share one machine, so station B's PTT-off
+  path never ran. The fake ssh can now silence one station (`FAKE_SKIP_HOST`), and station B alone
+  sent `T 0`.
+- **nit, taken:** `launch_daemon` could read a stale daemon as "ok". It now waits for any old daemon
+  to stop, refuses if one survives, and checks its own launch's pid with `kill -0`.
+- **nit, taken:** the comment notes that a rig can stay keyed for up to ~5.5 s while a daemon that
+  ignores TERM is waited out.
+- **nit, not taken:** a label containing `:` would break the per-station loop. The labels are fixed
+  names.
+
+Harness, with the real `pgrep`, `pkill` and `nohup` (the fake daemon is a script named
+`openpulse-server`, whose process name truncates the same way):
+- a run reports both daemons ok, and `status` shows them running;
+- `cleanup` stops everything, and B's path alone sends PTT 0;
+- a daemon that ignores TERM is killed;
+- a failed PTT-off is an ERROR with rc 1;
+- a daemon that dies on start is FAILED and both stations are stopped;
+- a stale daemon that cannot be stopped is refused at launch, and the abort says cleanup left
+  something running.
+
+Not run on air.

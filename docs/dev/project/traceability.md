@@ -57,6 +57,14 @@ this ledger adds the design rationale and the actually-observed results per chan
 
   Second review round in the same review file: no blocker; 2 should-fix findings, both taken. The
   harness was re-run with the banner printed on every command.
+- **Follow-up 2 (task 11's second attempt, nothing transmitted):**
+  - the daemon is matched by its 15-character process name, `openpulse-serve`;
+  - `cleanup` stops the daemon, sends PTT 0 through rigctld, stops rigctld, and reports what
+    survived;
+  - `launch_daemon` checks its own pid.
+
+  Third review round: no blocker; 2 should-fix and 2 nits taken. The harness now uses the real
+  `pgrep`, `pkill` and `nohup`.
 
 ## 2026-10-26 — On-air station readiness check; the first 2 m session is a dry run
 

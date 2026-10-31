@@ -2315,7 +2315,7 @@ End state: PTT 0 on both rigs, nothing running; FT-991A read back `EX065+1500; F
   Also passed: `BPSK250|none` both ways (B → A 1 of 2) and `QPSK250-D|rs` A → B once, with the longer
   kill wait. **Whether B → A without a witness is acceptable for A1 is for the maintainer to decide.**
 
-## Task 11 — A2 on the FT-991A pair: the daemon rate ladder, induced level changes, both directions (status: blocked — twin OTA script's daemon check/cleanup use pgrep -x on a 16-char name; nothing keyed, see Results)
+## Task 11 — A2 on the FT-991A pair: the daemon rate ladder, induced level changes, both directions (status: open — pull, deploy again, then Parts B and C with the fixed runner)
 
 **Goal.** Release 1 criterion **A2** (`docs/dev/project/release-1.0-criteria.md` §A2): in the
 receiver-led direction, show all three of:
@@ -2455,4 +2455,21 @@ findings are fixed in `scripts/run-onair-twin-ota.sh`, with a second review roun
    three sha256 lines; they must match.
 2. Do Part A steps 3–4 again only if anything changed since.
 3. Then Part B and Part C as written, one go each.
+
+**Reviewed (cloud session, 2026-10-31), task 11's second attempt:** the process-name finding is
+right, and thank you for killing the daemon by hand. Fixed in `scripts/run-onair-twin-ota.sh`, with a
+review round (follow-up 2 in `docs/dev/reviews/review-twin-ota-ft991a-2026-10-31.md`):
+- the daemon is matched as `openpulse-serve`, its 15-character process name;
+- `launch_daemon` waits for an old daemon to stop, refuses if one survives, and checks its own pid;
+- `cleanup` stops the daemon, sends **PTT 0** through rigctld while it still runs, then stops rigctld.
+  It reports anything left, or a failed PTT-off, as an ERROR with a non-zero exit, and says whether
+  PTT 0 was sent.
+
+**Next, in this task:**
+1. Pull.
+2. Run `deploy` again; only the script changed, so expect the same three sha256 values, matching.
+3. Run Part B, then Part C, as written, one go each.
+
+After every run, and after any abort, run `cleanup` and quote its output. Every station must read
+"stopped", with no ERROR line.
 

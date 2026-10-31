@@ -215,10 +215,14 @@ same_run_files() {
 launch_daemon() {  # ssh_fn repo_dir label
     local sshfn="$1" repo="$2" label="$3"
     echo "  [$label] launching openpulse-server (control 127.0.0.1:$DAEMON_TCP_PORT)"
-    "$sshfn" "pkill -x $DAEMON_COMM 2>/dev/null || true; sleep 0.5; \
+    # An old daemon must be gone first, and "ok" is checked on THIS launch's pid: a name match after
+    # 2 s could be a stale daemon that outlived the stop while the new one died (review, task 11).
+    "$sshfn" "pkill -x $DAEMON_COMM 2>/dev/null; \
+        for i in 1 2 3 4 5 6 7 8 9 10; do pgrep -x $DAEMON_COMM >/dev/null || break; sleep 0.5; done; \
+        if pgrep -x $DAEMON_COMM >/dev/null; then echo '  [$label] daemon FAILED: an old daemon did not stop'; exit 1; fi; \
         XDG_CONFIG_HOME=$CFG_DIR RUST_LOG=info \
-        nohup $repo/target/release/openpulse-server </dev/null >/tmp/twin-ota-daemon.log 2>&1 & \
-        sleep 2; pgrep -x $DAEMON_COMM >/dev/null && echo '  [$label] daemon ok' || { echo '  [$label] daemon FAILED'; tail -5 /tmp/twin-ota-daemon.log; exit 1; }"
+        nohup $repo/target/release/openpulse-server </dev/null >/tmp/twin-ota-daemon.log 2>&1 & pid=\$!; \
+        sleep 2; kill -0 \$pid 2>/dev/null && echo '  [$label] daemon ok' || { echo '  [$label] daemon FAILED'; tail -5 /tmp/twin-ota-daemon.log; exit 1; }"
 }
 
 # CAT read-back of what the rig was actually set to, so a decode anomaly can be attributed
@@ -255,6 +259,15 @@ do_setup() {
     echo "setup complete."
 }
 
+# A daemon did not start: stop both stations, and say whether that worked (review, task 11).
+abort_after_launch() {
+    if do_cleanup; then
+        die "$1 daemon did not start; both stations stopped"
+    else
+        die "$1 daemon did not start; cleanup left something running (see ERROR above) — check by hand"
+    fi
+}
+
 do_deploy() {
     preflight
     echo "== deploy =="
@@ -275,8 +288,8 @@ do_run() {
     write_config ssh_a "$CALLSIGN_A" "$GRID_A" "$A_AUDIO_DEVICE" "$A_RIGCTLD_PORT" "$A_LABEL"
     write_config ssh_b "$CALLSIGN_B" "$GRID_B" "$B_AUDIO_DEVICE" "$B_RIGCTLD_PORT" "$B_LABEL"
     # A dead daemon on one side would leave the other keying to nobody: stop both and end the run.
-    launch_daemon ssh_a "$A_REPO_DIR" "$A_LABEL" || { do_cleanup; die "$A_LABEL daemon did not start; both stopped"; }
-    launch_daemon ssh_b "$B_REPO_DIR" "$B_LABEL" || { do_cleanup; die "$B_LABEL daemon did not start; both stopped"; }
+    launch_daemon ssh_a "$A_REPO_DIR" "$A_LABEL" || abort_after_launch "$A_LABEL"
+    launch_daemon ssh_b "$B_REPO_DIR" "$B_LABEL" || abort_after_launch "$B_LABEL"
 
     cat <<EOF
 
@@ -334,7 +347,9 @@ do_status() {
 # Stop both stations' daemon and rigctld, and report what is still running instead of assuming
 # (task 11: it printed "stopped" while the daemon ran on). The daemon goes first, then PTT is
 # commanded off through rigctld while it still runs (a daemon stopped mid-over could leave the rig
-# keyed), then rigctld. Each gets up to 5 s to exit after TERM, then KILL. Non-zero if anything survived.
+# keyed: the daemon has no SIGTERM handler, so its PTT guard does not run), then rigctld. Each gets up
+# to 5 s to exit after TERM, then KILL, so a rig can stay keyed for up to ~5.5 s while a stuck daemon
+# is waited out. Non-zero if anything survived.
 do_cleanup() {
     echo "== cleanup =="
     local pair fn label port out left ptt rc=0
