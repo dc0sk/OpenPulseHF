@@ -2680,7 +2680,7 @@ counts, and for stopping for the whip. Three findings, then task 12.
 What A2 needs now is **engine work on real audio**, and that needs recordings of the real audio. Task 12
 collects them. Nothing else changes.
 
-## Task 12 — record the real receive audio beside both daemons, for offline reproduction (status: open)
+## Task 12 — record the real receive audio beside both daemons, for offline reproduction (status: done — runs G2 and B2 recorded, analysis for the cloud session)
 
 Station B is the remote FT-991A, and its station rules apply: 5 W at most, ask the maintainer before
 **every** run, and record nothing about that host here. **The RSPdx's port B stays empty.** The IC-9700
@@ -2743,3 +2743,18 @@ Decimated by 6 (`resample_poly(x, 1, 6)`, 48 kHz to 8 kHz, the command of the ta
 Report `onair-twin-ota-20261031-225133.log`, evidence in `docs/dev/test-reports/onair-twin-ota-20261031-225133-evidence/` (redacted, gzipped; the events files hold only this run): 1402 audit events (A), 1379 (B). `cleanup`: `[IC-9700] daemon and rigctld stopped; PTT 0 sent while rigctld ran`, `[FT-991A] daemon and rigctld stopped; PTT 0 sent while rigctld ran`, no ERROR. Counts as in task 11 Part G:
 - **Station A (IRS, the IC-9700):** `"verdict":"keyed"` decisions **4** (1 x `Sl2 -> Sl2 hold` with `decoded_level Sl2`, 2 x `nack_hold`, 1 x `nack_step_down Sl2 -> Sl1`), plus 4 x `nack_hold muted` at Sl1: **the same decision sequence as task 11 Part G**; `ptt_changed` 10; `ota_status` 111 (99 at `SL2/SL2/SL2`, 12 at `tx SL2, recommended SL1, confirmed SL1`).
 - **Station B (ISS, the FT-991A):** `ptt_changed` 9, `frame_transmitted` 4, `ota_status` 5, all `SL2/SL2/SL2`, **its `tx_level` never changes**; no `ota_rate_decision`; `OTA send abandoned` once in `daemon-b.log` (21:55:18 UTC); none in `daemon-a.log`.
+
+
+**Run B2 (A sends; maintainer's go, 2026-10-31, port B empty).** `deploy` again (the same three sha256), no daemon or rigctld before, `events.ndjson` deleted on both stations, then `OTA_PROFILE=robust TRAFFIC_FROM=A TRAFFIC_SIZE=64 TRAFFIC_INTERVAL=2 TRAFFIC_DURATION=300 DAEMON_LOG_LEVEL=debug scripts/run-onair-twin-ota.sh run`, both daemons ok, traffic from about 22:03:57 UTC for 300 s. Recordings (360 s each) started just before `run`:
+```
+rpi51:     start 22:03:23.893936462 UTC   /tmp/rx-a-b2.wav   34560044 bytes
+station B: start 22:03:24.265661705 UTC   /tmp/rx-b-b2.wav   34560044 bytes
+```
+Decimated and gzipped as for G2: `rx-a-b2-8k.wav.gz` 2000169 bytes (8000 Hz, 360.0 s, rms 204.0, peak 701), `rx-b-b2-8k.wav.gz` 5000116 bytes (8000 Hz, 360.0 s, **rms 1857.1, peak 6910**: station B's recording is far louder here than in G2 (rms 244.8), i.e. A's transmissions arrive strongly at B). The 48 kHz originals stay on rpi51 in /tmp (`rx-a-b2.wav` sha256 `8bb3c1ed...`, `rx-b-b2.wav` `e7cee414...`); the copy on station B was deleted.
+
+Report `onair-twin-ota-20261031-230340.log`, evidence in `docs/dev/test-reports/onair-twin-ota-20261031-230340-evidence/` (redacted, gzipped, only this run): 1419 audit events (A), 1296 (B). `cleanup`: `[IC-9700] daemon and rigctld stopped; PTT 0 sent while rigctld ran`, `[FT-991A] daemon and rigctld stopped; PTT 0 sent while rigctld ran`, no ERROR. Counts:
+- **Station A (ISS, the IC-9700):** `frame_transmitted` 4, `ptt_changed` 9, `ota_status` 7, all `SL2/SL2/SL2`; no `ota_rate_decision`; **`OTA send abandoned` twice in `daemon-a.log`** (22:06:13 and 22:08:46 UTC).
+- **Station B (IRS, the FT-991A):** **`ptt_changed` 0, no `ota_rate_decision`, no `frame_transmitted`: B keyed nothing, no ACK and no NACK.** Its events hold 4 `dcd_change busy true` (energy 0.016-0.063) and 5 `ota_status` at `SL2/SL2/SL2`. Debug log: 2323 `fec attempt FAILED`, 0 `fec attempt OK`: 2281 `FEC data length N is shorter than one N-byte block`, 39 `BPSK31 no data symbols after preamble`, 3 `signal too short`.
+- Compared with G2 (B sends): there, station A (rpi51) decoded one SL2 frame and answered with 4 keyed ACK/NACKs; here, station B (the Pi 4) decoded none and keyed nothing, while its recording shows strong audio.
+
+End state: PTT 0 on both rigs, nothing running (no daemon, rigctld or arecord); FT-991A read back `EX065+1500;FA144641564;0.05 0`; IC-9700 `0.0117647 0`; port B empty. **Task 12 Part B done (both runs).** Analysis is for the cloud session.
