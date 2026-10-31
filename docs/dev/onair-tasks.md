@@ -2315,7 +2315,7 @@ End state: PTT 0 on both rigs, nothing running; FT-991A read back `EX065+1500; F
   Also passed: `BPSK250|none` both ways (B → A 1 of 2) and `QPSK250-D|rs` A → B once, with the longer
   kill wait. **Whether B → A without a witness is acceptable for A1 is for the maintainer to decide.**
 
-## Task 11 — A2 on the FT-991A pair: the daemon rate ladder, induced level changes, both directions (status: open — Part D done; a Part B run (4th attempt) was made before Parts E-G were written and decoded nothing at SL2, see Results; next Parts E, F, G)
+## Task 11 — A2 on the FT-991A pair: the daemon rate ladder, induced level changes, both directions (status: blocked — Parts D, E, F, G done; Part B (4th attempt) decoded nothing at SL2 on station B and the ACK leg showed B never applying an ACK; for the cloud session, see Results)
 
 **Goal.** Release 1 criterion **A2** (`docs/dev/project/release-1.0-criteria.md` §A2): in the
 receiver-led direction, show all three of:
@@ -2532,6 +2532,17 @@ captured 150.00s peak=0.0539 rms=0.0083 clip=0.00% OK
 **Before Part G (maintainer, 2026-10-31):** the SRH-771 on the RSPdx was replaced by the SRH-805S ("as we had it before"), and the maintainer says it is **on port B**; whether it is extended was not stated. Part G's rule is that no resonant antenna may be on port B (or an attenuator must be in its line) while the IC-9700 transmits, so **Part G is not started**: it waits for the maintainer to disconnect port B (or move the 805S to port A, where RFGR 22 is the known-safe setting) and say so.
 
 **Part G precondition (maintainer, 2026-10-31):** an SRH-805S had been on both RSPdx ports; the maintainer then confirmed in this session: "no antenna connected to port B now". Recorded as the disconnect confirmation (port A keeps its SRH-805S; RFGR 22 is the safe setting there).
+
+**Part G (maintainer's go, 2026-10-31, after "no antenna connected to port B now"): the ACK leg, B sends.** `deploy` first (the same three sha256 on both stations), then `OTA_PROFILE=robust TRAFFIC_FROM=B TRAFFIC_SIZE=64 TRAFFIC_INTERVAL=2 TRAFFIC_DURATION=420 DAEMON_LOG_LEVEL=debug scripts/run-onair-twin-ota.sh run`, no drive changes, RSPdx on port A (`144620000 62500 480 22 40`, clip 0.00 %). Both daemons started, traffic from 21:26 UTC to 21:33, report `onair-twin-ota-20261031-222602.log` with `evidence: 7652 audit events` (A), `6922` (B). `cleanup`: `[IC-9700] daemon and rigctld stopped; PTT 0 sent while rigctld ran`, `[FT-991A] daemon and rigctld stopped; PTT 0 sent while rigctld ran`, no ERROR.
+
+**Note on the events files:** `events.ndjson` on each station is not truncated between runs; the evidence files contain run 4's events too. The counts below are for this run only (lines after run 4's 5664 on A and 4964 on B).
+
+Counts, this run (events and logs in `docs/dev/test-reports/onair-twin-ota-20261031-222602-evidence/`, redacted, gzipped):
+- **Station A (IRS, the IC-9700):** `ota_rate_decision` events with `"verdict":"keyed"` (ACKs/NACKs sent): **4** (1 x `Sl2 -> Sl2 hold` with `decoded_level Sl2`, i.e. one B frame **was decoded at SL2**, then 2 x `nack_hold`, 1 x `nack_step_down Sl2 -> Sl1`), plus 4 x `nack_hold ... muted` at Sl1; `ptt_changed` **16** (8 keyings). The RSPdx on port A sees seven IC-9700 bursts, at 117, 130.5, 161, 183.5, 199, 216.5-223 and 273 s from the capture start (~21:25:52 UTC), strongest at +21600 Hz and +50.8 dB over the floor.
+- **Station B (ISS, the FT-991A):** `ptt_changed` **11** (five `frame_transmitted`, each followed by PTT false, then a sixth keying open at the end); **`OTA send abandoned: peer silent for 2 consecutive ACK windows` appears twice in `daemon-b.log`** (21:28:37 and 21:31:10 UTC); **no `ota_status` after a `ptt_changed false` shows a change: B's `tx_level` stays SL2 in all 5 status events, and recommended SL2**; B has no `ota_rate_decision` events in this run. B's `dcd_change busy true` fires only twice (before the first frame and once around the fourth), i.e. B's receiver hardly saw the IC-9700's transmissions as busy.
+- Reading, no more: the IC-9700 decoded one SL2 frame from B and sent ACK/NACK frames that its own RSPdx capture shows on the air, but B's daemon never applied one; it gave up twice. Whether the ACKs are inaudible or undecodable at B (the FT-991A receive audio, level, or the FSK4 ACK decode) is not established here. B's audio was not recorded.
+
+End state: PTT 0 on both rigs, nothing running, no capture running; FT-991A read back `EX065+1500;FA144641564;0.05 0`; IC-9700 `0.0117647 0`; `--verify`: PASS: both stations' default sink+source point at their rig CODEC; TX level set.. Port B is still empty. **Part G done.**
 
 **Reviewed (cloud session, 2026-10-31), task 11's third attempt:** stopping was right under the rule as
 written, but the rule was wrong. What happened:
