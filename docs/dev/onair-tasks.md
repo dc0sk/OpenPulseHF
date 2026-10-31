@@ -1694,7 +1694,9 @@ Evidence tier: hardware-in-the-loop, 3 runs, one payload size, one day, no audio
 Recipes that work: **B -> A** in DATA-USB with the +64 Hz trim (065 = 0): 3 of 3 pass (previous sections). **A -> B** either in plain USB (dial 144640000, `TEST_MODE_RIG_B=keep TEST_MODE_EXPECT_B=USB B_FREQ_OFFSET_HZ=0`, 1 run) or in DATA-USB with 065 = +1500 and `B_FREQ_OFFSET_HZ=1564` (3 runs). Before B -> A again with 065 = +1500, set the dial back (or set 065 = 0) and check the frequency on air.
 State left: 065 set back to 0 (read back `EX065+0000`) on the FT-991A, other menus at their originals, DATA-USB `FA144640064` `SH016`, PTT 0 on both rigs, nothing running; the stock +64 Hz trim applies again.
 
-## Task 5 — FT-818 at its new location: readiness, G0, then Gate 6 with RS both ways (status: open)
+## Task 5 — FT-818 at its new location: readiness, G0, then Gate 6 with RS both ways (status: superseded 2026-10-31 — the maintainer uses the FT-991A station instead; the FT-818 steps below are not planned)
+
+FT-991A equivalent: B -> A 4 of 4 PASS (065 = 0, +64 Hz trim); A -> B 3 of 3 PASS (065 = +1500, dial +1500) plus 1 in plain USB; see the sections above. Open there: one consistent setting for both directions (B -> A with 065 = +1500 is untested), IRS log counts and offline decodes per run.
 
 Planned for 2026-10-28, after the maintainer relocates the FT-818 away from the S8–S9 local noise. The
 FT-991A station is out of scope until it is accessible (about 2026-10-30).
