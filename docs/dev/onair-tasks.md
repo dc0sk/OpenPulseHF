@@ -2315,7 +2315,7 @@ End state: PTT 0 on both rigs, nothing running; FT-991A read back `EX065+1500; F
   Also passed: `BPSK250|none` both ways (B → A 1 of 2) and `QPSK250-D|rs` A → B once, with the longer
   kill wait. **Whether B → A without a witness is acceptable for A1 is for the maintainer to decide.**
 
-## Task 11 — A2 on the FT-991A pair: the daemon rate ladder, induced level changes, both directions (status: blocked — run stopped: no OTA status and the runner's status polling never starts; see Results)
+## Task 11 — A2 on the FT-991A pair: the daemon rate ladder, induced level changes, both directions (status: open — Part D first: measure the receive cost on both stations; then Part B only if station B is fast enough)
 
 **Goal.** Release 1 criterion **A2** (`docs/dev/project/release-1.0-criteria.md` §A2): in the
 receiver-led direction, show all three of:
@@ -2480,4 +2480,46 @@ review round (follow-up 2 in `docs/dev/reviews/review-twin-ota-ft991a-2026-10-31
 
 After every run, and after any abort, run `cleanup` and quote its output. Every station must read
 "stopped", with no ERROR line.
+
+**Reviewed (cloud session, 2026-10-31), task 11's third attempt:** stopping was right under the rule as
+written, but the rule was wrong. What happened:
+1. **The runner hung after `traffic started`.** It started the traffic with `cd … && nohup … &`, which
+   backgrounds the whole list as a subshell that holds ssh's output open. Fixed: `cd … || exit 1;
+   nohup … &`. Reproduced locally (4.02 s against 0.006 s), and the harness now waits for EOF like ssh.
+2. **"No OTA status" is expected during a send.** The daemon handles a send inside its control loop
+   (`server.rs`, the OTA retry, `block_in_place`). While it transmits and waits for the ACK, the control
+   port does not answer, and at SL2 a frame takes about a minute. The status stop rule is dropped. The
+   evidence is the daemons' `events.ndjson`, not the polling.
+3. **The real failure: station B decoded nothing at SL2 and answered too late.** A sent its first
+   BPSK31 frame from 19:33:08 and gave up at 19:35:41 after two silent ACK windows. B's only NACK
+   came about four minutes after it started, around 19:37, after A had stopped listening. The ISS
+   waits **9 s** for the ACK (`ota_ack_timeout_ms`, `robust` carries MFSK16). The receive cost per
+   SL2 decode was 7.0–7.3 s on rpi51/rpi53 before the 2026-10-04 fix, and has not been measured on a
+   Pi since (work plan M2: "Pi re-measure pending").
+
+   Station B's daemon log shows a different, older GPU than rpi51's. If its SL2 decode takes much more
+   than ~8 s, B cannot be the receiver at SL2 in time. Every run starts at SL2 (`initial_level`). The
+   `info` log does not show the decode times; `DAEMON_LOG_LEVEL=debug` now does.
+
+### Part D — the receive cost on both stations (nothing transmits)
+1. Pull. On rpi51, build the probe:
+   `cargo test --release -p openpulse-modem --no-default-features --test receive_cost_scaling --no-run`.
+   Note the executable path it prints (`target/release/deps/receive_cost_scaling-…`).
+2. Run it on rpi51:
+   `PROBE_READ=4096 PROBE_ENTRY_RUNGS=1 <exe> --ignored --nocapture`.
+   Quote the per-rung decode times, at least SL1–SL6.
+3. Copy the same executable to station B (`/tmp`), run it there the same way, and quote the times.
+   Stop the daemons first (`cleanup`), so nothing else loads either Pi.
+4. Report both tables side by side, and say whether station B's SL2 decode is below **7.5 s**.
+
+### Part B again — only if station B's SL2 decode is below 7.5 s
+1. Run `deploy` again; only the script changed.
+2. Run Part B as written, adding `DAEMON_LOG_LEVEL=debug`.
+
+Stop rules now: a daemon that does not start, station B's link dropping, or a rig whose power or PTT
+reads anything unexpected. **Not** missing OTA status: the control port does not answer while a frame is
+sent. After the run or any abort, run `cleanup` and quote its output.
+
+If station B's SL2 decode is 7.5 s or more, **do not run Part B**. Report the tables; that is a
+decision for the maintainer and the cloud session.
 

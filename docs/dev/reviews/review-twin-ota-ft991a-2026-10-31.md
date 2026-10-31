@@ -174,3 +174,20 @@ Harness, with the real `pgrep`, `pkill` and `nohup` (the fake daemon is a script
   something running.
 
 Not run on air.
+
+## Follow-up 3: the traffic job held ssh open; daemon log level (task 11, third attempt, 2026-10-31)
+
+The traffic command was `cd <repo> && nohup … & echo started`. That backgrounds the whole `&&` list as a
+subshell, which keeps ssh's stdout open. So ssh did not return during the traffic window, and the
+status polling never ran.
+
+- **Reproduced locally:** with a 4 s job, `bash -c "<old>" | cat` returned after 4.02 s, and the new form,
+  `cd <repo> || exit 1; nohup … &`, after 0.006 s.
+- **Harness:** the fake ssh now pipes its output through `cat`, so it waits for EOF like ssh. A
+  `run` with a 20 s traffic job polled both daemons 3 times in its 12 s window.
+
+`DAEMON_LOG_LEVEL` (default `info`) sets the daemons' `RUST_LOG`, so a failed run can be logged at
+`debug`.
+
+No separate review round: this changes how the traffic job is started and what the daemon logs, not
+when or how anything keys. The keying path is still the daemon's own.

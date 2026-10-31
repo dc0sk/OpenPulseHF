@@ -65,6 +65,10 @@ this ledger adds the design rationale and the actually-observed results per chan
 
   Third review round: no blocker; 2 should-fix and 2 nits taken. The harness now uses the real
   `pgrep`, `pkill` and `nohup`.
+- **Follow-up 3 (task 11's third attempt):**
+  - the traffic job is started with `cd || exit 1; nohup … &`, so ssh returns. Locally the old form
+    held the caller for 4.02 s and the new one for 0.006 s;
+  - `DAEMON_LOG_LEVEL` sets the daemons' log level.
 
 ## 2026-10-26 — On-air station readiness check; the first 2 m session is a dry run
 

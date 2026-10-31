@@ -70,6 +70,9 @@ TRAFFIC_DURATION="${TRAFFIC_DURATION:-120}"
 # Which station sends the traffic (the ISS); the other is the receiver that leads the rate.
 # A2 needs both directions: one run with A, one with B.
 TRAFFIC_FROM="${TRAFFIC_FROM:-A}"
+# The daemons' RUST_LOG. `debug` logs each decode attempt and its timing, which a failed on-air run
+# needs (task 11: an `info` log could not say why station B never decoded).
+DAEMON_LOG_LEVEL="${DAEMON_LOG_LEVEL:-info}"
 OUTPUT_DIR="${OUTPUT_DIR:-docs/dev/test-reports}"
 
 ACTION="${1:-supervise}"
@@ -220,7 +223,7 @@ launch_daemon() {  # ssh_fn repo_dir label
     "$sshfn" "pkill -x $DAEMON_COMM 2>/dev/null; \
         for i in 1 2 3 4 5 6 7 8 9 10; do pgrep -x $DAEMON_COMM >/dev/null || break; sleep 0.5; done; \
         if pgrep -x $DAEMON_COMM >/dev/null; then echo '  [$label] daemon FAILED: an old daemon did not stop'; exit 1; fi; \
-        XDG_CONFIG_HOME=$CFG_DIR RUST_LOG=info \
+        XDG_CONFIG_HOME=$CFG_DIR RUST_LOG=$DAEMON_LOG_LEVEL \
         nohup $repo/target/release/openpulse-server </dev/null >/tmp/twin-ota-daemon.log 2>&1 & pid=\$!; \
         sleep 2; kill -0 \$pid 2>/dev/null && echo '  [$label] daemon ok' || { echo '  [$label] daemon FAILED'; tail -5 /tmp/twin-ota-daemon.log; exit 1; }"
 }
@@ -315,7 +318,10 @@ EOF
     local report="${OUTPUT_DIR}/onair-twin-ota-$(date +%Y%m%d-%H%M%S).log"
     mkdir -p "$OUTPUT_DIR"
     echo "# on-air twin-OTA  freq=${TEST_FREQ_HZ} dials A=${A_FREQ_HZ} B=${B_FREQ_HZ} profile=${OTA_PROFILE} traffic ${iss_label}→${irs_label} dur=${TRAFFIC_DURATION}s" | tee "$report"
-    "$iss_fn" "cd $iss_repo && nohup timeout ${TRAFFIC_DURATION} \
+    # `cd … || exit 1;`, not `cd … && nohup … &`: the latter backgrounds the whole list as a subshell
+    # that keeps ssh's stdout open, so ssh did not return for the whole traffic window and the status
+    # polling below never ran (task 11).
+    "$iss_fn" "cd $iss_repo || exit 1; nohup timeout ${TRAFFIC_DURATION} \
         env ADDR=127.0.0.1:${DAEMON_TCP_PORT} TO=${to_call} INTERVAL=${TRAFFIC_INTERVAL} SIZE=${TRAFFIC_SIZE} \
         bash scripts/twin-traffic.sh </dev/null >/tmp/twin-ota-traffic.log 2>&1 & echo '  traffic started'"
 
