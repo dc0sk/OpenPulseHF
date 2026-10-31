@@ -74,6 +74,10 @@ OUTPUT_DIR="${OUTPUT_DIR:-docs/dev/test-reports}"
 
 ACTION="${1:-supervise}"
 CFG_DIR='${HOME}/.config/openpulse-twin-ota'   # remote XDG_CONFIG_HOME per station
+# The kernel keeps 15 characters of a process name, so `pgrep -x openpulse-server` (16) never matches
+# (task 11: the started daemon read as FAILED and `cleanup` left it running). Match the truncated
+# name exactly; `-f` would also match the ssh shell whose command line names the binary.
+DAEMON_COMM="openpulse-serve"
 
 die() { echo "ERROR: $*" >&2; exit 1; }
 ssh_a() { ssh ${SSH_OPTS} "${A_SSH}" "$@"; }
@@ -211,10 +215,10 @@ same_run_files() {
 launch_daemon() {  # ssh_fn repo_dir label
     local sshfn="$1" repo="$2" label="$3"
     echo "  [$label] launching openpulse-server (control 127.0.0.1:$DAEMON_TCP_PORT)"
-    "$sshfn" "pkill -x openpulse-server 2>/dev/null || true; sleep 0.5; \
+    "$sshfn" "pkill -x $DAEMON_COMM 2>/dev/null || true; sleep 0.5; \
         XDG_CONFIG_HOME=$CFG_DIR RUST_LOG=info \
         nohup $repo/target/release/openpulse-server </dev/null >/tmp/twin-ota-daemon.log 2>&1 & \
-        sleep 2; pgrep -x openpulse-server >/dev/null && echo '  [$label] daemon ok' || { echo '  [$label] daemon FAILED'; tail -5 /tmp/twin-ota-daemon.log; exit 1; }"
+        sleep 2; pgrep -x $DAEMON_COMM >/dev/null && echo '  [$label] daemon ok' || { echo '  [$label] daemon FAILED'; tail -5 /tmp/twin-ota-daemon.log; exit 1; }"
 }
 
 # CAT read-back of what the rig was actually set to, so a decode anomaly can be attributed
@@ -323,15 +327,35 @@ do_status() {
         local fn="${pair%%:*}" label="${pair##*:}"
         echo "[$label]"
         "$fn" "pgrep -x rigctld >/dev/null && echo '  rigctld: running' || echo '  rigctld: stopped'; \
-               pgrep -x openpulse-server >/dev/null && echo '  daemon: running' || echo '  daemon: stopped'"
+               pgrep -x $DAEMON_COMM >/dev/null && echo '  daemon: running' || echo '  daemon: stopped'"
     done
 }
 
+# Stop both stations' daemon and rigctld, and report what is still running instead of assuming
+# (task 11: it printed "stopped" while the daemon ran on). The daemon goes first, then PTT is
+# commanded off through rigctld while it still runs (a daemon stopped mid-over could leave the rig
+# keyed), then rigctld. Each gets up to 5 s to exit after TERM, then KILL. Non-zero if anything survived.
 do_cleanup() {
     echo "== cleanup =="
-    ssh_a "pkill -x openpulse-server 2>/dev/null; pkill -x rigctld 2>/dev/null; true"
-    ssh_b "pkill -x openpulse-server 2>/dev/null; pkill -x rigctld 2>/dev/null; true"
-    echo "stopped daemons and rigctld on both stations."
+    local pair fn label port out left ptt rc=0
+    for pair in "ssh_a:$A_RIGCTLD_PORT:$A_LABEL" "ssh_b:$B_RIGCTLD_PORT:$B_LABEL"; do
+        IFS=: read -r fn port label <<<"$pair"
+        out="$("$fn" "stop() { pkill -x \$1 2>/dev/null; for i in 1 2 3 4 5 6 7 8 9 10; do pgrep -x \$1 >/dev/null || return 0; sleep 0.5; done; pkill -KILL -x \$1 2>/dev/null; sleep 0.5; }; \
+            stop $DAEMON_COMM; \
+            if pgrep -x rigctld >/dev/null; then rigctl -m 2 -r 127.0.0.1:$port T 0 >/dev/null 2>&1 && echo ptt0-sent || echo ptt-off-failed; else echo no-rigctld; fi; \
+            stop rigctld; \
+            pgrep -x $DAEMON_COMM >/dev/null && echo daemon; pgrep -x rigctld >/dev/null && echo rigctld; true" || echo unreachable)"
+        ptt="PTT 0 not sent: rigctld was not running"
+        [[ "$out" == *ptt0-sent* ]] && ptt="PTT 0 sent while rigctld ran"
+        left="$(printf '%s\n' "$out" | grep -vxE 'ptt0-sent|no-rigctld' | tr '\n' ' ' | sed 's/ *$//')"
+        if [[ -z "$left" ]]; then
+            echo "  [$label] daemon and rigctld stopped; ${ptt}"
+        else
+            echo "  [$label] ERROR: ${left} — check this station by hand" >&2
+            rc=1
+        fi
+    done
+    return $rc
 }
 
 case "$ACTION" in
