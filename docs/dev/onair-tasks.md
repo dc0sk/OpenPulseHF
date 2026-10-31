@@ -2091,3 +2091,66 @@ End state, whatever happened:
 
 ### Results
 
+**Part A — receiver logs (2026-10-31, nothing transmitted).** Copied from station B's log directory to `docs/dev/test-reports/on-air/irs-logs-2026-10-31/`, ANSI colour codes stripped, user name, host name and home path of that host replaced by `station-B`, then `gzip -9`. Check on the redacted text before compression: `grep -ciE "<user>|<host>|landline|myfritz|/home/[a-z]|<dotted quad>"` gave 0 for all four (the pattern `/home/[a-z]` matches a known instance, checked separately). Each file is the **latest** run of its case on station B: the QPSK file is task 8's second failure (15:46 UTC), the soft_concatenated file task 7's third attempt (12:20 UTC, 4.7 W), the `rs` and `none` files task 7's passes. The last line of the two pass logs is the decoded 64-byte test payload (untimestamped).
+
+| file | lines | first timestamp | last timestamp |
+|---|---|---|---|
+| `irs-QPSK250-D-rs.log.gz` | 5622 | 2026-10-31T15:46:15.570340Z | 2026-10-31T15:46:44.293796Z |
+| `irs-BPSK250-soft_concatenated.log.gz` | 4408 | 2026-10-31T12:20:16.916957Z | 2026-10-31T12:20:58.437411Z |
+| `irs-BPSK250-rs.log.gz` | 2218 | 2026-10-31T12:05:42.306976Z | 2026-10-31T12:06:02.890337Z |
+| `irs-BPSK250-none.log.gz` | 2352 | 2026-10-31T11:49:51.250488Z | 2026-10-31T11:50:14.049608Z |
+
+QPSK log, the first 15 lines containing `first-energy attempt`, `fec attempt` or `AFC settling`:
+```
+2026-10-31T15:46:27.716017Z  INFO AFC settling done: correction=0.0Hz onset=93320 (coarse=93256) buf_len=94000
+2026-10-31T15:46:27.726172Z DEBUG first-energy attempt: onset=93320 (fep=93320 k=0) correction=0.0Hz window_complete=false
+2026-10-31T15:46:27.727094Z DEBUG fec attempt FAILED: mode=QPSK250-D fec=Rs samples=880: FEC error: FEC data length 1 is shorter than one 255-byte block
+2026-10-31T15:46:27.737204Z DEBUG first-energy attempt: onset=93336 (fep=93320 k=1) correction=0.0Hz window_complete=false
+2026-10-31T15:46:27.738304Z DEBUG fec attempt FAILED: mode=QPSK250-D fec=Rs samples=864: FEC error: FEC data length 1 is shorter than one 255-byte block
+2026-10-31T15:46:27.748476Z DEBUG first-energy attempt: onset=93352 (fep=93320 k=2) correction=0.0Hz window_complete=false
+2026-10-31T15:46:27.749388Z DEBUG fec attempt FAILED: mode=QPSK250-D fec=Rs samples=1048: FEC error: FEC data length 2 is shorter than one 255-byte block
+2026-10-31T15:46:27.759479Z DEBUG first-energy attempt: onset=93368 (fep=93320 k=3) correction=0.0Hz window_complete=false
+2026-10-31T15:46:27.760418Z DEBUG fec attempt FAILED: mode=QPSK250-D fec=Rs samples=1032: FEC error: FEC data length 2 is shorter than one 255-byte block
+2026-10-31T15:46:27.771785Z DEBUG first-energy attempt: onset=93384 (fep=93320 k=4) correction=0.0Hz window_complete=false
+2026-10-31T15:46:27.772829Z DEBUG fec attempt FAILED: mode=QPSK250-D fec=Rs samples=1216: FEC error: FEC data length 4 is shorter than one 255-byte block
+2026-10-31T15:46:27.782933Z DEBUG first-energy attempt: onset=93400 (fep=93320 k=5) correction=0.0Hz window_complete=false
+2026-10-31T15:46:27.783992Z DEBUG fec attempt FAILED: mode=QPSK250-D fec=Rs samples=1200: FEC error: FEC data length 4 is shorter than one 255-byte block
+2026-10-31T15:46:27.794165Z DEBUG first-energy attempt: onset=93416 (fep=93320 k=6) correction=0.0Hz window_complete=false
+2026-10-31T15:46:27.795143Z DEBUG fec attempt FAILED: mode=QPSK250-D fec=Rs samples=1384: FEC error: FEC data length 5 is shorter than one 255-byte block
+```
+the last 15:
+```
+2026-10-31T15:46:43.761168Z DEBUG fec attempt FAILED: mode=QPSK250-D fec=Rs samples=6496: FEC error: FEC data length 45 is shorter than one 255-byte block
+2026-10-31T15:46:43.846269Z DEBUG fec attempt FAILED: mode=QPSK250-D fec=Rs samples=6400: FEC error: FEC data length 44 is shorter than one 255-byte block
+2026-10-31T15:46:43.876189Z DEBUG fec attempt FAILED: mode=QPSK250-D fec=Rs samples=6368: FEC error: FEC data length 44 is shorter than one 255-byte block
+2026-10-31T15:46:43.906204Z DEBUG fec attempt FAILED: mode=QPSK250-D fec=Rs samples=6336: FEC error: FEC data length 44 is shorter than one 255-byte block
+2026-10-31T15:46:43.936186Z DEBUG fec attempt FAILED: mode=QPSK250-D fec=Rs samples=6304: FEC error: FEC data length 43 is shorter than one 255-byte block
+2026-10-31T15:46:43.966314Z DEBUG fec attempt FAILED: mode=QPSK250-D fec=Rs samples=6272: FEC error: FEC data length 43 is shorter than one 255-byte block
+2026-10-31T15:46:43.996887Z DEBUG fec attempt FAILED: mode=QPSK250-D fec=Rs samples=6240: FEC error: FEC data length 43 is shorter than one 255-byte block
+2026-10-31T15:46:44.027128Z DEBUG fec attempt FAILED: mode=QPSK250-D fec=Rs samples=6208: FEC error: FEC data length 43 is shorter than one 255-byte block
+2026-10-31T15:46:44.057286Z DEBUG fec attempt FAILED: mode=QPSK250-D fec=Rs samples=6176: FEC error: FEC data length 42 is shorter than one 255-byte block
+2026-10-31T15:46:44.087331Z DEBUG fec attempt FAILED: mode=QPSK250-D fec=Rs samples=6144: FEC error: FEC data length 42 is shorter than one 255-byte block
+2026-10-31T15:46:44.117309Z DEBUG fec attempt FAILED: mode=QPSK250-D fec=Rs samples=6112: FEC error: FEC data length 42 is shorter than one 255-byte block
+2026-10-31T15:46:44.174834Z DEBUG fec attempt FAILED: mode=QPSK250-D fec=Rs samples=6048: FEC error: FEC data length 41 is shorter than one 255-byte block
+2026-10-31T15:46:44.232894Z DEBUG fec attempt FAILED: mode=QPSK250-D fec=Rs samples=5984: FEC error: FEC data length 41 is shorter than one 255-byte block
+2026-10-31T15:46:44.263160Z DEBUG fec attempt FAILED: mode=QPSK250-D fec=Rs samples=5952: FEC error: FEC data length 41 is shorter than one 255-byte block
+2026-10-31T15:46:44.293745Z DEBUG fec attempt FAILED: mode=QPSK250-D fec=Rs samples=5920: FEC error: FEC data length 40 is shorter than one 255-byte block
+```
+`fec attempt FAILED` per `samples=` value, top 10 (`grep -o 'samples=[0-9]*' | sort | uniq -c | sort -rn | head`; 471 failed attempts over 468 distinct values, so no value repeats more than twice):
+```
+      2 samples=1368
+      2 samples=1848
+      2 samples=2168
+      1 samples=880
+      1 samples=864
+      1 samples=1048
+      1 samples=1032
+      1 samples=1216
+      1 samples=1200
+      1 samples=1384
+```
+**Last log line:** `2026-10-31T15:46:44.293796Z` UTC; the log file's modification time on station B is 16:46:44.289 CET = 15:46:44.289 UTC, the same instant. **The runner's kill time is not logged.** The runner kills the receiver `KILL_WAIT` (12 s) after the transmitter exits, so the kill came at or after 15:46:44; the last line is an attempt in the middle of a descending `samples=` sequence (5920, 5952, 5984, ... 6496), so the receiver was still in its scan when it stopped writing. The first attempt in the log is at 15:46:27.7, i.e. the scan had run ~16.6 s for a 5.5 s burst. Observation only, no diagnosis: the BPSK passes end with `fec attempt OK` within a fraction of a second of the first attempt.
+
+_(Part B runs: pending, one go each)_
+
+
