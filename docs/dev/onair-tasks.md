@@ -1924,6 +1924,7 @@ Failure detail, full IRS log on station B: first-energy attempt: 319; fec attemp
 
 **Run 1 of 4 — A -> B (IC-9700 transmits ~1.2 W, FT-991A receives), `QPSK250-D|rs|64` (maintainer's go, 2026-10-31), RSPdx capture beside it:** **FAIL**
 `Report: docs/dev/test-reports/onair-2026-10-31T151749.json`; frequencies read back at the runner's pre-flight as for run 1 (IC-9700 144640000 Hz, FT-991A 144641564 Hz). SDR capture (`~/onair-captures/2026-10-31/a1-ab-qpsk-rs.cf32` on rpi51, 230400000 bytes, sha256 `4cf469f8...58bcf4`, RFGR 22, IFGR 40): `captured 150.00s peak=0.1955 rms=0.0054 clip=0.00% OK`. Burst at t = 75.25-80.75 s, **peak 51499.9 Hz above the LO**, 53.1 dB over the floor, -20 dB span 51344 51735 Hz. Not decoded (witness only). PTT 0 on both rigs, nothing running. Bundle: ``.
+Failure detail, full IRS log on station B (5216 lines): 38 `first-energy attempt`, 390 `fec attempt FAILED` (the lines I read were `FEC error: FEC data length 0/1 is shorter than one 255-byte block` with `fec demod: ... soft=false wire_bytes=1 llrs=0`, samples 816-848, i.e. attempts on a tail of the buffer, not on the burst), 0 `fec attempt OK`, 0 `invalid magic`, 0 `rejected`. I did not read the attempts made at the burst's onset; only the first three FAILED lines were inspected. The SDR shows a clean 5.5 s burst at +51500 Hz, 53.1 dB over the floor. One more try of this case is allowed on the maintainer's go; a second failure stops the task.
 
 _(runs 2-4: pending, one go each)_
 
