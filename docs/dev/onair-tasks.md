@@ -2204,7 +2204,7 @@ No burst in the RSPdx capture (0.6 dB), no witness. Station A's receiver log: 14
   backlog after the pass and decode. That is the diagnostic in task 10. UNCHECKED: whether the cpal
   input keeps the audio that arrives during the pass, or drops it.
 
-## Task 10 — A1's B → A on SL5 with the witness at full gain, then the QPSK starvation test (status: open)
+## Task 10 — A1's B → A on SL5 with the witness at full gain, then the QPSK starvation test (status: done)
 
 Station B is the remote FT-991A, and its station rules apply: 5 W at most, ask the maintainer before
 **every** run that keys, and record nothing about that host here. Same local profile as before.
@@ -2249,6 +2249,54 @@ captured 150.00s peak=1.0818 rms=0.6129 clip=0.96% OVERLOAD
 ```
 **The burst is still not visible:** 2.9 dB over the median 49-54 kHz floor, no block more than 6 dB above it. At this gain the front end is overloaded (clip 0.96 %, rms 0.61 against 0.0005 at RFGR 22): the strongest spectral line is at 0 Hz (+26 dB over the median, DC), i.e. broadband energy (not one carrier) saturates it, so the capture is not a witness in this direction at this gain either. Nothing else was raised. Capture `~/onair-captures/2026-10-31/a1-ba-rs10.cf32` on rpi51 (230400000 bytes, sha256 `93a4a7c6...3d3b61`). Station A's receiver log, 2521 lines, 17:10:31.03-17:10:50.99 UTC, ends `fec attempt OK: mode=BPSK250 fec=Rs samples=67352 payload=64 bytes`: `docs/dev/test-reports/on-air/irs-logs-2026-10-31/irsA-ba-BPSK250-rs-run10.log.gz`. Bundle: `docs/dev/test-reports/on-air/bundle-2026-10-31T171226Z-a1t10-ba-rs`. PTT 0 on both rigs, nothing running.
 
-_(Part B: pending, one go)_
+**Part B (maintainer's go, 2026-10-31): diagnostic, A -> B `QPSK250-D|rs|64` with `KILL_WAIT=45`** (not an A1 run). RSPdx at RFGR 22 / IFGR 40, capture lengthened to 200 s so it covers the longer wait. One run:
+```
+freq = 144640000 Hz [expected 144640000]   (IC-9700, ISS)
+freq = 144641564 Hz [expected 144641564]   (FT-991A, IRS)
+[QPSK250-D fec=rs payload=64B] ... PASS    Report: docs/dev/test-reports/onair-2026-10-31T171855.json
+```
+**It passed, where the same case failed twice with `KILL_WAIT=12` (task 8).** SDR: clean 5.5 s burst at +51488 Hz, 53.4 dB over the floor, clip 0.00 %. Station B's receiver log (redacted as in task 9, ANSI stripped, 5446 lines, 17:19:15.62-17:19:44.40 UTC): `docs/dev/test-reports/on-air/irs-logs-2026-10-31/irs-QPSK250-D-rs-run10-killwait45.log.gz`; counts: 46 `first-energy attempt`, 427 `fec attempt FAILED`, **1 `fec attempt OK`**, 0 `invalid magic`, 0 `rejected`, 1 `AFC settling`.
+
+Per second of the log, the largest `samples=`, the largest `pos=` (on `AFC full-retry` lines) and the largest `received N accumulated audio samples` (0 = none that second):
+
+| UTC second | max samples | max pos | max accumulated | log lines |
+|---|---|---|---|---|
+| 17:19:15 | 0 | 0 | 0 | 19 |
+| 17:19:16 | 0 | 0 | 7800 | 39 |
+| 17:19:17 | 0 | 0 | 16000 | 41 |
+| 17:19:18 | 0 | 0 | 24000 | 40 |
+| 17:19:19 | 0 | 0 | 31800 | 39 |
+| 17:19:20 | 0 | 0 | 39800 | 40 |
+| 17:19:21 | 0 | 0 | 47800 | 40 |
+| 17:19:22 | 0 | 0 | 55800 | 40 |
+| 17:19:23 | 0 | 0 | 63800 | 40 |
+| 17:19:24 | 0 | 0 | 71800 | 40 |
+| 17:19:25 | 0 | 0 | 80000 | 41 |
+| 17:19:26 | 0 | 0 | 88000 | 40 |
+| 17:19:27 | 1888 | 0 | 95800 | 88 |
+| 17:19:28 | 2360 | 94464 | 0 | 313 |
+| 17:19:29 | 17856 | 95200 | 111800 | 310 |
+| 17:19:30 | 18360 | 94368 | 0 | 292 |
+| 17:19:31 | 17336 | 95424 | 0 | 280 |
+| 17:19:32 | 16280 | 96480 | 0 | 283 |
+| 17:19:33 | 15288 | 97536 | 0 | 300 |
+| 17:19:34 | 14232 | 98592 | 0 | 302 |
+| 17:19:35 | 13144 | 99840 | 0 | 279 |
+| 17:19:36 | 11928 | 100896 | 0 | 302 |
+| 17:19:37 | 10872 | 101952 | 0 | 290 |
+| 17:19:38 | 9816 | 103168 | 0 | 291 |
+| 17:19:39 | 8472 | 104256 | 0 | 302 |
+| 17:19:40 | 7448 | 105312 | 0 | 313 |
+| 17:19:41 | 6424 | 106432 | 0 | 275 |
+| 17:19:42 | 5336 | 107520 | 0 | 297 |
+| 17:19:43 | 4248 | 108576 | 0 | 295 |
+| 17:19:44 | 74904 | 108992 | 227000 | 133 |
+
+- **The buffer stops growing during the retry pass and resumes after it.** `AFC full-retry: pos=93440` starts at 17:19:28.03; the last `received 111800 accumulated` line before the gap is at 17:19:29.98; the pass walks `pos` up to 108992 (ends `AFC full-retry: pos=108992 FAILED: FEC error: FEC data length 16 is shorter than one 255-byte block`, 17:19:44.33); `received 226800 accumulated` follows at 17:19:44.365 (it jumps from 111800 to 226800, i.e. the audio that arrived meanwhile is read in one go), then 227000. So the retry pass took about 16.3 s and reads no audio meanwhile.
+- **A `fec attempt OK` follows**, 20 ms after the buffer resumed: first an attempt at onset=93976 (`k=8`, `samples=74904`) failed with `RS correction failed at block 0: TooManyErrors`, then the attempt at onset=93848 (`k=0`, correction 4.4 Hz, `window_complete=true`) gave `fec attempt OK: mode=QPSK250-D fec=Rs samples=74904 payload=64 bytes` at 17:19:44.398556, the log's last line. Task 8's failed log (`KILL_WAIT=12`) has the same shape: first attempt at 15:46:27.7, the descending `samples=` sequence (last line `samples=5920` at 15:46:44.29), no `fec attempt OK`; there the receiver stopped writing about 16.6 s after its first attempt, in the same position of the pass where this run's `samples=` is still 4248 (about 1.4 s before the end of the pass), so it was killed inside the retry pass. (Timing inferred from the two runs' logs; the kill time itself is not logged.)
+
+End state: PTT 0 on both rigs, nothing running; FT-991A read back `EX065+1500; FA144641564; RFPOWER 0.05`; IC-9700 RFPOWER 0.0117647. Bundle: `docs/dev/test-reports/on-air/bundle-2026-10-31T172208Z-a1t10-ab-qpsk-diag`.
+
+**Status: done.**
 
 
