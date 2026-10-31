@@ -1692,7 +1692,7 @@ Evidence tier: hardware-in-the-loop, 3 runs, one payload size, one day, no audio
 | `KP` (CW pitch) | the dial readout differs between USB and DATA-USB by the CW pitch (`KP40` = 700 Hz, `KP20` = 500 Hz); this is the 700 Hz mode-readback difference the runner's pre-flight flags | measured |
 | 037 | is MIC SCAN per the manual, not what was assumed earlier; EX numbering was withdrawn (raw dump in `exdump`, see the menu-sweep section) | maintainer |
 Recipes that work: **B -> A** in DATA-USB with the +64 Hz trim (065 = 0): 3 of 3 pass (previous sections). **A -> B** either in plain USB (dial 144640000, `TEST_MODE_RIG_B=keep TEST_MODE_EXPECT_B=USB B_FREQ_OFFSET_HZ=0`, 1 run) or in DATA-USB with 065 = +1500 and `B_FREQ_OFFSET_HZ=1564` (3 runs). Before B -> A again with 065 = +1500, set the dial back (or set 065 = 0) and check the frequency on air.
-State left: 065 = +1500 on the FT-991A (other menus at their originals), DATA-USB, width 16, dial 144640064 (**the dial does not match the shift: do not key the FT-991A until it is either 065 = 0 or the dial +1500**), PTT 0 on both rigs, nothing running.
+State left: 065 set back to 0 (read back `EX065+0000`) on the FT-991A, other menus at their originals, DATA-USB `FA144640064` `SH016`, PTT 0 on both rigs, nothing running; the stock +64 Hz trim applies again.
 
 ## Task 5 — FT-818 at its new location: readiness, G0, then Gate 6 with RS both ways (status: open)
 
