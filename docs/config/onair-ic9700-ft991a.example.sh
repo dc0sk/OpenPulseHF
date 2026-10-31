@@ -71,6 +71,12 @@ export B_FREQ_OFFSET_HZ=1564
 # Station B has no checkout: copy the daemon to it with that runner's `deploy` before a `run`.
 export RIG_PASSBAND_HZ=2400
 
+# How long run-onair-ic9700-ft991a.sh waits after the sender exits before it kills the receiver. The
+# one-shot receive's full-buffer retry reads no audio while it runs (about 16 s on station B, task 10).
+# With the default 12 s, QPSK250-D|rs was killed mid-pass twice (task 8); with 45 it decoded. Parked
+# engine item in the work plan.
+export KILL_WAIT=45
+
 # IC-9700 audio prerequisites for digital USB TX (set on the radio UI):
 # - DATA MOD = USB
 # - USB MOD Level > 0 (start around mid-scale)

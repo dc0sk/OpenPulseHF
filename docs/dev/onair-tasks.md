@@ -2299,4 +2299,98 @@ End state: PTT 0 on both rigs, nothing running; FT-991A read back `EX065+1500; F
 
 **Status: done.**
 
+**Reviewed (cloud session, 2026-10-31), task 10:**
+- **The QPSK explanation holds.** With `KILL_WAIT=45` A → B `QPSK250-D|rs` **passed**. The log shows
+  the buffer frozen for 16.3 s during the retry pass (111 800 samples), then 226 800 samples read in
+  one go after it. The audio is buffered, not dropped. The decode succeeded 20 ms later, in the
+  first complete window. The engine item stays parked in the work plan; the profile now sets
+  `KILL_WAIT=45`, so the 2 m runner's one-shot runs survive it meanwhile.
+- **The B → A witness cannot be had with this RSPdx setup.** At RFGR 22 there is no burst. At RFGR 0 the
+  front end is overloaded by broadband energy (0.96 % clipping) and there is still no burst.
+- **A1 evidence on SL5 `BPSK250|rs|64`**, one build on both stations, a report, bundle and receiver
+  log per run:
+  - A → B: 2 of 2, with the RSPdx witness (task 7);
+  - B → A: 2 of 2 (tasks 9 and 10), with no SDR witness.
+
+  Also passed: `BPSK250|none` both ways (B → A 1 of 2) and `QPSK250-D|rs` A → B once, with the longer
+  kill wait. **Whether B → A without a witness is acceptable for A1 is for the maintainer to decide.**
+
+## Task 11 — A2 on the FT-991A pair: the daemon rate ladder, induced level changes, both directions (status: open)
+
+**Goal.** Release 1 criterion **A2** (`docs/dev/project/release-1.0-criteria.md` §A2): in the
+receiver-led direction, show all three of:
+1. a **climb** whose next frame at the new mode **decodes**;
+2. a **demotion** following at least one logged decode failure;
+3. **no demotion** over a window of clean decodes on a stable link.
+
+Each transition must appear in **both** stations' `events.ndjson`. A 2 m line-of-sight link does not
+fade, so the level changes are **induced** and **recorded**: the sending station's TX audio drive is
+lowered, muted and restored. RF power is never raised, and the FT-991A stays at 5 W at most. Manual
+`lock_level` does not count, so do not use it.
+
+Runner: `scripts/run-onair-twin-ota.sh`. Two `openpulse-server` daemons, receiver-led OTA,
+`observability.audit_mode` on; the evidence goes to `<report>-evidence/`. Profile: the local one that
+sources `onair-ic9700-ft991a.example.sh`, which sets `B_FREQ_OFFSET_HZ=1564` and `RIG_PASSBAND_HZ=2400`.
+Station B is the remote FT-991A, and its station rules apply: ask the maintainer before **every** run
+(a run keys **both** rigs, because the receiver sends ACKs), and record nothing about that host here.
+
+### Part A — nothing transmits
+1. Pull. Report the commit on rpi51.
+2. `scripts/run-onair-twin-ota.sh deploy`. It builds `openpulse-server` (cpal) and `openpulse` on rpi51
+   and copies them, with `scripts/twin-traffic.sh`, to station B. Quote the sha256 lines; **they must
+   match.** It refuses if the two CPU architectures differ.
+3. Read back the FT-991A (`EX065`, mode, dial, RFPOWER ≤ 0.05, PTT 0) and the IC-9700 (RFPOWER ≤ 0.05, AGC,
+   PTT 0). `scripts/onair-setup-audio-routing.sh --verify` must PASS on both stations.
+4. Confirm that nothing else uses either rig's CAT port or audio device. The daemons start their own
+   rigctld.
+
+### Part B — run 1: A sends, B leads the rate (keys both rigs: one go)
+Settings: `OTA_PROFILE=robust` (SL1–SL6, single-carrier, ≤ 500 Hz), `TRAFFIC_FROM=A`, `TRAFFIC_SIZE=64`,
+`TRAFFIC_INTERVAL=2`, `TRAFFIC_DURATION=900`. The ladder starts at SL2 (BPSK31, about a minute per frame),
+so climbing needs several minutes.
+1. RSPdx witness on rpi51, since the IC-9700 transmits here. Use a 62.5 kS/s capture, 20 kHz below the
+   frequency, covering the whole run:
+   `sdr_capture.py 144620000 62500 960 22 40 ~/onair-captures/2026-10-31/a2-ab.cf32`
+   (960 s at 8 bytes per sample is ~480 MB of RAM). If 62.5 kS/s is refused, say so and use the
+   lowest rate it accepts.
+2. `scripts/run-onair-twin-ota.sh run` with the settings above.
+3. **The induced level changes on station A's TX drive.** Make them from a second shell on rpi51, with
+   `B_TX_SINK_VOLUME` and both RX volumes kept at the profile's values:
+   `A_TX_SINK_VOLUME=<v> scripts/onair-setup-audio-routing.sh`.
+   Record the **UTC time** of each change. Schedule:
+   - Hold **0.15** until the report's `ISS` level has been at the profile's top (SL6) or unchanged for
+     at least 60 s with traffic decoding, and in any case until 540 s. This window is clause 3.
+   - Then **0.02** for 60 s, then **0** (muted) for 90 s. That should demote (clause 2).
+   - Then back to **0.15** to the end. That should climb (clause 1).
+4. After the run, from `<report>-evidence/`, commit:
+   - the report `.log`;
+   - `events-a.ndjson`, `events-b.ndjson`, `daemon-a.log`, `daemon-b.log`, `config-*.toml`, `rig-*.txt`.
+
+   Redact station B's host details from them as in task 9, then show the grep returns nothing.
+   Compress files over 1 MB with gzip. Write a notes file covering:
+   - the commit and the sha256 values;
+   - the drive schedule with its UTC times;
+   - the RSPdx capture's path, sha256 and clip %.
+
+### Part C — run 2: B sends, A leads the rate (keys both rigs: one go)
+The same as Part B, with these differences:
+- `TRAFFIC_FROM=B`;
+- the induced changes go on `B_TX_SINK_VOLUME`, with A's kept at the profile's value;
+- no RSPdx capture is needed (it cannot see station B).
+
+### Stop rules
+Stop the run and report if any of these happens:
+- a daemon does not start;
+- the report shows `<no status>` for more than a minute;
+- station B's link drops.
+
+Stop everything if either rig's power or PTT reads anything unexpected. `cleanup` stops both daemons
+and both rigctld.
+
+End state, whatever happened:
+- PTT 0 on both rigs; `run-onair-twin-ota.sh cleanup` run;
+- recorded: the FT-991A's 065, dial and RFPOWER, and the IC-9700's RFPOWER;
+- both TX drives back at the profile's values (`--verify` PASS).
+
+### Results
 
