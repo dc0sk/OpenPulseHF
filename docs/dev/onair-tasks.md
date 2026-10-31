@@ -1894,5 +1894,13 @@ RFPOWER recorded.
 - `scripts/onair-station-check.sh`: `Summary: PASS=33 FAIL=5`. The five FAILs are the non-git deployment's, as in task 6: no git checkout on B, no `pactl` on B, no numpy/scipy on B, `onair-preflight --strict` on B (missing config/kisstnc/gateway), `openpulse-server` not built on B. No other FAIL.
 - RSPdx: `Found device 0`, driver sdrplay, RSPdx. 10 s test capture `sdr_capture.py 144590000 192000 10 22 40`: `peak=0.0020 rms=0.0005 clip=0.00% OK` (nothing transmitting).
 
-_(Part B runs: pending, one go each)_
+**Run 1 of 6 — A -> B `BPSK250|none|64` (maintainer's go, 2026-10-31), RSPdx capture beside it:**
+```
+freq = 144640000 Hz [expected 144640000]   (IC-9700, ISS)
+freq = 144641564 Hz [expected 144641564]   (FT-991A, IRS)
+[BPSK250 fec=none payload=64B] ... PASS    Report: docs/dev/test-reports/onair-2026-10-31T114930.json
+```
+SDR capture (`~/onair-captures/2026-10-31/a1-ab-none.cf32` on rpi51, 230400000 bytes, sha256 `401caa19...9d0272`, RFGR 22, IFGR 40): `captured 150.00s peak=0.2537 rms=0.0046 clip=0.00% OK`. Burst at t = 75.75-79.75 s, **peak 51535 Hz above the LO**, 53.5 dB over the floor, -20 dB span 51341-51727 Hz. Not decoded (witness only). PTT 0 on both rigs, nothing running. Bundle: `docs/dev/test-reports/on-air/bundle-2026-10-31T115148Z-a1-ab-none` (the capture is not committed).
+
+_(runs 2-6: pending, one go each)_
 
