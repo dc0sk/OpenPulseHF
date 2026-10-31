@@ -2509,6 +2509,8 @@ After every run, and after any abort, run `cleanup` and quote its output. Every 
 
 End state: PTT 0 on both rigs, nothing running; FT-991A read back `EX065+1500;FA144641564;0.05 0`; IC-9700 `0.0117647 0`; `--verify`: PASS: both stations' default sink+source point at their rig CODEC; TX level set.. **Status: blocked** again (Part C not run): at SL2 the FT-991A station did not decode a single frame from the IC-9700 in 15 minutes, although it decodes the CLI's BPSK31-and-up frames in the Gate 6 runs.
 
+**Port B status (maintainer, 2026-10-31, asked after the 4th Part B attempt):** nothing was connected to the RSPdx's port B during that run (the maintainer connects the SRH-771 only when told to), so the IC-9700's transmissions in run 4 did not reach a resonant whip; that capture used port A. **Part E is waiting for the maintainer to connect the SRH-771 to port B** and say whether it is extended or collapsed and whether a 2 m band-pass filter is fitted; I have not started Part E, F or G.
+
 **Reviewed (cloud session, 2026-10-31), task 11's third attempt:** stopping was right under the rule as
 written, but the rule was wrong. What happened:
 1. **The runner hung after `traffic started`.** It started the traffic with `cd … && nohup … &`, which
