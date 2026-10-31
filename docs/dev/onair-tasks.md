@@ -2315,7 +2315,7 @@ End state: PTT 0 on both rigs, nothing running; FT-991A read back `EX065+1500; F
   Also passed: `BPSK250|none` both ways (B → A 1 of 2) and `QPSK250-D|rs` A → B once, with the longer
   kill wait. **Whether B → A without a witness is acceptable for A1 is for the maintainer to decide.**
 
-## Task 11 — A2 on the FT-991A pair: the daemon rate ladder, induced level changes, both directions (status: open — Parts D, E, F, G in order; then Part B only if station B is fast enough)
+## Task 11 — A2 on the FT-991A pair: the daemon rate ladder, induced level changes, both directions (status: open — Part D done; next Parts E, F, G, then Part B)
 
 **Goal.** Release 1 criterion **A2** (`docs/dev/project/release-1.0-criteria.md` §A2): in the
 receiver-led direction, show all three of:
@@ -2576,4 +2576,12 @@ Port A at RFGR 22 is the known-safe witness setting, and capturing is optional.
 4. Then run `cleanup` and quote it.
 
 Stop rules as for Part B. After Part G, go on to Part B only if Part D's condition holds.
+
+**Noted (cloud session, 2026-10-31), Part D:** SL2 decode takes 7.1 s on station B and 3.7 s on rpi51,
+so B is about 2× slower on every rung. Part B is allowed. The margin, from the probe's figure:
+- 9 s window − 7.1 s decode − the 0.52 s FSK4 ACK ≈ 1.4 s for the flush delay, PTT and key-up;
+- `debug` logging and real audio cost a little more than the probe.
+
+So Part G's ACK leg (B sends, rpi51 decodes) comes first. If Part B then fails with late ACKs, the
+cause is already named.
 
