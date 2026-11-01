@@ -71,6 +71,7 @@ impl NackBudget {
 /// #1460 probes so they cannot drift apart. The budget's verdict reaches the engine before the decode
 /// (a station without a valid callsign keys nothing, so its failures are muted); the budget is
 /// charged after it. Returns the decode and whether its ACK may be keyed.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn decode_ota_burst(
     engine: &mut ModemEngine,
     budget: &mut NackBudget,
@@ -78,8 +79,14 @@ pub(crate) fn decode_ota_burst(
     burst: &AudioSamples,
     session_id: &str,
     mode: &str,
+    channel_busy: bool,
 ) -> Result<(OtaRxResult, bool), ModemError> {
-    let verdict = if callsign_valid {
+    // `channel_busy`: the channel still carried a signal right after this burst flushed, so the
+    // sender is still transmitting and the burst is a piece of its frame. A NACK keyed now would go
+    // out over that frame, unheard: measured on air (task 15), station B flushed 56.5 s of a 66.6 s
+    // frame and keyed a NACK over the rest. Muted, so the failure neither keys nor moves the ladder
+    // (#1460) and the budget is left alone. A decode is still ACKed.
+    let verdict = if callsign_valid && !channel_busy {
         budget.failure_verdict(engine.listening_samples())
     } else {
         NackVerdict::Muted
@@ -89,6 +96,12 @@ pub(crate) fn decode_ota_burst(
     // handshake, QSY, relay) is sent at. Passing it enables the uncoded fallback for exactly that
     // traffic (#1123); without it an OTA-enabled daemon cannot receive any of it.
     let res = engine.ota_decode_burst(burst, session_id, Some(mode))?;
+    if channel_busy && res.payload.is_none() {
+        tracing::info!(
+            "OTA: a burst failed while the channel was still busy; no NACK keyed, the ladder holds"
+        );
+        return Ok((res, false));
+    }
     // A ladder frame resets the budget and is always ACKed; a failed decode is a NACK, keyed only
     // while the leaking budget allows. A `None` ack is non-ladder traffic the uncoded fallback
     // recovered: no evidence about the ladder either way, so it leaves the budget alone (#1123).
@@ -107,6 +120,67 @@ mod ladder_evidence_probe;
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A failed burst flushed while the channel is still busy keys no NACK and spends no budget; the
+    /// same burst on a quiet channel keys one (task 15: station B NACKed over the frame it was
+    /// receiving). Fails if `channel_busy` is ignored.
+    #[test]
+    fn a_failure_while_the_channel_is_busy_keys_nothing_and_spends_no_budget() {
+        let mut engine = ModemEngine::new(Box::new(openpulse_audio::LoopbackBackend::new()));
+        engine
+            .register_plugin(Box::new(bpsk_plugin::BpskPlugin::new()))
+            .unwrap();
+        engine
+            .register_plugin(Box::new(fsk4_plugin::Fsk4Plugin::new()))
+            .unwrap();
+        engine.start_ota_session(openpulse_core::profile::SessionProfile::robust());
+        // Deterministic noise: no frame in it, so every decode fails.
+        let mut state = 0x2545_f491_u64;
+        let noise: Vec<f32> = (0..16_000)
+            .map(|_| {
+                state ^= state << 13;
+                state ^= state >> 7;
+                state ^= state << 17;
+                ((state >> 40) as f32 / (1u64 << 24) as f32 - 0.5) * 0.2
+            })
+            .collect();
+        let burst = AudioSamples { samples: noise };
+        let mut budget = NackBudget::default();
+
+        let (res, keyed) = decode_ota_burst(
+            &mut engine,
+            &mut budget,
+            true,
+            &burst,
+            "peer",
+            "BPSK250",
+            true,
+        )
+        .unwrap();
+        assert!(res.payload.is_none(), "noise must not decode");
+        assert!(
+            !keyed,
+            "a NACK keyed while the channel is busy goes out over the sender's frame"
+        );
+
+        // The budget is untouched: the three NACKs it allows are all still there.
+        let keyed: Vec<bool> = (0..4)
+            .map(|_| {
+                decode_ota_burst(
+                    &mut engine,
+                    &mut budget,
+                    true,
+                    &burst,
+                    "peer",
+                    "BPSK250",
+                    false,
+                )
+                .unwrap()
+                .1
+            })
+            .collect();
+        assert_eq!(keyed, [true, true, true, false]);
+    }
 
     #[test]
     fn three_failures_key_and_the_fourth_does_not() {

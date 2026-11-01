@@ -121,3 +121,50 @@ fn a_burst_shorter_than_a_coded_frame_is_not_onset_scanned() {
 /// (`OTA_FALLBACK_RESCUE_ONSETS` unbounded), 888 with the short-of-block guard disabled too (sabotage
 /// runs). 200 fails if either bound is removed.
 const FRAGMENT_BUDGET: u64 = 200;
+
+/// Phase 2's fallback entry acquires across the onsets it will scan, not across a span that grows with
+/// the read that triggered the flush (task 15: a 14.6 s burst cost ~4700 settle passes, 19 s on x86).
+/// The fragment fixture fed in 2 s reads gives the burst a read-sized `onset_bound`.
+#[test]
+fn the_fallback_rescue_acquisition_does_not_grow_with_the_read() {
+    let cap = load_corpus("ft991a-ota-fragment-5s.wav").expect("corpus");
+    let bk = LoopbackBackend::new();
+    let mut rx = engine(&bk);
+    let mut worst = (0usize, 0u64);
+    // The fixture's own idle (its first 2 s) twice more, so the last burst is closed by a quiet read.
+    let idle = cap.samples[..16_000].to_vec();
+    let reads = cap
+        .samples
+        .chunks(16_000)
+        .map(|c| c.to_vec())
+        .chain([idle.clone(), idle]);
+    for chunk in reads {
+        let Some(burst) = rx.accumulate_capture(Some("BPSK250"), chunk).unwrap() else {
+            continue;
+        };
+        let before = rx.afc_settle_attempts();
+        let _ = rx
+            .ota_decode_burst(&burst, "DC0SK", Some("BPSK250"))
+            .unwrap();
+        let spent = rx.afc_settle_attempts() - before;
+        if burst.samples.len() > worst.0 {
+            worst = (burst.samples.len(), spent);
+        }
+    }
+    println!("longest burst {} samples: {} settles", worst.0, worst.1);
+    assert!(
+        worst.0 > 30_000,
+        "the fragment must flush as a burst (got {} samples)",
+        worst.0
+    );
+    assert!(
+        worst.1 <= SETTLE_BUDGET,
+        "{} settles on one burst: the fallback rescue acquired across the read-sized span \
+         (budget {SETTLE_BUDGET})",
+        worst.1
+    );
+}
+
+/// Measured on this fixture in 2 s reads: 17 settles with the acquisition bounded to the rescue's
+/// onsets, 206 with the fallback entry acquiring across the full span (sabotage run).
+const SETTLE_BUDGET: u64 = 60;

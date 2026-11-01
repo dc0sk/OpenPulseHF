@@ -2821,6 +2821,16 @@ impl ModemEngine {
                 self.rx_ring.clear();
             }
             self.push_ring(&samples.samples);
+            // Why and where a burst ended, so an on-air log can show a frame cut by a carrier dip
+            // (task 15: station B flushed 56.5 s of a 66.6 s frame and NACKed over the rest).
+            debug!(
+                post,
+                burst = self.rx_burst.len(),
+                read = samples.samples.len(),
+                energy = self.dcd.energy(),
+                squelch = self.dcd.threshold(),
+                "burst flushed: carrier dropped"
+            );
             // Carrier dropped after a burst → the frame is complete; flush it.
             self.last_flush_capped = false;
             self.record_flush_flags();
@@ -3394,6 +3404,20 @@ impl ModemEngine {
         step: usize,
         scan_end: usize,
     ) -> Option<f32> {
+        self.acquire_burst_correction_span(mode, samples, step, 0, scan_end)
+    }
+
+    /// [`Self::acquire_burst_correction`] over `[first, last]` only. The OTA arm's fallback entry
+    /// settles across the onsets it will scan, not the whole read-sized span (task 15: a 14.6 s burst
+    /// cost ~4700 settle passes, 19 s on x86, on the span `onset_bound` had grown to).
+    fn acquire_burst_correction_span(
+        &mut self,
+        mode: &str,
+        samples: &[f32],
+        step: usize,
+        first: usize,
+        scan_end: usize,
+    ) -> Option<f32> {
         let sr = AudioConfig::default().sample_rate;
         let (_, acq_samples, min_frame_samples, _) = self.frame_scan_geometry(mode, sr);
         let afc_window = acq_samples.max(min_frame_samples);
@@ -3402,7 +3426,7 @@ impl ModemEngine {
         let reach = if self.phase2_veto_reach { coarse } else { 0 };
         let entry = self.afc_correction_hz;
         let mut corrections: Vec<f32> = Vec::new();
-        let mut start = 0usize;
+        let mut start = first.min(scan_end);
         loop {
             if self.acquire_at_onset(mode, samples, start, afc_window, veto.as_ref(), reach) {
                 corrections.push(self.afc_correction_hz);
@@ -4017,22 +4041,30 @@ impl ModemEngine {
                 // workspace gate caught as a 98-minute non-terminating test; see
                 // `acquire_burst_correction` for why a count cap could not fix it.
                 self.afc_correction_hz = afc_before;
-                let Some(correction) =
-                    self.acquire_burst_correction(mode, &samples.samples, step, scan_end)
-                else {
-                    continue;
-                };
                 // The fallback entry scans at most OTA_FALLBACK_RESCUE_ONSETS onsets nearest the
-                // trigger (see the constant); the ladder candidates keep their full ascending walk.
-                let onsets: Vec<usize> = if fallback_at == Some(i) {
-                    onsets_nearest(
+                // trigger (see the constant), and acquires across those onsets only; the ladder
+                // candidates keep their full ascending walk and full-span acquisition.
+                let (onsets, acquire_from, acquire_to) = if fallback_at == Some(i) {
+                    let near = onsets_nearest(
                         step,
                         scan_end,
                         lead.min(n).saturating_sub(OTA_FALLBACK_RESCUE_LEAD_BIAS),
                         OTA_FALLBACK_RESCUE_ONSETS,
-                    )
+                    );
+                    let lo = near.iter().copied().min().unwrap_or(0);
+                    let hi = near.iter().copied().max().unwrap_or(0);
+                    (near, lo, hi)
                 } else {
-                    onsets_nearest(step, scan_end, 0, usize::MAX)
+                    (onsets_nearest(step, scan_end, 0, usize::MAX), 0, scan_end)
+                };
+                let Some(correction) = self.acquire_burst_correction_span(
+                    mode,
+                    &samples.samples,
+                    step,
+                    acquire_from,
+                    acquire_to,
+                ) else {
+                    continue;
                 };
                 for start in onsets {
                     self.afc_correction_hz = correction;

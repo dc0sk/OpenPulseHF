@@ -304,3 +304,65 @@ Every frame that decoded on the recordings still decodes. Full-length bursts tha
 - **Phase 2's cost for the ladder rungs on full-length bursts that fail.**
 - **The trigger settle.**
 - **Why live capture fragments where the recording does not.** The new read log is meant to show it.
+
+## Addendum 3 (2026-11-01, after on-air task 15): no NACK while the channel is busy; bound the fallback acquisition; log flushes
+
+### Measured
+
+The capture-read log (task 15) showed the receive loop still held for 28–64 s on both Pis.
+
+**Phase 2's fallback-entry acquisition is the multiplier left.** In the live-loop replay of `rx-b-b5`, a
+14.6 s burst cost 19 s on x86, about 4700 settle passes. `acquire_burst_correction` settled across the
+whole span, which grows with the triggering read. Addendum 2's cap limited only the onsets scanned after
+acquisition.
+
+**Station B keyed a NACK over A's frame.** It flushed 56.5 s of A's 66.6 s frame, failed it, and keyed
+a NACK at 20:06:56.3, while A transmitted until about 20:07:06.
+- It was not the burst cap, which is at least every candidate's frame length. The carrier detect
+  dropped mid-frame, after the loop had been held.
+- The replay cannot show why, because the recording already contains the gap B's own NACK caused.
+- A NACK keyed while the sender is still transmitting is never heard, and it costs B its own receive
+  for that time: a needless key-up.
+
+### Decision
+
+1. **(keying)** Right after a burst flushes, and before the decode, the daemon reads what has arrived
+   since (`channel_still_busy` in `server.rs`). If the newest 200 ms are above the DCD squelch and the
+   noise floor is warm, the channel is **busy**: the sender is still transmitting.
+   - A failure on that burst gets the `Muted` verdict: no NACK is keyed, the ladder does not move
+     (#1460's rule that a failure moves the ladder only when its NACK is keyed holds), and the NACK
+     budget is not spent.
+   - A successful decode is still ACKed. A station whose noise floor reads busy must not stop
+     acknowledging.
+   - The samples the check reads go into `rx_pending`, which the next tick hands to the accumulator
+     first, so nothing is lost.
+2. **(cost)** Phase 2's fallback entry acquires only across the onsets it will scan
+   (`acquire_burst_correction_span`). The ladder candidates' acquisition is unchanged, over
+   `[0, scan_end]`.
+3. **(diagnosis)** A carrier-drop flush is logged at debug, with the burst length, the read size, the
+   DCD energy and the squelch. The next on-air run can then show why a frame was cut.
+
+**What it does not do:** recover the frame. The early flush already lost it. This change prevents the
+needless key-up and keeps the ladder honest. Why the carrier detect drops mid-frame after a held loop
+stays open, and the new flush log is there to show it.
+
+**Limits of the busy check:** it reads only what has arrived since the flush, often 25–100 ms. A carrier
+dip longer than that can still read idle, and the NACK is then keyed as before. The check is a guard,
+not a guarantee.
+
+### Tests (run)
+
+- `nack_budget::tests::a_failure_while_the_channel_is_busy_keys_nothing_and_spends_no_budget`: on a
+  failing burst, `channel_busy = true` keys nothing, and the three budgeted NACKs are all still
+  available afterwards. Sabotage, with `channel_busy` ignored: it fails, "a NACK keyed while the
+  channel is busy goes out over the sender's frame".
+- `the_fallback_rescue_acquisition_does_not_grow_with_the_read`: the fragment fixture fed in 2 s
+  reads takes 17 settles on its burst (budget 60). Sabotage, with the fallback entry acquiring across
+  the full span: 206.
+- The replay decodes the same frames on all four earlier recordings (3, 2, 4, 2).
+
+### Not tested
+
+The server's busy check itself, reading the stream after a flush. It runs only with a capture stream,
+and the next on-air run exercises it; its debug line "channel still busy after a burst flushed" shows
+when it fires.

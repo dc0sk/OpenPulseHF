@@ -809,6 +809,9 @@ pub async fn run(cfg: OpenpulseConfig, modem_backend: Box<dyn AudioBackend>) -> 
     // stream clones shared buffers, so this is equivalent to per-tick reopen there.
     let capture_device = (!cfg.audio.device.is_empty()).then(|| cfg.audio.device.clone());
     let mut rx_stream: Option<Box<dyn AudioInputStream>> = None;
+    // Audio read ahead of the accumulator — by the busy check after a flush (`channel_still_busy`) —
+    // and handed to it first on the next tick, so the burst pipeline loses nothing.
+    let mut rx_pending: Vec<f32> = Vec::new();
     // Edge-triggered so a permanently dead capture device logs once, not once per receive tick.
     // Before the stream-fault latch existed this could never become true: a lost device produced an
     // unbroken run of successful empty reads, so the reopen path below was unreachable and the
@@ -953,7 +956,14 @@ pub async fn run(cfg: OpenpulseConfig, modem_backend: Box<dyn AudioBackend>) -> 
                         None => return Ok(None),
                     };
                     match read {
-                        Ok(samples) => {
+                        Ok(fresh) => {
+                            let samples = if rx_pending.is_empty() {
+                                fresh
+                            } else {
+                                let mut merged = std::mem::take(&mut rx_pending);
+                                merged.extend_from_slice(&fresh);
+                                merged
+                            };
                             // What the receiver was handed, and how long since the last read: on air
                             // (task 14) station B's daemon gathered frames in fragments that the audio
                             // recorded beside it does not reproduce, and nothing showed what it
@@ -1067,6 +1077,9 @@ pub async fn run(cfg: OpenpulseConfig, modem_backend: Box<dyn AudioBackend>) -> 
                         // with the ACK carrying our absolute recommended_level. The verdict, the
                         // budget and the callsign check live in `decode_ota_burst` (#1460, #1456).
                         let callsign_valid = runtime_state.local_callsign_valid();
+                        let channel_busy = tokio::task::block_in_place(|| {
+                            channel_still_busy(rx_stream.as_mut(), &engine, &mut rx_pending)
+                        });
                         match tokio::task::block_in_place(|| {
                             crate::nack_budget::decode_ota_burst(
                                 &mut engine,
@@ -1075,6 +1088,7 @@ pub async fn run(cfg: OpenpulseConfig, modem_backend: Box<dyn AudioBackend>) -> 
                                 &burst,
                                 &ota_session_id,
                                 &mode,
+                                channel_busy,
                             )
                         }) {
                             Ok((res, key_ack)) => {
@@ -2450,6 +2464,37 @@ fn build_ptt_controller(
             )))
         }
     }
+}
+
+/// Whether the channel still carries a signal right after a burst flushed: the newest 200 ms of what
+/// arrived since, against the DCD squelch, once the noise floor is warm. What it reads goes into
+/// `pending`, which the next tick hands to the accumulator first. `false` when nothing can be read.
+fn channel_still_busy(
+    stream: Option<&mut Box<dyn AudioInputStream>>,
+    engine: &ModemEngine,
+    pending: &mut Vec<f32>,
+) -> bool {
+    let Some(s) = stream else {
+        return false;
+    };
+    let Ok(fresh) = s.read() else {
+        return false;
+    };
+    pending.extend_from_slice(&fresh);
+    let tail = &pending[pending.len().saturating_sub(1_600)..];
+    if tail.is_empty() || !engine.dcd_floor_is_warm() {
+        return false;
+    }
+    let rms = (tail.iter().map(|x| x * x).sum::<f32>() / tail.len() as f32).sqrt();
+    let busy = rms > engine.dcd_squelch();
+    if busy {
+        tracing::debug!(
+            rms,
+            squelch = engine.dcd_squelch(),
+            "channel still busy after a burst flushed"
+        );
+    }
+    busy
 }
 
 #[cfg(test)]
