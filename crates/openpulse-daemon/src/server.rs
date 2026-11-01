@@ -811,6 +811,8 @@ pub async fn run(cfg: OpenpulseConfig, modem_backend: Box<dyn AudioBackend>) -> 
     let mut rx_stream: Option<Box<dyn AudioInputStream>> = None;
     // Audio read ahead of the accumulator — by the busy check after a flush (`channel_still_busy`) —
     // and handed to it first on the next tick, so the burst pipeline loses nothing.
+    // Cleared wherever the stream is dropped: audio read before a transmit must not be glued to
+    // audio captured after it (review, 2026-11-01, round 4).
     let mut rx_pending: Vec<f32> = Vec::new();
     // Edge-triggered so a permanently dead capture device logs once, not once per receive tick.
     // Before the stream-fault latch existed this could never become true: a lost device produced an
@@ -883,6 +885,7 @@ pub async fn run(cfg: OpenpulseConfig, modem_backend: Box<dyn AudioBackend>) -> 
                         // callback appends to an unbounded buffer and the next receive tick is handed
                         // one multi-second blob of during-transmit audio. The rx tick reopens lazily.
                         rx_stream = None;
+                        rx_pending.clear();
                         // Compress the session payload on the wire when enabled; the peer's rx tick
                         // unpacks the self-describing frame. Falls back to raw bytes when disabled.
                         let payload = if compress_tx {
@@ -922,6 +925,7 @@ pub async fn run(cfg: OpenpulseConfig, modem_backend: Box<dyn AudioBackend>) -> 
                 // is what stops a status-poll flood from thrashing the device open/closed.
                 if engine.frames_transmitted() != tx_frames_before_cmd {
                     rx_stream = None;
+                    rx_pending.clear();
                 }
             }
             _ = rx_ticker.tick() => {
@@ -994,6 +998,7 @@ pub async fn run(cfg: OpenpulseConfig, modem_backend: Box<dyn AudioBackend>) -> 
                         Err(e) => {
                             // Drop the stream so the next tick reopens it.
                             rx_stream = None;
+                            rx_pending.clear();
                             if capture_failed {
                                 tracing::debug!(error = %e, "capture still failing; reopening");
                             } else {
@@ -1397,6 +1402,7 @@ pub async fn run(cfg: OpenpulseConfig, modem_backend: Box<dyn AudioBackend>) -> 
                 // emission on this arm cannot silently miss it.
                 if engine.frames_transmitted() != tx_frames_before_tick {
                     rx_stream = None;
+                    rx_pending.clear();
                 }
             }
         }

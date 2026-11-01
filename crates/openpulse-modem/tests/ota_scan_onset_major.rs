@@ -167,4 +167,6 @@ fn the_fallback_rescue_acquisition_does_not_grow_with_the_read() {
 
 /// Measured on this fixture in 2 s reads: 17 settles with the acquisition bounded to the rescue's
 /// onsets, 206 with the fallback entry acquiring across the full span (sabotage run).
+/// A tripwire fitted to this one fixture: it shows the span no longer grows with the read, not that the
+/// rescue decodes anything.
 const SETTLE_BUDGET: u64 = 60;

@@ -366,3 +366,10 @@ not a guarantee.
 The server's busy check itself, reading the stream after a flush. It runs only with a capture stream,
 and the next on-air run exercises it; its debug line "channel still busy after a burst flushed" shows
 when it fires.
+
+### After review (round 4)
+
+`rx_pending` is cleared wherever the receive stream is dropped (before every transmit and on a read
+error). Without it, audio read before our ACK could be prepended to audio captured after it, open a
+burst, fail, and key a NACK right after the ACK. Not tested: like the busy check, it needs a capture
+stream.

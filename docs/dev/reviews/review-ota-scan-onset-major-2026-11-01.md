@@ -111,3 +111,34 @@ a pre-existing load flake, not shown to be caused by this change.
 | 2b | nit | `lead` is unclamped in one call site and `lead.min(n)` in the other. | Harmless (`abs_diff`); left. |
 | 5 | note | A daemon dying during the warm-up is noticed only when polling starts. Side recordings shift 30 s relative to the report. | Noted for the task text. |
 
+
+## Fourth round (mandatory, keying): no NACK while the channel is busy (`18f6616`)
+
+Mandatory because it changes when a NACK is keyed. The prompt asked for falsification:
+- a path that keys more than before;
+- a unit mismatch between the busy check and the DCD squelch;
+- a station muted for ever on a hot band;
+- a blocking read in the receive loop;
+- order, loss or duplication in `rx_pending`;
+- the verdict and budget rules of #1460/#1456;
+- whether the ladder candidates' acquisition walk is unchanged.
+
+It also asked "Does this block Release 1?".
+
+**Verdict:** no blocker, and it does not block Release 1. Confirmed by reading:
+- the change can only key less (a decode is still ACKed);
+- the busy check's RMS is the quantity the DCD gate compares;
+- a hot band cannot mute for ever, because then the DCD never drops either;
+- the read does not block (cpal returns after at most 10 ms, loopback drains at once);
+- `Muted` failures still emit `OtaRateDecision`, so A2 scoring sees them;
+- the ladder walk starts at `0.min(scan_end) = 0`, as before.
+
+Tests run by the reviewer: `nack_budget` unit tests 6/6, `muted_failures_move_no_ladder` 1/1,
+`twin_daemon_bridge` 8/8. The full daemon run did not link there (disk full); the pre-push hook ran it.
+
+| # | Severity | Finding | Disposition |
+|---|---|---|---|
+| 1 | should-fix | `rx_pending` survives every site that drops `rx_stream`. After an ACK, pre-transmit carrier could be prepended to post-transmit audio, open a burst, fail, and key a NACK right after our ACK. | **Taken.** `rx_pending` is cleared at every site that drops the stream. |
+| 2 | nit | The DCD sees post-notch audio and the busy check sees raw audio, so with the notch enabled a strong out-of-band tone can read busy. | Left: the notch defaults off, and a false busy only mutes. |
+| 3 | note | The settle tripwire is fitted to one fixture. | Recorded in the test's doc comment. |
+| 4 | unconfirmed | A carrier dip longer than the read still NACKs over the frame. | Already stated in addendum 3. |
