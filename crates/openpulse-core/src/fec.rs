@@ -156,11 +156,18 @@ pub const FEC_ECC_LEN_STRONG: usize = 64;
 /// Total bytes per encoded RS block (always 255 — GF(2^8) block size).
 const BLOCK_TOTAL: usize = 255;
 
-/// Start of the error [`FecCodec::decode_prefix`] returns for data shorter than one RS block; kept
-/// next to [`rs_short_of_block`], which parses it, so the two cannot drift apart.
+/// Start of the error for data shorter than one RS block; shared by its builder and its parser.
 const SHORT_OF_BLOCK_PREFIX: &str = "FEC data length ";
 
-/// The demodulated length, when `e` is "shorter than one RS block" from [`FecCodec::decode_prefix`].
+/// The error for RS data shorter than one block. Every producer builds it here, so
+/// [`rs_short_of_block`] reads all of them by construction.
+pub fn rs_short_of_block_error(have: usize) -> ModemError {
+    ModemError::Fec(format!(
+        "{SHORT_OF_BLOCK_PREFIX}{have} is shorter than one {BLOCK_TOTAL}-byte block"
+    ))
+}
+
+/// The demodulated length, when `e` is "shorter than one RS block" (see [`rs_short_of_block_error`]).
 ///
 /// The OTA scan uses it to stop trying a coded candidate whose whole burst holds less than one
 /// block: every later onset sees a suffix of the same burst (`docs/dev/design/ota-scan-onset-major.md`).
@@ -354,10 +361,7 @@ impl FecCodec {
     pub fn decode_prefix(&self, data: &[u8]) -> Result<Vec<u8>, ModemError> {
         let blocks = data.len() / BLOCK_TOTAL;
         if blocks == 0 {
-            return Err(ModemError::Fec(format!(
-                "{SHORT_OF_BLOCK_PREFIX}{} is shorter than one {BLOCK_TOTAL}-byte block",
-                data.len()
-            )));
+            return Err(rs_short_of_block_error(data.len()));
         }
         let mut last: Option<ModemError> = None;
         for k in 1..=blocks {

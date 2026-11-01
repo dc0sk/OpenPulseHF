@@ -8959,10 +8959,7 @@ fn decode_ldpc_llrs_prefix(codec: &LdpcCodec, llrs: &[f32]) -> Result<Vec<u8>, M
 fn rs_interleaved_decode_prefix(depth: usize, data: &[u8]) -> Result<Vec<u8>, ModemError> {
     let blocks = data.len() / RS_BLOCK_BYTES;
     if blocks == 0 {
-        return Err(ModemError::Fec(format!(
-            "FEC data length {} is shorter than one {RS_BLOCK_BYTES}-byte block",
-            data.len()
-        )));
+        return Err(openpulse_core::fec::rs_short_of_block_error(data.len()));
     }
     let il = Interleaver::new(depth);
     let mut last: Option<ModemError> = None;

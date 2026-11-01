@@ -177,8 +177,11 @@ Each candidate's first attempt already decodes the **whole** burst from offset 0
 2 skip that candidate.
 - **Why that is safe:** every later onset decodes a suffix of the same burst, so it holds no more
   data. The 2 bytes absorb a symbol of timing-search difference.
-- **Not skipped:** the uncoded fallback. A 0.9 s BPSK250 control frame can sit inside a fragment.
-  HARQ is untouched; on the `robust` rungs it never runs, because RS is hard-decision.
+- **Not skipped:** the uncoded fallback, because a 0.9 s BPSK250 control frame can sit inside a
+  fragment; and HARQ. HARQ **does** run on the `robust` BPSK rungs, since `FecMode::Rs` is admitted
+  and BPSK supports soft demodulation: one soft demod per candidate per failed burst, plus a staged
+  retention. Its share of the remaining cost is not measured. (An earlier draft said HARQ never ran
+  there. The review caught it.)
 - **Parsing the error:** it comes from `openpulse_core::fec::rs_short_of_block`, which lives next to
   the message's producer, `FecCodec::decode_prefix`, and shares its prefix constant. A unit test pins
   the two together.
@@ -203,6 +206,17 @@ Each candidate's first attempt already decodes the **whole** burst from offset 0
 `tests/captures/ft991a-ota-fragment-5s.wav`, 16 s around the 5.1 s fragment. The budget is 600 attempts:
 - with the guard: 511;
 - with it disabled (sabotage): 888, and the test fails.
+
+The 511 is mostly uncoded-fallback attempts, which the guard does not control. A change to the
+fallback could move the count without touching the guard, so the test drifts with unrelated
+changes; it is not noisy. There is no separate counter for coded attempts.
+
+Both producers of the "shorter than one block" error build it through
+`openpulse_core::fec::rs_short_of_block_error`: `FecCodec::decode_prefix` and the engine's
+`rs_interleaved_decode_prefix`. Before, the second one only matched the parser because its text
+happened to be the same.
+
+Review: `docs/dev/reviews/review-ota-scan-onset-major-2026-11-01.md` (second round).
 
 ### Still parked
 

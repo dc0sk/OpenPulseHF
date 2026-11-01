@@ -54,3 +54,29 @@ Confirmed:
 
 Not changed: the trigger settle itself, the cost of bursts that cannot decode, OTA phase 2 and
 `decode_burst_inner`. These are parked and twinned in the design note.
+
+## Second round: the short-of-block guard (`2711829`)
+
+The addendum to the design note was reviewed in a second round, with the same falsification brief:
+- whether the suffix argument holds for every FEC and plugin;
+- whether the flag lines up with the right candidate in the scan and in phase 2;
+- whether skipping phase 2 loses anything;
+- how robust the error parsing is;
+- what the test means.
+
+**Verdict:** no blocker, and it does not block Release 1. The guard is sound for every `hpx_hf` rung:
+- the BPSK and QPSK byte count derives only from the sample count, so a suffix gains at most about one
+  symbol, well inside the 2-byte margin;
+- MFSK16 failures and soft FECs produce other errors and are never flagged, which is safe;
+- the index alignment is correct;
+- phase 2 loses nothing, because its slices are suffixes too and a correction moves only the lock.
+
+The reviewer reproduced both tests: 26 and 511 attempts, 23.6 s in a debug build, default suite.
+
+| # | Severity | Finding | Disposition |
+|---|---|---|---|
+| 4 | should-fix | The engine's `rs_interleaved_decode_prefix` built the same message as a literal, so it matched the parser only by accident. | **Taken.** Both producers now build the error through `openpulse_core::fec::rs_short_of_block_error`. |
+| 5 | should-fix | The addendum said HARQ never runs on the `robust` rungs. False: `FecMode::Rs` is admitted to HARQ and BPSK supports soft demodulation. | **Taken.** The wording is corrected; HARQ's share of the remaining cost is stated as unmeasured. |
+| 1 | nit | `decode_variants` returns the last arm's error, so the length read can differ by at most one symbol. | Covered by the margin; no change. |
+| 6 | nit | The test's 511 is mostly uncoded-fallback attempts, so it can drift with unrelated changes. | **Stated** in the note; there is no separate counter for coded attempts. |
+
