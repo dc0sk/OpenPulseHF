@@ -15,6 +15,45 @@ this ledger adds the design rationale and the actually-observed results per chan
 
 ---
 
+## 2026-11-01 — The OTA burst scan runs onset-major (work plan M3, A2)
+
+- **Requirement/change:** REQ-FUN-06 and A2. On 2 m neither daemon answered inside the sender's 9 s ACK
+  window:
+  - rpi51 needed 267 attempts in 30 s for B's first SL2 frame;
+  - station B decoded none of A's frames.
+
+  The recordings beside both daemons (task 12) reproduce it offline. B's audio decodes all four
+  frames through the daemon's receive entry, at 8–10 s each on x86.
+- **Design decision** (`docs/dev/design/ota-scan-onset-major.md`, reviewed): in
+  `ota_decode_and_ack_inner`'s scan block, build the same (onset, candidate, pass) attempt set as
+  before and run it sorted by onset. Before, each candidate and pass walked the whole onset span
+  first.
+
+  On the recording, the trigger settle landed at −12.8 Hz against a +3.2 Hz carrier, possibly one
+  preamble sideband. The corrected pass walked all 129 onsets before the uncorrected pass decoded at
+  onset 2560. A burst that does not decode now costs exactly the same, and one that does stops at
+  the first onset where any attempt does.
+- **Implementation:**
+  - `crates/openpulse-modem/src/engine.rs` (the `'scan` block);
+  - `crates/openpulse-modem/tests/ota_scan_onset_major.rs`;
+  - fixture `crates/openpulse-modem/tests/captures/ft991a-ota-frame-bpsk31-rs.wav`, listed in the
+    corpus README.
+- **Tests and results (run):**
+  - the new test: 26 decode attempts on the burst (budget 40), 1.7 s in release and 5.3 s in debug;
+  - sabotage, with the scan reverted: 144 attempts, the test fails;
+  - replay on x86, release: B's first frame 8.13 → 1.75 s at 800-sample reads and 9.64 → 4.22 s at
+    4096; B's 4th frame 16.9 → 2.7 s; every burst that decoded before still decodes, with the same
+    ACK;
+  - `scripts/gate.sh` at `cd3bf5c` (the first revision; the second only adds the corner attempt):
+    **suites=369, tests_passed=2721, tests_failed=0**. Verdict `GATE: FAIL` from the
+    requirements-trailer lint alone: the branch commits `cd3bf5c` and `ab9235f` carry no
+    `Implements:` trailer. Rewriting them would need a force push, which was not done. The squash
+    message must carry `Implements: REQ-FUN-06`; `check-trailer.sh --message-file` passes with it;
+  - `scripts/slow-tests.sh`: running.
+- **Review:** `docs/dev/reviews/review-ota-scan-onset-major-2026-11-01.md`. No Release 1 blocker;
+  4 should-fix and 3 nits, all taken or stated. It does not show the fix is sufficient on a Pi; the
+  on-air retest decides.
+
 ## 2026-10-31 — The A2 daemon runner drives the FT-991A pair (work plan M3)
 
 - **Requirement/change:** A2 on 2 m (`release-1.0-criteria.md` §A2) runs through
