@@ -2,7 +2,7 @@
 project: openpulsehf
 doc: docs/dev/onair-tasks.md
 status: review
-last_updated: 2026-10-31
+last_updated: 2026-11-01
 ---
 
 # On-air task channel (cloud session ↔ station session on rpi51)
@@ -3101,10 +3101,56 @@ samples (64 s). Three findings:
    - It is a **keying** question, so any change needs the mandatory review.
 3. **rpi51's long holds came after the receiver had stepped down to SL1** (NACKs → `nack_step_down`).
    The failing bursts then went through MFSK16 and fallback attempts. MFSK16's acquisition alone is
-   cheap on a burst shorter than its 34 s frame; finding 1 is where the time goes.
+   cheap on a burst shorter than its 17 s frame; finding 1 is where the time goes. *(Corrected in task
+   16: this said 34 s. An MFSK16 frame is 17 s, so on longer bursts MFSK16 was scanned too, and that
+   cost more than finding 1.)*
 
 The pattern across tasks 13–15: each fix removes the cost the last run exposed, and the next stage
 shows up. The daemon's OTA receive on Pi-class hardware is less mature on real audio than the
 simulator suites suggested. The way forward is for the maintainer to decide (see the cloud session's
 summary).
+
+## Task 16 — retest with no NACK while the channel is busy and the MFSK16 bound (status: open)
+
+The new build is `cd44ca9`. On top of task 15's build:
+- **No NACK while the channel is still busy** (keying change, mandatory review taken). Right after a
+  burst flushes, the daemon reads what has arrived since. If the newest 200 ms are above the carrier
+  detect squelch, a failed burst keys **no NACK**, and the ladder does not move.
+  - The daemon logs `OTA: a burst failed while the channel was still busy; no NACK keyed, the ladder
+    holds` at info, and `channel still busy after a burst flushed` at debug.
+  - A decoded frame is still ACKed.
+- **Bounded acquisition for phase 2's fallback entry:** it acquires only across the onsets it scans.
+  This was task 15's finding 1.
+- **MFSK16 is no longer onset-scanned when its acquisition found no lock.** In the replay of b5, B had
+  stepped down to SL1 while A still sent SL2 frames. One 25.6 s piece of an SL2 frame then cost 53.5 s
+  on x86 in MFSK16 attempts, and the bound brings it to 1.7 s. This is what held station B for 64 s.
+- **Every carrier-drop flush is logged** at debug: `burst flushed: carrier dropped`, with `burst=`,
+  `read=`, `energy=` and `squelch=`.
+
+What the b5 recording shows (offline, for context): B's receive audio is silent only while B itself
+transmits. A sent its SL2 frames almost back to back, and B's bursts were cut where B keyed. The flush
+log is there to confirm this on air.
+
+Tests at this build:
+- the new and changed tests pass;
+- replaying the earlier recordings decodes the same frames;
+- the pre-push tests run when these commits are pushed; the cloud session adds the result here;
+- `slow-tests.sh` is not yet run at this build. The cloud session runs it and adds the result here.
+
+**Run task 13 Parts A to D again, as written there**, with these differences:
+- the commit on rpi51 must include `cd44ca9`;
+- name the recordings `-g6` (Part B) and `-b6` (Part C);
+- record for the traffic duration plus 90 s, as in task 15;
+- the Part D condition is the same.
+
+The station rules hold: 5 W at most, ask the maintainer before every run, record nothing about the
+remote host, RSPdx port B empty.
+
+Report task 15's counts and capture-read statistics, and also, from each daemon log:
+- the number of `burst flushed: carrier dropped` lines, each with its UTC time, `burst=`, `read=`,
+  `energy=` and `squelch=` (all of them, if there are fewer than 20);
+- the number of `failure while the channel was still busy` info lines and `channel still busy` debug
+  lines, with their times;
+- every `nack_hold, keyed` line with its time, and whether it falls inside one of the other station's
+  frames (the sender's `logged TX metadata` time minus the frame length, to that time).
 
