@@ -3010,7 +3010,7 @@ What remains, both on the engine side, plus one cheap runner change:
 
 The decision is the maintainer's.
 
-## Task 15 — retest with the bounded fallback rescue, the capture-read log and the warm-up (status: done — Parts A to C run; Part D not run, its condition failed; see Results)
+## Task 15 — retest with the bounded fallback rescue, the capture-read log and the warm-up (status: done — see the review below)
 
 The new build is `eb55283`. On top of task 14's build:
 - **the uncoded fallback rescue is bounded** to 64 onsets near the trigger point, so no single burst
@@ -3080,3 +3080,31 @@ Part D condition: **not met** (g5 had frame 0's ACK applied; b5 had B decode not
 
 Cleanup (quote), both runs: `== cleanup ==  [IC-9700] daemon and rigctld stopped; PTT 0 sent while rigctld ran  [FT-991A] daemon and rigctld stopped; PTT 0 sent while rigctld ran`; nothing running.
 End state read-back: FT-991A EX065+1500; dial 144641564 RFPOWER 0.05 PTT 0; IC-9700 RFPOWER 0.0117647 PTT 0; port B empty.
+
+**Reviewed (cloud session, 2026-11-01), task 15.** The capture-read log did its job: it shows the
+receive loop is **still held for tens of seconds**, on both Pis. rpi51 (g5) logged 12 long reads, up
+to 224 600 samples (28 s), starting right after its first ACK. Station B (b5) logged 7, up to 510 200
+samples (64 s). Three findings:
+
+1. **Phase 2's fallback-entry acquisition is the next multiplier.** In the replay of `rx-b-b5` with the
+   live-loop model, a 14.6 s burst cost 19 s on x86, about 4700 frequency-settle passes. That is
+   `acquire_burst_correction` for the uncoded fallback entry. It still settles across a span that grows
+   with the read that triggered the flush (`onset_bound` = lead + trigger read). Task 14's cap limits
+   only the onsets scanned **after** acquisition, not the acquisition itself.
+2. **Station B keyed a NACK in the middle of A's frame.** In b5, B flushed a burst while A's frame 0 was
+   still on air (about 20:05:58 to 20:07:06). It failed (`invalid magic`, 20:06:55.1), and B **keyed a
+   NACK at 20:06:56.3** (`nack_hold, keyed`) over A's transmission. That destroys the frame for B,
+   because its own receive goes silent while it transmits, and it is a needless key-up.
+   - It is not the burst cap, which is at least the frame length of every candidate.
+   - The carrier detect dropped mid-frame, after the loop had been held. Why is UNCHECKED: the replay
+     cannot show it, because the recording already contains the gap B's own NACK caused.
+   - It is a **keying** question, so any change needs the mandatory review.
+3. **rpi51's long holds came after the receiver had stepped down to SL1** (NACKs → `nack_step_down`).
+   The failing bursts then went through MFSK16 and fallback attempts. MFSK16's acquisition alone is
+   cheap on a burst shorter than its 34 s frame; finding 1 is where the time goes.
+
+The pattern across tasks 13–15: each fix removes the cost the last run exposed, and the next stage
+shows up. The daemon's OTA receive on Pi-class hardware is less mature on real audio than the
+simulator suites suggested. The way forward is for the maintainer to decide (see the cloud session's
+summary).
+
