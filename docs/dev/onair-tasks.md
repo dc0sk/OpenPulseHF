@@ -2886,3 +2886,15 @@ Station B (FT-991A, the sender):
 Compared with task 12 G2 (old build): the first decode is now 1.69 s after the frame end (G2: A's decode of the first frame came later; see the task 12 numbers), A keyed 4 decisions as before, the sender still abandons after two silent windows.
 
 Cleanup (quote): `== cleanup ==  [IC-9700] daemon and rigctld stopped; PTT 0 sent while rigctld ran  [FT-991A] daemon and rigctld stopped; PTT 0 sent while rigctld ran`; no openpulse-serve/rigctld/arecord left on rpi51.
+
+#### Part C — run b3 (A sends; maintainer's go 2026-11-01, port B empty)
+
+`OTA_PROFILE=robust TRAFFIC_FROM=A TRAFFIC_SIZE=64 TRAFFIC_INTERVAL=2 TRAFFIC_DURATION=300 DAEMON_LOG_LEVEL=debug scripts/run-onair-twin-ota.sh run`, same build, same preparation as g3. Recordings started 11:12:45.251 UTC (rpi51) and 11:12:45.613 UTC (station B). Evidence `docs/dev/test-reports/onair-twin-ota-20261101-121303{.log,-evidence/}`. Audio: `rx-a-b3-8k.wav.gz` 1815833 bytes (rms 207.3, peak 684), `rx-b-b3-8k.wav.gz` 5007895 bytes (rms 1908.5, peak 6685); 48 kHz originals on rpi51 in /tmp (`rx-a-b3.wav` sha256 `513d789e...`, `rx-b-b3.wav` `7a720ee2...`).
+
+Station A (IC-9700, sender): `frame_transmitted` 4 (seq 0-3 at 11:14:10, 11:15:22, 11:16:39, 11:17:55); `OTA ACK not received within window` **3** (11:15:32, 11:16:48, 11:18:04), `OTA send abandoned` **1** (11:16:48); `tx_level` SL2 in all 7 readings, never changes; no `ota_rate_decision` events (the sender only decides on the receiver side). No `not received` line for seq 0.
+
+Station B (FT-991A, receiver): **`fec attempt OK` 1** (seq 0, BPSK31/Rs, 64 bytes, 11:14:13.721, **2.97 s** after A's frame end), **`fec attempt FAILED` 813**; `ota_rate_decision` **2 keyed**, `ptt_changed` 4; two `mode=FSK4-ACK` metadata lines (11:14:15.323 = 4.57 s after A's frame end, and 11:16:54.451). In task 12 run B2 (old build) station B decoded nothing and keyed nothing.
+
+Part D condition: B->A run g3 had ACKs for seq 0 and 1 with no `not received` line; A->B run b3 had an ACK for seq 0 with no `not received` line. By the task's wording ("an ACK was received with no `not received` for that frame") both directions show at least one ACK applied; `tx_level` did not change in either, and every later frame in both runs was not ACKed (the sender abandoned after two silent windows). Part D (task 11 Parts B and C, 900 s each) not started: it needs the maintainer's go.
+
+Cleanup (quote), both runs: `== cleanup ==  [IC-9700] daemon and rigctld stopped; PTT 0 sent while rigctld ran  [FT-991A] daemon and rigctld stopped; PTT 0 sent while rigctld ran`; nothing left running on rpi51.
