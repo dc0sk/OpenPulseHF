@@ -2926,7 +2926,7 @@ Cleanup (quote): `== cleanup ==  [IC-9700] daemon and rigctld stopped; PTT 0 sen
   fragment drops from 79 s to 6.0 s and a 36 s burst from 40 s to 5.2 s. Every frame still decodes.
   The fix is under review; the gate and the slow tests run before the next on-air task.
 
-## Task 14 — retest with the short-burst guard (status: done — Parts A to C run; Part D not run, its condition failed; see Results)
+## Task 14 — retest with the short-burst guard (status: done — see the review below)
 
 The new build is `30dad89`. On top of task 13's build, it stops onset-scanning a coded candidate that a
 burst is too short to hold. On the task 13 recordings, the 5.1 s fragment that cost 79 s on x86 now
@@ -2978,3 +2978,35 @@ Part D condition: **not met** (g4 had frame 0 ACKed with no `not received` line;
 
 Cleanup (quote), both runs: `== cleanup ==  [IC-9700] daemon and rigctld stopped; PTT 0 sent while rigctld ran  [FT-991A] daemon and rigctld stopped; PTT 0 sent while rigctld ran`; nothing running. End state: PTT 0 on both rigs (read back below), port B empty.
 End state read-back: FT-991A EX065+1500; dial 144641564 RFPOWER 0.05 PTT 0; IC-9700 RFPOWER 0.0117647 PTT 0
+
+**Reviewed (cloud session, 2026-11-01), task 14:**
+- **The guard worked where it applies.** Station B's coded `fec attempt FAILED` dropped from 813 to
+  5, and A's from 712 to 92. rpi51 decoded B's first frame 1.18 s after its end.
+- **But station B decoded 0 of 4.** Its daemon log shows why: **it spent the whole run in the uncoded
+  fallback.** That is 6822 `received N audio samples / demodulated 21 bytes` attempts, 1100–2000 a
+  minute, with N stepping down by 32, i.e. one BPSK250 symbol. They are not counted as
+  `fec attempt`. The sequence:
+  1. A's first frame began at about 15:42:24.7. Within 1.85 s B flushed a 14 792-sample piece of it
+     (3 bytes, short of a block). Its fallback scan held the loop until 15:42:46.
+  2. The audio that piled up meanwhile came in as one read. B flushed a 171 000-sample (21 s) front
+     of the frame, 79 bytes, short of a block.
+  3. That burst's fallback scan ran **until the end of the run**. Its reach grows with the read that
+     triggered the flush: `onset_bound` is the lead plus the trigger read, used by
+     `decode_burst_phase1` too.
+- **Replay does not reproduce the early flush.** The same recording decodes A's frames at every read
+  size tried: 200, 400, 800 and 4096 samples, from a cold start 3 s before the frame, and with a
+  live-loop model in which each read holds the audio that arrived during the previous decode at a 4×
+  slower CPU. That model does show the spiral later in the recording: a 7.8 s fragment cost 19.9 s,
+  and the next read merged two frames into 96.6 s. So **what B's daemon captured live differs from
+  what `arecord` recorded beside it**, possibly gaps while its loop was blocked. UNCHECKED: the
+  daemon does not log its read sizes or capture gaps.
+
+What remains, both on the engine side, plus one cheap runner change:
+- **(a)** bound the uncoded fallback's scan, so that no single burst can hold the receive loop for
+  more than a few seconds whatever the read size;
+- **(b)** make the daemon log its capture reads (sizes, gaps), so the next on-air run shows what it
+  received;
+- **(c)** runner: give the daemons a warm-up before traffic starts.
+
+The decision is the maintainer's.
+
