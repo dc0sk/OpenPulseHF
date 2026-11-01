@@ -3731,7 +3731,24 @@ impl ModemEngine {
         if decoded.is_none() {
             let n = samples.samples.len();
             let sr = AudioConfig::default().sample_rate;
-            'scan: for (level, mode, fec) in &candidates {
+            // ONSET-MAJOR (docs/dev/design/ota-scan-onset-major.md). The attempts are the same set as
+            // before — every candidate, every pass, every onset — but they run in onset order: at each
+            // onset every candidate and pass, then the next onset. The scan used to run each candidate
+            // and pass to the end of the span first. Measured on the 2026-10-31 on-air recordings
+            // (`docs/dev/test-reports/on-air/rx-audio-2026-11-01/`): a trigger settle that landed
+            // 15.6 Hz off (one sideband of the preamble) sent the corrected pass through all 129 onsets
+            // before the uncorrected pass decoded at onset 2560 on its tenth attempt — 8.1 s of an
+            // 8.1 s decode on x86, past a Pi's 9 s ACK window. A burst no attempt decodes costs exactly
+            // what it cost; one that decodes stops at the first onset where any attempt does, so a
+            // wrong correction or a wrong candidate costs one attempt per onset instead of a span.
+            // Ascending onset order is kept, so a burst holding several frames still yields its first
+            // (`the_first_of_two_frames_in_one_keying_is_not_lost`).
+            //
+            // Per candidate: the slice size, and its passes as (correction, first onset).
+            let mut plans: Vec<(usize, Vec<(f32, usize)>)> = Vec::with_capacity(candidates.len());
+            // (onset, candidate index, pass index), sorted below into the order they run in.
+            let mut attempts: Vec<(usize, usize, usize)> = Vec::new();
+            for (ci, (_, mode, fec)) in candidates.iter().enumerate() {
                 let (step, scan_end, raw_max) = self.burst_onset_scan_bounds(mode, n, onset_bound);
                 // OFF FREQUENCY: scan at the carrier the trigger point settles on, first (REQ-PHY-03).
                 //
@@ -3757,6 +3774,7 @@ impl ModemEngine {
                         0,
                     )
                     .then_some(self.afc_correction_hz);
+                self.afc_correction_hz = afc_before;
                 // Offset 0 was tried at `afc_before` by attempt 0; at a new correction it is not.
                 let passes: Vec<(f32, usize)> = corrected
                     .map(|c| (c, 0))
@@ -3770,45 +3788,52 @@ impl ModemEngine {
                 // because the attempt before this scan decodes the whole burst, which is why the
                 // defect could sit unseen.
                 let (max_frame_samples, _) = frame_plan(raw_max, *fec);
-                for (afc, first) in passes {
-                    if scan_end == 0 && first > 0 {
-                        continue; // nothing to search: attempt 0 already covered this candidate
-                    }
-                    let mut start = first;
-                    loop {
-                        self.afc_correction_hz = afc;
-                        let end = (start + max_frame_samples).min(n);
-                        if start >= end {
-                            break;
-                        }
-                        let slice = samples.samples[start..end].to_vec();
-                        match self.decode_attempt(
-                            mode,
-                            AudioSamples {
-                                samples: slice.clone(),
-                            },
-                            *fec,
-                        ) {
-                            Ok(payload) => {
-                                // E1 skips the estimate on every attempt; the WINNING slice still needs
-                                // one so the wrapper's single `AfcUpdate` carries a real correction.
-                                self.update_afc_estimate(mode, &slice);
-                                // The window that DECODED is the only defensible place to measure the
-                                // SNR (#1142) — measuring over the whole gathered burst hands the
-                                // estimator's timing search a lead-in it cannot see past.
-                                decoded_span = Some((start, end));
-                                decoded = Some((payload, *level, mode.clone()));
-                                break 'scan;
-                            }
-                            Err(e) => {
-                                last_err = Some(e);
-                                if start >= scan_end {
-                                    break;
-                                }
-                                start = (start + step).min(scan_end);
-                            }
+                let mut start = 0usize;
+                loop {
+                    for (pi, &(_, first)) in passes.iter().enumerate() {
+                        // `scan_end == 0`: nothing to search, attempt 0 already covered this candidate.
+                        if start >= first && !(scan_end == 0 && first > 0) {
+                            attempts.push((start, ci, pi));
                         }
                     }
+                    if start >= scan_end {
+                        break;
+                    }
+                    start = (start + step).min(scan_end);
+                }
+                plans.push((max_frame_samples, passes));
+            }
+            // Onset first; at one onset the candidates in their profile order, and within a candidate
+            // the corrected pass before the uncorrected one, as the passes ran before.
+            attempts.sort_unstable();
+            for (start, ci, pi) in attempts {
+                let (level, mode, fec) = &candidates[ci];
+                let (max_frame_samples, passes) = &plans[ci];
+                self.afc_correction_hz = passes[pi].0;
+                let end = (start + *max_frame_samples).min(n);
+                if start >= end {
+                    continue;
+                }
+                let slice = samples.samples[start..end].to_vec();
+                match self.decode_attempt(
+                    mode,
+                    AudioSamples {
+                        samples: slice.clone(),
+                    },
+                    *fec,
+                ) {
+                    Ok(payload) => {
+                        // E1 skips the estimate on every attempt; the WINNING slice still needs
+                        // one so the wrapper's single `AfcUpdate` carries a real correction.
+                        self.update_afc_estimate(mode, &slice);
+                        // The window that DECODED is the only defensible place to measure the
+                        // SNR (#1142) — measuring over the whole gathered burst hands the
+                        // estimator's timing search a lead-in it cannot see past.
+                        decoded_span = Some((start, end));
+                        decoded = Some((payload, *level, mode.clone()));
+                        break;
+                    }
+                    Err(e) => last_err = Some(e),
                 }
             }
             self.afc_correction_hz = if decoded.is_some() {
