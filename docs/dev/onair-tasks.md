@@ -2898,3 +2898,14 @@ Station B (FT-991A, receiver): **`fec attempt OK` 1** (seq 0, BPSK31/Rs, 64 byte
 Part D condition: B->A run g3 had ACKs for seq 0 and 1 with no `not received` line; A->B run b3 had an ACK for seq 0 with no `not received` line. By the task's wording ("an ACK was received with no `not received` for that frame") both directions show at least one ACK applied; `tx_level` did not change in either, and every later frame in both runs was not ACKed (the sender abandoned after two silent windows). Part D (task 11 Parts B and C, 900 s each) not started: it needs the maintainer's go.
 
 Cleanup (quote), both runs: `== cleanup ==  [IC-9700] daemon and rigctld stopped; PTT 0 sent while rigctld ran  [FT-991A] daemon and rigctld stopped; PTT 0 sent while rigctld ran`; nothing left running on rpi51.
+
+#### Part D, run D1 — task 11 Part B (A sends, robust, 900 s; maintainer's go 2026-11-01, port B empty)
+
+`OTA_PROFILE=robust TRAFFIC_FROM=A TRAFFIC_SIZE=64 TRAFFIC_INTERVAL=2 TRAFFIC_DURATION=900 DAEMON_LOG_LEVEL=debug scripts/run-onair-twin-ota.sh run`, same build (`d58dbb7c`). My first launch attempt failed before anything started (profile not sourced in that shell: "A_SSH/B_SSH unset"); nothing keyed, the stray RSPdx capture was killed, its file deleted. Second launch: traffic from 11:37:35 UTC. Evidence: `docs/dev/test-reports/onair-twin-ota-20261101-123734{.log,-evidence/}` (NOTES.md with the commit, sha256 values, drive schedule and capture; no audio recordings this run). Drive schedule on `A_TX_SINK_VOLUME` (UTC): 0.15 until 11:46:35.88 (t0+540 s; the ISS level never left SL2, so the hold ran to the 540 s limit), **0.02** 11:46:35.88, **0** 11:47:35.09, **0.15** 11:49:05.38 to the end. RSPdx (port A, 144.620 MHz, 62.5 kS/s accepted, RFGR 22/IFGR 40, 960 s): `peak=0.0118 rms=0.0079 clip=0.00%`, file `~/onair-captures/2026-10-31/a2-ab.cf32`, not analysed.
+
+Result: **A2 not shown, worse than b3.**
+- Station A (sender): `frame_transmitted` 12 (11:38:41 ... 11:51:27), `OTA ACK not received within window` 11, `OTA send abandoned` 5; `tx_level` SL2 in all 11 readings.
+- Station B (receiver): `fec attempt OK` **0**, `fec attempt FAILED` 2870, `ota_rate_decision` **0**, no ACK keyed. (Run b3 minutes earlier on the same build: B decoded seq 0 in 2.97 s and keyed 2 ACKs.)
+- No demotion/climb could be observed: the rate never moved and no ACK reached A.
+
+Cleanup (quote): `== cleanup ==  [IC-9700] daemon and rigctld stopped; PTT 0 sent while rigctld ran  [FT-991A] daemon and rigctld stopped; PTT 0 sent while rigctld ran`; nothing running. Task 11 Part C (B sends, the same schedule on `B_TX_SINK_VOLUME`) NOT run: Part D's own premise (ACKs applied in both directions) is not repeated here; it waits for the maintainer's decision.
