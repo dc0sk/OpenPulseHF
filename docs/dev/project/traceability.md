@@ -15,6 +15,37 @@ this ledger adds the design rationale and the actually-observed results per chan
 
 ---
 
+## 2026-11-01 — OTA candidates a burst is too short to hold are not onset-scanned (work plan M3, A2)
+
+- **Requirement/change:** REQ-FUN-06 and A2. With the onset-major build on air (task 13) the first
+  frame got through in both directions inside the ACK window, but later frames were lost: bursts that
+  fail held the receive loop for minutes on the Pi 4. Replayed, a 5.1 s fragment cost 1088 coded
+  attempts and 79 s on x86, at SL2 and SL3, whose frames are 66.6 s and 33.8 s long.
+- **Design decision** (addendum to `docs/dev/design/ota-scan-onset-major.md`, reviewed): a candidate
+  whose offset-0 attempt over the whole burst fails as shorter than one RS block (`have + 2 < 255`) is
+  skipped by the onset scan and phase 2. Every later onset decodes a suffix of the same burst. The
+  uncoded fallback and HARQ are not skipped.
+- **Implementation:**
+  - `crates/openpulse-core/src/fec.rs`: `rs_short_of_block_error` and `rs_short_of_block`, which
+    share one prefix;
+  - `crates/openpulse-modem/src/engine.rs`: `short_of_block` in `ota_decode_and_ack_inner`, and
+    `rs_interleaved_decode_prefix` building its error through the core function;
+  - the test and fixture `crates/openpulse-modem/tests/captures/ft991a-ota-fragment-5s.wav`.
+- **Tests and results (run):**
+  - the new test: 511 attempts (budget 600); sabotage, with the guard disabled: 888, the test fails;
+  - the core unit test passes;
+  - replay on x86, release, 800-sample reads: the 5.1 s fragment 79.2 → 6.0 s, a 36.2 s burst
+    39.9 → 5.2 s, a 10.8 s burst 23.8 → 3.7 s; every frame that decoded on the four recordings still
+    decodes;
+  - the pre-push hook at `30dad89`: openpulse-core, openpulse-modem and their 30 reverse dependents,
+    tests passed;
+  - `scripts/slow-tests.sh` at `30dad89`: `ota_channel_adaptation` 3/3,
+    `spectral_busy_gathers_weak_frames` 2/2 and `total_power_bursts_keep_their_head` 1/1;
+    `notch_rescues_interferer` 2/3, the known red row #1457 with the same message.
+- **Review:** `docs/dev/reviews/review-ota-scan-onset-major-2026-11-01.md`, second round. No
+  Release 1 blocker; 2 should-fix findings taken: the duplicate message builder, and the false HARQ
+  claim.
+
 ## 2026-11-01 — The OTA burst scan runs onset-major (work plan M3, A2)
 
 - **Requirement/change:** REQ-FUN-06 and A2. On 2 m neither daemon answered inside the sender's 9 s ACK

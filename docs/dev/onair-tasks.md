@@ -2926,3 +2926,25 @@ Cleanup (quote): `== cleanup ==  [IC-9700] daemon and rigctld stopped; PTT 0 sen
   fragment drops from 79 s to 6.0 s and a 36 s burst from 40 s to 5.2 s. Every frame still decodes.
   The fix is under review; the gate and the slow tests run before the next on-air task.
 
+## Task 14 — retest with the short-burst guard (status: open)
+
+The new build is `30dad89`. On top of task 13's build, it stops onset-scanning a coded candidate that a
+burst is too short to hold. On the task 13 recordings, the 5.1 s fragment that cost 79 s on x86 now
+costs 6 s, and every frame still decodes. Tests at that build:
+- the pre-push tests of openpulse-core, openpulse-modem and their 30 dependents pass;
+- `slow-tests.sh` passes, except the known red notch row #1457.
+
+**Run task 13 Parts A to D again, exactly as written there**, with these differences:
+- the commit on rpi51 must include `30dad89`;
+- name the recordings `-g4` (Part B) and `-b4` (Part C);
+- the Part D condition is the same.
+
+The station rules hold: 5 W at most, ask the maintainer before every run, record nothing about the
+remote host, RSPdx port B empty.
+
+Report the same counts as task 13, plus one more: in each run, the receiver's `fec attempt OK` count
+against the number of frames the sender sent. That shows whether frames after the first now get
+through.
+
+### Results
+
