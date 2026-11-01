@@ -12,6 +12,7 @@
 
 use openpulse_audio::LoopbackBackend;
 use openpulse_core::profile::SessionProfile;
+use openpulse_core::rate::SpeedLevel;
 use openpulse_modem::capture_replay::load_corpus;
 use openpulse_modem::ModemEngine;
 
@@ -170,3 +171,117 @@ fn the_fallback_rescue_acquisition_does_not_grow_with_the_read() {
 /// A tripwire fitted to this one fixture: it shows the span no longer grows with the read, not that the
 /// rescue decodes anything.
 const SETTLE_BUDGET: u64 = 60;
+
+/// An MFSK16 candidate whose acquisition finds no lock from offset 0 is not onset-scanned: its
+/// acquisition already searched every onset of the burst (`docs/dev/design/ota-scan-onset-major.md`,
+/// addendum 4).
+///
+/// Fixture: `tests/captures/ft991a-ota-bpsk31-at-sl1.wav`, 32 s of station B's recording (on-air task 15,
+/// run b5) while station A sent an SL2 `BPSK31|rs` frame and B's receiver had stepped down to SL1. A
+/// 27 s piece of that frame flushes as one burst; at SL1 it is tried as MFSK16 only. Before the bound,
+/// the live-loop replay of the same run spent 205 failing MFSK16 attempts (56 s on x86) on such a burst.
+#[test]
+fn an_mfsk16_candidate_with_no_lock_is_not_onset_scanned() {
+    let cap = load_corpus("ft991a-ota-bpsk31-at-sl1.wav").expect("corpus");
+    let bk = LoopbackBackend::new();
+    let mut rx = engine(&bk);
+    rx.ota_lock_level(SpeedLevel::Sl1);
+    let mut worst = (0usize, 0u64);
+    // 2 s reads, as a receive loop held by a decode delivers them (the live-loop regime that gives the
+    // burst a read-sized onset bound), then two silent reads to close the last burst.
+    let reads = cap
+        .samples
+        .chunks(16_000)
+        .map(|c| c.to_vec())
+        .chain(std::iter::repeat_n(vec![0.0f32; 16_000], 2));
+    for chunk in reads {
+        let Some(burst) = rx.accumulate_capture(Some("BPSK250"), chunk).unwrap() else {
+            continue;
+        };
+        let before = rx.decode_attempts();
+        let res = rx
+            .ota_decode_burst(&burst, "DC0SK", Some("BPSK250"))
+            .unwrap();
+        assert!(res.payload.is_none(), "no MFSK16 frame is in this fixture");
+        let spent = rx.decode_attempts() - before;
+        if burst.samples.len() > worst.0 {
+            worst = (burst.samples.len(), spent);
+        }
+    }
+    println!(
+        "longest burst {} samples: {} decode attempts",
+        worst.0, worst.1
+    );
+    assert!(
+        worst.0 > 150_000,
+        "the frame piece must flush as one burst longer than an MFSK16 frame (got {} samples)",
+        worst.0
+    );
+    assert!(
+        worst.1 <= MFSK16_BUDGET,
+        "{} decode attempts on a burst MFSK16 found no lock in (budget {MFSK16_BUDGET})",
+        worst.1
+    );
+}
+
+/// Measured on this fixture in 2 s reads (x86, release): 69 attempts in 2.9 s with the bound, 171 in
+/// 41.7 s with MFSK16's uncorrected pass scanned again (sabotage run). Most of the 69 are the uncoded
+/// fallback rescue. 110 fails without the bound. A tripwire fitted to this one fixture.
+const MFSK16_BUDGET: u64 = 110;
+
+/// The bound's residual case (addendum 4): an MFSK16 frame that follows other energy in the same
+/// burst. Offset 0's acquisition must still find the frame, because no later onset is tried for it.
+///
+/// Four seconds of the fixture's BPSK31 audio, then an SL1 frame scaled to the same RMS, gathered as one
+/// burst through the production entry in 2 s reads. Review round 5, finding 7.
+#[test]
+fn an_mfsk16_frame_after_other_energy_in_one_burst_still_decodes() {
+    const PAYLOAD: &[u8] = b"MFSK16 after a BPSK31 piece";
+    let cap = load_corpus("ft991a-ota-bpsk31-at-sl1.wav").expect("corpus");
+    // t = 155–159 s of the recording: A's BPSK31 signal, after B's own transmission.
+    let lead = &cap.samples[9 * 8000..13 * 8000];
+    let rms = |s: &[f32]| (s.iter().map(|x| x * x).sum::<f32>() / s.len() as f32).sqrt();
+    let tx_bk = LoopbackBackend::new();
+    let mut tx = engine(&tx_bk);
+    tx.ota_lock_level(SpeedLevel::Sl1);
+    tx.transmit_with_fec(PAYLOAD, "MFSK16", None)
+        .expect("transmit");
+    let frame = tx_bk.drain_samples();
+    let gain = rms(lead) / rms(&frame);
+    let audio: Vec<f32> = lead
+        .iter()
+        .copied()
+        .chain(frame.iter().map(|x| x * gain))
+        .chain(std::iter::repeat_n(0.0, 32_000))
+        .collect();
+
+    let bk = LoopbackBackend::new();
+    let mut rx = engine(&bk);
+    rx.ota_lock_level(SpeedLevel::Sl1);
+    let mut got = None;
+    let mut longest = 0usize;
+    for chunk in audio.chunks(16_000) {
+        let Some(burst) = rx
+            .accumulate_capture(Some("BPSK250"), chunk.to_vec())
+            .unwrap()
+        else {
+            continue;
+        };
+        longest = longest.max(burst.samples.len());
+        let res = rx
+            .ota_decode_burst(&burst, "DC0SK", Some("BPSK250"))
+            .unwrap();
+        if res.payload.is_some() {
+            got = res.payload;
+        }
+    }
+    assert!(
+        longest >= lead.len() + frame.len() - 16_000,
+        "the BPSK31 piece and the frame must gather as one burst (longest {longest} samples)"
+    );
+    assert_eq!(
+        got.as_deref(),
+        Some(PAYLOAD),
+        "an MFSK16 frame behind other energy must decode from offset 0's acquisition"
+    );
+}

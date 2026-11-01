@@ -538,9 +538,41 @@ impl PluginRegistry {
     }
 }
 
+/// End of the error for a demodulator whose own timing search found no lock anywhere in its window.
+const WINDOW_ACQUISITION_FAILED: &str = " acquisition failed: no onset in the window locked";
+
+/// The error a demodulator returns when it searched EVERY onset of its window and none locked.
+///
+/// Only for a search that covers the whole window at the plugin's symbol period, which is the OTA scan's
+/// step (`frame_geometry().symbol_period_samples`); a window too short for a frame also qualifies. The
+/// OTA scan reads it
+/// (via [`is_window_acquisition_failure`]) as covering every later onset of the same burst
+/// (`docs/dev/design/ota-scan-onset-major.md`, addendum 4).
+pub fn window_acquisition_failed_error(mode: &str) -> ModemError {
+    ModemError::Demodulation(format!("{mode}{WINDOW_ACQUISITION_FAILED}"))
+}
+
+/// Whether `e` was built by [`window_acquisition_failed_error`].
+pub fn is_window_acquisition_failure(e: &ModemError) -> bool {
+    matches!(e, ModemError::Demodulation(m) if m.ends_with(WINDOW_ACQUISITION_FAILED))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_window_acquisition_failure_reads_back_and_nothing_else_does() {
+        assert!(is_window_acquisition_failure(
+            &window_acquisition_failed_error("MFSK16")
+        ));
+        assert!(!is_window_acquisition_failure(&ModemError::Demodulation(
+            "MFSK16 acquisition failed".into()
+        )));
+        assert!(!is_window_acquisition_failure(&ModemError::Fec(format!(
+            "MFSK16{WINDOW_ACQUISITION_FAILED}"
+        ))));
+    }
 
     /// Minimal plugin for exercising the registry + trait defaults.
     struct FakePlugin {

@@ -373,3 +373,88 @@ when it fires.
 error). Without it, audio read before our ACK could be prepended to audio captured after it, open a
 burst, fail, and key a NACK right after the ACK. Not tested: like the busy check, it needs a capture
 stream.
+
+## Addendum 4 (2026-11-01, live-loop replay of task 15's run b5): MFSK16 is not onset-scanned when it finds no lock
+
+### Measured
+
+The live-loop replay of station B's run b5 showed one burst costing 53.5–55.8 s on x86 (two runs). The replay ran with
+`REPLAY_CPU=4`: each read holds the audio that arrived during the previous decode, times 4. The burst:
+- 25.6–25.9 s of audio (the read sizes differ between runs), 205 decode attempts, every one
+  `MFSK16 acquisition failed`;
+- a piece of an SL2 frame from A: its energy sits entirely in 1400–1600 Hz;
+- tried at SL1, because B's receiver had stepped down, so its candidates were MFSK16 (SL1) and
+  `BPSK31|rs` (SL2).
+
+`BPSK31|rs` was skipped as short of one RS block. MFSK16 was scanned at ~200 onsets, because an MFSK16
+frame is 135 936 samples (17 s, 531 on-air tones × 256), shorter than the burst.
+
+### Why the scan buys nothing there
+
+MFSK16's `acquire` searches the timing itself:
+- every offset of its window at one-symbol steps (256 samples, the scan's own step);
+- times seven frequencies;
+- then it refines the best point.
+
+The offset-0 attempt's window is the whole burst, so its coarse search already covers every onset the
+scan would try. An onset `s` gives the window `burst[s..]`, whose search is a subset of the offset-0
+search on the same grid.
+
+### Decision
+
+- The MFSK16 plugin builds its acquisition failure with
+  `openpulse_core::plugin::window_acquisition_failed_error`, which says "no onset in this window
+  locked". `is_window_acquisition_failure` reads it back, as `rs_short_of_block` does for the RS guard.
+- When a candidate's offset-0 attempt fails that way, the scan block drops its pass at the offset-0
+  correction (`afc_before`). A corrected pass, at a different centre frequency, still runs.
+- Phase 2 is unchanged. MFSK16 reports no AFC estimate, so its settle lands inside the deadband and
+  phase 2 already skips it. The replay log agrees: the 205 attempts are offset 0 plus ~204 scan
+  windows (207 080 down to 155 008 samples in 256-sample steps), none from phase 2.
+
+### Residual
+
+The cover holds for every on-grid onset, and the coarse search is the same there. Two gaps remain:
+- **The scan's clamped last onset.** The walk clamps to `scan_end`, the trigger read plus one
+  acquisition window, and that is generally not a multiple of 256. Its slice sweeps coarse points at
+  another symbol phase, which offset 0 never visited (review round 5, finding 1). A real frame half a
+  symbol off still scores about half of perfect at the coarse step, and the refinement at 1/8 symbol
+  recovers it. So this gap folds into the next one.
+- **The refinement.** Offset 0 refines around its best coarse point only. A later onset could still
+  lock in one case: a noise or interference peak outscores the frame at the coarse step, the peak's
+  refined score stays below the gate, the frame's refined score would pass, and the later onset
+  excludes the peak.
+
+Noise peaks score near 1/16 of perfect and a BPSK31 segment near 0.1, against about 0.5 for a
+misaligned real frame. So this needs a false peak stronger than a real frame, and the guard accepts
+that loss. Tested on one case: an MFSK16 frame behind 4 s of the fixture's BPSK31 in one burst decodes
+(`an_mfsk16_frame_after_other_energy_in_one_burst_still_decodes`). UNCHECKED on air: how often it
+happens.
+
+### Measured after (x86, release)
+
+The live-loop replay of `rx-b-b5` at `REPLAY_CPU=4`:
+
+| Burst | Without the bound | With it |
+|---|---|---|
+| 56.5 s, 10.8 s, 27.8 s (the first three) | 1.7, 1.1, 1.7 s | 1.4, 1.0, 1.6 s |
+| 25.6 s, tried at SL1 | 53.5 s; the next read held 214 s of audio, and the run did not finish in 30 min | 1.7 s |
+| the rest (13.8, 67.3, 68.1 s) | not reached | 1.1, 5.5, 5.3 s |
+
+No burst of b5 decodes either way, so this replay cannot show a lost frame. The slowest remaining
+decode, 5.5 s, is on the 67 s bursts: a Pi 4 at roughly 4× is past the 9 s ACK window there. Those are
+whole SL2 frames that B, stepped down to SL1, could not decode. That is a ladder disagreement between
+the stations (A never heard B's NACK), not a scan cost.
+
+### Test (run)
+
+`an_mfsk16_candidate_with_no_lock_is_not_onset_scanned` replays
+`tests/captures/ft991a-ota-bpsk31-at-sl1.wav` (32 s of b5, t = 146–178 s) at SL1 in 2 s reads. The
+27 s burst costs 69 attempts in 2.9 s, most of them the uncoded fallback rescue. Sabotage, with the
+pass scanned again: 171 attempts in 41.7 s. The budget is 110. The test reads the error through the
+hard-FEC path, which passes the plugin's error through unchanged. A unit test in `openpulse-core`
+checks that the error reads back, and that neither the old wording nor another variant does.
+
+Also run: `mfsk16_engine` 2/2, `mfsk16_harq` 2/2, `mfsk16_arq_subfloor` 8/8, `mfsk_subfloor_bound`
+2/2, `off_frequency_fallback_is_not_ladder` 2/2, `ota_scan_onset_major` 4/4, the plugin's tests, and
+the core plugin unit tests. The replay decodes the same frames on the earlier recordings (`rx-a-g2` 2,
+`rx-b-b2` 4, `rx-a-g3` 2, `rx-b-b3` 3, `rx-b-b4` 4).

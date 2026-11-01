@@ -15,6 +15,41 @@ this ledger adds the design rationale and the actually-observed results per chan
 
 ---
 
+## 2026-11-01 — No NACK while the channel is busy; MFSK16 is not onset-scanned when it finds no lock (work plan M3, A2)
+
+- **Requirement/change:** REQ-FUN-06 and A2. In task 15 (run b5), station B decoded 0 of 4 frames and
+  keyed a NACK over A's frame. Its receive loop held for up to 64 s. In the live-loop replay, two
+  bursts were outliers: a 14.6 s burst cost 19 s in phase 2's fallback acquisition, and after B's
+  step-down to SL1, a 25.6 s piece of an SL2 frame cost 53.5 s in ~205 failing MFSK16 attempts.
+- **Design decision** (addenda 3 and 4 to `docs/dev/design/ota-scan-onset-major.md`):
+  - a failure is `Muted`, keying no NACK, when the audio read right after the flush is still above
+    the DCD squelch;
+  - phase 2's fallback entry acquires only across the onsets it scans;
+  - carrier-drop flushes are logged;
+  - read-ahead audio is dropped with the capture stream;
+  - a candidate whose demodulator searched every onset of the whole burst and found no lock (MFSK16,
+    `window_acquisition_failed_error`) skips the scan pass at the offset-0 correction.
+- **Implementation:**
+  - `crates/openpulse-daemon/src/server.rs`: `channel_still_busy`, `rx_pending`;
+  - `crates/openpulse-daemon/src/nack_budget.rs`: the `channel_busy` verdict;
+  - `crates/openpulse-modem/src/engine.rs`: `acquire_burst_correction_span`, the flush log,
+    `searched_whole_burst`;
+  - `crates/openpulse-core/src/plugin.rs`: `window_acquisition_failed_error`,
+    `is_window_acquisition_failure`;
+  - `plugins/mfsk16/src/lib.rs`: uses that error.
+- **Tests and results (run):**
+  - the busy-verdict unit test passes. Sabotage: it fails;
+  - settle tripwire: 17 settles. Sabotage: 206;
+  - MFSK16 fixture test: 69 attempts, 2.9 s. Sabotage: 171 attempts, 41.7 s. Budget 110;
+  - an MFSK16 frame behind 4 s of BPSK31 in one burst still decodes (review round 5, finding 7);
+  - the core unit test passes, as do the MFSK16 engine, HARQ, ARQ-subfloor and off-frequency suites;
+  - live-loop replay of b5 at CPU ×4: the 25.6 s burst 53.5 s → 1.7 s;
+  - the replay decodes the same frames on the earlier recordings, with the MFSK16 bound: `rx-a-g2` 2,
+    `rx-b-b2` 4, `rx-a-g3` 2, `rx-b-b3` 3, `rx-b-b4` 4 (800-sample reads).
+- **Review:** `docs/dev/reviews/review-ota-scan-onset-major-2026-11-01.md`, round 4 (keying,
+  mandatory). No Release 1 blocker; the `rx_pending` should-fix was taken. The MFSK16 bound: round 5, no
+  blocker; the wording of the cover's residual was corrected and a frame-after-energy test added.
+
 ## 2026-11-01 — The OTA uncoded fallback rescue is bounded; the daemon logs its capture reads (work plan M3, A2)
 
 - **Requirement/change:** REQ-FUN-06 and A2. On air with the short-of-block guard (task 14), station B

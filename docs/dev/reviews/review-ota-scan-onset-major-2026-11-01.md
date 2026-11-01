@@ -142,3 +142,39 @@ Tests run by the reviewer: `nack_budget` unit tests 6/6, `muted_failures_move_no
 | 2 | nit | The DCD sees post-notch audio and the busy check sees raw audio, so with the notch enabled a strong out-of-band tone can read busy. | Left: the notch defaults off, and a false busy only mutes. |
 | 3 | note | The settle tripwire is fitted to one fixture. | Recorded in the test's doc comment. |
 | 4 | unconfirmed | A carrier dip longer than the read still NACKs over the frame. | Already stated in addendum 3. |
+
+## Fifth round: MFSK16 is not onset-scanned when it finds no lock (addendum 4)
+
+Recommended, not mandatory: it keys nothing. The prompt asked for falsification of:
+- the subset claim (step, grid alignment, slice truncation);
+- slice-dependent processing that would break the cover;
+- the refinement residual;
+- HARQ retention;
+- other matchers of the old error text, and twins;
+- the test's regime and sabotage.
+
+It also asked "Does this block Release 1?".
+
+**Verdict:** no blocker, and it does not block Release 1. Confirmed:
+- the error is returned only on acquisition failure;
+- the slices are pure sub-slices of the same audio (the burst is pre-routed, and notch and AGC run
+  once);
+- HARQ demodulates the whole burst itself and is unchanged;
+- nothing else matches the old text, and fsk4 does no timing search, so it is not a twin;
+- the test drives `accumulate_capture` → `ota_decode_burst`.
+
+Tests the reviewer ran, release, all passing:
+- `ota_scan_onset_major` 4/4;
+- `mfsk16_engine` 2/2;
+- `mfsk16_harq` 2/2;
+- `mfsk16_arq_subfloor` 8/8;
+- `fallback_onset_rank_measurement` 3/3, one ignored;
+- the core plugin unit tests 8/8.
+
+| # | Severity | Finding | Disposition |
+|---|---|---|---|
+| 1 | should-fix (doc) | "Exact for the coarse search" is false: the scan clamps its last onset to `scan_end`, off the 256 grid, and that slice sweeps another symbol phase. | **Taken.** The residual now names the clamped onset and why it folds into the refinement case. |
+| 2 | nit | A window too short for a frame also returns "no onset locked". | **Taken** in the builder's doc. Harmless: such a burst is not scanned. |
+| 5 | nit | The contract that the plugin's step equals the scan's step is not checked by the engine. | **Taken** in the builder's doc (`symbol_period_samples`). |
+| 7 | should-fix (test) | No test had an MFSK16 frame following other energy in one burst. | **Taken.** `an_mfsk16_frame_after_other_energy_in_one_burst_still_decodes`: 4 s of the fixture's BPSK31, then an SL1 frame, in one burst; it decodes. |
+| 8 | nit | The engine comment, addendum and ledger quoted different burst lengths and costs. | **Taken**: 25.6 s, 53.5 s (the comparison run). |

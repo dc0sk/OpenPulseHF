@@ -3714,6 +3714,12 @@ impl ModemEngine {
         // coded attempts (79 s on x86, minutes on a Pi 4, deaf meanwhile) at SL2/SL3, whose frames
         // are 66.6 s and 33.8 s long (`docs/dev/design/ota-scan-onset-major.md`, short bursts).
         let mut short_of_block = vec![false; candidates.len()];
+        // Candidates whose demodulator searched EVERY onset of the whole burst from offset 0, at
+        // `afc_before`, and found no lock (MFSK16). Each later onset's window is a subset of that
+        // search (except the clamped last onset, off the step grid; addendum 4, residual), so the scan's pass at `afc_before` is skipped for them; a corrected pass, at another
+        // centre frequency, still runs. Measured on task 15's run b5 (live-loop replay): a 25.9 s piece
+        // of an SL2 frame cost ~205 failing MFSK16 attempts, 53.5 s on x86 (addendum 4).
+        let mut searched_whole_burst = vec![false; candidates.len()];
         for (ci, (level, mode, fec)) in candidates.iter().enumerate() {
             self.afc_correction_hz = afc_before;
             let slice = AudioSamples {
@@ -3732,6 +3738,8 @@ impl ModemEngine {
                     // differently at another onset.
                     short_of_block[ci] = openpulse_core::fec::rs_short_of_block(&e)
                         .is_some_and(|have| have + 2 < RS_BLOCK_BYTES);
+                    searched_whole_burst[ci] =
+                        openpulse_core::plugin::is_window_acquisition_failure(&e);
                     last_err = Some(e);
                 }
             }
@@ -3902,7 +3910,7 @@ impl ModemEngine {
                 let passes: Vec<(f32, usize)> = corrected
                     .map(|c| (c, 0))
                     .into_iter()
-                    .chain(std::iter::once((afc_before, step)))
+                    .chain((!searched_whole_burst[ci]).then_some((afc_before, step)))
                     .collect();
                 // SIZE THE SLICE FOR THE CODED FRAME (#1384). `burst_onset_scan_bounds` returns the
                 // plugin's RAW geometry. MEASURED on BPSK250: raw is 74 624 samples, while a coded
