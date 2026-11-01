@@ -45,7 +45,11 @@ this ledger adds the design rationale and the actually-observed results per chan
   - the core unit test passes, as do the MFSK16 engine, HARQ, ARQ-subfloor and off-frequency suites;
   - live-loop replay of b5 at CPU ×4: the 25.6 s burst 53.5 s → 1.7 s;
   - the replay decodes the same frames on the earlier recordings, with the MFSK16 bound: `rx-a-g2` 2,
-    `rx-b-b2` 4, `rx-a-g3` 2, `rx-b-b3` 3, `rx-b-b4` 4 (800-sample reads).
+    `rx-b-b2` 4, `rx-a-g3` 2, `rx-b-b3` 3, `rx-b-b4` 4 (800-sample reads);
+  - pre-push at `4ddd24d`: passed (344 test result lines, 0 failed);
+  - `slow-tests.sh` at `4ddd24d`: `ota_channel_adaptation` 3/3, `spectral_busy_gathers_weak_frames`
+    2/2, `total_power_bursts_keep_their_head` 1/1; `notch_rescues_interferer` 2/3, the known red row
+    #1457.
 - **Review:** `docs/dev/reviews/review-ota-scan-onset-major-2026-11-01.md`, round 4 (keying,
   mandatory). No Release 1 blocker; the `rx_pending` should-fix was taken. The MFSK16 bound: round 5, no
   blocker; the wording of the cover's residual was corrected and a frame-after-energy test added.

@@ -3134,8 +3134,9 @@ log is there to confirm this on air.
 Tests at this build:
 - the new and changed tests pass;
 - replaying the earlier recordings decodes the same frames;
-- the pre-push tests run when these commits are pushed; the cloud session adds the result here;
-- `slow-tests.sh` is not yet run at this build. The cloud session runs it and adds the result here.
+- the pre-push tests passed when `4ddd24d` was pushed;
+- `slow-tests.sh` at `4ddd24d`: `ota_channel_adaptation` 3/3, `spectral_busy_gathers_weak_frames` 2/2,
+  `total_power_bursts_keep_their_head` 1/1; `notch_rescues_interferer` 2/3, the known red row #1457.
 
 **Run task 13 Parts A to D again, as written there**, with these differences:
 - the commit on rpi51 must include `cd44ca9`;
