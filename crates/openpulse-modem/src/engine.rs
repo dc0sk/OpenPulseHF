@@ -343,6 +343,15 @@ const PHASE2_STEP_MULTIPLIER: usize = 4;
 /// 4 keeps margin for real on-air frames and residual carrier offset, which it could not cover.
 const FALLBACK_RANKED_ONSETS: usize = 4;
 
+/// How many onsets the OTA arm's uncoded-fallback RESCUE scans try per burst: the deferred exhaustive
+/// scan, and separately phase 2's fallback entry. They are taken nearest the burst's trigger point
+/// first (`docs/dev/design/ota-scan-onset-major.md`, fallback bound). Unbounded, the exhaustive scan
+/// tried every symbol out to a reach that grows with the read that triggered the flush. Measured on
+/// air, 2026-11-01 (task 14): a 21 s burst held station B's receive loop for the rest of a 5-minute
+/// run, 6822 uncoded attempts, and A's frames went unheard. 64 positions are ±32 symbols around the
+/// trigger at the scan step; the K correlation-ranked onsets before them are unchanged.
+const OTA_FALLBACK_RESCUE_ONSETS: usize = 64;
+
 /// Maximum AFC correction magnitude accepted after settling.
 ///
 /// The Goertzel acquisition range is ±400 Hz (`range_hz = 800` in `estimate_carrier_hz_wide`), so
@@ -1035,6 +1044,19 @@ const DCD_SQUELCH_MARGIN: f32 = 1.25;
 /// BPSK31 frame is ≤ 2 176 samples at +8 dB in-band and 3 954 at +6 dB (16 placements, #1454 round 7;
 /// the +8 dB figure is the maximum at an open threshold of 5.0, an upper bound for 4.5).
 const S_RING_WINDOWS: usize = 16;
+
+/// The scan grid `0, step, …, scan_end` (the last point clamped, as the onset walks clamp it), nearest
+/// `center` first — ties to the earlier onset — and at most `cap` of them.
+fn onsets_nearest(step: usize, scan_end: usize, center: usize, cap: usize) -> Vec<usize> {
+    let step = step.max(1);
+    let mut grid: Vec<usize> = (0..=scan_end / step).map(|k| k * step).collect();
+    if grid.last() != Some(&scan_end) {
+        grid.push(scan_end);
+    }
+    grid.sort_by_key(|&p| (p.abs_diff(center), p));
+    grid.truncate(cap);
+    grid
+}
 
 /// Whether the OTA arm's uncoded fallback is itself one of the rung candidates — the same mode,
 /// uncoded — in which case a ladder frame and a control frame at that mode are the same decode.
@@ -3153,6 +3175,59 @@ impl ModemEngine {
         self.ranked_fallback_onsets(mode, samples, onset_bound, k)
     }
 
+    /// The OTA arm's deferred uncoded rescue: at most [`OTA_FALLBACK_RESCUE_ONSETS`] onsets, nearest
+    /// the burst's trigger point (`trigger`, the flushed burst's lead) first, within the same span
+    /// `decode_burst_phase1` would scan. Same rollback discipline as `scan_burst_onsets`.
+    fn decode_fallback_near_trigger(
+        &mut self,
+        mode: &str,
+        burst: &AudioSamples,
+        onset_bound: usize,
+        trigger: usize,
+    ) -> Result<(Vec<u8>, usize), ModemError> {
+        let sr = AudioConfig::default().sample_rate;
+        let (_, _, min_frame_samples, max_frame_samples) = self.frame_scan_geometry(mode, sr);
+        let n = burst.samples.len();
+        if n < min_frame_samples {
+            return self.decode_burst_phase1(mode, burst, onset_bound);
+        }
+        let (step, scan_end, _) = self.burst_onset_scan_bounds(mode, n, onset_bound);
+        let was_prerouted = self.input_prerouted;
+        self.input_prerouted = true;
+        let was_quiet = self.suppress_afc_events;
+        self.suppress_afc_events = true;
+        let afc_before = self.afc_correction_hz;
+        let mut last_err = ModemError::Demodulation("no onset attempted".into());
+        let mut found = None;
+        for start in onsets_nearest(step, scan_end, trigger, OTA_FALLBACK_RESCUE_ONSETS) {
+            let end = (start + max_frame_samples).min(n);
+            if start >= end {
+                continue;
+            }
+            let slice = burst.samples[start..end].to_vec();
+            match self.decode_attempt(
+                mode,
+                AudioSamples {
+                    samples: slice.clone(),
+                },
+                FecMode::None,
+            ) {
+                Ok(payload) => {
+                    self.update_afc_estimate(mode, &slice);
+                    found = Some((payload, start));
+                    break;
+                }
+                Err(e) => {
+                    self.afc_correction_hz = afc_before;
+                    last_err = e;
+                }
+            }
+        }
+        self.input_prerouted = was_prerouted;
+        self.suppress_afc_events = was_quiet;
+        found.ok_or(last_err)
+    }
+
     /// Uncoded decode attempts at the ranked `onsets`, EARLIEST FIRST. Returns the payload, the
     /// onset and its correlation rank (its index in `onsets`).
     ///
@@ -3873,7 +3948,9 @@ impl ModemEngine {
         if decoded.is_none() {
             if let Some(mode) = fallback_deferred {
                 self.afc_correction_hz = afc_before;
-                if let Ok((payload, onset)) = self.decode_burst_phase1(mode, samples, onset_bound) {
+                if let Ok((payload, onset)) =
+                    self.decode_fallback_near_trigger(mode, samples, onset_bound, lead)
+                {
                     self.fallback_onset_ranks[FALLBACK_RANKED_ONSETS] += 1;
                     warn!(
                         "ota fallback: a {mode} frame at onset {onset} ranked below the top \
@@ -3937,8 +4014,14 @@ impl ModemEngine {
                 else {
                     continue;
                 };
-                let mut start = 0usize;
-                loop {
+                // The fallback entry scans at most OTA_FALLBACK_RESCUE_ONSETS onsets nearest the
+                // trigger (see the constant); the ladder candidates keep their full ascending walk.
+                let onsets: Vec<usize> = if fallback_at == Some(i) {
+                    onsets_nearest(step, scan_end, lead.min(n), OTA_FALLBACK_RESCUE_ONSETS)
+                } else {
+                    onsets_nearest(step, scan_end, 0, usize::MAX)
+                };
+                for start in onsets {
                     self.afc_correction_hz = correction;
                     let end = (start + max_frame_samples).min(n);
                     if start < end {
@@ -3975,10 +4058,6 @@ impl ModemEngine {
                             Err(e) => last_err = Some(e),
                         }
                     }
-                    if start >= scan_end {
-                        break;
-                    }
-                    start = (start + step).min(scan_end);
                 }
             }
             // Commit only on success — the rollback discipline every other arm follows (#1143).
@@ -9100,6 +9179,26 @@ mod ack_scan_tests {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn onsets_nearest_orders_the_scan_grid_by_distance_and_caps_it() {
+        // The grid is 0, 32, …, 320 plus the clamped end 330; nearest 100 first, ties to the earlier.
+        assert_eq!(
+            super::onsets_nearest(32, 330, 100, 4),
+            vec![96, 128, 64, 160]
+        );
+        // Uncapped from 0 it is the ascending walk the scans use, end included once.
+        let walk = super::onsets_nearest(32, 330, 0, usize::MAX);
+        assert_eq!(walk.first(), Some(&0));
+        assert_eq!(walk.last(), Some(&330));
+        assert_eq!(walk.len(), 12);
+        assert!(walk.windows(2).all(|w| w[0] < w[1]));
+        // A span on the grid is not doubled at its end.
+        assert_eq!(
+            super::onsets_nearest(32, 64, 0, usize::MAX),
+            vec![0, 32, 64]
+        );
+    }
     use super::*;
     use bpsk_plugin::BpskPlugin;
     use openpulse_audio::LoopbackBackend;

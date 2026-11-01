@@ -70,6 +70,9 @@ TRAFFIC_DURATION="${TRAFFIC_DURATION:-120}"
 # Which station sends the traffic (the ISS); the other is the receiver that leads the rate.
 # A2 needs both directions: one run with A, one with B.
 TRAFFIC_FROM="${TRAFFIC_FROM:-A}"
+# Seconds both daemons listen before traffic starts, so each receiver's energy gate has an idle
+# floor before the first frame arrives (task 14: station B started ~3 s before A's first frame).
+TRAFFIC_WARMUP="${TRAFFIC_WARMUP:-30}"
 # The daemons' RUST_LOG. `debug` logs each decode attempt and its timing, which a failed on-air run
 # needs (task 11: an `info` log could not say why station B never decoded).
 DAEMON_LOG_LEVEL="${DAEMON_LOG_LEVEL:-info}"
@@ -311,6 +314,8 @@ EOF
         iss_fn=ssh_b; iss_repo="$B_REPO_DIR"; iss_label="$B_LABEL"; to_call="$CALLSIGN_A"
         irs_fn=ssh_a; irs_repo="$A_REPO_DIR"; irs_label="$A_LABEL"
     fi
+    echo "Both daemons listening; traffic starts in ${TRAFFIC_WARMUP}s (warm-up) …"
+    sleep "${TRAFFIC_WARMUP}"
     echo "Driving OTA traffic from ${iss_label} to ${irs_label} for ${TRAFFIC_DURATION}s …"
 
     # Drive traffic from the ISS's control port (background, time-boxed) and poll both daemons'

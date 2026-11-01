@@ -814,6 +814,8 @@ pub async fn run(cfg: OpenpulseConfig, modem_backend: Box<dyn AudioBackend>) -> 
     // unbroken run of successful empty reads, so the reopen path below was unreachable and the
     // station went deaf in silence (audit 2026-07-19, #19).
     let mut capture_failed = false;
+    // When the previous capture read returned, for the read log below.
+    let mut last_capture_read: Option<std::time::Instant> = None;
     // Keyed-NACK budget, leaking with listening time (#1456; `nack_budget.rs`).
     let mut ota_nack_budget = crate::nack_budget::NackBudget::default();
     // Periodic station identification (REQ-REG-10): while transmitting, key up and send the
@@ -952,6 +954,23 @@ pub async fn run(cfg: OpenpulseConfig, modem_backend: Box<dyn AudioBackend>) -> 
                     };
                     match read {
                         Ok(samples) => {
+                            // What the receiver was handed, and how long since the last read: on air
+                            // (task 14) station B's daemon gathered frames in fragments that the audio
+                            // recorded beside it does not reproduce, and nothing showed what it
+                            // received. A read holding a second or more means the loop fell behind.
+                            let since_ms = last_capture_read
+                                .map(|t| t.elapsed().as_millis())
+                                .unwrap_or(0);
+                            last_capture_read = Some(std::time::Instant::now());
+                            if samples.len() >= 8_000 {
+                                tracing::info!(
+                                    samples = samples.len(),
+                                    since_ms,
+                                    "capture read holds a second or more of audio: the receive loop fell behind"
+                                );
+                            } else {
+                                tracing::debug!(samples = samples.len(), since_ms, "capture read");
+                            }
                             if capture_failed {
                                 capture_failed = false;
                                 tracing::warn!("audio capture recovered");

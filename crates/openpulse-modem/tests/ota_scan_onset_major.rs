@@ -72,7 +72,8 @@ fn a_real_off_correction_burst_decodes_without_walking_the_whole_span() {
 /// the scan, and is still far below what a pass walked to the end of the span costs.
 const ATTEMPT_BUDGET: u64 = 40;
 
-/// A burst shorter than one coded frame of every candidate must not be onset-scanned.
+/// A burst shorter than one coded frame of every candidate must not be onset-scanned, and its uncoded
+/// fallback rescue must stay bounded.
 ///
 /// Fixture: `tests/captures/ft991a-ota-fragment-5s.wav`, 16 s around a 5.1 s burst station B
 /// gathered between two of A's SL2 frames (on-air task 13, run b3). An SL2 frame is 66.6 s, so the
@@ -116,6 +117,7 @@ fn a_burst_shorter_than_a_coded_frame_is_not_onset_scanned() {
     );
 }
 
-/// Measured on this fixture: 511 attempts with the guard (nearly all of them the uncoded fallback,
-/// which a control frame of 0.9 s could still need), 888 with the guard disabled (sabotage run).
-const FRAGMENT_BUDGET: u64 = 600;
+/// Measured on this fixture: 133 attempts with both bounds; 511 with the fallback-rescue cap removed
+/// (`OTA_FALLBACK_RESCUE_ONSETS` unbounded), 888 with the short-of-block guard disabled too (sabotage
+/// runs). 200 fails if either bound is removed.
+const FRAGMENT_BUDGET: u64 = 200;

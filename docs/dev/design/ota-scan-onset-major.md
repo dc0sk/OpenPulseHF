@@ -226,3 +226,68 @@ Review: `docs/dev/reviews/review-ota-scan-onset-major-2026-11-01.md` (second rou
 - **The trigger settle.**
 - **The read-size effect.**
 
+
+## Addendum 2 (2026-11-01, after on-air task 14): bound the uncoded fallback rescue
+
+### Measured
+
+With the short-of-block guard on air (task 14), station B's coded failures dropped from 813 to 5,
+but **B decoded 0 of 4 frames.** Its daemon log shows it spent the run in the **uncoded fallback**:
+6822 attempts, stepping one BPSK250 symbol at a time, not counted as `fec attempt`. The sequence:
+1. Early fragments of A's first frame each started a fallback rescue, and the loop stalled.
+2. The backlog came in as one read, and a 21 s front of the frame flushed short of a block.
+3. Its exhaustive fallback scan ran for the rest of the 5-minute run. That scan's reach is
+   `max(4·acq, onset_bound + acq)`, and `onset_bound` includes the triggering read.
+
+The fixed-read replay does not reproduce the early fragments. A replay that models the live loop (each
+read holds the audio that arrived during the previous decode, CPU 4× slower) does reproduce the
+spiral later in the recording: a 7.8 s fragment cost 19.9 s, and two frames merged into a 96.6 s burst.
+
+### Decision
+
+Both uncoded **rescue** stages scan at most `OTA_FALLBACK_RESCUE_ONSETS` = 64 onsets, nearest the
+burst's trigger point (`lead`) first, within the span they scanned before:
+- the deferred exhaustive fallback (`decode_fallback_near_trigger`);
+- phase 2's fallback entry.
+
+The ordering is `onsets_nearest`, with ties going to the earlier onset.
+
+Not changed:
+- the K = 4 correlation-ranked attempts that run first;
+- the ladder candidates' scans and their phase 2, still the full ascending walk;
+- a fallback mode without a preamble template, which keeps `decode_burst_phase1` in the ranked
+  stage.
+
+**What this gives up:** a control frame whose onset lies further than ±32 symbols from the trigger
+point (±128 ms at BPSK250) *and* ranks below K. A frame normally starts at the burst's onset, and the
+ranked stage already covers the best correlation peaks anywhere in reach.
+
+### Measured after (x86, release, replay)
+
+| | before | after |
+|---|---|---|
+| 5.1 s fragment (`rx-b-b3`) | 6.0 s | **2.5 s** |
+| fragments on `rx-a-g3` | 2–6 s | **1.1–3.0 s** |
+| `rx-b-b4`, live-loop model, CPU ×4 | 3 of 4 frames; the 4th merged into a 96.6 s burst | **4 of 4 frames decode** |
+
+Every frame that decoded on the recordings still decodes. Full-length bursts that fail still cost
+27–39 s; they are phase 2 for the ladder rungs, and the next item.
+
+### Tests
+
+- `a_burst_shorter_than_a_coded_frame_is_not_onset_scanned` now has a budget of 200 attempts. With
+  both bounds the fragment takes 133. Sabotage: with the rescue cap unbounded, 511; with the
+  short-of-block guard disabled too, 888.
+- `onsets_nearest` has a unit test covering the order, the cap and the clamped end.
+
+### Also in this round
+
+- **The daemon logs every capture read** at debug level, with its sample count and the time since the
+  last read. A read of a second or more is logged at info: "the receive loop fell behind".
+- **The runner waits `TRAFFIC_WARMUP` (30 s) after the daemons start before traffic begins.**
+
+### Still parked
+
+- **Phase 2's cost for the ladder rungs on full-length bursts that fail.**
+- **The trigger settle.**
+- **Why live capture fragments where the recording does not.** The new read log is meant to show it.
