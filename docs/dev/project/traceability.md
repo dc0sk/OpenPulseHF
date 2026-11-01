@@ -49,7 +49,13 @@ this ledger adds the design rationale and the actually-observed results per chan
     requirements-trailer lint alone: the branch commits `cd3bf5c` and `ab9235f` carry no
     `Implements:` trailer. Rewriting them would need a force push, which was not done. The squash
     message must carry `Implements: REQ-FUN-06`; `check-trailer.sh --message-file` passes with it;
-  - `scripts/slow-tests.sh`: running.
+  - `scripts/slow-tests.sh` at `ab9235f`: `SLOW-TESTS: FAIL`. One suite failed:
+    `notch_rescues_interferer`, 2 passed and 1 failed. The failure is the known red row #1457 (work
+    plan decision 10; `acceptance-criteria.md`, recorded red since `4eb13f95`, 2026-09-29), with the
+    same message: "the decode SUCCEEDED without the notch at interferer amplitude 0.3". That test
+    decodes through the CLI path (`receive_with_fec_mode_timeout`), not the OTA scan changed here.
+    Passed: `ota_channel_adaptation` (3/3, 1682 s), `spectral_busy_gathers_weak_frames` (2/2, 598 s)
+    and `total_power_bursts_keep_their_head` (1/1, 249 s).
 - **Review:** `docs/dev/reviews/review-ota-scan-onset-major-2026-11-01.md`. No Release 1 blocker;
   4 should-fix and 3 nits, all taken or stated. It does not show the fix is sufficient on a Pi; the
   on-air retest decides.

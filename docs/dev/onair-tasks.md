@@ -2798,3 +2798,63 @@ first, or scan onsets near the lead first, and keep phase 1's full sweep as the 
 recordings are the regression fixtures. That waits for the maintainer's go; the stations are free
 meanwhile.
 
+## Task 13 — retest the daemons on air with the onset-major scan (status: open)
+
+The fix: the daemon's OTA scan now runs onset-major (`ab9235f`;
+`docs/dev/design/ota-scan-onset-major.md`). On the task 12 recordings, station B's first decode drops
+from 8.1 to 1.75 s on x86. Tests at that build:
+- the workspace gate: 2721 passed, 0 failed;
+- `slow-tests.sh`: everything except the known red notch row #1457.
+
+Whether it is enough on the Pi 4 is what this task shows.
+
+The station rules hold, as in tasks 11 and 12:
+- 5 W at most;
+- ask the maintainer before **every** run, because both rigs key;
+- record nothing about the remote host;
+- **RSPdx port B empty**, because the IC-9700 transmits.
+
+### Part A — nothing transmits
+1. Pull. Report the commit on rpi51; it must include `ab9235f`.
+2. Run `scripts/run-onair-twin-ota.sh deploy`, which builds the new daemon on rpi51 and copies it to
+   station B. Quote the three sha256 lines; they must match. They will differ from task 12's.
+3. Read back both rigs: 065, dial, RFPOWER, PTT on the FT-991A; RFPOWER, PTT on the IC-9700.
+
+### Part B — the ACK leg again: B sends (keys both rigs: one go)
+Task 12 run G2 again: `OTA_PROFILE=robust TRAFFIC_FROM=B TRAFFIC_SIZE=64 TRAFFIC_INTERVAL=2
+TRAFFIC_DURATION=300 DAEMON_LOG_LEVEL=debug scripts/run-onair-twin-ota.sh run`.
+- Delete both stations' `events.ndjson` first, with the daemons stopped.
+- Record the receive audio on both stations as in task 12. Decimate it to 8 kHz, gzip it, and commit it
+  as `rx-<a|b>-g3-8k.wav.gz` under `docs/dev/test-reports/on-air/rx-audio-2026-11-01/`.
+- Commit the evidence as before, redacted and gzipped.
+
+Report:
+- station A: the number of `ota_rate_decision` events with `"verdict":"keyed"`, and the time from
+  each B frame's end (its `logged TX metadata` line in `daemon-b.log`) to A's next `fec attempt OK`
+  and to A's ACK (`mode=FSK4-ACK` metadata line in `daemon-a.log`);
+- station B: `OTA send abandoned` (how many), whether `ota_status` shows `tx_level` changing, and
+  `OTA ACK not received within window` (how many).
+
+### Part C — B receives: A sends (keys both rigs: one go)
+The same with `TRAFFIC_FROM=A`, recordings named `-b3`. Report the same counts with the roles swapped,
+and for station B the number of `fec attempt OK` and `fec attempt FAILED`.
+
+### Part D — only if both B and C show at least one ACK applied inside the window
+"Applied" means: the sender's `ota_status` changed right after a `ptt_changed false`, or an ACK was
+received with no `not received within window` for that frame.
+
+If so, run **task 11 Part B** as written (A2: `robust`, A sends, 900 s, the induced drive schedule on
+`A_TX_SINK_VOLUME` with UTC times). Then **task 11 Part C** (B sends, the schedule on
+`B_TX_SINK_VOLUME`). One go each. Commit the evidence as before.
+
+If not, stop after Part C and report. The recordings let the cloud session replay it.
+
+After every run or abort, run `cleanup` and quote it.
+
+End state, whatever happened:
+- PTT 0 on both rigs, nothing running;
+- recorded: the FT-991A's 065, dial and RFPOWER, and the IC-9700's RFPOWER;
+- port B empty.
+
+### Results
+
