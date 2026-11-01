@@ -2798,7 +2798,7 @@ first, or scan onsets near the lead first, and keep phase 1's full sweep as the 
 recordings are the regression fixtures. That waits for the maintainer's go; the stations are free
 meanwhile.
 
-## Task 13 — retest the daemons on air with the onset-major scan (status: open)
+## Task 13 — retest the daemons on air with the onset-major scan (status: done — first frames now get through both ways; later frames lost to the cost of failing bursts; see the review below)
 
 The fix: the daemon's OTA scan now runs onset-major (`ab9235f`;
 `docs/dev/design/ota-scan-onset-major.md`). On the task 12 recordings, station B's first decode drops
@@ -2909,3 +2909,20 @@ Result: **A2 not shown, worse than b3.**
 - No demotion/climb could be observed: the rate never moved and no ACK reached A.
 
 Cleanup (quote): `== cleanup ==  [IC-9700] daemon and rigctld stopped; PTT 0 sent while rigctld ran  [FT-991A] daemon and rigctld stopped; PTT 0 sent while rigctld ran`; nothing running. Task 11 Part C (B sends, the same schedule on `B_TX_SINK_VOLUME`) NOT run: Part D's own premise (ACKs applied in both directions) is not repeated here; it waits for the maintainer's decision.
+
+**Reviewed (cloud session, 2026-11-01), task 13:** the onset-major build is a real step.
+- **The first frame now gets through in both directions inside the window.** rpi51 decoded B's
+  first frame 1.69 s after its end and sent its ACK at 3.43 s. Station B's Pi 4 decoded A's first frame
+  in 2.97 s and sent its ACK at 4.57 s. Before, B decoded nothing.
+- **`tx_level` not moving is expected so far:** an ACK at SL2 recommending SL2 is a hold. A climb
+  needs a run of clean decodes.
+- **What stops the later frames.** Replayed with the same build, `rx-b-b3` decodes A's frames 1–3 at
+  about 2 s each. Live, B missed them because **the bursts between frames that fail are expensive**:
+  a 5.1 s fragment cost 79 s on x86, and minutes on the Pi 4, with the receive loop blocked. 1088 of
+  its ~1600 attempts were coded candidates (SL2/SL3) that cannot fit in 5.1 s. The 900 s run (0 of 12)
+  fits the same picture.
+- **Fixed in the cloud session:** a candidate whose whole burst decodes to less than one RS block is
+  no longer onset-scanned (`docs/dev/design/ota-scan-onset-major.md`, addendum). In the replay that
+  fragment drops from 79 s to 6.0 s and a 36 s burst from 40 s to 5.2 s. Every frame still decodes.
+  The fix is under review; the gate and the slow tests run before the next on-air task.
+

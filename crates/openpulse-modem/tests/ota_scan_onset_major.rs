@@ -71,3 +71,51 @@ fn a_real_off_correction_burst_decodes_without_walking_the_whole_span() {
 /// scan reverted to pass-major (sabotage run). 40 leaves room for upstream changes to the arms before
 /// the scan, and is still far below what a pass walked to the end of the span costs.
 const ATTEMPT_BUDGET: u64 = 40;
+
+/// A burst shorter than one coded frame of every candidate must not be onset-scanned.
+///
+/// Fixture: `tests/captures/ft991a-ota-fragment-5s.wav`, 16 s around a 5.1 s burst station B
+/// gathered between two of A's SL2 frames (on-air task 13, run b3). An SL2 frame is 66.6 s, so the
+/// burst cannot hold one. Before the guard it cost 1088 coded attempts and 79 s on x86 at SL2/SL3.
+#[test]
+fn a_burst_shorter_than_a_coded_frame_is_not_onset_scanned() {
+    let cap = load_corpus("ft991a-ota-fragment-5s.wav").expect("corpus");
+    let bk = LoopbackBackend::new();
+    let mut rx = engine(&bk);
+    let mut worst = (0usize, 0u64);
+    for chunk in cap.samples.chunks(800) {
+        let Some(burst) = rx
+            .accumulate_capture(Some("BPSK250"), chunk.to_vec())
+            .unwrap()
+        else {
+            continue;
+        };
+        let before = rx.decode_attempts();
+        let res = rx
+            .ota_decode_burst(&burst, "DC0SK", Some("BPSK250"))
+            .unwrap();
+        assert!(res.payload.is_none(), "no frame fits in this fixture");
+        let spent = rx.decode_attempts() - before;
+        if burst.samples.len() > worst.0 {
+            worst = (burst.samples.len(), spent);
+        }
+    }
+    println!(
+        "longest burst {} samples: {} decode attempts",
+        worst.0, worst.1
+    );
+    assert!(
+        worst.0 > 30_000,
+        "the fragment must flush as a burst (got {} samples)",
+        worst.0
+    );
+    assert!(
+        worst.1 <= FRAGMENT_BUDGET,
+        "{} decode attempts on a burst too short for an SL2 frame (budget {FRAGMENT_BUDGET})",
+        worst.1
+    );
+}
+
+/// Measured on this fixture: 511 attempts with the guard (nearly all of them the uncoded fallback,
+/// which a control frame of 0.9 s could still need), 888 with the guard disabled (sabotage run).
+const FRAGMENT_BUDGET: u64 = 600;

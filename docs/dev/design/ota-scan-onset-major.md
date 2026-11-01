@@ -145,9 +145,70 @@ failed. `grep -n "scan_burst_onsets\|acquire_burst_correction" crates/openpulse-
   window the playbook's §3 warns against. Diagnose it with the swept-correction experiment of §1.
 - **Why larger reads cost more on these recordings** (1.3 → 9.7 s at 800 → 4096 samples), given that
   `scan_end` does not change at those sizes.
-- **A bound on bursts that cannot decode.** The 10.8 s fragment burst cost 258 coded attempts, each
-  failing `FEC data length N is shorter than one 255-byte block`, plus 257 exhaustive fallback
-  attempts. Once a window truncated by the burst's end holds less than one RS block, every later
-  onset holds less, so that candidate's scan could stop.
+- ~~A bound on bursts that cannot decode.~~ Done, see the next section.
 - **The on-channel carrier at rpi51.** It shows ~1494–1500 Hz in the IC-9700's idle audio, and on
   the RSPdx's port A at 144.6415 MHz.
+
+## Addendum (2026-11-01, after on-air task 13): skip candidates a burst is too short for
+
+### Measured
+
+With the onset-major build on air (task 13), the first frame got through in both directions inside the
+window:
+- rpi51 decoded B's first frame 1.69 s after it ended;
+- station B decoded A's first frame in 2.97 s.
+
+But **every later frame failed live.** In the 900 s run station B decoded 0 of 12. Replayed, the same
+recordings decode A's frames 1–3 at about 2 s each. What fills the time between them is the **bursts
+that fail**:
+- a 5.1 s fragment cost **79 s** on x86;
+- a 36 s burst cost 40 s.
+
+On a Pi 4 that is minutes of a blocked receive loop, so the following frames go unheard.
+
+On the 5.1 s fragment, **1088 of about 1600 attempts** were coded attempts, every one failing
+`FEC data length N is shorter than one 255-byte block`. The candidates were SL3 (a 33.8 s frame) and
+SL2 (66.6 s), and neither fits in 5.1 s.
+
+### Decision
+
+Each candidate's first attempt already decodes the **whole** burst from offset 0. If it fails as
+"shorter than one RS block" with at least 2 bytes to spare (`have + 2 < 255`), the onset scan and phase
+2 skip that candidate.
+- **Why that is safe:** every later onset decodes a suffix of the same burst, so it holds no more
+  data. The 2 bytes absorb a symbol of timing-search difference.
+- **Not skipped:** the uncoded fallback. A 0.9 s BPSK250 control frame can sit inside a fragment.
+  HARQ is untouched; on the `robust` rungs it never runs, because RS is hard-decision.
+- **Parsing the error:** it comes from `openpulse_core::fec::rs_short_of_block`, which lives next to
+  the message's producer, `FecCodec::decode_prefix`, and shares its prefix constant. A unit test pins
+  the two together.
+
+### Measured after (x86, release, replay at 800-sample reads)
+
+| burst | before | after |
+|---|---|---|
+| 5.1 s fragment (`rx-b-b3`) | 79.2 s | **6.0 s** |
+| 36.2 s (`rx-a-g3`) | 39.9 s | **5.2 s** |
+| 25.3 s (`rx-a-g3`) | 30.1 s | **4.0 s** |
+| 10.8 s (`rx-a-g2`) | 23.8 s | **3.7 s** |
+
+- Every frame that decoded before still decodes, with the same ACKs (all four recordings).
+- What the fragments still cost, 2–6 s on x86, is mostly the uncoded fallback.
+- Full-length bursts that fail still cost about 30–46 s. One of them is a frame cut off by the end
+  of the recording.
+
+### Test
+
+`tests/ota_scan_onset_major.rs::a_burst_shorter_than_a_coded_frame_is_not_onset_scanned` replays
+`tests/captures/ft991a-ota-fragment-5s.wav`, 16 s around the 5.1 s fragment. The budget is 600 attempts:
+- with the guard: 511;
+- with it disabled (sabotage): 888, and the test fails.
+
+### Still parked
+
+- **The uncoded fallback's cost on fragments.** It is exhaustive after the ranked K, and the
+  phase-2 entry adds to it.
+- **Full-length bursts that fail.**
+- **The trigger settle.**
+- **The read-size effect.**
+

@@ -3601,7 +3601,13 @@ impl ModemEngine {
         // Offset 0 only, exactly as before #1138. The onset SCAN is deliberately NOT here — it
         // runs after the uncoded fallback below, so its cost lands only on bursts nothing else
         // could decode. See the scan block for why that ordering is the additive one.
-        for (level, mode, fec) in &candidates {
+        // Candidates whose WHOLE burst, decoded from offset 0, holds less than one RS block. Every
+        // later onset decodes a suffix of the same burst, so no onset can hold more: the onset scan
+        // and phase 2 skip them. Measured on the 2026-11-01 recordings: a 5.1 s fragment cost 1088
+        // coded attempts (79 s on x86, minutes on a Pi 4, deaf meanwhile) at SL2/SL3, whose frames
+        // are 66.6 s and 33.8 s long (`docs/dev/design/ota-scan-onset-major.md`, short bursts).
+        let mut short_of_block = vec![false; candidates.len()];
+        for (ci, (level, mode, fec)) in candidates.iter().enumerate() {
             self.afc_correction_hz = afc_before;
             let slice = AudioSamples {
                 samples: samples.samples.clone(),
@@ -3614,7 +3620,13 @@ impl ModemEngine {
                     decoded = Some((payload, *level, mode.clone()));
                     break;
                 }
-                Err(e) => last_err = Some(e),
+                Err(e) => {
+                    // Two bytes of margin: the demodulator's timing search may land a symbol
+                    // differently at another onset.
+                    short_of_block[ci] = openpulse_core::fec::rs_short_of_block(&e)
+                        .is_some_and(|have| have + 2 < RS_BLOCK_BYTES);
+                    last_err = Some(e);
+                }
             }
         }
 
@@ -3750,6 +3762,10 @@ impl ModemEngine {
             let mut attempts: Vec<(usize, usize, usize)> = Vec::new();
             for (ci, (_, mode, fec)) in candidates.iter().enumerate() {
                 let (step, scan_end, raw_max) = self.burst_onset_scan_bounds(mode, n, onset_bound);
+                if short_of_block[ci] {
+                    plans.push((0, Vec::new()));
+                    continue;
+                }
                 // OFF FREQUENCY: scan at the carrier the trigger point settles on, first (REQ-PHY-03).
                 //
                 // Phase 2 acquires the carrier, but only after this scan has failed at every onset
@@ -3903,6 +3919,10 @@ impl ModemEngine {
                     phase2.len() - 1
                 });
             'settle_scan: for (i, (level, mode, fec)) in phase2.iter().enumerate() {
+                // The fallback entry, if any, sits past `candidates` and is never short-flagged.
+                if short_of_block.get(i).copied().unwrap_or(false) {
+                    continue;
+                }
                 let (step, scan_end, raw_max) = self.burst_onset_scan_bounds(mode, n, onset_bound);
                 // Coded sizing here too (#1384) — phase 2 starts its scan at onset 0, but walks past
                 // it, so every later slice has the same raw-truncation exposure as phase 1's.
