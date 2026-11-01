@@ -1,11 +1,13 @@
 ---
 project: openpulsehf
 doc: docs/dev/design/ota-scan-onset-major.md
-status: review
+status: resolved
 last_updated: 2026-11-01
 ---
 
 # Run the OTA burst scan onset-major
+
+Reviewed: `docs/dev/reviews/review-ota-scan-onset-major-2026-11-01.md` (no Release 1 blocker; findings taken as listed there).
 
 Work plan M3, A2 (found on air 2026-10-31, reproduced offline 2026-11-01).
 
@@ -33,10 +35,14 @@ The debug log of the first burst shows where the cost goes, in the OTA arm's sca
    onsets): **all fail.**
 3. The **uncorrected pass** then decodes at **onset 2560, on its 10th attempt.**
 
-That is 144 attempts, of which 135 could not succeed. **Read size multiplies it:** `scan_end` grows to
-`onset_bound + acq` with the read that triggered the flush (#1454/#1443). A Pi that falls behind reads
-larger chunks and widens the next scan. On the recordings, A's first frame took 1.3 s at 800-sample
-reads, 9.7 s at 4096, and at 16 000 the bursts merged and frames were lost.
+That is 144 attempts, of which 135 could not succeed.
+
+**Read size matters too; the mechanism is not established.** On the recordings, A's first frame took
+1.3 s at 800-sample reads, 9.7 s at 4096, and at 16 000 the bursts merged and frames were lost. An
+earlier draft blamed `scan_end` growing with the trigger read (`onset_bound + acq`, #1454/#1443). The
+review showed that does not hold here: for BPSK31 the `4·acq` = 32 768 floor dominates until
+`onset_bound` exceeds about 24 576 samples, so at 4096-sample reads `scan_end` is unchanged. What makes
+larger reads costlier is UNCHECKED. It is parked below.
 
 The same pass-major shape holds across candidates. Once the receiver had recommended SL3, B's 4th
 frame paid a full SL3 scan before SL2 decoded: 16.9 s.
@@ -54,7 +60,9 @@ attempt that decodes wins, as before.
 
 Properties:
 - **Same attempt set.** A burst no attempt decodes costs exactly what it cost: the same attempts, in
-  another order.
+  another order. That includes one corner the first draft dropped (review): when
+  `0 < scan_end < step`, the pass-major walk made one attempt at onset `step` itself, past
+  `scan_end`. The schedule adds it explicitly.
 - **A decoding burst stops at the first onset where any attempt decodes.** A wrong correction or a
   wrong candidate costs one attempt per onset, not a span.
 - **The earliest onset wins.** The scan was ascending within a pass and stays ascending overall. A
@@ -83,6 +91,8 @@ Not changed:
 - Every burst that decoded before still decodes, with the same payload length and ACK.
 - A's first frame at 800-sample reads got slightly slower, because both passes now alternate there.
 - Bursts that do not decode cost the same as before (6–60 s), as designed.
+- **Necessary, not shown sufficient, for A2 on a Pi:** at 4096-sample reads the first frame still
+  takes 4.2–4.9 s on x86, and a Pi is several times slower. The on-air retest decides.
 
 ## Risks and how each is checked
 
@@ -96,7 +106,9 @@ Not changed:
 - **The regression test:** `tests/ota_scan_onset_major.rs` replays a cut of the recording
   (`tests/captures/ft991a-ota-frame-bpsk31-rs.wav`). It asserts the decode, and at most 40 decode
   attempts on the burst. Onset-major takes 26; reverted to pass-major, 144 (sabotage run, the test
-  fails).
+  fails). It pins a **cost**, not the order: a change before the scan that happened to decode early
+  would also pass. `OtaRxResult` does not expose the winning onset, so the onset (2560) is not
+  asserted.
 
 ## Consumer
 
@@ -129,7 +141,10 @@ failed. `grep -n "scan_burst_onsets\|acquire_burst_correction" crates/openpulse-
 ## Parked
 
 - **The trigger settle's wrong estimate:** −12.8 against +3.2 Hz on BPSK31, possibly a preamble
-  sideband. It is the playbook's §1 territory.
+  sideband. It settles on a window anchored at the squelch trigger, which is the coarse energy-gate
+  window the playbook's §3 warns against. Diagnose it with the swept-correction experiment of §1.
+- **Why larger reads cost more on these recordings** (1.3 → 9.7 s at 800 → 4096 samples), given that
+  `scan_end` does not change at those sizes.
 - **A bound on bursts that cannot decode.** The 10.8 s fragment burst cost 258 coded attempts, each
   failing `FEC data length N is shorter than one 255-byte block`, plus 257 exhaustive fallback
   attempts. Once a window truncated by the burst's end holds less than one RS block, every later

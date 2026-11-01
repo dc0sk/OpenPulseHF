@@ -3801,6 +3801,14 @@ impl ModemEngine {
                     }
                     start = (start + step).min(scan_end);
                 }
+                // The pass-major walk started a pass at `first` before clamping to `scan_end`, so when
+                // `0 < scan_end < first` it made one attempt at `first` itself. Kept, so the set is
+                // exactly the one it replaces (review, 2026-11-01).
+                for (pi, &(_, first)) in passes.iter().enumerate() {
+                    if scan_end > 0 && first > scan_end {
+                        attempts.push((first, ci, pi));
+                    }
+                }
                 plans.push((max_frame_samples, passes));
             }
             // Onset first; at one onset the candidates in their profile order, and within a candidate
