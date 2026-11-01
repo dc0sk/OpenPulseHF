@@ -3010,3 +3010,35 @@ What remains, both on the engine side, plus one cheap runner change:
 
 The decision is the maintainer's.
 
+## Task 15 — retest with the bounded fallback rescue, the capture-read log and the warm-up (status: open)
+
+The new build is `eb55283`. On top of task 14's build:
+- **the uncoded fallback rescue is bounded** to 64 onsets near the trigger point, so no single burst
+  can hold the receive loop for minutes;
+- **the daemon logs every capture read:** at debug, the sample count and the ms since the last read;
+  at info, any read holding a second or more;
+- **the runner waits 30 s after starting the daemons before traffic begins** (`TRAFFIC_WARMUP`).
+
+On the task 14 recordings, a model of the live loop on a 4× slower CPU now decodes 4 of 4 frames. Tests
+at this build:
+- the pre-push tests of 16 crates pass;
+- `slow-tests.sh` passes, except the known red notch row #1457.
+
+**Run task 13 Parts A to D again, as written there**, with these differences:
+- the commit on rpi51 must include `eb55283`;
+- name the recordings `-g5` (Part B) and `-b5` (Part C);
+- start each recording just before `run`, as before. The traffic now starts 30 s later, so allow
+  for that: record for the traffic duration plus 90 s;
+- the Part D condition is the same.
+
+The station rules hold: 5 W at most, ask the maintainer before every run, record nothing about the
+remote host, RSPdx port B empty.
+
+Report task 14's counts, the receiver's `fec attempt OK` against the frames the sender sent, and from
+each daemon log:
+- the number of `capture read holds` info lines, with the largest `samples=` value;
+- from the debug `capture read` lines, the distribution of `samples=` (e.g.
+  `grep -o 'samples=[0-9]*' | sort | uniq -c | sort -rn | head`) and the largest `since_ms`.
+
+### Results
+

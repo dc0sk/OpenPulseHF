@@ -15,6 +15,41 @@ this ledger adds the design rationale and the actually-observed results per chan
 
 ---
 
+## 2026-11-01 — The OTA uncoded fallback rescue is bounded; the daemon logs its capture reads (work plan M3, A2)
+
+- **Requirement/change:** REQ-FUN-06 and A2. On air with the short-of-block guard (task 14), station B
+  decoded 0 of 4. Its daemon spent the run in the uncoded fallback, 6822 attempts. The exhaustive
+  scan's reach grows with the read that triggered the flush, after early fragments of A's first frame
+  had stalled the loop.
+- **Design decision** (addendum 2 to `docs/dev/design/ota-scan-onset-major.md`, reviewed):
+  - the deferred exhaustive fallback and phase 2's fallback entry scan at most 64 onsets, nearest a
+    point 1024 samples before the trigger point first. That covers the 2048-sample pre-trigger ring at
+    BPSK250;
+  - the daemon logs every capture read;
+  - the runner warms up for 30 s before traffic starts.
+- **Implementation:**
+  - `crates/openpulse-modem/src/engine.rs`: `OTA_FALLBACK_RESCUE_ONSETS`,
+    `OTA_FALLBACK_RESCUE_LEAD_BIAS`, `onsets_nearest`, `decode_fallback_near_trigger`, and the phase-2
+    onset list;
+  - `crates/openpulse-daemon/src/server.rs`: the capture-read log;
+  - `scripts/run-onair-twin-ota.sh`: `TRAFFIC_WARMUP`.
+- **Tests and results (run):**
+  - fragment test budget 200: 133 attempts. Sabotage: 511 without the cap, 888 without the guard too;
+  - the `onsets_nearest` unit test passes;
+  - replay on x86, release: the 5.1 s fragment 6.0 → 2.5 s; `rx-a-g3` fragments 1.1–3.0 s. The
+    live-loop model on `rx-b-b4` at CPU ×4 decodes 4 of 4 frames, where the 4th had been merged into a
+    96.6 s burst. The same frames decode on all four recordings;
+  - pre-push at `48c64ef` and at `eb55283`: 16 crates, tests passed. The first push of `eb55283` failed
+    on `discovery_tick_defers_a_due_beacon_when_the_channel_is_busy` while `slow-tests.sh` loaded the
+    machine. It passed 5/5 alone and 3/3 in the parallel daemon library run, so it looks like a load
+    flake; the change only adds logging to `server.rs`. The retry passed;
+  - `slow-tests.sh` at `eb55283`: `ota_channel_adaptation` 3/3, `spectral_busy_gathers_weak_frames`
+    2/2, `total_power_bursts_keep_their_head` 1/1; `notch_rescues_interferer` 2/3, the known red row
+    #1457.
+- **Review:** the same review file, third round. No Release 1 blocker. The cap's centre was moved
+  before the trigger and the log wording changed. `twin_daemon_bridge` flakes under load before and
+  after the change.
+
 ## 2026-11-01 — OTA candidates a burst is too short to hold are not onset-scanned (work plan M3, A2)
 
 - **Requirement/change:** REQ-FUN-06 and A2. With the onset-major build on air (task 13) the first
