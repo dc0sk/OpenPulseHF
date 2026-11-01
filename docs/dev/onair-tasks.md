@@ -2926,7 +2926,7 @@ Cleanup (quote): `== cleanup ==  [IC-9700] daemon and rigctld stopped; PTT 0 sen
   fragment drops from 79 s to 6.0 s and a 36 s burst from 40 s to 5.2 s. Every frame still decodes.
   The fix is under review; the gate and the slow tests run before the next on-air task.
 
-## Task 14 — retest with the short-burst guard (status: open)
+## Task 14 — retest with the short-burst guard (status: done — Parts A to C run; Part D not run, its condition failed; see Results)
 
 The new build is `30dad89`. On top of task 13's build, it stops onset-scanning a coded candidate that a
 burst is too short to hold. On the task 13 recordings, the 5.1 s fragment that cost 79 s on x86 now
@@ -2966,3 +2966,15 @@ Station A (receiver): `ota_rate_decision` 7, **4 keyed**; **`fec attempt OK` 1 o
 Station B (sender): 4 frames; `OTA ACK not received within window` **2** (15:29:21.347, 15:30:38.192); `OTA send abandoned` **1**; `tx_level` SL2 in all 5 readings. No `not received` line for frame 0 or frame 3.
 
 Cleanup (quote): `== cleanup ==  [IC-9700] daemon and rigctld stopped; PTT 0 sent while rigctld ran  [FT-991A] daemon and rigctld stopped; PTT 0 sent while rigctld ran`; nothing running.
+
+#### Task 14 Part C — run b4 (A sends; maintainer's go 2026-11-01, port B empty)
+
+Same as b3, build `30dad89`. Recordings started 15:42:05.680 UTC (rpi51) and 15:42:06.039 UTC (station B); cleanup ran before 360 s, files 358.5 s and 357.0 s. Evidence `docs/dev/test-reports/onair-twin-ota-20261101-164223{.log,-evidence/}`. Audio `rx-a-b4-8k.wav.gz` 1966173 bytes (rms 204.9), `rx-b-b4-8k.wav.gz` 4970593 bytes (rms 1857.6, loud as in B2/b3); 48 kHz originals on rpi51 in /tmp (sha256 `635f6bea...`, `304fd8d6...`).
+
+Station B (receiver): **`fec attempt OK` 0 of 4 frames sent**, `fec attempt FAILED` **5** (b3: 813), `ota_rate_decision` keyed **0**, no ACK keyed. So the guard removed the failing-attempt cost, but B decoded none, not even frame 0 (b3 decoded frame 0 in 2.97 s).
+Station A (sender): 4 frames (15:43:31.320, 15:44:47.588, 15:46:04.293, 15:47:20.578 UTC); `OTA ACK not received within window` **3** (15:43:40.652, 15:44:56.863, 15:46:13.640); `OTA send abandoned` **1**; `tx_level` SL2 in all 6 readings. No ACK was received for frame 0, 1 or 2.
+
+Part D condition: **not met** (g4 had frame 0 ACKed with no `not received` line; b4 had no ACK applied). Part D not run, per the task: stop after Part C.
+
+Cleanup (quote), both runs: `== cleanup ==  [IC-9700] daemon and rigctld stopped; PTT 0 sent while rigctld ran  [FT-991A] daemon and rigctld stopped; PTT 0 sent while rigctld ran`; nothing running. End state: PTT 0 on both rigs (read back below), port B empty.
+End state read-back: FT-991A EX065+1500; dial 144641564 RFPOWER 0.05 PTT 0; IC-9700 RFPOWER 0.0117647 PTT 0
