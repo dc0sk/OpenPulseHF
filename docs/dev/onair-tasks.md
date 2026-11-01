@@ -3042,3 +3042,25 @@ each daemon log:
 
 ### Results
 
+
+#### Task 15 Part A (station session, 2026-11-01) — nothing transmitted
+
+- rpi51 at `8162cc45`; `git merge-base --is-ancestor eb55283 HEAD` true.
+- `deploy` rc=0; sha256 identical on both stations:
+  - `a230cff1536301cc8b4d70bbec12f9e8b8c00eb666307d5a87ac3f6c237323e5  target/release/openpulse-server`
+  - `470ea95ed463f114bb9829dd9e723075f598bc73820ea60fc511fecf2a13d9f7  target/release/openpulse`
+  - `c9e152f32d6b8d5548551b255865b9c45c198b96739672b02eab9dee56fdc373  scripts/twin-traffic.sh`
+- Read-back: FT-991A `EX065+1500;`, dial 144641564, RFPOWER 0.05, PTT 0. IC-9700 dial 144640000, RFPOWER 0.0117647, PTT 0. Nothing running on rpi51.
+
+#### Task 15 Part B — run g5 (B sends; maintainer's go 2026-11-01, port B empty)
+
+Same command as g3/g4 (`TRAFFIC_FROM=B`, 300 s, debug), build `eb55283` (rpi51 `8162cc45`); the runner's 30 s warm-up applied. Recordings `-d 390`, started 19:56:59.998 UTC (rpi51) and 19:57:00.350 UTC (station B), complete (390.0 s each). Evidence `docs/dev/test-reports/onair-twin-ota-20261101-205748{.log,-evidence/}`. Audio `rx-a-g5-8k.wav.gz` 4650877 bytes (rms 295.8), `rx-b-g5-8k.wav.gz` 1577508 bytes (rms 256.5); 48 kHz originals on rpi51 in /tmp (sha256 `ace3d559...`, `d7cb7fe4...`).
+
+Station A (receiver): `ota_rate_decision` 10, **4 keyed**; **`fec attempt OK` 1 of 4 frames sent**, `fec attempt FAILED` **343** (g4: 92, g3: 712). B frame ends 19:58:55.775, 20:00:06.114, 20:01:22.943, 20:02:39.805 UTC; A's `fec attempt OK` 19:58:57.037 (**1.26 s** after frame 0); A's ACK lines (`FSK4-ACK`) 19:58:58.694 (2.92 s after frame 0), 19:59:12.520, 19:59:34.660. Frames 1-3 not decoded.
+Station B (sender): 4 frames; `OTA ACK not received within window` **3** (20:00:15.890, 20:01:32.749, 20:02:48.933); `OTA send abandoned` **1**; `tx_level` SL2 in all 35 readings. Frame 0's ACK was applied (no `not received` line).
+
+Capture-read log (new in this build):
+- station A (rpi51): **12** `capture read holds` info lines, **largest `samples=224600`** (`since_ms=28076`, 20:00:57.076 UTC), then 81800 (`since_ms=10206`, 20:00:28.985); the first holds start at 19:59:02.153 (samples=19400, since_ms=2388), right after A's first ACK. Debug `capture read` `samples=` distribution: 867x 200, 655x 600, 644x 400, 300x 0; **largest `since_ms` 28076** (hold lines included).
+- station B (Pi 4): **0** `capture read holds` lines; distribution 307x 400, 168x 200, 163x 600, 8x 0; largest `since_ms` 70500 (the very first read, `samples=0`, 19:58:58.937, i.e. time since daemon start, not a stall); all later reads `since_ms` about 52-53 ms at most.
+
+Cleanup (quote): `== cleanup ==  [IC-9700] daemon and rigctld stopped; PTT 0 sent while rigctld ran  [FT-991A] daemon and rigctld stopped; PTT 0 sent while rigctld ran`; nothing running.
