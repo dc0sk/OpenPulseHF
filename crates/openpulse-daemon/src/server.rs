@@ -966,7 +966,8 @@ pub async fn run(cfg: OpenpulseConfig, modem_backend: Box<dyn AudioBackend>) -> 
                                 tracing::info!(
                                     samples = samples.len(),
                                     since_ms,
-                                    "capture read holds a second or more of audio: the receive loop fell behind"
+                                    "capture read holds {:.1} s of audio (the receive loop was busy that long)",
+                                    samples.len() as f32 / 8_000.0
                                 );
                             } else {
                                 tracing::debug!(samples = samples.len(), since_ms, "capture read");

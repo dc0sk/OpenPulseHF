@@ -80,3 +80,34 @@ The reviewer reproduced both tests: 26 and 511 attempts, 23.6 s in a debug build
 | 1 | nit | `decode_variants` returns the last arm's error, so the length read can differ by at most one symbol. | Covered by the margin; no change. |
 | 6 | nit | The test's 511 is mostly uncoded-fallback attempts, so it can drift with unrelated changes. | **Stated** in the note; there is no separate counter for coded attempts. |
 
+## Third round: the fallback-rescue bound, capture-read log and runner warm-up (`f6dec5a`, pushed as `48c64ef`)
+
+**Verdict:** no blocker, and it does not block Release 1. Confirmed:
+- the phase-2 ladder walk is identical to the old loop, including `scan_end == 0`,
+  `scan_end < step`, no doubled end, and the labelled break;
+- the logging's hot-path cost is negligible, and 8000 samples is correct because the engine runs at
+  8 kHz;
+- the warm-up keys nothing by itself.
+
+Tests run by the reviewer, debug build, all passing:
+- `off_frequency_fallback_is_not_ladder` 2/2;
+- `ota_arm_uncoded_dispatch` 6/6;
+- `burst_carries_several_frames` 2/2;
+- `ota_scan_onset_major` 2/2;
+- `ota_rate_decision_events` 3/3;
+- `pn_preamble_parity` 2 passed, 6 ignored;
+- the `onsets_nearest` unit test;
+- `muted_failures_move_no_ladder` 1/1;
+- `twin_multi_fragment_file` 3/3.
+
+`twin_daemon_bridge::a_file_crosses_the_bridge_with_ota_enabled` timed out under parallel load in 2 of
+8 runs with the change, and in 1 of 3 on the parent commit `56dce3f`. Single-threaded, both pass. It is
+a pre-existing load flake, not shown to be caused by this change.
+
+| # | Severity | Finding | Disposition |
+|---|---|---|---|
+| 2 | should-fix (by analysis) | The cap was centred on the trigger point, but a frame's head precedes the trigger by up to the 2048-sample pre-trigger ring. At BPSK250, 64 onsets covered only ±1024. | **Taken.** Centred 1024 samples before the trigger (`OTA_FALLBACK_RESCUE_LEAD_BIAS`), which covers the ring at BPSK250. The note now says *trigger point* and states the remaining loss class, and that the rank-0 premise is UNCHECKED on real frames. |
+| 4 | nit | "fell behind" alarms on every read after a normal multi-second Pi decode. | **Taken.** The info line now states the seconds of audio the read holds. The log volume is noted. |
+| 2b | nit | `lead` is unclamped in one call site and `lead.min(n)` in the other. | Harmless (`abs_diff`); left. |
+| 5 | note | A daemon dying during the warm-up is noticed only when polling starts. Side recordings shift 30 s relative to the report. | Noted for the task text. |
+

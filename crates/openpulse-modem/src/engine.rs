@@ -348,9 +348,15 @@ const FALLBACK_RANKED_ONSETS: usize = 4;
 /// first (`docs/dev/design/ota-scan-onset-major.md`, fallback bound). Unbounded, the exhaustive scan
 /// tried every symbol out to a reach that grows with the read that triggered the flush. Measured on
 /// air, 2026-11-01 (task 14): a 21 s burst held station B's receive loop for the rest of a 5-minute
-/// run, 6822 uncoded attempts, and A's frames went unheard. 64 positions are ±32 symbols around the
-/// trigger at the scan step; the K correlation-ranked onsets before them are unchanged.
+/// run, 6822 uncoded attempts, and A's frames went unheard. The K correlation-ranked onsets before
+/// them are unchanged.
 const OTA_FALLBACK_RESCUE_ONSETS: usize = 64;
+
+/// Where the bounded rescue centres, in samples BEFORE the trigger point: a frame's head precedes the
+/// trigger by up to the pre-trigger ring (`S_LOOKBACK · WINDOW` = 2048 samples), so centring half of
+/// that earlier lets 64 onsets at BPSK250's 32-sample step cover the whole ring (review, 2026-11-01).
+/// At BPSK31's 256-sample step they span ±8192 either way.
+const OTA_FALLBACK_RESCUE_LEAD_BIAS: usize = 1024;
 
 /// Maximum AFC correction magnitude accepted after settling.
 ///
@@ -3176,7 +3182,8 @@ impl ModemEngine {
     }
 
     /// The OTA arm's deferred uncoded rescue: at most [`OTA_FALLBACK_RESCUE_ONSETS`] onsets, nearest
-    /// the burst's trigger point (`trigger`, the flushed burst's lead) first, within the same span
+    /// a point [`OTA_FALLBACK_RESCUE_LEAD_BIAS`] before the burst's trigger point (`trigger`, the
+    /// flushed burst's lead) first, within the same span
     /// `decode_burst_phase1` would scan. Same rollback discipline as `scan_burst_onsets`.
     fn decode_fallback_near_trigger(
         &mut self,
@@ -3199,7 +3206,8 @@ impl ModemEngine {
         let afc_before = self.afc_correction_hz;
         let mut last_err = ModemError::Demodulation("no onset attempted".into());
         let mut found = None;
-        for start in onsets_nearest(step, scan_end, trigger, OTA_FALLBACK_RESCUE_ONSETS) {
+        let centre = trigger.saturating_sub(OTA_FALLBACK_RESCUE_LEAD_BIAS);
+        for start in onsets_nearest(step, scan_end, centre, OTA_FALLBACK_RESCUE_ONSETS) {
             let end = (start + max_frame_samples).min(n);
             if start >= end {
                 continue;
@@ -4017,7 +4025,12 @@ impl ModemEngine {
                 // The fallback entry scans at most OTA_FALLBACK_RESCUE_ONSETS onsets nearest the
                 // trigger (see the constant); the ladder candidates keep their full ascending walk.
                 let onsets: Vec<usize> = if fallback_at == Some(i) {
-                    onsets_nearest(step, scan_end, lead.min(n), OTA_FALLBACK_RESCUE_ONSETS)
+                    onsets_nearest(
+                        step,
+                        scan_end,
+                        lead.min(n).saturating_sub(OTA_FALLBACK_RESCUE_LEAD_BIAS),
+                        OTA_FALLBACK_RESCUE_ONSETS,
+                    )
                 } else {
                     onsets_nearest(step, scan_end, 0, usize::MAX)
                 };

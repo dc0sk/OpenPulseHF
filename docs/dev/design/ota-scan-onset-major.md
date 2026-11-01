@@ -245,8 +245,9 @@ spiral later in the recording: a 7.8 s fragment cost 19.9 s, and two frames merg
 
 ### Decision
 
-Both uncoded **rescue** stages scan at most `OTA_FALLBACK_RESCUE_ONSETS` = 64 onsets, nearest the
-burst's trigger point (`lead`) first, within the span they scanned before:
+Both uncoded **rescue** stages scan at most `OTA_FALLBACK_RESCUE_ONSETS` = 64 onsets, nearest a point
+`OTA_FALLBACK_RESCUE_LEAD_BIAS` = 1024 samples **before** the burst's trigger point (`lead`) first,
+within the span they scanned before:
 - the deferred exhaustive fallback (`decode_fallback_near_trigger`);
 - phase 2's fallback entry.
 
@@ -258,9 +259,20 @@ Not changed:
 - a fallback mode without a preamble template, which keeps `decode_burst_phase1` in the ranked
   stage.
 
-**What this gives up:** a control frame whose onset lies further than ±32 symbols from the trigger
-point (±128 ms at BPSK250) *and* ranks below K. A frame normally starts at the burst's onset, and the
-ranked stage already covers the best correlation peaks anywhere in reach.
+**Why the bias:** a frame's head precedes the **trigger point** by up to the pre-trigger ring, 2048
+samples. Centred on the trigger, 64 onsets at BPSK250's 32-sample step covered only ±1024 samples, half
+the ring (review). Centred 1024 samples earlier, they cover the whole ring. At BPSK31's 256-sample step
+they span ±8192 either way.
+
+**What this gives up:**
+- at BPSK250, a control frame that ranks below K **and** whose head lies more than 2048 samples before
+  the trigger or after it;
+- in particular, a frame that opens late inside a long read (#1454's case). Bounding that regime is
+  the point: a long read means the loop is already behind.
+
+The ranked stage still covers the best correlation peaks anywhere in reach. `fallback-onset-ranking.md`
+found every measured frame at rank 0, but on synthetic frames only. No real on-air frame was checked, so
+this rests on an assumption that is still UNCHECKED.
 
 ### Measured after (x86, release, replay)
 
@@ -283,7 +295,8 @@ Every frame that decoded on the recordings still decodes. Full-length bursts tha
 ### Also in this round
 
 - **The daemon logs every capture read** at debug level, with its sample count and the time since the
-  last read. A read of a second or more is logged at info: "the receive loop fell behind".
+  last read. A read of a second or more is logged at info, with how many seconds of audio it holds. At
+  debug that is about 20 lines a second, roughly 70 000 an hour.
 - **The runner waits `TRAFFIC_WARMUP` (30 s) after the daemons start before traffic begins.**
 
 ### Still parked
