@@ -3010,7 +3010,7 @@ What remains, both on the engine side, plus one cheap runner change:
 
 The decision is the maintainer's.
 
-## Task 15 — retest with the bounded fallback rescue, the capture-read log and the warm-up (status: open)
+## Task 15 — retest with the bounded fallback rescue, the capture-read log and the warm-up (status: done — Parts A to C run; Part D not run, its condition failed; see Results)
 
 The new build is `eb55283`. On top of task 14's build:
 - **the uncoded fallback rescue is bounded** to 64 onsets near the trigger point, so no single burst
@@ -3064,3 +3064,19 @@ Capture-read log (new in this build):
 - station B (Pi 4): **0** `capture read holds` lines; distribution 307x 400, 168x 200, 163x 600, 8x 0; largest `since_ms` 70500 (the very first read, `samples=0`, 19:58:58.937, i.e. time since daemon start, not a stall); all later reads `since_ms` about 52-53 ms at most.
 
 Cleanup (quote): `== cleanup ==  [IC-9700] daemon and rigctld stopped; PTT 0 sent while rigctld ran  [FT-991A] daemon and rigctld stopped; PTT 0 sent while rigctld ran`; nothing running.
+
+#### Task 15 Part C — run b5 (A sends; maintainer's go 2026-11-01, port B empty)
+
+Same as b3/b4, build `eb55283`, 30 s warm-up. Recordings `-d 390`, started 20:05:10.322 UTC (rpi51) and 20:05:10.662 UTC (station B), complete. Evidence `docs/dev/test-reports/onair-twin-ota-20261101-210558{.log,-evidence/}`. Audio `rx-a-b5-8k.wav.gz` 2208259 bytes (rms 203.3), `rx-b-b5-8k.wav.gz` 5307128 bytes (rms 1815.0); 48 kHz originals on rpi51 in /tmp (sha256 `3af93589...`, `fab25cd0...`).
+
+Station B (receiver): **`fec attempt OK` 0 of 4 frames sent**, `fec attempt FAILED` **94** (b4: 5, b3: 813), `ota_rate_decision` 6, **3 keyed**; two ACK metadata lines (`FSK4-ACK`) at 20:06:56.339 and 20:07:11.863 UTC.
+Station A (sender): 4 frames (`logged TX metadata` 20:07:05.989, 20:08:18.954, 20:09:35.240, 20:10:51.667 UTC); `OTA ACK not received within window` **3** (20:08:28.258, 20:09:44.545, 20:11:00.975); `OTA send abandoned` **1**; `tx_level` SL2 in all 37 readings. There is no `not received` line for frame 0, so A's frame-0 window closed without that error; but B decoded nothing, so what A took for an ACK is not an ACK for a decoded frame. Note B's first ACK line (20:06:56.3) precedes A's frame-0 end (20:07:05.989) by 9.7 s: B keyed without having decoded any frame.
+
+Capture-read log:
+- station A (rpi51): **0** `capture read holds` lines; distribution 503x 400, 92x 200, 85x 600, 15x 0; largest `since_ms` **226243** (one read of `samples=0` at 20:09:44.671, the second ACK window of A's own send; every other read is 53 ms or less). The sender's loop does not read while it sends and waits for an ACK.
+- station B (Pi 4): **7** `capture read holds` lines, **largest `samples=510200`** (`since_ms=63766`, 20:09:29.395 UTC); others 68200 (8512 ms, 20:06:08), 18600, 33000, 23600, 23600, 122800 (15339 ms, 20:08:25.6). Distribution 295x 400, 226x 200, 171x 600, 91x 0; largest `since_ms` 63766 for a hold line (48323 ms is the first read, `samples=0`, 20:06:56.654).
+
+Part D condition: **not met** (g5 had frame 0's ACK applied; b5 had B decode nothing). Part D not run, per the task.
+
+Cleanup (quote), both runs: `== cleanup ==  [IC-9700] daemon and rigctld stopped; PTT 0 sent while rigctld ran  [FT-991A] daemon and rigctld stopped; PTT 0 sent while rigctld ran`; nothing running.
+End state read-back: FT-991A EX065+1500; dial 144641564 RFPOWER 0.05 PTT 0; IC-9700 RFPOWER 0.0117647 PTT 0; port B empty.
