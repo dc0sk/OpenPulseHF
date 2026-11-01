@@ -2948,3 +2948,21 @@ through.
 
 ### Results
 
+
+#### Task 14 Part A (station session, 2026-11-01) — nothing transmitted
+
+- rpi51 at `fc43f4af`; `git merge-base --is-ancestor 30dad89 HEAD` true.
+- `deploy` rc=0; sha256 identical on both stations:
+  - `091cada3af4a8ab85ce4a2346d64731de7185735617039d7277737a0a9fdcfdb  target/release/openpulse-server`
+  - `9b04db773cb6bff9d8b9b10146da38d224c2fb915646a2a4b3a003e0d7d5e2d5  target/release/openpulse`
+  - `c9e152f32d6b8d5548551b255865b9c45c198b96739672b02eab9dee56fdc373  scripts/twin-traffic.sh`
+- Read-back: FT-991A `EX065+1500;`, dial 144641564, RFPOWER 0.05, PTT 0. IC-9700 dial 144640000, RFPOWER 0.0117647, PTT 0. Nothing running on rpi51.
+
+#### Task 14 Part B — run g4 (B sends; maintainer's go 2026-11-01, port B empty)
+
+Same command and preparation as g3 (`TRAFFIC_FROM=B`, 300 s), build `30dad89` (rpi51 `fc43f4af`). Recordings started 15:26:29.561 UTC (rpi51) and 15:26:29.910 UTC (station B), `-d 360`; cleanup ran at about 355 s, so the files are 357.1 s and 355.6 s long (WavFileWarning on read, EOF early). Evidence `docs/dev/test-reports/onair-twin-ota-20261101-162647{.log,-evidence/}`. Audio `rx-a-g4-8k.wav.gz` 4230861 bytes (rms 290.6), `rx-b-g4-8k.wav.gz` 1514509 bytes (rms 275.9); 48 kHz originals on rpi51 in /tmp (sha256 `43d4b5ef...`, `93952aee...`).
+
+Station A (receiver): `ota_rate_decision` 7, **4 keyed**; **`fec attempt OK` 1 of 4 frames sent**, `fec attempt FAILED` **92** (g3: 712). B frame ends (`logged TX metadata`) 15:27:55.180, 15:29:11.546, 15:30:28.393, 15:31:45.238 UTC; A's `fec attempt OK` 15:27:56.360 (**1.18 s** after frame 0); A's ACK metadata lines (`FSK4-ACK`) 15:27:58.023 (2.84 s after frame 0), 15:28:14.930, 15:28:28.872. Frames 1-3 not decoded.
+Station B (sender): 4 frames; `OTA ACK not received within window` **2** (15:29:21.347, 15:30:38.192); `OTA send abandoned` **1**; `tx_level` SL2 in all 5 readings. No `not received` line for frame 0 or frame 3.
+
+Cleanup (quote): `== cleanup ==  [IC-9700] daemon and rigctld stopped; PTT 0 sent while rigctld ran  [FT-991A] daemon and rigctld stopped; PTT 0 sent while rigctld ran`; nothing running.
