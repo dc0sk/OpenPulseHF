@@ -2680,7 +2680,7 @@ counts, and for stopping for the whip. Three findings, then task 12.
 What A2 needs now is **engine work on real audio**, and that needs recordings of the real audio. Task 12
 collects them. Nothing else changes.
 
-## Task 12 — record the real receive audio beside both daemons, for offline reproduction (status: done — runs G2 and B2 recorded, analysis for the cloud session)
+## Task 12 — record the real receive audio beside both daemons, for offline reproduction (status: done — analysed by the cloud session, see the review below)
 
 Station B is the remote FT-991A, and its station rules apply: 5 W at most, ask the maintainer before
 **every** run, and record nothing about that host here. **The RSPdx's port B stays empty.** The IC-9700
@@ -2758,3 +2758,43 @@ Report `onair-twin-ota-20261031-230340.log`, evidence in `docs/dev/test-reports/
 - Compared with G2 (B sends): there, station A (rpi51) decoded one SL2 frame and answered with 4 keyed ACK/NACKs; here, station B (the Pi 4) decoded none and keyed nothing, while its recording shows strong audio.
 
 End state: PTT 0 on both rigs, nothing running (no daemon, rigctld or arecord); FT-991A read back `EX065+1500;FA144641564;0.05 0`; IC-9700 `0.0117647 0`; port B empty. **Task 12 Part B done (both runs).** Analysis is for the cloud session.
+
+**Reviewed (cloud session, 2026-11-01), task 12 — the recordings reproduce it offline.**
+
+The replay: the 8 kHz recordings go through the daemon's receive entry, as `server.rs` drives it.
+- `accumulate_capture(Some("BPSK250"), read)`, then `ota_decode_burst(burst, …, Some("BPSK250"))`, with
+  the `robust` profile, on x86 at release.
+- It is a scratch test, not committed yet. It goes in with the fix.
+
+1. **Station B's audio is fine.** `rx-b-b2` (B hearing A) decodes **all four** of A's SL2 frames, with
+   ACKs, and climbs to SL3. That holds at reads of 800, 4096 and 16 000 samples, at gains of 1, 0.15
+   and 0.05, and with B's 1123 Hz idle tone notched out. **So the capture level is not the cause.**
+2. **But each of those decodes costs 8–10 s on x86.** A Pi 4 is several times slower, so it misses
+   the 9 s ACK window by a wide margin. While its decode blocks the loop, the live daemon received A's
+   later frames only in fragments.
+3. **Where the cost goes** (debug log of the first burst): `decode_burst_inner` has two phases.
+   - **Phase 1** tries every onset from 0 to `reach` at the current correction. For BPSK31, `reach` is
+     4 acquisition windows, 32 768 samples or 4 s. That is **139 failed attempts**: 39 near the start
+     fail `TooManyErrors`, and 100 later ones are windows short of the RS block.
+   - Only then does **phase 2** acquire the correction (`acquire_burst_correction`, total offset ≈ +20 Hz
+     here) and rescan from 0. It **succeeds on its 10th attempt, at onset ≈ 2560**, next to the burst's
+     2848-sample lead.
+
+   BPSK31 does not decode uncorrected 18–20 Hz off, so **about 95 % of the cost is a phase that cannot
+   succeed** when the carrier is off.
+4. **Read size multiplies it.** `reach` grows to `onset_bound + acq` with the read that triggered the
+   flush (#1454/#1443). On `rx-a-g2`, A's first decode took 1.3 s at 800-sample reads, 9.7 s at 4096,
+   and at 16 000 the bursts merged (155 s) and the first frames were lost. The live daemon reads
+   whatever buffered since its last tick, so a slow decode makes the next read bigger. That fits
+   rpi51's 267 attempts in task 11 Part G.
+5. **Both stations have an idle tone.** rpi51 hears a constant carrier at ~1494–1500 Hz (+15 to +20 dB
+   over the noise median). That is the line the RSPdx's port A saw at 144.6415 MHz, on the test channel
+   itself. Station B has one at 1123 Hz (+21 dB). Notching B's tone does not change the cost. The
+   source of the on-channel carrier at rpi51 is unknown.
+
+**What that means:** A2 needs an engine change to the burst decode, an acquisition-path change under
+`docs/dev/dsp-acquisition-playbook.md` with a mandatory review. For example: acquire the correction
+first, or scan onsets near the lead first, and keep phase 1's full sweep as the fallback. The four
+recordings are the regression fixtures. That waits for the maintainer's go; the stations are free
+meanwhile.
+
