@@ -2858,3 +2858,31 @@ End state, whatever happened:
 
 ### Results
 
+
+#### Part A (station session, 2026-11-01) — nothing transmitted
+
+- rpi51 at `13207383`; `git merge-base --is-ancestor ab9235f HEAD` true.
+- `deploy` rc=0; sha256 identical on both stations:
+  - `78331f0453883a68b31bf9352eb438911f4e30e5d33a0211ff2697081a9b20d5  target/release/openpulse-server`
+  - `eec7e6453e3569ebda2ea7bccb537441790bac75767c4e01278222ae929afc28  target/release/openpulse`
+  - `c9e152f32d6b8d5548551b255865b9c45c198b96739672b02eab9dee56fdc373  scripts/twin-traffic.sh`
+- Read-back: FT-991A `EX065+1500;`, dial 144641564, RFPOWER 0.05, PTT 0. IC-9700 dial 144640000, RFPOWER 0.0117647, PTT 0. No rigctld/openpulse/sdr process running on rpi51.
+
+#### Part B — run g3 (B sends; maintainer's go 2026-11-01, port B empty)
+
+`OTA_PROFILE=robust TRAFFIC_FROM=B TRAFFIC_SIZE=64 TRAFFIC_INTERVAL=2 TRAFFIC_DURATION=300 DAEMON_LOG_LEVEL=debug scripts/run-onair-twin-ota.sh run`, rpi51 at `13207383`, no daemon/rigctld/recorder before, `events.ndjson` moved away on both with the daemons stopped, both daemons ok. Recordings `arecord -q -D pulse -f S16_LE -r 48000 -c 1 -d 360`, started 10:57:21.938 UTC (rpi51) and 10:57:22.282 UTC (station B). Evidence: `docs/dev/test-reports/onair-twin-ota-20261101-115739{.log,-evidence/}` (redacted, gzipped). Audio: `rx-a-g3-8k.wav.gz` 4285573 bytes (8 kHz, 360.0 s, rms 303.8, peak 692), `rx-b-g3-8k.wav.gz` 1208496 bytes (rms 248.7, peak 5144); 48 kHz originals on rpi51 in /tmp (`rx-a-g3.wav` sha256 `562d20f8...`, `rx-b-g3.wav` `43159e49...`), station B's copy moved off /tmp.
+
+Station A (IC-9700, the receiver):
+- `ota_rate_decision`: 8 events, **4 `"verdict":"keyed"`**, 4 `muted`.
+- `fec attempt OK`: **1** (BPSK31/Rs, 64 bytes), `fec attempt FAILED`: 712.
+- Time from B's frame end (its `logged TX metadata` line) to A's `fec attempt OK`: seq 0 at 10:58:47.624 -> OK at 10:58:49.313 = **1.69 s**; to A's ACK (`mode=FSK4-ACK` metadata line, 10:58:51.059) = **3.43 s**. The other B frames: seq 1 (10:59:58.461) -> ACK line 11:00:02.590 = 4.13 s, no `fec attempt OK` for it; seq 2 (11:01:10.081) -> no ACK line within the window; the third ACK metadata line is at 11:00:38.453 (no B frame before it). Three `FSK4-ACK` metadata lines in all.
+
+Station B (FT-991A, the sender):
+- `logged TX metadata`: 4 frames (seq 0-3 at 10:58:47, 10:59:58, 11:01:10, 11:02:26); `frame_transmitted` 4, `ptt_changed` 9.
+- `OTA ACK not received within window`: **2** (11:01:19.849 for seq 2, 11:02:36.626 for seq 3); **`OTA send abandoned`: 1** (11:02:36.626, "peer silent for 2 consecutive ACK windows").
+- `ota_status` `tx_level`: **SL2 in all 6 readings, never changes.**
+- No `not received` line for seq 0 or seq 1, i.e. an ACK arrived inside the window for those two (the criterion of Part D "received with no `not received` for that frame"); `tx_level` did not move.
+
+Compared with task 12 G2 (old build): the first decode is now 1.69 s after the frame end (G2: A's decode of the first frame came later; see the task 12 numbers), A keyed 4 decisions as before, the sender still abandons after two silent windows.
+
+Cleanup (quote): `== cleanup ==  [IC-9700] daemon and rigctld stopped; PTT 0 sent while rigctld ran  [FT-991A] daemon and rigctld stopped; PTT 0 sent while rigctld ran`; no openpulse-serve/rigctld/arecord left on rpi51.
