@@ -218,7 +218,10 @@ async fn the_signoff_id_is_not_keyed_while_another_station_transmits() {
         .expect("a capture read after the flush");
     let waited = keyed_id.saturating_duration_since(quiet_from);
     assert!(
-        waited >= Duration::from_millis(openpulse_core::station_id::ID_MIN_QUIET_MS),
+        // Quiet starts in the tick that flushed and decoded the burst, one tick before the capture read
+        // this measures from: 100 ms of tolerance (the sabotage with no quiet rule reads 0).
+        waited + Duration::from_millis(100)
+            >= Duration::from_millis(openpulse_core::station_id::ID_MIN_QUIET_MS),
         "the ID was keyed {waited:?} after the channel went quiet; it must wait ID_MIN_QUIET_MS"
     );
 }

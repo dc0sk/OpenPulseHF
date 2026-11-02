@@ -1,6 +1,7 @@
 //! Through two real daemons (`spawn_bridged_pair`): the station ID rides in each station's own keying —
-//! the receiver's in front of its ACK, the sender's behind its data frame — and the receiver sets the
-//! ACK deadline on every OTA decode (review 2026-11-02; on-air task 18). Without the ride-along, a
+//! the receiver's in front of its ACK, the sender's behind its data frame (review 2026-11-02; on-air
+//! task 18). The twin delivers audio faster than real time, so it sets no ACK deadline; that wiring is
+//! `ota_ack_deadline_on_real_time_audio`. Without the ride-along, a
 //! receiver in a continuous exchange never has 3 s of quiet, so its ID is forced at the interval,
 //! most likely inside the sender's frame.
 
@@ -50,7 +51,7 @@ async fn the_station_id_rides_in_each_stations_own_keying() {
     let log = Log::default();
     let sink = log.clone();
     tracing_subscriber::fmt()
-        .with_env_filter("warn,openpulse_daemon=info,openpulse_modem::ota_deadline=debug")
+        .with_env_filter("warn,openpulse_daemon=info")
         .with_writer(move || sink.clone())
         .with_ansi(false)
         .init();
@@ -87,10 +88,6 @@ async fn the_station_id_rides_in_each_stations_own_keying() {
     let text = String::from_utf8_lossy(&log.0.lock().unwrap()).to_string();
     // Not `pair.shutdown()`: it joins daemon A, which may still be working through queued messages.
     drop(pair);
-    assert!(
-        text.contains("OTA decode: ACK deadline set"),
-        "the receiver's OTA decode ran without an ACK deadline (server.rs, set_ota_ack_deadline)"
-    );
     assert!(
         ok,
         "the station ID did not ride in both stations' own keying: with-ack {}, with-data {}",

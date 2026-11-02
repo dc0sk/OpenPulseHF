@@ -983,6 +983,10 @@ pub async fn run(cfg: OpenpulseConfig, modem_backend: Box<dyn AudioBackend>) -> 
                 // Samples in this tick's read: the read that ended a burst also holds audio from after
                 // the frame, so the frame ended about this long before now (the ACK deadline).
                 let mut tick_read_len = 0usize;
+                // Whether that read arrived at the audio rate: no more audio than the time since the
+                // previous read. The twin and loopback harnesses deliver faster than real time, and a
+                // wall-clock deadline means nothing there.
+                let mut tick_real_time = false;
                 let burst = tokio::task::block_in_place(|| {
                     if rx_stream.is_none() {
                         rx_stream = Some(engine.open_capture_stream(capture_device.as_deref())?);
@@ -1029,6 +1033,8 @@ pub async fn run(cfg: OpenpulseConfig, modem_backend: Box<dyn AudioBackend>) -> 
                                 return Ok(None);
                             }
                             tick_read_len = samples.len();
+                            tick_real_time = samples.len() as f64 / 8000.0
+                                <= since_ms as f64 / 1000.0 + 0.5;
                             engine.accumulate_capture(Some(&mode), samples)
                         }
                         Err(e) => {
@@ -1128,9 +1134,11 @@ pub async fn run(cfg: OpenpulseConfig, modem_backend: Box<dyn AudioBackend>) -> 
                         let ack_window_end =
                             frame_end + std::time::Duration::from_millis(engine.ota_ack_timeout_ms());
                         let ack_airtime = std::time::Duration::from_millis(engine.fsk4_ack_airtime_ms());
-                        engine.set_ota_ack_deadline(ack_window_end.checked_sub(
-                            ACK_KEYING_ALLOWANCE + ack_airtime + ACK_SLACK,
-                        ));
+                        engine.set_ota_ack_deadline(
+                            ack_window_end
+                                .checked_sub(ACK_KEYING_ALLOWANCE + ack_airtime + ACK_SLACK)
+                                .filter(|_| tick_real_time),
+                        );
                         let channel_busy = tokio::task::block_in_place(|| {
                             channel_still_busy(rx_stream.as_mut(), &engine, &mut rx_pending)
                         });
