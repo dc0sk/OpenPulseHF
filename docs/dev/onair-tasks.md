@@ -3460,3 +3460,34 @@ Part D condition: **met** (g8 and b8: every ACK applied, none `not received`, `t
 
 Cleanup (quote), both runs: `== cleanup ==  [IC-9700] daemon and rigctld stopped; PTT 0 sent while rigctld ran  [FT-991A] daemon and rigctld stopped; PTT 0 sent while rigctld ran`; nothing running.
 End state read-back: FT-991A EX065+1500; dial 144641564 RFPOWER 0.05 PTT 0; IC-9700 RFPOWER 0.0117647 PTT 0; port B empty.
+
+**Reviewed (cloud session, 2026-11-02), task 18.** The OTA path works on 2 m in both directions.
+
+| Run | Frames decoded | ACKs applied | Ladder | Decode after frame end | Flushes `read=0` over squelch | IDs inside a frame |
+|---|---|---|---|---|---|---|
+| g8 (B sends) | 8 of 8 | 8 of 8 | SL2 → SL6 | 0.58–3.93 s (rpi51) | 0 | 0 |
+| b8 (A sends) | 7 of 7 | 7 of 7 | SL2 → SL6 | 0.94–5.67 s (Pi 4) | 0 | 0 |
+
+- **The climb is shown both ways:** `hold`, `hold`, `climb_on_evidence` (SL2→SL3), then `climb_on_snr`
+  to SL4, SL5 and SL6, then `hold` at SL6. No ACK window was missed, and no send was abandoned.
+- **Margin:** station B (Pi 4) ACKed SL4 and SL5 frames 6.3 s and 6.8 s after the frame ended, inside
+  the 9 s window but with the least margin of the run. Watch it in Part D.
+- **`burst abandoned` fired once** (A, b8, 8392 samples, after its own frame 1): a short piece gathered
+  while it was keying, as intended.
+- **The sign-off ID is not in the logs, and that is the runner, not the daemon.** The runner collected
+  the logs 1–3 s after the last ACK, and `cleanup` then stopped both daemons before the sign-off (10 s
+  after the last transmission, on a quiet channel) was due. A run should end with each station's
+  end-of-exchange ID. **Fixed in the runner:** after the traffic window it now waits `SIGNOFF_TAIL`
+  (25 s) before collecting the logs. It keys nothing itself; the daemons' own ID path does. No rebuild
+  is needed: pull the commit that adds this note (the runner runs on rpi51, the daemons are unchanged).
+
+**Part D, the first A2 attempt, may go ahead with the maintainer's go, one run each**, as task 18
+says: task 11 Part B (`-a2a`, A sends) and Part C (`-a2b`, B sends), with the induced drive schedule
+and UTC times. Before Part B, pull this commit on rpi51; `deploy` is not needed (the binaries are the
+same, check the hashes as before). In the report, add:
+- every `transmitted station ID` line with its time and `kind`. Over 900 s, expect the interval ID once
+  per station, up to 90 s early at a quiet moment, and one sign-off at the end of each run. Say whether
+  any falls inside the other station's frame;
+- the `ota_rate_decision` events in time order (`decision`, `verdict`, from and to level) against the
+  drive schedule's UTC times, so the three A2 clauses can be scored;
+- the decode time after each frame's end on the Pi 4, as in the table above.

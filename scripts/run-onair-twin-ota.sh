@@ -76,6 +76,11 @@ TRAFFIC_WARMUP="${TRAFFIC_WARMUP:-30}"
 # The daemons' RUST_LOG. `debug` logs each decode attempt and its timing, which a failed on-air run
 # needs (task 11: an `info` log could not say why station B never decoded).
 DAEMON_LOG_LEVEL="${DAEMON_LOG_LEVEL:-info}"
+# Seconds both daemons keep running after the traffic window, before the logs are collected, so each
+# station sends its end-of-exchange (sign-off) ID: it waits 10 s after the station's last transmission
+# and for a quiet channel (task 18: the logs were collected 1-3 s after the last ACK, so they could not
+# show the ID, and cleanup stopped the daemons before it was due).
+SIGNOFF_TAIL="${SIGNOFF_TAIL:-25}"
 OUTPUT_DIR="${OUTPUT_DIR:-docs/dev/test-reports}"
 
 ACTION="${1:-supervise}"
@@ -339,7 +344,8 @@ EOF
         sleep 5
     done
 
-    echo "traffic window complete." | tee -a "$report"
+    echo "traffic window complete; ${SIGNOFF_TAIL}s for the stations' sign-off IDs …" | tee -a "$report"
+    sleep "${SIGNOFF_TAIL}"
     collect_evidence "$report"
     echo "report: $report"
     echo "(watch the live TX-level climb on both directions in openpulse-twinview)"
