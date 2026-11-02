@@ -3326,3 +3326,41 @@ Part D condition: **met** (g7: frame 0's ACK applied, no `not received` line for
 
 Cleanup (quote), both runs: `== cleanup ==  [IC-9700] daemon and rigctld stopped; PTT 0 sent while rigctld ran  [FT-991A] daemon and rigctld stopped; PTT 0 sent while rigctld ran`; nothing running.
 End state read-back: FT-991A EX065+1500; dial 144641564 RFPOWER 0.05 PTT 0; IC-9700 RFPOWER 0.0117647 PTT 0; port B empty.
+
+**Reviewed (cloud session, 2026-11-02), task 17.** The empty-read fix worked, and the next cause is
+in the logs.
+
+- **What the fix did.** Carrier-drop flushes fell from 234 to 12 on A (g7) and from 124 to 10 on B (b7).
+  Whole frames now reach the decoder: A gathered B's frames 0 and 2 whole (537 048 and 543 200
+  samples), and B gathered A's frames 0 and 2 whole. Frame 0 decoded both ways (1.23 s and 2.90 s) and
+  its ACK was applied both ways. That met the Part D condition for the first time.
+- **Why frame 1 is lost both ways: the receiver keys its own station ID in the middle of the sender's
+  frame.** From B's log in b7:
+  - 10:08:08.3: B keys the ACK for frame 0, and A starts frame 1 (about 10:08:09.4, 66.6 s long);
+  - 10:08:18.5: ten seconds after its last transmission, B keys a **sign-off station ID** (`transmitted
+    station ID … mode=BPSK250 kind="sign-off"`). The ID timer's sign-off fires after
+    `auto_id_signoff_idle_secs = 10` with no transmission *of our own*. It does not look at the
+    channel, so it keys over A's frame;
+  - 10:08:20.2: the capture stream reopens after the ID; its first read is empty, and the ID took more
+    than 250 ms, so the open burst flushes: the 78 400-sample piece (`read=0`). It fails (short of one
+    RS block), and the busy check reads the new stream's empty first read as idle. So **B keys a NACK
+    at 10:08:24.9** over A's frame;
+  - 10 s later another sign-off ID, and the cycle repeats every ~17 s until A's frame ends.
+
+  Station IDs keyed in the logs: g6 A 2, b6 B 2, g7 A 4, b7 B 4, all `sign-off`, all by the receiving
+  station; the sending stations keyed none. The four ~10 s pieces in each run are this cycle.
+- **What is wrong, in order:**
+  1. **(keying)** The sign-off ID keys while the other station is transmitting. Its own doc says "the
+     channel has been quiet", but it measures only our own transmissions. It should wait until no
+     burst is being gathered and the carrier detect is idle.
+  2. A burst open when the station keys is not abandoned. That is the work-plan parking entry from the
+     last review; this is the case it named.
+  3. The busy check right after a transmit reads a freshly opened stream, whose first read is empty,
+     and so reads idle.
+- **Proposed** (needs the maintainer's go and the mandatory review, because 1 changes when the
+  transmitter keys):
+  - the station ID waits while a burst is being gathered or the carrier detect is busy. The sign-off
+    waits until both are quiet. The 10-minute interval ID waits too, but at most 90 s, so §97.119's
+    10 minutes cannot be overrun by a busy channel;
+  - abandon the open burst when the station keys (item 2);
+  - the busy check treats an empty read as no information, not as idle (item 3).
