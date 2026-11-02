@@ -15,6 +15,40 @@ this ledger adds the design rationale and the actually-observed results per chan
 
 ---
 
+## 2026-11-02 — No late ACK; a decode stops at its ACK deadline; the station ID rides in each station's own keying (work plan M3, A2)
+
+- **Requirement/change:** REQ-FUN-06, REQ-REG-10 and A2. In task 18, run a2a, the Pi 4 receiver ACKed
+  an SL3 frame 10.1 s after its end, past the sender's 9 s window. The ACK landed on the
+  retransmission and cut its head, and the receiver had moved its recommendation, which the sender
+  never heard. The headless burst then held the Pi 4 for about 3 minutes (reproduced offline: 52 s on
+  x86). The receiver's interval ID, forced at 10 minutes in a continuous exchange, would cut a frame
+  too.
+- **Design decision:**
+  - before each OTA decode on real-time audio, the daemon sets an ACK deadline: frame end + window −
+    2 s keying (measured on air: at most 1.7 s) − ACK airtime − 0.3 s;
+  - a ladder decode stops trying past the deadline, and one that finishes late keys nothing and moves no
+    rung;
+  - non-ladder decodes need no ACK and are exempt;
+  - the ID rides in the station's own keying when its early window is open: the receiver's before its
+    ACK, if both fit; the sender's after its data frame (before it, the receiver loses the data frame).
+- **Implementation:**
+  - `crates/openpulse-modem/src/engine.rs`: `set_ota_ack_deadline`, `decode_deadline`,
+    `non_ladder_decode`, `past_decode_deadline`, `last_ota_decode_late`,
+    `decode_attempts_past_deadline`, `fsk4_ack_airtime_ms`;
+  - `crates/openpulse-core/src/station_id.rs`: `ride_along_due`;
+  - `crates/openpulse-daemon/src/server.rs`: the deadline (with `burst_real_time`), the ride-along at
+    the ACK and in `ota_send_with_ptt`.
+- **Tests and results (run, each sabotage-verified):**
+  - `no_ack_past_the_deadline`: no ACK, no rung moved, no ladder attempt; a non-ladder frame still
+    decodes;
+  - `id_rides_with_the_data_frame`: SL1–SL6;
+  - `id_rides_with_the_ack`: SL1, SL3 and SL6 ACK waveforms;
+  - `ota_ack_deadline_on_real_time_audio` and `id_rides_in_own_keying` (daemon, `server::run`);
+  - suites: see the commit message.
+- **Review:** `docs/dev/reviews/review-late-ack-and-id-ride-2026-11-02.md` (mandatory, keying). One
+  blocker: the deadline was set in the twin and cut non-ladder decodes. Taken, with S1–S5 and N2; S6 is
+  stated in task 19 and N7 is parked.
+
 ## 2026-11-02 — No station ID over another station; drop the burst when keying (work plan M3, A2)
 
 - **Requirement/change:** REQ-REG-10, REQ-FUN-06 and A2. In task 17 the receiving station keyed its
