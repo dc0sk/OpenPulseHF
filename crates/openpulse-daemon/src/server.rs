@@ -821,8 +821,8 @@ pub async fn run(cfg: OpenpulseConfig, modem_backend: Box<dyn AudioBackend>) -> 
     let mut capture_failed = false;
     // When the previous capture read returned, for the read log below.
     let mut last_capture_read: Option<std::time::Instant> = None;
-    // When capture audio last arrived, for `empty_read_is_silence`.
-    let mut last_capture_audio: Option<std::time::Instant> = None;
+    // Keeps an empty read in the middle of a frame from ending the burst (shared with `CaptureTicker`).
+    let mut capture_gap = openpulse_modem::capture_ticker::CaptureGap::default();
     // Keyed-NACK budget, leaking with listening time (#1456; `nack_budget.rs`).
     let mut ota_nack_budget = crate::nack_budget::NackBudget::default();
     // Periodic station identification (REQ-REG-10): while transmitting, key up and send the
@@ -995,10 +995,7 @@ pub async fn run(cfg: OpenpulseConfig, modem_backend: Box<dyn AudioBackend>) -> 
                             if disco_dwelling {
                                 discovery_raw = samples.clone();
                             }
-                            let now = std::time::Instant::now();
-                            if !samples.is_empty() {
-                                last_capture_audio = Some(now);
-                            } else if !empty_read_is_silence(last_capture_audio, now) {
+                            if !capture_gap.admits(samples.len(), std::time::Instant::now()) {
                                 return Ok(None);
                             }
                             engine.accumulate_capture(Some(&mode), samples)
@@ -2480,22 +2477,6 @@ fn build_ptt_controller(
     }
 }
 
-/// How long no capture audio may arrive before an empty read counts as silence.
-const CAPTURE_GAP_MS: u64 = 250;
-
-/// Whether an empty capture read goes to the engine, which reads it as "no carrier" and ends a burst.
-///
-/// A real device returns an empty read whenever it has delivered nothing since the last tick, in the
-/// middle of a frame as much as anywhere. On air (task 16) 228 of A's 234 carrier-drop flushes, and
-/// 118 of B's 124, were empty reads with the signal above the squelch: frames were cut into hundreds of
-/// pieces. Only a gap with no audio at all (a loopback or twin stream that has ended, a dead device)
-/// still ends the burst.
-fn empty_read_is_silence(last_audio: Option<std::time::Instant>, now: std::time::Instant) -> bool {
-    last_audio.is_none_or(|t| {
-        now.saturating_duration_since(t) >= std::time::Duration::from_millis(CAPTURE_GAP_MS)
-    })
-}
-
 /// Whether the channel still carries a signal right after a burst flushed: the newest 200 ms of what
 /// arrived since, against the DCD squelch, once the noise floor is warm. What it reads goes into
 /// `pending`, which the next tick hands to the accumulator first. `false` when nothing can be read.
@@ -2626,33 +2607,6 @@ mod ota_retry_tests {
         let (attempts, stop) = drive(&[None]);
         assert_eq!(stop, OtaSendStop::NoSession);
         assert_eq!(attempts, 1); // the closure was polled once and reported "no session"
-    }
-}
-
-#[cfg(test)]
-mod empty_read_tests {
-    use super::{empty_read_is_silence, CAPTURE_GAP_MS};
-    use std::time::{Duration, Instant};
-
-    #[test]
-    fn an_empty_read_is_silence_only_after_a_gap_with_no_audio() {
-        let t = Instant::now();
-        assert!(
-            empty_read_is_silence(None, t),
-            "no audio ever: nothing to cut"
-        );
-        assert!(!empty_read_is_silence(
-            Some(t),
-            t + Duration::from_millis(50)
-        ));
-        assert!(!empty_read_is_silence(
-            Some(t),
-            t + Duration::from_millis(CAPTURE_GAP_MS - 1)
-        ));
-        assert!(empty_read_is_silence(
-            Some(t),
-            t + Duration::from_millis(CAPTURE_GAP_MS)
-        ));
     }
 }
 

@@ -172,6 +172,6 @@ async fn a_frame_read_with_empty_reads_between_its_chunks_still_decodes() {
         Some(&b"empty reads"[..]),
         "a frame delivered with an empty read between its chunks never decoded: each empty read ended \
          the burst as if the carrier had dropped (task 16's mid-frame cuts). See \
-         `empty_read_is_silence` in server.rs"
+         `CaptureGap` in openpulse-modem's capture_ticker.rs"
     );
 }
