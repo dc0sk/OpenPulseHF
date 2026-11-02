@@ -3371,7 +3371,7 @@ findings. The sign-off ID waits for a quiet channel; the interval ID takes a qui
 ARDOP TNC); and an empty read after a flush is not read as an idle channel. Keying review: no blocker
 (`docs/dev/reviews/review-station-id-quiet-channel-2026-11-02.md`).
 
-## Task 18 — retest with the station ID on a quiet channel; then A2 if the condition holds (status: Parts A to C done, both directions climb SL2 to SL6; Part D waits for the maintainer; see Results)
+## Task 18 — retest with the station ID on a quiet channel; then A2 if the condition holds (status: Parts A to C done, both directions climb SL2 to SL6; Part D run a2a done (A sends), run a2b (B sends) waits for the maintainer; see Results)
 
 The new build is `cda9c8a`.
 
@@ -3491,3 +3491,46 @@ same, check the hashes as before). In the report, add:
 - the `ota_rate_decision` events in time order (`decision`, `verdict`, from and to level) against the
   drive schedule's UTC times, so the three A2 clauses can be scored;
 - the decode time after each frame's end on the Pi 4, as in the table above.
+
+### Results — task 18 Part D, run a2a (task 11 Part B: A sends, B leads the rate, robust, 900 s)
+
+Commit on rpi51 `8149ab37`; server, CLI and `twin-traffic.sh` hashes as in task 18, identical on both stations. Evidence: `docs/dev/test-reports/onair-twin-ota-20261102-164000-evidence/` (with `drive-schedule.txt`, `NOTES.md`); receive audio `rx-audio-2026-11-01/rx-{a,b}-a2a-8k.wav.gz`. RSPdx witness: 960 s from 15:40:00, `peak=0.0136 rms=0.0085 clip=0.00%`, not analysed (sha in `NOTES.md`).
+
+**Drive schedule (`A_TX_SINK_VOLUME`, UTC).** t0 = 15:40:00.24 (traffic start). 0.15 until 15:49:00.37 (t0+540 s); 0.02 from 15:49:00.37; 0 from 15:50:00.66; 0.15 from 15:51:30.91 to the end.
+
+**Counts.** A sent 64 frames (TX ends listed in the daemon log); B decoded 50 (`fec attempt OK` 50, FAILED 8867). A logged 12 `ACK not received` and 5 `send abandoned`. B flushes 69 / `read=0` 0 / `read=0` over squelch 0 (longest burst 547392); A flushes 10 / 0 / 0. Holds: A 0, B 1 (8000 samples). `burst abandoned: this station keyed`: A 1 (15:52:07, 8392 samples), B 0.
+
+**B's `ota_rate_decision` events in time order (all 55 verdict `keyed` except one), with the times of B's ACK/NACK transmissions:**
+
+| # | B tx (UTC) | from → to | decision | decoded / SNR |
+|---|---|---|---|---|
+| 1 | 15:41:14.5 | SL2 → SL2 | hold | SL2, −8.9 dB |
+| 2 | 15:42:27.8 | SL2 → SL2 | hold | SL2, −3.1 |
+| 3 | 15:43:39.7 | SL2 → SL3 | climb_on_evidence | SL2, −3.6 |
+| 4 | 15:44:24.4 | SL3 → SL4 | climb_on_snr | SL3, 13.5 |
+| 5, 6 | 15:47:32.9, 15:47:57.0 | SL4 → SL4 | nack_hold ×2 | none |
+| 7 | 15:48:21.4 | SL4 → SL5 | climb_on_snr | SL4, 17.4 |
+| 8 | 15:48:34.7 | SL5 → SL6 | climb_on_snr | SL5, 22.0 |
+| 9–20 | 15:48:41.5 … 15:49:56.7 | SL6 | hold | SL6, 8.8–12.3 dB |
+| 21, 22 | 15:50:06.9, 15:51:45.1 | SL6 → SL6 | nack_hold ×2 | none |
+| 23 | 15:51:54.7 | SL6 → SL5 | nack_step_down | none |
+| 24 | 15:52:06.8 | SL5 → SL6 | climb_on_snr, **verdict `muted`** | SL5, 20.7 |
+| 25–55 | 15:52:13 … 15:55:40 | SL6 | hold | SL6, 3.1–11.6 dB |
+
+(The audit events carry no timestamps; each row is matched to the ACK/NACK transmission in B's log by order.) A's `tx_level` readings: SL2 ×37, SL3 ×4, SL4 ×1, SL5 ×2, SL6 ×23, SL5 ×1, SL6 ×43.
+
+**What happened, in order.**
+- SL2 frames decoded at 15:41:12, 15:42:26 and 15:43:38; the climb to SL3 followed. B's decode of A's first SL3 frame (BPSK63) came **8.8 s** after the frame ended and its ACK went out 10.1 s after it, past A's 9 s window: A logged `ACK not received` at 15:44:23.57 and stayed at SL3, while B had already stepped to SL4 (decision 4).
+- From 15:44:57 to 15:47:51 A sent five more frames and B decoded none (`ACK not received` ×4 more, `send abandoned` at 15:45:07 and 15:46:33). The two `nack_hold` rows (5 and 6) are the NACKs B sent at 15:47:32 and 15:47:57. B's `fec attempt OK` resumed with a BPSK100 frame at 15:48:20.3, then SL5 (15:48:33.7) and SL6 QPSK250-D (15:48:40.5). **SL6 was reached and held from 15:48:40, 20 s before the 0.02 step.** Clause 1 (climb to the top) is met, 8.7 min after traffic start.
+- **Interval IDs: the two stations keyed theirs at the same time.** A transmitted its 18-byte ID frame from 15:48:21.98 (logged 15:48:23.27, `kind="interval"`); B from 15:48:21.57 (logged 15:48:23.11, `kind="interval"`), 0.2 s after its own ACK went out. The two IDs overlapped on the air for about 1.3 s. Neither fell inside a data frame (A's previous data frame had ended at 15:48:18.5 and its next went out after the IDs), and the next data frame decoded (15:48:33.7).
+- Drive at 0.02 (from 15:49:00.4): B kept decoding SL6 frames until 15:49:55.6 (55 s, 9 frames, SNR as before). At 0 (from 15:50:00.7) the decodes stopped. B sent a NACK at 15:50:06.9 (decision 21), B's **sign-off ID went out at 15:50:18.56 (`kind="sign-off"`), in the mute, with A silent**. A logged `ACK not received` ×7 between 15:50:20 and 15:51:44 and `send abandoned` ×3.
+- Drive back to 0.15 at 15:51:30.9. B's second NACK (decision 22) went out at 15:51:45.1 and the **step-down SL6 → SL5 (decision 23) at 15:51:54.7, 24 s after the drive was back**. A sent BPSK250 (SL5) at 15:52:03.7, B decoded it (15:52:05.75), and B climbed back to SL6 (decision 24, verdict `muted`, 15:52:06.8). From 15:52:12 on every frame decoded, to the end.
+- Clause 2 (demote on loss of drive): B's step-down is on the record, but it came **after** the drive was restored, not during the mute; during the mute B only held with NACKs. Clause 3 (re-climb): SL5 → SL6 12 s after the step-down. I do not score the clauses further; that is for the cloud session.
+- **No `sign-off` line from A in this run** (A's log has one `transmitted station ID`, the interval one at 15:48:23; its log runs to 15:55:33). B's sign-off is the one at 15:50:18.
+
+**B decode time after each frame's end (Pi 4):** SL2 5.2, 4.3, 3.2 s; first SL3 8.8 s; then SL4 1.8 s; SL5 1.5 s; SL6 0.9 s each (15:48:40–15:49:56); after the mute SL5 2.1 s, SL6 0.9 s.
+
+**Daemon log station IDs:** A `15:48:23.27 interval`; B `15:48:23.11 interval`, `15:50:18.56 sign-off`. None inside the other station's frame.
+
+Part D run a2a done; Part C (`-a2b`, B sends) waits for the maintainer's go.
+End state read-back: FT-991A EX065+1500; dial 144641564 RFPOWER 0.05 PTT 0; IC-9700 RFPOWER 0.0117647 PTT 0; port B empty; nothing running.
