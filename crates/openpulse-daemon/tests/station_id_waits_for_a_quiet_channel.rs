@@ -10,8 +10,9 @@
 //! the ID must go out once it is off. A transmit is counted by the output stream it opens.
 
 use std::f32::consts::TAU;
+use std::io::Write;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use openpulse_config::OpenpulseConfig;
@@ -29,6 +30,26 @@ struct Channel {
     carrier: Arc<AtomicBool>,
     /// Transmits keyed by the daemon (one output stream per transmit).
     transmits: Arc<AtomicUsize>,
+    /// When each transmit opened its output stream.
+    keyed_at: Arc<Mutex<Vec<Instant>>>,
+}
+
+/// The daemon's log, each line stamped when it was written.
+#[derive(Clone, Default)]
+struct Log(Arc<Mutex<Vec<(Instant, String)>>>);
+
+impl Write for Log {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        let text = String::from_utf8_lossy(buf).to_string();
+        let mut g = self.0.lock().unwrap();
+        for line in text.lines() {
+            g.push((Instant::now(), line.to_string()));
+        }
+        Ok(buf.len())
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
 }
 
 struct Input {
@@ -87,6 +108,7 @@ impl AudioBackend for Channel {
         _d: Option<&str>,
         _c: &AudioConfig,
     ) -> Result<Box<dyn AudioOutputStream>, AudioError> {
+        self.keyed_at.lock().unwrap().push(Instant::now());
         self.transmits.fetch_add(1, Ordering::SeqCst);
         Ok(Box::new(Sink))
     }
@@ -105,6 +127,13 @@ async fn wait_for(cond: impl Fn() -> bool, limit: Duration) -> bool {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn the_signoff_id_is_not_keyed_while_another_station_transmits() {
+    let log = Log::default();
+    let sink = log.clone();
+    tracing_subscriber::fmt()
+        .with_env_filter("openpulse_daemon=debug,openpulse_modem=debug")
+        .with_writer(move || sink.clone())
+        .with_ansi(false)
+        .init();
     let channel = Channel::default();
     let mut c = OpenpulseConfig::default();
     c.station.callsign = "TESTER".into();
@@ -153,6 +182,7 @@ async fn the_signoff_id_is_not_keyed_while_another_station_transmits() {
     tokio::time::sleep(Duration::from_secs(4)).await;
     let during_carrier = channel.transmits.load(Ordering::SeqCst) - after_message;
     channel.carrier.store(false, Ordering::SeqCst);
+    let quiet_from = Instant::now();
 
     let t = Arc::clone(&channel.transmits);
     let id_after_quiet = wait_for(
@@ -161,6 +191,7 @@ async fn the_signoff_id_is_not_keyed_while_another_station_transmits() {
         Duration::from_secs(15),
     )
     .await;
+    let _ = quiet_from;
 
     assert_eq!(
         during_carrier, 0,
@@ -170,5 +201,24 @@ async fn the_signoff_id_is_not_keyed_while_another_station_transmits() {
     assert!(
         id_after_quiet,
         "no station ID once the channel went quiet: deferring it must not lose it (§97.119)"
+    );
+    // The channel is quiet from the first capture read after the carrier's burst was flushed and
+    // decoded (the receive loop reads nothing while it decodes); the ID must wait ID_MIN_QUIET_MS
+    // from there, or it can land in the turnaround before the other station's next frame (task 18).
+    let keyed_id = *channel.keyed_at.lock().unwrap().last().unwrap();
+    let lines = log.0.lock().unwrap().clone();
+    let flushed = lines
+        .iter()
+        .rposition(|(t, l)| *t < keyed_id && l.contains("burst flushed"))
+        .expect("the carrier's burst was flushed");
+    let quiet_from = lines[flushed..]
+        .iter()
+        .find(|(_, l)| l.contains("capture read"))
+        .map(|(t, _)| *t)
+        .expect("a capture read after the flush");
+    let waited = keyed_id.saturating_duration_since(quiet_from);
+    assert!(
+        waited >= Duration::from_millis(openpulse_core::station_id::ID_MIN_QUIET_MS),
+        "the ID was keyed {waited:?} after the channel went quiet; it must wait ID_MIN_QUIET_MS"
     );
 }

@@ -81,6 +81,9 @@ impl StationIdTimer {
     /// No-op when disabled. The station's own ID frame must NOT be reported here (else an
     /// otherwise-idle station would re-ID forever); see the daemon wiring.
     pub fn note_tx(&mut self, now_ms: u64) {
+        // Our own transmission is not quiet, and the callers do not poll while it lasts: without this
+        // a quiet stretch before it would count on the first poll after it (review, 2026-11-02).
+        self.quiet_since_ms = None;
         if self.is_enabled() {
             self.tx_since_id = true;
             self.last_tx_ms = now_ms;
@@ -468,5 +471,33 @@ mod tests {
         let mut t = StationIdTimer::new(60_000, 0);
         t.note_tx(1_000);
         assert_eq!(t.due_reason(60_000, false), Some("interval"));
+    }
+
+    #[test]
+    fn quiet_before_our_own_transmission_does_not_count_after_it() {
+        // The sender polls quiet, then sends a frame and listens for the ACK (no polls for 30 s); the
+        // first poll after that must start the quiet clock, not find it settled.
+        let mut t = StationIdTimer::new(TEN_MIN, 0);
+        t.note_tx(1_000);
+        let window_opens = TEN_MIN - ID_QUIET_WINDOW_MS;
+        assert_eq!(
+            poll(&mut t, window_opens - 10_000, window_opens - 9_000, true),
+            None
+        );
+        t.note_tx(window_opens + 20_000);
+        assert_eq!(
+            t.due_reason(window_opens + 21_000, true),
+            None,
+            "a quiet stretch before our own transmission is not quiet after it"
+        );
+        assert_eq!(
+            poll(
+                &mut t,
+                window_opens + 21_050,
+                window_opens + 21_000 + ID_MIN_QUIET_MS,
+                true
+            ),
+            Some("interval")
+        );
     }
 }
