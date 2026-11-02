@@ -3565,3 +3565,54 @@ Commit on rpi51 `2bbcc074` (same binaries and hashes as a2a). Evidence: `docs/de
 End state read-back: FT-991A EX065+1500; dial 144641564 RFPOWER 0.05 PTT 0; IC-9700 RFPOWER 0.0117647 PTT 0; port B empty; nothing running.
 
 Task 18 Part D done (both runs). Waits for the cloud session's review.
+
+**Reviewed (cloud session, 2026-11-02), task 18 Part D: the first A2 attempt.**
+
+A2 scoring (`docs/dev/project/release-1.0-criteria.md`, *A2 scoring*), per direction:
+
+| Clause | A → B (a2a, B leads) | B → A (a2b, A leads) |
+|---|---|---|
+| 1. A climb whose new mode then decodes | **met**: SL2 → SL6, each new mode decoded (also g8 and b8) | **met**: SL2 → SL6 in 4.8 min, each new mode decoded |
+| 2. A demotion after a logged decode failure | **met**: `nack_hold` ×2, then `nack_step_down` SL6 → SL5 (15:51:54.7). A adopted SL5 (its `tx_level` reading), and the SL5 frame decoded | **not shown**: one `nack_hold`, no step-down |
+| 3. Stability: clean decodes, no demotion | **met**: 31 SL6 holds from 15:52:13 to the end, 3.1–11.6 dB | **met**: SL6 for 4.1 min before the cut and 31 holds after it, 3.1–10.5 dB |
+
+Both stations' logs show every transition: the receiver's decision and the sender's `tx_level`.
+**Corroboration in a capture is still open.** The RSPdx captured A's transmissions in a2a, not yet
+analysed. For B's transmissions there are only the receive recordings beside the daemons. SL5 → SL6
+is BPSK250 → QPSK250-D, both at 250 baud, so a capture tells them apart by constellation, not by
+bandwidth.
+
+Four findings:
+
+1. **Why clause 2 failed for B → A: the drive schedule removed the evidence, not the controller.** A
+   demotion needs NACKed failures, and a NACK needs a burst that failed. At 0 (mute) nothing arrives,
+   so there is nothing to fail. The sender's missed ACKs are not receiver evidence, by design. At 0.02,
+   a2a still decoded SL6 for 55 s, and a2b opened no burst at all. In a2a the demotion came from two
+   failed frames right after the drive returned. **The schedule needs a level at which frames still
+   arrive but fail**: step down in stages (for example 0.08, 0.05, 0.035, 60–90 s each) instead of
+   0.02 and 0.
+2. **The early interval ID still costs a frame (review S3, parked, now seen on air).** In a2a both
+   stations keyed their interval IDs at the same moment (15:48:21–23), right after B's ACK; they
+   overlapped each other, but no data frame. In a2b, A keyed its interval ID 0.1 s after its own ACK,
+   just as B started its next frame; that frame was lost and A NACKed it (decision 36). The quiet
+   check sees a quiet channel in the turnaround after an ACK, because the sender has not started
+   yet. A candidate fix: the early slot needs the channel quiet for a few seconds (longer than a
+   turnaround). In a continuous exchange it then waits for a pause, or for the forced time.
+3. **The sign-off at the end of a run is still missing, and that is the runner again.** The sending
+   daemon keeps sending its queued frames after the traffic script stops: in a2a the last
+   transmissions were at 15:55:31 and 15:55:40, 31–40 s after the window, so the 25 s wait ended
+   mid-exchange. **Fix:** after the window, wait until each station's log shows a `sign-off` ID after
+   its last transmission, up to a limit, then collect.
+4. **A ladder desync cost a2a three minutes.** B decoded A's first SL3 frame (BPSK63) 8.8 s after its
+   end; the ACK went out at 10.1 s, past A's 9 s window. So A stayed at SL3 while B moved its
+   recommendation to SL4. B then decoded none of A's next five SL3 frames (15:44:57–15:47:51), although
+   its candidates should still include SL3. UNCHECKED why: the receive recording `rx-b-a2a` lets the
+   cloud session replay it offline. The 8.8 s is also an outlier: the Pi 4 decoded SL4 in 1.8 s and SL2
+   in 3.2–5.2 s.
+
+**Next steps proposed to the maintainer:**
+- fix 3 (runner only, keys nothing);
+- investigate 4 offline (no keying);
+- fix 2 (keying, so it needs the go and the mandatory review);
+- then one more B → A run with a stepped drive schedule for clause 2. Repeat A → B too if 2 or 4
+  changes the receive path.
