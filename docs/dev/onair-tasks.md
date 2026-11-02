@@ -3247,7 +3247,7 @@ RSPdx port B stays empty: the next task keys the IC-9700, and no witness run is 
 `CaptureTicker`, through which the ARDOP TNC and the KISS bridge receive (the keying review found that
 twin). Keying review: no blocker; see `docs/dev/reviews/review-empty-capture-reads-2026-11-02.md`.
 
-## Task 17 — retest with the empty-read fix (status: open)
+## Task 17 — retest with the empty-read fix (status: Parts A to C done; Part D waits for the maintainer; see Results)
 
 The new build is `f6c0e74`, which includes `CaptureGap`.
 
@@ -3307,3 +3307,22 @@ Keyed decisions at station A (events carry no time; the times of the three `FSK4
 Capture-read statistics: A 5 `capture read holds` lines, largest `samples=60200` (7539 ms, 10:02:00); B 1 hold, largest `samples=15400`. `channel still busy` lines: 0 on both.
 
 Cleanup (quote): `== cleanup ==  [IC-9700] daemon and rigctld stopped; PTT 0 sent while rigctld ran  [FT-991A] daemon and rigctld stopped; PTT 0 sent while rigctld ran`; nothing running.
+
+#### Task 17 Part C — run b7 (A sends; maintainer's go 2026-11-02, port B empty)
+
+Same as b6, build `f6c0e74`. Recordings `-d 390`, started 10:06:08.365 UTC (rpi51) and 10:06:08.698 UTC (station B), complete. Evidence `docs/dev/test-reports/onair-twin-ota-20261102-110656{.log,-evidence/}`; audio `rx-{a,b}-b7-8k.wav.gz` (sizes in the directory listing of the commit), 48 kHz originals on rpi51 in /tmp.
+
+Counts:
+- Station B (receiver): **`fec attempt OK` 1 of 4 frames sent** (10:08:06.744, **2.90 s** after A's frame-0 end 10:08:03.842), `fec attempt FAILED` **26** (b6: 140); `ota_rate_decision` 7, keyed: `hold` 1, `nack_hold` 2, `nack_step_down` 1. B's `FSK4-ACK` metadata lines: 10:08:08.324, 10:08:24.880, 10:08:42.036.
+- Station A (sender): 4 frames (`logged TX metadata` 10:08:03.842, 10:09:16.043, 10:10:32.353, 10:11:48.773 UTC); `OTA ACK not received within window` **3** (10:09:25.331, 10:10:41.669, 10:11:58.045); `OTA send abandoned` **1**; `tx_level` SL2 in all 37 readings. Frame 0's ACK applied.
+
+Flush counts (total, `read=0`, `read=0` and `energy` >= `squelch`): **A 3, 0, 0** (b6: 4); **B 10, 4, 4** (b6: 124). Longest flushed burst: A `burst=3248`; **B `burst=543992`** (10:10:32.673, A's frame 2, whole). B's ten: 10:06:30.673 `2648/600/0.018926/0.022866`; 10:08:04.176 `537048/400/0.006174/0.023486` (frame 0, whole, decoded 10:08:06.7); 10:08:09.346 `2448/200`; **10:08:20.202 `78400/0/0.060872/0.023530`, 10:08:36.805 `77600/0/0.071908`, 10:08:53.825 `78800/0/0.055574`, 10:09:16.150 `78600/0/0.060373`** (four ~10 s pieces inside A's frame 1); 10:09:21.902 `46000/200/0.01822`; 10:09:25.631 `2448/200`; 10:10:32.673 `543992/400/0.007120/0.023525`. A's three (before the traffic): 10:06:29.025, 10:06:47.974, 10:06:55.524, each about 3000 samples, `energy` just under `squelch`.
+
+Keyed decisions at station B: A's frame starts = its `logged TX metadata` time minus 66.6 s: frame 0 about 10:06:57.2, frame 1 about 10:08:09.4, frame 2 about 10:09:25.8, frame 3 about 10:10:42.2. B's ACK at 10:08:08.324 sits just before frame 1 starts; **B's keyed lines at 10:08:24.880 and 10:08:42.036 fall inside A's frame 1** (10:08:09.4-10:09:16.0); frame 1 arrived in the four ~10 s pieces above, none decoded. Frame 2 arrived whole (burst 543992) and was not decoded; no keyed transmission of B falls inside it. (Times of B's transmissions are the metadata lines; the events carry no time.) The same pattern as g7 with the stations swapped.
+
+Capture-read statistics: A 0 holds; B 4 holds, largest `samples=144000` (`since_ms=18011`, 10:10:50.684; also 142400 at 10:11:58.487, 45800 at 10:09:21.850). `channel still busy` lines: 0 on both.
+
+Part D condition: **met** (g7: frame 0's ACK applied, no `not received` line for it; b7: the same). Part D (task 11 Parts B and C) not started: it needs the maintainer's go, one per run.
+
+Cleanup (quote), both runs: `== cleanup ==  [IC-9700] daemon and rigctld stopped; PTT 0 sent while rigctld ran  [FT-991A] daemon and rigctld stopped; PTT 0 sent while rigctld ran`; nothing running.
+End state read-back: FT-991A EX065+1500; dial 144641564 RFPOWER 0.05 PTT 0; IC-9700 RFPOWER 0.0117647 PTT 0; port B empty.
