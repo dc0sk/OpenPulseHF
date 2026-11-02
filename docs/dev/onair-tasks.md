@@ -3203,3 +3203,40 @@ Part D condition: g6 had **no ACK applied** (A decoded nothing, B's four frames 
 
 Cleanup (quote), both runs: `== cleanup ==  [IC-9700] daemon and rigctld stopped; PTT 0 sent while rigctld ran  [FT-991A] daemon and rigctld stopped; PTT 0 sent while rigctld ran`; nothing running.
 End state read-back: FT-991A EX065+1500; dial 144641564 RFPOWER 0.05 PTT 0; IC-9700 RFPOWER 0.0117647 PTT 0; port B empty.
+
+**Reviewed (cloud session, 2026-11-02), task 16.** Progress, and the cause of the mid-frame cuts.
+
+- **What improved.** In b6, station B decoded A's frame 0 2.81 s after it ended, ACKed it 4.47 s after
+  the end, and A applied the ACK. B's longest receive-loop hold fell from 510 200 samples (64 s) to
+  42 400 (5.3 s). The MFSK16 bound and the bounded fallback acquisition did what the replay predicted.
+  The busy-channel guard held 170 failures on A (g6) and 47 on B (b6) that would each have keyed a NACK
+  over the other station's frame.
+- **Why the carrier detect "drops" mid-frame: empty capture reads.** `accumulate_routed` counts a read
+  as carrier only when it holds samples (`!samples.samples.is_empty() && …`). An empty read, which the
+  cpal stream returns whenever the device has delivered nothing in the last 10 ms, therefore ends the
+  burst as if the carrier had gone. In the task 16 logs:
+
+  | Log | Carrier-drop flushes | With `read=0` | Of those, energy at or above the squelch |
+  |---|---|---|---|
+  | A, g6 | 234 | 228 | 224 |
+  | B, b6 | 124 | 118 | 117 |
+
+  So nearly every cut was an empty read in the middle of a strong signal, not a carrier dip. In g6, B's
+  frame (07:07:15.7 to 07:08:22.3) was cut into more than 200 pieces, and A decoded none of them. The
+  busy-channel guard muted most of the resulting failures, but its 200 ms peek read idle 3 times, so A
+  still keyed 3 NACKs over B's frame. Task 15's NACK over A's frame (b5) and the flushes in tasks 13–15
+  fit the same mechanism.
+- **Why the replay never showed it:** the replay feeds every read with samples in it. Empty reads exist
+  only live.
+- **Proposed fix** (not done; it changes when a burst ends, and so when a NACK is keyed, so it needs
+  the maintainer's go and the mandatory review): in the daemon's receive tick, an empty read is not
+  evidence. It is handed to the engine only when no samples have arrived for longer than a gap
+  (≈250 ms). That is the loopback and twin harnesses' end of stream, or a dead device. The engine's rule
+  stays as it is for those, and an on-air burst then ends only on audio that is really quiet. Test: a
+  frame fed through the production entry with empty reads interleaved must gather as one burst and
+  decode. It must fail without the fix.
+- **A's squelch sits close to its noise** (squelch ≈0.0054, idle energy 0.0047–0.0052), so idle noise
+  flickers open short bursts on A. Those end on non-empty quiet reads and are handled as fragments.
+  They are not the cause above; noted, not changed.
+
+RSPdx port B stays empty: the next task keys the IC-9700, and no witness run is planned yet.
