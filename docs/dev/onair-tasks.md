@@ -3647,3 +3647,69 @@ needs the maintainer's go and the mandatory review.
 
 Also worth considering: a longer ACK window (`ota_ack_timeout_ms`) for a pair with a Pi 4 receiver. It
 is configuration only, and costs throughput only when a frame is lost.
+
+## Task 19 — A2 again, with a stepped drive schedule: B → A first, then A → B (status: open)
+
+The new build is `4fd5a13`. On top of task 18's build:
+- **No late ACK.** On real-time audio, a ladder decode has an ACK deadline: the frame end plus the
+  sender's window, minus 2 s for keying, the ACK's airtime and 0.3 s. A decode that would finish later
+  stops trying and keys nothing, and the ladder does not move. The daemon logs `OTA: the decode finished
+  past the sender's ACK window; no ACK keyed, the ladder holds` at info. Non-ladder traffic (IDs, file
+  fragments, handshake) is not bounded. This is what cost a2a three minutes.
+- **The station ID rides in the station's own keying** once its 10-minute window is open: the
+  receiver's just before its ACK (`kind="with-ack"`), the sender's just after its data frame
+  (`kind="with-data"`). An unforced ID otherwise needs 3 s of quiet, which a continuous exchange never
+  has.
+- **The runner waits for both stations' sign-off IDs** after the traffic window, up to 180 s, and
+  reports `sign-off IDs after the last transmission: … yes/no`.
+
+Tests at this build:
+- the daemon and ARDOP suites pass (273), as do core (375) and the affected modem suites (26);
+- each new test fails with its part removed;
+- the pre-push result is added below when the push completes.
+
+**Why the schedule changes.** A demotion needs failed frames whose NACK is keyed. At mute nothing
+arrives, and at 0.02 a2b opened no burst, so there was nothing to fail. The new schedule steps the drive
+down so that frames still arrive and fail. With the deadline, a failure on the Pi 4 that finishes later
+than about 6 s after the frame keys nothing either. A demotion therefore needs failures that the
+receiver gives up on quickly: a weak but present signal, not a missing one.
+
+### Part A — nothing transmits
+As task 18 Part A: pull on rpi51 (commit including `4fd5a13`), `deploy`, check the hashes, read back.
+Port B empty.
+
+### Part B — run a2c: B sends, A leads the rate (keys both rigs: one go)
+Task 11 Part C's settings (`robust`, `TRAFFIC_FROM=B`, `TRAFFIC_SIZE=64`, `TRAFFIC_INTERVAL=2`,
+`TRAFFIC_DURATION=900`). Record as before, as `-a2c`.
+
+The drive schedule goes on `B_TX_SINK_VOLUME`, with A's kept at the profile's value. Record the UTC time
+of each change:
+- **0.15** until the report's ISS level has been at SL6 for at least 60 s with frames decoding, and in
+  any case until t0 + 480 s (clause 3);
+- **0.08** for 60 s;
+- **0.05** for 90 s;
+- **0.035** for 90 s;
+- **0.15** to the end (clause 1 again).
+
+If at some step A shows **no flushed burst at all** for 60 s (no `burst flushed` line in its log),
+note the time and go straight to 0.15: below that level nothing arrives, and nothing more can be
+learned there.
+
+### Part C — run a2d: A sends, B leads the rate (keys both rigs: one go)
+The same as Part B with the stations swapped, as task 11 Part B: `TRAFFIC_FROM=A`, the schedule on
+`A_TX_SINK_VOLUME`, the RSPdx witness as written there. Record as `-a2d`.
+
+The station rules hold: 5 W at most, ask the maintainer before every run, record nothing about the
+remote host, RSPdx port B empty.
+
+### Report, per run
+- **Counts:** frames sent and decoded, ACKs applied, `not received`, abandoned, and the flush counts.
+- **The receiver's `ota_rate_decision` events in time order**, as a table: `decision`, `verdict`, from
+  and to level, SNR, against the drive schedule's UTC times.
+- **Late decodes:** every `finished past the sender's ACK window` line with its time, and the drive
+  level then.
+- **Station IDs:** every `transmitted station ID` line with its time and `kind`, whether any falls inside
+  the other station's frame, and the runner's sign-off line.
+- **Timing:** the decode time after each frame's end, and the time from each `fec attempt OK` to the
+  next `logged TX metadata` with `FSK4-ACK` (the keying allowance is fitted to task 18's 0.8–1.7 s).
+- **Per drive level:** the receiver's decodes, its failures, and its NACKs keyed.
