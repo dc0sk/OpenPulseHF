@@ -157,7 +157,8 @@ async fn the_signoff_id_is_not_keyed_while_another_station_transmits() {
     let t = Arc::clone(&channel.transmits);
     let id_after_quiet = wait_for(
         || t.load(Ordering::SeqCst) > after_message,
-        Duration::from_secs(5),
+        // The ID needs `ID_MIN_QUIET_MS` (3 s) of quiet after the burst has been flushed and decoded.
+        Duration::from_secs(15),
     )
     .await;
 
