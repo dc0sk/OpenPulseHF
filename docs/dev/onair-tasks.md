@@ -3110,7 +3110,7 @@ shows up. The daemon's OTA receive on Pi-class hardware is less mature on real a
 simulator suites suggested. The way forward is for the maintainer to decide (see the cloud session's
 summary).
 
-## Task 16 — retest with no NACK while the channel is busy and the MFSK16 bound (status: open)
+## Task 16 — retest with no NACK while the channel is busy and the MFSK16 bound (status: done — Parts A to C run; Part D not run, its condition failed; see Results)
 
 The new build is `cd44ca9`. On top of task 15's build:
 - **No NACK while the channel is still busy** (keying change, mandatory review taken). Right after a
@@ -3183,3 +3183,23 @@ New log lines:
 - Reading: from 07:06:56, 90 s before B's first frame ended, A's receiver saw energy at or above the squelch (energy 0.0047-0.0119, squelch about 0.0054) in short bursts, and it kept doing so to the end of the run. A's squelch in g6 sits close to the noise energy. I did not check the channel for another signal; the RSPdx was not running.
 
 Cleanup (quote): `== cleanup ==  [IC-9700] daemon and rigctld stopped; PTT 0 sent while rigctld ran  [FT-991A] daemon and rigctld stopped; PTT 0 sent while rigctld ran`; nothing running.
+
+#### Task 16 Part C — run b6 (A sends; maintainer's go 2026-11-02, port B empty)
+
+Same as b5, build `cd44ca9`. Recordings `-d 390`, started 07:14:55.371 UTC (rpi51) and 07:14:55.701 UTC (station B), complete. Evidence `docs/dev/test-reports/onair-twin-ota-20261102-081543{.log,-evidence/}`. Audio `rx-a-b6-8k.wav.gz` 2172829 bytes (rms 204.2), `rx-b-b6-8k.wav.gz` 5294227 bytes (rms 1819.3); 48 kHz originals on rpi51 in /tmp (sha256 `aee4a288...`, `2dc422fe...`).
+
+Counts:
+- Station B (receiver): **`fec attempt OK` 1 of 4 frames sent** (07:16:53.805, **2.81 s** after A's frame-0 end at 07:16:50.992), `fec attempt FAILED` **140** (b5: 94); `ota_rate_decision` 51: `hold` keyed 1, `nack_hold` keyed 2, `nack_step_down` keyed 1, `nack_hold` muted 47. B's ACK/NACK metadata lines: 07:16:55.462 (**4.47 s** after frame 0), 07:17:03.656, 07:17:27.677. First run since task 12 in which B decoded a frame; in b5 it decoded none.
+- Station A (sender): 4 frames (07:16:50.992, 07:18:02.440, 07:19:18.579, 07:20:34.878 UTC); `OTA ACK not received within window` **3** (07:18:11.688, 07:19:27.899, 07:20:44.123); `OTA send abandoned` **1**; `tx_level` SL2 in all 37 readings. Frame 0's ACK was applied (no `not received` line for it).
+
+Capture-read statistics: A: 0 holds, largest `since_ms` 858 ms; B (Pi 4): **52** `capture read holds` lines, largest `samples=42400` (b5: 510200), largest `since_ms` 10466 ms on a read (72117 ms is the first read, `samples=0`).
+
+New log lines:
+- `burst flushed: carrier dropped`: **A 4, B 124**. A's four: 07:15:27.349 `burst=3048 read=200 energy=0.005602 squelch=0.005766`, 07:15:28.045 `2448/200/0.004762/0.005795`, 07:15:28.278 `3848/0/0.005927/0.005799`, 07:15:37.246 `3048/200/0.005400/0.005684` (all before A's first frame, none during the traffic). B's first lines: 07:15:11.938 `burst=200 read=0 energy=0.02043 squelch=0.01000`, 07:15:15.633 `2848/400/0.02184/0.02489`, 07:15:16.733, 07:15:25.633, then 07:16:51.283 `burst=536648 read=600 energy=0.004543 squelch=0.025432` (A's frame, one long burst), and from 07:16:55.912 many short bursts (`burst` 200-28600, `read=0`, `energy` 0.046-0.072 against `squelch` about 0.025), i.e. during B's own ACK keying and A's following transmissions. Full lists in `daemon-{a,b}.log.gz`.
+- `while the channel was still busy` info lines: **A 1, B 78**; `channel still busy after a burst flushed` debug lines: **A 1** (07:15:37.256 and 07:15:37.740), **B 79**; B's first at 07:16:55.922. B's 124 flushes and 78 busy holds: the energy over the squelch is the strong A signal and B's own keying.
+- `nack_hold, keyed`: B's two events (`nack_hold` keyed); the metadata lines at 07:17:03.656 and 07:17:27.677 are the later two B transmissions. I did not match them to A's frame starts (the frame length is not in the log lines).
+
+Part D condition: g6 had **no ACK applied** (A decoded nothing, B's four frames all `not received`); b6 had frame 0's ACK applied. **Not met**; Part D not run, per the task.
+
+Cleanup (quote), both runs: `== cleanup ==  [IC-9700] daemon and rigctld stopped; PTT 0 sent while rigctld ran  [FT-991A] daemon and rigctld stopped; PTT 0 sent while rigctld ran`; nothing running.
+End state read-back: FT-991A EX065+1500; dial 144641564 RFPOWER 0.05 PTT 0; IC-9700 RFPOWER 0.0117647 PTT 0; port B empty.
