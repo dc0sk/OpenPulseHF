@@ -3616,3 +3616,34 @@ Four findings:
 - fix 2 (keying, so it needs the go and the mandatory review);
 - then one more B → A run with a stepped drive schedule for clause 2. Repeat A → B too if 2 or 4
   changes the receive path.
+
+**Investigated offline (cloud session, 2026-11-02): the a2a desync (finding 4).** Replayed `rx-b-a2a` (B's
+receive audio, recording start 15:39:12.51) through the daemon's receive entry, from the start so B's
+ladder state follows the run.
+- **Reproduced:** the SL3 burst that ends at t = 345.5 s (15:44:58) costs **52 s on x86** in the replay
+  (759 BPSK100 + 759 BPSK63 attempts) and fails. That is about 3 min on the Pi 4, during which B heard
+  nothing; on air the next burst flushed at 15:47:51.
+- **The frame was decodable but lost its head.** Cut as the burst had it (311.54–345.5 s), BPSK63 comes
+  up short of an RS block. With 0.3 s more head (from 311.24 s) it decodes (258 attempts). The frame
+  starts at about 311.3 s, and A's retransmission started at 15:44:23.6 (311.1 s), right after its 9 s
+  ACK window closed.
+- **B's own late ACK cut the head off.** B decoded A's first SL3 frame 8.8 s after its end (69 attempts
+  on the Pi 4; the same burst takes 2.4 s on x86). It keyed the ACK at 15:44:24.4, 10.1 s after the
+  frame's end and during the first ~0.3 s of A's retransmission, so its own receiver was muted for the
+  retransmission's head.
+- **Then the scan made it a cascade.** B had already moved its recommendation to SL4, so the headless
+  burst was scanned as SL4 and SL3. Its cost held the Pi 4's receive loop for about 3 minutes.
+
+**So the cause is a late ACK, and the cost of a failing burst is what turned it into three lost
+minutes.** Two things need changing. Neither is done yet: both decide when the receiver keys, so each
+needs the maintainer's go and the mandatory review.
+1. **No ACK after the sender's window.** An ACK keyed after the sender's window cannot be received, and
+   it lands on the retransmission. When the decode finishes too late (frame end + ACK window − ACK
+   airtime), the receiver keys nothing for that frame, and its ladder must not move. The sender never
+   learns of the decision, so moving it alone is what desynchronised the two stations.
+2. **A decode that cannot finish before the ACK deadline should stop there.** Its result can no
+   longer be ACKed, and the sender will retransmit anyway. Bounding the scan by the deadline caps how
+   long a failing burst holds the receive loop: about 9 s instead of 3 minutes on the Pi 4.
+
+Also worth considering: a longer ACK window (`ota_ack_timeout_ms`) for a pair with a Pi 4 receiver. It
+is configuration only, and costs throughput only when a frame is lost.
