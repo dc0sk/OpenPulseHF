@@ -3282,3 +3282,28 @@ Report task 16's counts. Also, from each daemon log:
   inside one of the other station's frames. Frame start = the sender's `logged TX metadata` time minus
   the frame's length: 66.6 s at SL2, 33.8 s at SL3, 17 s at SL1.
 
+
+#### Task 17 Part A (station session, 2026-11-02) — nothing transmitted
+
+- rpi51 at `8e6339e7`; `git merge-base --is-ancestor f6c0e74 HEAD` true.
+- `deploy` rc=0; sha256 identical on both stations:
+  - `fa3ec54a341f91dc2fbae2f0228a6f0b4f6807bdbdb99a09987d14b3e1fe6292  target/release/openpulse-server`
+  - `bf2983eedf188e8eebbcb6329ec1c1d9613258c49dca76e888f6f4fcf597b8d2  target/release/openpulse`
+  - `c9e152f32d6b8d5548551b255865b9c45c198b96739672b02eab9dee56fdc373  scripts/twin-traffic.sh`
+- Read-back: FT-991A `EX065+1500;`, dial 144641564, RFPOWER 0.05, PTT 0. IC-9700 dial 144640000, RFPOWER 0.0117647, PTT 0. Nothing running on rpi51.
+
+#### Task 17 Part B — run g7 (B sends; maintainer's go 2026-11-02, port B empty)
+
+Same command as g6, build `f6c0e74` (rpi51 `8e6339e7`). Recordings `-d 390`, started 09:57:29.424 UTC (rpi51) and 09:57:29.763 UTC (station B), complete. Evidence `docs/dev/test-reports/onair-twin-ota-20261102-105817{.log,-evidence/}`. Audio `rx-a-g7-8k.wav.gz` 4621388 bytes (rms 294.3), `rx-b-g7-8k.wav.gz` 1611866 bytes (rms 265.8); 48 kHz originals on rpi51 in /tmp (sha256 `53bfc82f...`, `cc9439c4...`).
+
+Counts:
+- Station A (receiver): **`fec attempt OK` 1 of 4 frames sent** (09:59:26.320, **1.23 s** after B's frame-0 end 09:59:25.092), `fec attempt FAILED` **21** (g6: 234); `ota_rate_decision` 7, keyed: `hold` 1, `nack_hold` 2, `nack_step_down` 1. A's ACK/NACK metadata lines (`FSK4-ACK`): 09:59:28.008, 09:59:42.266, 09:59:56.437.
+- Station B (sender): 4 frames (`logged TX metadata` 09:59:25.092, 10:00:35.411, 10:01:52.287, 10:03:11.315 UTC); `OTA ACK not received within window` **3** (10:00:45.148, 10:02:02.053, 10:03:21.099); `OTA send abandoned` **1**; `tx_level` SL2 in all 35 readings. Frame 0's ACK applied.
+
+Flush counts, with the task's one-liner (total, `read=0`, `read=0` and `energy` >= `squelch`): **A 12, 4, 4** (g6: 234); **B 1, 1, 0**. Longest flushed burst: **A `burst=543200`** (10:01:52.600; a whole 66.6 s frame is 532800 samples), B `burst=8392`. A's twelve, in time order: 09:59:25.350 `burst=537048 read=600 energy=0.000919 squelch=0.005776` (frame 0, whole; decoded at 09:59:26.3); 09:59:28.645 `2448/200/0.005691/0.005803`; **09:59:39.688 `78448/0/0.010237/0.005803`, 09:59:53.876 `79200/0/0.009781`, 10:00:07.951 `79200/0/0.011742`, 10:00:27.568 `79600/0/0.010928`** (four pieces of ~10 s each in what is B's frame 1); 10:00:35.751 `65000/600/0.000965/0.005803`; four small ones at 10:00:42.000-10:00:44.650 (`2648-6048`, `read=200-600`); 10:01:52.600 `543200/600/0.001002/0.004689` (B's frame 2, whole); B 10:02:02.325 `8392/0/0.018667/0.021259`.
+
+Keyed decisions at station A (events carry no time; the times of the three `FSK4-ACK` transmissions are the metadata lines above; one decision of the four has no line). B's frame starts = its `logged TX metadata` time minus 66.6 s: frame 0 about 09:58:18.5, frame 1 about 09:59:28.8, frame 2 about 10:00:45.7, frame 3 about 10:02:04.7. So A's ACK at 09:59:28.008 sits just before frame 1 started; **A's keyed lines at 09:59:42.266 and 09:59:56.437 fall inside B's frame 1** (09:59:28.8-10:00:35.4). Frame 1 arrived as the four ~10 s pieces above (the carrier-drop flushes at 09:59:39.7, 09:59:53.9 are within 3 s before those two transmissions); frame 1 was not decoded. Frame 2 (burst 543200, 10:01:52.600) arrived whole and was not decoded; no keyed transmission of A falls inside it.
+
+Capture-read statistics: A 5 `capture read holds` lines, largest `samples=60200` (7539 ms, 10:02:00); B 1 hold, largest `samples=15400`. `channel still busy` lines: 0 on both.
+
+Cleanup (quote): `== cleanup ==  [IC-9700] daemon and rigctld stopped; PTT 0 sent while rigctld ran  [FT-991A] daemon and rigctld stopped; PTT 0 sent while rigctld ran`; nothing running.
