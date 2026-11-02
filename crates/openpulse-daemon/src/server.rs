@@ -888,8 +888,6 @@ pub async fn run(cfg: OpenpulseConfig, modem_backend: Box<dyn AudioBackend>) -> 
                         // one multi-second blob of during-transmit audio. The rx tick reopens lazily.
                         rx_stream = None;
                         rx_pending.clear();
-                        // Our own transmission: the burst gathered before it is not a frame (task 17).
-                        engine.abandon_burst();
                         // Compress the session payload on the wire when enabled; the peer's rx tick
                         // unpacks the self-describing frame. Falls back to raw bytes when disabled.
                         let payload = if compress_tx {

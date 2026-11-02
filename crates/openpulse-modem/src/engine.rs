@@ -947,6 +947,8 @@ pub struct ModemEngine {
     /// Every FEC/plain decode attempt `decode_attempt` made: the work an OTA burst cost, counted so a
     /// test can bound it instead of timing it.
     decode_attempts: u64,
+    /// Bursts dropped because this station keyed (`abandon_burst`).
+    bursts_abandoned: u64,
     /// Settles rejected because the preamble correlation did not corroborate them (#1049).
     ///
     /// A tripwire as much as a counter: it stays 0 when the mode publishes no template, so a test
@@ -1213,6 +1215,7 @@ impl ModemEngine {
             settle_condemnations: 0,
             afc_settle_attempts: 0,
             decode_attempts: 0,
+            bursts_abandoned: 0,
             condemned_positions: Vec::new(),
             accepted_settle_positions: Vec::new(),
             sweep_attempt_inputs: Vec::new(),
@@ -1854,13 +1857,29 @@ impl ModemEngine {
         self.rx_capturing = false;
         self.rx_burst.clear();
         self.rx_ring.clear();
+        // The held audio is a transmission, not band: the floor must not learn from it.
         if self.noise_floor.is_held() {
             self.noise_floor.discard();
         }
+        // The per-burst state every flush resets, without recording a flush (nothing was delivered).
+        self.rx_burst_lead = 0;
+        self.rx_burst_first_block = 0;
+        self.rx_burst_tp_run = 0;
+        self.rx_burst_tp_cur = 0;
+        self.rx_burst_s_span = 0;
+        self.s_armed = false;
+        self.s_permitted_latch = None;
         if dropped > 0 {
+            self.bursts_abandoned = self.bursts_abandoned.wrapping_add(1);
             debug!(dropped, "burst abandoned: this station keyed");
         }
         dropped
+    }
+
+    /// Bursts dropped by [`abandon_burst`](Self::abandon_burst) since the engine started: a tripwire
+    /// that the daemon's keying paths really call it.
+    pub fn bursts_abandoned(&self) -> u64 {
+        self.bursts_abandoned
     }
 
     /// Returns the most recent DCD RMS energy estimate.

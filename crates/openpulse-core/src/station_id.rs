@@ -23,8 +23,9 @@ pub const ID_QUIET_WINDOW_MS: u64 = 90_000;
 /// - **Interval ID** ([`id_due`](Self::id_due)): enabled, armed by TX since the last
 ///   ID, and `interval_ms` elapsed since the last ID.
 /// - **End-of-exchange (sign-off) ID** ([`signoff_due`](Self::signoff_due)): enabled
-///   with a non-zero sign-off idle, armed by TX since the last ID, and the channel has
-///   been quiet (no TX) for `signoff_idle_ms` — i.e. the exchange has wound down.
+///   with a non-zero sign-off idle, armed by TX since the last ID, and no TX of our own for
+///   `signoff_idle_ms`. [`due_reason`](Self::due_reason) also waits for a quiet channel, so it is
+///   not keyed over another station; a busy channel leaves it to the forced interval ID.
 ///
 /// Both share one `mark_identified` reset, so after any ID neither fires again until
 /// the station transmits anew. Pure state machine over an injected `now_ms` clock so
@@ -90,8 +91,9 @@ impl StationIdTimer {
             return None;
         }
         let since_id = now_ms.saturating_sub(self.last_id_ms);
-        if since_id >= self.interval_ms
-            || (channel_quiet && since_id >= self.interval_ms.saturating_sub(ID_QUIET_WINDOW_MS))
+        // At most half the interval, so a short configured interval does not ID after every frame.
+        let window = ID_QUIET_WINDOW_MS.min(self.interval_ms / 2);
+        if since_id >= self.interval_ms || (channel_quiet && since_id >= self.interval_ms - window)
         {
             return Some("interval");
         }
@@ -393,5 +395,18 @@ mod tests {
         let t = StationIdTimer::new(TEN_MIN, 0).with_signoff_idle_ms(SIGNOFF);
         assert_eq!(t.due_reason(TEN_MIN * 3, true), None);
         assert_eq!(t.due_reason(TEN_MIN * 3, false), None);
+    }
+
+    #[test]
+    fn a_short_interval_waits_at_least_half_of_it_for_the_early_slot() {
+        let mut t = StationIdTimer::new(60_000, 0);
+        t.note_tx(1_000);
+        assert_eq!(
+            t.due_reason(29_999, true),
+            None,
+            "a 60 s interval must not ID at the first quiet moment after every frame"
+        );
+        assert_eq!(t.due_reason(30_000, true), Some("interval"));
+        assert_eq!(t.due_reason(60_000, false), Some("interval"));
     }
 }
