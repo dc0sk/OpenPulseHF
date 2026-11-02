@@ -3371,7 +3371,7 @@ findings. The sign-off ID waits for a quiet channel; the interval ID takes a qui
 ARDOP TNC); and an empty read after a flush is not read as an idle channel. Keying review: no blocker
 (`docs/dev/reviews/review-station-id-quiet-channel-2026-11-02.md`).
 
-## Task 18 — retest with the station ID on a quiet channel; then A2 if the condition holds (status: open)
+## Task 18 — retest with the station ID on a quiet channel; then A2 if the condition holds (status: Parts A to C done, both directions climb SL2 to SL6; Part D waits for the maintainer; see Results)
 
 The new build is `cda9c8a`.
 
@@ -3438,3 +3438,25 @@ Keyed decisions inside the other station's frames: A's ACK lines each sit 1.7-2.
 Capture-read statistics: A 0 holds, B 0 holds. `channel still busy` lines: 0 on both.
 
 Cleanup (quote): `== cleanup ==  [IC-9700] daemon and rigctld stopped; PTT 0 sent while rigctld ran  [FT-991A] daemon and rigctld stopped; PTT 0 sent while rigctld ran`; nothing running.
+
+#### Task 18 Part C — run b8 (A sends; maintainer's go 2026-11-02, port B empty)
+
+Same as b7, build `cda9c8a`. Recordings `-d 390`, started 13:59:50.232 UTC (rpi51) and 13:59:50.582 UTC (station B), complete. Evidence `docs/dev/test-reports/onair-twin-ota-20261102-150038{.log,-evidence/}`. Audio `rx-a-b8-8k.wav.gz` 2348708 bytes (rms 201.0), `rx-b-b8-8k.wav.gz` 5285274 bytes (rms 1788.0); 48 kHz originals on rpi51 in /tmp (sha256 `d9eddcf6...`, `3346d027...`).
+
+**Result: 7 of 7 frames decoded, 7 of 7 ACKs applied, ladder SL2 -> SL6 (A sends).**
+- Station B (receiver): **`fec attempt OK` 7 of 7 frames sent**, `fec attempt FAILED` 493. `ota_rate_decision` 7, all keyed, in time order: `hold`, `hold` (SL2), `climb_on_evidence` (SL2->SL3), `climb_on_snr` (SL3->SL4), `climb_on_snr` (SL4->SL5), `climb_on_snr` (SL5->SL6), `hold` (SL6).
+- Station A (sender): 7 frames, modes BPSK31, BPSK31, BPSK31, BPSK63, BPSK100, BPSK250, QPSK250; `logged TX metadata` 14:01:45.711, 14:02:57.731, 14:04:09.077, 14:04:47.587, 14:05:15.700, 14:05:31.849, 14:05:40.259 UTC; `OTA ACK not received within window` **0**; `OTA send abandoned` **0**; `tx_level` readings: SL2 x37, SL3 x2, SL4 x1, SL5 x1, SL6 x2.
+- B's `fec attempt OK`: 14:01:48.866, 14:03:00.387, 14:04:11.854, 14:04:52.651, 14:05:21.371, 14:05:34.511, 14:05:41.196, i.e. 3.15, 2.66, 2.78, 5.06, 5.67, 2.66, 0.94 s after each frame end; B's ACK transmissions: 14:01:50.549, 14:03:01.898, 14:04:13.289, 14:04:53.890, 14:05:22.474, 14:05:35.549, 14:05:42.218.
+
+Flush counts (total, `read=0`, `read=0` and `energy` >= `squelch`): **A 2, 0, 0**; **B 11, 0, 0** (b7: B 10, 4, 4). Longest flushed burst: B `burst=537648` (14:01:46.046; an SL2 frame is 532800), A `burst=3048`. B's flushes in the traffic are the whole frames (`537648`, `536648`, `536648`, then `275000`, `174600`, `74800`, `38048` as the frames get shorter) plus small ones (`1600`, `2400`, `2448`; `read=200`); all have `energy` far under `squelch` at the flush (the carrier has dropped).
+
+Station IDs: **none** (`transmitted station ID` absent on both; only the start-up line `periodic station ID enabled interval_s=600`). `burst abandoned: this station keyed`: **A 1** (14:03:02.145, `dropped=8392`, 4.4 s after A's frame-1 end at 14:02:57.7, a short piece A had gathered while it was keying), **B 0**.
+
+Keyed decisions inside the other station's frames: none. Each of B's ACK lines sits 1.0-2.3 s after the matching A frame end and before the next frame starts.
+
+Capture-read statistics: A 0 holds, B 0 holds. `channel still busy` lines: 0 on both.
+
+Part D condition: **met** (g8 and b8: every ACK applied, none `not received`, `tx_level` moved). Part D (task 11 Parts B and C, the first A2 attempt, recordings `-a2a` and `-a2b`) not started: it needs the maintainer's go, one per run.
+
+Cleanup (quote), both runs: `== cleanup ==  [IC-9700] daemon and rigctld stopped; PTT 0 sent while rigctld ran  [FT-991A] daemon and rigctld stopped; PTT 0 sent while rigctld ran`; nothing running.
+End state read-back: FT-991A EX065+1500; dial 144641564 RFPOWER 0.05 PTT 0; IC-9700 RFPOWER 0.0117647 PTT 0; port B empty.
