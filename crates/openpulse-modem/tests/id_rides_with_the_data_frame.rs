@@ -44,6 +44,7 @@ fn burst_for(level: SpeedLevel) -> Vec<f32> {
 fn a_data_frame_followed_by_an_id_decodes_at_every_robust_rung() {
     let mut failed = Vec::new();
     for level in [
+        SpeedLevel::Sl1,
         SpeedLevel::Sl2,
         SpeedLevel::Sl3,
         SpeedLevel::Sl4,

@@ -69,9 +69,9 @@ fn a_decode_past_the_deadline_answers_nothing_and_moves_no_rung() {
     let mut rx = engine(&LoopbackBackend::new());
     let before = rx.ota_rx_recommended_level();
     rx.set_ota_ack_deadline(Some(Instant::now()));
-    let res = rx
-        .ota_decode_burst(&burst, "DC0SK", Some("BPSK250"))
-        .unwrap();
+    // No fallback mode: the uncoded fallback (non-ladder, not bounded by the deadline) would run
+    // attempts of its own; this counts the ladder decode only.
+    let res = rx.ota_decode_burst(&burst, "DC0SK", None).unwrap();
     assert!(
         res.ack.is_none(),
         "an ACK past the sender's window cannot be heard and lands on its retransmission"
@@ -86,7 +86,11 @@ fn a_decode_past_the_deadline_answers_nothing_and_moves_no_rung() {
         rx.decode_attempts_past_deadline() > 0,
         "attempts past the deadline are skipped, not run"
     );
-    assert_eq!(rx.decode_attempts(), 0, "no attempt ran past the deadline");
+    assert_eq!(
+        rx.decode_attempts(),
+        0,
+        "no ladder attempt ran past the deadline"
+    );
 
     // The deadline applies to one decode only.
     let res = rx
@@ -96,4 +100,39 @@ fn a_decode_past_the_deadline_answers_nothing_and_moves_no_rung() {
         res.ack.is_some(),
         "the next decode has no deadline unless one is set"
     );
+}
+
+/// Non-ladder traffic (station ID, file fragments, handshake) answers no ACK, so the deadline must not
+/// cut its decode (review 2026-11-02, S1: on the twin, four uncoded file fragments were lost to it).
+#[test]
+fn a_non_ladder_frame_still_decodes_past_the_deadline() {
+    let bk = LoopbackBackend::new();
+    let mut tx = engine(&bk);
+    tx.transmit(b"DE DC0SK", "BPSK250", None).unwrap();
+    let mut audio = vec![0.0f32; 2_400];
+    audio.extend(bk.drain_samples());
+    let rx_bk = LoopbackBackend::new();
+    let mut rx = engine(&rx_bk);
+    let mut burst = None;
+    for chunk in audio
+        .chunks(800)
+        .map(|c| c.to_vec())
+        .chain(std::iter::repeat_n(vec![0.0; 800], 4))
+    {
+        if let Some(b) = rx.accumulate_capture(Some("BPSK250"), chunk).unwrap() {
+            burst = Some(b);
+            break;
+        }
+    }
+    let burst = burst.expect("the ID flushed as a burst");
+    rx.set_ota_ack_deadline(Some(Instant::now()));
+    let res = rx
+        .ota_decode_burst(&burst, "DC0SK", Some("BPSK250"))
+        .unwrap();
+    assert_eq!(
+        res.payload.as_deref(),
+        Some(&b"DE DC0SK"[..]),
+        "an uncoded non-ladder frame must decode whatever the ACK deadline"
+    );
+    assert!(res.ack.is_none(), "non-ladder traffic is never ACKed");
 }

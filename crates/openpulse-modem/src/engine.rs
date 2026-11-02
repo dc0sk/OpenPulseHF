@@ -780,6 +780,9 @@ pub struct ModemEngine {
     next_ota_ack_deadline: Option<Instant>,
     /// The deadline of the OTA decode running now: `decode_attempt` stops trying past it.
     decode_deadline: Option<Instant>,
+    /// A non-ladder decode is running (the uncoded fallback and the frames after it): it answers no
+    /// ACK, so the ACK deadline does not bound it.
+    non_ladder_decode: bool,
     /// Whether the last OTA decode finished past its ACK deadline (no ACK, the ladder held).
     last_ota_decode_late: bool,
     /// Decode attempts skipped because the ACK deadline had passed.
@@ -1191,6 +1194,7 @@ impl ModemEngine {
             next_failure_verdict: NackVerdict::Keyed,
             next_ota_ack_deadline: None,
             decode_deadline: None,
+            non_ladder_decode: false,
             last_ota_decode_late: false,
             decode_attempts_past_deadline: 0,
             listening_samples: 0,
@@ -2623,6 +2627,11 @@ impl ModemEngine {
         self.next_ota_ack_deadline = deadline;
     }
 
+    /// Whether a ladder decode running now is past its ACK deadline (non-ladder decodes have none).
+    fn past_decode_deadline(&self) -> bool {
+        !self.non_ladder_decode && self.decode_deadline.is_some_and(|d| Instant::now() >= d)
+    }
+
     /// Whether the last OTA decode finished past its ACK deadline.
     pub fn last_ota_decode_late(&self) -> bool {
         self.last_ota_decode_late
@@ -3714,6 +3723,7 @@ impl ModemEngine {
         let was_quiet = self.suppress_afc_events;
         self.suppress_afc_events = true;
         self.decode_deadline = self.next_ota_ack_deadline.take();
+        self.non_ladder_decode = false;
         self.last_ota_decode_late = false;
         if let Some(d) = self.decode_deadline {
             debug!(
@@ -3724,6 +3734,7 @@ impl ModemEngine {
         }
         let result = self.ota_decode_and_ack_inner(samples, session_id, fallback_mode);
         self.decode_deadline = None;
+        self.non_ladder_decode = false;
         self.input_prerouted = was_prerouted;
         self.suppress_afc_events = was_quiet;
         if let Ok((Some((_, mode)), _, _)) = &result {
@@ -3891,6 +3902,8 @@ impl ModemEngine {
                 // Same isolation every candidate gets: a failed attempt's AFC drift must not
                 // poison this one.
                 self.afc_correction_hz = afc_before;
+                // Non-ladder traffic answers no ACK: the ACK deadline does not bound it.
+                self.non_ladder_decode = true;
                 let found = match self.ranked_fallback_onsets(
                     mode,
                     &samples.samples,
@@ -3922,6 +3935,7 @@ impl ModemEngine {
                 if let Some((payload, onset)) = found {
                     return Ok(self.fallback_decoded(mode, samples, payload, onset, last_err));
                 }
+                self.non_ladder_decode = false;
                 self.afc_correction_hz = afc_before;
             }
         }
@@ -4083,6 +4097,7 @@ impl ModemEngine {
         if decoded.is_none() {
             if let Some(mode) = fallback_deferred {
                 self.afc_correction_hz = afc_before;
+                self.non_ladder_decode = true;
                 if let Ok((payload, onset)) =
                     self.decode_fallback_near_trigger(mode, samples, onset_bound, lead)
                 {
@@ -4094,6 +4109,7 @@ impl ModemEngine {
                     );
                     return Ok(self.fallback_decoded(mode, samples, payload, onset, last_err));
                 }
+                self.non_ladder_decode = false;
                 self.afc_correction_hz = afc_before;
             }
         }
@@ -4131,8 +4147,10 @@ impl ModemEngine {
                     phase2.len() - 1
                 });
             'settle_scan: for (i, (level, mode, fec)) in phase2.iter().enumerate() {
+                self.non_ladder_decode = fallback_at == Some(i);
                 // The fallback entry, if any, sits past `candidates` and is never short-flagged.
-                if short_of_block.get(i).copied().unwrap_or(false) {
+                // A ladder entry past the ACK deadline skips its acquisition too.
+                if short_of_block.get(i).copied().unwrap_or(false) || self.past_decode_deadline() {
                     continue;
                 }
                 let (step, scan_end, raw_max) = self.burst_onset_scan_bounds(mode, n, onset_bound);
@@ -4208,6 +4226,7 @@ impl ModemEngine {
                     }
                 }
             }
+            self.non_ladder_decode = false;
             // Commit only on success — the rollback discipline every other arm follows (#1143).
             self.afc_correction_hz = if decoded.is_some() {
                 self.afc_correction_hz
@@ -4236,7 +4255,7 @@ impl ModemEngine {
                 self.ota_retained_session = Some(session_id.to_string());
             }
             for (level, mode, fec) in &candidates {
-                if decoded.is_some() {
+                if decoded.is_some() || self.past_decode_deadline() {
                     break;
                 }
                 let soft = self
@@ -5873,7 +5892,7 @@ impl ModemEngine {
     ) -> Result<Vec<u8>, ModemError> {
         // Past the ACK deadline a decode can no longer be answered, and the sender retransmits: the
         // attempt would only keep the receive loop deaf (task 18: one failing burst, 3 min on a Pi 4).
-        if self.decode_deadline.is_some_and(|d| Instant::now() >= d) {
+        if self.past_decode_deadline() {
             self.decode_attempts_past_deadline = self.decode_attempts_past_deadline.wrapping_add(1);
             return Err(ModemError::Demodulation(
                 "past the ACK deadline: not attempted".into(),

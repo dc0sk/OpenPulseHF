@@ -823,6 +823,11 @@ pub async fn run(cfg: OpenpulseConfig, modem_backend: Box<dyn AudioBackend>) -> 
     let mut last_capture_read: Option<std::time::Instant> = None;
     // Keeps an empty read in the middle of a frame from ending the burst (shared with `CaptureTicker`).
     let mut capture_gap = openpulse_modem::capture_ticker::CaptureGap::default();
+    // Whether every read since the current burst opened arrived at the audio rate (no more audio than
+    // the time since the previous read). The twin and loopback harnesses deliver faster than real
+    // time, often a whole keying in one read before a small read flushes it: a wall-clock ACK deadline
+    // means nothing there (review 2026-11-02, B1).
+    let mut burst_real_time = true;
     // Keyed-NACK budget, leaking with listening time (#1456; `nack_budget.rs`).
     let mut ota_nack_budget = crate::nack_budget::NackBudget::default();
     // Periodic station identification (REQ-REG-10): while transmitting, key up and send the
@@ -983,9 +988,9 @@ pub async fn run(cfg: OpenpulseConfig, modem_backend: Box<dyn AudioBackend>) -> 
                 // Samples in this tick's read: the read that ended a burst also holds audio from after
                 // the frame, so the frame ended about this long before now (the ACK deadline).
                 let mut tick_read_len = 0usize;
-                // Whether that read arrived at the audio rate: no more audio than the time since the
-                // previous read. The twin and loopback harnesses deliver faster than real time, and a
-                // wall-clock deadline means nothing there.
+                // When that read was taken (the frame's end is anchored on it, not on a later moment
+                // after the monitor and the repeater hand-off), and whether its burst was real time.
+                let mut tick_read_at = std::time::Instant::now();
                 let mut tick_real_time = false;
                 let burst = tokio::task::block_in_place(|| {
                     if rx_stream.is_none() {
@@ -1011,7 +1016,8 @@ pub async fn run(cfg: OpenpulseConfig, modem_backend: Box<dyn AudioBackend>) -> 
                             let since_ms = last_capture_read
                                 .map(|t| t.elapsed().as_millis())
                                 .unwrap_or(0);
-                            last_capture_read = Some(std::time::Instant::now());
+                            let read_at = std::time::Instant::now();
+                            last_capture_read = Some(read_at);
                             if samples.len() >= 8_000 {
                                 tracing::info!(
                                     samples = samples.len(),
@@ -1033,8 +1039,13 @@ pub async fn run(cfg: OpenpulseConfig, modem_backend: Box<dyn AudioBackend>) -> 
                                 return Ok(None);
                             }
                             tick_read_len = samples.len();
-                            tick_real_time = samples.len() as f64 / 8000.0
-                                <= since_ms as f64 / 1000.0 + 0.5;
+                            tick_read_at = read_at;
+                            if !engine.burst_open() {
+                                burst_real_time = true;
+                            }
+                            burst_real_time &=
+                                samples.len() as f64 / 8000.0 <= since_ms as f64 / 1000.0 + 0.5;
+                            tick_real_time = burst_real_time;
                             engine.accumulate_capture(Some(&mode), samples)
                         }
                         Err(e) => {
@@ -1128,9 +1139,9 @@ pub async fn run(cfg: OpenpulseConfig, modem_backend: Box<dyn AudioBackend>) -> 
                         // frame. The decode must finish early enough that the ACK, keyed ~2 s later
                         // (measured on air: at most 1.7 s), is heard whole inside that window; past it
                         // the engine stops trying and answers nothing (task 18, run a2a).
-                        let frame_end = std::time::Instant::now()
+                        let frame_end = tick_read_at
                             .checked_sub(std::time::Duration::from_secs_f64(tick_read_len as f64 / 8000.0))
-                            .unwrap_or_else(std::time::Instant::now);
+                            .unwrap_or(tick_read_at);
                         let ack_window_end =
                             frame_end + std::time::Duration::from_millis(engine.ota_ack_timeout_ms());
                         let ack_airtime = std::time::Duration::from_millis(engine.fsk4_ack_airtime_ms());
@@ -1192,10 +1203,18 @@ pub async fn run(cfg: OpenpulseConfig, modem_backend: Box<dyn AudioBackend>) -> 
                                             "ota-ack",
                                             || {
                                                 tokio::task::block_in_place(|| {
-                                                    if id_rides {
-                                                        engine.transmit(id_body.as_bytes(), &mode, None)?;
-                                                    }
-                                                    engine.transmit_ota_ack(ack, None)
+                                                    // A failed ID must not take the ACK down with it.
+                                                    let id_sent = id_rides
+                                                        && engine
+                                                            .transmit(id_body.as_bytes(), &mode, None)
+                                                            .inspect_err(|e| {
+                                                                tracing::warn!(
+                                                                    error = %e,
+                                                                    "station ID before the ACK failed; the ACK goes out"
+                                                                )
+                                                            })
+                                                            .is_ok();
+                                                    engine.transmit_ota_ack(ack, None).map(|()| id_sent)
                                                 })
                                             },
                                         ) {
@@ -1203,7 +1222,7 @@ pub async fn run(cfg: OpenpulseConfig, modem_backend: Box<dyn AudioBackend>) -> 
                                                 "OTA ACK skipped — PTT assert failed; the sender will \
                                                  see no ACK and the ARQ exchange will stall"
                                             ),
-                                            Ok(()) if id_rides => {
+                                            Ok(true) => {
                                                 tracing::info!(
                                                     callsign = %id_callsign,
                                                     mode = %mode,
@@ -2176,15 +2195,20 @@ fn ota_send_with_ptt(
         // operator's message with only a log line. The comment here used to say "already surfaced as
         // a warn + event"; that is false — `SharedPtt::key` emits no event on failure. Tracked
         // separately rather than changed under a keying PR.
-        let id = id_pending.take();
         let tx = match crate::keyed_transmit(ptt, Some(event_tx), "ota-send", || {
             tokio::task::block_in_place(|| {
                 engine.transmit_with_fec_mode(body, &mode, fec, None)?;
                 // AFTER the data frame: in front of it, the receiver's uncoded fallback decodes the ID
-                // and never finds the ladder frame (`id_rides_with_the_data_frame`).
-                if let Some((id_body, id_mode)) = id {
-                    engine.transmit(id_body, id_mode, None)?;
-                    id_sent = true;
+                // and never finds the ladder frame (`id_rides_with_the_data_frame`). Taken here, so a
+                // refused keying keeps it for the next attempt; a failed ID does not fail the attempt,
+                // which would retransmit without listening for the ACK (review 2026-11-02, S3, S5).
+                if let Some((id_body, id_mode)) = id_pending.take() {
+                    match engine.transmit(id_body, id_mode, None) {
+                        Ok(()) => id_sent = true,
+                        Err(e) => {
+                            tracing::warn!(error = %e, "station ID after the data frame failed")
+                        }
+                    }
                 }
                 Ok(())
             })
