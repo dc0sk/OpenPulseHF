@@ -264,7 +264,12 @@ fn worker_loop(bridge: Arc<ModemBridge>, tx_data_rx: std::sync::mpsc::Receiver<V
                 tx_frames_seen = tx_now;
             }
             let one_shot = bridge.id_requested.swap(false, Ordering::Relaxed);
-            if one_shot || id_timer.id_due(now_ms) || id_timer.signoff_due(now_ms) {
+            // Not over another station's transmission (on-air task 17; `StationIdTimer::due_reason`).
+            let channel_quiet = {
+                let e = bridge.engine.lock().unwrap_or_else(|e| e.into_inner());
+                !e.burst_open() && !e.is_channel_busy()
+            };
+            if one_shot || id_timer.due_reason(now_ms, channel_quiet).is_some() {
                 // The ID frame *is* the identification, so it needs a real call — the placeholder
                 // `N0CALL` is not one (§97.119). `tx_callsign` returns the valid MYID or None.
                 match tx_callsign(&bridge) {

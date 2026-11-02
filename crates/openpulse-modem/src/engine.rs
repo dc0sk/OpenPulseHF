@@ -1837,6 +1837,32 @@ impl ModemEngine {
         self.dcd.is_busy()
     }
 
+    /// Whether the burst accumulator is gathering a burst (the carrier has not dropped yet).
+    pub fn burst_open(&self) -> bool {
+        self.rx_capturing && !self.rx_burst.is_empty()
+    }
+
+    /// Drop a burst being gathered, because the station is about to key or has just keyed: audio
+    /// captured before its own transmission must not be joined to audio captured after it and
+    /// flushed as one frame piece (on-air task 17: a piece cut by the station's own ID failed and
+    /// the station keyed a NACK over the other station's frame). Returns the samples dropped.
+    pub fn abandon_burst(&mut self) -> usize {
+        if !self.rx_capturing {
+            return 0;
+        }
+        let dropped = self.rx_burst.len();
+        self.rx_capturing = false;
+        self.rx_burst.clear();
+        self.rx_ring.clear();
+        if self.noise_floor.is_held() {
+            self.noise_floor.discard();
+        }
+        if dropped > 0 {
+            debug!(dropped, "burst abandoned: this station keyed");
+        }
+        dropped
+    }
+
     /// Returns the most recent DCD RMS energy estimate.
     pub fn dcd_energy(&self) -> f32 {
         self.dcd.energy()

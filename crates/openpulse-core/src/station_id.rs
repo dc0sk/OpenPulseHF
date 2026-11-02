@@ -8,6 +8,11 @@ pub fn callsign_is_valid(callsign: &str) -> bool {
     !trimmed.is_empty() && !trimmed.eq_ignore_ascii_case("N0CALL")
 }
 
+/// How long before the interval ID is due the station starts waiting for a quiet channel
+/// ([`due_reason`](StationIdTimer::due_reason)). Longer than the longest `hpx_hf` frame (SL2, 66.6 s),
+/// so one frame of the other station's fits in it; the ID is still forced at the interval itself.
+pub const ID_QUIET_WINDOW_MS: u64 = 90_000;
+
 /// Decides when a station must next transmit its identification.
 ///
 /// Regulatory rules (e.g. FCC §97.119(a)) require a station to identify **at least
@@ -70,6 +75,30 @@ impl StationIdTimer {
             self.tx_since_id = true;
             self.last_tx_ms = now_ms;
         }
+    }
+
+    /// Which ID to transmit now, given whether the channel is quiet (no burst being gathered, carrier
+    /// detect idle), or `None`.
+    ///
+    /// - **interval:** from [`ID_QUIET_WINDOW_MS`] before the interval, at the first quiet moment;
+    ///   at the interval itself, regardless, so a busy channel cannot push it past §97.119's limit.
+    /// - **sign-off:** only on a quiet channel. It used to fire 10 s after the station's own last
+    ///   transmission, which on air was the middle of the other station's next frame: the receiver
+    ///   keyed its ID over every second frame (on-air task 17, 2026-11-02).
+    pub fn due_reason(&self, now_ms: u64, channel_quiet: bool) -> Option<&'static str> {
+        if !self.is_enabled() || !self.tx_since_id {
+            return None;
+        }
+        let since_id = now_ms.saturating_sub(self.last_id_ms);
+        if since_id >= self.interval_ms
+            || (channel_quiet && since_id >= self.interval_ms.saturating_sub(ID_QUIET_WINDOW_MS))
+        {
+            return Some("interval");
+        }
+        if channel_quiet && self.signoff_due(now_ms) {
+            return Some("sign-off");
+        }
+        None
     }
 
     /// True when an **interval** ID is due: enabled, armed by TX since the last ID, and
@@ -319,5 +348,50 @@ mod tests {
             t.signoff_due(TEN_MIN + 1_000 + SIGNOFF),
             "sign-off ID at the end of the exchange"
         );
+    }
+
+    // ── Waiting for a quiet channel (on-air task 17) ─────────────────────────────
+
+    #[test]
+    fn the_signoff_id_waits_for_a_quiet_channel() {
+        let mut t = StationIdTimer::new(TEN_MIN, 0).with_signoff_idle_ms(SIGNOFF);
+        t.note_tx(1_000);
+        assert_eq!(
+            t.due_reason(1_000 + SIGNOFF, false),
+            None,
+            "the other station is transmitting: no sign-off over its frame"
+        );
+        assert_eq!(t.due_reason(1_000 + SIGNOFF + 60_000, false), None);
+        assert_eq!(
+            t.due_reason(1_000 + SIGNOFF + 60_000, true),
+            Some("sign-off"),
+            "the sign-off goes out once the channel is quiet"
+        );
+    }
+
+    #[test]
+    fn the_interval_id_takes_a_quiet_moment_early_and_is_forced_at_the_interval() {
+        let mut t = StationIdTimer::new(TEN_MIN, 0);
+        t.note_tx(1_000);
+        let window_opens = TEN_MIN - ID_QUIET_WINDOW_MS;
+        assert_eq!(t.due_reason(window_opens - 1, true), None);
+        assert_eq!(t.due_reason(window_opens, true), Some("interval"));
+        assert_eq!(
+            t.due_reason(TEN_MIN - 1, false),
+            None,
+            "inside the window a busy channel defers it"
+        );
+        assert_eq!(
+            t.due_reason(TEN_MIN, false),
+            Some("interval"),
+            "at the interval it goes out regardless (§97.119)"
+        );
+    }
+
+    #[test]
+    fn no_id_without_a_transmission_quiet_or_not() {
+        let t = StationIdTimer::new(TEN_MIN, 0).with_signoff_idle_ms(SIGNOFF);
+        assert_eq!(t.due_reason(TEN_MIN * 3, true), None);
+        assert_eq!(t.due_reason(TEN_MIN * 3, false), None);
     }
 }

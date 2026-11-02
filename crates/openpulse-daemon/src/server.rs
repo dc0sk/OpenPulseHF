@@ -888,6 +888,8 @@ pub async fn run(cfg: OpenpulseConfig, modem_backend: Box<dyn AudioBackend>) -> 
                         // one multi-second blob of during-transmit audio. The rx tick reopens lazily.
                         rx_stream = None;
                         rx_pending.clear();
+                        // Our own transmission: the burst gathered before it is not a frame (task 17).
+                        engine.abandon_burst();
                         // Compress the session payload on the wire when enabled; the peer's rx tick
                         // unpacks the self-describing frame. Falls back to raw bytes when disabled.
                         let payload = if compress_tx {
@@ -928,6 +930,8 @@ pub async fn run(cfg: OpenpulseConfig, modem_backend: Box<dyn AudioBackend>) -> 
                 if engine.frames_transmitted() != tx_frames_before_cmd {
                     rx_stream = None;
                     rx_pending.clear();
+                    // Our own transmission: the burst gathered before it is not a frame (task 17).
+                    engine.abandon_burst();
                 }
             }
             _ = rx_ticker.tick() => {
@@ -1315,13 +1319,11 @@ pub async fn run(cfg: OpenpulseConfig, modem_backend: Box<dyn AudioBackend>) -> 
                         id_timer.note_tx(now_ms);
                         tx_frames_seen = tx_now;
                     }
-                    let id_reason = if id_timer.id_due(now_ms) {
-                        Some("interval")
-                    } else if id_timer.signoff_due(now_ms) {
-                        Some("sign-off")
-                    } else {
-                        None
-                    };
+                    // Not over another station's transmission: a sign-off ID waits for a quiet
+                    // channel, and the interval ID takes the first quiet moment in the last 90 s
+                    // before it is forced (on-air task 17; `StationIdTimer::due_reason`).
+                    let channel_quiet = !engine.burst_open() && !engine.is_channel_busy();
+                    let id_reason = id_timer.due_reason(now_ms, channel_quiet);
                     if let Some(reason) = id_reason {
                         let id_mode = handle.active_mode.lock().await.clone();
                         let id_body = format!("DE {id_callsign}");
@@ -1408,6 +1410,8 @@ pub async fn run(cfg: OpenpulseConfig, modem_backend: Box<dyn AudioBackend>) -> 
                 if engine.frames_transmitted() != tx_frames_before_tick {
                     rx_stream = None;
                     rx_pending.clear();
+                    // Our own transmission: the burst gathered before it is not a frame (task 17).
+                    engine.abandon_burst();
                 }
             }
         }
@@ -2492,11 +2496,17 @@ fn channel_still_busy(
         return false;
     };
     pending.extend_from_slice(&fresh);
-    let tail = &pending[pending.len().saturating_sub(1_600)..];
-    if tail.is_empty() || !engine.dcd_floor_is_warm() {
+    if !engine.dcd_floor_is_warm() {
         return false;
     }
-    let rms = (tail.iter().map(|x| x * x).sum::<f32>() / tail.len() as f32).sqrt();
+    let tail = &pending[pending.len().saturating_sub(1_600)..];
+    // Nothing arrived since the flush (a stream just reopened returns an empty first read): that is
+    // no information, not a quiet channel. Judge by the last audio the carrier detect saw (task 17).
+    let rms = if tail.is_empty() {
+        engine.dcd_energy()
+    } else {
+        (tail.iter().map(|x| x * x).sum::<f32>() / tail.len() as f32).sqrt()
+    };
     let busy = rms > engine.dcd_squelch();
     if busy {
         tracing::debug!(
@@ -2607,6 +2617,60 @@ mod ota_retry_tests {
         let (attempts, stop) = drive(&[None]);
         assert_eq!(stop, OtaSendStop::NoSession);
         assert_eq!(attempts, 1); // the closure was polled once and reported "no session"
+    }
+}
+
+#[cfg(test)]
+mod channel_busy_tests {
+    use super::channel_still_busy;
+    use openpulse_core::audio::AudioInputStream;
+    use openpulse_core::error::AudioError;
+    use openpulse_modem::ModemEngine;
+
+    /// A stream just reopened after a transmit: its first read is empty.
+    struct Empty;
+    impl AudioInputStream for Empty {
+        fn read(&mut self) -> Result<Vec<f32>, AudioError> {
+            Ok(Vec::new())
+        }
+        fn close(self: Box<Self>) {}
+    }
+
+    /// An empty read after a flush is no information; the last audio the carrier detect saw decides
+    /// (on-air task 17: the busy check read a reopened stream's empty first read as idle, and the
+    /// station keyed a NACK over the other station's frame).
+    #[test]
+    fn an_empty_read_after_a_flush_is_judged_by_the_last_audio() {
+        let mut e = ModemEngine::new(Box::new(openpulse_audio::LoopbackBackend::new()));
+        // A quiet band with a little noise, long enough for the floor to warm.
+        let mut x = 1u32;
+        let mut noise = || {
+            (0..400)
+                .map(|_| {
+                    x = x.wrapping_mul(1_103_515_245).wrapping_add(12_345);
+                    ((x >> 16) as f32 / 65_536.0 - 0.5) * 0.002
+                })
+                .collect::<Vec<f32>>()
+        };
+        for _ in 0..400 {
+            let _ = e.accumulate_capture(Some("BPSK250"), noise());
+        }
+        assert!(e.dcd_floor_is_warm(), "precondition: the floor is warm");
+        let loud: Vec<f32> = (0..400).map(|i| 0.3 * (i as f32 * 1.178).sin()).collect();
+        let _ = e.accumulate_capture(Some("BPSK250"), loud);
+        let mut s: Box<dyn AudioInputStream> = Box::new(Empty);
+        let mut pending = Vec::new();
+        assert!(
+            channel_still_busy(Some(&mut s), &e, &mut pending),
+            "the last audio was a strong signal; an empty read must not make the channel idle"
+        );
+
+        let _ = e.accumulate_capture(Some("BPSK250"), noise());
+        let mut pending = Vec::new();
+        assert!(
+            !channel_still_busy(Some(&mut s), &e, &mut pending),
+            "the last audio was quiet"
+        );
     }
 }
 
