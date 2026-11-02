@@ -3364,3 +3364,49 @@ in the logs.
     10 minutes cannot be overrun by a busy channel;
   - abandon the open burst when the station keys (item 2);
   - the busy check treats an empty read as no information, not as idle (item 3).
+
+**Done (cloud session, 2026-11-02, the maintainer's go):** the fix as proposed, plus the review's
+findings. The sign-off ID waits for a quiet channel; the interval ID takes a quiet moment in its last
+90 s and is forced at the interval; a burst being gathered is dropped when the station keys (daemon and
+ARDOP TNC); and an empty read after a flush is not read as an idle channel. Keying review: no blocker
+(`docs/dev/reviews/review-station-id-quiet-channel-2026-11-02.md`).
+
+## Task 18 — retest with the station ID on a quiet channel; then A2 if the condition holds (status: open)
+
+The new build is `cda9c8a`.
+
+**The changes since task 17:**
+- **The station ID waits for a quiet channel.** In g7 and b7, the receiving station keyed a sign-off ID
+  10 s after its ACK, in the middle of the sender's frame 1, about every 17 s, and each ID cut the
+  frame and led to a NACK over it. The sign-off now goes out only when no burst is being gathered and
+  the carrier detect is idle. The 10-minute ID can come up to 90 s early at a quiet moment, and is
+  forced at 10 minutes.
+- **A burst being gathered is dropped when the station keys.** The daemon logs it at debug as
+  `burst abandoned: this station keyed`.
+- **The busy check no longer reads an empty read after a flush as idle.**
+
+**What it should show:**
+- no `transmitted station ID` line while the other station's frame is on the air;
+- frame 1 arriving whole, as frames 0 and 2 did in task 17;
+- more than one frame decoded per run.
+
+**Run task 13 Parts A to C again, as written there**, with these differences:
+- the commit on rpi51 must include `cda9c8a`;
+- name the recordings `-g8` (Part B) and `-b8` (Part C);
+- record for the traffic duration plus 90 s.
+
+**Then Part D**, if its condition holds again: task 11's Parts B and C, the first A2 attempt. Each run
+needs the maintainer's go. Name the recordings `-a2a` and `-a2b`.
+
+The station rules hold: 5 W at most, ask the maintainer before every run, record nothing about the
+remote host, RSPdx port B empty.
+
+Report task 17's counts (frames decoded of those sent, ACKs applied, the flush counts with the
+one-liner, the longest burst, keyed decisions inside the other station's frames). Also, from each daemon
+log:
+- every `transmitted station ID` line, with its time and `kind`, and whether it falls inside one of the
+  other station's frames;
+- the number of `burst abandoned: this station keyed` lines;
+- for Part D, the `ota_rate_decision` events in time order: their `decision` and `verdict`, and the
+  `tx_level` readings, so the climb and any demotion can be scored.
+

@@ -3968,7 +3968,7 @@ A minimal working HF station config — every key below is real, with real seman
 callsign = "N0CALL"          # CHANGE THIS. The daemon and mesh daemon REFUSE to start on N0CALL.
 grid_square = "AA00"         # Maidenhead locator
 auto_id_interval_secs = 600  # periodic station ID (REQ-REG-10); 0 disables
-auto_id_signoff_idle_secs = 10  # end-of-exchange ID after TX quiet; 0 disables
+auto_id_signoff_idle_secs = 10  # end-of-exchange ID after TX quiet, once the channel is quiet; 0 disables
 tx_power_watts = 25.0        # operator-DECLARED power for the TX log (default 0.0);
                              # the modem cannot measure PA output
 

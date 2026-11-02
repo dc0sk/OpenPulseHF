@@ -15,6 +15,42 @@ this ledger adds the design rationale and the actually-observed results per chan
 
 ---
 
+## 2026-11-02 — No station ID over another station; drop the burst when keying (work plan M3, A2)
+
+- **Requirement/change:** REQ-REG-10, REQ-FUN-06 and A2. In task 17 the receiving station keyed its
+  sign-off ID 10 s after its own ACK, in the middle of the sender's next 66.6 s frame, every ~17 s until
+  that frame ended. Each ID cut the burst. The piece failed, and the busy check read the reopened
+  stream's empty first read as idle, so a NACK was keyed over the frame too. Frame 1 was lost both ways.
+- **Design decision:**
+  - `StationIdTimer::due_reason(now, channel_quiet)`: the sign-off waits for a quiet channel (no burst
+    being gathered, carrier detect idle). The interval ID takes the first quiet moment in its last
+    `min(90 s, interval/2)` and is forced at the interval, so §97.119's limit holds;
+  - the daemon and the ARDOP TNC drop the burst being gathered (`abandon_burst`) where they drop the
+    capture stream around their own transmission. In the daemon that is after the transmit, not before
+    an OTA send that may not key;
+  - the busy check treats an empty read as no information, and the last audio the carrier detect saw
+    decides.
+- **Implementation:**
+  - `crates/openpulse-core/src/station_id.rs` (`due_reason`, `ID_QUIET_WINDOW_MS`);
+  - `crates/openpulse-modem/src/engine.rs` (`burst_open`, `abandon_burst`, `bursts_abandoned`);
+  - `crates/openpulse-daemon/src/server.rs` (the ID's quiet check, two abandon sites,
+    `channel_still_busy`);
+  - `crates/openpulse-ardop/src/bridge.rs` (the ID's quiet check; `release_capture` abandons);
+  - the config doc and template, and the book.
+- **Tests and results (run, each sabotage-verified):**
+  - `station_id_waits_for_a_quiet_channel` (daemon, `server::run`): no transmission during 4 s of
+    carrier, then the ID once quiet. Sabotage, with quiet always true: the ID keyed during the carrier;
+  - `abandon_burst_when_keying` (daemon, `server::run`): the tripwire line appears. Sabotage, with the
+    daemon's calls removed: fails;
+  - `abandon_burst_on_keying` (modem). Sabotage, with the burst left in place: fails;
+  - `channel_busy_tests` (daemon lib). Sabotage, with an empty read read as idle: fails;
+  - core `station_id` tests, four of them new;
+  - suites at `803b110`: daemon, ARDOP, KISS and repeater 318 passed, core 371, 0 failed. After the
+    review fixes: see the commit message.
+- **Review:** `docs/dev/reviews/review-station-id-quiet-channel-2026-11-02.md` (mandatory, keying and
+  regulatory). No Release 1 blocker. S1, S2 and N1–N4 were taken; S3 (the early interval ID in the
+  turnaround after an ACK) was parked.
+
 ## 2026-11-02 — An empty capture read no longer ends a burst (work plan M3, A2)
 
 - **Requirement/change:** REQ-FUN-06 and A2. In task 16, 228 of station A's 234 carrier-drop flushes,
