@@ -895,7 +895,32 @@ pub async fn run(cfg: OpenpulseConfig, modem_backend: Box<dyn AudioBackend>) -> 
                         } else {
                             body.as_bytes().to_vec()
                         };
-                        ota_send_with_ptt(&mut engine, &ptt, &handle.event_tx, &payload, to);
+                        // The station ID rides behind the first data frame when its early window is
+                        // open: in the station's own keying, never over the other station.
+                        let id_now_ms = id_start.elapsed().as_millis() as u64;
+                        let id_body = format!("DE {id_callsign}");
+                        let id_mode = handle.active_mode.lock().await.clone();
+                        let id_first = (auto_id_active && id_timer.ride_along_due(id_now_ms))
+                            .then_some((id_body.as_bytes(), id_mode.as_str()));
+                        let id_sent = ota_send_with_ptt(
+                            &mut engine,
+                            &ptt,
+                            &handle.event_tx,
+                            &payload,
+                            to,
+                            id_first,
+                        );
+                        if id_sent {
+                            tracing::info!(
+                                callsign = %id_callsign,
+                                mode = %id_mode,
+                                kind = "with-data",
+                                "transmitted station ID"
+                            );
+                            id_timer.mark_identified(id_now_ms);
+                            id_timer.note_tx(id_now_ms);
+                            tx_frames_seen = engine.frames_transmitted();
+                        }
                     }
                 }
                 if !ptt_hard_failed && !ota_send_handled {
@@ -955,6 +980,9 @@ pub async fn run(cfg: OpenpulseConfig, modem_backend: Box<dyn AudioBackend>) -> 
                 // calling channel (the DCD-burst pipeline can't carry −24 dB signals; §6.2).
                 let disco_dwelling = discovery_is_dwelling(&runtime_state);
                 let mut discovery_raw: Vec<f32> = Vec::new();
+                // Samples in this tick's read: the read that ended a burst also holds audio from after
+                // the frame, so the frame ended about this long before now (the ACK deadline).
+                let mut tick_read_len = 0usize;
                 let burst = tokio::task::block_in_place(|| {
                     if rx_stream.is_none() {
                         rx_stream = Some(engine.open_capture_stream(capture_device.as_deref())?);
@@ -1000,6 +1028,7 @@ pub async fn run(cfg: OpenpulseConfig, modem_backend: Box<dyn AudioBackend>) -> 
                             if !capture_gap.admits(samples.len(), std::time::Instant::now()) {
                                 return Ok(None);
                             }
+                            tick_read_len = samples.len();
                             engine.accumulate_capture(Some(&mode), samples)
                         }
                         Err(e) => {
@@ -1089,6 +1118,19 @@ pub async fn run(cfg: OpenpulseConfig, modem_backend: Box<dyn AudioBackend>) -> 
                         // with the ACK carrying our absolute recommended_level. The verdict, the
                         // budget and the callsign check live in `decode_ota_burst` (#1460, #1456).
                         let callsign_valid = runtime_state.local_callsign_valid();
+                        // The sender listens for the ACK for `ota_ack_timeout_ms` from the end of its
+                        // frame. The decode must finish early enough that the ACK, keyed ~2 s later
+                        // (measured on air: at most 1.7 s), is heard whole inside that window; past it
+                        // the engine stops trying and answers nothing (task 18, run a2a).
+                        let frame_end = std::time::Instant::now()
+                            .checked_sub(std::time::Duration::from_secs_f64(tick_read_len as f64 / 8000.0))
+                            .unwrap_or_else(std::time::Instant::now);
+                        let ack_window_end =
+                            frame_end + std::time::Duration::from_millis(engine.ota_ack_timeout_ms());
+                        let ack_airtime = std::time::Duration::from_millis(engine.fsk4_ack_airtime_ms());
+                        engine.set_ota_ack_deadline(ack_window_end.checked_sub(
+                            ACK_KEYING_ALLOWANCE + ack_airtime + ACK_SLACK,
+                        ));
                         let channel_busy = tokio::task::block_in_place(|| {
                             channel_still_busy(rx_stream.as_mut(), &engine, &mut rx_pending)
                         });
@@ -1111,23 +1153,61 @@ pub async fn run(cfg: OpenpulseConfig, modem_backend: Box<dyn AudioBackend>) -> 
                                     // stalls with no diagnostic anywhere, and the operator sees a link that
                                     // simply stops (audit 2026-07-19, #8).
                                     if let Some(ack) = res.ack.as_ref() {
+                                        // The station ID rides in front of the ACK, in the same keying,
+                                        // when its early window is open and both still fit in the
+                                        // sender's window: in a continuous exchange this is the only slot
+                                        // that is never over the other station (review 2026-11-02).
+                                        let id_now_ms = id_start.elapsed().as_millis() as u64;
+                                        let id_body = format!("DE {id_callsign}");
+                                        let id_rides = auto_id_active
+                                            && id_timer.ride_along_due(id_now_ms)
+                                            && engine
+                                                .tx_airtime_seconds(
+                                                    id_body.as_bytes(),
+                                                    &mode,
+                                                    openpulse_core::fec::FecMode::None,
+                                                )
+                                                .is_ok_and(|s| {
+                                                    std::time::Instant::now()
+                                                        + ACK_KEYING_ALLOWANCE
+                                                        + std::time::Duration::from_secs_f64(s)
+                                                        + ack_airtime
+                                                        + ACK_SLACK
+                                                        <= ack_window_end
+                                                });
                                         // Mode-aware ACK: K=3 union MFSK16-ACK (with a leading FSK4 copy)
                                         // when recommending the sub-floor rung, else FSK4-ACK. The ISS
                                         // union-listens, so either is heard.
-                                        if let Err(crate::KeyedTxError::Assert) = crate::keyed_transmit(
+                                        match crate::keyed_transmit(
                                             &ptt,
                                             Some(&handle.event_tx),
                                             "ota-ack",
                                             || {
                                                 tokio::task::block_in_place(|| {
+                                                    if id_rides {
+                                                        engine.transmit(id_body.as_bytes(), &mode, None)?;
+                                                    }
                                                     engine.transmit_ota_ack(ack, None)
                                                 })
                                             },
                                         ) {
-                                            tracing::warn!(
+                                            Err(crate::KeyedTxError::Assert) => tracing::warn!(
                                                 "OTA ACK skipped — PTT assert failed; the sender will \
                                                  see no ACK and the ARQ exchange will stall"
-                                            );
+                                            ),
+                                            Ok(()) if id_rides => {
+                                                tracing::info!(
+                                                    callsign = %id_callsign,
+                                                    mode = %mode,
+                                                    kind = "with-ack",
+                                                    "transmitted station ID"
+                                                );
+                                                id_timer.mark_identified(id_now_ms);
+                                                // The ACK went out after the ID: still a transmission.
+                                                id_timer.note_tx(id_now_ms);
+                                                tx_frames_seen = engine.frames_transmitted();
+                                            }
+                                            _ => {}
                                         }
                                     }
                                 }
@@ -2042,8 +2122,12 @@ fn ota_send_with_ptt(
     event_tx: &std::sync::Arc<tokio::sync::broadcast::Sender<crate::protocol::ControlEvent>>,
     body: &[u8],
     peer: &str,
-) {
+    id_first: Option<(&[u8], &str)>,
+) -> bool {
     use openpulse_core::ack::{AckFrame, AckType};
+    // The station ID, sent after the first data frame in the same keying; whether it went out.
+    let mut id_pending = id_first;
+    let mut id_sent = false;
     // Only adopt an ACK carrying the addressed peer's session hash — the IRS builds its ACK with its own
     // callsign as the session id, so a correctly-addressed send matches while a co-channel session's ACK is
     // filtered (else the ISS could adopt a foreign rate and mark this message delivered).
@@ -2064,7 +2148,7 @@ fn ota_send_with_ptt(
             openpulse_modem::engine::ModemEngine::MFSK16_OTA_MAX_PAYLOAD
         );
         let _ = event_tx.send(ota_status_event(engine));
-        return;
+        return false;
     }
 
     let stop = run_ota_retry(|| {
@@ -2084,8 +2168,18 @@ fn ota_send_with_ptt(
         // operator's message with only a log line. The comment here used to say "already surfaced as
         // a warn + event"; that is false — `SharedPtt::key` emits no event on failure. Tracked
         // separately rather than changed under a keying PR.
+        let id = id_pending.take();
         let tx = match crate::keyed_transmit(ptt, Some(event_tx), "ota-send", || {
-            tokio::task::block_in_place(|| engine.transmit_with_fec_mode(body, &mode, fec, None))
+            tokio::task::block_in_place(|| {
+                engine.transmit_with_fec_mode(body, &mode, fec, None)?;
+                // AFTER the data frame: in front of it, the receiver's uncoded fallback decodes the ID
+                // and never finds the ladder frame (`id_rides_with_the_data_frame`).
+                if let Some((id_body, id_mode)) = id {
+                    engine.transmit(id_body, id_mode, None)?;
+                    id_sent = true;
+                }
+                Ok(())
+            })
         }) {
             Ok(()) => Ok(()),
             // #1295: NOT `Delivered`. Stopping is right — a rig that cannot be keyed will not be
@@ -2158,7 +2252,14 @@ fn ota_send_with_ptt(
         }
         OtaSendStop::Delivered | OtaSendStop::NoSession => {}
     }
+    id_sent
 }
+
+/// Allowance from a decode's end to the ACK's first sample on air: PTT, opening the output stream,
+/// the first write. Measured on air (task 18, both Pis, 192 ACKs): 0.8–1.7 s.
+const ACK_KEYING_ALLOWANCE: std::time::Duration = std::time::Duration::from_millis(2_000);
+/// Margin for the sender's own ACK detection at the end of its window.
+const ACK_SLACK: std::time::Duration = std::time::Duration::from_millis(300);
 
 /// The startup warning owed to an operator who set `psk_key_id`, or `None` if they did not.
 ///

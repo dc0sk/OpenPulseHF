@@ -775,6 +775,15 @@ pub struct ModemEngine {
     /// daemon before the decode, taken at the decode's entry so no return path leaves it stale.
     /// Unset is `Keyed`, today's behaviour.
     next_failure_verdict: NackVerdict,
+    /// The latest moment the next OTA burst's decode may finish and still be ACKed inside the sender's
+    /// window (`set_ota_ack_deadline`); taken by that decode.
+    next_ota_ack_deadline: Option<Instant>,
+    /// The deadline of the OTA decode running now: `decode_attempt` stops trying past it.
+    decode_deadline: Option<Instant>,
+    /// Whether the last OTA decode finished past its ACK deadline (no ACK, the ladder held).
+    last_ota_decode_late: bool,
+    /// Decode attempts skipped because the ACK deadline had passed.
+    decode_attempts_past_deadline: u64,
     /// Samples fed through `accumulate_capture`: this station's listening time. It stops while the
     /// daemon transmits, because the daemon drops the capture stream then.
     listening_samples: u64,
@@ -1180,6 +1189,10 @@ impl ModemEngine {
             relay_mode: None,
             last_flush_capped: false,
             next_failure_verdict: NackVerdict::Keyed,
+            next_ota_ack_deadline: None,
+            decode_deadline: None,
+            last_ota_decode_late: false,
+            decode_attempts_past_deadline: 0,
             listening_samples: 0,
             shortest_frame_cache: Vec::new(),
             last_flush_lead: 0,
@@ -2600,6 +2613,33 @@ impl ModemEngine {
         self.next_failure_verdict = verdict;
     }
 
+    /// The latest moment the next OTA burst's decode may finish and still have its ACK heard inside
+    /// the sender's window, or `None` for no limit. The next [`ota_decode_burst`](Self::ota_decode_burst)
+    /// takes it: its decode attempts stop at the deadline, and a decode that finishes past it answers
+    /// no ACK and leaves the ladder alone (on-air task 18, run a2a: an ACK keyed 10.1 s after the frame,
+    /// past the sender's 9 s window, landed on the sender's retransmission and cut its head; the
+    /// receiver had also moved its recommendation, which the sender never heard).
+    pub fn set_ota_ack_deadline(&mut self, deadline: Option<Instant>) {
+        self.next_ota_ack_deadline = deadline;
+    }
+
+    /// Whether the last OTA decode finished past its ACK deadline.
+    pub fn last_ota_decode_late(&self) -> bool {
+        self.last_ota_decode_late
+    }
+
+    /// Decode attempts skipped because an OTA decode's ACK deadline had passed.
+    pub fn decode_attempts_past_deadline(&self) -> u64 {
+        self.decode_attempts_past_deadline
+    }
+
+    /// Airtime of one FSK4 OTA ACK, in milliseconds: what the sender must hear inside its window.
+    pub fn fsk4_ack_airtime_ms(&self) -> u64 {
+        self.fsk4_ack_frame_len()
+            .map(|n| n as u64 * 1000 / AudioConfig::default().sample_rate as u64)
+            .unwrap_or(0)
+    }
+
     /// Samples fed through [`accumulate_capture`](Self::accumulate_capture) since the engine was built:
     /// this station's listening time, which the daemon's NACK budget leaks against (#1456).
     pub fn listening_samples(&self) -> u64 {
@@ -3673,7 +3713,17 @@ impl ModemEngine {
         // `afc_correction_hz` on failure.
         let was_quiet = self.suppress_afc_events;
         self.suppress_afc_events = true;
+        self.decode_deadline = self.next_ota_ack_deadline.take();
+        self.last_ota_decode_late = false;
+        if let Some(d) = self.decode_deadline {
+            debug!(
+                target: "openpulse_modem::ota_deadline",
+                ms_left = d.saturating_duration_since(Instant::now()).as_millis() as u64,
+                "OTA decode: ACK deadline set"
+            );
+        }
         let result = self.ota_decode_and_ack_inner(samples, session_id, fallback_mode);
+        self.decode_deadline = None;
         self.input_prerouted = was_prerouted;
         self.suppress_afc_events = was_quiet;
         if let Ok((Some((_, mode)), _, _)) = &result {
@@ -4452,6 +4502,19 @@ impl ModemEngine {
             }
         }
 
+        // PAST THE ACK DEADLINE: no ACK can be heard any more, and one keyed now lands on the sender's
+        // retransmission. Nor does the ladder move: a decision the sender never hears desynchronises
+        // the two stations (task 18, run a2a). A decoded payload is still delivered; the sender
+        // retransmits it, and the next copy is answered as usual.
+        if self.decode_deadline.is_some_and(|d| Instant::now() >= d) {
+            self.last_ota_decode_late = true;
+            info!(
+                decoded = decoded.is_some(),
+                skipped = self.decode_attempts_past_deadline,
+                "OTA: the decode finished past the sender's ACK window; no ACK keyed, the ladder holds"
+            );
+            return Ok((decoded.map(|(p, _, m)| (p, m)), None, last_err));
+        }
         let ota = self
             .ota
             .as_mut()
@@ -5808,6 +5871,14 @@ impl ModemEngine {
         samples: AudioSamples,
         fec: FecMode,
     ) -> Result<Vec<u8>, ModemError> {
+        // Past the ACK deadline a decode can no longer be answered, and the sender retransmits: the
+        // attempt would only keep the receive loop deaf (task 18: one failing burst, 3 min on a Pi 4).
+        if self.decode_deadline.is_some_and(|d| Instant::now() >= d) {
+            self.decode_attempts_past_deadline = self.decode_attempts_past_deadline.wrapping_add(1);
+            return Err(ModemError::Demodulation(
+                "past the ACK deadline: not attempted".into(),
+            ));
+        }
         self.decode_attempts = self.decode_attempts.wrapping_add(1);
         match fec {
             FecMode::None => self.receive_from_samples(mode, samples),

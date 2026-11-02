@@ -123,6 +123,17 @@ impl StationIdTimer {
         None
     }
 
+    /// Whether an ID may ride in this station's own next transmission (before its data frame or its
+    /// ACK, in the same keying): the interval's early window is open. An ID sent that way is never
+    /// keyed over the other station, so it needs no quiet channel. In a continuous exchange that is the
+    /// only slot an unforced ID ever gets (review 2026-11-02, round 2, finding 2).
+    pub fn ride_along_due(&self, now_ms: u64) -> bool {
+        let window = ID_QUIET_WINDOW_MS.min(self.interval_ms / 2);
+        self.is_enabled()
+            && self.tx_since_id
+            && now_ms.saturating_sub(self.last_id_ms) >= self.interval_ms - window
+    }
+
     /// True when an **interval** ID is due: enabled, armed by TX since the last ID, and
     /// at least `interval_ms` elapsed since the last ID.
     pub fn id_due(&self, now_ms: u64) -> bool {
@@ -499,5 +510,19 @@ mod tests {
             ),
             Some("interval")
         );
+    }
+
+    #[test]
+    fn an_id_rides_along_once_the_early_window_opens() {
+        let mut t = StationIdTimer::new(TEN_MIN, 0);
+        assert!(
+            !t.ride_along_due(TEN_MIN),
+            "nothing transmitted: nothing to identify"
+        );
+        t.note_tx(1_000);
+        assert!(!t.ride_along_due(TEN_MIN - ID_QUIET_WINDOW_MS - 1));
+        assert!(t.ride_along_due(TEN_MIN - ID_QUIET_WINDOW_MS));
+        t.mark_identified(TEN_MIN - 60_000);
+        assert!(!t.ride_along_due(TEN_MIN - 59_000), "just identified");
     }
 }
