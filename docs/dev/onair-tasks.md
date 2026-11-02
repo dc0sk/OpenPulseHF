@@ -3155,3 +3155,31 @@ Report task 15's counts and capture-read statistics, and also, from each daemon 
 - every `nack_hold, keyed` line with its time, and whether it falls inside one of the other station's
   frames (the sender's `logged TX metadata` time minus the frame length, to that time).
 
+
+#### Task 16 Part A (station session, 2026-11-02) — nothing transmitted
+
+- rpi51 at `b4d068cb`; `git merge-base --is-ancestor cd44ca9 HEAD` true.
+- `deploy` rc=0; sha256 identical on both stations:
+  - `ca93128f8d631747959a2204dec690ccebdaadca07eaee713a830aa2f4763b30  target/release/openpulse-server`
+  - `91b40f98a0cd3e00db481cde5f4c0625334e1dffecfd6a8dac800b61d6778c57  target/release/openpulse`
+  - `c9e152f32d6b8d5548551b255865b9c45c198b96739672b02eab9dee56fdc373  scripts/twin-traffic.sh`
+- Read-back: FT-991A `EX065+1500;`, dial 144641564, RFPOWER 0.05, PTT 0. IC-9700 dial 144640000, RFPOWER 0.0117647, PTT 0. Nothing running on rpi51.
+
+#### Task 16 Part B — run g6 (B sends; maintainer's go 2026-11-02, port B empty)
+
+Same command as g5, build `cd44ca9` (rpi51 `b4d068cb`). Recordings `-d 390`, started 07:06:26.722 UTC (rpi51) and 07:06:27.072 UTC (station B), complete. Evidence `docs/dev/test-reports/onair-twin-ota-20261102-080714{.log,-evidence/}`. Audio `rx-a-g6-8k.wav.gz` 4643264 bytes (rms 293.8), `rx-b-g6-8k.wav.gz` 1668479 bytes (rms 340.4, peak 4119); 48 kHz originals on rpi51 in /tmp (sha256 `f9e73254...`, `71978a18...`).
+
+Counts (this is the first run since task 12 in which A decoded **nothing**):
+- Station A (receiver): **`fec attempt OK` 0 of 4 frames sent**, `fec attempt FAILED` **234**; `ota_rate_decision` **173** (g5: 10), verdicts: `nack_hold` muted 170, `nack_hold` **keyed 2**, `nack_step_down` **keyed 1**.
+- Station B (sender): 4 frames (`logged TX metadata` 07:08:22.303, 07:09:38.563, 07:10:55.633, 07:12:11.879 UTC); `OTA ACK not received within window` **4** (07:08:31.416, 07:09:48.318, 07:11:04.755, 07:12:21.621); `OTA send abandoned` **2**; `tx_level` SL2 in all 35 readings.
+- A's ACK/NACK metadata lines (`FSK4-ACK`): 07:07:26.254 and 07:07:50.190 UTC, i.e. **before B's first frame ended** (07:08:22.3). Those are the keyed ones; their times are my reading of the metadata lines, the events carry no time. The step-down keyed event has no matching second metadata line.
+
+Capture-read statistics:
+- A: **177** `capture read holds` lines, largest `samples=21000`; B: **0**.
+
+New log lines:
+- `burst flushed: carrier dropped`: **A 234, B 2**. A's first lines: 07:06:56.072 `burst=2648 read=600 energy=0.004906 squelch=0.005707`, 07:07:01.322 `2648/600/0.004645/0.005506`, 07:07:10.221 `2848/400/0.004794/0.005406`, 07:07:12.821, 07:07:15.372 `3048/200/0.005204/0.005436`, then 07:07:15.876 `burst=12392 read=0 energy=0.006974 squelch=0.005443`, 07:07:17.204 `10600/0/0.008931`, 07:07:18.915 `13600/0/0.009981`, 07:07:20.657 `14000/0/0.007671`, 07:07:23.066 `19400/0/0.011709`, then bursts of 200-3600 samples from 07:07:26.536 (about every 30-40 ms) with `energy` 0.007-0.012 over `squelch` about 0.0054. B's two: 07:06:43.204 `burst=200 read=0 energy=0.02118 squelch=0.01000` and 07:07:06.074 `burst=2848 read=400 energy=0.02512 squelch=0.02700`. The full list is in `daemon-a.log.gz` (`grep 'burst flushed: carrier dropped'`).
+- `while the channel was still busy` info lines: **A 116, B 0**; `channel still busy after a burst flushed` debug lines: **A 117, B 0**; first at 07:07:15.886, from 07:07:15 to 07:12:19 (all in the daemon log).
+- Reading: from 07:06:56, 90 s before B's first frame ended, A's receiver saw energy at or above the squelch (energy 0.0047-0.0119, squelch about 0.0054) in short bursts, and it kept doing so to the end of the run. A's squelch in g6 sits close to the noise energy. I did not check the channel for another signal; the RSPdx was not running.
+
+Cleanup (quote): `== cleanup ==  [IC-9700] daemon and rigctld stopped; PTT 0 sent while rigctld ran  [FT-991A] daemon and rigctld stopped; PTT 0 sent while rigctld ran`; nothing running.
