@@ -3666,7 +3666,7 @@ The new build is `4fd5a13`. On top of task 18's build:
 Tests at this build:
 - the daemon and ARDOP suites pass (273), as do core (375) and the affected modem suites (26);
 - each new test fails with its part removed;
-- the pre-push result is added below when the push completes.
+- the pre-push at `2fcf546` passed (354 test result lines, 0 failed).
 
 **Why the schedule changes.** A demotion needs failed frames whose NACK is keyed. At mute nothing
 arrives, and at 0.02 a2b opened no burst, so there was nothing to fail. The new schedule steps the drive
