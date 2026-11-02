@@ -3410,3 +3410,31 @@ log:
 - for Part D, the `ota_rate_decision` events in time order: their `decision` and `verdict`, and the
   `tx_level` readings, so the climb and any demotion can be scored.
 
+
+#### Task 18 Part A (station session, 2026-11-02) — nothing transmitted
+
+- rpi51 at `0bf0a7af`; `git merge-base --is-ancestor cda9c8a HEAD` true.
+- `deploy` rc=0; sha256 identical on both stations:
+  - `7ee5312766d5f738af9619dd857eabe085f10676f4ff966d68315976e9ef20a2  target/release/openpulse-server`
+  - `52f8a3c6b5a8d3305c036ba1f8f5728f941b8f9203498be09ef95a28d2ed0af3  target/release/openpulse`
+  - `c9e152f32d6b8d5548551b255865b9c45c198b96739672b02eab9dee56fdc373  scripts/twin-traffic.sh`
+- Read-back: FT-991A `EX065+1500;`, dial 144641564, RFPOWER 0.05, PTT 0. IC-9700 dial 144640000, RFPOWER 0.0117647, PTT 0. Nothing running on rpi51.
+
+#### Task 18 Part B — run g8 (B sends; maintainer's go 2026-11-02, port B empty)
+
+Same command as g7, build `cda9c8a` (rpi51 `0bf0a7af`). Recordings `-d 390`, started 13:51:25.755 UTC (rpi51) and 13:51:26.096 UTC (station B), complete. Evidence `docs/dev/test-reports/onair-twin-ota-20261102-145213{.log,-evidence/}`. Audio `rx-a-g8-8k.wav.gz` 4612468 bytes (rms 295.9), `rx-b-g8-8k.wav.gz` 1657640 bytes (rms 324.5); 48 kHz originals on rpi51 in /tmp (sha256 `9d12315c...`, `48b53cd3...`).
+
+**Result: 8 of 8 frames decoded, 8 of 8 ACKs applied, and the ladder climbed SL2 -> SL6.**
+- Station A (receiver): **`fec attempt OK` 8 of 8 frames sent**, `fec attempt FAILED` 640 (these are scan attempts on the way to each decode; g7: 21 failures for 1 decode). `ota_rate_decision` 8, all keyed, in time order: `hold` (SL2->SL2), `hold` (SL2->SL2), `climb_on_evidence` (SL2->SL3), `climb_on_snr` (SL3->SL4), `climb_on_snr` (SL4->SL5), `climb_on_snr` (SL5->SL6), `hold` (SL6), `hold` (SL6).
+- Station B (sender): 8 frames, modes in order BPSK31, BPSK31, BPSK31, BPSK63, BPSK100, BPSK250, QPSK250, QPSK250; `logged TX metadata` 13:53:21.264, 13:54:32.741, 13:55:42.814, 13:56:20.892, 13:56:47.565, 13:56:59.541, 13:57:06.619, 13:57:13.297 UTC; `OTA ACK not received within window` **0**; `OTA send abandoned` **0**; `tx_level` readings: SL2 x35, SL3 x2, SL4 x1, SL5 x1, SL6 x4.
+- A's `fec attempt OK`: 13:53:23.375, 13:54:34.236, 13:55:44.976, 13:56:24.824, 13:56:49.515, 13:57:00.836, 13:57:07.235, 13:57:13.873, i.e. 2.11, 1.50, 2.16, 3.93, 1.95, 1.30, 0.62, 0.58 s after each frame end. A's ACK transmissions (`FSK4-ACK`): 13:53:25.064, 13:54:35.337, 13:55:46.118, 13:56:25.679, 13:56:50.504, 13:57:01.776, 13:57:08.179, 13:57:14.825.
+
+Flush counts (total, `read=0`, `read=0` and `energy` >= `squelch`): **A 17, 0, 0**; **B 0, 0, 0**. Longest flushed burst: A `burst=540000` (13:55:43.059; an SL2 frame is 532800), B none. A's flushes in the traffic: 13:53:21.559 `539648/400`, 13:54:33.009 `536848/400`, 13:55:43.059 `540000/600`, 13:56:21.259 `276448/400`, 13:56:47.859 `173048/400`, 13:56:59.809 `72048/400` (shorter frames as the rate climbed), plus the small `burst=2200-4648` pieces with `energy` just under `squelch` as before.
+
+Station IDs: **no `transmitted station ID` line in either log** (filter check: the same grep on `station.id` finds the start-up line `periodic station ID enabled interval_s=600` on each). So none fell inside a frame. The 10 s sign-off had no quiet moment in 8 frames and the run ended about 13:57:30 UTC. `burst abandoned: this station keyed`: **0 on both** (debug level; nothing to abandon because no burst was open at a keying moment).
+
+Keyed decisions inside the other station's frames: A's ACK lines each sit 1.7-2.4 s after the matching frame end and before the next frame starts (frames are 66.6 s at SL2, then 33.8 s at SL3, shorter above), so none falls inside a B frame.
+
+Capture-read statistics: A 0 holds, B 0 holds. `channel still busy` lines: 0 on both.
+
+Cleanup (quote): `== cleanup ==  [IC-9700] daemon and rigctld stopped; PTT 0 sent while rigctld ran  [FT-991A] daemon and rigctld stopped; PTT 0 sent while rigctld ran`; nothing running.
