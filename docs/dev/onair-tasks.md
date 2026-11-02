@@ -3231,7 +3231,8 @@ End state read-back: FT-991A EX065+1500; dial 144641564 RFPOWER 0.05 PTT 0; IC-9
 - **Proposed fix** (not done; it changes when a burst ends, and so when a NACK is keyed, so it needs
   the maintainer's go and the mandatory review): in the daemon's receive tick, an empty read is not
   evidence. It is handed to the engine only when no samples have arrived for longer than a gap
-  (≈250 ms). That is the loopback and twin harnesses' end of stream, or a dead device. The engine's rule
+  (≈250 ms). That is a loopback or replay stream that has ended, or a dead device (the twin rig fills
+  silence, so it never relies on empty reads; corrected after review). The engine's rule
   stays as it is for those, and an on-air burst then ends only on audio that is really quiet. Test: a
   frame fed through the production entry with empty reads interleaved must gather as one burst and
   decode. It must fail without the fix.
@@ -3240,3 +3241,44 @@ End state read-back: FT-991A EX065+1500; dial 144641564 RFPOWER 0.05 PTT 0; IC-9
   They are not the cause above; noted, not changed.
 
 RSPdx port B stays empty: the next task keys the IC-9700, and no witness run is planned yet.
+
+**Done (cloud session, 2026-11-02, the maintainer's go):** the empty-read fix, as proposed, owned once:
+`CaptureGap` in `crates/openpulse-modem/src/capture_ticker.rs`, used by the daemon's receive tick and by
+`CaptureTicker`, through which the ARDOP TNC and the KISS bridge receive (the keying review found that
+twin). Keying review: no blocker; see `docs/dev/reviews/review-empty-capture-reads-2026-11-02.md`.
+
+## Task 17 — retest with the empty-read fix (status: open)
+
+The new build is `f6c0e74`, which includes `CaptureGap`.
+
+**The change:** an empty capture read in the middle of a frame no longer ends the burst. In task 16,
+228 of A's 234 carrier-drop flushes, and 118 of B's 124, were empty reads with the signal above the
+squelch. Frames were cut into hundreds of pieces, and A keyed 3 NACKs over B's frame. Now an empty read
+ends a burst only after 250 ms with no audio at all.
+
+**What it should show:** whole frames reach the decoder, and in each daemon log almost no
+`burst flushed: carrier dropped` line has `read=0` with `energy` at or above `squelch`.
+
+Tests at this build:
+- the new tests pass, through the daemon's production entry and through the ticker;
+- each fails with the fix disabled: no decode in 30 s, and a frame cut into 12 bursts;
+- the daemon, ARDOP and KISS suites pass.
+
+**Run task 13 Parts A to D again, as written there**, with these differences:
+- the commit on rpi51 must include `f6c0e74`;
+- name the recordings `-g7` (Part B) and `-b7` (Part C);
+- record for the traffic duration plus 90 s;
+- the Part D condition is the same. If it is met, run Part D: it is the first A2 attempt.
+
+The station rules hold: 5 W at most, ask the maintainer before every run, record nothing about the
+remote host, RSPdx port B empty.
+
+Report task 16's counts. Also, from each daemon log:
+- the carrier-drop flush counts: in total, with `read=0`, and with `read=0` and `energy` at or above
+  `squelch`. A one-liner that does this:
+  `zcat daemon-a.log.gz | grep 'burst flushed: carrier dropped' | awk '{r=e=q="";for(i=1;i<=NF;i++){if($i~/^read=/)r=substr($i,6);if($i~/^energy=/)e=substr($i,8);if($i~/^squelch=/)q=substr($i,9)}; t++; if(r==0){z++; if(e+0>=q+0)a++}} END{print t, z+0, a+0}'`;
+- the longest flushed burst (`burst=`) in each run;
+- every keyed decision (`keyed` in the `ota_rate_decision` events) with its time, and whether it falls
+  inside one of the other station's frames. Frame start = the sender's `logged TX metadata` time minus
+  the frame's length: 66.6 s at SL2, 33.8 s at SL3, 17 s at SL1.
+

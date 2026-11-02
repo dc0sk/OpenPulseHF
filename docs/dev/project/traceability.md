@@ -15,6 +15,36 @@ this ledger adds the design rationale and the actually-observed results per chan
 
 ---
 
+## 2026-11-02 — An empty capture read no longer ends a burst (work plan M3, A2)
+
+- **Requirement/change:** REQ-FUN-06 and A2. In task 16, 228 of station A's 234 carrier-drop flushes,
+  and 118 of B's 124, were empty capture reads with the signal above the squelch. Frames were cut into
+  hundreds of pieces; A decoded none of B's frames and keyed 3 NACKs over B's frame.
+- **Design decision:**
+  - an empty read reaches the engine's accumulator only after 250 ms with no audio at all (a stream
+    that has ended, or a dead device);
+  - the rule is owned once, in `CaptureGap`, and used by every receive loop: the daemon's `rx_ticker`
+    and `CaptureTicker` (ARDOP, KISS);
+  - the engine's own rule is unchanged;
+  - 250 ms is fitted to the task 16 logs: the longest real gap was 37–45 ms. It is falsified by a
+    device with a callback period of 250 ms or more.
+- **Implementation:**
+  - `crates/openpulse-modem/src/capture_ticker.rs`: `CAPTURE_GAP_MS`, `CaptureGap`, and its use in
+    `CaptureTicker::tick`;
+  - `crates/openpulse-daemon/src/server.rs`: the receive tick uses `CaptureGap`.
+- **Tests and results (run):**
+  - `empty_capture_reads` (daemon, through `server::run`): passes in 2.4 s. Sabotage: no decode in
+    30 s, fails;
+  - `capture_ticker_empty_reads` (modem): passes. Sabotage: 12 bursts, the first 2000 of 9504 samples,
+    fails;
+  - the `capture_ticker` unit test passes;
+  - the daemon suite passed at `63a1f52` (220 tests) and with `CaptureGap` (219; the unit test moved
+    to the modem crate), 0 failed;
+  - the ARDOP and KISS suites: 66 passed, 0 failed; clippy and fmt are clean.
+- **Review:** `docs/dev/reviews/review-empty-capture-reads-2026-11-02.md` (mandatory, keying). No
+  Release 1 blocker. The `CaptureTicker` twin was taken, and the stream-drop and burst-abandon gap was
+  parked.
+
 ## 2026-11-01 — No NACK while the channel is busy; MFSK16 is not onset-scanned when it finds no lock (work plan M3, A2)
 
 - **Requirement/change:** REQ-FUN-06 and A2. In task 15 (run b5), station B decoded 0 of 4 frames and

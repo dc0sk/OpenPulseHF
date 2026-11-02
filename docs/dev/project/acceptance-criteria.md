@@ -2,7 +2,7 @@
 project: openpulsehf
 doc: docs/dev/project/acceptance-criteria.md
 status: resolved
-last_updated: 2026-10-13
+last_updated: 2026-11-02
 ---
 
 # Acceptance criteria
@@ -31,6 +31,7 @@ Each requirement below is done when the linked test passes. Add new links as tes
 | Idle flicker behind a 250 Hz filter and an ACK on air are not ladder evidence, and a frame failing at the decode edge still is (#1456); the daemon's NACK budget leaks one per 10 min of listening (#1456) | `cargo test -p openpulse-modem --no-default-features --test idle_flicker_is_not_evidence`; `cargo test -p openpulse-daemon --no-default-features --lib nack_budget` |
 | A failed burst moves the rate ladder only when its NACK is keyed: after the budget mutes, failures take no silent step, and a leaked NACK steps on its own (#1460 round 4b) | `cargo test -p openpulse-daemon --no-default-features --test muted_failures_move_no_ladder`; `cargo test -p openpulse-core --no-default-features --lib ota_rate`; `cargo test -p openpulse-daemon --no-default-features --lib nack_budget` |
 | An off-frequency non-ladder frame recovered by the OTA acquisition pass keys no ACK, moves no rung, and yields every frame of its keying (#1123, #1461) | `cargo test -p openpulse-modem --no-default-features --test off_frequency_fallback_is_not_ladder` |
+| An empty capture read in the middle of a frame does not end the burst, on the daemon's receive tick and on the `CaptureTicker` path (ARDOP, KISS); an empty read ends a burst only after 250 ms with no audio (on-air task 16, REQ-FUN-06) | `cargo test -p openpulse-daemon --no-default-features --test empty_capture_reads` + `cargo test -p openpulse-modem --no-default-features --test capture_ticker_empty_reads` + `cargo test -p openpulse-modem --no-default-features --lib capture_ticker` |
 | HPX state machine transitions | `cargo test -p openpulse-modem --test hpx_conformance_integration` |
 | Benchmark 100% pass, mean_transitions ≤ 20 | `cargo test -p openpulse-modem --test benchmark_integration` |
 | Session persistence | `cargo test -p openpulse-cli --test local_state_integration` |
