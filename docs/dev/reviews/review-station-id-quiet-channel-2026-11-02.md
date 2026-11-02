@@ -71,3 +71,27 @@ emission, is unchanged. The discovery beacon and the file-transfer drain already
 - KISS has no ID timer.
 - The CLI's `beacon` keys on a fixed interval without carrier sense. It is pre-existing and not on the
   on-air gate's path; UNCHECKED whether it should change.
+
+## Second round: 3 s of quiet before an unforced ID (`60fc8c7`)
+
+Mandatory (keying, regulatory). On air in task 18 Part D, the early interval ID went out 0.1 s after
+the station's own ACK, in the turnaround before the other station's next frame, and that frame was
+lost. `60fc8c7` makes `due_reason` track how long the channel has been quiet, and requires
+`ID_MIN_QUIET_MS` (3 s) for the early interval ID and the sign-off.
+
+**Verdict:** no blocker, and it does not block Release 1. The forced interval ID is unchanged, so the
+§97.119 bound holds. Confirmed:
+- after a blocking decode, the quiet clock starts at the first quiet poll;
+- quiet tracking continues while the timer is disarmed;
+- the carrier detect is live on both receive paths;
+- the 15 s wait in the daemon test hides no lost ID.
+
+| # | Severity | Finding | Disposition |
+|---|---|---|---|
+| 1 | should-fix | The quiet clock was stale across the station's own transmission (no polls during it). So for the sending station, the first poll after its frame and ACK listen found the 3 s already met. | **Taken.** `note_tx` clears the quiet clock. New core test `quiet_before_our_own_transmission_does_not_count_after_it`; it fails without the change. |
+| 2 | should-fix (park) | In a continuous exchange the receiver never sees 3 s of quiet, so its early ID is dead and the ID is forced at the interval, most likely inside the sender's frame. That cuts the frame, a NACK follows, and a demotion caused by the station's own ID could be scored under A2 clause 2. | **Parked** in the work plan, with the risk named. The fix is a keying design change: the receiver sends its ID in the same keyed burst as its ACK, before it, inside the sender's window. Until then, a run review marks any demotion that follows the station's own forced ID. |
+| 3 | should-fix | The daemon test passed with the 3 s rule removed. | **Taken.** It now measures from the first capture read after the flushed burst (the start of quiet) to the moment the ID opens its output. Passes; with `ID_MIN_QUIET_MS = 0` it fails ("keyed 0ns after the channel went quiet"). |
+| 4 | nit | A station whose squelch flickers near its noise never gets 3 s of quiet: its sign-off and early ID starve, and the forced interval ID still bounds it. | Recorded in the sharp edges. |
+| 7 | note | 3 s is fitted to one inventory: the a2b turnaround, with the sender keying 0.6–1 s after the ACK. It is falsified by a sender whose next frame starts more than 3 s after the ACK. | Recorded here. |
+| 8 | nit | The commit message implied the rule governed both stations; it governed only the receiver. | Corrected in the follow-up commit's message (finding 1 makes it govern both). |
+
