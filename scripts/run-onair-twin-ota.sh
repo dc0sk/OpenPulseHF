@@ -76,11 +76,13 @@ TRAFFIC_WARMUP="${TRAFFIC_WARMUP:-30}"
 # The daemons' RUST_LOG. `debug` logs each decode attempt and its timing, which a failed on-air run
 # needs (task 11: an `info` log could not say why station B never decoded).
 DAEMON_LOG_LEVEL="${DAEMON_LOG_LEVEL:-info}"
-# Seconds both daemons keep running after the traffic window, before the logs are collected, so each
-# station sends its end-of-exchange (sign-off) ID: it waits 10 s after the station's last transmission
-# and for a quiet channel (task 18: the logs were collected 1-3 s after the last ACK, so they could not
-# show the ID, and cleanup stopped the daemons before it was due).
-SIGNOFF_TAIL="${SIGNOFF_TAIL:-25}"
+# After the traffic window, how long to wait at most for each station's end-of-exchange (sign-off) ID
+# before the logs are collected. The ID waits 10 s after the station's last transmission and for a quiet
+# channel, and the sending daemon keeps sending its queued frames after the traffic script stops: in
+# task 18 Part D the last frames went out 31-40 s after the window, so a fixed 25 s wait ended
+# mid-exchange. The runner waits until each station's log shows a sign-off ID after its last
+# transmission, or this many seconds.
+SIGNOFF_WAIT_MAX="${SIGNOFF_WAIT_MAX:-180}"
 OUTPUT_DIR="${OUTPUT_DIR:-docs/dev/test-reports}"
 
 ACTION="${1:-supervise}"
@@ -344,11 +346,30 @@ EOF
         sleep 5
     done
 
-    echo "traffic window complete; ${SIGNOFF_TAIL}s for the stations' sign-off IDs …" | tee -a "$report"
-    sleep "${SIGNOFF_TAIL}"
+    echo "traffic window complete; waiting up to ${SIGNOFF_WAIT_MAX}s for both stations' sign-off IDs …" | tee -a "$report"
+    wait_for_signoff "$report"
     collect_evidence "$report"
     echo "report: $report"
     echo "(watch the live TX-level climb on both directions in openpulse-twinview)"
+}
+
+# Whether a station's last transmission is its sign-off ID: the ID's own TX-metadata line comes before
+# its `transmitted station ID` line, so the last of the two kinds is the sign-off line exactly when
+# nothing was transmitted after the ID.
+signed_off() {
+    "$1" "grep -E 'logged TX metadata|transmitted station ID' /tmp/twin-ota-daemon.log 2>/dev/null \
+        | tail -n1 | grep -q 'kind=\"sign-off\"'"
+}
+
+wait_for_signoff() {
+    local report="$1" deadline=$(( $(date +%s) + SIGNOFF_WAIT_MAX )) a=no b=no
+    while [ "$(date +%s)" -lt "$deadline" ]; do
+        signed_off ssh_a && a=yes || a=no
+        signed_off ssh_b && b=yes || b=no
+        [ "$a" = yes ] && [ "$b" = yes ] && break
+        sleep 5
+    done
+    echo "sign-off IDs after the last transmission: ${A_LABEL} ${a}, ${B_LABEL} ${b}" | tee -a "$report"
 }
 
 do_status() {
