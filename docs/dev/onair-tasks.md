@@ -4101,7 +4101,7 @@ step). It plays no part in the decisions here: `climb_on_snr` was not the path a
 
 ## Task 21 — A→B demotion on one build; the `fast` profile's first time on air; the Pi cost of the OFDM receive (status: open; waits for the maintainer's go)
 
-The new build is `BUILD_HASH`. On top of task 20's build (`f18c8a6`):
+The new build is `23278b6`. On top of task 20's build (`f18c8a6`):
 - **The sender's station ID shares its data frame's audio stream** (task 20, finding 1). The data frame
   and the ID behind it are now one output stream: no gap inside the PTT hold, so the receiver's burst
   ends after the ID and its ACK follows it.
@@ -4116,7 +4116,7 @@ The new build is `BUILD_HASH`. On top of task 20's build (`f18c8a6`):
 - **The OFDM SNR reading measures the frame**, not the noise after it. Before, SL7 read 6.6 dB on a
   clean channel against a 12 dB climb ceiling, and SL14 was out of the `fast` ladder's reach.
 
-Tests at this build: `GATE_LINE`.
+Tests at this build: `scripts/gate.sh` at `62a45b3`: 2766 tests passed, 0 failed (389 suites); trace, reachability, fmt, doc and unsafe lints ok; clippy failed on one unneeded `mut` in the new test `ladder_frame_behind_a_lead`, fixed in `23278b6` (amended, test file only; both clippy configurations then clean); the trailer lint fails only on `ab9235f` and `cd3bf5c` (2026-11-01, recorded on the M3 line). The held-out suites run separately (`scripts/slow-tests.sh`).
 
 The station rules hold:
 - ask the maintainer before every run;
@@ -4125,7 +4125,7 @@ The station rules hold:
 - RSPdx port B empty.
 
 ### Part A — nothing transmits
-As task 20 Part A: pull on rpi51 (commit including `BUILD_HASH`), `deploy`, check that both daemons'
+As task 20 Part A: pull on rpi51 (commit including `23278b6`), `deploy`, check that both daemons'
 hashes match, read back. Port B empty.
 
 ### Part B — the OFDM receive cost on rpi51 (nothing transmits)
