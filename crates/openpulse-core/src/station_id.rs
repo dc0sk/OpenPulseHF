@@ -11,7 +11,7 @@ pub fn callsign_is_valid(callsign: &str) -> bool {
 /// How long before the interval ID is due the station starts waiting for a quiet channel
 /// ([`due_reason`](StationIdTimer::due_reason)). Longer than the longest `hpx_hf` frame (SL2, 66.6 s),
 /// so one frame of the other station's fits in it; the ID is still forced at the interval itself.
-pub const ID_QUIET_WINDOW_MS: u64 = 90_000;
+pub(crate) const ID_QUIET_WINDOW_MS: u64 = 90_000;
 
 /// How long the channel must have been quiet before a station ID that is not forced goes out. Longer
 /// than the turnaround after an ACK (about 1 s on air), when the channel is quiet only because the

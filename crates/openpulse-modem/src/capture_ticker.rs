@@ -45,7 +45,7 @@ use crate::pipeline::AudioSamples;
 /// Fitted to the task 16 logs (both Pis, PulseAudio): with the device delivering 25 ms fragments, the
 /// longest span with no audio that later resumed was 37–45 ms; 250 is more than 5× that. Falsified by
 /// a capture device whose callback period is 250 ms or longer.
-pub const CAPTURE_GAP_MS: u64 = 250;
+pub(crate) const CAPTURE_GAP_MS: u64 = 250;
 
 /// When capture audio last arrived, so that an empty read ends a burst only after a real gap.
 ///

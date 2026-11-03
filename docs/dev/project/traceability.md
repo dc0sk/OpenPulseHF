@@ -25,7 +25,7 @@ this ledger adds the design rationale and the actually-observed results per chan
   read −11.5 Hz for a true +2.5 Hz on OFDM. The steps: mix to the told centre; a coarse grid of
   ±50 Hz in 12.5 Hz steps, timing found after the mix, scored by pilot coherence; the pilot drift for
   the fine part; one exact analytic-signal mix of the burst.
-- **Implementation:** `plugins/ofdm/src/acquire.rs` (`acquire_offset_hz`), `shift.rs` (`shift_hz`),
+- **Implementation:** `plugins/ofdm/src/acquire.rs` (`acquire`), `shift.rs` (`shift_hz`),
   `channel.rs` (`pilot_drift`), `lib.rs` (`at_nominal_centre` on `demodulate`, `demodulate_soft`,
   `estimate_snr_db`; `estimate_afc_hz` removed).
 - **Tests:** `ofdm_carrier_offset_ota` (`openpulse-modem`, production path); `carrier_offset_applied`

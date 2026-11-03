@@ -68,7 +68,7 @@ impl Default for OfdmPlugin {
 const NOMINAL_CENTRE_HZ: f32 = 1500.0;
 
 /// The received samples translated back to [`NOMINAL_CENTRE_HZ`], with the frame's own carrier
-/// offset acquired around the receiver's `center_frequency` (`acquire::acquire_offset_hz`).
+/// offset acquired around the receiver's `center_frequency` (`acquire::acquire`).
 ///
 /// Before 2026-11-03 the receiver refused (hard path) or ignored (soft path) any centre but 1500 Hz,
 /// and nothing corrected the offset; an uncorrected offset leaks power between the 31.25 Hz
@@ -90,12 +90,13 @@ fn at_nominal_centre<'a>(
             config.mode
         )));
     };
-    match acquire::acquire_offset_hz(samples, &p, told) {
-        Some(hz) => {
+    match acquire::acquire(samples, &p, told) {
+        Some(acquire::Acquired { hz, coherence }) => {
             tracing::debug!(
                 mode = %config.mode,
                 told_hz = told,
                 acquired_hz = hz,
+                pilot_coherence = coherence,
                 "OFDM: carrier offset acquired"
             );
             // Below a quarter hertz the leakage between subcarriers is under −45 dB; the full-burst
@@ -617,9 +618,9 @@ mod tests {
             let cfg = mod_config(mode);
             let payload: Vec<u8> = (0..n).collect();
             let samples = plugin.modulate(&payload, &cfg).unwrap();
-            let est =
-                crate::acquire::acquire_offset_hz(&samples, &params_for_mode(mode).unwrap(), 0.0)
-                    .expect("acquisition on a clean frame");
+            let est = crate::acquire::acquire(&samples, &params_for_mode(mode).unwrap(), 0.0)
+                .map(|a| a.hz)
+                .expect("acquisition on a clean frame");
             assert!(est.abs() < 0.5, "{mode}: acquired {est:.2} Hz on carrier");
             assert_eq!(plugin.estimate_afc_hz(&samples, &cfg), None, "{mode}");
         }

@@ -1939,6 +1939,7 @@ impl ModemEngine {
 
     /// Bursts dropped by [`abandon_burst`](Self::abandon_burst) since the engine started: a tripwire
     /// that the daemon's keying paths really call it.
+    #[cfg(feature = "instruments")]
     pub fn bursts_abandoned(&self) -> u64 {
         self.bursts_abandoned
     }
@@ -2677,11 +2678,13 @@ impl ModemEngine {
     }
 
     /// Whether the last OTA decode finished past its ACK deadline.
+    #[cfg(feature = "instruments")]
     pub fn last_ota_decode_late(&self) -> bool {
         self.last_ota_decode_late
     }
 
     /// Decode attempts skipped because an OTA decode's ACK deadline had passed.
+    #[cfg(feature = "instruments")]
     pub fn decode_attempts_past_deadline(&self) -> u64 {
         self.decode_attempts_past_deadline
     }

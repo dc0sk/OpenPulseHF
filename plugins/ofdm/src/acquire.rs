@@ -46,13 +46,8 @@ pub struct Acquired {
     pub coherence: f32,
 }
 
-/// The carrier offset of the OFDM frame in `samples`, in Hz relative to the samples' own 1500 Hz
-/// centre, or `None` when no candidate finds a preamble with pilots.
-pub fn acquire_offset_hz(samples: &[f32], p: &OfdmParams, told: f32) -> Option<f32> {
-    acquire(samples, p, told).map(|a| a.hz)
-}
-
-/// The search behind [`acquire_offset_hz`].
+/// The carrier offset of the OFDM frame in `samples`, relative to the samples' own 1500 Hz centre, or
+/// `None` when no candidate finds a preamble with pilots.
 ///
 /// Candidates run outward from `told` (the offset the caller already believes) on a grid. Each mixes
 /// a short window from the burst's start, finds the timing there, and scores the pilots' coherence
