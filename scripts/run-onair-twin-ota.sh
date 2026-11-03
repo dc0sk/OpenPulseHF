@@ -81,8 +81,11 @@ DAEMON_LOG_LEVEL="${DAEMON_LOG_LEVEL:-info}"
 # channel, and the sending daemon keeps sending its queued frames after the traffic script stops: in
 # task 18 Part D the last frames went out 31-40 s after the window, so a fixed 25 s wait ended
 # mid-exchange. The runner waits until each station's log shows a sign-off ID after its last
-# transmission, or this many seconds.
-SIGNOFF_WAIT_MAX="${SIGNOFF_WAIT_MAX:-180}"
+# transmission, or this many seconds. The traffic script queues a message every few seconds whatever
+# the daemon is doing, and the daemon holds up to 64 queued commands, so the sender can keep sending
+# for many minutes after the window (task 19: still sending when a 180 s wait ran out). 900 s lets that
+# backlog drain; the progress lines show when each station last transmitted.
+SIGNOFF_WAIT_MAX="${SIGNOFF_WAIT_MAX:-900}"
 OUTPUT_DIR="${OUTPUT_DIR:-docs/dev/test-reports}"
 
 ACTION="${1:-supervise}"
@@ -361,12 +364,22 @@ signed_off() {
         | tail -n1 | grep -q 'kind=\"sign-off\"'"
 }
 
+# The UTC time of a station's last transmission (TX-metadata line), or `-`.
+last_tx() {
+    "$1" "grep 'logged TX metadata' /tmp/twin-ota-daemon.log 2>/dev/null | tail -n1 | cut -c12-19" || true
+}
+
 wait_for_signoff() {
     local report="$1" deadline=$(( $(date +%s) + SIGNOFF_WAIT_MAX )) a=no b=no
+    local polls=0
     while [ "$(date +%s)" -lt "$deadline" ]; do
         signed_off ssh_a && a=yes || a=no
         signed_off ssh_b && b=yes || b=no
         [ "$a" = yes ] && [ "$b" = yes ] && break
+        polls=$((polls + 1))
+        if [ $((polls % 12)) -eq 0 ]; then
+            echo "$(date +%H:%M:%S)  waiting for sign-off: ${A_LABEL} ${a} (last TX $(last_tx ssh_a)), ${B_LABEL} ${b} (last TX $(last_tx ssh_b))" | tee -a "$report"
+        fi
         sleep 5
     done
     echo "sign-off IDs after the last transmission: ${A_LABEL} ${a}, ${B_LABEL} ${b}" | tee -a "$report"
