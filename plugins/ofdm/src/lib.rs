@@ -90,18 +90,27 @@ fn at_nominal_centre<'a>(
             config.mode
         )));
     };
-    let base: Cow<'a, [f32]> = if told.abs() < 0.01 {
-        Cow::Borrowed(samples)
-    } else {
-        Cow::Owned(shift::shift_hz(samples, -told, SAMPLE_RATE as f32))
-    };
-    match acquire::acquire_offset_hz(&base, &p) {
-        Some(hz) if hz.abs() >= 0.01 => Ok(Cow::Owned(shift::shift_hz(
-            samples,
-            -(told + hz),
-            SAMPLE_RATE as f32,
-        ))),
-        _ => Ok(base),
+    match acquire::acquire_offset_hz(samples, &p, told) {
+        Some(hz) => {
+            tracing::debug!(
+                mode = %config.mode,
+                told_hz = told,
+                acquired_hz = hz,
+                "OFDM: carrier offset acquired"
+            );
+            if hz.abs() < 0.01 {
+                Ok(Cow::Borrowed(samples))
+            } else {
+                Ok(Cow::Owned(shift::shift_hz(
+                    samples,
+                    -hz,
+                    SAMPLE_RATE as f32,
+                )))
+            }
+        }
+        // No preamble with pilots at any candidate: nothing here to decode, so the burst is not
+        // mixed (a long burst of another mode would cost a full-length FFT pair for nothing).
+        None => Ok(Cow::Borrowed(samples)),
     }
 }
 
@@ -606,8 +615,9 @@ mod tests {
             let cfg = mod_config(mode);
             let payload: Vec<u8> = (0..n).collect();
             let samples = plugin.modulate(&payload, &cfg).unwrap();
-            let est = crate::acquire::acquire_offset_hz(&samples, &params_for_mode(mode).unwrap())
-                .expect("acquisition on a clean frame");
+            let est =
+                crate::acquire::acquire_offset_hz(&samples, &params_for_mode(mode).unwrap(), 0.0)
+                    .expect("acquisition on a clean frame");
             assert!(est.abs() < 0.5, "{mode}: acquired {est:.2} Hz on carrier");
             assert_eq!(plugin.estimate_afc_hz(&samples, &cfg), None, "{mode}");
         }

@@ -4791,6 +4791,7 @@ dependencies = [
  "openpulse-core",
  "openpulse-dsp",
  "rustfft",
+ "tracing",
 ]
 
 [[package]]

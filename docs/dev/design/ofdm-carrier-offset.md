@@ -1,7 +1,7 @@
 ---
 project: openpulsehf
 doc: docs/dev/design/ofdm-carrier-offset.md
-status: review
+status: resolved
 last_updated: 2026-11-03
 ---
 
@@ -40,12 +40,12 @@ AFC settle, built for BPSK, read garbage on OFDM, e.g. −11.5 Hz for a true +2.
 The OFDM plugin acquires its own offset in its receive entries, and opts out of the engine's AFC
 (`estimate_afc_hz` returns `None`), as MFSK16 does. This is codec2's DATAC approach: a coarse search,
 then the pilots for the fine part.
-1. **The told centre:** mix the burst from `center_frequency` back to 1500 Hz (`at_nominal_centre`).
-   This is whatever the engine's BPSK settles left, usually within a few Hz.
-2. **The coarse grid** (`acquire::acquire_offset_hz`): from −50 to +50 Hz in 12.5 Hz steps,
-   9 candidates, 0 first. For each candidate:
+1. **The told centre:** the search runs around `center_frequency` − 1500 Hz, whatever the engine's
+   BPSK settles left, usually within a few Hz.
+2. **The coarse grid** (`acquire::acquire_offset_hz`): ±50 Hz around the told offset in 12.5 Hz
+   steps, 9 candidates, the told one first. For each candidate:
    - mix a short window from the burst's start (the timing search's reach plus 9 symbols, about 11 000
-     samples);
+     samples). Only the window is ever mixed during the search, never the burst;
    - find the timing **on the mixed window**: the real-valued Schmidl–Cox metric falls as
      cos(πΔ/31.25 Hz) and is zero at ±15.6 Hz, so timing must come after the mix;
    - score the pilots' coherence across symbols, |Σ a*b| / Σ |a||b|. A wrong offset puts data, not
@@ -53,17 +53,29 @@ then the pilots for the fine part.
 3. **The fine part:** the best candidate's pilot drift (`channel::pilot_drift`), then one more pass at
    the sum.
 4. **One exact mix of the whole burst** (`shift::shift_hz`: an analytic signal by FFT, times
-   e^{j2πft}), then the existing receiver.
+   e^{j2πft}), then the existing receiver. When no candidate finds a preamble with pilots, the burst is
+   not mixed at all: there is nothing to decode, and a 26 s burst of another mode would otherwise cost
+   a full-length FFT pair.
+5. **Logged:** `OFDM: carrier offset acquired` at debug, with the told and acquired offsets.
 
 `demodulate`, `demodulate_soft` and `estimate_snr_db` all go through step 1–4. The SNR the ladder
 reads is therefore measured after the correction; an uncorrected offset would cut it.
 
 **The constants, what they were set from, and what would prove them wrong.**
-- **`COARSE_STEP_HZ` 12.5:** from two limits of the code, not fitted.
-  - Its half (6.25 Hz) must stay inside the pilot drift's ±13.9 Hz and away from the timing null at
-    ±15.6 Hz; 6.25 Hz keeps 81 % of the timing metric.
-  - **Falsified by** a frame that fails at an offset halfway between grid points (6.25, 18.75 Hz …)
-    and decodes on the grid.
+- **`COARSE_STEP_HZ` 12.5:** from two limits of the code, then checked at its falsifier.
+  - Its half (6.25 Hz) stays inside the pilot drift's ±13.9 Hz and away from the timing null at
+    ±15.6 Hz.
+  - **The timing gate** is on M = P²/R² ≥ 0.5, so it scales as cos²: 0.65 of clean at 6.25 Hz. (The
+    first draft said 81 %, which is the cos, not the cos²; the review caught it.) By that formula a
+    frame halfway between grid points fails below about 9 dB in-band SNR.
+  - **Measured at the falsifier**, offsets halfway between grid points (+6.25, −18.75, +31.25 Hz),
+    8 noise seeds each:
+    - SL10 near its floor (noise 0.05) and SL14 (0.02): **8/8 with this step**, the same as with a
+      6.25 Hz step;
+    - at noise 0.1, SL10 fails on carrier too, so the frame dies before the grid matters.
+  - A 6.25 Hz step would double the search for a loss not seen anywhere a frame decodes at all.
+  - **Still falsified by** an on-air OFDM frame that fails halfway between grid points and decodes on
+    the grid.
 - **`COARSE_SPAN_HZ` 50:**
   - codec2 DATAC's burst search covers ±50 Hz;
   - untrimmed 2 m rigs were 54–64 Hz apart (`openpulse-channel` `cfo.rs`), and the engine's BPSK
@@ -80,7 +92,14 @@ reads is therefore measured after the correction; an uncorrected offset would cu
   - 12 of 12 in 1 attempt each;
   - the SNR read is within 1 dB of on-carrier at every rung (SL7 6.0–7.2 against 6.6 dB, SL10
     10.5–11.4 against 10.2, SL14 9.0–9.5 against 9.1).
-- **Cost:** the pinned test's 15 decodes take 0.66 s in all, the modulation included.
+- **Cost per `demodulate` call** (x86, release, after the review's fix):
+  - 6 ms on a burst with no OFDM frame, whatever its length;
+  - 8 ms on a 2.3 s burst holding a 64QAM frame;
+  - 21 ms on that frame inside a 26 s burst (one full-length shift, then the decode).
+
+  The review counts up to 40–50 attempts per burst in the worst case (2 candidates × attempt 0, the
+  ranked onsets and the walk). At about 4× on a Pi 4 that is about 1.5 s, inside the 6 s ACK
+  deadline. UNCHECKED on the Pi.
 
 ## Risks and how each is checked
 
@@ -95,16 +114,26 @@ reads is therefore measured after the correction; an uncorrected offset would cu
     metric, normalised by its own energy, can lock to;
   - seen in a test without a noise floor, so every test carries a floor;
   - a receiver always has one, but the behaviour is noted here.
-- **The engine's corrected pass:** with no estimate from OFDM, the engine's settle no longer moves the
-  centre for the OFDM candidate. The plugin's own acquisition covers that.
+- **The engine's corrected pass:** with no estimate from OFDM, the engine's settle leaves its
+  correction at 0, so no corrected pass runs and phase 2 yields nothing for OFDM (review, from
+  `engine.rs` `afc_mini_settle` and `worth_retrying`). The plugin's own acquisition covers ±50 Hz.
+- **Telemetry:** the engine's `last_afc_offset_hz` is `None` after an OFDM decode, so the daemon's
+  AFC telemetry reads 0 there. The acquired offset is in the plugin's debug log instead. Carrying it
+  to the engine would change the plugin trait (a mandatory review); it is parked.
+- **The peer's BPSK bursts:** a BPSK250 preamble line sits on OFDM52's pilot bin 50 and repeats every
+  128 samples. On those bursts every candidate "finds" a coherent pilot. That costs an attempt and a
+  wrong mix on a burst that cannot decode; FEC and CRC stop a false decode (review).
 
 ## Not changed, and found on the way
 
 - **The SNR the OFDM receiver reads is low on a clean channel**, before and after this change: SL7
-  reads 6.6 dB over a 0.002 floor. The `fast` profile's SNR floor for SL7 is 9 dB, so `climb_on_snr`
-  may never take the fast ladder past SL7.
-  - UNCHECKED, and a possible Release 1 risk of its own. The `fast` profile has never been on air.
-  - Put to the maintainer, not fixed here.
+  reads 6.6 dB over a 0.002 floor, against the `fast` profile's 9 dB floor for SL7.
+  - **Likely mechanism, from the review:** `equalized_data_symbols` equalises every symbol in the
+    slice it is given. The OTA slice runs to the frame's maximum length or the burst's end,
+    post-roll included, so noise-only "symbols" inflate the noise estimate.
+  - **Effect on the ladder** (review, from `ota_rate.rs`): the SNR only gates `climb_on_snr`. The
+    ladder still climbs on evidence, three decodes per rung, so it is slower but not stuck.
+  - UNCHECKED by a run. Put to the maintainer, not fixed here.
 
 ## Tests
 
@@ -121,6 +150,16 @@ reads is therefore measured after the correction; an uncorrected offset would cu
   Hz); a zero shift is the identity.
 - **`acquisition_is_near_zero_on_carrier_and_the_engine_gets_no_estimate`:** replaces the two tests
   that asserted OFDM publishes an engine AFC estimate.
+
+## Review
+
+Fable, 2026-11-03 (`docs/dev/reviews/review-ofdm-carrier-offset-2026-11-03.md`): no blocker, does
+not block Release 1. Its findings are taken above:
+- the cos² of the timing gate (measured at the falsifier);
+- the full-burst mix before any preamble (removed: only the window is mixed until a preamble is
+  found);
+- the lost observability (a debug log; the telemetry gap parked);
+- the SNR mechanism.
 
 ## Consumer
 
