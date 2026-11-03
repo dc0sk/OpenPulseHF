@@ -3870,7 +3870,7 @@ reported missing for that reason. The deadline's margin is about right.
 3. Check the mode changes in the receive recordings offline (A2 corroboration): no keying.
 4. Then reproduce A2 on that build, both directions, with task 19's stepped schedule.
 
-## Task 20 — reproduce A2 on one build: the ranked ladder scan, both directions, the stepped schedule (status: Part A done; Parts B and C wait for the maintainer's go; see Results)
+## Task 20 — reproduce A2 on one build: the ranked ladder scan, both directions, the stepped schedule (status: Parts A and B done; Part C (a2f) waits for the maintainer; see Results)
 
 The new build is `f18c8a6` (the ranked scan `87ce9b6` with its review fixes). On top of task 19's build (`4fd5a13`):
 - **The ladder scan tries a short ranked list of onsets before its walk**
@@ -3933,3 +3933,51 @@ rpi51 at `97c55110` (contains `f18c8a6`). `deploy` built on rpi51 and copied to 
 - `scripts/twin-traffic.sh` `c9e152f32d6b8d5548551b255865b9c45c198b96739672b02eab9dee56fdc373`
 
 Read-back: FT-991A EX065+1500, dial 144641564, RFPOWER 0.05, PTT 0; IC-9700 dial 144640000, RFPOWER 0.0117647, PTT 0; nothing running; port B empty (as set). Parts B (a2e) and C (a2f) each need the maintainer's go.
+
+### Results — task 20 Part B, run a2e (B sends, A leads the rate, robust, 900 s, stepped drive on `B_TX_SINK_VOLUME`)
+
+Commit on rpi51 `97c55110` (build `f18c8a6`; hashes as in Part A, identical on both stations). Evidence: `docs/dev/test-reports/onair-twin-ota-20261103-111213-evidence/` (with `drive-schedule.txt`, `NOTES.md`); receive audio `rx-audio-2026-11-01/rx-{a,b}-a2e-8k.wav.gz` (1950 s). RSPdx witness: 960 s from 10:12:13.2, `peak=0.0146 rms=0.0016 clip=0.00%`, not analysed.
+
+**Drive schedule (UTC).** t0 = 10:12:13.21; window end 10:27:13. First SL6 decode 10:17:01.80 (t0+288 s). 0.15 until 10:20:14.33 (t0+481 s); **0.08** from 10:20:14.33 (60 s); **0.05** from 10:21:15.57 (90 s); **0.035** from 10:22:46.89 (90 s); **0.15** from 10:24:18.42 to the end. A showed `burst flushed` lines in every step, so the shortcut never fired.
+
+**Counts (whole run, including the backlog after the window).** B sent 218 frames; A decoded 168 (`fec attempt OK` 168, FAILED 23140). B logged 6 `ACK not received` and 1 `send abandoned`. A flushes 545 / `read=0` 0 / `read=0` over squelch 0 (longest burst 544592); B flushes 1 / 0 / 0 (longest 400). Holds: A 15 (max 38600 samples, 4.8 s), B 0. Channel-busy holds at A: 9. `burst abandoned: this station keyed`: B 21, A 0. **Late decodes (`finished past the sender's ACK window`): 0 on either station.**
+
+**A's 218 `ota_rate_decision` events:** 1–2 SL2 hold (−10.7, −3.5 dB); 3 SL2 → SL3 `climb_on_evidence` (−0.1 dB); 4 SL3 → SL4 `climb_on_snr` (11.9); 5 SL4 → SL5 (14.2); 6 SL5 → SL6 (15.6); 7–218: 158 SL6 `hold`/keyed, 41 `nack_hold`/keyed at SL6, **4 `nack_step_down` SL6 → SL5**, 5 `nack_hold`/muted at SL5, **4 `climb_on_snr` SL5 → SL6 (all `muted`, 15.8–16.0 dB)**. B's `tx_level` readings: SL2 ×35, SL3 ×2, SL4 ×1, SL5 ×1, SL6 ×76, **SL5 ×3, SL6 ×67, SL5 ×1, SL6 ×10, SL5 ×1, SL6 ×32, SL5 ×1, SL6 ×73**.
+
+**The four demotions, from A's log** (each is a run of keyed NACKs, then a BPSK250 decode at SL5, then the climb ACK; the times are A's ACK/NACK transmissions):
+
+| # | Drive | NACKs (UTC) | Step-down NACK | SL5 frame decoded | Climb ACK | Back at SL6 after |
+|---|---|---|---|---|---|---|
+| 1 | **0.035** (22:46.9–24:18.4) | 10:22:57.2, 10:23:05.7 | **10:23:14.9** | 10:24:39.7 | 10:24:40.6 | **22 s after the drive returned** (10:24:18.4) |
+| 2 | 0.15, after the window | 10:31:02.4, 10:31:10.3 | **10:31:17.9** | 10:31:27.5 | 10:31:28.4 | 10.5 s |
+| 3 | 0.15 | 10:32:11.7, 10:32:19.5 | **10:32:27.7** | 10:32:37.5 | 10:32:38.5 | 10.8 s |
+| 4 | 0.15 | 10:35:36.1, 10:35:43.9 | **10:35:52.1** | 10:36:02.1 | 10:36:03.0 | 10.9 s |
+
+(Each step-down is the third keyed NACK in a row. In #1 the preceding NACKs fell at 0.035 with no frame decoded between 10:22:46.6 and 10:24:39.7. The earlier NACK at 10:22:40.9 (0.05) was an isolated one. In #2–#4 the drive was 0.15 and frames were failing during the backlog.)
+
+**Per drive level (A):**
+
+| Drive | Decodes | Keyed NACKs | Flushes |
+|---|---|---|---|
+| 0.15 (pre, to 10:20:14) | 36 (6 on the climb, 30 at SL6) | 0 | 52 |
+| 0.08 (60 s) | 7 | 0 | 14 |
+| 0.05 (90 s) | 12 | 2 (10:21:32.3, 10:22:40.9) | 28 |
+| 0.035 (90 s) | 0 | 3 (10:22:57.2, 10:23:05.7, 10:23:14.9 = step-down) | 13 |
+| 0.15 (10:24:18–10:27:13) | 15 | 4 (10:24:48.7, 10:24:57.1, 10:25:11.7, 10:26:06.1) | 77 |
+| 0.15 after the window | 98 | the rest of the 45 | 365 |
+
+**The climb and SL3.** SL3 was entered at decision 3 (ACK 10:15:43) and left at decision 4 after **one** BPSK63 decode: frame end 10:16:18.73, `fec attempt OK` 10:16:19.56, **0.83 s after the frame's end** (task 19's a2d took 10 s and missed its deadline). The ladder sat at SL3 for about 37 s. The other first-climb decodes: SL4 (BPSK100) 10:16:42.9, SL5 (BPSK250) 10:16:53.7, SL6 10:17:01.8; SL6 was reached 288 s after t0 and held.
+
+**Clauses.** Clause 1 met (SL2 → SL6; plus four SL5 → SL6 re-climbs, each with the new mode decoding). Clause 2 met four times, each with its NACKs keyed; #1 under the 0.035 step. Clause 3 met: after the climb, 39 SL6 decisions in a row (7–45) are `hold`/keyed with no level change; the first NACK is decision 46, at 10:21:32.
+
+**Station IDs (A = DC0SK, B = DD2ZM):** A `with-ack` 10:20:15.02, **`sign-off` 10:23:31.28** (mid-run, in the 0.035 step, 16 s after the step-down NACK), `with-ack` 10:32:03.26 and 10:40:38.51; B `with-data` 10:20:37.66, 10:29:18.23 and 10:37:39.14. I did not scan every ACK against B's frames; the IDs sit as listed.
+
+**Sign-off and the backlog.** **`sign-off IDs after the last transmission: IC-9700 no, FT-991A no`**, after the full 15 min wait. The window ended at 10:27:13; the **last transmission of A was 10:42:17.4 and of B 10:42:15.9** (15.0 min after the window end, at the cap): both stations kept sending backlog to the end, so there was no quiet time for a final sign-off. The only `sign-off` line is A's mid-run one at 10:23:31.
+
+**Timing (A, rpi51):** decode time after the frame's end, 168 frames: min 0.35 s, median 0.50 s, max 2.04 s. `fec attempt OK` to the next ACK transmission: min 0.74 s, median 0.94 s, max 2.14 s.
+
+**Stop rules.** No keying over 70 s (the longest frames are the 66.6 s SL2 frames); B's 21 `burst abandoned: this station keyed` lines are bursts B itself had gathered when it keyed; they do not show whether B keyed over a frame of A's, and I did not check that.
+
+End state read-back: FT-991A EX065+1500; dial 144641564 RFPOWER 0.05 PTT 0; IC-9700 dial 144640000 RFPOWER 0.0117647 PTT 0; port B empty; nothing running.
+
+Part B done; Part C (a2f, A sends) waits for the maintainer's go.
