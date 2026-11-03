@@ -343,6 +343,11 @@ const PHASE2_STEP_MULTIPLIER: usize = 4;
 /// 4 keeps margin for real on-air frames and residual carrier offset, which it could not cover.
 const FALLBACK_RANKED_ONSETS: usize = 4;
 
+/// Preamble-correlation peaks a ladder candidate tries before the onset walk
+/// (`docs/dev/design/ladder-scan-ranked-onsets.md`). The same K as the uncoded fallback's, whose
+/// rank measurement (`fallback_onset_rank_measurement`) found the true onset at rank 0 on its fixtures.
+const LADDER_RANKED_ONSETS: usize = 4;
+
 /// How many onsets the OTA arm's uncoded-fallback RESCUE scans try per burst: the deferred exhaustive
 /// scan, and separately phase 2's fallback entry. They are taken nearest the burst's trigger point
 /// first (`docs/dev/design/ota-scan-onset-major.md`, fallback bound). Unbounded, the exhaustive scan
@@ -1067,6 +1072,42 @@ const S_RING_WINDOWS: usize = 16;
 
 /// The scan grid `0, step, …, scan_end` (the last point clamped, as the onset walks clamp it), nearest
 /// `center` first — ties to the earlier onset — and at most `cap` of them.
+/// Onsets around where the burst's energy first rises to its frame's level, nearest first: the first
+/// `step`-sample window whose RMS reaches [`ENERGY_RISE_FRACTION`] of the burst's 80th-percentile window
+/// RMS and holds it for the next window, then one and two steps either side, within `[0, scan_end]`.
+///
+/// A burst can open on noise or flicker before the frame (task 19, run a2d: 0.7 s before an SL3 frame,
+/// which the walk from onset 0 reached at its 66th onset). Empty when the burst has no such rise.
+fn energy_rise_onsets(samples: &[f32], step: usize, scan_end: usize) -> Vec<usize> {
+    let step = step.max(1);
+    let rms: Vec<f32> = samples
+        .chunks(step)
+        .map(|c| (c.iter().map(|x| x * x).sum::<f32>() / c.len() as f32).sqrt())
+        .collect();
+    if rms.len() < 3 {
+        return Vec::new();
+    }
+    let mut sorted = rms.clone();
+    sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    let level = ENERGY_RISE_FRACTION * sorted[sorted.len() * 4 / 5];
+    let Some(w) = (0..rms.len() - 1).find(|&w| rms[w] >= level && rms[w + 1] >= level) else {
+        return Vec::new();
+    };
+    let at = w * step;
+    let mut out = Vec::new();
+    for d in [0isize, -1, 1, -2, 2] {
+        let s = at as isize + d * step as isize;
+        if s >= 0 && (s as usize) <= scan_end && !out.contains(&(s as usize)) {
+            out.push(s as usize);
+        }
+    }
+    out
+}
+
+/// The fraction of a burst's 80th-percentile window RMS that marks its frame's arrival
+/// (`energy_rise_onsets`). Half: a frame's windows sit near the 80th percentile, noise below a third.
+const ENERGY_RISE_FRACTION: f32 = 0.5;
+
 fn onsets_nearest(step: usize, scan_end: usize, center: usize, cap: usize) -> Vec<usize> {
     let step = step.max(1);
     let mut grid: Vec<usize> = (0..=scan_end / step).map(|k| k * step).collect();
@@ -4054,6 +4095,47 @@ impl ModemEngine {
             // Onset first; at one onset the candidates in their profile order, and within a candidate
             // the corrected pass before the uncorrected one, as the passes ran before.
             attempts.sort_unstable();
+            // RANKED FIRST (`docs/dev/design/ladder-scan-ranked-onsets.md`). A candidate with a
+            // preamble template tries its best preamble-correlation peaks before the walk, which goes
+            // on in the same order without them. On air (task 19, run a2d) an SL3 burst opened 0.7 s
+            // before the frame, and the walk from onset 0 in 128-sample steps reached it at its 66th
+            // onset: 68 attempts, 2.7 s on x86, about 11 s on a Pi 4 — past the ACK deadline, so the
+            // frame was never answered and the ladder held at SL3 for 6.5 minutes.
+            let mut ranked: Vec<(usize, usize, usize)> = Vec::new();
+            for (ci, (_, mode, _)) in candidates.iter().enumerate() {
+                let (_, passes) = &plans[ci];
+                if passes.is_empty() {
+                    continue;
+                }
+                self.afc_correction_hz = afc_before;
+                // The preamble's correlation peaks where the mode publishes a template (BPSK250
+                // only), then where the burst's energy rises to the frame's level, for every mode.
+                let (step, scan_end, _) = self.burst_onset_scan_bounds(mode, n, onset_bound);
+                let mut onsets = self
+                    .ranked_fallback_onsets(
+                        mode,
+                        &samples.samples,
+                        onset_bound,
+                        LADDER_RANKED_ONSETS,
+                    )
+                    .unwrap_or_default();
+                for start in energy_rise_onsets(&samples.samples, step, scan_end) {
+                    if !onsets.contains(&start) {
+                        onsets.push(start);
+                    }
+                }
+                for start in onsets {
+                    for (pi, &(_, first)) in passes.iter().enumerate() {
+                        // Offset 0 at `afc_before` was attempt 0; not repeated.
+                        if start >= first && !ranked.contains(&(start, ci, pi)) {
+                            ranked.push((start, ci, pi));
+                        }
+                    }
+                }
+            }
+            self.afc_correction_hz = afc_before;
+            attempts.retain(|a| !ranked.contains(a));
+            let attempts: Vec<(usize, usize, usize)> = ranked.into_iter().chain(attempts).collect();
             for (start, ci, pi) in attempts {
                 let (level, mode, fec) = &candidates[ci];
                 let (max_frame_samples, passes) = &plans[ci];
