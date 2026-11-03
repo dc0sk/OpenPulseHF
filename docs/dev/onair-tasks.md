@@ -4098,3 +4098,94 @@ step). It plays no part in the decisions here: `climb_on_snr` was not the path a
      changes only B's receiver.
    - Or **A's sink volume at 0.02, 0.01 and 0.005**, to find where A's level starts to fall.
 4. The backlog (finding 2) before the next long run.
+
+## Task 21 — A→B demotion on one build; the `fast` profile's first time on air; the Pi cost of the OFDM receive (status: open; waits for the maintainer's go)
+
+The new build is `BUILD_HASH`. On top of task 20's build (`f18c8a6`):
+- **The sender's station ID shares its data frame's audio stream** (task 20, finding 1). The data frame
+  and the ID behind it are now one output stream: no gap inside the PTT hold, so the receiver's burst
+  ends after the ID and its ACK follows it.
+  - Expected: no `ACK not received` tied to a `with-data` ID.
+  - The `transmitted station ID … kind="with-data"` line is now logged when the ID goes out, not after
+    the ACK window.
+- **The OFDM rungs (SL7–SL14) acquire their own carrier offset** over ±50 Hz. Before, SL14 failed at
+  2.5 Hz and SL7 at 10 Hz.
+  - With `DAEMON_LOG_LEVEL` at debug for `ofdm_plugin`, each OFDM decode logs `OFDM: carrier offset
+    acquired` with `told_hz`, `acquired_hz` and `pilot_coherence`.
+  - `docs/dev/design/ofdm-carrier-offset.md`.
+- **The OFDM SNR reading measures the frame**, not the noise after it. Before, SL7 read 6.6 dB on a
+  clean channel against a 12 dB climb ceiling, and SL14 was out of the `fast` ladder's reach.
+
+Tests at this build: `GATE_LINE`.
+
+The station rules hold:
+- ask the maintainer before every run;
+- FT-991A 5 W at most;
+- record nothing about a host other than rpi51 and rpi53;
+- RSPdx port B empty.
+
+### Part A — nothing transmits
+As task 20 Part A: pull on rpi51 (commit including `BUILD_HASH`), `deploy`, check that both daemons'
+hashes match, read back. Port B empty.
+
+### Part B — the OFDM receive cost on rpi51 (nothing transmits)
+On rpi51, in the checkout:
+`cargo test --release -p openpulse-modem --no-default-features --features instruments --test ofdm_decode_cost -- --ignored --nocapture`
+
+Report the six `COST` lines. On x86 they read 10–25 ms for a clean frame and 50–60 ms for a faded
+frame that fails (15 attempts). Station B's Pi 4 has no checkout; its OFDM decode times come from
+Part D's logs.
+
+### Part C — run a2g: A sends, B leads the rate; the demotion through B's receive gain (keys both rigs: one go)
+- **Settings:** task 20 Part C's (`robust`, `TRAFFIC_FROM=A`, `TRAFFIC_SIZE=64`,
+  `TRAFFIC_DURATION=900`), but `TRAFFIC_INTERVAL=8`. One send at SL6 takes about 7 s, so a message
+  every 8 s builds no backlog (task 20, finding 2).
+- **Recording:** as before, as `-a2g`.
+- **A's drive stays at the profile's value.** In tasks 19 and 20, A's sink volume did not change what B
+  received.
+- **The schedule is on station B's receive RF gain instead:** the FT-991A's `RF` level through Hamlib
+  (`rigctl … l RF` to read, `L RF <0–1>` to set). It changes B's receiver only and keys nothing.
+  - Read it back before the run and after each change. Restore the starting value at the end.
+  - Record the UTC time of each change.
+  - **Steps:** the starting value until the report's ISS level has been at SL6 for at least 60 s with
+    frames decoding, and in any case until t0 + 480 s; then 0.5 for 60 s; 0.3 for 90 s; 0.2 for 90 s;
+    0.1 for 90 s; then the starting value to the end.
+  - If at some step B shows **no flushed burst at all** for 60 s, note the time and go back up one
+    step: below that level nothing arrives.
+
+### Part D — the `fast` profile on air, both directions (keys both rigs: one go per run)
+The `fast` profile has never been on air. It climbs SL2 to SL6 as `robust` does, then into OFDM52
+(SL7–SL14, about 500–2530 Hz of audio).
+- **The audio passband:** check before the first run that both rigs' receive filters pass 500–2550 Hz.
+  Use `RIG_PASSBAND_HZ=3000` (the runner's default), plain USB on the FT-991A as before (its DATA-USB
+  audio ends near 1.5 kHz, task 8), and the IC-9700 as in the earlier tasks. Read back the passband.
+- **Run f1, A sends:** `OTA_PROFILE=fast`, `TRAFFIC_FROM=A`, `TRAFFIC_SIZE=64`, `TRAFFIC_INTERVAL=8`,
+  `TRAFFIC_DURATION=600`, `DAEMON_LOG_LEVEL=info,ofdm_plugin=debug`. A's drive at the profile's value;
+  no steps. Record as `-f1`.
+- **Run f2, B sends:** the same with `TRAFFIC_FROM=B`. Record as `-f2`.
+- **Stop rules:**
+  - stop a run (both daemons down, PTT released) if either station keys for more than 70 s at a time;
+  - stop a run if the ALC or the drive shows overload on the OFDM rungs (their peak-to-average is
+    higher than BPSK's);
+  - report what was seen.
+
+### Report, per run
+- **Counts:** frames sent and decoded, ACKs applied, `ACK not received` (with the time of the nearest
+  `with-data` ID before each), and flushes.
+- **The receiver's `ota_rate_decision` table** against the schedule's UTC times (Part C), or the climb
+  (Part D): the highest rung reached, how long at each rung, and every `climb_on_snr` with its SNR.
+- **Part D only:**
+  - every `OFDM: carrier offset acquired` line's `acquired_hz` and `pilot_coherence` (min, median,
+    max);
+  - the decode time after each OFDM frame's end, per rung, on each station (the Pi 4's is the cost
+    Part B could not measure).
+- **Station IDs:** every `transmitted station ID` line with its time and `kind`, and the runner's
+  sign-off line.
+- Push the logs and the receive recordings as before.
+
+### What it shows
+- **A2 on one build:** A→B demotion (Part C). B→A was shown in task 20 on `f18c8a6`; the A2 clauses are
+  scored again on this build from Parts C and D together.
+- **The ride-along fix:** no ACK lost to a `with-data` ID.
+- **The `fast` profile:** whether it climbs into OFDM on 2 m, how far, and at what acquired offset and
+  decode cost.
