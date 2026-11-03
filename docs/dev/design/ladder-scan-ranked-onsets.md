@@ -56,6 +56,17 @@ walk then goes on, in its own order, without those entries.
 Offset 0 at `afc_before` was attempt 0 and is not repeated. The preamble peaks are tried in time order,
 not correlation order, so the earliest frame comes first if a keying ever holds two (#1461).
 
+**Amended 2026-11-03: the energy-rise onsets reach the burst's end, not the walk's `scan_end`.**
+- The walk's reach ends near the trigger point (`onset_bound`). A frame behind a lead that opened the
+  burst can lie beyond it, so a ranked onset clipped to the same reach could not find it.
+- **Measured** (the review of the one-stream ID, S2): SL5 and SL6 behind 0.25 and 0.7 s of noise, read
+  in 800-sample ticks, decoded **nothing**, with or without a trailing ID, and decoded with a larger
+  first read (which moves `scan_end`). With the energy-rise onsets reaching the burst's end, all 24
+  cases decode with an ACK.
+- The energy-rise entries are then no longer only a reordering of the walk: past `scan_end` they are
+  additions, still at most 5 per pass and candidate.
+- Test: `ladder_frame_behind_a_lead`.
+
 **The bound on extra attempts.** The energy-rise entries lie on the walk's grid and are only reordered.
 They cost extra attempts only when the frame decodes later in the walk than they would have run: at
 most 5 onsets × 2 passes × 2 candidates = 20. The preamble peaks (BPSK250 candidates) are sample-exact,

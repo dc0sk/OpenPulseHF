@@ -2196,7 +2196,11 @@ fn ota_send_with_ptt(
                 // One output stream for the data frame and the ID behind it: two streams leave an
                 // audio gap inside the PTT hold, the receiver takes it as the frame's end and keys
                 // its ACK over the ID while this station cannot hear (on-air task 20, 5 ACKs in 6).
-                engine.transmit_burst(None, |engine| {
+                // `held`: the ID was queued in the burst. It went out only if the burst was written,
+                // so `id_sent` follows the burst's result, and a burst that was not written keeps
+                // the ID for the next attempt (review 2026-11-03, S1).
+                let mut held = None;
+                let burst = engine.transmit_burst(None, |engine| {
                     engine.transmit_with_fec_mode(body, &mode, fec, None)?;
                     // AFTER the data frame: in front of it, the receiver's uncoded fallback decodes
                     // the ID and never finds the ladder frame (`id_rides_with_the_data_frame`). Taken
@@ -2205,14 +2209,20 @@ fn ota_send_with_ptt(
                     // 2026-11-02, S3, S5).
                     if let Some((id_body, id_mode)) = id_pending.take() {
                         match engine.transmit(id_body, id_mode, None) {
-                            Ok(()) => id_sent = true,
+                            Ok(()) => held = Some((id_body, id_mode)),
                             Err(e) => {
                                 tracing::warn!(error = %e, "station ID after the data frame failed")
                             }
                         }
                     }
                     Ok(())
-                })
+                });
+                match (&burst, held) {
+                    (Ok(()), Some(_)) => id_sent = true,
+                    (Err(_), Some(id)) => id_pending = Some(id),
+                    _ => {}
+                }
+                burst
             })
         }) {
             Ok(()) => Ok(()),

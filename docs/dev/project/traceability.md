@@ -49,7 +49,12 @@ this ledger adds the design rationale and the actually-observed results per chan
   (modem).
 - **Test results:** 1 stream in the ID's keying; sabotage (no burst): 2 streams, fails. The burst's
   audio equals the two frames sent separately; seqs 0 and 1 logged with their modes; a failure after
-  the first frame still writes the first. GATE_RESULT_2
+  the first frame still writes the first. **Review fixes:** S1, the ID counts as sent only if its
+  burst was written (`id_after_a_failed_write`: logged once, after the failure; sabotage fails); S3, a
+  nested burst is refused and a panic closes the burst (`transmit_burst`, 4 passed). The review's S2
+  falsifier never decoded the ID, but found that SL5 and SL6 behind a lead decoded nothing; the
+  energy-rise onsets now reach the burst's end (`ladder_frame_behind_a_lead`, 1 passed covering 12
+  cases; sabotage fails). GATE_RESULT_2
 
 ## 2026-11-03 — The OFDM receiver acquires its own carrier offset (work plan M3; Release 1 `fast` profile)
 

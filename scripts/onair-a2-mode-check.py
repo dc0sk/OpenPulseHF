@@ -85,6 +85,11 @@ for i, (ts, mode) in enumerate(rows):
     # A short line within 2 s of the previous one is an ID keyed right after a data frame: skipped.
     if i > 0 and (ts - rows[i - 1][0]).total_seconds() < 2.0:
         continue
+    # A line followed within 0.1 s by another is a frame sent in one burst with the next (since
+    # 84456d8 the ID rides in its data frame's stream, and both lines are logged when the burst ends):
+    # the audio before this line ends with the other frame, so it cannot be classified. Skipped.
+    if i + 1 < len(rows) and (rows[i + 1][0] - ts).total_seconds() < 0.1:
+        continue
     end = (ts - t0).total_seconds() - 0.3
     start = end - 3.5
     if start < 0 or int(end * FS) > len(x):

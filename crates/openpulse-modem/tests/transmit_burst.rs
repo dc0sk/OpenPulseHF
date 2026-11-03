@@ -112,3 +112,42 @@ fn a_frame_that_fails_after_the_first_still_lets_the_first_go_out() {
     );
     assert_eq!(e.frames_transmitted(), 1);
 }
+
+#[test]
+fn a_nested_burst_is_refused_and_the_outer_one_still_goes_out() {
+    let bk = LoopbackBackend::new();
+    let mut e = engine(Box::new(bk.clone_shared()));
+    let inner = e
+        .transmit_burst(None, |e| {
+            e.transmit(b"outer", "BPSK250", None)?;
+            Ok(e.transmit_burst(None, |e| e.transmit(b"inner", "BPSK250", None)))
+        })
+        .unwrap();
+    assert!(inner.is_err(), "a nested burst must be refused: {inner:?}");
+    assert_eq!(
+        e.frames_transmitted(),
+        1,
+        "the outer frame must still go out"
+    );
+}
+
+#[test]
+fn a_panic_inside_a_burst_leaves_no_burst_open() {
+    let bk = LoopbackBackend::new();
+    let mut e = engine(Box::new(bk.clone_shared()));
+    let caught = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let _: Result<(), ModemError> = e.transmit_burst(None, |e| {
+            e.transmit(b"held", "BPSK250", None)?;
+            panic!("inside the burst");
+        });
+    }));
+    assert!(caught.is_err());
+    let _ = bk.drain_samples();
+    // Left open, the burst would hold this frame forever, unsent and unlogged.
+    e.transmit(b"after", "BPSK250", None).unwrap();
+    assert!(
+        !bk.drain_samples().is_empty(),
+        "a frame after the panic was held, not sent"
+    );
+    assert_eq!(e.frames_transmitted(), 1);
+}

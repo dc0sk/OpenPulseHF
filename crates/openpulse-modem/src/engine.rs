@@ -4129,7 +4129,7 @@ impl ModemEngine {
                 self.afc_correction_hz = afc_before;
                 // The preamble's correlation peaks where the mode publishes a template (BPSK250
                 // only), then where the burst's energy rises to the frame's level, for every mode.
-                let (step, scan_end, _) = self.burst_onset_scan_bounds(mode, n, onset_bound);
+                let (step, _, _) = self.burst_onset_scan_bounds(mode, n, onset_bound);
                 let mut onsets = self
                     .ranked_fallback_onsets(
                         mode,
@@ -4140,7 +4140,11 @@ impl ModemEngine {
                     .unwrap_or_default();
                 // Time order, not ρ order: the earliest frame first if a keying ever holds two (#1461).
                 onsets.sort_unstable();
-                for start in energy_rise_onsets(&samples.samples, step, scan_end) {
+                // Past `scan_end` too: the walk's reach ends near the trigger, and a frame behind a
+                // lead that opened the burst lies beyond it. SL5 and SL6 behind 0.25–0.7 s of noise,
+                // read in 800-sample ticks, decoded nothing until this reached the burst's end
+                // (2026-11-03, `ladder_frame_behind_a_lead`).
+                for start in energy_rise_onsets(&samples.samples, step, n.saturating_sub(1)) {
                     if !onsets.contains(&start) {
                         onsets.push(start);
                     }
@@ -8617,8 +8621,21 @@ impl ModemEngine {
         device: Option<&str>,
         frames: impl FnOnce(&mut Self) -> Result<T, ModemError>,
     ) -> Result<T, ModemError> {
+        if self.tx_burst.is_some() {
+            // A nested burst would discard the outer one's audio and its §97 records.
+            return Err(ModemError::Configuration(
+                "transmit_burst: a burst is already open".to_string(),
+            ));
+        }
         self.tx_burst = Some(TxBurst::default());
-        let result = frames(self);
+        let result = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| frames(self))) {
+            Ok(r) => r,
+            Err(panic) => {
+                // Left open, the burst would hold every later frame forever, unsent and unlogged.
+                self.tx_burst = None;
+                std::panic::resume_unwind(panic);
+            }
+        };
         let written = self.end_tx_burst(device);
         let value = result?;
         written?;
