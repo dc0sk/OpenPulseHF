@@ -916,12 +916,7 @@ pub async fn run(cfg: OpenpulseConfig, modem_backend: Box<dyn AudioBackend>) -> 
                             id_first,
                         );
                         if id_sent {
-                            tracing::info!(
-                                callsign = %id_callsign,
-                                mode = %id_mode,
-                                kind = "with-data",
-                                "transmitted station ID"
-                            );
+                            // Logged by `ota_send_with_ptt` when the ID went out.
                             id_timer.mark_identified(id_now_ms);
                             id_timer.note_tx(id_now_ms);
                             tx_frames_seen = engine.frames_transmitted();
@@ -2155,6 +2150,7 @@ fn ota_send_with_ptt(
     // The station ID, sent after the first data frame in the same keying; whether it went out.
     let mut id_pending = id_first;
     let mut id_sent = false;
+    let mut id_logged = false;
     // Only adopt an ACK carrying the addressed peer's session hash — the IRS builds its ACK with its own
     // callsign as the session id, so a correctly-addressed send matches while a co-channel session's ACK is
     // filtered (else the ISS could adopt a foreign rate and mark this message delivered).
@@ -2197,20 +2193,26 @@ fn ota_send_with_ptt(
         // separately rather than changed under a keying PR.
         let tx = match crate::keyed_transmit(ptt, Some(event_tx), "ota-send", || {
             tokio::task::block_in_place(|| {
-                engine.transmit_with_fec_mode(body, &mode, fec, None)?;
-                // AFTER the data frame: in front of it, the receiver's uncoded fallback decodes the ID
-                // and never finds the ladder frame (`id_rides_with_the_data_frame`). Taken here, so a
-                // refused keying keeps it for the next attempt; a failed ID does not fail the attempt,
-                // which would retransmit without listening for the ACK (review 2026-11-02, S3, S5).
-                if let Some((id_body, id_mode)) = id_pending.take() {
-                    match engine.transmit(id_body, id_mode, None) {
-                        Ok(()) => id_sent = true,
-                        Err(e) => {
-                            tracing::warn!(error = %e, "station ID after the data frame failed")
+                // One output stream for the data frame and the ID behind it: two streams leave an
+                // audio gap inside the PTT hold, the receiver takes it as the frame's end and keys
+                // its ACK over the ID while this station cannot hear (on-air task 20, 5 ACKs in 6).
+                engine.transmit_burst(None, |engine| {
+                    engine.transmit_with_fec_mode(body, &mode, fec, None)?;
+                    // AFTER the data frame: in front of it, the receiver's uncoded fallback decodes
+                    // the ID and never finds the ladder frame (`id_rides_with_the_data_frame`). Taken
+                    // here, so a refused keying keeps it for the next attempt; a failed ID does not
+                    // fail the attempt, which would retransmit without listening for the ACK (review
+                    // 2026-11-02, S3, S5).
+                    if let Some((id_body, id_mode)) = id_pending.take() {
+                        match engine.transmit(id_body, id_mode, None) {
+                            Ok(()) => id_sent = true,
+                            Err(e) => {
+                                tracing::warn!(error = %e, "station ID after the data frame failed")
+                            }
                         }
                     }
-                }
-                Ok(())
+                    Ok(())
+                })
             })
         }) {
             Ok(()) => Ok(()),
@@ -2225,6 +2227,18 @@ fn ota_send_with_ptt(
             Err(crate::KeyedTxError::AlreadyKeyed) => return Some(OtaAttempt::Nack),
             Err(crate::KeyedTxError::Transmit(e)) => Err(e),
         };
+
+        // Logged here, when the ID went out — not after the ACK window, where the caller would put it
+        // up to 17 s late (on-air task 20 read that time as the ID's).
+        if let (Some((id_body, id_mode)), true, false) = (id_first, id_sent, id_logged) {
+            tracing::info!(
+                callsign = %String::from_utf8_lossy(id_body).trim_start_matches("DE "),
+                mode = %id_mode,
+                kind = "with-data",
+                "transmitted station ID"
+            );
+            id_logged = true;
+        }
 
         if let Err(e) = tx {
             tracing::warn!(error = %e, "OTA data transmit failed");

@@ -966,6 +966,9 @@ pub struct ModemEngine {
     decode_attempts: u64,
     /// Bursts dropped because this station keyed (`abandon_burst`).
     bursts_abandoned: u64,
+    /// Frames held for one output stream inside [`transmit_burst`](Self::transmit_burst): the
+    /// processed audio, and each frame's mode and sequence.
+    tx_burst: Option<TxBurst>,
     /// Settles rejected because the preamble correlation did not corroborate them (#1049).
     ///
     /// A tripwire as much as a counter: it stays 0 when the mode publishes no template, so a test
@@ -1183,6 +1186,15 @@ const SPECTRUM_TAP_MAX: usize = 16384;
 /// dropped. Three matches the HARQ diversity depth measured in `harq_fade_diversity`.
 const OTA_HARQ_MAX_ATTEMPTS: usize = 3;
 
+/// Frames held for one output stream by [`ModemEngine::transmit_burst`].
+#[derive(Debug, Default)]
+struct TxBurst {
+    /// The processed audio of every held frame, back to back.
+    samples: Vec<f32>,
+    /// Each held frame's mode and sequence number, for the §97 log once the burst is written.
+    frames: Vec<(String, u16)>,
+}
+
 /// Post-lead samples a failed burst needs before it counts against the ladder (#1456): 0.5 s, about
 /// 3× the longest idle flicker measured behind a 250 Hz filter (1200 samples) and an eighth of the
 /// shortest counted piece of a failing frame (4.2 s at QPSK250-D). Falsified by a recorded idle
@@ -1277,6 +1289,7 @@ impl ModemEngine {
             afc_settle_attempts: 0,
             decode_attempts: 0,
             bursts_abandoned: 0,
+            tx_burst: None,
             condemned_positions: Vec::new(),
             accepted_settle_positions: Vec::new(),
             sweep_attempt_inputs: Vec::new(),
@@ -8547,12 +8560,6 @@ impl ModemEngine {
     ) -> Result<(), ModemError> {
         let _stage = PipelineStage::OutputEmit;
 
-        let audio_cfg = AudioConfig::default();
-        let mut stream = self
-            .audio
-            .open_output(device.or(self.default_device.as_deref()), &audio_cfg)
-            .map_err(|e| ModemError::Audio(e.to_string()))?;
-
         let atten_linear = 10.0f32.powf(self.tx_attenuation_db / 20.0);
         let mut write_samples: Vec<f32> = if (atten_linear - 1.0).abs() < 1e-6 {
             samples.samples.clone()
@@ -8571,6 +8578,20 @@ impl ModemEngine {
         }
 
         self.record_audio(&write_samples); // TX window for the spectrum/waterfall tap
+        if let Some(burst) = self.tx_burst.as_mut() {
+            // Held for `end_tx_burst`, which writes the burst as one stream and records each frame
+            // under the sequence it was sent with.
+            burst.samples.extend_from_slice(&write_samples);
+            burst
+                .frames
+                .push((mode.to_string(), self.sequence.wrapping_sub(1)));
+            return Ok(());
+        }
+        let audio_cfg = AudioConfig::default();
+        let mut stream = self
+            .audio
+            .open_output(device.or(self.default_device.as_deref()), &audio_cfg)
+            .map_err(|e| ModemError::Audio(e.to_string()))?;
         stream
             .write(&write_samples)
             .map_err(|e| ModemError::Audio(e.to_string()))?;
@@ -8585,13 +8606,68 @@ impl ModemEngine {
         Ok(())
     }
 
+    /// Run `frames`, which transmits one or more frames, and send them as ONE output stream, back to
+    /// back. Two transmits otherwise open two streams, and the audio gap between them (0.12 s on air)
+    /// drops an SSB carrier inside one PTT hold: the other station takes it as the frame's end and
+    /// keys its ACK over the rest (on-air task 20: the sender's station ID after its data frame cost
+    /// that frame's ACK 5 times in 6). Every frame `frames` emitted goes out, also when it returns an
+    /// error after the first; its result is returned once the burst is written.
+    pub fn transmit_burst<T>(
+        &mut self,
+        device: Option<&str>,
+        frames: impl FnOnce(&mut Self) -> Result<T, ModemError>,
+    ) -> Result<T, ModemError> {
+        self.tx_burst = Some(TxBurst::default());
+        let result = frames(self);
+        let written = self.end_tx_burst(device);
+        let value = result?;
+        written?;
+        Ok(value)
+    }
+
+    /// Write the frames held since `transmit_burst` began as one stream, then record each in the §97
+    /// log and the transmit count, as [`stage_emit_output`] does for one. Nothing held writes
+    /// nothing. Always ends the burst, also on an error.
+    fn end_tx_burst(&mut self, device: Option<&str>) -> Result<(), ModemError> {
+        let Some(TxBurst {
+            samples: held,
+            frames,
+        }) = self.tx_burst.take()
+        else {
+            return Ok(());
+        };
+        if frames.is_empty() {
+            return Ok(());
+        }
+        let audio_cfg = AudioConfig::default();
+        let mut stream = self
+            .audio
+            .open_output(device.or(self.default_device.as_deref()), &audio_cfg)
+            .map_err(|e| ModemError::Audio(e.to_string()))?;
+        stream
+            .write(&held)
+            .map_err(|e| ModemError::Audio(e.to_string()))?;
+        // Intent, not completion, as in `stage_emit_output` (#1334).
+        let flushed = stream.flush();
+        for (mode, seq) in &frames {
+            self.record_tx_frame_seq(mode, *seq)?;
+        }
+        flushed.map_err(|e| ModemError::Audio(e.to_string()))?;
+        Ok(())
+    }
+
     /// Record one emitted frame in the §97 regulatory TX-metadata log and bump `frames_transmitted`
     /// (which arms the auto-ID timer). Called at **every** emit seam — the audio path
     /// (`stage_emit_output`) and the IQ path (`transmit_iq`) — so no on-air TX escapes the log or the
     /// station-ID accounting.
     fn record_tx_frame(&mut self, mode: &str) -> Result<(), ModemError> {
+        self.record_tx_frame_seq(mode, self.sequence.wrapping_sub(1))
+    }
+
+    /// [`record_tx_frame`](Self::record_tx_frame) for a frame sent under `tx_seq`: a held burst
+    /// records its frames after later ones have taken sequence numbers.
+    fn record_tx_frame_seq(&mut self, mode: &str, tx_seq: u16) -> Result<(), ModemError> {
         self.update_tx_session_callsign();
-        let tx_seq = self.sequence.wrapping_sub(1);
         let metadata = TxMetadata::new(&self.callsign, mode, self.max_power_watts, tx_seq);
         self.tx_session_log
             .log_frame(metadata.clone())
