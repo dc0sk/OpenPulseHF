@@ -54,7 +54,7 @@ this ledger adds the design rationale and the actually-observed results per chan
   nested burst is refused and a panic closes the burst (`transmit_burst`, 4 passed). The review's S2
   falsifier never decoded the ID, but found that SL5 and SL6 behind a lead decoded nothing; the
   energy-rise onsets now reach the burst's end (`ladder_frame_behind_a_lead`, 1 passed covering 12
-  cases; sabotage fails). `scripts/gate.sh` at `62a45b3`: 2766 tests passed, 0 failed (389 suites); trace, reachability, fmt, doc and unsafe lints ok; clippy failed on one unneeded `mut` in the new test `ladder_frame_behind_a_lead`, fixed in `23278b6` (amended, test file only; both clippy configurations then clean); the trailer lint fails only on `ab9235f` and `cd3bf5c` (2026-11-01, recorded on the M3 line). The held-out suites run separately (`scripts/slow-tests.sh`).
+  cases; sabotage fails). `scripts/gate.sh` at `62a45b3`: 2766 tests passed, 0 failed (389 suites); trace, reachability, fmt, doc and unsafe lints ok; clippy failed on one unneeded `mut` in the new test `ladder_frame_behind_a_lead`, fixed in `23278b6` (amended, test file only; both clippy configurations then clean); the trailer lint fails only on `ab9235f` and `cd3bf5c` (2026-11-01, recorded on the M3 line). `scripts/slow-tests.sh` at `ad99247` (this tree with the ride-along test's 90 s budget): `ota_channel_adaptation` 3/3, `spectral_busy_gathers_weak_frames` 2/2, `total_power_bursts_keep_their_head` 1/1, `notch_rescues_interferer` 2/3 (the known red row #1457, same message: the decode succeeded without the notch).
 
 ## 2026-11-03 — The OFDM receiver acquires its own carrier offset (work plan M3; Release 1 `fast` profile)
 
