@@ -3869,3 +3869,58 @@ reported missing for that reason. The deadline's margin is about right.
 2. Runner option (c) for the sign-off (finding 2): keys nothing.
 3. Check the mode changes in the receive recordings offline (A2 corroboration): no keying.
 4. Then reproduce A2 on that build, both directions, with task 19's stepped schedule.
+
+## Task 20 — reproduce A2 on one build: the ranked ladder scan, both directions, the stepped schedule (status: open; waits for the maintainer's go)
+
+The new build is `87ce9b6`. On top of task 19's build (`4fd5a13`):
+- **The ladder scan tries a short ranked list of onsets before its walk**
+  (`docs/dev/design/ladder-scan-ranked-onsets.md`): where the burst's energy rises to the frame's level
+  (every mode), and the preamble's correlation peaks where the mode publishes a template (BPSK250). On
+  `rx-b-a2d`'s first SL3 frame: 68 → 3 attempts. This is what held a2d at SL3 for 6.5 minutes.
+- **The runner waits for the sign-off IDs up to 15 minutes** (`SIGNOFF_WAIT_MAX`, default 900 s) and
+  prints its progress every minute. The traffic backlog (task 19, finding 2) is still there: the sender
+  goes on sending queued messages for minutes after the window. Let the runner wait it out; do not
+  stop the daemons by hand unless a stop rule below says so.
+- **Corroboration in the audio is done offline** for tasks 18 and 19
+  (`docs/dev/test-reports/on-air/a2-mode-corroboration-2026-11-03.md`, every logged mode change found
+  in the receive recordings: 312 of 312). The same check runs on this task's recordings, so record them
+  as before.
+
+Nothing else changed in the keying: the ACK deadline, the ride-along IDs and the quiet-channel rule are
+task 19's.
+
+### Part A — nothing transmits
+As task 19 Part A: pull on rpi51 (commit including `87ce9b6`), `deploy`, check that both daemons'
+hashes match, read back the dial offsets. RSPdx port B stays empty.
+
+### Part B — run a2e: B sends, A leads the rate (keys both rigs: one go)
+Task 19 Part B exactly (`robust`, `TRAFFIC_FROM=B`, `TRAFFIC_SIZE=64`, `TRAFFIC_INTERVAL=2`,
+`TRAFFIC_DURATION=900`), the same drive schedule on `B_TX_SINK_VOLUME` (0.15 until SL6 has held 60 s
+and at least t0 + 480 s; 0.08 for 60 s; 0.05 for 90 s; 0.035 for 90 s; 0.15 to the end), the same
+"no flushed burst for 60 s" short cut. Record the UTC time of each change. Record as `-a2e`.
+
+### Part C — run a2f: A sends, B leads the rate (keys both rigs: one go)
+As Part B with the stations swapped, as task 19 Part C: `TRAFFIC_FROM=A`, the schedule on
+`A_TX_SINK_VOLUME`, the RSPdx witness as written there. Record as `-a2f`.
+
+### Stop rules
+- Ask the maintainer before each run. FT-991A 5 W at most. No IP addresses, logins, host keys or
+  anything about a host other than rpi51 and rpi53 in the results.
+- Stop the run (both daemons down, PTT released) if either station keys for more than 70 s at a time,
+  or keys while the other station's frame is on air more than once.
+
+### Report, per run (as task 19, plus two lines)
+- Counts, the receiver's `ota_rate_decision` table against the drive times, late decodes, station IDs,
+  timing, and per drive level, as task 19 asked.
+- **New:** for every SL3 frame (BPSK63) the receiver decoded, the decode time after the frame's end;
+  and how long the ladder sat at SL3 in each climb.
+- **New:** the runner's sign-off line, and the time from the end of the traffic window to the last
+  transmission of each station.
+- Push the logs and the receive recordings (`rx-a-a2e`, `rx-b-a2f` and the others) as before; the cloud
+  session runs `scripts/onair-a2-mode-check.py` on them.
+
+### What scores A2 here
+A2 is reproduced on one build if, across a2e and a2f together, each direction shows: a climb to a rung
+that then decodes (clause 1), at least one demotion with the NACKs that caused it keyed (clause 2), and
+60 s or more at one rung with frames decoding and no level change (clause 3); and the offline check finds
+every logged mode change in the receive audio.
