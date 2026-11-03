@@ -3872,7 +3872,7 @@ reported missing for that reason. The deadline's margin is about right.
 
 ## Task 20 — reproduce A2 on one build: the ranked ladder scan, both directions, the stepped schedule (status: open; waits for the maintainer's go)
 
-The new build is `87ce9b6`. On top of task 19's build (`4fd5a13`):
+The new build is `f18c8a6` (the ranked scan `87ce9b6` with its review fixes). On top of task 19's build (`4fd5a13`):
 - **The ladder scan tries a short ranked list of onsets before its walk**
   (`docs/dev/design/ladder-scan-ranked-onsets.md`): where the burst's energy rises to the frame's level
   (every mode), and the preamble's correlation peaks where the mode publishes a template (BPSK250). On
@@ -3890,7 +3890,7 @@ Nothing else changed in the keying: the ACK deadline, the ride-along IDs and the
 task 19's.
 
 ### Part A — nothing transmits
-As task 19 Part A: pull on rpi51 (commit including `87ce9b6`), `deploy`, check that both daemons'
+As task 19 Part A: pull on rpi51 (commit including `f18c8a6`), `deploy`, check that both daemons'
 hashes match, read back the dial offsets. RSPdx port B stays empty.
 
 ### Part B — run a2e: B sends, A leads the rate (keys both rigs: one go)
