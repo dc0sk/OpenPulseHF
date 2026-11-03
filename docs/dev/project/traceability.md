@@ -38,7 +38,7 @@ this ledger adds the design rationale and the actually-observed results per chan
   (`harq_combining_survives_the_production_capture_entry`: 42 rescues → 0). The cause was the mix's
   residue in exact-zero lead-in, which the self-normalised timing metric locked to. It was fixed by a
   relative energy floor in the timing search (`TIMING_ENERGY_FLOOR`), plus early accept and an
-  analytic-once search for cost: 41 rescues, standalone 0.680 against 0.673. GATE_RESULT
+  analytic-once search for cost: 41 rescues, standalone 0.680 against 0.673. `scripts/gate.sh` at `79d37ea` (tree identical to `64dd0e1`, message-only amend): 2757 tests passed, 0 failed, 382 suites; clippy (three configurations), fmt, trace and reachability ok; FAIL on the trailer lint, only for `ab9235f` and `cd3bf5c` (2026-11-01, recorded on the M3 line; the squash carries the trailer). The held-out suites are run separately (`scripts/slow-tests.sh`).
 
 ## 2026-11-03 — The ladder scan tries the burst's energy rise and preamble peaks before its walk (work plan M3, A2)
 
