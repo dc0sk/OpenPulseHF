@@ -3870,7 +3870,7 @@ reported missing for that reason. The deadline's margin is about right.
 3. Check the mode changes in the receive recordings offline (A2 corroboration): no keying.
 4. Then reproduce A2 on that build, both directions, with task 19's stepped schedule.
 
-## Task 20 — reproduce A2 on one build: the ranked ladder scan, both directions, the stepped schedule (status: open; waits for the maintainer's go)
+## Task 20 — reproduce A2 on one build: the ranked ladder scan, both directions, the stepped schedule (status: Part A done; Parts B and C wait for the maintainer's go; see Results)
 
 The new build is `f18c8a6` (the ranked scan `87ce9b6` with its review fixes). On top of task 19's build (`4fd5a13`):
 - **The ladder scan tries a short ranked list of onsets before its walk**
@@ -3924,3 +3924,12 @@ A2 is reproduced on one build if, across a2e and a2f together, each direction sh
 that then decodes (clause 1), at least one demotion with the NACKs that caused it keyed (clause 2), and
 60 s or more at one rung with frames decoding and no level change (clause 3); and the offline check finds
 every logged mode change in the receive audio.
+
+### Results — task 20 Part A (nothing transmitted)
+
+rpi51 at `97c55110` (contains `f18c8a6`). `deploy` built on rpi51 and copied to station B; the hashes are identical on both stations:
+- `target/release/openpulse-server` `290e0b891db187bbda41024e4247251e6f9f71b8592292e82a06856df1a45253`
+- `target/release/openpulse` `d4e738b68ce6fcae9d091f14d0f166f68125a15e5d56205da8efb14130efd019`
+- `scripts/twin-traffic.sh` `c9e152f32d6b8d5548551b255865b9c45c198b96739672b02eab9dee56fdc373`
+
+Read-back: FT-991A EX065+1500, dial 144641564, RFPOWER 0.05, PTT 0; IC-9700 dial 144640000, RFPOWER 0.0117647, PTT 0; nothing running; port B empty (as set). Parts B (a2e) and C (a2f) each need the maintainer's go.
