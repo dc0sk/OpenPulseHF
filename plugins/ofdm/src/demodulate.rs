@@ -275,7 +275,31 @@ fn equalized_data_symbols(samples: &[f32], p: &OfdmParams) -> Option<Vec<Complex
         let h_est = ls_estimate(p, &freq);
         syms.extend(zf_equalize(p, &freq, &h_est));
     }
+    syms.truncate(frame_symbol_count(&syms, p).saturating_mul(p.n_data));
     Some(syms)
+}
+
+/// How many OFDM symbols the frame in `syms` occupies, from its length prefix; every symbol when the
+/// prefix does not decode. The receive slice runs past the frame (to its maximum length or the
+/// burst's end), and equalised noise counted as data drove the SNR estimate down: a 16QAM frame read
+/// 41.6 dB alone and 6.1 dB with one second of noise after it (2026-11-03), under the `fast`
+/// profile's floors, so `climb_on_snr` never fired on an OFDM rung.
+fn frame_symbol_count(syms: &[Complex32], p: &OfdmParams) -> usize {
+    let all = syms.len() / p.n_data.max(1);
+    let mut bits: Vec<bool> = syms
+        .iter()
+        .take(LEN_PREFIX_BITS.div_ceil(p.bits_per_sc.max(1)))
+        .flat_map(|&sym| {
+            let label = demap_symbol(sym, p.bits_per_sc);
+            (0..p.bits_per_sc).map(move |b| (label >> b) & 1 == 1)
+        })
+        .collect();
+    crate::scramble::scramble_bits(&mut bits);
+    let Some(payload_len) = decode_len_prefix(&bits_to_bytes(&bits)) else {
+        return all;
+    };
+    let frame_bits = (LEN_PREFIX_BYTES + payload_len as usize) * 8;
+    frame_bits.div_ceil(p.bits_per_symbol().max(1)).min(all)
 }
 
 /// Equalized data-subcarrier constellation symbols for display — the real QAM scatter the receiver

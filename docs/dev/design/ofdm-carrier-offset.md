@@ -194,14 +194,24 @@ The setup:
 
 ## Not changed, and found on the way
 
-- **The SNR the OFDM receiver reads is low on a clean channel**, before and after this change: SL7
-  reads 6.6 dB over a 0.002 floor, against the `fast` profile's 9 dB floor for SL7.
-  - **Likely mechanism, from the review:** `equalized_data_symbols` equalises every symbol in the
-    slice it is given. The OTA slice runs to the frame's maximum length or the burst's end,
-    post-roll included, so noise-only "symbols" inflate the noise estimate.
-  - **Effect on the ladder** (review, from `ota_rate.rs`): the SNR only gates `climb_on_snr`. The
-    ladder still climbs on evidence, three decodes per rung, so it is slower but not stuck.
-  - UNCHECKED by a run. Put to the maintainer, not fixed here.
+- **The SNR the OFDM receiver read was low on a clean channel**, before and after the offset fix.
+  **Fixed 2026-11-03** (the maintainer's go):
+  - **The mechanism, measured:** `equalized_data_symbols` equalised every symbol in the slice it was
+    given, and the OTA slice runs past the frame. The same 16QAM frame read 41.6 dB alone and 6.1 dB
+    with one second of noise after it; SL7 read 31.5 and 2.6 dB.
+  - **The fix:** count the frame's symbols from its length prefix (`frame_symbol_count`), and keep
+    every symbol when the prefix does not decode. This bounds both the SNR estimate and the display
+    scatter.
+  - **What it changes on the ladder:**
+    - SL7 read 6.6 dB on the production path against a 12 dB climb ceiling, so `climb_on_snr` never
+      fired on an OFDM rung;
+    - SL14 is admitted only after an SNR upgrade candidate (`ack_up_requires_snr_candidate_at`), so
+      the `fast` ladder could not have reached its top rung at all.
+  - **After the fix**, on the production path over a 0.002 floor, every rung clears its climb
+    ceiling: SL7 16.5 dB against 12, SL8–SL13 37–42 dB against 14–22.
+  - **Tests:** `ofdm_snr_clears_the_climb_ceiling` (`openpulse-modem`) and `snr_ignores_the_tail`
+    (`ofdm-plugin`). Sabotage, with the bound removed: SL7 reads 7.1 dB and fails; the plugin test
+    reads 2.7 against 31.5 dB and fails.
 
 ## Tests
 

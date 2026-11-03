@@ -15,6 +15,42 @@ this ledger adds the design rationale and the actually-observed results per chan
 
 ---
 
+## 2026-11-03 — The OFDM SNR reading measures the frame, not the noise after it (work plan M3; Release 1 `fast` profile)
+
+- **Requirement/change:** REQ-FUN-06. The OFDM SNR estimate equalised the whole receive slice, the
+  noise after the frame included. SL7 read 6.6 dB on a clean channel against a 12 dB climb ceiling,
+  so `climb_on_snr` never fired on an OFDM rung, and SL14 (admitted only after an SNR upgrade
+  candidate) was unreachable on the `fast` ladder.
+- **Design decision:** bound the equalised symbols to the frame by its length prefix; keep every
+  symbol when the prefix does not decode (`docs/dev/design/ofdm-carrier-offset.md`, "Not changed, and
+  found on the way", now fixed).
+- **Implementation:** `plugins/ofdm/src/demodulate.rs` (`frame_symbol_count`, `equalized_data_symbols`).
+- **Tests:** `ofdm_snr_clears_the_climb_ceiling` (`openpulse-modem`, production path, SL7–SL13);
+  `snr_ignores_the_tail` (`ofdm-plugin`).
+- **Test results:** SL7 16.5 dB against a 12 dB ceiling; SL8–SL13 37–42 dB against 14–22; the plugin
+  test within 1 dB with and without the tail (e.g. 16QAM: 41.6 alone, 6.1 with the tail before).
+  Sabotage, with the bound removed: SL7 7.1 dB fails; the plugin test 2.7 against 31.5 dB fails.
+  The gate result is in the station-ID entry above.
+
+## 2026-11-03 — The sender's station ID shares its data frame's audio stream (work plan M3)
+
+- **Requirement/change:** REQ-FUN-06, REQ-REG-10. On air (task 20) the sender keyed its data frame and
+  its ride-along ID as two output streams in one PTT hold. The 0.12 s audio gap dropped the SSB
+  carrier, and the receiver keyed its ACK over the ID: 5 of 6 frames carrying an ID lost their ACK.
+- **Design decision:** `ModemEngine::transmit_burst` holds every frame the closure transmits, after
+  its per-frame processing, and writes them as one stream; each frame is recorded in the §97 log under
+  the sequence it was sent with; the burst always ends. The receiver's ID-before-ACK keeps two streams
+  (no loss there on air; merging is untested for the sender's ACK listener). Mandatory keying review:
+  `docs/dev/reviews/review-id-one-stream-2026-11-03.md`.
+- **Implementation:** `crates/openpulse-modem/src/engine.rs` (`transmit_burst`, `TxBurst`,
+  `end_tx_burst`, `record_tx_frame_seq`, `stage_emit_output`); `crates/openpulse-daemon/src/server.rs`
+  (`ota_send_with_ptt`; the with-data ID logged when it goes out).
+- **Tests:** `id_with_data_is_one_stream` (daemon, `server::run`, a counting backend); `transmit_burst`
+  (modem).
+- **Test results:** 1 stream in the ID's keying; sabotage (no burst): 2 streams, fails. The burst's
+  audio equals the two frames sent separately; seqs 0 and 1 logged with their modes; a failure after
+  the first frame still writes the first. GATE_RESULT_2
+
 ## 2026-11-03 — The OFDM receiver acquires its own carrier offset (work plan M3; Release 1 `fast` profile)
 
 - **Requirement/change:** REQ-FUN-06. The OFDM rungs (SL7–SL14) had no carrier-frequency correction:
