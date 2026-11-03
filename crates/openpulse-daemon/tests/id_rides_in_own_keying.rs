@@ -70,7 +70,11 @@ async fn the_station_id_rides_in_each_stations_own_keying() {
 
     let seen = |needle: &str| String::from_utf8_lossy(&log.0.lock().unwrap()).contains(needle);
     let mut ok = false;
-    for i in 0..40 {
+    // The receiver's ID rides only if, at decode time, ID + keying + ACK still fit in the sender's
+    // window, measured on the wall clock; under CPU load the twin's decode takes longer and the first
+    // fit comes later. Measured 2026-11-03: 10–34 s on a quiet machine (5 runs), over 40 s once beside
+    // the pre-push run's parallel test binaries. 90 s keeps the test about the ride, not the load.
+    for i in 0..90 {
         let cmd = serde_json::to_string(&ControlCommand::SendMessage {
             to: "RIDEB".into(),
             subject: "s".into(),
