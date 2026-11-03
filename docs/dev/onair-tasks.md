@@ -3870,7 +3870,7 @@ reported missing for that reason. The deadline's margin is about right.
 3. Check the mode changes in the receive recordings offline (A2 corroboration): no keying.
 4. Then reproduce A2 on that build, both directions, with task 19's stepped schedule.
 
-## Task 20 — reproduce A2 on one build: the ranked ladder scan, both directions, the stepped schedule (status: Parts A to C done; see Results)
+## Task 20 — reproduce A2 on one build: the ranked ladder scan, both directions, the stepped schedule (status: done — reviewed below)
 
 The new build is `f18c8a6` (the ranked scan `87ce9b6` with its review fixes). On top of task 19's build (`4fd5a13`):
 - **The ladder scan tries a short ranked list of onsets before its walk**
@@ -4022,3 +4022,79 @@ Commit on rpi51 `13029c11` (build `f18c8a6`, hashes as in Part A). Evidence: `do
 End state read-back: FT-991A EX065+1500; dial 144641564 RFPOWER 0.05 PTT 0; IC-9700 dial 144640000 RFPOWER 0.0117647 PTT 0; port B empty; nothing running.
 
 Task 20 Parts B and C done; waits for the cloud session's review.
+
+### Review of task 20 (cloud session, 2026-11-03)
+
+**A2 on one build (`f18c8a6`):**
+- **B → A (a2e):** all three clauses.
+  - Clause 1: SL2 → SL6.
+  - Clause 2: four demotions, each after three keyed NACKs. #1 came under the 0.035 step; the stepped
+    drive worked in this direction.
+  - Clause 3: 39 SL6 holds in a row.
+- **A → B (a2f):** clauses 1 and 3 (SL2 → SL6; 234 SL6 holds through every step).
+- **Clause 2 A → B is still shown only on the earlier build** (a2a, `cda9c8a`). The drive on
+  `A_TX_SINK_VOLUME` did not change what B received: its SL6 SNR median is 11.0–11.6 dB at every step,
+  0.035 included, as in a2d. A's level is set somewhere after the sink volume (likely the IC-9700's
+  audio input or ALC at its lowest RF power), so A's drive needs another handle.
+- **Corroboration in the receive audio:**
+
+  | Run | Recording | Sender log | Agree | Disagree | Not in the audio |
+  |---|---|---|---|---|---|
+  | a2e | `rx-a-a2e` | B's | 209 | 0 | 6 (the 0.035 step: nothing arrived, as the counts say) |
+  | a2f | `rx-b-a2f` | A's | 241 | 0 | 0 |
+
+  Command: `scripts/onair-a2-mode-check.py <rx recording> <recording start> <sender's daemon log>`.
+  The mode sequences show the climb in both runs, and a2e's four BPSK250 dips between QPSK runs.
+
+**The ranked scan, on air.**
+- SL3 was left after one decode in both directions: 0.83 s after the frame's end on rpi51, 1.47 s on
+  the Pi 4. In a2d it took 10 s and missed the deadline.
+- No late decodes in either run.
+- Decode time after the frame's end: median 0.50 s (rpi51) and 0.56 s (Pi 4), maximum 2.04 s.
+
+**Finding 1: the sender's ride-along ID costs an ACK, 5 times out of 6.**
+- **The pattern:** a2f's three `ACK not received`, and two of a2e's other three (B's IDs at
+  10:20:20 and 10:28:51), each fall on the frame just before the sender's `with-data` ID.
+- **Mechanism, from a2f at 10:58** (both logs):
+  - A ended data frame seq 37 at 10:58:08.63. It then keyed its ID, an 18-byte BPSK250 frame, as a
+    **separate transmission**, from about 10:58:08.75 to 10:58:09.86.
+  - B flushed the data frame at 10:58:08.97 on a carrier drop (the gap between the two keyings),
+    decoded it at 09.20, and keyed its ACK about 09.55–10.22, over A's ID.
+  - A's receive was closed until 10.06, so A heard none of the ACK and retransmitted.
+- **This is our own design's fault** (`4fd5a13`, the ride-along). The receiver acknowledges about 1 s
+  after the frame's end, and does not know the sender has more to send.
+- **Cost:** one retransmission per 10-minute ID, about 1 % of frames here; at SL1 a whole 66 s frame.
+  It is not a Release 1 blocker, but it is a keying bug.
+- **Fix proposal (keying, so the mandatory review):** send the ID **in the same keying** as the data
+  frame, one PTT hold with the audio back to back, so the receiver's burst ends after the ID and its
+  ACK follows it.
+  - The earlier failure ("an ID before the data lost the data frame") came from the ID going first;
+    after the data, the frame sits at the burst's offset 0.
+  - The alternative is that the receiver holds its ACK while the channel is busy. That reacts later,
+    and the ID could still cut the ACK window.
+- **A log artifact to fix with it:** `transmitted station ID … kind="with-data"` is logged about 17 s
+  late, after the next frame. Its times in the task 19 and 20 results are not when the ID went out.
+  The `transmitting 18 byte frame` line is.
+
+**Finding 2: the sign-off is still not shown (backlog).**
+- Both runs went on sending for the full 15-minute wait. A queue of 64 at about 7 s per send drains in
+  about 7.5 minutes, so something keeps feeding it past the window. UNCHECKED: whether
+  `twin-traffic.sh` stops queueing at the window's end.
+- **Next:**
+  - check the script;
+  - set `TRAFFIC_INTERVAL` to at least one send's duration (8 s at SL6), so no backlog forms;
+  - or add option (a) of task 19, which waits until the sender is idle.
+
+**Finding 3: the SNR estimate floors at 3.1 dB** on some SL6 decodes in a2f (the minimum at every
+step). It plays no part in the decisions here: `climb_on_snr` was not the path at SL6. Note only.
+
+**Next steps:**
+1. **Fix the OFDM rungs' frequency offset before M3** (the maintainer's decision, 2026-11-03;
+   `docs/dev/research/acquisition-comparison-codec2-ft8.md` §1). In progress.
+2. The ride-along ID in the data frame's keying (finding 1), with its review. Waits for the
+   maintainer's go.
+3. **A → B demotion on this build.** Lower what B receives, not A's sink:
+   - **B's receive gain** (FT-991A `RG` by CAT, or its ATT/IPO) in steps. This keys nothing new and
+     changes only B's receiver.
+   - Or **A's sink volume at 0.02, 0.01 and 0.005**, to find where A's level starts to fall.
+4. The backlog (finding 2) before the next long run.
