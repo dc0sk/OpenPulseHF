@@ -5,10 +5,14 @@
 //! MFSK16 does, and as codec2's OFDM modem does: coarse offsets on a grid, the pilot drift for the
 //! fine part, then one exact mix of the whole frame.
 
+use std::borrow::Cow;
+
+use num_complex::Complex32;
+
 use crate::channel::pilot_drift;
 use crate::demodulate::find_first_data_body;
 use crate::params::{OfdmParams, SAMPLE_RATE, SYM_LEN};
-use crate::shift::shift_hz;
+use crate::shift::{analytic, rotate_real};
 
 /// Coarse grid step. The timing search (a real-valued Schmidl–Cox, L = 128) gates on
 /// `M = P²/R² ≥ 0.5`, and `M` falls as `cos²(π·Δ/31.25 Hz)` times an in-band SNR factor; the pilot
@@ -24,30 +28,55 @@ const COARSE_STEP_HZ: f32 = 12.5;
 /// moved the centre to within a few Hz before an OFDM frame is tried, so ±50 Hz is around that.
 const COARSE_SPAN_HZ: f32 = 50.0;
 
+/// Pilot coherence at which a candidate is taken without trying the rest.
+const EARLY_ACCEPT_COHERENCE: f32 = 0.9;
+
 /// Data symbols the coarse score and the fine estimate use (the pilot drift reads at most 8).
 const SCORE_SYMS: usize = 9;
 
 /// The timing search's reach (`find_first_data_body`'s `SEARCH_CAP`) plus the preamble.
 const TIMING_REACH: usize = 8192 + 2 * SYM_LEN;
 
+/// What the search found.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Acquired {
+    /// Carrier offset, Hz, relative to the samples' own 1500 Hz centre.
+    pub hz: f32,
+    /// Pilot coherence across symbols of the candidate the offset came from, 0–1.
+    pub coherence: f32,
+}
+
 /// The carrier offset of the OFDM frame in `samples`, in Hz relative to the samples' own 1500 Hz
 /// centre, or `None` when no candidate finds a preamble with pilots.
-///
-/// Each grid offset mixes a short window from the burst's start, finds the timing there, and scores
-/// the pilots' coherence across symbols; a wrong offset puts data, not pilots, in the pilot bins. The
-/// best one's pilot drift is the fine part, and one more pass at the sum removes what is left.
-///
-/// `told` is the offset the caller already believes (the engine's centre minus 1500 Hz); the search
-/// runs around it and the result includes it. Only the window is ever mixed here, never the burst.
 pub fn acquire_offset_hz(samples: &[f32], p: &OfdmParams, told: f32) -> Option<f32> {
+    acquire(samples, p, told).map(|a| a.hz)
+}
+
+/// The search behind [`acquire_offset_hz`].
+///
+/// Candidates run outward from `told` (the offset the caller already believes) on a grid. Each mixes
+/// a short window from the burst's start, finds the timing there, and scores the pilots' coherence
+/// across symbols; a wrong offset puts data, not pilots, in the pilot bins. The first candidate at
+/// [`EARLY_ACCEPT_COHERENCE`] ends the search, otherwise the best is taken. Its pilot drift is the
+/// fine part, and one more pass at the sum removes what is left. Only the window is ever mixed, and
+/// its analytic signal is computed once, when the first candidate needs a rotation.
+pub fn acquire(samples: &[f32], p: &OfdmParams, told: f32) -> Option<Acquired> {
     let window = &samples[..samples.len().min(TIMING_REACH + SCORE_SYMS * SYM_LEN)];
     let fs = SAMPLE_RATE as f32;
+    let mut z: Option<Vec<Complex32>> = None;
+    let mut at = |hz: f32| -> Cow<'_, [f32]> {
+        if hz == 0.0 {
+            return Cow::Borrowed(window);
+        }
+        let z = z.get_or_insert_with(|| analytic(window));
+        Cow::Owned(rotate_real(z, -hz, fs))
+    };
     let steps = (COARSE_SPAN_HZ / COARSE_STEP_HZ).round() as i32;
-    // (coherence, offset); 0 first, then outward, so a tie keeps the smaller offset.
+    // (coherence, offset); `told` first, then outward, so a tie keeps the nearer offset.
     let mut best: Option<(f32, f32)> = None;
     for k in (0..=steps).flat_map(|k| if k == 0 { vec![0] } else { vec![k, -k] }) {
         let coarse = told + k as f32 * COARSE_STEP_HZ;
-        let w = shift_hz(window, -coarse, fs);
+        let w = at(coarse);
         let Some(start) = find_first_data_body(&w, p) else {
             continue;
         };
@@ -57,12 +86,18 @@ pub fn acquire_offset_hz(samples: &[f32], p: &OfdmParams, told: f32) -> Option<f
         if best.is_none_or(|(c, _)| coherence > c) {
             best = Some((coherence, coarse + fine));
         }
+        if coherence >= EARLY_ACCEPT_COHERENCE {
+            break;
+        }
     }
-    let (_, offset) = best?;
+    let (coherence, offset) = best?;
     // One more pass at the estimate: the fine estimate is closest to right near zero residual.
-    let w = shift_hz(window, -offset, fs);
+    let w = at(offset);
     let residual = find_first_data_body(&w, p)
         .and_then(|start| pilot_drift(&w, start, p))
         .map_or(0.0, |(hz, _)| hz);
-    Some(offset + residual)
+    Some(Acquired {
+        hz: offset + residual,
+        coherence,
+    })
 }

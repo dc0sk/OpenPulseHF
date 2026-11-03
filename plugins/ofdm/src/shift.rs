@@ -7,29 +7,52 @@ use rustfft::FftPlanner;
 /// `samples` translated by `hz`: the analytic signal (FFT, negative frequencies removed) times
 /// `e^{j·2π·hz·t}`, real part. Exact for any `hz`, with no image, unlike an FIR Hilbert pair.
 pub fn shift_hz(samples: &[f32], hz: f32, fs: f32) -> Vec<f32> {
-    let n = samples.len();
-    if n < 2 || hz == 0.0 {
+    if samples.len() < 2 || hz == 0.0 {
         return samples.to_vec();
     }
+    rotate_real(&analytic(samples), hz, fs)
+}
+
+/// The analytic signal of `samples`: DC once, positive frequencies doubled, negative ones removed.
+/// Computed at the next power of two (zero-padded, then cut back), which is several times faster
+/// than an arbitrary length and wraps less of the frame's edge around the buffer.
+pub fn analytic(samples: &[f32]) -> Vec<Complex32> {
+    let n = samples.len();
+    let m = n.next_power_of_two().max(2);
     let mut planner = FftPlanner::<f32>::new();
-    let mut buf: Vec<Complex32> = samples.iter().map(|&s| Complex32::new(s, 0.0)).collect();
-    planner.plan_fft_forward(n).process(&mut buf);
-    // Analytic signal: DC (and Nyquist, for even n) once, positive bins doubled, negative bins zero.
-    for b in buf.iter_mut().take(n.div_ceil(2)).skip(1) {
+    let mut buf: Vec<Complex32> = samples
+        .iter()
+        .map(|&s| Complex32::new(s, 0.0))
+        .chain(std::iter::repeat_n(Complex32::new(0.0, 0.0), m - n))
+        .collect();
+    planner.plan_fft_forward(m).process(&mut buf);
+    // DC and Nyquist once, positive bins doubled, negative bins zero (m is even).
+    for b in buf.iter_mut().take(m / 2).skip(1) {
         *b *= 2.0;
     }
-    for b in buf.iter_mut().skip(n / 2 + 1) {
+    for b in buf.iter_mut().skip(m / 2 + 1) {
         *b = Complex32::new(0.0, 0.0);
     }
-    planner.plan_fft_inverse(n).process(&mut buf);
+    planner.plan_fft_inverse(m).process(&mut buf);
+    let scale = 1.0 / m as f32;
+    buf.truncate(n);
+    for z in buf.iter_mut() {
+        *z *= scale;
+    }
+    buf
+}
+
+/// The real part of `analytic` turned by `e^{j·2π·hz·t}`: one candidate offset in O(n), so a search
+/// over offsets pays for the FFT pair once.
+pub fn rotate_real(analytic: &[Complex32], hz: f32, fs: f32) -> Vec<f32> {
     let w = 2.0 * std::f64::consts::PI * f64::from(hz) / f64::from(fs);
-    let scale = 1.0 / n as f32;
-    buf.iter()
+    analytic
+        .iter()
         .enumerate()
         .map(|(t, z)| {
             // f64 phase: an f32 product loses the phase over a 100 000-sample frame.
             let ph = (w * t as f64).rem_euclid(2.0 * std::f64::consts::PI);
-            (z * scale * Complex32::new(ph.cos() as f32, ph.sin() as f32)).re
+            (z * Complex32::new(ph.cos() as f32, ph.sin() as f32)).re
         })
         .collect()
 }

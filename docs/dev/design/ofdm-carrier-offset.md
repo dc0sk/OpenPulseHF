@@ -42,8 +42,11 @@ The OFDM plugin acquires its own offset in its receive entries, and opts out of 
 then the pilots for the fine part.
 1. **The told centre:** the search runs around `center_frequency` − 1500 Hz, whatever the engine's
    BPSK settles left, usually within a few Hz.
-2. **The coarse grid** (`acquire::acquire_offset_hz`): ±50 Hz around the told offset in 12.5 Hz
-   steps, 9 candidates, the told one first. For each candidate:
+2. **The coarse grid** (`acquire::acquire`): ±50 Hz around the told offset in 12.5 Hz steps,
+   9 candidates, the told one first and then outward. The first candidate whose pilot coherence reaches
+   0.9 ends the search (`EARLY_ACCEPT_COHERENCE`); otherwise the best is taken. The window's analytic
+   signal is computed once (zero-padded to a power of two), and each candidate is an O(n) rotation of
+   it. For each candidate:
    - mix a short window from the burst's start (the timing search's reach plus 9 symbols, about 11 000
      samples). Only the window is ever mixed during the search, never the burst;
    - find the timing **on the mixed window**: the real-valued Schmidl–Cox metric falls as
@@ -52,7 +55,8 @@ then the pilots for the fine part.
      pilots, in the pilot bins.
 3. **The fine part:** the best candidate's pilot drift (`channel::pilot_drift`), then one more pass at
    the sum.
-4. **One exact mix of the whole burst** (`shift::shift_hz`: an analytic signal by FFT, times
+4. **One exact mix of the whole burst**, unless the acquired offset is under 0.25 Hz (leakage under
+   −45 dB), (`shift::shift_hz`: an analytic signal by FFT, times
    e^{j2πft}), then the existing receiver. When no candidate finds a preamble with pilots, the burst is
    not mixed at all: there is nothing to decode, and a 26 s burst of another mode would otherwise cost
    a full-length FFT pair.
@@ -84,6 +88,68 @@ reads is therefore measured after the correction; an uncorrected offset would cu
     (the centre known) and the OFDM offset more than 50 Hz from it.
 - **`SCORE_SYMS` 9:** the pilot drift reads at most 8 symbol pairs.
 
+## The HARQ regression the pre-push run found, and its fix
+
+The first version wiped out HARQ combining on SL9 over a Watterson fade
+(`harq_combining_survives_the_production_capture_entry`):
+
+| Version | Rescued | Combining rate | Time |
+|---|---|---|---|
+| Acquisition off | 42 | 0.953 | 7.4 s |
+| First version | 0 | 0.660 | 120 s |
+
+**The mechanism**, found by deleting suspects one at a time:
+- **Not wrong coarse picks.** On 60 faded bursts with a true offset of 0, acquisition read within
+  ±1 Hz every time.
+- **It was the mix itself.** Skipping mixes under 1.5 Hz brought back 29 rescues.
+- **How the mix did it:**
+  - the test feeds exact digital zeros before and after the burst;
+  - a 0.5–1 Hz mix leaves the frame's Hilbert tails in them, 1–4 × 10⁻³ RMS (−35 to −45 dB);
+  - HARQ demodulates the whole burst from offset 0, and the Minn timing metric, normalised by its own
+    window's energy, locked to that residue;
+  - standalone attempts start inside the frame, so they were untouched.
+
+**Fixed at the timing search**, not at the mix (`demodulate.rs`, `TIMING_ENERGY_FLOOR` = 0.01): a lag
+whose window energy is more than 20 dB below the strongest in the search cannot be the preamble. That
+closes the class for any residue, quiet sound cards included. The function's own comment records
+that a quiet card exposed the trailing-edge case before.
+
+**Result:**
+
+| Version | Rescued | Standalone | Combining | Time |
+|---|---|---|---|---|
+| Acquisition off | 42 | 0.673 | 0.953 | 7.4 s |
+| After the fix | 41 | 0.680 | 0.953 | 27 s |
+
+The extra time is the full grid, which the faded frames that fail pay on every attempt (below).
+
+## The pilot-coherence inventory (what `EARLY_ACCEPT_COHERENCE` was set from)
+
+The setup:
+- 40 Watterson `moderate_f1` bursts per row, with carrier offsets 0, +7, −18 and +33 Hz in turn;
+- each rung's own frame and FEC;
+- `acquire` run on the raw burst;
+- "wrong" means more than 3 Hz from the truth.
+
+| Rung | SNR | Found | None | Wrong | Coherence p10 / p50 / p90 |
+|---|---|---|---|---|---|
+| SL7 | 5 dB | 8 | 32 | 2 | 0.18 / 0.88 / 0.90 |
+| SL7 | 10 dB | 30 | 10 | 8 | 0.16 / 0.90 / 0.95 |
+| SL7 | 20 dB | 40 | 0 | 0 | 0.90 / 0.94 / 0.98 |
+| SL9 | 5 dB | 22 | 18 | 5 | 0.16 / 0.84 / 0.91 |
+| SL9 | 10 dB | 38 | 2 | 5 | 0.23 / 0.92 / 0.95 |
+| SL9 | 20 dB | 40 | 0 | 0 | 0.91 / 0.95 / 0.99 |
+| SL14 | 5 dB | 21 | 19 | 4 | 0.24 / 0.86 / 0.94 |
+| SL14 | 10 dB | 38 | 2 | 4 | 0.29 / 0.90 / 0.97 |
+| SL14 | 20 dB | 40 | 0 | 0 | 0.91 / 0.94 / 0.99 |
+
+- Noise alone, 20 bursts per rung: **nothing found**.
+- Wrong picks come with low coherence, on deeply faded frames that no offset decodes. Without
+  acquisition, those 7, −18 and 33 Hz off would not have decoded at all.
+- At 20 dB the p10 sits at 0.90, so 0.9 early-accepts the typical clean frame after one timing search.
+- **Falsified by** a frame that early-accepts a wrong candidate at coherence ≥ 0.9: none in this
+  inventory, but it is one channel model.
+
 ## Measured after the fix (x86, release)
 
 - **Production path** (the probe): SL7, SL8, SL10, SL12 and SL14 at 0, +1.5, −2.5, +5, −7.5, +10, −15,
@@ -92,14 +158,16 @@ reads is therefore measured after the correction; an uncorrected offset would cu
   - 12 of 12 in 1 attempt each;
   - the SNR read is within 1 dB of on-carrier at every rung (SL7 6.0–7.2 against 6.6 dB, SL10
     10.5–11.4 against 10.2, SL14 9.0–9.5 against 9.1).
-- **Cost per `demodulate` call** (x86, release, after the review's fix):
-  - 6 ms on a burst with no OFDM frame, whatever its length;
-  - 8 ms on a 2.3 s burst holding a 64QAM frame;
-  - 21 ms on that frame inside a 26 s burst (one full-length shift, then the decode).
+- **Cost** (x86, release, a 2.3 s burst):
+  - the raw soft demodulation alone is 0.56 ms;
+  - the full search was 4.7 ms per call before the cuts: 9 timing searches, 9 rotations at 0.19 ms,
+    an analytic signal at 0.5 ms, and a 1.5 ms full-burst mix;
+  - with early accept, a clean frame near the told offset costs one timing search;
+  - a failing faded frame still pays the grid, which is why the HARQ test takes 27 s against 7.4 s.
 
   The review counts up to 40–50 attempts per burst in the worst case (2 candidates × attempt 0, the
   ranked onsets and the walk). At about 4× on a Pi 4 that is about 1.5 s, inside the 6 s ACK
-  deadline. UNCHECKED on the Pi.
+  deadline. UNCHECKED on the Pi; the next on-air task measures it there.
 
 ## Risks and how each is checked
 
@@ -136,6 +204,9 @@ reads is therefore measured after the correction; an uncorrected offset would cu
   - UNCHECKED by a run. Put to the maintainer, not fixed here.
 
 ## Tests
+
+- `harq_combining_survives_the_production_capture_entry` (existing): 41 rescued, the guard that found
+  the regression.
 
 - **`ofdm_carrier_offset_ota` (`openpulse-modem`):** the production path.
   - Passes as above.

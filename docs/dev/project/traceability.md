@@ -34,7 +34,11 @@ this ledger adds the design rationale and the actually-observed results per chan
 - **Test results:** production path 55 of 55 (SL7/8/10/12/14 × 11 offsets from −50 to +50 Hz) in 1
   attempt each; the pinned test 12 of 12, SNR within 1 dB of on-carrier. `ofdm-plugin` 36 + 3 + 1
   passed. Sabotage: acquisition off fails SL7 at −7.5 Hz on the production path and −40 Hz in the
-  plugin test; the mix removed fails "told" at −40 Hz. GATE_RESULT
+  plugin test; the mix removed fails "told" at −40 Hz. The pre-push run then found a HARQ regression
+  (`harq_combining_survives_the_production_capture_entry`: 42 rescues → 0). The cause was the mix's
+  residue in exact-zero lead-in, which the self-normalised timing metric locked to. It was fixed by a
+  relative energy floor in the timing search (`TIMING_ENERGY_FLOOR`), plus early accept and an
+  analytic-once search for cost: 41 rescues, standalone 0.680 against 0.673. GATE_RESULT
 
 ## 2026-11-03 — The ladder scan tries the burst's energy rise and preamble peaks before its walk (work plan M3, A2)
 

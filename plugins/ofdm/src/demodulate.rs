@@ -41,6 +41,13 @@ pub fn ofdm_demodulate_soft(samples: &[f32], mode: &str) -> Result<Vec<f32>, Mod
     demodulate_soft_with_params(samples, &p)
 }
 
+/// Window energy, relative to the strongest window in the search, below which a lag cannot be the
+/// preamble. The Minn metric is normalised by its own window's energy, so on near-silence it scores
+/// whatever residue is there: a carrier-offset mix leaves the frame's Hilbert tails (1–4 × 10⁻³ RMS,
+/// −35 to −45 dB) in exact-zero lead-in, and the timing locked to them (HARQ combining's 42 rescues
+/// fell to 0, 2026-11-03). A preamble is never 20 dB below its own frame.
+const TIMING_ENERGY_FLOOR: f32 = 0.01;
+
 /// Locate the first data-symbol body via Schmidl-Cox preamble acquisition.
 ///
 /// Returns the sample index of the FFT window for data symbol 0 (i.e. just past
@@ -88,8 +95,11 @@ pub(crate) fn find_first_data_body(samples: &[f32], p: &OfdmParams) -> Option<us
         r1_acc += samples[m] * samples[m];
         r2_acc += samples[m + L] * samples[m + L];
     }
-    let mut best_m = 0.0f32;
-    let mut best_d = 0usize;
+    // Metric and window energy at every lag; the peak is chosen afterwards among lags whose energy is
+    // within `TIMING_ENERGY_FLOOR` of the strongest, so a near-silent stretch cannot win on a
+    // self-normalised metric of its own residue (below).
+    let mut ms = Vec::with_capacity(max_d + 1);
+    let mut rs = Vec::with_capacity(max_d + 1);
     for d in 0..=max_d {
         let r_mean = 0.5 * (r1_acc + r2_acc);
         let m = if r_mean > 1e-9 {
@@ -97,14 +107,21 @@ pub(crate) fn find_first_data_body(samples: &[f32], p: &OfdmParams) -> Option<us
         } else {
             0.0
         };
-        if m > best_m {
-            best_m = m;
-            best_d = d;
-        }
+        ms.push(m);
+        rs.push(r_mean);
         if d < max_d {
             p_acc += -samples[d] * samples[d + L] + samples[d + L] * samples[d + 2 * L];
             r1_acc += -samples[d] * samples[d] + samples[d + L] * samples[d + L];
             r2_acc += -samples[d + L] * samples[d + L] + samples[d + 2 * L] * samples[d + 2 * L];
+        }
+    }
+    let r_max = rs.iter().copied().fold(0.0f32, f32::max);
+    let mut best_m = 0.0f32;
+    let mut best_d = 0usize;
+    for (d, (&m, &r)) in ms.iter().zip(&rs).enumerate() {
+        if r >= r_max * TIMING_ENERGY_FLOOR && m > best_m {
+            best_m = m;
+            best_d = d;
         }
     }
     // Require a clear correlation peak (M → 1 at perfect alignment).

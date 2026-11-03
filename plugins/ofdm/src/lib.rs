@@ -98,7 +98,9 @@ fn at_nominal_centre<'a>(
                 acquired_hz = hz,
                 "OFDM: carrier offset acquired"
             );
-            if hz.abs() < 0.01 {
+            // Below a quarter hertz the leakage between subcarriers is under −45 dB; the full-burst
+            // mix (1.5 ms on 2.3 s of audio) would buy nothing.
+            if hz.abs() < 0.25 {
                 Ok(Cow::Borrowed(samples))
             } else {
                 Ok(Cow::Owned(shift::shift_hz(
