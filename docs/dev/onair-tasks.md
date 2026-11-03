@@ -3648,7 +3648,7 @@ needs the maintainer's go and the mandatory review.
 Also worth considering: a longer ACK window (`ota_ack_timeout_ms`) for a pair with a Pi 4 receiver. It
 is configuration only, and costs throughput only when a frame is lost.
 
-## Task 19 — A2 again, with a stepped drive schedule: B → A first, then A → B (status: open)
+## Task 19 — A2 again, with a stepped drive schedule: B → A first, then A → B (status: Part A done; Parts B and C wait for the maintainer's go; see Results)
 
 The new build is `4fd5a13`. On top of task 18's build:
 - **No late ACK.** On real-time audio, a ladder decode has an ACK deadline: the frame end plus the
@@ -3713,3 +3713,12 @@ remote host, RSPdx port B empty.
 - **Timing:** the decode time after each frame's end, and the time from each `fec attempt OK` to the
   next `logged TX metadata` with `FSK4-ACK` (the keying allowance is fitted to task 18's 0.8–1.7 s).
 - **Per drive level:** the receiver's decodes, its failures, and its NACKs keyed.
+
+### Results — task 19 Part A (nothing transmitted)
+
+rpi51 at `f56cf2ea` (contains `4fd5a13`). `deploy` built on rpi51 and copied to station B; the hashes are identical on both stations:
+- `target/release/openpulse-server` `130c6139246266ef7b99b9cf498f77499018272ba831338bb27fb0d49e83a73b`
+- `target/release/openpulse` `9e927cee70f03c1889071a44c09444885e90ae04a772a3c99559359e2919265f`
+- `scripts/twin-traffic.sh` `c9e152f32d6b8d5548551b255865b9c45c198b96739672b02eab9dee56fdc373`
+
+Read-back: FT-991A EX065+1500; dial 144641564 RFPOWER 0.05 PTT 0; IC-9700 RFPOWER 0.0117647 PTT 0; no daemon, rigctld, arecord or capture running; port B empty (as set). Parts B (a2c) and C (a2d) each need the maintainer's go.
