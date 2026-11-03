@@ -1,7 +1,7 @@
 ---
 project: openpulsehf
 doc: docs/dev/design/ladder-scan-ranked-onsets.md
-status: accepted
+status: resolved
 last_updated: 2026-11-03
 ---
 
