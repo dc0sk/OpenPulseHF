@@ -15,6 +15,27 @@ this ledger adds the design rationale and the actually-observed results per chan
 
 ---
 
+## 2026-11-03 — The OFDM receiver acquires its own carrier offset (work plan M3; Release 1 `fast` profile)
+
+- **Requirement/change:** REQ-FUN-06. The OFDM rungs (SL7–SL14) had no carrier-frequency correction:
+  the receiver refused (hard) or ignored (soft) a moved centre. Measured on the daemon's receive path:
+  SL14 failed at 2.5 Hz, SL10 at 5 Hz, SL7 at 10 Hz (`docs/dev/research/acquisition-comparison-codec2-ft8.md` §1).
+- **Design decision:** `docs/dev/design/ofdm-carrier-offset.md`. The plugin acquires its own offset,
+  as codec2's DATAC modem and our MFSK16 do, and opts out of the engine's AFC, whose BPSK-built settle
+  read −11.5 Hz for a true +2.5 Hz on OFDM. The steps: mix to the told centre; a coarse grid of
+  ±50 Hz in 12.5 Hz steps, timing found after the mix, scored by pilot coherence; the pilot drift for
+  the fine part; one exact analytic-signal mix of the burst.
+- **Implementation:** `plugins/ofdm/src/acquire.rs` (`acquire_offset_hz`), `shift.rs` (`shift_hz`),
+  `channel.rs` (`pilot_drift`), `lib.rs` (`at_nominal_centre` on `demodulate`, `demodulate_soft`,
+  `estimate_snr_db`; `estimate_afc_hz` removed).
+- **Tests:** `ofdm_carrier_offset_ota` (`openpulse-modem`, production path); `carrier_offset_applied`
+  (`ofdm-plugin`: told, not told, raw-demod impairment check); `shift::tests`;
+  `acquisition_is_near_zero_on_carrier_and_the_engine_gets_no_estimate`.
+- **Test results:** production path 55 of 55 (SL7/8/10/12/14 × 11 offsets from −50 to +50 Hz) in 1
+  attempt each; the pinned test 12 of 12, SNR within 1 dB of on-carrier. `ofdm-plugin` 36 + 3 + 1
+  passed. Sabotage: acquisition off fails SL7 at −7.5 Hz on the production path and −40 Hz in the
+  plugin test; the mix removed fails "told" at −40 Hz. GATE_RESULT
+
 ## 2026-11-03 — The ladder scan tries the burst's energy rise and preamble peaks before its walk (work plan M3, A2)
 
 - **Requirement/change:** REQ-FUN-06. On air (task 19, run a2d) an SL3 burst opened 0.7 s before its

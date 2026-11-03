@@ -48,6 +48,8 @@ fixtures before anything changes; none is adopted because a reference does it.
 
 ## 1. The OFDM rungs have no frequency correction (measured)
 
+**Fixed 2026-11-03** (`docs/dev/design/ofdm-carrier-offset.md`): the OFDM plugin acquires its own offset over ±50 Hz. The text below is the finding as it stood.
+
 **What the code does.**
 - The OFDM plugin publishes a frequency estimate (`estimate_afc_hz` → `channel::estimate_cfo_hz`), so
   the engine's settle measures the offset.
