@@ -1070,8 +1070,6 @@ const DCD_SQUELCH_MARGIN: f32 = 1.25;
 /// the +8 dB figure is the maximum at an open threshold of 5.0, an upper bound for 4.5).
 const S_RING_WINDOWS: usize = 16;
 
-/// The scan grid `0, step, …, scan_end` (the last point clamped, as the onset walks clamp it), nearest
-/// `center` first — ties to the earlier onset — and at most `cap` of them.
 /// Onsets around where the burst's energy first rises to its frame's level, nearest first: the first
 /// `step`-sample window whose RMS reaches [`ENERGY_RISE_FRACTION`] of the burst's 80th-percentile window
 /// RMS and holds it for the next window, then one and two steps either side, within `[0, scan_end]`.
@@ -1105,9 +1103,14 @@ fn energy_rise_onsets(samples: &[f32], step: usize, scan_end: usize) -> Vec<usiz
 }
 
 /// The fraction of a burst's 80th-percentile window RMS that marks its frame's arrival
-/// (`energy_rise_onsets`). Half: a frame's windows sit near the 80th percentile, noise below a third.
+/// (`energy_rise_onsets`). Fitted to one burst (a2d's first SL3 frame): the opener's windows peak at
+/// 0.43 of the P80, the frame's at 0.68–0.75; 0.4–0.9 all find the frame's edge there, 0.3 the opener.
+/// A frame within ~6 dB of its opener (near a rung's cliff) is not separated: a miss costs only the
+/// ranked attempts, and the walk follows.
 const ENERGY_RISE_FRACTION: f32 = 0.5;
 
+/// The scan grid `0, step, …, scan_end` (the last point clamped, as the onset walks clamp it), nearest
+/// `center` first — ties to the earlier onset — and at most `cap` of them.
 fn onsets_nearest(step: usize, scan_end: usize, center: usize, cap: usize) -> Vec<usize> {
     let step = step.max(1);
     let mut grid: Vec<usize> = (0..=scan_end / step).map(|k| k * step).collect();
@@ -4099,7 +4102,7 @@ impl ModemEngine {
             // preamble template tries its best preamble-correlation peaks before the walk, which goes
             // on in the same order without them. On air (task 19, run a2d) an SL3 burst opened 0.7 s
             // before the frame, and the walk from onset 0 in 128-sample steps reached it at its 66th
-            // onset: 68 attempts, 2.7 s on x86, about 11 s on a Pi 4 — past the ACK deadline, so the
+            // onset: 68 attempts, 2.4–2.9 s on x86, about 11 s on a Pi 4 — past the ACK deadline, so the
             // frame was never answered and the ladder held at SL3 for 6.5 minutes.
             let mut ranked: Vec<(usize, usize, usize)> = Vec::new();
             for (ci, (_, mode, _)) in candidates.iter().enumerate() {
@@ -4119,6 +4122,8 @@ impl ModemEngine {
                         LADDER_RANKED_ONSETS,
                     )
                     .unwrap_or_default();
+                // Time order, not ρ order: the earliest frame first if a keying ever holds two (#1461).
+                onsets.sort_unstable();
                 for start in energy_rise_onsets(&samples.samples, step, scan_end) {
                     if !onsets.contains(&start) {
                         onsets.push(start);
@@ -9449,6 +9454,33 @@ mod ack_scan_tests {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn energy_rise_onsets_edges() {
+        let burst = |quiet: usize, loud: usize| {
+            let mut v = vec![0.01f32; quiet];
+            v.extend(std::iter::repeat_n(1.0f32, loud));
+            v
+        };
+        // The rise at window 3 of step 10: there, then one and two steps either side.
+        assert_eq!(
+            super::energy_rise_onsets(&burst(30, 100), 10, 120),
+            vec![30, 20, 40, 10, 50]
+        );
+        // A rise at window 0 keeps only the onsets inside the burst.
+        assert_eq!(
+            super::energy_rise_onsets(&burst(0, 100), 10, 90),
+            vec![0, 10, 20]
+        );
+        // A rise past the scan's end leaves only the earlier onsets that fall inside it.
+        assert_eq!(
+            super::energy_rise_onsets(&burst(80, 100), 10, 70),
+            vec![70, 60]
+        );
+        // Too short to rank, and a flat burst rises at its first window.
+        assert!(super::energy_rise_onsets(&[1.0; 15], 10, 10).is_empty());
+        assert_eq!(super::energy_rise_onsets(&[0.0; 100], 10, 90)[0], 0);
+    }
 
     #[test]
     fn onsets_nearest_orders_the_scan_grid_by_distance_and_caps_it() {

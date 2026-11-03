@@ -15,6 +15,25 @@ this ledger adds the design rationale and the actually-observed results per chan
 
 ---
 
+## 2026-11-03 — The ladder scan tries the burst's energy rise and preamble peaks before its walk (work plan M3, A2)
+
+- **Requirement/change:** REQ-FUN-06. On air (task 19, run a2d) an SL3 burst opened 0.7 s before its
+  frame; the ladder scan walked from onset 0 and needed 68 attempts (~11 s on the Pi 4), past the ACK
+  deadline, so the ladder held at SL3 for 6.5 minutes.
+- **Design decision:** `docs/dev/design/ladder-scan-ranked-onsets.md`. Each candidate first tries the
+  preamble's correlation peaks (BPSK250, K = 4, time order) and the first window reaching half the
+  burst's 80th-percentile window RMS, ±1 and ±2 steps; the walk follows without them. Reorders, cannot
+  lose a frame; extra attempts bounded. Review:
+  `docs/dev/reviews/review-ladder-scan-ranked-onsets-2026-11-03.md` (no blocker; all findings taken).
+- **Implementation:** `crates/openpulse-modem/src/engine.rs`: the scan block in
+  `ota_decode_and_ack_inner`, `energy_rise_onsets`, `ENERGY_RISE_FRACTION`, `LADDER_RANKED_ONSETS`.
+- **Tests:** `ladder_scan_ranked_onsets` (two cases: a quiet opener and one at 0.4 of the frame's RMS),
+  `energy_rise_onsets_edges` (unit).
+- **Test results:** both integration cases 2 attempts (budget 12), 2 passed; sabotage with the energy
+  rise removed: 66 attempts, fails; with `ENERGY_RISE_FRACTION` = 0.3: 107, the loud case fails. Unit:
+  1 passed. Replay A/B on eight on-air recordings: the same frames decode, total decode time lower on
+  every one (a2d's first SL3 frame 68 → 3 attempts). `openpulse-modem` release + instruments at `87ce9b6`: 638 passed, 0 failed (172 result lines); clippy and fmt clean on the fixes; the daemon suite and the rest in the pre-push hook.
+
 ## 2026-11-02 — No late ACK; a decode stops at its ACK deadline; the station ID rides in each station's own keying (work plan M3, A2)
 
 - **Requirement/change:** REQ-FUN-06, REQ-REG-10 and A2. In task 18, run a2a, the Pi 4 receiver ACKed

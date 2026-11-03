@@ -37,8 +37,9 @@ fn noise(n: usize, amp: f32, state: &mut u64) -> Vec<f32> {
         .collect()
 }
 
-#[test]
-fn an_sl3_frame_behind_noise_is_found_where_the_energy_rises() {
+/// Decodes an SL3 frame behind 0.7 s of noise of RMS `opener` (or `opener_of_frame` times the frame's
+/// RMS) and returns the decode attempts it took.
+fn attempts_behind_an_opener(opener: Option<f32>, opener_of_frame: f32) -> u64 {
     let bk = LoopbackBackend::new();
     let mut tx = engine(&bk);
     let mode = tx.ota_tx_mode().unwrap().to_owned();
@@ -47,10 +48,12 @@ fn an_sl3_frame_behind_noise_is_found_where_the_energy_rises() {
     tx.transmit_with_fec_mode(b"sl3 frame behind noise", &mode, fec, None)
         .unwrap();
     let frame = bk.drain_samples();
+    let frame_rms = (frame.iter().map(|x| x * x).sum::<f32>() / frame.len() as f32).sqrt();
+    let opener = opener.unwrap_or(opener_of_frame * frame_rms);
 
     let mut st = 0x9e37_79b9_7f4a_7c15_u64;
     let mut audio = noise(24_000, 0.002, &mut st); // a quiet band: the floor warms
-    audio.extend(noise(5_600, 0.03, &mut st)); // 0.7 s of noise above the squelch: opens the burst
+    audio.extend(noise(5_600, opener, &mut st)); // 0.7 s of noise above the squelch: opens the burst
     let floor = noise(frame.len(), 0.002, &mut st);
     audio.extend(frame.iter().zip(&floor).map(|(s, n)| s + n));
     audio.extend(noise(16_000, 0.002, &mut st));
@@ -73,12 +76,33 @@ fn an_sl3_frame_behind_noise_is_found_where_the_energy_rises() {
         }
     }
     let (payload, attempts, len) = result.expect("the frame flushed as a burst");
-    println!("burst {len} samples, {attempts} decode attempts");
+    println!(
+        "opener RMS {opener:.3} (frame {frame_rms:.3}): burst {len} samples, {attempts} attempts"
+    );
     assert_eq!(payload.as_deref(), Some(&b"sl3 frame behind noise"[..]));
+    attempts
+}
+
+#[test]
+fn an_sl3_frame_behind_noise_is_found_where_the_energy_rises() {
+    let attempts = attempts_behind_an_opener(Some(0.03), 0.0);
     assert!(
         attempts <= RANKED_BUDGET,
         "{attempts} decode attempts on a frame behind 0.7 s of noise: the scan walked to it from \
          onset 0 instead of trying where the burst's energy rises (budget {RANKED_BUDGET})"
+    );
+}
+
+/// The opener at a2d's level: its windows peaked at 0.43 of the burst's 80th-percentile window RMS
+/// (the review's measurement of `rx-b-a2d`). This pins `ENERGY_RISE_FRACTION` from below: a fraction
+/// that lets the opener's level count as the frame's puts the rise on the opener.
+#[test]
+fn an_sl3_frame_behind_a_loud_opener_is_found_where_the_energy_rises() {
+    let attempts = attempts_behind_an_opener(None, 0.4);
+    assert!(
+        attempts <= RANKED_BUDGET,
+        "{attempts} decode attempts on a frame behind an opener at 0.4 of its RMS: the energy rise \
+         was placed on the opener (ENERGY_RISE_FRACTION too low?) (budget {RANKED_BUDGET})"
     );
 }
 
