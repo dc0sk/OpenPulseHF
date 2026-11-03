@@ -3805,3 +3805,67 @@ Commit on rpi51 `bbe97add` (build `4fd5a13`, hashes as in Part A). Evidence: `do
 End state read-back: FT-991A EX065+1500; dial 144641564 RFPOWER 0.05 PTT 0; IC-9700 RFPOWER 0.0117647 PTT 0; port B empty; nothing running.
 
 Task 19 Parts B and C done; waits for the cloud session's review.
+
+**Reviewed (cloud session, 2026-11-03), task 19.**
+
+**A2 scoring, across task 18 Part D and task 19** (`release-1.0-criteria.md`, *A2 scoring*):
+
+| Clause | A → B (B leads) | B → A (A leads) |
+|---|---|---|
+| 1. A climb whose new mode then decodes | met: a2a and a2d (SL2 → SL6) | met: a2b and a2c (SL2 → SL6); a2c also re-climbed SL5 → SL6 25 s after the drive returned |
+| 2. A demotion after a logged decode failure | met: a2a, SL6 → SL5 after two failed frames | **met: a2c**, SL6 → SL5 at 05:15:03.1, on the third keyed NACK at drive 0.035. B adopted SL5 (`tx_level` SL5 ×4), and the SL5 frame decoded |
+| 3. Stability: clean decodes, no demotion | met: a2a (31 SL6 holds), a2d (54 SL6 holds; 3 `nack_hold`, none stepped) | met: a2b, a2c (64 SL6 holds after the re-climb) |
+
+Every transition is in both stations' logs: the receiver's decision and the sender's `tx_level`. **Two
+things stand between this and a scored A2:**
+- **Corroboration in a capture.** The RSPdx captures of A's transmissions are not analysed, and B's
+  transmissions exist only in the receive recordings. The cloud session can check the mode changes in
+  the receive recordings offline (baud; BPSK against QPSK by the squared and fourth-power carrier
+  lines), without keying.
+- **The build.** a2a's demotion was on an earlier build (`cda9c8a`). For the record, A2 should be
+  reproduced on the release candidate.
+
+**Finding 1: the ladder scan, not the deadline, is what stuck a2d at SL3.** The eight late decodes
+(`decoded=false`) were A's BPSK63 frames, decoded too slowly by the Pi 4.
+- **Replayed** `rx-b-a2d` (recording start 05:52:32.41) to 625 s. The first SL3 frame (end 300 s) decodes
+  offline, but needs **68 attempts, 2.7 s on x86, about 11 s on the Pi 4**. That is past its ACK deadline
+  (about 6.2 s after the frame).
+- **Why 68 attempts:** the burst opened about 0.7 s before A's frame, and the frame's onset is 8448
+  samples in. The ladder scan walks onsets from the burst's start in 128-sample steps, so it reaches the
+  frame at the 66th onset.
+- **The same thing happened in a2a** (8.8 s on the Pi 4, the late ACK). In task 18's b8, where the Pi 4
+  decoded SL3 in 2.8 s, the frame started at the burst's start.
+- **Before the deadline** this ended as a late ACK and a desync. **With it**, the frame is never
+  answered, so the ladder holds at SL3 until a frame happens to land early in its burst. At 0.035 one
+  did (5.0 s), and the ladder climbed to SL6 at the lowest drive.
+- **What would fix it:** the uncoded fallback already ranks onsets by the preamble's correlation (#1454
+  and `ranked_fallback_onsets`), and SL3–SL5 carry a PN-63 preamble. Ranking the ladder scan's onsets
+  the same way, trying the best few correlation peaks before the walk, would find such a frame in one or
+  two attempts. It changes the DSP path, so it needs a design note, the playbook and a review.
+
+**Finding 2: the sign-off at the end is still not shown, and it is the traffic backlog.**
+- `twin-traffic.sh` sends a message every 2 s whatever the daemon is doing, and each OTA send takes
+  several seconds. The control channel holds up to 64 queued messages, so the sender keeps sending for
+  many minutes after the window. In a2d the last transmissions were at 06:11:31–34, three minutes after
+  the window ended, when the runner's 180 s wait ran out.
+- The interval and ride-along IDs keep the stations within 10 minutes all along; what is missing is
+  the final ID after the last transmission.
+- **Options:**
+  - (a) the traffic script waits until the sender is idle before the next message, which needs a "send
+    done" signal from the daemon;
+  - (b) a control command that drops queued sends, used by the runner at the window's end; it changes
+    the protocol;
+  - (c) the runner waits until neither station has transmitted for 30 s, and then for the sign-off,
+    with a cap of about 15 minutes.
+
+  (c) needs no code in the daemon.
+
+**Finding 3: the 2 s keying allowance holds.** Decode to the ACK's first sample: rpi51 0.74–2.24 s,
+Pi 4 0.97–2.36 s. The maximum is a little over 2 s, but the 0.3 s slack covers it, and no ACK was
+reported missing for that reason. The deadline's margin is about right.
+
+**Next steps proposed to the maintainer:**
+1. Rank the ladder scan's onsets by the preamble (finding 1): DSP, so a design note, then a review.
+2. Runner option (c) for the sign-off (finding 2): keys nothing.
+3. Check the mode changes in the receive recordings offline (A2 corroboration): no keying.
+4. Then reproduce A2 on that build, both directions, with task 19's stepped schedule.
