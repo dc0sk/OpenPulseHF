@@ -45,10 +45,10 @@ fn modulate_with_params(payload: &[u8], p: &OfdmParams) -> Vec<f32> {
         bits.len().div_ceil(bits_per_sym)
     };
     // The last symbol's padding is whitened with the rest. Padded after the whitening, it put up to
-    // 49 of 52 subcarriers on one point: the impulse above, which set a 16QAM frame's peak 3.5 dB over
-    // its data and arrived broken on air (`docs/dev/design/ofdm-padding-whitening.md`). The receiver
-    // stops at the length prefix and never reads a padding bit.
-    bits.resize(n_syms * bits_per_sym, false);
+    // 51 of 52 subcarriers on one point: the impulse above, which set a 16QAM frame's peak a median
+    // 3.6 dB over its data and arrived broken on air (`docs/dev/design/ofdm-padding-whitening.md`).
+    // The receiver stops at the length prefix and never reads a padding bit.
+    bits.resize(n_syms * bits_per_sym.max(1), false);
     crate::scramble::scramble_bits(&mut bits);
 
     let mut planner = FftPlanner::<f32>::new();
@@ -276,7 +276,7 @@ mod tests {
             let p = params_for_mode(mode).unwrap();
             // Random data: a point's count is binomial, n·q ± σ with q = 2^-bits; the bound is 5σ over
             // the mean, and at least a quarter of the subcarriers, since on the dense grids the count is
-            // skewed and thousands of symbols are checked. A padded symbol put up to 49 of 52 on one point.
+            // skewed and thousands of symbols are checked. A padded symbol put up to 51 of 52 on one point.
             let (n, q) = (p.n_data as f32, 0.5f32.powi(p.bits_per_sc as i32));
             let bound = (n * q + 5.0 * (n * q * (1.0 - q)).sqrt()).max(n / 4.0);
             let mut worst = 0usize;

@@ -92,6 +92,15 @@ fn every_ofdm_rung_decodes_through_a_carrier_offset() {
             // above it the shifted burst reads the mix's own ceiling, ~38.5 dB at SL14 −40 Hz with
             // either padding, and the check measured that, not the ladder. The whitened padding
             // (`ofdm-padding-whitening.md`) raised SL14's on-carrier reading from 41.0 to 41.5 dB.
+            // Above the cap, a fixed floor keeps the check's sensitivity: the shifted reading is ~38 dB.
+            if let (Some(a), Some(b)) = (snr0, snr) {
+                if a > 30.0 {
+                    assert!(
+                        b >= 35.0,
+                        "{level:?} at {hz:+} Hz read SNR {b:.1} dB against {a:.1} on carrier"
+                    );
+                }
+            }
             if let (Some(a), Some(b)) = (snr0.map(|a| a.min(30.0)), snr) {
                 assert!(
                     b >= a - 3.0,
