@@ -15,6 +15,28 @@ this ledger adds the design rationale and the actually-observed results per chan
 
 ---
 
+## 2026-11-04 — The receive notch protects every rung the OTA receiver will try (work plan M3; Release 1 `fast` profile)
+
+- **Requirement/change:** REQ-FUN-06, REQ-QRM-01.
+  - On air (task 22, run f1b) B read SL8 at a median 5.0 dB; the recording, taken before the
+    front end, reads 12.8 dB.
+  - The daemon passes its base mode (BPSK250) to `accumulate_capture`, so the notch protected 500 Hz
+    and nulled the OFDM edge subcarriers at 500 and 2500 Hz.
+- **Design decision:** `docs/dev/design/notch-protects-the-ladder.md`.
+  - In an OTA session, protect the widest occupied band among the caller's mode and
+    `rx_candidates()`.
+  - Review: none — a bug fix at the seam with a sabotage-verified production-path test.
+- **Implementation:** `crates/openpulse-modem/src/engine.rs` (`apply_rx_notch`).
+- **Tests:** `crates/openpulse-modem/tests/notch_protects_the_ladder.rs`, through `accumulate_capture`
+  → `ota_decode_burst` with the stations' notch configuration.
+- **Test results:**
+  - SL7–SL10 read 15.6 / 20.5 / 21.2 / 20.3 dB with the notch on and off alike; before the fix,
+    4.9 / 5.9 / 11.4 / 9.6 dB with it on.
+  - Sabotage (the candidate loop disabled) fails it: SL7 4.9 dB against 15.6.
+  - `scripts/slow-tests.sh notch` (REQ-QRM-01): running at this commit; the result follows in the
+    next commit.
+
+
 ## 2026-11-04 — The OFDM last symbol's padding is whitened (work plan M3; Release 1 `fast` profile)
 
 - **Requirement/change:** REQ-FUN-06. In run f1 the OFDM rungs read a low SNR on decoded frames

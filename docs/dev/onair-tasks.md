@@ -4661,3 +4661,109 @@ Commit on rpi51 `14aa9057` (build `e5ba27f`, hashes as in Part A). Settings as f
 **Stop rules and ALC:** no keying stretch over 70 s (watcher). ALC IC-9700 max 0.675 (40 readings, while it keyed ACKs); FT-991A 0.0625 in all 301 readings.
 
 **End state:** cleanup clean on both stations. FT-991A dial 144641564, RFPOWER 0.05, RF 0.984314, AGC 2, SQL 0, PREAMP 20, PTT 0; IC-9700 dial 144640000, RFPOWER 0.0117647, AGC 2, SQL 0, PTT 0; nothing running; port B empty. Task 22 is complete (Parts A–C) and waits for the cloud session's review.
+
+### Review of task 22 (cloud session, 2026-11-04)
+
+**1. The low OFDM SNR on B is the receive notch, not the channel** (fixed:
+`docs/dev/design/notch-protects-the-ladder.md`).
+- **The daemon gives the notch its base mode (BPSK250).** So the notch protected 500 Hz around the
+  centre, and nulled the OFDM rungs' edge subcarriers at 500 and 2500 Hz.
+- **On the daemon's path at 0.02 RMS noise:** SL8 reads 20.5 dB with the notch off and 5.9 dB with it
+  on (SL7 15.6 → 4.9, SL9 21.2 → 11.4, SL10 20.3 → 9.6). On air B read SL8 5.0, SL7 1.5, SL9 8.5 dB.
+- **From the recording**, taken before the notch, the plugin's estimator reads SL8 12.8 dB and SL10
+  13.4–14.5 dB on the f1b frames.
+- **So SL10's failures and the SL8–SL10 cycling are likely the notch,** at least in part. The
+  padding fix (`3fe112e`) was real but smaller; it shows on the frames (16QAM's last symbol is no
+  longer broken).
+- **Fix:** while an OTA session is active, the notch protects the widest band among the rungs the
+  receiver will try. Sabotage-verified.
+
+**2. Run a2h: the demotion through attenuation is not shown; the drive steps were too coarse.**
+- B decoded SL6 at the same SNR (median 11.5 dB) with A 28 dB down, and nothing at 43 dB down. That
+  is a cliff between two steps.
+- B's DCD did not open on the weak signal (fragments at energy 0.021–0.024 against a squelch of
+  0.027). At 43 dB down the frame sat under B's hiss, and nothing was there to fail.
+- **B's flat SL6 SNR through 28 dB of attenuation is suspicious.** The notch also places notches on
+  SL6's skirts (1040–1200 and 1800–2070 Hz in a scratch run), and a notch-limited reading would be
+  flat. UNCHECKED: the harness reads no SNR for QPSK250-D on this path.
+- **Next:** repeat on the notch-fix build, with drive steps between 0.01 and 0.005 (0.008, 0.007,
+  0.006), each 90 s.
+
+**3. The lost ACKs next to the receiver's sign-off IDs: the ID follows the loss, it does not cause it.**
+- **f1b, 18:49:53 and 18:51:25:**
+  - B never decoded A's frame. At 18:51:27–30 B's receive loop was busy 1.4–2.5 s
+    (`capture read holds 2.5 s of audio`).
+  - B keyed nothing. Ten seconds after B's last ACK its sign-off timer fired (`auto_id_signoff_idle_secs`
+    10, after 3 s of quiet).
+  - A timed out and abandoned.
+- **But the ID is not harmless:** at 18:51:35.65–37.09 B's sign-off ID overlapped A's retransmission
+  at 18:51:36.36. The sender's ACK window (9 s) ends close to the receiver's 10 s sign-off idle.
+- **Operating change for the next runs, no code:** `auto_id_signoff_idle_secs = 30` on both stations.
+  That clears one whole retry cycle (frame + 9 s window + retransmission).
+- **A daemon change** (no sign-off while an OTA session is open) would change when the station keys:
+  it needs the mandatory review and the maintainer's go. Parked as a proposal.
+- **The busy receive loop on the Pi 4 is a cost in its own right.**
+  - At full `debug` logging B wrote 2597 `fec attempt FAILED` lines in 600 s.
+  - Whether the logging or the scan holds the loop is UNCHECKED.
+  - The next run uses `info,ofdm_plugin=debug` again, as the task said.
+
+**4. The step-down from a failed probe skips a rung (f2b SL7 → SL5, f1b SL10 → SL8).**
+- `NackStepDown` lowers the *confirmed* rung (`prev_mapped(rx_confirmed)`), also when the failures
+  were at a higher, unconfirmed probe. So a failed probe of SL7 costs SL6 as well, which was decoding.
+- **Proposal:** when `rx_recommended > rx_confirmed`, a step-down abandons the probe (recommended =
+  confirmed) and leaves the confirmed rung. It changes A2's demotion behaviour, so it waits for the
+  maintainer's go and a review. Parked.
+
+**5. Part A:**
+- B's silent gaps were the squelch (SQL above 0).
+- ATT does not work on 144 MHz.
+- The preamp does not change B's idle hiss.
+- AGC FAST is set on both rigs and stays.
+
+## Task 23 — the `fast` profile and the A→B demotion on the notch-fix build (status: open; waits for the build and the maintainer's go)
+
+**The new build is the branch head once the notch fix is committed** (`notch-protects-the-ladder.md`).
+On top of task 22's build (`e5ba27f`):
+- **The receive notch protects the OFDM band** during an OTA session. On f1b the notch cut the OFDM
+  edge subcarriers and B read SL8 at 5.0 dB; on the daemon's path the fix restores 20.5 dB at
+  0.02 RMS noise.
+- **Expect:**
+  - B's (and in f2, A's) OFDM SNR readings near the frames' real 13–15 dB;
+  - `climb_on_snr` on the OFDM rungs;
+  - SL10 decoding.
+
+**Settings for every run (both stations):**
+- AGC FAST and SQL 0, as in task 22. The FT-991A's PREAMP stays at 20.
+- `auto_id_signoff_idle_secs = 30` on both stations (task 22 review, item 3). Read it back from the
+  deployed configuration and record it.
+- `DAEMON_LOG_LEVEL=info,ofdm_plugin=debug`, not full `debug`. In task 22 full `debug` wrote 2597 lines
+  per run and B's receive loop held 1.4–2.5 s at a time; count the `capture read holds` lines.
+
+The station rules hold. Ask the maintainer before every run.
+
+### Part A — runs f1c and f2c: the `fast` profile, both directions (keys both rigs: one go per run)
+
+As task 22 Part C, on this build:
+- `OTA_PROFILE=fast`, `TRAFFIC_INTERVAL=8`, `TRAFFIC_DURATION=600`;
+- f1c: A sends; f2c: B sends.
+
+### Part B — run a2i: A sends, A's drive in finer steps (keys both rigs: one go)
+
+As task 22 Part B, without the preamp steps:
+- **The drive:** `A_TX_SINK_VOLUME` 0.15 → 0.01 → 0.008 → 0.007 → 0.006 → 0.005 → 0.15, each held 90 s.
+  In a2h, B decoded everything at 0.01 and nothing at 0.005.
+- **Read the RSPdx level in each step**, as in a2h.
+- **Go back up a step if B shows no flushed burst for 60 s** (the same stop rule).
+
+### Report, per run
+
+As task 22, plus:
+- the SNR B (or A) reads per OFDM rung, against task 22's;
+- the highest rung decoded;
+- the `capture read holds` lines;
+- every sign-off ID and the nearest `ACK not received`;
+- for a2i, per drive step:
+  - the RSPdx level;
+  - the decodes, the `fec attempt FAILED` bursts and the NACKs keyed;
+  - the rate decisions;
+  - the IC-9700's ALC.
