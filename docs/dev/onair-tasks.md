@@ -4355,7 +4355,8 @@ Commit on rpi51 `772429a0` (build `23278b6`, hashes as in Part A). Evidence: `do
 
 ## Task 22 — B's receive audio state; A→B demotion through real attenuation; then the `fast` profile (status: open; Part A keys nothing; Parts B and C wait for the build and the maintainer's go)
 
-The new build is `9745839`. On top of task 21's build (`23278b6`):
+The new build is `e5ba27f` (pull the branch head; the commits after it are docs). On top of task 21's
+build (`23278b6`):
 - **The DCD learns a raised noise floor through a receiver's AGC** (`docs/dev/design/dcd-raised-floor.md`).
   - In a2g, after B's audio went from silence between frames to steady hiss, B's DCD never saw the
     carrier drop again: no frame boundaries, no NACK, no demotion, and A abandoned 12 messages.
@@ -4363,8 +4364,20 @@ The new build is `9745839`. On top of task 21's build (`23278b6`):
     which the AGC holds the hiss 31 dB down), and frames separate again.
   - On the a2g recording: 12 of 14 bursts decode after the first cap.
   - Expect one cap (38 s) of deafness after a step up in the band, then normal operation.
+- **No late ACK from a capped burst** (`026a979`; review
+  `docs/dev/reviews/review-late-ack-capped-slab-2026-11-04.md`).
+  - A frame decoded from a capped burst is answered only if it ended inside A's ACK window.
+  - Expect, after a cap, the line `OTA: a capped slab's frame ended past the sender's ACK window; no
+    ACK keyed, the ladder holds`, and on A a retransmit instead of a frame marked delivered by an
+    old ACK. Count those lines per run.
+- **The OFDM last symbol's padding is whitened** (`3fe112e`, `e5ba27f`;
+  `docs/dev/design/ofdm-padding-whitening.md`).
+  - SL9 (16QAM) goes out a median 3.5 dB louder at the same peak (SL10 +0.4 dB, SL11 and SL14
+    +1.6 dB).
+  - B's OFDM SNR reading should rise to the frame's real ~15 dB: in f1 it read 6.8 dB on SL9.
+  - The waveform change is receive-compatible both ways, but both stations run this build anyway.
 
-Tests at this build: `scripts/gate.sh` at `43acba7`: 2767 tests passed, 0 failed (390 suites); clippy (three configurations), fmt, trace and doc lints ok; reachability failed on the two new constants being `pub`, made private in `9745839` (amended; reachability, both clippy configurations and `openpulse-dsp` then clean); the trailer lint fails only on `ab9235f` and `cd3bf5c` (2026-11-01, recorded on the M3 line)..
+Tests at this build: `scripts/gate.sh` at `a8434c0`: 2771 tests passed, 0 failed (391 suites); clippy (three configurations), fmt, trace, reachability, unsafe, ledger and review lints ok; the doc-frontmatter lint failed on the new design note's status (`implemented`, not an allowed value), set to `resolved` in the commit after (the lint then passes); the trailer lint fails only on `ab9235f` and `cd3bf5c` (2026-11-01, recorded on the M3 line). The held-out suites run separately (`scripts/slow-tests.sh`).
 
 The station rules hold:
 - ask the maintainer before every run;
@@ -4497,4 +4510,6 @@ As task 21, plus:
 - every `burst flushed` line's `squelch` against B's audio RMS between frames;
 - every capped burst (`burst=306048` or near it), and the first normal flush after it;
 - `channel still busy` lines;
-- the NACKs keyed at each attenuation or drive step.
+- the NACKs keyed at each attenuation or drive step;
+- the IC-9700's ALC reading at each drive step (Part B), against B's SNR at that step;
+- the `capped slab's frame ended past the sender's ACK window` lines.

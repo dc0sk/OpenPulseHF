@@ -1,7 +1,7 @@
 ---
 project: openpulsehf
 doc: docs/dev/design/ofdm-padding-whitening.md
-status: implemented
+status: resolved
 last_updated: 2026-11-04
 ---
 
