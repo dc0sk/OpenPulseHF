@@ -4099,7 +4099,7 @@ step). It plays no part in the decisions here: `climb_on_snr` was not the path a
    - Or **A's sink volume at 0.02, 0.01 and 0.005**, to find where A's level starts to fall.
 4. The backlog (finding 2) before the next long run.
 
-## Task 21 — A→B demotion on one build; the `fast` profile's first time on air; the Pi cost of the OFDM receive (status: Parts A to C done; Part D waits for the maintainer's go)
+## Task 21 — A→B demotion on one build; the `fast` profile's first time on air; the Pi cost of the OFDM receive (status: Parts A to C done and reviewed; Part D waits for the maintainer's go and a check of B's audio floor)
 
 The new build is `23278b6`. On top of task 20's build (`f18c8a6`):
 - **The sender's station ID shares its data frame's audio stream** (task 20, finding 1). The data frame
@@ -4249,3 +4249,78 @@ Commit on rpi51 `d70e6c6f` (build `23278b6`, hashes as in Part A). Evidence: `do
 **Backlog:** with an 8 s interval, A's 39 sends after 08:24:45 and the 15 min wait show A still transmitting every 20–40 s up to 08:32; I did not check what drives that rhythm.
 
 **End state:** cleanup clean on both stations. FT-991A dial 144641564, RFPOWER 0.05, RF 0.984314 (the starting value), PTT 0; IC-9700 dial 144640000, RFPOWER 0.0117647, PTT 0; nothing running; port B empty. Part D (f1, f2) needs the maintainer's go; before f1, the receive passbands are to be read back.
+
+### Review of task 21 Parts A to C (cloud session, 2026-11-04)
+
+**Part B — the OFDM receive cost on rpi51 (Pi 5).** A clean frame 18 Hz off decodes in 16–39 ms; a
+frame faded below its floor fails in 81–88 ms (15 attempts). That is about 1.5× x86 (10–25 and
+50–60 ms), far inside the 6 s ACK deadline. Station B's Pi 4 is still to be measured, from Part D's logs.
+
+**The one-stream ID works on air.**
+- At 08:19:05.49 A logged its data frame (seq 36, QPSK250-D) and its ID (seq 37, BPSK250) in the same
+  millisecond: one burst.
+- The `with-data` line followed at 08:19:05.59, now when the ID went out.
+- A's next frame (seq 38) followed 8 s later with no `ACK not received`: the ACK of the frame carrying
+  the ID arrived, 1 of 1. The second `with-data` (08:27:58) fell in the stall below.
+
+**Finding 1: a receiver's RF gain does not move the SNR, so it cannot make a demotion.**
+- B's audio fell 44 dB (rms 0.050 → 0.0004) across the steps, and the decisions' median SNR stayed at
+  11 dB.
+- The noise B hears is the receiver's own front-end noise. Turning the gain after the front end
+  scales the signal and that noise together.
+- The level has to fall **before** B's front end. Two ways:
+  - **an attenuator in B's antenna line**, which needs the maintainer;
+  - **A's drive far below the range tried so far.** At 0.035–0.15, A's sink volume did not change
+    B's SNR (tasks 19 and 20), likely the IC-9700's audio input or ALC at its lowest RF power. Try
+    0.01, 0.005 and 0.002.
+- A→B demotion is still shown only on `cda9c8a` (a2a).
+
+**Finding 2 (the important one): under a raised noise floor the receiver neither NACKs nor demotes,
+and the link stalls.**
+- **What happened:** after the gain was restored at 08:24:45, B's audio between frames stayed about
+  10× higher (rms 0.021, against below 0.002 before the steps at the same RF value). The RSPdx shows
+  the air was quiet, so the rise came from B's rig or its receive chain. The cause is not found; only
+  RF, SQL and AGC were read, and only after the run.
+- **What the daemon did, from B's log:**
+  - the DCD no longer saw the carrier drop between frames;
+  - the one exception was every ~40 s, when a long burst held by `channel still busy … rms=0.02`
+    decoded one frame (`samples=74904`);
+  - otherwise it flushed 400–2800-sample fragments, which are not ladder evidence (#1456, under its
+    4000-sample floor).
+  - **No NACK was keyed in the whole run**: "channel busy" suppresses NACKs by design, and fragments
+    are not evidence. So no rung moved.
+  - A, which never steps down on its own (the ladder is receiver-led), logged 25 `ACK not received`
+    and abandoned 12 messages.
+  - The decisions in that phase read 7 dB.
+- **This is the demotion case A2 asks for, with a real loss of SNR, and the protocol stalled instead
+  of stepping down.**
+- **On HF a raised noise floor (QRN, an S5 band) is the normal case**, so this is a Release 1 risk,
+  not only a test hole.
+- **Three parts to look at**, none tested yet:
+  1. **The DCD's squelch under a steady raised floor.** It rose from 1e-4 to 0.0147 (energy) while
+     the noise read rms 0.02. Whether the squelch, the floor tracker, or the carrier-drop rule fails
+     to separate frames from that noise is UNCHECKED. **Next: replay `rx-b-a2g` from 08:24:30 through
+     the daemon's receive path** (no keying) to reproduce it and find which.
+  2. **NACK suppression while the channel is "busy".** It exists so a station does not key over the
+     other's frame (task 15). Under steady noise it suppresses every NACK. Busy should mean another
+     station's signal (structure, e.g. the #1454 spectral test), not total power over a floor. That
+     changes when the receiver keys: the mandatory review.
+  3. **The sender after silent ACK windows.** It retries, then abandons, and never steps down. A
+     sender-side fallback (after K silent windows, offer the next rung down) touches the ladder's
+     lockstep: a design, then the mandatory review.
+
+**Finding 3: the backlog is gone.** With `TRAFFIC_INTERVAL=8`, A's sends before the stall kept pace.
+The sends every 20–40 s after 08:25 are the stall's retries and abandons.
+
+**Next steps proposed to the maintainer:**
+1. **Offline, no keying:** replay `rx-b-a2g` across the restore and find why the DCD stopped
+   separating frames under the raised floor (finding 2, part 1).
+2. **Design, with the mandatory review:** NACKs under a steady raised floor (part 2), and a
+   sender-side step-down after silent windows (part 3). Decide whether this gates M3. My view: it does
+   for HF, since a link that stalls at its top rung when the band gets noisy fails A2's clause 2 on
+   HF.
+3. **Before Part D:** read B's inter-frame audio level with nothing transmitting. If it is still about
+   0.02, find what changed in the FT-991A (AGC, NB, DNR, the RF/SQL knob), because Part D would
+   otherwise test the stall, not the `fast` profile.
+4. **A→B demotion:** an attenuator in B's antenna line (maintainer), or A's drive at 0.01, 0.005 and
+   0.002.
