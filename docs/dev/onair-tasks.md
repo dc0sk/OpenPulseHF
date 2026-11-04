@@ -4364,7 +4364,7 @@ No daemon or rigctld running on either station; both rigs in the state the last 
 
 B's floor is about 0.019: the same as after the restore in a2g (0.021), 10× the a2g gaps between 08:16 and 08:24 (below 0.002) and similar to the gaps at 08:12–08:14 (0.008–0.013). The air is quiet: an RSPdx capture (6 s, port A, LO 144.620 MHz) reads −79.2 dB in the 144.640 MHz band and −78.9 dB in the reference band, the same as the a2g gaps. So the noise is B's rig or receive chain, as the review said, and it is steady now, not a change that came with the gain steps. I did not find the cause: no menu item or level was changed by me beyond RF (restored to the same readback) and the power-on; the FT-991A's SQL reads 0 and AGC 6 now, but I have no reading of them from before a2g. Part D f2 would transmit under this floor; f1 climbed to SL10 and cycled under it, so it does not stop the ladder when frames decode.
 
-## Task 22 — B's receive audio state; A→B demotion through real attenuation; then the `fast` profile (status: Part A done; Parts B and C wait for the maintainer's go)
+## Task 22 — B's receive audio state; A→B demotion through real attenuation; then the `fast` profile (status: Parts A and B done; Part C waits for the maintainer's go)
 
 The new build is `e5ba27f` (pull the branch head; the commits after it are docs). On top of task 21's
 build (`23278b6`):
@@ -4566,3 +4566,39 @@ So with SQL above 0 the rig gates its audio to silence when no signal passes the
 **5. AGC FAST set on both rigs and read back** (FT-991A 6 → 2, IC-9700 3 → 2). With AGC FAST on B and SQL 0 the idle audio is rms 0.01952 (per second 0.0190–0.0201): the same hiss. Record the AGC setting in every run's report: FAST on both.
 
 **End state:** nothing running; FT-991A PKTUSB 2400, SQL 0, AGC 2, dial 144641564, RFPOWER 0.05, RF 0.984314, PTT 0; IC-9700 AGC 2, dial 144640000, RFPOWER 0.0117647, PTT 0; port B empty. Parts B (a2h) and C (f1, f2) each need the maintainer's go.
+
+### Results — task 22 Part B, run a2h (A sends, `robust`, 900 s, interval 8 s; B's preamp, then A's drive)
+
+Commit on rpi51 `22ca4365` (build `e5ba27f`, hashes as in Part A). AGC FAST on both rigs; FT-991A SQL 0 (hiss), PREAMP 20. Evidence: `docs/dev/test-reports/onair-twin-ota-20261104-190501-evidence/` (with `drive-schedule.txt`, `ptt-alc-watch.txt`, `NOTES.md`); receive audio `rx-audio-2026-11-01/rx-{a,b}-a2h-8k.wav.gz` (1950 s). RSPdx witness: 960 s from 18:05:02.1, `peak=0.0170 rms=0.0100 clip=0.00%`, analysed below only for the 144.640 MHz band level.
+
+**Before the run (nothing transmitted):**
+- **RF-gain writes do not change SQL:** with SQL set to 0.1, writing RF 0.5, 0.1 and 0.984314 through CAT left SQL at 0.1 each time. So the SQL 0 in a2g was not set by my RF writes; what set it is still unknown.
+- **PREAMP by CAT on 144.64 MHz:** writes 0, 10 and 20 read back as written. B's idle hiss (SQL 0, AGC FAST): rms 0.02142 at 0, 0.02124 at 10, 0.02092 at 20 dB: no change. ATT is rejected by the rig.
+
+**Schedule (UTC):** t0 18:05:02.12; first SL6 decode 18:09:53.16 (t0+291 s); PREAMP 0 at 18:13:02.53 (t0+480 s, read back 0), 20 at 18:14:35.79 (read back 20); drive 0.01 at 18:16:09.02, 0.005 at 18:17:25.11, 0.002 at 18:18:44.19, 0.15 at 18:20:00.17. The "no flushed burst for 60 s" short cut did not fire (B's last flush before 18:19:11 was 18:17:56, 75 s earlier, by chance after the step had ended: 0.005 held to 18:18:40, 0.002 to 18:20:00 with a flush at 18:19:11).
+
+**A's level on the air (RSPdx, 144.640 MHz band, loudest 0.5 s in each step; noise reference band −79.5 dB):**
+
+| step | A's drive | level | B's SL6 decodes in the step (OK lines) |
+|---|---|---|---|
+| before, 18:15–18:16 | 0.15 | −29.6 dB | (36 before the first step) |
+| PREAMP 0, 18:13:30–18:14:30 | 0.15 | −29.6 dB | 15 |
+| PREAMP 20 again | 0.15 | −29.6 dB | 14 |
+| drive 0.01 | 0.01 | **−57.7 dB** (28 dB down) | 12 |
+| drive 0.005 | 0.005 | −72.7 dB (43 dB down) | **0** |
+| drive 0.002 | 0.002 | −78.6 dB (the noise floor) | **0** |
+| 0.15 again | 0.15 | −29.6 dB | 29 |
+
+**Result in short:** (1) B's preamp off did not move the SL6 SNR (median 11.3 dB at preamp 0, 11.0 at 20). (2) A's drive lowers A's on-air level by 28 dB at 0.01 and 43 dB at 0.005 (RSPdx), but the SL6 SNR B reports stays at a median of 11.5 dB at 0.01, then at 0.005 B decodes nothing: a cliff, no slope. (3) At 0.005 and 0.002 B keyed no NACK and demoted nothing, A logged `ACK not received` 4 and 5 times in 18:18 and 18:19 and abandoned 5 messages (3 abandoned lines on A); the link recovered within 2 s of the drive going back to 0.15 (first decode at 18:20:02.8). So the A→B demotion through attenuation is **not shown**: the drive step goes from "decodes, SNR as before" straight to "nothing to decode", so the receiver never had a frame that fails.
+
+**Counts (B):** 108 rate decisions (3 `climb_on_snr`, 1 `climb_on_evidence`, 102 holds, 2 `nack_hold`), 106 frames decoded (`fec attempt OK`; 399 `fec attempt FAILED` lines, the ladder scan of undecodable bursts); the two NACKs are in the 18:17:05–18:17:38 stretch of the step before the drive went under (B's `ota_decode_burst` logged failures for FEC data lengths 11, 46, 67 bytes at 18:17:05, 18:17:28 and 18:17:38). A: 121 data transmissions, 11 `ACK not received`, 5 abandoned. Late decodes: 0. Capped-slab lines (`a capped slab's frame ended past the sender's ACK window`): 0.
+
+**Per minute around the low-drive steps (B ok / burst-failed / flushed bursts / B ACK-NACK keyed; A data TX / A `ACK not received`):** 18:16 9/0/9/10; 9/0; 18:17 4/5/9/5; 7/2; 18:18 0/0/0/0; 4/4; 18:19 0/1/1/0; 4/5; 18:20 8/1/9/9; 9/0; 18:21 9/0/9/9; 10/0. In the silent minutes B's DCD flushed only fragments (burst 2448–9392 samples, energy 0.021–0.024 against squelch 0.027): the raised-floor fix kept the DCD working under B's hiss but a 43 dB weaker signal under that floor is not seen.
+
+**SNR of the SL6 decisions per step (median, from the events paired with the OK lines in time order; after the two NACKs the pairing can be off by up to two frames):** before the steps 11.1 dB (min 3.2, max 14.8); preamp 0 11.3 (4.2–13.5); preamp 20 again 11.0 (3.6–11.9); drive 0.01 11.5 (10.9–16.2).
+
+**Station IDs:** A `with-data` 18:13:03.58 and 18:21:35.44, `sign-off` 18:23:31.87; B `with-ack` 18:13:06.72, `sign-off` 18:17:42.90 and 18:23:25.76. The runner: `sign-off IDs after the last transmission: IC-9700 no, FT-991A no`, though both stations logged a `sign-off` line (the last at 18:23:31.87 for A, 18:23:25.76 for B, in the wait).
+
+**ALC (watcher, 1 s polling while keyed; 343 IC-9700 readings, 51 FT-991A):** IC-9700 maximum 0.783; FT-991A as in f1 (0.0625 at its coarse scale). No keying over 70 s.
+
+**End state:** cleanup clean on both stations. FT-991A dial 144641564, RFPOWER 0.05, RF 0.984314, AGC 2 (FAST), SQL 0, PREAMP 20, PTT 0; IC-9700 dial 144640000, RFPOWER 0.0117647, AGC 2, SQL 0, PTT 0 (drive back at 0.15); nothing running; port B empty. Part C (f1, f2 on this build) needs the maintainer's go.
