@@ -38,13 +38,18 @@ fn modulate_with_params(payload: &[u8], p: &OfdmParams) -> Vec<f32> {
     // Whiten the bit stream so no payload (zero-runs, RS padding) can produce an all-identical-subcarrier
     // impulse-train symbol that the engine's CE-SSB peak-stretch would crush. See `crate::scramble`.
     let mut bits = bytes_to_bits(&data);
-    crate::scramble::scramble_bits(&mut bits);
     let bits_per_sym = p.bits_per_symbol();
     let n_syms = if bits_per_sym == 0 {
         1
     } else {
         bits.len().div_ceil(bits_per_sym)
     };
+    // The last symbol's padding is whitened with the rest. Padded after the whitening, it put up to
+    // 49 of 52 subcarriers on one point: the impulse above, which set a 16QAM frame's peak 3.5 dB over
+    // its data and arrived broken on air (`docs/dev/design/ofdm-padding-whitening.md`). The receiver
+    // stops at the length prefix and never reads a padding bit.
+    bits.resize(n_syms * bits_per_sym, false);
+    crate::scramble::scramble_bits(&mut bits);
 
     let mut planner = FftPlanner::<f32>::new();
     let ifft = planner.plan_fft_inverse(FFT_SIZE);
@@ -246,6 +251,75 @@ mod tests {
         // Clipping is applied inside ofdm_modulate; verify result is within target.
         let papr = measure_papr(&samples);
         assert!(papr <= TARGET_PAPR_DB + 0.5, "PAPR={papr:.1} dB > target");
+    }
+
+    /// Every data symbol's subcarriers spread over the constellation, the padded last one included: one
+    /// point on most of them is a time-domain impulse (`docs/dev/design/ofdm-padding-whitening.md`).
+    #[test]
+    fn no_symbol_puts_most_subcarriers_on_one_point() {
+        use crate::channel::{is_pilot, pilot_positions};
+        use crate::params::{params_for_mode, SYM_LEN};
+        use openpulse_dsp::constellation::demap_symbol;
+        use rustfft::num_complex::Complex32;
+        let mut planner = FftPlanner::<f32>::new();
+        let fft = planner.plan_fft_forward(FFT_SIZE);
+        let mut lcg: u64 = 0x5eed;
+        let modes = [
+            "OFDM16",
+            "OFDM52",
+            "OFDM52-8PSK",
+            "OFDM52-16QAM",
+            "OFDM52-32QAM",
+            "OFDM52-64QAM",
+        ];
+        for mode in modes {
+            let p = params_for_mode(mode).unwrap();
+            // Random data: a point's count is binomial, n·q ± σ with q = 2^-bits; the bound is 5σ over
+            // the mean, and at least a quarter of the subcarriers, since on the dense grids the count is
+            // skewed and thousands of symbols are checked. A padded symbol put up to 49 of 52 on one point.
+            let (n, q) = (p.n_data as f32, 0.5f32.powi(p.bits_per_sc as i32));
+            let bound = (n * q + 5.0 * (n * q * (1.0 - q)).sqrt()).max(n / 4.0);
+            let mut worst = 0usize;
+            // Every padding length from none to almost a whole symbol, twice over.
+            for len in 1..=3 * p.bytes_per_symbol() {
+                let payload: Vec<u8> = (0..len)
+                    .map(|_| {
+                        lcg = lcg
+                            .wrapping_mul(6364136223846793005)
+                            .wrapping_add(1442695040888963407);
+                        (lcg >> 56) as u8
+                    })
+                    .collect();
+                let frame = ofdm_modulate(&payload, mode);
+                let n_data = frame.len() / SYM_LEN - 1;
+                for k in 0..n_data {
+                    let body = SYM_LEN * (k + 1) + CP;
+                    let mut freq: Vec<Complex32> = frame[body..body + FFT_SIZE]
+                        .iter()
+                        .map(|&v| Complex32::new(v, 0.0))
+                        .collect();
+                    fft.process(&mut freq);
+                    let pilots = pilot_positions(&p);
+                    let gain =
+                        pilots.iter().map(|&sc| freq[sc].re).sum::<f32>() / pilots.len() as f32;
+                    let mut counts = [0usize; 64];
+                    for sc in (p.first_sc..=p.last_sc).filter(|&sc| !is_pilot(&p, sc)) {
+                        counts[demap_symbol(freq[sc] / gain, p.bits_per_sc) as usize] += 1;
+                    }
+                    let most = counts.iter().copied().max().unwrap_or(0);
+                    worst = worst.max(most);
+                    assert!(
+                        most as f32 <= bound,
+                        "{mode}, {len} B: data symbol {k} of {n_data} puts {most} of {} subcarriers on one point (bound {bound:.1})",
+                        p.n_data
+                    );
+                }
+            }
+            println!(
+                "{mode}: at most {worst} of {} subcarriers on one point (bound {bound:.1})",
+                p.n_data
+            );
+        }
     }
 
     #[test]
