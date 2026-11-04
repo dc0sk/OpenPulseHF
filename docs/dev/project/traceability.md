@@ -33,8 +33,11 @@ this ledger adds the design rationale and the actually-observed results per chan
   - SL7–SL10 read 15.6 / 20.5 / 21.2 / 20.3 dB with the notch on and off alike; before the fix,
     4.9 / 5.9 / 11.4 / 9.6 dB with it on.
   - Sabotage (the candidate loop disabled) fails it: SL7 4.9 dB against 15.6.
-  - `scripts/slow-tests.sh notch` (REQ-QRM-01): running at this commit; the result follows in the
-    next commit.
+  - `scripts/slow-tests.sh notch` (REQ-QRM-01) at `79fa331`: 2 passed, 1 failed (523 s).
+    - The failure is the known red row #1457: the negative control of
+      `the_notch_rescues_a_decode_that_fails_without_it` decodes without the notch at 0.3.
+    - Same as before the change. That suite runs the one-shot receive with no OTA session, which the
+      change does not touch.
 
 
 ## 2026-11-04 — The OFDM last symbol's padding is whitened (work plan M3; Release 1 `fast` profile)
