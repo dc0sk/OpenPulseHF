@@ -20,11 +20,14 @@ this ledger adds the design rationale and the actually-observed results per chan
 - **Requirement/change:** REQ-FUN-06. In run f1 the OFDM rungs read a low SNR on decoded frames
   (SL9 median 6.8 dB). From `rx-b-f1`, 93 frames through the plugin's own equaliser: the last data
   symbol of a 16QAM frame arrives broken (pilot gain 0.29, EVM-SNR −5.2 dB), and without it the
-  frames pool to 15.5 dB. The modulator padded the last symbol after the whitening, so 48 of its 52
-  subcarriers carried one point, an impulse that set the frame's peak 3.5 dB over its data.
+  frames pool to 15.5 dB. The modulator padded the last symbol after the whitening, so 40 of its 52
+  subcarriers carried one point, an impulse that set the frame's peak a median 3.6 dB over its data.
 - **Design decision:** `docs/dev/design/ofdm-padding-whitening.md`. Pad to whole symbols before the
   whitening. The receiver stops at the length prefix, so old and new builds interoperate. The SNR
-  estimator is not changed. Review: in progress at this commit; recorded with its result.
+  estimator is not changed. Review (after the implementation, a plugin waveform change the receiver
+  never reads): `docs/dev/reviews/review-ofdm-padding-whitening-2026-11-04.md`. It confirms the
+  mechanism and interop in both directions (652 frames, both orders, hard and soft), and corrects the
+  first numbers, which were made with a 2-byte prefix.
 - **Implementation:** `plugins/ofdm/src/modulate.rs` (`modulate_with_params`).
 - **Tests:**
   - `no_symbol_puts_most_subcarriers_on_one_point` (`ofdm-plugin`): every mode, every padding length.
@@ -40,7 +43,10 @@ this ledger adds the design rationale and the actually-observed results per chan
     `ofdm_carrier_offset_ota` 1, `ofdm_simulation` 1, `ofdm_snr_clears_the_climb_ceiling` 1,
     `ofdm_scfdma_bakeoff` 1.
   - Clippy and fmt are clean.
-  - Frame power at the same peak: 16QAM +3.45 dB, 32QAM +1.3 dB, 64QAM +1.1 dB.
+  - Frame power at the same peak, 40 seeds (the review): 16QAM median +3.5 dB (+1.6 to +5.4),
+    32QAM +0.4 dB, 64QAM +1.6 dB.
+  - After the review, `ofdm_carrier_offset_ota` also asserts a fixed 35 dB floor above the 30 dB
+    cap (the shifted readings are 37.7–39.7 dB), so the check keeps its sensitivity there.
 
 ## 2026-11-04 — No ACK for a frame that ended past its window in a capped slab (work plan M3, A2)
 

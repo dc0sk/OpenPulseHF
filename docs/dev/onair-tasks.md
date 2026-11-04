@@ -4471,11 +4471,11 @@ from the length prefix and the frame's duration.
 | SL10 32QAM | 15 | 15.9 dB | 0.69 / 12.4 dB | 15.9 dB |
 
 - **The cause is in the modulator: the last symbol's padding is not whitened.**
-  - On 16QAM, 48 of its 52 subcarriers carry one point, an impulse.
-  - The impulse sets the frame's peak 3.5 dB over the data, so the frame goes out 3.5 dB quiet
-    (32QAM 1.6 dB, 64QAM 1.1 dB).
+  - On 16QAM, 40 of its 52 subcarriers carry one point, an impulse.
+  - The impulse sets the frame's peak a median 3.6 dB over the data, so the frame goes out a median
+    3.5 dB quiet (32QAM 0.4 dB, 64QAM 1.6 dB).
   - On air the symbol arrives broken, and the pooled estimate drops from 15.5 dB to 6.8 dB.
-- **Fix:** `docs/dev/design/ofdm-padding-whitening.md`, under review.
+- **Fix:** `docs/dev/design/ofdm-padding-whitening.md`, reviewed. Task 22 Part C (f1, f2) runs it.
   - The receiver never reads the padding, so old and new builds interoperate.
 
 **What is left, an inference (UNCHECKED):**
@@ -4486,8 +4486,11 @@ from the length prefix and the frame's duration.
   or the transmitter's own noise.
 - That would also explain why neither A's drive (tasks 19 and 20) nor B's RF gain (task 21) moved
   B's SNR. And it would explain an SL10 cap: 32QAM needs about 16 dB.
-- **Part B tests it:** if B's SNR does not fall with A's drive until the drive is far down, the noise
-  is proportional. Part B's recording is enough to read that; no extra item.
+- The review rules out phase noise: a 15 dB floor needs about −15 dBc of integrated phase noise, and
+  a rig is about 40 dB better. **The likelier actor is A's ALC**, which regulates through every frame
+  (median reading 0.617), and the PA's IMD at that point.
+- **Part B tests it:** if B's SNR rises once A's drive is low enough for the ALC meter to read zero,
+  it was the ALC or the PA. Record the ALC reading at each drive step.
 
 ### Report, per run (Parts B and C)
 As task 21, plus:

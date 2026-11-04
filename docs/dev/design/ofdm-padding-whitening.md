@@ -1,7 +1,7 @@
 ---
 project: openpulsehf
 doc: docs/dev/design/ofdm-padding-whitening.md
-status: proposed
+status: implemented
 last_updated: 2026-11-04
 ---
 
@@ -38,31 +38,49 @@ Work plan M3; Release 1 `fast` profile (SL7–SL14). Found in the analysis of ta
    impulse.
 2. The last symbol's subcarriers beyond the stream get `sym_bits = 0` (`bit_idx < bits.len()`),
    **after** the whitening. They are not whitened.
-3. So for a 520-byte frame, 48 of the last symbol's 52 data subcarriers on 16QAM and ~49 on 32QAM carry
-   the same point: the impulse the whitener exists to prevent.
-4. **The modulator, measured:**
+3. So for a 520-byte frame (526 bytes with the 6-byte prefix), 40 of the last symbol's 52 data
+   subcarriers on 16QAM and 42 on 32QAM carry the same point: the impulse the whitener exists to
+   prevent.
+4. **The modulator, measured** (`ofdm_modulate`, 520-byte random payloads, 40 seeds; the review's
+   numbers, which correct a first table made with a 2-byte prefix):
 
-   | mode | padded SCs | frame peak over the rest of the frame |
-   |---|---|---|
-   | 8PSK | 12 | +0.0 dB |
-   | 16QAM | 48 | +3.5 dB |
-   | 32QAM | 49 | +1.6 dB |
-   | 64QAM | 32 | +1.1 dB |
+   | mode | padded SCs | last symbol's peak over the others: min / median / max | power gained by the fix |
+   |---|---|---|---|
+   | 8PSK | 1–2 | — | — |
+   | 16QAM | 40 | +1.7 / +3.6 / +5.6 dB | +1.6 / +3.5 / +5.4 dB |
+   | 32QAM | 42 | median +0.9 dB | median +0.4 dB |
+   | 64QAM | 27 | median +1.9 dB | median +1.6 dB |
 
-   - The higher-order modes scale the frame to a 0.9 peak, so the whole 16QAM frame goes out 3.5 dB
-     below what its data symbols need.
-   - QPSK (OFDM52) is clipped to the PAPR target, so its impulse is clipped away.
-5. **On air**, the impulse is a transient that the transmitter's ALC and the receiver's AGC answer
-   inside the symbol. Which one does it is UNCHECKED. The symbol arrives broken.
+   - The higher-order modes scale the frame to a 0.9 peak, so the whole 16QAM frame goes out a median
+     3.5 dB below what its data symbols need.
+   - QPSK (OFDM52) is clipped to the PAPR target at the transmitter, and that clip already costs the
+     last symbol: at the modulator's output, pilot gain 0.89 and EVM-SNR 17 dB (60 dB with the fix);
+     the on-air SL7 last-symbol gain of 0.88 is that clip. SL7's low reading on *every* symbol
+     (about 7 dB at a 12 dB pilot SNR) is a separate matter, CE-SSB on SL7, not touched here.
+5. **On air**, the impulse is a transient that a gain control answers inside the symbol, and the
+   symbol arrives broken.
+   - **The review's model reproduces it:** a gain loop with a 1–3 ms attack, a 100–300 ms release and
+     a 2.5× over-reaction (in dB) gives last-symbol pilot gain ×0.33 (on air 0.29), EVM −5.1 to
+     −6.3 dB (on air −5.2) and a pooled SNR of 6.9–8.1 dB (on air 6.8). With the fix, under the
+     same model, the symbol is clean.
+   - A hard clip or an instant AGC does not reproduce it.
+   - The IC-9700 is in ALC through the run (median 0.617), so its ALC is the likelier actor than B's
+     AGC. Which one does it is UNCHECKED on air.
+   - B's software AGC is off (`config-b.toml`), and the recording is taken before the AGC seam.
 
 **What it costs:**
 - `climb_on_snr` reads a 4–7 dB SL9;
 - SL9 transmits 3.5 dB under its peak budget, SL10 1.6 dB, SL13 1.1 dB.
 
-The decode survives for 64-byte traffic, because the broken symbol carries only 16 real bits.
-**For a frame whose last symbol is mostly data, those bits are lost.** That is UNCHECKED on air.
+The decode survives for 64-byte traffic: the broken symbol carries 48 data bits on 16QAM, inside
+the FEC's margin. **For a frame whose last symbol is mostly data, more is lost.** That is UNCHECKED
+on air.
 
-## Decision — proposed: whiten the padding
+## Decision — implemented: whiten the padding
+
+Review: `docs/dev/reviews/review-ofdm-padding-whitening-2026-11-04.md`. It ran after the
+implementation: this is a plugin waveform change that the receiver never reads, not a wire-format
+change in the interop sense (`protocol-wire-spec.md` scopes plugin framing out of the byte layout).
 
 Pad the bit stream to whole symbols **before** the whitening, so every padded subcarrier carries
 keystream bits:
@@ -77,10 +95,14 @@ keystream bits:
 
 ## Tests
 
-- **A modulator property test** (`ofdm-plugin`): for every OFDM mode and a range of payload lengths
-  (one byte to a full symbol of padding), no data symbol's peak exceeds the others' by more than a
-  bound.
-  - Sabotage: whitening after the padding, as now, fails it.
+- **A modulator property test**, `no_symbol_puts_most_subcarriers_on_one_point` (`ofdm-plugin`).
+  - For every OFDM mode and every payload length up to three symbols, no data symbol puts more of
+    its subcarriers on one point than 5σ over the binomial mean (at least a quarter of them).
+  - **Why not a peak bound, as first proposed:** the old order's excess is payload-dependent
+    (+1.7 to +5.6 dB), so a 2–3 dB bound would let the bug through for some payloads. And the new
+    order's last symbol can legitimately sit +0.6 dB over the rest.
+  - **Sabotage:** the old order fails it on every mode (14/16, 49/52, 50/52, 50/52, 51/52, 51/52).
+    The new order's worst counts are 9–10/16 and 6–24/52.
 - **The existing loopback and soft-LLR tests** must pass unchanged (the receiver ignores padding).
 
 ## Consumer
@@ -98,7 +120,10 @@ keystream bits:
 
 ## Twins
 
-- **SC-FDMA and the other non-`hpx_hf` multicarrier plugins:** they may pad the same way.
-  UNCHECKED; not Release 1.
+- **SC-FDMA** (`plugins/scfdma/src/modulate.rs`): pads with zeros and has no whitener at all.
+  - A zero run through its DFT precoding is a single-subcarrier tone, not an impulse.
+  - Not on `hpx_hf`; not Release 1.
+  - Found with `grep -rln scramble plugins/*/src` (only `bpsk` and `ofdm`) and
+    `grep -rn "bit_idx < bits.len()" plugins` (only `ofdm` and `scfdma`).
 - **The PSK/FSK plugins:** single carrier; a run of identical symbols is a tone, not an impulse.
   Not affected.
