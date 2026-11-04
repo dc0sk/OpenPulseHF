@@ -4364,7 +4364,7 @@ No daemon or rigctld running on either station; both rigs in the state the last 
 
 B's floor is about 0.019: the same as after the restore in a2g (0.021), 10× the a2g gaps between 08:16 and 08:24 (below 0.002) and similar to the gaps at 08:12–08:14 (0.008–0.013). The air is quiet: an RSPdx capture (6 s, port A, LO 144.620 MHz) reads −79.2 dB in the 144.640 MHz band and −78.9 dB in the reference band, the same as the a2g gaps. So the noise is B's rig or receive chain, as the review said, and it is steady now, not a change that came with the gain steps. I did not find the cause: no menu item or level was changed by me beyond RF (restored to the same readback) and the power-on; the FT-991A's SQL reads 0 and AGC 6 now, but I have no reading of them from before a2g. Part D f2 would transmit under this floor; f1 climbed to SL10 and cycled under it, so it does not stop the ladder when frames decode.
 
-## Task 22 — B's receive audio state; A→B demotion through real attenuation; then the `fast` profile (status: open; Part A keys nothing; Parts B and C wait for the build and the maintainer's go)
+## Task 22 — B's receive audio state; A→B demotion through real attenuation; then the `fast` profile (status: Part A done; Parts B and C wait for the maintainer's go)
 
 The new build is `e5ba27f` (pull the branch head; the commits after it are docs). On top of task 21's
 build (`23278b6`):
@@ -4524,3 +4524,45 @@ As task 21, plus:
 - the NACKs keyed at each attenuation or drive step;
 - the IC-9700's ALC reading at each drive step (Part B), against B's SNR at that step;
 - the `capped slab's frame ended past the sender's ACK window` lines.
+
+### Results — task 22 Part A (nothing transmitted), 2026-11-04
+
+**Build:** rpi51 at `8f69fd3c` (contains `e5ba27f`); `deploy` built on rpi51 and copied to station B; hashes identical on both stations:
+- `target/release/openpulse-server` `3587d64bf23800a731d2aeb56a7e91abf4e9ea8dd5840e4953d97e4d2adf6b6f`
+- `target/release/openpulse` `c777374e820cbe8f5638fffee65956f55476ff82384c3aa66a2fb17be3a5ff6e`
+- `scripts/twin-traffic.sh` `c9e152f32d6b8d5548551b255865b9c45c198b96739672b02eab9dee56fdc373`
+
+**1. B's idle receive audio** (20 s `arecord -D pulse`, 48 kHz, no daemon or rigctld running, FT-991A PKTUSB 2400, RF 0.984314, SQL 0, AGC 6 AUTO): rms 0.01906 (per second 0.0179–0.0195): **hiss**. IC-9700 in the same state: 0.00467.
+
+**2. Read-back by CAT (Hamlib levels and functions; the rigs idle):**
+
+| | FT-991A (B) | IC-9700 (A) |
+|---|---|---|
+| mode, passband | PKTUSB 2400 | PKTUSB 0 (default) |
+| AGC (before → now) | 6 (AUTO) → **2 (FAST)** | 3 (SLOW) → **2 (FAST)** |
+| RF gain | 0.984314 | 1 |
+| SQL | 0 | 0 |
+| NB / NR level | off / 0.0667 (NR function off) | off / 0.0314 |
+| ANF, manual notch (MN) | off, off (NOTCHF level reads 1500 Hz) | off, off |
+| PREAMP | **20 dB** | 0 |
+| ATT | command rejected by the rig on 144.64 MHz | 0 |
+| IF shift | 0 | not read |
+| other | TONE function reads 1 (a CTCSS setting; no effect in USB) | |
+
+I did not look up manual menu numbers: no FT-991A manual is on rpi51 and I will not quote numbers from memory (task 22 asked for them quoted; this stays open for the maintainer or a session with the manual).
+
+**3. The setting that gives silence and the one that gives hiss: the squelch.** FT-991A, 20 s each, SQL set by CAT and read back:
+
+| SQL | rms (per second min / max) | |
+|---|---|---|
+| 0.1 | 0.00004 / 0.00004 | digital silence |
+| 0.3 | 0.00004 / 0.00004 | digital silence |
+| 0 | 0.01951 / (0.01864–0.02051) | hiss |
+
+So with SQL above 0 the rig gates its audio to silence when no signal passes the squelch, and with SQL 0 the noise floor goes through. Before a2g I had no SQL reading, and after it SQL read 0; I do not know what it read between 08:16 and 08:24 when the gaps were silent, or what turned it to 0. I did not test whether the RF-gain writes through rigctld change SQL (the FT-991A's RF/SQL knob can be assigned to either); that would be the next check, and it keys nothing.
+
+**4. State left for Parts B and C: hiss (SQL 0), as the task asks.** 
+
+**5. AGC FAST set on both rigs and read back** (FT-991A 6 → 2, IC-9700 3 → 2). With AGC FAST on B and SQL 0 the idle audio is rms 0.01952 (per second 0.0190–0.0201): the same hiss. Record the AGC setting in every run's report: FAST on both.
+
+**End state:** nothing running; FT-991A PKTUSB 2400, SQL 0, AGC 2, dial 144641564, RFPOWER 0.05, RF 0.984314, PTT 0; IC-9700 AGC 2, dial 144640000, RFPOWER 0.0117647, PTT 0; port B empty. Parts B (a2h) and C (f1, f2) each need the maintainer's go.
