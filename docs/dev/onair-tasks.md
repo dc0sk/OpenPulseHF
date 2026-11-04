@@ -4099,7 +4099,7 @@ step). It plays no part in the decisions here: `climb_on_snr` was not the path a
    - Or **A's sink volume at 0.02, 0.01 and 0.005**, to find where A's level starts to fall.
 4. The backlog (finding 2) before the next long run.
 
-## Task 21 — A→B demotion on one build; the `fast` profile's first time on air; the Pi cost of the OFDM receive (status: Parts A to C done and reviewed; Part D run f1 done; f2 waits for the maintainer's go and a check of B's audio floor)
+## Task 21 — A→B demotion on one build; the `fast` profile's first time on air; the Pi cost of the OFDM receive (status: Parts A to C done and reviewed; Part D run f1 done; B's idle audio floor read (still raised); f2 waits for the maintainer's go)
 
 The new build is `23278b6`. On top of task 20's build (`f18c8a6`):
 - **The sender's station ID shares its data frame's audio stream** (task 20, finding 1). The data frame
@@ -4352,6 +4352,17 @@ Commit on rpi51 `772429a0` (build `23278b6`, hashes as in Part A). Evidence: `do
 **Stop rules and ALC:** no keying stretch over 70 s on either rig (watcher, 1 s polling). ALC while keyed (rigctld `l ALC`, 178 readings on the IC-9700, 54 on the FT-991A): IC-9700 min 0.033, median 0.617, max 0.858; per minute the maximum was 0.63 until 10:00, 0.858 at 10:00:35 (and 0.85 at 10:00:39, the only two readings above 0.8), 0.44–0.76 after. B's first OFDM acquisition line is at 10:00:31, so those two readings are in A's first OFDM transmissions (SL7–SL8). FT-991A ALC 0.0625 in every reading (its meter scale is coarse). I did not stop the run: I have no calibrated ALC limit for the IC-9700, only these numbers, and the drive was at the profile's value. This needs the cloud session's reading.
 
 **End state:** cleanup clean on both stations. FT-991A dial 144641564, RFPOWER 0.05, RF 0.984314, PTT 0 (powered on); IC-9700 dial 144640000, RFPOWER 0.0117647, PTT 0; nothing running; port B empty. Run f2 (B sends) needs the maintainer's go.
+
+### Results — task 21, B's idle audio floor (nothing transmitted; the review's step 3), 2026-11-04 16:52 UTC
+
+No daemon or rigctld running on either station; both rigs in the state the last cleanup left them (FT-991A PKTUSB 2400, RF 0.984314, SQL 0, AGC 6, AF 0.12549 after the power-on; IC-9700 PKTUSB, SQL 0, AF 0.0039). `arecord -D pulse`, 48 kHz, 20 s, each station:
+
+| station | rms | per-second min / max | PSD 300–1000 / 1000–1500 / 1500–3000 Hz |
+|---|---|---|---|
+| FT-991A (B) | 0.01906 | 0.01790 / 0.01954 | −67.1 / −66.4 / −71.3 dB |
+| IC-9700 (A) | 0.00467 | 0.00373 / 0.00516 | −81.4 / −79.2 / −81.6 dB |
+
+B's floor is about 0.019: the same as after the restore in a2g (0.021), 10× the a2g gaps between 08:16 and 08:24 (below 0.002) and similar to the gaps at 08:12–08:14 (0.008–0.013). The air is quiet: an RSPdx capture (6 s, port A, LO 144.620 MHz) reads −79.2 dB in the 144.640 MHz band and −78.9 dB in the reference band, the same as the a2g gaps. So the noise is B's rig or receive chain, as the review said, and it is steady now, not a change that came with the gain steps. I did not find the cause: no menu item or level was changed by me beyond RF (restored to the same readback) and the power-on; the FT-991A's SQL reads 0 and AGC 6 now, but I have no reading of them from before a2g. Part D f2 would transmit under this floor; f1 climbed to SL10 and cycled under it, so it does not stop the ladder when frames decode.
 
 ## Task 22 — B's receive audio state; A→B demotion through real attenuation; then the `fast` profile (status: open; Part A keys nothing; Parts B and C wait for the build and the maintainer's go)
 
