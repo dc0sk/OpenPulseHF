@@ -4548,7 +4548,9 @@ impl ModemEngine {
             tracing::debug!("OTA: cap-flushed burst did not decode; not ladder evidence (#1255)");
             return Ok((None, None, last_err));
         }
-        self.last_flush_capped = false;
+        // Consumed here, so a later hand-built burst cannot read a stale `true`; the decoded case
+        // needs it below, for the capped slab's ACK deadline.
+        let capped_slab = std::mem::take(&mut self.last_flush_capped);
 
         // #1452: nor is a failed burst shorter than every candidate's RECOGNITION WINDOW (its
         // acquisition window plus one symbol) — no candidate frame's sync and first symbol fit in it.
@@ -4643,6 +4645,43 @@ impl ModemEngine {
                 "OTA: the decode finished past the sender's ACK window; no ACK keyed, the ladder holds"
             );
             return Ok((decoded.map(|(p, _, m)| (p, m)), None, last_err));
+        }
+        // A CAPPED slab (#1255) ends where the length cap fell, not where its frame did: the deadline
+        // above was set from the slab's end, and a frame decoded early in it ended up to the cap's
+        // length before that. The ACK carries no sequence number, so one keyed for it can land in the
+        // sender's window for a later frame and mark that one delivered (review 2026-11-04, of the
+        // a2g cap flushes). Shift the deadline back by the slab's tail after the frame, bounded from
+        // above by its slice start plus the candidate's longest coded frame (offset 0 and HARQ record
+        // the whole slab as the span): a frame that may still be answered is answered.
+        if capped_slab {
+            let frame_end =
+                decoded
+                    .as_ref()
+                    .zip(decoded_span)
+                    .and_then(|((_, level, mode), (start, end))| {
+                        let (_, _, fec) = candidates
+                            .iter()
+                            .find(|(l, m, _)| l == level && m == mode)?;
+                        let (_, _, raw_max) =
+                            self.burst_onset_scan_bounds(mode, samples.samples.len(), onset_bound);
+                        let (max_frame, _) = frame_plan(raw_max, *fec);
+                        Some(end.min(start + max_frame))
+                    });
+            if let (Some(end), Some(deadline)) = (frame_end, self.decode_deadline) {
+                let tail = Duration::from_secs_f64(
+                    samples.samples.len().saturating_sub(end) as f64
+                        / f64::from(AudioConfig::default().sample_rate),
+                );
+                if Instant::now() + tail >= deadline {
+                    self.last_ota_decode_late = true;
+                    info!(
+                        tail_ms = tail.as_millis() as u64,
+                        "OTA: a capped slab's frame ended past the sender's ACK window; no ACK keyed, \
+                         the ladder holds"
+                    );
+                    return Ok((decoded.map(|(p, _, m)| (p, m)), None, last_err));
+                }
+            }
         }
         let ota = self
             .ota

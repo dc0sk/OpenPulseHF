@@ -4398,12 +4398,27 @@ about 0.02, 300–2700 Hz) after. Something in the FT-991A changed. With nothing
 - **Why:** turning B's RF gain changed B's audio by 44 dB and its SNR by nothing (task 21). The noise
   B hears is its own front end's, and it scales with the signal. The level has to fall before B's
   front end.
-- **The maintainer chooses one:**
-  - **an attenuator in B's antenna line**, stepped: for example 0, 10, 20, 30 dB and back to 0, each
-    step held 60–90 s;
-  - **or A's drive far below the range tried before:** `A_TX_SINK_VOLUME` 0.15 → 0.01 → 0.005 →
-    0.002 → 0.15, each step held 60–90 s. At 0.035–0.15 A's level into the IC-9700 did not change B's
-    SNR (tasks 19, 20), likely its ALC at minimum RF power.
+- **The method (2026-11-04): station B keeps its antenna; every change is remote (by CAT).** Nobody
+  has physical access to either station.
+  - **Never touch an antenna socket:** station B keys an FSK4 ACK after every frame.
+- **Before the run (nothing transmits), find what can be switched on station B at 144 MHz, by CAT:**
+  - **the attenuator (ATT).** On the FT-991A it may work on HF/50 MHz only, UNCHECKED. Set it and read
+    it back on 144.64 MHz.
+  - **the preamp (AMP, or IPO).** Turned off, it lowers the SNR: on 2 m the receiver's own noise
+    figure sets the floor, and the preamp sets the noise figure. That differs from RF gain, which
+    scales signal and noise together.
+
+  Record what each read-back says, and whether the hiss level changes when each is switched.
+- **Steps during the run, in this order of preference:**
+  1. **ATT, if it works on 2 m:** off → on → off, each held 90 s.
+  2. **Otherwise the preamp:** on → off → on, each held 90 s.
+  3. **Then, or if neither moves B's SNR, A's drive:** `A_TX_SINK_VOLUME` 0.15 → 0.01 → 0.005 →
+     0.002 → 0.15, each held 60–90 s. At 0.035–0.15, A's level into the IC-9700 did not change B's
+     SNR (tasks 19 and 20), likely its ALC at minimum RF power.
+
+  Each step holds at least until B has decoded or failed three frames. Read back after every change.
+  If a step shows B no flushed burst at all for 60 s, go back up one step, and for the drive halve the
+  distance (e.g. 0.002 → 0.003).
 - **Settings:** task 21 Part C's (`robust`, `TRAFFIC_FROM=A`, `TRAFFIC_SIZE=64`,
   `TRAFFIC_INTERVAL=8`, `TRAFFIC_DURATION=900`). The first step only after SL6 has held 60 s, and at
   t0 + 480 s at the earliest. Record the UTC time of each change.
