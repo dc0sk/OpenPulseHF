@@ -39,8 +39,13 @@ fn noise(n: usize, amp: f32, st: &mut u64) -> Vec<f32> {
         .collect()
 }
 
-/// A capped slab: quiet, then a frame, then 40 s of a carrier that never drops (the band stepped up).
-fn capped_slab() -> (ModemEngine, openpulse_modem::pipeline::AudioSamples) {
+/// A capped slab: quiet, a frame, then a carrier that never drops (the band stepped up). Returns the
+/// engine, the slab, and the frame's true tail: the slab after the frame's last sample.
+fn capped_slab() -> (
+    ModemEngine,
+    openpulse_modem::pipeline::AudioSamples,
+    Duration,
+) {
     let bk = LoopbackBackend::new();
     let mut tx = engine(&bk);
     let mode = tx.ota_tx_mode().unwrap().to_owned();
@@ -52,7 +57,7 @@ fn capped_slab() -> (ModemEngine, openpulse_modem::pipeline::AudioSamples) {
     let mut audio = noise(24_000, 0.0005, &mut st);
     let floor = noise(frame.len(), 0.0005, &mut st);
     audio.extend(frame.iter().zip(&floor).map(|(s, n)| s + n));
-    audio.extend(noise(40 * 8000, 0.02, &mut st));
+    audio.extend(noise(60 * 8000, 0.02, &mut st));
 
     let rx_bk = LoopbackBackend::new();
     let mut rx = engine(&rx_bk);
@@ -62,49 +67,75 @@ fn capped_slab() -> (ModemEngine, openpulse_modem::pipeline::AudioSamples) {
             .unwrap()
         {
             if b.samples.len() > 200_000 {
-                return (rx, b);
+                // The slab opens `lead` samples before the frame's first read.
+                let lead = rx.last_flush_lead();
+                let tail = b.samples.len().saturating_sub(lead + frame.len());
+                return (rx, b, Duration::from_secs_f64(tail as f64 / 8000.0));
             }
         }
     }
     panic!("no capped slab: the carrier did not hold to the length cap");
 }
 
-#[test]
-fn an_early_frame_in_a_capped_slab_is_not_answered_past_its_window() {
-    // The sender's window, from the slab's end, as the daemon sets it: about 6 s.
-    let (mut rx, slab) = capped_slab();
-    rx.set_ota_ack_deadline(Some(Instant::now() + Duration::from_secs(6)));
+/// Decodes a fresh capped slab with the sender's window ending `window(true tail)` from now; returns
+/// (decoded, ACK keyed). Asserts the decode itself finished inside the window, so a slow decode (the
+/// ordinary late path) cannot pass for this rule.
+fn decode(window: impl Fn(Duration) -> Option<Duration>) -> (bool, bool, Duration) {
+    let (mut rx, slab, tail) = capped_slab();
+    let deadline = window(tail).map(|w| Instant::now() + w);
+    rx.set_ota_ack_deadline(deadline);
     let r = rx.ota_decode_burst(&slab, "DC0SK", None).unwrap();
-    assert_eq!(
-        r.payload.as_deref(),
-        Some(&b"early in a capped slab"[..]),
-        "precondition: the frame decodes"
-    );
-    assert!(
-        r.ack.is_none(),
-        "an ACK was keyed for a frame that ended ~35 s before its capped slab's end: it would land in \
-         the sender's window for a later frame (task 21, run a2g)"
-    );
-    assert!(rx.last_ota_decode_late());
+    if let Some(d) = deadline {
+        assert!(
+            Instant::now() < d,
+            "the decode itself ran past the window: this case tests nothing"
+        );
+    }
+    (
+        r.payload.as_deref() == Some(&b"early in a capped slab"[..]),
+        r.ack.is_some(),
+        tail,
+    )
 }
 
 #[test]
-fn an_early_frame_in_a_capped_slab_is_answered_when_its_window_is_still_open() {
-    // A window longer than the slab's tail: the frame can still be answered, so it is.
-    let (mut rx, slab) = capped_slab();
-    rx.set_ota_ack_deadline(Some(Instant::now() + Duration::from_secs(60)));
-    let r = rx.ota_decode_burst(&slab, "DC0SK", None).unwrap();
-    assert!(r.payload.is_some(), "precondition: the frame decodes");
+fn a_frame_early_in_a_capped_slab_is_not_answered_past_its_window() {
+    // The sender's window from the slab's end, as the daemon sets it on real-time audio: about 6 s.
+    let (decoded, acked, tail) = decode(|_| Some(Duration::from_secs(6)));
+    assert!(decoded, "precondition: the frame decodes");
     assert!(
-        r.ack.is_some(),
-        "a frame whose window is still open was not answered"
+        !acked,
+        "an ACK was keyed for a frame that ended {tail:?} before its capped slab's end: it would land \
+         in the sender's window for a later frame (task 21, run a2g)"
+    );
+}
+
+#[test]
+fn the_frames_end_is_its_airtime_not_its_slice_reserve() {
+    // A window 2 s shorter than the frame's true tail: past it, so no ACK. The first bound (the slice
+    // reserve, 9.4 s at SL6 against 4.2 s of airtime) read the tail 5.2 s short and answered.
+    let (decoded, acked, tail) = decode(|tail| Some(tail.saturating_sub(Duration::from_secs(2))));
+    assert!(decoded, "precondition: the frame decodes");
+    assert!(
+        !acked,
+        "a frame whose true tail ({tail:?}) is 2 s past the window was answered: the frame's end was \
+         taken later than it is"
+    );
+}
+
+#[test]
+fn a_frame_still_inside_its_window_is_answered() {
+    // A window 2 s longer than the frame's true tail: inside it, so it is answered.
+    let (decoded, acked, tail) = decode(|tail| Some(tail + Duration::from_secs(2)));
+    assert!(decoded, "precondition: the frame decodes");
+    assert!(
+        acked,
+        "a frame whose true tail ({tail:?}) fits the window was not answered"
     );
     // No deadline at all (audio faster than real time, the twin): unchanged, answered.
-    let (mut rx, slab) = capped_slab();
-    rx.set_ota_ack_deadline(None);
-    let r = rx.ota_decode_burst(&slab, "DC0SK", None).unwrap();
+    let (_, acked, _) = decode(|_| None);
     assert!(
-        r.ack.is_some(),
+        acked,
         "with no deadline set, the frame must be answered as before"
     );
 }

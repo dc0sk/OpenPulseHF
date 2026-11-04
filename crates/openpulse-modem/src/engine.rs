@@ -4650,28 +4650,25 @@ impl ModemEngine {
         // above was set from the slab's end, and a frame decoded early in it ended up to the cap's
         // length before that. The ACK carries no sequence number, so one keyed for it can land in the
         // sender's window for a later frame and mark that one delivered (review 2026-11-04, of the
-        // a2g cap flushes). Shift the deadline back by the slab's tail after the frame, bounded from
-        // above by its slice start plus the candidate's longest coded frame (offset 0 and HARQ record
-        // the whole slab as the span): a frame that may still be answered is answered.
+        // a2g cap flushes). Shift the deadline back by the slab's tail after the frame. The frame's
+        // end is its slice start plus the decoded payload's own coded airtime (`tx_airtime_seconds`
+        // runs the real codecs), not the slice reserve, which is 2-2.5x longer and left late ACKs
+        // through by 5 s at SL6 and 83 s at SL2 (review of 8177910). Offset 0 and HARQ record the
+        // whole slab as the span, so their start is 0: strict, the safe direction.
         if capped_slab {
-            let frame_end =
-                decoded
-                    .as_ref()
-                    .zip(decoded_span)
-                    .and_then(|((_, level, mode), (start, end))| {
-                        let (_, _, fec) = candidates
-                            .iter()
-                            .find(|(l, m, _)| l == level && m == mode)?;
-                        let (_, _, raw_max) =
-                            self.burst_onset_scan_bounds(mode, samples.samples.len(), onset_bound);
-                        let (max_frame, _) = frame_plan(raw_max, *fec);
-                        Some(end.min(start + max_frame))
-                    });
+            let fs = f64::from(AudioConfig::default().sample_rate);
+            let frame_end = decoded.as_ref().zip(decoded_span).and_then(
+                |((payload, level, mode), (start, _))| {
+                    let (_, _, fec) = candidates
+                        .iter()
+                        .find(|(l, m, _)| l == level && m == mode)?;
+                    let secs = self.tx_airtime_seconds(payload, mode, *fec).ok()?;
+                    Some(start + (secs * fs) as usize)
+                },
+            );
             if let (Some(end), Some(deadline)) = (frame_end, self.decode_deadline) {
-                let tail = Duration::from_secs_f64(
-                    samples.samples.len().saturating_sub(end) as f64
-                        / f64::from(AudioConfig::default().sample_rate),
-                );
+                let tail =
+                    Duration::from_secs_f64(samples.samples.len().saturating_sub(end) as f64 / fs);
                 if Instant::now() + tail >= deadline {
                     self.last_ota_decode_late = true;
                     info!(
