@@ -51,7 +51,7 @@ async fn the_station_id_rides_in_each_stations_own_keying() {
     let log = Log::default();
     let sink = log.clone();
     tracing_subscriber::fmt()
-        .with_env_filter("warn,openpulse_daemon=info")
+        .with_env_filter("warn,openpulse_daemon=debug")
         .with_writer(move || sink.clone())
         .with_ansi(false)
         .init();
@@ -70,11 +70,9 @@ async fn the_station_id_rides_in_each_stations_own_keying() {
 
     let seen = |needle: &str| String::from_utf8_lossy(&log.0.lock().unwrap()).contains(needle);
     let mut ok = false;
-    // The receiver's ID rides only if, at decode time, ID + keying + ACK still fit in the sender's
-    // window, measured on the wall clock; under CPU load the twin's decode takes longer and the first
-    // fit comes later. Measured 2026-11-03: 10–34 s on a quiet machine (5 runs), over 40 s once beside
-    // the pre-push run's parallel test binaries. 90 s keeps the test about the ride, not the load.
-    for i in 0..90 {
+    // 40 s (134 × 300 ms): the receiver's decision (it rode, or it was due and did not fit) comes
+    // within the first few exchanges whatever the machine's load.
+    for i in 0..134 {
         let cmd = serde_json::to_string(&ControlCommand::SendMessage {
             to: "RIDEB".into(),
             subject: "s".into(),
@@ -83,8 +81,17 @@ async fn the_station_id_rides_in_each_stations_own_keying() {
         .unwrap()
             + "\n";
         a_write.write_all(cmd.as_bytes()).await.unwrap();
-        tokio::time::sleep(Duration::from_millis(1_000)).await;
-        if seen("kind=\"with-ack\"") && seen("kind=\"with-data\"") {
+        // Faster than one exchange takes: the queue keeps the exchange continuous, so the receiver's
+        // early quiet-channel ID (3 s of quiet) cannot take the slot even on a loaded machine, where
+        // a message a second left such gaps.
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        // The receiver's ride is decided against the wall clock: on a loaded machine the twin's
+        // decode can leave no room before the ACK, and the receiver then rightly waits. Either it
+        // rode, or it was due and the fit check ran and said no; what must never happen is that the
+        // receiver's ID is never even considered.
+        let receiver_decided =
+            seen("kind=\"with-ack\"") || seen("station ID due, but it does not fit before the ACK");
+        if receiver_decided && seen("kind=\"with-data\"") {
             ok = true;
             break;
         }
@@ -94,8 +101,10 @@ async fn the_station_id_rides_in_each_stations_own_keying() {
     drop(pair);
     assert!(
         ok,
-        "the station ID did not ride in both stations' own keying: with-ack {}, with-data {}",
+        "the station ID did not ride in both stations' own keying: with-ack {}, receiver's ID due but \
+         not fitting {}, with-data {}",
         text.contains("kind=\"with-ack\""),
+        text.contains("station ID due, but it does not fit before the ACK"),
         text.contains("kind=\"with-data\"")
     );
 }

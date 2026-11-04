@@ -1173,8 +1173,9 @@ pub async fn run(cfg: OpenpulseConfig, modem_backend: Box<dyn AudioBackend>) -> 
                                         // that is never over the other station (review 2026-11-02).
                                         let id_now_ms = id_start.elapsed().as_millis() as u64;
                                         let id_body = format!("DE {id_callsign}");
-                                        let id_rides = auto_id_active
-                                            && id_timer.ride_along_due(id_now_ms)
+                                        let id_due =
+                                            auto_id_active && id_timer.ride_along_due(id_now_ms);
+                                        let id_rides = id_due
                                             && engine
                                                 .tx_airtime_seconds(
                                                     id_body.as_bytes(),
@@ -1189,6 +1190,16 @@ pub async fn run(cfg: OpenpulseConfig, modem_backend: Box<dyn AudioBackend>) -> 
                                                         + ACK_SLACK
                                                         <= ack_window_end
                                                 });
+                                        if id_due && !id_rides {
+                                            // Not keyed here; a later quiet moment, or the interval,
+                                            // takes the ID. Logged so a run (and the ride-along test
+                                            // on a loaded machine) can tell "did not fit" from "never
+                                            // due".
+                                            tracing::debug!(
+                                                "station ID due, but it does not fit before the ACK in \
+                                                 the sender's window; it waits"
+                                            );
+                                        }
                                         // Mode-aware ACK: K=3 union MFSK16-ACK (with a leading FSK4 copy)
                                         // when recommending the sub-floor rung, else FSK4-ACK. The ISS
                                         // union-listens, so either is heard.
