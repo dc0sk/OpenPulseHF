@@ -4389,6 +4389,10 @@ about 0.02, 300–2700 Hz) after. Something in the FT-991A changed. With nothing
    Change only receive settings; key nothing.
 4. **Leave the rig in the hiss state for Parts B and C.** That is what a receiver hears on HF, and
    what the DCD has to work in. If the maintainer prefers the other state, record which and why.
+5. **Set the FT-991A's AGC to FAST** (and record the read-back), the IC-9700's too. With a slow AGC the
+   hiss stays held down for over a second after each frame, and the DCD's floor slides under the gaps
+   again (`dcd-raised-floor.md`, measured from a 1.5 s hang). Record the AGC setting in every run's
+   report from now on.
 
 ### Part B — run a2h: A sends, the demotion through attenuation before B's front end (keys both rigs: one go)
 - **Why:** turning B's RF gain changed B's audio by 44 dB and its SNR by nothing (task 21). The noise
@@ -4411,6 +4415,26 @@ about 0.02, 300–2700 Hz) after. Something in the FT-991A changed. With nothing
 Task 21 Part D, unchanged, on this build: runs f1 (A sends) and f2 (B sends), `OTA_PROFILE=fast`,
 `TRAFFIC_INTERVAL=8`, `TRAFFIC_DURATION=600`, `DAEMON_LOG_LEVEL=info,ofdm_plugin=debug`, the passband
 check first, B in the Part A hiss state. Its report items are task 21's.
+
+### Review of task 21 Part D, run f1 (cloud session, 2026-11-04)
+
+The `fast` profile's first time on air:
+- **It climbs SL2 → SL10** (`climb_on_snr` up to SL7, on evidence above).
+- **It cycles SL8–SL10 with 8 NACK-driven step-downs:** A2 clause 2 working on the OFDM rungs, on
+  this build.
+- **It never reaches SL11.**
+- **The OFDM carrier acquisition works on air.** The acquired offset has a median of 2.40 Hz against
+  a told offset of 2.84–3.03 Hz, and a pilot coherence of 0.99. The ±35 Hz outliers have coherence
+  down to 0.30, on failed attempts.
+
+What f1 raises, for its own analysis (offline, from `rx-b-f1`):
+- **The decisions on the OFDM rungs read low SNR on decoded frames:** 2–7 dB, where the BPSK rungs
+  read 12–22 dB.
+- **The IC-9700's ALC peaked at 0.858** at A's first OFDM transmissions.
+
+OFDM's peak-to-average ratio, compressed by the ALC, is the first suspect for the distortion that
+caps the ladder at SL10. The next step is the EVM per rung, from the recording. f2 (B sends) is
+still to run; it moves to task 22 Part C.
 
 ### Report, per run (Parts B and C)
 As task 21, plus:

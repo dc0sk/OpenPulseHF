@@ -15,6 +15,30 @@ this ledger adds the design rationale and the actually-observed results per chan
 
 ---
 
+## 2026-11-04 — The DCD re-learns a raised noise floor under a receiver AGC (work plan M3, A2 clause 2)
+
+- **Requirement/change:** REQ-FUN-06. On air (task 21, run a2g) station B's audio between frames went
+  from digital silence to steady hiss while its AGC held the hiss 31 dB down under each frame. The
+  squelch, learned on silence, stayed below the hiss; the 38 s cap committed frames and gaps together,
+  and the floor came out at half the gap hiss. Result: no frame boundary, no NACK, no demotion, and
+  12 messages abandoned.
+- **Design decision:** `docs/dev/design/dcd-raised-floor.md`. At a cap flush only, learn the 20 %-wide
+  run of the held windows, ranked by total power, that spreads least, starting at or below the median
+  (`commit_band`), replacing the history. Review:
+  `docs/dev/reviews/review-dcd-raised-floor-2026-11-04.md`. Decisions 2 (NACKs while busy) and 3 (a
+  sender-side step-down) are parked; a late ACK from a decoded cap flush (keying) waits for the
+  maintainer.
+- **Implementation:** `crates/openpulse-dsp/src/noise_floor.rs` (`commit_band`, `BAND_COMMIT_WIDTH`,
+  `BAND_COMMIT_MAX_START`); `crates/openpulse-modem/src/engine.rs` (the cap flush).
+- **Tests:** `dcd_agc_pumped_hiss` (the on-air cadence, a 0.6 s hang); an `#[ignore]`d measurement
+  across hangs of 0.6–2.5 s.
+- **Test results:** 7 of 7 frames decoded after the step, against 0 of 7 with `commit`. Sabotage:
+  `commit` 0/7, the quietest fifth 0/7, both fail. The replay of `rx-b-a2g`: the squelch steady at
+  0.024–0.026 against 0.021 hiss, 12 of 14 bursts decode. The measurement: 7/7, 6/7, 0/7 at hangs of
+  0.6, 1.0, 1.5 s; from 1.5 s the steady-state learner slides the squelch under the gaps, so **AGC
+  FAST is a Release 1 operating requirement**. `openpulse-modem` 648/0 and `openpulse-dsp` 125/0 at
+  `338bbbd`. GATE_RESULT_3
+
 ## 2026-11-03 — The OFDM SNR reading measures the frame, not the noise after it (work plan M3; Release 1 `fast` profile)
 
 - **Requirement/change:** REQ-FUN-06. The OFDM SNR estimate equalised the whole receive slice, the

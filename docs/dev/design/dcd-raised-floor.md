@@ -1,7 +1,7 @@
 ---
 project: openpulsehf
 doc: docs/dev/design/dcd-raised-floor.md
-status: review
+status: resolved
 last_updated: 2026-11-04
 ---
 
@@ -17,7 +17,9 @@ Work plan M3, A2 clause 2. Found on air in task 21, run a2g; reproduced offline 
 - After the gain was restored (08:24:45) the gaps held **steady hiss at RMS 0.021**, 99.5 % of it in
   300–2700 Hz, about 9 dB under the frames (0.06). The RSPdx showed the air was quiet.
 - The **receiver AGC pumps**. Away from the signal (2300–2700 Hz), the hiss is **31 dB lower during a
-  frame** than in the gaps, and it stays down for about **0.4 s after each frame** (the AGC's hang).
+  frame** than in the gaps. After each frame the total RMS takes **0.58 s** (median, p90 0.70) to
+  recover, and the band away from the signal stays more than 5 dB down for about 1 s (the AGC's hang;
+  the review's measurement, correcting a first reading of 0.4 s).
 - From then on, B's daemon:
   - never saw the carrier drop;
   - flushed a burst only at the **38.3 s length cap**, or as fragments too short to be ladder evidence
@@ -31,9 +33,10 @@ test:
 1. The squelch was learned on silence (1e-4). The hiss stepped up past it, so every block was
    "carrier" and nothing was learned: a floor learner that learns only below the squelch cannot
    follow a step up.
-2. The 38 s cap then committed every window it held (#1452). The per-bin 25th percentile picked the
-   **AGC-suppressed hiss from the frame windows** (60 % of the time): a floor of **0.011, half the
-   gap hiss**.
+2. The 38 s cap then committed every window it held (#1452). Frames are 30–33 % of each slab and the
+   hang about 7 %, so 39 % of the windows carry the hiss held down. The per-bin 25th percentile picked
+   that: a floor of **0.011, half the gap hiss**. The review reproduces it exactly by emulating the
+   estimator on the slabs (0.0116–0.0122; the live squelch 0.0147/1.25 = 0.0118).
 3. The squelch (1.25 × floor = 0.0138) stayed below the gaps, so the carrier never dropped. Every
    later cap repeated it: a **permanent lockout**.
 4. The tracker itself is right on this hiss: fed only the gaps it reads 0.0212 against a true RMS
@@ -42,88 +45,110 @@ test:
 **Why it matters for Release 1:** on HF the receiver hears steady hiss or QRN, and every transceiver
 has an AGC. B's earlier runs on 2 m probably all had a gated, silent channel between frames.
 
-## Decision 1 — implemented: a capped burst learns the band from its middle ranks
+## Decision 1 — implemented: a capped burst learns the band from its plateau
 
 `NoiseFloorTracker::commit_band` (`openpulse-dsp`), called at the cap flush instead of `commit`:
-- learn the held windows ranked from the **10th to the 30th percentile** by total power
-  (`BAND_COMMIT_FROM`, `BAND_COMMIT_TO`);
-- these **replace the history**: a capped burst means the band changed;
-- a window that holds a frame is never in those ranks, so the AGC-suppressed hiss under the frames
-  is never learned;
-- the quietest 10 % are the AGC hang and the station's own transmissions, which the replay
-  recording contains (the live daemon drops capture while it keys), so they are skipped too.
+- rank the held windows by total power;
+- learn the **20 %-wide run of ranks whose powers spread least** (top over bottom), starting at or
+  below the median (`BAND_COMMIT_WIDTH` 0.2, `BAND_COMMIT_MAX_START` 0.5). These replace the history:
+  a capped burst means the band changed.
+- **Why this works:** steady gap hiss is a plateau, its 512-sample windows within about ±10 % of each
+  other. The AGC's hang after each frame spreads below it as a ramp. The frames lie above, and the
+  start cap keeps a constant-envelope frame's own plateau out of reach.
 
 Short flicker commits keep `commit`.
 
+**The first version (fixed ranks 10–30 %) and why it was replaced.** The review showed that the test
+did not model the hang, so the fitted lower edge was untested. With the test given the on-air cadence
+(4.2 s frames every 13.8 s, a hang, then a 1 s recovery), fixed ranks held for a 0.6 s hang (7/7)
+and failed for 1.0 s (1/7). The plateau rule holds 7/7 and 6/7.
+
+**The limit, measured:**
+- **From a 1.5 s hang, no commit rule helps.** The steady-state floor learner (#1452, the 25th
+  percentile of every non-carrier window) absorbs the held-down hiss, and the squelch slides under
+  the gaps again: 0.0268 after the commit, then 0.0238, 0.0182, 0.0083, 0.0008 frame by frame
+  (`where_a_slow_agc_hang_defeats_the_band_commit`).
+- HF transceivers' slow AGC decays over 1–3 s.
+- **So Release 1 needs the receiving rig's AGC set to FAST (or off)**, as digital-mode setups usually
+  are. That is an operating requirement for the HF confirmation, written into task 22.
+- A floor learner that only learns the gap plateau is parked (post-M3, with the HF confirmation).
+
+**Further limits (the review, S1 and S2), all in the HF regime:**
+- **A signal near the AGC's knee:** the AGC holds the output level, so frames do not rank above the
+  gaps by total power. There the commit is `commit`'s input subsampled: no worse, but no fix.
+- **SL2's 66 s frames run at ~87 % duty:** the gaps are under a fifth of a capped burst. The SL2 cap
+  is also 266–320 s, so one cap there costs minutes, not 38 s.
+- **A systematic low bias:** learning from windows below the median total power biases the floor
+  6–8 % low, so the squelch after a band commit is about 1.16× the hiss, not 1.25×. The cost is more
+  flickers; each keys nothing (#1456).
+
 **The constants, what they were set from, and what would prove them wrong:**
-- **Inventory:** one recording, `rx-b-a2g`, 127 s after the restore.
-  - window RMS 5th / 10th / 20th / 40th percentile: 0.0071 / 0.0183 / 0.0203 / 0.0214;
-  - frames above;
-  - AGC hang and own transmit at about 5 %.
-- **A first try, the quietest tenth,** learned a squelch of 0.0038 there, below the hiss: it took
-  the hang.
-- **Falsified by:**
-  - a band whose gaps are under a fifth of a capped burst (traffic over ~70 % duty);
-  - an AGC hang over a tenth of it;
-  - a receiver whose frames do not lift a window's total power over the gaps'.
+- **Inventory:**
+  - `rx-b-a2g`, 127 s after the restore: window RMS 5th / 10th / 20th / 40th percentile
+    0.0071 / 0.0183 / 0.0203 / 0.0214, the frames above;
+  - the synthetic cadence in `dcd_agc_pumped_hiss`.
+- **Falsified by:** gaps under a fifth of a capped burst; a hang over about 1 s; frames that do not
+  lift a window's total power over the gaps.
 
 **Measured:**
 
-| Case | Before | After |
+| Case | `commit` (before) | `commit_band` |
 |---|---|---|
-| Replay of `rx-b-a2g` across the restore (SL6 locked) | every burst to the cap; 1 frame per 38 s | the squelch goes to 0.0215 after the first cap, then tracks to 0.024 (gap hiss 0.021, frames 0.06); bursts are 4.9 s frames again; 12 of 14 decode with an ACK; the 2 failures are fragments |
-| `dcd_agc_pumped_hiss` (synthetic: SL6 frames, a quiet gated channel, then hiss stepping up to 0.021 with the hiss 31 dB down under frames) | 3 capped bursts, 0 frames decoded from the step + 60 s | 1 capped burst, 11 decoded |
+| Replay of `rx-b-a2g` across the restore (SL6 locked) | every burst to the cap; 1 frame per 38 s | the squelch steady at 0.024–0.026 after the first cap (gap hiss 0.021, frames 0.06); 12 of 14 bursts decode |
+| `dcd_agc_pumped_hiss` (on-air cadence, hiss stepping up to 0.021, 31 dB under frames, 0.6 s hang) | 0 of 7 | 7 of 7 |
 
-- **Sabotage** (`commit` at the cap again): 0 decoded, the test fails.
-- `openpulse-dsp` 125 passed.
+- **Sabotage:**
+  - `commit` at the cap: 0/7, fails;
+  - the run forced to the quietest fifth (`BAND_COMMIT_MAX_START` 0): 0/7, fails.
 
-**What it leaves:** one cap length (38 s) of deafness after a step up in the band, before the floor
-re-learns. Shortening that, for example by learning at a shorter, separate "band check" span, is
-parked.
+**What it leaves:** one cap of deafness after a step up in the band: 37 s at SL5/SL6, 266–320 s with
+SL2 among the candidates. The cap flush's decode also blocks the loop for 1.3–2.5 s.
 
-## Decision 2 — proposed, for the mandatory review: NACKs while the channel is "busy"
+## Decision 2 — parked after the review: NACKs while the channel is "busy"
 
-**Today:** after a failed burst, if the channel is still above the squelch (`channel_still_busy`),
-the receiver keys no NACK, so as not to key over the other station's frame (task 15).
+**The premise was wrong.** The review found that the busy mute (`nack_budget.rs`, "a burst failed
+while the channel was still busy") never acted in a2g: 0 lines. The NACKs were withheld for two other
+reasons:
+- the capped slabs, which are not ladder evidence (#1255);
+- the 400–3400-sample fragments, under the evidence floor (#1454, #1456).
 
-Under the lockout above, that suppressed **every** NACK. With decision 1 the lockout ends after one
-cap, so the suppression lasts at most 38 s. The residual risk is a band whose level the squelch
-cannot settle on (QRN bursts, a slowly rising floor).
+Decision 1 removes both. The proposal itself would reopen task 15 for weak frames: a frame whose power
+dips and whose structure is under the spectral threshold would read "not busy", and the NACK would be
+keyed over the rest of it. **Not needed; parked.**
 
-**Proposal:** "busy" means another station's signal, not total power over a floor. Suppress the NACK
-only if the spectral test (#1454) finds structure in the audio after the burst. A NACK withheld
-because of total power alone is keyed anyway after one more silent ACK window of the sender's.
+## Decision 3 — not to be implemented as written
 
-**Open for the review:**
-- does the spectral test hold on QRN?
-- the cost of a wrong NACK (keyed over a frame) against a missing one (a stalled link).
+**Silence is not rung evidence.** In a2g, B decoded SL6 at 7 dB; what failed was the ACK path. A
+sender-side step-down after silent windows would have walked A down while B held {SL6}.
 
-## Decision 3 — proposed, for the mandatory review: the sender after silent ACK windows
+**The review found a lockstep break with no path back:**
+1. The silent windows add up per message, so 12 abandoned messages reach SL1.
+2. At SL1 a body over 209 B is skipped without transmitting.
+3. The receiver hears nothing, and no ACK can ever raise the sender's level: a permanent stall.
 
-**Today:** the ladder is receiver-led. After `MAX_SILENT_ACK_WINDOWS` (2) silent windows the sender
-abandons the message, and it never steps down. A link whose receiver hears frames but cannot answer
-(a stall, as here, or an ACK path that fails) stays at its top rung for good.
+The only safe shape is option (b), bounded to the receiver's previous recommendation on an ACK-up,
+and even that should require a decode-less reason (a NACK heard), not silence. **Parked.**
 
-**Proposal:** after K silent windows in a row (K = 2, the abandon point), the sender's next message
-goes out at **one rung lower**.
-- The receiver already decodes its recommended and its confirmed rung (`rx_candidates`, at most 2).
-- A lower rung is decodable there when it is the confirmed one.
-- It is not, when the receiver has itself moved on.
+## Found by the review: a decoded cap flush keys a late ACK (pre-existing; a keying change)
 
-**The lockstep question for the review:** can a sender-side step leave the two ladders on different
-rungs with no path back? Options:
-- (a) the receiver adds the rung below its recommendation to its candidates after a silence;
-- (b) the sender steps only to the receiver's last confirmed rung, which is in the ACKs it did
-  receive.
-
-(b) needs no change at the receiver.
+- **The mechanism:** every cap flush that decoded a frame keyed an ACK: 13 after the restore in a2g.
+  The ACK deadline is set from the slab's end, not the decoded frame's, and #1255 guards only failed
+  slabs.
+- **Why it matters:** `AckFrame` carries no sequence number, so an ACK for a frame that ended up to
+  38 s earlier can land in the sender's window for a later frame and mark that one delivered.
+  Whether that happened in a2g is UNCHECKED.
+- **Proposal:** a decoded cap flush keys nothing unless the decoded frame ended inside the sender's
+  window.
+- It changes when the receiver keys, so it waits for the maintainer's go. The review recorded here is
+  its design review.
 
 ## Tests
 
-- `dcd_agc_pumped_hiss` (`openpulse-modem`), above.
+- `dcd_agc_pumped_hiss` (`openpulse-modem`): the gate case (0.6 s hang) and an `#[ignore]`d
+  measurement across hangs of 0.6–2.5 s.
 - The replay of `rx-b-a2g` is scratch code; the recording is in the repository
   (`docs/dev/test-reports/on-air/rx-audio-2026-11-01/`).
-- Decisions 2 and 3: none until the review.
+- Decisions 2 and 3: parked.
 
 ## Consumer
 
