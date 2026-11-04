@@ -4099,7 +4099,7 @@ step). It plays no part in the decisions here: `climb_on_snr` was not the path a
    - Or **A's sink volume at 0.02, 0.01 and 0.005**, to find where A's level starts to fall.
 4. The backlog (finding 2) before the next long run.
 
-## Task 21 — A→B demotion on one build; the `fast` profile's first time on air; the Pi cost of the OFDM receive (status: open; waits for the maintainer's go)
+## Task 21 — A→B demotion on one build; the `fast` profile's first time on air; the Pi cost of the OFDM receive (status: Parts A and B done; Parts C and D wait for the maintainer's go)
 
 The new build is `23278b6`. On top of task 20's build (`f18c8a6`):
 - **The sender's station ID shares its data frame's audio stream** (task 20, finding 1). The data frame
@@ -4189,3 +4189,27 @@ The `fast` profile has never been on air. It climbs SL2 to SL6 as `robust` does,
 - **The ride-along fix:** no ACK lost to a `with-data` ID.
 - **The `fast` profile:** whether it climbs into OFDM on 2 m, how far, and at what acquired offset and
   decode cost.
+
+### Results — task 21 Part A (nothing transmitted)
+
+rpi51 at `467a1519` (contains `23278b6`). `deploy` built on rpi51 and copied to station B; the hashes are identical on both stations:
+- `target/release/openpulse-server` `635f4f8051193e7d823e0362aa20c0e9a333305a997bac2ddbdfe31af95ce19c`
+- `target/release/openpulse` `9847a38bbdb1226e7d257c2538bddbd23e6dfd7c8889de1fdae75194baf6b5e9`
+- `scripts/twin-traffic.sh` `c9e152f32d6b8d5548551b255865b9c45c198b96739672b02eab9dee56fdc373`
+
+Read-back: FT-991A dial 144641564, RFPOWER 0.05, PTT 0, RF gain (starting value for Part C) 0.984314, AF 0.121569; IC-9700 dial 144640000, RFPOWER 0.0117647, PTT 0; nothing running; port B empty (as set).
+
+### Results — task 21 Part B (OFDM receive cost on rpi51, nothing transmitted)
+
+`cargo test --release -p openpulse-modem --no-default-features --features instruments --test ofdm_decode_cost -- --ignored --nocapture` at `467a1519`: 1 passed, 0 failed, 0.41 s. Raw:
+
+```
+COST Sl7 OFDM52 clean, 18 Hz off: decoded true, 1 attempts, 21 ms in decode
+COST Sl7 OFDM52 faded below its floor: decoded false, 15 attempts, 87 ms in decode
+COST Sl10 OFDM52-32QAM clean, 18 Hz off: decoded true, 1 attempts, 16 ms in decode
+COST Sl10 OFDM52-32QAM faded below its floor: decoded false, 15 attempts, 81 ms in decode
+COST Sl14 OFDM52-64QAM clean, 18 Hz off: decoded true, 1 attempts, 39 ms in decode
+COST Sl14 OFDM52-64QAM faded below its floor: decoded false, 15 attempts, 88 ms in decode
+```
+
+Parts C (a2g) and D (f1, f2) each need the maintainer's go.
