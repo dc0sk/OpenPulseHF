@@ -4353,7 +4353,23 @@ Commit on rpi51 `772429a0` (build `23278b6`, hashes as in Part A). Evidence: `do
 
 **End state:** cleanup clean on both stations. FT-991A dial 144641564, RFPOWER 0.05, RF 0.984314, PTT 0 (powered on); IC-9700 dial 144640000, RFPOWER 0.0117647, PTT 0; nothing running; port B empty. Run f2 (B sends) needs the maintainer's go.
 
-## Task 22 — B's receive audio state; A→B demotion through real attenuation; then the `fast` profile (status: open; Part A keys nothing; Parts B and C wait for the build and the maintainer's go)
+## Task 22 — B's receive audio state; A→B demotion through real attenuation; then the `fast` profile (status: open; the maintainer's go given 2026-11-04 for Parts B and C)
+
+**The maintainer's go (2026-11-04), for this task as written, on build `e5ba27f`:**
+- **The order:** Part A (keys nothing) → Part B (run a2h) → Part C run f1 → Part C run f2. One run at a time.
+- **The go covers those four runs only.** Anything else that keys a rig needs a new go: a repeat, an
+  extra run, a changed setting.
+- **Each run starts only if the one before it ended clean:** cleanup on both stations, PTT 0, and the
+  read-backs as recorded.
+- **The station rules hold for every run:**
+  - FT-991A at 5 W at most; never raise either rig's power.
+  - Every change is remote (CAT); never touch an antenna socket.
+  - RSPdx port B stays empty.
+  - Record nothing about a host other than rpi51 and rpi53.
+- **Stop and report instead of continuing if:**
+  - Part B's attenuator or preamp read-back does not match what was set;
+  - any keying stretch runs over 70 s;
+  - B shows no flushed burst for 60 s after going back up a step.
 
 The new build is `e5ba27f` (pull the branch head; the commits after it are docs). On top of task 21's
 build (`23278b6`):
