@@ -2916,7 +2916,10 @@ impl ModemEngine {
                 // gathered, so a genuine step UP in band level reads as carrier until this flush.
                 // Nothing earlier can end it — the engine does not know which FEC its consumers
                 // decode, and over every FEC the longest frame is the cap itself (#1455).
-                self.noise_floor.commit();
+                // From its quietest windows only: under a receiver AGC the frames' windows carry the
+                // hiss tens of dB down, and learning them kept the squelch below the gaps for good
+                // (task 21, run a2g; `dcd_agc_pumped_hiss`).
+                self.noise_floor.commit_band();
                 self.last_flush_capped = true;
                 return Ok(Some(AudioSamples {
                     samples: std::mem::take(&mut self.rx_burst),

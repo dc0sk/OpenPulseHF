@@ -4352,3 +4352,69 @@ Commit on rpi51 `772429a0` (build `23278b6`, hashes as in Part A). Evidence: `do
 **Stop rules and ALC:** no keying stretch over 70 s on either rig (watcher, 1 s polling). ALC while keyed (rigctld `l ALC`, 178 readings on the IC-9700, 54 on the FT-991A): IC-9700 min 0.033, median 0.617, max 0.858; per minute the maximum was 0.63 until 10:00, 0.858 at 10:00:35 (and 0.85 at 10:00:39, the only two readings above 0.8), 0.44–0.76 after. B's first OFDM acquisition line is at 10:00:31, so those two readings are in A's first OFDM transmissions (SL7–SL8). FT-991A ALC 0.0625 in every reading (its meter scale is coarse). I did not stop the run: I have no calibrated ALC limit for the IC-9700, only these numbers, and the drive was at the profile's value. This needs the cloud session's reading.
 
 **End state:** cleanup clean on both stations. FT-991A dial 144641564, RFPOWER 0.05, RF 0.984314, PTT 0 (powered on); IC-9700 dial 144640000, RFPOWER 0.0117647, PTT 0; nothing running; port B empty. Run f2 (B sends) needs the maintainer's go.
+
+## Task 22 — B's receive audio state; A→B demotion through real attenuation; then the `fast` profile (status: open; Part A keys nothing; Parts B and C wait for the build and the maintainer's go)
+
+The new build is `BUILD_HASH`. On top of task 21's build (`23278b6`):
+- **The DCD learns a raised noise floor through a receiver's AGC** (`docs/dev/design/dcd-raised-floor.md`).
+  - In a2g, after B's audio went from silence between frames to steady hiss, B's DCD never saw the
+    carrier drop again: no frame boundaries, no NACK, no demotion, and A abandoned 12 messages.
+  - Now the first 38 s capped burst re-learns the band from the gaps, not from the frames (under
+    which the AGC holds the hiss 31 dB down), and frames separate again.
+  - On the a2g recording: 12 of 14 bursts decode after the first cap.
+  - Expect one cap (38 s) of deafness after a step up in the band, then normal operation.
+
+Tests at this build: `GATE_LINE`.
+
+The station rules hold:
+- ask the maintainer before every run;
+- FT-991A 5 W at most;
+- record nothing about a host other than rpi51 and rpi53;
+- RSPdx port B empty.
+
+### Part A — station B's receive audio: which state is normal, and what gated it (nothing transmits)
+
+In a2g, B's audio between frames was digital silence until the RF-gain steps, and steady hiss (RMS
+about 0.02, 300–2700 Hz) after. Something in the FT-991A changed. With nothing transmitting:
+1. **Record 20 s of B's receive audio** (the receive-audio recorder as in the runs) with the rig as
+   it is now. Report the RMS and whether it is silence or hiss.
+2. **Read back by CAT, and report:**
+   - AGC, RF gain, SQL, NB, DNR (noise reduction), the notch;
+   - the mode and its passband;
+   - IPO/ATT, if the 2 m band has them;
+   - and anything in the data-mode menus that gates audio. **Quote the manual's menu numbers;** the
+     task 8 menu numbers from memory were wrong.
+3. **Find the setting that gives silence between signals, and the one that gives steady hiss.** The
+   squelch (`SQL`) and the RF/SQL knob assignment are the first suspects. Record 20 s in each state.
+   Change only receive settings; key nothing.
+4. **Leave the rig in the hiss state for Parts B and C.** That is what a receiver hears on HF, and
+   what the DCD has to work in. If the maintainer prefers the other state, record which and why.
+
+### Part B — run a2h: A sends, the demotion through attenuation before B's front end (keys both rigs: one go)
+- **Why:** turning B's RF gain changed B's audio by 44 dB and its SNR by nothing (task 21). The noise
+  B hears is its own front end's, and it scales with the signal. The level has to fall before B's
+  front end.
+- **The maintainer chooses one:**
+  - **an attenuator in B's antenna line**, stepped: for example 0, 10, 20, 30 dB and back to 0, each
+    step held 60–90 s;
+  - **or A's drive far below the range tried before:** `A_TX_SINK_VOLUME` 0.15 → 0.01 → 0.005 →
+    0.002 → 0.15, each step held 60–90 s. At 0.035–0.15 A's level into the IC-9700 did not change B's
+    SNR (tasks 19, 20), likely its ALC at minimum RF power.
+- **Settings:** task 21 Part C's (`robust`, `TRAFFIC_FROM=A`, `TRAFFIC_SIZE=64`,
+  `TRAFFIC_INTERVAL=8`, `TRAFFIC_DURATION=900`). The first step only after SL6 has held 60 s, and at
+  t0 + 480 s at the earliest. Record the UTC time of each change.
+- **Recording:** as before, as `-a2h`.
+- **Stop:** go back up a step if B shows no flushed burst for 60 s.
+
+### Part C — the `fast` profile on air, both directions (keys both rigs: one go per run)
+
+Task 21 Part D, unchanged, on this build: runs f1 (A sends) and f2 (B sends), `OTA_PROFILE=fast`,
+`TRAFFIC_INTERVAL=8`, `TRAFFIC_DURATION=600`, `DAEMON_LOG_LEVEL=info,ofdm_plugin=debug`, the passband
+check first, B in the Part A hiss state. Its report items are task 21's.
+
+### Report, per run (Parts B and C)
+As task 21, plus:
+- every `burst flushed` line's `squelch` against B's audio RMS between frames;
+- every capped burst (`burst=306048` or near it), and the first normal flush after it;
+- `channel still busy` lines;
+- the NACKs keyed at each attenuation or drive step.

@@ -83,6 +83,20 @@ const TRIMMED_EXP_MEAN: f32 = 0.966_081;
 /// as window periodograms, so this is a count of windows × `WINDOW`.
 const MAX_HELD_SAMPLES: usize = 1 << 20;
 
+/// The band of a capped burst's windows, ranked by total power, that [`NoiseFloorTracker::
+/// commit_band`] learns: from the 10th to the 30th percentile.
+///
+/// Fitted to one recording (task 21, run a2g, station B after the hiss rose, 127 s): below 5 % of
+/// the windows sit the receiver AGC's hang after each frame (0.4 s, the hiss still ~20 dB down) and
+/// the station's own transmissions; the hiss in the gaps holds the 10th to the 40th percentile; the
+/// frames lie above. The lower edge skips up to a tenth of hang and own-transmit windows (a quietest
+/// tenth learned a squelch of 0.0038 there, below the 0.021 hiss); the upper edge leaves the floor to
+/// the gaps while the traffic takes up to ~70 % of the time. Falsified by a band whose gaps are under
+/// a fifth of a capped burst, or whose AGC hang is over a tenth of it.
+pub const BAND_COMMIT_FROM: f32 = 0.1;
+/// See [`BAND_COMMIT_FROM`].
+pub const BAND_COMMIT_TO: f32 = 0.3;
+
 /// Spectral busy test (#1454): a band is this many adjacent bins (62.5 Hz), sliding one bin at a time.
 const S_BAND_BINS: usize = 4;
 
@@ -360,6 +374,41 @@ impl NoiseFloorTracker {
             }
             self.mean_sq = Some(self.estimate());
         }
+    }
+
+    /// Learn the band from a burst that ran to the length cap: the held windows ranked from
+    /// [`BAND_COMMIT_FROM`] to [`BAND_COMMIT_TO`] by total power, in place of the history, and resume.
+    ///
+    /// A capped burst means the carrier never dropped: the band stepped up past the squelch, and
+    /// nothing below the squelch was left to learn from. [`commit`](Self::commit) learns every held
+    /// window, and under a receiver AGC that is wrong. On air (task 21, run a2g) the AGC held the hiss
+    /// 31 dB lower during each frame than in the gaps; the per-bin low quantile took the suppressed
+    /// hiss from the frame windows (60 % of the time), learned a floor at half the gap hiss, and the
+    /// squelch stayed below the gaps for good. A window that holds a frame is never among the
+    /// quieter ranks, and the quietest few are the AGC's hang after a frame or this station's own
+    /// transmissions, not the band; the ranks between are the gaps: the band as it now is, which is
+    /// why they replace the history.
+    pub fn commit_band(&mut self) {
+        let Some(mut held) = self.held.take() else {
+            return;
+        };
+        if held.is_empty() {
+            return;
+        }
+        self.recent_a.clear();
+        self.recent_b.clear();
+        held.sort_by(|a, b| a.iter().sum::<f32>().total_cmp(&b.iter().sum::<f32>()));
+        let n = held.len();
+        let from = (n as f32 * BAND_COMMIT_FROM) as usize;
+        let to = ((n as f32 * BAND_COMMIT_TO) as usize)
+            .max(from + COLD_WINDOWS)
+            .min(n);
+        let from = from.min(to.saturating_sub(COLD_WINDOWS));
+        self.history.clear();
+        for powers in held.into_iter().skip(from).take(to - from) {
+            self.push_history(powers);
+        }
+        self.mean_sq = Some(self.estimate());
     }
 
     /// Drop everything held (the burst was a transmission), and resume learning. The buffered partial
