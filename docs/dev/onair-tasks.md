@@ -4355,7 +4355,7 @@ Commit on rpi51 `772429a0` (build `23278b6`, hashes as in Part A). Evidence: `do
 
 ## Task 22 — B's receive audio state; A→B demotion through real attenuation; then the `fast` profile (status: open; Part A keys nothing; Parts B and C wait for the build and the maintainer's go)
 
-The new build is `BUILD_HASH`. On top of task 21's build (`23278b6`):
+The new build is `9745839`. On top of task 21's build (`23278b6`):
 - **The DCD learns a raised noise floor through a receiver's AGC** (`docs/dev/design/dcd-raised-floor.md`).
   - In a2g, after B's audio went from silence between frames to steady hiss, B's DCD never saw the
     carrier drop again: no frame boundaries, no NACK, no demotion, and A abandoned 12 messages.
@@ -4364,7 +4364,7 @@ The new build is `BUILD_HASH`. On top of task 21's build (`23278b6`):
   - On the a2g recording: 12 of 14 bursts decode after the first cap.
   - Expect one cap (38 s) of deafness after a step up in the band, then normal operation.
 
-Tests at this build: `GATE_LINE`.
+Tests at this build: `scripts/gate.sh` at `43acba7`: 2767 tests passed, 0 failed (390 suites); clippy (three configurations), fmt, trace and doc lints ok; reachability failed on the two new constants being `pub`, made private in `9745839` (amended; reachability, both clippy configurations and `openpulse-dsp` then clean); the trailer lint fails only on `ab9235f` and `cd3bf5c` (2026-11-01, recorded on the M3 line)..
 
 The station rules hold:
 - ask the maintainer before every run;

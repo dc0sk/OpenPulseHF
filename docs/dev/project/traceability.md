@@ -37,7 +37,7 @@ this ledger adds the design rationale and the actually-observed results per chan
   0.024–0.026 against 0.021 hiss, 12 of 14 bursts decode. The measurement: 7/7, 6/7, 0/7 at hangs of
   0.6, 1.0, 1.5 s; from 1.5 s the steady-state learner slides the squelch under the gaps, so **AGC
   FAST is a Release 1 operating requirement**. `openpulse-modem` 648/0 and `openpulse-dsp` 125/0 at
-  `338bbbd`. GATE_RESULT_3
+  `338bbbd`. `scripts/gate.sh` at `43acba7`: 2767 tests passed, 0 failed (390 suites); clippy (three configurations), fmt, trace and doc lints ok; reachability failed on the two new constants being `pub`, made private in `9745839` (amended; reachability, both clippy configurations and `openpulse-dsp` then clean); the trailer lint fails only on `ab9235f` and `cd3bf5c` (2026-11-01, recorded on the M3 line).
 
 ## 2026-11-03 — The OFDM SNR reading measures the frame, not the noise after it (work plan M3; Release 1 `fast` profile)
 
