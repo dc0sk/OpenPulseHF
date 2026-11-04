@@ -1615,9 +1615,19 @@ impl ModemEngine {
     /// (a QSY case the notch can't fix).
     fn apply_rx_notch(&mut self, mode: Option<&str>, samples: Vec<f32>) -> Vec<f32> {
         let center = self.center_frequency + self.afc_correction_hz;
-        let bw = mode
-            .and_then(|m| self.plugins.get(m).and_then(|p| p.occupied_bandwidth_hz(m)))
-            .unwrap_or(self.notch_fallback_bw_hz);
+        let bw_of = |m: &str| self.plugins.get(m).and_then(|p| p.occupied_bandwidth_hz(m));
+        let mut bw = mode.and_then(bw_of).unwrap_or(self.notch_fallback_bw_hz);
+        // In an OTA session the frame may be any rung the receiver will try, not the caller's mode:
+        // the daemon passes its base mode (BPSK250, 500 Hz), and the notch cut the OFDM rungs' edge
+        // subcarriers at 500 and 2500 Hz, reading SL8 5.9 dB for 20.5 (on air in f1b, 5.0 dB median;
+        // `docs/dev/design/notch-protects-the-ladder.md`). So protect the widest candidate.
+        if let Some(ota) = self.ota.as_ref() {
+            for (_, m, _) in ota.rx_candidates() {
+                if let Some(b) = bw_of(m) {
+                    bw = bw.max(b);
+                }
+            }
+        }
         let half = bw / 2.0;
         let (lo, hi) = ((center - half).max(0.0), center + half);
         self.notch_protect_extremes = Some(match self.notch_protect_extremes {
