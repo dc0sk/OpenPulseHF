@@ -4451,6 +4451,44 @@ OFDM's peak-to-average ratio, compressed by the ALC, is the first suspect for th
 caps the ladder at SL10. The next step is the EVM per rung, from the recording. f2 (B sends) is
 still to run; it moves to task 22 Part C.
 
+### The OFDM SNR of run f1, from the recording (cloud session, 2026-11-04)
+
+From `rx-b-f1`: 93 OFDM frames, each run through the plugin's own acquisition and equaliser, mode
+from the length prefix and the frame's duration.
+
+**It is not the ALC compressing the frames.**
+- At SL8 and above, the amplitude tail is heavier than Gaussian (0.6–0.9 % of samples over 3σ,
+  against 0.27 %), not cut off.
+- CE-SSB acts on SL7 only, and shows there as a thin tail (peak/RMS 9.8 dB).
+
+**The low reading comes from the last symbol.**
+
+| mode | frames | SNR read (median) | last symbol: pilot gain / EVM-SNR | without the last symbol |
+|---|---|---|---|---|
+| SL7 OFDM52 | 3 | 6.8 dB | 0.88 / 4.5 dB | 6.8 dB |
+| SL8 8PSK | 28 | 14.5 dB | 0.94 / 15.4 dB | 14.5 dB |
+| SL9 16QAM | 47 | **6.8 dB** | **0.29 / −5.2 dB** | **15.5 dB** |
+| SL10 32QAM | 15 | 15.9 dB | 0.69 / 12.4 dB | 15.9 dB |
+
+- **The cause is in the modulator: the last symbol's padding is not whitened.**
+  - On 16QAM, 48 of its 52 subcarriers carry one point, an impulse.
+  - The impulse sets the frame's peak 3.5 dB over the data, so the frame goes out 3.5 dB quiet
+    (32QAM 1.6 dB, 64QAM 1.1 dB).
+  - On air the symbol arrives broken, and the pooled estimate drops from 15.5 dB to 6.8 dB.
+- **Fix:** `docs/dev/design/ofdm-padding-whitening.md`, under review.
+  - The receiver never reads the padding, so old and new builds interoperate.
+
+**What is left, an inference (UNCHECKED):**
+- The decision-free pilot SNR is **15–17 dB on every OFDM rung**. The noise under a frame, read from
+  the AGC's hang right after it, is about 27 dB under the gap hiss, so the band would allow about
+  30 dB.
+- A noise that is there only while a signal is would scale with the signal: oscillator phase noise,
+  or the transmitter's own noise.
+- That would also explain why neither A's drive (tasks 19 and 20) nor B's RF gain (task 21) moved
+  B's SNR. And it would explain an SL10 cap: 32QAM needs about 16 dB.
+- **Part B tests it:** if B's SNR does not fall with A's drive until the drive is far down, the noise
+  is proportional. Part B's recording is enough to read that; no extra item.
+
 ### Report, per run (Parts B and C)
 As task 21, plus:
 - every `burst flushed` line's `squelch` against B's audio RMS between frames;

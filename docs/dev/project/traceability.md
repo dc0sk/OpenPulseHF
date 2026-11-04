@@ -15,6 +15,33 @@ this ledger adds the design rationale and the actually-observed results per chan
 
 ---
 
+## 2026-11-04 — The OFDM last symbol's padding is whitened (work plan M3; Release 1 `fast` profile)
+
+- **Requirement/change:** REQ-FUN-06. In run f1 the OFDM rungs read a low SNR on decoded frames
+  (SL9 median 6.8 dB). From `rx-b-f1`, 93 frames through the plugin's own equaliser: the last data
+  symbol of a 16QAM frame arrives broken (pilot gain 0.29, EVM-SNR −5.2 dB), and without it the
+  frames pool to 15.5 dB. The modulator padded the last symbol after the whitening, so 48 of its 52
+  subcarriers carried one point, an impulse that set the frame's peak 3.5 dB over its data.
+- **Design decision:** `docs/dev/design/ofdm-padding-whitening.md`. Pad to whole symbols before the
+  whitening. The receiver stops at the length prefix, so old and new builds interoperate. The SNR
+  estimator is not changed. Review: in progress at this commit; recorded with its result.
+- **Implementation:** `plugins/ofdm/src/modulate.rs` (`modulate_with_params`).
+- **Tests:**
+  - `no_symbol_puts_most_subcarriers_on_one_point` (`ofdm-plugin`): every mode, every padding length.
+  - `ofdm_carrier_offset_ota`: the SNR reference is capped at 30 dB, 8 dB over the ladder's highest
+    climb ceiling. Above it the check measured the shift's own ceiling (~38.5 dB at SL14 −40 Hz with
+    either padding), and the louder frame raised SL14's on-carrier reading from 41.0 to 41.5 dB.
+- **Test results:**
+  - The new test passes; worst counts are 10/16, 22/52, 15/52, 10/52, 8/52 and 6/52 against bounds of
+    12.7–28.6.
+  - **Sabotage** (the old order, whitening before padding) fails it: 13 of 16 on one point.
+  - `ofdm-plugin` 37 + 5 passed, 0 failed.
+  - `openpulse-modem` OFDM suites all pass after the cap: `cessb_ofdm_lowentropy` 3,
+    `ofdm_carrier_offset_ota` 1, `ofdm_simulation` 1, `ofdm_snr_clears_the_climb_ceiling` 1,
+    `ofdm_scfdma_bakeoff` 1.
+  - Clippy and fmt are clean.
+  - Frame power at the same peak: 16QAM +3.45 dB, 32QAM +1.3 dB, 64QAM +1.1 dB.
+
 ## 2026-11-04 — No ACK for a frame that ended past its window in a capped slab (work plan M3, A2)
 
 - **Requirement/change:** REQ-FUN-06. Finding K of `docs/dev/design/dcd-raised-floor.md`: a capped
