@@ -4222,7 +4222,7 @@ Commit on rpi51 `d70e6c6f` (build `23278b6`, hashes as in Part A). Evidence: `do
 
 **Result in short:** (1) The lowering of B's receive RF gain did not make SL6 fail at any step down to 0.1: no failed SL6 frame, no NACK, no demotion. So the A→B demotion through B's receive gain is **not shown**. (2) After the gain went back to 0.984314, B's receive worked no more: from 08:25 B decoded about 1 frame in 40 s, A logged 25 `ACK not received` and 12 abandoned sends. Cause not established, see below.
 
-**Counts:** A logged 128 data transmissions (89 before 08:24:45, 39 after; the 130 `logged TX metadata` lines include an ID line), B decoded 101 frames (95 QPSK250-D, 1 BPSK250, 1 BPSK100, 1 BPSK63, 3 BPSK31), 88 up to 08:24:45 and 13 after. `fec attempt FAILED` lines on B: 2994 (the ladder scan of undecodable bursts, 15 or so per burst). `ACK not received` on A: 25, all from 08:25:00 on; `OTA send abandoned`: 12, all from 08:25:14 on. B flushed 110 bursts (energy-and-read checks: none with read=0). Late decodes (`past the sender's ACK window`): 0 on both stations; ACK deadline set 122 times on B.
+**Counts:** A logged 128 data transmissions (89 before 08:24:45, 39 after; the log has 130 `logged TX metadata` lines that are not ACKs, I did not reconcile the difference of 2), B decoded 101 frames (95 QPSK250-D, 1 BPSK250, 1 BPSK100, 1 BPSK63, 3 BPSK31), 88 up to 08:24:45 and 13 after. `fec attempt FAILED` lines on B: 2994 (the ladder scan of undecodable bursts, 15 or so per burst). `ACK not received` on A: 25, all from 08:25:00 on; `OTA send abandoned`: 12, all from 08:25:14 on. B flushed 110 bursts. Late decodes (`past the sender's ACK window`): 0 on both stations; ACK deadline set 122 times on B.
 
 **Timing (B, whole run):** flush to decode OK: median 0.26 s, max 1.55 s (n=89); decode OK to ACK keyed: median 1.05 s, min 0.93 s, max 2.44 s (n=101).
 
@@ -4237,7 +4237,7 @@ Commit on rpi51 `d70e6c6f` (build `23278b6`, hashes as in Part A). Evidence: `do
 | 0.1 | 14 | 3.6 / 11.0 / 18.4 |
 | 0.984314 after | 13 | 3.6 / 7.0 / 8.0 |
 
-**B's audio level at the steps** (rx-b recording, 20 s windows, rms of the 16-bit scale: 0.984 → 0.050; 0.5 → 0.049 (window opened 25 s after the change, started too early to count); 0.3 → 0.0061; 0.2 → 0.0022; 0.1 → 0.0004). The daemon's burst energy at 0.1 was 3–5e-5 against a squelch of 1e-4, and the frames still decoded at 9 per minute. The receiver is insensitive to this level down to −44 dB below the starting one.
+**B's audio level at the steps** (rx-b recording, 20 s windows, rms of the 16-bit scale: 0.984 → 0.050; 0.5 → 0.049 (a 20 s window at 08:19:30, 26 s after the change; the level here is mostly the frames' own); 0.3 → 0.0061; 0.2 → 0.0022; 0.1 → 0.0004). The daemon's burst energy at 0.1 was 3–5e-5 against a squelch of 1e-4, and the frames still decoded at 9 per minute. The receiver is insensitive to this level down to −44 dB below the starting one.
 
 **After the restore (08:24:45):** the audio between the frames stayed at an rms of about 0.021 (rx-b, 2 s windows from 08:24:52 to 08:25:40) where it had been below 0.002 between 08:16 and 08:24; B's daemon logged `channel still busy after a burst flushed rms=0.02…` and its squelch rose from 1e-4 to 0.0147; its flushed bursts shrank to 400–2800 samples; decodes came once per 40 s, each logged right after a `channel still busy` line, with `samples=74904`. The RSPdx witness shows A's frames at 08:25:40 and nothing in the 144.640 MHz band between frames at 08:24:55, 08:25:10 and 08:26:30, so the air was quiet; the continuous audio is inside B's rig or receive chain. Read-back after the run: RF 0.984314 as before, SQL 0, AGC 6 (I did not read these before the run, so I do not know if either changed). I did not find the cause.
 
@@ -4246,6 +4246,6 @@ Commit on rpi51 `d70e6c6f` (build `23278b6`, hashes as in Part A). Evidence: `do
 - B: `with-ack` 08:19:08.65 and 08:28:06.58; `sign-off` 08:33:16.68.
 - Runner: `sign-off IDs after the last transmission: IC-9700 no, FT-991A no` after the 15 min wait (the A and B last transmissions were at 08:3x; B's sign-off line is at 08:33:16 and A's `interval` ID at 08:37:54).
 
-**Backlog:** with an 8 s interval, A's 39 sends after 08:24:45 and the 15 min wait show A still transmitting every 20–40 s up to 08:32; that is the ACK-retry rhythm of the abandoned sends, not a backlog of the traffic script.
+**Backlog:** with an 8 s interval, A's 39 sends after 08:24:45 and the 15 min wait show A still transmitting every 20–40 s up to 08:32; I did not check what drives that rhythm.
 
 **End state:** cleanup clean on both stations. FT-991A dial 144641564, RFPOWER 0.05, RF 0.984314 (the starting value), PTT 0; IC-9700 dial 144640000, RFPOWER 0.0117647, PTT 0; nothing running; port B empty. Part D (f1, f2) needs the maintainer's go; before f1, the receive passbands are to be read back.
