@@ -15,6 +15,26 @@ this ledger adds the design rationale and the actually-observed results per chan
 
 ---
 
+## 2026-11-04 — No ACK for a frame that ended past its window in a capped slab (work plan M3, A2)
+
+- **Requirement/change:** REQ-FUN-06. Finding K of `docs/dev/design/dcd-raised-floor.md`: a capped
+  slab (#1255) ends where the cap fell, up to 38 s after its frame at SL6 and up to 320 s at SL2. The
+  ACK deadline is set from the slab's end. In a2g every decoded cap flush keyed an ACK (13 after the
+  restore), and an ACK carries no sequence number, so a late one can mark a later frame delivered.
+- **Design decision:** on a capped slab, the frame's end is the decoded slice's start plus the payload's
+  own coded airtime (`tx_airtime_seconds`). The deadline is shifted back by the slab's tail after it;
+  past it, no ACK and the ladder holds, as for a late decode. A keying change, so the review was
+  mandatory: `docs/dev/reviews/review-late-ack-capped-slab-2026-11-04.md`. It replaced the first
+  version's slice-reserve bound, which still let late ACKs through by 5 s at SL6 and 83 s at SL2.
+- **Implementation:** `crates/openpulse-modem/src/engine.rs` (`ota_decode_and_ack_inner`: the capped
+  flag is kept past the failed-slab branch; the rule follows the past-deadline check).
+- **Tests:** `crates/openpulse-modem/tests/no_ack_for_an_early_frame_in_a_capped_slab.rs`: a 6 s
+  window (no ACK); a window of the true tail − 2 s (no ACK; the tightness case); the tail + 2 s and no
+  deadline (ACK). Every case asserts that the decode finished before its deadline.
+- **Test results:** 3 passed, 0 failed. Sabotage: the slice-reserve bound restored, 1 failed
+  (`the_frames_end_is_its_airtime_not_its_slice_reserve`), 2 passed. Clippy (`openpulse-modem`,
+  all targets) and fmt clean. The gate result is on the M3 line.
+
 ## 2026-11-04 — The DCD re-learns a raised noise floor under a receiver AGC (work plan M3, A2 clause 2)
 
 - **Requirement/change:** REQ-FUN-06. On air (task 21, run a2g) station B's audio between frames went

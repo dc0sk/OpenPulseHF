@@ -129,7 +129,7 @@ sender-side step-down after silent windows would have walked A down while B held
 The only safe shape is option (b), bounded to the receiver's previous recommendation on an ACK-up,
 and even that should require a decode-less reason (a NACK heard), not silence. **Parked.**
 
-## Found by the review: a decoded cap flush keys a late ACK (pre-existing; a keying change)
+## Found by the review: a decoded cap flush keys a late ACK (pre-existing; a keying change) — fixed
 
 - **The mechanism:** every cap flush that decoded a frame keyed an ACK: 13 after the restore in a2g.
   The ACK deadline is set from the slab's end, not the decoded frame's, and #1255 guards only failed
@@ -139,8 +139,14 @@ and even that should require a decode-less reason (a NACK heard), not silence. *
   Whether that happened in a2g is UNCHECKED.
 - **Proposal:** a decoded cap flush keys nothing unless the decoded frame ended inside the sender's
   window.
-- It changes when the receiver keys, so it waits for the maintainer's go. The review recorded here is
+- It changes when the receiver keys, so it waited for the maintainer's go. The review recorded here is
   its design review.
+- **Fixed** (`8177910`, then the review's should-fixes): on a capped slab, the frame's end is its slice
+  start plus the decoded payload's own coded airtime (`tx_airtime_seconds`). The deadline is shifted
+  back by the slab's tail after that end; past it the receiver keys no ACK and the ladder holds, as
+  for a late decode. The first version's bound, the slice reserve, left late ACKs through by 5 s at
+  SL6 and 83 s at SL2. Review: `docs/dev/reviews/review-late-ack-capped-slab-2026-11-04.md`. Test:
+  `no_ack_for_an_early_frame_in_a_capped_slab`.
 
 ## Tests
 
@@ -148,6 +154,7 @@ and even that should require a decode-less reason (a NACK heard), not silence. *
   measurement across hangs of 0.6–2.5 s.
 - The replay of `rx-b-a2g` is scratch code; the recording is in the repository
   (`docs/dev/test-reports/on-air/rx-audio-2026-11-01/`).
+- `no_ack_for_an_early_frame_in_a_capped_slab` (`openpulse-modem`): the late-ACK rule, three cases.
 - Decisions 2 and 3: parked.
 
 ## Consumer
