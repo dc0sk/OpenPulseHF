@@ -4099,7 +4099,7 @@ step). It plays no part in the decisions here: `climb_on_snr` was not the path a
    - Or **A's sink volume at 0.02, 0.01 and 0.005**, to find where A's level starts to fall.
 4. The backlog (finding 2) before the next long run.
 
-## Task 21 — A→B demotion on one build; the `fast` profile's first time on air; the Pi cost of the OFDM receive (status: Parts A to C done and reviewed; Part D waits for the maintainer's go and a check of B's audio floor)
+## Task 21 — A→B demotion on one build; the `fast` profile's first time on air; the Pi cost of the OFDM receive (status: Parts A to C done and reviewed; Part D run f1 done; f2 waits for the maintainer's go and a check of B's audio floor)
 
 The new build is `23278b6`. On top of task 20's build (`f18c8a6`):
 - **The sender's station ID shares its data frame's audio stream** (task 20, finding 1). The data frame
@@ -4324,3 +4324,31 @@ The sends every 20–40 s after 08:25 are the stall's retries and abandons.
    otherwise test the stall, not the `fast` profile.
 4. **A→B demotion:** an attenuator in B's antenna line (maintainer), or A's drive at 0.01, 0.005 and
    0.002.
+
+### Results — task 21 Part D, run f1 (A sends, `fast` profile, 600 s, interval 8 s)
+
+Commit on rpi51 `772429a0` (build `23278b6`, hashes as in Part A). Evidence: `docs/dev/test-reports/onair-twin-ota-20261104-105532-evidence/` (with `ptt-alc-watch.txt`, `NOTES.md`); receive audio `rx-audio-2026-11-01/rx-{a,b}-f1-8k.wav.gz` (1800 s). The daemon logs are at `info,ofdm_plugin=debug`, so they have no per-frame decode, flush or TX lines: the counts below come from the rate-decision events and the OFDM debug lines. Before the run: FT-991A powered off when I came to read it back, switched on through CAT (`set_powerstat 1`), read back dial 144641564, PKTUSB 2400, RFPOWER 0.05, RF 0.984314, SQL 0, AGC 6; the runner then set PKTUSB 3000 on both rigs (as in the earlier tasks, not plain USB). The cloud review's step 3 (read B's inter-frame audio with nothing transmitting) reached me after f1 had run; I did not take that reading before it. f1 itself shows no stall: the ladder climbed and stepped down (below), and the rig had been powered off and on in between, so B's floor before f1 is unmeasured.
+
+**Climb (B's `ota_rate_decision` events, 115 decisions):** SL2 → SL3 (evidence, −2.2 dB) → SL4 (12.0 dB) → SL5 (16.5 dB) → SL6 (22.1 dB) → **SL7** (11.2 dB, `climb_on_snr`) → SL8 (evidence, SNR 2.2 dB) → SL9 (evidence, 7.1 dB) → SL10 (evidence, 4 dB). Then a cycle, 7 times: SL10 with two `nack_hold` → `nack_step_down` to SL8 → SL8 (hold, muted) → climb on evidence to SL9 → holds and `nack_hold`s → climb on evidence to SL10 → two `nack_hold` → step down to SL8. SL9 → SL8 `nack_step_down` happened twice. Highest rung reached: SL10 (OFDM52-32QAM). Totals: 21 climbs (4 `climb_on_snr`, 17 `climb_on_evidence`), 52 holds (8 muted), 34 `nack_hold`, 8 `nack_step_down`. No SL11 or above. Times per rung are not in the events (no timestamps) and the daemon logs at this level have none.
+
+**Counts:** B: 115 rate decisions, of which 34 `nack_hold` and 8 `nack_step_down` follow failed frames (42) and 73 decoded frames. A logged 1 `nack_hold` in its events and once `OTA send: retries exhausted (peer kept NACKing)`. The `ACK not received` and flush counts are not in these logs.
+
+**OFDM carrier offset (B, `OFDM: carrier offset acquired`, 1407 lines, one per decode attempt, so failed attempts count):**
+
+| mode | lines | `acquired_hz` min / median / max | `pilot_coherence` min / median / max |
+|---|---|---|---|
+| OFDM52 (SL7) | 9 | 3.76 / 3.77 / 3.79 | 0.96 / 0.98 / 0.98 |
+| OFDM52-8PSK | 129 | 1.72 / 2.79 / 29.58 | 0.63 / 0.99 / 1.00 |
+| OFDM52-16QAM | 943 | −34.85 / 2.40 / 35.20 | 0.30 / 0.99 / 1.00 |
+| OFDM52-32QAM | 326 | 1.59 / 2.37 / 3.95 | 0.95 / 0.99 / 0.99 |
+| all | 1407 | −34.85 / 2.40 / 35.20 | 0.30 / 0.99 / 1.00 |
+
+`told_hz` is 2.84–3.03 Hz throughout. A's daemon has no such lines (it received no OFDM frame).
+
+**Decode time after an OFDM frame's end, per rung:** not available (no flush or decode timestamps at this log level). To be had from f2 only if the log level is raised to debug for the whole daemon; I did not do that.
+
+**Station IDs:** A `with-data` 10:03:40.20 UTC, `interval` 10:13:15.11; B `with-ack` 10:03:35.16, `sign-off` 10:03:49.38 and 10:08:00.53. Runner: `sign-off IDs after the last transmission: IC-9700 no, FT-991A no` (the wait ran its 15 min; its "last TX" fields were empty because of the log level).
+
+**Stop rules and ALC:** no keying stretch over 70 s on either rig (watcher, 1 s polling). ALC while keyed (rigctld `l ALC`, 178 readings on the IC-9700, 54 on the FT-991A): IC-9700 min 0.033, median 0.617, max 0.858; per minute the maximum was 0.63 until 10:00, 0.858 at 10:00:35 (and 0.85 at 10:00:39, the only two readings above 0.8), 0.44–0.76 after. B's first OFDM acquisition line is at 10:00:31, so those two readings are in A's first OFDM transmissions (SL7–SL8). FT-991A ALC 0.0625 in every reading (its meter scale is coarse). I did not stop the run: I have no calibrated ALC limit for the IC-9700, only these numbers, and the drive was at the profile's value. This needs the cloud session's reading.
+
+**End state:** cleanup clean on both stations. FT-991A dial 144641564, RFPOWER 0.05, RF 0.984314, PTT 0 (powered on); IC-9700 dial 144640000, RFPOWER 0.0117647, PTT 0; nothing running; port B empty. Run f2 (B sends) needs the maintainer's go.
