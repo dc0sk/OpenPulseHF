@@ -4099,7 +4099,7 @@ step). It plays no part in the decisions here: `climb_on_snr` was not the path a
    - Or **A's sink volume at 0.02, 0.01 and 0.005**, to find where A's level starts to fall.
 4. The backlog (finding 2) before the next long run.
 
-## Task 21 — A→B demotion on one build; the `fast` profile's first time on air; the Pi cost of the OFDM receive (status: Parts A and B done; Parts C and D wait for the maintainer's go)
+## Task 21 — A→B demotion on one build; the `fast` profile's first time on air; the Pi cost of the OFDM receive (status: Parts A to C done; Part D waits for the maintainer's go)
 
 The new build is `23278b6`. On top of task 20's build (`f18c8a6`):
 - **The sender's station ID shares its data frame's audio stream** (task 20, finding 1). The data frame
@@ -4213,3 +4213,39 @@ COST Sl14 OFDM52-64QAM faded below its floor: decoded false, 15 attempts, 88 ms 
 ```
 
 Parts C (a2g) and D (f1, f2) each need the maintainer's go.
+
+### Results — task 21 Part C, run a2g (A sends, B leads the rate, robust, 900 s, interval 8 s, stepped RF gain on station B)
+
+Commit on rpi51 `d70e6c6f` (build `23278b6`, hashes as in Part A). Evidence: `docs/dev/test-reports/onair-twin-ota-20261104-091103-evidence/` (with `drive-schedule.txt`, `NOTES.md`); receive audio `rx-audio-2026-11-01/rx-{a,b}-a2g-8k.wav.gz` (1950 s). RSPdx witness: 960 s from 08:11:03.4, `peak=0.0161 rms=0.0086 clip=0.00%`, not analysed beyond the spot checks in NOTES.md.
+
+**Schedule (UTC, B's RF gain through its rigctld, each read back):** t0 08:11:03.38; first SL6 decode 08:15:54.94 (t0+291 s); 0.984314 until 08:19:04.33 (t0+481 s); 0.5 (read 0.498039); 0.3 from 08:20:07.13 (read 0.301961); 0.2 from 08:21:38.57 (read 0.2); 0.1 from 08:23:11.98 (read 0.0980392); 0.984314 from 08:24:45.27 (read 0.984314). At no step did B show 60 s without a flushed burst, so no step was reverted.
+
+**Result in short:** (1) The lowering of B's receive RF gain did not make SL6 fail at any step down to 0.1: no failed SL6 frame, no NACK, no demotion. So the A→B demotion through B's receive gain is **not shown**. (2) After the gain went back to 0.984314, B's receive worked no more: from 08:25 B decoded about 1 frame in 40 s, A logged 25 `ACK not received` and 12 abandoned sends. Cause not established, see below.
+
+**Counts:** A logged 128 data transmissions (89 before 08:24:45, 39 after; the 130 `logged TX metadata` lines include an ID line), B decoded 101 frames (95 QPSK250-D, 1 BPSK250, 1 BPSK100, 1 BPSK63, 3 BPSK31), 88 up to 08:24:45 and 13 after. `fec attempt FAILED` lines on B: 2994 (the ladder scan of undecodable bursts, 15 or so per burst). `ACK not received` on A: 25, all from 08:25:00 on; `OTA send abandoned`: 12, all from 08:25:14 on. B flushed 110 bursts (energy-and-read checks: none with read=0). Late decodes (`past the sender's ACK window`): 0 on both stations; ACK deadline set 122 times on B.
+
+**Timing (B, whole run):** flush to decode OK: median 0.26 s, max 1.55 s (n=89); decode OK to ACK keyed: median 1.05 s, min 0.93 s, max 2.44 s (n=101).
+
+**Rate decisions (B, 101 decisions, 4 keyed non-hold):** SL2→SL3 `climb_on_evidence` (4.6 dB); `climb_on_snr` SL3→SL4 at 14.1 dB, SL4→SL5 at 16.9 dB, SL5→SL6 at 21.3 dB; 85 keyed holds, no NACK, no step-down. SL6 first decoded at t0+291 s and was held to the end of the decisions. SNR of the decisions by phase (all rungs; the first ones are the climb):
+
+| B RF gain | decodes | SNR min / median / max (dB) |
+|---|---|---|
+| 0.984314 before | 36 | −6.3 / 11.1 / 21.3 |
+| 0.5 | 10 | 3.3 / 10.9 / 13.5 |
+| 0.3 | 14 | 3.3 / 11.2 / 18.4 |
+| 0.2 | 14 | −1.5 / 8.7 / 12.9 |
+| 0.1 | 14 | 3.6 / 11.0 / 18.4 |
+| 0.984314 after | 13 | 3.6 / 7.0 / 8.0 |
+
+**B's audio level at the steps** (rx-b recording, 20 s windows, rms of the 16-bit scale: 0.984 → 0.050; 0.5 → 0.049 (window opened 25 s after the change, started too early to count); 0.3 → 0.0061; 0.2 → 0.0022; 0.1 → 0.0004). The daemon's burst energy at 0.1 was 3–5e-5 against a squelch of 1e-4, and the frames still decoded at 9 per minute. The receiver is insensitive to this level down to −44 dB below the starting one.
+
+**After the restore (08:24:45):** the audio between the frames stayed at an rms of about 0.021 (rx-b, 2 s windows from 08:24:52 to 08:25:40) where it had been below 0.002 between 08:16 and 08:24; B's daemon logged `channel still busy after a burst flushed rms=0.02…` and its squelch rose from 1e-4 to 0.0147; its flushed bursts shrank to 400–2800 samples; decodes came once per 40 s, each logged right after a `channel still busy` line, with `samples=74904`. The RSPdx witness shows A's frames at 08:25:40 and nothing in the 144.640 MHz band between frames at 08:24:55, 08:25:10 and 08:26:30, so the air was quiet; the continuous audio is inside B's rig or receive chain. Read-back after the run: RF 0.984314 as before, SQL 0, AGC 6 (I did not read these before the run, so I do not know if either changed). I did not find the cause.
+
+**Station IDs:**
+- A: `with-data` 08:19:05.59 and 08:27:58.76; `interval` 08:37:54.57.
+- B: `with-ack` 08:19:08.65 and 08:28:06.58; `sign-off` 08:33:16.68.
+- Runner: `sign-off IDs after the last transmission: IC-9700 no, FT-991A no` after the 15 min wait (the A and B last transmissions were at 08:3x; B's sign-off line is at 08:33:16 and A's `interval` ID at 08:37:54).
+
+**Backlog:** with an 8 s interval, A's 39 sends after 08:24:45 and the 15 min wait show A still transmitting every 20–40 s up to 08:32; that is the ACK-retry rhythm of the abandoned sends, not a backlog of the traffic script.
+
+**End state:** cleanup clean on both stations. FT-991A dial 144641564, RFPOWER 0.05, RF 0.984314 (the starting value), PTT 0; IC-9700 dial 144640000, RFPOWER 0.0117647, PTT 0; nothing running; port B empty. Part D (f1, f2) needs the maintainer's go; before f1, the receive passbands are to be read back.
