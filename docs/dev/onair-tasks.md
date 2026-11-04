@@ -4364,7 +4364,7 @@ No daemon or rigctld running on either station; both rigs in the state the last 
 
 B's floor is about 0.019: the same as after the restore in a2g (0.021), 10× the a2g gaps between 08:16 and 08:24 (below 0.002) and similar to the gaps at 08:12–08:14 (0.008–0.013). The air is quiet: an RSPdx capture (6 s, port A, LO 144.620 MHz) reads −79.2 dB in the 144.640 MHz band and −78.9 dB in the reference band, the same as the a2g gaps. So the noise is B's rig or receive chain, as the review said, and it is steady now, not a change that came with the gain steps. I did not find the cause: no menu item or level was changed by me beyond RF (restored to the same readback) and the power-on; the FT-991A's SQL reads 0 and AGC 6 now, but I have no reading of them from before a2g. Part D f2 would transmit under this floor; f1 climbed to SL10 and cycled under it, so it does not stop the ladder when frames decode.
 
-## Task 22 — B's receive audio state; A→B demotion through real attenuation; then the `fast` profile (status: Parts A and B done; Part C waits for the maintainer's go)
+## Task 22 — B's receive audio state; A→B demotion through real attenuation; then the `fast` profile (status: Parts A and B done; Part C run f1b done, f2 waits for the maintainer's go)
 
 The new build is `e5ba27f` (pull the branch head; the commits after it are docs). On top of task 21's
 build (`23278b6`):
@@ -4602,3 +4602,38 @@ Commit on rpi51 `22ca4365` (build `e5ba27f`, hashes as in Part A). AGC FAST on b
 **ALC (watcher, 1 s polling while keyed; 343 IC-9700 readings, 51 FT-991A):** IC-9700 maximum 0.783; FT-991A as in f1 (0.0625 at its coarse scale). No keying over 70 s.
 
 **End state:** cleanup clean on both stations. FT-991A dial 144641564, RFPOWER 0.05, RF 0.984314, AGC 2 (FAST), SQL 0, PREAMP 20, PTT 0; IC-9700 dial 144640000, RFPOWER 0.0117647, AGC 2, SQL 0, PTT 0 (drive back at 0.15); nothing running; port B empty. Part C (f1, f2 on this build) needs the maintainer's go.
+
+### Results — task 22 Part C, run f1b (A sends, `fast` profile, 600 s, interval 8 s, B in the hiss state)
+
+Commit on rpi51 `6c2e0295` (build `e5ba27f`, hashes as in Part A). AGC FAST on both rigs; FT-991A SQL 0 (hiss), PREAMP 20; the runner set PKTUSB 3000 on both rigs (as in the earlier tasks). I did not read the receive passbands back separately before the run. Evidence: `docs/dev/test-reports/onair-twin-ota-20261104-194140-evidence/` (with `ptt-alc-watch.txt`, `NOTES.md`); receive audio `rx-audio-2026-11-01/rx-{a,b}-f1b-8k.wav.gz` (1800 s). Tag `f1b` because `f1` is task 21's run; log level full `debug` (the task said `info,ofdm_plugin=debug`) so that decode times can be read.
+
+**Climb (B's 117 rate decisions):** SL2 → SL3 (evidence, −6 dB) → SL4 (9 dB) → SL5 (17 dB) → SL6 (22 dB) → SL7 (`climb_on_snr`, 11 dB) → SL8 (evidence) → SL9 (evidence, 4 dB) and then, 9 times, the cycle: SL9 holds and NACKs → climb on evidence to SL10 → two `nack_hold` → `nack_step_down` to SL8 → climb on evidence to SL9 (one cycle ends SL9 → SL7 → SL8). Highest rung reached: SL10 (OFDM52-32QAM), from which every visit failed twice: **SL10 never decoded a frame**; the highest rung that decoded is SL9 (16QAM). Totals: 22 climbs (4 `climb_on_snr`, 18 `climb_on_evidence`), 50 holds, 35 `nack_hold`, 10 `nack_step_down`. Times per rung are not in the events; B's flushes give no per-rung clock either, so no per-rung durations.
+
+**Decoded frames on B (72 `fec attempt OK`):** SL2–SL6 climb 7 (3 BPSK31, 1 BPSK63, 1 BPSK100, 1 BPSK250, 1 QPSK250-D), SL7 OFDM52 6, SL8 OFDM52-8PSK 35, SL9 OFDM52-16QAM 24, SL10 0. 2597 `fec attempt FAILED` lines (the ladder scan of undecodable bursts).
+
+**SNR of the decisions per rung (B's reading):** SL7 median 1.5 dB (−0.6–3.1, 6 frames); SL8 5.0 (2.3–12.8, 35); SL9 8.5 (3.0–11.3, 24). Task 22's note expected B's SL9 reading to rise to the frame's real ~15 dB; here it reads a median 8.5 dB, a maximum 11.3.
+
+**Decode time after the frame's end (B, the Pi 4; burst flush to `fec attempt OK`):**
+
+| rung / mode | frames | min / median / max (s) |
+|---|---|---|
+| SL7 OFDM52 | 6 | 0.04 / 0.05 / 0.08 |
+| SL8 OFDM52-8PSK | 35 | 0.03 / 0.04 / 0.39 |
+| SL9 OFDM52-16QAM | 24 | 0.02 / 0.04 / 0.53 |
+| BPSK31 (SL2) | 3 | 1.46 / 1.48 / 1.63 |
+| BPSK63 | 1 | 1.09 |
+| BPSK100 | 1 | 0.69 |
+| BPSK250 | 1 | 0.49 |
+| QPSK250-D (SL6) | 1 | 0.30 |
+
+(For a decode that comes after more than one flush the nearest earlier flush is used; the 0.39 and 0.53 maxima may be that case.) Late decodes (`past the sender's ACK window`): 0; capped-slab lines: 0.
+
+**OFDM carrier offset (B, 1257 `OFDM: carrier offset acquired` lines, one per attempt):** `acquired_hz` min −9.28, median 3.87, max 5.95; `pilot_coherence` min 0.46, median 0.98, max 1.00.
+
+**Counts:** A 118 data transmissions; `ACK not received` 5 (18:50:04.64, 18:51:36.25, 18:51:47.03, 18:53:24.65, 18:53:35.34); abandoned 0. B logged `channel still busy after a burst flushed` 12 times. B's `sign-off` lines at 18:50:04.38, 18:51:37.09 and 18:53:25.38 fall within 0.3–0.9 s of three of the `ACK not received` times (the first, third and fifth of A's: 18:50:04.64 after 18:50:04.38; 18:51:36.25 before 18:51:37.09; 18:53:24.65 before 18:53:25.38); I did not examine the frames in detail.
+
+**Station IDs:** A `with-data` 18:49:55.44, `sign-off` 18:54:47.69; B `with-ack` 18:49:43.51, `sign-off` 18:50:04.38, 18:51:37.09, 18:53:25.38, 18:54:27.32, 19:01:05.65, 19:04:02.81. Runner: `sign-off IDs after the last transmission: IC-9700 no, FT-991A no`.
+
+**Stop rules and ALC:** no keying stretch over 70 s on either rig (watcher). ALC on the IC-9700: 182 readings while keyed, maximum 0.858 (the same as f1's); not stopped (no calibrated limit).
+
+**End state:** cleanup clean on both stations. FT-991A dial 144641564, RFPOWER 0.05, RF 0.984314, AGC 2, SQL 0, PREAMP 20, PTT 0; IC-9700 dial 144640000, RFPOWER 0.0117647, AGC 2, SQL 0, PTT 0; nothing running; port B empty. Run f2 (B sends) needs the maintainer's go.
