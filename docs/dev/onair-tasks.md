@@ -4957,7 +4957,7 @@ maintainer's go and the mandatory review):**
 - P1 and P2 decide whether the `fast` profile climbs past SL7 from a rig without ALC compression,
   which on HF is the common case.
 
-## Task 24 — the `fast` profile on the build with the fallback after silence (status: Part A run f1d done; f2d waits for the maintainer's go)
+## Task 24 — the `fast` profile on the build with the fallback after silence (status: Part A runs f1d and f2d done; see Results)
 
 **The new build is the branch head** once the fallback is committed
 (`docs/dev/design/ladder-climb-into-silence.md`). On top of task 23's build (`5a3f6c5`):
@@ -5013,4 +5013,26 @@ As task 23, plus:
 **Station IDs (30 s sign-off idle):** A `with-data` 16:49:32.99, `sign-off` 16:53:42.96. B `with-ack` 16:49:35.86, `sign-off` 16:53:08.70 and 16:57:18.89. `ACK not received` is a DEBUG line and is not in these logs.
 
 **A sent 107 frames and B keyed 106 decisions:** every frame but one got a decision from B.
+
+### Results — Part A, run f2d (B sends, `fast` profile; 2026-11-05)
+
+**Setup:** as f1d, `TRAFFIC_FROM=B`, rig state read back before the run (A 0.0117647 / AGC 2 / SQL 0; B 0.05 / AGC 2 / SQL 0 / PREAMP 20). Recordings from 17:21:01 UTC. Evidence: `docs/dev/test-reports/onair-twin-ota-20261105-182148-evidence` (`NOTES.md`).
+
+**Stop rules and state:** no keying stretch over 70 s. IC-9700 ALC while keyed: 3 readings (median 0.617, max 0.667); FT-991A ALC 0.0625 in all 230 readings. The runner printed `no, no` for sign-off again. After cleanup (read back): IC-9700 dial 144640000, RFPOWER 0.0117647, AGC 2, SQL 0, PTT 0; FT-991A dial 144641564, RFPOWER 0.05, AGC 2, SQL 0, PREAMP 20, PTT 0; nothing running.
+
+**The fallback did not fire, and B stayed at SL7 for the run.**
+- **B's `ota_status` shows `tx_level` SL2→SL3→SL4→SL5→SL6→SL7 and then no further change.** B sent 114 frames: OFDM52 (SL7) 103, BPSK31 3, BPSK250 3, QPSK250-D 3, BPSK63 1, BPSK100 1.
+- **A, the receiver, made 9 rate decisions** (4 hold, 3 climb_on_snr, 2 climb_on_evidence): SL2→3→4→5→6→7. A decoded 11 frames (BPSK31 3, BPSK250 3, QPSK250-D 3, BPSK63 1, BPSK100 1; **no OFDM52 frame**). A's `ota_status` at the last change: `rx_recommended_level` SL7, `rx_confirmed_level` SL6.
+- **SNR A read (dB):** SL2 −4.1 (−11.5 to −0.5, 3), SL3 9.7, SL4 12.5, SL5 13.9, SL6 9.8 (3.3–9.9, 3). SL7: nothing decoded, so no SNR.
+- **B logged 51 `OTA send abandoned: peer silent for 2 consecutive ACK windows`** (first 17:27:17.20, last 17:46:xx; f2c: 51). **0 `back to the level before it` lines and 0 `ota_fall_back` events, on either station.** That line has not matched anything in any log yet, so "0" is "my filter found nothing", not a verified absence of the behaviour. What the logs do show is two silent ACK windows 51 times with B's `tx_level` still SL7.
+- **A kept acquiring OFDM carrier offsets:** 114 lines (17:28:52 to 17:46:36), `acquired_hz` −41.54 to 24.48, median −4.07; `pilot_coherence` min 0.24, median 0.966. A saw OFDM carriers and decoded none. A keyed 19-ish times at most (3 ALC readings; its events show 1 `frame_transmitted`).
+- **Against the task's expectation** (B→A tops at SL6 with SL7 probes answered by the fallback): B→A topped at SL6 decoded, as expected, but B did not fall back from SL7. I have not looked at why.
+
+**`capture read holds`:** A 15 (1.04–1.39 s, 17:27:11 to 17:44:41), B 0. The first A hold is at 17:27:11, six seconds before B's first `abandoned` line.
+
+**Station IDs (30 s sign-off idle):** A `sign-off` 17:27:24.72. B `with-data` 17:30:05.75 and 17:38:45.35; B logged no `sign-off` ID. `ACK not received` is a DEBUG line and is not in these logs.
+
+**`TCP client event receiver lagged; events dropped` on B:** 18 lines (lost 13, 46, 59, …) from 17:29:15 on. B's events file therefore may lack events after that; B's `frame_transmitted` count (114) is from the events file.
+
+**Operational note:** `/tmp` (an 8 GB tmpfs) filled while finishing this run and B's first audio copy was cut short. I deleted only my own raw 48 kHz scratchpad copies (`rx-b-*.wav`) of earlier runs whose 8 kHz versions are committed, copied B's recording again and converted it again; both f2d audio files pass `gzip -t`. Nothing else in `/tmp` was touched.
 
