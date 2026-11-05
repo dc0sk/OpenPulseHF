@@ -15,6 +15,20 @@ this ledger adds the design rationale and the actually-observed results per chan
 
 ---
 
+## 2026-11-05 — The fallback says why it declined (work plan M3, A2)
+
+- **Requirement/change:** REQ-FUN-06. On air (task 24, f2d) the fallback after a climb into silence
+  declined 51 times at SL7. A keyed no ACK after its climb recommendation, and the code, an engine
+  replay of B's ACK sequence and a two-daemon twin all fall back. The info log could not say why.
+- **Design decision:** a diagnostic only. `fall_back_declined_because` gives the reason, and the engine
+  logs it at `info` on every decline. No keying change.
+- **Implementation:** `crates/openpulse-core/src/ota_rate.rs` (`fall_back_declined_because`);
+  `crates/openpulse-modem/src/engine.rs` (`ota_fall_back_after_silence`).
+- **Tests:** `the_declined_reason_matches_the_fall_back`.
+- **Test results:** `ota_rate` 35/0. Clippy (`openpulse-core`, `openpulse-modem`) and fmt clean;
+  reachability PASS. Task 25 reruns f2d with it.
+
+
 ## 2026-11-05 — A climb into silence: the sender returns to the level before it; SL7's peak within full scale (work plan M3, A2)
 
 - **Requirement/change:** REQ-FUN-06.

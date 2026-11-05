@@ -5036,3 +5036,55 @@ As task 23, plus:
 
 **Operational note:** `/tmp` (an 8 GB tmpfs) filled while finishing this run and B's first audio copy was cut short. I deleted only my own raw 48 kHz scratchpad copies (`rx-b-*.wav`) of earlier runs whose 8 kHz versions are committed, copied B's recording again and converted it again; both f2d audio files pass `gzip -t`. Nothing else in `/tmp` was touched.
 
+
+### Review of task 24 (cloud session, 2026-11-05)
+
+**f1d (A sends):**
+- As f1c: SL9 decodes at 14.1 dB, SL10 never.
+- A→B never had two silent windows after a climb, so no fallback was needed. No abandoned sends.
+- The IC-9700's ALC peaked at 0.75 (task 23: 0.858), consistent with SL7's lower peak.
+
+**f2d (B sends): the case the fallback exists for, and it did not fire.**
+- **A recommended SL7 on evidence** after its third QPSK250-D decode, at a 9.8 dB SL6 reading.
+- **B climbed to SL7**, as its events show (`[tx SL6] QPSK QPSK QPSK [tx SL7]`).
+- **A decoded none of B's SL7 frames.** That matches P1's prediction for the rig without ALC compression: f2c decoded 5.
+- **A keyed nothing after the climb** but its sign-off ID (its events: the last decision is `climb_on_evidence` to SL7, then one PTT for the ID). So no ACK could have cleared B's record.
+- **Yet B abandoned 51 messages "peer silent" at SL7,** with no `back to the level before it` line and no `ota_fall_back` event. Its level stayed SL7.
+
+**What I checked, and what it shows:**
+- **The committed code** (`run_ota_retry`, `adopt_recommendation_from`, `fall_back_after_silence` at
+  `a845ce4`) does what the design says.
+- **Replaying B's ACK sequence** through `ModemEngine::apply_ota_ack` (AckUp SL3 … SL6, AckOk SL6 ×2,
+  AckUp SL7), the fallback fires and returns to SL6.
+- **A two-daemon twin** climbing from SL5 fell back SL6 → SL5 after silence, and the backoff then held
+  it at SL5.
+- **The deployed server changed** (`e74e6f4c…` against task 23's `8630d843…`), and P1 is visible on air.
+- **Nothing else in the daemon** writes the sender's level besides ACKs, the bounds and lock commands
+  (control port only; the runner sends none), and the fallback.
+- **So why the fallback declined on air is not established.** The info log cannot say.
+
+**Change for the next run:**
+- When the fallback declines, the engine now logs `OTA: the peer is silent; no fall-back` with its
+  reason: no unconfirmed climb recorded, the session locked, or the SL1 sub-floor.
+- It is a log line only, no keying change.
+
+## Task 25 — why the fallback declined: f2d again, with the reason logged (status: open; waits for the build and the maintainer's go)
+
+**The new build is the branch head** (the decline line, on top of task 24's `a845ce4`). Settings as task 24.
+
+**One change in the logging:** `DAEMON_LOG_LEVEL=info,ofdm_plugin=debug,openpulse_daemon=debug` on
+**station B only**, so that its ACK listen (`OTA ACK not received within window`) and each received ACK
+are logged. Station A stays at `info,ofdm_plugin=debug`. Count B's `capture read holds`; in task 22 full
+`debug` held B's loop for 1.4–2.5 s.
+
+### Part A — run f2e (B sends, `fast` profile; keys both rigs: one go)
+
+As task 24's f2d: `TRAFFIC_FROM=B`, `TRAFFIC_INTERVAL=8`, `TRAFFIC_DURATION=600`.
+
+### Report
+
+As task 24, plus:
+- every `the peer is silent; no fall-back` line, with its `why`;
+- every `back to the level before it` line;
+- B's ACK lines (received and not received) from the climb to SL7 until the first abandon, with times;
+- B's `ota_status` `tx_level` at the first abandon.
