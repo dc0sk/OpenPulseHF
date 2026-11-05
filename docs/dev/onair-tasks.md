@@ -4957,7 +4957,7 @@ maintainer's go and the mandatory review):**
 - P1 and P2 decide whether the `fast` profile climbs past SL7 from a rig without ALC compression,
   which on HF is the common case.
 
-## Task 24 — the `fast` profile on the build with the fallback after silence (status: open; waits for the build and the maintainer's go)
+## Task 24 — the `fast` profile on the build with the fallback after silence (status: Part A run f1d done; f2d waits for the maintainer's go)
 
 **The new build is the branch head** once the fallback is committed
 (`docs/dev/design/ladder-climb-into-silence.md`). On top of task 23's build (`5a3f6c5`):
@@ -4989,3 +4989,28 @@ As task 23, plus:
 - the messages abandoned (`OTA send abandoned`), against f2c's 51;
 - the highest rung decoded in each direction;
 - the IC-9700's ALC on SL7 frames against task 23's (0.858).
+
+### Results — Part A, run f1d (A sends, `fast` profile; 2026-11-05)
+
+**Setup:** rpi51 at `a845ce45`, deployed with `deploy` (server, CLI and `twin-traffic.sh` sha256 identical on both stations). Settings as task 23; rig state read back before the run (A 0.0117647 / AGC 2 / SQL 0; B 0.05 / AGC 2 / SQL 0 / PREAMP 20). `auto_id_signoff_idle_secs = 30` on both (configs in the evidence). Evidence: `docs/dev/test-reports/onair-twin-ota-20261105-174133-evidence` (`NOTES.md`). Recordings from 16:40:46 UTC.
+
+**Stop rules:** no keying stretch over 70 s. IC-9700 ALC while keyed: 172 readings, median 0.617, max 0.75, 1 at or above 0.7, none at or above 0.8 (task 23 f1c: max 0.85). FT-991A ALC 0.0625 throughout. The runner printed `no, no` for sign-off again. After cleanup: IC-9700 dial 144640000, RFPOWER 0.0117647, AGC 2, SQL 0, PTT 0; FT-991A dial 144641564, RFPOWER 0.05, AGC 2, SQL 0, PREAMP 20, PTT 0; nothing running.
+
+**B, the receiver, decoded 75 frames:** OFDM52-8PSK 34, OFDM52-16QAM 32, BPSK31 3, BPSK250 2, BPSK63 1, BPSK100 1, QPSK250-D 1, OFDM52 1. **Highest rung decoded: SL9. SL10 never decoded** (A sent 30 OFDM52-32QAM frames).
+
+**B's 106 rate decisions:** 47 hold, 22 climb_on_evidence, 5 climb_on_snr, 22 nack_hold, 10 nack_step_down. Path: SL2→…→SL10, then ten cycles SL10 `nack_hold` → `nack_step_down` to SL8 → SL9 → SL10, as in f1c (nine cycles there).
+
+**SNR B read per decoded level (dB):** SL2 −4.7 (−10.6 to −2.9, 3), SL3 15.3, SL4 17.2, SL5 23.3, SL6 11.2, **SL7 13.1 (1 frame; f1c: 6.6, 3 frames)**, SL8 12.2 (10.4–13.8, 34), SL9 14.1 (13.1–15.5, 32). SL10: none decoded, so no SNR. One SL7 frame is all there is; I did not test why it reads higher than f1c's three.
+
+**The fallback did not fire:** 0 lines `back to the level before it` and 0 `ota_fall_back` events (events: `dcd_change`, `frame_transmitted`, one `ota_rate_decision` on A), 0 `OTA send abandoned` lines on either station (f2c: 51). A→B never had two silent ACK windows after a climb. The filter is the same as for the lines found in task 23 runs (`OTA send abandoned` matched 51 lines in f2c's B log); `back to the level before it` has not matched anything yet, so "0" here is "my filter found nothing" for that line.
+
+**The IC-9700's ALC on SL7 frames: not isolated.** A sent one SL7 (OFDM52) frame in the run, and the ALC watcher's timestamps cannot be matched to it. The run's maximum, 0.75, is below task 23's 0.858 and 0.85.
+
+**OFDM carrier offset (B, 1171 lines):** `acquired_hz` min −9.83, median 3.49, max 5.28.
+
+**`capture read holds`:** A 2 (2.38 s at 16:56:49, 2.08 s at 16:57:21); B 7 (1.0–2.4 s at 16:46:57, 16:53:14, 16:55:02, 16:56:36, 16:56:43, 16:58:05, 16:59:07).
+
+**Station IDs (30 s sign-off idle):** A `with-data` 16:49:32.99, `sign-off` 16:53:42.96. B `with-ack` 16:49:35.86, `sign-off` 16:53:08.70 and 16:57:18.89. `ACK not received` is a DEBUG line and is not in these logs.
+
+**A sent 107 frames and B keyed 106 decisions:** every frame but one got a decision from B.
+
