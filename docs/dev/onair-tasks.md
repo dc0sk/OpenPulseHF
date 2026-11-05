@@ -4720,7 +4720,7 @@ Commit on rpi51 `14aa9057` (build `e5ba27f`, hashes as in Part A). Settings as f
 - The preamp does not change B's idle hiss.
 - AGC FAST is set on both rigs and stays.
 
-## Task 23 — the `fast` profile and the A→B demotion on the notch-fix build (status: Part A run f1c done; f2c and a2i wait for the maintainer's go)
+## Task 23 — the `fast` profile and the A→B demotion on the notch-fix build (status: Part A runs f1c and f2c done; a2i waits for the maintainer's go)
 
 **The new build is the branch head once the notch fix is committed** (`notch-protects-the-ladder.md`).
 On top of task 22's build (`e5ba27f`):
@@ -4813,3 +4813,26 @@ Against the task's expectation:
 **Not looked at:** why SL10 never decodes while SL9 decodes at 14.1 dB (the SL10 frames' SNR is not logged), and whether A's retransmissions overlap B's IDs (the info-level log has no TX lines for either).
 
 **Radio state after cleanup (read back, nothing running on either station):** IC-9700 dial 144640000, RFPOWER 0.0117647, AGC 2 (FAST), SQL 0, PTT 0. FT-991A dial 144641564, RFPOWER 0.05, AGC 2 (FAST), SQL 0, PREAMP 20, PTT 0.
+
+### Results — Part A, run f2c (B sends, `fast` profile; 2026-11-05)
+
+**Setup:** as f1c, `TRAFFIC_FROM=B`; traffic window about 07:52:20–08:02:20 UTC (the watcher's first keyed reading is 07:52:19). Evidence: `docs/dev/test-reports/onair-twin-ota-20261105-085217-evidence` (`NOTES.md`). Configs read back `auto_id_signoff_idle_secs = 30` on both stations. Recordings from 07:51:31 UTC.
+
+**Stop rules and state:** no keying stretch over 70 s. IC-9700 ALC while keyed: 6 readings, median 0.554, max 0.667. FT-991A ALC 0.0625 in all 202 readings. The runner printed `no, no` for sign-off again. After cleanup (read back): IC-9700 dial 144640000, RFPOWER 0.0117647, AGC 2, SQL 0, PTT 0; FT-991A dial 144641564, RFPOWER 0.05, AGC 2, SQL 0, PREAMP 20, PTT 0; nothing running.
+
+**The link stalled after about 07:57:30 and never recovered.**
+- **A, the receiver, made 19 rate decisions** in 33 minutes, against 111 in f1c: 8 hold, 3 climb_on_evidence, 3 climb_on_snr, 5 nack_hold (4 keyed, 1 muted). A decoded 16 frames (`frame_received`): BPSK31 3, BPSK63 1, BPSK100 1, BPSK250 3, QPSK250-D 3, OFDM52 5.
+- **Ladder path:** SL2→3→4→5→6→7→8, then only `nack_hold`; no `nack_step_down`, no further climb. A never decoded an OFDM52-8PSK frame.
+- **SNR A read per decoded level (dB):** SL2 −5.2 (−11.3 to −1.1, 3), SL3 10.7, SL4 13.1, SL5 15.3, SL6 9.6 (3.1–10.3, 3), SL7 6.0 (5.9–6.5, 5). The 5 NACK decisions carry no SNR.
+- **B sent 124 frames** (`frame_transmitted`) and keyed 122 times. B logged **51 `OTA send abandoned: peer silent for 2 consecutive ACK windows`** lines, the first at 07:58:21, the last at 08:17:08.
+- **A keyed 19 times in all.** A's log has one line at the stall: `07:57:32.74 OTA: a burst failed while the channel was still busy; no NACK keyed, the ladder holds`. After that A logged two `received frame` lines, seq 33 at 08:00:39.37 and seq 80 at 08:09:20.82. B's `with-data` station IDs are at 08:00:39.02 and 08:09:20.41, so the two decodes coincide with B's IDs; I did not check that they are the ID frames.
+- **A kept acquiring OFDM carrier offsets** until 08:17:21 (391 lines; `acquired_hz` −18.56 to 39.99, median −4.38; `pilot_coherence` min 0.16, median 0.953). The OFDM front end saw B's frames and A decoded none of them after SL7; the `info` log does not say why. `dcd_change` events: 126.
+
+**Not explained:** why A stopped making decisions after 07:57:32, and why it keyed no NACK for the SL8 frames it acquired. The log level was `info,ofdm_plugin=debug`, which has no line for the decode attempt or for the veto. The one `no NACK keyed` line is the existing busy-channel hold; I did not show that it caused the stall. A rerun at full `debug` would show the attempts, and the earlier full-`debug` runs cost the receive loop 1.4–2.5 s holds on B.
+
+**`capture read holds`:** A 5 (1.13–1.42 s: 07:57:32, 07:58:48, 08:10:13, 08:10:31, 08:15:08), B 0.
+
+**Station IDs (30 s sign-off idle):** A `sign-off` 07:58:29.71; B `with-data` 08:00:39.02 and 08:09:20.41, none other. **Lost ACKs next to IDs:** not answerable at this log level (`ACK not received` is DEBUG); B's `abandoned` lines at `info` are the nearest signal, and they are 51 lines over 19 minutes, not tied to the IDs.
+
+**Against f1c:** with A sending (f1c) B decoded SL8 and SL9 at 12.6 and 14.1 dB. With B sending (f2c) A read SL7 at 6.0 dB and decoded nothing above SL7, as in f2b.
+
