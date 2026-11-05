@@ -421,6 +421,26 @@ impl OtaRateController {
         true
     }
 
+    /// Why [`fall_back_after_silence`](Self::fall_back_after_silence) would decline now, or `None`
+    /// when it would fall back. For the log line on a silent peer (on-air task 24, f2d: it declined
+    /// 51 times and the info log could not say why).
+    pub fn fall_back_declined_because(&self) -> Option<&'static str> {
+        if self.locked.is_some() {
+            return Some("the session is locked");
+        }
+        let Some(before) = self.tx_before_climb else {
+            return Some("no unconfirmed climb is recorded");
+        };
+        if self
+            .profile
+            .mode_for(before)
+            .is_some_and(|m| m.starts_with("MFSK16"))
+        {
+            return Some("the level before the climb is the MFSK16 sub-floor");
+        }
+        None
+    }
+
     /// Current TX speed level.
     pub fn tx_level(&self) -> SpeedLevel {
         self.tx_level
@@ -819,6 +839,24 @@ mod tests {
         c.adopt_recommendation(SpeedLevel::Sl8);
         c.lock_level(SpeedLevel::Sl8);
         c.unlock();
+        assert!(!c.fall_back_after_silence());
+    }
+
+    #[test]
+    fn the_declined_reason_matches_the_fall_back() {
+        let mut c = ctrl();
+        assert_eq!(
+            c.fall_back_declined_because(),
+            Some("no unconfirmed climb is recorded")
+        );
+        c.adopt_recommendation(SpeedLevel::Sl7);
+        c.adopt_recommendation(SpeedLevel::Sl8);
+        assert_eq!(c.fall_back_declined_because(), None);
+        assert!(c.fall_back_after_silence());
+        let mut c = ctrl();
+        c.adopt_recommendation(SpeedLevel::Sl1);
+        c.adopt_recommendation(SpeedLevel::Sl2);
+        assert!(c.fall_back_declined_because().is_some());
         assert!(!c.fall_back_after_silence());
     }
 

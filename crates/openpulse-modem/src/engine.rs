@@ -2292,7 +2292,11 @@ impl ModemEngine {
             return false;
         };
         let from = o.tx_level();
+        let declined = o.fall_back_declined_because();
         let fell = o.fall_back_after_silence();
+        if let Some(why) = declined {
+            info!(level = ?from, why, "OTA: the peer is silent; no fall-back");
+        }
         if fell {
             let to = o.tx_level();
             info!(
