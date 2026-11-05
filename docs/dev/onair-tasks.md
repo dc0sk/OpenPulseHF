@@ -2553,6 +2553,10 @@ written, but the rule was wrong. What happened:
    (`server.rs`, the OTA retry, `block_in_place`). While it transmits and waits for the ACK, the control
    port does not answer, and at SL2 a frame takes about a minute. The status stop rule is dropped. The
    evidence is the daemons' `events.ndjson`, not the polling.
+   **Corrected 2026-11-05 (task 26 review): the explanation is wrong; dropping the rule was right.**
+   `ota-status` never printed a status, on an idle daemon too. The daemon answers `ok` at once and
+   broadcasts the status afterwards, and the CLI stopped reading at the `ok`. The query was also a
+   bounds command that emptied the sender's climb record. Both are fixed in `306cad29`.
 3. **The real failure: station B decoded nothing at SL2 and answered too late.** A sent its first
    BPSK31 frame from 19:33:08 and gave up at 19:35:41 after two silent ACK windows. B's only NACK
    came about four minutes after it started, around 19:37, after A had stopped listening. The ISS
@@ -5061,6 +5065,8 @@ As task 23, plus:
 - **The deployed server changed** (`e74e6f4c…` against task 23's `8630d843…`), and P1 is visible on air.
 - **Nothing else in the daemon** writes the sender's level besides ACKs, the bounds and lock commands
   (control port only; the runner sends none), and the fallback.
+  **Corrected 2026-11-05 (task 26 review):** the runner sent one on every pass. Its `ota-status` poll
+  was `OtaSetLevelBounds {None, None}`, and that emptied the climb record.
 - **So why the fallback declined on air is not established.** The info log cannot say.
 
 **Change for the next run:**
@@ -5225,3 +5231,79 @@ As task 25, plus:
 **Station IDs (30 s sign-off idle):** A `sign-off` 21:37:09.16. B `with-data` 21:39:50.82 and 21:48:27.53; no `sign-off` ID on B.
 
 **Operator's report** (relayed by the task session, the maintainer's words): "I can hear B's OFDM signal clearly, but there is nearly no signal on the scope. The exchange just before (A something wide, B something narrow) was fine." Time not known to me; B's first SL7 frame went out between 21:36:38.05 and 21:36:49.83. The RSPdx was not recording. Mechanisms offered with the report (OFDM power spread over about 2.4 kHz; the FT-991A's lower average OFDM level) are interpretation, not measured.
+
+### Review of task 26 (pc1 session, 2026-11-05)
+
+**Found: no ACK emptied the record. The runner's status poll did.**
+- f2f shows the climb ACK recorded the climb (`no_fall_back="-"` at 21:36:38.05), and the decline
+  23 s later found it empty, with no ACK applied in between.
+- The runner (`scripts/run-onair-twin-ota.sh`, the traffic loop) runs `openpulse daemon ota-status` on
+  both stations every pass. The CLI built that query as `OtaSetLevelBounds {None, None}`, "a no-op
+  bounds command". It is not one: `set_level_bounds` empties the climb record and the backoff, and
+  overwrites any configured `ota_min_level` / `ota_max_level`.
+- **Timing (Fable's correction to my first reading):** a send blocks B's server loop, and commands
+  queue in order. So the poll that clears the record is the one queued behind the message whose ACK
+  climbed, applied right after that ACK. In f2f's B events, that is the second SL7 `ota_status`
+  between the climb ACK's and the first OFDM52 keying. The connects during the SL7 send itself were
+  applied only after it ended.
+- The same poll explains f2d and f2e. On air the backoff has never run either, for the same reason.
+
+**Also found: `ota-status` never printed a status.**
+- The daemon answers a command with `ok` at once and broadcasts the event when its loop gets to it.
+  The CLI stopped reading at the `ok`. Every runner report from tasks 11–26 shows `<no status>`.
+- `ptt-state` had the same defect and printed `active: false` for every query.
+- The CLI's own test fed the event before the `ok`, the reverse of the real daemon.
+- Task 11's explanation ("the control port does not answer during a send") is corrected in place
+  above, and so is task 24's "the runner sends none".
+
+**Confirmed by measurement (Fable, read-only probes, deleted afterwards):**
+- the twin with a 3 s bounds poll fails (400 s timeout, twice), and the same build unpolled passes in
+  120 s;
+- through the controller, f2f's ACK sequence plus `set_level_bounds(None, None)` gives exactly f2f's
+  decline;
+- on a loopback daemon, one `ota-status` erased a configured SL4 floor.
+
+**The fix (`306cad29`):**
+- a read-only `GetOtaStatus` control command, which only broadcasts the status;
+- the CLI's `ota-status` sends it, and `ota-status` and `ptt-state` read past the `ok` to the event;
+- `set_level_bounds` with the bounds already in force changes nothing, so an older CLI's poll keeps
+  the record. A real change still drops it, so a fall-back cannot land outside new bounds.
+
+**Gates:**
+- a twin test polls with the bounds A runs with, every 3 s;
+- a CLI test against a mock that answers in the real order;
+- a daemon test showing a status query keeps a floor;
+- a controller unit test.
+
+**Sabotages,** each failing its gate:
+- the no-op removed fails the unit test and the polled twin (400 s), while the unpolled twin passes;
+- the CLI sending the bounds command again fails the request check;
+- the CLI stopping at the `ok` fails both "reads the event" tests;
+- the status arm mutating fails the daemon test.
+
+**What this leaves for A2:**
+- B→A has never run the fall-back or the backoff on air. The next run should show the designed shape:
+  - SL7 silent, back to SL6 within the same send;
+  - A keeps recommending SL7, and B declines 4, then 8, 16 and 32 climbs before it re-probes SL7.
+- Why A decodes no OFDM52 from B (operator: "I can hear B's OFDM signal clearly, but there is nearly no
+  signal on the scope") is a separate open item. The fall-back survives it; it does not fix it.
+
+## Task 27 — the fall-back on air: f2f again, on the build with the read-only status query (status: open; waits for the build and the maintainer's go)
+
+**The new build is the branch head** (`306cad29` and its docs). Settings and log levels as task 26,
+with the same uncommitted runner overrides. Nothing in the runner changes: its `ota-status` poll now
+sends `GetOtaStatus` and should print a status line. Both stations must run the new CLI.
+
+### Part A — run f2g (B sends, `fast` profile; keys both rigs: one go)
+
+As f2f: `TRAFFIC_FROM=B`, `TRAFFIC_INTERVAL=8`, `TRAFFIC_DURATION=600`.
+
+### Report
+
+As task 26, plus:
+- every `back to the level before it` line and every `ota_fall_back` event, with times;
+- the first three `no fall-back` lines, if any, with their `why`;
+- B's `OTA ACK received` lines from the first climb to SL7 until 2 minutes after the first fall-back;
+- how many messages B delivered and abandoned, and how many it delivered at each level;
+- **whether the runner's report lines now carry a status** (count of `<no status>` against status lines).
+

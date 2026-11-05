@@ -165,6 +165,12 @@ That is a design for the next round.
 - **P1:** `ModulationPlugin::modulate` for OFDM16 and OFDM52 (SL7 on `fast`).
 - Found with `grep -n "run_ota_retry\|apply_ota_ack" crates/openpulse-daemon/src/server.rs` and
   `grep -n "bits_per_sc != 2" plugins/ofdm/src/modulate.rs`.
+- **Missed, found on air (task 26):** the senders of the bounds command, which drops the record. Before
+  `306cad29` the CLI's `ota-status` was such a command, polled by the on-air runner every pass, so the
+  record never survived to a fall-back. Senders, from the `ControlCommand` enum
+  (`OtaSetLevelBounds`, `OtaLockLevel`, `OtaUnlock`): the CLI's `ota-bounds` / `ota-lock` /
+  `ota-unlock` and the panel's lock toggle, all on user action only. `ota-status` now sends
+  `GetOtaStatus`.
 
 ## Prior art
 

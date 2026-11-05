@@ -15,6 +15,35 @@ this ledger adds the design rationale and the actually-observed results per chan
 
 ---
 
+## 2026-11-05 — A status query no longer erases the sender's climb record (work plan M3, A2)
+
+- **Requirement/change:** REQ-FUN-06. On air (tasks 24–26: f2d, f2e, f2f) B climbed to SL7, A
+  decoded nothing there, and the fall-back after silence never fired (51 abandons per run). f2f's ACK
+  log showed the climb was recorded and emptied with no ACK in between.
+- **Cause:** the CLI's `ota-status` was `OtaSetLevelBounds {None, None}`, and `set_level_bounds`
+  empties the climb record and the backoff and overwrites configured bounds. The on-air runner polls
+  it every pass. Also, `ota-status` and `ptt-state` stopped reading at the daemon's `ok`, which comes
+  before the event, so neither had ever printed a real answer against a real daemon.
+- **Design decision:** a read-only `ControlCommand::GetOtaStatus`; the CLI reads past the `ok` to the
+  event; unchanged bounds are a no-op in `set_level_bounds`, while real changes still drop the record.
+  Mandatory review by Fable, which confirmed the cause by measurement (twin fails polled, 400 s;
+  passes unpolled, 120 s) and set the fix shape (task 26 review, `docs/dev/onair-tasks.md`).
+- **Implementation:** `crates/openpulse-daemon/src/protocol.rs` (`GetOtaStatus`),
+  `crates/openpulse-daemon/src/lib.rs` (`apply_command_to_engine`),
+  `crates/openpulse-cli/src/commands/daemon.rs` (`run_command_for_event`, `ota_status`, `ptt_state`),
+  `crates/openpulse-core/src/ota_rate.rs` (`set_level_bounds`).
+- **Tests:** `a_status_poll_with_unchanged_bounds_keeps_the_fall_back` (twin, new);
+  `unchanged_bounds_keep_the_climb_record_and_a_change_drops_it`;
+  `get_ota_status_reports_and_keeps_the_bounds`; CLI `ota_status_reads_the_event_that_follows_the_ok`,
+  `ota_status_without_an_event_is_an_error`, `ptt_state_reads_the_event_that_follows_the_ok`,
+  `ptt_state_without_an_event_is_an_error`.
+- **Test results:** twin 2/0 (120 s); `ota_rate` 36/0; daemon lib (filtered) 32/0; CLI `daemon` 12/0.
+  Clippy (core, daemon, cli, panel, `--all-targets`) and fmt clean. Sabotages, each failing its gate:
+  no-op removed → unit and polled twin (400 s; the unpolled twin passes); CLI sends the bounds command
+  → request check; CLI stops at `ok` → both "reads the event" tests; status arm mutates → daemon test.
+  Workspace gate not run. Task 27 runs it on air.
+
+
 ## 2026-11-05 — The fallback says why it declined (work plan M3, A2)
 
 - **Requirement/change:** REQ-FUN-06. On air (task 24, f2d) the fallback after a climb into silence
