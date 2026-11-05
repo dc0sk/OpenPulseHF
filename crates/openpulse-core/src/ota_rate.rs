@@ -66,9 +66,9 @@ pub const ACK_CLIMB_THRESHOLD: u8 = 3;
 /// After a fall-back from a rung that went silent, the sender declines this many climbs back to it
 /// before trying again (`ladder-climb-into-silence.md`, review S2): the receiver re-proposes the climb
 /// every `ACK_CLIMB_THRESHOLD` decodes, and each try costs two silent ACK windows.
-pub const TX_CLIMB_BACKOFF_FIRST: u8 = 4;
+const TX_CLIMB_BACKOFF_FIRST: u8 = 4;
 /// The most climbs declined after repeated fall-backs from the same rung (the count doubles each time).
-pub const TX_CLIMB_BACKOFF_MAX: u8 = 32;
+const TX_CLIMB_BACKOFF_MAX: u8 = 32;
 
 /// Outcome of demodulating a received data frame, fed to [`OtaRateController::on_rx_frame`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
