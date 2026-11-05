@@ -12,7 +12,8 @@ Until 2026-11-05 the on-air work ran as two sessions:
 - the rpi51 station session ran them;
 - they talked through pushes to `claude/affectionate-brahmagupta-sdn8qg`.
 
-From here, **one local session does both, on a build machine that reaches both stations over SSH.**
+From here, **one local session does both, on a build machine that reaches both stations over SSH**
+(decided 2026-11-05: the main session runs on the build machine, not on rpi51).
 This note is where it starts. The task file stays the record of every run. Keep committing to the
 branch; push when it suits you, not as the transport.
 
@@ -58,6 +59,12 @@ branch; push when it suits you, not as the transport.
    - the env `CARGO_PROFILE_DEV_DEBUG=0 CARGO_PROFILE_TEST_DEBUG=0 CARGO_INCREMENTAL=0` keeps the debug
      target small (it reached 25 GB without it);
    - don't run the gate and a pre-push hook at the same time.
+
+6. **The stations only run.** The main session lives on the build machine, and rpi51 and station B
+   are reached over SSH.
+   - **No cargo builds or tests on a Pi during an on-air run.** They compete with the daemon's receive
+     loop, and 1–2.5 s holds have cost frames (task 22).
+   - **Mind `/tmp` and disk on the Pis.** Keep `target/` on the build machine.
 
 ## Where M3 stands (2026-11-05)
 
