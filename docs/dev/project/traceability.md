@@ -15,6 +15,44 @@ this ledger adds the design rationale and the actually-observed results per chan
 
 ---
 
+## 2026-11-05 — A climb into silence: the sender returns to the level before it; SL7's peak within full scale (work plan M3, A2)
+
+- **Requirement/change:** REQ-FUN-06.
+  - On air (task 23, f2c) the climb SL7 → SL8 dropped B's audio by 13 dB. A heard nothing, keyed
+    nothing, and the link never recovered: B abandoned 51 messages at SL8.
+  - SL7's frames went out at a 2.82 peak, above full scale.
+- **Design decision:** `docs/dev/design/ladder-climb-into-silence.md`; mandatory review
+  `docs/dev/reviews/review-ladder-climb-into-silence-2026-11-05.md` (M1, M2, S1–S7, N1 taken).
+  - **P3:** after `MAX_SILENT_ACK_WINDOWS` silent windows following an unconfirmed climb, the sender
+    returns once to the level before it and continues within the same budget. Only a decode-path ACK
+    clears the record; never onto the MFSK16 sub-floor; a backoff of 4 to 32 declined climbs back to
+    a rung that went silent.
+  - **P1:** every OFDM frame is normalised to a 0.9 peak.
+  - **P2(a)** is not implemented: the estimators need a per-mode calibration first (review S6).
+- **Implementation:**
+  - `crates/openpulse-core/src/ota_rate.rs`: `adopt_recommendation_from`, `fall_back_after_silence`,
+    `TX_CLIMB_BACKOFF_FIRST`, `TX_CLIMB_BACKOFF_MAX`.
+  - `crates/openpulse-modem/src/engine.rs`: `apply_ota_ack`, `ota_fall_back_after_silence`.
+  - `crates/openpulse-modem/src/event.rs`: `EngineEvent::OtaFallBack`.
+  - `crates/openpulse-daemon/src/server.rs`: `run_ota_retry`.
+  - `plugins/ofdm/src/modulate.rs`.
+  - The panel and the TUI handle the new event.
+- **Tests:**
+  - `ota_rate` (7 new);
+  - `run_ota_retry` (2 new);
+  - `climb_into_silence_falls_back` (two daemons, the twin bridge, a channel silent while A is at
+    SL8);
+  - `every_ofdm_frame_peaks_within_full_scale`.
+- **Test results:**
+  - `ota_rate` 34/0; `ota_retry` 9/0; `ota_rate_lockstep` 10/0; `ofdm-plugin` 38 + 5/0;
+    `climb_into_silence_falls_back` 1/0 (120 s).
+  - **Sabotage:** M1, M2 and the backoff removed each fail their own test (33/1). The fallback disabled
+    (`false && …`) fails the twin test at its 400 s timeout.
+  - Two earlier sabotages proved nothing and are recorded in the review: a muted channel louder than
+    idle, which B NACKed; and `x() && false`, which still called the fallback.
+  - Clippy (workspace, all targets) and fmt are clean. The gate result is on the M3 line.
+
+
 ## 2026-11-04 — The receive notch protects every rung the OTA receiver will try (work plan M3; Release 1 `fast` profile)
 
 - **Requirement/change:** REQ-FUN-06, REQ-QRM-01.

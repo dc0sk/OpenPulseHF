@@ -4956,3 +4956,34 @@ maintainer's go and the mandatory review):**
 - P3 does: a stalled link on the `fast` profile is A2's stability clause failing.
 - P1 and P2 decide whether the `fast` profile climbs past SL7 from a rig without ALC compression,
   which on HF is the common case.
+
+## Task 24 — the `fast` profile on the build with the fallback after silence (status: open; waits for the build and the maintainer's go)
+
+**The new build is the branch head** once the fallback is committed
+(`docs/dev/design/ladder-climb-into-silence.md`). On top of task 23's build (`5a3f6c5`):
+- **A climb answered by silence falls back.**
+  - After two silent ACK windows following a climb the receiver never confirmed, the sender returns
+    once to the level before it and retransmits there.
+  - Then it declines the next 4 climbs back to that rung (8, 16, 32 on repeats).
+  - Expect the line `OTA: no answer after a climb; back to the level before it` and the event
+    `ota_fall_back`, never onto SL1.
+- **SL7 goes out at a 0.9 peak** (it was 2.82): about 10 dB quieter in RMS than in task 23.
+  - **Expect:** B→A (the FT-991A, no ALC compression) to top at SL6, with SL7 probes answered by the
+    fallback. That is the expected outcome, not a regression (the design note, P1).
+  - A→B (the IC-9700 in ALC) may still climb.
+
+**Settings:** as task 23 (AGC FAST, SQL 0, PREAMP 20, `auto_id_signoff_idle_secs = 30`,
+`DAEMON_LOG_LEVEL=info,ofdm_plugin=debug`). The station rules hold; ask the maintainer before every run.
+
+### Part A — runs f1d and f2d (keys both rigs: one go per run)
+
+As task 23 Part A: `OTA_PROFILE=fast`, `TRAFFIC_INTERVAL=8`, `TRAFFIC_DURATION=600`; f1d A sends, f2d B
+sends.
+
+### Report, per run
+
+As task 23, plus:
+- every `back to the level before it` line, with its from/to and the next decode;
+- the messages abandoned (`OTA send abandoned`), against f2c's 51;
+- the highest rung decoded in each direction;
+- the IC-9700's ALC on SL7 frames against task 23's (0.858).
