@@ -242,6 +242,11 @@ impl OtaRateController {
     /// Clamp adaptation to `[min, max]` (each `None` = the profile's natural bound).
     /// Current levels are immediately snapped into the new range.
     pub fn set_level_bounds(&mut self, min: Option<SpeedLevel>, max: Option<SpeedLevel>) {
+        // Unchanged bounds change no level, so they keep the climb record and the backoff: an
+        // older CLI's status poll sends exactly this (on-air tasks 24–26).
+        if (min, max) == (self.min_level, self.max_level) {
+            return;
+        }
         self.min_level = min;
         self.max_level = max;
         self.rx_recommended = self.clamp_mapped(self.rx_recommended);
@@ -840,6 +845,27 @@ mod tests {
         c.lock_level(SpeedLevel::Sl8);
         c.unlock();
         assert!(!c.fall_back_after_silence());
+    }
+
+    #[test]
+    fn unchanged_bounds_keep_the_climb_record_and_a_change_drops_it() {
+        // The CLI's status poll before on-air task 27 sent the bounds already in force, every ~5 s.
+        let mut c = ctrl();
+        c.adopt_recommendation(SpeedLevel::Sl6);
+        c.adopt_recommendation(SpeedLevel::Sl6);
+        c.adopt_recommendation(SpeedLevel::Sl7);
+        c.set_level_bounds(None, None);
+        assert_eq!(
+            c.fall_back_declined_because(),
+            None,
+            "unchanged bounds keep the record"
+        );
+        c.set_level_bounds(Some(SpeedLevel::Sl3), None);
+        assert_eq!(
+            c.fall_back_declined_because(),
+            Some("no unconfirmed climb is recorded"),
+            "new bounds drop it, so a fall-back cannot land outside them"
+        );
     }
 
     #[test]

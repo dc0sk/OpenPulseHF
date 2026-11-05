@@ -5,6 +5,10 @@
 //! heard nothing, keyed nothing, and the link never recovered: B abandoned 51 messages at SL8. Here
 //! the forward channel carries only noise from the moment A's transmit level reaches SL8 until A
 //! leaves it, so the receiver hears nothing at SL8, as on air.
+//!
+//! On air (tasks 24–26) the fall-back never fired: the runner polled `ota-status` every ~5 s, and the
+//! CLI's status query was a bounds command with the bounds already in force, which emptied the
+//! sender's climb record. The polled test below sends that command throughout.
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -46,7 +50,7 @@ fn awgn(seed: u64) -> AwgnChannel {
     AwgnChannel::new(AwgnConfig::new(40.0, Some(seed))).unwrap()
 }
 
-// This binary's own ports, 19230–19233; the sibling daemon test binaries hold 19010–19223.
+// This binary's own ports, 19230–19237; the sibling daemon test binaries hold 19010–19223.
 fn ota_cfg(callsign: &str, tcp_port: u16) -> OpenpulseConfig {
     let mut c = OpenpulseConfig::default();
     c.station.callsign = callsign.into();
@@ -63,14 +67,32 @@ fn ota_cfg(callsign: &str, tcp_port: u16) -> OpenpulseConfig {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 6)]
 async fn a_climb_answered_by_silence_falls_back_and_delivers() {
+    assert_eq!(
+        climb_into_silence(19230, false).await,
+        Ok(true),
+        "A never fell back from the silent SL8 to SL7 and delivered there"
+    );
+}
+
+/// As the runner's status poll before the fix: the bounds A already runs with, every 3 s.
+#[tokio::test(flavor = "multi_thread", worker_threads = 6)]
+async fn a_status_poll_with_unchanged_bounds_keeps_the_fall_back() {
+    assert_eq!(
+        climb_into_silence(19234, true).await,
+        Ok(true),
+        "with A polled, A never fell back from the silent SL8 to SL7 and delivered there"
+    );
+}
+
+async fn climb_into_silence(port: u16, poll: bool) -> Result<bool, tokio::time::error::Elapsed> {
     let silent = Arc::new(AtomicBool::new(false));
     let fwd = MutingChannel {
         awgn: awgn(31),
         silent: silent.clone(),
     };
     let pair = spawn_bridged_pair(
-        ota_cfg("SILA", 19230),
-        ota_cfg("SILB", 19232),
+        ota_cfg("SILA", port),
+        ota_cfg("SILB", port + 2),
         Box::new(fwd),
         Box::new(awgn(32)),
         Duration::from_millis(10),
@@ -83,6 +105,25 @@ async fn a_climb_answered_by_silence_falls_back_and_delivers() {
     let b = TcpStream::connect(pair.addr_b).await.unwrap();
     let (b_read, _b_write) = b.into_split();
     let mut b_reader = BufReader::new(b_read);
+    if poll {
+        let p = TcpStream::connect(pair.addr_a).await.unwrap();
+        let (p_read, mut p_write) = p.into_split();
+        let bounds = serde_json::to_string(&ControlCommand::OtaSetLevelBounds {
+            min_level: Some("SL7".into()),
+            max_level: None,
+        })
+        .unwrap()
+            + "\n";
+        tokio::spawn(async move {
+            let mut lines = BufReader::new(p_read).lines();
+            while let Ok(Some(_)) = lines.next_line().await {}
+        });
+        tokio::spawn(async move {
+            while p_write.write_all(bounds.as_bytes()).await.is_ok() {
+                tokio::time::sleep(Duration::from_secs(3)).await;
+            }
+        });
+    }
     tokio::time::sleep(Duration::from_millis(200)).await;
     let send = serde_json::to_string(&ControlCommand::SendMessage {
         to: "SILB".into(),
@@ -158,9 +199,5 @@ async fn a_climb_answered_by_silence_falls_back_and_delivers() {
     .await;
 
     pair.shutdown();
-    assert_eq!(
-        outcome,
-        Ok(true),
-        "A never fell back from the silent SL8 to SL7 and delivered there"
-    );
+    outcome
 }
