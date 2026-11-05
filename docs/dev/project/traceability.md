@@ -50,7 +50,11 @@ this ledger adds the design rationale and the actually-observed results per chan
     (`false && …`) fails the twin test at its 400 s timeout.
   - Two earlier sabotages proved nothing and are recorded in the review: a muted channel louder than
     idle, which B NACKed; and `x() && false`, which still called the fallback.
-  - Clippy (workspace, all targets) and fmt are clean. The gate result is on the M3 line.
+  - Clippy (workspace, all targets) and fmt are clean.
+  - `scripts/gate.sh` at `f87cd95`: 2783 tests passed, 0 failed (393 suites).
+    - The reachability ratchet failed on the two backoff constants being `pub`; they were made private
+      in `f60ae48` (`REACH: PASS`, `ota_rate` 34/0).
+    - The trailer lint fails only on `ab9235f` and `cd3bf5c` (2026-11-01, recorded on the M3 line).
 
 
 ## 2026-11-04 — The receive notch protects every rung the OTA receiver will try (work plan M3; Release 1 `fast` profile)

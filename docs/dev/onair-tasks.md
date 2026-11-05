@@ -4972,6 +4972,8 @@ maintainer's go and the mandatory review):**
     fallback. That is the expected outcome, not a regression (the design note, P1).
   - A→B (the IC-9700 in ALC) may still climb.
 
+Tests at this build: `scripts/gate.sh` at `f87cd95`: 2783 tests passed, 0 failed (393 suites). The reachability ratchet failed on the two backoff constants being `pub`; they were made private in `f60ae48` (`REACH: PASS`). The trailer lint fails only on `ab9235f` and `cd3bf5c` (2026-11-01, recorded on the M3 line). The held-out suites run separately (`scripts/slow-tests.sh`).
+
 **Settings:** as task 23 (AGC FAST, SQL 0, PREAMP 20, `auto_id_signoff_idle_secs = 30`,
 `DAEMON_LOG_LEVEL=info,ofdm_plugin=debug`). The station rules hold; ask the maintainer before every run.
 
