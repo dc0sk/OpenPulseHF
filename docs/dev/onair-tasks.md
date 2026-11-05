@@ -5068,7 +5068,7 @@ As task 23, plus:
   reason: no unconfirmed climb recorded, the session locked, or the SL1 sub-floor.
 - It is a log line only, no keying change.
 
-## Task 25 — why the fallback declined: f2d again, with the reason logged (status: open; waits for the build and the maintainer's go)
+## Task 25 — why the fallback declined: f2d again, with the reason logged (status: Part A run f2e done; see Results)
 
 **The new build is the branch head** (the decline line, on top of task 24's `a845ce4`). Settings as task 24.
 
@@ -5088,3 +5088,36 @@ As task 24, plus:
 - every `back to the level before it` line;
 - B's ACK lines (received and not received) from the climb to SL7 until the first abandon, with times;
 - B's `ota_status` `tx_level` at the first abandon.
+
+### Results — Part A, run f2e (B sends, `fast` profile; 2026-11-05)
+
+**Setup:** rpi51 at `e0832e49`; build deployed with `deploy` (server `aefe38fb…`, CLI `27318f37…`, `twin-traffic.sh` `c9e152f3…`, identical on both stations). Settings as task 24, rig state read back before the run (A 0.0117647 / AGC 2 / SQL 0; B 0.05 / AGC 2 / SQL 0 / PREAMP 20), `auto_id_signoff_idle_secs = 30` on both. Log levels: A `info,ofdm_plugin=debug`; B `info,ofdm_plugin=debug,openpulse_daemon=debug`. Recordings from 20:30:15 UTC. Evidence: `docs/dev/test-reports/onair-twin-ota-20261105-213101-evidence` (`NOTES.md`).
+
+**The runner had one log level for both stations.** I added a local, uncommitted `DAEMON_LOG_LEVEL_B` override (and `SIGNOFF_IDLE_SECS` from task 23); neither is on the branch.
+
+**Stop rules and state:** no keying stretch over 70 s. IC-9700 ALC while keyed: 5 readings (0.042, 0.042, 0.683, 0.658, 0.042); FT-991A ALC 0.0625 in all 227 readings. The runner printed `no, no` for sign-off again. After cleanup (read back): IC-9700 dial 144640000, RFPOWER 0.0117647, AGC 2, SQL 0, PTT 0; FT-991A dial 144641564, RFPOWER 0.05, AGC 2, SQL 0, PREAMP 20, PTT 0; nothing running.
+
+**The decline reason: `no unconfirmed climb is recorded`, all 51 times.**
+- B logged **51 `OTA: the peer is silent; no fall-back`** lines, every one `level=Sl7 why="no unconfirmed climb is recorded"`, first 20:36:31.32, last 20:56:08.86. Each is paired with an `OTA send abandoned: peer silent for 2 consecutive ACK windows` line at the same timestamp (51 lines).
+- **0 `back to the level before it` lines and 0 `ota_fall_back` events** on either station. That line has still never matched anything.
+- First lines (B's `daemon-b.log`, UTC):
+
+```
+2026-11-05T20:36:31.317829Z  INFO OTA: the peer is silent; no fall-back level=Sl7 why="no unconfirmed climb is recorded"
+2026-11-05T20:36:53.857369Z  INFO OTA: the peer is silent; no fall-back level=Sl7 why="no unconfirmed climb is recorded"
+2026-11-05T20:37:17.673952Z  INFO OTA: the peer is silent; no fall-back level=Sl7 why="no unconfirmed climb is recorded"
+2026-11-05T20:37:40.696024Z  INFO OTA: the peer is silent; no fall-back level=Sl7 why="no unconfirmed climb is recorded"
+```
+
+- **B's ACK lines.** At `openpulse_daemon=debug` B logs `OTA ACK not received within window` (102 lines; two per abandon, 20:36:19.52, 20:36:31.32, 20:36:42.73, 20:36:53.86, 20:37:05.86, 20:37:17.67, … last 20:56:08.86) and **no line for an ACK that was received** (my filter for `ACK` without `not received` found nothing in B's log; I did not look for another wording). So B's received ACKs between the climb to SL7 and the first abandon are not in the log, and the time of the climb to SL7 is not either. The first `ACK not received` is 20:36:19.52, 5 min 4 s after the traffic window opened (about 20:31:15).
+- **B's `tx_level` at the first abandon:** the decline line says `level=Sl7`. B's `ota_status` events (no timestamps) go SL2→SL3→SL4→SL5→SL6→SL7 and never change after; B's `rx_recommended_level` and `rx_confirmed_level` stay SL2 throughout.
+
+**A, the receiver, made 9 rate decisions** (4 hold, 3 climb_on_snr, 2 climb_on_evidence): SL2→3→4→5→6→7. A decoded 11 frames (BPSK31 3, BPSK250 3, QPSK250-D 3, BPSK63 1, BPSK100 1; **no OFDM52**). At the last status change A's `rx_recommended_level` is SL7 and `rx_confirmed_level` SL6. SNR A read (dB): SL2 −3.9 (−9.1 to 0.4, 3), SL3 11.5, SL4 13.5, SL5 14.4, SL6 8.1 (3.2–10.0, 3); SL7 none. B sent 114 frames (OFDM52 103, BPSK31 3, BPSK250 3, QPSK250-D 3, BPSK63 1, BPSK100 1), the same split as f2d.
+
+**A's OFDM carrier lines:** 545 `carrier offset acquired` lines from 20:36:43 to 20:56:10; `acquired_hz` −47.21 to 18.70, median −8.90; `pilot_coherence` min 0.20, median 0.968. The first is 12 s after B's first abandon.
+
+**`capture read holds`:** A 18 (1.0–1.2 s, 20:36:34 to 20:56:03), **B 0 at `openpulse_daemon=debug`**. B logged 22 `TCP client event receiver lagged; events dropped` lines.
+
+**Station IDs (30 s sign-off idle):** A `sign-off` 20:36:38.98. B `with-data` 20:39:19.18 and 20:47:57.36; B logged no `sign-off` ID.
+
+**What I did not look at:** why no climb is recorded when B sits at SL7 (the code that clears it: `adopt_recommendation_from` clears `tx_before_climb` on a non-NACK recommendation at or below the current level, `ota_rate.rs` lines 373–375; I read the lines and did not trace which ACK did it), and what B's debug log shows for received ACKs under another wording.
