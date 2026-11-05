@@ -2281,7 +2281,18 @@ impl ModemEngine {
     /// The absolute target means a lost ACK never desyncs — the next ACK re-states it.
     pub fn apply_ota_ack(&mut self, frame: &AckFrame) {
         if let (Some(o), Some(level)) = (self.ota.as_mut(), frame.recommended_level) {
+            let from = o.tx_level();
             o.adopt_recommendation_from(level, frame.ack_type == AckType::Nack);
+            // On-air task 25 (f2e): the fall-back declined with no climb recorded, and no log line
+            // showed which received ACK had answered the climb.
+            info!(
+                ack = ?frame.ack_type,
+                recommended = ?level,
+                from = ?from,
+                to = ?o.tx_level(),
+                no_fall_back = o.fall_back_declined_because().unwrap_or("-"),
+                "OTA ACK received"
+            );
         }
     }
 
