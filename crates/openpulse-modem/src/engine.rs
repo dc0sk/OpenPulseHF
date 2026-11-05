@@ -2281,8 +2281,30 @@ impl ModemEngine {
     /// The absolute target means a lost ACK never desyncs — the next ACK re-states it.
     pub fn apply_ota_ack(&mut self, frame: &AckFrame) {
         if let (Some(o), Some(level)) = (self.ota.as_mut(), frame.recommended_level) {
-            o.adopt_recommendation(level);
+            o.adopt_recommendation_from(level, frame.ack_type == AckType::Nack);
         }
+    }
+
+    /// Sender side: the peer was silent after a climb it never confirmed; return to the level before
+    /// it, once (`OtaRateController::fall_back_after_silence`). Returns whether it fell back.
+    pub fn ota_fall_back_after_silence(&mut self) -> bool {
+        let Some(o) = self.ota.as_mut() else {
+            return false;
+        };
+        let from = o.tx_level();
+        let fell = o.fall_back_after_silence();
+        if fell {
+            let to = o.tx_level();
+            info!(
+                from = ?from,
+                to = ?to,
+                "OTA: no answer after a climb; back to the level before it"
+            );
+            // Its own event: a sender-side level change the receiver did not lead, which A2's scoring
+            // must tell apart from a receiver's step-down (review S4).
+            let _ = self.event_tx.send(EngineEvent::OtaFallBack { from, to });
+        }
+        fell
     }
 
     /// Sender side (ISS): one-call OTA data frame — transmit at the current OTA

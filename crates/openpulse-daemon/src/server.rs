@@ -2092,7 +2092,9 @@ const MAX_RETRIES: usize = 3;
 /// silent, so further data retransmissions are futile and would keep the daemon's single `select!`
 /// control loop blocked for a full ACK window each (up to 9 s on the MFSK16 sub-floor). One retry
 /// covers a lost ACK on a live link; a second silent window means give up. Bounds the silent-peer
-/// stall to `MAX_SILENT_ACK_WINDOWS` windows instead of `MAX_RETRIES + 1` (audit #917 / finding #1).
+/// stall to `MAX_SILENT_ACK_WINDOWS` windows instead of `MAX_RETRIES + 1` (audit #917 / finding #1),
+/// or twice that once per unconfirmed climb: after one, the sender falls back and tries the level
+/// below within the same budget (`ladder-climb-into-silence.md`).
 const MAX_SILENT_ACK_WINDOWS: usize = 2;
 
 /// Why the OTA send/ACK retry loop stopped.
@@ -2115,10 +2117,18 @@ enum OtaSendStop {
 /// NACKing peer, or after `MAX_SILENT_ACK_WINDOWS` consecutive silent windows. `attempt` returns `None`
 /// when it cannot send at all (no active OTA session). Pure policy — unit-tested with scripted outcomes
 /// so the silent-peer bound doesn't need real ACK timing.
-fn run_ota_retry(mut attempt: impl FnMut() -> Option<OtaAttempt>) -> OtaSendStop {
+///
+/// `fall_back` is asked when the peer has been silent for `MAX_SILENT_ACK_WINDOWS`: if it returns
+/// true (the sender returned to the level before an unconfirmed climb), the send continues at that
+/// level within the same budget instead of being abandoned (`ladder-climb-into-silence.md`).
+fn run_ota_retry<S: ?Sized>(
+    state: &mut S,
+    mut attempt: impl FnMut(&mut S) -> Option<OtaAttempt>,
+    mut fall_back: impl FnMut(&mut S) -> bool,
+) -> OtaSendStop {
     let mut consecutive_timeouts = 0usize;
     for _ in 0..=MAX_RETRIES {
-        match attempt() {
+        match attempt(state) {
             None => return OtaSendStop::NoSession,
             Some(OtaAttempt::Delivered) => return OtaSendStop::Delivered,
             Some(OtaAttempt::PttFault) => return OtaSendStop::PttFault,
@@ -2126,6 +2136,10 @@ fn run_ota_retry(mut attempt: impl FnMut() -> Option<OtaAttempt>) -> OtaSendStop
             Some(OtaAttempt::Timeout) => {
                 consecutive_timeouts += 1;
                 if consecutive_timeouts >= MAX_SILENT_ACK_WINDOWS {
+                    if fall_back(state) {
+                        consecutive_timeouts = 0;
+                        continue;
+                    }
                     return OtaSendStop::PeerSilent;
                 }
             }
@@ -2185,33 +2199,35 @@ fn ota_send_with_ptt(
         return false;
     }
 
-    let stop = run_ota_retry(|| {
-        let mode = engine.ota_tx_mode().map(|m| m.to_owned())?; // no OTA session → stop
-                                                                // Free Rs → RsStrong strengthening for small frames (see engine transmit path / #934).
-        let fec = openpulse_core::fec::free_rs_strengthening(
-            engine.ota_tx_fec(),
-            body.len() + openpulse_core::frame::Frame::WIRE_OVERHEAD,
-        );
+    let stop = run_ota_retry(
+        engine,
+        |engine| {
+            let mode = engine.ota_tx_mode().map(|m| m.to_owned())?; // no OTA session → stop
+                                                                    // Free Rs → RsStrong strengthening for small frames (see engine transmit path / #934).
+            let fec = openpulse_core::fec::free_rs_strengthening(
+                engine.ota_tx_fec(),
+                body.len() + openpulse_core::frame::Frame::WIRE_OVERHEAD,
+            );
 
-        // Key PTT for the data frame (REQ-PTT-01). The guard is owned by `keyed_transmit` and drops
-        // when it returns — i.e. BEFORE the ACK listen below, which is the half-duplex turnaround this
-        // path needs; on a panic inside the closure it releases during unwind rather than leaving the
-        // rig keyed.
-        //
-        // NOTE: the assert-failure arm returns `Delivered`, which stops the retry loop and drops the
-        // operator's message with only a log line. The comment here used to say "already surfaced as
-        // a warn + event"; that is false — `SharedPtt::key` emits no event on failure. Tracked
-        // separately rather than changed under a keying PR.
-        let tx = match crate::keyed_transmit(ptt, Some(event_tx), "ota-send", || {
-            tokio::task::block_in_place(|| {
-                // One output stream for the data frame and the ID behind it: two streams leave an
-                // audio gap inside the PTT hold, the receiver takes it as the frame's end and keys
-                // its ACK over the ID while this station cannot hear (on-air task 20, 5 ACKs in 6).
-                // `held`: the ID was queued in the burst. It went out only if the burst was written,
-                // so `id_sent` follows the burst's result, and a burst that was not written keeps
-                // the ID for the next attempt (review 2026-11-03, S1).
-                let mut held = None;
-                let burst = engine.transmit_burst(None, |engine| {
+            // Key PTT for the data frame (REQ-PTT-01). The guard is owned by `keyed_transmit` and drops
+            // when it returns — i.e. BEFORE the ACK listen below, which is the half-duplex turnaround this
+            // path needs; on a panic inside the closure it releases during unwind rather than leaving the
+            // rig keyed.
+            //
+            // NOTE: the assert-failure arm returns `Delivered`, which stops the retry loop and drops the
+            // operator's message with only a log line. The comment here used to say "already surfaced as
+            // a warn + event"; that is false — `SharedPtt::key` emits no event on failure. Tracked
+            // separately rather than changed under a keying PR.
+            let tx = match crate::keyed_transmit(ptt, Some(event_tx), "ota-send", || {
+                tokio::task::block_in_place(|| {
+                    // One output stream for the data frame and the ID behind it: two streams leave an
+                    // audio gap inside the PTT hold, the receiver takes it as the frame's end and keys
+                    // its ACK over the ID while this station cannot hear (on-air task 20, 5 ACKs in 6).
+                    // `held`: the ID was queued in the burst. It went out only if the burst was written,
+                    // so `id_sent` follows the burst's result, and a burst that was not written keeps
+                    // the ID for the next attempt (review 2026-11-03, S1).
+                    let mut held = None;
+                    let burst = engine.transmit_burst(None, |engine| {
                     engine.transmit_with_fec_mode(body, &mode, fec, None)?;
                     // AFTER the data frame: in front of it, the receiver's uncoded fallback decodes
                     // the ID and never finds the ladder frame (`id_rides_with_the_data_frame`). Taken
@@ -2228,65 +2244,67 @@ fn ota_send_with_ptt(
                     }
                     Ok(())
                 });
-                match (&burst, held) {
-                    (Ok(()), Some(_)) => id_sent = true,
-                    (Err(_), Some(id)) => id_pending = Some(id),
-                    _ => {}
+                    match (&burst, held) {
+                        (Ok(()), Some(_)) => id_sent = true,
+                        (Err(_), Some(id)) => id_pending = Some(id),
+                        _ => {}
+                    }
+                    burst
+                })
+            }) {
+                Ok(()) => Ok(()),
+                // #1295: NOT `Delivered`. Stopping is right — a rig that cannot be keyed will not be
+                // keyed by trying again — but `Delivered` is consumed as "the peer has it": the session
+                // advances and the rate controller sees a success, for a frame that never went out.
+                // Before #1285 this arm was rarely reached, because an unreachable backend collapsed to
+                // `None` and keying then SUCCEEDED; now every attempt against a dead rig lands here.
+                Err(crate::KeyedTxError::Assert) => return Some(OtaAttempt::PttFault),
+                // Busy, not broken (#1263): nothing went out, but the condition is transient, so retry
+                // the data frame rather than stopping as an assert fault does.
+                Err(crate::KeyedTxError::AlreadyKeyed) => return Some(OtaAttempt::Nack),
+                Err(crate::KeyedTxError::Transmit(e)) => Err(e),
+            };
+
+            // Logged here, when the ID went out — not after the ACK window, where the caller would put it
+            // up to 17 s late (on-air task 20 read that time as the ID's).
+            if let (Some((id_body, id_mode)), true, false) = (id_first, id_sent, id_logged) {
+                tracing::info!(
+                    callsign = %String::from_utf8_lossy(id_body).trim_start_matches("DE "),
+                    mode = %id_mode,
+                    kind = "with-data",
+                    "transmitted station ID"
+                );
+                id_logged = true;
+            }
+
+            if let Err(e) = tx {
+                tracing::warn!(error = %e, "OTA data transmit failed");
+                // A local TX failure isn't the peer being silent; retry the data frame.
+                return Some(OtaAttempt::Nack);
+            }
+
+            // Listen for the ACK with PTT down; adopt the peer's recommended level. Union-listen (FSK4 +
+            // K=3 MFSK16-ACK) when the profile carries the sub-floor rung, so an SL1 boundary can't desync.
+            match tokio::task::block_in_place(|| {
+                engine.receive_ota_ack_within(None, ack_timeout_ms, expected_hash)
+            }) {
+                Ok(ack) => {
+                    engine.apply_ota_ack(&ack);
+                    let _ = event_tx.send(ota_status_event(engine));
+                    if ack.ack_type == AckType::Nack {
+                        Some(OtaAttempt::Nack)
+                    } else {
+                        Some(OtaAttempt::Delivered)
+                    }
                 }
-                burst
-            })
-        }) {
-            Ok(()) => Ok(()),
-            // #1295: NOT `Delivered`. Stopping is right — a rig that cannot be keyed will not be
-            // keyed by trying again — but `Delivered` is consumed as "the peer has it": the session
-            // advances and the rate controller sees a success, for a frame that never went out.
-            // Before #1285 this arm was rarely reached, because an unreachable backend collapsed to
-            // `None` and keying then SUCCEEDED; now every attempt against a dead rig lands here.
-            Err(crate::KeyedTxError::Assert) => return Some(OtaAttempt::PttFault),
-            // Busy, not broken (#1263): nothing went out, but the condition is transient, so retry
-            // the data frame rather than stopping as an assert fault does.
-            Err(crate::KeyedTxError::AlreadyKeyed) => return Some(OtaAttempt::Nack),
-            Err(crate::KeyedTxError::Transmit(e)) => Err(e),
-        };
-
-        // Logged here, when the ID went out — not after the ACK window, where the caller would put it
-        // up to 17 s late (on-air task 20 read that time as the ID's).
-        if let (Some((id_body, id_mode)), true, false) = (id_first, id_sent, id_logged) {
-            tracing::info!(
-                callsign = %String::from_utf8_lossy(id_body).trim_start_matches("DE "),
-                mode = %id_mode,
-                kind = "with-data",
-                "transmitted station ID"
-            );
-            id_logged = true;
-        }
-
-        if let Err(e) = tx {
-            tracing::warn!(error = %e, "OTA data transmit failed");
-            // A local TX failure isn't the peer being silent; retry the data frame.
-            return Some(OtaAttempt::Nack);
-        }
-
-        // Listen for the ACK with PTT down; adopt the peer's recommended level. Union-listen (FSK4 +
-        // K=3 MFSK16-ACK) when the profile carries the sub-floor rung, so an SL1 boundary can't desync.
-        match tokio::task::block_in_place(|| {
-            engine.receive_ota_ack_within(None, ack_timeout_ms, expected_hash)
-        }) {
-            Ok(ack) => {
-                engine.apply_ota_ack(&ack);
-                let _ = event_tx.send(ota_status_event(engine));
-                if ack.ack_type == AckType::Nack {
-                    Some(OtaAttempt::Nack)
-                } else {
-                    Some(OtaAttempt::Delivered)
+                Err(e) => {
+                    tracing::debug!(error = %e, "OTA ACK not received within window");
+                    Some(OtaAttempt::Timeout)
                 }
             }
-            Err(e) => {
-                tracing::debug!(error = %e, "OTA ACK not received within window");
-                Some(OtaAttempt::Timeout)
-            }
-        }
-    });
+        },
+        |engine| engine.ota_fall_back_after_silence(),
+    );
 
     // Surface a give-up once so the operator isn't left thinking the message sent (a silent peer is
     // the case this bail exists for: it stops the control loop being blocked for further doomed windows).
@@ -2692,13 +2710,75 @@ mod ota_retry_tests {
     /// right number of attempts and stops for the right reason. `None` in the script (or running off the
     /// end) means "no more attempts scripted".
     fn drive(script: &[Option<OtaAttempt>]) -> (usize, OtaSendStop) {
-        let mut i = 0;
-        let stop = run_ota_retry(|| {
-            let out = script.get(i).copied().flatten();
-            i += 1;
-            out
-        });
-        (i, stop)
+        let (attempts, _, stop) = drive_with_fall_back(script, 0);
+        (attempts, stop)
+    }
+
+    /// As `drive`, with `fall_backs` returns to a lower level available after silence. Returns the
+    /// attempts made, the fall-backs taken, and why the loop stopped.
+    fn drive_with_fall_back(
+        script: &[Option<OtaAttempt>],
+        fall_backs: usize,
+    ) -> (usize, usize, OtaSendStop) {
+        let mut st = (0usize, fall_backs, 0usize);
+        let stop = run_ota_retry(
+            &mut st,
+            |st| {
+                let out = script.get(st.0).copied().flatten();
+                st.0 += 1;
+                out
+            },
+            |st| {
+                if st.1 > 0 {
+                    st.1 -= 1;
+                    st.2 += 1;
+                    true
+                } else {
+                    false
+                }
+            },
+        );
+        (st.0, st.2, stop)
+    }
+
+    #[test]
+    fn a_fall_back_on_the_last_attempt_moves_the_level_but_sends_nothing_more() {
+        // Timeout, NACK, Timeout, Timeout: the budget ends where the fall-back fires. The level moves
+        // (the next message goes there) and nothing more is sent for this one.
+        let (attempts, fell, stop) = drive_with_fall_back(
+            &[
+                Some(OtaAttempt::Timeout),
+                Some(OtaAttempt::Nack),
+                Some(OtaAttempt::Timeout),
+                Some(OtaAttempt::Timeout),
+            ],
+            1,
+        );
+        assert_eq!((attempts, fell), (MAX_RETRIES + 1, 1));
+        assert_eq!(stop, OtaSendStop::RetriesExhausted);
+    }
+
+    #[test]
+    fn silence_after_a_climb_continues_at_the_level_before_it_within_the_budget() {
+        // Two silent windows at the new rung, then the old rung is answered: delivered, not abandoned.
+        let (attempts, fell, stop) = drive_with_fall_back(
+            &[
+                Some(OtaAttempt::Timeout),
+                Some(OtaAttempt::Timeout),
+                Some(OtaAttempt::Delivered),
+            ],
+            1,
+        );
+        assert_eq!((attempts, fell, stop), (3, 1, OtaSendStop::Delivered));
+        // Silence at the old rung too: abandoned after its own two windows, the budget unchanged.
+        let (attempts, fell, stop) = drive_with_fall_back(&[Some(OtaAttempt::Timeout); 8], 1);
+        assert_eq!(fell, 1);
+        assert_eq!(stop, OtaSendStop::PeerSilent);
+        assert_eq!(
+            attempts,
+            MAX_RETRIES + 1,
+            "the fall-back spends the same budget"
+        );
     }
 
     #[test]

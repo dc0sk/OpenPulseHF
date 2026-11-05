@@ -63,6 +63,13 @@ use serde::{Deserialize, Serialize};
 /// thrash nor large enough to make the climb invisible on a short session.
 pub const ACK_CLIMB_THRESHOLD: u8 = 3;
 
+/// After a fall-back from a rung that went silent, the sender declines this many climbs back to it
+/// before trying again (`ladder-climb-into-silence.md`, review S2): the receiver re-proposes the climb
+/// every `ACK_CLIMB_THRESHOLD` decodes, and each try costs two silent ACK windows.
+pub const TX_CLIMB_BACKOFF_FIRST: u8 = 4;
+/// The most climbs declined after repeated fall-backs from the same rung (the count doubles each time).
+pub const TX_CLIMB_BACKOFF_MAX: u8 = 32;
+
 /// Outcome of demodulating a received data frame, fed to [`OtaRateController::on_rx_frame`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RxOutcome {
@@ -183,6 +190,12 @@ pub struct OtaRateController {
     rx_consecutive_ok: u8,
     // TX direction (we are the data sender and follow the peer):
     tx_level: SpeedLevel,
+    /// The level before the last climb the peer has not yet confirmed: where the sender returns when
+    /// the climb is answered by silence (`fall_back_after_silence`). One step, used once.
+    tx_before_climb: Option<SpeedLevel>,
+    /// After a fall-back from a rung, the climbs back to it the sender declines before trying it
+    /// again: (the rung, climbs still to decline, the next refusal count). Doubles per repeat.
+    tx_climb_backoff: Option<(SpeedLevel, u8, u8)>,
     // Operator controls:
     /// Lowest level adaptation may use (`None` = the profile's lowest mapped level).
     min_level: Option<SpeedLevel>,
@@ -215,6 +228,8 @@ impl OtaRateController {
             rx_consecutive_nack: 0,
             rx_consecutive_ok: 0,
             tx_level: initial,
+            tx_before_climb: None,
+            tx_climb_backoff: None,
             min_level: None,
             max_level: None,
             profile_cap,
@@ -232,6 +247,8 @@ impl OtaRateController {
         self.rx_recommended = self.clamp_mapped(self.rx_recommended);
         self.rx_confirmed = self.clamp_mapped(self.rx_confirmed);
         self.tx_level = self.clamp_mapped(self.tx_level);
+        self.tx_before_climb = None;
+        self.tx_climb_backoff = None;
     }
 
     /// Pin both directions to `level` and stop adapting (a manual override).
@@ -241,6 +258,8 @@ impl OtaRateController {
         self.tx_level = l;
         self.rx_recommended = l;
         self.rx_confirmed = l;
+        self.tx_before_climb = None;
+        self.tx_climb_backoff = None;
     }
 
     /// Release a [`lock_level`](Self::lock_level) and resume adapting from the current level.
@@ -329,10 +348,77 @@ impl OtaRateController {
     /// Ignored while locked (the manual override wins); otherwise clamped into the
     /// configured `[min, max]` bounds.
     pub fn adopt_recommendation(&mut self, level: SpeedLevel) {
+        self.adopt_recommendation_from(level, false);
+    }
+
+    /// As [`adopt_recommendation`](Self::adopt_recommendation), from an ACK of type NACK or not.
+    ///
+    /// A climb is remembered until a decode-path ACK (not a NACK) answers it: the sender sends only
+    /// at its level, so such an ACK answers a frame sent at the new one. A NACK is evidence against
+    /// the rung, and one NACK before a silence would otherwise leave the sender stranded
+    /// (`docs/dev/design/ladder-climb-into-silence.md`, review M1).
+    pub fn adopt_recommendation_from(&mut self, level: SpeedLevel, nack: bool) {
         if self.locked.is_some() {
             return;
         }
-        self.tx_level = self.clamp_mapped(level);
+        let next = self.clamp_mapped(level);
+        if next > self.tx_level {
+            if let Some((rung, left, n)) = self.tx_climb_backoff {
+                if rung == next && left > 0 {
+                    // A rung that just went silent: decline the climb, stay where the peer decodes.
+                    self.tx_climb_backoff = Some((rung, left - 1, n));
+                    return;
+                }
+            }
+            self.tx_before_climb = Some(self.tx_level);
+        } else if !nack || next < self.tx_level {
+            self.tx_before_climb = None;
+            if !nack
+                && self
+                    .tx_climb_backoff
+                    .is_some_and(|(rung, _, _)| next >= rung)
+            {
+                // The rung decodes after all: forget the backoff.
+                self.tx_climb_backoff = None;
+            }
+        }
+        if next < self.tx_level {
+            self.tx_climb_backoff = None;
+        }
+        self.tx_level = next;
+    }
+
+    /// The peer went silent after a climb it never confirmed: return to the level before it, once.
+    ///
+    /// On air (task 23, f2c) the climb SL7 → SL8 dropped the sender's audio by 13 dB, the receiver
+    /// heard nothing, keyed nothing, and the link never recovered: the rate follows the receiver, and
+    /// a receiver that hears nothing says nothing. Bounded: one step, never below the level the
+    /// climb started from, so silence cannot walk the ladder down. Returns whether it fell back.
+    pub fn fall_back_after_silence(&mut self) -> bool {
+        if self.locked.is_some() {
+            return false;
+        }
+        let Some(before) = self.tx_before_climb.take() else {
+            return false;
+        };
+        // Never onto the MFSK16 sub-floor: a body over its one-block capacity cannot ride it, the
+        // send would key with nothing radiated, and the receiver (never told SL1) would hear nothing
+        // again: the permanent stall of decision 3 (review M2).
+        if self
+            .profile
+            .mode_for(before)
+            .is_some_and(|m| m.starts_with("MFSK16"))
+        {
+            return false;
+        }
+        let from = self.tx_level;
+        let n = match self.tx_climb_backoff {
+            Some((rung, _, n)) if rung == from => n.saturating_mul(2).min(TX_CLIMB_BACKOFF_MAX),
+            _ => TX_CLIMB_BACKOFF_FIRST,
+        };
+        self.tx_climb_backoff = Some((from, n, n));
+        self.tx_level = before;
+        true
     }
 
     /// Current TX speed level.
@@ -630,6 +716,124 @@ mod tests {
 
     fn ctrl() -> OtaRateController {
         OtaRateController::new(SessionProfile::fast())
+    }
+
+    #[test]
+    fn a_climb_answered_by_silence_returns_once_to_the_level_before_it() {
+        let mut c = ctrl();
+        c.adopt_recommendation(SpeedLevel::Sl7);
+        c.adopt_recommendation(SpeedLevel::Sl7);
+        c.adopt_recommendation(SpeedLevel::Sl8);
+        assert_eq!(c.tx_level(), SpeedLevel::Sl8);
+        assert!(c.fall_back_after_silence());
+        assert_eq!(
+            c.tx_level(),
+            SpeedLevel::Sl7,
+            "back to the level the climb started from"
+        );
+        assert!(!c.fall_back_after_silence(), "once per climb");
+        assert_eq!(
+            c.tx_level(),
+            SpeedLevel::Sl7,
+            "silence never walks the ladder down"
+        );
+    }
+
+    #[test]
+    fn an_answer_at_the_new_level_clears_the_way_back() {
+        let mut c = ctrl();
+        c.adopt_recommendation(SpeedLevel::Sl7);
+        c.adopt_recommendation(SpeedLevel::Sl8);
+        // An AckOk (or a NACK) restating SL8: the peer hears this rung.
+        c.adopt_recommendation(SpeedLevel::Sl8);
+        assert!(!c.fall_back_after_silence());
+        assert_eq!(c.tx_level(), SpeedLevel::Sl8);
+        // A further climb remembers the confirmed rung, not the one before it.
+        c.adopt_recommendation(SpeedLevel::Sl9);
+        assert!(c.fall_back_after_silence());
+        assert_eq!(c.tx_level(), SpeedLevel::Sl8);
+    }
+
+    #[test]
+    fn a_nack_after_the_climb_keeps_the_way_back() {
+        let mut c = ctrl();
+        c.adopt_recommendation(SpeedLevel::Sl7);
+        c.adopt_recommendation(SpeedLevel::Sl8);
+        // NackHold restates SL8: heard and failed, evidence against the rung, not for it.
+        c.adopt_recommendation_from(SpeedLevel::Sl8, true);
+        assert!(c.fall_back_after_silence());
+        assert_eq!(c.tx_level(), SpeedLevel::Sl7);
+    }
+
+    #[test]
+    fn a_climb_back_to_a_rung_that_went_silent_waits_and_the_wait_doubles() {
+        let mut c = ctrl();
+        c.adopt_recommendation(SpeedLevel::Sl7);
+        c.adopt_recommendation(SpeedLevel::Sl8);
+        assert!(c.fall_back_after_silence());
+        for _ in 0..TX_CLIMB_BACKOFF_FIRST {
+            c.adopt_recommendation(SpeedLevel::Sl8);
+            assert_eq!(c.tx_level(), SpeedLevel::Sl7, "declined while backing off");
+        }
+        c.adopt_recommendation(SpeedLevel::Sl8);
+        assert_eq!(c.tx_level(), SpeedLevel::Sl8, "tried again after the wait");
+        assert!(c.fall_back_after_silence(), "silent again");
+        let mut declined = 0;
+        while {
+            c.adopt_recommendation(SpeedLevel::Sl8);
+            c.tx_level() == SpeedLevel::Sl7
+        } {
+            declined += 1;
+        }
+        assert_eq!(declined, 2 * TX_CLIMB_BACKOFF_FIRST, "the wait doubles");
+        // A decode-path ACK at the rung ends the backoff: the next fall-back starts from the first.
+        c.adopt_recommendation(SpeedLevel::Sl8);
+        c.adopt_recommendation(SpeedLevel::Sl9);
+        assert!(c.fall_back_after_silence());
+        assert_eq!(c.tx_level(), SpeedLevel::Sl8);
+    }
+
+    #[test]
+    fn never_falls_back_onto_the_mfsk16_sub_floor() {
+        let mut c = ctrl();
+        c.adopt_recommendation(SpeedLevel::Sl1);
+        assert_eq!(
+            c.tx_mode(),
+            Some("MFSK16"),
+            "the fast profile's SL1 is the sub-floor"
+        );
+        c.adopt_recommendation(SpeedLevel::Sl2);
+        assert!(!c.fall_back_after_silence());
+        assert_eq!(c.tx_level(), SpeedLevel::Sl2);
+    }
+
+    #[test]
+    fn a_lock_or_new_bounds_drop_the_way_back() {
+        let mut c = ctrl();
+        c.adopt_recommendation(SpeedLevel::Sl7);
+        c.adopt_recommendation(SpeedLevel::Sl8);
+        c.set_level_bounds(Some(SpeedLevel::Sl8), None);
+        assert!(!c.fall_back_after_silence());
+        let mut c = ctrl();
+        c.adopt_recommendation(SpeedLevel::Sl7);
+        c.adopt_recommendation(SpeedLevel::Sl8);
+        c.lock_level(SpeedLevel::Sl8);
+        c.unlock();
+        assert!(!c.fall_back_after_silence());
+    }
+
+    #[test]
+    fn no_climb_or_a_lock_means_no_fall_back() {
+        let mut c = ctrl();
+        assert!(!c.fall_back_after_silence(), "nothing to return to");
+        c.adopt_recommendation(SpeedLevel::Sl8);
+        c.adopt_recommendation(SpeedLevel::Sl6);
+        assert!(!c.fall_back_after_silence(), "a step down is not a climb");
+        assert_eq!(c.tx_level(), SpeedLevel::Sl6);
+        let mut c = ctrl();
+        c.lock_level(SpeedLevel::Sl8);
+        assert!(!c.fall_back_after_silence());
+        assert_eq!(c.tx_level(), SpeedLevel::Sl8);
     }
 
     /// Every branch must report the decision that actually ran. A reason field that does not track
