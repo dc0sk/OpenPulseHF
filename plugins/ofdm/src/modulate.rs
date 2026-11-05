@@ -139,14 +139,13 @@ fn modulate_with_params(payload: &[u8], p: &OfdmParams) -> Vec<f32> {
     // but 16QAM/64QAM decode to garbage on hardware).  Scaling the whole frame so
     // its peak sits at 0.9 fits the DAC WITHOUT clipping distortion — the inherent
     // PAPR backoff, applied uniformly so the demodulator (which equalizes) is
-    // unaffected.  QPSK keeps its clip-bounded peak (it already fits).
-    if p.bits_per_sc != 2 {
-        let peak = frame.iter().map(|s| s.abs()).fold(0.0_f32, f32::max);
-        if peak > 0.9 {
-            let g = 0.9 / peak;
-            for s in &mut frame {
-                *s *= g;
-            }
+    // unaffected.  QPSK too: its clip bounds the PAPR, not the level, and left a 2.82 peak that went
+    // out above full scale on SL7 (on-air task 23; `docs/dev/design/ladder-climb-into-silence.md`).
+    let peak = frame.iter().map(|s| s.abs()).fold(0.0_f32, f32::max);
+    if peak > 0.9 {
+        let g = 0.9 / peak;
+        for s in &mut frame {
+            *s *= g;
         }
     }
     frame
@@ -319,6 +318,27 @@ mod tests {
                 "{mode}: at most {worst} of {} subcarriers on one point (bound {bound:.1})",
                 p.n_data
             );
+        }
+    }
+
+    /// Every OFDM frame fits the DAC: QPSK's PAPR clip left SL7 at a 2.82 peak, above full scale.
+    #[test]
+    fn every_ofdm_frame_peaks_within_full_scale() {
+        for mode in [
+            "OFDM16",
+            "OFDM52",
+            "OFDM52-8PSK",
+            "OFDM52-16QAM",
+            "OFDM52-32QAM",
+            "OFDM52-64QAM",
+        ] {
+            for len in [1usize, 64, 520] {
+                let payload: Vec<u8> = (0..len).map(|i| (i * 37 + 11) as u8).collect();
+                let peak = ofdm_modulate(&payload, mode)
+                    .iter()
+                    .fold(0.0f32, |a, v| a.max(v.abs()));
+                assert!(peak <= 0.9 + 1e-6, "{mode}, {len} B: peak {peak:.3}");
+            }
         }
     }
 
