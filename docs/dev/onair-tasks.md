@@ -4876,3 +4876,83 @@ Whole run: A's ALC 411 readings, median 0.617, max 0.792, 3 at or above 0.7; FT-
 
 **State after cleanup (read back):** IC-9700 dial 144640000, RFPOWER 0.0117647, AGC 2, SQL 0, PTT 0, `A_TX_SINK_VOLUME` 0.15 (`wpctl` 0.15); FT-991A dial 144641564, RFPOWER 0.05, AGC 2, SQL 0, PREAMP 20, PTT 0; nothing running.
 
+
+### Review of task 23 (cloud session, 2026-11-05)
+
+**1. The notch fix works (f1c).**
+- B reads SL8 at 12.6 dB and SL9 at 14.1 dB, against 5.0 and 8.5 dB in f1b.
+- **No `climb_on_snr` on the OFDM rungs is by design:** SL9's ceiling is floor(SL10) + 2 = 16 dB, and
+  B reads 14.1.
+- **SL10 never decodes,** so on this link at A's drive SL9 is the top.
+- The nine SL10 → SL8 drops are the failed-probe step-down (task 22 review, item 4): each failed
+  probe of SL10 also costs SL9.
+
+**2. f2c's stall: B's SL8 frames did not reach A, and the ladder had no way back.**
+- **A's receive audio** (`rx-a-f2c`, from 07:51:31) holds B's frames until about 07:57:30. After that
+  it is noise at 0.0052 RMS for 20 minutes. Only B's two `with-data` BPSK250 IDs show (0.86 s at
+  0.010 RMS, at 08:00:39 and 08:09:20).
+- **The ID rides in the same stream as the SL8 frame before it,** and that frame is not in the audio.
+  B's PTT watcher shows B keyed every ~11 s through that time.
+- **The cause is the transmit level per rung,** measured through the engine's transmit path
+  (`transmit_with_fec_mode`, loopback, 64-byte payload):
+
+  | rung | mode | RMS | dBFS | peak |
+  |---|---|---|---|---|
+  | SL2–SL6 | BPSK31 … QPSK250-D | 0.61 | −4.3 | 1.00 |
+  | SL7 | OFDM52 | 0.93 | −0.6 | **2.82** |
+  | SL8 | OFDM52-8PSK | 0.21 | −13.7 | 0.90 |
+  | SL9 | OFDM52-16QAM | 0.21 | −13.5 | 0.90 |
+  | SL10 | OFDM52-32QAM | 0.18 | −14.8 | 0.90 |
+  | SL11, SL14 | OFDM52-64QAM | 0.22 | −13.0 | 0.90 |
+
+  - **SL7 → SL8 drops the audio by 13 dB.**
+  - A's IC-9700 runs in ALC on the loud frames (median 0.617), which narrows the step on air: A→B
+    worked.
+  - B's FT-991A shows no ALC (0.0625 throughout), so its RF follows the audio. A read B's SL7 at 6 dB,
+    so B's SL8 arrived well under A's noise.
+- **Nothing in the protocol could recover:**
+  - A heard nothing, so it keyed no NACK and made no decision.
+  - B kept sending at A's last recommendation (SL8) and abandoned 51 messages, "peer silent".
+  - This is the case the design note's decision 3 parked ("silence is not rung evidence"). Here
+    silence was the only signal there was.
+
+**3. SL7's frames go out at 2.8× full scale.**
+- The QPSK OFDM frame is clipped to its PAPR target but never peak-normalised (`modulate.rs`; the
+  higher-order modes are normalised to 0.9). CE-SSB then rescales to that same peak (`engine.rs`,
+  `cessb_condition_tx`, "restore the original peak").
+- Whether the audio path clips it depends on where float becomes integer (PipeWire applies the sink
+  volume in float first): UNCHECKED.
+- It is the frame that drove A's ALC to 0.858 in f1 and f1b. SL7 reads about 6–7 dB on every symbol
+  in both directions, at a pilot SNR of 12 dB.
+
+**4. a2i: the demotion through attenuation is still not shown, and it may not be showable this way.**
+- B decoded everything at drive 0.008 (16.7 dB over the RSPdx noise), and at 0.007 nothing reached the
+  air above the noise. The level fell ~9 dB in one step.
+- The pattern in a2h and a2i is the same: **B's carrier detect stops seeing a frame before the decoder
+  would fail it.** A frame weak enough to fail is not flushed, so no NACK is keyed.
+  - With the DCD less sensitive than the decoder, "weaker signal → failed frame → NACK → demotion"
+    is reachable only in a band of a few dB.
+  - A2's demotion clause may need a different inducement: a stepped noise source, or an interferer
+    in band. That is the maintainer's call.
+
+**Proposals (none implemented; each changes what or when a station transmits, so each needs the
+maintainer's go and the mandatory review):**
+- **P1 — SL7's peak:** normalise the QPSK OFDM frame's peak to 0.9, as the higher-order modes are.
+  - SL7 then drops ~9 dB in RMS, to about −9.6 dBFS; the SL6 → SL7 step becomes −5 dB.
+- **P2 — the per-rung level step:** the ladder reads SNR on one rung and climbs to another that is
+  sent up to 13 dB quieter at the same peak. Two options:
+  - (a) a climb predicts the next rung's SNR with the known level difference (a per-rung
+    transmit-level table, measured as above);
+  - (b) equal RMS on every rung, accepting that the rig's ALC then works harder on OFDM.
+  - (a) keeps the transmitter clean and is the safer one.
+- **P3 — the lockstep after a climb into silence:** after K silent ACK windows following an ACK-up,
+  the sender returns to the level before that ACK-up. That is decision 3's bounded option (b): never
+  lower than the previous recommendation, so it cannot walk the ladder down. The receiver also
+  abandons a probe it has not decoded for the same span.
+- **P4 — the failed-probe step-down** (task 22 review, item 4): abandon the probe, keep the
+  confirmed rung.
+
+**Does this block Release 1?**
+- P3 does: a stalled link on the `fast` profile is A2's stability clause failing.
+- P1 and P2 decide whether the `fast` profile climbs past SL7 from a rig without ALC compression,
+  which on HF is the common case.
