@@ -4720,7 +4720,7 @@ Commit on rpi51 `14aa9057` (build `e5ba27f`, hashes as in Part A). Settings as f
 - The preamp does not change B's idle hiss.
 - AGC FAST is set on both rigs and stays.
 
-## Task 23 — the `fast` profile and the A→B demotion on the notch-fix build (status: open; waits for the build and the maintainer's go)
+## Task 23 — the `fast` profile and the A→B demotion on the notch-fix build (status: Part A run f1c done; f2c and a2i wait for the maintainer's go)
 
 **The new build is the branch head once the notch fix is committed** (`notch-protects-the-ladder.md`).
 On top of task 22's build (`e5ba27f`):
@@ -4767,3 +4767,49 @@ As task 22, plus:
   - the decodes, the `fec attempt FAILED` bursts and the NACKs keyed;
   - the rate decisions;
   - the IC-9700's ALC.
+
+### Results — Part A, run f1c (A sends, `fast` profile; 2026-11-05)
+
+**Setup:** rpi51 at `5a3f6c5b`, build deployed with `deploy` (server, CLI and `twin-traffic.sh` sha256 identical on both stations). AGC FAST and SQL 0 on both rigs, FT-991A PREAMP 20, RFPOWER 0.0117647 (A) and 0.05 (B), both read back before the run. `OTA_PROFILE=fast`, `TRAFFIC_SIZE=64`, `TRAFFIC_INTERVAL=8`, `TRAFFIC_DURATION=600`, `DAEMON_LOG_LEVEL=info,ofdm_plugin=debug`. Recordings from 07:10:45 UTC. Evidence: `docs/dev/test-reports/onair-twin-ota-20261105-081132-evidence` (`NOTES.md`).
+
+**The runner has no setting for `auto_id_signoff_idle_secs`.** I added a local, uncommitted `SIGNOFF_IDLE_SECS` variable (default 10) that writes it under `[station]`. The deployed configs read back `auto_id_signoff_idle_secs = 30` on both stations (`config-a.toml`, `config-b.toml`). The runner change is not committed (the branch takes the task file and session records only).
+
+**Stop rules:** no keying stretch over 70 s (1 s polling). IC-9700 ALC while keyed: 174 readings, median 0.617, max 0.85, 5 readings at or above 0.7, 2 at or above 0.8. FT-991A ALC 0.0625 in all 57 readings. The runner printed `sign-off IDs after the last transmission: IC-9700 no, FT-991A no` again. Cleanup: both daemons and rigctlds stopped, PTT 0 sent.
+
+**B, the receiver, decoded 74 frames** (`frame_received` events): BPSK31 3, BPSK63 1, BPSK100 1, BPSK250 1, QPSK250-D 1, OFDM52 3, OFDM52-8PSK 33, OFDM52-16QAM 31. The highest rung decoded is SL9. SL10 (OFDM52-32QAM) never decoded.
+
+**B's 111 rate decisions:** 49 hold, 21 climb_on_evidence, 4 climb_on_snr, 28 nack_hold, 9 nack_step_down. A sent 111 frames (`frame_transmitted`): every one got a decision from B.
+
+**Ladder path (B's decisions):** SL2→3→4→5→6→7→8→9→10, then nine cycles of SL10 `nack_hold` → `nack_step_down` to SL8 → SL9 → SL10 (the `nack_hold` count before each step-down: 3, 2, 2, 3, 3, 3, 3, 2, 4; 28 in all). The climbs SL7→SL8→SL9→SL10 were `climb_on_evidence`; the four `climb_on_snr` decisions are SL3, SL4, SL5 and SL6 (BPSK/QPSK rungs). None on an OFDM rung.
+
+**SNR B read per decoded level (`snr_db` in `ota_rate_decision`):**
+
+| Level | Decisions | SNR median (min–max), dB |
+|---|---|---|
+| SL2 | 3 | −5.1 (−6.5 to −4.3) |
+| SL3 | 1 | 10.4 |
+| SL4 | 1 | 12.9 |
+| SL5 | 1 | 23.5 |
+| SL6 | 1 | 11.1 |
+| SL7 (OFDM52) | 3 | 6.6 (6.6–6.8) |
+| SL8 (OFDM52-8PSK) | 33 | 12.6 (10.2–13.8) |
+| SL9 (OFDM52-16QAM) | 31 | 14.1 (13.4–14.7) |
+| SL10 | 0 decoded | the 37 NACK decisions carry no SNR |
+
+Against the task's expectation:
+- **OFDM SNR near 13–15 dB:** yes on SL8 and SL9. SL7's 6.6 dB comes from 3 frames.
+- **`climb_on_snr` on the OFDM rungs:** no. All climbs on SL7–SL9 were `climb_on_evidence`.
+- **SL10 decoding:** no.
+- I did not take f1b's SL8 reading (5.0 dB) from its evidence again; it is the cloud session's figure.
+
+**OFDM carrier offset (B, 1297 `carrier offset acquired` lines):** `acquired_hz` min −33.12, median 3.06, max 5.08; `pilot_coherence` min 0.20, median 0.973.
+
+**`capture read holds` lines:** A 4 (1.35–2.42 s), B 12 (1.0–3.0 s, max `samples=24000` at 07:32:38.03). B's holds are 07:16:42, 07:19:28, 07:19:45, 07:20:55, 07:22:09, 07:28:00, 07:32:06, 07:32:38, 07:32:47, 07:34:37, 07:36:09, 07:36:23; A's 07:23:44, 07:34:44, 07:34:47, 07:35:06. The holds are still there with `info,ofdm_plugin=debug`.
+
+**Station IDs (30 s sign-off idle):** A `with-data` 07:19:39.14, `sign-off` 07:23:38.07. B `with-ack` 07:19:33.81, `sign-off` 07:23:32.74 and 07:24:14.89, `interval` 07:34:43.96. The traffic window ran from about 07:11:30 to 07:21:30 (the watcher logs its first keyed reading at 07:11:33).
+
+**Lost ACKs next to sign-off IDs: not answerable from this run.** `ACK not received` is a DEBUG line (6 lines in f2b's `daemon-b.log` at debug; 0 here), and A's log at `info` has no `abandoned` line either. My filter found nothing, and that says nothing about whether ACKs were lost. What the events show is that A sent 111 frames and B keyed 111 decisions, so B answered every frame it had a decision for. That is not a measure of ACKs reaching A.
+
+**Not looked at:** why SL10 never decodes while SL9 decodes at 14.1 dB (the SL10 frames' SNR is not logged), and whether A's retransmissions overlap B's IDs (the info-level log has no TX lines for either).
+
+**Radio state after cleanup (read back, nothing running on either station):** IC-9700 dial 144640000, RFPOWER 0.0117647, AGC 2 (FAST), SQL 0, PTT 0. FT-991A dial 144641564, RFPOWER 0.05, AGC 2 (FAST), SQL 0, PREAMP 20, PTT 0.

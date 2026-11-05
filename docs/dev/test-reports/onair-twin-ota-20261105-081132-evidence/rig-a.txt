@@ -1,0 +1,5 @@
+# IC-9700
+f: rigctld: Hamlib 4.6.2 2025-02-09T21:03:50Z SHA=870364 64-bit 144640000 
+m: rigctld: Hamlib 4.6.2 2025-02-09T21:03:50Z SHA=870364 64-bit PKTUSB 2400 
+j: rigctld: Hamlib 4.6.2 2025-02-09T21:03:50Z SHA=870364 64-bit 0 
+z: rigctld: Hamlib 4.6.2 2025-02-09T21:03:50Z SHA=870364 64-bit error = Backend version: 20240418.0, Status: Stable rigctl_parse: called, interactive=0 rigctl_parse: vfo_opt=0 rigctl_parse.c(2283):rigctl_get_xit entered **2:rig.c(6246):rig_get_xit entered **../../src/rig.c(6264) trace netrigctl_get_xit called netrigctl_vfostr: called vfo=currVFO netrigctl_vfostr: vfo==RIG_VFO_CURR, curr=VFOA netrigctl_vfostr: vfo_opt=0 netrigctl_transaction: called len=2 network_flush called write_block(): TX 2 bytes read_string_generic called, rxmax=1024 direct=1, expected_len=1 read_string_generic(): RX 9 characters, direct=1 **2:rig.c(6266):rig_get_xit returning(-11) Feature not available  rigctl_parse.c(2289):rigctl_get_xit returning2(-11) Feature not available  Feature not available  
