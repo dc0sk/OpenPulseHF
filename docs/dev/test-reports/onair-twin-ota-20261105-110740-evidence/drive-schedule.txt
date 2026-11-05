@@ -1,0 +1,17 @@
+10:07:40.717280063 t0 (Driving OTA traffic line)
+10:07:40.718820018 sdr capture started (1200 s)
+10:12:31.687473574 first SL6 (QPSK250-D) frame_received on B (t0+291 s)
+10:13:32.615871071 SL6 seen >=60 s and t0+300 passed: start stepping
+10:13:32.617032991 set A_TX_SINK_VOLUME=0.01 (t0+352 s)
+
+10:13:33.703448341 done
+10:15:03.785871484 set A_TX_SINK_VOLUME=0.008 (t0+443 s)
+
+10:15:04.900999763 done
+10:16:36.439566345 set A_TX_SINK_VOLUME=0.007 (t0+536 s)
+
+10:16:37.574872171 done
+10:17:38.939522589 no rate decision on B for 60 s at drive 0.007: back to 0.008
+10:17:38.940355788 set A_TX_SINK_VOLUME=0.15 (to the end, t0+598 s)
+
+10:17:40.037065703 done

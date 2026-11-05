@@ -4720,7 +4720,7 @@ Commit on rpi51 `14aa9057` (build `e5ba27f`, hashes as in Part A). Settings as f
 - The preamp does not change B's idle hiss.
 - AGC FAST is set on both rigs and stays.
 
-## Task 23 — the `fast` profile and the A→B demotion on the notch-fix build (status: Part A runs f1c and f2c done; a2i waits for the maintainer's go)
+## Task 23 — the `fast` profile and the A→B demotion on the notch-fix build (status: Parts A and B done; see Results)
 
 **The new build is the branch head once the notch fix is committed** (`notch-protects-the-ladder.md`).
 On top of task 22's build (`e5ba27f`):
@@ -4835,4 +4835,44 @@ Against the task's expectation:
 **Station IDs (30 s sign-off idle):** A `sign-off` 07:58:29.71; B `with-data` 08:00:39.02 and 08:09:20.41, none other. **Lost ACKs next to IDs:** not answerable at this log level (`ACK not received` is DEBUG); B's `abandoned` lines at `info` are the nearest signal, and they are 51 lines over 19 minutes, not tied to the IDs.
 
 **Against f1c:** with A sending (f1c) B decoded SL8 and SL9 at 12.6 and 14.1 dB. With B sending (f2c) A read SL7 at 6.0 dB and decoded nothing above SL7, as in f2b.
+
+### Results — Part B, run a2i (A sends, `robust`, A's drive in finer steps; 2026-11-05)
+
+**Setup:** as f1c, `OTA_PROFILE=robust`, `TRAFFIC_FROM=A`, `TRAFFIC_DURATION=1200`. t0 = 10:07:40.72 UTC. Evidence: `docs/dev/test-reports/onair-twin-ota-20261105-110740-evidence` (`NOTES.md`, `drive-schedule.txt`). RSPdx capture 1200 s from t0 (port A; port B empty).
+
+**Drive schedule (UTC; `A_TX_SINK_VOLUME` set through `wpctl set-volume`):** first SL6 frame on B at t0+291 s (10:12:31.69); 0.01 from 10:13:32.62 (t0+352 s); 0.008 from 10:15:03.79; 0.007 from 10:16:36.44; **back to 0.15 at 10:17:38.94**, after B logged no `ota_rate_decision` for 60 s at 0.007 (the stop rule). The 0.006 and 0.005 steps were not run. The routing script's read-back prints `sink_vol` to two decimals, so it printed 0.01 for the 0.008 and 0.007 steps; it does not confirm those values.
+
+**RSPdx level per step** (18–22 kHz band, 0.1 s frames, noise from the 26–30 kHz band; "keyed" = band power more than 6 dB over the noise median):
+
+| Step | Frames | Keyed frames | Noise (dB) | Signal median (dB) | Signal over noise (dB) |
+|---|---|---|---|---|---|
+| 0.15 (10:10:00–10:13:32) | 2120 | 1759 | −75.1 | −26.2 | 48.9 |
+| 0.01 | 890 | 586 | −75.0 | −54.6 | 20.5 |
+| 0.008 | 900 | 578 | −75.0 | −58.3 | 16.7 |
+| 0.007 | 600 | **1** | −74.6 | −67.5 (one frame) | 7.2 |
+| 0.15 (10:17:45–10:27:30) | 5850 | 3832 | −75.1 | −26.4 | 48.7 |
+
+At 0.01 the signal sits 28.4 dB under 0.15, as in task 22. 0.008 is 3.7 dB under 0.01. At 0.007 almost no frame clears 6 dB over the noise in the band, so the on-air level fell to about the noise floor within one step.
+
+**IC-9700 while keyed (1 s polls: the counts are readings, not transmissions) and B's keyed readings:**
+
+| Step | A keyed readings | A ALC median / max | B keyed readings |
+|---|---|---|---|
+| 0.15 before | 80 | 0.617 / 0.633 | 7 |
+| 0.01 | 27 | 0.033 / 0.033 | 4 |
+| 0.008 | 29 | 0.033 / 0.042 | 8 |
+| 0.007 | 10 | 0.042 / 0.042 | **0** |
+| 0.15 after | 183 | 0.617 / 0.792 | 41 |
+
+Whole run: A's ALC 411 readings, median 0.617, max 0.792, 3 at or above 0.7; FT-991A ALC 0.0625 in all of its readings. No keying stretch over 70 s. The runner printed `no, no` for sign-off again.
+
+**Decodes and decisions (B's events; they carry no timestamps, so none of them is split per step):** B decoded 148 frames: QPSK250-D 141, BPSK31 3, BPSK250 2, BPSK63 1, BPSK100 1. It made 147 rate decisions: 143 hold, 3 climb_on_snr, 1 climb_on_evidence. **No `nack_hold`, no `nack_step_down`.** Ladder SL2→3→4→5→6 and then 141 holds at SL6. A sent 155 frames (`frame_transmitted`). SL6 SNR by step was not computed.
+
+**No A→B demotion was shown, again.** At 0.01 and 0.008 B kept answering (B keyed 4 and 8 readings, and the run holds no NACK decision, so those were ACKs, not NACKs). At 0.007 B keyed nothing and A's signal was at the noise floor. A logged **2 `OTA send abandoned`** lines, at 10:17:05 and 10:17:33, both inside the 0.007 step. The step from "decodes everything" to "nothing" lies between 0.008 and 0.007, 1.1 dB apart in drive on a 0.15 scale; B never had a frame it could fail and NACK.
+
+**Station IDs (30 s sign-off idle):** A `with-data` 10:15:42.89 and 10:24:18.14, `interval` 10:33:54.29. B `with-ack` 10:15:45.97 and 10:25:44.16, `sign-off` 10:17:09.25 and 10:29:16.01. B's first `sign-off` (10:17:09) falls 4 s after A's first `abandoned` line (10:17:05) and in the 0.007 step, where B received nothing. The log at `info` does not show the nearest `ACK not received`.
+
+**`capture read holds`:** A 1 (6.934 s at 10:33:49, five seconds before A's `interval` ID at 10:33:54), B 0.
+
+**State after cleanup (read back):** IC-9700 dial 144640000, RFPOWER 0.0117647, AGC 2, SQL 0, PTT 0, `A_TX_SINK_VOLUME` 0.15 (`wpctl` 0.15); FT-991A dial 144641564, RFPOWER 0.05, AGC 2, SQL 0, PREAMP 20, PTT 0; nothing running.
 
