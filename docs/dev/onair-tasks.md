@@ -5160,7 +5160,7 @@ As task 24, plus:
 - If neither appears, the record was emptied by something that is not an ACK, which the code says
   cannot happen.
 
-## Task 26 — which ACK empties the climb record: f2e again, with every received ACK logged (status: open; waits for the build and the maintainer's go)
+## Task 26 — which ACK empties the climb record: f2e again, with every received ACK logged (status: Part A run f2f done; see Results)
 
 **The new build is the branch head** (the `OTA ACK received` line, on top of task 25's `e0832e4`).
 Settings and log levels as task 25 (B at `info,ofdm_plugin=debug,openpulse_daemon=debug`, A at
@@ -5179,3 +5179,49 @@ As task 25, plus:
 - **the `OTA ACK received` line on the climb to SL7** (or whatever rung B tops at), quoted;
 - the count of `OTA ACK received` lines on B, and on A (A is never the sender here; expect 0).
 
+### Results — Part A, run f2f (B sends, `fast` profile; 2026-11-05)
+
+**Setup:** rpi51 at `2a212286`; build deployed with `deploy` (server `f84c54c3…`, CLI `01ebbab8…`, `twin-traffic.sh` `c9e152f3…`, identical on both stations). Settings and log levels as f2e (A `info,ofdm_plugin=debug`; B `info,ofdm_plugin=debug,openpulse_daemon=debug`), with the same local, uncommitted runner overrides (`DAEMON_LOG_LEVEL_B`, `SIGNOFF_IDLE_SECS`). Rig state read back before the run (A 0.0117647 / AGC 2 / SQL 0; B 0.05 / AGC 2 / SQL 0 / PREAMP 20), `auto_id_signoff_idle_secs = 30` on both. Recordings from 21:30:46 UTC. Evidence: `docs/dev/test-reports/onair-twin-ota-20261105-223132-evidence` (`NOTES.md`).
+
+**Stop rules and state:** no keying stretch over 70 s. IC-9700 ALC while keyed: 2 readings (0.658, 0.042); FT-991A ALC 0.0625 in all 229 readings. The runner printed `no, no` for sign-off. After cleanup (read back): IC-9700 dial 144640000, RFPOWER 0.0117647, AGC 2, SQL 0, PTT 0; FT-991A dial 144641564, RFPOWER 0.05, AGC 2, SQL 0, PREAMP 20, PTT 0; nothing running.
+
+**The climb ACK to SL7 reports `no_fall_back="-"` (the fall-back would fire), and 23 s later the fall-back declines for "no unconfirmed climb is recorded" with no ACK applied in between.**
+- **`OTA ACK received` lines: B 9, A 0.** All nine are before the first decline. B logged no further `OTA ACK received` line after 21:36:38.05 (the first five after the first decline: none exist).
+- **B's nine, in full (UTC):**
+
+```
+21:32:43.712640Z  INFO OTA ACK received ack=AckOk recommended=Sl2 from=Sl2 to=Sl2 no_fall_back="no unconfirmed climb is recorded"
+21:33:53.431251Z  INFO OTA ACK received ack=AckOk recommended=Sl2 from=Sl2 to=Sl2 no_fall_back="no unconfirmed climb is recorded"
+21:35:03.274682Z  INFO OTA ACK received ack=AckUp recommended=Sl3 from=Sl2 to=Sl3 no_fall_back="-"
+21:35:40.720557Z  INFO OTA ACK received ack=AckUp recommended=Sl4 from=Sl3 to=Sl4 no_fall_back="-"
+21:36:06.098609Z  INFO OTA ACK received ack=AckUp recommended=Sl5 from=Sl4 to=Sl5 no_fall_back="-"
+21:36:17.336781Z  INFO OTA ACK received ack=AckUp recommended=Sl6 from=Sl5 to=Sl6 no_fall_back="-"
+21:36:24.258444Z  INFO OTA ACK received ack=AckOk recommended=Sl6 from=Sl6 to=Sl6 no_fall_back="no unconfirmed climb is recorded"
+21:36:31.164501Z  INFO OTA ACK received ack=AckOk recommended=Sl6 from=Sl6 to=Sl6 no_fall_back="no unconfirmed climb is recorded"
+21:36:38.053648Z  INFO OTA ACK received ack=AckUp recommended=Sl7 from=Sl6 to=Sl7 no_fall_back="-"
+```
+
+- **The climb ACK to SL7 is the last line: `ack=AckUp recommended=Sl7 from=Sl6 to=Sl7 no_fall_back="-"`.** (The line is logged after the ACK is applied, so `no_fall_back` is the state after it.)
+- **What follows on B, with nothing applied between:**
+
+```
+21:36:49.825283Z DEBUG OTA ACK not received within window error=demodulation failed: ACK not received within window
+21:37:01.587510Z DEBUG OTA ACK not received within window error=demodulation failed: ACK not received within window
+21:37:01.587557Z  INFO OTA: the peer is silent; no fall-back level=Sl7 why="no unconfirmed climb is recorded"
+21:37:01.587572Z  WARN OTA send abandoned: peer silent for 2 consecutive ACK windows; ...
+```
+
+- **51 `OTA: the peer is silent; no fall-back` lines**, all `level=Sl7 why="no unconfirmed climb is recorded"`, first 21:37:01.59, last 21:56:42.48; 51 `OTA send abandoned`; 102 `ACK not received within window` (first 21:36:49.83). **0 `back to the level before it`, 0 `ota_fall_back`** (that line has never matched in any log).
+- **So the climb record was set by the climb ACK (the line says `-`) and was empty by the first decline. No ACK was applied in between** (no `OTA ACK received` line; the same filter matches the nine lines above, so its silence after 21:36:38.05 is a real zero). Not found: what emptied it. I looked at the callers of the clearing code and found `apply_ota_ack` (engine.rs:2285) as the only production caller of `adopt_recommendation_from`; `ota_set_level_bounds`, `ota_lock_level` and `ota_unlock` also clear it (daemon `lib.rs` 2942–2960) and my grep of `scripts/twin-traffic.sh` for those names found nothing. I did not check that the B daemon received no such control command.
+
+**B's `tx_level` at the first decline:** the decline line says `level=Sl7`. B's `ota_status` events go SL2→SL3→SL4→SL5→SL6→SL7 and do not change after; B's `rx_recommended_level` and `rx_confirmed_level` stay SL2.
+
+**A, the receiver, made 9 rate decisions** (4 hold, 3 climb_on_snr, 2 climb_on_evidence): SL2→3→4→5→6→7. A decoded 11 frames (BPSK31 3, BPSK250 3, QPSK250-D 3, BPSK63 1, BPSK100 1; **no OFDM52**). At the last status change A's `rx_recommended_level` is SL7, `rx_confirmed_level` SL6. SNR A read (dB): SL2 1.4 (−2.8 to 4.5, 3), SL3 11.1, SL4 13.7, SL5 14.6, SL6 9.9 (3.0–10.0, 3); SL7 none. B sent 114 frames (OFDM52 103, BPSK31 3, BPSK250 3, QPSK250-D 3, BPSK63 1, BPSK100 1), the same split as f2d and f2e.
+
+**A's OFDM carrier lines:** 665 from 21:37:14 to 21:56:20; `acquired_hz` −45.64 to 19.94, median −8.82; `pilot_coherence` min 0.24, median 0.969. The first is 13 s after B's first decline.
+
+**`capture read holds`:** A 28 (0.98–1.34 s, 21:36:40 to 21:56:33), **B 0** at `openpulse_daemon=debug`. B logged 26 `TCP client event receiver lagged; events dropped` lines.
+
+**Station IDs (30 s sign-off idle):** A `sign-off` 21:37:09.16. B `with-data` 21:39:50.82 and 21:48:27.53; no `sign-off` ID on B.
+
+**Operator's report** (relayed by the task session, the maintainer's words): "I can hear B's OFDM signal clearly, but there is nearly no signal on the scope. The exchange just before (A something wide, B something narrow) was fine." Time not known to me; B's first SL7 frame went out between 21:36:38.05 and 21:36:49.83. The RSPdx was not recording. Mechanisms offered with the report (OFDM power spread over about 2.4 kHz; the FT-991A's lower average OFDM level) are interpretation, not measured.
