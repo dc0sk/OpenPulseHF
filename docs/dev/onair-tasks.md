@@ -5068,7 +5068,7 @@ As task 23, plus:
   reason: no unconfirmed climb recorded, the session locked, or the SL1 sub-floor.
 - It is a log line only, no keying change.
 
-## Task 25 — why the fallback declined: f2d again, with the reason logged (status: Part A run f2e done; see Results)
+## Task 25 — why the fallback declined: f2d again, with the reason logged (status: done — reviewed below)
 
 **The new build is the branch head** (the decline line, on top of task 24's `a845ce4`). Settings as task 24.
 
@@ -5121,3 +5121,61 @@ As task 24, plus:
 **Station IDs (30 s sign-off idle):** A `sign-off` 20:36:38.98. B `with-data` 20:39:19.18 and 20:47:57.36; B logged no `sign-off` ID.
 
 **What I did not look at:** why no climb is recorded when B sits at SL7 (the code that clears it: `adopt_recommendation_from` clears `tx_before_climb` on a non-NACK recommendation at or below the current level, `ota_rate.rs` lines 373–375; I read the lines and did not trace which ACK did it), and what B's debug log shows for received ACKs under another wording.
+
+### Review of task 25 (pc1 session, 2026-11-05)
+
+**The reason is logged, and it narrows the question.**
+- All 51 declines say `no unconfirmed climb is recorded`. That excludes the lock and the MFSK16
+  sub-floor, so the controller's `tx_before_climb` was empty when the fall-back was asked.
+- Only three things empty it:
+  1. the bounds or lock commands (control port only; the runner sends neither, and `server::run`
+     applies config bounds once, at start);
+  2. the fall-back itself (it never fired: 0 `back to the level before it` lines);
+  3. a received ACK that is not a NACK, at or below the sender's level (`adopt_recommendation_from`).
+
+**The timeline does not show an ACK that could have done it.**
+- In the PTT watcher (2 s sampling, so it misses short keyings), A keyed at 20:35:47, 20:35:54,
+  20:36:01 and 20:36:08. In A's events, the last three QPSK250-D decodes are ACKed: hold, hold,
+  `climb_on_evidence` to SL7. After those, A keyed only its sign-off ID at 20:36:38.
+- B climbed to SL7 after its third QPSK250-D frame. Its first two windows at SL7 timed out (20:36:19.52
+  and 20:36:31.32), and the first decline is at 20:36:31.32. Between the climb and the first
+  decline, B logged no other ACK window.
+- So, on what the logs show, the climb ACK set the record and nothing cleared it. Yet the record was
+  empty. **Either the climb ACK never recorded the climb, or B received an ACK that left no line.** B
+  logs nothing for a received ACK, so the evidence cannot separate the two.
+
+**Change for the next run (log line only, no keying change):**
+- `ModemEngine::apply_ota_ack` now logs `OTA ACK received` at info for every applied ACK:
+  - the ACK type and recommended level;
+  - the sender's level before and after (`from`, `to`);
+  - `no_fall_back`: what the fall-back would say at that moment (`-` when it would fall back).
+- Checked: `cargo clippy -p openpulse-modem -p openpulse-daemon --no-default-features --all-targets
+  -- -D warnings` clean; `climb_into_silence_falls_back` 1 passed.
+
+**What the line decides:**
+- On the climb ACK (`from=Sl6 to=Sl7`), `no_fall_back` must read `-`. If it already says `no
+  unconfirmed climb is recorded`, the climb was never recorded, a defect in `adopt_recommendation_from`.
+- If it reads `-` there, then any later `OTA ACK received` line before the first decline names the ACK
+  that cleared it.
+- If neither appears, the record was emptied by something that is not an ACK, which the code says
+  cannot happen.
+
+## Task 26 — which ACK empties the climb record: f2e again, with every received ACK logged (status: open; waits for the build and the maintainer's go)
+
+**The new build is the branch head** (the `OTA ACK received` line, on top of task 25's `e0832e4`).
+Settings and log levels as task 25 (B at `info,ofdm_plugin=debug,openpulse_daemon=debug`, A at
+`info,ofdm_plugin=debug`). Keep the same uncommitted runner overrides as f2e, and say so in the notes.
+
+### Part A — run f2f (B sends, `fast` profile; keys both rigs: one go)
+
+As f2e: `TRAFFIC_FROM=B`, `TRAFFIC_INTERVAL=8`, `TRAFFIC_DURATION=600`.
+
+### Report
+
+As task 25, plus:
+- **every `OTA ACK received` line on B,** with time and all fields, from the start of traffic until
+  the first `no fall-back` or `back to the level before it` line;
+- the first five of those lines after that point;
+- **the `OTA ACK received` line on the climb to SL7** (or whatever rung B tops at), quoted;
+- the count of `OTA ACK received` lines on B, and on A (A is never the sender here; expect 0).
+
