@@ -492,3 +492,33 @@ fn a_detected_burst_is_not_learned_as_band() {
     }
     println!("squelch at open / after flush: {moved:?}");
 }
+
+/// P's head survives a total-power flicker over the preamble. At 400-sample reads total power can
+/// trip on the frame's first read or two and drop again before P's confirm is in (four data symbols
+/// later); that short burst flushes, and #1454's retention rule empties `rx_ring`, preamble and all.
+/// P's head comes from its own ring, which the rule does not empty. Seen on one f2g frame while this
+/// was built (a 0.356 s flicker, then a P burst with no head that did not decode); this pins it with
+/// a frame whose first 600 samples stand 2.5× over the rest.
+#[test]
+fn a_flicker_over_the_preamble_keeps_ps_head() {
+    let (mut x, starts, len, payloads) = two_frames_at_agc_level(s(3.0));
+    for v in &mut x[starts[0]..starts[0] + 600] {
+        *v *= 2.5;
+    }
+    let seg = [Segment { at: 0, samples: &x }];
+    let mut e = engine(SpeedLevel::Sl7, true);
+    let flushes = feed(&mut e, &seg, 400, true);
+    assert!(
+        flushes
+            .iter()
+            .any(|f| f.start + f.len > starts[0] && f.start + f.len < starts[0] + len),
+        "no burst flushed inside the frame: the flicker this fixture exists for did not happen \
+         ({flushes:?})"
+    );
+    assert!(
+        flushes.iter().any(|f| holds_and_decodes(f, starts[0], len)
+            && f.decoded.as_ref().is_some_and(|(_, p)| *p == payloads[0])),
+        "after a flicker over its preamble the frame was not gathered whole and decoded: \
+         {flushes:?}"
+    );
+}
