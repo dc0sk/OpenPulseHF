@@ -5496,3 +5496,46 @@ reference: B→A OFDM is decodable on this pair, and the detector has to gather 
 A→B. The level comparison per rung on `rx-a-f2h-8k.wav.gz` (the OFDM step over the hiss under AGC
 SLOW) is to be done offline. The station's crude numbers are indicative only.
 
+## Task 29 — B→A OFDM under AGC FAST with the preamble detect: does the release configuration deliver SL7+? (status: open; maintainer's go given 2026-11-06)
+
+**Why.** Task 28 showed that B→A OFDM is decodable on this pair: with A's AGC SLOW, A decoded 38
+OFDM frames and B→A climbed to SL9. Under AGC FAST, the Release 1 operating requirement, A gathered
+none (f2d–f2g), because the frames sit at about 1.2× the gap hiss. `main` now carries a carrier
+detect that does not depend on level (#1518, `docs/dev/design/ofdm-preamble-detect.md`): it opens on
+the OFDM preamble and holds on the cyclic prefix. f2i is that detector's first run on air.
+
+**Build:** the branch head (`main` at #1518 plus the task docs). Rebuild and redeploy BOTH stations,
+and record the sha256 of both binaries. Settings, log levels and runner overrides as f2h, except
+**A's AGC: FAST (2)**, read back before and after.
+
+### Part A — run f2i (B sends, `fast` profile; keys both rigs: one go)
+
+As f2h: `TRAFFIC_FROM=B`, `TRAFFIC_INTERVAL=8`, `TRAFFIC_DURATION=600`.
+
+**Before:** read back A's AGC (must be 2), RF gain and source volume, and run
+`scripts/onair-rx-level-check.sh`.
+
+**Check the build is the detector's:** on A, the daemon log must show `preamble carrier detect` lines
+once OFDM is among the OTA candidates. If none appears by the time B reaches SL7, report that and stop
+the analysis there; the run itself may continue.
+
+### Report
+
+As task 28, plus:
+- **A's frames received by mode** (OFDM52, OFDM52-8PSK, OFDM52-16QAM …), and A's rate decisions by
+  level with SNR;
+- **every `preamble carrier detect` line on A**: first, last, and the ones at each SL7+ episode, with
+  all fields (blocks, opens, false_opens, held_no_frame, us_per_block);
+- **the detector's cost on rpi51:** the `us_per_block` range, and whether any `capture read holds`
+  line on A coincides with OFDM episodes (count, against f2h);
+- **B's ACKs by send level**, delivered and abandoned counts, and every `back to the level before it`
+  and `no fall-back` line;
+- `preamble carrier detect` lines on B as well: B receives A's ACKs and IDs, never OFDM in this
+  direction, so B's opens should be 0;
+- whether the narrow rungs (BPSK/QPSK) regressed against f2h;
+- the recordings committed as before.
+
+**Prediction:** A delivers OFDM52 at SL7, and B→A reaches SL7 or above under AGC FAST, as f2h did under
+SLOW; A's false_opens stays 0 or near it. **Killed if** no OFDM52 is delivered under FAST with the
+detector running, or if false opens hold the channel busy enough to cost narrow-rung deliveries.
+
