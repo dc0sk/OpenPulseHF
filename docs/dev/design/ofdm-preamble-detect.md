@@ -132,7 +132,8 @@ does not enter it.
     bursts the cold squelch judged, and P never consults the squelch. It does apply today:
     `accumulate_routed` discards any burst with `was_cold && mean_sq.is_some()` (`engine.rs`
     ~2991–3000). The burst carries a `p_opened` flag, read there to skip the discard. Gate 1's cold
-    case and sabotage S6 pin it.
+    case and sabotage S6 pin it. *(Implemented otherwise: the exemption was unreachable, and the
+    premise is pinned by a tripwire instead; Implementation, deviation 5.)*
 - **The ACK deadline.** The daemon takes the frame's end as the start of the read that flushed it
   (`server.rs:1135–1146`).
   - P releases 6–8 symbols (0.22–0.29 s) after the frame's real end, measured 6/6 on f2g. So the
@@ -310,8 +311,9 @@ locked to SL7 (`ota_lock_level`), so SL7 and SL6 are the candidates.
    - **Sabotage S1:** P not OR'd into `carrier_present`. Expected 0/6; task 28 measured 0 gathered on
      the production path.
    - **Cold case:** the same f2g excerpt fed to an engine whose noise floor is cold. The frame must
-     still decode. **Sabotage S6:** the `p_opened` check removed from the `was_cold` discard. The
-     burst is discarded, and it must fail.
+     still decode. **Sabotage S6 — withdrawn: unreachable (premise pinned by a tripwire).** It was
+     the `p_opened` check removed from the `was_cold` discard; no P-opened burst can reach that
+     discard (Implementation, deviation 5).
 2. **`ofdm_detect_ignores_the_corpus`.**
    - Input: every idle capture, the tone, the BPSK250 and BPSK31 captures, and one f2g QPSK250-D
      excerpt, with an OFDM candidate active.
@@ -362,6 +364,14 @@ locked to SL7 (`ota_lock_level`), so SL7 and SL6 are the candidates.
     abandon_burst()`, `server.rs` ~951–957 and ~1521–1525).
     - `abandon_burst_when_keying.rs` runs with an OFDM candidate, so a regression in that rule shows up
       as a P open.
+    - Scope: the test keys on the command arm (a data send), where two rules each suffice (the send
+      closes the stream before keying, audit #917; the arm drops it after, #1007). The rx-tick
+      keyings — the OTA ACK/NACK, the station ID at `handle.active_mode`, CONACK/QSY replies — keep
+      the stream open during the key and rest on #1007 alone. That holds because
+      `stage_emit_output` → `record_tx_frame` bumps `frames_transmitted` for every emission keyed
+      through it, so the tick's post-transmit drop and `abandon_burst` fire for them too
+      (`transmit_raw_audio`, the JS8 beacon, counts in `raw_audio_frames_transmitted` instead; not
+      checked here). No test keys on that arm with an OFDM candidate.
 
 **The asset rule** for committed captures:
 - **Format:** 8 kHz mono 16-bit PCM, cut by sample index from the committed `.wav.gz` (no resampling).
@@ -381,15 +391,19 @@ locked to SL7 (`ota_lock_level`), so SL7 and SL6 are the candidates.
   - **The worse cost is a keyed NACK on noise** (the #1178 class), since a confirmed burst is ladder
     evidence. The `acquire` coherence ≥ 0.9 condition is what stands between the two.
   - The daemon logs a false-open counter, so the HF run measures the rate instead of extrapolating it.
+    It counts only failed bursts P itself opened whose `acquire` coherence is under 0.9; failed
+    bursts P only held after total power or S opened them are logged apart as `held_no_frame`,
+    because most are fragments of genuine frames (Implementation, deviation 8).
 - **CPU on the Pi.**
   - About 5–7 % of a core, estimated (Cost). Receive-only, and only with an OFDM candidate.
   - After a transmit or a decode, the first read can hold 2.4 s of audio, about 0.1 s of P work in
     one tick. UNCHECKED on the Pi.
 - **`SPECTRAL_TAIL_MAX` and frames 0.4 s apart.**
   - P adds no tail beyond S's: it releases 0.22–0.29 s after the frame, against S's ≤ 0.5 s.
-  - With P alone, frames 0.4 s apart stay two bursts only while a read is shorter than about
-    0.11 s (880 samples; derived from the release, not measured). The daemon's 100 ms tick (800)
-    qualifies with little margin; a 2.4 s read hold does not.
+  - Measured by the reviewer, two SL7 frames at AGC level: at a 0.4 s gap, two bursts that both
+    decode at 400, 800, 1 200 and 1 600-sample reads, and one burst at 2 400 and 4 096; at a 0.6 s
+    gap, two bursts up to 2 400 and one at 4 096. The daemon's 100 ms tick (800) is inside that; a
+    2.4 s read hold is not.
   - Where they merge, #1461's multi-frame decode carries both.
 - **A deep fade splits a frame:** γ₈ under 0.30 mid-frame. Not seen on the 57 faded frames that
   decoded (minimum 0.431); seen in 4 of 40 at 6 dB, failed frames included.
@@ -519,11 +533,13 @@ Code: `CarrierDetector`/`CarrierVerdict` and `ModulationPlugin::carrier_detector
    pinned by `a_flicker_over_the_preamble_keeps_ps_head`, which fails with `rx_ring`.
 4. **The analytic signal is a 127-tap Hamming Hilbert FIR**, streamed, not an FFT per block; flat in
    band to ±3 % (`the_analytic_signal_is_a_phasor_in_band`).
-5. **The `p_opened` exemption from the cold discard is unreachable today**, and sabotage S6 cannot go
-   red: P's earliest open is 1 503 samples after its onset (confirm plus the FIR's delay), while the
-   tracker's `mean_sq` is `Some` after its first 512 samples and never returns to `None`, so no
-   P-opened burst can flush on the read that first warms the tracker. The flag is in place for a
-   future tracker that can go cold again.
+5. **No `p_opened` exemption from the cold discard; S6 withdrawn: unreachable (premise pinned by a
+   tripwire).** P's earliest open is 1 503 samples after its onset (confirm plus the FIR's delay),
+   while the tracker's `mean_sq` is `Some` after its first 512 samples and never returns to `None`,
+   so no P-opened burst can flush on the read that first warms the tracker. The exemption was
+   therefore removed (review follow-up), and `accumulate_routed` carries
+   `debug_assert!(!(was_cold && rx_burst_p_opened))`, which every debug test run checks, plus a
+   `warn!` for a release build. Forcing `was_cold` true makes gate 1 panic on it.
 6. **Gate fixtures:**
    - Gate 1: the 9 s before each episode's first frame is not all gap hiss (B's QPSK250-D frame and
      A's two own ACKs). The feed warms the floor on the episode's own 10 s gap, cuts A's own keyed
@@ -547,15 +563,32 @@ Code: `CarrierDetector`/`CarrierVerdict` and `ModulationPlugin::carrier_detector
      off; the gate is the sender hearing the ACK inside its window. Its channel hears the frame in
      f2g's recorded gap hiss, shaped to that hiss's spectrum: with white or unshaped hiss the spectral
      test gathered the frame and the gate passed with P sabotaged out.
-   - Gate 12: two rules keep a station's own OFDM frame out of P, and either suffices for an OTA send:
-     the send closes the stream before keying (audit #917) and the command arm drops it after
-     (#1007). Removing the second alone stays green; removing both opens P on the echo.
-7. **The daemon logs P's line once P has run and then on change**, so a run shows P active even when
-   it never opens. `ofdm-plugin` declares trait `"3.2"`.
-
-**Found, not changed (parked in the work plan):** P also runs on the ACK listen's capture
-(`receive_ota_ack_within` routes through the seam) with the detector state of the receive stream,
-so two streams interleave in one detector; harmless to opens so far, UNCHECKED for `force_busy`.
+   - Gate 12: two rules keep a station's own OFDM frame out of P, and either suffices for the
+     command arm's data send: the send closes the stream before keying (audit #917) and the command
+     arm drops it after (#1007). Removing the second alone stays green; removing both opens P on the
+     echo (3/3 red). The rx-tick keyings rest on #1007 alone (gate 12, scope). That P ran is read
+     from the daemon's line, logged after every read (deviation 7), not from a post-decode line:
+     that needed a burst to flush after the transmit and raced the daemon's lazy stream reopen (the
+     reviewer saw 2 failures in 5 runs).
+7. **The daemon logs P's line once P has run and then on change, after every read as well as after
+   a decode** (`log_preamble_detect`), so a run shows P active even when it never opens and no burst
+   flushes. `ofdm-plugin` declares trait `"3.2"`.
+8. **What the false-open counter counts** (review follow-up). `preamble_detect_false_opens` counts
+   only failed bursts P itself opened (`FlushSpans.p_opened`) whose `acquire` coherence is under
+   `P_EVIDENCE_COHERENCE`; failed bursts P only held, after total power or S opened them, count in
+   `preamble_detect_held_no_frame`. The first version counted both together, and under an S1
+   sabotage the twin logged `opens=2 false_opens=1` on a genuine SL7 frame. The daemon's line logs
+   `false_opens` and `held_no_frame`, and its message says what each counts. Pinned in-crate by
+   `a_false_open_retains_no_llrs_and_is_counted` (a P-opened comb; its first fixture was loud
+   enough that total power opened it, so it is now at gate 4's AGC level) and
+   `a_held_fragment_of_a_genuine_frame_is_not_a_false_open`.
+9. **P runs only on the accumulator's seam** (review follow-up): `update_dcd_at_seam` calls
+   `update_preamble_detect` only under `seam_in_accumulate`. The ACK listen (`receive_ota_ack_within`)
+   and the one-shot receives route through the same seam, and fed to P they interleaved a second
+   stream into the receive stream's detector state. Pinned by
+   `the_ack_listen_does_not_feed_the_preamble_detect`.
+10. **`P_EVIDENCE_COHERENCE` and `acquire::EARLY_ACCEPT_COHERENCE`** are both 0.9 by design (decision
+    4) and name each other in their doc comments; the plugin's constant stays private.
 
 **Measured cost** (Ryzen 9 3900X, one thread, `--release`, 800-sample reads on the f2g excerpt):
 1.76 ms per read, 17.6 ms/s (the note's table: 16.4; its 1 727-sample carry: 4.78 ms per read).

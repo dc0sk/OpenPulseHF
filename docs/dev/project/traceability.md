@@ -29,20 +29,33 @@ this ledger adds the design rationale and the actually-observed results per chan
   (`docs/dev/reviews/review-ofdm-preamble-detect-2026-11-06.md`); design
   `docs/dev/design/ofdm-preamble-detect.md`, whose Implementation section states every deviation
   (no `hold_bound_samples` on the trait, `template`/`burst_coherence` added, P's own head ring, the
-  unreachable cold-discard exemption, fixture changes).
+  cold-discard exemption replaced by a tripwire, fixture changes, and the review follow-ups: the
+  false-open counter's meaning, P on the accumulator's seam only, the daemon line after every read).
 - **Implementation:** `crates/openpulse-core/src/plugin.rs` (`CarrierDetector`, `CarrierVerdict`,
   `ModulationPlugin::carrier_detector`, trait 3.2.0); `plugins/ofdm/src/detect.rs`
   (`OfdmCarrierDetector`), `modulate.rs` (`clipped_preamble`), `lib.rs`;
   `crates/openpulse-modem/src/engine.rs` (`update_preamble_detect`, `sync_p_units`, `p_hold_bound`,
-  `p_burst_coherence`, the `accumulate_routed` head, cold-discard and floor sites, `FlushSpans.p_confirmed`,
-  the evidence rule, `preamble_detect_*` counters); `crates/openpulse-daemon/src/server.rs` (the
-  `preamble carrier detect` log line), `twin.rs` (`spawn_bridged_pair_in_hiss`); `Cargo.toml`
+  `p_burst_coherence`, the `accumulate_routed` head, the cold-discard tripwire and floor sites,
+  `FlushSpans.p_confirmed`/`p_opened`, the evidence rule, `preamble_detect_*` counters including
+  `held_no_frame`, P gated on `seam_in_accumulate`); `crates/openpulse-daemon/src/server.rs`
+  (`log_preamble_detect`, after every read and after a decode), `twin.rs` (`spawn_bridged_pair_in_hiss`); `Cargo.toml`
   (`openpulse-dsp` and `ofdm-plugin` optimised in debug builds).
 - **Tests:** gates 1–12 of the design: `ofdm_preamble_detect.rs` (1, 2, 4, 5, 6 and the flicker
   head), `ofdm_detect_fade.rs` (3), `detector_template.rs` (7), `veto_membership_pin.rs` (8),
   `ofdm_detect_twin.rs` (9, 11), `scripts/slow-tests.sh spectral` (10), `abandon_burst_when_keying.rs`
-  (12), the in-crate `preamble_detect_false_open` (6, HARQ), `capture_replay_corpus.rs` (asset rule).
+  (12), the in-crate `preamble_detect_false_open` (6, HARQ; the false-open counter's meaning; P off
+  the ACK listen), `capture_replay_corpus.rs` (asset rule).
   Four excerpts cut from rx-a-f2g and rx-b-f1d, 1 227 712 B, provenance in `tests/captures/README.md`.
+- **Test results after the review follow-ups (run at `23581b18`, debug, `--no-default-features`,
+  `--no-fail-fast --test-threads=4`):** `ofdm-plugin` 49/0; `openpulse-modem` 666/0 (124 ignored);
+  `openpulse-daemon` 232/0 (2 ignored). Gate 12 12/12 green in sequential runs; a probe asserting
+  P's line before the transmit passed with the fix and failed without it. Sabotages red: both
+  own-echo rules removed → P opens on the echo (3/3); false-open rule back to "opened or held" →
+  the held-fragment test; `p_opened` forced false → the P-opened test; `was_cold` forced true → the
+  tripwire panics in gate 1; P not gated on the seam → the ACK-listen test. **S6 withdrawn:
+  unreachable (premise pinned by a tripwire).** Clippy (`-D warnings --all-targets`) clean on
+  ofdm-plugin, modem and daemon; fmt clean; trailer lint PASS. `openpulse-core` not re-run (not
+  touched).
 - **Test results (run at `0bcdcfaa`, debug, `--no-default-features`):** `openpulse-core` 571/0 (1
   ignored); `ofdm-plugin` 49/0; `openpulse-daemon` 232/0 (2 ignored); `openpulse-modem` 664/0 (124
   ignored); `scripts/slow-tests.sh spectral` PASS (the OFDM cells: 2/0 and 1/0). Every plugin package
@@ -52,7 +65,7 @@ this ledger adds the design rationale and the actually-observed results per chan
   a decodable frame not gathered at −43.75 Hz; S4 → held 67 200 vs 26 608; S5 → floor +0.83 %;
   unclipped template → ρ 0.998695; `preamble_template` published → veto pin; both own-echo rules
   removed → P opens on the echo; evidence rule removed → false open uncounted; `rx_ring` for P's head
-  → flicker gate). S6 cannot go red (the exemption is unreachable, see the design note). Measured
+  → flicker gate). S6: withdrawn, unreachable (premise pinned by a tripwire; see the design note). Measured
   cost 1.76 ms per 800-sample read (17.6 ms/s, Ryzen 9 3900X, release). Workspace gate not run.
 
 ## 2026-11-05 — A status query no longer erases the sender's climb record (work plan M3, A2)

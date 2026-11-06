@@ -2,7 +2,7 @@
 project: openpulsehf
 doc: docs/dev/verification-mechanics.md
 status: resolved
-last_updated: 2026-09-30
+last_updated: 2026-11-06
 ---
 
 # Verification mechanics — full text and history
@@ -36,6 +36,15 @@ is visible in the transcript rather than indistinguishable from compliance.
    therefore does NOT mean REQ-QRM-01 was re-proven; `scripts/slow-tests.sh` is what proves it, and
    the gate prints a `held-out (runtime, #1274):` line so a green verdict cannot be read as covering
    them.
+   **A debug verdict depends on two crates being built optimised (2026-11-06).** The workspace
+   `Cargo.toml` sets `[profile.dev.package.openpulse-dsp]` and `[profile.dev.package.ofdm-plugin]`
+   to `opt-level = 3`. The OFDM preamble detect correlates every receive read over a 9-point
+   frequency grid, about 50× slower unoptimised, close to real time; debug-built twin daemons then
+   fall behind their receive tick and time out (`muted_failures_move_no_ladder` was red in debug
+   with P, green optimised and green with P off). So a debug `GATE:` line says nothing about those
+   twin tests if the override is removed or bypassed (e.g. a `RUSTFLAGS`/profile that forces
+   `opt-level = 0`): a timeout there is the build, not the code. Debug assertions and overflow
+   checks stay on in both crates; they are profile settings, not opt-level ones.
 3. **After editing `gate.sh`, sabotage-verify it** — but know what each probe reaches, because
    this rule described behaviour the code does not have until 2026-09-01 (#1242). A gate nobody has
    watched fail is the self-consistent checker it exists to prevent, and so is a *rule* nobody has
