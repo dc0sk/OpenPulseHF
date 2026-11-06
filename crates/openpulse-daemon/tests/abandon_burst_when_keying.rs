@@ -13,7 +13,13 @@
 //! regression shows up here as a P open. Two rules do it for this OTA send, and either alone suffices:
 //! the send closes the stream before keying (audit #917, finding #6), and the command arm drops it
 //! after any transmit (#1007, task 17). Measured: with only the second removed this stays green; with
-//! both removed P opens on the echo.
+//! both removed P opens on the echo. "Either suffices" holds for this command-arm send only: the
+//! rx-tick keyings (the OTA ACK/NACK, the station ID, CONACK/QSY replies) keep the stream open during
+//! the key and rest on #1007 alone.
+//!
+//! That P ran is read from the daemon's `preamble carrier detect` line, which it logs after every
+//! read once P has run: it needs no burst to flush after the transmit. Read from a post-decode line
+//! instead, the check raced the daemon's lazy stream reopen (2 failures in 5 runs, review).
 
 use std::f32::consts::TAU;
 use std::io::Write;
@@ -211,7 +217,9 @@ async fn the_daemon_drops_the_burst_it_was_gathering_when_it_keys() {
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
     // The own echo is heard only if the stream the daemon keyed over is read again. Give the receive
-    // loop time to read whatever it holds, and turn the carrier off so a burst flushes and P logs.
+    // loop time to read whatever it holds. P's open (the plugin's confirm line) and P's run (the
+    // daemon's counter line, logged after every read) need no burst to flush after the transmit:
+    // waiting on one raced the daemon's lazy stream reopen (2 failures in 5 runs, review).
     channel.carrier.store(false, Ordering::SeqCst);
     tokio::time::sleep(Duration::from_secs(4)).await;
     assert!(

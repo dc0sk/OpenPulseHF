@@ -1065,6 +1065,9 @@ pub async fn run(cfg: OpenpulseConfig, modem_backend: Box<dyn AudioBackend>) -> 
                         }
                     }
                 });
+                // After every read, not only after a decode: a P open or a run with no burst at all
+                // shows without waiting for a burst to flush.
+                log_preamble_detect(&engine, &mut p_detect_logged);
                 // #1454: a burst the spectral test opened carries a pre-trigger ring at its head. The
                 // OTA and non-OTA arms below run on this engine and read where it ends; the monitor and
                 // the repeater decode with their own engines, cannot know, and scan only 4x the
