@@ -1,18 +1,21 @@
 ---
 project: openpulsehf
 doc: docs/dev/design/ofdm-preamble-detect.md
-status: review
+status: resolved
 last_updated: 2026-11-06
 ---
 
 # A level-independent carrier detect for the OFDM rungs: open on the preamble, hold on the cyclic prefix
 
 Work plan M3, A2 on the `fast` profile. Found in on-air task 27, run f2g; reviewed by Fable on
-2026-11-06 (task 28's "Why"). **Design only: nothing here is implemented.** It changes the plugin
-trait, so it is a mandatory design review before implementing (CLAUDE.md, adversarial review). The
-design review (APPROVE WITH CHANGES) is
+2026-11-06 (task 28's "Why"). It changes the plugin trait, so it was a mandatory design review
+before implementing (CLAUDE.md, adversarial review). The design review (APPROVE WITH CHANGES) is
 [`review-ofdm-preamble-detect-2026-11-06.md`](../reviews/review-ofdm-preamble-detect-2026-11-06.md);
 its required changes are applied below.
+
+**Status: implemented 2026-11-06** (branch `feat/ofdm-preamble-detect`). The front-matter vocabulary
+has no `implemented`, so the note is `resolved`. What the implementation does differently, and why,
+is in [Implementation](#implementation-2026-11-06) at the end; everything else is as written.
 
 ## Problem — measured
 
@@ -485,3 +488,74 @@ The questions this note put to the reviewer, with the answers taken.
 
 Reviewed 2026-11-06, APPROVE WITH CHANGES:
 [`review-ofdm-preamble-detect-2026-11-06.md`](../reviews/review-ofdm-preamble-detect-2026-11-06.md).
+
+## Implementation (2026-11-06)
+
+Code: `CarrierDetector`/`CarrierVerdict` and `ModulationPlugin::carrier_detector`
+(`crates/openpulse-core/src/plugin.rs`, trait 3.2.0); `OfdmCarrierDetector`
+(`plugins/ofdm/src/detect.rs`) and `clipped_preamble` (`modulate.rs`); the engine's P
+(`update_preamble_detect`, `sync_p_units`, `p_hold_bound`, `p_burst_coherence` and the
+`accumulate_routed` sites in `crates/openpulse-modem/src/engine.rs`); the daemon's
+`preamble carrier detect` log line (`server.rs`). Gates: `ofdm_preamble_detect.rs`,
+`ofdm_detect_fade.rs`, `veto_membership_pin.rs`, `capture_replay_corpus.rs` (asset rule),
+`detector_template.rs`, the in-crate `preamble_detect_false_open`, and in the daemon
+`ofdm_detect_twin.rs` and `abandon_burst_when_keying.rs`.
+
+**Deviations from the note, each with its reason:**
+
+1. **The trait has no `hold_bound_samples(fec)`.** A plugin cannot reach `frame_plan`
+   (`openpulse-modem`), and a copy of the FEC slice factor in the plugin would be a second owner of
+   that rule. The engine computes `hold_bound` from `frame_plan(max_frame_samples, fec).0` over the
+   candidates' `(mode, fec)` tuples, as step 3 says, and enforces it, counting from the latest open.
+   The trait gained two methods the note did not list, each needed by a decision: `template()` (the
+   engine dedups by template) and `burst_coherence(burst)` (decision 4 needs the plugin's `acquire`
+   coherence, which the engine cannot call).
+2. **`Open { onset }` is the read's first open;** a second open later in the same read re-arms the
+   bound from the first, so at a 2.4 s read the bound can be up to a read short. **`Released` counts
+   as held for its block**, because at a long read the frame can end inside the read that releases.
+3. **P's head comes from a ring of its own** (`p_ring`), not `rx_ring`. At 400-sample reads total
+   power can flicker over a preamble and flush a short burst before P's confirm is in; #1454's
+   retention rule then empties `rx_ring`, preamble and all. Seen on one f2g frame while building;
+   pinned by `a_flicker_over_the_preamble_keeps_ps_head`, which fails with `rx_ring`.
+4. **The analytic signal is a 127-tap Hamming Hilbert FIR**, streamed, not an FFT per block; flat in
+   band to ±3 % (`the_analytic_signal_is_a_phasor_in_band`).
+5. **The `p_opened` exemption from the cold discard is unreachable today**, and sabotage S6 cannot go
+   red: P's earliest open is 1 503 samples after its onset (confirm plus the FIR's delay), while the
+   tracker's `mean_sq` is `Some` after its first 512 samples and never returns to `None`, so no
+   P-opened burst can flush on the read that first warms the tracker. The flag is in place for a
+   future tracker that can go cold again.
+6. **Gate fixtures:**
+   - Gate 1: the 9 s before each episode's first frame is not all gap hiss (B's QPSK250-D frame and
+     A's two own ACKs). The feed warms the floor on the episode's own 10 s gap, cuts A's own keyed
+     intervals as the daemon does, and appends the gap again so the last burst flushes at long reads.
+     A cold engine started mid-traffic learns the AGC's hang and total power then holds for good,
+     with or without P. The cold case starts cold on the gap hiss before the second frame. The
+     second rig (f1d) runs at 400 and 800-sample reads only: its own-transmit gaps break longer
+     reads. A locked session has one candidate, SL7 (the note said SL7 and SL6).
+   - Gate 3: with the AGC embedding, 8 of 40 frames decode by hand at 9 dB (the note's 20/40 was
+     without it). Every one is gathered whole; 5 of 8 decode from P's burst. The other 3 sit at the
+     decode cliff: the gathered burst differs from the hand window only by the seam's per-read DC
+     block (−39 dB rms) and that flips them. Confirm refusals among the decodable: 0 (note: 1/38).
+   - Gate 4: at 19 200-sample reads the two frames are one burst, and **#1461's multi-frame decode
+     carries only the first**: its follow-on reach (four symbols plus 4 × the acquisition window,
+     1 152 samples) does not reach a frame 3 200 samples on. The note expected both; pinned.
+   - Gate 5: a tone holds γ ≈ 1 but trips the spectral test, which then holds the burst; the fixture
+     follows the preamble with OFDM data symbols that never end.
+   - Gate 6: the squelch is read one block after the flush, where the commit or discard lands; within
+     0.3 % (measured: discard +0.025 %/+0.097 %, S5's commit +0.83 %/+1.19 %).
+   - Gate 11: the twin delivers faster than real time, so the receiver's wall-clock ACK deadline is
+     off; the gate is the sender hearing the ACK inside its window. Its channel hears the frame in
+     f2g's recorded gap hiss, shaped to that hiss's spectrum: with white or unshaped hiss the spectral
+     test gathered the frame and the gate passed with P sabotaged out.
+   - Gate 12: two rules keep a station's own OFDM frame out of P, and either suffices for an OTA send:
+     the send closes the stream before keying (audit #917) and the command arm drops it after
+     (#1007). Removing the second alone stays green; removing both opens P on the echo.
+7. **The daemon logs P's line once P has run and then on change**, so a run shows P active even when
+   it never opens. `ofdm-plugin` declares trait `"3.2"`.
+
+**Found, not changed (parked in the work plan):** P also runs on the ACK listen's capture
+(`receive_ota_ack_within` routes through the seam) with the detector state of the receive stream,
+so two streams interleave in one detector; harmless to opens so far, UNCHECKED for `force_busy`.
+
+**Measured cost** (Ryzen 9 3900X, one thread, `--release`, 800-sample reads on the f2g excerpt):
+1.76 ms per read, 17.6 ms/s (the note's table: 16.4; its 1 727-sample carry: 4.78 ms per read).
