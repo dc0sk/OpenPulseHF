@@ -15,6 +15,37 @@ this ledger adds the design rationale and the actually-observed results per chan
 
 ---
 
+## 2026-11-06 — The preamble detect judges a frame at the receiver's centre, from the refined coherence (work plan M3, A2)
+
+- **Requirement/change:** REQ-FUN-06. On air (task 29, run f2i) P was built at the nominal centre
+  while A's AFC sat at −6.7 Hz, and `acquire` reported its coarse grid point's coherence: 22 genuine
+  SL9 frames A could not decode read 0.846–0.900 against `P_EVIDENCE_COHERENCE` 0.9, so A keyed no
+  NACK and B sat out 21 of 23 silent ACK windows; the daemon counted them as false opens.
+- **Design decision:** Fable's design review of task 29, no trait change. (C) `rx_center()` owns
+  `center_frequency + afc_correction_hz` on the receive side; P's units record their told and are
+  rebuilt past a 1.0 Hz hysteresis. (D) `acquire` reports the refined pass's coherence; the coarse
+  value only drives the early-accept break. `P_EVIDENCE_COHERENCE` 0.9 → 0.8, decoupled from
+  `EARLY_ACCEPT_COHERENCE`; inventory one 2 m link, SL7–SL9, 93 + 6 frames, HF UNCHECKED
+  (`docs/dev/design/ofdm-preamble-detect.md`, Implementation, "P follows the receiver's centre").
+- **Implementation:** `plugins/ofdm/src/acquire.rs` (`acquire`); `crates/openpulse-modem/src/engine.rs`
+  (`rx_center`, `PUnit::built_at`, `P_TOLD_HYSTERESIS_HZ`, `sync_p_units`, `p_config`,
+  `P_EVIDENCE_COHERENCE`, 13 receive sites converted).
+- **Tests:** in-crate `preamble_detect_told` (4 tests) and the extended
+  `a_false_open_retains_no_llrs_and_is_counted` (no ACK, AFC 0/−6.7/+10; fixture 1.15× → 1.05×
+  because at 1.15× another evidence rule already NACKed it); asset
+  `ic9700-ofdm52-f2i-sl9-undecodable.wav` (57 044 B, from `rx-a-f2i-8k.wav.gz`), its check in
+  `capture_replay_corpus.rs`.
+- **Test results (run at `72bfdbae`, debug, `--no-default-features`, `--no-fail-fast
+  --test-threads=4`):** `ofdm-plugin` 49/0; `openpulse-modem` 670/0 (124 ignored); `openpulse-daemon`
+  231/1 (2 ignored): `id_rides_in_own_keying` failed once in the full run (with-ack false) and
+  passed 3/3 run alone; it runs `robust` SL6 (no OFDM candidate, so no P); not attributed, not
+  resolved. Sabotages (each red where the design note's table says): pre-fix behaviour → the NACK
+  gates and the follow test red; S-a P at nominal → the follow test only; S-b 0.95 → the NACK gates;
+  S-c coarse coherence → the grid-phase test only; S-d `p_ok = p_confirmed` → the false-open
+  control and the held-fragment test; hysteresis 0 → five of seven. Clippy (`-D warnings
+  --all-targets`) clean on ofdm-plugin and openpulse-modem; fmt clean.
+- **Gate:** not run here (the maintainer's session runs `scripts/gate.sh`).
+
 ## 2026-11-06 — A level-independent carrier detect for the OFDM rungs (work plan M3, A2)
 
 - **Requirement/change:** REQ-FUN-06. On 2 m under AGC FAST (a Release 1 operating requirement),

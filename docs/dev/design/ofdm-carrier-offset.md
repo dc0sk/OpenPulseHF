@@ -2,7 +2,7 @@
 project: openpulsehf
 doc: docs/dev/design/ofdm-carrier-offset.md
 status: resolved
-last_updated: 2026-11-03
+last_updated: 2026-11-06
 ---
 
 # The OFDM receiver acquires its own carrier offset
@@ -54,7 +54,9 @@ then the pilots for the fine part.
    - score the pilots' coherence across symbols, |Σ a*b| / Σ |a||b|. A wrong offset puts data, not
      pilots, in the pilot bins.
 3. **The fine part:** the best candidate's pilot drift (`channel::pilot_drift`), then one more pass at
-   the sum.
+   the sum. The coherence `acquire` reports is that pass's, not the coarse candidate's (since task
+   29: the coarse point reads the grid's phase, `ofdm-preamble-detect.md`, Implementation); the
+   early accept still reads the coarse one, as a search-cost rule.
 4. **One exact mix of the whole burst**, unless the acquired offset is under 0.25 Hz (leakage under
    −45 dB), (`shift::shift_hz`: an analytic signal by FFT, times
    e^{j2πft}), then the existing receiver. When no candidate finds a preamble with pilots, the burst is
