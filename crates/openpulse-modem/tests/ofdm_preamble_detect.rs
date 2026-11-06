@@ -378,25 +378,25 @@ fn ofdm_hold_is_bounded_by_the_frame() {
     let body = &tx[sym..sym + (tx.len() - sym) / sym * sym];
     let period: Vec<f32> = body.to_vec();
     let lead = s(12.0);
-    let comb_len = s(8.0);
-    let total = lead + sym + comb_len + s(6.0);
+    let body_len = s(8.0);
+    let total = lead + sym + body_len + s(6.0);
     let mut x: Vec<f32> = (0..total).map(|i| hiss[i % hiss.len()]).collect();
     let under = 0.25f32;
     let gp = ((1.15 * 1.15 - under * under) * h * h).sqrt() / rms(pre);
-    let gc = ((1.15 * 1.15 - under * under) * h * h).sqrt() / rms(&period);
-    for i in 0..sym + comb_len {
+    let gb = ((1.15 * 1.15 - under * under) * h * h).sqrt() / rms(&period);
+    for i in 0..sym + body_len {
         let j = lead + i;
         let v = if i < sym {
             pre[i] * gp
         } else {
-            period[(i - sym) % period.len()] * gc
+            period[(i - sym) % period.len()] * gb
         };
         x[j] = x[j] * under + v;
     }
     let bound = hold_bound("OFDM52", FecMode::SoftConcatenated);
     assert!(
-        sym + comb_len > bound + 19_200,
-        "the comb must outlast the bound"
+        sym + body_len > bound + 19_200,
+        "the never-ending frame must outlast the bound"
     );
     for read in [800usize, 4096] {
         let mut e = engine(SpeedLevel::Sl7, true);
@@ -409,14 +409,22 @@ fn ofdm_hold_is_bounded_by_the_frame() {
         assert!(
             held >= bound && held <= bound + read + sym,
             "{read}-sample reads: P held {held} samples from the preamble; the bound is {bound} \
-             (+ one read {read}); the comb ran {}",
-            sym + comb_len
+             (+ one read {read}); the never-ending frame ran {}",
+            sym + body_len
         );
     }
 }
 
 /// Gate 6, the floor: a burst P opened is never learned as band — the squelch the floor sets is the
-/// same after the burst flushes as before it opened. Sabotage S5 (`commit` for `discard`) moves it.
+/// same, one read after the burst flushes, as when it opened. Sabotage S5 (`commit` for `discard`)
+/// moves it.
+///
+/// "The same" within [`FLOOR_STILL`], because the read after the flush is band and is learned (the
+/// flush's commit or discard re-aims the squelch only at the next block's seam). Measured on this
+/// fixture: that read moves the squelch +0.025 % at 800-sample reads and +0.097 % at 4 096; S5's
+/// commit moves it +0.83 % and +1.19 %.
+const FLOOR_STILL: f32 = 0.003;
+
 #[test]
 fn a_detected_burst_is_not_learned_as_band() {
     let ep = &EPISODES[0];
@@ -452,7 +460,8 @@ fn a_detected_burst_is_not_learned_as_band() {
             .collect();
         let mut flushed = false;
         let mut squelch_at_open = None;
-        for chunk in rest.chunks(read) {
+        let mut chunks = rest.chunks(read);
+        for chunk in chunks.by_ref() {
             let was_open = e.burst_open();
             let sq = e.dcd_squelch();
             if let Ok(Some(_)) = e.accumulate_capture(Some("OFDM52"), chunk.to_vec()) {
@@ -463,6 +472,10 @@ fn a_detected_burst_is_not_learned_as_band() {
                 squelch_at_open = Some(sq);
             }
         }
+        // The flush's own commit or discard re-aims the squelch only at the next block's seam.
+        for chunk in chunks.take(1) {
+            let _ = e.accumulate_capture(Some("OFDM52"), chunk.to_vec());
+        }
         assert!(flushed, "{read}: the frame's burst never flushed");
         assert!(
             e.preamble_detect_opens() > opens_before,
@@ -471,9 +484,8 @@ fn a_detected_burst_is_not_learned_as_band() {
         let at_open = squelch_at_open.unwrap_or(squelch_before);
         let after = e.dcd_squelch();
         moved.push((read, at_open, after));
-        assert_eq!(
-            after.to_bits(),
-            at_open.to_bits(),
+        assert!(
+            (after / at_open - 1.0).abs() < FLOOR_STILL,
             "{read}-sample reads: the floor moved across a burst P opened ({at_open} → {after}): \
              the frame was learned as band"
         );
