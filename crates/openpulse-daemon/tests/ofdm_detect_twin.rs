@@ -49,10 +49,43 @@ impl Log {
 /// Recorded, not white: the rig's filter shapes the hiss, and white hiss spread over 0–4 kHz would put
 /// the OFDM band's density 2.5× over it, where the spectral test opens on the frame and P is not
 /// needed — the fixture would no longer be the case it exists for.
+///
+/// The frame is shaped to the hiss's own spectrum (an all-pole fit to the hiss, order 16), as the
+/// rig's receive filter shapes both on air; otherwise the flat OFDM band would stand over the hiss at
+/// the filter's skirts, where the spectral test opens on it.
 struct AgcChannel {
     hiss: Vec<f32>,
     at: usize,
     rms: f32,
+    /// The all-pole shaping filter's coefficients `a[1..]` and its state.
+    lpc: Vec<f32>,
+    state: Vec<f32>,
+}
+
+/// Levinson–Durbin: the order-`p` predictor of `x`, `a[1..=p]` with `x[n] ≈ −Σ a[k]·x[n−k]`.
+fn lpc(x: &[f32], p: usize) -> Vec<f32> {
+    let r: Vec<f64> = (0..=p)
+        .map(|k| {
+            x.iter()
+                .zip(&x[k..])
+                .map(|(a, b)| f64::from(*a) * f64::from(*b))
+                .sum()
+        })
+        .collect();
+    let mut a = vec![0.0f64; p + 1];
+    a[0] = 1.0;
+    let mut err = r[0];
+    for i in 1..=p {
+        let acc: f64 = (0..i).map(|j| a[j] * r[i - j]).sum();
+        let k = -acc / err;
+        let prev = a.clone();
+        for j in 1..i {
+            a[j] = prev[j] + k * prev[i - j];
+        }
+        a[i] = k;
+        err *= 1.0 - k * k;
+    }
+    a[1..].iter().map(|&v| v as f32).collect()
 }
 
 impl AgcChannel {
@@ -67,7 +100,31 @@ impl AgcChannel {
         // The gap between the excerpt's two frames, 11.0–20.7 s: hiss only (tests/captures/README.md).
         let hiss = x[88_000..165_600].to_vec();
         let rms = (hiss.iter().map(|v| v * v).sum::<f32>() / hiss.len() as f32).sqrt();
-        Self { hiss, at: 0, rms }
+        let lpc = lpc(&hiss, 16);
+        let state = vec![0.0; lpc.len()];
+        Self {
+            hiss,
+            at: 0,
+            rms,
+            lpc,
+            state,
+        }
+    }
+    /// The frame through the all-pole filter `1/A(z)`.
+    fn shape(&mut self, x: &[f32]) -> Vec<f32> {
+        x.iter()
+            .map(|&v| {
+                let y = v - self
+                    .lpc
+                    .iter()
+                    .zip(&self.state)
+                    .map(|(a, s)| a * s)
+                    .sum::<f32>();
+                self.state.rotate_right(1);
+                self.state[0] = y;
+                y
+            })
+            .collect()
     }
     fn next(&mut self) -> f32 {
         let v = self.hiss[self.at % self.hiss.len()];
@@ -81,6 +138,7 @@ impl ChannelModel for AgcChannel {
         if input.is_empty() {
             return Vec::new();
         }
+        let input = self.shape(input);
         let rms = (input.iter().map(|v| v * v).sum::<f32>() / input.len() as f32).sqrt();
         let under = 0.25f32;
         let g = if rms > 0.0 {
