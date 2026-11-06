@@ -3257,9 +3257,24 @@ impl ModemEngine {
             // Here nothing is lost, because a burst is only discarded when the FIRST warm judgement
             // says the carrier is absent; if it says present, the cold samples stay in the burst.
             // A tracker that can never warm leaves this branch exactly as it was.
-            // Not for a burst P opened: the rule is for bursts the cold squelch judged, and P never
-            // consults the squelch (`ofdm-preamble-detect.md`, the noise-floor commit).
-            if was_cold && self.noise_floor.mean_sq().is_some() && !self.rx_burst_p_opened {
+            //
+            // A burst P opened never reaches this rule, and the rule would be wrong for one (P never
+            // consults the squelch): P's earliest open is 1 503 samples after its onset (confirm plus
+            // the analytic FIR's delay), while the tracker's `mean_sq` is `Some` after its first 512
+            // samples and never returns to `None`. The design's exemption for it was unreachable, so
+            // the premise is pinned by a tripwire instead (`ofdm-preamble-detect.md`, S6 withdrawn).
+            debug_assert!(
+                !(was_cold && self.rx_burst_p_opened),
+                "a burst the preamble detect opened flushed while the noise floor was cold: the \
+                 #1254 discard would drop it (ofdm-preamble-detect.md, S6)"
+            );
+            if was_cold && self.rx_burst_p_opened {
+                warn!(
+                    "a burst the preamble detect opened flushed while the noise floor was cold; \
+                     the #1254 cold-start discard drops it (ofdm-preamble-detect.md, S6)"
+                );
+            }
+            if was_cold && self.noise_floor.mean_sq().is_some() {
                 self.noise_floor.discard();
                 self.rx_burst.clear();
                 self.rx_ring.clear();
