@@ -5615,3 +5615,35 @@ one:
 and not this defect: the SL9 bursts that failed and every SL10 frame are undecodable at this link's
 edge (SL9 SNR median 8.9 dB). SL10 has never decoded in either direction.
 
+## Task 30 — f2i again on the fixed detector: does every genuine failed frame NACK? (status: open; maintainer's go given 2026-11-06)
+
+**Why.** In f2i (task 29), the 22 "false opens" were genuine B frames that failed to decode. P judged
+them at 0 Hz instead of the decoder's AFC-corrected told, so they keyed no NACK, and B sat out 21
+silent ACK windows. #1519 makes P judge at the receiver's centre (`rx_center()`), from the refined
+coherence, at a 0.8 threshold. f2j checks that on air.
+
+**Build:** the branch head (`main` at #1519 plus the task docs). Rebuild and redeploy BOTH stations,
+and record the sha256 of both binaries. Settings, log levels and runner overrides as f2i; A on
+AGC FAST (2), read back before and after.
+
+### Part A — run f2j (B sends, `fast` profile; keys both rigs: one go)
+
+As f2i: `TRAFFIC_FROM=B`, `TRAFFIC_INTERVAL=8`, `TRAFFIC_DURATION=600`.
+
+### Report
+
+As task 29, plus:
+- A's `preamble carrier detect` lines: the final counters (`opens`, `false_opens`, `held_no_frame`),
+  and every step of `false_opens`, with its time;
+- A's NACK decisions by level (f2i: 12), and B's `ACK not received` windows (f2i: 23), abandons
+  (f2i: 4) and fall-backs (f2i: 2 SL10→SL9);
+- for each B send at SL9/SL10 that A did not decode: whether B received a NACK or nothing. Take B's
+  send times from its log, and A's outcome from A's decisions;
+- A's `capture read holds` count (f2i: 23);
+- the recordings committed as before.
+
+**Prediction:** `false_opens` near 0, and the SL9/SL10 frames A cannot decode get a NACK instead of
+silence. So B's `ACK not received` windows fall well below f2i's 23, and there are fewer abandons and
+fall-backs. **Killed if** `false_opens` stays well above 0, or if genuine failed frames still leave B
+without an answer.
+
