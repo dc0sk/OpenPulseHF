@@ -115,3 +115,15 @@ snow               = "0.9"
 eframe             = { version = "0.29", default-features = false, features = ["default_fonts", "glow"] }
 egui               = "0.29"
 egui_plot          = "0.29"
+
+# The OFDM preamble detect (docs/dev/design/ofdm-preamble-detect.md) correlates every receive read
+# over a 9-point frequency grid: 1.76 ms per 800-sample read optimised, but about 50x that in an
+# unoptimised build — close to real time — so a debug-built twin daemon fell behind its own receive
+# tick and `muted_failures_move_no_ladder` timed out (passes optimised, and with P off). Optimising
+# the two crates the correlation and the CP statistics live in keeps debug test runs real-time.
+# Debug assertions and overflow checks stay on: they are profile settings, not opt-level ones.
+[profile.dev.package.openpulse-dsp]
+opt-level = 3
+
+[profile.dev.package.ofdm-plugin]
+opt-level = 3
