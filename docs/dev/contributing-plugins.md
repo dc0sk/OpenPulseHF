@@ -82,8 +82,9 @@ pub trait ModulationPlugin: Send + Sync {
     fn supports_mode(&self, mode: &str) -> bool { … }
 
     // … plus default-implemented methods a plugin may override, among them
-    // `demodulate_soft` (LLRs for the soft FEC decoders) and `preamble_template`
-    // (for the receiver's correlation veto). See `crates/openpulse-core/src/plugin.rs`.
+    // `demodulate_soft` (LLRs for the soft FEC decoders), `preamble_template`
+    // (for the receiver's correlation veto) and `carrier_detector` (a level-independent
+    // carrier detect for the burst gatherer, 3.2.0). See `crates/openpulse-core/src/plugin.rs`.
 }
 ```
 
@@ -96,7 +97,7 @@ pub struct PluginInfo {
     pub description: String,             // one-liner
     pub author: String,                  // you!
     pub supported_modes: Vec<String>,    // e.g., ["ARDOP1200", "ARDOP2400"]
-    pub trait_version_required: String,  // framework major.minor, e.g. "3.0" (PLUGIN_TRAIT_VERSION is "3.1.0")
+    pub trait_version_required: String,  // framework major.minor, e.g. "3.0" (PLUGIN_TRAIT_VERSION is "3.2.0")
 }
 ```
 

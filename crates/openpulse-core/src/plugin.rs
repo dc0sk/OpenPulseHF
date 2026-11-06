@@ -5,6 +5,10 @@ use crate::error::{ModemError, PluginError};
 /// Current plugin trait version.
 /// Format: `<major>.<minor>.<patch>`
 ///
+/// 3.2.0 added [`ModulationPlugin::carrier_detector`] and the [`CarrierDetector`] trait object it
+/// returns — additive, with a `None` default, so every plugin declaring `3.0` or `3.1` keeps working
+/// unchanged (`docs/dev/design/ofdm-preamble-detect.md`).
+///
 /// 1.1.0 added [`ModulationPlugin::preamble_template`] — additive, with a `None` default, so every
 /// plugin declaring `1.0.0` keeps working unchanged.
 ///
@@ -25,7 +29,7 @@ use crate::error::{ModemError, PluginError};
 /// would corroborate settles on pure noise — the exact defect the check exists to prevent, and one
 /// that produces no error, only a receiver that stops acquiring. A single method makes publishing a
 /// template without its own measured constants unrepresentable.
-pub const PLUGIN_TRAIT_VERSION: &str = "3.1.0";
+pub const PLUGIN_TRAIT_VERSION: &str = "3.2.0";
 
 // ── Plugin metadata ───────────────────────────────────────────────────────────
 
@@ -229,6 +233,45 @@ impl PreambleTemplate {
     }
 }
 
+// ── Carrier detector ──────────────────────────────────────────────────────────
+
+/// What a [`CarrierDetector`] concluded about one read.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CarrierVerdict {
+    /// No frame of this waveform was held at any point of the read.
+    Idle,
+    /// A frame was found and confirmed during the read. `onset` is its preamble's first sample,
+    /// counted from the read's first sample: negative when it lies in an earlier read, because the
+    /// confirm waits for data symbols after the preamble. The first open of the read, when several.
+    Open {
+        /// Preamble start relative to the read's first sample.
+        onset: isize,
+    },
+    /// A frame opened earlier was still held at the end of the read.
+    Held,
+    /// A frame held at the start of the read was released during it.
+    Released,
+}
+
+/// A level-independent carrier detect for one waveform, fed every captured read in order.
+///
+/// Published by [`ModulationPlugin::carrier_detector`] rather than through
+/// [`ModulationPlugin::preamble_template`], because publishing a template switches on the decode-path
+/// correlation veto and the ranked fallback onsets for that mode (#1049), which this is not for. A
+/// detector judges normalised statistics only, so the receive level never enters it.
+pub trait CarrierDetector: Send {
+    /// Judge one read: the samples after the read before it, at the config's sample rate.
+    fn observe(&mut self, read: &[f32]) -> CarrierVerdict;
+
+    /// The preamble this detector correlates against, so a receiver can serve several modes that
+    /// send the same preamble with one detector.
+    fn template(&self) -> &[f32];
+
+    /// The waveform's own acquisition confidence (0–1) on a flushed burst, or `None` when it finds
+    /// no frame there: what decides whether a failed burst this detector held is evidence.
+    fn burst_coherence(&self, burst: &[f32]) -> Option<f32>;
+}
+
 // ── Plugin trait ──────────────────────────────────────────────────────────────
 
 /// A modulation / demodulation plugin.
@@ -413,6 +456,14 @@ pub trait ModulationPlugin: Send + Sync {
     /// The returned [`PreambleTemplate`] carries the samples *and* the ρ threshold and search grid
     /// measured for that mode — see its docs for why those cannot be receiver-wide constants.
     fn preamble_template(&self, _config: &ModulationConfig) -> Option<PreambleTemplate> {
+        None
+    }
+
+    /// A level-independent carrier detect for `config.mode`, for a receiver gathering bursts from a
+    /// stream (`docs/dev/design/ofdm-preamble-detect.md`). `None` (the default) means the mode has
+    /// none, and the receiver gathers on total power and the spectral test alone. A detector carries
+    /// constants measured for its own waveform, as a [`PreambleTemplate`] does.
+    fn carrier_detector(&self, _config: &ModulationConfig) -> Option<Box<dyn CarrierDetector>> {
         None
     }
 
@@ -625,6 +676,15 @@ mod tests {
             .expect("PLUGIN_TRAIT_VERSION must start with a numeric major")
     }
 
+    /// The framework's own minor version, so the minor check cannot drift from it either.
+    fn fw_minor() -> u32 {
+        PLUGIN_TRAIT_VERSION
+            .split('.')
+            .nth(1)
+            .and_then(|m| m.parse().ok())
+            .expect("PLUGIN_TRAIT_VERSION must carry a numeric minor")
+    }
+
     /// A version a plugin can declare that the current framework accepts.
     fn compatible_version() -> String {
         format!("{}.0", fw_major())
@@ -683,10 +743,11 @@ mod tests {
     #[test]
     fn higher_minor_than_framework_is_rejected() {
         let mut reg = PluginRegistry::new();
-        // Framework minor is 0; a plugin requiring minor 5 needs a newer framework. The major must
+        // Five minors above the framework's own (derived: this said "framework minor is 0" while the
+        // framework was at 3.1.0, and a literal "3.5" goes compatible at 3.5.0). The major must
         // MATCH here, or this passes on the major check and says nothing about the minor one — which
         // is exactly what the hardcoded "2.5" had been doing since the framework moved to 3.0.0.
-        let higher_minor = format!("{}.5", fw_major());
+        let higher_minor = format!("{}.{}", fw_major(), fw_minor() + 5);
         let err = reg
             .register(FakePlugin::boxed("NEWER", &["X"], &higher_minor))
             .unwrap_err();
@@ -724,5 +785,6 @@ mod tests {
         assert!(p.frame_geometry(&cfg).is_none());
         assert!(p.estimate_afc_hz(&[], &cfg).is_none());
         assert!(p.occupied_bandwidth_hz("BPSK31").is_none());
+        assert!(p.carrier_detector(&cfg).is_none());
     }
 }

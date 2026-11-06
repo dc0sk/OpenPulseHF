@@ -3253,14 +3253,14 @@ The project's stated convention is "one concept per file; prefer small focused m
 
 ### 3.2 The plugin system
 
-To an operator, a "mode" like `BPSK250` or `OFDM52-16QAM` is a menu entry. Internally, every mode string is owned by exactly one *modulation plugin*: a compiled-in Rust object implementing one trait, registered at startup, and looked up by mode name for every transmit and receive. There is **no dynamic loading** — no `.so` files, no ABI boundary. Plugins are statically linked and registered by explicit `register_plugin(Box::new(...))` calls (the daemon does this in `server::run`, `crates/openpulse-daemon/src/server.rs`). The versioning machinery below is forward-looking for out-of-tree plugins; in-tree every shipped plugin declares `"3.0"` against a framework at `3.1.0`, so it rejects nothing.
+To an operator, a "mode" like `BPSK250` or `OFDM52-16QAM` is a menu entry. Internally, every mode string is owned by exactly one *modulation plugin*: a compiled-in Rust object implementing one trait, registered at startup, and looked up by mode name for every transmit and receive. There is **no dynamic loading** — no `.so` files, no ABI boundary. Plugins are statically linked and registered by explicit `register_plugin(Box::new(...))` calls (the daemon does this in `server::run`, `crates/openpulse-daemon/src/server.rs`). The versioning machinery below is forward-looking for out-of-tree plugins; in-tree every shipped plugin declares `"3.0"` against a framework at `3.2.0`, except `ofdm-plugin`, which overrides the 3.2 method `carrier_detector` and declares `"3.2"`; it rejects nothing.
 
 #### 3.2.1 The trait
 
 Everything lives in one file, `crates/openpulse-core/src/plugin.rs`. Abbreviated but verbatim:
 
 ```rust
-pub const PLUGIN_TRAIT_VERSION: &str = "3.1.0";
+pub const PLUGIN_TRAIT_VERSION: &str = "3.2.0";
 
 pub trait ModulationPlugin: Send + Sync {
     /// Return this plugin's static metadata.
@@ -3285,6 +3285,7 @@ pub trait ModulationPlugin: Send + Sync {
     fn estimate_afc_hz(&self, _s: &[f32], _c: &ModulationConfig) -> Option<f32> { None }
     fn estimate_snr_db(&self, _s: &[f32], _c: &ModulationConfig) -> Option<f32> { None }
     fn preamble_template(&self, _c: &ModulationConfig) -> Option<PreambleTemplate> { None }
+    fn carrier_detector(&self, _c: &ModulationConfig) -> Option<Box<dyn CarrierDetector>> { None }
     fn acquire_copy_offset(&self, _s: &[f32], _c: &ModulationConfig) -> Option<usize> { None }
     fn occupied_bandwidth_hz(&self, _mode: &str) -> Option<f32> { None }
     fn modulate_iq(&self, data: &[u8], config: &ModulationConfig)
@@ -3300,7 +3301,10 @@ byte-for-byte, and the engine keeps the first variant that passes FEC and CRC (B
 two decision arms, §2A.3.1). `preamble_template` publishes a mode's modulated preamble *together
 with* the ρ threshold and search grid measured for that mode, in a `PreambleTemplate` whose
 `for_mode` field the engine checks, so a threshold derived for one mode cannot silently be inherited
-by another.
+by another. `carrier_detector` (3.2.0) publishes a level-independent carrier detect for the burst
+gatherer — OFDM52's preamble correlation confirmed and held on the cyclic prefix — through its own
+method, so it does not switch on the correlation veto that `preamble_template` would
+(`docs/dev/design/ofdm-preamble-detect.md`).
 
 Three design decisions carry weight:
 
