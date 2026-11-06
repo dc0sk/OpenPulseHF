@@ -5288,7 +5288,7 @@ As task 25, plus:
 - Why A decodes no OFDM52 from B (operator: "I can hear B's OFDM signal clearly, but there is nearly no
   signal on the scope") is a separate open item. The fall-back survives it; it does not fix it.
 
-## Task 27 — the fall-back on air: f2f again, on the build with the read-only status query (status: open; waits for the build and the maintainer's go)
+## Task 27 — the fall-back on air: f2f again, on the build with the read-only status query (status: Part A run f2g done; see Results)
 
 **The new build is the branch head** (`306cad29` and its docs). Settings and log levels as task 26,
 with the same uncommitted runner overrides. Nothing in the runner changes: its `ota-status` poll now
@@ -5307,3 +5307,57 @@ As task 26, plus:
 - how many messages B delivered and abandoned, and how many it delivered at each level;
 - **whether the runner's report lines now carry a status** (count of `<no status>` against status lines).
 
+
+### Results — Part A, run f2g (B sends, `fast` profile; 2026-11-06)
+
+**Setup:** rpi51 at `4682a41e` (build `306cad29`); `deploy` built on A and copied to station-B. sha256, identical on both stations: server `2f9befd2…`, CLI `53e446cc…`, `twin-traffic.sh` `c9e152f3…` (full values in the deploy output: server `2f9befd23664f58acb8613cd69e7739cec9c85bb6ade08406f08089afa7bd894`, CLI `53e446cc3c1d39c935173012cb23175f4d1997dd912b9f1f014ea43a8f0811ce`). Settings and log levels as f2f (A `info,ofdm_plugin=debug`; B `info,ofdm_plugin=debug,openpulse_daemon=debug`), with the same local, uncommitted runner overrides (`DAEMON_LOG_LEVEL_B`, `SIGNOFF_IDLE_SECS=30`). `TRAFFIC_FROM=B`, `TRAFFIC_INTERVAL=8`, `TRAFFIC_DURATION=600`. Both stations idle (no daemon, no arecord) before keying. Evidence: `docs/dev/test-reports/onair-twin-ota-20261106-080749-evidence`; receive audio `rx-{a,b}-f2g-8k.wav.gz`. All times below are UTC (daemon-log clock).
+
+**Stop rules and state:** no keying stretch over 70 s (0 STOP lines). IC-9700 ALC while keyed: 29 readings (0.0417 ×11; 0.6083–0.6667 ×18, of which 0.6583 ×8); FT-991A ALC 0.0625 in all 268 readings. After cleanup (read back): IC-9700 dial 144640000, RFPOWER 0.0117647, AGC 2, SQL 0, PTT 0; FT-991A dial 144641564, RFPOWER 0.05, AGC 2, SQL 0, PREAMP 20, PTT 0; nothing running.
+
+**The fall-back works on air: 3 `back to the level before it` lines, 3 `ota_fall_back` events, 0 `no fall-back` lines, 0 abandoned sends.**
+
+- **Fall-back lines (B)**, each two silent ACK windows (~12 s apart) after an SL7 climb ACK:
+
+```
+2026-11-06T07:13:19.002800Z  INFO OTA: no answer after a climb; back to the level before it from=Sl7 to=Sl6
+2026-11-06T07:15:22.152142Z  INFO OTA: no answer after a climb; back to the level before it from=Sl7 to=Sl6
+2026-11-06T07:18:51.582118Z  INFO OTA: no answer after a climb; back to the level before it from=Sl7 to=Sl6
+```
+
+- **`ota_fall_back` events (B):** 3, all `from=Sl7 to=Sl6` (events-b.ndjson lines 1611, 2234, 3344; the event has no timestamp, same order as the log lines).
+- **First three `no fall-back` lines: none.** B logged 0 lines containing `no fall-back ` (the decline text `the peer is silent` also 0). The 66+2 `OTA ACK received` lines at SL6/SL2 carry the field `no_fall_back="no unconfirmed climb is recorded"`, which is the field, not a decline; the 6 climb ACKs carry `no_fall_back="-"`. My zero-filter was not shown matching a known instance of the decline text in this log; the same text did match in f2f's log.
+- **B's `OTA ACK received` lines from the first climb to SL7 (07:12:55.42) to 2 min after the first fall-back (07:15:19), plus the silent windows and the fall-back line:**
+
+```
+2026-11-06T07:12:55.417260Z  INFO OTA ACK received ack=AckUp recommended=Sl7 from=Sl6 to=Sl7 no_fall_back="-"
+2026-11-06T07:13:07.217435Z DEBUG OTA ACK not received within window error=demodulation failed: ACK not received within window
+2026-11-06T07:13:19.002741Z DEBUG OTA ACK not received within window error=demodulation failed: ACK not received within window
+2026-11-06T07:13:19.002800Z  INFO OTA: no answer after a climb; back to the level before it from=Sl7 to=Sl6
+2026-11-06T07:13:25.584229Z  INFO OTA ACK received ack=AckOk recommended=Sl6 from=Sl6 to=Sl6 no_fall_back="no unconfirmed climb is recorded"
+2026-11-06T07:13:32.108746Z  INFO OTA ACK received ack=AckOk recommended=Sl6 from=Sl6 to=Sl6 no_fall_back="no unconfirmed climb is recorded"
+2026-11-06T07:13:38.863303Z  INFO OTA ACK received ack=AckUp recommended=Sl7 from=Sl6 to=Sl6 no_fall_back="no unconfirmed climb is recorded"
+2026-11-06T07:13:45.477327Z  INFO OTA ACK received ack=AckOk recommended=Sl6 from=Sl6 to=Sl6 no_fall_back="no unconfirmed climb is recorded"
+2026-11-06T07:13:51.883797Z  INFO OTA ACK received ack=AckOk recommended=Sl6 from=Sl6 to=Sl6 no_fall_back="no unconfirmed climb is recorded"
+2026-11-06T07:13:58.688320Z  INFO OTA ACK received ack=AckUp recommended=Sl7 from=Sl6 to=Sl6 no_fall_back="no unconfirmed climb is recorded"
+2026-11-06T07:14:05.486514Z  INFO OTA ACK received ack=AckOk recommended=Sl6 from=Sl6 to=Sl6 no_fall_back="no unconfirmed climb is recorded"
+2026-11-06T07:14:12.342362Z  INFO OTA ACK received ack=AckOk recommended=Sl6 from=Sl6 to=Sl6 no_fall_back="no unconfirmed climb is recorded"
+2026-11-06T07:14:18.961615Z  INFO OTA ACK received ack=AckUp recommended=Sl7 from=Sl6 to=Sl6 no_fall_back="no unconfirmed climb is recorded"
+2026-11-06T07:14:25.764144Z  INFO OTA ACK received ack=AckOk recommended=Sl6 from=Sl6 to=Sl6 no_fall_back="no unconfirmed climb is recorded"
+2026-11-06T07:14:32.522689Z  INFO OTA ACK received ack=AckOk recommended=Sl6 from=Sl6 to=Sl6 no_fall_back="no unconfirmed climb is recorded"
+2026-11-06T07:14:38.610740Z  INFO OTA ACK received ack=AckUp recommended=Sl7 from=Sl6 to=Sl6 no_fall_back="no unconfirmed climb is recorded"
+2026-11-06T07:14:45.193790Z  INFO OTA ACK received ack=AckOk recommended=Sl6 from=Sl6 to=Sl6 no_fall_back="no unconfirmed climb is recorded"
+2026-11-06T07:14:51.846414Z  INFO OTA ACK received ack=AckOk recommended=Sl6 from=Sl6 to=Sl6 no_fall_back="no unconfirmed climb is recorded"
+2026-11-06T07:14:58.617487Z  INFO OTA ACK received ack=AckUp recommended=Sl7 from=Sl6 to=Sl7 no_fall_back="-"
+2026-11-06T07:15:10.378203Z DEBUG OTA ACK not received within window error=demodulation failed: ACK not received within window
+```
+
+- **After each fall-back the next ACK arrives within 7 s, at SL6:** 07:13:25.58 (6.6 s after the first), 07:15:28.81 (6.7 s), 07:18:58.24 (6.7 s), all `ack=AckOk recommended=Sl6 from=Sl6 to=Sl6`.
+- **B declines A's next climbs before it re-probes SL7** (`AckUp recommended=Sl7` with `to=Sl6` = declined; `to=Sl7` = accepted). Before the first probe: 4 declines (07:11:20, 07:11:59, 07:12:24, 07:12:35), then accepted 07:12:55. After fall-back 1 (07:13:19): **4 declines** (07:13:38, 07:13:58, 07:14:18, 07:14:38), accepted 07:14:58. After fall-back 2 (07:15:22): **8 declines** (07:15:42 … 07:18:07), accepted 07:18:27. After fall-back 3 (07:18:51): **at least 8 declines** (07:19:11 … 07:21:33 listed; the run ended before the next probe; I did not count past 07:21:33).
+
+**Delivered and abandoned (B):** 75 sends delivered (75 `OTA ACK received`, 75 `message_received` events on B), **0 abandoned** (0 `OTA send abandoned`). Deliveries by the level B sent at (the `from=` field): SL2 3, SL3 1, SL4 1, SL5 1, **SL6 69, SL7 0**. A received 75 frames (QPSK250-D 69, BPSK31 3, BPSK250 2, BPSK63 1, BPSK100 1; **no OFDM52, again**). B transmitted 83 frames: 75 delivered + 6 OFDM52 sends with no ACK (the 3 × 2 silent windows) + 2 BPSK250 station IDs (`with-data` 07:15:56.21, `sign-off` 07:22:41.04). A: `with-ack` 07:15:50.24, `sign-off` 07:22:05.09. 6 `ACK not received within window` (all in the three fall-back pairs).
+
+**Runner report lines now carry a status: 44 status blocks per station (`ISS FT-991A: {` ×44, `IRS IC-9700: {` ×44), 0 `<no status>`.** The report file `onair-twin-ota-20261106-080749.log` has 0 `<no status>` and 88 `tx_level` lines (44 blocks × 2). In f2f the same progress lines were `<no status>` every pass.
+
+**A, the receiver:** 75 rate decisions (48 hold, 24 climb_on_evidence, 3 climb_on_snr), all with verdict keyed. A's three `climb_on_snr` decisions line up with the three SL6→SL7 recommendations. 
+
+**Not found / not done:** why A decodes no OFDM52 (A's OFDM front end was not looked at in this run); whether the delivered message after each fall-back was the same message as the one that went silent at SL7 (not checked — the lines show only that an ACK at SL6 follows within 7 s). IC-9700 ALC on the SL7 frames not isolated (A transmits only ACKs here).
