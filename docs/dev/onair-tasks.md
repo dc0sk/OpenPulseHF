@@ -5390,7 +5390,7 @@ As task 26, plus:
 - Unchecked: whether the message delivered at SL6 after each fall-back is the one that went silent at
   SL7. By the code it is: the fall-back continues the same send within its budget.
 
-## Task 28 — B→A OFDM52 with A's AGC off: does A gather the frames? (status: open; maintainer's go given 2026-11-06)
+## Task 28 — B→A OFDM52 with A's AGC off: does A gather the frames? (status: Part A run f2h done (AGC SLOW, rig refused OFF); see Results)
 
 **Why.** f2g's recording of A's receive audio holds six OFDM52 frames from B that decode offline (6/6,
 SNR 8.5–9.0 dB), but the production receive path gathers none of them. Under the IC-9700's AGC FAST,
@@ -5435,3 +5435,28 @@ As task 27, plus:
 A's `rx_confirmed_level` reaches SL7. **Killed if** the bursts at SL7 times stay under 0.5 s with AGC
 off: then the AGC is not the mechanism.
 
+
+### Results — Part A, run f2h (B sends, `fast` profile, A's AGC SLOW; 2026-11-06)
+
+**This run used AGC SLOW because the rig refused OFF.** `L AGC 0` on the IC-9700 was answered "Command rejected by the rig" (nothing keyed; AGC read back 2). The maintainer then chose "go for a": AGC SLOW (`L AGC 3`), everything else as f2g. Run on the old branch head `fdf2cec5`; binaries unchanged (server `2f9befd2…`, CLI `53e446cc…`, identical on both stations, not rebuilt). Evidence: `docs/dev/test-reports/onair-twin-ota-20261106-115916-evidence`; receive audio `rx-{a,b}-f2h-8k.wav.gz`. Times UTC (daemon log clock; local = +1 h).
+
+**Rig read-backs (A, IC-9700):** before: AGC 2, RF gain 1, SQL 0, source (PCM2901) volume 0.44. Set `L AGC 3`, read back **AGC 3**, RF gain 1. After the run: set `L AGC 2`, read back **AGC 2**, RF gain 1, dial 144640000, RFPOWER 0.0117647, PTT 0. `wpctl status` after the run lists two PCM2901 sources, vol 0.44 and 0.15 (I did not identify which one the rx check uses; neither was changed by me). FT-991A after: dial 144641564, RFPOWER 0.05, AGC 2, PTT 0. Nothing running.
+
+**rx-level check, AGC SLOW, before the run (PASS):** IC-9700 idle mean_sq 0.000076, gate threshold 0.000228, OK; FT-991A idle mean_sq 0.000347, threshold 0.001041, OK. (With AGC FAST, at the refused-OFF attempt: 0.000106 / 0.000494.)
+
+**Stop rules:** 0 STOP lines (no keying over 70 s).
+
+**Result: with AGC SLOW A gathers and decodes OFDM52 from B, and the link climbs to SL10.**
+- A `frame_received`: OFDM52 8, OFDM52-8PSK 15, OFDM52-16QAM 15, QPSK250-D 3, BPSK250 3, BPSK31 3, BPSK63 1, BPSK100 1. (f2g: no OFDM52 at all.)
+- **A's `ota_rate_decision`s by decoded level (SNR dB, A's estimate):** SL2 3 (−12.0…−0.3), SL3 1 (11.4), SL4 1 (14.2), SL5 1 (14.8), SL6 3 (4.4…9.9), **SL7 8 (2.8…9.6, median 9.1; 6 hold, 2 climb_on_evidence)**, SL8 15 (5.8…9.1, median 8.1), SL9 15 (7.3…10.7, median 9.7). SL10: never decoded; 96 NACK decisions (nack_hold 90, nack_step_down 6, no SNR).
+- **A's `rx_confirmed_level` at the end: SL8** (it reached SL9 several times, then stepped down on SL10 NACKs: SL8→SL9→SL10 attempt→SL8 cycles). `ota_status` event sequence of `rx_confirmed_level`: SL2 282, SL3 25, SL4 12, SL5 8, SL6 36, SL7 46, SL8 10, SL9 38, SL8 619, SL7 15, SL8 9, SL9 15, SL8 14, SL9 17, SL8 13, SL9 16, SL8 13, SL9 128, SL8 258 (counts of consecutive status events).
+- **QPSK/BPSK did not regress:** the SL2→SL6 climb ran as in earlier runs (B's ACKs: SL2→3→4→5→6→7 one climb each).
+- **B (sender):** 65 `OTA ACK received` (first 11:00:27.22, last 11:18:05.90): climbs SL2→…→SL7→SL8→SL9→SL10, then `from=Sl10 to=Sl8` ×4 (A's step-downs) and 8 `from=Sl10 to=Sl10`; per level (`from=`): SL2 3, SL3 1, SL4 1, SL5 1, SL6 3, SL7 12 (9 hold + 2 up + … see log), SL8 17, SL9 21, SL10 12. **26 `OTA send abandoned`**, 74 `message_received` on B. **0 `back to the level before it`; 57 `ACK not received within window`; first `no fall-back` line: 11:06:35.76 `level=Sl8 why="no unconfirmed climb is recorded"`** (10 listed at SL8 from 11:06:35 to 11:09:57, every ~22 s; B sat at SL8 with A silent). This is the other half of the fall-back: it only reverses an unconfirmed climb, and these are SL8 sends after an ACK-confirmed SL8.
+
+**Burst length, A's `received N audio samples` (the first line of each count-down run; each following line is N−32):** I took each run's first line where N jumps up by >200 and N≥5000. In the SL7 window 11:04:15–11:05:10 these are 6571 (11:04:19.54), 8872 and 9600 (11:04:31.34/.46), 8386/8400 (11:04:42.80/.89), 7924/8800 (11:04:46.98/47.02) and 67448/68800 (11:04:59.44/.59); a run of 36303 at 11:04:16.18 precedes it. **None of the SL7-window runs is ~17 600.** I am not sure these runs are the metric you meant; the first lines of the OFDM runs are not the whole frame. 120 runs overall start ≥17 000 (of 336 ≥5000), mostly 36 000–38 000 (13+21) and 62 000–69 000 (45). Raw lines: `grep 'received [0-9]* audio samples' daemon-a.log.gz`.
+
+**Recording levels (crude, 8 kHz decimated file, 0.1 s windows, dBFS rms):** idle before traffic (10:58:40–10:59:08) −46.6; BPSK/QPSK frames (SL2–SL6) −40.1…−41.1; bursts at SL7–SL10 −45.7…−47.4; gaps between frames (10th percentile of all windows) −51.7. My burst segmentation was a simple threshold, not per-frame alignment: **treat these as indicative only, and the OFDM step over the hiss is not measured here** (the hiss moves with the AGC state, and I did not align windows to individual frames; the committed recordings let you do it offline).
+
+**Station IDs / NOTES:** A `interval` 11:08:44.74, `with-ack` 11:17:17.90, `sign-off` 11:19:24.26 and 11:21:10.54; B `with-data` 11:07:23.27, 11:15:57.83.
+
+**Not done / open:** per-frame RMS and the OFDM step over hiss; which burst-length metric PC1 means; why the SL10 never decodes (as in earlier runs); IC-9700 ALC not isolated. The prediction (bursts ≥17 000 at SL7 times) is not met by the lines I extracted, yet OFDM52 delivered and `rx_confirmed_level` reached SL9 (SL8 at the end); the kill condition (bursts under 0.5 s) cannot be judged from my extraction.
