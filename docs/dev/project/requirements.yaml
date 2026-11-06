@@ -208,6 +208,7 @@ capabilities:
     - plugins/ofdm/src/acquire.rs
     - plugins/ofdm/src/channel.rs
     - plugins/ofdm/src/demodulate.rs
+    - plugins/ofdm/src/detect.rs
     - plugins/ofdm/src/lib.rs
     - plugins/ofdm/src/modulate.rs
     - plugins/ofdm/src/params.rs
@@ -220,8 +221,11 @@ capabilities:
     - REQ-PERF-04
     tests:
     - crates/openpulse-modem/tests/ofdm_carrier_offset_ota.rs
+    - crates/openpulse-modem/tests/ofdm_detect_fade.rs
+    - crates/openpulse-modem/tests/ofdm_preamble_detect.rs
     - crates/openpulse-modem/tests/ofdm_simulation.rs
     - plugins/ofdm/tests/carrier_offset_applied.rs
+    - plugins/ofdm/tests/detector_template.rs
     traceability: baseline
   CAP-18:
     code:

@@ -152,9 +152,35 @@ impl BridgedPair {
 pub async fn spawn_bridged_pair(
     cfg_a: OpenpulseConfig,
     cfg_b: OpenpulseConfig,
+    fwd: Box<dyn ChannelModel>,
+    rev: Box<dyn ChannelModel>,
+    bridge_tick: Duration,
+) -> BridgedPair {
+    spawn_pair(cfg_a, cfg_b, fwd, rev, bridge_tick, false).await
+}
+
+/// [`spawn_bridged_pair`], but between frames each receiver hears its channel's own noise
+/// (`ChannelModel::generate_noise`) instead of digital silence: a band whose hiss is as loud as the
+/// frames, as under a receiver AGC (`docs/dev/design/ofdm-preamble-detect.md`, gate 11).
+///
+/// DORMANT(#1176): consumed by the twin integration tests only, as `BridgedPair` is.
+pub async fn spawn_bridged_pair_in_hiss(
+    cfg_a: OpenpulseConfig,
+    cfg_b: OpenpulseConfig,
+    fwd: Box<dyn ChannelModel>,
+    rev: Box<dyn ChannelModel>,
+    bridge_tick: Duration,
+) -> BridgedPair {
+    spawn_pair(cfg_a, cfg_b, fwd, rev, bridge_tick, true).await
+}
+
+async fn spawn_pair(
+    cfg_a: OpenpulseConfig,
+    cfg_b: OpenpulseConfig,
     mut fwd: Box<dyn ChannelModel>,
     mut rev: Box<dyn ChannelModel>,
     bridge_tick: Duration,
+    idle_from_channel: bool,
 ) -> BridgedPair {
     let addr_a = control_addr(&cfg_a);
     let addr_b = control_addr(&cfg_b);
@@ -199,12 +225,20 @@ pub async fn spawn_bridged_pair(
             // moved is a receive-side one — a distinction no other signal in this rig makes.
             let fwd_moved = bridge_through(&a_lb, &b_lb, fwd.as_mut());
             if fwd_moved == 0 {
-                b_lb.fill_samples(&vec![0.0; idle_samples]);
+                b_lb.fill_samples(&if idle_from_channel {
+                    fwd.generate_noise(idle_samples)
+                } else {
+                    vec![0.0; idle_samples]
+                });
             }
             fwd_count.fetch_add(fwd_moved, Ordering::Relaxed);
             let rev_moved = bridge_through(&b_lb, &a_lb, rev.as_mut());
             if rev_moved == 0 {
-                a_lb.fill_samples(&vec![0.0; idle_samples]);
+                a_lb.fill_samples(&if idle_from_channel {
+                    rev.generate_noise(idle_samples)
+                } else {
+                    vec![0.0; idle_samples]
+                });
             }
             rev_count.fetch_add(rev_moved, Ordering::Relaxed);
             std::thread::sleep(bridge_tick);

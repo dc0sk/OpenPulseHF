@@ -2,7 +2,7 @@
 project: openpulsehf
 doc: docs/dev/plugin-trait-versioning.md
 status: living
-last_updated: 2026-10-15
+last_updated: 2026-11-06
 ---
 
 # Plugin Trait Versioning and Compatibility
@@ -39,8 +39,13 @@ Plugin trait compatibility is tracked via **semantic versioning** applied to the
 <major>.<minor>.<patch>
 ```
 
-The current trait version is **`3.1.0`**. Recent history, newest first:
+The current trait version is **`3.2.0`**. Recent history, newest first:
 
+- **`3.2.0`** (minor) — added `ModulationPlugin::carrier_detector` and the `CarrierDetector` trait
+  object it returns (with `CarrierVerdict`): a level-independent carrier detect the engine's burst
+  gatherer ORs into its decision (`docs/dev/design/ofdm-preamble-detect.md`). Additive with a `None`
+  default, so every existing plugin compiles unchanged; `ofdm-plugin` overrides it for the OFDM52
+  family and declares `"3.2"`.
 - **`3.1.0`** (#1428, minor) — added `ModulationPlugin::demodulate_variants`, every hard-decision
   wire a mode can produce from one acquisition. Additive with a default body returning
   `vec![self.demodulate(..)?]`, so every existing plugin compiles unchanged; BPSK overrides it to
@@ -63,7 +68,8 @@ The trait version is:
 - **Published in**: intended for each framework release's `docs/releasenotes.md`; as of
   2026-10-15 the release notes do not yet state it.
 - **Declared by plugins**: in `PluginInfo::trait_version_required` (see § Plugin Declaration below).
-  Every in-tree plugin declares `"3.0"`.
+  Every in-tree plugin declares `"3.0"`, except `ofdm-plugin`, which declares `"3.2"` because it
+  overrides `carrier_detector`.
 
 ## Compatibility Rules
 

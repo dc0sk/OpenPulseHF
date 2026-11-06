@@ -830,6 +830,8 @@ pub async fn run(cfg: OpenpulseConfig, modem_backend: Box<dyn AudioBackend>) -> 
     let mut burst_real_time = true;
     // Keyed-NACK budget, leaking with listening time (#1456; `nack_budget.rs`).
     let mut ota_nack_budget = crate::nack_budget::NackBudget::default();
+    // The preamble detect's counters last logged (`log_preamble_detect`).
+    let mut p_detect_logged: Option<(u64, u64, u64)> = None;
     // Periodic station identification (REQ-REG-10): while transmitting, key up and send the
     // callsign at least every `auto_id_interval_secs`. The pure `StationIdTimer` is fed a
     // monotonic ms clock (`id_start`) and armed by polling the engine's `frames_transmitted`
@@ -1063,6 +1065,9 @@ pub async fn run(cfg: OpenpulseConfig, modem_backend: Box<dyn AudioBackend>) -> 
                         }
                     }
                 });
+                // After every read, not only after a decode: a P open or a run with no burst at all
+                // shows without waiting for a burst to flush.
+                log_preamble_detect(&engine, &mut p_detect_logged);
                 // #1454: a burst the spectral test opened carries a pre-trigger ring at its head. The
                 // OTA and non-OTA arms below run on this engine and read where it ends; the monitor and
                 // the repeater decode with their own engines, cannot know, and scan only 4x the
@@ -1148,7 +1153,7 @@ pub async fn run(cfg: OpenpulseConfig, modem_backend: Box<dyn AudioBackend>) -> 
                         let channel_busy = tokio::task::block_in_place(|| {
                             channel_still_busy(rx_stream.as_mut(), &engine, &mut rx_pending)
                         });
-                        match tokio::task::block_in_place(|| {
+                        let decoded = tokio::task::block_in_place(|| {
                             crate::nack_budget::decode_ota_burst(
                                 &mut engine,
                                 &mut ota_nack_budget,
@@ -1158,7 +1163,9 @@ pub async fn run(cfg: OpenpulseConfig, modem_backend: Box<dyn AudioBackend>) -> 
                                 &mode,
                                 channel_busy,
                             )
-                        }) {
+                        });
+                        log_preamble_detect(&engine, &mut p_detect_logged);
+                        match decoded {
                             Ok((res, key_ack)) => {
                                 if key_ack {
                                     // RAII guard (REQ-PTT-01): releases at block end / on unwind. On assert
@@ -2663,6 +2670,32 @@ fn build_ptt_controller(
             )))
         }
     }
+}
+
+/// Log the preamble detect P's counters once P has run, then whenever one changes. The on-air run
+/// measures P's false-open rate from this line (`ofdm-preamble-detect.md`): `false_opens` counts
+/// failed bursts P itself opened that hold no frame its waveform acquires, `held_no_frame` the same
+/// for bursts P only held after another test opened them (mostly fragments of genuine frames).
+fn log_preamble_detect(engine: &ModemEngine, logged: &mut Option<(u64, u64, u64)>) {
+    let blocks = engine.preamble_detect_blocks_processed();
+    let now = (
+        engine.preamble_detect_opens(),
+        engine.preamble_detect_false_opens(),
+        engine.preamble_detect_held_no_frame(),
+    );
+    if blocks == 0 || *logged == Some(now) {
+        return;
+    }
+    *logged = Some(now);
+    tracing::info!(
+        blocks,
+        opens = now.0,
+        false_opens = now.1,
+        held_no_frame = now.2,
+        us_per_block = engine.preamble_detect_nanos() / blocks / 1000,
+        "preamble carrier detect (false_opens: failed bursts P opened with no frame its waveform \
+         acquires; held_no_frame: the same for bursts P only held)"
+    );
 }
 
 /// Whether the channel still carries a signal right after a burst flushed: the newest 200 ms of what

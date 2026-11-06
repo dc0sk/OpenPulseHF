@@ -21,14 +21,17 @@ use crate::shift::{analytic, rotate_real};
 /// halfway between grid points (6.25, −18.75, 31.25 Hz), 8 noise seeds each: SL10 near its floor
 /// (noise 0.05) and SL14 (0.02) decoded 8/8 with this step, as with 6.25 Hz; at noise 0.1 SL10 fails
 /// on carrier too. 6.25 Hz would double the search for a loss not seen where a frame decodes at all.
-const COARSE_STEP_HZ: f32 = 12.5;
+pub(crate) const COARSE_STEP_HZ: f32 = 12.5;
 
 /// Coarse search span either side of the receiver's centre: codec2's DATAC burst search covers
 /// ±50 Hz. Untrimmed 2 m rigs were 54–64 Hz apart (`cfo.rs`); the engine's BPSK settle has usually
 /// moved the centre to within a few Hz before an OFDM frame is tried, so ±50 Hz is around that.
-const COARSE_SPAN_HZ: f32 = 50.0;
+pub(crate) const COARSE_SPAN_HZ: f32 = 50.0;
 
-/// Pilot coherence at which a candidate is taken without trying the rest.
+/// Pilot coherence at which a candidate is taken without trying the rest. The engine's
+/// `P_EVIDENCE_COHERENCE` (`openpulse-modem`, `engine.rs`) is the same value on purpose: a failed
+/// burst the preamble detect held is ladder evidence only at the coherence at which this search takes
+/// a frame as present. Change both or neither.
 const EARLY_ACCEPT_COHERENCE: f32 = 0.9;
 
 /// Data symbols the coarse score and the fine estimate use (the pilot drift reads at most 8).
