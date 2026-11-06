@@ -158,7 +158,8 @@ does not enter it.
   these frames.
 - **Ladder evidence (#1456). Decision:** a failed burst that P confirmed counts as ladder evidence,
   and so can key a NACK, only when the plugin's `acquire` returns coherence ≥ 0.9 on the flushed
-  burst. Without it, B→A waits out the 9 s ACK window on every miss. `FlushSpans` gains
+  burst (since task 29: ≥ 0.8, refined, at the receiver's centre; Implementation, "P follows the
+  receiver's centre"). Without it, B→A waits out the 9 s ACK window on every miss. `FlushSpans` gains
   `p_confirmed`.
 
 ### Cost
@@ -389,9 +390,11 @@ locked to SL7 (`ota_lock_level`), so SL7 and SL6 are the candidates.
   - **Measured rate:** 0 at 0.55 (or 0.50) over 3 512 s of on-air audio and 459 s of corpus;
     extrapolated about one ρ window per 900 h before the confirm (the extreme-value caveat above).
   - **The worse cost is a keyed NACK on noise** (the #1178 class), since a confirmed burst is ladder
-    evidence. The `acquire` coherence ≥ 0.9 condition is what stands between the two.
+    evidence. The `acquire` coherence ≥ `P_EVIDENCE_COHERENCE` condition (0.8 refined since task 29)
+    is what stands between the two.
   - The daemon logs a false-open counter, so the HF run measures the rate instead of extrapolating it.
-    It counts only failed bursts P itself opened whose `acquire` coherence is under 0.9; failed
+    It counts only failed bursts P itself opened whose `acquire` coherence is under
+    `P_EVIDENCE_COHERENCE`; failed
     bursts P only held after total power or S opened them are logged apart as `held_no_frame`,
     because most are fragments of genuine frames (Implementation, deviation 8).
 - **CPU on the Pi.**
@@ -430,7 +433,9 @@ The questions this note put to the reviewer, with the answers taken.
    and it is the only test that sees these frames.
 4. **Evidence:** a failed P-confirmed burst counts as ladder evidence, gated by the plugin's
    `acquire` coherence ≥ 0.9 on the flushed burst. Otherwise B→A waits out the 9 s ACK window on every
-   miss.
+   miss. **Superseded in part (task 29):** 0.8, read at the refined offset and at the receiver's
+   centre; the tie to `EARLY_ACCEPT_COHERENCE` is dropped (Implementation, "P follows the receiver's
+   centre").
 5. **`RHO_OPEN`:** 0.55. 0.50 gains 2/40 frames at 9 dB and 0 at 6 dB, and costs about ×55 in
    false-open rate.
 6. **Release:** CP release at 0.30. A shorter release window (the tail is the 8-symbol window's
@@ -587,8 +592,81 @@ Code: `CarrierDetector`/`CarrierVerdict` and `ModulationPlugin::carrier_detector
    and the one-shot receives route through the same seam, and fed to P they interleaved a second
    stream into the receive stream's detector state. Pinned by
    `the_ack_listen_does_not_feed_the_preamble_detect`.
-10. **`P_EVIDENCE_COHERENCE` and `acquire::EARLY_ACCEPT_COHERENCE`** are both 0.9 by design (decision
-    4) and name each other in their doc comments; the plugin's constant stays private.
+10. **`P_EVIDENCE_COHERENCE` and `acquire::EARLY_ACCEPT_COHERENCE`** were both 0.9 (decision 4), and
+    their doc comments said 0.9 was "the coherence at which this search takes a frame as present".
+    That was false: the early accept is a search-cost rule, and a frame under it is still acquired at
+    the best candidate. **Since task 29 they are decoupled** and `P_EVIDENCE_COHERENCE` is 0.8 (next
+    subsection).
 
 **Measured cost** (Ryzen 9 3900X, one thread, `--release`, 800-sample reads on the f2g excerpt):
 1.76 ms per read, 17.6 ms/s (the note's table: 16.4; its 1 727-sample carry: 4.78 ms per read).
+
+### P follows the receiver's centre (2026-11-06, on-air task 29, run f2i)
+
+**Measured on air.** P built its detectors at `center_frequency`, so its told was 0 and fixed at
+creation, while the decoder runs at `center_frequency + afc_correction_hz`: on A in f2i that was
+−6.7 Hz. And `acquire` reported its coherence at the **coarse** grid point, discarding the second
+pass at the refined offset. 22 genuine B frames A could not decode read 0.846–0.900 at told 0
+against `P_EVIDENCE_COHERENCE` 0.9 (0.902–0.937 at the decoder's told, 0.903–0.935 refined), so they
+were no ladder evidence: A keyed no NACK, B sat out 21 of 23 silent ACK windows (4 abandons, 2
+fall-backs), and the daemon's `false_opens` counted them. Fix: Fable's design review of task 29.
+
+**The fix (no trait change):**
+1. **(C)** `ModemEngine::rx_center()` is the one owner of `center_frequency + afc_correction_hz` on
+   the receive side: P and every decoder site (13) use it. `sync_p_units` records each unit's told
+   (`PUnit::built_at`) and rebuilds a unit once `|rx_center − built_at| ≥ P_TOLD_HYSTERESIS_HZ`
+   (1.0 Hz; A's AFC jitters ~0.01 Hz per decode and drifted 0.23 Hz over f2i; the weakest decodable
+   frames cross the threshold only at a 2–3 Hz residual). The rebuild drops detector state; the AFC
+   moves only inside a decode, after a flush (`reset_afc` is called only by the monitor, which runs
+   no OTA session and so no P).
+2. **(D)** `acquire` reports the coherence of the pass at the refined offset (coarse + fine), the
+   coarse one's only when that pass finds no timing or pilots. The coarse value still drives the
+   early-accept break (a search-cost rule). The offset is unchanged, so the decoder mixes exactly as
+   before. **Consumers of the returned coherence:** the plugin's `OFDM: carrier offset acquired`
+   debug log (`pilot_coherence`), and `OfdmCarrierDetector::burst_coherence` → the engine's P
+   evidence test and false-open counter. No decode-path decision reads it.
+3. **`P_EVIDENCE_COHERENCE` 0.9 → 0.8**, decoupled from `EARLY_ACCEPT_COHERENCE` (deviation 10).
+   - **Inventory:** one 2 m link, SL7–SL9, 93 + 6 frames. Genuine decodable frames read down to
+     0.877 refined at the right told (f2g SL7); the f2i decoded minimum is 0.900; A's on-air decoder
+     logged 0.893/0.894. The worst negative P could hold that yields a coherence at all is a
+     narrow-filter idle at 0.76; wide hiss and tones give `None`. **HF is UNCHECKED.**
+   - **Falsifiers:** a decoded frame under 0.8 refined on a channel the rung exists for; a P-opened
+     noise burst over 0.8.
+
+**Gates and sabotages** (in-crate, `engine.rs`; asset `ic9700-ofdm52-f2i-sl9-undecodable.wav`: 2 s
+of f2i's own hiss, then the SL9 window from 499.00 s, which acquires at −7.8 Hz). Every sabotage was
+applied to the committed tree and restored with `git show HEAD:<path> > <path>`.
+
+| Gate | Pre-fix (`acquire` from `aeb4b443`, P at nominal, 0.9) | S-a P at nominal | S-b 0.95 | S-c coarse coherence | S-d `p_ok = p_confirmed` | hysteresis 0 |
+|---|---|---|---|---|---|---|
+| `a_genuine_frame_the_decoder_cannot_decode_nacks_at_the_afc_told` (AFC −6.7) | **red** (keyed `[]`) | green | **red** | green | green | **red** |
+| `the_verdict_does_not_change_with_the_grid_phase` (AFC 0, +6.25) | **red** at 0 | green | **red** | green | green | **red** |
+| `ps_burst_coherence_does_not_depend_on_the_grid_phase` (spread < 0.01 over 6 tolds) | green | green | green | **red** (0.822–0.915) | green | green |
+| `ps_told_follows_the_receiver_centre_with_hysteresis` | **red** | **red** (0.181 at 67.2 Hz) | **red** | green | green | **red** |
+| `a_false_open_retains_no_llrs_and_is_counted` (+ no ACK, AFC 0, −6.7, +10) | green | green | green | green | **red** (NACK) | **red** |
+
+- S-d and hysteresis 0 also turn `a_held_fragment_of_a_genuine_frame_is_not_a_false_open` red; with
+  the hysteresis at 0 the unit is rebuilt on every read and P never opens. S-b turns the follow
+  test red only through its threshold read (0.915 < 0.95).
+- **What the table shows, honestly:** on this fixture (C), (D) and the lower threshold are each
+  *sufficient* at the on-air told. The coarse coherence over every told never falls under 0.822
+  here, so with 0.8 neither S-a nor S-c turns the NACK gates red; each is pinned by its own mechanism
+  gate instead (the told follows a +75 Hz-shifted frame; the coherence does not move with the grid
+  phase). The NACK gates are red before the fix and under S-b, so they read the coherence.
+- **The false-open control was vacuous at its old level.** At 1.15× the gap another evidence rule
+  (total power's run or the spectral span; not separated) already keyed a NACK on the comb, so a
+  no-NACK assertion could not see P's coherence check. At 1.10× and under it keys none; the fixture
+  is now 1.05×, and S-d keys a NACK on it.
+- **The asset** is outside the detect excerpts' 1.25 MB budget (it would take it to 1.28 MB), with
+  its own format check and 60 KB cap in the asset-rule test. The brief's 12 500-sample window alone
+  never flushed inside the file; with 1 s or more of the recording's own hiss ahead it flushes as
+  one 9 087-sample burst, so the asset carries 2 s.
+- **Not done: the twin with a CFO (gate 11).** The OFDM plugin opts out of the engine's AFC, so in
+  the twin's SL7-locked session `afc_correction_hz` never moves; a nonzero AFC needs BPSK rungs
+  decoding first, i.e. a climb SL2→SL7 in the twin (minutes per run). Parked below.
+
+**Parked (one line each):**
+- P's open reach is tied to the AFC: ±50 Hz about `rx_center`, not about the nominal centre.
+- Gate 11's twin with a `CfoChannel`, so the AFC settles nonzero (on BPSK rungs) before the OFDM phase.
+- `decode_mfsk16_k3_ack` builds its config at the nominal centre, not `rx_center`; FSK's tolerance
+  makes that moot at 7 Hz. Noted, not fixed.
