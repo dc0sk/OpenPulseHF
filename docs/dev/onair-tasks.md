@@ -5390,3 +5390,48 @@ As task 26, plus:
 - Unchecked: whether the message delivered at SL6 after each fall-back is the one that went silent at
   SL7. By the code it is: the fall-back continues the same send within its budget.
 
+## Task 28 — B→A OFDM52 with A's AGC off: does A gather the frames? (status: open; maintainer's go given 2026-11-06)
+
+**Why.** f2g's recording of A's receive audio holds six OFDM52 frames from B that decode offline (6/6,
+SNR 8.5–9.0 dB), but the production receive path gathers none of them. Under the IC-9700's AGC FAST,
+each frame comes out of A's audio only 1.15–1.22× the gap hiss in total power, which is 0.82–0.96 of
+A's squelch, and 1.2× per 62.5 Hz band against the spectral test's 4.5 to open and 2.5 to hold.
+Reviewed by Fable (2026-11-06): confirmed, recording start pinned to ±0.05 s, notch and frequency
+offset ruled out. The handover's "B→A tops at SL6 … expected" is wrong: the frames are decodable, and
+the carrier detect drops them.
+
+**This run is a diagnostic, not a fix.** AGC FAST stays a Release 1 operating requirement (hang,
+`docs/dev/design/dcd-raised-floor.md`), and the fix the maintainer chose is a level-independent OFDM
+detector, designed separately.
+
+**Build:** the branch head (no code change since task 27). Settings, log levels and runner overrides
+as f2g, except **A's IC-9700 AGC: OFF** (Hamlib `L AGC 0`), set over CAT before the run and read back.
+
+### Part A — run f2h (B sends, `fast` profile; keys both rigs: one go)
+
+As f2g: `TRAFFIC_FROM=B`, `TRAFFIC_INTERVAL=8`, `TRAFFIC_DURATION=600`.
+
+**Before:** read back and report A's AGC (must be 0), RF gain and the PipeWire source volume. Run
+`scripts/onair-rx-level-check.sh` on A (AGC off may move the idle floor either way). Stop if A's idle
+audio clips or reads silent.
+
+**After:** set A's AGC back to FAST (2), read it back, and report it.
+
+### Report
+
+As task 27, plus:
+- A's AGC, RF gain and source volume, before and after (read back);
+- the rx-level check output;
+- from the new recording: gap-hiss RMS, and each rung's frame RMS (BPSK, QPSK250-D, OFDM52), in dBFS.
+  The OFDM step over the hiss, in dB, is the quantity predicted (+9…10 dB with AGC off; f2g: +0.8 dB);
+- A's first `received N audio samples` line of each decode run at the SL7 times. That is the burst
+  length; a whole OFDM52 frame is about 17 600 samples;
+- every OFDM52 frame A decodes or NACKs, with its SNR (SL7's floor is about 9 dB, so a gathered frame
+  may still NACK on SNR);
+- A's `rx_confirmed_level` at the end, and whether QPSK/BPSK decodes regressed;
+- the recordings committed as before. The offline bypass and production replay will be run on them here.
+
+**Prediction:** bursts at SL7 times of about 17 000 samples or more, at least one OFDM52 delivered, and
+A's `rx_confirmed_level` reaches SL7. **Killed if** the bursts at SL7 times stay under 0.5 s with AGC
+off: then the AGC is not the mechanism.
+
