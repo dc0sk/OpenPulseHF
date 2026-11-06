@@ -29,7 +29,9 @@ use openpulse_core::frame::Frame;
 use openpulse_core::hpx::{HpxEvent, HpxSession, HpxState, HpxTransition};
 use openpulse_core::ldpc::{IterativeDecoder, LdpcCodec};
 use openpulse_core::ota_rate::{NackVerdict, OtaRateController, RxOutcome};
-use openpulse_core::plugin::{ModulationConfig, PluginRegistry, PreambleTemplate};
+use openpulse_core::plugin::{
+    CarrierDetector, CarrierVerdict, ModulationConfig, PluginRegistry, PreambleTemplate,
+};
 use openpulse_core::profile::SessionProfile;
 use openpulse_core::rate::OtaAggressiveness;
 use openpulse_core::rate::RateEvent;
@@ -815,6 +817,38 @@ pub struct ModemEngine {
     last_flush_spans: Option<FlushSpans>,
     /// The spectral test's verdict for the current block (#1454), read by the accumulator and the AGC.
     seam_s: bool,
+    /// The preamble carrier detect P (`docs/dev/design/ofdm-preamble-detect.md`): one detector per
+    /// distinct template among the OTA candidates' modes. Empty while no candidate publishes one.
+    p_units: Vec<PUnit>,
+    /// Modes known to publish no detector, so the registry is not asked again on every read.
+    p_no_detector: Vec<String>,
+    /// P's verdict for the current block: a frame was held during it, inside the hold bound.
+    seam_p: bool,
+    /// Where P's preamble lies relative to the current block, when P opened during it.
+    seam_p_onset: Option<isize>,
+    /// The symbol period of P's waveform: a P-opened burst starts this far before its preamble.
+    p_symbol: usize,
+    /// Index, on P's own sample clock, of the latest open: the hold bound counts from it.
+    p_open_at: Option<u64>,
+    /// Samples P has observed: its clock.
+    p_pos: u64,
+    /// Blocks P judged — a tripwire: stays 0 if P never runs on a path that should run it.
+    p_blocks_processed: u64,
+    /// Bursts P opened or re-armed.
+    p_opens: u64,
+    /// Failed bursts P held whose waveform found no frame in them (`acquire` coherence < 0.9).
+    p_false_opens: u64,
+    /// Wall time P spent judging blocks, in nanoseconds: the per-read cost the Pi is checked with.
+    p_nanos: u64,
+    /// The most recent routed audio for a P-opened burst's head, as `rx_ring` but never emptied by
+    /// #1454's retention rule: at 400-sample reads total power can flicker over a frame's preamble and
+    /// flush a short burst before P's confirm is in, and that flush empties `rx_ring` — the preamble
+    /// with it. Cleared only when the stream breaks (`abandon_burst`).
+    p_ring: std::collections::VecDeque<f32>,
+    /// Whether P opened the burst being gathered (its head is P's).
+    rx_burst_p_opened: bool,
+    /// Whether P held any block of the burst being gathered.
+    rx_burst_p_held: bool,
     /// The last spectral (open, hold) verdict; a block that completes no window inherits it.
     s_last: (bool, bool),
     /// D3's per-burst latch (#1454): whether the spectral test is permitted for the burst being
@@ -1065,6 +1099,17 @@ const CESSB_LOOKAHEAD: usize = 16;
 /// too high is a receiver that cannot hear. `daemon_squelch_noise_floor.rs` pins both sides.
 const DCD_SQUELCH_MARGIN: f32 = 1.25;
 
+/// One preamble detector of P and the OTA candidate modes it serves (one template, several modes).
+struct PUnit {
+    modes: Vec<String>,
+    det: Box<dyn CarrierDetector>,
+}
+
+/// Pilot coherence the waveform's own acquisition must reach on a failed burst P held before that
+/// burst counts as ladder evidence (design decision 4): `acquire`'s early-accept value, so a burst
+/// counts only where the receiver itself would have taken the frame as present.
+const P_EVIDENCE_COHERENCE: f32 = 0.9;
+
 /// Pre-trigger ring for a burst the spectral test opened, in 512-sample windows (#1454). The same
 /// constant is the minimum spectral span at which a failed burst the spectral test carried counts as
 /// ladder evidence — one name, one number (#1454 design, items 2 and 6). It is set by that rule, and
@@ -1142,6 +1187,8 @@ struct FlushSpans {
     tp_run: usize,
     /// Up to the end of the last block on which the spectral OPEN test was true.
     s_span: usize,
+    /// Whether the preamble detect P opened or held the burst.
+    p_confirmed: bool,
 }
 
 /// Absolute lower bound on the squelch, so a digitally-silent input cannot drive the threshold to
@@ -1260,6 +1307,20 @@ impl ModemEngine {
             ota_fallback_more: Vec::new(),
             last_flush_spans: None,
             seam_s: false,
+            p_units: Vec::new(),
+            p_no_detector: Vec::new(),
+            seam_p: false,
+            seam_p_onset: None,
+            p_symbol: 0,
+            p_open_at: None,
+            p_pos: 0,
+            p_blocks_processed: 0,
+            p_opens: 0,
+            p_false_opens: 0,
+            p_nanos: 0,
+            p_ring: std::collections::VecDeque::new(),
+            rx_burst_p_opened: false,
+            rx_burst_p_held: false,
             s_last: (false, false),
             s_permitted_latch: None,
             rx_ring: std::collections::VecDeque::new(),
@@ -1934,6 +1995,13 @@ impl ModemEngine {
     /// flushed as one frame piece (on-air task 17: a piece cut by the station's own ID failed and
     /// the station keyed a NACK over the other station's frame). Returns the samples dropped.
     pub fn abandon_burst(&mut self) -> usize {
+        // P's detectors carry audio across reads; the stream is discontinuous across a transmit, so
+        // they start again from the next read. The burst flags go with the burst.
+        self.p_units.clear();
+        self.p_open_at = None;
+        self.p_ring.clear();
+        self.rx_burst_p_opened = false;
+        self.rx_burst_p_held = false;
         if !self.rx_capturing {
             return 0;
         }
@@ -2554,9 +2622,12 @@ impl ModemEngine {
             } else {
                 s_open
             };
+        // P, the preamble detect: level-independent, so neither the squelch nor D3 enters it. A block it
+        // holds is a carrier block, so the floor does not learn the frame as band.
+        let p = self.update_preamble_detect(samples);
         let mut carrier_block = self.noise_floor.mean_sq().is_some()
             && !self.noise_floor.is_held()
-            && (block_rms >= self.dcd.threshold() || s);
+            && (block_rms >= self.dcd.threshold() || s || p);
         if carrier_block && self.seam_in_accumulate {
             self.noise_floor.hold();
             carrier_block = false;
@@ -2575,9 +2646,10 @@ impl ModemEngine {
             self.dcd.set_threshold(self.effective_squelch());
         }
         self.seam_s = s;
+        self.seam_p = p;
         let prev_busy = self.dcd.is_busy();
         self.dcd.update(samples);
-        if s {
+        if s || p {
             self.dcd.force_busy();
         }
         if self.dcd.is_busy() != prev_busy {
@@ -2586,6 +2658,154 @@ impl ModemEngine {
                 energy: self.dcd.energy(),
             });
         }
+    }
+
+    /// Run P over one block: keep one detector per distinct template among the OTA candidates that
+    /// publish one, feed each the block, and return whether a frame was held during it inside the hold
+    /// bound (`docs/dev/design/ofdm-preamble-detect.md`). Only while an OTA candidate's plugin
+    /// publishes a detector (decision 2): not for the configured or relay mode.
+    fn update_preamble_detect(&mut self, samples: &[f32]) -> bool {
+        self.seam_p_onset = None;
+        let candidates: Vec<(String, FecMode)> = self
+            .ota
+            .as_ref()
+            .map(|o| {
+                o.rx_candidates()
+                    .into_iter()
+                    .map(|(_, m, f)| (m.to_string(), f))
+                    .collect()
+            })
+            .unwrap_or_default();
+        self.sync_p_units(&candidates);
+        if self.p_units.is_empty() {
+            self.p_open_at = None;
+            return false;
+        }
+        self.p_blocks_processed = self.p_blocks_processed.wrapping_add(1);
+        let started = Instant::now();
+        let mut first_open: Option<isize> = None;
+        let mut up = false;
+        for unit in &mut self.p_units {
+            match unit.det.observe(samples) {
+                CarrierVerdict::Open { onset } => {
+                    up = true;
+                    first_open = Some(first_open.map_or(onset, |o| o.min(onset)));
+                }
+                CarrierVerdict::Held | CarrierVerdict::Released => up = true,
+                CarrierVerdict::Idle => {}
+            }
+        }
+        self.p_nanos = self
+            .p_nanos
+            .saturating_add(started.elapsed().as_nanos() as u64);
+        let block_start = self.p_pos;
+        self.p_pos += samples.len() as u64;
+        if let Some(onset) = first_open {
+            self.p_opens = self.p_opens.wrapping_add(1);
+            self.p_open_at = Some((block_start as i64 + onset as i64).max(0) as u64);
+            self.seam_p_onset = Some(onset);
+        }
+        let bound = self.p_hold_bound(&candidates) as u64;
+        up && self
+            .p_open_at
+            .is_some_and(|at| block_start < at.saturating_add(bound))
+    }
+
+    /// Bring P's detectors in line with the OTA candidates: a candidate mode joins the unit whose
+    /// template its detector shares (every OFDM52 rung sends one preamble), or starts its own; a unit
+    /// no candidate needs any more is dropped.
+    fn sync_p_units(&mut self, candidates: &[(String, FecMode)]) {
+        for unit in &mut self.p_units {
+            unit.modes
+                .retain(|m| candidates.iter().any(|(c, _)| c == m));
+        }
+        self.p_units.retain(|u| !u.modes.is_empty());
+        for (mode, _) in candidates {
+            if self.p_units.iter().any(|u| u.modes.contains(mode))
+                || self.p_no_detector.contains(mode)
+            {
+                continue;
+            }
+            let cfg = ModulationConfig {
+                mode: mode.clone(),
+                center_frequency: self.center_frequency,
+                sample_rate: AudioConfig::default().sample_rate,
+                ..ModulationConfig::default()
+            };
+            let det = self
+                .plugins
+                .get(mode)
+                .and_then(|p| p.carrier_detector(&cfg));
+            let Some(det) = det else {
+                self.p_no_detector.push(mode.clone());
+                continue;
+            };
+            if let Some(unit) = self
+                .p_units
+                .iter_mut()
+                .find(|u| u.det.template() == det.template())
+            {
+                unit.modes.push(mode.clone());
+            } else {
+                self.p_symbol = self
+                    .plugins
+                    .get(mode)
+                    .and_then(|p| p.frame_geometry(&cfg))
+                    .map_or(det.template().len(), |g| g.symbol_period_samples);
+                self.p_units.push(PUnit {
+                    modes: vec![mode.clone()],
+                    det,
+                });
+            }
+        }
+    }
+
+    /// How long P may hold after its latest open: the longest coded frame of any candidate it serves,
+    /// `frame_plan(max_frame_samples, fec).0`, from the candidates' own `(mode, FEC)` — never the burst
+    /// cap, which is sized for every FEC and every rung that may arrive.
+    fn p_hold_bound(&self, candidates: &[(String, FecMode)]) -> usize {
+        candidates
+            .iter()
+            .filter(|(m, _)| self.p_units.iter().any(|u| u.modes.contains(m)))
+            .filter_map(|(m, fec)| {
+                let cfg = ModulationConfig {
+                    mode: m.clone(),
+                    ..ModulationConfig::default()
+                };
+                let g = self.plugins.get(m)?.frame_geometry(&cfg)?;
+                Some(frame_plan(g.max_frame_samples, *fec).0)
+            })
+            .max()
+            .unwrap_or(0)
+    }
+
+    /// The waveform's own acquisition coherence on `burst`, best over P's detectors, or `None`.
+    fn p_burst_coherence(&self, burst: &[f32]) -> Option<f32> {
+        self.p_units
+            .iter()
+            .filter_map(|u| u.det.burst_coherence(burst))
+            .reduce(f32::max)
+    }
+
+    /// Blocks the preamble detect P has judged: a tripwire that P runs on the production path.
+    pub fn preamble_detect_blocks_processed(&self) -> u64 {
+        self.p_blocks_processed
+    }
+
+    /// Opens (and re-arms) of the preamble detect P.
+    pub fn preamble_detect_opens(&self) -> u64 {
+        self.p_opens
+    }
+
+    /// Failed bursts P held in which the waveform's own acquisition found no frame: P's false opens,
+    /// for the on-air rate the design extrapolated (`ofdm-preamble-detect.md`, risks).
+    pub fn preamble_detect_false_opens(&self) -> u64 {
+        self.p_false_opens
+    }
+
+    /// Wall time P has spent judging blocks, in nanoseconds (its per-read cost on this host).
+    pub fn preamble_detect_nanos(&self) -> u64 {
+        self.p_nanos
     }
 
     /// Tick-based burst capture for a free-running daemon over a streaming audio
@@ -2885,9 +3105,12 @@ impl ModemEngine {
         self.seam_in_accumulate = false;
         let samples = routed?;
         let total = !samples.samples.is_empty() && self.dcd.energy() >= self.dcd.threshold();
-        let carrier_present = total || (!samples.samples.is_empty() && self.seam_s);
+        let carrier_present =
+            total || (!samples.samples.is_empty() && (self.seam_s || self.seam_p));
 
         if carrier_present {
+            // Where in this read the burst's audio starts: 0 except on a P-opened burst's head read.
+            let mut append_from = 0usize;
             // Carrier present: keep accumulating this burst — and stop the noise floor learning
             // from it (#1452/#1304). Held audio is learned from only if the burst turns out to be the
             // band (a cap flush, below) and dropped on an ordinary carrier drop.
@@ -2900,6 +3123,8 @@ impl ModemEngine {
                 self.rx_burst_tp_cur = 0;
                 self.rx_burst_s_span = 0;
                 self.s_armed = false;
+                self.rx_burst_p_opened = false;
+                self.rx_burst_p_held = false;
                 // "Opened by S" is S true at the open block, not "total power false": total power
                 // trips on 10-16 % of a +10 dB frame's blocks, and the proxy withheld the ring then.
                 // The ring is copied, not drained — a flicker that flushes before S opens must not
@@ -2918,7 +3143,30 @@ impl ModemEngine {
                 // lead — per successful BPSK31 decode 0.18 s at a 400-sample lead, 0.46 s at 1 600, 1.96 s
                 // at the whole 8 192; this lead is 2 448 at 400-sample reads (~0.6–0.7 s by that sweep,
                 // not measured directly), and approaches the ring at long reads.
-                if self.seam_s {
+                // A burst P alone opened (`ofdm-preamble-detect.md`, the pre-trigger ring) starts one
+                // symbol before its preamble, wherever that lies: in an earlier read (the confirm waits
+                // for four data symbols), from the ring; in this one, from this read — so neither the
+                // whole ring nor the whole read. A burst total power or S opened keeps its own head.
+                let p_head = (!total && !self.seam_s)
+                    .then_some(self.seam_p_onset)
+                    .flatten()
+                    .filter(|_| self.seam_p);
+                if let Some(onset) = p_head {
+                    let sym = self.p_symbol as isize;
+                    let head = onset - sym;
+                    if head >= 0 {
+                        append_from = (head as usize).min(samples.samples.len());
+                        self.rx_burst_lead = sym as usize;
+                    } else {
+                        let need = head.unsigned_abs();
+                        let take = need.min(self.p_ring.len());
+                        let skip = self.p_ring.len() - take;
+                        self.rx_burst.extend(self.p_ring.iter().skip(skip).copied());
+                        // Ring samples before the preamble, should the ring be shorter than asked.
+                        self.rx_burst_lead = (sym as usize).saturating_sub(need - take);
+                    }
+                    self.rx_burst_p_opened = true;
+                } else if self.seam_s {
                     self.rx_burst_lead = self.rx_ring.len();
                     self.rx_burst.extend(self.rx_ring.iter().copied());
                 } else {
@@ -2930,8 +3178,15 @@ impl ModemEngine {
                     self.rx_burst
                         .extend(self.rx_ring.iter().skip(skip).copied());
                 }
-                self.rx_burst_first_block = samples.samples.len();
+                // P hands the decoder a bound of two symbols: the lead and one more (the design's
+                // onset bound); its own timing search places the frame finely.
+                self.rx_burst_first_block = if self.rx_burst_p_opened {
+                    self.p_symbol
+                } else {
+                    samples.samples.len()
+                };
             }
+            self.rx_burst_p_held |= self.seam_p;
             self.push_ring(&samples.samples);
             self.s_armed |= self.s_last.0;
             if total {
@@ -2940,7 +3195,8 @@ impl ModemEngine {
             } else {
                 self.rx_burst_tp_cur = 0;
             }
-            self.rx_burst.extend_from_slice(&samples.samples);
+            self.rx_burst
+                .extend_from_slice(&samples.samples[append_from..]);
             if self.s_last.0 {
                 self.rx_burst_s_span = self.rx_burst.len() - self.rx_burst_lead;
             }
@@ -2988,7 +3244,9 @@ impl ModemEngine {
             // Here nothing is lost, because a burst is only discarded when the FIRST warm judgement
             // says the carrier is absent; if it says present, the cold samples stay in the burst.
             // A tracker that can never warm leaves this branch exactly as it was.
-            if was_cold && self.noise_floor.mean_sq().is_some() {
+            // Not for a burst P opened: the rule is for bursts the cold squelch judged, and P never
+            // consults the squelch (`ofdm-preamble-detect.md`, the noise-floor commit).
+            if was_cold && self.noise_floor.mean_sq().is_some() && !self.rx_burst_p_opened {
                 self.noise_floor.discard();
                 self.rx_burst.clear();
                 self.rx_ring.clear();
@@ -3012,7 +3270,10 @@ impl ModemEngine {
             let post = self.rx_burst.len() - self.rx_burst_lead;
             let held_is_this_burst =
                 self.noise_floor.held_len() <= post + openpulse_dsp::noise_floor::WINDOW;
-            if shortest > 0 && post < shortest && held_is_this_burst {
+            // A burst P opened or held is a frame, not band: always discarded. Unbiased, unlike the
+            // flicker case — P does not select windows by level.
+            let p_burst = self.rx_burst_p_opened || self.rx_burst_p_held;
+            if shortest > 0 && post < shortest && held_is_this_burst && !p_burst {
                 self.noise_floor.commit();
             } else {
                 self.noise_floor.discard();
@@ -3074,6 +3335,13 @@ impl ModemEngine {
         self.rx_ring.extend(samples.iter().copied());
         let excess = self.rx_ring.len().saturating_sub(cap);
         self.rx_ring.drain(..excess);
+        if !self.p_units.is_empty() {
+            self.p_ring.extend(samples.iter().copied());
+            let excess = self.p_ring.len().saturating_sub(cap);
+            self.p_ring.drain(..excess);
+        } else {
+            self.p_ring.clear();
+        }
     }
 
     /// Onset-scan bounds for a gathered burst: `(step, scan_end, max_frame_samples)`.
@@ -4631,12 +4899,30 @@ impl ModemEngine {
             // loud fragment one sample under a recognition window into a NACK.
             let floor = self.shortest_candidate_recognition_window(&candidates);
             let post = samples.samples.len().saturating_sub(lead);
-            let FlushSpans { tp_run, s_span } = spans.unwrap_or(FlushSpans {
+            let FlushSpans {
+                tp_run,
+                s_span,
+                p_confirmed,
+            } = spans.unwrap_or(FlushSpans {
                 tp_run: post,
                 s_span: 0,
+                p_confirmed: false,
             });
             let s_min = (S_RING_WINDOWS * openpulse_dsp::noise_floor::WINDOW).max(floor);
-            if !(tp_run >= floor || s_span >= s_min) {
+            // Design decision 4: a burst P held is evidence only where the waveform's own acquisition
+            // takes a frame as present in it — what stands between a false open and a keyed NACK.
+            let p_ok = p_confirmed
+                && self
+                    .p_burst_coherence(&samples.samples)
+                    .is_some_and(|c| c >= P_EVIDENCE_COHERENCE);
+            if p_confirmed && !p_ok {
+                self.p_false_opens = self.p_false_opens.wrapping_add(1);
+                tracing::debug!(
+                    false_opens = self.p_false_opens,
+                    "OTA: a burst the preamble detect held holds no frame its waveform acquires"
+                );
+            }
+            if !(tp_run >= floor || s_span >= s_min || p_ok) {
                 tracing::debug!(
                     "OTA: failed burst is not ladder evidence (#1454): longest total-power run \
                      {tp_run}, spectral span {s_span}, recognition window {floor}"
@@ -6549,7 +6835,10 @@ impl ModemEngine {
         self.last_flush_spans = Some(FlushSpans {
             tp_run: self.rx_burst_tp_run,
             s_span: self.rx_burst_s_span,
+            p_confirmed: self.rx_burst_p_opened || self.rx_burst_p_held,
         });
+        self.rx_burst_p_opened = false;
+        self.rx_burst_p_held = false;
         self.rx_burst_lead = 0;
         self.rx_burst_first_block = 0;
         self.rx_burst_tp_run = 0;
@@ -11006,6 +11295,91 @@ mod burst_decode_sizes_for_the_fec {
         assert_eq!(
             via_plain, via_fec,
             "decode_burst must be exactly the FecMode::None case of decode_burst_with_fec"
+        );
+    }
+}
+
+#[cfg(test)]
+mod preamble_detect_false_open {
+    //! Gate 6, HARQ (`docs/dev/design/ofdm-preamble-detect.md`): a burst the preamble detect P opened
+    //! on something that is not an OFDM frame retains no soft LLRs, counts as a false open, and is no
+    //! ladder evidence. The design note read the first from the code (the plugin's `acquire` finds no
+    //! preamble with pilots, so `demodulate_soft` errors) and left it UNCHECKED; this checks it.
+    //!
+    //! In-crate because the retained LLRs are private (a probe needing private access is a unit test).
+    use super::*;
+    use openpulse_audio::LoopbackBackend;
+    use openpulse_core::profile::SessionProfile;
+
+    /// OFDM52's transmitted preamble, then 6 s of a pilot-less comb periodic at the FFT length (so the
+    /// cyclic prefix confirms and holds), in hiss: P opens and holds, and no frame is there.
+    fn false_open_fixture() -> Vec<f32> {
+        let lb = LoopbackBackend::new();
+        let mut tx = ModemEngine::new(Box::new(lb.clone_shared()));
+        tx.register_plugin(Box::new(ofdm_plugin::OfdmPlugin::new()))
+            .expect("ofdm");
+        tx.transmit_with_fec_mode(&[7u8; 8], "OFDM52", FecMode::SoftConcatenated, None)
+            .expect("tx");
+        let frame = lb.drain_samples();
+        let pre = &frame[..288];
+        let mut seed = 0x2545_f491u32;
+        let mut noise = move || {
+            seed ^= seed << 13;
+            seed ^= seed >> 17;
+            seed ^= seed << 5;
+            (seed as f32 / u32::MAX as f32 - 0.5) * 0.02
+        };
+        // Lines on every 31.25 Hz from 500 to 2500 Hz at one amplitude, fixed pseudo-random phases.
+        let comb: Vec<f32> = (0..256)
+            .map(|n| {
+                (16..=80)
+                    .map(|k| {
+                        let ph = (k * 2_654_435_761u64 as usize % 1000) as f32 / 1000.0;
+                        (std::f32::consts::TAU * (k as f32 * n as f32 / 256.0 + ph)).cos()
+                    })
+                    .sum::<f32>()
+                    * 0.004
+            })
+            .collect();
+        let mut x: Vec<f32> = (0..8000 * 12).map(|_| noise()).collect();
+        x.extend(pre.iter().map(|v| v * 0.5));
+        x.extend((0..8000 * 6).map(|i| comb[i % 256] + noise()));
+        x.extend((0..8000 * 4).map(|_| noise()));
+        x
+    }
+
+    #[test]
+    fn a_false_open_retains_no_llrs_and_is_counted() {
+        let lb = LoopbackBackend::new();
+        let mut e = ModemEngine::new(Box::new(lb.clone_shared()));
+        e.register_plugin(Box::new(ofdm_plugin::OfdmPlugin::new()))
+            .expect("ofdm");
+        e.register_plugin(Box::new(bpsk_plugin::BpskPlugin::new()))
+            .expect("bpsk");
+        e.start_ota_session(SessionProfile::fast());
+        e.ota_lock_level(SpeedLevel::Sl7);
+        let x = false_open_fixture();
+        let mut bursts = 0;
+        for chunk in x.chunks(800) {
+            if let Ok(Some(b)) = e.accumulate_capture(Some("OFDM52"), chunk.to_vec()) {
+                bursts += 1;
+                let r = e.ota_decode_burst(&b, "S", None).expect("decode call");
+                assert!(r.payload.is_none(), "a comb decoded as a frame");
+            }
+        }
+        assert!(
+            e.preamble_detect_opens() >= 1,
+            "P never opened on the fixture"
+        );
+        assert!(bursts >= 1, "nothing flushed");
+        assert!(
+            e.preamble_detect_false_opens() >= 1,
+            "the false open was not counted (bursts {bursts})"
+        );
+        let retained: usize = e.ota_retained_llrs.values().map(Vec::len).sum();
+        assert_eq!(
+            retained, 0,
+            "a burst P opened on a pilot-less comb retained {retained} LLR vector(s) for HARQ"
         );
     }
 }

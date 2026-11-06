@@ -25,15 +25,15 @@ use crate::params::{OfdmParams, CP, FFT_SIZE, SAMPLE_RATE, SYM_LEN};
 /// air and 459 s of corpus; decoded minimum 0.593 (`moderate_f1`, 6 dB), 0.638 (9 dB), 0.697 (on air).
 /// Falsified by a decoded frame under it on a channel the rung exists for, or a negative at or above
 /// it that also passes the confirm (design note, the constants).
-pub const RHO_OPEN: f32 = 0.55;
+pub(crate) const RHO_OPEN: f32 = 0.55;
 
 /// γ₄ at which a candidate opens. Decoded minimum 0.661 (fade); 0 of 3 697 wide-hiss trials reached
 /// it. It rejects broadband noise only: narrowband audio reads up to 0.99 and is ρ's job.
-pub const GAMMA_CONFIRM: f32 = 0.50;
+pub(crate) const GAMMA_CONFIRM: f32 = 0.50;
 
 /// γ₈ under which a held frame is released. Decoded in-frame minimum 0.431 (fade); hiss falls under it
 /// within 8 symbols of a frame's end on air.
-pub const GAMMA_RELEASE: f32 = 0.30;
+pub(crate) const GAMMA_RELEASE: f32 = 0.30;
 
 /// Energy floor of the ρ search, as a share of the searched span's mean (the #1049 veto's value).
 const ENERGY_FLOOR: f32 = 0.05;
@@ -98,9 +98,9 @@ pub struct OfdmCarrierDetector {
     held: Option<Held>,
     /// Onset of the latest confirmed open, so a later read's lobe of the same preamble is not re-taken.
     last_open: Option<u64>,
+    /// Confirmed opens, for the unit tests.
+    #[cfg(test)]
     opens: u64,
-    confirm_rejections: u64,
-    last_gamma4: Option<f32>,
 }
 
 impl OfdmCarrierDetector {
@@ -126,25 +126,15 @@ impl OfdmCarrierDetector {
             pending: Vec::new(),
             held: None,
             last_open: None,
+            #[cfg(test)]
             opens: 0,
-            confirm_rejections: 0,
-            last_gamma4: None,
         }
     }
 
     /// Confirmed opens since the detector was built.
-    pub fn opens(&self) -> u64 {
+    #[cfg(test)]
+    fn opens(&self) -> u64 {
         self.opens
-    }
-
-    /// Candidates with ρ ≥ [`RHO_OPEN`] that the confirm refused (γ₄ < [`GAMMA_CONFIRM`]).
-    pub fn confirm_rejections(&self) -> u64 {
-        self.confirm_rejections
-    }
-
-    /// γ₄ of the latest candidate judged, opened or refused.
-    pub fn last_gamma4(&self) -> Option<f32> {
-        self.last_gamma4
     }
 
     /// Extend the analytic signal by `read`: the FIR's output for absolute index `t` is ready once
@@ -283,11 +273,19 @@ impl CarrierDetector for OfdmCarrierDetector {
                     // order); drop it rather than stall.
                     continue;
                 };
-                self.last_gamma4 = Some(g4);
                 if g4 < GAMMA_CONFIRM {
-                    self.confirm_rejections += 1;
+                    tracing::debug!(
+                        rho = c.rho,
+                        gamma4 = g4,
+                        "OFDM carrier detect: the cyclic prefix refused a preamble candidate"
+                    );
                     continue;
                 }
+                tracing::debug!(
+                    rho = c.rho,
+                    gamma4 = g4,
+                    "OFDM carrier detect: preamble confirmed"
+                );
                 let stats = (1..=CONFIRM_SYMS as u64)
                     .filter_map(|j| self.symbol_stats(c.onset + j * SYM_LEN as u64))
                     .collect();
@@ -297,7 +295,10 @@ impl CarrierDetector for OfdmCarrierDetector {
                     stats,
                 });
                 self.last_open = Some(c.onset);
-                self.opens += 1;
+                #[cfg(test)]
+                {
+                    self.opens += 1;
+                }
                 first_open.get_or_insert(c.onset);
                 continue;
             }
