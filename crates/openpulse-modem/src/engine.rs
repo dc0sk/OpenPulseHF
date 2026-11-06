@@ -1107,14 +1107,31 @@ const DCD_SQUELCH_MARGIN: f32 = 1.25;
 struct PUnit {
     modes: Vec<String>,
     det: Box<dyn CarrierDetector>,
+    /// The receiver centre (`rx_center`) the detector was built at: its told.
+    built_at: f32,
 }
 
-/// Pilot coherence the waveform's own acquisition must reach on a failed burst P held before that
-/// burst counts as ladder evidence (design decision 4): the same value as `ofdm-plugin`'s
-/// `acquire::EARLY_ACCEPT_COHERENCE` (0.9), so a burst counts only where the receiver itself would
-/// have taken the frame as present. That constant is private to the plugin and the engine does not
-/// name a plugin's internals, so the two are tied by these cross-references: change both or neither.
-const P_EVIDENCE_COHERENCE: f32 = 0.9;
+/// How far the receiver centre may move from a P unit's told before the unit is rebuilt there, Hz.
+///
+/// P must judge a frame at the centre the decoder uses: built at the nominal centre on air (f2i), A's
+/// AFC sat at −6.7 Hz and 22 genuine undecodable frames read 0.846–0.900 at told 0 against
+/// 0.902–0.937 at the decoder's told. A's AFC jitters about 0.01 Hz per decode and drifted 0.23 Hz
+/// over f2i, so a rebuild on every change would drop detector state for nothing, while the weakest
+/// decodable frames cross the evidence threshold only at a 2–3 Hz residual.
+const P_TOLD_HYSTERESIS_HZ: f32 = 1.0;
+
+/// Pilot coherence (refined, at P's told) the waveform's own acquisition must reach on a failed burst
+/// P held before that burst counts as ladder evidence (design decision 4). Not tied to `ofdm-plugin`'s
+/// `acquire::EARLY_ACCEPT_COHERENCE` (0.9): that is a search-cost rule, and the receiver acquires a
+/// frame under it too.
+///
+/// **Fitted to** one 2 m link, SL7–SL9, 93 + 6 frames (`ofdm-preamble-detect.md`, Implementation):
+/// genuine decodable frames read down to 0.877 refined at the right told (f2g SL7), the f2i decoded
+/// minimum is 0.900, A's on-air decoder logged 0.893/0.894; the worst negative P could hold with a
+/// coherence at all is a narrow-filter idle at 0.76 (wide hiss and tones give none). HF is UNCHECKED.
+/// **Falsified by** a decoded frame under 0.8 refined on a channel the rung exists for, or a P-opened
+/// noise burst over 0.8.
+const P_EVIDENCE_COHERENCE: f32 = 0.8;
 
 /// Pre-trigger ring for a burst the spectral test opened, in 512-sample windows (#1454). The same
 /// constant is the minimum spectral span at which a failed burst the spectral test carried counts as
@@ -1684,7 +1701,7 @@ impl ModemEngine {
     /// is on, feed the block to the silence tracker and surface any confirmed in-band interferer
     /// (a QSY case the notch can't fix).
     fn apply_rx_notch(&mut self, mode: Option<&str>, samples: Vec<f32>) -> Vec<f32> {
-        let center = self.center_frequency + self.afc_correction_hz;
+        let center = self.rx_center();
         let bw_of = |m: &str| self.plugins.get(m).and_then(|p| p.occupied_bandwidth_hz(m));
         let mut bw = mode.and_then(bw_of).unwrap_or(self.notch_fallback_bw_hz);
         // In an OTA session the frame may be any rung the receiver will try, not the caller's mode:
@@ -2729,27 +2746,49 @@ impl ModemEngine {
             .is_some_and(|at| block_start < at.saturating_add(bound))
     }
 
+    /// The centre the receiver demodulates at: the configured centre plus the AFC correction. The one
+    /// owner of that sum on the receive side, so P and the decoder cannot judge a frame at two tolds.
+    fn rx_center(&self) -> f32 {
+        self.center_frequency + self.afc_correction_hz
+    }
+
     /// Bring P's detectors in line with the OTA candidates: a candidate mode joins the unit whose
     /// template its detector shares (every OFDM52 rung sends one preamble), or starts its own; a unit
-    /// no candidate needs any more is dropped.
+    /// no candidate needs any more is dropped; a unit whose told is [`P_TOLD_HYSTERESIS_HZ`] or more
+    /// from the receiver centre is rebuilt at it.
     fn sync_p_units(&mut self, candidates: &[(String, FecMode)]) {
         for unit in &mut self.p_units {
             unit.modes
                 .retain(|m| candidates.iter().any(|(c, _)| c == m));
         }
         self.p_units.retain(|u| !u.modes.is_empty());
+        let center = self.rx_center();
+        // The rebuild drops the detector's state (a pending candidate, a held frame). That costs
+        // nothing in practice: the AFC moves only inside a decode (or `reset_afc`, which only the
+        // monitor calls, between decodes, with no OTA session and so no P), and a decode follows a
+        // flush, so no frame is mid-detection when the told jumps.
+        for i in 0..self.p_units.len() {
+            if (center - self.p_units[i].built_at).abs() < P_TOLD_HYSTERESIS_HZ {
+                continue;
+            }
+            let mode = self.p_units[i].modes[0].clone();
+            let cfg = self.p_config(&mode, center);
+            if let Some(det) = self
+                .plugins
+                .get(&mode)
+                .and_then(|p| p.carrier_detector(&cfg))
+            {
+                self.p_units[i].det = det;
+                self.p_units[i].built_at = center;
+            }
+        }
         for (mode, _) in candidates {
             if self.p_units.iter().any(|u| u.modes.contains(mode))
                 || self.p_no_detector.contains(mode)
             {
                 continue;
             }
-            let cfg = ModulationConfig {
-                mode: mode.clone(),
-                center_frequency: self.center_frequency,
-                sample_rate: AudioConfig::default().sample_rate,
-                ..ModulationConfig::default()
-            };
+            let cfg = self.p_config(mode, center);
             let det = self
                 .plugins
                 .get(mode)
@@ -2773,8 +2812,19 @@ impl ModemEngine {
                 self.p_units.push(PUnit {
                     modes: vec![mode.clone()],
                     det,
+                    built_at: center,
                 });
             }
+        }
+    }
+
+    /// The configuration P builds `mode`'s detector with, at receiver centre `center`.
+    fn p_config(&self, mode: &str, center: f32) -> ModulationConfig {
+        ModulationConfig {
+            mode: mode.to_string(),
+            center_frequency: center,
+            sample_rate: AudioConfig::default().sample_rate,
+            ..ModulationConfig::default()
         }
     }
 
@@ -5113,7 +5163,7 @@ impl ModemEngine {
         )?;
         let mod_cfg = ModulationConfig {
             mode: mode.to_string(),
-            center_frequency: self.center_frequency + self.afc_correction_hz,
+            center_frequency: self.rx_center(),
             afc_correction_hz: self.afc_correction_hz,
             ..ModulationConfig::default()
         };
@@ -6319,7 +6369,7 @@ impl ModemEngine {
                 .ok_or_else(|| ModemError::PluginNotFound(mode.to_string()))?;
             let mod_cfg = ModulationConfig {
                 mode: mode.to_string(),
-                center_frequency: self.center_frequency + self.afc_correction_hz,
+                center_frequency: self.rx_center(),
                 afc_correction_hz: self.afc_correction_hz,
                 ..ModulationConfig::default()
             };
@@ -6471,7 +6521,7 @@ impl ModemEngine {
 
         let mod_cfg = ModulationConfig {
             mode: mode.to_string(),
-            center_frequency: self.center_frequency + self.afc_correction_hz,
+            center_frequency: self.rx_center(),
             afc_correction_hz: self.afc_correction_hz,
             ..ModulationConfig::default()
         };
@@ -7389,7 +7439,7 @@ impl ModemEngine {
                 .ok_or_else(|| ModemError::PluginNotFound(mode.to_string()))?;
             let mod_cfg = ModulationConfig {
                 mode: mode.to_string(),
-                center_frequency: self.center_frequency + self.afc_correction_hz,
+                center_frequency: self.rx_center(),
                 ..ModulationConfig::default()
             };
             openpulse_modem_descramble_soft(plugin.demodulate_soft(&samples.samples, &mod_cfg)?)
@@ -7596,7 +7646,7 @@ impl ModemEngine {
                 .ok_or_else(|| ModemError::PluginNotFound(mode.to_string()))?;
             let mod_cfg = ModulationConfig {
                 mode: mode.to_string(),
-                center_frequency: self.center_frequency + self.afc_correction_hz,
+                center_frequency: self.rx_center(),
                 ..ModulationConfig::default()
             };
             openpulse_modem_descramble_soft(plugin.demodulate_soft(&samples.samples, &mod_cfg)?)
@@ -7684,7 +7734,7 @@ impl ModemEngine {
                 .ok_or_else(|| ModemError::PluginNotFound(mode.to_string()))?;
             let mod_cfg = ModulationConfig {
                 mode: mode.to_string(),
-                center_frequency: self.center_frequency + self.afc_correction_hz,
+                center_frequency: self.rx_center(),
                 ..ModulationConfig::default()
             };
             openpulse_modem_descramble_soft(plugin.demodulate_soft(&samples.samples, &mod_cfg)?)
@@ -7820,7 +7870,7 @@ impl ModemEngine {
 
         let mod_cfg = ModulationConfig {
             mode: mode.to_string(),
-            center_frequency: self.center_frequency + self.afc_correction_hz,
+            center_frequency: self.rx_center(),
             ..ModulationConfig::default()
         };
 
@@ -7946,7 +7996,7 @@ impl ModemEngine {
 
         let mod_cfg = ModulationConfig {
             mode: mode.to_string(),
-            center_frequency: self.center_frequency + self.afc_correction_hz,
+            center_frequency: self.rx_center(),
             ..ModulationConfig::default()
         };
 
@@ -9376,7 +9426,7 @@ impl ModemEngine {
     /// the *same* SNR the daemon uses, instead of a tx-vs-rx estimator that counts delay spread as
     /// noise (which reads ≈ −8 dB for a 25 dB OFDM signal through moderate_f1).
     pub fn rx_snr_db(&self, mode: &str, samples: &[f32]) -> f32 {
-        let fc = self.center_frequency + self.afc_correction_hz;
+        let fc = self.rx_center();
         let fs = AudioConfig::default().sample_rate as f32;
         if let Some(plugin) = self.plugins.get(mode) {
             let mod_cfg = ModulationConfig {
@@ -9414,7 +9464,7 @@ impl ModemEngine {
     fn update_afc_estimate(&mut self, mode: &str, samples: &[f32]) {
         let mod_cfg = ModulationConfig {
             mode: mode.to_string(),
-            center_frequency: self.center_frequency + self.afc_correction_hz,
+            center_frequency: self.rx_center(),
             afc_correction_hz: self.afc_correction_hz,
             ..ModulationConfig::default()
         };
@@ -9467,7 +9517,7 @@ impl ModemEngine {
         let _stage = PipelineStage::DemodulateDecode;
         let mod_cfg = ModulationConfig {
             mode: mode.to_string(),
-            center_frequency: self.center_frequency + self.afc_correction_hz,
+            center_frequency: self.rx_center(),
             afc_correction_hz: self.afc_correction_hz,
             ..ModulationConfig::default()
         };
@@ -9494,7 +9544,7 @@ impl ModemEngine {
         let _stage = PipelineStage::DemodulateDecode;
         let mod_cfg = ModulationConfig {
             mode: mode.to_string(),
-            center_frequency: self.center_frequency + self.afc_correction_hz,
+            center_frequency: self.rx_center(),
             afc_correction_hz: self.afc_correction_hz,
             ..ModulationConfig::default()
         };
