@@ -44,26 +44,35 @@ impl Log {
     }
 }
 
-/// The hiss level between frames, RMS.
-const HISS: f32 = 0.05;
-
-/// A receiver AGC, as the IC-9700's AGC FAST behaved in run f2g: between frames the hiss at `HISS`;
-/// under a frame the hiss 12 dB down and the frame scaled so the total is 1.15× the gap hiss.
+/// A receiver AGC, as the IC-9700's AGC FAST behaved in run f2g: between frames the recorded gap hiss
+/// of that run; under a frame that hiss 12 dB down and the frame scaled so the total is 1.15× the gap.
+/// Recorded, not white: the rig's filter shapes the hiss, and white hiss spread over 0–4 kHz would put
+/// the OFDM band's density 2.5× over it, where the spectral test opens on the frame and P is not
+/// needed — the fixture would no longer be the case it exists for.
 struct AgcChannel {
-    state: u64,
+    hiss: Vec<f32>,
+    at: usize,
+    rms: f32,
 }
 
 impl AgcChannel {
-    fn gauss(&mut self) -> f32 {
-        let mut u = || {
-            self.state = self
-                .state
-                .wrapping_mul(6_364_136_223_846_793_005)
-                .wrapping_add(1_442_695_040_888_963_407);
-            ((self.state >> 40) as f32 + 1.0) / 16_777_217.0
-        };
-        let (a, b) = (u(), u());
-        (-2.0 * a.ln()).sqrt() * (std::f32::consts::TAU * b).cos()
+    fn new() -> Self {
+        let path = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../openpulse-modem/tests/captures/ic9700-ofdm52-f2g-agc-1.wav"
+        );
+        let x = openpulse_modem::capture_replay::load_wav(path)
+            .expect("the f2g excerpt loads")
+            .samples;
+        // The gap between the excerpt's two frames, 11.0–20.7 s: hiss only (tests/captures/README.md).
+        let hiss = x[88_000..165_600].to_vec();
+        let rms = (hiss.iter().map(|v| v * v).sum::<f32>() / hiss.len() as f32).sqrt();
+        Self { hiss, at: 0, rms }
+    }
+    fn next(&mut self) -> f32 {
+        let v = self.hiss[self.at % self.hiss.len()];
+        self.at += 1;
+        v
     }
 }
 
@@ -75,17 +84,14 @@ impl ChannelModel for AgcChannel {
         let rms = (input.iter().map(|v| v * v).sum::<f32>() / input.len() as f32).sqrt();
         let under = 0.25f32;
         let g = if rms > 0.0 {
-            ((1.15f32 * 1.15 - under * under).sqrt() * HISS) / rms
+            ((1.15f32 * 1.15 - under * under).sqrt() * self.rms) / rms
         } else {
             0.0
         };
-        input
-            .iter()
-            .map(|v| v * g + under * HISS * self.gauss())
-            .collect()
+        input.iter().map(|v| v * g + under * self.next()).collect()
     }
     fn generate_noise(&mut self, length: usize) -> Vec<f32> {
-        (0..length).map(|_| HISS * self.gauss()).collect()
+        (0..length).map(|_| self.next()).collect()
     }
 }
 
@@ -117,7 +123,7 @@ async fn an_sl7_frame_at_agc_level_is_gathered_decoded_and_acked() {
     let pair = spawn_bridged_pair_in_hiss(
         cfg("PDTA", 19240),
         cfg("PDTB", 19242),
-        Box::new(AgcChannel { state: 41 }),
+        Box::new(AgcChannel::new()),
         Box::new(AwgnChannel::new(AwgnConfig::new(40.0, Some(42))).expect("awgn")),
         Duration::from_millis(10),
     )
