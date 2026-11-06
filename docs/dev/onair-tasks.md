@@ -5361,3 +5361,32 @@ As task 26, plus:
 **A, the receiver:** 75 rate decisions (48 hold, 24 climb_on_evidence, 3 climb_on_snr), all with verdict keyed.
 
 **Not found / not done:** why A decodes no OFDM52 (A's OFDM front end was not looked at in this run); whether the delivered message after each fall-back was the same message as the one that went silent at SL7 (not checked — the lines show only that an ACK at SL6 follows within 7 s). IC-9700 ALC on the SL7 frames not isolated (A transmits only ACKs here).
+
+### Review of task 27 (pc1 session, 2026-11-06)
+
+**The fall-back after a climb into silence works on air (A2, B→A).**
+- B climbed to SL7 three times. Each time, A heard nothing at SL7, and after the second silent window
+  B logged `back to the level before it` (SL7 → SL6) and an `ota_fall_back` event (07:13:19.00,
+  07:15:22.15, 07:18:51.58).
+- The next ACK, at SL6, came 6.6–6.7 s later each time. Every message was delivered: 75 delivered,
+  0 abandoned (f2f: 51 abandoned).
+- 0 `no fall-back` lines (f2f: 51).
+
+**The backoff runs as designed.**
+- After the first fall-back B declined 4 climbs to SL7, then re-probed (07:13:38 … 07:14:38 declined,
+  07:14:58 accepted).
+- After the second it declined 8, re-probing at 07:18:27.
+- After the third it declined at least 8 before the run ended; the design says 16.
+- **Correction to the results block:** the "4 declines before the first probe" at 07:11:20, 07:11:59,
+  07:12:24 and 07:12:35 are not declines. They are B's accepted climbs SL2 → SL3 → SL4 → SL5 → SL6
+  (`from=Sl2 to=Sl3` … `from=Sl5 to=Sl6` in B's log). Before the first fall-back there is no backoff.
+
+**The status query is fixed on air:** 44 status blocks per station, 0 `<no status>`.
+
+**What A2 still lacks on B→A:**
+- A decodes no OFDM52 from B (f2d–f2g). 545–665 OFDM carrier lines per run, with median pilot
+  coherence 0.97, and no decode. The operator heard B's OFDM clearly with nearly nothing on the scope.
+  That is the next thing to find. The fall-back keeps the link up; it does not make SL7 work.
+- Unchecked: whether the message delivered at SL6 after each fall-back is the one that went silent at
+  SL7. By the code it is: the fall-back continues the same send within its budget.
+
