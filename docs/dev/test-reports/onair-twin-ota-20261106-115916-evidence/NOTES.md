@@ -1,0 +1,1 @@
+Run f2h (task 28). A's IC-9700 AGC was SLOW (`L AGC 3`) because the rig refused AGC OFF (`L AGC 0`: "Command rejected by the rig"). AGC set back to FAST (2) after the run and read back. Everything else as f2g.
