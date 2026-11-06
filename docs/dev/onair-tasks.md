@@ -5496,7 +5496,7 @@ reference: B→A OFDM is decodable on this pair, and the detector has to gather 
 A→B. The level comparison per rung on `rx-a-f2h-8k.wav.gz` (the OFDM step over the hiss under AGC
 SLOW) is to be done offline. The station's crude numbers are indicative only.
 
-## Task 29 — B→A OFDM under AGC FAST with the preamble detect: does the release configuration deliver SL7+? (status: Part A run f2i done; see Results)
+## Task 29 — B→A OFDM under AGC FAST with the preamble detect: does the release configuration deliver SL7+? (status: done — reviewed below)
 
 **Why.** Task 28 showed that B→A OFDM is decodable on this pair: with A's AGC SLOW, A decoded 38
 OFDM frames and B→A climbed to SL9. Under AGC FAST, the Release 1 operating requirement, A gathered
@@ -5575,3 +5575,43 @@ detector running, or if false opens hold the channel busy enough to cost narrow-
 **Prediction check:** A delivered OFDM52 at SL7 (3 decodes at 7.8–8.6 dB) and B→A reached SL9 under AGC FAST, so the first part holds. **`false_opens` is 22, not near 0.** The kill condition ("no OFDM52 delivered under FAST", or false opens costing narrow-rung deliveries) is not met: narrow rungs delivered as in f2h; whether the false opens cost anything at SL9 I did not measure.
 
 **Not done / open:** which transmissions the 22 false opens are; per-frame RMS; B shows 0 detector lines (not investigated); the 79 vs 75 count.
+
+### Review of task 29 (pc1 session, 2026-11-06)
+
+**The preamble detect delivers B→A OFDM under AGC FAST, the release configuration.**
+- A decoded 59 OFDM frames (OFDM52 3, OFDM52-8PSK 7, OFDM52-16QAM 49). In f2d–f2g, under the
+  same AGC FAST, it decoded none.
+- B→A reached SL9, and A ended confirmed at SL9: f2h's result under AGC SLOW, now in the release
+  configuration.
+- The narrow rungs did not regress. B's detector stayed silent (0 lines).
+- P's cost on rpi51: 0.8–1.3 ms per block.
+
+**Found: the 22 "false opens" are genuine B frames, and they cost B its NACKs.** Measured offline on
+`rx-a-f2i-8k.wav.gz`, through the production receive path, with A's 93 on-air opens matched one to
+one:
+- **All 22 are B frames that failed to decode:** 15 sent at SL9, 7 at SL10. They were gathered whole
+  (burst lengths match the decoded frames'). None was noise, A's own tail or a station ID.
+- **The cause:** P builds its detectors with `center_frequency` only (`sync_p_units`), so
+  `burst_coherence` searches around 0 Hz. The decoder searches around
+  `center_frequency + afc_correction_hz`, which is −6.7 Hz on A, and the frames sit near −8 Hz. On
+  P's grid the nearest point is 4–8 Hz off, so coherence reads 0.85–0.90, under the 0.9 evidence
+  threshold. On the decoder's grid it reads 0.90–0.96.
+- **The cost:** a burst under the threshold is not ladder evidence, so A keyed no NACK on 21 of
+  them. B sat out its full ACK window each time (about 10.4 s, against about 2.9 s for a NACK). That
+  accounts for 21 of B's 23 silent windows, all 4 abandons and both falls back SL10→SL9. The time
+  lost is about 2.6 min of a 7.7 min OFDM phase (inferred).
+- **This is not as designed.** Decision 4 makes a P-held failed burst evidence when the waveform's
+  own acquisition takes a frame as present, and the decoder's acquisition did.
+- **The replay confirms it:**
+  - false opens reproduce at uniform 400- and 800-sample reads with no holds;
+  - with P and the decoder both at −6.7 Hz, false opens drop to 0, and all 22 bursts NACK.
+- **The read holds on A are effects, not causes.** Each one is the first read after a failed decode
+  that keyed nothing (about 1.1 s on rpi51).
+- Two consequences: until this is fixed, the `false_opens` counter cannot measure P's false-open
+  rate; and the implementation review's "`told` fixed at creation is fine for Release 1" is wrong
+  on air.
+
+**Fix:** under design review before implementing, because it changes when a NACK is keyed. Separate,
+and not this defect: the SL9 bursts that failed and every SL10 frame are undecodable at this link's
+edge (SL9 SNR median 8.9 dB). SL10 has never decoded in either direction.
+
