@@ -69,6 +69,40 @@ fn the_corpus_loads_and_is_at_the_modem_sample_rate() {
     }
 }
 
+/// The OFDM preamble detect's excerpts keep to the asset rule (`docs/dev/design/ofdm-preamble-
+/// detect.md`): 8 kHz mono 16-bit, at most 410 KB each and 1.25 MB together.
+#[test]
+fn the_ofdm_detect_excerpts_keep_to_the_asset_rule() {
+    let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/captures");
+    let mut total = 0u64;
+    for name in [
+        "ic9700-ofdm52-f2g-agc-1.wav",
+        "ic9700-ofdm52-f2g-agc-2.wav",
+        "ic9700-ofdm52-f2g-agc-3.wav",
+        "ft991a-ofdm52-f1d-sl8-sl9.wav",
+    ] {
+        let c = corpus(name);
+        assert_eq!(c.sample_rate, 8_000, "{name} must be 8 kHz");
+        let bytes = std::fs::metadata(dir.join(name))
+            .unwrap_or_else(|e| panic!("{name}: {e}"))
+            .len();
+        assert_eq!(
+            bytes,
+            44 + 2 * c.samples.len() as u64,
+            "{name} is not plain 16-bit mono PCM"
+        );
+        assert!(
+            bytes <= 410_000,
+            "{name} is {bytes} B, over the 410 KB rule"
+        );
+        total += bytes;
+    }
+    assert!(
+        total <= 1_250_000,
+        "the OFDM detect excerpts total {total} B, over 1.25 MB"
+    );
+}
+
 /// The IC-9700 capture must still be the HOT floor that broke #1020 — above the gate ceiling.
 /// This is the property the file exists to preserve; re-encoding that changed the level would make
 /// it an ordinary recording rather than evidence.

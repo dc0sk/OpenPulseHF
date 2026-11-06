@@ -108,11 +108,7 @@ fn modulate_with_params(payload: &[u8], p: &OfdmParams) -> Vec<f32> {
     } else {
         out
     };
-    let mut preamble = clip_iterative(
-        &build_preamble(p, &ifft, scale),
-        TARGET_PAPR_DB,
-        CLIP_MAX_ITER,
-    );
+    let mut preamble = clipped_preamble_with(p, &ifft, scale);
 
     // Equalize section RMS: each section is clipped to the PAPR target against
     // its OWN rms, but the frame PAPR is measured against the POOLED rms — a
@@ -149,6 +145,29 @@ fn modulate_with_params(payload: &[u8], p: &OfdmParams) -> Vec<f32> {
         }
     }
     frame
+}
+
+/// The preamble as the transmitter sends it, before the frame's level scaling: the clipped
+/// [`build_preamble`]. The carrier detector correlates against this same function's output, so the
+/// transmitted preamble and the detector's template cannot drift apart
+/// (`docs/dev/design/ofdm-preamble-detect.md`, the preamble reference).
+pub(crate) fn clipped_preamble(p: &OfdmParams) -> Vec<f32> {
+    let mut planner = FftPlanner::<f32>::new();
+    let ifft = planner.plan_fft_inverse(FFT_SIZE);
+    clipped_preamble_with(p, &ifft, 1.0 / (FFT_SIZE as f32).sqrt())
+}
+
+/// [`clipped_preamble`] with the caller's IFFT plan and scale.
+fn clipped_preamble_with(
+    p: &OfdmParams,
+    ifft: &std::sync::Arc<dyn rustfft::Fft<f32>>,
+    scale: f32,
+) -> Vec<f32> {
+    clip_iterative(
+        &build_preamble(p, ifft, scale),
+        TARGET_PAPR_DB,
+        CLIP_MAX_ITER,
+    )
 }
 
 /// The clean (pre-clip) preamble symbol waveform, used by the receiver as a
