@@ -5288,7 +5288,7 @@ As task 25, plus:
 - Why A decodes no OFDM52 from B (operator: "I can hear B's OFDM signal clearly, but there is nearly no
   signal on the scope") is a separate open item. The fall-back survives it; it does not fix it.
 
-## Task 27 — the fall-back on air: f2f again, on the build with the read-only status query (status: Part A run f2g done; see Results)
+## Task 27 — the fall-back on air: f2f again, on the build with the read-only status query (status: done — reviewed below)
 
 **The new build is the branch head** (`306cad29` and its docs). Settings and log levels as task 26,
 with the same uncommitted runner overrides. Nothing in the runner changes: its `ota-status` poll now
