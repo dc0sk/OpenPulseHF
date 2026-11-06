@@ -98,7 +98,7 @@ pub fn engine(level: SpeedLevel, p_on: bool) -> ModemEngine {
 }
 
 /// One flushed burst, on the feed's timeline.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Clone, PartialEq)]
 pub struct Flush {
     /// Timeline index of the burst's first sample.
     pub start: usize,
@@ -110,6 +110,19 @@ pub struct Flush {
     pub decoded: Option<(String, Vec<u8>)>,
     /// The burst itself.
     pub samples: Vec<f32>,
+}
+
+impl std::fmt::Debug for Flush {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "Flush {{ start: {}, len: {}, lead: {}, decoded: {:?} }}",
+            self.start,
+            self.len,
+            self.lead,
+            self.decoded.as_ref().map(|(m, p)| (m, p.len()))
+        )
+    }
 }
 
 /// A stretch of contiguous audio at `at` on the feed's timeline. A segment that does not follow the

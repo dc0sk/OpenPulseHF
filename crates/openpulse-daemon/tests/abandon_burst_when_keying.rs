@@ -9,8 +9,11 @@
 //! **With an OFDM candidate, and its own echo** (gate 12 of `docs/dev/design/ofdm-preamble-detect.md`).
 //! The station runs an OTA session at SL7, so the preamble detect P runs, and every frame it sends
 //! comes back in its own capture, as on air (rx-a-f1d holds A's own OFDM frames at ρ 0.907–0.942, 98
-//! times). P stays off them only because the daemon drops its capture stream after it keys (#1007,
-//! task 17), so a regression in that rule shows up here as a P open.
+//! times). P stays off them only because the daemon drops its capture stream around its keying, so a
+//! regression shows up here as a P open. Two rules do it for this OTA send, and either alone suffices:
+//! the send closes the stream before keying (audit #917, finding #6), and the command arm drops it
+//! after any transmit (#1007, task 17). Measured: with only the second removed this stays green; with
+//! both removed P opens on the echo.
 
 use std::f32::consts::TAU;
 use std::io::Write;
