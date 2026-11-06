@@ -5390,7 +5390,7 @@ As task 26, plus:
 - Unchecked: whether the message delivered at SL6 after each fall-back is the one that went silent at
   SL7. By the code it is: the fall-back continues the same send within its budget.
 
-## Task 28 — B→A OFDM52 with A's AGC off: does A gather the frames? (status: Part A run f2h done (AGC SLOW, rig refused OFF); see Results)
+## Task 28 — B→A OFDM52 with A's AGC off: does A gather the frames? (status: done — reviewed below); see Results)
 
 **Why.** f2g's recording of A's receive audio holds six OFDM52 frames from B that decode offline (6/6,
 SNR 8.5–9.0 dB), but the production receive path gathers none of them. Under the IC-9700's AGC FAST,
@@ -5460,3 +5460,39 @@ off: then the AGC is not the mechanism.
 **Station IDs / NOTES:** A `interval` 11:08:44.74, `with-ack` 11:17:17.90, `sign-off` 11:19:24.26 and 11:21:10.54; B `with-data` 11:07:23.27, 11:15:57.83.
 
 **Not done / open:** per-frame RMS and the OFDM step over hiss; which burst-length metric PC1 means; why the SL10 never decodes (as in earlier runs); IC-9700 ALC not isolated. The prediction (bursts ≥17 000 at SL7 times) is not met by the lines I extracted, yet OFDM52 delivered and `rx_confirmed_level` reached SL9 (SL8 at the end); the kill condition (bursts under 0.5 s) cannot be judged from my extraction.
+
+### Review of task 28 (pc1 session, 2026-11-06)
+
+**Run as changed:** the IC-9700 refused AGC OFF over CAT (`L AGC 0`, the rig answers NAK). f2h ran with
+A's AGC SLOW (`L AGC 3`) under a revised go, and A was restored to FAST (2) afterwards, read back.
+
+**The mechanism is confirmed. With A's AGC slow, A gathers and decodes B's OFDM:**
+- A received OFDM52 8 times, OFDM52-8PSK 15 times and OFDM52-16QAM 15 times. In f2d–f2g it decoded
+  no OFDM52 at all.
+- B→A climbed to SL9 for the first time, and A's `rx_confirmed_level` reached SL9 and ended at SL8.
+- QPSK and BPSK did not regress.
+- So the f2d–f2g failure was A's AGC FAST compressing the OFDM frame into the gap hiss, as the
+  offline analysis found. It was not B's level, the notch or the frequency offset.
+- The metric I asked for ("bursts ≥ 17 000 samples") was the wrong one. `received N audio samples`
+  is logged once per decode attempt, not per burst, so the station's extraction is not a burst length.
+  The delivered frames settle the question instead.
+
+**This is a diagnostic, not a configuration.** AGC FAST stays the Release 1 operating requirement
+(`dcd-raised-floor.md`), and the fix is the level-independent OFDM detector
+(`docs/dev/design/ofdm-preamble-detect.md`, reviewed, being implemented). f2h is now that detector's
+reference: B→A OFDM is decodable on this pair, and the detector has to gather it under AGC FAST.
+
+**Found: silence at a confirmed rung.**
+- From 11:06:35 to 11:09:57 B sat at SL8, a rung A had confirmed, and A answered nothing: 10
+  `no fall-back` lines (`no unconfirmed climb is recorded`) and 26 abandoned sends. The link recovered
+  by itself after about 3.5 minutes.
+- The fall-back after silence covers only an unconfirmed climb, by design.
+- A's SL8 SNR readings had a median of 8.1 dB, near the rung's floor, so a fade on a marginal rung is
+  the likely cause, but it is unchecked.
+- Whether silence at a confirmed rung needs its own step-down is a design question for the A2 ladder,
+  and it goes to review before any change. Parked.
+
+**Also:** SL10 never decodes B→A either (96 NACKs: `nack_hold` 90, `nack_step_down` 6), the same as
+A→B. The level comparison per rung on `rx-a-f2h-8k.wav.gz` (the OFDM step over the hiss under AGC
+SLOW) is to be done offline. The station's crude numbers are indicative only.
+
