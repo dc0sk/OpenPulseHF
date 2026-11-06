@@ -45,7 +45,10 @@ export B_RIGCTLD_PORT=4532
 # 2m safety guard for this test window (script enforces this range)
 export BAND2M_MIN_HZ=144500000
 export BAND2M_MAX_HZ=144750000
-export TEST_FREQ_HZ=144600000
+# 144.640 MHz, the project's 2 m test frequency (as in onair-ic9700-ft818.example.sh). This was
+# 144600000, and on 2026-10-30 a session that sourced this profile transmitted on 144.600 MHz instead
+# of the announced frequency (inside the band guard, but not the agreed one).
+export TEST_FREQ_HZ=144640000
 export TEST_MODE_RIG="PKTUSB"
 
 # Per-side dial trim to null the measured rig-to-rig crystal offset (Gate 5).
@@ -55,7 +58,24 @@ export TEST_MODE_RIG="PKTUSB"
 # corrects the actual crystal difference and aligns BOTH directions (received carrier
 # measured back at 1501.5 Hz). Re-measure with Gate 5 if a rig or its TCXO changes.
 export A_FREQ_OFFSET_HZ=0
-export B_FREQ_OFFSET_HZ=64
+# The FT-991A's DATA-USB receive passband is centred near 0 Hz at the factory setting (it ends near half
+# the filter width, ~1.4 kHz at the runner's SH 16), which cuts a 1500 Hz BPSK250 signal: A -> B failed.
+# Menu 065 OTHER SHIFT (SSB) = +1500 centres it (293-2648 Hz) and moves the dial relation by 1500 Hz in
+# BOTH directions, so the dial sits 1500 Hz above the test frequency plus the 64 Hz trim. Measured
+# 2026-10-31: A -> B 3 of 3, B -> A 1 of 1 PASS (onair-tasks.md, task 6). REQUIRES 065 = +1500 on the rig
+# (read back `EX065;` -> EX065+1500;): with 065 at 0 this offset puts the transmission 1.5 kHz off.
+export B_FREQ_OFFSET_HZ=1564
+
+# scripts/run-onair-twin-ota.sh (the A2 daemon runner) reads this profile too. It sends this passband
+# with the mode; 2400 is the passband run-onair-ic9700-ft991a.sh uses (its own default is 3000).
+# Station B has no checkout: copy the daemon to it with that runner's `deploy` before a `run`.
+export RIG_PASSBAND_HZ=2400
+
+# How long run-onair-ic9700-ft991a.sh waits after the sender exits before it kills the receiver. The
+# one-shot receive's full-buffer retry reads no audio while it runs (about 16 s on station B, task 10).
+# With the default 12 s, QPSK250-D|rs was killed mid-pass twice (task 8); with 45 it decoded. Parked
+# engine item in the work plan.
+export KILL_WAIT=45
 
 # IC-9700 audio prerequisites for digital USB TX (set on the radio UI):
 # - DATA MOD = USB

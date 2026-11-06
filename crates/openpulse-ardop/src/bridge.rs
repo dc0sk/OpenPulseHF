@@ -167,10 +167,14 @@ pub fn spawn_worker(bridge: Arc<ModemBridge>, tx_data_rx: std::sync::mpsc::Recei
 /// with this station's own transmitted audio and the next tick hands that blob to
 /// `accumulate_capture`; on an exclusive device a concurrent open fails outright. `None` is the
 /// adaptive case, where no stream is held at all and there is nothing to release.
-fn release_capture(ticker: &mut Option<CaptureTicker>) {
+///
+/// It also drops the burst the engine was gathering: audio captured before this station's own
+/// transmission must not be joined to audio captured after it (on-air task 17, the daemon's twin).
+fn release_capture(engine: &mut ModemEngine, ticker: &mut Option<CaptureTicker>) {
     if let Some(t) = ticker.as_mut() {
         t.drop_stream();
     }
+    engine.abandon_burst();
 }
 
 fn worker_loop(bridge: Arc<ModemBridge>, tx_data_rx: std::sync::mpsc::Receiver<Vec<u8>>) {
@@ -264,7 +268,12 @@ fn worker_loop(bridge: Arc<ModemBridge>, tx_data_rx: std::sync::mpsc::Receiver<V
                 tx_frames_seen = tx_now;
             }
             let one_shot = bridge.id_requested.swap(false, Ordering::Relaxed);
-            if one_shot || id_timer.id_due(now_ms) || id_timer.signoff_due(now_ms) {
+            // Not over another station's transmission (on-air task 17; `StationIdTimer::due_reason`).
+            let channel_quiet = {
+                let e = bridge.engine.lock().unwrap_or_else(|e| e.into_inner());
+                !e.burst_open() && !e.is_channel_busy()
+            };
+            if one_shot || id_timer.due_reason(now_ms, channel_quiet).is_some() {
                 // The ID frame *is* the identification, so it needs a real call — the placeholder
                 // `N0CALL` is not one (§97.119). `tx_callsign` returns the valid MYID or None.
                 match tx_callsign(&bridge) {
@@ -369,7 +378,7 @@ fn worker_loop(bridge: Arc<ModemBridge>, tx_data_rx: std::sync::mpsc::Receiver<V
                     for attempt in 0..attempts {
                         // Transmit at the ladder's current mode, exactly as `transmit_arq` does.
                         let tx_mode = engine.current_adaptive_mode().unwrap_or(&mode).to_owned();
-                        release_capture(&mut ticker);
+                        release_capture(&mut engine, &mut ticker);
                         let sent = keyed_transmit(&bridge, "arq", || {
                             engine.transmit(&data, &tx_mode, None)
                         })
@@ -410,7 +419,7 @@ fn worker_loop(bridge: Arc<ModemBridge>, tx_data_rx: std::sync::mpsc::Receiver<V
                     }
                     drop(engine);
                 } else {
-                    release_capture(&mut ticker);
+                    release_capture(&mut engine, &mut ticker);
                     let tx_ok = keyed_transmit(&bridge, "data", || {
                         if use_fec {
                             engine.transmit_with_fec(&data, &mode, None)
@@ -457,7 +466,7 @@ fn worker_loop(bridge: Arc<ModemBridge>, tx_data_rx: std::sync::mpsc::Receiver<V
                     Ok((payload, ack_type)) => {
                         if can_tx {
                             let ack_frame = AckFrame::new(ack_type, &mode);
-                            release_capture(&mut ticker);
+                            release_capture(&mut engine, &mut ticker);
                             keyed_transmit(&bridge, "irs-ack", || {
                                 engine.transmit_ack_with_short_fec(&ack_frame, None)
                             });
@@ -470,7 +479,7 @@ fn worker_loop(bridge: Arc<ModemBridge>, tx_data_rx: std::sync::mpsc::Receiver<V
                         tracing::debug!("IRS receive_with_ack_hint failed ({e}); sending Nack");
                         if can_tx {
                             let nack = AckFrame::new(AckType::Nack, &mode);
-                            release_capture(&mut ticker);
+                            release_capture(&mut engine, &mut ticker);
                             keyed_transmit(&bridge, "irs-nack", || {
                                 engine.transmit_ack_with_short_fec(&nack, None)
                             });
@@ -586,7 +595,7 @@ fn transmit_station_id(
     let mut engine = bridge.engine.lock().unwrap_or_else(|e| e.into_inner());
     // The digital ID and the CW ID are ONE keyed burst — keying is a burst property, not a frame
     // property, so they must not key/unkey twice.
-    release_capture(ticker);
+    release_capture(&mut engine, ticker);
     let sent = keyed_transmit(bridge, "station-id", || {
         let body = format!("DE {callsign}");
         engine.transmit(body.as_bytes(), mode, None)?;
@@ -683,7 +692,7 @@ fn maybe_relay_forward(
         Ok(out_envelope) => {
             if let Ok(out_bytes) = out_envelope.encode() {
                 let mut engine = bridge.engine.lock().unwrap_or_else(|e| e.into_inner());
-                release_capture(ticker);
+                release_capture(&mut engine, ticker);
                 keyed_transmit(bridge, "relay", || engine.transmit(&out_bytes, mode, None));
                 drop(engine);
                 tracing::debug!(

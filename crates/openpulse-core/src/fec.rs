@@ -156,6 +156,33 @@ pub const FEC_ECC_LEN_STRONG: usize = 64;
 /// Total bytes per encoded RS block (always 255 — GF(2^8) block size).
 const BLOCK_TOTAL: usize = 255;
 
+/// Start of the error for data shorter than one RS block; shared by its builder and its parser.
+const SHORT_OF_BLOCK_PREFIX: &str = "FEC data length ";
+
+/// The error for RS data shorter than one block. Every producer builds it here, so
+/// [`rs_short_of_block`] reads all of them by construction.
+pub fn rs_short_of_block_error(have: usize) -> ModemError {
+    ModemError::Fec(format!(
+        "{SHORT_OF_BLOCK_PREFIX}{have} is shorter than one {BLOCK_TOTAL}-byte block"
+    ))
+}
+
+/// The demodulated length, when `e` is "shorter than one RS block" (see [`rs_short_of_block_error`]).
+///
+/// The OTA scan uses it to stop trying a coded candidate whose whole burst holds less than one
+/// block: every later onset sees a suffix of the same burst (`docs/dev/design/ota-scan-onset-major.md`).
+pub fn rs_short_of_block(e: &ModemError) -> Option<usize> {
+    let ModemError::Fec(m) = e else {
+        return None;
+    };
+    let rest = m.strip_prefix(SHORT_OF_BLOCK_PREFIX)?;
+    let (n, tail) = rest.split_once(' ')?;
+    if !tail.starts_with("is shorter than one ") {
+        return None;
+    }
+    n.parse().ok()
+}
+
 /// Byte width of the big-endian original-length prefix.
 const PREFIX_LEN: usize = 4;
 
@@ -334,10 +361,7 @@ impl FecCodec {
     pub fn decode_prefix(&self, data: &[u8]) -> Result<Vec<u8>, ModemError> {
         let blocks = data.len() / BLOCK_TOTAL;
         if blocks == 0 {
-            return Err(ModemError::Fec(format!(
-                "FEC data length {} is shorter than one {BLOCK_TOTAL}-byte block",
-                data.len()
-            )));
+            return Err(rs_short_of_block_error(data.len()));
         }
         let mut last: Option<ModemError> = None;
         for k in 1..=blocks {
@@ -1039,6 +1063,14 @@ mod hard_bit_tests {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn rs_short_of_block_reads_the_error_decode_prefix_produces() {
+        let err = FecCodec::new().decode_prefix(&[0u8; 46]).unwrap_err();
+        assert_eq!(rs_short_of_block(&err), Some(46));
+        let other = ModemError::Fec("RS correction failed at block 0: TooManyErrors".into());
+        assert_eq!(rs_short_of_block(&other), None);
+    }
+
     /// `ALL` must list every variant exactly once, in `all_index` order.
     ///
     /// Two ways this fails, which is the point: a NEW variant makes `all_index`'s match

@@ -2,7 +2,7 @@
 project: openpulsehf
 doc: scripts/onair-sdr/README.md
 status: living
-last_updated: 2026-10-15
+last_updated: 2026-10-17
 ---
 
 # On-air SDR spectral-measurement toolset
@@ -17,13 +17,15 @@ spectrum analyser.
 
 There are **two hosts**:
 
-- **SDR host** — the machine with the RSP2. Runs `sdr_capture.py`,
+- **SDR host** — the machine with the SDR. For the Release 1 2 m campaign that is **rpi51 with an
+  RSPdx**, beside the IC-9700 (decision 27); earlier work used an RSP2 on the dev host. Runs `sdr_capture.py`,
   `cap_during_tx.sh`, `analyze_ab.py`, `digital_oob.py`.
 - **Station** — the machine with the radio (e.g. a Pi with an FT-991A). Runs
   `keyplay.py` / `keyplay_meter.py` (copy them there). Direct Yaesu CAT is used,
   so **no rigctld is required** on the station.
 
-**FT-991A only.** The station scripts speak the FT-991A's ASCII CAT (`TX1;`, `PC020;`) on
+**FT-991A only, and not used for Release 1.** The 2 m pair keys through the on-air runners; the
+FT-991A is a possible later option (decision 27). The station scripts speak the FT-991A's ASCII CAT (`TX1;`, `PC020;`) on
 `OPHF_PORT` (default `/dev/ttyUSB0`, 38400 baud). They do not drive the FT-818, which uses Yaesu's
 binary CAT. The first thing they send is `ID;`, and unless the rig answers `ID0670;` they stop
 without sending another byte. `ID0670;` is the FT-991A's reply per Yaesu's CAT reference and has

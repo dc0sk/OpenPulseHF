@@ -1,0 +1,6 @@
+# Task 21 Part C, run a2g — A sends, robust, 900 s, TRAFFIC_INTERVAL=8, stepped RF gain on station B's receiver
+- rpi51 commit `d70e6c6f` (build `23278b6`; hashes as in task 21 Part A, identical on both stations).
+- Traffic started 08:11:03.38 UTC (t0 = the runner's "Driving OTA traffic" line); window end 08:26:03. First SL6 decode 08:15:54.94 (t0+291 s).
+- B's RF gain (through its rigctld; read back after every change), UTC: 0.984314 until 08:19:04.33 (t0+481 s); 0.5 (read 0.498039); 0.3 from 08:20:07.13 (read 0.301961); 0.2 from 08:21:38.57 (read 0.2); 0.1 from 08:23:11.98 (read 0.0980392); 0.984314 from 08:24:45.27 (read 0.984314). `drive-schedule.txt`.
+- RSPdx witness, port A, LO 144.620 MHz, 62.5 kS/s, RFGR 22 / IFGR 40, 960 s from 08:11:03.4: `~/onair-captures/2026-10-31/a2g.cf32` (480000000 bytes, not committed), sha256 `ebf34f82364eb11da8f72b00f1ae9038dfa9caf20b5e2fc0268eec768dbca24d`, `peak=0.0161 rms=0.0086 clip=0.00%`. Checked only for the 144.640 MHz band at a few instants (frames present at 08:14:00, 08:17:30, 08:23:30, 08:24:20, 08:25:40; absent between frames at 08:24:55, 08:25:10, 08:26:30).
+- Receive audio (8 kHz): rx-audio-2026-11-01/rx-{a,b}-a2g-8k.wav.gz, 1950 s each, started 08:10:15.27 (rpi51) / 08:10:15.62 (station B).

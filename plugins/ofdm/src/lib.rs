@@ -12,16 +12,20 @@
 //! (target 12 dB); the higher-order modes keep their natural PAPR (clipping
 //! distortion breaks dense constellations) and rely on TX leveling/backoff.
 
+pub mod acquire;
 pub mod channel;
 pub mod demodulate;
 pub mod modulate;
 pub mod params;
 pub mod scramble;
+pub mod shift;
 
 use openpulse_core::{
     error::ModemError,
     plugin::{FrameGeometry, ModulationConfig, ModulationPlugin, PluginInfo},
 };
+
+use std::borrow::Cow;
 
 use crate::demodulate::{ofdm_demodulate, ofdm_demodulate_soft};
 use crate::modulate::{ofdm_modulate, ofdm_modulate_iq};
@@ -57,6 +61,59 @@ impl OfdmPlugin {
 impl Default for OfdmPlugin {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+/// The centre every OFDM mode is built on (subcarrier 48 of the 256-point FFT at 8 kHz).
+const NOMINAL_CENTRE_HZ: f32 = 1500.0;
+
+/// The received samples translated back to [`NOMINAL_CENTRE_HZ`], with the frame's own carrier
+/// offset acquired around the receiver's `center_frequency` (`acquire::acquire`).
+///
+/// Before 2026-11-03 the receiver refused (hard path) or ignored (soft path) any centre but 1500 Hz,
+/// and nothing corrected the offset; an uncorrected offset leaks power between the 31.25 Hz
+/// subcarriers: SL14 failed at 2.5 Hz, SL7 at 10 Hz.
+fn at_nominal_centre<'a>(
+    samples: &'a [f32],
+    config: &ModulationConfig,
+) -> Result<Cow<'a, [f32]>, ModemError> {
+    let told = config.center_frequency - NOMINAL_CENTRE_HZ;
+    if !told.is_finite() {
+        return Err(ModemError::Configuration(format!(
+            "OFDM plugin: center_frequency {} is not a frequency",
+            config.center_frequency
+        )));
+    }
+    let Some(p) = params_for_mode(&config.mode) else {
+        return Err(ModemError::Configuration(format!(
+            "OFDM plugin: unknown mode '{}'",
+            config.mode
+        )));
+    };
+    match acquire::acquire(samples, &p, told) {
+        Some(acquire::Acquired { hz, coherence }) => {
+            tracing::debug!(
+                mode = %config.mode,
+                told_hz = told,
+                acquired_hz = hz,
+                pilot_coherence = coherence,
+                "OFDM: carrier offset acquired"
+            );
+            // Below a quarter hertz the leakage between subcarriers is under −45 dB; the full-burst
+            // mix (1.5 ms on 2.3 s of audio) would buy nothing.
+            if hz.abs() < 0.25 {
+                Ok(Cow::Borrowed(samples))
+            } else {
+                Ok(Cow::Owned(shift::shift_hz(
+                    samples,
+                    -hz,
+                    SAMPLE_RATE as f32,
+                )))
+            }
+        }
+        // No preamble with pilots at any candidate: nothing here to decode, so the burst is not
+        // mixed (a long burst of another mode would cost a full-length FFT pair for nothing).
+        None => Ok(Cow::Borrowed(samples)),
     }
 }
 
@@ -121,13 +178,7 @@ impl ModulationPlugin for OfdmPlugin {
                 config.sample_rate
             )));
         }
-        if (config.center_frequency - 1500.0).abs() > 1.0 {
-            return Err(ModemError::Configuration(format!(
-                "OFDM plugin: center_frequency {:.1} not supported; must be 1500.0 Hz",
-                config.center_frequency
-            )));
-        }
-        ofdm_demodulate(samples, &config.mode)
+        ofdm_demodulate(&at_nominal_centre(samples, config)?, &config.mode)
     }
 
     fn demodulate_soft(
@@ -141,7 +192,7 @@ impl ModulationPlugin for OfdmPlugin {
                 config.mode
             )));
         }
-        ofdm_demodulate_soft(samples, &config.mode)
+        ofdm_demodulate_soft(&at_nominal_centre(samples, config)?, &config.mode)
     }
 
     fn frame_geometry(&self, config: &ModulationConfig) -> Option<FrameGeometry> {
@@ -163,13 +214,8 @@ impl ModulationPlugin for OfdmPlugin {
         true
     }
 
-    fn estimate_afc_hz(&self, samples: &[f32], config: &ModulationConfig) -> Option<f32> {
-        let p = params_for_mode(&config.mode)?;
-        crate::channel::estimate_cfo_hz(samples, &p)
-    }
-
     fn estimate_snr_db(&self, samples: &[f32], config: &ModulationConfig) -> Option<f32> {
-        demodulate::estimate_snr_db(samples, &config.mode)
+        demodulate::estimate_snr_db(&at_nominal_centre(samples, config).ok()?, &config.mode)
     }
 
     fn occupied_bandwidth_hz(&self, mode: &str) -> Option<f32> {
@@ -562,30 +608,22 @@ mod tests {
         assert_eq!(rx.as_slice(), payload.as_ref());
     }
 
-    // AFC estimator: on-carrier signal returns near-zero estimate.
+    // The plugin acquires its own carrier offset and opts out of the engine's AFC (its settle read
+    // −11.5 Hz for a true +2.5 Hz on OFDM): an on-carrier frame acquires near zero, and the engine
+    // gets no estimate to apply.
     #[test]
-    fn afc_estimate_near_zero_ofdm16() {
+    fn acquisition_is_near_zero_on_carrier_and_the_engine_gets_no_estimate() {
         let plugin = OfdmPlugin::new();
-        let cfg = mod_config("OFDM16");
-        let payload: Vec<u8> = (0..32u8).collect();
-        let samples = plugin.modulate(&payload, &cfg).unwrap();
-        let est = plugin
-            .estimate_afc_hz(&samples, &cfg)
-            .expect("afc estimate");
-        assert!(est.abs() < 5.0, "expected near-zero AFC, got {est:.2} Hz");
-    }
-
-    // AFC estimator: on-carrier OFDM52 signal returns near-zero estimate.
-    #[test]
-    fn afc_estimate_near_zero_ofdm52() {
-        let plugin = OfdmPlugin::new();
-        let cfg = mod_config("OFDM52");
-        let payload: Vec<u8> = (0..64u8).collect();
-        let samples = plugin.modulate(&payload, &cfg).unwrap();
-        let est = plugin
-            .estimate_afc_hz(&samples, &cfg)
-            .expect("afc estimate");
-        assert!(est.abs() < 5.0, "expected near-zero AFC, got {est:.2} Hz");
+        for (mode, n) in [("OFDM16", 32u8), ("OFDM52", 64u8)] {
+            let cfg = mod_config(mode);
+            let payload: Vec<u8> = (0..n).collect();
+            let samples = plugin.modulate(&payload, &cfg).unwrap();
+            let est = crate::acquire::acquire(&samples, &params_for_mode(mode).unwrap(), 0.0)
+                .map(|a| a.hz)
+                .expect("acquisition on a clean frame");
+            assert!(est.abs() < 0.5, "{mode}: acquired {est:.2} Hz on carrier");
+            assert_eq!(plugin.estimate_afc_hz(&samples, &cfg), None, "{mode}");
+        }
     }
 
     // AFC estimator: synthetic signal with known inter-symbol pilot phase drift.

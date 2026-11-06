@@ -60,6 +60,71 @@ fn run_command(addr: &str, cmd: &ControlCommand) -> Result<(Vec<ControlEvent>, C
     }
 }
 
+/// Send `cmd` and return the first event `want` accepts, read before or after the response.
+///
+/// The daemon answers a command its server loop applies with `ok` at once and broadcasts the
+/// event when the loop gets to it, so the event follows the `ok` (and, during a keyed send,
+/// waits for the send to end). `None` when no such event arrives within the read timeout.
+fn run_command_for_event(
+    addr: &str,
+    cmd: &ControlCommand,
+    want: impl Fn(&ControlEvent) -> bool,
+) -> Result<(Option<ControlEvent>, CommandResponse)> {
+    let stream =
+        TcpStream::connect(addr).with_context(|| format!("connect to daemon at {addr}"))?;
+    stream
+        .set_read_timeout(Some(DEFAULT_TIMEOUT))
+        .context("set read timeout")?;
+    stream
+        .set_write_timeout(Some(DEFAULT_TIMEOUT))
+        .context("set write timeout")?;
+    let mut writer = stream.try_clone().context("clone tcp stream")?;
+    let mut reader = BufReader::new(stream);
+
+    let line = serde_json::to_string(cmd).context("serialize command")?;
+    writer.write_all(line.as_bytes())?;
+    writer.write_all(b"\n")?;
+    writer.flush()?;
+
+    let mut found: Option<ControlEvent> = None;
+    let mut resp: Option<CommandResponse> = None;
+    let mut buf = String::new();
+    loop {
+        buf.clear();
+        let n = match reader.read_line(&mut buf) {
+            Ok(n) => n,
+            // The read timeout after the response: the event did not come.
+            Err(_) if resp.is_some() => 0,
+            Err(e) => return Err(e).context("read daemon reply"),
+        };
+        if n == 0 {
+            return match resp {
+                Some(r) => Ok((found, r)),
+                None => Err(anyhow!("daemon closed connection before response")),
+            };
+        }
+        let trimmed = buf.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        if let Ok(r) = serde_json::from_str::<CommandResponse>(trimmed) {
+            if !r.ok || found.is_some() {
+                return Ok((found, r));
+            }
+            resp = Some(r);
+            continue;
+        }
+        if let Ok(ev) = serde_json::from_str::<ControlEvent>(trimmed) {
+            if found.is_none() && want(&ev) {
+                if let Some(r) = resp.take() {
+                    return Ok((Some(ev), r));
+                }
+                found = Some(ev);
+            }
+        }
+    }
+}
+
 pub fn run(addr: &str, cmd: DaemonCommands) -> Result<i32> {
     match cmd {
         DaemonCommands::ConnectPeer { callsign } => {
@@ -157,16 +222,11 @@ pub fn run(addr: &str, cmd: DaemonCommands) -> Result<i32> {
     }
 }
 
-/// Trigger an OtaStatus broadcast (via a no-op bounds command) and print the first
-/// `OtaStatus` event the daemon emits.
+/// Ask for an OtaStatus broadcast with the read-only `GetOtaStatus` and print the first one.
 fn ota_status(addr: &str) -> Result<i32> {
-    let (events, resp) = run_command(
-        addr,
-        &ControlCommand::OtaSetLevelBounds {
-            min_level: None,
-            max_level: None,
-        },
-    )?;
+    let (event, resp) = run_command_for_event(addr, &ControlCommand::GetOtaStatus, |e| {
+        matches!(e, ControlEvent::OtaStatus { .. })
+    })?;
     if !resp.ok {
         eprintln!(
             "error: {}",
@@ -174,29 +234,27 @@ fn ota_status(addr: &str) -> Result<i32> {
         );
         return Ok(1);
     }
-    for ev in events {
-        if let ControlEvent::OtaStatus {
-            active,
-            tx_mode,
-            tx_level,
-            tx_fec,
-            rx_recommended_level,
-            rx_confirmed_level,
-            is_locked,
-        } = ev
-        {
-            let out = serde_json::json!({
-                "active": active,
-                "tx_mode": tx_mode,
-                "tx_level": tx_level,
-                "tx_fec": tx_fec,
-                "rx_recommended_level": rx_recommended_level,
-                "rx_confirmed_level": rx_confirmed_level,
-                "is_locked": is_locked,
-            });
-            println!("{}", serde_json::to_string_pretty(&out)?);
-            return Ok(0);
-        }
+    if let Some(ControlEvent::OtaStatus {
+        active,
+        tx_mode,
+        tx_level,
+        tx_fec,
+        rx_recommended_level,
+        rx_confirmed_level,
+        is_locked,
+    }) = event
+    {
+        let out = serde_json::json!({
+            "active": active,
+            "tx_mode": tx_mode,
+            "tx_level": tx_level,
+            "tx_fec": tx_fec,
+            "rx_recommended_level": rx_recommended_level,
+            "rx_confirmed_level": rx_confirmed_level,
+            "is_locked": is_locked,
+        });
+        println!("{}", serde_json::to_string_pretty(&out)?);
+        return Ok(0);
     }
     eprintln!("error: daemon returned no OTA status");
     Ok(1)
@@ -255,7 +313,9 @@ fn list_stations(addr: &str) -> Result<i32> {
 }
 
 fn ptt_state(addr: &str) -> Result<i32> {
-    let (events, resp) = run_command(addr, &ControlCommand::GetPttState)?;
+    let (event, resp) = run_command_for_event(addr, &ControlCommand::GetPttState, |e| {
+        matches!(e, ControlEvent::PttChanged { .. })
+    })?;
     if !resp.ok {
         eprintln!(
             "error: {}",
@@ -263,12 +323,11 @@ fn ptt_state(addr: &str) -> Result<i32> {
         );
         return Ok(1);
     }
-    let mut active = false;
-    for ev in events {
-        if let ControlEvent::PttChanged { active: a } = ev {
-            active = a;
-        }
-    }
+    // No event is no answer: printing `false` here reported an unkeyed rig for every query.
+    let Some(ControlEvent::PttChanged { active }) = event else {
+        eprintln!("error: daemon returned no PTT state");
+        return Ok(1);
+    };
     println!("{}", serde_json::json!({ "active": active }));
     Ok(0)
 }
@@ -560,6 +619,42 @@ mod tests {
             r#"{"ok":true}"#.into(),
         ]);
         assert_eq!(ota_status(&addr).unwrap(), 0);
+    }
+
+    const OTA_STATUS_LINE: &str = r#"{"type":"ota_status","active":true,"tx_mode":"OFDM52","tx_level":"SL7","tx_fec":"ldpc","rx_recommended_level":"SL2","rx_confirmed_level":"SL2","is_locked":false}"#;
+
+    /// The real daemon's order: `ok` from the client task at once, the event from the server loop
+    /// after it. Reading only up to the `ok` printed no status on any on-air run (tasks 11–26).
+    #[test]
+    fn ota_status_reads_the_event_that_follows_the_ok() {
+        let (addr, handle) = mock_daemon(vec![r#"{"ok":true}"#.into(), OTA_STATUS_LINE.into()]);
+        assert_eq!(ota_status(&addr).unwrap(), 0);
+        let req: ControlCommand = serde_json::from_str(handle.join().unwrap().trim()).unwrap();
+        assert!(
+            matches!(req, ControlCommand::GetOtaStatus),
+            "a status query must not be a bounds command, which erases the climb record: {req:?}"
+        );
+    }
+
+    #[test]
+    fn ota_status_without_an_event_is_an_error() {
+        let (addr, _) = mock_daemon(vec![r#"{"ok":true}"#.into()]);
+        assert_eq!(ota_status(&addr).unwrap(), 1);
+    }
+
+    #[test]
+    fn ptt_state_reads_the_event_that_follows_the_ok() {
+        let (addr, _) = mock_daemon(vec![
+            r#"{"ok":true}"#.into(),
+            r#"{"type":"ptt_changed","active":true}"#.into(),
+        ]);
+        assert_eq!(ptt_state(&addr).unwrap(), 0);
+    }
+
+    #[test]
+    fn ptt_state_without_an_event_is_an_error() {
+        let (addr, _) = mock_daemon(vec![r#"{"ok":true}"#.into()]);
+        assert_eq!(ptt_state(&addr).unwrap(), 1);
     }
 
     #[test]

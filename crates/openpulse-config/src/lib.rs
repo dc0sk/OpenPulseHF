@@ -361,7 +361,8 @@ pub struct StationConfig {
     pub auto_id_interval_secs: u64,
     /// End-of-exchange (sign-off) ID: seconds of TX quiet after the station has transmitted before a
     /// final ID is sent (REQ-REG-10 "at the end of a communication"). `10` = ID ~10 s after the last
-    /// transmission of an exchange; `0` disables the sign-off ID (interval ID only). Only active when
+    /// transmission of an exchange, once the channel is quiet (never over another station; on a busy
+    /// channel the forced interval ID covers it); `0` disables the sign-off ID (interval ID only). Only active when
     /// `auto_id_interval_secs > 0`.
     pub auto_id_signoff_idle_secs: u64,
     /// Transmitter output power in watts, recorded in the §97 regulatory TX-metadata log. The modem
@@ -1049,7 +1050,8 @@ identity_key_path = ""
 auto_id_interval_secs = 600
 # End-of-exchange (sign-off) ID: seconds of transmit quiet before a final ID is sent after you
 # have transmitted (regulatory "identify at the end of a communication"). 10 = ID ~10 s after the
-# last transmission of an exchange; 0 disables the sign-off ID (interval ID only).
+# last transmission of an exchange, once the channel is quiet (never over another station);
+# 0 disables the sign-off ID (interval ID only).
 auto_id_signoff_idle_secs = 10
 # Transmitter output power in watts, recorded in the regulatory TX-metadata log (the modem cannot
 # measure PA output — this is your declared value). 0 = unspecified.

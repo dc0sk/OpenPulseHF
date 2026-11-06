@@ -113,7 +113,8 @@ fn run(rx: &mut ModemEngine, budget: &mut NackBudget, input: &[f32]) -> Vec<Coun
         let Ok(Some(burst)) = rx.accumulate_capture(Some(STATION_MODE), chunk.to_vec()) else {
             continue;
         };
-        let Ok((_, keyed)) = decode_ota_burst(rx, budget, true, &burst, "peer", STATION_MODE)
+        let Ok((_, keyed)) =
+            decode_ota_burst(rx, budget, true, &burst, "peer", STATION_MODE, false)
         else {
             continue;
         };

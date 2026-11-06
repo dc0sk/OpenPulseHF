@@ -151,12 +151,19 @@ pub fn zf_equalize(p: &OfdmParams, freq: &[Complex32], h_est: &[Complex32]) -> V
 ///
 /// Returns `None` when there are fewer than two complete symbols or no pilots.
 pub fn estimate_cfo_hz(samples: &[f32], p: &OfdmParams) -> Option<f32> {
-    use std::f32::consts::PI;
-
     // Skip the (pilotless) timing-acquisition preamble; CFO is measured across
     // consecutive DATA symbols only.  Fall back to sample 0 when no preamble is
     // detected so callers passing bare symbol streams still get an estimate.
     let data_start = crate::demodulate::find_first_data_body(samples, p).unwrap_or(CP);
+    pilot_drift(samples, data_start, p).map(|(hz, _)| hz)
+}
+
+/// The pilot-drift CFO estimate from the data symbols at `data_start`, and how coherent the pilots
+/// are across symbols: `|Σ a*·b| / Σ |a|·|b|`, 1 when every pilot turns by the same angle each
+/// symbol. A wrong integer offset puts data, not pilots, in the pilot bins, and the coherence falls.
+pub fn pilot_drift(samples: &[f32], data_start: usize, p: &OfdmParams) -> Option<(f32, f32)> {
+    use std::f32::consts::PI;
+
     let usable = samples.len().saturating_sub(data_start) + CP;
     let n_syms = usable / SYM_LEN;
     if n_syms < 2 {
@@ -193,20 +200,22 @@ pub fn estimate_cfo_hz(samples: &[f32], p: &OfdmParams) -> Option<f32> {
     // individual phase angles, which suffer wrap-around and over-weight
     // low-magnitude bins).
     let mut acc = Complex32::new(0.0, 0.0);
+    let mut mag = 0.0f32;
     for i in 0..(spectra.len() - 1) {
         for &k in &pilots {
             if k < FFT_SIZE {
-                acc += spectra[i][k].conj() * spectra[i + 1][k];
+                let z = spectra[i][k].conj() * spectra[i + 1][k];
+                acc += z;
+                mag += z.norm();
             }
         }
     }
-    if acc.norm_sqr() < 1e-12 {
+    if acc.norm_sqr() < 1e-12 || mag <= 0.0 {
         return None;
     }
 
-    let mean_phase = acc.arg();
     let t_sym = SYM_LEN as f32 / SAMPLE_RATE as f32;
-    Some(mean_phase / (2.0 * PI * t_sym))
+    Some((acc.arg() / (2.0 * PI * t_sym), acc.norm() / mag))
 }
 
 #[cfg(test)]

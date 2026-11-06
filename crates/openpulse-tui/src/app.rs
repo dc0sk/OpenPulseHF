@@ -104,6 +104,8 @@ impl App {
                     }
                 }
             }
+            // The sender's own level, which this trace does not show (it follows the receiver's).
+            EngineEvent::OtaFallBack { .. } => {}
             EngineEvent::DcdChange { busy, energy } => {
                 self.dcd_busy = busy;
                 self.dcd_energy = energy;

@@ -204,6 +204,9 @@ pub(crate) fn apply_event(line: &str, shared: &Arc<Mutex<PanelState>>) {
                     st.afc_hz = *offset_hz;
                     format!("AFC {offset_hz:+.1} Hz")
                 }
+                EngineEvent::OtaFallBack { from, to } => {
+                    format!("OTA no answer at {}: back to {}", from.name(), to.name())
+                }
                 // Shown as the log line an operator reads to attribute a rate decision — the
                 // branch name is the payload, not the level (#1081). A hold is rendered too, so a
                 // failed decode that moves nothing is still visible.

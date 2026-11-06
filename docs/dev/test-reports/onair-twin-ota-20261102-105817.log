@@ -1,0 +1,36 @@
+# on-air twin-OTA  freq=144640000 dials A=144640000 B=144641564 profile=robust traffic FT-991A→IC-9700 dur=300s
+10:58:18  ISS FT-991A: <no status>  |  IRS IC-9700: <no status>
+10:58:23  ISS FT-991A: <no status>  |  IRS IC-9700: <no status>
+10:58:29  ISS FT-991A: <no status>  |  IRS IC-9700: <no status>
+10:58:34  ISS FT-991A: <no status>  |  IRS IC-9700: <no status>
+10:58:40  ISS FT-991A: <no status>  |  IRS IC-9700: <no status>
+10:58:45  ISS FT-991A: <no status>  |  IRS IC-9700: <no status>
+10:58:51  ISS FT-991A: <no status>  |  IRS IC-9700: <no status>
+10:58:56  ISS FT-991A: <no status>  |  IRS IC-9700: <no status>
+10:59:02  ISS FT-991A: <no status>  |  IRS IC-9700: <no status>
+10:59:07  ISS FT-991A: <no status>  |  IRS IC-9700: <no status>
+10:59:13  ISS FT-991A: <no status>  |  IRS IC-9700: <no status>
+10:59:19  ISS FT-991A: <no status>  |  IRS IC-9700: <no status>
+10:59:24  ISS FT-991A: <no status>  |  IRS IC-9700: <no status>
+10:59:30  ISS FT-991A: <no status>  |  IRS IC-9700: <no status>
+10:59:35  ISS FT-991A: <no status>  |  IRS IC-9700: <no status>
+10:59:41  ISS FT-991A: <no status>  |  IRS IC-9700: <no status>
+10:59:46  ISS FT-991A: <no status>  |  IRS IC-9700: <no status>
+10:59:52  ISS FT-991A: <no status>  |  IRS IC-9700: <no status>
+11:00:07  ISS FT-991A: <no status>  |  IRS IC-9700: <no status>
+11:00:23  ISS FT-991A: <no status>  |  IRS IC-9700: <no status>
+11:00:39  ISS FT-991A: <no status>  |  IRS IC-9700: <no status>
+11:00:54  ISS FT-991A: <no status>  |  IRS IC-9700: <no status>
+11:01:10  ISS FT-991A: <no status>  |  IRS IC-9700: <no status>
+11:01:25  ISS FT-991A: <no status>  |  IRS IC-9700: <no status>
+11:01:41  ISS FT-991A: <no status>  |  IRS IC-9700: <no status>
+11:01:57  ISS FT-991A: <no status>  |  IRS IC-9700: <no status>
+11:02:12  ISS FT-991A: <no status>  |  IRS IC-9700: <no status>
+11:02:28  ISS FT-991A: <no status>  |  IRS IC-9700: <no status>
+11:02:43  ISS FT-991A: <no status>  |  IRS IC-9700: <no status>
+11:02:59  ISS FT-991A: <no status>  |  IRS IC-9700: <no status>
+11:03:15  ISS FT-991A: <no status>  |  IRS IC-9700: <no status>
+traffic window complete.
+  [IC-9700] evidence: 1786 audit events, rig read-back, config, daemon log
+  [FT-991A] evidence: 1536 audit events, rig read-back, config, daemon log
+evidence: docs/dev/test-reports/onair-twin-ota-20261102-105817-evidence

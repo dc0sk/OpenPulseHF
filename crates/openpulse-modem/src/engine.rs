@@ -343,6 +343,26 @@ const PHASE2_STEP_MULTIPLIER: usize = 4;
 /// 4 keeps margin for real on-air frames and residual carrier offset, which it could not cover.
 const FALLBACK_RANKED_ONSETS: usize = 4;
 
+/// Preamble-correlation peaks a ladder candidate tries before the onset walk
+/// (`docs/dev/design/ladder-scan-ranked-onsets.md`). The same K as the uncoded fallback's, whose
+/// rank measurement (`fallback_onset_rank_measurement`) found the true onset at rank 0 on its fixtures.
+const LADDER_RANKED_ONSETS: usize = 4;
+
+/// How many onsets the OTA arm's uncoded-fallback RESCUE scans try per burst: the deferred exhaustive
+/// scan, and separately phase 2's fallback entry. They are taken nearest the burst's trigger point
+/// first (`docs/dev/design/ota-scan-onset-major.md`, fallback bound). Unbounded, the exhaustive scan
+/// tried every symbol out to a reach that grows with the read that triggered the flush. Measured on
+/// air, 2026-11-01 (task 14): a 21 s burst held station B's receive loop for the rest of a 5-minute
+/// run, 6822 uncoded attempts, and A's frames went unheard. The K correlation-ranked onsets before
+/// them are unchanged.
+const OTA_FALLBACK_RESCUE_ONSETS: usize = 64;
+
+/// Where the bounded rescue centres, in samples BEFORE the trigger point: a frame's head precedes the
+/// trigger by up to the pre-trigger ring (`S_LOOKBACK · WINDOW` = 2048 samples), so centring half of
+/// that earlier lets 64 onsets at BPSK250's 32-sample step cover the whole ring (review, 2026-11-01).
+/// At BPSK31's 256-sample step they span ±8192 either way.
+const OTA_FALLBACK_RESCUE_LEAD_BIAS: usize = 1024;
+
 /// Maximum AFC correction magnitude accepted after settling.
 ///
 /// The Goertzel acquisition range is ±400 Hz (`range_hz = 800` in `estimate_carrier_hz_wide`), so
@@ -760,6 +780,18 @@ pub struct ModemEngine {
     /// daemon before the decode, taken at the decode's entry so no return path leaves it stale.
     /// Unset is `Keyed`, today's behaviour.
     next_failure_verdict: NackVerdict,
+    /// The latest moment the next OTA burst's decode may finish and still be ACKed inside the sender's
+    /// window (`set_ota_ack_deadline`); taken by that decode.
+    next_ota_ack_deadline: Option<Instant>,
+    /// The deadline of the OTA decode running now: `decode_attempt` stops trying past it.
+    decode_deadline: Option<Instant>,
+    /// A non-ladder decode is running (the uncoded fallback and the frames after it): it answers no
+    /// ACK, so the ACK deadline does not bound it.
+    non_ladder_decode: bool,
+    /// Whether the last OTA decode finished past its ACK deadline (no ACK, the ladder held).
+    last_ota_decode_late: bool,
+    /// Decode attempts skipped because the ACK deadline had passed.
+    decode_attempts_past_deadline: u64,
     /// Samples fed through `accumulate_capture`: this station's listening time. It stops while the
     /// daemon transmits, because the daemon drops the capture stream then.
     listening_samples: u64,
@@ -932,6 +964,11 @@ pub struct ModemEngine {
     /// Every FEC/plain decode attempt `decode_attempt` made: the work an OTA burst cost, counted so a
     /// test can bound it instead of timing it.
     decode_attempts: u64,
+    /// Bursts dropped because this station keyed (`abandon_burst`).
+    bursts_abandoned: u64,
+    /// Frames held for one output stream inside [`transmit_burst`](Self::transmit_burst): the
+    /// processed audio, and each frame's mode and sequence.
+    tx_burst: Option<TxBurst>,
     /// Settles rejected because the preamble correlation did not corroborate them (#1049).
     ///
     /// A tripwire as much as a counter: it stays 0 when the mode publishes no template, so a test
@@ -1036,6 +1073,58 @@ const DCD_SQUELCH_MARGIN: f32 = 1.25;
 /// the +8 dB figure is the maximum at an open threshold of 5.0, an upper bound for 4.5).
 const S_RING_WINDOWS: usize = 16;
 
+/// Onsets around where the burst's energy first rises to its frame's level, nearest first: the first
+/// `step`-sample window whose RMS reaches [`ENERGY_RISE_FRACTION`] of the burst's 80th-percentile window
+/// RMS and holds it for the next window, then one and two steps either side, within `[0, scan_end]`.
+///
+/// A burst can open on noise or flicker before the frame (task 19, run a2d: 0.7 s before an SL3 frame,
+/// which the walk from onset 0 reached at its 66th onset). Empty when the burst has no such rise.
+fn energy_rise_onsets(samples: &[f32], step: usize, scan_end: usize) -> Vec<usize> {
+    let step = step.max(1);
+    let rms: Vec<f32> = samples
+        .chunks(step)
+        .map(|c| (c.iter().map(|x| x * x).sum::<f32>() / c.len() as f32).sqrt())
+        .collect();
+    if rms.len() < 3 {
+        return Vec::new();
+    }
+    let mut sorted = rms.clone();
+    sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    let level = ENERGY_RISE_FRACTION * sorted[sorted.len() * 4 / 5];
+    let Some(w) = (0..rms.len() - 1).find(|&w| rms[w] >= level && rms[w + 1] >= level) else {
+        return Vec::new();
+    };
+    let at = w * step;
+    let mut out = Vec::new();
+    for d in [0isize, -1, 1, -2, 2] {
+        let s = at as isize + d * step as isize;
+        if s >= 0 && (s as usize) <= scan_end && !out.contains(&(s as usize)) {
+            out.push(s as usize);
+        }
+    }
+    out
+}
+
+/// The fraction of a burst's 80th-percentile window RMS that marks its frame's arrival
+/// (`energy_rise_onsets`). Fitted to one burst (a2d's first SL3 frame): the opener's windows peak at
+/// 0.43 of the P80, the frame's at 0.68–0.75; 0.4–0.9 all find the frame's edge there, 0.3 the opener.
+/// A frame within ~6 dB of its opener (near a rung's cliff) is not separated: a miss costs only the
+/// ranked attempts, and the walk follows.
+const ENERGY_RISE_FRACTION: f32 = 0.5;
+
+/// The scan grid `0, step, …, scan_end` (the last point clamped, as the onset walks clamp it), nearest
+/// `center` first — ties to the earlier onset — and at most `cap` of them.
+fn onsets_nearest(step: usize, scan_end: usize, center: usize, cap: usize) -> Vec<usize> {
+    let step = step.max(1);
+    let mut grid: Vec<usize> = (0..=scan_end / step).map(|k| k * step).collect();
+    if grid.last() != Some(&scan_end) {
+        grid.push(scan_end);
+    }
+    grid.sort_by_key(|&p| (p.abs_diff(center), p));
+    grid.truncate(cap);
+    grid
+}
+
 /// Whether the OTA arm's uncoded fallback is itself one of the rung candidates — the same mode,
 /// uncoded — in which case a ladder frame and a control frame at that mode are the same decode.
 /// One predicate for both places the arm asks, so the phase-1 fallback and the phase-2 settle pass
@@ -1097,6 +1186,15 @@ const SPECTRUM_TAP_MAX: usize = 16384;
 /// dropped. Three matches the HARQ diversity depth measured in `harq_fade_diversity`.
 const OTA_HARQ_MAX_ATTEMPTS: usize = 3;
 
+/// Frames held for one output stream by [`ModemEngine::transmit_burst`].
+#[derive(Debug, Default)]
+struct TxBurst {
+    /// The processed audio of every held frame, back to back.
+    samples: Vec<f32>,
+    /// Each held frame's mode and sequence number, for the §97 log once the burst is written.
+    frames: Vec<(String, u16)>,
+}
+
 /// Post-lead samples a failed burst needs before it counts against the ladder (#1456): 0.5 s, about
 /// 3× the longest idle flicker measured behind a 250 Hz filter (1200 samples) and an eighth of the
 /// shortest counted piece of a failing frame (4.2 s at QPSK250-D). Falsified by a recorded idle
@@ -1150,6 +1248,11 @@ impl ModemEngine {
             relay_mode: None,
             last_flush_capped: false,
             next_failure_verdict: NackVerdict::Keyed,
+            next_ota_ack_deadline: None,
+            decode_deadline: None,
+            non_ladder_decode: false,
+            last_ota_decode_late: false,
+            decode_attempts_past_deadline: 0,
             listening_samples: 0,
             shortest_frame_cache: Vec::new(),
             last_flush_lead: 0,
@@ -1185,6 +1288,8 @@ impl ModemEngine {
             settle_condemnations: 0,
             afc_settle_attempts: 0,
             decode_attempts: 0,
+            bursts_abandoned: 0,
+            tx_burst: None,
             condemned_positions: Vec::new(),
             accepted_settle_positions: Vec::new(),
             sweep_attempt_inputs: Vec::new(),
@@ -1510,9 +1615,19 @@ impl ModemEngine {
     /// (a QSY case the notch can't fix).
     fn apply_rx_notch(&mut self, mode: Option<&str>, samples: Vec<f32>) -> Vec<f32> {
         let center = self.center_frequency + self.afc_correction_hz;
-        let bw = mode
-            .and_then(|m| self.plugins.get(m).and_then(|p| p.occupied_bandwidth_hz(m)))
-            .unwrap_or(self.notch_fallback_bw_hz);
+        let bw_of = |m: &str| self.plugins.get(m).and_then(|p| p.occupied_bandwidth_hz(m));
+        let mut bw = mode.and_then(bw_of).unwrap_or(self.notch_fallback_bw_hz);
+        // In an OTA session the frame may be any rung the receiver will try, not the caller's mode:
+        // the daemon passes its base mode (BPSK250, 500 Hz), and the notch cut the OFDM rungs' edge
+        // subcarriers at 500 and 2500 Hz, reading SL8 5.9 dB for 20.5 (on air in f1b, 5.0 dB median;
+        // `docs/dev/design/notch-protects-the-ladder.md`). So protect the widest candidate.
+        if let Some(ota) = self.ota.as_ref() {
+            for (_, m, _) in ota.rx_candidates() {
+                if let Some(b) = bw_of(m) {
+                    bw = bw.max(b);
+                }
+            }
+        }
         let half = bw / 2.0;
         let (lo, hi) = ((center - half).max(0.0), center + half);
         self.notch_protect_extremes = Some(match self.notch_protect_extremes {
@@ -1807,6 +1922,49 @@ impl ModemEngine {
     /// Returns `true` if the DCD detector currently sees a busy channel.
     pub fn is_channel_busy(&self) -> bool {
         self.dcd.is_busy()
+    }
+
+    /// Whether the burst accumulator is gathering a burst (the carrier has not dropped yet).
+    pub fn burst_open(&self) -> bool {
+        self.rx_capturing && !self.rx_burst.is_empty()
+    }
+
+    /// Drop a burst being gathered, because the station is about to key or has just keyed: audio
+    /// captured before its own transmission must not be joined to audio captured after it and
+    /// flushed as one frame piece (on-air task 17: a piece cut by the station's own ID failed and
+    /// the station keyed a NACK over the other station's frame). Returns the samples dropped.
+    pub fn abandon_burst(&mut self) -> usize {
+        if !self.rx_capturing {
+            return 0;
+        }
+        let dropped = self.rx_burst.len();
+        self.rx_capturing = false;
+        self.rx_burst.clear();
+        self.rx_ring.clear();
+        // The held audio is a transmission, not band: the floor must not learn from it.
+        if self.noise_floor.is_held() {
+            self.noise_floor.discard();
+        }
+        // The per-burst state every flush resets, without recording a flush (nothing was delivered).
+        self.rx_burst_lead = 0;
+        self.rx_burst_first_block = 0;
+        self.rx_burst_tp_run = 0;
+        self.rx_burst_tp_cur = 0;
+        self.rx_burst_s_span = 0;
+        self.s_armed = false;
+        self.s_permitted_latch = None;
+        if dropped > 0 {
+            self.bursts_abandoned = self.bursts_abandoned.wrapping_add(1);
+            debug!(dropped, "burst abandoned: this station keyed");
+        }
+        dropped
+    }
+
+    /// Bursts dropped by [`abandon_burst`](Self::abandon_burst) since the engine started: a tripwire
+    /// that the daemon's keying paths really call it.
+    #[cfg(feature = "instruments")]
+    pub fn bursts_abandoned(&self) -> u64 {
+        self.bursts_abandoned
     }
 
     /// Returns the most recent DCD RMS energy estimate.
@@ -2123,8 +2281,45 @@ impl ModemEngine {
     /// The absolute target means a lost ACK never desyncs — the next ACK re-states it.
     pub fn apply_ota_ack(&mut self, frame: &AckFrame) {
         if let (Some(o), Some(level)) = (self.ota.as_mut(), frame.recommended_level) {
-            o.adopt_recommendation(level);
+            let from = o.tx_level();
+            o.adopt_recommendation_from(level, frame.ack_type == AckType::Nack);
+            // On-air task 25 (f2e): the fall-back declined with no climb recorded, and no log line
+            // showed which received ACK had answered the climb.
+            info!(
+                ack = ?frame.ack_type,
+                recommended = ?level,
+                from = ?from,
+                to = ?o.tx_level(),
+                no_fall_back = o.fall_back_declined_because().unwrap_or("-"),
+                "OTA ACK received"
+            );
         }
+    }
+
+    /// Sender side: the peer was silent after a climb it never confirmed; return to the level before
+    /// it, once (`OtaRateController::fall_back_after_silence`). Returns whether it fell back.
+    pub fn ota_fall_back_after_silence(&mut self) -> bool {
+        let Some(o) = self.ota.as_mut() else {
+            return false;
+        };
+        let from = o.tx_level();
+        let declined = o.fall_back_declined_because();
+        let fell = o.fall_back_after_silence();
+        if let Some(why) = declined {
+            info!(level = ?from, why, "OTA: the peer is silent; no fall-back");
+        }
+        if fell {
+            let to = o.tx_level();
+            info!(
+                from = ?from,
+                to = ?to,
+                "OTA: no answer after a climb; back to the level before it"
+            );
+            // Its own event: a sender-side level change the receiver did not lead, which A2's scoring
+            // must tell apart from a receiver's step-down (review S4).
+            let _ = self.event_tx.send(EngineEvent::OtaFallBack { from, to });
+        }
+        fell
     }
 
     /// Sender side (ISS): one-call OTA data frame — transmit at the current OTA
@@ -2527,6 +2722,40 @@ impl ModemEngine {
         self.next_failure_verdict = verdict;
     }
 
+    /// The latest moment the next OTA burst's decode may finish and still have its ACK heard inside
+    /// the sender's window, or `None` for no limit. The next [`ota_decode_burst`](Self::ota_decode_burst)
+    /// takes it: its decode attempts stop at the deadline, and a decode that finishes past it answers
+    /// no ACK and leaves the ladder alone (on-air task 18, run a2a: an ACK keyed 10.1 s after the frame,
+    /// past the sender's 9 s window, landed on the sender's retransmission and cut its head; the
+    /// receiver had also moved its recommendation, which the sender never heard).
+    pub fn set_ota_ack_deadline(&mut self, deadline: Option<Instant>) {
+        self.next_ota_ack_deadline = deadline;
+    }
+
+    /// Whether a ladder decode running now is past its ACK deadline (non-ladder decodes have none).
+    fn past_decode_deadline(&self) -> bool {
+        !self.non_ladder_decode && self.decode_deadline.is_some_and(|d| Instant::now() >= d)
+    }
+
+    /// Whether the last OTA decode finished past its ACK deadline.
+    #[cfg(feature = "instruments")]
+    pub fn last_ota_decode_late(&self) -> bool {
+        self.last_ota_decode_late
+    }
+
+    /// Decode attempts skipped because an OTA decode's ACK deadline had passed.
+    #[cfg(feature = "instruments")]
+    pub fn decode_attempts_past_deadline(&self) -> u64 {
+        self.decode_attempts_past_deadline
+    }
+
+    /// Airtime of one FSK4 OTA ACK, in milliseconds: what the sender must hear inside its window.
+    pub fn fsk4_ack_airtime_ms(&self) -> u64 {
+        self.fsk4_ack_frame_len()
+            .map(|n| n as u64 * 1000 / AudioConfig::default().sample_rate as u64)
+            .unwrap_or(0)
+    }
+
     /// Samples fed through [`accumulate_capture`](Self::accumulate_capture) since the engine was built:
     /// this station's listening time, which the daemon's NACK budget leaks against (#1456).
     pub fn listening_samples(&self) -> u64 {
@@ -2734,7 +2963,10 @@ impl ModemEngine {
                 // gathered, so a genuine step UP in band level reads as carrier until this flush.
                 // Nothing earlier can end it — the engine does not know which FEC its consumers
                 // decode, and over every FEC the longest frame is the cap itself (#1455).
-                self.noise_floor.commit();
+                // From its quietest windows only: under a receiver AGC the frames' windows carry the
+                // hiss tens of dB down, and learning them kept the squelch below the gaps for good
+                // (task 21, run a2g; `dcd_agc_pumped_hiss`).
+                self.noise_floor.commit_band();
                 self.last_flush_capped = true;
                 return Ok(Some(AudioSamples {
                     samples: std::mem::take(&mut self.rx_burst),
@@ -2793,6 +3025,16 @@ impl ModemEngine {
                 self.rx_ring.clear();
             }
             self.push_ring(&samples.samples);
+            // Why and where a burst ended, so an on-air log can show a frame cut by a carrier dip
+            // (task 15: station B flushed 56.5 s of a 66.6 s frame and NACKed over the rest).
+            debug!(
+                post,
+                burst = self.rx_burst.len(),
+                read = samples.samples.len(),
+                energy = self.dcd.energy(),
+                squelch = self.dcd.threshold(),
+                "burst flushed: carrier dropped"
+            );
             // Carrier dropped after a burst → the frame is complete; flush it.
             self.last_flush_capped = false;
             self.record_flush_flags();
@@ -3153,6 +3395,61 @@ impl ModemEngine {
         self.ranked_fallback_onsets(mode, samples, onset_bound, k)
     }
 
+    /// The OTA arm's deferred uncoded rescue: at most [`OTA_FALLBACK_RESCUE_ONSETS`] onsets, nearest
+    /// a point [`OTA_FALLBACK_RESCUE_LEAD_BIAS`] before the burst's trigger point (`trigger`, the
+    /// flushed burst's lead) first, within the same span
+    /// `decode_burst_phase1` would scan. Same rollback discipline as `scan_burst_onsets`.
+    fn decode_fallback_near_trigger(
+        &mut self,
+        mode: &str,
+        burst: &AudioSamples,
+        onset_bound: usize,
+        trigger: usize,
+    ) -> Result<(Vec<u8>, usize), ModemError> {
+        let sr = AudioConfig::default().sample_rate;
+        let (_, _, min_frame_samples, max_frame_samples) = self.frame_scan_geometry(mode, sr);
+        let n = burst.samples.len();
+        if n < min_frame_samples {
+            return self.decode_burst_phase1(mode, burst, onset_bound);
+        }
+        let (step, scan_end, _) = self.burst_onset_scan_bounds(mode, n, onset_bound);
+        let was_prerouted = self.input_prerouted;
+        self.input_prerouted = true;
+        let was_quiet = self.suppress_afc_events;
+        self.suppress_afc_events = true;
+        let afc_before = self.afc_correction_hz;
+        let mut last_err = ModemError::Demodulation("no onset attempted".into());
+        let mut found = None;
+        let centre = trigger.saturating_sub(OTA_FALLBACK_RESCUE_LEAD_BIAS);
+        for start in onsets_nearest(step, scan_end, centre, OTA_FALLBACK_RESCUE_ONSETS) {
+            let end = (start + max_frame_samples).min(n);
+            if start >= end {
+                continue;
+            }
+            let slice = burst.samples[start..end].to_vec();
+            match self.decode_attempt(
+                mode,
+                AudioSamples {
+                    samples: slice.clone(),
+                },
+                FecMode::None,
+            ) {
+                Ok(payload) => {
+                    self.update_afc_estimate(mode, &slice);
+                    found = Some((payload, start));
+                    break;
+                }
+                Err(e) => {
+                    self.afc_correction_hz = afc_before;
+                    last_err = e;
+                }
+            }
+        }
+        self.input_prerouted = was_prerouted;
+        self.suppress_afc_events = was_quiet;
+        found.ok_or(last_err)
+    }
+
     /// Uncoded decode attempts at the ranked `onsets`, EARLIEST FIRST. Returns the payload, the
     /// onset and its correlation rank (its index in `onsets`).
     ///
@@ -3311,6 +3608,20 @@ impl ModemEngine {
         step: usize,
         scan_end: usize,
     ) -> Option<f32> {
+        self.acquire_burst_correction_span(mode, samples, step, 0, scan_end)
+    }
+
+    /// [`Self::acquire_burst_correction`] over `[first, last]` only. The OTA arm's fallback entry
+    /// settles across the onsets it will scan, not the whole read-sized span (task 15: a 14.6 s burst
+    /// cost ~4700 settle passes, 19 s on x86, on the span `onset_bound` had grown to).
+    fn acquire_burst_correction_span(
+        &mut self,
+        mode: &str,
+        samples: &[f32],
+        step: usize,
+        first: usize,
+        scan_end: usize,
+    ) -> Option<f32> {
         let sr = AudioConfig::default().sample_rate;
         let (_, acq_samples, min_frame_samples, _) = self.frame_scan_geometry(mode, sr);
         let afc_window = acq_samples.max(min_frame_samples);
@@ -3319,7 +3630,7 @@ impl ModemEngine {
         let reach = if self.phase2_veto_reach { coarse } else { 0 };
         let entry = self.afc_correction_hz;
         let mut corrections: Vec<f32> = Vec::new();
-        let mut start = 0usize;
+        let mut start = first.min(scan_end);
         loop {
             if self.acquire_at_onset(mode, samples, start, afc_window, veto.as_ref(), reach) {
                 corrections.push(self.afc_correction_hz);
@@ -3521,7 +3832,19 @@ impl ModemEngine {
         // `afc_correction_hz` on failure.
         let was_quiet = self.suppress_afc_events;
         self.suppress_afc_events = true;
+        self.decode_deadline = self.next_ota_ack_deadline.take();
+        self.non_ladder_decode = false;
+        self.last_ota_decode_late = false;
+        if let Some(d) = self.decode_deadline {
+            debug!(
+                target: "openpulse_modem::ota_deadline",
+                ms_left = d.saturating_duration_since(Instant::now()).as_millis() as u64,
+                "OTA decode: ACK deadline set"
+            );
+        }
         let result = self.ota_decode_and_ack_inner(samples, session_id, fallback_mode);
+        self.decode_deadline = None;
+        self.non_ladder_decode = false;
         self.input_prerouted = was_prerouted;
         self.suppress_afc_events = was_quiet;
         if let Ok((Some((_, mode)), _, _)) = &result {
@@ -3601,7 +3924,19 @@ impl ModemEngine {
         // Offset 0 only, exactly as before #1138. The onset SCAN is deliberately NOT here — it
         // runs after the uncoded fallback below, so its cost lands only on bursts nothing else
         // could decode. See the scan block for why that ordering is the additive one.
-        for (level, mode, fec) in &candidates {
+        // Candidates whose WHOLE burst, decoded from offset 0, holds less than one RS block. Every
+        // later onset decodes a suffix of the same burst, so no onset can hold more: the onset scan
+        // and phase 2 skip them. Measured on the 2026-11-01 recordings: a 5.1 s fragment cost 1088
+        // coded attempts (79 s on x86, minutes on a Pi 4, deaf meanwhile) at SL2/SL3, whose frames
+        // are 66.6 s and 33.8 s long (`docs/dev/design/ota-scan-onset-major.md`, short bursts).
+        let mut short_of_block = vec![false; candidates.len()];
+        // Candidates whose demodulator searched EVERY onset of the whole burst from offset 0, at
+        // `afc_before`, and found no lock (MFSK16). Each later onset's window is a subset of that
+        // search (except the clamped last onset, off the step grid; addendum 4, residual), so the scan's pass at `afc_before` is skipped for them; a corrected pass, at another
+        // centre frequency, still runs. Measured on task 15's run b5 (live-loop replay): a 25.9 s piece
+        // of an SL2 frame cost ~205 failing MFSK16 attempts, 53.5 s on x86 (addendum 4).
+        let mut searched_whole_burst = vec![false; candidates.len()];
+        for (ci, (level, mode, fec)) in candidates.iter().enumerate() {
             self.afc_correction_hz = afc_before;
             let slice = AudioSamples {
                 samples: samples.samples.clone(),
@@ -3614,7 +3949,15 @@ impl ModemEngine {
                     decoded = Some((payload, *level, mode.clone()));
                     break;
                 }
-                Err(e) => last_err = Some(e),
+                Err(e) => {
+                    // Two bytes of margin: the demodulator's timing search may land a symbol
+                    // differently at another onset.
+                    short_of_block[ci] = openpulse_core::fec::rs_short_of_block(&e)
+                        .is_some_and(|have| have + 2 < RS_BLOCK_BYTES);
+                    searched_whole_burst[ci] =
+                        openpulse_core::plugin::is_window_acquisition_failure(&e);
+                    last_err = Some(e);
+                }
             }
         }
 
@@ -3669,6 +4012,8 @@ impl ModemEngine {
                 // Same isolation every candidate gets: a failed attempt's AFC drift must not
                 // poison this one.
                 self.afc_correction_hz = afc_before;
+                // Non-ladder traffic answers no ACK: the ACK deadline does not bound it.
+                self.non_ladder_decode = true;
                 let found = match self.ranked_fallback_onsets(
                     mode,
                     &samples.samples,
@@ -3700,6 +4045,7 @@ impl ModemEngine {
                 if let Some((payload, onset)) = found {
                     return Ok(self.fallback_decoded(mode, samples, payload, onset, last_err));
                 }
+                self.non_ladder_decode = false;
                 self.afc_correction_hz = afc_before;
             }
         }
@@ -3731,8 +4077,29 @@ impl ModemEngine {
         if decoded.is_none() {
             let n = samples.samples.len();
             let sr = AudioConfig::default().sample_rate;
-            'scan: for (level, mode, fec) in &candidates {
+            // ONSET-MAJOR (docs/dev/design/ota-scan-onset-major.md). The attempts are the same set as
+            // before — every candidate, every pass, every onset — but they run in onset order: at each
+            // onset every candidate and pass, then the next onset. The scan used to run each candidate
+            // and pass to the end of the span first. Measured on the 2026-10-31 on-air recordings
+            // (`docs/dev/test-reports/on-air/rx-audio-2026-11-01/`): a trigger settle that landed
+            // 15.6 Hz off (one sideband of the preamble) sent the corrected pass through all 129 onsets
+            // before the uncorrected pass decoded at onset 2560 on its tenth attempt — 8.1 s of an
+            // 8.1 s decode on x86, past a Pi's 9 s ACK window. A burst no attempt decodes costs exactly
+            // what it cost; one that decodes stops at the first onset where any attempt does, so a
+            // wrong correction or a wrong candidate costs one attempt per onset instead of a span.
+            // Ascending onset order is kept, so a burst holding several frames still yields its first
+            // (`the_first_of_two_frames_in_one_keying_is_not_lost`).
+            //
+            // Per candidate: the slice size, and its passes as (correction, first onset).
+            let mut plans: Vec<(usize, Vec<(f32, usize)>)> = Vec::with_capacity(candidates.len());
+            // (onset, candidate index, pass index), sorted below into the order they run in.
+            let mut attempts: Vec<(usize, usize, usize)> = Vec::new();
+            for (ci, (_, mode, fec)) in candidates.iter().enumerate() {
                 let (step, scan_end, raw_max) = self.burst_onset_scan_bounds(mode, n, onset_bound);
+                if short_of_block[ci] {
+                    plans.push((0, Vec::new()));
+                    continue;
+                }
                 // OFF FREQUENCY: scan at the carrier the trigger point settles on, first (REQ-PHY-03).
                 //
                 // Phase 2 acquires the carrier, but only after this scan has failed at every onset
@@ -3757,11 +4124,12 @@ impl ModemEngine {
                         0,
                     )
                     .then_some(self.afc_correction_hz);
+                self.afc_correction_hz = afc_before;
                 // Offset 0 was tried at `afc_before` by attempt 0; at a new correction it is not.
                 let passes: Vec<(f32, usize)> = corrected
                     .map(|c| (c, 0))
                     .into_iter()
-                    .chain(std::iter::once((afc_before, step)))
+                    .chain((!searched_whole_burst[ci]).then_some((afc_before, step)))
                     .collect();
                 // SIZE THE SLICE FOR THE CODED FRAME (#1384). `burst_onset_scan_bounds` returns the
                 // plugin's RAW geometry. MEASURED on BPSK250: raw is 74 624 samples, while a coded
@@ -3770,45 +4138,107 @@ impl ModemEngine {
                 // because the attempt before this scan decodes the whole burst, which is why the
                 // defect could sit unseen.
                 let (max_frame_samples, _) = frame_plan(raw_max, *fec);
-                for (afc, first) in passes {
-                    if scan_end == 0 && first > 0 {
-                        continue; // nothing to search: attempt 0 already covered this candidate
-                    }
-                    let mut start = first;
-                    loop {
-                        self.afc_correction_hz = afc;
-                        let end = (start + max_frame_samples).min(n);
-                        if start >= end {
-                            break;
-                        }
-                        let slice = samples.samples[start..end].to_vec();
-                        match self.decode_attempt(
-                            mode,
-                            AudioSamples {
-                                samples: slice.clone(),
-                            },
-                            *fec,
-                        ) {
-                            Ok(payload) => {
-                                // E1 skips the estimate on every attempt; the WINNING slice still needs
-                                // one so the wrapper's single `AfcUpdate` carries a real correction.
-                                self.update_afc_estimate(mode, &slice);
-                                // The window that DECODED is the only defensible place to measure the
-                                // SNR (#1142) — measuring over the whole gathered burst hands the
-                                // estimator's timing search a lead-in it cannot see past.
-                                decoded_span = Some((start, end));
-                                decoded = Some((payload, *level, mode.clone()));
-                                break 'scan;
-                            }
-                            Err(e) => {
-                                last_err = Some(e);
-                                if start >= scan_end {
-                                    break;
-                                }
-                                start = (start + step).min(scan_end);
-                            }
+                let mut start = 0usize;
+                loop {
+                    for (pi, &(_, first)) in passes.iter().enumerate() {
+                        // `scan_end == 0`: nothing to search, attempt 0 already covered this candidate.
+                        if start >= first && !(scan_end == 0 && first > 0) {
+                            attempts.push((start, ci, pi));
                         }
                     }
+                    if start >= scan_end {
+                        break;
+                    }
+                    start = (start + step).min(scan_end);
+                }
+                // The pass-major walk started a pass at `first` before clamping to `scan_end`, so when
+                // `0 < scan_end < first` it made one attempt at `first` itself. Kept, so the set is
+                // exactly the one it replaces (review, 2026-11-01).
+                for (pi, &(_, first)) in passes.iter().enumerate() {
+                    if scan_end > 0 && first > scan_end {
+                        attempts.push((first, ci, pi));
+                    }
+                }
+                plans.push((max_frame_samples, passes));
+            }
+            // Onset first; at one onset the candidates in their profile order, and within a candidate
+            // the corrected pass before the uncorrected one, as the passes ran before.
+            attempts.sort_unstable();
+            // RANKED FIRST (`docs/dev/design/ladder-scan-ranked-onsets.md`). A candidate with a
+            // preamble template tries its best preamble-correlation peaks before the walk, which goes
+            // on in the same order without them. On air (task 19, run a2d) an SL3 burst opened 0.7 s
+            // before the frame, and the walk from onset 0 in 128-sample steps reached it at its 66th
+            // onset: 68 attempts, 2.4–2.9 s on x86, about 11 s on a Pi 4 — past the ACK deadline, so the
+            // frame was never answered and the ladder held at SL3 for 6.5 minutes.
+            let mut ranked: Vec<(usize, usize, usize)> = Vec::new();
+            for (ci, (_, mode, _)) in candidates.iter().enumerate() {
+                let (_, passes) = &plans[ci];
+                if passes.is_empty() {
+                    continue;
+                }
+                self.afc_correction_hz = afc_before;
+                // The preamble's correlation peaks where the mode publishes a template (BPSK250
+                // only), then where the burst's energy rises to the frame's level, for every mode.
+                let (step, _, _) = self.burst_onset_scan_bounds(mode, n, onset_bound);
+                let mut onsets = self
+                    .ranked_fallback_onsets(
+                        mode,
+                        &samples.samples,
+                        onset_bound,
+                        LADDER_RANKED_ONSETS,
+                    )
+                    .unwrap_or_default();
+                // Time order, not ρ order: the earliest frame first if a keying ever holds two (#1461).
+                onsets.sort_unstable();
+                // Past `scan_end` too: the walk's reach ends near the trigger, and a frame behind a
+                // lead that opened the burst lies beyond it. SL5 and SL6 behind 0.25–0.7 s of noise,
+                // read in 800-sample ticks, decoded nothing until this reached the burst's end
+                // (2026-11-03, `ladder_frame_behind_a_lead`).
+                for start in energy_rise_onsets(&samples.samples, step, n.saturating_sub(1)) {
+                    if !onsets.contains(&start) {
+                        onsets.push(start);
+                    }
+                }
+                for start in onsets {
+                    for (pi, &(_, first)) in passes.iter().enumerate() {
+                        // Offset 0 at `afc_before` was attempt 0; not repeated.
+                        if start >= first && !ranked.contains(&(start, ci, pi)) {
+                            ranked.push((start, ci, pi));
+                        }
+                    }
+                }
+            }
+            self.afc_correction_hz = afc_before;
+            attempts.retain(|a| !ranked.contains(a));
+            let attempts: Vec<(usize, usize, usize)> = ranked.into_iter().chain(attempts).collect();
+            for (start, ci, pi) in attempts {
+                let (level, mode, fec) = &candidates[ci];
+                let (max_frame_samples, passes) = &plans[ci];
+                self.afc_correction_hz = passes[pi].0;
+                let end = (start + *max_frame_samples).min(n);
+                if start >= end {
+                    continue;
+                }
+                let slice = samples.samples[start..end].to_vec();
+                match self.decode_attempt(
+                    mode,
+                    AudioSamples {
+                        samples: slice.clone(),
+                    },
+                    *fec,
+                ) {
+                    Ok(payload) => {
+                        // E1 skips the estimate on every attempt; the WINNING slice still needs
+                        // one so the wrapper's single `AfcUpdate` carries a real correction.
+                        self.update_afc_estimate(mode, &slice);
+                        // The window that DECODED is the only defensible place to measure the
+                        // SNR (#1142) — measuring over the whole gathered burst hands the
+                        // estimator's timing search a lead-in it cannot see past.
+                        decoded_span = Some((start, end));
+                        decoded = Some((payload, *level, mode.clone()));
+                        break;
+                    }
+                    Err(e) => last_err = Some(e),
                 }
             }
             self.afc_correction_hz = if decoded.is_some() {
@@ -3824,7 +4254,10 @@ impl ModemEngine {
         if decoded.is_none() {
             if let Some(mode) = fallback_deferred {
                 self.afc_correction_hz = afc_before;
-                if let Ok((payload, onset)) = self.decode_burst_phase1(mode, samples, onset_bound) {
+                self.non_ladder_decode = true;
+                if let Ok((payload, onset)) =
+                    self.decode_fallback_near_trigger(mode, samples, onset_bound, lead)
+                {
                     self.fallback_onset_ranks[FALLBACK_RANKED_ONSETS] += 1;
                     warn!(
                         "ota fallback: a {mode} frame at onset {onset} ranked below the top \
@@ -3833,6 +4266,7 @@ impl ModemEngine {
                     );
                     return Ok(self.fallback_decoded(mode, samples, payload, onset, last_err));
                 }
+                self.non_ladder_decode = false;
                 self.afc_correction_hz = afc_before;
             }
         }
@@ -3870,6 +4304,12 @@ impl ModemEngine {
                     phase2.len() - 1
                 });
             'settle_scan: for (i, (level, mode, fec)) in phase2.iter().enumerate() {
+                self.non_ladder_decode = fallback_at == Some(i);
+                // The fallback entry, if any, sits past `candidates` and is never short-flagged.
+                // A ladder entry past the ACK deadline skips its acquisition too.
+                if short_of_block.get(i).copied().unwrap_or(false) || self.past_decode_deadline() {
+                    continue;
+                }
                 let (step, scan_end, raw_max) = self.burst_onset_scan_bounds(mode, n, onset_bound);
                 // Coded sizing here too (#1384) — phase 2 starts its scan at onset 0, but walks past
                 // it, so every later slice has the same raw-truncation exposure as phase 1's.
@@ -3879,13 +4319,32 @@ impl ModemEngine {
                 // workspace gate caught as a 98-minute non-terminating test; see
                 // `acquire_burst_correction` for why a count cap could not fix it.
                 self.afc_correction_hz = afc_before;
-                let Some(correction) =
-                    self.acquire_burst_correction(mode, &samples.samples, step, scan_end)
-                else {
+                // The fallback entry scans at most OTA_FALLBACK_RESCUE_ONSETS onsets nearest the
+                // trigger (see the constant), and acquires across those onsets only; the ladder
+                // candidates keep their full ascending walk and full-span acquisition.
+                let (onsets, acquire_from, acquire_to) = if fallback_at == Some(i) {
+                    let near = onsets_nearest(
+                        step,
+                        scan_end,
+                        lead.min(n).saturating_sub(OTA_FALLBACK_RESCUE_LEAD_BIAS),
+                        OTA_FALLBACK_RESCUE_ONSETS,
+                    );
+                    let lo = near.iter().copied().min().unwrap_or(0);
+                    let hi = near.iter().copied().max().unwrap_or(0);
+                    (near, lo, hi)
+                } else {
+                    (onsets_nearest(step, scan_end, 0, usize::MAX), 0, scan_end)
+                };
+                let Some(correction) = self.acquire_burst_correction_span(
+                    mode,
+                    &samples.samples,
+                    step,
+                    acquire_from,
+                    acquire_to,
+                ) else {
                     continue;
                 };
-                let mut start = 0usize;
-                loop {
+                for start in onsets {
                     self.afc_correction_hz = correction;
                     let end = (start + max_frame_samples).min(n);
                     if start < end {
@@ -3922,12 +4381,9 @@ impl ModemEngine {
                             Err(e) => last_err = Some(e),
                         }
                     }
-                    if start >= scan_end {
-                        break;
-                    }
-                    start = (start + step).min(scan_end);
                 }
             }
+            self.non_ladder_decode = false;
             // Commit only on success — the rollback discipline every other arm follows (#1143).
             self.afc_correction_hz = if decoded.is_some() {
                 self.afc_correction_hz
@@ -3956,7 +4412,7 @@ impl ModemEngine {
                 self.ota_retained_session = Some(session_id.to_string());
             }
             for (level, mode, fec) in &candidates {
-                if decoded.is_some() {
+                if decoded.is_some() || self.past_decode_deadline() {
                     break;
                 }
                 let soft = self
@@ -4139,7 +4595,9 @@ impl ModemEngine {
             tracing::debug!("OTA: cap-flushed burst did not decode; not ladder evidence (#1255)");
             return Ok((None, None, last_err));
         }
-        self.last_flush_capped = false;
+        // Consumed here, so a later hand-built burst cannot read a stale `true`; the decoded case
+        // needs it below, for the capped slab's ACK deadline.
+        let capped_slab = std::mem::take(&mut self.last_flush_capped);
 
         // #1452: nor is a failed burst shorter than every candidate's RECOGNITION WINDOW (its
         // acquisition window plus one symbol) — no candidate frame's sync and first symbol fit in it.
@@ -4222,6 +4680,53 @@ impl ModemEngine {
             }
         }
 
+        // PAST THE ACK DEADLINE: no ACK can be heard any more, and one keyed now lands on the sender's
+        // retransmission. Nor does the ladder move: a decision the sender never hears desynchronises
+        // the two stations (task 18, run a2a). A decoded payload is still delivered; the sender
+        // retransmits it, and the next copy is answered as usual.
+        if self.decode_deadline.is_some_and(|d| Instant::now() >= d) {
+            self.last_ota_decode_late = true;
+            info!(
+                decoded = decoded.is_some(),
+                skipped = self.decode_attempts_past_deadline,
+                "OTA: the decode finished past the sender's ACK window; no ACK keyed, the ladder holds"
+            );
+            return Ok((decoded.map(|(p, _, m)| (p, m)), None, last_err));
+        }
+        // A CAPPED slab (#1255) ends where the length cap fell, not where its frame did: the deadline
+        // above was set from the slab's end, and a frame decoded early in it ended up to the cap's
+        // length before that. The ACK carries no sequence number, so one keyed for it can land in the
+        // sender's window for a later frame and mark that one delivered (review 2026-11-04, of the
+        // a2g cap flushes). Shift the deadline back by the slab's tail after the frame. The frame's
+        // end is its slice start plus the decoded payload's own coded airtime (`tx_airtime_seconds`
+        // runs the real codecs), not the slice reserve, which is 2-2.5x longer and left late ACKs
+        // through by 5 s at SL6 and 83 s at SL2 (review of 8177910). Offset 0 and HARQ record the
+        // whole slab as the span, so their start is 0: strict, the safe direction.
+        if capped_slab {
+            let fs = f64::from(AudioConfig::default().sample_rate);
+            let frame_end = decoded.as_ref().zip(decoded_span).and_then(
+                |((payload, level, mode), (start, _))| {
+                    let (_, _, fec) = candidates
+                        .iter()
+                        .find(|(l, m, _)| l == level && m == mode)?;
+                    let secs = self.tx_airtime_seconds(payload, mode, *fec).ok()?;
+                    Some(start + (secs * fs) as usize)
+                },
+            );
+            if let (Some(end), Some(deadline)) = (frame_end, self.decode_deadline) {
+                let tail =
+                    Duration::from_secs_f64(samples.samples.len().saturating_sub(end) as f64 / fs);
+                if Instant::now() + tail >= deadline {
+                    self.last_ota_decode_late = true;
+                    info!(
+                        tail_ms = tail.as_millis() as u64,
+                        "OTA: a capped slab's frame ended past the sender's ACK window; no ACK keyed, \
+                         the ladder holds"
+                    );
+                    return Ok((decoded.map(|(p, _, m)| (p, m)), None, last_err));
+                }
+            }
+        }
         let ota = self
             .ota
             .as_mut()
@@ -5578,6 +6083,14 @@ impl ModemEngine {
         samples: AudioSamples,
         fec: FecMode,
     ) -> Result<Vec<u8>, ModemError> {
+        // Past the ACK deadline a decode can no longer be answered, and the sender retransmits: the
+        // attempt would only keep the receive loop deaf (task 18: one failing burst, 3 min on a Pi 4).
+        if self.past_decode_deadline() {
+            self.decode_attempts_past_deadline = self.decode_attempts_past_deadline.wrapping_add(1);
+            return Err(ModemError::Demodulation(
+                "past the ACK deadline: not attempted".into(),
+            ));
+        }
         self.decode_attempts = self.decode_attempts.wrapping_add(1);
         match fec {
             FecMode::None => self.receive_from_samples(mode, samples),
@@ -8137,12 +8650,6 @@ impl ModemEngine {
     ) -> Result<(), ModemError> {
         let _stage = PipelineStage::OutputEmit;
 
-        let audio_cfg = AudioConfig::default();
-        let mut stream = self
-            .audio
-            .open_output(device.or(self.default_device.as_deref()), &audio_cfg)
-            .map_err(|e| ModemError::Audio(e.to_string()))?;
-
         let atten_linear = 10.0f32.powf(self.tx_attenuation_db / 20.0);
         let mut write_samples: Vec<f32> = if (atten_linear - 1.0).abs() < 1e-6 {
             samples.samples.clone()
@@ -8161,6 +8668,20 @@ impl ModemEngine {
         }
 
         self.record_audio(&write_samples); // TX window for the spectrum/waterfall tap
+        if let Some(burst) = self.tx_burst.as_mut() {
+            // Held for `end_tx_burst`, which writes the burst as one stream and records each frame
+            // under the sequence it was sent with.
+            burst.samples.extend_from_slice(&write_samples);
+            burst
+                .frames
+                .push((mode.to_string(), self.sequence.wrapping_sub(1)));
+            return Ok(());
+        }
+        let audio_cfg = AudioConfig::default();
+        let mut stream = self
+            .audio
+            .open_output(device.or(self.default_device.as_deref()), &audio_cfg)
+            .map_err(|e| ModemError::Audio(e.to_string()))?;
         stream
             .write(&write_samples)
             .map_err(|e| ModemError::Audio(e.to_string()))?;
@@ -8175,13 +8696,81 @@ impl ModemEngine {
         Ok(())
     }
 
+    /// Run `frames`, which transmits one or more frames, and send them as ONE output stream, back to
+    /// back. Two transmits otherwise open two streams, and the audio gap between them (0.12 s on air)
+    /// drops an SSB carrier inside one PTT hold: the other station takes it as the frame's end and
+    /// keys its ACK over the rest (on-air task 20: the sender's station ID after its data frame cost
+    /// that frame's ACK 5 times in 6). Every frame `frames` emitted goes out, also when it returns an
+    /// error after the first; its result is returned once the burst is written.
+    pub fn transmit_burst<T>(
+        &mut self,
+        device: Option<&str>,
+        frames: impl FnOnce(&mut Self) -> Result<T, ModemError>,
+    ) -> Result<T, ModemError> {
+        if self.tx_burst.is_some() {
+            // A nested burst would discard the outer one's audio and its §97 records.
+            return Err(ModemError::Configuration(
+                "transmit_burst: a burst is already open".to_string(),
+            ));
+        }
+        self.tx_burst = Some(TxBurst::default());
+        let result = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| frames(self))) {
+            Ok(r) => r,
+            Err(panic) => {
+                // Left open, the burst would hold every later frame forever, unsent and unlogged.
+                self.tx_burst = None;
+                std::panic::resume_unwind(panic);
+            }
+        };
+        let written = self.end_tx_burst(device);
+        let value = result?;
+        written?;
+        Ok(value)
+    }
+
+    /// Write the frames held since `transmit_burst` began as one stream, then record each in the §97
+    /// log and the transmit count, as [`stage_emit_output`] does for one. Nothing held writes
+    /// nothing. Always ends the burst, also on an error.
+    fn end_tx_burst(&mut self, device: Option<&str>) -> Result<(), ModemError> {
+        let Some(TxBurst {
+            samples: held,
+            frames,
+        }) = self.tx_burst.take()
+        else {
+            return Ok(());
+        };
+        if frames.is_empty() {
+            return Ok(());
+        }
+        let audio_cfg = AudioConfig::default();
+        let mut stream = self
+            .audio
+            .open_output(device.or(self.default_device.as_deref()), &audio_cfg)
+            .map_err(|e| ModemError::Audio(e.to_string()))?;
+        stream
+            .write(&held)
+            .map_err(|e| ModemError::Audio(e.to_string()))?;
+        // Intent, not completion, as in `stage_emit_output` (#1334).
+        let flushed = stream.flush();
+        for (mode, seq) in &frames {
+            self.record_tx_frame_seq(mode, *seq)?;
+        }
+        flushed.map_err(|e| ModemError::Audio(e.to_string()))?;
+        Ok(())
+    }
+
     /// Record one emitted frame in the §97 regulatory TX-metadata log and bump `frames_transmitted`
     /// (which arms the auto-ID timer). Called at **every** emit seam — the audio path
     /// (`stage_emit_output`) and the IQ path (`transmit_iq`) — so no on-air TX escapes the log or the
     /// station-ID accounting.
     fn record_tx_frame(&mut self, mode: &str) -> Result<(), ModemError> {
+        self.record_tx_frame_seq(mode, self.sequence.wrapping_sub(1))
+    }
+
+    /// [`record_tx_frame`](Self::record_tx_frame) for a frame sent under `tx_seq`: a held burst
+    /// records its frames after later ones have taken sequence numbers.
+    fn record_tx_frame_seq(&mut self, mode: &str, tx_seq: u16) -> Result<(), ModemError> {
         self.update_tx_session_callsign();
-        let tx_seq = self.sequence.wrapping_sub(1);
         let metadata = TxMetadata::new(&self.callsign, mode, self.max_power_watts, tx_seq);
         self.tx_session_log
             .log_frame(metadata.clone())
@@ -8906,10 +9495,7 @@ fn decode_ldpc_llrs_prefix(codec: &LdpcCodec, llrs: &[f32]) -> Result<Vec<u8>, M
 fn rs_interleaved_decode_prefix(depth: usize, data: &[u8]) -> Result<Vec<u8>, ModemError> {
     let blocks = data.len() / RS_BLOCK_BYTES;
     if blocks == 0 {
-        return Err(ModemError::Fec(format!(
-            "FEC data length {} is shorter than one {RS_BLOCK_BYTES}-byte block",
-            data.len()
-        )));
+        return Err(openpulse_core::fec::rs_short_of_block_error(data.len()));
     }
     let il = Interleaver::new(depth);
     let mut last: Option<ModemError> = None;
@@ -9050,6 +9636,53 @@ mod ack_scan_tests {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn energy_rise_onsets_edges() {
+        let burst = |quiet: usize, loud: usize| {
+            let mut v = vec![0.01f32; quiet];
+            v.extend(std::iter::repeat_n(1.0f32, loud));
+            v
+        };
+        // The rise at window 3 of step 10: there, then one and two steps either side.
+        assert_eq!(
+            super::energy_rise_onsets(&burst(30, 100), 10, 120),
+            vec![30, 20, 40, 10, 50]
+        );
+        // A rise at window 0 keeps only the onsets inside the burst.
+        assert_eq!(
+            super::energy_rise_onsets(&burst(0, 100), 10, 90),
+            vec![0, 10, 20]
+        );
+        // A rise past the scan's end leaves only the earlier onsets that fall inside it.
+        assert_eq!(
+            super::energy_rise_onsets(&burst(80, 100), 10, 70),
+            vec![70, 60]
+        );
+        // Too short to rank, and a flat burst rises at its first window.
+        assert!(super::energy_rise_onsets(&[1.0; 15], 10, 10).is_empty());
+        assert_eq!(super::energy_rise_onsets(&[0.0; 100], 10, 90)[0], 0);
+    }
+
+    #[test]
+    fn onsets_nearest_orders_the_scan_grid_by_distance_and_caps_it() {
+        // The grid is 0, 32, …, 320 plus the clamped end 330; nearest 100 first, ties to the earlier.
+        assert_eq!(
+            super::onsets_nearest(32, 330, 100, 4),
+            vec![96, 128, 64, 160]
+        );
+        // Uncapped from 0 it is the ascending walk the scans use, end included once.
+        let walk = super::onsets_nearest(32, 330, 0, usize::MAX);
+        assert_eq!(walk.first(), Some(&0));
+        assert_eq!(walk.last(), Some(&330));
+        assert_eq!(walk.len(), 12);
+        assert!(walk.windows(2).all(|w| w[0] < w[1]));
+        // A span on the grid is not doubled at its end.
+        assert_eq!(
+            super::onsets_nearest(32, 64, 0, usize::MAX),
+            vec![0, 32, 64]
+        );
+    }
     use super::*;
     use bpsk_plugin::BpskPlugin;
     use openpulse_audio::LoopbackBackend;

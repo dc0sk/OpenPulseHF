@@ -441,6 +441,11 @@ pub enum ControlCommand {
     OtaLockLevel { level: String },
     /// Release the OTA level lock and resume adapting.
     OtaUnlock,
+    /// Ask the daemon to broadcast the current [`ControlEvent::OtaStatus`]; changes nothing.
+    ///
+    /// The status query the CLI used before was `OtaSetLevelBounds {None, None}`, which erased the
+    /// sender's climb record and configured bounds on every poll (on-air tasks 24–26).
+    GetOtaStatus,
     /// Tune the rate-adaptation hysteresis (anti-oscillation) gates at runtime.
     /// `min_backlog` (bytes) gates AckUp upgrades on queued TX backlog; `0`
     /// disables. `upgrade_hold_frames` suppresses re-upgrades after a downgrade;
@@ -672,6 +677,7 @@ mod ota_protocol_tests {
                 level: "SL6".into(),
             },
             ControlCommand::OtaUnlock,
+            ControlCommand::GetOtaStatus,
             ControlCommand::OtaSetHysteresis {
                 min_backlog: Some(128),
                 upgrade_hold_frames: Some(3),

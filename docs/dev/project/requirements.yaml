@@ -205,19 +205,23 @@ capabilities:
     traceability: baseline
   CAP-17:
     code:
+    - plugins/ofdm/src/acquire.rs
     - plugins/ofdm/src/channel.rs
     - plugins/ofdm/src/demodulate.rs
     - plugins/ofdm/src/lib.rs
     - plugins/ofdm/src/modulate.rs
     - plugins/ofdm/src/params.rs
     - plugins/ofdm/src/scramble.rs
+    - plugins/ofdm/src/shift.rs
     name: OFDM multicarrier plugin
     satisfies:
     - REQ-FUN-06
     - REQ-FUN-07
     - REQ-PERF-04
     tests:
+    - crates/openpulse-modem/tests/ofdm_carrier_offset_ota.rs
     - crates/openpulse-modem/tests/ofdm_simulation.rs
+    - plugins/ofdm/tests/carrier_offset_applied.rs
     traceability: baseline
   CAP-18:
     code:

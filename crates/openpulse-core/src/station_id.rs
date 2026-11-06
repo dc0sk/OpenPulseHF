@@ -8,6 +8,17 @@ pub fn callsign_is_valid(callsign: &str) -> bool {
     !trimmed.is_empty() && !trimmed.eq_ignore_ascii_case("N0CALL")
 }
 
+/// How long before the interval ID is due the station starts waiting for a quiet channel
+/// ([`due_reason`](StationIdTimer::due_reason)). Longer than the longest `hpx_hf` frame (SL2, 66.6 s),
+/// so one frame of the other station's fits in it; the ID is still forced at the interval itself.
+pub(crate) const ID_QUIET_WINDOW_MS: u64 = 90_000;
+
+/// How long the channel must have been quiet before a station ID that is not forced goes out. Longer
+/// than the turnaround after an ACK (about 1 s on air), when the channel is quiet only because the
+/// sender has not started its next frame yet: on air (task 18, run a2b) an ID keyed 0.1 s after the
+/// station's own ACK covered the start of the other station's next frame, which was lost.
+pub const ID_MIN_QUIET_MS: u64 = 3_000;
+
 /// Decides when a station must next transmit its identification.
 ///
 /// Regulatory rules (e.g. FCC §97.119(a)) require a station to identify **at least
@@ -18,8 +29,9 @@ pub fn callsign_is_valid(callsign: &str) -> bool {
 /// - **Interval ID** ([`id_due`](Self::id_due)): enabled, armed by TX since the last
 ///   ID, and `interval_ms` elapsed since the last ID.
 /// - **End-of-exchange (sign-off) ID** ([`signoff_due`](Self::signoff_due)): enabled
-///   with a non-zero sign-off idle, armed by TX since the last ID, and the channel has
-///   been quiet (no TX) for `signoff_idle_ms` — i.e. the exchange has wound down.
+///   with a non-zero sign-off idle, armed by TX since the last ID, and no TX of our own for
+///   `signoff_idle_ms`. [`due_reason`](Self::due_reason) also waits for a quiet channel, so it is
+///   not keyed over another station; a busy channel leaves it to the forced interval ID.
 ///
 /// Both share one `mark_identified` reset, so after any ID neither fires again until
 /// the station transmits anew. Pure state machine over an injected `now_ms` clock so
@@ -32,6 +44,8 @@ pub struct StationIdTimer {
     last_id_ms: u64,
     last_tx_ms: u64,
     tx_since_id: bool,
+    /// Since when the channel has been quiet, as last reported to [`due_reason`](Self::due_reason).
+    quiet_since_ms: Option<u64>,
 }
 
 impl StationIdTimer {
@@ -45,6 +59,7 @@ impl StationIdTimer {
             last_id_ms: now_ms,
             last_tx_ms: now_ms,
             tx_since_id: false,
+            quiet_since_ms: None,
         }
     }
 
@@ -66,10 +81,57 @@ impl StationIdTimer {
     /// No-op when disabled. The station's own ID frame must NOT be reported here (else an
     /// otherwise-idle station would re-ID forever); see the daemon wiring.
     pub fn note_tx(&mut self, now_ms: u64) {
+        // Our own transmission is not quiet, and the callers do not poll while it lasts: without this
+        // a quiet stretch before it would count on the first poll after it (review, 2026-11-02).
+        self.quiet_since_ms = None;
         if self.is_enabled() {
             self.tx_since_id = true;
             self.last_tx_ms = now_ms;
         }
+    }
+
+    /// Which ID to transmit now, given whether the channel is quiet at `now_ms` (no burst being
+    /// gathered, carrier detect idle), or `None`. Called every poll: it also tracks for how long the
+    /// channel has been quiet.
+    ///
+    /// - **interval:** from [`ID_QUIET_WINDOW_MS`] before the interval, once the channel has been quiet
+    ///   for [`ID_MIN_QUIET_MS`]; at the interval itself, regardless, so a busy channel cannot push it
+    ///   past §97.119's limit.
+    /// - **sign-off:** only after [`ID_MIN_QUIET_MS`] of quiet. It used to fire 10 s after the station's
+    ///   own last transmission, which on air was the middle of the other station's next frame (task 17).
+    pub fn due_reason(&mut self, now_ms: u64, channel_quiet: bool) -> Option<&'static str> {
+        self.quiet_since_ms = if channel_quiet {
+            Some(self.quiet_since_ms.unwrap_or(now_ms))
+        } else {
+            None
+        };
+        if !self.is_enabled() || !self.tx_since_id {
+            return None;
+        }
+        let settled = self
+            .quiet_since_ms
+            .is_some_and(|t| now_ms.saturating_sub(t) >= ID_MIN_QUIET_MS);
+        let since_id = now_ms.saturating_sub(self.last_id_ms);
+        // At most half the interval, so a short configured interval does not ID after every frame.
+        let window = ID_QUIET_WINDOW_MS.min(self.interval_ms / 2);
+        if since_id >= self.interval_ms || (settled && since_id >= self.interval_ms - window) {
+            return Some("interval");
+        }
+        if settled && self.signoff_due(now_ms) {
+            return Some("sign-off");
+        }
+        None
+    }
+
+    /// Whether an ID may ride in this station's own next transmission (before its data frame or its
+    /// ACK, in the same keying): the interval's early window is open. An ID sent that way is never
+    /// keyed over the other station, so it needs no quiet channel. In a continuous exchange that is the
+    /// only slot an unforced ID ever gets (review 2026-11-02, round 2, finding 2).
+    pub fn ride_along_due(&self, now_ms: u64) -> bool {
+        let window = ID_QUIET_WINDOW_MS.min(self.interval_ms / 2);
+        self.is_enabled()
+            && self.tx_since_id
+            && now_ms.saturating_sub(self.last_id_ms) >= self.interval_ms - window
     }
 
     /// True when an **interval** ID is due: enabled, armed by TX since the last ID, and
@@ -319,5 +381,148 @@ mod tests {
             t.signoff_due(TEN_MIN + 1_000 + SIGNOFF),
             "sign-off ID at the end of the exchange"
         );
+    }
+
+    // ── Waiting for a quiet channel (on-air tasks 17 and 18) ─────────────────────
+
+    /// Poll every 50 ms from `from` to `to` (inclusive) with the channel quiet or not, as the daemon's
+    /// receive tick does; the last answer.
+    fn poll(t: &mut StationIdTimer, from: u64, to: u64, quiet: bool) -> Option<&'static str> {
+        let mut last = None;
+        let mut now = from;
+        while now <= to {
+            last = t.due_reason(now, quiet);
+            if last.is_some() {
+                return last;
+            }
+            now += 50;
+        }
+        last
+    }
+
+    #[test]
+    fn the_signoff_id_waits_for_a_quiet_channel() {
+        let mut t = StationIdTimer::new(TEN_MIN, 0).with_signoff_idle_ms(SIGNOFF);
+        t.note_tx(1_000);
+        assert_eq!(
+            poll(&mut t, 1_000, 1_000 + SIGNOFF + 60_000, false),
+            None,
+            "the other station is transmitting: no sign-off over its frame"
+        );
+        let quiet_from = 1_000 + SIGNOFF + 60_050;
+        assert_eq!(
+            poll(&mut t, quiet_from, quiet_from + ID_MIN_QUIET_MS - 50, true),
+            None,
+            "quiet for less than ID_MIN_QUIET_MS: could be the turnaround after an ACK"
+        );
+        assert_eq!(
+            t.due_reason(quiet_from + ID_MIN_QUIET_MS, true),
+            Some("sign-off"),
+            "the sign-off goes out once the channel has been quiet long enough"
+        );
+    }
+
+    #[test]
+    fn no_id_in_the_turnaround_after_an_ack() {
+        // The interval's early window is open; our ACK has just gone out and the other station starts
+        // its next frame 1 s later (task 18, run a2b).
+        let mut t = StationIdTimer::new(TEN_MIN, 0);
+        t.note_tx(TEN_MIN - 60_000);
+        let ack_end = TEN_MIN - 60_000;
+        assert_eq!(poll(&mut t, ack_end, ack_end + 1_000, true), None);
+        assert_eq!(poll(&mut t, ack_end + 1_050, ack_end + 8_000, false), None);
+    }
+
+    #[test]
+    fn the_interval_id_takes_a_quiet_moment_early_and_is_forced_at_the_interval() {
+        let mut t = StationIdTimer::new(TEN_MIN, 0);
+        t.note_tx(1_000);
+        let window_opens = TEN_MIN - ID_QUIET_WINDOW_MS;
+        assert_eq!(
+            poll(&mut t, window_opens - 10_000, window_opens - 50, true),
+            None
+        );
+        assert_eq!(
+            t.due_reason(window_opens, true),
+            Some("interval"),
+            "quiet for 10 s when the window opens: it goes out"
+        );
+
+        let mut t = StationIdTimer::new(TEN_MIN, 0);
+        t.note_tx(1_000);
+        assert_eq!(
+            poll(&mut t, window_opens, TEN_MIN - 50, false),
+            None,
+            "inside the window a busy channel defers it"
+        );
+        assert_eq!(
+            t.due_reason(TEN_MIN, false),
+            Some("interval"),
+            "at the interval it goes out regardless (§97.119)"
+        );
+    }
+
+    #[test]
+    fn no_id_without_a_transmission_quiet_or_not() {
+        let mut t = StationIdTimer::new(TEN_MIN, 0).with_signoff_idle_ms(SIGNOFF);
+        assert_eq!(poll(&mut t, 0, TEN_MIN * 3, true), None);
+        assert_eq!(poll(&mut t, TEN_MIN * 3, TEN_MIN * 4, false), None);
+    }
+
+    #[test]
+    fn a_short_interval_waits_at_least_half_of_it_for_the_early_slot() {
+        let mut t = StationIdTimer::new(60_000, 0);
+        t.note_tx(1_000);
+        assert_eq!(
+            poll(&mut t, 1_000, 29_950, true),
+            None,
+            "a 60 s interval must not ID at the first quiet moment after every frame"
+        );
+        assert_eq!(t.due_reason(30_000, true), Some("interval"));
+        let mut t = StationIdTimer::new(60_000, 0);
+        t.note_tx(1_000);
+        assert_eq!(t.due_reason(60_000, false), Some("interval"));
+    }
+
+    #[test]
+    fn quiet_before_our_own_transmission_does_not_count_after_it() {
+        // The sender polls quiet, then sends a frame and listens for the ACK (no polls for 30 s); the
+        // first poll after that must start the quiet clock, not find it settled.
+        let mut t = StationIdTimer::new(TEN_MIN, 0);
+        t.note_tx(1_000);
+        let window_opens = TEN_MIN - ID_QUIET_WINDOW_MS;
+        assert_eq!(
+            poll(&mut t, window_opens - 10_000, window_opens - 9_000, true),
+            None
+        );
+        t.note_tx(window_opens + 20_000);
+        assert_eq!(
+            t.due_reason(window_opens + 21_000, true),
+            None,
+            "a quiet stretch before our own transmission is not quiet after it"
+        );
+        assert_eq!(
+            poll(
+                &mut t,
+                window_opens + 21_050,
+                window_opens + 21_000 + ID_MIN_QUIET_MS,
+                true
+            ),
+            Some("interval")
+        );
+    }
+
+    #[test]
+    fn an_id_rides_along_once_the_early_window_opens() {
+        let mut t = StationIdTimer::new(TEN_MIN, 0);
+        assert!(
+            !t.ride_along_due(TEN_MIN),
+            "nothing transmitted: nothing to identify"
+        );
+        t.note_tx(1_000);
+        assert!(!t.ride_along_due(TEN_MIN - ID_QUIET_WINDOW_MS - 1));
+        assert!(t.ride_along_due(TEN_MIN - ID_QUIET_WINDOW_MS));
+        t.mark_identified(TEN_MIN - 60_000);
+        assert!(!t.ride_along_due(TEN_MIN - 59_000), "just identified");
     }
 }
