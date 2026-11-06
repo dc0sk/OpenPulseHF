@@ -836,8 +836,12 @@ pub struct ModemEngine {
     p_blocks_processed: u64,
     /// Bursts P opened or re-armed.
     p_opens: u64,
-    /// Failed bursts P held whose waveform found no frame in them (`acquire` coherence < 0.9).
+    /// Failed bursts P itself OPENED in which its waveform's acquisition finds no frame (coherence
+    /// under `P_EVIDENCE_COHERENCE`): P's false opens. A burst total power or S opened is not one.
     p_false_opens: u64,
+    /// Failed bursts P only HELD (another test opened them) in which the acquisition finds no frame:
+    /// mostly fragments of genuine frames, so kept apart from `p_false_opens`.
+    p_held_no_frame: u64,
     /// Wall time P spent judging blocks, in nanoseconds: the per-read cost the Pi is checked with.
     p_nanos: u64,
     /// The most recent routed audio for a P-opened burst's head, as `rx_ring` but never emptied by
@@ -1189,6 +1193,8 @@ struct FlushSpans {
     s_span: usize,
     /// Whether the preamble detect P opened or held the burst.
     p_confirmed: bool,
+    /// Whether P itself opened the burst (its head is P's), not only held it.
+    p_opened: bool,
 }
 
 /// Absolute lower bound on the squelch, so a digitally-silent input cannot drive the threshold to
@@ -1317,6 +1323,7 @@ impl ModemEngine {
             p_blocks_processed: 0,
             p_opens: 0,
             p_false_opens: 0,
+            p_held_no_frame: 0,
             p_nanos: 0,
             p_ring: std::collections::VecDeque::new(),
             rx_burst_p_opened: false,
@@ -2797,10 +2804,16 @@ impl ModemEngine {
         self.p_opens
     }
 
-    /// Failed bursts P held in which the waveform's own acquisition found no frame: P's false opens,
-    /// for the on-air rate the design extrapolated (`ofdm-preamble-detect.md`, risks).
+    /// Failed bursts P itself opened in which the waveform's own acquisition found no frame: P's false
+    /// opens, for the on-air rate the design extrapolated (`ofdm-preamble-detect.md`, risks).
     pub fn preamble_detect_false_opens(&self) -> u64 {
         self.p_false_opens
+    }
+
+    /// Failed bursts P only held (another test opened them) in which the acquisition found no frame;
+    /// not false opens, since most are fragments of genuine frames.
+    pub fn preamble_detect_held_no_frame(&self) -> u64 {
+        self.p_held_no_frame
     }
 
     /// Wall time P has spent judging blocks, in nanoseconds (its per-read cost on this host).
@@ -4903,10 +4916,12 @@ impl ModemEngine {
                 tp_run,
                 s_span,
                 p_confirmed,
+                p_opened,
             } = spans.unwrap_or(FlushSpans {
                 tp_run: post,
                 s_span: 0,
                 p_confirmed: false,
+                p_opened: false,
             });
             let s_min = (S_RING_WINDOWS * openpulse_dsp::noise_floor::WINDOW).max(floor);
             // Design decision 4: a burst P held is evidence only where the waveform's own acquisition
@@ -4915,11 +4930,20 @@ impl ModemEngine {
                 && self
                     .p_burst_coherence(&samples.samples)
                     .is_some_and(|c| c >= P_EVIDENCE_COHERENCE);
+            // Only a burst P itself opened is P's false open: a burst total power or S opened and P
+            // only held is usually a fragment of a genuine frame (under an S1 sabotage a genuine SL7
+            // frame's fragment counted as one), and HF reads this counter as P's false-open rate.
             if p_confirmed && !p_ok {
-                self.p_false_opens = self.p_false_opens.wrapping_add(1);
+                if p_opened {
+                    self.p_false_opens = self.p_false_opens.wrapping_add(1);
+                } else {
+                    self.p_held_no_frame = self.p_held_no_frame.wrapping_add(1);
+                }
                 tracing::debug!(
+                    p_opened,
                     false_opens = self.p_false_opens,
-                    "OTA: a burst the preamble detect held holds no frame its waveform acquires"
+                    held_no_frame = self.p_held_no_frame,
+                    "OTA: a failed burst the preamble detect opened or held holds no frame its waveform acquires"
                 );
             }
             if !(tp_run >= floor || s_span >= s_min || p_ok) {
@@ -6836,6 +6860,7 @@ impl ModemEngine {
             tp_run: self.rx_burst_tp_run,
             s_span: self.rx_burst_s_span,
             p_confirmed: self.rx_burst_p_opened || self.rx_burst_p_held,
+            p_opened: self.rx_burst_p_opened,
         });
         self.rx_burst_p_opened = false;
         self.rx_burst_p_held = false;
@@ -11304,7 +11329,9 @@ mod preamble_detect_false_open {
     //! Gate 6, HARQ (`docs/dev/design/ofdm-preamble-detect.md`): a burst the preamble detect P opened
     //! on something that is not an OFDM frame retains no soft LLRs, counts as a false open, and is no
     //! ladder evidence. The design note read the first from the code (the plugin's `acquire` finds no
-    //! preamble with pilots, so `demodulate_soft` errors) and left it UNCHECKED; this checks it.
+    //! preamble with pilots, so `demodulate_soft` errors) and left it UNCHECKED; this checks it. And a
+    //! failed burst P only held — a genuine frame's fragment in a burst total power opened — is not
+    //! counted as a false open, because HF reads that counter as P's false-open rate.
     //!
     //! In-crate because the retained LLRs are private (a probe needing private access is a unit test).
     use super::*;
@@ -11312,8 +11339,11 @@ mod preamble_detect_false_open {
     use openpulse_core::profile::SessionProfile;
 
     /// OFDM52's transmitted preamble, then 6 s of a pilot-less comb periodic at the FFT length (so the
-    /// cyclic prefix confirms and holds), in hiss: P opens and holds, and no frame is there.
+    /// cyclic prefix confirms and holds), at a receiver AGC's level in recorded hiss: total 1.15× the
+    /// gap with the hiss 12 dB down under the signal, as gate 4 embeds a frame. Neither total power nor
+    /// the spectral test sees it, so P opens the burst, and no frame is there.
     fn false_open_fixture() -> Vec<f32> {
+        let level = 1.15f32;
         let lb = LoopbackBackend::new();
         let mut tx = ModemEngine::new(Box::new(lb.clone_shared()));
         tx.register_plugin(Box::new(ofdm_plugin::OfdmPlugin::new()))
@@ -11321,14 +11351,7 @@ mod preamble_detect_false_open {
         tx.transmit_with_fec_mode(&[7u8; 8], "OFDM52", FecMode::SoftConcatenated, None)
             .expect("tx");
         let frame = lb.drain_samples();
-        let pre = &frame[..288];
-        let mut seed = 0x2545_f491u32;
-        let mut noise = move || {
-            seed ^= seed << 13;
-            seed ^= seed >> 17;
-            seed ^= seed << 5;
-            (seed as f32 / u32::MAX as f32 - 0.5) * 0.02
-        };
+        let pre = &frame[..ofdm_plugin::params::SYM_LEN];
         // Lines on every 31.25 Hz from 500 to 2500 Hz at one amplitude, fixed pseudo-random phases.
         let comb: Vec<f32> = (0..256)
             .map(|n| {
@@ -11338,13 +11361,29 @@ mod preamble_detect_false_open {
                         (std::f32::consts::TAU * (k as f32 * n as f32 / 256.0 + ph)).cos()
                     })
                     .sum::<f32>()
-                    * 0.004
             })
             .collect();
-        let mut x: Vec<f32> = (0..8000 * 12).map(|_| noise()).collect();
-        x.extend(pre.iter().map(|v| v * 0.5));
-        x.extend((0..8000 * 6).map(|i| comb[i % 256] + noise()));
-        x.extend((0..8000 * 4).map(|_| noise()));
+        let rms = |v: &[f32]| (v.iter().map(|s| s * s).sum::<f32>() / v.len() as f32).sqrt();
+        let hiss = crate::capture_replay::load_corpus("ic9700-idle-wide-500hz-control.wav")
+            .expect("hiss capture")
+            .samples;
+        let h = rms(&hiss);
+        let under = 0.25f32;
+        let want = ((level * level - under * under) * h * h).sqrt();
+        let (gp, gc) = (want / rms(pre), want / rms(&comb));
+        let lead = 8000 * 12;
+        let body = 8000 * 6;
+        let mut x: Vec<f32> = (0..lead + pre.len() + body + 8000 * 4)
+            .map(|i| hiss[i % hiss.len()])
+            .collect();
+        for i in 0..pre.len() + body {
+            let v = if i < pre.len() {
+                pre[i] * gp
+            } else {
+                comb[(i - pre.len()) % 256] * gc
+            };
+            x[lead + i] = x[lead + i] * under + v;
+        }
         x
     }
 
@@ -11374,12 +11413,78 @@ mod preamble_detect_false_open {
         assert!(bursts >= 1, "nothing flushed");
         assert!(
             e.preamble_detect_false_opens() >= 1,
-            "the false open was not counted (bursts {bursts})"
+            "the burst P opened on no frame was not counted as a false open (bursts {bursts})"
         );
         let retained: usize = e.ota_retained_llrs.values().map(Vec::len).sum();
         assert_eq!(
             retained, 0,
             "a burst P opened on a pilot-less comb retained {retained} LLR vector(s) for HARQ"
+        );
+        assert_eq!(
+            e.preamble_detect_held_no_frame(),
+            0,
+            "a burst P opened was counted as one P only held"
+        );
+    }
+
+    /// 1.5 s of loud noise, so total power opens the burst, running straight into a genuine OFDM52
+    /// frame cut after ten data symbols: P confirms the frame's preamble and holds the burst it did
+    /// not open. The waveform's acquisition searches the burst from its start, which is noise beyond
+    /// its reach, so it finds no frame, and the fragment does not decode.
+    fn held_fragment_fixture() -> Vec<f32> {
+        let lb = LoopbackBackend::new();
+        let mut tx = ModemEngine::new(Box::new(lb.clone_shared()));
+        tx.register_plugin(Box::new(ofdm_plugin::OfdmPlugin::new()))
+            .expect("ofdm");
+        tx.transmit_with_fec_mode(&[7u8; 64], "OFDM52", FecMode::SoftConcatenated, None)
+            .expect("tx");
+        let frame = lb.drain_samples();
+        let fragment = &frame[..(ofdm_plugin::params::SYM_LEN * 11).min(frame.len())];
+        let mut seed = 0x1b87_3593u32;
+        let mut noise = move || {
+            seed ^= seed << 13;
+            seed ^= seed >> 17;
+            seed ^= seed << 5;
+            (seed as f32 / u32::MAX as f32 - 0.5) * 0.02
+        };
+        let mut x: Vec<f32> = (0..8000 * 12).map(|_| noise()).collect();
+        x.extend((0..12_000).map(|_| noise() * 10.0));
+        x.extend(fragment.iter().map(|v| v * 0.5 + noise()));
+        x.extend((0..8000 * 4).map(|_| noise()));
+        x
+    }
+
+    #[test]
+    fn a_held_fragment_of_a_genuine_frame_is_not_a_false_open() {
+        let lb = LoopbackBackend::new();
+        let mut e = ModemEngine::new(Box::new(lb.clone_shared()));
+        e.register_plugin(Box::new(ofdm_plugin::OfdmPlugin::new()))
+            .expect("ofdm");
+        e.register_plugin(Box::new(bpsk_plugin::BpskPlugin::new()))
+            .expect("bpsk");
+        e.start_ota_session(SessionProfile::fast());
+        e.ota_lock_level(SpeedLevel::Sl7);
+        let mut bursts = 0;
+        for chunk in held_fragment_fixture().chunks(800) {
+            if let Ok(Some(b)) = e.accumulate_capture(Some("OFDM52"), chunk.to_vec()) {
+                bursts += 1;
+                let r = e.ota_decode_burst(&b, "S", None).expect("decode call");
+                assert!(r.payload.is_none(), "a cut frame decoded");
+            }
+        }
+        assert!(bursts >= 1, "nothing flushed");
+        assert!(
+            e.preamble_detect_opens() >= 1,
+            "P never confirmed the fragment's preamble"
+        );
+        assert!(
+            e.preamble_detect_held_no_frame() >= 1,
+            "the fixture did not produce a failed burst P only held (bursts {bursts})"
+        );
+        assert_eq!(
+            e.preamble_detect_false_opens(),
+            0,
+            "a burst total power opened and P only held counted as P's false open"
         );
     }
 }
