@@ -100,7 +100,6 @@ payload format change, so M1 closed as a bug fix plus a declaration.
 | A decoded-header check for #1460's evidence rule (from #1062 F3): a 62-symbol template matches foreign same-baud data at up to ~0.5 over a long over, so correlation alone cannot refuse it | parked |
 | The onset ranking on the DDC correlation arm (from #1062 review finding 2): templates over 2 048 samples get no ranking today, which excludes BPSK31/63/100 and any long future preamble | parked |
 | A shorter release window for the OFDM preamble detect's CP hold (`ofdm-preamble-detect.md`, decision 6): the 0.22–0.29 s tail after a frame is the 8-symbol window's artefact, not the channel's | parked |
-| The OFDM preamble detect also runs on the ACK listen's capture (`receive_ota_ack_within` routes through the seam) with the receive stream's detector state, so two streams interleave in one detector (found implementing `ofdm-preamble-detect.md`); harmless to opens so far, UNCHECKED for `force_busy` | parked |
 | One burst holding two ladder frames decodes only the first: the OTA arm decodes one ladder frame per burst, and #1461's follow-on scan reaches 1 152 samples past the first frame, short of a frame 0.4 s later (`ofdm-preamble-detect.md`, gate 4 at 19 200-sample reads) | parked |
 
 ### M2 — Release path (target 2026-10-28)

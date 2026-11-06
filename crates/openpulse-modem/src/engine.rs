@@ -1110,8 +1110,10 @@ struct PUnit {
 }
 
 /// Pilot coherence the waveform's own acquisition must reach on a failed burst P held before that
-/// burst counts as ladder evidence (design decision 4): `acquire`'s early-accept value, so a burst
-/// counts only where the receiver itself would have taken the frame as present.
+/// burst counts as ladder evidence (design decision 4): the same value as `ofdm-plugin`'s
+/// `acquire::EARLY_ACCEPT_COHERENCE` (0.9), so a burst counts only where the receiver itself would
+/// have taken the frame as present. That constant is private to the plugin and the engine does not
+/// name a plugin's internals, so the two are tied by these cross-references: change both or neither.
 const P_EVIDENCE_COHERENCE: f32 = 0.9;
 
 /// Pre-trigger ring for a burst the spectral test opened, in 512-sample windows (#1454). The same
@@ -2630,8 +2632,16 @@ impl ModemEngine {
                 s_open
             };
         // P, the preamble detect: level-independent, so neither the squelch nor D3 enters it. A block it
-        // holds is a carrier block, so the floor does not learn the frame as band.
-        let p = self.update_preamble_detect(samples);
+        // holds is a carrier block, so the floor does not learn the frame as band. Only on the
+        // accumulator's path, the only one that gathers a burst: the ACK listen's capture and the
+        // one-shot receives route through this seam too, and fed to P they would interleave a second
+        // stream into the receive stream's detector state.
+        let p = if self.seam_in_accumulate {
+            self.update_preamble_detect(samples)
+        } else {
+            self.seam_p_onset = None;
+            false
+        };
         let mut carrier_block = self.noise_floor.mean_sq().is_some()
             && !self.noise_floor.is_held()
             && (block_rms >= self.dcd.threshold() || s || p);
@@ -2670,7 +2680,8 @@ impl ModemEngine {
     /// Run P over one block: keep one detector per distinct template among the OTA candidates that
     /// publish one, feed each the block, and return whether a frame was held during it inside the hold
     /// bound (`docs/dev/design/ofdm-preamble-detect.md`). Only while an OTA candidate's plugin
-    /// publishes a detector (decision 2): not for the configured or relay mode.
+    /// publishes a detector (decision 2): not for the configured or relay mode. Called only from
+    /// `accumulate_routed`'s seam (`seam_in_accumulate`).
     fn update_preamble_detect(&mut self, samples: &[f32]) -> bool {
         self.seam_p_onset = None;
         let candidates: Vec<(String, FecMode)> = self
@@ -11439,6 +11450,34 @@ mod preamble_detect_false_open {
             e.preamble_detect_held_no_frame(),
             0,
             "a burst P opened was counted as one P only held"
+        );
+    }
+
+    /// P runs only on the accumulator's seam: the ACK listen routes its capture through the same seam,
+    /// and fed to P it would interleave a second stream into the receive stream's detector state.
+    #[test]
+    fn the_ack_listen_does_not_feed_the_preamble_detect() {
+        let lb = LoopbackBackend::new();
+        let mut e = ModemEngine::new(Box::new(lb.clone_shared()));
+        e.register_plugin(Box::new(ofdm_plugin::OfdmPlugin::new()))
+            .expect("ofdm");
+        e.register_plugin(Box::new(fsk4_plugin::Fsk4Plugin::new()))
+            .expect("fsk4");
+        e.start_ota_session(SessionProfile::fast());
+        e.ota_lock_level(SpeedLevel::Sl7);
+        let x = false_open_fixture();
+        lb.fill_samples(&x[..16_000]);
+        let _ = e.receive_ota_ack_within(None, 200, None);
+        assert_eq!(
+            e.preamble_detect_blocks_processed(),
+            0,
+            "the ACK listen's capture was fed to the preamble detect"
+        );
+        let _ = e.accumulate_capture(Some("OFDM52"), x[..800].to_vec());
+        assert_eq!(
+            e.preamble_detect_blocks_processed(),
+            1,
+            "the accumulator's read did not reach the preamble detect, so the check above is vacuous"
         );
     }
 

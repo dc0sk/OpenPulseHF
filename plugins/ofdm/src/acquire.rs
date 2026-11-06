@@ -28,7 +28,10 @@ pub(crate) const COARSE_STEP_HZ: f32 = 12.5;
 /// moved the centre to within a few Hz before an OFDM frame is tried, so ±50 Hz is around that.
 pub(crate) const COARSE_SPAN_HZ: f32 = 50.0;
 
-/// Pilot coherence at which a candidate is taken without trying the rest.
+/// Pilot coherence at which a candidate is taken without trying the rest. The engine's
+/// `P_EVIDENCE_COHERENCE` (`openpulse-modem`, `engine.rs`) is the same value on purpose: a failed
+/// burst the preamble detect held is ladder evidence only at the coherence at which this search takes
+/// a frame as present. Change both or neither.
 const EARLY_ACCEPT_COHERENCE: f32 = 0.9;
 
 /// Data symbols the coarse score and the fine estimate use (the pilot drift reads at most 8).
