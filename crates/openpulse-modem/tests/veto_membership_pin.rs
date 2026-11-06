@@ -22,12 +22,18 @@ use openpulse_core::plugin::ModulationPlugin;
 use openpulse_modem::engine::ModemEngine;
 use std::collections::BTreeSet;
 
-/// The single-carrier PSK family — the modes this veto could apply to at all.
+/// The single-carrier PSK family — the modes this veto could apply to at all — and OFDM.
+///
+/// OFDM is here because it publishes a carrier detector built on the same preamble correlation
+/// (`docs/dev/design/ofdm-preamble-detect.md`, gate 8). Publishing it through `preamble_template`
+/// instead would switch on the decode-path veto for every OFDM52 rung; with OFDM unregistered this
+/// pin could not see that.
 fn plugins() -> Vec<Box<dyn ModulationPlugin>> {
     vec![
         Box::new(bpsk_plugin::BpskPlugin::new()),
         Box::new(qpsk_plugin::QpskPlugin::new()),
         Box::new(psk8_plugin::Psk8Plugin::new()),
+        Box::new(ofdm_plugin::OfdmPlugin::new()),
     ]
 }
 
@@ -87,6 +93,32 @@ fn only_the_pinned_modes_have_a_preamble_veto() {
          If this shrank: a mode lost its veto and fell back to the energy-only settle.\n\
          Either way, update MODES_WITH_VETO deliberately and say why."
     );
+}
+
+/// OFDM's carrier detector is published, and is not a veto: the pin above covers the OFDM52 modes
+/// only because a detector exists for them to be confused with.
+#[test]
+fn the_ofdm_detector_is_published_and_is_not_a_veto() {
+    use openpulse_core::plugin::ModulationConfig;
+    let e = engine_with_all_plugins();
+    let ofdm = ofdm_plugin::OfdmPlugin::new();
+    for mode in &ofdm.info().supported_modes {
+        if !mode.starts_with("OFDM52") {
+            continue;
+        }
+        let cfg = ModulationConfig {
+            mode: mode.clone(),
+            ..ModulationConfig::default()
+        };
+        assert!(
+            ofdm.carrier_detector(&cfg).is_some(),
+            "{mode} publishes no detector"
+        );
+        assert!(
+            !e.preamble_veto_active(mode),
+            "{mode} has a decode-path veto"
+        );
+    }
 }
 
 /// The pin above is only meaningful if the veto it counts is real.

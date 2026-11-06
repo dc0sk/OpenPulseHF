@@ -12,7 +12,8 @@
 #   scripts/slow-tests.sh             # every suite
 #   scripts/slow-tests.sh notch       # just the notch acceptance suite (REQ-QRM-01)
 #   scripts/slow-tests.sh ota         # just the OTA rate-adaptation suite (CAP-33)
-#   scripts/slow-tests.sh spectral    # just the carrier-detect decode counts (#1454, #1443, REQ-DCD-01)
+#   scripts/slow-tests.sh spectral    # just the carrier-detect decode counts (#1454, #1443, REQ-DCD-01,
+#                                     # and the OFDM preamble detect's held-out cells)
 #
 # Named tests, never a blanket `-- --ignored`: the notch binary also holds `probe_band_sweep`, a
 # manual env-driven research harness that asserts nothing, and `capture_replay_corpus` holds two
@@ -79,6 +80,10 @@ wants ota      && run_suite ota_channel_adaptation
 # output is otherwise swallowed.
 wants spectral && PROFILE=--release run_suite spectral_busy_gathers_weak_frames --nocapture
 wants spectral && PROFILE=--release run_suite total_power_bursts_keep_their_head --nocapture
+# The OFDM preamble detect's long-read, 400-sample-corpus and 40-frame fade cells
+# (docs/dev/design/ofdm-preamble-detect.md, gates 1–3).
+wants spectral && PROFILE=--release run_suite ofdm_preamble_detect --nocapture
+wants spectral && PROFILE=--release run_suite ofdm_detect_fade --nocapture
 
 if [ "$rc_total" -eq 0 ]; then
     echo "SLOW-TESTS: PASS"
