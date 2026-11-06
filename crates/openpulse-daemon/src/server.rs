@@ -830,9 +830,10 @@ pub async fn run(cfg: OpenpulseConfig, modem_backend: Box<dyn AudioBackend>) -> 
     let mut burst_real_time = true;
     // Keyed-NACK budget, leaking with listening time (#1456; `nack_budget.rs`).
     let mut ota_nack_budget = crate::nack_budget::NackBudget::default();
-    // The preamble detect's (opens, false opens) last logged, so its counters are logged on change
-    // only: the on-air run measures P's false-open rate from this line (`ofdm-preamble-detect.md`).
-    let mut p_detect_logged = (0u64, 0u64);
+    // The preamble detect's (opens, false opens) last logged: its counters are logged once P has run
+    // and then on change only. The on-air run measures P's false-open rate from this line
+    // (`ofdm-preamble-detect.md`).
+    let mut p_detect_logged: Option<(u64, u64)> = None;
     // Periodic station identification (REQ-REG-10): while transmitting, key up and send the
     // callsign at least every `auto_id_interval_secs`. The pure `StationIdTimer` is fed a
     // monotonic ms clock (`id_start`) and armed by polling the engine's `frames_transmitted`
@@ -1166,9 +1167,9 @@ pub async fn run(cfg: OpenpulseConfig, modem_backend: Box<dyn AudioBackend>) -> 
                             engine.preamble_detect_opens(),
                             engine.preamble_detect_false_opens(),
                         );
-                        if p_now != p_detect_logged {
-                            p_detect_logged = p_now;
-                            let blocks = engine.preamble_detect_blocks_processed();
+                        let blocks = engine.preamble_detect_blocks_processed();
+                        if blocks > 0 && p_detect_logged != Some(p_now) {
+                            p_detect_logged = Some(p_now);
                             tracing::info!(
                                 blocks,
                                 opens = p_now.0,
