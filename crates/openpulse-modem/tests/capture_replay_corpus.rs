@@ -101,6 +101,20 @@ fn the_ofdm_detect_excerpts_keep_to_the_asset_rule() {
         total <= 1_250_000,
         "the OFDM detect excerpts total {total} B, over 1.25 MB"
     );
+    // The P-told fix's fixture, outside the detect's 1.25 MB budget (it would take the total to
+    // 1.28 MB): the same format rule, and its own 60 KB cap.
+    let name = "ic9700-ofdm52-f2i-sl9-undecodable.wav";
+    let c = corpus(name);
+    assert_eq!(c.sample_rate, 8_000, "{name} must be 8 kHz");
+    let bytes = std::fs::metadata(dir.join(name))
+        .unwrap_or_else(|e| panic!("{name}: {e}"))
+        .len();
+    assert_eq!(
+        bytes,
+        44 + 2 * c.samples.len() as u64,
+        "{name} is not plain 16-bit mono PCM"
+    );
+    assert!(bytes <= 60_000, "{name} is {bytes} B, over its 60 KB cap");
 }
 
 /// The IC-9700 capture must still be the HOT floor that broke #1020 — above the gate ceiling.

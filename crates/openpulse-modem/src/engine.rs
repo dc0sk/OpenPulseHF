@@ -11415,11 +11415,14 @@ mod preamble_detect_false_open {
     use openpulse_core::profile::SessionProfile;
 
     /// OFDM52's transmitted preamble, then 6 s of a pilot-less comb periodic at the FFT length (so the
-    /// cyclic prefix confirms and holds), at a receiver AGC's level in recorded hiss: total 1.15× the
-    /// gap with the hiss 12 dB down under the signal, as gate 4 embeds a frame. Neither total power nor
-    /// the spectral test sees it, so P opens the burst, and no frame is there.
+    /// cyclic prefix confirms and holds), at a receiver AGC's level in recorded hiss: total 1.05× the
+    /// gap with the hiss 12 dB down under the signal. P opens the burst, and no frame is there.
+    ///
+    /// 1.05, not gate 4's 1.15: at 1.15 another evidence rule (total power's run or the spectral span)
+    /// already keyed a NACK on this burst, so the no-NACK control below was vacuous for P's coherence
+    /// check. At 1.10 and under it keys none, and dropping the coherence check keys one (sabotage S-d).
     fn false_open_fixture() -> Vec<f32> {
-        let level = 1.15f32;
+        let level = 1.05f32;
         let lb = LoopbackBackend::new();
         let mut tx = ModemEngine::new(Box::new(lb.clone_shared()));
         tx.register_plugin(Box::new(ofdm_plugin::OfdmPlugin::new()))
@@ -11463,8 +11466,16 @@ mod preamble_detect_false_open {
         x
     }
 
+    /// Also the #1178-class control: a false open keys no NACK, at the nominal centre and with the
+    /// AFC (and so P's told) moved either way.
     #[test]
     fn a_false_open_retains_no_llrs_and_is_counted() {
+        for afc in [0.0, -6.7, 10.0] {
+            false_open_at(afc);
+        }
+    }
+
+    fn false_open_at(afc: f32) {
         let lb = LoopbackBackend::new();
         let mut e = ModemEngine::new(Box::new(lb.clone_shared()));
         e.register_plugin(Box::new(ofdm_plugin::OfdmPlugin::new()))
@@ -11473,33 +11484,39 @@ mod preamble_detect_false_open {
             .expect("bpsk");
         e.start_ota_session(SessionProfile::fast());
         e.ota_lock_level(SpeedLevel::Sl7);
+        e.afc_correction_hz = afc;
         let x = false_open_fixture();
         let mut bursts = 0;
         for chunk in x.chunks(800) {
             if let Ok(Some(b)) = e.accumulate_capture(Some("OFDM52"), chunk.to_vec()) {
                 bursts += 1;
                 let r = e.ota_decode_burst(&b, "S", None).expect("decode call");
-                assert!(r.payload.is_none(), "a comb decoded as a frame");
+                assert!(r.payload.is_none(), "AFC {afc}: a comb decoded as a frame");
+                assert!(
+                    r.ack.is_none(),
+                    "AFC {afc}: a burst P opened on a pilot-less comb keyed {:?}",
+                    r.ack.map(|a| a.ack_type)
+                );
             }
         }
         assert!(
             e.preamble_detect_opens() >= 1,
-            "P never opened on the fixture"
+            "AFC {afc}: P never opened on the fixture"
         );
-        assert!(bursts >= 1, "nothing flushed");
+        assert!(bursts >= 1, "AFC {afc}: nothing flushed");
         assert!(
             e.preamble_detect_false_opens() >= 1,
-            "the burst P opened on no frame was not counted as a false open (bursts {bursts})"
+            "AFC {afc}: the burst P opened on no frame was not counted as a false open (bursts {bursts})"
         );
         let retained: usize = e.ota_retained_llrs.values().map(Vec::len).sum();
         assert_eq!(
             retained, 0,
-            "a burst P opened on a pilot-less comb retained {retained} LLR vector(s) for HARQ"
+            "AFC {afc}: a burst P opened on a pilot-less comb retained {retained} LLR vector(s) for HARQ"
         );
         assert_eq!(
             e.preamble_detect_held_no_frame(),
             0,
-            "a burst P opened was counted as one P only held"
+            "AFC {afc}: a burst P opened was counted as one P only held"
         );
     }
 
@@ -11589,6 +11606,148 @@ mod preamble_detect_false_open {
             e.preamble_detect_false_opens(),
             0,
             "a burst total power opened and P only held counted as P's false open"
+        );
+    }
+}
+
+#[cfg(test)]
+mod preamble_detect_told {
+    //! P judges a frame at the receiver's centre, as the decoder does (`ofdm-preamble-detect.md`,
+    //! Implementation, "P follows the receiver's centre"). On air (f2i) P was built at the nominal
+    //! centre while A's AFC sat at −6.7 Hz, `acquire` reported its coarse grid point's coherence, and
+    //! 22 genuine SL9 frames A could not decode read under the 0.9 evidence threshold: A keyed no NACK
+    //! and B sat out its ACK windows.
+    //!
+    //! In-crate because `afc_correction_hz` and P's units are private.
+    use super::*;
+    use openpulse_audio::LoopbackBackend;
+    use openpulse_core::profile::SessionProfile;
+
+    /// An SL9 frame A heard on air in f2i and could not decode, behind 2 s of the recording's own
+    /// hiss (`tests/captures/README.md`).
+    fn sl9_undecodable() -> Vec<f32> {
+        crate::capture_replay::load_corpus("ic9700-ofdm52-f2i-sl9-undecodable.wav")
+            .expect("f2i SL9 capture")
+            .samples
+    }
+
+    /// The window from 499.00 s on: the frame, inside `acquire`'s timing reach.
+    fn sl9_frame() -> Vec<f32> {
+        sl9_undecodable()[2 * 8000..].to_vec()
+    }
+
+    fn engine(afc_hz: f32) -> ModemEngine {
+        let lb = LoopbackBackend::new();
+        let mut e = ModemEngine::new(Box::new(lb.clone_shared()));
+        e.register_plugin(Box::new(ofdm_plugin::OfdmPlugin::new()))
+            .expect("ofdm");
+        e.register_plugin(Box::new(bpsk_plugin::BpskPlugin::new()))
+            .expect("bpsk");
+        e.register_plugin(Box::new(fsk4_plugin::Fsk4Plugin::new()))
+            .expect("fsk4");
+        e.start_ota_session(SessionProfile::fast());
+        e.ota_lock_level(SpeedLevel::Sl9);
+        e.afc_correction_hz = afc_hz;
+        e
+    }
+
+    /// Feed `x` in 800-sample reads, as the daemon's 100 ms tick does; decode every burst and return
+    /// the ACK types keyed and the decoded payload count.
+    fn run(e: &mut ModemEngine, x: &[f32]) -> (Vec<AckType>, usize) {
+        let mut acks = Vec::new();
+        let mut decoded = 0;
+        for chunk in x.chunks(800) {
+            if let Ok(Some(b)) = e.accumulate_capture(Some("OFDM52-16QAM"), chunk.to_vec()) {
+                let r = e.ota_decode_burst(&b, "S", None).expect("decode call");
+                decoded += usize::from(r.payload.is_some());
+                acks.extend(r.ack.map(|a| a.ack_type));
+            }
+        }
+        (acks, decoded)
+    }
+
+    fn assert_nacks_at(afc_hz: f32) {
+        let mut e = engine(afc_hz);
+        let (acks, decoded) = run(&mut e, &sl9_undecodable());
+        assert_eq!(decoded, 0, "AFC {afc_hz}: the undecodable frame decoded");
+        assert!(
+            e.preamble_detect_opens() >= 1,
+            "AFC {afc_hz}: P never opened on the frame"
+        );
+        assert_eq!(
+            acks,
+            vec![AckType::Nack],
+            "AFC {afc_hz}: a genuine frame the decoder could not decode keyed {acks:?}, not one NACK"
+        );
+        assert_eq!(
+            e.preamble_detect_false_opens(),
+            0,
+            "AFC {afc_hz}: a genuine frame counted as P's false open"
+        );
+    }
+
+    #[test]
+    fn a_genuine_frame_the_decoder_cannot_decode_nacks_at_the_afc_told() {
+        assert_nacks_at(-6.7);
+    }
+
+    /// The verdict does not depend on where the AFC sits against the coarse grid: at told 0 the frame
+    /// (at −7.8 Hz) is 7.8 Hz from the grid point it is scored at, at +6.25 Hz it is 1.55 Hz.
+    #[test]
+    fn the_verdict_does_not_change_with_the_grid_phase() {
+        for afc in [0.0, 6.25] {
+            assert_nacks_at(afc);
+        }
+    }
+
+    /// `acquire` reports the coherence at the refined offset, so P's evidence reads the frame, not the
+    /// grid's phase: on the coarse point the window reads 0.822–0.917 across tolds 0.5 Hz apart.
+    #[test]
+    fn ps_burst_coherence_does_not_depend_on_the_grid_phase() {
+        let x = sl9_frame();
+        let mut seen = Vec::new();
+        for afc in [-7.8f32, -6.7, -2.0, 0.0, 6.25, 10.5] {
+            let mut e = engine(afc);
+            let _ = e.accumulate_capture(Some("OFDM52-16QAM"), x[..800].to_vec());
+            assert_eq!(e.p_units.len(), 1, "AFC {afc}: P has no unit");
+            let c = e.p_burst_coherence(&x).expect("acquires");
+            seen.push((afc, c));
+        }
+        let lo = seen.iter().map(|s| s.1).fold(f32::INFINITY, f32::min);
+        let hi = seen.iter().map(|s| s.1).fold(0.0f32, f32::max);
+        assert!(
+            hi - lo < 0.01,
+            "P's burst coherence moved {:.3} with the AFC's grid phase: {seen:?}",
+            hi - lo
+        );
+    }
+
+    /// P's told follows the receiver centre: a unit is rebuilt once the centre has moved
+    /// `P_TOLD_HYSTERESIS_HZ` from where it was built, not on the AFC's per-decode jitter. Read by
+    /// behaviour: the frame moved +75 Hz (beyond the ±50 Hz search about told 0) acquires only at a
+    /// told that has followed it.
+    #[test]
+    fn ps_told_follows_the_receiver_centre_with_hysteresis() {
+        let x = ofdm_plugin::shift::shift_hz(&sl9_frame(), 75.0, 8000.0);
+        let mut e = engine(0.0);
+        let _ = e.accumulate_capture(Some("OFDM52-16QAM"), x[..800].to_vec());
+        let at_nominal = e.p_burst_coherence(&x).unwrap_or(0.0);
+        assert!(
+            at_nominal < P_EVIDENCE_COHERENCE,
+            "the shifted frame reads {at_nominal:.3} at told 0, so the check below is vacuous"
+        );
+        e.afc_correction_hz = 0.6;
+        let _ = e.accumulate_capture(Some("OFDM52-16QAM"), x[..800].to_vec());
+        assert_eq!(
+            e.p_units[0].built_at, e.center_frequency,
+            "a 0.6 Hz move rebuilt P's unit (inside the hysteresis)"
+        );
+        e.afc_correction_hz = 67.2;
+        let _ = e.accumulate_capture(Some("OFDM52-16QAM"), x[..800].to_vec());
+        let followed = e.p_burst_coherence(&x).unwrap_or(0.0);
+        assert!(
+            followed >= P_EVIDENCE_COHERENCE,
+            "P did not follow the receiver centre to 67.2 Hz: the frame reads {followed:.3} there"
         );
     }
 }
