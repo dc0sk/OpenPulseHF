@@ -28,10 +28,10 @@ pub(crate) const COARSE_STEP_HZ: f32 = 12.5;
 /// moved the centre to within a few Hz before an OFDM frame is tried, so ±50 Hz is around that.
 pub(crate) const COARSE_SPAN_HZ: f32 = 50.0;
 
-/// Pilot coherence at which a candidate is taken without trying the rest. The engine's
-/// `P_EVIDENCE_COHERENCE` (`openpulse-modem`, `engine.rs`) is the same value on purpose: a failed
-/// burst the preamble detect held is ladder evidence only at the coherence at which this search takes
-/// a frame as present. Change both or neither.
+/// Pilot coherence at which a coarse candidate ends the search without trying the rest: a search-cost
+/// rule, read on the coarse grid point, not a presence test. A frame under it is still acquired at
+/// the best candidate. The engine's `P_EVIDENCE_COHERENCE` (0.8) is a separate rule, fitted to its
+/// own inventory, and is not tied to this value.
 const EARLY_ACCEPT_COHERENCE: f32 = 0.9;
 
 /// Data symbols the coarse score and the fine estimate use (the pilot drift reads at most 8).
@@ -45,7 +45,8 @@ const TIMING_REACH: usize = 8192 + 2 * SYM_LEN;
 pub struct Acquired {
     /// Carrier offset, Hz, relative to the samples' own 1500 Hz centre.
     pub hz: f32,
-    /// Pilot coherence across symbols of the candidate the offset came from, 0–1.
+    /// Pilot coherence across symbols at the refined offset (coarse plus fine), 0–1; the coarse
+    /// candidate's own when that pass finds no timing or pilots.
     pub coherence: f32,
 }
 
@@ -56,8 +57,9 @@ pub struct Acquired {
 /// a short window from the burst's start, finds the timing there, and scores the pilots' coherence
 /// across symbols; a wrong offset puts data, not pilots, in the pilot bins. The first candidate at
 /// [`EARLY_ACCEPT_COHERENCE`] ends the search, otherwise the best is taken. Its pilot drift is the
-/// fine part, and one more pass at the sum removes what is left. Only the window is ever mixed, and
-/// its analytic signal is computed once, when the first candidate needs a rotation.
+/// fine part, and one more pass at the sum removes what is left; the coherence reported is that
+/// pass's. Only the window is ever mixed, and its analytic signal is computed once, when the first
+/// candidate needs a rotation.
 pub fn acquire(samples: &[f32], p: &OfdmParams, told: f32) -> Option<Acquired> {
     let window = &samples[..samples.len().min(TIMING_REACH + SCORE_SYMS * SYM_LEN)];
     let fs = SAMPLE_RATE as f32;
@@ -88,12 +90,15 @@ pub fn acquire(samples: &[f32], p: &OfdmParams, told: f32) -> Option<Acquired> {
             break;
         }
     }
-    let (coherence, offset) = best?;
-    // One more pass at the estimate: the fine estimate is closest to right near zero residual.
+    let (coarse_coherence, offset) = best?;
+    // One more pass at the estimate: the fine estimate is closest to right near zero residual. Its
+    // coherence is the one reported: the coarse point can sit up to 6.25 Hz off the frame, where the
+    // pilots leak between subcarriers, so the coarse value reads the grid's phase, not the frame
+    // (on air, f2i: 0.846–0.900 at the coarse point for frames reading 0.903–0.935 refined).
     let w = at(offset);
-    let residual = find_first_data_body(&w, p)
+    let (residual, coherence) = find_first_data_body(&w, p)
         .and_then(|start| pilot_drift(&w, start, p))
-        .map_or(0.0, |(hz, _)| hz);
+        .unwrap_or((0.0, coarse_coherence));
     Some(Acquired {
         hz: offset + residual,
         coherence,
