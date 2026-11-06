@@ -45,6 +45,7 @@ this ledger adds the design rationale and the actually-observed results per chan
   control and the held-fragment test; hysteresis 0 → five of seven. Clippy (`-D warnings
   --all-targets`) clean on ofdm-plugin and openpulse-modem; fmt clean.
 - **Gate:** not run here (the maintainer's session runs `scripts/gate.sh`).
+- **Gate:** `GATE: PASS 393d92be17a137a55a1c5f54aa4ff531ba0d5734 clean 20261106T191833Z` (suites 397, 2816 passed, 0 failed); `scripts/slow-tests.sh spectral` PASS at the same tree. A one-off failure of `id_rides_in_own_keying` in the implementer's package run (robust/SL6 BPSK, P never runs there) did not reproduce in 3 isolated runs or in the gate: unattributed.
 
 ## 2026-11-06 — A level-independent carrier detect for the OFDM rungs (work plan M3, A2)
 
