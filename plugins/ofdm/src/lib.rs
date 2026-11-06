@@ -15,6 +15,7 @@
 pub mod acquire;
 pub mod channel;
 pub mod demodulate;
+pub mod detect;
 pub mod modulate;
 pub mod params;
 pub mod scramble;
@@ -22,14 +23,14 @@ pub mod shift;
 
 use openpulse_core::{
     error::ModemError,
-    plugin::{FrameGeometry, ModulationConfig, ModulationPlugin, PluginInfo},
+    plugin::{CarrierDetector, FrameGeometry, ModulationConfig, ModulationPlugin, PluginInfo},
 };
 
 use std::borrow::Cow;
 
 use crate::demodulate::{ofdm_demodulate, ofdm_demodulate_soft};
 use crate::modulate::{ofdm_modulate, ofdm_modulate_iq};
-use crate::params::{params_for_mode, SAMPLE_RATE, SYM_LEN};
+use crate::params::{params_for_mode, OFDM52, SAMPLE_RATE, SYM_LEN};
 
 /// OFDM plugin supporting OFDM16 and OFDM52 modes.
 pub struct OfdmPlugin {
@@ -220,6 +221,21 @@ impl ModulationPlugin for OfdmPlugin {
 
     fn occupied_bandwidth_hz(&self, mode: &str) -> Option<f32> {
         params_for_mode(mode).map(|p| p.occupied_bw_hz())
+    }
+
+    /// The OFDM52 family only: every `fast` OFDM rung sends the one preamble its constants were
+    /// measured on (`build_preamble` reads only `first_sc`/`last_sc`). OFDM16's preamble differs and is
+    /// unmeasured, so it publishes none.
+    fn carrier_detector(&self, config: &ModulationConfig) -> Option<Box<dyn CarrierDetector>> {
+        let p = params_for_mode(&config.mode)?;
+        let told = config.center_frequency - NOMINAL_CENTRE_HZ;
+        if (p.first_sc, p.last_sc) != (OFDM52.first_sc, OFDM52.last_sc)
+            || config.sample_rate != SAMPLE_RATE
+            || !told.is_finite()
+        {
+            return None;
+        }
+        Some(Box::new(detect::OfdmCarrierDetector::new(p, told)))
     }
 }
 
