@@ -56,6 +56,7 @@ this ledger adds the design rationale and the actually-observed results per chan
   unreachable (premise pinned by a tripwire).** Clippy (`-D warnings --all-targets`) clean on
   ofdm-plugin, modem and daemon; fmt clean; trailer lint PASS. `openpulse-core` not re-run (not
   touched).
+- **Gate:** `GATE: PASS cd955e1aebc74df44f910bd067bddade531a9080 clean 20261106T154925Z` (suites 397, tests 2812 passed, 0 failed); `scripts/slow-tests.sh spectral` PASS at the same tree (including `ofdm_preamble_detect` 2/0 and `ofdm_detect_fade` 1/0 held-out cells). Earlier gate at `42cddd7c`: PASS, 2810/0.
 - **Test results (run at `0bcdcfaa`, debug, `--no-default-features`):** `openpulse-core` 571/0 (1
   ignored); `ofdm-plugin` 49/0; `openpulse-daemon` 232/0 (2 ignored); `openpulse-modem` 664/0 (124
   ignored); `scripts/slow-tests.sh spectral` PASS (the OFDM cells: 2/0 and 1/0). Every plugin package
