@@ -2,7 +2,7 @@
 project: openpulsehf
 doc: docs/dev/onair-ic9700-ft818-setup.md
 status: living
-last_updated: 2026-10-14
+last_updated: 2026-10-31
 ---
 
 # On-air setup — IC-9700 (rpi51) ↔ FT-818 (rpi53)
@@ -26,12 +26,85 @@ CAT on the SCU-17's CP2105 first port (`…CP2105…-if00-port0`, `/dev/ttyUSB0`
 baud; 144.600 MHz, mode USB 2200 Hz at the time; `l RFPOWER` reads `10` (not Hamlib's 0–1 scale, so
 not a power setting), `l RFPOWER_METER` is unsupported, and the antenna is not readable (`y`).
 Setting any level other than `BAND_SELECT` is unsupported. Audio: ALSA card `CODEC`
-(`plughw:CARD=CODEC,DEV=0`).
+(`plughw:CARD=CODEC,DEV=0`); the modem uses it through PipeWire (`B_AUDIO_DEVICE="pulse"`), so
+the routed levels apply.
 
 Config profile: [`docs/config/onair-ic9700-ft818.example.sh`](../config/onair-ic9700-ft818.example.sh).
 Runner: `scripts/run-onair-ic9700-ft991a.sh` (rig-B-agnostic — the filename is historical). The
 execution order and the *why* (fix the receive path first) live in
 [onair-execution-plan.md](onair-execution-plan.md); this document is the station-specific setup.
+
+---
+
+## Station preparation — before a session counts
+
+The 2026-10-26 session on rpi53 was a **dry run**; its results are not accepted (maintainer,
+2026-10-26). It found the stations not ready: no SSH key between the Pis, the witness SDR's
+SoapySDR module never built, scipy missing for G0, PipeWire volumes lost on reboot, the CAT port
+and the FT-818 mode reading still TODO in the profile, and a preflight proof that cannot pass.
+Sessions run **on rpi51** from now on, as the control host. A session counts only after
+`scripts/onair-station-check.sh` passes on both stations and the manual list below is ticked.
+
+Steps 1–3 need `sudo`, a password or a download from outside the repo. Do them yourself before
+starting a Claude Code session; an agent session is (rightly) blocked from running downloaded code
+as root and from cloning and building third-party code without an explicit rule.
+
+1. **SSH from rpi51 to both stations, including itself** (the runner reaches station A over ssh
+   too). On rpi51:
+   ```bash
+   ssh-keygen -t ed25519                     # if ~/.ssh/id_ed25519 does not exist
+   ssh-copy-id dc0sk@dc0sk-rpi51             # itself
+   ssh-copy-id dc0sk@dc0sk-rpi53
+   ssh -o BatchMode=yes dc0sk@dc0sk-rpi53 true && ssh -o BatchMode=yes dc0sk@dc0sk-rpi51 true && echo ok
+   ```
+   A key on rpi51 itself needs no agent forwarding. If the key has a passphrase, load it into an
+   agent in the shell the session runs in; a forwarded agent reaches only the shell `sshd` started.
+2. **Packages.** On rpi51: `scripts/install-rpi-build-deps.sh --with-onair --with-sdr`. On rpi53:
+   `scripts/install-rpi-build-deps.sh --with-onair`. The package names are Debian's; rpi53 ran
+   Hamlib 4.6.2, newer than bookworm's 4.5.5, so record each Pi's OS release (the check prints it).
+3. **The witness SDR on rpi51** (decision 27). Plug the RSPdx into a port where `lsusb -t` shows it at
+   **480M**: at 12M (full speed, behind a hub) its stream fails with `Init() failed: sdrplay_api_Fail`
+   (2026-10-27). Install the SDRplay API (3.15.2 was used) from
+   SDRplay's download with **bash** (`sh` fails on its installer), then
+   `sudo systemctl enable --now sdrplay`. Build the SoapySDR module from source:
+   ```bash
+   git clone https://github.com/pothosware/SoapySDRPlay3 && cd SoapySDRPlay3
+   mkdir build && cd build && cmake .. && make && sudo make install && sudo ldconfig
+   SoapySDRUtil --find="driver=sdrplay"      # must list the RSPdx; if not: sudo systemctl restart sdrplay
+   ```
+4. **One commit on both stations, built in release with real audio** (on each Pi):
+   ```bash
+   cd ~/git/OpenPulseHF && git fetch && git checkout <the session's commit>
+   cargo build --release -p openpulse-cli --features cpal-backend
+   cargo build --release -p openpulse-ardop --features cpal
+   cargo build --release -p openpulse-kiss --features cpal
+   cargo build --release -p openpulse-daemon --features cpal --bin openpulse-server
+   cargo build --release -p openpulse-gateway
+   ```
+5. **Config:** `~/.config/openpulse/config.toml` on both with the callsign set (preflight checks it).
+6. **Profile:** on rpi51, a local profile **outside the repo** (e.g. `~/onair-local/ic9700-ft818.sh`)
+   that sources `docs/config/onair-ic9700-ft818.example.sh` and sets what the example cannot know —
+   at least `B_CAT_PORT`, the **`-if00-port0`** path of the SCU-17's CP2105 (the station check lists
+   the by-id paths on rpi53 while it is unset). Never the second port (`-if01-`): RTS on it keys
+   the FT-818's data PTT, and the check refuses to open it.
+7. **Audio routing and levels, after every reboot** (PipeWire volumes do not survive one):
+   `scripts/onair-setup-audio-routing.sh`. The profile carries the 2026-10-26 levels.
+8. **Check:** `scripts/onair-station-check.sh`, then, with **both rigs on and nothing
+   transmitting**, `scripts/onair-station-check.sh --levels`. A rig that is off gives a silent floor
+   that passes trivially. Fix every FAIL before the session.
+9. **Manual list** (printed by the check; not readable over CAT): FT-818 FRONT antenna, L1,
+   DIG/USER-U, CAT rate; **FT-818 VFO B on the test frequency** (Hamlib's FT-817/818 backend toggles
+   VFO A/B on every CAT read to read VFO B, so a VFO B on HF briefly puts the rig on HF — and onto its
+   other antenna socket — at every read; a read during a transmission would transmit there); the FT-818 away from the 2026-10-26 noise source; TOT on both rigs; the
+   IC-9700 settings in [onair-signal-chain-verification.md](onair-signal-chain-verification.md); the
+   RSPdx attenuated against the IC-9700 and its maximum input rating checked; antennas connected.
+
+**G0 is judged on line prominence only for this campaign** (maintainer, 2026-10-27): run the
+analyser with `OPHF_ABS_DBFS=0`, which no in-band peak can exceed, so only a line 15 dB or more over
+the floor fails. The absolute −40 dBFS limit failed a flat floor on 2026-10-26, and the raw ALSA
+capture bypasses the PipeWire level the modem uses. The FT-818 has not yet found a quiet location
+(maintainer, 2026-10-27): its broadband floor stays high, which costs sensitivity, not decodes, on a
+2 m line-of-sight path that delivered S9+51 dB.
 
 ---
 
@@ -135,7 +208,8 @@ Run in this order; stop on the first failure.
    ./scripts/onair-preflight.sh --strict        # now includes a `--backend cpal devices` probe
    ```
 3. **Phase G0 — the FT-818 receive floor is clean** (the conducted-RFI check; the earlier campaign
-   found birdies on the laptop that hosted this station then). With **no TX anywhere and the SDR stopped**:
+   found birdies on the laptop that hosted this station then). With **no TX anywhere and the SDR stopped**
+   (then again on station A with the RSPdx streaming — it shares rpi51's USB with the IC-9700):
    ```bash
    # once B_AUDIO_DEVICE is known, point the ALSA capture at the SCU-17 CODEC:
    scripts/onair-rx-idle-floor.sh plughw:CARD=CODEC,DEV=0   # the SCU-17 CODEC on rpi53
@@ -146,8 +220,11 @@ Run in this order; stop on the first failure.
 4. **Signal-chain gates 1–6** from [onair-signal-chain-verification.md](onair-signal-chain-verification.md),
    with Station B now the FT-818: CAT connectivity, a tone deflecting ALC, a synchronized RX capture
    ≥ 0.005 mean-sq (Gate 3, both directions), carrier at 1500 Hz, one BPSK250 frame decoded.
-5. **SDR monitor up** (`scripts/onair-sdr/sdr_capture.py`): the RSP2pro independently monitors every
-   burst and is the arbiter of any rig-RX result.
+5. **SDR monitor up** (`scripts/onair-sdr/sdr_capture.py` on rpi51): the RSPdx independently monitors
+   every burst. It arbitrates station A's receive (B → A); for A → B it checks A's transmission, not
+   B's receive. Attenuate it against the IC-9700 next to it, and capture per burst at a low rate so
+   it does not compete with station A's decoder — see
+   [onair-execution-plan.md](onair-execution-plan.md), *The witness*.
 
 ---
 
@@ -172,6 +249,47 @@ trust a rig-RX PASS unless the SDR corroborates it or gates 1–6 passed clean i
   GAIN, and the **front BNC** antenna at 2 m, at **L1 (0.5 W)**.
 - Station B host: **`dc0sk-rpi53`** (`B_SSH=dc0sk@dc0sk-rpi53`).
 - The **LDG Z817 is HF-only** and inert on 2 m; the antenna must be resonant on its own.
-- The **SDR is co-located** with the portable station, which is ideal for monitoring.
+- The **SDR** is an RSPdx on **rpi51**, beside station A, not with the portable station
+  (decision 27). The FT-991A is not part of this campaign.
 - Everything on the IC-9700/rpi51 side is unchanged, including its unresolved USB-capture-during-TX
   caveat (Gate 3 covers it).
+
+---
+
+## Session log
+
+One record per session; each holds the station state, results, gotchas and open items.
+
+- **2026-10-26** — [onair-session-2026-10-26.md](onair-session-2026-10-26.md) (run on rpi53):
+  Gate 1 PASS on both stations, Gate 2 PASS (FT-818 at L1 heard at S9+51 dB on the IC-9700);
+  G0 FAIL on both, level not birdies (rpi53: flat −36 dBFS floor over the analyser's −40 dBFS
+  absolute limit, max line prominence 4 dB; rpi51: 48 weak lines at 4–16 dB on a −44 dBFS
+  floor). Gate 3 is next. Preflight now builds the #1060 proof with `--release`.
+- **2026-10-26 — not accepted** (maintainer): a dry run; station preparation was set up instead.
+- **2026-10-27 — readiness** (`docs/dev/onair-tasks.md`, tasks 1–2, run on rpi51):
+  `scripts/onair-station-check.sh --levels` PASS=43 FAIL=0 on `a20e0fe1` — both Pis on Debian 13 with
+  Hamlib 4.6.2, the same commit, strict preflight, CAT and mode, the RSPdx found by SoapySDRPlay3,
+  routing at the profile levels, idle RX 0.000110 (IC-9700) and 0.000510 (FT-818). Manual list:
+  TOT, IC-9700 settings, RSPdx attenuation and rating, antennas confirmed; the FT-818 items (front
+  antenna, L1, DIG/USER-U, CAT rate, away from the noise source) not yet confirmed. A first run with the
+  IC-9700 off passed its idle level at exactly 0; the level check now fails digital silence.
+- **2026-10-27 — G0 and Gate 3** (`docs/dev/onair-tasks.md`, task 3): G0 PASS on prominence on both
+  stations, station A also with the RSPdx streaming. Gate 3 B → A met at 7.9x on the fourth run, once
+  the IC-9700's AGC was SLOW (FAST held the burst at 4.9x); the FT-818 at L1 arrives at S9+55 dB.
+  Fixed on the way: the RSPdx at 480M, `libasound2-plugins` on rpi53 for the `pulse` device.
+- **2026-10-27 — Gates 4–6** (`docs/dev/onair-tasks.md`, task 4 and its summary): station check
+  46/0; Gate 5 carrier +3.6 Hz; Gate 4 200-sample chunks at 40/s. Gate 6 is **not reliable**: B → A
+  passed 2 of 4 live runs, and only at the FT-818 drive 0.075 (at 0.15 the FT-818 loses the first ~1 s
+  of every transmission); A → B failed both runs, the FT-818's received audio being noise-limited (S8
+  local QRM) and AGC-pumped, uncoded. Found and fixed: the runner's `pgrep -f` matched its own ssh
+  command (rc 255 before any keying; `[o]penpulse`, unreviewed); Hamlib's VFO toggle on the FT-818
+  with VFO B on 40 m (VFO B set to the test frequency, telemetry off). Ruled out with an experiment
+  each: one-sided rebuild, IC-9700 front-end overload (10 dB attenuator), PTT leader, sink suspend,
+  the modem's own envelope. The FT-991A remote station was checked as an alternative receiver; its
+  2 m antenna path failed a 5 W carrier check (nothing received at the IC-9700) and waits for an
+  on-site look.
+- **2026-10-30 — the remote FT-991A as station B** (`docs/dev/onair-tasks.md`, task 4 addenda): its 2 m
+  path works (S9+23 dB at the IC-9700 at 5 W). Gate 6 B → A (FT-991A transmits, RS): **3 of 3 PASS**.
+  A → B fails in DATA-USB: the FT-991A's data-mode receive passband is centred near 0 Hz; plain USB
+  passed once; menu 065 OTHER SHIFT +1500 centres the passband but moves the dial relation by 1500 Hz.
+  One run went out on 144.600 MHz from the FT-991A example profile; fixed to 144.640.

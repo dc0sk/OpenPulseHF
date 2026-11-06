@@ -40,6 +40,41 @@ use openpulse_core::error::ModemError;
 use crate::engine::ModemEngine;
 use crate::pipeline::AudioSamples;
 
+/// How long no capture audio may arrive before an empty read counts as silence.
+///
+/// Fitted to the task 16 logs (both Pis, PulseAudio): with the device delivering 25 ms fragments, the
+/// longest span with no audio that later resumed was 37–45 ms; 250 is more than 5× that. Falsified by
+/// a capture device whose callback period is 250 ms or longer.
+pub(crate) const CAPTURE_GAP_MS: u64 = 250;
+
+/// When capture audio last arrived, so that an empty read ends a burst only after a real gap.
+///
+/// The engine counts a read as carrier only when it holds samples, and a real device returns an empty
+/// read whenever it has delivered nothing since the last tick, in the middle of a frame as much as
+/// anywhere. On air (task 16) 228 of A's 234 carrier-drop flushes, and 118 of B's 124, were empty
+/// reads with the signal above the squelch: frames were cut into hundreds of pieces. Every receive
+/// loop that feeds [`ModemEngine::accumulate_capture`] uses this: [`CaptureTicker`] and the daemon's
+/// `rx_ticker`.
+#[derive(Debug, Default, Clone)]
+pub struct CaptureGap {
+    last_audio: Option<std::time::Instant>,
+}
+
+impl CaptureGap {
+    /// Whether a read of `len` samples at `now` goes to the accumulator: always when it holds samples;
+    /// when empty, only once no audio has arrived for [`CAPTURE_GAP_MS`] (a stream that has ended, a
+    /// dead device) or none ever has.
+    pub fn admits(&mut self, len: usize, now: std::time::Instant) -> bool {
+        if len > 0 {
+            self.last_audio = Some(now);
+            return true;
+        }
+        self.last_audio.is_none_or(|t| {
+            now.saturating_duration_since(t) >= std::time::Duration::from_millis(CAPTURE_GAP_MS)
+        })
+    }
+}
+
 /// What one tick produced.
 pub struct Tick {
     /// A burst, when the accumulator flushed one this tick.
@@ -56,6 +91,8 @@ pub struct CaptureTicker {
     /// Whether the last read or open failed, so the recurring case logs at DEBUG and the first
     /// failure and the recovery each log at WARN.
     failed: bool,
+    /// Keeps an empty read in the middle of a frame from ending the burst.
+    gap: CaptureGap,
 }
 
 impl CaptureTicker {
@@ -65,6 +102,7 @@ impl CaptureTicker {
             stream: None,
             device,
             failed: false,
+            gap: CaptureGap::default(),
         }
     }
 
@@ -132,6 +170,9 @@ impl CaptureTicker {
                     tracing::warn!("audio capture recovered");
                 }
                 let raw = samples.clone();
+                if !self.gap.admits(samples.len(), std::time::Instant::now()) {
+                    return Tick { burst: None, raw };
+                }
                 let burst = engine
                     .accumulate_capture(Some(mode), samples)
                     .unwrap_or_else(|e| {
@@ -166,5 +207,24 @@ impl CaptureTicker {
             // must not look like a quiet band.
             tracing::warn!(error = %e, "{what}; retrying on the next tick");
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{CaptureGap, CAPTURE_GAP_MS};
+    use std::time::{Duration, Instant};
+
+    #[test]
+    fn an_empty_read_is_admitted_only_after_a_gap_with_no_audio() {
+        let t = Instant::now();
+        let mut gap = CaptureGap::default();
+        assert!(gap.admits(0, t), "no audio ever: nothing to cut");
+        assert!(gap.admits(400, t));
+        assert!(!gap.admits(0, t + Duration::from_millis(50)));
+        assert!(!gap.admits(0, t + Duration::from_millis(CAPTURE_GAP_MS - 1)));
+        assert!(gap.admits(0, t + Duration::from_millis(CAPTURE_GAP_MS)));
+        assert!(gap.admits(200, t + Duration::from_millis(CAPTURE_GAP_MS + 10)));
+        assert!(!gap.admits(0, t + Duration::from_millis(CAPTURE_GAP_MS + 20)));
     }
 }

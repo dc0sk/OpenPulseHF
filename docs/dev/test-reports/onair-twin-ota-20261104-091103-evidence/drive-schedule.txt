@@ -1,0 +1,14 @@
+08:11:03.383392905 t0 (Driving OTA traffic line)
+08:11:03.387177808 sdr capture started
+08:15:54.943632437 first SL6 decode seen (t0+291 s)
+08:19:04.329362903 SL6 seen >=60 s and t0+480 passed: start stepping
+08:19:04.330249805 set B RF=0.5 (t0+481 s) (hold 60 s)
+08:19:05.599292548 readback RF=0.498039
+08:20:07.132330975 set B RF=0.3 (t0+544 s) (hold 90 s)
+08:20:08.398533837 readback RF=0.301961
+08:21:38.571822033 set B RF=0.2 (t0+635 s) (hold 90 s)
+08:21:39.873258504 readback RF=0.2
+08:23:11.978469572 set B RF=0.1 (t0+728 s) (hold 90 s)
+08:23:13.266633652 readback RF=0.0980392
+08:24:45.274791603 set B RF=0.984314 (t0+822 s) (restore, to the end)
+08:24:46.548105238 readback RF=0.984314

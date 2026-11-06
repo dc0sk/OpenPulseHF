@@ -62,6 +62,14 @@ pub enum EngineEvent {
         #[serde(default)]
         verdict: NackVerdict,
     },
+    /// The OTA sender returned to the level before a climb its peer answered with silence
+    /// (`docs/dev/design/ladder-climb-into-silence.md`): a sender-side change the receiver did not lead.
+    OtaFallBack {
+        /// The level the climb reached, which went unanswered.
+        from: SpeedLevel,
+        /// The level before the climb, where the sender now transmits.
+        to: SpeedLevel,
+    },
     /// Rate adapter advanced after an ACK was applied.
     RateChange {
         event: RateEvent,

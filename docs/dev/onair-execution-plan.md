@@ -2,7 +2,7 @@
 project: openpulsehf
 doc: docs/dev/onair-execution-plan.md
 status: living
-last_updated: 2026-10-15
+last_updated: 2026-10-17
 ---
 
 # On-air execution plan
@@ -118,7 +118,8 @@ throughout.** The SDR is the instrument that already works; every rig-RX result 
 
 The one faulty rig from the earlier campaign (FT-991A 007174ED — a hardware TX distortion that
 followed the rig across hosts) has been retired; do not reuse it. Healthy hardware: FT-991A 008924A1,
-IC-705 (hamlib 3085), and the SDRplay RSP2pro on the dev host.
+IC-705 (hamlib 3085), and the SDRplay RSP2pro on the dev host. For Release 1 the witness is an
+SDRplay RSPdx on rpi51, and the FT-991A is not used (decision 27).
 
 ---
 
@@ -236,14 +237,34 @@ each Pi — do **not** deploy via `deploy-rpi-pair.sh` (no-audio; it now refuses
 
 **Station pairings** (each has a config profile + a setup doc):
 - IC-9700 (rpi51) ↔ FT-991A (dd2zm) — [signal-chain-verification](onair-signal-chain-verification.md). The
-  earlier campaign's pair; not the Release 1 development pair.
+  earlier campaign's pair; not used for Release 1 (decision 27), a possible later option over the
+  remote Pi.
 - **Release 1 pair:** IC-9700 (rpi51) ↔ FT-818 + SCU-17 (rpi53; first set up portable on a laptop) —
   [onair-ic9700-ft818-setup.md](onair-ic9700-ft818-setup.md), profile
   `docs/config/onair-ic9700-ft818.example.sh`. 2 m 144.640 MHz; FT-818 on its FRONT antenna at L1.
 
+**The witness (decision 27, 2026-10-17).** An SDRplay **RSPdx on rpi51**, beside the IC-9700, is the
+independent receiver for the Release 1 campaign. Where it sits decides what it proves:
+- **B → A (FT-818 transmits):** the RSPdx hears what the IC-9700 hears. A rig-RX failure that the
+  RSPdx decodes is a receive-side fault on station A (level, RFI), not the waveform.
+- **A → B (IC-9700 transmits):** the RSPdx is a metre from the transmitter. It checks what A puts on
+  air (spectrum, key-up, leader), not what B receives. Attenuate so it does not overload: the
+  capture prints `OVERLOAD` above 0.1 % clipping. Keep its input below the RSPdx's maximum input
+  rating (from SDRplay's datasheet; UNCHECKED here — the README's ~+10 dBm is the RSP2's); a
+  nearby antenna can couple more than that even at the IC-9700's lowest power, so use a fixed
+  attenuator or measured isolation, not a guess.
+- **rpi51 also runs station A's modem.** The Pi decode cost leaves little slack in the ACK window
+  (SL2 6.3–7.3 s per decode against 9 s), and `sdr_capture.py` holds the whole capture in RAM
+  (8 bytes per sample: 2 MS/s for 60 s is ~1 GB). Capture at the lowest rate that covers the
+  signal (250 kS/s is ample for a 3 kHz channel) and per burst, not for a whole run, and check the
+  receive timing with and without the capture running before trusting an A2 result.
+- **It is one more USB device on the IC-9700's host.** Conducted USB noise into the rig's audio was
+  the earlier campaign's blocker (G0): run the idle-floor check on station A with the RSPdx
+  connected and streaming, not only with it stopped.
+
 Sequence:
-1. **SDR up first, always.** Start `scripts/onair-sdr/sdr_capture.py` on the dev host so every TX is
-   independently monitored. The SDR is the arbiter: if a rig-RX fails but the SDR decoded the same
+1. **SDR up first, always.** Start `scripts/onair-sdr/sdr_capture.py` on rpi51 (the RSPdx) so every
+   TX is independently monitored; see *The witness* below for what it proves in each direction. The SDR is the arbiter: if a rig-RX fails but the SDR decoded the same
    burst, the fault is receive-side (RFI/level), not the waveform.
 2. **`calibrate drive`** on the transmitting rig (`openpulse calibrate drive`, needs rigctld + a real
    radio) to land ALC in the moderate band. On-air-validated behaviour; converges in ~4 iterations.

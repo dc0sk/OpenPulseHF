@@ -549,3 +549,7 @@ additive_snr_db_windowed	crates/openpulse-dsp/src/constellation.rs
 receive_ack_with_short_fec	crates/openpulse-modem/src/engine.rs
 tone_dominated	crates/openpulse-dsp/src/notch.rs
 has_prominent_peak	crates/openpulse-dsp/src/notch.rs
+# CONTRACT, added 2026-11-03: the station ID's minimum quiet time before an unforced ID (§97.119,
+# on-air task 17). Production reads it inside station_id.rs; it stays pub so the daemon's test
+# station_id_waits_for_a_quiet_channel asserts the ID waited for it, rather than a copied number.
+ID_MIN_QUIET_MS	crates/openpulse-core/src/station_id.rs

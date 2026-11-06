@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Capture IQ from an SDRplay RSP2 (or compatible SoapySDR device) to a CF32 file.
+"""Capture IQ from an SDRplay RSP2 or RSPdx (or compatible SoapySDR device) to a CF32 file.
 
 Part of the on-air SDR spectral-measurement toolset (see README.md). Runs on the
 host that has the SDR; used by cap_during_tx.sh to capture while the station keys.
@@ -8,7 +8,8 @@ Usage:
     sdr_capture.py <center_hz> <fs_hz> <dur_s> <rfgr> <ifgr> <out.cf32>
 
 Gain is set per element, NOT via the overall knob: RFGR = RF/LNA gain *reduction*
-(0..8, higher = more attenuation = protects the front end), IFGR = IF gain
+(higher = more attenuation = protects the front end; 0..8 on the RSP2, a different range on the
+RSPdx, so the range the device reports is printed), IFGR = IF gain
 reduction (20..59, 20 = most IF gain). This avoids the inverted/confusing overall
 gain mapping in SoapySDRPlay3. AGC is forced off. The device is opened with no
 args because the SWIG dict/string filter is broken on Python 3.14 (only one device
@@ -40,7 +41,8 @@ sdr.setFrequency(SOAPY_SDR_RX, 0, center)
 print(
     f"cfg: f={sdr.getFrequency(SOAPY_SDR_RX, 0) / 1e6:.4f}MHz "
     f"RFGR={sdr.getGain(SOAPY_SDR_RX, 0, 'RFGR'):.0f} "
-    f"IFGR={sdr.getGain(SOAPY_SDR_RX, 0, 'IFGR'):.0f} ant={antenna}"
+    f"IFGR={sdr.getGain(SOAPY_SDR_RX, 0, 'IFGR'):.0f} ant={antenna} "
+    f"RFGR range {sdr.getGainRange(SOAPY_SDR_RX, 0, 'RFGR')}"
 )
 
 st = sdr.setupStream(SOAPY_SDR_RX, SOAPY_SDR_CF32)

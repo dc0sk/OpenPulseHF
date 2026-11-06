@@ -1,0 +1,8 @@
+ M scripts/run-onair-ic9700-ft991a.sh
+?? docs/dev/test-reports/on-air/bundle-2026-10-27T102310Z-ic9700-ft991a-quick/
+?? docs/dev/test-reports/onair-2026-10-27T102028.json
+?? docs/dev/test-reports/rig-state-postrun-a.txt
+?? docs/dev/test-reports/rig-state-postrun-b.txt
+?? docs/dev/test-reports/rig-state-preflight-a.txt
+?? docs/dev/test-reports/rig-state-preflight-b.txt
+?? pki-tooling/Cargo.lock

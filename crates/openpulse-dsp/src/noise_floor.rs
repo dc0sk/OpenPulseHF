@@ -83,6 +83,23 @@ const TRIMMED_EXP_MEAN: f32 = 0.966_081;
 /// as window periodograms, so this is a count of windows × `WINDOW`.
 const MAX_HELD_SAMPLES: usize = 1 << 20;
 
+/// The share of a capped burst's windows, ranked by total power, that [`NoiseFloorTracker::
+/// commit_band`] learns: the 20 %-wide run of ranks whose powers spread least (top over bottom),
+/// starting at or below the median.
+///
+/// The gap hiss is a plateau: 512-sample windows of steady hiss sit within about ±10 % of each other.
+/// Below it a receiver AGC's hang after each frame spreads out as a ramp; above it lie the frames.
+/// Fixed ranks (10th–30th percentile, the first version) held for a 0.6 s hang and failed from a 1 s
+/// one (`dcd_agc_pumped_hiss`: 7/7, 1/7, 0/7 at 0.6, 1.0, 1.5 s); this rule holds 7/7 and 6/7 at
+/// 0.6 and 1.0 s. From 1.5 s no commit rule helps: the steady-state floor learner itself (the 25th
+/// percentile of every non-carrier window) absorbs the held-down hiss and the squelch slides under the
+/// gaps again (`dcd-raised-floor.md`). The start cap keeps the frames' own plateau (constant-envelope
+/// modes are tight too) out of reach. Falsified by gaps under a fifth of a capped burst (traffic over
+/// ~80 % duty, e.g. SL2's 66 s frames).
+const BAND_COMMIT_WIDTH: f32 = 0.2;
+/// The highest rank, as a share, a [`BAND_COMMIT_WIDTH`] run may start at. See there.
+const BAND_COMMIT_MAX_START: f32 = 0.5;
+
 /// Spectral busy test (#1454): a band is this many adjacent bins (62.5 Hz), sliding one bin at a time.
 const S_BAND_BINS: usize = 4;
 
@@ -360,6 +377,47 @@ impl NoiseFloorTracker {
             }
             self.mean_sq = Some(self.estimate());
         }
+    }
+
+    /// Learn the band from a burst that ran to the length cap: the [`BAND_COMMIT_WIDTH`] run of the
+    /// held windows, ranked by total power, that spreads least, in place of the history, and resume.
+    ///
+    /// A capped burst means the carrier never dropped: the band stepped up past the squelch, and
+    /// nothing below the squelch was left to learn from. [`commit`](Self::commit) learns every held
+    /// window, and under a receiver AGC that is wrong. On air (task 21, run a2g) the AGC held the hiss
+    /// 31 dB lower during each frame than in the gaps; the per-bin low quantile took the suppressed
+    /// hiss from the frame windows (60 % of the time), learned a floor at half the gap hiss, and the
+    /// squelch stayed below the gaps for good. A window that holds a frame ranks above the gaps; the
+    /// AGC's hang after a frame, and this station's own transmissions on a recording, rank below them
+    /// as a spread-out ramp; the gaps are the tight plateau between: the band as it now is, which is
+    /// why they replace the history.
+    pub fn commit_band(&mut self) {
+        let Some(mut held) = self.held.take() else {
+            return;
+        };
+        if held.is_empty() {
+            return;
+        }
+        self.recent_a.clear();
+        self.recent_b.clear();
+        held.sort_by(|a, b| a.iter().sum::<f32>().total_cmp(&b.iter().sum::<f32>()));
+        let n = held.len();
+        let width = ((n as f32 * BAND_COMMIT_WIDTH) as usize)
+            .max(COLD_WINDOWS)
+            .min(n);
+        let totals: Vec<f32> = held.iter().map(|w| w.iter().sum::<f32>()).collect();
+        let last_start = ((n as f32 * BAND_COMMIT_MAX_START) as usize).min(n - width);
+        // The run whose powers spread least: the band's plateau, not the AGC's ramp below it.
+        let spread = |i: usize| totals[i + width - 1] / totals[i].max(f32::MIN_POSITIVE);
+        let from = (0..=last_start)
+            .min_by(|&a, &b| spread(a).total_cmp(&spread(b)))
+            .unwrap_or(0);
+        let to = from + width;
+        self.history.clear();
+        for powers in held.into_iter().skip(from).take(to - from) {
+            self.push_history(powers);
+        }
+        self.mean_sq = Some(self.estimate());
     }
 
     /// Drop everything held (the burst was a transmission), and resume learning. The buffered partial

@@ -1,0 +1,5 @@
+# Task 18 Part D (task 11 Part C), run a2b — B sends, robust, 900 s
+- rpi51 commit `2bbcc074` (same binaries as a2a: server `7ee5312766d5f738af9619dd857eabe085f10676f4ff966d68315976e9ef20a2`, CLI `52f8a3c6b5a8d3305c036ba1f8f5728f941b8f9203498be09ef95a28d2ed0af3`, twin-traffic.sh `c9e152f32d6b8d5548551b255865b9c45c198b96739672b02eab9dee56fdc373`, identical on both stations).
+- Traffic started 16:12:37.94 UTC (t0 = the runner's "Driving OTA traffic" line). Drive schedule on `B_TX_SINK_VOLUME` (UTC): 0.15 until 16:21:37.07 (t0+540 s), 0.02 at 16:21:37.07, 0 at 16:22:37.24, 0.15 at 16:24:07.43 to the end (drive-schedule.txt).
+- RSPdx witness, port A, LO 144.620 MHz, 62.5 kS/s, RFGR 22 / IFGR 40, 960 s from 16:12:37.9: `~/onair-captures/2026-10-31/a2b.cf32` (480000000 bytes, not committed), sha256 `1355f8048c926b980e53a041e987b45ce045998ccd57f64993a0d5951e6d57fb`, `peak=0.0129 rms=0.0014 clip=0.00%`. Not analysed.
+- Receive audio (8 kHz): rx-audio-2026-11-01/rx-{a,b}-a2b-8k.wav.gz, 1100 s each, started 16:11:49.83 (rpi51) / 16:11:50.17 (station B).

@@ -1,0 +1,6 @@
+# Task 23 Part B, run a2i — A sends, robust, 1200 s, interval 8 s; A's drive 0.01 / 0.008 / 0.007 (then back to 0.15)
+- rpi51 `5a3f6c5b` (notch fix), AGC FAST both rigs, FT-991A SQL 0 and PREAMP 20, `auto_id_signoff_idle_secs = 30` on both (`config-a.toml`, `config-b.toml`), `DAEMON_LOG_LEVEL=info,ofdm_plugin=debug`, `OTA_PROFILE=robust`, `TRAFFIC_DURATION=1200`.
+- t0 (the runner's "Driving OTA traffic" line) 10:07:40.72 UTC. First SL6 (QPSK250-D) `frame_received` on B at t0+291 s. Schedule in `drive-schedule.txt`; the schedule script is `t23sched.sh` (scratchpad, not committed). Stop rule at the finer steps: no `ota_rate_decision` on B for 60 s (the `info` log has no `burst flushed` line to count).
+- PTT/ALC watcher (1 s polling, both rigctlds): `ptt-alc-watch.txt`. No keying stretch over 70 s.
+- RSPdx witness, port A, LO 144.620 MHz, 62.5 kS/s, RFGR 22 / IFGR 40, 1200 s from 10:07:40.7: `~/onair-captures/2026-10-31/a2i.cf32` (600000000 bytes, not committed), sha256 `cd0312d8bcb33404e6185b5ca5e63ca4251d263b2f2cc9a95ace2d93cf1f4b09`, `peak=0.0155 rms=0.0093 clip=0.00%`.
+- Receive audio (8 kHz): rx-audio-2026-11-01/rx-{a,b}-a2i-8k.wav.gz, 2400 s each, started 10:06:53.23 (rpi51) UTC.

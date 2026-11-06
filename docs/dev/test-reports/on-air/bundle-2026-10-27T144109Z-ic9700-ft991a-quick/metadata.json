@@ -1,0 +1,26 @@
+{
+  "captured_at_utc": "2026-10-27T144109Z",
+  "git_sha": "4dbd2f6dd12aeae47bb489c6abea9d8dd3ff1b04",
+  "git_branch": "claude/affectionate-brahmagupta-sdn8qg",
+  "git_dirty": true,
+  "host": "DC0SK-RPI51",
+  "operator_user": "dc0sk",
+  "label": "ic9700-ft991a-quick",
+  "files": {
+    "report": {
+      "source": "docs/dev/test-reports/onair-2026-10-27T143955.json",
+      "bundle_name": "onair-2026-10-27T143955.json",
+      "sha256": "eedc4ed639588e6a613f2ae2e51c109462cc617e6d7745a61482c337fc5a5644"
+    },
+    "config_snapshot": {
+      "source": "/home/dc0sk/.config/openpulse/config.toml",
+      "bundle_name": "config.toml.snapshot",
+      "sha256": "d7db54195ec4f5893f41d220474e75d21dd2ad0c7e992288944068dbf480e093"
+    },
+    "notes": {
+      "bundle_name": "",
+      "sha256": ""
+    }
+  },
+  "preflight": null
+}

@@ -15,6 +15,614 @@ this ledger adds the design rationale and the actually-observed results per chan
 
 ---
 
+## 2026-11-05 — A status query no longer erases the sender's climb record (work plan M3, A2)
+
+- **Requirement/change:** REQ-FUN-06. On air (tasks 24–26: f2d, f2e, f2f) B climbed to SL7, A
+  decoded nothing there, and the fall-back after silence never fired (51 abandons per run). f2f's ACK
+  log showed the climb was recorded and emptied with no ACK in between.
+- **Cause:** the CLI's `ota-status` was `OtaSetLevelBounds {None, None}`, and `set_level_bounds`
+  empties the climb record and the backoff and overwrites configured bounds. The on-air runner polls
+  it every pass. Also, `ota-status` and `ptt-state` stopped reading at the daemon's `ok`, which comes
+  before the event, so neither had ever printed a real answer against a real daemon.
+- **Design decision:** a read-only `ControlCommand::GetOtaStatus`; the CLI reads past the `ok` to the
+  event; unchanged bounds are a no-op in `set_level_bounds`, while real changes still drop the record.
+  Mandatory review by Fable, which confirmed the cause by measurement (twin fails polled, 400 s;
+  passes unpolled, 120 s) and set the fix shape (task 26 review, `docs/dev/onair-tasks.md`).
+- **Implementation:** `crates/openpulse-daemon/src/protocol.rs` (`GetOtaStatus`),
+  `crates/openpulse-daemon/src/lib.rs` (`apply_command_to_engine`),
+  `crates/openpulse-cli/src/commands/daemon.rs` (`run_command_for_event`, `ota_status`, `ptt_state`),
+  `crates/openpulse-core/src/ota_rate.rs` (`set_level_bounds`).
+- **Tests:** `a_status_poll_with_unchanged_bounds_keeps_the_fall_back` (twin, new);
+  `unchanged_bounds_keep_the_climb_record_and_a_change_drops_it`;
+  `get_ota_status_reports_and_keeps_the_bounds`; CLI `ota_status_reads_the_event_that_follows_the_ok`,
+  `ota_status_without_an_event_is_an_error`, `ptt_state_reads_the_event_that_follows_the_ok`,
+  `ptt_state_without_an_event_is_an_error`.
+- **Test results:** twin 2/0 (120 s); `ota_rate` 36/0; daemon lib (filtered) 32/0; CLI `daemon` 12/0.
+  Clippy (core, daemon, cli, panel, `--all-targets`) and fmt clean. Sabotages, each failing its gate:
+  no-op removed → unit and polled twin (400 s; the unpolled twin passes); CLI sends the bounds command
+  → request check; CLI stops at `ok` → both "reads the event" tests; status arm mutates → daemon test.
+  Workspace gate not run. Task 27 runs it on air.
+
+
+## 2026-11-05 — The fallback says why it declined (work plan M3, A2)
+
+- **Requirement/change:** REQ-FUN-06. On air (task 24, f2d) the fallback after a climb into silence
+  declined 51 times at SL7. A keyed no ACK after its climb recommendation, and the code, an engine
+  replay of B's ACK sequence and a two-daemon twin all fall back. The info log could not say why.
+- **Design decision:** a diagnostic only. `fall_back_declined_because` gives the reason, and the engine
+  logs it at `info` on every decline. No keying change.
+- **Implementation:** `crates/openpulse-core/src/ota_rate.rs` (`fall_back_declined_because`);
+  `crates/openpulse-modem/src/engine.rs` (`ota_fall_back_after_silence`).
+- **Tests:** `the_declined_reason_matches_the_fall_back`.
+- **Test results:** `ota_rate` 35/0. Clippy (`openpulse-core`, `openpulse-modem`) and fmt clean;
+  reachability PASS. Task 25 reruns f2d with it.
+
+
+## 2026-11-05 — A climb into silence: the sender returns to the level before it; SL7's peak within full scale (work plan M3, A2)
+
+- **Requirement/change:** REQ-FUN-06.
+  - On air (task 23, f2c) the climb SL7 → SL8 dropped B's audio by 13 dB. A heard nothing, keyed
+    nothing, and the link never recovered: B abandoned 51 messages at SL8.
+  - SL7's frames went out at a 2.82 peak, above full scale.
+- **Design decision:** `docs/dev/design/ladder-climb-into-silence.md`; mandatory review
+  `docs/dev/reviews/review-ladder-climb-into-silence-2026-11-05.md` (M1, M2, S1–S7, N1 taken).
+  - **P3:** after `MAX_SILENT_ACK_WINDOWS` silent windows following an unconfirmed climb, the sender
+    returns once to the level before it and continues within the same budget. Only a decode-path ACK
+    clears the record; never onto the MFSK16 sub-floor; a backoff of 4 to 32 declined climbs back to
+    a rung that went silent.
+  - **P1:** every OFDM frame is normalised to a 0.9 peak.
+  - **P2(a)** is not implemented: the estimators need a per-mode calibration first (review S6).
+- **Implementation:**
+  - `crates/openpulse-core/src/ota_rate.rs`: `adopt_recommendation_from`, `fall_back_after_silence`,
+    `TX_CLIMB_BACKOFF_FIRST`, `TX_CLIMB_BACKOFF_MAX`.
+  - `crates/openpulse-modem/src/engine.rs`: `apply_ota_ack`, `ota_fall_back_after_silence`.
+  - `crates/openpulse-modem/src/event.rs`: `EngineEvent::OtaFallBack`.
+  - `crates/openpulse-daemon/src/server.rs`: `run_ota_retry`.
+  - `plugins/ofdm/src/modulate.rs`.
+  - The panel and the TUI handle the new event.
+- **Tests:**
+  - `ota_rate` (7 new);
+  - `run_ota_retry` (2 new);
+  - `climb_into_silence_falls_back` (two daemons, the twin bridge, a channel silent while A is at
+    SL8);
+  - `every_ofdm_frame_peaks_within_full_scale`.
+- **Test results:**
+  - `ota_rate` 34/0; `ota_retry` 9/0; `ota_rate_lockstep` 10/0; `ofdm-plugin` 38 + 5/0;
+    `climb_into_silence_falls_back` 1/0 (120 s).
+  - **Sabotage:** M1, M2 and the backoff removed each fail their own test (33/1). The fallback disabled
+    (`false && …`) fails the twin test at its 400 s timeout.
+  - Two earlier sabotages proved nothing and are recorded in the review: a muted channel louder than
+    idle, which B NACKed; and `x() && false`, which still called the fallback.
+  - Clippy (workspace, all targets) and fmt are clean.
+  - `scripts/gate.sh` at `f87cd95`: 2783 tests passed, 0 failed (393 suites).
+    - The reachability ratchet failed on the two backoff constants being `pub`; they were made private
+      in `f60ae48` (`REACH: PASS`, `ota_rate` 34/0).
+    - The trailer lint fails only on `ab9235f` and `cd3bf5c` (2026-11-01, recorded on the M3 line).
+
+
+## 2026-11-04 — The receive notch protects every rung the OTA receiver will try (work plan M3; Release 1 `fast` profile)
+
+- **Requirement/change:** REQ-FUN-06, REQ-QRM-01.
+  - On air (task 22, run f1b) B read SL8 at a median 5.0 dB; the recording, taken before the
+    front end, reads 12.8 dB.
+  - The daemon passes its base mode (BPSK250) to `accumulate_capture`, so the notch protected 500 Hz
+    and nulled the OFDM edge subcarriers at 500 and 2500 Hz.
+- **Design decision:** `docs/dev/design/notch-protects-the-ladder.md`.
+  - In an OTA session, protect the widest occupied band among the caller's mode and
+    `rx_candidates()`.
+  - Review: none — a bug fix at the seam with a sabotage-verified production-path test.
+- **Implementation:** `crates/openpulse-modem/src/engine.rs` (`apply_rx_notch`).
+- **Tests:** `crates/openpulse-modem/tests/notch_protects_the_ladder.rs`, through `accumulate_capture`
+  → `ota_decode_burst` with the stations' notch configuration.
+- **Test results:**
+  - SL7–SL10 read 15.6 / 20.5 / 21.2 / 20.3 dB with the notch on and off alike; before the fix,
+    4.9 / 5.9 / 11.4 / 9.6 dB with it on.
+  - Sabotage (the candidate loop disabled) fails it: SL7 4.9 dB against 15.6.
+  - `scripts/slow-tests.sh notch` (REQ-QRM-01) at `79fa331`: 2 passed, 1 failed (523 s).
+    - The failure is the known red row #1457: the negative control of
+      `the_notch_rescues_a_decode_that_fails_without_it` decodes without the notch at 0.3.
+    - Same as before the change. That suite runs the one-shot receive with no OTA session, which the
+      change does not touch.
+
+
+## 2026-11-04 — The OFDM last symbol's padding is whitened (work plan M3; Release 1 `fast` profile)
+
+- **Requirement/change:** REQ-FUN-06. In run f1 the OFDM rungs read a low SNR on decoded frames
+  (SL9 median 6.8 dB). From `rx-b-f1`, 93 frames through the plugin's own equaliser: the last data
+  symbol of a 16QAM frame arrives broken (pilot gain 0.29, EVM-SNR −5.2 dB), and without it the
+  frames pool to 15.5 dB. The modulator padded the last symbol after the whitening, so 40 of its 52
+  subcarriers carried one point, an impulse that set the frame's peak a median 3.6 dB over its data.
+- **Design decision:** `docs/dev/design/ofdm-padding-whitening.md`. Pad to whole symbols before the
+  whitening. The receiver stops at the length prefix, so old and new builds interoperate. The SNR
+  estimator is not changed. Review (after the implementation, a plugin waveform change the receiver
+  never reads): `docs/dev/reviews/review-ofdm-padding-whitening-2026-11-04.md`. It confirms the
+  mechanism and interop in both directions (652 frames, both orders, hard and soft), and corrects the
+  first numbers, which were made with a 2-byte prefix.
+- **Implementation:** `plugins/ofdm/src/modulate.rs` (`modulate_with_params`).
+- **Tests:**
+  - `no_symbol_puts_most_subcarriers_on_one_point` (`ofdm-plugin`): every mode, every padding length.
+  - `ofdm_carrier_offset_ota`: the SNR reference is capped at 30 dB, 8 dB over the ladder's highest
+    climb ceiling. Above it the check measured the shift's own ceiling (~38.5 dB at SL14 −40 Hz with
+    either padding), and the louder frame raised SL14's on-carrier reading from 41.0 to 41.5 dB.
+- **Test results:**
+  - The new test passes; worst counts are 10/16, 22/52, 15/52, 10/52, 8/52 and 6/52 against bounds of
+    12.7–28.6.
+  - **Sabotage** (the old order, whitening before padding) fails it: 13 of 16 on one point.
+  - `ofdm-plugin` 37 + 5 passed, 0 failed.
+  - `openpulse-modem` OFDM suites all pass after the cap: `cessb_ofdm_lowentropy` 3,
+    `ofdm_carrier_offset_ota` 1, `ofdm_simulation` 1, `ofdm_snr_clears_the_climb_ceiling` 1,
+    `ofdm_scfdma_bakeoff` 1.
+  - Clippy and fmt are clean.
+  - Frame power at the same peak, 40 seeds (the review): 16QAM median +3.5 dB (+1.6 to +5.4),
+    32QAM +0.4 dB, 64QAM +1.6 dB.
+  - After the review, `ofdm_carrier_offset_ota` also asserts a fixed 35 dB floor above the 30 dB
+    cap (the shifted readings are 37.7–39.7 dB), so the check keeps its sensitivity there.
+
+## 2026-11-04 — No ACK for a frame that ended past its window in a capped slab (work plan M3, A2)
+
+- **Requirement/change:** REQ-FUN-06. Finding K of `docs/dev/design/dcd-raised-floor.md`: a capped
+  slab (#1255) ends where the cap fell, up to 38 s after its frame at SL6 and up to 320 s at SL2. The
+  ACK deadline is set from the slab's end. In a2g every decoded cap flush keyed an ACK (13 after the
+  restore), and an ACK carries no sequence number, so a late one can mark a later frame delivered.
+- **Design decision:** on a capped slab, the frame's end is the decoded slice's start plus the payload's
+  own coded airtime (`tx_airtime_seconds`). The deadline is shifted back by the slab's tail after it;
+  past it, no ACK and the ladder holds, as for a late decode. A keying change, so the review was
+  mandatory: `docs/dev/reviews/review-late-ack-capped-slab-2026-11-04.md`. It replaced the first
+  version's slice-reserve bound, which still let late ACKs through by 5 s at SL6 and 83 s at SL2.
+- **Implementation:** `crates/openpulse-modem/src/engine.rs` (`ota_decode_and_ack_inner`: the capped
+  flag is kept past the failed-slab branch; the rule follows the past-deadline check).
+- **Tests:** `crates/openpulse-modem/tests/no_ack_for_an_early_frame_in_a_capped_slab.rs`: a 6 s
+  window (no ACK); a window of the true tail − 2 s (no ACK; the tightness case); the tail + 2 s and no
+  deadline (ACK). Every case asserts that the decode finished before its deadline.
+- **Test results:** 3 passed, 0 failed. Sabotage: the slice-reserve bound restored, 1 failed
+  (`the_frames_end_is_its_airtime_not_its_slice_reserve`), 2 passed. Clippy (`openpulse-modem`,
+  all targets) and fmt clean. The gate result is on the M3 line.
+
+## 2026-11-04 — The DCD re-learns a raised noise floor under a receiver AGC (work plan M3, A2 clause 2)
+
+- **Requirement/change:** REQ-FUN-06. On air (task 21, run a2g) station B's audio between frames went
+  from digital silence to steady hiss while its AGC held the hiss 31 dB down under each frame. The
+  squelch, learned on silence, stayed below the hiss; the 38 s cap committed frames and gaps together,
+  and the floor came out at half the gap hiss. Result: no frame boundary, no NACK, no demotion, and
+  12 messages abandoned.
+- **Design decision:** `docs/dev/design/dcd-raised-floor.md`. At a cap flush only, learn the 20 %-wide
+  run of the held windows, ranked by total power, that spreads least, starting at or below the median
+  (`commit_band`), replacing the history. Review:
+  `docs/dev/reviews/review-dcd-raised-floor-2026-11-04.md`. Decisions 2 (NACKs while busy) and 3 (a
+  sender-side step-down) are parked; a late ACK from a decoded cap flush (keying) waits for the
+  maintainer.
+- **Implementation:** `crates/openpulse-dsp/src/noise_floor.rs` (`commit_band`, `BAND_COMMIT_WIDTH`,
+  `BAND_COMMIT_MAX_START`); `crates/openpulse-modem/src/engine.rs` (the cap flush).
+- **Tests:** `dcd_agc_pumped_hiss` (the on-air cadence, a 0.6 s hang); an `#[ignore]`d measurement
+  across hangs of 0.6–2.5 s.
+- **Test results:** 7 of 7 frames decoded after the step, against 0 of 7 with `commit`. Sabotage:
+  `commit` 0/7, the quietest fifth 0/7, both fail. The replay of `rx-b-a2g`: the squelch steady at
+  0.024–0.026 against 0.021 hiss, 12 of 14 bursts decode. The measurement: 7/7, 6/7, 0/7 at hangs of
+  0.6, 1.0, 1.5 s; from 1.5 s the steady-state learner slides the squelch under the gaps, so **AGC
+  FAST is a Release 1 operating requirement**. `openpulse-modem` 648/0 and `openpulse-dsp` 125/0 at
+  `338bbbd`. `scripts/gate.sh` at `43acba7`: 2767 tests passed, 0 failed (390 suites); clippy (three configurations), fmt, trace and doc lints ok; reachability failed on the two new constants being `pub`, made private in `9745839` (amended; reachability, both clippy configurations and `openpulse-dsp` then clean); the trailer lint fails only on `ab9235f` and `cd3bf5c` (2026-11-01, recorded on the M3 line).
+
+## 2026-11-03 — The OFDM SNR reading measures the frame, not the noise after it (work plan M3; Release 1 `fast` profile)
+
+- **Requirement/change:** REQ-FUN-06. The OFDM SNR estimate equalised the whole receive slice, the
+  noise after the frame included. SL7 read 6.6 dB on a clean channel against a 12 dB climb ceiling,
+  so `climb_on_snr` never fired on an OFDM rung, and SL14 (admitted only after an SNR upgrade
+  candidate) was unreachable on the `fast` ladder.
+- **Design decision:** bound the equalised symbols to the frame by its length prefix; keep every
+  symbol when the prefix does not decode (`docs/dev/design/ofdm-carrier-offset.md`, "Not changed, and
+  found on the way", now fixed).
+- **Implementation:** `plugins/ofdm/src/demodulate.rs` (`frame_symbol_count`, `equalized_data_symbols`).
+- **Tests:** `ofdm_snr_clears_the_climb_ceiling` (`openpulse-modem`, production path, SL7–SL13);
+  `snr_ignores_the_tail` (`ofdm-plugin`).
+- **Test results:** SL7 16.5 dB against a 12 dB ceiling; SL8–SL13 37–42 dB against 14–22; the plugin
+  test within 1 dB with and without the tail (e.g. 16QAM: 41.6 alone, 6.1 with the tail before).
+  Sabotage, with the bound removed: SL7 7.1 dB fails; the plugin test 2.7 against 31.5 dB fails.
+  The gate result is in the station-ID entry above.
+
+## 2026-11-03 — The sender's station ID shares its data frame's audio stream (work plan M3)
+
+- **Requirement/change:** REQ-FUN-06, REQ-REG-10. On air (task 20) the sender keyed its data frame and
+  its ride-along ID as two output streams in one PTT hold. The 0.12 s audio gap dropped the SSB
+  carrier, and the receiver keyed its ACK over the ID: 5 of 6 frames carrying an ID lost their ACK.
+- **Design decision:** `ModemEngine::transmit_burst` holds every frame the closure transmits, after
+  its per-frame processing, and writes them as one stream; each frame is recorded in the §97 log under
+  the sequence it was sent with; the burst always ends. The receiver's ID-before-ACK keeps two streams
+  (no loss there on air; merging is untested for the sender's ACK listener). Mandatory keying review:
+  `docs/dev/reviews/review-id-one-stream-2026-11-03.md`.
+- **Implementation:** `crates/openpulse-modem/src/engine.rs` (`transmit_burst`, `TxBurst`,
+  `end_tx_burst`, `record_tx_frame_seq`, `stage_emit_output`); `crates/openpulse-daemon/src/server.rs`
+  (`ota_send_with_ptt`; the with-data ID logged when it goes out).
+- **Tests:** `id_with_data_is_one_stream` (daemon, `server::run`, a counting backend); `transmit_burst`
+  (modem).
+- **Test results:** 1 stream in the ID's keying; sabotage (no burst): 2 streams, fails. The burst's
+  audio equals the two frames sent separately; seqs 0 and 1 logged with their modes; a failure after
+  the first frame still writes the first. **Review fixes:** S1, the ID counts as sent only if its
+  burst was written (`id_after_a_failed_write`: logged once, after the failure; sabotage fails); S3, a
+  nested burst is refused and a panic closes the burst (`transmit_burst`, 4 passed). The review's S2
+  falsifier never decoded the ID, but found that SL5 and SL6 behind a lead decoded nothing; the
+  energy-rise onsets now reach the burst's end (`ladder_frame_behind_a_lead`, 1 passed covering 12
+  cases; sabotage fails). `scripts/gate.sh` at `62a45b3`: 2766 tests passed, 0 failed (389 suites); trace, reachability, fmt, doc and unsafe lints ok; clippy failed on one unneeded `mut` in the new test `ladder_frame_behind_a_lead`, fixed in `23278b6` (amended, test file only; both clippy configurations then clean); the trailer lint fails only on `ab9235f` and `cd3bf5c` (2026-11-01, recorded on the M3 line). `scripts/slow-tests.sh` at `ad99247` (this tree with the ride-along test's 90 s budget): `ota_channel_adaptation` 3/3, `spectral_busy_gathers_weak_frames` 2/2, `total_power_bursts_keep_their_head` 1/1, `notch_rescues_interferer` 2/3 (the known red row #1457, same message: the decode succeeded without the notch).
+
+## 2026-11-03 — The OFDM receiver acquires its own carrier offset (work plan M3; Release 1 `fast` profile)
+
+- **Requirement/change:** REQ-FUN-06. The OFDM rungs (SL7–SL14) had no carrier-frequency correction:
+  the receiver refused (hard) or ignored (soft) a moved centre. Measured on the daemon's receive path:
+  SL14 failed at 2.5 Hz, SL10 at 5 Hz, SL7 at 10 Hz (`docs/dev/research/acquisition-comparison-codec2-ft8.md` §1).
+- **Design decision:** `docs/dev/design/ofdm-carrier-offset.md`. The plugin acquires its own offset,
+  as codec2's DATAC modem and our MFSK16 do, and opts out of the engine's AFC, whose BPSK-built settle
+  read −11.5 Hz for a true +2.5 Hz on OFDM. The steps: mix to the told centre; a coarse grid of
+  ±50 Hz in 12.5 Hz steps, timing found after the mix, scored by pilot coherence; the pilot drift for
+  the fine part; one exact analytic-signal mix of the burst.
+- **Implementation:** `plugins/ofdm/src/acquire.rs` (`acquire`), `shift.rs` (`shift_hz`),
+  `channel.rs` (`pilot_drift`), `lib.rs` (`at_nominal_centre` on `demodulate`, `demodulate_soft`,
+  `estimate_snr_db`; `estimate_afc_hz` removed).
+- **Tests:** `ofdm_carrier_offset_ota` (`openpulse-modem`, production path); `carrier_offset_applied`
+  (`ofdm-plugin`: told, not told, raw-demod impairment check); `shift::tests`;
+  `acquisition_is_near_zero_on_carrier_and_the_engine_gets_no_estimate`.
+- **Test results:** production path 55 of 55 (SL7/8/10/12/14 × 11 offsets from −50 to +50 Hz) in 1
+  attempt each; the pinned test 12 of 12, SNR within 1 dB of on-carrier. `ofdm-plugin` 36 + 3 + 1
+  passed. Sabotage: acquisition off fails SL7 at −7.5 Hz on the production path and −40 Hz in the
+  plugin test; the mix removed fails "told" at −40 Hz. The pre-push run then found a HARQ regression
+  (`harq_combining_survives_the_production_capture_entry`: 42 rescues → 0). The cause was the mix's
+  residue in exact-zero lead-in, which the self-normalised timing metric locked to. It was fixed by a
+  relative energy floor in the timing search (`TIMING_ENERGY_FLOOR`), plus early accept and an
+  analytic-once search for cost: 41 rescues, standalone 0.680 against 0.673. `scripts/gate.sh` at `79d37ea` (tree identical to `64dd0e1`, message-only amend): 2757 tests passed, 0 failed, 382 suites; clippy (three configurations), fmt, trace and reachability ok; FAIL on the trailer lint, only for `ab9235f` and `cd3bf5c` (2026-11-01, recorded on the M3 line; the squash carries the trailer). The held-out suites are run separately (`scripts/slow-tests.sh`).
+
+## 2026-11-03 — The ladder scan tries the burst's energy rise and preamble peaks before its walk (work plan M3, A2)
+
+- **Requirement/change:** REQ-FUN-06. On air (task 19, run a2d) an SL3 burst opened 0.7 s before its
+  frame; the ladder scan walked from onset 0 and needed 68 attempts (~11 s on the Pi 4), past the ACK
+  deadline, so the ladder held at SL3 for 6.5 minutes.
+- **Design decision:** `docs/dev/design/ladder-scan-ranked-onsets.md`. Each candidate first tries the
+  preamble's correlation peaks (BPSK250, K = 4, time order) and the first window reaching half the
+  burst's 80th-percentile window RMS, ±1 and ±2 steps; the walk follows without them. Reorders, cannot
+  lose a frame; extra attempts bounded. Review:
+  `docs/dev/reviews/review-ladder-scan-ranked-onsets-2026-11-03.md` (no blocker; all findings taken).
+- **Implementation:** `crates/openpulse-modem/src/engine.rs`: the scan block in
+  `ota_decode_and_ack_inner`, `energy_rise_onsets`, `ENERGY_RISE_FRACTION`, `LADDER_RANKED_ONSETS`.
+- **Tests:** `ladder_scan_ranked_onsets` (two cases: a quiet opener and one at 0.4 of the frame's RMS),
+  `energy_rise_onsets_edges` (unit).
+- **Test results:** both integration cases 2 attempts (budget 12), 2 passed; sabotage with the energy
+  rise removed: 66 attempts, fails; with `ENERGY_RISE_FRACTION` = 0.3: 107, the loud case fails. Unit:
+  1 passed. Replay A/B on eight on-air recordings: the same frames decode, total decode time lower on
+  every one (a2d's first SL3 frame 68 → 3 attempts). `openpulse-modem` release + instruments at `87ce9b6`: 638 passed, 0 failed (172 result lines); clippy and fmt clean on the fixes; the daemon suite and the rest in the pre-push hook.
+
+## 2026-11-02 — No late ACK; a decode stops at its ACK deadline; the station ID rides in each station's own keying (work plan M3, A2)
+
+- **Requirement/change:** REQ-FUN-06, REQ-REG-10 and A2. In task 18, run a2a, the Pi 4 receiver ACKed
+  an SL3 frame 10.1 s after its end, past the sender's 9 s window. The ACK landed on the
+  retransmission and cut its head, and the receiver had moved its recommendation, which the sender
+  never heard. The headless burst then held the Pi 4 for about 3 minutes (reproduced offline: 52 s on
+  x86). The receiver's interval ID, forced at 10 minutes in a continuous exchange, would cut a frame
+  too.
+- **Design decision:**
+  - before each OTA decode on real-time audio, the daemon sets an ACK deadline: frame end + window −
+    2 s keying (measured on air: at most 1.7 s) − ACK airtime − 0.3 s;
+  - a ladder decode stops trying past the deadline, and one that finishes late keys nothing and moves no
+    rung;
+  - non-ladder decodes need no ACK and are exempt;
+  - the ID rides in the station's own keying when its early window is open: the receiver's before its
+    ACK, if both fit; the sender's after its data frame (before it, the receiver loses the data frame).
+- **Implementation:**
+  - `crates/openpulse-modem/src/engine.rs`: `set_ota_ack_deadline`, `decode_deadline`,
+    `non_ladder_decode`, `past_decode_deadline`, `last_ota_decode_late`,
+    `decode_attempts_past_deadline`, `fsk4_ack_airtime_ms`;
+  - `crates/openpulse-core/src/station_id.rs`: `ride_along_due`;
+  - `crates/openpulse-daemon/src/server.rs`: the deadline (with `burst_real_time`), the ride-along at
+    the ACK and in `ota_send_with_ptt`.
+- **Tests and results (run, each sabotage-verified):**
+  - `no_ack_past_the_deadline`: no ACK, no rung moved, no ladder attempt; a non-ladder frame still
+    decodes;
+  - `id_rides_with_the_data_frame`: SL1–SL6;
+  - `id_rides_with_the_ack`: SL1, SL3 and SL6 ACK waveforms;
+  - `ota_ack_deadline_on_real_time_audio` and `id_rides_in_own_keying` (daemon, `server::run`);
+  - suites: see the commit message.
+- **Review:** `docs/dev/reviews/review-late-ack-and-id-ride-2026-11-02.md` (mandatory, keying). One
+  blocker: the deadline was set in the twin and cut non-ladder decodes. Taken, with S1–S5 and N2; S6 is
+  stated in task 19 and N7 is parked.
+
+## 2026-11-02 — No station ID over another station; drop the burst when keying (work plan M3, A2)
+
+- **Requirement/change:** REQ-REG-10, REQ-FUN-06 and A2. In task 17 the receiving station keyed its
+  sign-off ID 10 s after its own ACK, in the middle of the sender's next 66.6 s frame, every ~17 s until
+  that frame ended. Each ID cut the burst. The piece failed, and the busy check read the reopened
+  stream's empty first read as idle, so a NACK was keyed over the frame too. Frame 1 was lost both ways.
+- **Design decision:**
+  - `StationIdTimer::due_reason(now, channel_quiet)`: the sign-off waits for a quiet channel (no burst
+    being gathered, carrier detect idle). The interval ID takes the first quiet moment in its last
+    `min(90 s, interval/2)` and is forced at the interval, so §97.119's limit holds;
+  - the daemon and the ARDOP TNC drop the burst being gathered (`abandon_burst`) where they drop the
+    capture stream around their own transmission. In the daemon that is after the transmit, not before
+    an OTA send that may not key;
+  - the busy check treats an empty read as no information, and the last audio the carrier detect saw
+    decides.
+- **Implementation:**
+  - `crates/openpulse-core/src/station_id.rs` (`due_reason`, `ID_QUIET_WINDOW_MS`);
+  - `crates/openpulse-modem/src/engine.rs` (`burst_open`, `abandon_burst`, `bursts_abandoned`);
+  - `crates/openpulse-daemon/src/server.rs` (the ID's quiet check, two abandon sites,
+    `channel_still_busy`);
+  - `crates/openpulse-ardop/src/bridge.rs` (the ID's quiet check; `release_capture` abandons);
+  - the config doc and template, and the book.
+- **Tests and results (run, each sabotage-verified):**
+  - `station_id_waits_for_a_quiet_channel` (daemon, `server::run`): no transmission during 4 s of
+    carrier, then the ID once quiet. Sabotage, with quiet always true: the ID keyed during the carrier;
+  - `abandon_burst_when_keying` (daemon, `server::run`): the tripwire line appears. Sabotage, with the
+    daemon's calls removed: fails;
+  - `abandon_burst_on_keying` (modem). Sabotage, with the burst left in place: fails;
+  - `channel_busy_tests` (daemon lib). Sabotage, with an empty read read as idle: fails;
+  - core `station_id` tests, four of them new;
+  - suites at `803b110`: daemon, ARDOP, KISS and repeater 318 passed, core 371, 0 failed. After the
+    review fixes: see the commit message.
+- **Review:** `docs/dev/reviews/review-station-id-quiet-channel-2026-11-02.md` (mandatory, keying and
+  regulatory). No Release 1 blocker. S1, S2 and N1–N4 were taken; S3 (the early interval ID in the
+  turnaround after an ACK) was parked.
+
+## 2026-11-02 — An empty capture read no longer ends a burst (work plan M3, A2)
+
+- **Requirement/change:** REQ-FUN-06 and A2. In task 16, 228 of station A's 234 carrier-drop flushes,
+  and 118 of B's 124, were empty capture reads with the signal above the squelch. Frames were cut into
+  hundreds of pieces; A decoded none of B's frames and keyed 3 NACKs over B's frame.
+- **Design decision:**
+  - an empty read reaches the engine's accumulator only after 250 ms with no audio at all (a stream
+    that has ended, or a dead device);
+  - the rule is owned once, in `CaptureGap`, and used by every receive loop: the daemon's `rx_ticker`
+    and `CaptureTicker` (ARDOP, KISS);
+  - the engine's own rule is unchanged;
+  - 250 ms is fitted to the task 16 logs: the longest real gap was 37–45 ms. It is falsified by a
+    device with a callback period of 250 ms or more.
+- **Implementation:**
+  - `crates/openpulse-modem/src/capture_ticker.rs`: `CAPTURE_GAP_MS`, `CaptureGap`, and its use in
+    `CaptureTicker::tick`;
+  - `crates/openpulse-daemon/src/server.rs`: the receive tick uses `CaptureGap`.
+- **Tests and results (run):**
+  - `empty_capture_reads` (daemon, through `server::run`): passes in 2.4 s. Sabotage: no decode in
+    30 s, fails;
+  - `capture_ticker_empty_reads` (modem): passes. Sabotage: 12 bursts, the first 2000 of 9504 samples,
+    fails;
+  - the `capture_ticker` unit test passes;
+  - the daemon suite passed at `63a1f52` (220 tests) and with `CaptureGap` (219; the unit test moved
+    to the modem crate), 0 failed;
+  - the ARDOP and KISS suites: 66 passed, 0 failed; clippy and fmt are clean.
+- **Review:** `docs/dev/reviews/review-empty-capture-reads-2026-11-02.md` (mandatory, keying). No
+  Release 1 blocker. The `CaptureTicker` twin was taken, and the stream-drop and burst-abandon gap was
+  parked.
+
+## 2026-11-01 — No NACK while the channel is busy; MFSK16 is not onset-scanned when it finds no lock (work plan M3, A2)
+
+- **Requirement/change:** REQ-FUN-06 and A2. In task 15 (run b5), station B decoded 0 of 4 frames and
+  keyed a NACK over A's frame. Its receive loop held for up to 64 s. In the live-loop replay, two
+  bursts were outliers: a 14.6 s burst cost 19 s in phase 2's fallback acquisition, and after B's
+  step-down to SL1, a 25.6 s piece of an SL2 frame cost 53.5 s in ~205 failing MFSK16 attempts.
+- **Design decision** (addenda 3 and 4 to `docs/dev/design/ota-scan-onset-major.md`):
+  - a failure is `Muted`, keying no NACK, when the audio read right after the flush is still above
+    the DCD squelch;
+  - phase 2's fallback entry acquires only across the onsets it scans;
+  - carrier-drop flushes are logged;
+  - read-ahead audio is dropped with the capture stream;
+  - a candidate whose demodulator searched every onset of the whole burst and found no lock (MFSK16,
+    `window_acquisition_failed_error`) skips the scan pass at the offset-0 correction.
+- **Implementation:**
+  - `crates/openpulse-daemon/src/server.rs`: `channel_still_busy`, `rx_pending`;
+  - `crates/openpulse-daemon/src/nack_budget.rs`: the `channel_busy` verdict;
+  - `crates/openpulse-modem/src/engine.rs`: `acquire_burst_correction_span`, the flush log,
+    `searched_whole_burst`;
+  - `crates/openpulse-core/src/plugin.rs`: `window_acquisition_failed_error`,
+    `is_window_acquisition_failure`;
+  - `plugins/mfsk16/src/lib.rs`: uses that error.
+- **Tests and results (run):**
+  - the busy-verdict unit test passes. Sabotage: it fails;
+  - settle tripwire: 17 settles. Sabotage: 206;
+  - MFSK16 fixture test: 69 attempts, 2.9 s. Sabotage: 171 attempts, 41.7 s. Budget 110;
+  - an MFSK16 frame behind 4 s of BPSK31 in one burst still decodes (review round 5, finding 7);
+  - the core unit test passes, as do the MFSK16 engine, HARQ, ARQ-subfloor and off-frequency suites;
+  - live-loop replay of b5 at CPU ×4: the 25.6 s burst 53.5 s → 1.7 s;
+  - the replay decodes the same frames on the earlier recordings, with the MFSK16 bound: `rx-a-g2` 2,
+    `rx-b-b2` 4, `rx-a-g3` 2, `rx-b-b3` 3, `rx-b-b4` 4 (800-sample reads);
+  - pre-push at `4ddd24d`: passed (344 test result lines, 0 failed);
+  - `slow-tests.sh` at `4ddd24d`: `ota_channel_adaptation` 3/3, `spectral_busy_gathers_weak_frames`
+    2/2, `total_power_bursts_keep_their_head` 1/1; `notch_rescues_interferer` 2/3, the known red row
+    #1457.
+- **Review:** `docs/dev/reviews/review-ota-scan-onset-major-2026-11-01.md`, round 4 (keying,
+  mandatory). No Release 1 blocker; the `rx_pending` should-fix was taken. The MFSK16 bound: round 5, no
+  blocker; the wording of the cover's residual was corrected and a frame-after-energy test added.
+
+## 2026-11-01 — The OTA uncoded fallback rescue is bounded; the daemon logs its capture reads (work plan M3, A2)
+
+- **Requirement/change:** REQ-FUN-06 and A2. On air with the short-of-block guard (task 14), station B
+  decoded 0 of 4. Its daemon spent the run in the uncoded fallback, 6822 attempts. The exhaustive
+  scan's reach grows with the read that triggered the flush, after early fragments of A's first frame
+  had stalled the loop.
+- **Design decision** (addendum 2 to `docs/dev/design/ota-scan-onset-major.md`, reviewed):
+  - the deferred exhaustive fallback and phase 2's fallback entry scan at most 64 onsets, nearest a
+    point 1024 samples before the trigger point first. That covers the 2048-sample pre-trigger ring at
+    BPSK250;
+  - the daemon logs every capture read;
+  - the runner warms up for 30 s before traffic starts.
+- **Implementation:**
+  - `crates/openpulse-modem/src/engine.rs`: `OTA_FALLBACK_RESCUE_ONSETS`,
+    `OTA_FALLBACK_RESCUE_LEAD_BIAS`, `onsets_nearest`, `decode_fallback_near_trigger`, and the phase-2
+    onset list;
+  - `crates/openpulse-daemon/src/server.rs`: the capture-read log;
+  - `scripts/run-onair-twin-ota.sh`: `TRAFFIC_WARMUP`.
+- **Tests and results (run):**
+  - fragment test budget 200: 133 attempts. Sabotage: 511 without the cap, 888 without the guard too;
+  - the `onsets_nearest` unit test passes;
+  - replay on x86, release: the 5.1 s fragment 6.0 → 2.5 s; `rx-a-g3` fragments 1.1–3.0 s. The
+    live-loop model on `rx-b-b4` at CPU ×4 decodes 4 of 4 frames, where the 4th had been merged into a
+    96.6 s burst. The same frames decode on all four recordings;
+  - pre-push at `48c64ef` and at `eb55283`: 16 crates, tests passed. The first push of `eb55283` failed
+    on `discovery_tick_defers_a_due_beacon_when_the_channel_is_busy` while `slow-tests.sh` loaded the
+    machine. It passed 5/5 alone and 3/3 in the parallel daemon library run, so it looks like a load
+    flake; the change only adds logging to `server.rs`. The retry passed;
+  - `slow-tests.sh` at `eb55283`: `ota_channel_adaptation` 3/3, `spectral_busy_gathers_weak_frames`
+    2/2, `total_power_bursts_keep_their_head` 1/1; `notch_rescues_interferer` 2/3, the known red row
+    #1457.
+- **Review:** the same review file, third round. No Release 1 blocker. The cap's centre was moved
+  before the trigger and the log wording changed. `twin_daemon_bridge` flakes under load before and
+  after the change.
+
+## 2026-11-01 — OTA candidates a burst is too short to hold are not onset-scanned (work plan M3, A2)
+
+- **Requirement/change:** REQ-FUN-06 and A2. With the onset-major build on air (task 13) the first
+  frame got through in both directions inside the ACK window, but later frames were lost: bursts that
+  fail held the receive loop for minutes on the Pi 4. Replayed, a 5.1 s fragment cost 1088 coded
+  attempts and 79 s on x86, at SL2 and SL3, whose frames are 66.6 s and 33.8 s long.
+- **Design decision** (addendum to `docs/dev/design/ota-scan-onset-major.md`, reviewed): a candidate
+  whose offset-0 attempt over the whole burst fails as shorter than one RS block (`have + 2 < 255`) is
+  skipped by the onset scan and phase 2. Every later onset decodes a suffix of the same burst. The
+  uncoded fallback and HARQ are not skipped.
+- **Implementation:**
+  - `crates/openpulse-core/src/fec.rs`: `rs_short_of_block_error` and `rs_short_of_block`, which
+    share one prefix;
+  - `crates/openpulse-modem/src/engine.rs`: `short_of_block` in `ota_decode_and_ack_inner`, and
+    `rs_interleaved_decode_prefix` building its error through the core function;
+  - the test and fixture `crates/openpulse-modem/tests/captures/ft991a-ota-fragment-5s.wav`.
+- **Tests and results (run):**
+  - the new test: 511 attempts (budget 600); sabotage, with the guard disabled: 888, the test fails;
+  - the core unit test passes;
+  - replay on x86, release, 800-sample reads: the 5.1 s fragment 79.2 → 6.0 s, a 36.2 s burst
+    39.9 → 5.2 s, a 10.8 s burst 23.8 → 3.7 s; every frame that decoded on the four recordings still
+    decodes;
+  - the pre-push hook at `30dad89`: openpulse-core, openpulse-modem and their 30 reverse dependents,
+    tests passed;
+  - `scripts/slow-tests.sh` at `30dad89`: `ota_channel_adaptation` 3/3,
+    `spectral_busy_gathers_weak_frames` 2/2 and `total_power_bursts_keep_their_head` 1/1;
+    `notch_rescues_interferer` 2/3, the known red row #1457 with the same message.
+- **Review:** `docs/dev/reviews/review-ota-scan-onset-major-2026-11-01.md`, second round. No
+  Release 1 blocker; 2 should-fix findings taken: the duplicate message builder, and the false HARQ
+  claim.
+
+## 2026-11-01 — The OTA burst scan runs onset-major (work plan M3, A2)
+
+- **Requirement/change:** REQ-FUN-06 and A2. On 2 m neither daemon answered inside the sender's 9 s ACK
+  window:
+  - rpi51 needed 267 attempts in 30 s for B's first SL2 frame;
+  - station B decoded none of A's frames.
+
+  The recordings beside both daemons (task 12) reproduce it offline. B's audio decodes all four
+  frames through the daemon's receive entry, at 8–10 s each on x86.
+- **Design decision** (`docs/dev/design/ota-scan-onset-major.md`, reviewed): in
+  `ota_decode_and_ack_inner`'s scan block, build the same (onset, candidate, pass) attempt set as
+  before and run it sorted by onset. Before, each candidate and pass walked the whole onset span
+  first.
+
+  On the recording, the trigger settle landed at −12.8 Hz against a +3.2 Hz carrier, possibly one
+  preamble sideband. The corrected pass walked all 129 onsets before the uncorrected pass decoded at
+  onset 2560. A burst that does not decode now costs exactly the same, and one that does stops at
+  the first onset where any attempt does.
+- **Implementation:**
+  - `crates/openpulse-modem/src/engine.rs` (the `'scan` block);
+  - `crates/openpulse-modem/tests/ota_scan_onset_major.rs`;
+  - fixture `crates/openpulse-modem/tests/captures/ft991a-ota-frame-bpsk31-rs.wav`, listed in the
+    corpus README.
+- **Tests and results (run):**
+  - the new test: 26 decode attempts on the burst (budget 40), 1.7 s in release and 5.3 s in debug;
+  - sabotage, with the scan reverted: 144 attempts, the test fails;
+  - replay on x86, release: B's first frame 8.13 → 1.75 s at 800-sample reads and 9.64 → 4.22 s at
+    4096; B's 4th frame 16.9 → 2.7 s; every burst that decoded before still decodes, with the same
+    ACK;
+  - `scripts/gate.sh` at `cd3bf5c` (the first revision; the second only adds the corner attempt):
+    **suites=369, tests_passed=2721, tests_failed=0**. Verdict `GATE: FAIL` from the
+    requirements-trailer lint alone: the branch commits `cd3bf5c` and `ab9235f` carry no
+    `Implements:` trailer. Rewriting them would need a force push, which was not done. The squash
+    message must carry `Implements: REQ-FUN-06`; `check-trailer.sh --message-file` passes with it;
+  - `scripts/slow-tests.sh` at `ab9235f`: `SLOW-TESTS: FAIL`. One suite failed:
+    `notch_rescues_interferer`, 2 passed and 1 failed. The failure is the known red row #1457 (work
+    plan decision 10; `acceptance-criteria.md`, recorded red since `4eb13f95`, 2026-09-29), with the
+    same message: "the decode SUCCEEDED without the notch at interferer amplitude 0.3". That test
+    decodes through the CLI path (`receive_with_fec_mode_timeout`), not the OTA scan changed here.
+    Passed: `ota_channel_adaptation` (3/3, 1682 s), `spectral_busy_gathers_weak_frames` (2/2, 598 s)
+    and `total_power_bursts_keep_their_head` (1/1, 249 s).
+- **Review:** `docs/dev/reviews/review-ota-scan-onset-major-2026-11-01.md`. No Release 1 blocker;
+  4 should-fix and 3 nits, all taken or stated. It does not show the fix is sufficient on a Pi; the
+  on-air retest decides.
+
+## 2026-10-31 — The A2 daemon runner drives the FT-991A pair (work plan M3)
+
+- **Requirement/change:** A2 on 2 m (`release-1.0-criteria.md` §A2) runs through
+  `scripts/run-onair-twin-ota.sh`, which could not drive the FT-991A pair. It had one dial for both
+  rigs, but the FT-991A needs +1564 Hz (task 6). It built on each station, but the remote station
+  has no checkout. And it sent traffic only from A, but A2 needs both directions.
+- **Design decisions:**
+  - `A_/B_FREQ_OFFSET_HZ` have the same meaning as in `run-onair-ic9700-ft991a.sh`.
+  - Each dial must be in band and read back equal to the dial that was set, or nothing keys.
+  - `deploy` builds on A and copies the binaries to B, in the shape that runner uses.
+  - `run` refuses to start unless both `openpulse-server` binaries are byte-identical: A1/A2 count
+    only on one commit.
+  - `TRAFFIC_FROM=A|B` picks the sender, and both daemons' OTA status is polled.
+  - The passband is a setting, still 3000 by default; the FT-991A profile sets 2400.
+- **Implementation:** `scripts/run-onair-twin-ota.sh`, `docs/config/onair-ic9700-ft991a.example.sh`,
+  the M3 A1/A2 rows in `docs/dev/project/workplan.md`.
+- **Tests and results (run):** against a fake `ssh`/`rigctl`/`cargo` harness:
+  - `run` before `deploy` refuses, rc 1, with the binaries missing.
+  - `deploy` gives identical sha256 on both stations, rc 0.
+  - `run` with `TRAFFIC_FROM=B` tunes A to 144640000 and B to 144641564 PKTUSB 2400, and sends the
+    traffic to the A callsign, rc 0. The `TRAFFIC_FROM=A` default is unchanged.
+  - An out-of-band offset refuses, rc 1.
+  - `TRAFFIC_FROM=C` refuses, rc 1.
+  - A dial read back wrong refuses before anything keys, rc 1.
+  - Not run on air.
+- **Review:** `docs/dev/reviews/review-twin-ota-ft991a-2026-10-31.md`. It found no path that keys
+  wrongly and does not block Release 1; there were 3 should-fix findings, 3 nits and 1 unconfirmed.
+  Six were taken; the seventh, the FT-818 VFO toggling, is unchanged with the reason recorded. The
+  biggest: `TRAFFIC_FROM=B` sent nothing, because `deploy` did not copy `twin-traffic.sh`. Now
+  `deploy` copies and hashes the daemon, the CLI and the traffic script. A failed build or a CPU
+  mismatch copies nothing, a daemon that does not start stops both stations, and the FT-818
+  profile's variable names are read. The fake harness was re-run with a B that starts empty: all
+  seven cases behave as recorded there.
+- **Follow-up (task 11's first attempt, nothing keyed):** fixes in `tune()` and `build_remote`:
+  - Hamlib 4.6.2's `rigctld:` banner made the dial read-back refuse; the dial is now the all-digit
+    line, and the mode read-back skips the banner;
+  - cargo is found in `~/.cargo/bin`;
+  - the CLI is built with audio, as the Gate 6 runner builds it;
+  - a mode the runner sets is now read back, and a mismatch refuses.
+
+  Second review round in the same review file: no blocker; 2 should-fix findings, both taken. The
+  harness was re-run with the banner printed on every command.
+- **Follow-up 2 (task 11's second attempt, nothing transmitted):**
+  - the daemon is matched by its 15-character process name, `openpulse-serve`;
+  - `cleanup` stops the daemon, sends PTT 0 through rigctld, stops rigctld, and reports what
+    survived;
+  - `launch_daemon` checks its own pid.
+
+  Third review round: no blocker; 2 should-fix and 2 nits taken. The harness now uses the real
+  `pgrep`, `pkill` and `nohup`.
+- **Follow-up 3 (task 11's third attempt):**
+  - the traffic job is started with `cd || exit 1; nohup … &`, so ssh returns. Locally the old form
+    held the caller for 4.02 s and the new one for 0.006 s;
+  - `DAEMON_LOG_LEVEL` sets the daemons' log level.
+
+## 2026-10-26 — On-air station readiness check; the first 2 m session is a dry run
+
+- **Requirement/change:** the maintainer did not accept the first 2 m session (2026-10-26, run on
+  rpi53, `docs/dev/onair-session-2026-10-26.md`): station problems dominated — no SSH key between
+  the Pis, the witness SDR's SoapySDR module never built, scipy missing for G0, PipeWire volumes lost
+  on reboot, the CAT port and FT-818 mode reading TODO in the profile, a preflight proof that could
+  not pass. Stations are to be prepared to a checked state, and sessions run on rpi51. Serves M3.
+- **Design decisions:** one read-only check run from the control host, reusing the existing checks
+  (`onair-preflight.sh`, `onair-setup-audio-routing.sh --verify`, `onair-rx-level-check.sh`) rather
+  than restating them; CAT is read (`f`, `m`) and never set; a station's checks end with a sentinel,
+  so a remote abort is a failure, not fewer passes; the direct CAT open is refused on a PTT or second
+  interface, because opening a tty raises RTS and that keys the rig on those ports. Station B moves
+  to `pulse` audio: on `plughw` its modem bypassed PipeWire, so the 0.15 TX drive and the capture
+  level never applied to it.
+- **Implementation:** `scripts/onair-station-check.sh` (new); `scripts/install-rpi-build-deps.sh`
+  (`--with-onair`, `--with-sdr`); `docs/config/onair-ic9700-ft818.example.sh` (mode reading PKTUSB,
+  levels, `B_AUDIO_DEVICE=pulse`, `WITNESS_SDR_SIDE=A`, `SKIP_RHO_STANDDOWN=1`);
+  `docs/dev/onair-ic9700-ft818-setup.md` (*Station preparation*); the session record, the M3 row,
+  the weekly log and a parking line in `docs/dev/project/workplan.md`.
+- **Tests and results (run):** the check against fake stations (an `ssh` that runs the remote half
+  locally, fake `rigctl`/`arecord`): the expected FAIL for a dirty checkout, missing scipy, preflight
+  failures, an unreachable host, a station cut after four lines (no `END`), a `-if01-` CAT port, a
+  side not on `pulse`, and a `keep` mismatch; INFO for a runner-set mode; a profile value with a
+  single quote survives. Not run against the real Pis. The #1060 stand-down proof
+  (`cargo test --release -p openpulse-modem --no-default-features --test rho_calibration_receive
+  -- --ignored the_veto_stands_down`) on x86 at c702573f: FAILED in 407 s, rc 101, on its
+  precondition — the 250 Hz fixture derived 0.46772602, not above the delivered-frame bound 0.51 —
+  so it no longer reaches the stand-down path. Which change moved it is not established. Review:
+  `docs/dev/reviews/review-station-readiness-2026-10-26.md` (no Release 1 blocker; 1 must-fix,
+  7 should-fix, 5 nits, all taken).
+
 ## 2026-10-15 — Review follow-ups: lower-only station keyers, TNC PTT fails closed, stale comments
 
 - **Requirement/change:** the open points of the documentation review

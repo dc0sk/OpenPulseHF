@@ -41,6 +41,13 @@ pub fn ofdm_demodulate_soft(samples: &[f32], mode: &str) -> Result<Vec<f32>, Mod
     demodulate_soft_with_params(samples, &p)
 }
 
+/// Window energy, relative to the strongest window in the search, below which a lag cannot be the
+/// preamble. The Minn metric is normalised by its own window's energy, so on near-silence it scores
+/// whatever residue is there: a carrier-offset mix leaves the frame's Hilbert tails (1–4 × 10⁻³ RMS,
+/// −35 to −45 dB) in exact-zero lead-in, and the timing locked to them (HARQ combining's 42 rescues
+/// fell to 0, 2026-11-03). A preamble is never 20 dB below its own frame.
+const TIMING_ENERGY_FLOOR: f32 = 0.01;
+
 /// Locate the first data-symbol body via Schmidl-Cox preamble acquisition.
 ///
 /// Returns the sample index of the FFT window for data symbol 0 (i.e. just past
@@ -88,8 +95,11 @@ pub(crate) fn find_first_data_body(samples: &[f32], p: &OfdmParams) -> Option<us
         r1_acc += samples[m] * samples[m];
         r2_acc += samples[m + L] * samples[m + L];
     }
-    let mut best_m = 0.0f32;
-    let mut best_d = 0usize;
+    // Metric and window energy at every lag; the peak is chosen afterwards among lags whose energy is
+    // within `TIMING_ENERGY_FLOOR` of the strongest, so a near-silent stretch cannot win on a
+    // self-normalised metric of its own residue (below).
+    let mut ms = Vec::with_capacity(max_d + 1);
+    let mut rs = Vec::with_capacity(max_d + 1);
     for d in 0..=max_d {
         let r_mean = 0.5 * (r1_acc + r2_acc);
         let m = if r_mean > 1e-9 {
@@ -97,14 +107,21 @@ pub(crate) fn find_first_data_body(samples: &[f32], p: &OfdmParams) -> Option<us
         } else {
             0.0
         };
-        if m > best_m {
-            best_m = m;
-            best_d = d;
-        }
+        ms.push(m);
+        rs.push(r_mean);
         if d < max_d {
             p_acc += -samples[d] * samples[d + L] + samples[d + L] * samples[d + 2 * L];
             r1_acc += -samples[d] * samples[d] + samples[d + L] * samples[d + L];
             r2_acc += -samples[d + L] * samples[d + L] + samples[d + 2 * L] * samples[d + 2 * L];
+        }
+    }
+    let r_max = rs.iter().copied().fold(0.0f32, f32::max);
+    let mut best_m = 0.0f32;
+    let mut best_d = 0usize;
+    for (d, (&m, &r)) in ms.iter().zip(&rs).enumerate() {
+        if r >= r_max * TIMING_ENERGY_FLOOR && m > best_m {
+            best_m = m;
+            best_d = d;
         }
     }
     // Require a clear correlation peak (M → 1 at perfect alignment).
@@ -258,7 +275,31 @@ fn equalized_data_symbols(samples: &[f32], p: &OfdmParams) -> Option<Vec<Complex
         let h_est = ls_estimate(p, &freq);
         syms.extend(zf_equalize(p, &freq, &h_est));
     }
+    syms.truncate(frame_symbol_count(&syms, p).saturating_mul(p.n_data));
     Some(syms)
+}
+
+/// How many OFDM symbols the frame in `syms` occupies, from its length prefix; every symbol when the
+/// prefix does not decode. The receive slice runs past the frame (to its maximum length or the
+/// burst's end), and equalised noise counted as data drove the SNR estimate down: a 16QAM frame read
+/// 41.6 dB alone and 6.1 dB with one second of noise after it (2026-11-03), under the `fast`
+/// profile's floors, so `climb_on_snr` never fired on an OFDM rung.
+fn frame_symbol_count(syms: &[Complex32], p: &OfdmParams) -> usize {
+    let all = syms.len() / p.n_data.max(1);
+    let mut bits: Vec<bool> = syms
+        .iter()
+        .take(LEN_PREFIX_BITS.div_ceil(p.bits_per_sc.max(1)))
+        .flat_map(|&sym| {
+            let label = demap_symbol(sym, p.bits_per_sc);
+            (0..p.bits_per_sc).map(move |b| (label >> b) & 1 == 1)
+        })
+        .collect();
+    crate::scramble::scramble_bits(&mut bits);
+    let Some(payload_len) = decode_len_prefix(&bits_to_bytes(&bits)) else {
+        return all;
+    };
+    let frame_bits = (LEN_PREFIX_BYTES + payload_len as usize) * 8;
+    frame_bits.div_ceil(p.bits_per_symbol().max(1)).min(all)
 }
 
 /// Equalized data-subcarrier constellation symbols for display — the real QAM scatter the receiver

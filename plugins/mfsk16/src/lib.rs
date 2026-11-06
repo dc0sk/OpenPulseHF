@@ -18,7 +18,9 @@
 //! is therefore `None` — the non-coherent plugin opts out of the engine's coherent AFC chain entirely.
 
 use openpulse_core::error::ModemError;
-use openpulse_core::plugin::{FrameGeometry, ModulationConfig, ModulationPlugin, PluginInfo};
+use openpulse_core::plugin::{
+    window_acquisition_failed_error, FrameGeometry, ModulationConfig, ModulationPlugin, PluginInfo,
+};
 
 use js8_plugin::demodulate::goertzel_energy;
 use js8_plugin::modulate::{modulate_tones, GfskParams, DEFAULT_BT};
@@ -332,7 +334,7 @@ impl ModulationPlugin for Mfsk16Plugin {
         let fs = config.sample_rate as f32;
         let lay = layout_for(&config.mode);
         let energies = acquire_and_energies(samples, config.center_frequency, fs, &lay)
-            .ok_or_else(|| ModemError::Demodulation("MFSK16 acquisition failed".into()))?;
+            .ok_or_else(|| window_acquisition_failed_error("MFSK16"))?;
         // Hard decision = argmax tone per symbol → bits (consistent with the soft path's LLR signs).
         let mut bits = Vec::with_capacity(energies.len() * BITS_PER_SYM);
         for e in &energies {
@@ -364,7 +366,7 @@ impl ModulationPlugin for Mfsk16Plugin {
         let fs = config.sample_rate as f32;
         let lay = layout_for(&config.mode);
         let energies = acquire_and_energies(samples, config.center_frequency, fs, &lay)
-            .ok_or_else(|| ModemError::Demodulation("MFSK16 acquisition failed".into()))?;
+            .ok_or_else(|| window_acquisition_failed_error("MFSK16"))?;
         let inv_noise = 1.0 / frame_noise(&energies);
         let mut out = Vec::with_capacity(energies.len() * BITS_PER_SYM);
         for e in &energies {

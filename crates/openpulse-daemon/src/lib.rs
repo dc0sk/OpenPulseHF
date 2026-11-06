@@ -2960,6 +2960,9 @@ pub async fn apply_command_to_engine(
             engine.ota_unlock();
             let _ = event_tx.send(ota_status_event(engine));
         }
+        ControlCommand::GetOtaStatus => {
+            let _ = event_tx.send(ota_status_event(engine));
+        }
         ControlCommand::OtaSetHysteresis {
             min_backlog,
             upgrade_hold_frames,
@@ -3556,6 +3559,50 @@ mod command_apply_tests {
             }
         }
         assert!(got_status, "OtaSetLevelBounds must emit an OtaStatus");
+    }
+
+    /// The status query changes nothing: a floor set before it still clamps a lock below it. The
+    /// bounds command the CLI used to send erased the floor (and the climb record) on every poll.
+    #[tokio::test]
+    async fn get_ota_status_reports_and_keeps_the_bounds() {
+        let mut engine = test_engine();
+        let (tx, mut rx) = broadcast::channel::<ControlEvent>(16);
+        let ev = Arc::new(tx);
+        let mut rs = RuntimeControlState::default();
+        for cmd in [
+            ControlCommand::StartOtaSession {
+                profile: "fast".into(),
+            },
+            ControlCommand::OtaSetLevelBounds {
+                min_level: Some("SL4".into()),
+                max_level: None,
+            },
+        ] {
+            apply(cmd, &mut engine, &mut rs, &ev).await;
+        }
+        while rx.try_recv().is_ok() {}
+
+        apply(ControlCommand::GetOtaStatus, &mut engine, &mut rs, &ev).await;
+        let mut got_status = false;
+        while let Ok(e) = rx.try_recv() {
+            got_status |= matches!(e, ControlEvent::OtaStatus { .. });
+        }
+        assert!(got_status, "GetOtaStatus must emit an OtaStatus");
+
+        apply(
+            ControlCommand::OtaLockLevel {
+                level: "SL2".into(),
+            },
+            &mut engine,
+            &mut rs,
+            &ev,
+        )
+        .await;
+        assert_eq!(
+            engine.ota_tx_level(),
+            Some(openpulse_core::rate::SpeedLevel::Sl4),
+            "the SL4 floor must survive a status query"
+        );
     }
 
     #[tokio::test]

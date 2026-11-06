@@ -1,0 +1,40 @@
+05:06:09.496575791 t0 (Driving OTA traffic line)
+05:06:09.497661248 sdr capture started
+05:11:01.091432192 first SL6 (QPSK250-D) decode seen (t0+292 s)
+05:12:01.246012870 SL6 decoding for >= 60 s: start stepping
+05:12:01.247028845 set B_TX_SINK_VOLUME=0.08 (t0+352 s) (hold 60 s)
+==> IC-9700 (rpi51) — set routing (match='Codec', tx-vol=0.15, rx-vol=0.44)
+    RESULT pass sink=87 src=82 default_sink=87 default_src=82 sink_vol=0.15 src_vol=0.44
+==> FT-991A (station-B) — set routing (match='Codec', tx-vol=0.08, rx-vol=1.0)
+    RESULT pass sink=58 src=59 default_sink=58 default_src=59 sink_vol=0.08 src_vol=1.00
+
+PASS: both stations' default sink+source point at their rig CODEC; TX level set.
+      The runner's --device pulse will now reach the radios. Re-run --verify anytime.
+05:12:02.465855555 done
+05:13:02.629376978 set B_TX_SINK_VOLUME=0.05 (t0+413 s) (hold 90 s)
+==> IC-9700 (rpi51) — set routing (match='Codec', tx-vol=0.15, rx-vol=0.44)
+    RESULT pass sink=87 src=82 default_sink=87 default_src=82 sink_vol=0.15 src_vol=0.44
+==> FT-991A (station-B) — set routing (match='Codec', tx-vol=0.05, rx-vol=1.0)
+    RESULT pass sink=58 src=59 default_sink=58 default_src=59 sink_vol=0.05 src_vol=1.00
+
+PASS: both stations' default sink+source point at their rig CODEC; TX level set.
+      The runner's --device pulse will now reach the radios. Re-run --verify anytime.
+05:13:03.664855480 done
+05:14:33.939505901 set B_TX_SINK_VOLUME=0.035 (t0+504 s) (hold 90 s)
+==> IC-9700 (rpi51) — set routing (match='Codec', tx-vol=0.15, rx-vol=0.44)
+    RESULT pass sink=87 src=82 default_sink=87 default_src=82 sink_vol=0.15 src_vol=0.44
+==> FT-991A (station-B) — set routing (match='Codec', tx-vol=0.035, rx-vol=1.0)
+    RESULT pass sink=58 src=59 default_sink=58 default_src=59 sink_vol=0.04 src_vol=1.00
+
+PASS: both stations' default sink+source point at their rig CODEC; TX level set.
+      The runner's --device pulse will now reach the radios. Re-run --verify anytime.
+05:14:35.014061470 done
+05:16:05.313550901 set B_TX_SINK_VOLUME=0.15 (t0+596 s) (to the end)
+==> IC-9700 (rpi51) — set routing (match='Codec', tx-vol=0.15, rx-vol=0.44)
+    RESULT pass sink=87 src=82 default_sink=87 default_src=82 sink_vol=0.15 src_vol=0.44
+==> FT-991A (station-B) — set routing (match='Codec', tx-vol=0.15, rx-vol=1.0)
+    RESULT pass sink=58 src=59 default_sink=58 default_src=59 sink_vol=0.15 src_vol=1.00
+
+PASS: both stations' default sink+source point at their rig CODEC; TX level set.
+      The runner's --device pulse will now reach the radios. Re-run --verify anytime.
+05:16:06.407656405 done

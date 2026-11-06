@@ -1,0 +1,26 @@
+{
+  "captured_at_utc": "2026-10-31T091253Z",
+  "git_sha": "df298f2cfd6601d87733aaa16cdd2fa4308af086",
+  "git_branch": "onair-retest-1030",
+  "git_dirty": true,
+  "host": "DC0SK-RPI51",
+  "operator_user": "dc0sk",
+  "label": "ic9700-ft991a-quick",
+  "files": {
+    "report": {
+      "source": "docs/dev/test-reports/onair-2026-10-31T091111.json",
+      "bundle_name": "onair-2026-10-31T091111.json",
+      "sha256": "2eee3740585a13df96d1c90e2e45f50508579781922481963fb30f88fe9524af"
+    },
+    "config_snapshot": {
+      "source": "/home/dc0sk/.config/openpulse/config.toml",
+      "bundle_name": "config.toml.snapshot",
+      "sha256": "d7db54195ec4f5893f41d220474e75d21dd2ad0c7e992288944068dbf480e093"
+    },
+    "notes": {
+      "bundle_name": "",
+      "sha256": ""
+    }
+  },
+  "preflight": null
+}

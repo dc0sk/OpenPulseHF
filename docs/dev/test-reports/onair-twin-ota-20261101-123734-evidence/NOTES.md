@@ -1,0 +1,4 @@
+# Task 13 Part D (task 11 Part B), run D1 — A sends, robust, 900 s
+- rpi51 commit `d58dbb7c`; server sha256 `78331f0453883a68b31bf9352eb438911f4e30e5d33a0211ff2697081a9b20d5`, CLI `eec7e6453e3569ebda2ea7bccb537441790bac75767c4e01278222ae929afc28`, twin-traffic.sh `c9e152f32d6b8d5548551b255865b9c45c198b96739672b02eab9dee56fdc373` (identical on both stations).
+- Traffic started 11:37:35 UTC (t0). Drive schedule (`A_TX_SINK_VOLUME`, UTC): 0.15 until 11:46:35.88 (t0+540 s), 0.02 at 11:46:35.88, 0 at 11:47:35.09, 0.15 again at 11:49:05.38 to the end (see drive-schedule.txt).
+- RSPdx witness, port A, LO 144.620 MHz, 62.5 kS/s accepted, RFGR 22 / IFGR 40, 960 s: `~/onair-captures/2026-10-31/a2-ab.cf32` (480000000 bytes, not committed), sha256 `2c139fabe8442e016ee960e7ab8561dac8203c5fe3e96ebb217388e5a57d461d`, result line `peak=0.0118 rms=0.0079 clip=0.00%`. Not analysed.
