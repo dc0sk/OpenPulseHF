@@ -5390,7 +5390,7 @@ As task 26, plus:
 - Unchecked: whether the message delivered at SL6 after each fall-back is the one that went silent at
   SL7. By the code it is: the fall-back continues the same send within its budget.
 
-## Task 28 — B→A OFDM52 with A's AGC off: does A gather the frames? (status: done — reviewed below); see Results)
+## Task 28 — B→A OFDM52 with A's AGC off: does A gather the frames? (status: done — reviewed below)
 
 **Why.** f2g's recording of A's receive audio holds six OFDM52 frames from B that decode offline (6/6,
 SNR 8.5–9.0 dB), but the production receive path gathers none of them. Under the IC-9700's AGC FAST,
