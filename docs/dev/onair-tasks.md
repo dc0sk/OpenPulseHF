@@ -5325,7 +5325,7 @@ As task 26, plus:
 ```
 
 - **`ota_fall_back` events (B):** 3, all `from=Sl7 to=Sl6` (events-b.ndjson lines 1611, 2234, 3344; the event has no timestamp, same order as the log lines).
-- **First three `no fall-back` lines: none.** B logged 0 lines containing `no fall-back ` (the decline text `the peer is silent` also 0). The 66+2 `OTA ACK received` lines at SL6/SL2 carry the field `no_fall_back="no unconfirmed climb is recorded"`, which is the field, not a decline; the 6 climb ACKs carry `no_fall_back="-"`. My zero-filter was not shown matching a known instance of the decline text in this log; the same text did match in f2f's log.
+- **First three `no fall-back` lines: none.** B logged 0 lines containing `no fall-back ` (the decline text `the peer is silent` also 0). The 66+2 `OTA ACK received` lines at SL6/SL2 carry the field `no_fall_back="no unconfirmed climb is recorded"`, which is the field, not a decline; the 7 climb ACKs (SL2→3→4→5→6 and three to SL7) carry `no_fall_back="-"`. My zero-filter was not shown matching a known instance of the decline text in this log; the same text did match in f2f's log.
 - **B's `OTA ACK received` lines from the first climb to SL7 (07:12:55.42) to 2 min after the first fall-back (07:15:19), plus the silent windows and the fall-back line:**
 
 ```
@@ -5358,6 +5358,6 @@ As task 26, plus:
 
 **Runner report lines now carry a status: 44 status blocks per station (`ISS FT-991A: {` ×44, `IRS IC-9700: {` ×44), 0 `<no status>`.** The report file `onair-twin-ota-20261106-080749.log` has 0 `<no status>` and 88 `tx_level` lines (44 blocks × 2). In f2f the same progress lines were `<no status>` every pass.
 
-**A, the receiver:** 75 rate decisions (48 hold, 24 climb_on_evidence, 3 climb_on_snr), all with verdict keyed. A's three `climb_on_snr` decisions line up with the three SL6→SL7 recommendations. 
+**A, the receiver:** 75 rate decisions (48 hold, 24 climb_on_evidence, 3 climb_on_snr), all with verdict keyed.
 
 **Not found / not done:** why A decodes no OFDM52 (A's OFDM front end was not looked at in this run); whether the delivered message after each fall-back was the same message as the one that went silent at SL7 (not checked — the lines show only that an ACK at SL6 follows within 7 s). IC-9700 ALC on the SL7 frames not isolated (A transmits only ACKs here).
