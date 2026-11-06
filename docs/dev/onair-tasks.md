@@ -5615,7 +5615,7 @@ one:
 and not this defect: the SL9 bursts that failed and every SL10 frame are undecodable at this link's
 edge (SL9 SNR median 8.9 dB). SL10 has never decoded in either direction.
 
-## Task 30 — f2i again on the fixed detector: does every genuine failed frame NACK? (status: open; maintainer's go given 2026-11-06)
+## Task 30 — f2i again on the fixed detector: does every genuine failed frame NACK? (status: Part A run f2j done; see Results)
 
 **Why.** In f2i (task 29), the 22 "false opens" were genuine B frames that failed to decode. P judged
 them at 0 Hz instead of the decoder's AFC-corrected told, so they keyed no NACK, and B sat out 21
@@ -5647,3 +5647,29 @@ silence. So B's `ACK not received` windows fall well below f2i's 23, and there a
 fall-backs. **Killed if** `false_opens` stays well above 0, or if genuine failed frames still leave B
 without an answer.
 
+
+### Results — Part A, run f2j (B sends, `fast` profile, A's AGC FAST, fixed preamble detect; 2026-11-06)
+
+**Setup:** rpi51 at `cf480757` (m3/onair, #1519 plus task docs); `deploy` rebuilt on A and copied to station-B. sha256, identical on both stations: server `1968675730f11fb071a92f7b16660d939d7e1eade08b492d8a19b8ff538c420a`, CLI `4cf9edbcced81f54ead3126dfcc6e9ef276692913c947656bc63b83a1a2c911b`, `twin-traffic.sh` `c9e152f32d6b8d5548551b255865b9c45c198b96739672b02eab9dee56fdc373`. Settings, log levels and local runner overrides as f2i. Times UTC (daemon-log clock; local +1 h). Evidence: `docs/dev/test-reports/onair-twin-ota-20261106-212610-evidence`; receive audio `rx-{a,b}-f2j-8k.wav.gz`.
+
+**Before:** A: AGC 2, RF gain 1, dial 144640000, RFPOWER 0.0117647; PCM2901 sources vol 0.15 and 0.44 (as f2i). rx-level check PASS: IC-9700 idle mean_sq 0.000125, threshold 0.000375; FT-991A 0.000410, threshold 0.001231. **After (read back):** A AGC 2, RF 1, dial 144640000, RFPOWER 0.0117647, PTT 0; FT-991A dial 144641564, RFPOWER 0.05, AGC 2, PTT 0; nothing running. 0 STOP lines (no keying over 70 s).
+
+**Result: `false_opens` 0, and every SL9/SL10 frame A could not decode got a NACK at B.**
+- **A's final detector counters** (110 `preamble carrier detect` lines, 20:33:57.41 to 20:39:54.87): `blocks=4964 opens=109 false_opens=0 held_no_frame=0 us_per_block=992`. **No step of `false_opens`: 0 in all 110 lines**, `held_no_frame` 0 in all. First line `20:33:57.408 blocks=1 opens=0`; first open `20:33:58.525 blocks=33 opens=1`. `us_per_block` 883–1064 (median 995). B: 0 detector lines. All 110 lines compact: `preamble-carrier-detect-a.txt` in the evidence dir.
+- **A's `frame_received`:** OFDM52 6, OFDM52-8PSK 28, OFDM52-16QAM 31 (65 OFDM), QPSK250-D 3, BPSK250 3, BPSK31 2, BPSK63 1, BPSK100 1.
+- **A's rate decisions by decoded level, SNR dB:** SL2 2 (3.7…7.8), SL3 1 (11.1), SL4 1 (13.1), SL5 1 (13.3), SL6 3 (8.9…9.9), SL7 6 (8.2…8.4; 4 hold, 2 climb_on_evidence), SL8 28 (2.2…8.1, median 6.9), SL9 31 (3.4…9.8, median 8.6). SL10 never decoded.
+- **A's NACK decisions: 44** (f2i: 12): nack_hold 36, nack_step_down 8; by A's level at the time (`from`): SL8 2, SL9 30, SL10 12.
+- **B received 44 `ack=Nack`** (equal to A's 44): `recommended=Sl9 from=Sl9 to=Sl9` 26, `recommended=Sl10 from=Sl10 to=Sl10` 8, `recommended=Sl8 from=Sl10 to=Sl8` 4, `recommended=Sl8 from=Sl9 to=Sl8` 3, `recommended=Sl8 from=Sl8 to=Sl8` 2, `recommended=Sl7 from=Sl9 to=Sl7` 1. B's ACK lines in all: 117 (AckOk 53, AckUp 20, Nack 44), first 20:31:11.96, last 20:39:56.89; by send level (`from=`): SL2 2, SL3 1, SL4 1, SL5 1, SL6 3, SL7 6, SL8 30, SL9 61, SL10 12.
+- **SL9/SL10 sends A did not decode → what B got:** SL9: 61 replies, 31 not-NACK (= A's 31 SL9 decodes), 30 NACK. SL10: 12 replies, all NACK (A decoded none). **Every undecoded SL9/SL10 send got a NACK; none was left silent** (all 73 SL9/SL10 sends got a reply: 0 silent windows at SL8–SL10). I matched by counts of B's ACK lines and A's decisions, not by timestamping each send against A's attempt.
+
+**B's silent windows, abandons, fall-backs (f2i: 23 / 4 / 2):** `ACK not received within window` **3** (20:27:28.15, 20:28:45.05, 20:30:01.52), `OTA send abandoned` **1** (20:28:45.05), `back to the level before it` **0**, `no fall-back` **1**: `20:28:45.049038Z INFO OTA: the peer is silent; no fall-back level=Sl2 why="no unconfirmed climb is recorded"`. All three windows are at SL2 before the first ACK (20:31:11.96), i.e. the start of the run, not OFDM. `message_received` on B 74; 0 `TCP client event receiver lagged` lines.
+
+**`capture read holds` on A: 4** (f2i: 23; f2h: 111): 20:27:27 (71 200 samples), 20:28:44 (72 600), 20:30:01 (71 600), 20:40:38 (9 800). **None between 20:33:57 and 20:39:54 (the OFDM episode)**; the first three are at the SL2 start next to B's silent windows, the last in the sign-off phase. B 0.
+
+**Narrow rungs:** SL2→SL6 climbed one ACK per level (SL2 2, SL3 1, SL4 1, SL5 1, SL6 3) with QPSK/BPSK decodes as in f2i; the SL2 start was slow (3 silent windows, 1 abandon, first ACK 20:31:11.96, 4 min after the run began); I did not investigate why.
+
+**Station IDs:** A `with-ack` 20:34:09.27, `sign-off` 20:40:33.19; B `with-data` 20:34:11.91, `sign-off` 20:40:28.48 and 20:41:10.99.
+
+**Prediction check:** `false_opens` near 0: **met (0)**. Undecodable SL9/SL10 frames get a NACK instead of silence: **met** (44 NACKs, 0 silent at SL8–SL10); B's silent windows 3 against 23, abandons 1 against 4, fall-backs 0 against 2. Kill not met. B→A still stops at SL9 (SL10 does not decode; 12 NACKs there).
+
+**Not done / open:** the slow SL2 start (3 silent windows before the first ACK); per-send timestamp matching; the 4 min between the run start and the first ACK was not analysed.
