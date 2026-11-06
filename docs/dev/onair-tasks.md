@@ -5615,7 +5615,7 @@ one:
 and not this defect: the SL9 bursts that failed and every SL10 frame are undecodable at this link's
 edge (SL9 SNR median 8.9 dB). SL10 has never decoded in either direction.
 
-## Task 30 — f2i again on the fixed detector: does every genuine failed frame NACK? (status: Part A run f2j done; see Results)
+## Task 30 — f2i again on the fixed detector: does every genuine failed frame NACK? (status: done — reviewed below)
 
 **Why.** In f2i (task 29), the 22 "false opens" were genuine B frames that failed to decode. P judged
 them at 0 Hz instead of the decoder's AFC-corrected told, so they keyed no NACK, and B sat out 21
@@ -5673,3 +5673,32 @@ without an answer.
 **Prediction check:** `false_opens` near 0: **met (0)**. Undecodable SL9/SL10 frames get a NACK instead of silence: **met** (44 NACKs, 0 silent at SL8–SL10); B's silent windows 3 against 23, abandons 1 against 4, fall-backs 0 against 2. Kill not met. B→A still stops at SL9 (SL10 does not decode; 12 NACKs there).
 
 **Not done / open:** the slow SL2 start (3 silent windows before the first ACK); per-send timestamp matching; the 4 min between the run start and the first ACK was not analysed.
+
+### Review of task 30 (pc1 session, 2026-11-06)
+
+**The fix works on air (#1519). Every genuine failed OFDM frame now gets a NACK.**
+- **The false-open counter is clean:** `false_opens` was 0 in all 110 of A's detector lines (f2i: 22),
+  and `held_no_frame` stayed 0.
+- **A keyed 44 NACKs** (f2i: 12), and B received all 44.
+  - Every SL9 or SL10 send A did not decode got a NACK: SL9 61 replies = 31 decodes + 30 NACKs; SL10
+    12 replies, all NACKs.
+  - This was matched by counts, not per-send timestamps.
+- **No silence on the OFDM rungs:**
+  - B's `ACK not received` windows: 3 (f2i: 23). All three come at SL2, before B's first ACK and
+    before any OFDM.
+  - Abandons: 1 (f2i: 4). Falls back: 0 (f2i: 2).
+- **The OFDM ladder:** A decoded 65 OFDM frames (OFDM52 6, 8PSK 28, 16QAM 31), and B→A held SL9 under
+  AGC FAST. SL10 still never decodes (12 NACKs), which is a rung-edge matter and was not targeted
+  here.
+- **The detector's cost on rpi51:** 883–1 064 µs per block. A had 0 `capture read holds` in the OFDM
+  episode (f2i: 23).
+- The narrow rungs did not regress.
+
+**Open, parked: a slow SL2 start.** The run's first four minutes at SL2 had:
+- 3 silent windows and 1 abandon;
+- A `capture read holds` of about 71 000 samples (≈ 9 s) next to each window.
+
+That is the BPSK31 phase, not OFDM. The detector cannot be involved, because P runs only with an OFDM
+candidate. An SL2 decode or fallback scan of about 9 s on rpi51 missing B's ACK window is the likely
+shape, but it is unchecked. To look at before A2 is scored.
+
