@@ -59,6 +59,7 @@ this ledger adds the design rationale and the actually-observed results per chan
   now in `usize`. Clippy (`-D warnings --all-targets`) clean on openpulse-modem and openpulse-daemon;
   `cargo fmt --all -- --check` clean; `check-trailer.sh` and `reachability.sh check` PASS.
 - **Gate:** not run here (the maintainer's session runs `scripts/gate.sh` and `scripts/slow-tests.sh`).
+- **Gate:** `GATE: PASS 80d08a3e6a1f96c1959e152fec84e59b54ee0636 clean 20261107T185950Z` (suites 398, 2832 passed, 0 failed). `scripts/slow-tests.sh` (all, same tree): `ota_channel_adaptation` 3/0, `spectral_busy_gathers_weak_frames` 2/0, `total_power_bursts_keep_their_head` 1/0, `ofdm_preamble_detect` 2/0, `ofdm_detect_fade` 1/0, `bpsk_settle_sideband` 1/0; `notch_rescues_interferer` 2/1, the known red row #1457 (the same assertion as on main).
 
 ## 2026-11-07 — The BPSK carrier estimate's coarse stage is a dense spectral peak, not a 12.5 Hz picket grid (work plan M3, A2)
 
