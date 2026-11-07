@@ -1,7 +1,7 @@
 ---
 project: openpulsehf
 doc: docs/dev/design/bpsk31-settle-sideband.md
-status: draft
+status: resolved
 last_updated: 2026-11-07
 ---
 
@@ -299,6 +299,10 @@ not by bins:
     bursts above.
   - Falsified by: a sweep at quarter-bin offsets losing any cell the 0.25 Hz Goertzel prototype
     wins, or an FFT-vs-Goertzel disagreement beyond the gate-6 tolerance on the same windows.
+  - **Measured not load-bearing** (*Implementation*, sabotage S2a): without the padding, bins one
+    main lobe apart still kept every gate-2, 3 and 6 cell, because the worst scalloping (~3.9 dB)
+    sits inside the 11.8 dB line margin. Kept because it costs one FFT size; a future change may drop
+    it only with that sweep re-run.
 - **No new threshold.** The ±400 Hz range, the 150 Hz interferer guard, the `--++`/PN preambles,
   `AFC_SETTLE_DEADBAND_HZ`, the convergence check's constants (`last_delta < 5`,
   \|fine − anchor\| ≤ 20) and the 5 iterations at 0.7 are all unchanged. What the check *does*
@@ -439,6 +443,83 @@ the fix or without it (review), so the construction is part of the gate.
   which needs the mandatory keying review because it changes when a NACK is keyed; its bound is a
   tripwire-counted skip.
 
+## Implementation (2026-11-07)
+
+**Code.**
+- `crates/openpulse-dsp/src/acquisition.rs`: `mth_power_peak_scan` and `PEAK_SCAN_ZERO_PAD`, as
+  *The dense stage, specified* says: probes on the bin grid (step binw/m), the Goertzel's fold and
+  interferer guards per probe, the `fs/2 − 150` guard on the unfolded probe for m = 2, lowest δf
+  first with ties to the smallest |δf|, parabolic interpolation on magnitude. In-crate
+  `peak_scan_tests` (3).
+- `plugins/bpsk/src/demodulate.rs`: `estimate_carrier_hz_wide` takes its stage 1 as a
+  `CoarseStage`; the product passes `dense_coarse`. `afc_estimate_hz_with_coarse` runs the plugin's
+  own window and stage 2 around a supplied stage 1, which is how the gates rebuild the shipped
+  estimator and the 0.25 Hz prototype by reference (`tests/common/mod.rs`, `ref_bpsk`).
+- `crates/openpulse-modem/src/engine.rs`: the convergence check is `AfcSettleOutcome::converged` /
+  `credible`, used by both acquisition paths (the same predicate as before); the `instruments`
+  accessor `settle_probe` returns what `acquire_at_onset`'s settle returns at a start.
+
+**Deviations from the gates as written.**
+- **Gate 1 is split.** The default run asserts the decode in ≤ 30 decode attempts with no deadline
+  (host-independent; measured 24, of which 3 are the 1600-sample burst ahead of the frame). The
+  production deadline is asserted by an `#[ignore]`d test run released by the new
+  `scripts/slow-tests.sh settle` suite: an unoptimised build spends 3.7 s of the 6.18 s budget, so a
+  loaded host could fail it for a reason that is not the receiver's.
+- **Gate 2 uses f2j burst 2 from the full cut** rather than a fourth short cut, so the short cuts are
+  f2j #1, #3, f2h #1 and f2i #1 (4 × 48 KB).
+- **Gate 3's full sweep** (41 × 6 × 2 × 2) stays a measurement (Part 1), not a slow-tests suite.
+- **Gate 8 found the CLI fixture inert.** On `coded_noise_settle_recovery`'s floor the adaptive energy
+  gate no longer fires before the frame, so both estimators give the same counters (1 settle, 1
+  correlation accept, 1 decode attempt, 0 condemnations), coded and uncoded. The gate pins them for
+  both. The CLI-path fixture where noise settles do reach the veto is the saturating floor
+  (`preamble_correlation_settle::the_receiver_never_settles_on_a_saturating_noise_floor`), which
+  carries gate 9.
+- **Gate 9 measured the behaviour change on the CLI path: the veto now does ~9× the work.** Same
+  1247 / 2498 / 3749 settles at the three leads, same decode, 0 condemnations either way, but the
+  correlation check refuses 1205 / 2416 / 3614 settles (dense) against 138 / 233 / 323 (picket),
+  because the convergence check no longer drops them first. At lead 40 000 (debug, single thread)
+  the receive took 35.0 s against 31.7 s; the calibration took 39 samples against 29, its threshold
+  stayed 0.315 and it did not stand down. Gated as a ±20 % band on the rejection counts and a
+  decode-attempt bound.
+- **Gate 10: the notch cannot remove either interferer.** In the `fast` OTA session the notch
+  protects 1250–1750 Hz in every block (`notch_protect_extremes`), so a tone at fc + 137 Hz and a
+  second station at +200 Hz are never notched (`notch_freqs_seen`); it does notch out-of-band hiss
+  lines, so the gate settles on the flushed (notched) burst. Dense, at three starts: tone +6 dB →
+  the tone (+137); **tone 0 dB → +69.3…+70.8 Hz, credible (a known limit)**; tone −6 dB → −9, right;
+  **second frame → +95.3 Hz, the cross term, credible (a known limit)**. The shipped grid, for
+  comparison: +6 dB the tone or a credible +71.9; 0 dB the tone or rejected; −6 dB a credible
+  sideband (−24.6) or rejected; second frame the other station at +200, credible. So the dense stage
+  trades a tone lock for a cross-term lock at 0 dB, and the other station's carrier for the cross term
+  on two signals: wrong in both, not worse in kind. A notch cannot reach either while the
+  candidates' band is protected.
+
+**Gate and sabotage table** (each sabotage committed-then-restored with `git show HEAD:<path>`;
+debug unless marked):
+
+| sabotage | what it removes | result |
+|---|---|---|
+| S1 picket grid back as stage 1 | the fix | **red:** gates 1 (no decode, 458 attempts), 1-deadline (release), 2, 3, 6, 7 (all three: dense 0/40, 0/19, 0/39), 9 (138 rejections vs 1205), 10 |
+| S2a no zero-pad (FFT length N rounded down to 8192) | the ×2 padding | **green** on gates 2, 3, 6 — the design predicted red. Measured: with bins one main lobe apart the worst scalloping (~3.9 dB) stays inside the 11.8 dB line margin, so ×2 is not load-bearing on this inventory. Kept (it costs one FFT size), and stated as such under *Constants*. |
+| S2b every 50th probe (a 6.1 Hz picket) | the density | **red:** gates 2, 3, 6 |
+| S3 no ÷ m | the domain conversion | **red:** gates 3 (12 of 32 cells: every ±300/350/399 cell; the small offsets converge through the settle's re-centring, contrary to the design's "every nonzero offset") and 6; gate 4 (BPSK100 +50 Hz: 385 attempts against the pinned 6) |
+| S4 no parabolic interpolation | the refinement | **green**, as designed: gates 2, 3, 6 (the fine stage absorbs half a bin) |
+| S5 Nyquist guard on the folded probe only | the unfolded guard | **green** on gate 3 and the dsp mirror test: the tie rule alone resolves the mirror to the carrier |
+| S5b ties to the later probe, unfolded guard kept | the tie rule | **green**: the unfolded guard alone excludes the mirror |
+| S5c both S5 and S5b | the mirror defence | **red:** gate 3 (+300 → +706, +350 → +653, +399 → +600 Hz) and dsp `a_recentred_scan_does_not_take_the_nyquist_mirror`. The two defences are redundant by design; each is watched only through the other's removal. |
+| S6 no correlation veto for BPSK | the veto | **red:** gate 8 (counters move from (1, 1, 0, 0, 1)) and the saturating-floor gate 9 |
+| S7 notch protect band emptied | the notch's reach | **red:** gate 10 (the notch removes the frame; no flushed burst holds it) |
+
+**The existing suites run by name** (not in the default run, not in `slow-tests.sh`), released,
+`--ignored`: `carrier_offset_matrix` 1/1, `freq_acquire_accuracy` 1/1, `chain_veto_slow_rung` 1/1,
+`preamble_veto_interference` 9/9 (g1–g9; `a_frame_behind_unrefusable_interference_is_not_acquired`
+skipped, it is the #1062 reproduction of a known defect). The characterizations print and assert
+little, and they were not run on the unpatched tree for a side-by-side, so "passes" is all this says.
+
+**Test counts** (debug, `--no-fail-fast --test-threads=4`): `openpulse-dsp` 128/0, `bpsk-plugin`
+50/0, `openpulse-modem` 679/0 (125 ignored), `openpulse-daemon` 231/1 — `id_rides_in_own_keying`
+failed in the full run and passed 3/3 alone, the same unattributed signature recorded on 2026-11-06
+before this change. `scripts/slow-tests.sh settle` PASS (release: 24 attempts, 2.26 s, AFC −9.25).
+
 ## Option 2 — seed the AFC from the previous session: not recommended for Release 1
 
 - It does not reach a first contact with a new peer, or the first frame after a QSY, a band change
@@ -527,8 +608,8 @@ pilot:208) and reading each plugin's `estimate_afc_hz`.
   pushed a borderline cell late.
 - **The synthetic SNR is not calibrated** to the on-air frames: the plugin's SNR estimator returned
   `None` on the settle windows, and AGC FAST distorts the level ratio.
-- **The FFT form of the dense stage has not been run in the decode path.** The 0.25 Hz Goertzel
-  prototype was.
+- ~~The FFT form of the dense stage has not been run in the decode path.~~ It has (*Implementation*,
+  gate 1: f2j burst 2 decodes cold in 24 attempts, 2.26 s released, AFC −9.25 Hz).
 - **Not measured before review:** the tone negative control (the review measured it with the notch
   off; gate 10 runs it with the notch on); QPSK250-D's decode impact (parked); BPSK63's decode
   impact (its settle goes from 24 wrong accepts to 124/124 right, review); whether the convergence

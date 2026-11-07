@@ -15,6 +15,52 @@ this ledger adds the design rationale and the actually-observed results per chan
 
 ---
 
+## 2026-11-07 — The BPSK carrier estimate's coarse stage is a dense spectral peak, not a 12.5 Hz picket grid (work plan M3, A2)
+
+- **Requirement/change:** REQ-PHY-03. On air (task 30, run f2j) A's cold trigger settle read +7.21 /
+  −24.86 / −25.31 Hz on B's first three SL2 frames against a carrier near −9 Hz, so each decode ran
+  past the ACK deadline (x86 replay: 152 attempts past it, 7.64 s) and B abandoned a message. The
+  12.5 Hz Goertzel grid hears a long window's line only through sidelobes, and at some offsets a
+  structural line of the squared `--++` preamble out-scores the carrier. f2h's and f2i's first
+  settles were also wrong (−11.69, −19.81), hidden by BPSK31's native reach.
+- **Design decision:** `docs/dev/design/bpsk31-settle-sideband.md`, reviewed by Fable, APPROVE WITH
+  CHANGES (`docs/dev/reviews/review-bpsk31-settle-sideband-2026-11-07.md`). A dense coarse stage: the
+  M-th-power signal's FFT zero-padded to the next power of two ≥ 2N, read at probes on the bin grid
+  with the Goertzel's fold and guards per probe and the Nyquist guard on the UNFOLDED probe for m = 2,
+  ties to the smallest |δf|, parabolic refinement. Stage 2 unchanged. The convergence check's
+  constants are unchanged but it now passes noise settles (stated and gated).
+- **Implementation:** `crates/openpulse-dsp/src/acquisition.rs` (`mth_power_peak_scan`,
+  `PEAK_SCAN_ZERO_PAD`); `plugins/bpsk/src/demodulate.rs` (`estimate_carrier_hz_wide`,
+  `dense_coarse`, `CoarseStage`, `afc_estimate_hz_with_coarse`); `crates/openpulse-modem/src/engine.rs`
+  (`AfcSettleOutcome::converged` / `credible`, `instruments` `settle_probe`).
+- **Tests:** dsp `peak_scan_tests` (3); `crates/openpulse-modem/tests/bpsk_settle_sideband.rs` (gates
+  1, 1-deadline, 2, 3, 6, 7 ×3, 10); `coded_noise_settle_recovery::the_cli_path_counters_hold_for_both_coarse_stages`
+  (gate 8); `preamble_correlation_settle::the_receiver_never_settles_on_a_saturating_noise_floor`
+  extended with the correlation-rejection band (gate 9); BPSK100's 6/6 pinned in
+  `daemon_frequency_acquisition` (gate 4); `tests/common/mod.rs` `ref_bpsk` (the shipped and prototype
+  estimators by reference); new `scripts/slow-tests.sh settle`. Captures: `ic9700-f2j-bpsk31-burst2-full.wav`
+  (1 729 644 B) and four 48 044 B settle cuts (f2j #1, #3, f2h #1, f2i #1), 1.92 MB in all.
+- **Test results (run at `20508e85` + docs, debug, `--no-default-features`, `--no-fail-fast
+  --test-threads=4`):** `openpulse-dsp` 128/0 (1 ignored); `bpsk-plugin` 50/0 (7 ignored);
+  `openpulse-modem` 679/0 (125 ignored); `openpulse-daemon` 231/1 (2 ignored):
+  `id_rides_in_own_keying` failed in the full run ("with-ack false", 40.7 s) and passed 3/3 alone
+  (10.2 s); the same signature was recorded unattributed on 2026-11-06 before this change; not
+  attributed here either. `scripts/slow-tests.sh settle` (release) PASS: decoded inside the deadline,
+  24 attempts, AFC −9.25 Hz, 2.26 s. Measured: real settles −8.45 / −9.20 / −9.65 (f2j), −3.85 (f2h),
+  −4.14 (f2i), +2.82 (corpus) at all 13 starts; noise acceptance shipped/dense 0/40 vs 38/40 (corpus,
+  BPSK31), 0/19 vs 17/19 (f2j hiss, BPSK31), 0/39 vs 37/39 (f2j hiss, BPSK250); on the saturating
+  floor the veto refuses 1205 / 2416 / 3614 settles against 138 / 233 / 323, same decode, 0
+  condemnations; the notch cannot reach a tone at fc + 137 Hz or a second station at +200 Hz
+  (protected 1250–1750 Hz), and dense locks a cross term at 0 dB tone (+69.3…+70.8 Hz) and with two
+  stations (+95.3 Hz): known limits. Sabotages (design note, *Implementation*): S1 picket back → gates
+  1, 1-deadline, 2, 3, 6, 7, 9, 10 red; S2a no zero-pad → green (padding not load-bearing, recorded);
+  S2b every 50th probe → red; S3 no ÷ m → gates 3, 6, 4 red; S4 no interpolation → green as designed;
+  S5 / S5b each mirror defence alone → green; S5c both → red; S6 no BPSK veto → gates 8, 9 red; S7 notch
+  protect band emptied → gate 10 red. By name, released, `--ignored`: `carrier_offset_matrix` 1/1,
+  `freq_acquire_accuracy` 1/1, `chain_veto_slow_rung` 1/1, `preamble_veto_interference` 9/9. Clippy (`-D warnings --all-targets`) clean on openpulse-dsp,
+  bpsk-plugin, openpulse-modem, openpulse-daemon; fmt clean.
+- **Gate:** not run here (the maintainer's session runs `scripts/gate.sh` and `scripts/slow-tests.sh`).
+
 ## 2026-11-06 — The preamble detect judges a frame at the receiver's centre, from the refined coherence (work plan M3, A2)
 
 - **Requirement/change:** REQ-FUN-06. On air (task 29, run f2i) P was built at the nominal centre
