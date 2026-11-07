@@ -688,6 +688,10 @@ pub struct OtaRxResult {
     /// Further non-ladder frames the uncoded fallback found after `payload` in the same burst — a
     /// multi-fragment keying (#1461). Always empty for a ladder frame: ARQ keys one per ACK.
     pub more: Vec<Vec<u8>>,
+    /// The burst failed and the preamble detect confirmed a frame in it (the waveform's `acquire`
+    /// coherence ≥ `P_EVIDENCE_COHERENCE`). Its NACK is keyed past a NACK budget handed in with
+    /// [`ModemEngine::set_ota_budget_verdict`], and the caller must not charge the budget for it.
+    pub p_evidence: bool,
 }
 
 /// The modem engine.
@@ -799,6 +803,11 @@ pub struct ModemEngine {
     /// daemon before the decode, taken at the decode's entry so no return path leaves it stale.
     /// Unset is `Keyed`, today's behaviour.
     next_failure_verdict: NackVerdict,
+    /// Whether `next_failure_verdict` is the NACK budget's (`set_ota_budget_verdict`), which a
+    /// P-confirmed failure is exempt from, rather than a mute the caller imposes.
+    next_failure_verdict_from_budget: bool,
+    /// The last OTA decode failed on a burst P confirmed as a frame: [`OtaRxResult::p_evidence`].
+    ota_last_p_evidence: bool,
     /// The latest moment the next OTA burst's decode may finish and still be ACKed inside the sender's
     /// window (`set_ota_ack_deadline`); taken by that decode.
     next_ota_ack_deadline: Option<Instant>,
@@ -1345,6 +1354,8 @@ impl ModemEngine {
             relay_mode: None,
             last_flush_capped: false,
             next_failure_verdict: NackVerdict::Keyed,
+            next_failure_verdict_from_budget: false,
+            ota_last_p_evidence: false,
             next_ota_ack_deadline: None,
             decode_deadline: None,
             non_ladder_decode: false,
@@ -2618,6 +2629,7 @@ impl ModemEngine {
             ack,
             mode,
             more: Vec::new(),
+            p_evidence: std::mem::take(&mut self.ota_last_p_evidence),
         }))
     }
 
@@ -3065,6 +3077,16 @@ impl ModemEngine {
     /// failure moves no ladder (#1460 round 4b). Taken by that burst's decode.
     pub fn set_ota_failure_verdict(&mut self, verdict: NackVerdict) {
         self.next_failure_verdict = verdict;
+        self.next_failure_verdict_from_budget = false;
+    }
+
+    /// As [`set_ota_failure_verdict`](Self::set_ota_failure_verdict), for the NACK budget's verdict:
+    /// a failed burst the preamble detect confirmed as a frame is keyed whatever the budget says, and
+    /// comes back with [`OtaRxResult::p_evidence`] so the caller does not charge it
+    /// (`ofdm-preamble-detect.md`, Implementation, "The budget exemption").
+    pub fn set_ota_budget_verdict(&mut self, verdict: NackVerdict) {
+        self.next_failure_verdict = verdict;
+        self.next_failure_verdict_from_budget = true;
     }
 
     /// The latest moment the next OTA burst's decode may finish and still have its ACK heard inside
@@ -4267,6 +4289,7 @@ impl ModemEngine {
             ack,
             mode,
             more,
+            p_evidence: std::mem::take(&mut self.ota_last_p_evidence),
         })
     }
 
@@ -4345,7 +4368,9 @@ impl ModemEngine {
         let lead = std::mem::take(&mut self.last_flush_lead);
         let onset_bound = std::mem::take(&mut self.last_flush_onset_bound);
         let spans = self.last_flush_spans.take();
-        let verdict = std::mem::take(&mut self.next_failure_verdict);
+        let mut verdict = std::mem::take(&mut self.next_failure_verdict);
+        let verdict_from_budget = std::mem::take(&mut self.next_failure_verdict_from_budget);
+        self.ota_last_p_evidence = false;
         let candidates: Vec<(SpeedLevel, String, FecMode)> = self
             .ota
             .as_ref()
@@ -5110,6 +5135,18 @@ impl ModemEngine {
                 && self
                     .p_burst_coherence(&samples.samples)
                     .is_some_and(|c| c >= P_EVIDENCE_COHERENCE);
+            // The budget exemption: a P-confirmed failure is a frame at a candidate rung by the
+            // strongest evidence this receiver has, so the NACK budget neither mutes it nor (the
+            // caller, reading `p_evidence`) counts it. A mute the caller imposes (the channel still
+            // busy, no valid callsign) stands. Bounded by the ladder: each NACK it keys is a
+            // failure, so a foreign OFDM52 sender draws at most 3·(rung − 6) before the candidates
+            // leave OFDM and P stops.
+            if p_ok {
+                self.ota_last_p_evidence = true;
+                if verdict_from_budget {
+                    verdict = NackVerdict::Keyed;
+                }
+            }
             // Only a burst P itself opened is P's false open: a burst total power or S opened and P
             // only held is usually a fragment of a genuine frame (under an S1 sabotage a genuine SL7
             // frame's fragment counted as one), and HF reads this counter as P's false-open rate.
@@ -11745,7 +11782,10 @@ mod preamble_detect_false_open {
                 "{read}-sample reads: a cut frame decoded: {flushes:?}"
             );
             assert_eq!(
-                (e.preamble_detect_held_no_frame(), e.preamble_detect_false_opens()),
+                (
+                    e.preamble_detect_held_no_frame(),
+                    e.preamble_detect_false_opens()
+                ),
                 (0, 0),
                 "{read}-sample reads: the re-headed fragment counted as no frame: {flushes:?}"
             );
@@ -11760,7 +11800,11 @@ mod preamble_detect_false_open {
         let (x, _) = fragment_after_noise(12_000, 10);
         for read in [400usize, 800] {
             let (e, flushes) = run_fragment(&x, read);
-            assert_eq!(e.preamble_detect_reheads(), 1, "{read}: no re-head, vacuous");
+            assert_eq!(
+                e.preamble_detect_reheads(),
+                1,
+                "{read}: no re-head, vacuous"
+            );
             let keyed_on_noise: Vec<&FragmentFlush> = flushes
                 .iter()
                 .filter(|f| !f.p_opened && f.ack.is_some())
