@@ -903,7 +903,7 @@ pub fn goertzel_carrier_scan(
 /// Inventory it must hold on: the 492 synthetic BPSK31 cells, the 372 SL3–SL5 cells and the 14 real
 /// bursts of `docs/dev/design/bpsk31-settle-sideband.md`. Falsified by a quarter-bin-offset sweep
 /// losing a cell the 0.25 Hz Goertzel prototype wins.
-pub const PEAK_SCAN_ZERO_PAD: usize = 2;
+const PEAK_SCAN_ZERO_PAD: usize = 2;
 
 /// Dense coarse carrier-offset scan: the peak of the M-th-power signal's zero-padded spectrum.
 ///

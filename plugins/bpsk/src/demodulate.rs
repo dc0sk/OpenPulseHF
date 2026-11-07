@@ -423,6 +423,10 @@ pub fn estimate_frequency_offset(i_syms: &[f32], q_syms: &[f32], baud_rate: f32)
 const AFC_WINDOW_SYMS: usize = 128;
 
 /// A coarse carrier stage: `(window, fs, fc)` to the offset from `fc` in Hz.
+#[cfg(not(feature = "instruments"))]
+pub(crate) type CoarseStage = dyn Fn(&[f32], f32, f32) -> Option<f32>;
+/// A coarse carrier stage: `(window, fs, fc)` to the offset from `fc` in Hz (public for gates, #1277).
+#[cfg(feature = "instruments")]
 pub type CoarseStage = dyn Fn(&[f32], f32, f32) -> Option<f32>;
 
 /// Wide-range carrier frequency estimator: the dense peak of the squared signal's spectrum.
@@ -488,6 +492,8 @@ pub fn afc_estimate_hz_with_expected(
 ///
 /// Exists so a gate can run a reference coarse stage (the former 12.5 Hz Goertzel grid, or a dense
 /// Goertzel prototype) through the product's own window and stage 2, rather than a copy of them.
+/// Test-only (#1277): behind `instruments`, which only `openpulse-modem`'s dev-dependency enables.
+#[cfg(feature = "instruments")]
 pub fn afc_estimate_hz_with_coarse(
     samples: &[f32],
     config: &ModulationConfig,
