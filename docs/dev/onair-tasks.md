@@ -5702,7 +5702,7 @@ That is the BPSK31 phase, not OFDM. The detector cannot be involved, because P r
 candidate. An SL2 decode or fallback scan of about 9 s on rpi51 missing B's ACK window is the likely
 shape, but it is unchecked. To look at before A2 is scored.
 
-## Task 31 — a cold first contact on the dense BPSK estimator: does B's first SL2 frame decode? (status: Part A run f2k done; see Results)
+## Task 31 — a cold first contact on the dense BPSK estimator: does B's first SL2 frame decode? (status: done — reviewed below)
 
 **Why.** In f2j (task 30) A's first three SL2 (BPSK31) frames from B failed cold. A's AFC started
 at 0 Hz, B sat at about −9 Hz, and the BPSK settle locked one preamble sideband (±15.6 Hz) off the
@@ -5764,3 +5764,38 @@ which case it was.
 **Prediction check:** B's first SL2 frame ACKed with no silent window or abandon before it: **met**. Kill not met. The OFDM phase did not regress (false_opens 0, NACKs answered, SL9 reached; SL10 still undecoded). **Weak-case flag:** first-frame correction −6.31 Hz is inside ±7.8 Hz.
 
 **Not done / open:** A's decode time for the first frame; whether the old build would have failed at this offset (not tested; the run differs from f2j in B's offset at start, which I did not measure); which BPSK sideband the settle chose.
+
+### Review of task 31 (pc1 session, 2026-11-07)
+
+**The prediction is met, and the start by itself is a weak test, as the station flagged.**
+- B's first SL2 frame was ACKed about 3 s after it ended: 0 silent windows and 0 abandons before the
+  first ACK (f2j: about 4 min, 3 and 1).
+- A's first-frame correction was −6.31 Hz, inside BPSK31's ±7.8 Hz native reach.
+
+**The offline counterfactual** (replayed on `rx-a-f2k-8k.wav.gz` with the daemon's construction and the
+production deadline, release; both coarse stages, the former picket stage run by reference):
+- **Fidelity:** the replay's kept AFC on frames 1–3, −6.31 / −7.43 / −7.91 Hz, matches A's on-air
+  `afc_update` events exactly.
+- **Frame 1 (about −6.3 Hz): both stages decode alike** (1.66 s against 1.68 s, 25 attempts each). The
+  old picket settles right at 12 of 13 window starts there (one start lands on a sideband, +9.35 Hz).
+  So f2k's clean start does not, alone, show the fix took effect: the old build would have started
+  cleanly by luck of offset.
+- **Frame 3 (B had drifted to about −7.9 Hz), replayed cold, is the strong confirmation.** The old
+  picket puts all 13 starts on the +15.6 Hz sideband and misses the deadline (235 attempts, 155 past
+  it). The dense stage decodes in 1.79 s. That is f2j's failure reproduced on f2k's own channel, and
+  fixed by #1520.
+
+**Why −6.31 Hz and not about −8.3 Hz:** B's carrier drifted, it was not mis-settled.
+- B drifted about 1.8 Hz downward over 3.5 min (−6.5 → −7.3 Hz across frame 1, about −8.3 Hz by the
+  end of frame 3), measured on the 2fc line of x². The FT-991A warming up under transmit is the likely
+  cause; that is inferred.
+- The settle was within about 0.2 Hz of the carrier at the frame start. The kept AFC lags intra-frame
+  drift by about 1 Hz, through the 0.1 tracking step, which is harmless at these rates.
+
+**The rest of the run did not regress:**
+- false opens 0 in all 99 detector lines;
+- all 31 undecodable SL9/SL10 frames NACKed, all received;
+- 1 silent window in the run (OFDM phase), 0 abandons;
+- B→A held SL9 (OFDM52 3, 8PSK 33, 16QAM 30). SL10 still never decodes.
+- The detector's cost on rpi51 is 743–1 049 µs per block.
+
