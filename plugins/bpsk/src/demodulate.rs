@@ -30,7 +30,7 @@ use std::f32::consts::PI;
 use num_complex::Complex32;
 use openpulse_core::error::ModemError;
 use openpulse_core::plugin::{ModulationConfig, PulseShape};
-use openpulse_dsp::acquisition::goertzel_carrier_scan;
+use openpulse_dsp::acquisition::mth_power_peak_scan;
 use openpulse_dsp::constellation::{
     differential_llr_scale, isi_aware_snr_db_windowed, remove_residual_frequency,
 };
@@ -422,13 +422,21 @@ pub fn estimate_frequency_offset(i_syms: &[f32], q_syms: &[f32], baud_rate: f32)
 /// Symbols of audio the coarse AFC search reads: today's `4 × 32`, held fixed across preambles.
 const AFC_WINDOW_SYMS: usize = 128;
 
-/// Wide-range carrier frequency estimator using the Goertzel algorithm on the
-/// squared signal.
+/// A coarse carrier stage: `(window, fs, fc)` to the offset from `fc` in Hz.
+pub type CoarseStage = dyn Fn(&[f32], f32, f32) -> Option<f32>;
+
+/// Wide-range carrier frequency estimator: the dense peak of the squared signal's spectrum.
 ///
-/// Squaring removes BPSK modulation, leaving a tone at 2×fc.  A Goertzel
-/// search in 25 Hz steps over 2×fc ± 800 Hz (= fc ± 400 Hz at baseband)
-/// locates the dominant peak.  **Acquisition range: ±400 Hz.**
-fn estimate_carrier_hz_wide(samples: &[f32], config: &ModulationConfig) -> Option<f32> {
+/// Squaring removes BPSK modulation, leaving a line at 2×fc; `coarse` locates it over fc ± 400 Hz
+/// on the bounded window. **Acquisition range: ±400 Hz.** The production stage is
+/// [`mth_power_peak_scan`], not the former 12.5 Hz Goertzel grid, which heard a long window's line
+/// only through sidelobes and so picked the `--++` preamble's structural sidebands at some offsets
+/// (`docs/dev/design/bpsk31-settle-sideband.md`).
+fn estimate_carrier_hz_wide(
+    samples: &[f32],
+    config: &ModulationConfig,
+    coarse: &CoarseStage,
+) -> Option<f32> {
     let baud = crate::parse_baud_rate(&config.mode).ok()?;
     let fs = config.sample_rate as f32;
     let fc = config.center_frequency;
@@ -442,16 +450,21 @@ fn estimate_carrier_hz_wide(samples: &[f32], config: &ModulationConfig) -> Optio
     // signal, so the preamble's content is irrelevant here, and a longer preamble must not silently
     // stretch this window over a fade (#1062 design, *AFC window, decoupled*).
     let window_len = (n * AFC_WINDOW_SYMS).min(samples.len());
-    goertzel_carrier_scan(&samples[..window_len], fs, fc, 2, 400.0, 12.5)
+    coarse(&samples[..window_len], fs, fc)
+}
+
+/// The production coarse stage: [`mth_power_peak_scan`] of the squared signal over ±400 Hz.
+fn dense_coarse(window: &[f32], fs: f32, fc: f32) -> Option<f32> {
+    mth_power_peak_scan(window, fs, fc, 2, 400.0)
 }
 
 /// Run a lightweight demodulation pass to estimate the carrier frequency offset.
 ///
 /// **Two-stage estimator:**
-/// 1. Goertzel coarse search (±400 Hz, 12.5 Hz resolution at baseband) to handle
-///    large initial offsets — e.g., VHF crystal errors of up to ±3 ppm on 144 MHz.
-/// 2. IQ-squaring fine correction at the Goertzel-corrected centre frequency to
-///    recover the sub-step residual (≤ 6.25 Hz) for accurate tracking.
+/// 1. Dense coarse search (±400 Hz, the squared spectrum's peak) to handle large initial offsets —
+///    e.g., VHF crystal errors of up to ±3 ppm on 144 MHz.
+/// 2. IQ-squaring fine correction at the coarse centre to recover the residual for accurate
+///    tracking; the residual is a fraction of a bin, far inside the stage's ±baud/4 wrap.
 ///
 /// Returns `None` if the buffer is too short for either path.
 pub fn afc_estimate_hz(samples: &[f32], config: &ModulationConfig) -> Option<f32> {
@@ -468,26 +481,51 @@ pub fn afc_estimate_hz_with_expected(
     config: &ModulationConfig,
     expected: &[f32],
 ) -> Option<f32> {
+    afc_estimate_two_stage(samples, config, expected, &dense_coarse)
+}
+
+/// [`afc_estimate_hz`] with a caller-supplied stage 1, given `(window, fs, fc)`.
+///
+/// Exists so a gate can run a reference coarse stage (the former 12.5 Hz Goertzel grid, or a dense
+/// Goertzel prototype) through the product's own window and stage 2, rather than a copy of them.
+pub fn afc_estimate_hz_with_coarse(
+    samples: &[f32],
+    config: &ModulationConfig,
+    coarse: &CoarseStage,
+) -> Option<f32> {
+    afc_estimate_two_stage(
+        samples,
+        config,
+        &expected_preamble_for(&config.mode),
+        coarse,
+    )
+}
+
+fn afc_estimate_two_stage(
+    samples: &[f32],
+    config: &ModulationConfig,
+    expected: &[f32],
+    coarse: &CoarseStage,
+) -> Option<f32> {
     let baud = crate::parse_baud_rate(&config.mode).ok()?;
     let fs = config.sample_rate as f32;
     let n = crate::modulate::samples_per_symbol(fs, baud).ok()?;
 
-    // Stage 1: coarse Goertzel acquisition (±400 Hz).
-    let coarse = estimate_carrier_hz_wide(samples, config);
+    // Stage 1: coarse acquisition (±400 Hz).
+    let coarse = estimate_carrier_hz_wide(samples, config, coarse);
 
     if samples.len() < n * (expected.len() + 1) {
         return coarse;
     }
 
-    // Stage 2: fine IQ-squaring at the Goertzel-corrected centre frequency to
-    // eliminate the sub-step quantisation error (≤ 6.25 Hz).
+    // Stage 2: fine IQ-squaring at the coarse-corrected centre frequency.
     let c = coarse.unwrap_or(0.0);
     let corrected_fc = config.center_frequency + c;
     let lock = timing_locks_with_expected(samples, n, corrected_fc, fs, expected).widened;
     let (i_syms, q_syms) = demodulate_iq_at(samples, n, corrected_fc, fs, lock);
     let residual = estimate_frequency_offset(&i_syms, &q_syms, baud);
 
-    // The residual should be within ±baud/4 of 0 after Goertzel correction.
+    // The residual should be within ±baud/4 of 0 after the coarse correction.
     // If it is, combine both stages; otherwise fall back to the coarse estimate.
     if residual.abs() < baud / 4.0 {
         Some(c + residual)
@@ -2349,7 +2387,7 @@ mod tests {
     #[test]
     fn afc_wide_detects_large_offset() {
         use crate::modulate::bpsk_modulate;
-        // 150 Hz offset — beyond the narrow ±62.5 Hz range; wide Goertzel must acquire.
+        // 150 Hz offset — beyond the narrow ±62.5 Hz range; the wide coarse stage must acquire.
         let true_fc = 1650.0f32;
         let ref_fc = 1500.0f32;
         let cfg_tx = ModulationConfig {
@@ -2366,7 +2404,7 @@ mod tests {
         };
         let samples = bpsk_modulate(b"HelloWorldABCDEFGHIJKLMNOP", &cfg_tx).unwrap();
         let offset = afc_estimate_hz(&samples, &cfg_rx).expect("afc estimate");
-        // Goertzel step is 12.5 Hz at baseband; allow ±15 Hz tolerance.
+        // Tolerance kept from the 12.5 Hz picket grid this stage replaced.
         assert!(
             (offset - 150.0).abs() < 15.0,
             "expected ≈+150 Hz AFC offset, got {offset:.2} Hz"

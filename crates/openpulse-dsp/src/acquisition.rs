@@ -896,6 +896,181 @@ pub fn goertzel_carrier_scan(
     Some(best_df)
 }
 
+/// Zero-padding factor of [`mth_power_peak_scan`]'s FFT: its length is the next power of two ≥ this × N.
+///
+/// Fitted to nothing: ×2 puts the bin spacing at no more than half the rectangular window's main
+/// lobe, so the scalloping loss is ≤ ~0.9 dB, against the 12.5 Hz picket grid's ~28 dB worst case.
+/// Inventory it must hold on: the 492 synthetic BPSK31 cells, the 372 SL3–SL5 cells and the 14 real
+/// bursts of `docs/dev/design/bpsk31-settle-sideband.md`. Falsified by a quarter-bin-offset sweep
+/// losing a cell the 0.25 Hz Goertzel prototype wins.
+pub const PEAK_SCAN_ZERO_PAD: usize = 2;
+
+/// Dense coarse carrier-offset scan: the peak of the M-th-power signal's zero-padded spectrum.
+///
+/// The probe semantics are [`goertzel_carrier_scan`]'s, read at every FFT bin instead of on a fixed
+/// grid. δf steps over `±range_hz` in `binw / m` increments (binw = fs / L, L from
+/// [`PEAK_SCAN_ZERO_PAD`]), lowest first; each probe `m·(fc + δf)` is folded into `[0, fs/2]`,
+/// skipped within 150 Hz of a self-mixing interferer (DC and `k·fc`, k < m), and scored by its
+/// nearest bin's power. **For m = 2 the Nyquist guard applies to the UNFOLDED probe**: after the settle
+/// re-centres at fc + c with c ≥ 300 Hz, the carrier's Nyquist mirror would otherwise sit inside the
+/// span at the carrier's own folded bin. Ties go to the smallest |δf|. The winner is refined by
+/// parabolic interpolation over its folded neighbours, sign-flipped when the probe folded from above
+/// Nyquist, and divided by `m`.
+///
+/// Why dense: a picket grid hears a long window's narrow line only through sidelobes, so a BPSK
+/// preamble's structural sidebands out-score the carrier at some offsets
+/// (`docs/dev/design/bpsk31-settle-sideband.md`). Returns `None` where
+/// [`goertzel_carrier_scan`] does, and `Some(0.0)` when every probe is guarded, as it does.
+pub fn mth_power_peak_scan(
+    samples: &[f32],
+    fs: f32,
+    fc: f32,
+    m: u32,
+    range_hz: f32,
+) -> Option<f32> {
+    if samples.is_empty() || m == 0 || range_hz < 0.0 || fs.is_nan() || fs <= 0.0 {
+        return None;
+    }
+    let len = (PEAK_SCAN_ZERO_PAD * samples.len()).next_power_of_two();
+    let mut spectrum: Vec<Complex32> = samples
+        .iter()
+        .map(|&s| {
+            let mut acc = s;
+            for _ in 1..m {
+                acc *= s;
+            }
+            Complex32::new(acc, 0.0)
+        })
+        .collect();
+    spectrum.resize(len, Complex32::new(0.0, 0.0));
+    FftPlanner::new()
+        .plan_fft_forward(len)
+        .process(&mut spectrum);
+    let power: Vec<f32> = spectrum[..=len / 2].iter().map(|c| c.norm_sqr()).collect();
+
+    let fold = |f: f32| -> f32 {
+        let f = f.rem_euclid(fs);
+        if f > fs / 2.0 {
+            fs - f
+        } else {
+            f
+        }
+    };
+    // The same guard and interferer set as `goertzel_carrier_scan`, for the same reason.
+    const INTERFERER_GUARD_HZ: f32 = 150.0;
+    let mut interferers: Vec<f32> = vec![0.0];
+    for k in 1..m {
+        interferers.push(fold(k as f32 * fc));
+    }
+
+    let binw = fs / len as f32;
+    let mf = m as f32;
+    let step = binw / mf;
+    let k_max = (range_hz / step).floor() as i64;
+    let last_bin = power.len() - 1;
+    let nyquist = fs / 2.0 - INTERFERER_GUARD_HZ;
+    // (power, probe index, bin, folded from above Nyquist)
+    let mut best: Option<(f32, i64, usize, bool)> = None;
+    for k in -k_max..=k_max {
+        let unfolded = mf * (fc + k as f32 * step);
+        let probe = fold(unfolded);
+        if interferers
+            .iter()
+            .any(|&intf| (probe - intf).abs() < INTERFERER_GUARD_HZ)
+            || probe > nyquist
+            || (m == 2 && unfolded > nyquist)
+        {
+            continue;
+        }
+        let bin = ((probe / binw).round() as usize).min(last_bin);
+        let p = power[bin];
+        let better = match best {
+            None => true,
+            Some((bp, bk, _, _)) => p > bp || (p == bp && k.abs() < bk.abs()),
+        };
+        if better {
+            best = Some((p, k, bin, unfolded.rem_euclid(fs) > fs / 2.0));
+        }
+    }
+    let Some((_, k, bin, mirrored)) = best else {
+        return Some(0.0);
+    };
+
+    let mut frac = 0.0f32;
+    if bin >= 1 && bin < last_bin {
+        let (a, b, c) = (
+            power[bin - 1].sqrt(),
+            power[bin].sqrt(),
+            power[bin + 1].sqrt(),
+        );
+        let denom = a - 2.0 * b + c;
+        if denom < 0.0 {
+            frac = (0.5 * (a - c) / denom).clamp(-0.5, 0.5);
+        }
+    }
+    let probe = fold(mf * (fc + k as f32 * step));
+    let folded_delta = (bin as f32 + frac) * binw - probe;
+    let unfolded_delta = if mirrored {
+        -folded_delta
+    } else {
+        folded_delta
+    };
+    Some(k as f32 * step + unfolded_delta / mf)
+}
+
+#[cfg(test)]
+mod peak_scan_tests {
+    use super::*;
+    use std::f32::consts::PI;
+
+    /// A pure tone at `fc + df`: squaring it gives the line at `2·(fc + df)` with no modulation.
+    fn tone(fs: f32, f: f32, n: usize) -> Vec<f32> {
+        (0..n)
+            .map(|i| (2.0 * PI * f * i as f32 / fs).cos())
+            .collect()
+    }
+
+    #[test]
+    fn finds_a_tone_to_a_fraction_of_a_hertz_across_the_span() {
+        for df in [
+            -399.0f32, -300.0, -17.3, -9.0, 0.0, 3.4, 150.0, 350.0, 399.0,
+        ] {
+            let est =
+                mth_power_peak_scan(&tone(8000.0, 1500.0 + df, 8448), 8000.0, 1500.0, 2, 400.0)
+                    .expect("scan");
+            assert!((est - df).abs() < 0.05, "df {df}: estimated {est}");
+        }
+    }
+
+    /// Review item 2: re-centred at fc + c, c ≥ 300, the carrier's Nyquist mirror sits inside the
+    /// span on the carrier's own folded bin. The unfolded guard keeps the scan on the carrier.
+    #[test]
+    fn a_recentred_scan_does_not_take_the_nyquist_mirror() {
+        for c in [300.0f32, 350.0, 380.0, 399.0] {
+            let fc = 1500.0 + c;
+            let est =
+                mth_power_peak_scan(&tone(8000.0, fc, 8448), 8000.0, fc, 2, 400.0).expect("scan");
+            assert!(
+                est.abs() < 0.05,
+                "re-centred at +{c}: estimated {est}, want 0"
+            );
+        }
+    }
+
+    #[test]
+    fn degenerate_inputs_match_the_goertzel_contract() {
+        assert_eq!(mth_power_peak_scan(&[], 8000.0, 1500.0, 2, 400.0), None);
+        assert_eq!(
+            mth_power_peak_scan(&[1.0; 64], 8000.0, 1500.0, 0, 400.0),
+            None
+        );
+        assert_eq!(
+            mth_power_peak_scan(&[1.0; 64], 8000.0, 1500.0, 2, -1.0),
+            None
+        );
+    }
+}
+
 #[cfg(test)]
 mod goertzel_tests {
     use super::*;
