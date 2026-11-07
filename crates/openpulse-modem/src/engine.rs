@@ -367,9 +367,10 @@ const OTA_FALLBACK_RESCUE_LEAD_BIAS: usize = 1024;
 
 /// Maximum AFC correction magnitude accepted after settling.
 ///
-/// The Goertzel acquisition range is ±400 Hz (`range_hz = 800` in `estimate_carrier_hz_wide`), so
-/// this is that range plus a small margin. The convergence guard (`|change| > 5 Hz`) still rejects
-/// flat noise that produces a near-zero stable estimate.
+/// The BPSK coarse stage's acquisition range is ±400 Hz (`range_hz = 400` in the plugin's
+/// `dense_coarse`), so this is that range plus a small margin. The convergence guard
+/// (`|change| > 5 Hz`) no longer rejects most noise settles: with the dense coarse stage they
+/// converge (`docs/dev/design/bpsk31-settle-sideband.md`, *Behaviour change*).
 ///
 /// **Corrected 2026-08-18**: this comment used to justify the bound with "on-air measurements show a
 /// consistent ~400 Hz carrier offset between the two rigs". That figure is unsupported — it traces to
@@ -530,6 +531,22 @@ struct AfcSettleOutcome {
     fine: f32,
     /// Absolute change introduced by the final fine pass (convergence check).
     last_delta: f32,
+}
+
+impl AfcSettleOutcome {
+    /// The convergence check both acquisition paths apply: the last fine pass moved < 5 Hz and the
+    /// fine track stayed within 20 Hz of the anchor.
+    ///
+    /// With the dense coarse stage a noise settle converges too, where the picket grid's re-centring
+    /// jitter used to fail it (`docs/dev/design/bpsk31-settle-sideband.md`, *Behaviour change*).
+    fn converged(&self) -> bool {
+        self.last_delta < 5.0 && (self.fine - self.anchor).abs() <= 20.0
+    }
+
+    /// [`converged`](Self::converged) and inside the acquisition range.
+    fn credible(&self) -> bool {
+        self.converged() && self.fine.abs() <= AFC_MAX_CORRECTION_HZ
+    }
 }
 
 /// Adaptive scan energy gate: a noise-floor-relative threshold, from the first window.
@@ -1625,6 +1642,26 @@ impl ModemEngine {
         let (rho, _) = self.preamble_rho(&veto, window, settled_override.unwrap_or(fine))?;
         let threshold = self.rho_calibration.effective_threshold(veto.rho_threshold);
         Some((fine, rho, threshold))
+    }
+
+    /// The settle [`acquire_at_onset`](Self::acquire_at_onset) runs at `start`, on the window it
+    /// would use: `(anchor, fine, credible)`, where `credible` is the convergence and range check both
+    /// acquisition paths apply. Leaves the AFC as it found it; `None` when the window does not fit.
+    #[cfg(feature = "instruments")]
+    pub fn settle_probe(
+        &mut self,
+        mode: &str,
+        samples: &[f32],
+        start: usize,
+    ) -> Option<(f32, f32, bool)> {
+        let sr = AudioConfig::default().sample_rate;
+        let (_, acq_samples, min_frame_samples, _) = self.frame_scan_geometry(mode, sr);
+        let end = start.checked_add(acq_samples.max(min_frame_samples))?;
+        let window = samples.get(start..end)?;
+        let entry = self.afc_correction_hz;
+        let outcome = self.afc_mini_settle(mode, window);
+        self.afc_correction_hz = entry;
+        Some((outcome.anchor, outcome.fine, outcome.credible()))
     }
 
     /// Whether the veto is standing down for want of a separating threshold (REQ-RX-03), and how
@@ -4035,10 +4072,8 @@ impl ModemEngine {
             return false;
         }
         let outcome = self.afc_mini_settle(mode, &samples[start..settle_end]);
-        let converged = outcome.last_delta < 5.0 && (outcome.fine - outcome.anchor).abs() <= 20.0;
-        let plausible = outcome.fine.abs() <= AFC_MAX_CORRECTION_HZ;
         let worth_retrying = outcome.fine.abs() >= AFC_SETTLE_DEADBAND_HZ;
-        if !(converged && plausible && worth_retrying) {
+        if !(outcome.credible() && worth_retrying) {
             return false;
         }
         let Some(v) = veto else {
@@ -6198,8 +6233,7 @@ impl ModemEngine {
                         // last delta), the fine track must agree with the anchor within
                         // 20 Hz (real carrier), and the magnitude must not exceed the
                         // Goertzel acquisition range.
-                        let converged =
-                            settle.last_delta < 5.0 && (settle.fine - settle.anchor).abs() <= 20.0;
+                        let converged = settle.converged();
                         let plausible = settle.fine.abs() <= AFC_MAX_CORRECTION_HZ;
                         if !converged || !plausible {
                             debug!(

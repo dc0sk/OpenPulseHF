@@ -14,6 +14,8 @@
 #   scripts/slow-tests.sh ota         # just the OTA rate-adaptation suite (CAP-33)
 #   scripts/slow-tests.sh spectral    # just the carrier-detect decode counts (#1454, #1443, REQ-DCD-01,
 #                                     # and the OFDM preamble detect's held-out cells)
+#   scripts/slow-tests.sh settle      # the BPSK31 cold frame inside the production ACK deadline
+#                                     # (docs/dev/design/bpsk31-settle-sideband.md, gate 1)
 #
 # Named tests, never a blanket `-- --ignored`: the notch binary also holds `probe_band_sweep`, a
 # manual env-driven research harness that asserts nothing, and `capture_replay_corpus` holds two
@@ -25,8 +27,8 @@ cd "$REPO_ROOT" || exit 2
 
 want=${1:-all}
 case "$want" in
-    all|notch|ota|spectral) ;;
-    *) echo "usage: scripts/slow-tests.sh {all|notch|ota|spectral}" >&2; exit 2 ;;
+    all|notch|ota|spectral|settle) ;;
+    *) echo "usage: scripts/slow-tests.sh {all|notch|ota|spectral|settle}" >&2; exit 2 ;;
 esac
 
 rc_total=0
@@ -84,6 +86,10 @@ wants spectral && PROFILE=--release run_suite total_power_bursts_keep_their_head
 # (docs/dev/design/ofdm-preamble-detect.md, gates 1–3).
 wants spectral && PROFILE=--release run_suite ofdm_preamble_detect --nocapture
 wants spectral && PROFILE=--release run_suite ofdm_detect_fade --nocapture
+# The f2j cold first frame decoded inside the production ACK deadline: a wall-clock verdict, so it
+# runs released (an unoptimised build spends 3.7 s of the 6.18 s budget); the attempt-count form of
+# the same gate runs by default.
+wants settle && PROFILE=--release run_suite bpsk_settle_sideband --nocapture
 
 if [ "$rc_total" -eq 0 ]; then
     echo "SLOW-TESTS: PASS"

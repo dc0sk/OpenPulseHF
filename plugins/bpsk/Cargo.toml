@@ -12,6 +12,9 @@ gpu = ["dep:openpulse-gpu"]
 # The #1062 PN-63 candidate preamble as `-PN` modes, for measurement against the shipped one
 # (docs/dev/design/pn-preamble.md, F1). Never enabled in a shipped build.
 pn-candidate = []
+# Test-only instruments (#1277): `afc_estimate_hz_with_coarse`, so a gate can run a reference coarse
+# stage through the product's own window and stage 2. Enabled only by openpulse-modem's dev-dependency.
+instruments = []
 
 [dependencies]
 openpulse-core = { workspace = true }

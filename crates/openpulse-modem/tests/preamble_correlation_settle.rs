@@ -125,8 +125,34 @@ fn the_receiver_never_settles_on_a_saturating_noise_floor() {
             "lead {lead}: no settle was ever refused on correlation, yet this floor saturates the \
              energy gate — the check is inert and the count above proves nothing"
         );
+
+        // BPSK250's veto counters are a GATE, not a note (`docs/dev/design/bpsk31-settle-sideband.md`,
+        // gates 8–9). With the dense coarse stage a noise settle converges, so the correlation check
+        // now refuses settles the convergence check used to drop first: measured 1205 / 2416 / 3614
+        // rejections at the three leads, against 138 / 233 / 323 with the 12.5 Hz picket grid, for
+        // the same 1247 / 2498 / 3749 settles, the same decode and zero condemnations either way.
+        // The band holds that work where it was measured, so a coarse-stage change that moves what the
+        // veto sees is seen here; the decode-attempt bound holds the outcome.
+        let rejected = h.rx_engine.rho_rejected_settles();
+        let measured = MEASURED_RHO_REJECTIONS[fixture::LEADS
+            .iter()
+            .position(|&l| l == lead)
+            .expect("a fixture lead")];
+        assert!(
+            rejected * 10 >= measured * 8 && rejected * 10 <= measured * 12,
+            "lead {lead}: {rejected} settles refused on correlation, measured {measured} (±20 %) — \
+             the coarse stage changed what reaches the veto"
+        );
+        assert!(
+            h.rx_engine.decode_attempts() <= 2,
+            "lead {lead}: {} decode attempts (measured 1, 2, 2)",
+            h.rx_engine.decode_attempts()
+        );
     }
 }
+
+/// Correlation rejections per [`fixture::LEADS`] entry with the dense coarse stage (2026-11-07).
+const MEASURED_RHO_REJECTIONS: [u64; 3] = [1205, 2416, 3614];
 
 /// The false-reject half: a real frame must still be acquired when it is far off-frequency.
 ///
