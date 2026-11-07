@@ -228,3 +228,63 @@ fn the_settle_recovery_threshold_is_reachable_for_the_slow_rungs() {
          documenting a defect that no longer exists in the form described"
     );
 }
+
+mod common;
+
+/// The CLI path's counters on this fixture, held for both coarse stages (design
+/// `docs/dev/design/bpsk31-settle-sideband.md`, gate 8).
+///
+/// The dense coarse stage lets noise settles converge, and on this path a converged settle latches the
+/// scan planner (#1021), so the change could have moved the condemnation recovery. Measured
+/// 2026-11-07, identical with the dense stage and with the 12.5 Hz picket grid it replaced, coded and
+/// uncoded: one settle, accepted by the correlation veto, one decode attempt, no condemnation. The
+/// adaptive energy gate no longer fires on this floor before the frame, so the recovery is not
+/// exercised here; the floor where it is (`preamble_correlation_settle`) gates the veto's work.
+#[test]
+fn the_cli_path_counters_hold_for_both_coarse_stages() {
+    let payload = b"coded payload that must survive a noise settle".to_vec();
+    for picket in [false, true] {
+        for fec in [FecMode::None, FecMode::Rs] {
+            let mut h = ChannelSimHarness::new();
+            h.tx_engine
+                .register_plugin(Box::new(BpskPlugin::new()))
+                .unwrap();
+            let rx: Box<dyn ModulationPlugin> = if picket {
+                Box::new(common::ref_bpsk::RefBpsk::new(common::ref_bpsk::picket))
+            } else {
+                Box::new(BpskPlugin::new())
+            };
+            h.rx_engine.register_plugin(rx).unwrap();
+            h.tx_engine
+                .transmit_with_fec_mode(&payload, "BPSK250", fec, None)
+                .expect("transmit");
+            h.route_embedded_noisy(LEAD, TRAIL, ONAIR_IDLE_RMS, 1);
+            let got = h.rx_engine.receive_with_fec_mode_timeout(
+                "BPSK250",
+                fec,
+                None,
+                Duration::from_millis(RECEIVE_TIMEOUT_MS),
+            );
+            let e = &h.rx_engine;
+            let counters = (
+                e.decode_attempts(),
+                e.afc_settle_attempts(),
+                e.settle_condemnations(),
+                e.rho_rejected_settles(),
+                e.rho_accepted_settles(),
+            );
+            let label = if picket { "picket" } else { "dense" };
+            assert_eq!(
+                got.ok().as_deref(),
+                Some(payload.as_slice()),
+                "{label} {fec:?}: the round trip must decode"
+            );
+            assert_eq!(
+                counters,
+                (1, 1, 0, 0, 1),
+                "{label} {fec:?}: (decode attempts, settles, condemnations, rho rejections, rho \
+                 accepts) moved from the measured (1, 1, 0, 0, 1)"
+            );
+        }
+    }
+}

@@ -238,4 +238,12 @@ fn an_off_frequency_first_frame_does_not_pay_the_onset_scan() {
         off <= 2 * on + 2,
         "the +{REQUIRED_OFFSET_HZ} Hz frame cost {off} decode attempts against {on} on frequency"
     );
+    // Pinned, not "still passes" (`docs/dev/design/bpsk31-settle-sideband.md`, gate 4): measured 6 and
+    // 6 on 2026-11-07 before and after the BPSK coarse stage became dense. BPSK100's sidebands sit on
+    // the picket grid with its carrier, so the change must not move these counts.
+    assert_eq!(
+        (on, off),
+        (6, 6),
+        "{SLOW_MODE} decode attempts moved from the measured 6 at 0 Hz and 6 at +50 Hz"
+    );
 }
