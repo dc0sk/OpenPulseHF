@@ -2,7 +2,7 @@
 project: openpulsehf
 doc: docs/dev/design/ota-scan-onset-major.md
 status: resolved
-last_updated: 2026-11-01
+last_updated: 2026-11-07
 ---
 
 # Run the OTA burst scan onset-major
@@ -140,9 +140,11 @@ failed. `grep -n "scan_burst_onsets\|acquire_burst_correction" crates/openpulse-
 
 ## Parked
 
-- **The trigger settle's wrong estimate:** −12.8 against +3.2 Hz on BPSK31, possibly a preamble
-  sideband. It settles on a window anchored at the squelch trigger, which is the coarse energy-gate
-  window the playbook's §3 warns against. Diagnose it with the swept-correction experiment of §1.
+- ~~**The trigger settle's wrong estimate:** −12.8 against +3.2 Hz on BPSK31, possibly a preamble
+  sideband.~~ **Confirmed and closed (2026-11-07):** it is a preamble sideband, −16.0 Hz = one Rs/2
+  off, picked by the coarse stage's 12.5 Hz picket grid rather than caused by the trigger window.
+  Diagnosis and fix: [`bpsk31-settle-sideband.md`](bpsk31-settle-sideband.md); the capture is the
+  corpus file `ft991a-ota-frame-bpsk31-rs.wav`, gated there.
 - **Why larger reads cost more on these recordings** (1.3 → 9.7 s at 800 → 4096 samples), given that
   `scan_end` does not change at those sizes.
 - ~~A bound on bursts that cannot decode.~~ Done, see the next section.

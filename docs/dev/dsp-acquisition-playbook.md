@@ -2,7 +2,7 @@
 project: openpulsehf
 doc: docs/dev/dsp-acquisition-playbook.md
 status: resolved
-last_updated: 2026-09-30
+last_updated: 2026-11-07
 ---
 
 # DSP acquisition and carrier-recovery playbook
@@ -20,6 +20,8 @@ Blind acquisition — recovering timing, frequency, **and** phase simultaneously
 4. **Carrier recovery is acquire-then-track, not one loop.** A gentle (low-BW) loop holds lock but **cannot acquire** even a ~1 Hz residual over a short (~60–200 symbol) frame. Use two passes: pass 1 wide BW to acquire the frequency, pass 2 narrow BW *seeded* with it to track cleanly. 64QAM (`dd_carrier_track_2pass`) and 8PSK (`dd_track_seeded`, #417) both do this. A single high-BW loop fixes the offset but regresses clean/dense modes (8PSK9600) — the split keeps both.
 
 5. **Don't try to extract sub-Hz CFO from the 16-symbol preamble by a magnitude-peak frequency search.** Its frequency resolution is only ~baud/16 (31–62 Hz) and the magnitude metric is sidelobe-ridden; a coarse scan locks to spurious peaks (−100…−256 Hz observed). Use a scan only for *coarse* acquisition; leave the fine residual to the 2-pass tracker. The data-aided mean-phase-increment estimator is the precise stage (ISI-biased ~0.9 Hz, which the tracker now absorbs).
+
+5a. **A decode does not certify the settle.** BPSK31's native reach hides ±4 Hz, and the fine stage's residual reads 0 at a sideband; judge a settle against the decoded carrier (`docs/dev/design/bpsk31-settle-sideband.md`).
 
 6. **Dense constellations are the regression canaries.** 8PSK (±22.5° margin) and 64QAM surface every timing/phase/AFC weakness that BPSK/QPSK hide. Validate acquisition changes against them, not just BPSK.
 
