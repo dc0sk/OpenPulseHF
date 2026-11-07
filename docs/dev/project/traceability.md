@@ -60,6 +60,7 @@ this ledger adds the design rationale and the actually-observed results per chan
   `freq_acquire_accuracy` 1/1, `chain_veto_slow_rung` 1/1, `preamble_veto_interference` 9/9. Clippy (`-D warnings --all-targets`) clean on openpulse-dsp,
   bpsk-plugin, openpulse-modem, openpulse-daemon; fmt clean.
 - **Gate:** not run here (the maintainer's session runs `scripts/gate.sh` and `scripts/slow-tests.sh`).
+- **Gate:** `GATE: PASS 6215a76a509e45bc21bab28c8f95b33a083ef640 clean 20261107T122553Z` (suites 398, 2828 passed, 0 failed). An earlier gate at `16c2e634` failed only on the reachability ratchet (3 new test-only public items), fixed by `6215a76a`. `scripts/slow-tests.sh` (all suites, at `16c2e634`; the later commit only changes visibility): `ota_channel_adaptation` 3/0, `spectral_busy_gathers_weak_frames` 2/0, `total_power_bursts_keep_their_head` 1/0, `ofdm_preamble_detect` 2/0, `ofdm_detect_fade` 1/0, `bpsk_settle_sideband` 1/0; `notch_rescues_interferer` 2/1, the known red row #1457 (the same assertion as on main).
 
 ## 2026-11-06 — The preamble detect judges a frame at the receiver's centre, from the refined coherence (work plan M3, A2)
 
