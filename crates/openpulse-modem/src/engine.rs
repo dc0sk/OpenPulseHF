@@ -11993,3 +11993,122 @@ mod preamble_detect_told {
         );
     }
 }
+
+#[cfg(test)]
+mod preamble_detect_rehead_trap {
+    //! The re-head's case (`ofdm-preamble-detect.md`, Implementation, "The re-head"): on air (f2h,
+    //! IC-9700 under AGC SLOW) the noise floor learned the AGC's post-frame dips, the squelch sat
+    //! under the hiss, total power opened a burst on the hiss about 2 s after each frame, and the next
+    //! SL8 frame sat at the tail of that burst, out of the decoder's reach. Replayed from the
+    //! recording's start on the daemon path, 1 of 56 frames in the trapped stretch decoded on `main`,
+    //! 52 with the re-head.
+    //!
+    //! The committed cut is 55.75 s of that stretch: it starts in a post-frame dip and holds five SL8
+    //! frames. The floor is pre-warmed by feeding the cut once (the trap's own dynamics, no decode),
+    //! so the measured pass starts trapped with the tracker warm; then the cut is fed again through
+    //! `accumulate_capture` in the daemon's 800-sample reads, with the read after a flush holding the
+    //! busy check's read plus what buffered during the decode, and every burst goes to
+    //! `ota_decode_burst`.
+    //!
+    //! In-crate because the receiver's AFC is private: it is set to the value A's held through the
+    //! stretch in the full replay, so P judges at the on-air told.
+    use super::*;
+    use openpulse_audio::LoopbackBackend;
+    use openpulse_core::profile::SessionProfile;
+
+    const CUT: &str = "ic9700-ofdm52-f2h-agc-slow-trap.wav";
+    /// SL8 frames in the cut.
+    const FRAMES: usize = 5;
+    /// The AFC correction through the trapped stretch in the full replay.
+    const AFC_HZ: f32 = -6.07;
+    /// The read after a flush: the busy check's 400 samples plus 1.7 s buffered while the loop
+    /// decoded (the replay's figure for the daemon's loop).
+    const POST_FLUSH_READ: usize = 400 + 13_600;
+    /// The daemon's configured mode on station A (`config-a.toml`).
+    const MODE: &str = "BPSK250";
+
+    /// The daemon's receive construction: the `hpx_hf` plugins, the notch, a `fast` session, here
+    /// locked at the stretch's rung.
+    fn daemon_engine() -> ModemEngine {
+        let lb = LoopbackBackend::new();
+        let mut e = ModemEngine::new(Box::new(lb.clone_shared()));
+        e.register_plugin(Box::new(bpsk_plugin::BpskPlugin::new()))
+            .expect("bpsk");
+        e.register_plugin(Box::new(qpsk_plugin::QpskPlugin::new()))
+            .expect("qpsk");
+        e.register_plugin(Box::new(fsk4_plugin::Fsk4Plugin::new()))
+            .expect("fsk4");
+        e.register_plugin(Box::new(mfsk16_plugin::Mfsk16Plugin::new()))
+            .expect("mfsk16");
+        e.register_plugin(Box::new(ofdm_plugin::OfdmPlugin::new()))
+            .expect("ofdm");
+        e.enable_notch();
+        e.start_ota_session(SessionProfile::fast());
+        e.ota_lock_level(SpeedLevel::Sl8);
+        e.afc_correction_hz = AFC_HZ;
+        e
+    }
+
+    /// Feed `x` in daemon reads; decode every flushed burst when `decode`. Returns the frames decoded.
+    fn feed(e: &mut ModemEngine, x: &[f32], decode: bool) -> usize {
+        let (mut pos, mut next, mut decoded) = (0usize, 800usize, 0usize);
+        while pos < x.len() {
+            let end = (pos + next).min(x.len());
+            let chunk = x[pos..end].to_vec();
+            pos = end;
+            next = 800;
+            if let Ok(Some(b)) = e.accumulate_capture(Some(MODE), chunk) {
+                next = POST_FLUSH_READ;
+                if decode {
+                    let r = e
+                        .ota_decode_burst(&b, "S", Some(MODE))
+                        .expect("decode call");
+                    decoded += usize::from(r.payload.is_some());
+                }
+            }
+        }
+        decoded
+    }
+
+    /// The hiss: the 60th percentile of the cut's 512-sample window RMS (frames sit at its level
+    /// under the AGC, the dips under it).
+    fn hiss(x: &[f32]) -> f32 {
+        let mut r: Vec<f32> = x
+            .chunks_exact(512)
+            .map(|w| (w.iter().map(|v| v * v).sum::<f32>() / 512.0).sqrt())
+            .collect();
+        r.sort_by(f32::total_cmp);
+        r[r.len() * 6 / 10]
+    }
+
+    /// Gate: the trapped stretch decodes. Sabotage: a reach of `usize::MAX` (P never re-heads) takes
+    /// it to at most one.
+    #[test]
+    fn the_trapped_stretch_decodes_with_the_rehead() {
+        let x = crate::capture_replay::load_corpus(CUT)
+            .expect("f2h trap capture")
+            .samples;
+        let mut e = daemon_engine();
+        feed(&mut e, &x, false);
+        e.abandon_burst();
+        // The precondition the fixture exists for: a warm floor whose squelch sits under the hiss,
+        // so total power opens bursts on it (on air 0.53–0.61 through the stretch).
+        let ratio = e.dcd_squelch() / hiss(&x);
+        assert!(
+            e.dcd_floor_is_warm() && ratio < 0.8,
+            "the pre-warm did not reproduce the trap: warm {}, squelch/hiss {ratio:.2}",
+            e.dcd_floor_is_warm()
+        );
+        let reheads = e.preamble_detect_reheads();
+        let decoded = feed(&mut e, &x, true);
+        let reheads = e.preamble_detect_reheads() - reheads;
+        eprintln!(
+            "trap cut: {decoded} of {FRAMES} decoded, {reheads} re-heads, squelch/hiss {ratio:.2}"
+        );
+        assert!(
+            decoded >= FRAMES - 1,
+            "{decoded} of {FRAMES} trapped SL8 frames decoded (re-heads {reheads}, squelch/hiss \
+             {ratio:.2})"
+        );
+    }
+}
