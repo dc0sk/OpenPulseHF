@@ -5702,7 +5702,7 @@ That is the BPSK31 phase, not OFDM. The detector cannot be involved, because P r
 candidate. An SL2 decode or fallback scan of about 9 s on rpi51 missing B's ACK window is the likely
 shape, but it is unchecked. To look at before A2 is scored.
 
-## Task 31 — a cold first contact on the dense BPSK estimator: does B's first SL2 frame decode? (status: open; maintainer's go given 2026-11-07)
+## Task 31 — a cold first contact on the dense BPSK estimator: does B's first SL2 frame decode? (status: Part A run f2k done; see Results)
 
 **Why.** In f2j (task 30) A's first three SL2 (BPSK31) frames from B failed cold. A's AFC started
 at 0 Hz, B sat at about −9 Hz, and the BPSK settle locked one preamble sideband (±15.6 Hz) off the
@@ -5738,3 +5738,29 @@ deadline.
 settle, so a clean start would then not exercise the fix. Report the offset, so the review can say
 which case it was.
 
+
+### Results — Part A, run f2k (B sends, `fast` profile, A's AGC FAST, dense BPSK estimator; 2026-11-07)
+
+**Setup:** rpi51 at `3b5c677d` (m3/onair, #1520 plus task docs); `deploy` rebuilt on A and copied to station-B. sha256, identical on both stations: server `21829a958b2f6643c446cbed1e0717d973e3afe7458523ca4ff4ed123b1be15b`, CLI `ad77000f8235476a7b4d88e6392b007c8af26f4c0c49e44656ce87b89d04f6f5`, `twin-traffic.sh` `c9e152f32d6b8d5548551b255865b9c45c198b96739672b02eab9dee56fdc373`. Settings, log levels and local runner overrides as f2j. Times UTC (daemon-log clock; local +1 h). Evidence: `docs/dev/test-reports/onair-twin-ota-20261107-144125-evidence`; receive audio `rx-{a,b}-f2k-8k.wav.gz`.
+
+**Before:** A: AGC 2, RF gain 1, dial 144640000, RFPOWER 0.0117647; PCM2901 sources vol 0.15 and 0.44 (as f2j). rx-level check PASS: IC-9700 idle mean_sq 0.000105, threshold 0.000316; FT-991A 0.000367, threshold 0.001102. **After (read back):** A AGC 2, RF 1, dial 144640000, RFPOWER 0.0117647, PTT 0; FT-991A dial 144641564, RFPOWER 0.05, AGC 2, PTT 0; nothing running. 0 STOP lines.
+
+**SL2 start: B's first frame was ACKed, with no silent window and no abandon before the first ACK.**
+- **B's first send** keyed at 13:41:27 (watcher's first keyed reading; B's daemon log carries no send line at this log level, so this is a 1 s poll, not an exact time); that BPSK31 frame ran until about 13:42:33. **B's first ACK 13:42:36.70** (`ack=AckOk recommended=Sl2 from=Sl2 to=Sl2`). Gap about 69 s, which is the frame's own length plus A's ACK, not a timeout (f2j: about 4 min). B's next ACKs at 13:43:46.35 and 13:44:55.95, one per send.
+- **`ACK not received` windows before the first ACK: 0; abandons: 0** (f2j: 3 and 1). The run's only silent window is at 13:49:37.91, in the OFDM phase.
+- **A's `capture read holds` before the first ACK: 0.** A has 1 hold in the whole run, `13:52:44.45 samples=12200 since_ms=1523`, after the sign-off IDs.
+- **A's settled offset on the first decoded frame:** A's first `afc_update` event (BPSK31, the first `frame_received`): **`offset_hz=-0.726`, `correction_hz=-6.314`**; the next updates: −7.424 (BPSK31), −7.910 (BPSK31), −8.261 (BPSK63), −8.308 (BPSK100). So A started from 0.0 and adopted −6.31 Hz on the first frame, −8.3 Hz at the end of the climb. **The first frame's correction, 6.31 Hz, is inside ±7.8 Hz** (the task's "weak if" case): BPSK31 can decode that far off even with a wrong settle, so this clean start does not by itself prove the fix; the offset B sat at, about −8.3 Hz, is outside ±7.8 Hz, the first settle only reached −6.31. A's daemon log (`info,ofdm_plugin=debug`) has no settle or carrier-offset line for BPSK, so there is no other source for the offset.
+- **A's decode time for the first frame:** not logged. The ACK reached B 13:42:36.70, about 3 s after B's frame ended (~13:42:33); I did not measure A's decode more precisely (A's first ACK keying fell between two 1 s polls).
+
+**The full run as task 30 (no regression):**
+- **A's final detector counters** (99 `preamble carrier detect` lines, 13:46:28.68 to 13:52:04.53): `blocks=4831 opens=98 false_opens=0 held_no_frame=0 us_per_block=1005`. **`false_opens` 0 in all 99 lines (no step)**, `held_no_frame` 0 throughout; first open 13:46:29.575 (`blocks=29 opens=1 us_per_block=743`); `us_per_block` 743–1049 (median 1005). B: 0 detector lines. Compact table: `preamble-carrier-detect-a.txt`.
+- **A's `frame_received`:** OFDM52 3, OFDM52-8PSK 33, OFDM52-16QAM 30 (66 OFDM), QPSK250-D 3, BPSK250 3, BPSK31 3, BPSK63 1, BPSK100 1.
+- **A's rate decisions by decoded level, SNR dB:** SL2 3 (−3.2…3.5), SL3 1 (12.4), SL4 1 (13.7), SL5 1 (15.3), SL6 3 (3.3…9.9), SL7 3 (9.5…9.7), SL8 33 (3.7…9.0, median 8.2), SL9 30 (3.5…10.6, median 9.6). SL10 never decoded.
+- **A's NACK decisions: 31** (f2j 44, f2i 12): nack_hold 21, nack_step_down 10; by A's level: SL9 1, SL10 30. **B received 31 `ack=Nack`:** `recommended=Sl10 from=Sl10 to=Sl10` 20, `recommended=Sl8 from=Sl10 to=Sl8` 10, `recommended=Sl9 from=Sl9 to=Sl9` 1.
+- **B's ACK lines:** 106 (AckOk 48, AckUp 27, Nack 31), 13:42:36.70 to 13:52:06.78; by send level (`from=`): SL2 3, SL3 1, SL4 1, SL5 1, SL6 3, SL7 3, SL8 33, SL9 31, SL10 30. SL9: 30 non-NACK (= A's 30 SL9 decodes) and 1 NACK; SL10: 30, all NACK (A decoded none). **Every SL9/SL10 send A did not decode got a NACK; 0 silent** (counts matched, not per-send timestamps).
+- **B:** `ACK not received` 1 (13:49:37.91, no abandon followed), `OTA send abandoned` 0, `back to the level before it` 0, `no fall-back` 0; `message_received` on B 75; 0 `TCP client event receiver lagged` lines. B's `capture read holds` 16, all 13:58:10–14:06:32, after both sign-off IDs (the daemons ran on until the recordings ended), 8000–17800 samples; none in the run window.
+- **Station IDs:** A `with-ack` 13:49:25.82, `sign-off` 13:52:38.12; B `with-data` 13:49:28.24, `sign-off` 13:53:14.12.
+
+**Prediction check:** B's first SL2 frame ACKed with no silent window or abandon before it: **met**. Kill not met. The OFDM phase did not regress (false_opens 0, NACKs answered, SL9 reached; SL10 still undecoded). **Weak-case flag:** first-frame correction −6.31 Hz is inside ±7.8 Hz.
+
+**Not done / open:** A's decode time for the first frame; whether the old build would have failed at this offset (not tested; the run differs from f2j in B's offset at start, which I did not measure); which BPSK sideband the settle chose.
