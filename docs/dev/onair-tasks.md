@@ -5482,10 +5482,28 @@ A's AGC SLOW (`L AGC 3`) under a revised go, and A was restored to FAST (2) afte
 (`docs/dev/design/ofdm-preamble-detect.md`, reviewed, being implemented). f2h is now that detector's
 reference: B→A OFDM is decodable on this pair, and the detector has to gather it under AGC FAST.
 
-**Found: silence at a confirmed rung.**
+**Found: silence at a confirmed rung.** *Corrected 2026-11-07 by an offline analysis (below): the
+stretch ran about 10 min, not 3.5, and it did not recover by itself.*
 - From 11:06:35 to 11:09:57 B sat at SL8, a rung A had confirmed, and A answered nothing: 10
   `no fall-back` lines (`no unconfirmed climb is recorded`) and 26 abandoned sends. The link recovered
   by itself after about 3.5 minutes.
+- **Correction (2026-11-07), measured offline:**
+  - **The stretch:** 11:06:02–11:16:12, about 10 min, with 26 `no fall-back` lines, 26 abandons and
+    54 silent windows.
+  - **The frames reached A and were decodable:** B's 55 SL8 frames are all in A's audio, 51 of 55
+    decode offline (SNR median 8.4 dB), preamble ρ 0.857–0.923. Not a fade.
+  - **Why A keyed nothing:** the three SL10 NACKs at 11:05:55–11:06:02 used up the NACK budget
+    (`OTA_NACK_BUDGET` = 3), so A's events show 54 × `nack_hold verdict=muted` until the 10-min leak's
+    `nack_step_down` at 11:16:12. That leak is what ended it.
+  - **Why the decodable frames failed:** under AGC SLOW the noise floor learned only the quiet dips
+    after each frame, so the squelch fell under the hiss. Total power then opened a burst on the hiss
+    about 2 s after each frame, and each frame sat at the tail of a 66–92k-sample burst, out of the
+    decoder's onset reach. The loop sustains itself.
+  - So "silence at a confirmed rung" is the wrong frame: it is a receiver trap plus the NACK budget,
+    not a sender step-down question.
+  - The follow-ups are receiver-side: the preamble detect re-heading a burst opened on hiss, and
+    whether a detect-confirmed failure counts against the budget. See task 31's notes and the work
+    plan.
 - The fall-back after silence covers only an unconfirmed climb, by design.
 - A's SL8 SNR readings had a median of 8.1 dB, near the rung's floor, so a fade on a marginal rung is
   the likely cause, but it is unchecked.
