@@ -168,3 +168,103 @@ pub mod filter {
         buf.iter().map(|c| c.re * scale).collect()
     }
 }
+
+/// The BPSK plugin with a reference coarse stage, for gates that compare the product's carrier
+/// estimate against the one it replaced (`docs/dev/design/bpsk31-settle-sideband.md`).
+///
+/// Everything but stage 1 is the product: `afc_estimate_hz_with_coarse` runs the plugin's own window
+/// and stage 2 around the supplied coarse function, and every other trait method delegates.
+pub mod ref_bpsk {
+    use bpsk_plugin::BpskPlugin;
+    use openpulse_core::error::ModemError;
+    use openpulse_core::plugin::{
+        CarrierDetector, FrameGeometry, ModulationConfig, ModulationPlugin, PluginInfo,
+        PreambleTemplate,
+    };
+    use openpulse_dsp::acquisition::goertzel_carrier_scan;
+
+    /// A coarse stage: `(window, fs, fc) -> offset`.
+    pub type Coarse = fn(&[f32], f32, f32) -> Option<f32>;
+
+    /// The shipped stage 1 until 2026-11-07: the 12.5 Hz Goertzel picket grid.
+    pub fn picket(window: &[f32], fs: f32, fc: f32) -> Option<f32> {
+        goertzel_carrier_scan(window, fs, fc, 2, 400.0, 12.5)
+    }
+
+    /// The design's measured prototype: a 0.25 Hz Goertzel grid.
+    pub fn prototype(window: &[f32], fs: f32, fc: f32) -> Option<f32> {
+        goertzel_carrier_scan(window, fs, fc, 2, 400.0, 0.25)
+    }
+
+    /// The BPSK plugin with `coarse` as its stage 1.
+    pub struct RefBpsk {
+        inner: BpskPlugin,
+        coarse: Coarse,
+    }
+
+    impl RefBpsk {
+        /// The product plugin with its stage 1 replaced by `coarse`.
+        pub fn new(coarse: Coarse) -> Self {
+            Self {
+                inner: BpskPlugin::new(),
+                coarse,
+            }
+        }
+    }
+
+    impl ModulationPlugin for RefBpsk {
+        fn info(&self) -> &PluginInfo {
+            self.inner.info()
+        }
+        fn modulate(&self, d: &[u8], c: &ModulationConfig) -> Result<Vec<f32>, ModemError> {
+            self.inner.modulate(d, c)
+        }
+        fn demodulate(&self, s: &[f32], c: &ModulationConfig) -> Result<Vec<u8>, ModemError> {
+            self.inner.demodulate(s, c)
+        }
+        fn demodulate_soft(&self, s: &[f32], c: &ModulationConfig) -> Result<Vec<f32>, ModemError> {
+            self.inner.demodulate_soft(s, c)
+        }
+        fn demodulate_variants(
+            &self,
+            s: &[f32],
+            c: &ModulationConfig,
+        ) -> Result<Vec<Vec<u8>>, ModemError> {
+            self.inner.demodulate_variants(s, c)
+        }
+        fn frame_geometry(&self, c: &ModulationConfig) -> Option<FrameGeometry> {
+            self.inner.frame_geometry(c)
+        }
+        fn supports_soft_demod(&self, mode: &str) -> bool {
+            self.inner.supports_soft_demod(mode)
+        }
+        fn supports_mode(&self, mode: &str) -> bool {
+            self.inner.supports_mode(mode)
+        }
+        fn estimate_afc_hz(&self, s: &[f32], c: &ModulationConfig) -> Option<f32> {
+            bpsk_plugin::demodulate::afc_estimate_hz_with_coarse(s, c, &self.coarse)
+        }
+        fn estimate_snr_db(&self, s: &[f32], c: &ModulationConfig) -> Option<f32> {
+            self.inner.estimate_snr_db(s, c)
+        }
+        fn preamble_template(&self, c: &ModulationConfig) -> Option<PreambleTemplate> {
+            self.inner.preamble_template(c)
+        }
+        fn carrier_detector(&self, c: &ModulationConfig) -> Option<Box<dyn CarrierDetector>> {
+            self.inner.carrier_detector(c)
+        }
+        fn acquire_copy_offset(&self, s: &[f32], c: &ModulationConfig) -> Option<usize> {
+            self.inner.acquire_copy_offset(s, c)
+        }
+        fn occupied_bandwidth_hz(&self, mode: &str) -> Option<f32> {
+            self.inner.occupied_bandwidth_hz(mode)
+        }
+        fn modulate_iq(
+            &self,
+            d: &[u8],
+            c: &ModulationConfig,
+        ) -> Result<(Vec<f32>, Vec<f32>), ModemError> {
+            self.inner.modulate_iq(d, c)
+        }
+    }
+}
