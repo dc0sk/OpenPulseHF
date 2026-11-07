@@ -76,19 +76,27 @@ if [ -n "$(git status --porcelain 2>/dev/null)" ]; then DIRTY="dirty"; else DIRT
 
 # Run one command, capture its REAL status. No pipes: `$?` after a pipeline is the last element's
 # status, and ${PIPESTATUS}/$pipestatus differ between bash and zsh. This form works everywhere.
+# Wall time per step, mm:ss, so the slow steps are known rather than guessed (the gate takes ~2 h).
+fmt_secs() { printf '%dm%02ds' $(( $1 / 60 )) $(( $1 % 60 )); }
+
 run_step() {
     step_name=$1; shift
     printf '  %-38s' "$step_name"
     echo "=== $step_name: $* ===" >> "$LOG"
+    step_t0=$(date +%s)
     "$@" >> "$LOG" 2>&1
     rc=$?
+    step_secs=$(( $(date +%s) - step_t0 ))
     # Completion marker (#1224). Without it a truncated log is indistinguishable from a finished one
     # — a completed gate log simply ends with the last step's output — so `trace.py` read a
     # half-written log as evidence and reported CITED-BUT-DIDN'T-RUN for tests that had not been
     # reached yet. Written REGARDLESS of $rc: a test run with failures is still a completed run and
     # is valid evidence about which tests passed; only truncation invalidates it.
     echo "=== end $step_name: exit $rc ===" >> "$LOG"
-    if [ "$rc" -eq 0 ]; then echo "ok"; else echo "FAILED (exit $rc)"; fi
+    # A separate line: trace.py matches only `=== end <step>: exit N ===`, which stays verbatim.
+    echo "=== time $step_name: ${step_secs}s ===" >> "$LOG"
+    if [ "$rc" -eq 0 ]; then printf 'ok%-18s%s\n' "" "$(fmt_secs "$step_secs")"
+    else printf 'FAILED (exit %s)%-5s%s\n' "$rc" "" "$(fmt_secs "$step_secs")"; fi
     return $rc
 }
 
@@ -180,6 +188,7 @@ if [ "$MODE" = "fingerprint" ]; then fingerprint; exit 0; fi
 
 START_TREE=$(fingerprint)
 START_HEAD=$(git rev-parse HEAD 2>/dev/null || echo "unknown")
+GATE_T0=$(date +%s)
 
 # Called BEFORE each step and once after the last. Aborting at the next boundary rather than at the
 # end keeps a 2 h test step from being spent on a run that is already void — and it is what makes
@@ -414,5 +423,6 @@ cat > "$VERDICT" <<JSON
 }
 JSON
 
+echo "gate wall time: $(fmt_secs $(( $(date +%s) - GATE_T0 )))"
 echo "GATE: $result $COMMIT $DIRTY $STAMP"
 [ "$result" = "PASS" ] && exit 0 || exit 1
