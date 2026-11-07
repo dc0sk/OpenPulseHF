@@ -861,6 +861,8 @@ pub struct ModemEngine {
     p_held_no_frame: u64,
     /// Wall time P spent judging blocks, in nanoseconds: the per-read cost the Pi is checked with.
     p_nanos: u64,
+    /// Bursts total power or S opened that P re-headed at its onset (`rehead_at_p`).
+    p_reheads: u64,
     /// The most recent routed audio for a P-opened burst's head, as `rx_ring` but never emptied by
     /// #1454's retention rule: at 400-sample reads total power can flicker over a frame's preamble and
     /// flush a short burst before P's confirm is in, and that flush empties `rx_ring` — the preamble
@@ -1150,6 +1152,12 @@ const P_TOLD_HYSTERESIS_HZ: f32 = 1.0;
 /// noise burst over 0.8.
 const P_EVIDENCE_COHERENCE: f32 = 0.8;
 
+/// Symbols past a burst's onset bound within which its decoder still finds a frame. With OFDM52's
+/// one-symbol acquisition window this covers both terms of the onset scan's reach,
+/// `max(4·acq, onset_bound + acq)` (`burst_onset_scan_bounds`). P re-heads a burst whose first P open
+/// lies beyond it (`rehead_at_p`). The reviewed design's value, not fitted.
+const P_REHEAD_REACH_SYMBOLS: usize = 4;
+
 /// Pre-trigger ring for a burst the spectral test opened, in 512-sample windows (#1454). The same
 /// constant is the minimum spectral span at which a failed burst the spectral test carried counts as
 /// ladder evidence — one name, one number (#1454 design, items 2 and 6). It is set by that rule, and
@@ -1361,6 +1369,7 @@ impl ModemEngine {
             p_false_opens: 0,
             p_held_no_frame: 0,
             p_nanos: 0,
+            p_reheads: 0,
             p_ring: std::collections::VecDeque::new(),
             rx_burst_p_opened: false,
             rx_burst_p_held: false,
@@ -2914,6 +2923,11 @@ impl ModemEngine {
         self.p_held_no_frame
     }
 
+    /// Bursts total power or the spectral test opened that P re-headed at its preamble's onset.
+    pub fn preamble_detect_reheads(&self) -> u64 {
+        self.p_reheads
+    }
+
     /// Wall time P has spent judging blocks, in nanoseconds (its per-read cost on this host).
     pub fn preamble_detect_nanos(&self) -> u64 {
         self.p_nanos
@@ -3263,20 +3277,7 @@ impl ModemEngine {
                     .flatten()
                     .filter(|_| self.seam_p);
                 if let Some(onset) = p_head {
-                    let sym = self.p_symbol as isize;
-                    let head = onset - sym;
-                    if head >= 0 {
-                        append_from = (head as usize).min(samples.samples.len());
-                        self.rx_burst_lead = sym as usize;
-                    } else {
-                        let need = head.unsigned_abs();
-                        let take = need.min(self.p_ring.len());
-                        let skip = self.p_ring.len() - take;
-                        self.rx_burst.extend(self.p_ring.iter().skip(skip).copied());
-                        // Ring samples before the preamble, should the ring be shorter than asked.
-                        self.rx_burst_lead = (sym as usize).saturating_sub(need - take);
-                    }
-                    self.rx_burst_p_opened = true;
+                    append_from = self.take_p_head(onset, samples.samples.len());
                 } else if self.seam_s {
                     self.rx_burst_lead = self.rx_ring.len();
                     self.rx_burst.extend(self.rx_ring.iter().copied());
@@ -3296,6 +3297,8 @@ impl ModemEngine {
                 } else {
                     samples.samples.len()
                 };
+            } else if let Some(from) = self.rehead_at_p(samples.samples.len()) {
+                append_from = from;
             }
             self.rx_burst_p_held |= self.seam_p;
             self.push_ring(&samples.samples);
@@ -3449,6 +3452,72 @@ impl ModemEngine {
             }
             Ok(None)
         }
+    }
+
+    /// Start the burst one symbol before P's preamble at `onset` (relative to the current read of
+    /// `read_len` samples): from `p_ring` when the preamble lies in an earlier read, else from this
+    /// read. Marks the burst P-opened and returns where in this read its audio starts.
+    fn take_p_head(&mut self, onset: isize, read_len: usize) -> usize {
+        let sym = self.p_symbol as isize;
+        let head = onset - sym;
+        self.rx_burst_p_opened = true;
+        if head >= 0 {
+            self.rx_burst_lead = sym as usize;
+            return (head as usize).min(read_len);
+        }
+        let need = head.unsigned_abs();
+        let take = need.min(self.p_ring.len());
+        let skip = self.p_ring.len() - take;
+        self.rx_burst.extend(self.p_ring.iter().skip(skip).copied());
+        // Ring samples before the preamble, should the ring be shorter than asked.
+        self.rx_burst_lead = (sym as usize).saturating_sub(need - take);
+        0
+    }
+
+    /// How far into a burst its decoder finds a frame: the burst's lead, its first read, and
+    /// [`P_REHEAD_REACH_SYMBOLS`] symbols of the onset scan.
+    fn p_rehead_reach(&self) -> usize {
+        self.rx_burst_lead + self.rx_burst_first_block + P_REHEAD_REACH_SYMBOLS * self.p_symbol
+    }
+
+    /// The re-head (`ofdm-preamble-detect.md`, Implementation, "The re-head"): P's first open inside
+    /// a burst total power or S opened, beyond the decoder's reach from the burst's head, restarts the
+    /// burst at P's onset, exactly as a burst P opened. Under AGC SLOW (on-air f2h) the floor learned
+    /// the AGC's post-frame dips, total power opened a burst on the hiss about 2 s after each frame,
+    /// and the next frame sat at the tail of a 66–92k-sample burst, out of the decoder's reach.
+    ///
+    /// The head is dropped: not flushed, since a hiss head carries a total-power run past the evidence
+    /// floor and would key a NACK on noise (the #1178 class); not learned, since the floor holds it as
+    /// carrier. A non-OFDM frame in it (a station ID ahead of the data frame) is lost; without the
+    /// re-head the data frame is lost instead. Returns where in this read the burst's audio starts.
+    fn rehead_at_p(&mut self, read_len: usize) -> Option<usize> {
+        if self.rx_burst_p_opened || self.rx_burst_p_held || !self.seam_p {
+            return None;
+        }
+        let onset = self.seam_p_onset?;
+        // Where the burst would start, in the burst gathered so far (before any of this read).
+        let head_in_burst =
+            (self.rx_burst.len() as isize + onset - self.p_symbol as isize).max(0) as usize;
+        let reach = self.p_rehead_reach();
+        if head_in_burst <= reach {
+            return None;
+        }
+        self.noise_floor.discard();
+        self.rx_burst.clear();
+        let from = self.take_p_head(onset, read_len);
+        self.rx_burst_first_block = self.p_symbol;
+        self.rx_burst_tp_run = 0;
+        self.rx_burst_tp_cur = 0;
+        self.rx_burst_s_span = 0;
+        self.s_armed = false;
+        self.p_reheads = self.p_reheads.wrapping_add(1);
+        debug!(
+            head_in_burst,
+            reach,
+            reheads = self.p_reheads,
+            "a burst total power or the spectral test opened was re-headed at the preamble detect's onset"
+        );
+        Some(from)
     }
 
     /// Keep the most recent `S_RING_WINDOWS` of captured audio for an S-opened burst's head (#1454).
@@ -11582,11 +11651,11 @@ mod preamble_detect_false_open {
         );
     }
 
-    /// 1.5 s of loud noise, so total power opens the burst, running straight into a genuine OFDM52
-    /// frame cut after ten data symbols: P confirms the frame's preamble and holds the burst it did
-    /// not open. The waveform's acquisition searches the burst from its start, which is noise beyond
-    /// its reach, so it finds no frame, and the fragment does not decode.
-    fn held_fragment_fixture() -> Vec<f32> {
+    /// Loud noise for `noise` samples, so total power opens the burst, running straight into a
+    /// genuine OFDM52 frame cut after `data_syms` data symbols, behind 12 s of quiet noise and with
+    /// 4 s of it after. Returns the feed and where the preamble starts in it. P confirms the
+    /// fragment's preamble inside a burst it did not open.
+    fn fragment_after_noise(noise: usize, data_syms: usize) -> (Vec<f32>, usize) {
         let lb = LoopbackBackend::new();
         let mut tx = ModemEngine::new(Box::new(lb.clone_shared()));
         tx.register_plugin(Box::new(ofdm_plugin::OfdmPlugin::new()))
@@ -11594,23 +11663,34 @@ mod preamble_detect_false_open {
         tx.transmit_with_fec_mode(&[7u8; 64], "OFDM52", FecMode::SoftConcatenated, None)
             .expect("tx");
         let frame = lb.drain_samples();
-        let fragment = &frame[..(ofdm_plugin::params::SYM_LEN * 11).min(frame.len())];
+        let fragment = &frame[..(ofdm_plugin::params::SYM_LEN * (1 + data_syms)).min(frame.len())];
         let mut seed = 0x1b87_3593u32;
-        let mut noise = move || {
+        let mut noise_at = move || {
             seed ^= seed << 13;
             seed ^= seed >> 17;
             seed ^= seed << 5;
             (seed as f32 / u32::MAX as f32 - 0.5) * 0.02
         };
-        let mut x: Vec<f32> = (0..8000 * 12).map(|_| noise()).collect();
-        x.extend((0..12_000).map(|_| noise() * 10.0));
-        x.extend(fragment.iter().map(|v| v * 0.5 + noise()));
-        x.extend((0..8000 * 4).map(|_| noise()));
-        x
+        let mut x: Vec<f32> = (0..8000 * 12).map(|_| noise_at()).collect();
+        x.extend((0..noise).map(|_| noise_at() * 10.0));
+        let preamble_at = x.len();
+        x.extend(fragment.iter().map(|v| v * 0.5 + noise_at()));
+        x.extend((0..8000 * 4).map(|_| noise_at()));
+        (x, preamble_at)
     }
 
-    #[test]
-    fn a_held_fragment_of_a_genuine_frame_is_not_a_false_open() {
+    /// One flushed burst of [`run_fragment`]: where it starts on the feed, its lead, whether P opened
+    /// it, whether it decoded, and the ACK type it keyed.
+    #[derive(Debug)]
+    struct FragmentFlush {
+        start: usize,
+        lead: usize,
+        p_opened: bool,
+        decoded: bool,
+        ack: Option<AckType>,
+    }
+
+    fn run_fragment(x: &[f32], read: usize) -> (ModemEngine, Vec<FragmentFlush>) {
         let lb = LoopbackBackend::new();
         let mut e = ModemEngine::new(Box::new(lb.clone_shared()));
         e.register_plugin(Box::new(ofdm_plugin::OfdmPlugin::new()))
@@ -11619,22 +11699,106 @@ mod preamble_detect_false_open {
             .expect("bpsk");
         e.start_ota_session(SessionProfile::fast());
         e.ota_lock_level(SpeedLevel::Sl7);
-        let mut bursts = 0;
-        for chunk in held_fragment_fixture().chunks(800) {
+        let mut out = Vec::new();
+        let mut pos = 0usize;
+        for chunk in x.chunks(read) {
+            pos += chunk.len();
             if let Ok(Some(b)) = e.accumulate_capture(Some("OFDM52"), chunk.to_vec()) {
-                bursts += 1;
+                let p_opened = e.last_flush_spans.is_some_and(|f| f.p_opened);
+                let lead = e.last_flush_lead;
                 let r = e.ota_decode_burst(&b, "S", None).expect("decode call");
-                assert!(r.payload.is_none(), "a cut frame decoded");
+                out.push(FragmentFlush {
+                    start: pos - chunk.len() - b.samples.len(),
+                    lead,
+                    p_opened,
+                    decoded: r.payload.is_some(),
+                    ack: r.ack.map(|a| a.ack_type),
+                });
             }
         }
-        assert!(bursts >= 1, "nothing flushed");
+        (e, out)
+    }
+
+    /// The re-head's positive gate (`ofdm-preamble-detect.md`, Implementation, "The re-head"): 1.5 s
+    /// of loud noise opens a burst on total power, and the fragment's preamble lies beyond the
+    /// decoder's reach from its head, so P restarts the burst one symbol before the preamble, exactly
+    /// as a burst P opened. Sabotage: a reach of `usize::MAX` (never re-heads) turns it red.
+    #[test]
+    fn a_burst_opened_on_noise_is_reheaded_at_ps_onset() {
+        let (x, preamble_at) = fragment_after_noise(12_000, 10);
+        for read in [400usize, 800] {
+            let (e, flushes) = run_fragment(&x, read);
+            assert_eq!(
+                e.preamble_detect_reheads(),
+                1,
+                "{read}-sample reads: P did not re-head the burst ({flushes:?})"
+            );
+            let sym = ofdm_plugin::params::SYM_LEN;
+            let headed: Vec<&FragmentFlush> = flushes.iter().filter(|f| f.p_opened).collect();
+            assert!(
+                headed.len() == 1 && headed[0].start == preamble_at - sym && headed[0].lead == sym,
+                "{read}-sample reads: no burst starts one symbol before the preamble with P's lead \
+                 (preamble at {preamble_at}): {flushes:?}"
+            );
+            assert!(
+                flushes.iter().all(|f| !f.decoded),
+                "{read}-sample reads: a cut frame decoded: {flushes:?}"
+            );
+            assert_eq!(
+                (e.preamble_detect_held_no_frame(), e.preamble_detect_false_opens()),
+                (0, 0),
+                "{read}-sample reads: the re-headed fragment counted as no frame: {flushes:?}"
+            );
+        }
+    }
+
+    /// The re-head drops the burst's head; it does not flush it. A flushed hiss head carries a
+    /// total-power run past the evidence floor and would key a NACK on noise (the #1178 class).
+    /// Sabotage: flushing the head instead turns it red.
+    #[test]
+    fn a_dropped_head_keys_nothing() {
+        let (x, _) = fragment_after_noise(12_000, 10);
+        for read in [400usize, 800] {
+            let (e, flushes) = run_fragment(&x, read);
+            assert_eq!(e.preamble_detect_reheads(), 1, "{read}: no re-head, vacuous");
+            let keyed_on_noise: Vec<&FragmentFlush> = flushes
+                .iter()
+                .filter(|f| !f.p_opened && f.ack.is_some())
+                .collect();
+            assert!(
+                keyed_on_noise.is_empty(),
+                "{read}-sample reads: a burst P did not open keyed an ACK: {flushes:?}"
+            );
+        }
+    }
+
+    /// A failed burst P only held is counted as `held_no_frame`, not as P's false open, because HF
+    /// reads that counter as P's false-open rate. The re-head's fragment behind 0.15 s of loud noise
+    /// instead of 1.5 s: its preamble lies within the decoder's reach of the burst total power opened,
+    /// so the burst is not re-headed, and the waveform's acquisition over the burst reads no coherence
+    /// at the evidence threshold (measured, with 5 or 10 data symbols alike). Sabotage: a reach of 0
+    /// (always re-head) turns it red.
+    #[test]
+    fn a_held_fragment_of_a_genuine_frame_is_not_a_false_open() {
+        let (x, _) = fragment_after_noise(1_200, 10);
+        let (e, flushes) = run_fragment(&x, 800);
+        assert!(!flushes.is_empty(), "nothing flushed");
+        assert_eq!(
+            e.preamble_detect_reheads(),
+            0,
+            "the fragment's preamble lay beyond reach, so this is not the held case: {flushes:?}"
+        );
+        assert!(
+            flushes.iter().all(|f| !f.decoded),
+            "a cut frame decoded: {flushes:?}"
+        );
         assert!(
             e.preamble_detect_opens() >= 1,
             "P never confirmed the fragment's preamble"
         );
         assert!(
             e.preamble_detect_held_no_frame() >= 1,
-            "the fixture did not produce a failed burst P only held (bursts {bursts})"
+            "the fixture did not produce a failed burst P only held: {flushes:?}"
         );
         assert_eq!(
             e.preamble_detect_false_opens(),
