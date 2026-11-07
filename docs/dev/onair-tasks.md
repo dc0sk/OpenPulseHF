@@ -5702,3 +5702,39 @@ That is the BPSK31 phase, not OFDM. The detector cannot be involved, because P r
 candidate. An SL2 decode or fallback scan of about 9 s on rpi51 missing B's ACK window is the likely
 shape, but it is unchecked. To look at before A2 is scored.
 
+## Task 31 — a cold first contact on the dense BPSK estimator: does B's first SL2 frame decode? (status: open; maintainer's go given 2026-11-07)
+
+**Why.** In f2j (task 30) A's first three SL2 (BPSK31) frames from B failed cold. A's AFC started
+at 0 Hz, B sat at about −9 Hz, and the BPSK settle locked one preamble sideband (±15.6 Hz) off the
+carrier. A keyed nothing; B timed out three times and abandoned a message: about 4 min lost.
+
+#1520 replaces the coarse stage with a dense spectral peak. On f2j's recording, the first frame now
+decodes cold in about 2 s. Every run restarts both daemons, so A's AFC is cold at the start of each
+run, and the first frames of f2k are the test.
+
+**Build:** the branch head (`main` at #1520 plus the task docs). Rebuild and redeploy BOTH stations,
+and record the sha256 of both binaries. Settings, log levels and runner overrides as f2j; A on
+AGC FAST (2), read back before and after.
+
+### Part A — run f2k (B sends, `fast` profile; keys both rigs: one go)
+
+As f2j: `TRAFFIC_FROM=B`, `TRAFFIC_INTERVAL=8`, `TRAFFIC_DURATION=600`.
+
+### Report
+
+As task 30, plus, for the SL2 start:
+- the time of B's first send, of B's first ACK, and the gap between them (f2j: about 4 min);
+- B's `ACK not received` windows and abandons before its first ACK (f2j: 3 and 1);
+- A's `capture read holds` before the first ACK (f2j: three of about 71 000 samples);
+- **A's settled carrier offset on the first decoded frame:** the `afc_correction_hz` A adopts, or the
+  first `carrier offset` / settle line in A's log. And A's decode time for that frame.
+- the full run's results as task 30 (the OFDM phase must not regress: false opens, NACKs, SL9).
+
+**Prediction:** B's first SL2 frame is ACKed, with no silent window or abandon before the first ACK.
+**Killed if** a silent window precedes the first ACK while A's decode of that frame runs into its
+deadline.
+
+**Weak if:** the offset this run is inside ±7.8 Hz. BPSK31 decodes that far off even with a wrong
+settle, so a clean start would then not exercise the fix. Report the offset, so the review can say
+which case it was.
+
