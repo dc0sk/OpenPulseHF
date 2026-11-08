@@ -64,6 +64,7 @@ this ledger adds the design rationale and the actually-observed results per chan
   `check-trailer.sh`, `reachability.sh check` and `check-doc-stamps.sh` PASS.
 - **Gate:** not run here (the maintainer's session runs `scripts/gate.sh` and `scripts/slow-tests.sh`,
   `ota` included: CAP-33 drives this controller).
+- **Gate:** `GATE: PASS e0b7f59f57f6970dfec071b2b32a4a5386b5cde6 clean 20261108T115309Z` (nextest; 2848 passed, 0 failed; 9m23s). An earlier `cargo test` gate at `70775e0b` (before the rebase onto #1524) failed only `id_rides_in_own_keying`, under host load from concurrent test runs (cross-worktree fixed-port collisions, #1524 finding); it passed 3/3 alone on a quiet host. `scripts/slow-tests.sh` (all, at `70775e0b`; the rebase brought only CI changes): `ota_channel_adaptation` 3/0, `spectral_busy_gathers_weak_frames` 2/0, `total_power_bursts_keep_their_head` 1/0, `ofdm_preamble_detect` 2/0, `ofdm_detect_fade` 1/0, `bpsk_settle_sideband` 1/0; `notch_rescues_interferer` 2/1, the known red row #1457.
 
 ## 2026-11-08 — The gate's workspace tests run under cargo-nextest (work plan decision 9: a daily gate)
 
