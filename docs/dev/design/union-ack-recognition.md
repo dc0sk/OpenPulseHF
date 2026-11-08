@@ -112,8 +112,10 @@ A slow scan turns the next read into one long read, and a long read is itself a 
   - at the heads: **19 + 85 ms**.
 - **Bursts shorter than one MFSK16 copy** skip that check (`mfsk16_k3_copy_llrs` returns `None`).
   That includes every failed OFDM frame (0.79–1.51 s).
-- **The Pi 5:** UNCHECKED. The station is measuring it; the result goes here, and it is a merge
-  condition.
+- **The Pi 5 (rpi51, station A), release, the same probe:** **31 + 126 ms** worst case, over five
+  runs. That is under the review's ~200 ms stall bound.
+- **The Pi 4 (station B, the A→B receiver, with the tightest ACK margin):** being measured; it is a
+  merge condition.
 
 ### What it does not do
 
