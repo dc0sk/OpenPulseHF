@@ -1,0 +1,1 @@
+Run f2k (task 31): A's IC-9700 AGC FAST (2), read back before and after; m3/onair at 3b5c677d (#1520: dense BPSK estimator). Local runner overrides as f2j. Daemons were left up until both recordings ended, so the logs hold idle time after the sign-off IDs.
