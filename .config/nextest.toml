@@ -7,8 +7,10 @@
 # Everything here is a SAFETY setting, not a speed knob. Read before changing:
 #
 # * `test-threads` is BOUNDED, never the CPU-count default. A sabotage run on this host once took
-#   32 GB and froze it, and the corruption it caused landed in a different repository. The value
-#   below was chosen from a measured peak (docs/dev/project/traceability.md, 2026-11-08 entry).
+#   32 GB and froze it, and the corruption it caused landed in a different repository. 16 of the
+#   host's 24 threads, so the twin-daemon tests (each ~11 threads, real-time) keep headroom. What
+#   was measured at 16 (docs/dev/project/traceability.md, 2026-11-08 entry): the summed RSS of the
+#   test processes, and five full runs; see that entry for the numbers and their limits.
 # * `retries = 0`. A retry turns a flake into a pass and hides it; this repo's wall-clock verdicts
 #   (#1066) are exactly the tests a retry would launder.
 # * The test groups below exist because nextest runs EACH TEST IN ITS OWN PROCESS and binaries
@@ -26,9 +28,11 @@ dir = "target/nextest"
 [profile.default]
 test-threads = 16
 retries = 0
-# Report slow tests, never kill them: a timeout is a verdict change, and the gate's contract is
-# that every test runs to its own end. `cargo test` had no timeout either.
-slow-timeout = { period = "120s" }
+# Report slow tests every 120 s; kill one only after 20 min (10 periods), ~2.7x the longest test
+# (rho_calibration_receive, ~435 s). `cargo test` had no limit at all, and a hung test then hung the
+# gate with no verdict: the baseline run of 2026-11-08 sat 20 min on muted_failures_move_no_ladder
+# until killed by hand. A kill here is a loud TIMEOUT failure naming the test, never a pass.
+slow-timeout = { period = "120s", terminate-after = 10 }
 
 [test-groups]
 # `twin_daemon_bridge` allocates its daemons' ports from a per-PROCESS atomic counter starting at
@@ -54,6 +58,15 @@ test-group = 'twin-bridge-port-allocator'
 [[profile.default.overrides]]
 filter = 'binary_id(openpulse-daemon::ota_ack_deadline_on_real_time_audio) | binary_id(openpulse-daemon::repeater_relays_a_daemon_burst)'
 test-group = 'daemon-port-19180'
+
+# The daemon integration tests run two real daemons, a bridge and a 6-worker tokio runtime against
+# a real-time receive tick (#1066's wall-clock class): under `cargo test` a daemon binary had the
+# machine to itself. `threads-required` makes the scheduler count each as 4 of the 16 slots, so at
+# most four run at once and fewer CPU-bound DSP tests run beside them. Configuration, not a
+# timeout: no test's deadline was raised.
+[[profile.default.overrides]]
+filter = 'package(openpulse-daemon) & kind(test)'
+threads-required = 4
 
 # Start the longest tests first. The run's wall time is bounded below by its longest test
 # (`rho_calibration_receive` ~430 s of a ~590 s run, measured 2026-11-08), and nextest otherwise

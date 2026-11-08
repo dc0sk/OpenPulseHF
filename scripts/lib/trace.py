@@ -727,6 +727,16 @@ def do_evidence_selftest():
                "one does not")
         else:
             bad(f"nextest_junit.py's rendering of a JUnit report yielded {res!r}")
+        # G2. A SKIPPED testcase has neither `failure` nor `error`; rendered like the others it
+        #     would read as `test X ... ok`, and every #[ignore]d test would become evidence.
+        io.open(junit, "w", encoding="utf-8").write(
+            '<testsuites><testsuite name="openpulse-modem::notch_rescues_interferer">'
+            '<testcase name="an_ignored_gate"><skipped/></testcase></testsuite></testsuites>\n')
+        try:
+            got = nextest_junit.render(nextest_junit.parse(junit))
+            bad(f"a SKIPPED testcase was rendered instead of refused: {got.splitlines()[3:4]}")
+        except nextest_junit.SkippedInReport:
+            ok("a SKIPPED testcase in the JUnit report is refused, never rendered as ok")
 
     # F. An INVALID gate run (#1151: tree or HEAD moved under it) must not be evidence, even when
     #    its log is complete. Measured before the check existed: it WAS accepted. The PASS control

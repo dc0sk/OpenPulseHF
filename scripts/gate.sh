@@ -142,6 +142,11 @@ hook_drift() {
 #     replayed stdout contains libtest's own `test result:` lines, which would be counted);
 #   * trace.py's evidence channel — reads those same libtest-shaped `test <path> ... ok` lines.
 NEXTEST_PROFILE="gate"
+# The two steps whose `test result:` lines are counted. Named ONCE and used by reference by both
+# run_step and the counter: a hand-typed copy would let a rename count nothing and pass on a zero
+# (review 2026-11-08, finding 2 — the shape trace.py's marker matcher already refuses).
+STEP_REPORT="nextest JUnit report"
+STEP_DOCTEST="cargo test --doc (workspace)"
 # The version the gate was validated with (and that CI installs). Recorded in gate-verdict.json.
 NEXTEST_VERSION="0.9.143"
 NEXTEST_CMD="cargo nextest run --workspace --no-default-features --no-fail-fast --profile $NEXTEST_PROFILE"
@@ -153,6 +158,14 @@ DOCTEST_CMD="cargo test --workspace --no-default-features --doc --no-fail-fast"
 # landed in ./target/nextest/gate/. Kept a function so the self-test and the gate share it.
 junit_path() {
     echo "$REPO_ROOT/target/nextest/$NEXTEST_PROFILE/junit.xml"
+}
+
+# The report step: the JUnit report rendered for the counters and trace.py, and required to hold
+# exactly as many tests as nextest selects — the gate's form of the self-test's property 3.
+report_step() {
+    _want=$(python3 scripts/lib/nextest_parity.py nextest-count) || {
+        echo "cannot count nextest's selection"; return 2; }
+    python3 scripts/lib/nextest_junit.py report "$JUNIT" "$_want"
 }
 
 # Delete the previous report FIRST: a run that dies before writing one must not be judged from
@@ -358,9 +371,9 @@ if [ "$MODE" = "full" ]; then
     run_step "cargo nextest (workspace)" run_nextest || rc_total=1
     # The report step's output is what the counts below and trace.py read; its status is 2 when the
     # report is missing (the run died before writing it), 1 when a test failed.
-    run_step "nextest JUnit report" python3 scripts/lib/nextest_junit.py report "$JUNIT" || rc_total=1
+    run_step "$STEP_REPORT" report_step || rc_total=1
     drift_check
-    run_step "cargo test --doc (workspace)" $DOCTEST_CMD || rc_total=1
+    run_step "$STEP_DOCTEST" $DOCTEST_CMD || rc_total=1
     drift_check
     run_step "nextest/cargo test parity" python3 scripts/lib/nextest_parity.py check || rc_total=1
     # Traceability is checked INSIDE the gate, not a separately-disableable job: enforced
@@ -438,7 +451,7 @@ drift_check   # final boundary: nothing moved between the last step and the verd
 # nextest binary) and the doctest run. nextest's own step is EXCLUDED: when a test fails nextest
 # replays its stdout, which holds libtest's `test result:` line for that one-test process, and
 # counting it would double the failure. `step` tracks which run_step section a line is in.
-COUNTED_STEPS="nextest JUnit report|cargo test --doc (workspace)"
+COUNTED_STEPS="$STEP_REPORT|$STEP_DOCTEST"
 count_field() {  # $1 = passed; | failed; | suites
     awk -v want="$1" -v steps="$COUNTED_STEPS" '
         BEGIN { n = split(steps, a, "|"); for (i = 1; i <= n; i++) ok[a[i]] = 1 }
@@ -463,7 +476,8 @@ if [ "$failed" -gt 0 ] || [ "$rc_total" -ne 0 ]; then
         python3 scripts/lib/nextest_junit.py failures "$JUNIT" 2>&1 | sed 's/^/  /'
         # Doctest failures, from the doctest step's own libtest output only.
         # A doctest's name is `<file> - <item> (line N)`, so it is matched by that shape.
-        awk '/^=== cargo test --doc \(workspace\): /{d=1} /^=== end cargo test --doc/{d=0}
+        awk -v h="=== $STEP_DOCTEST: " -v e="=== end $STEP_DOCTEST:" '
+             index($0, h) == 1 {d=1} index($0, e) == 1 {d=0}
              d && /^failures:$/{f=1;next} d && /^test result:/{f=0}
              d && f && /^    [^ ].* \(line [0-9]+\)$/{sub(/^    /, ""); print "  doctest " $0}' "$LOG" | sort -u
     fi
@@ -481,6 +495,13 @@ if [ "$MODE" = "quick" ]; then
     echo "GATE: PARTIAL $COMMIT $DIRTY $STAMP (fmt+clippy only — NOT a gate, no token written)"
     drift_check   # --quick shares the guard by reference; a drifted PARTIAL is quoted too
     exit $rc_total
+fi
+
+# A full run that counted no tests is not a pass, whatever the statuses say: it means the counter
+# read nothing (a renamed step, a changed header format), not that nothing failed.
+if [ "$MODE" = "full" ] && [ "$passed" -eq 0 ]; then
+    echo "  no tests were counted — the counting channel is broken, so this cannot be a PASS"
+    rc_total=1
 fi
 
 if [ "$rc_total" -eq 0 ] && [ "$failed" -eq 0 ]; then
