@@ -15,6 +15,56 @@ this ledger adds the design rationale and the actually-observed results per chan
 
 ---
 
+## 2026-11-08 — The receiver remembers a failed climb, and one SL2 frame of airtime proves the rung (work plan M3, A2)
+
+- **Requirement/change:** REQ-FUN-06. On air (task 31, f2k, B→A) the receiver re-proposed SL10 after
+  every three clean SL9 decodes; three SL10 failures stepped its anchor to SL8, below the SL9 that
+  kept decoding (ten SL10 → SL8 → SL9 cycles, 30 of 106 frames at SL10, 33 at SL8), and each probe
+  spent the whole #1456 NACK budget (f2h's 10-min mute began with three SL10 NACKs). On the entry
+  rung a climb on evidence took three 66.56 s SL2 frames, 3.5 min.
+- **Design decision:** `docs/dev/design/ota-climb-memory.md`; Fable's mandatory review
+  (`docs/dev/reviews/review-ota-climb-memory-2026-11-08.md`): APPROVE WITH CHANGES for both changes,
+  R1–R6 applied (the maintainer chose option c for R2 and a for R4). Change 1: a **keyed** failure
+  while a probe is outstanding withdraws to the confirmed rung (`ProbeWithdrawn`), the anchor kept,
+  and the rung is declined (`ClimbDeclined`) for 4, 8, 16 would-be climbs; the expiry is clean
+  airtime at the anchor, 120 then 240 s, capped (R2); a leaked failure keeps `NackStepDown` (R1); a
+  muted one moves nothing (#1460). Change 2 (only with change 1): a streak with ≥ 1 decode and ≥ 60 s
+  of decoded airtime proves the rung. Trade-offs: no HARQ on the probe rung (0 SL10 decodes on 2 m);
+  a lost first NACK no longer leaves the probe a candidate; A2 clause 2 is now shown by an induced
+  demotion (R4). Not a wire change.
+- **Implementation:** `crates/openpulse-core/src/ota_rate.rs` (`RxClimbBackoff`, `rx_climb_backoff`,
+  `on_rx_frame_timed`, the withdraw and decline branches, `RateDecision::{ProbeWithdrawn,
+  ClimbDeclined}`, `RX_CLIMB_BACKOFF_*`, `CLIMB_EVIDENCE_AIRTIME_S`);
+  `crates/openpulse-modem/src/engine.rs` (`decoded_airtime_s` and its cache; the `OTA climb memory`
+  log line, R3).
+- **Tests:** in-crate `ota_rate::tests::{a_failed_probe_withdraws_to_the_confirmed_rung_and_keeps_the_anchor,
+  a_withdrawn_rung_is_declined_then_reprobed_and_the_wait_doubles_to_16,
+  the_memory_expires_after_120_s_then_240_s_of_clean_airtime, a_leaked_failure_at_a_probe_steps_down,
+  a_decode_at_or_above_the_rung_clears_the_memory, a_step_below_the_anchor_clears_it,
+  a_muted_probe_failure_withdraws_nothing, a_lock_or_new_bounds_drop_the_climb_memory,
+  one_sl2_frame_of_airtime_proves_the_rung, airtime_without_a_decode_proves_nothing,
+  a_failure_resets_the_airtime, no_airtime_is_todays_rule,
+  an_airtime_climb_that_fails_never_reaches_the_sub_floor}`; `never_desyncs_under_arbitrary_ack_loss`
+  extended to random outcomes, verdicts and ACK loss with withdraws and declines; the variant sweep
+  and four failure tests re-specified from a settled state with probe cases beside them;
+  `openpulse-modem` `decoded_airtime_reaches_the_controller`; daemon twins
+  `a_ceiling_rung_is_probed_with_a_backoff` (new) and `muted_failures_move_no_ladder` (counts
+  announced moves).
+- **Test results (run at `4fdd1f9a`, debug, `--no-default-features`, `--no-fail-fast
+  --test-threads=4`):** `openpulse-core` 585/0 (1 ignored, 26 binaries); `openpulse-modem` 683/0 (125
+  ignored); `openpulse-daemon` 234/0 (2 ignored); `openpulse-linksim` 22/0. The twin: 4 SL9 probes in
+  40 of B's decisions, 0 decodes below SL8, 4 withdraws. Sabotages, each watched red (design note,
+  Implementation table): 14 on the controller (`ota_rate`, 50 tests; the withdraw removed fails 10,
+  a leaked failure withdrawing fails 2), the engine passing `None`, the twin at 24 SL9 probes with
+  the withdraw removed, and `muted_failures_move_no_ladder` at 3 moves with muted failures counted.
+  R4 replay (the design's apparatus re-run on the implemented controller, removed after): f2j
+  `NackStepDown` 29 today, 7 with change 1, 8 with both; it reproduces the design's f2j rows (today
+  102/223/42 frames, change 1 262/130/4). Clippy (`-D warnings --all-targets`) clean on
+  openpulse-core, openpulse-modem and openpulse-daemon; `cargo fmt --all -- --check` clean;
+  `check-trailer.sh`, `reachability.sh check` and `check-doc-stamps.sh` PASS.
+- **Gate:** not run here (the maintainer's session runs `scripts/gate.sh` and `scripts/slow-tests.sh`,
+  `ota` included: CAP-33 drives this controller).
+
 ## 2026-11-08 — The gate's workspace tests run under cargo-nextest (work plan decision 9: a daily gate)
 
 - **Requirement/change:** `scripts/gate.sh` took 48m26s, 45 min of it `cargo test --workspace

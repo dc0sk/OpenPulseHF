@@ -1,7 +1,7 @@
 ---
 project: openpulsehf
 doc: docs/dev/design/ota-climb-memory.md
-status: draft
+status: resolved
 last_updated: 2026-11-08
 ---
 
@@ -13,7 +13,7 @@ measures them first. The design had the mandatory review before it was built, be
 when and at what level a station transmits: **Fable, 2026-11-08, APPROVE WITH CHANGES for both
 changes** (`docs/dev/reviews/review-ota-climb-memory-2026-11-08.md`). The review's changes R1–R6 are
 applied below, each marked with its number; the maintainer chose option (c) for R2 and option (a)
-for R4.
+for R4. **Implemented 2026-11-08** (see Implementation).
 
 ## Problem — measured on air
 
@@ -478,8 +478,8 @@ frames.
   - **The existence proof that the anchor still demotes when it degrades:** the review's
     anchor-degradation model (mean SNR 14 → 10 dB over 600 s) gives the first `NackStepDown` at a
     median 8.7 s today and 8.5 s with change 1, and 60/60 runs demote under both. In the f2j replay,
-    where SL9 itself fails, change 1 still steps the anchor down (the count is under Implementation,
-    re-measured on the implemented controller).
+    where SL9 itself fails, change 1 still steps the anchor down: **7 `NackStepDown` with change 1,
+    against 29 today** (re-measured on the implemented controller; see Implementation).
   - Consumers (found with the grep under Consumer):
     - `openpulse-panel` `connection.rs:213` prints the variant by its `Debug` name, so new variants
       show with no change.
@@ -585,9 +585,78 @@ rate controller.
 
 Each of the first four is cited to `docs/dev/research/xara-comparison.md` and the Fable comparison of 2026-11-07.
 
+## Implementation (2026-11-08, branch `feat/climb-memory`)
+
+Both changes, as revised by the review. Commits `9c6b1700` (controller), `3907b539` (engine),
+`29caa30f` (daemon twin tests).
+
+- **`crates/openpulse-core/src/ota_rate.rs`:**
+  - `RxClimbBackoff { rung, anchor, left, n, airtime_s }` and `rx_climb_backoff()` (read by the
+    engine's log line); `RX_CLIMB_BACKOFF_FIRST` 4, `RX_CLIMB_BACKOFF_MAX` 16,
+    `RX_CLIMB_BACKOFF_EXPIRY_FIRST_S` 120, `RX_CLIMB_BACKOFF_EXPIRY_MAX_S` 240,
+    `CLIMB_EVIDENCE_AIRTIME_S` 60.
+  - `on_rx_frame_timed(outcome, snr, verdict, airtime_s)`; `on_rx_frame` and `on_rx_frame_with`
+    pass `None`, which is the count-only rule.
+  - The failure path: Locked, Muted, FastDownshift as before; then a **keyed** failure with
+    `rx_recommended > rx_confirmed` → `ProbeWithdrawn`; otherwise the hysteresis (a leaked failure
+    steps, R1). Any failure that leaves the anchor below the memory's clears it.
+  - The decode path: the memory clears on a decode at or above its rung or below its anchor;
+    otherwise the frame's airtime counts toward the expiry, which sets `left = 0` and keeps `n`.
+    A would-be climb to the memory's rung with `left > 0` is `ClimbDeclined` (streak and airtime
+    spent). `lock_level` and changed bounds clear the memory.
+  - `RateDecision::ProbeWithdrawn` (index 7, a failure path) and `ClimbDeclined` (index 8).
+- **`crates/openpulse-modem/src/engine.rs`:** the OTA decode passes the decoded payload's coded
+  airtime (`decoded_airtime_s`: `tx_airtime_seconds` cached per mode, FEC and payload length, so a
+  66 s SL2 frame is modulated once, not inside every ACK window), and logs `OTA climb memory` with
+  `decision`, `rung`, `anchor`, `n`, `left` and `airtime_s` on every withdraw and decline (R3).
+- **Not changed:** the panel (it prints the decision's `Debug` name, so the new variants show);
+  `ladder_evidence_probe.rs` (its sessions start settled at a fixed level, so no probe is
+  outstanding and its `NackStepDown` counts keep their meaning); the link simulator (change 1 by
+  construction, change 2 only with an airtime, which it does not pass); the sender's
+  `tx_climb_backoff`. The wall-clock bound is parked (work plan).
+
+**Gates, each watched RED under its sabotage** (debug, `--no-default-features`; the sabotage applied
+to the committed file and restored with `git show HEAD:<path>`):
+
+| sabotage | gates that failed |
+|---|---|
+| withdraw removed (today's rule, which is also "change 2 alone") | `a_failed_probe_withdraws_to_the_confirmed_rung_and_keeps_the_anchor`, `an_airtime_climb_that_fails_never_reaches_the_sub_floor`, `a_withdrawn_rung_is_declined_then_reprobed_and_the_wait_doubles_to_16`, `the_memory_expires_after_120_s_then_240_s_of_clean_airtime`, the clear tests, `every_branch_reports_the_decision_that_actually_ran`, `never_desyncs_under_arbitrary_ack_loss`, the abstention probe case (10 of 50); the twin `a_ceiling_rung_is_probed_with_a_backoff` at **24 SL9 probes** |
+| a leaked failure withdraws (R1) | `a_leaked_failure_at_a_probe_steps_down`, `a_leaked_nack_steps_on_its_own` |
+| no doubling of `n` | `…the_wait_doubles_to_16`, `the_memory_expires_…` |
+| expiry removed | `the_memory_expires_…` |
+| expiry not doubled (fixed 120 s, R2) | `the_memory_expires_…` |
+| a decode at the rung keeps the memory | `a_decode_at_or_above_the_rung_clears_the_memory` |
+| a step below / a decode below the anchor keeps it | `a_step_below_the_anchor_clears_it` (each) |
+| the withdraw placed before the muted return | `a_muted_probe_failure_withdraws_nothing`, `a_muted_failure_does_not_fast_downshift`, `never_desyncs_…` (a desync with no keyed ACK lost) |
+| a lock / new bounds keep the memory | `a_lock_or_new_bounds_drop_the_climb_memory` (each) |
+| airtime proves nothing | `one_sl2_frame_of_airtime_proves_the_rung`, `a_failure_resets_the_airtime`, `the_memory_expires_…` |
+| a failure keeps / counts the airtime | `a_failure_resets_the_airtime` / `airtime_without_a_decode_proves_nothing` |
+| decline removed | `…the_wait_doubles_to_16`, `the_memory_expires_…`, `every_branch_…`, `never_desyncs_…` |
+| the engine passes `None` | `decoded_airtime_reaches_the_controller` |
+| muted failures run the hysteresis (#1460) | twin `muted_failures_move_no_ladder`: 3 announced moves |
+
+- **Re-specified, not deleted:** `a_failed_decode_without_an_snr_reading_does_not_crash_the_ladder`,
+  `muted_failures_move_nothing_but_the_climb_streak`,
+  `transient_failure_at_good_snr_keeps_the_nack_hysteresis` and
+  `abstention_still_steps_down_at_the_nack_threshold` start from a settled state; each has its
+  probe case beside it. `a_leaked_nack_steps_on_its_own` is unchanged (R1). The variant sweep reaches
+  both new variants.
+- **The twin:** `a_ceiling_rung_is_probed_with_a_backoff` measured **4 SL9 probes in 40 of B's
+  decisions, 0 decodes below SL8, 4 withdraws** (debug, 89 s), against 24 with the withdraw removed.
+- **R4, the replay re-run on the implemented controller** (a temporary `#[cfg(test)]` child of
+  `server.rs`, the design's apparatus: the real controllers, `NackBudget` and `run_ota_retry`, f2j's
+  receiver outcomes in order per rung; removed after the run). It reproduces the design's f2j rows:
+  today 102 / 223 / 42 frames at SL8 / SL9 / SL10, first SL7 send 234 s, 467 B/min in the first
+  600 s; change 1 262 / 130 / 4, 15 `ProbeWithdrawn`, 666 B/min. **`NackStepDown` in f2j: 29 today,
+  7 with change 1, 8 with both changes.** That is the existence proof that the anchor still demotes
+  where the rung itself fails (SL9 failed 30 of 61 frames in f2j).
+
 ## What this could not establish
 
-- **The gains are a model's.** No run has had either change on air. The in-order and i.i.d. models
+- **The gains are a model's.** No run has had either change on air; R5's 2 m run per direction is
+  the first that will.
+- **The `OTA climb memory` log line is not gated:** no test reads it. The census's event half (the
+  re-probe outcome) needs no log line; only the per-level `n` does. The in-order and i.i.d. models
   agree, but both assume that the rung's outcome does not depend on what was sent before it.
 - **HF:** the expiry constant has no on-air inventory. 2 m ceilings did not move within a run.
 - **Whether HARQ would rescue a probe rung on HF:** UNCHECKED.
