@@ -114,8 +114,14 @@ A slow scan turns the next read into one long read, and a long read is itself a 
   That includes every failed OFDM frame (0.79–1.51 s).
 - **The Pi 5 (rpi51, station A), release, the same probe:** **31 + 126 ms** worst case, over five
   runs. That is under the review's ~200 ms stall bound.
-- **The Pi 4 (station B, the A→B receiver, with the tightest ACK margin):** being measured; it is a
-  merge condition.
+- **The Pi 4 (station B, the A→B receiver, with the tightest ACK margin):** **68 + 265 ms**, over the
+  review's ~200 ms. It was built with rustc 1.96.1 (station B's toolchain, not the pinned 1.97.1) and
+  run with B idle.
+  - **What this is still under:** the 0.5 s evidence floor (4 000 samples). A 333 ms stall adds about
+    2 700 samples to the next read, which by itself does not make a floor-passing burst.
+  - **Which bursts pay it:** only failed bursts between one MFSK16 copy and the bound that hold no FSK4
+    codeword, for example a failed SL6 frame (4.18 s).
+  - **The decision is the maintainer's:** accept it, or make the MFSK16 check cheaper first.
 
 ### What it does not do
 
@@ -123,7 +129,9 @@ A slow scan turns the next read into one long read, and a long read is itself a 
   - Every idle NACK is followed by that station's sign-off ID: BPSK250 uncoded, 18 B, 6 880 samples,
     0.86 s. That is above the 4 000 evidence floor and inside the bound, and it is never an ACK
     codeword.
-  - A decoded **0 of B's 6 IDs** that day.
+  - A decoded few of them. The idle-gate review (`idle-nack-gate.md`) corrected the union review's "0 of
+    6": A decoded **1** of B's post-run IDs (8 B payload, event row A-11302), which correctly keyed
+    nothing.
   - So after this change A still counts B's ID after each B NACK, and keys.
   - **Only a peer-liveness gate on idle NACKs ends the exchange.** #1456 keeps idle NACKs so that a
     new peer's first frame is answered, so the gate is a keying change with its own design and
@@ -133,6 +141,18 @@ A slow scan turns the next read into one long read, and a long read is itself a 
 - **It does not touch an idle daemon NACKing its own floor** (B's first NACK each episode). That is the
   squelch, B's RX source at 1.0 (`rig-b.txt` of f2l), compare #1060.
 - **It does not recognise an ACK too weak for ShortFEC.** That stays a failed burst, as for FSK4 today.
+  On air this is not a corner case.
+  - The idle-gate review found that B counted A's FSK4 NACKs heard at only +0.5–1.5 dB over its
+    floor; the FSK4 guard, which already existed, did not fire.
+  - So on that link no content recognition stops the idle exchange. That is the peer-liveness gate's job.
+- **It does not see an ACK behind a ride-along station ID.** When an ID is due, it can go in front of
+  the ACK in the same keying, uncoded in the daemon's mode. The ACK's codeword then starts up to one ID
+  airtime past the head (6 880 samples at BPSK250).
+  - An active sender hears that ACK in its own ACK listen, not here, so only an idle or third station
+    is affected.
+  - Extending the heads by one ID would cost about +50 % / +25 %.
+  - It never occurred on air: every post-run ID was an interval or sign-off ID in its own keying.
+  - Left to the idle gate.
 
 ### False recognition (change 5)
 

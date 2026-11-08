@@ -37,7 +37,7 @@ Reviewer: Fable. It was read-only. Every number was re-derived from the constant
    - Every idle NACK is followed by that station's ID: BPSK250 uncoded 18 B, 6 880 samples, 0.86 s.
      That is above the 4 000 evidence floor and inside today's bound, and it is never an ACK
      codeword.
-   - A decoded **0 of B's 6 IDs** all day.
+   - A decoded **0 of B's 6 IDs** all day. *(Corrected by the idle-gate review, 2026-11-08: A decoded 1 of B's post-run IDs, row A-11302.)*
    - So after this design, A still counts B's ID after each NACK, and keys.
    - **Changes:**
      - say so in "What it does not do";
