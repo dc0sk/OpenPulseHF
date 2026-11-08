@@ -5950,9 +5950,11 @@ Apparatus and deviations, all disclosed:
 - The audit events carry no timestamps. Times below come from the sender's `OTA ACK received` lines
   (one per decision: 166 ACK lines against 166 decisions in f2m; 153 against 154 in f2l, so for f2l
   the index mapping is not exact and I did not use it).
-- `ACK not received` / `send abandoned` counts: 0 in both runs, but the daemon on A runs at
-  `info,ofdm_plugin=debug` only, so for f2m (sender A) my filter could not see the DEBUG line.
-  Treat that zero as "my filter found nothing".
+- **Overrides not as f2k.** Both runs used `auto_id_signoff_idle_secs = 10` on both stations (f2k used 30)
+  and no `openpulse_daemon=debug` on B: I launched without `SIGNOFF_IDLE_SECS=30` and `DAEMON_LOG_LEVEL_B`.
+- `ACK not received` / `send abandoned` counts: 0 in both runs, but neither daemon logged
+  `openpulse_daemon` at DEBUG, so my filter could not see the DEBUG line. Treat that zero as "my filter
+  found nothing".
 
 **f2l (B sends, A receives; `fast`, 1200 s; report `onair-twin-ota-20261108-141842`)**
 
@@ -6033,10 +6035,17 @@ Climb: SL2 to SL9 by t0+217 s (16:58:18); t0 16:54:41. Schedule (UTC): v0/2 (0.0
 - v0/2 to v0/8 left SNR unchanged in f2m while f2l's v0/2 lost the signal (rho 0.91 to 0.70). The
   two directions respond differently to the same relative drive.
 - f2l: I noticed the run had ended about 3 h late (my wait loop was wrong), so both daemons sat up,
-  rigs idle, from 13:53 to 16:50 UTC until `cleanup`. The PTT watcher logged a few short keyed
-  readings in that gap (13:55 and 16:22 to 16:24 UTC; none above 4 consecutive samples). The daemon
-  logs show no transmission after 13:40:15 and nothing OTA-related after 13:53 in the live logs.
-  I cannot say what those readings were.
+  rigs idle, from 13:53 to 16:50 UTC until `cleanup`. The PTT watcher (CAT get-PTT and ALC through each
+  rigctld; it cannot key) logged keyed readings at 13:55 and 16:22 to 16:24 UTC. **The daemons did key:**
+  the full audit-events files (kept as `events.ndjson.pre-f2m` on each station) show after the run A
+  with 9 PTT key-ups and 4 `frame_transmitted` (BPSK250, 18 bytes, the station-ID size), and B with 7
+  key-ups and 3 `frame_transmitted`. Each burst of keying starts with a NACK decision (A: nack_hold keyed,
+  nack_step_down SL9 to SL8 keyed; B: nack_step_down SL1 "leaked", nack_hold keyed or muted), after DCD
+  busy toggles at both stations. So the daemons judged received bursts as failed and answered. What put
+  energy on the channel is **UNEXPLAINED** (an external transmitter is not ruled out); B reacted first
+  at both times. The daemon text logs after 13:53 were overwritten when f2m launched, and the audio
+  recordings had ended at 13:50. My earlier "no transmission after 13:40" was wrong (it rested on the
+  logs collected at 13:53).
 - The ACK-line totals of the pre-step windows in f2l and f2m are identical (63 lines: 49 AckOk, 10
   AckUp, 4 Nack). The sequences differ, so I take it as coincidence.
 
