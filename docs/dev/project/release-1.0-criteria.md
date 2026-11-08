@@ -2,7 +2,7 @@
 project: openpulsehf
 doc: docs/dev/project/release-1.0-criteria.md
 status: living
-last_updated: 2026-10-15
+last_updated: 2026-11-08
 ---
 
 # What 1.0 means
@@ -88,7 +88,15 @@ without proving more. It measured propagation, not software.
 **Corroboration, because the log is written by the software under test.** Each transition must appear
 in *both* stations' logs — a receiver-led recommendation must show up at the sender as an adopted
 level and a changed transmit waveform — and be visible in the retained capture, where a mode change
-is physically identifiable by baud and occupied bandwidth without trusting the modem. A transition
+is physically identifiable without trusting the modem: by baud and occupied bandwidth between
+single-carrier rungs, and between the OFDM rungs, which share one waveform geometry (SL7–SL14,
+OFDM52, differing only in constellation), by **burst duration**. Each rung's frame has a fixed
+length for any payload up to 209 B (SL7 1.51, SL8 1.01, SL9 0.79, SL10 0.65, SL11 0.54 s;
+SL12–SL14 0.25 / 0.22 / 0.18 s; `docs/dev/design/ota-climb-memory.md`, frame airtime per rung),
+measured from the capture's energy envelope. Where two rungs' durations differ by less than the
+envelope's resolution on that capture, the move between them is reported as not separable from the
+capture, not as corroborated (reworded 2026-11-08, the maintainer, after task 33's review found the
+baud-and-bandwidth test cannot tell SL7–SL9 apart). A transition
 attributable *only* to the SNR estimate does not count: the estimate is the model, the decode is the
 observation, and this repo's rule is that the observation wins.
 
