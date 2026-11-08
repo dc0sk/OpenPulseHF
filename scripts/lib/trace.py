@@ -703,6 +703,41 @@ def do_evidence_selftest():
         else:
             bad(f"a completed run missing the cited test yielded {res!r} — the check is a no-op")
 
+        # G. THE NEXTEST CHANNEL (2026-11-08). The gate's tests run under cargo-nextest, and the
+        #    lines this module reads are written by scripts/lib/nextest_junit.py from nextest's
+        #    JUnit report — a second producer whose format must agree with `_TEST_RESULT` and
+        #    `_passed_tests`'s matcher. Taken by reference: the real renderer, a real JUnit shape,
+        #    and gate.sh's own report step. A passing and a FAILED case, so a renderer that marked
+        #    everything `ok` (or nothing) fails here.
+        if not re.search(r"nextest_junit\.py report", gate_src):
+            bad("gate.sh no longer runs the nextest JUnit report step — trace.py has no evidence")
+        import nextest_junit
+        junit = os.path.join(td, "junit.xml")
+        io.open(junit, "w", encoding="utf-8").write(
+            '<?xml version="1.0" encoding="UTF-8"?>\n<testsuites name="nextest-run" tests="2">'
+            '<testsuite name="openpulse-core::fec_loopback" tests="2" failures="1">'
+            '<testcase name="tests::a_cited_test" classname="openpulse-core::fec_loopback"/>'
+            '<testcase name="tests::a_failed_test" classname="openpulse-core::fec_loopback">'
+            '<failure type="test failure">boom</failure></testcase>'
+            '</testsuite></testsuites>\n')
+        rendered = nextest_junit.render(nextest_junit.parse(junit))
+        res, _ = run_with(rendered + sample + "\n")
+        if isinstance(res, set) and "a_cited_test" in res and "a_failed_test" not in res:
+            ok("nextest_junit.py's lines are read as evidence: the passed test counts, the failed "
+               "one does not")
+        else:
+            bad(f"nextest_junit.py's rendering of a JUnit report yielded {res!r}")
+        # G2. A SKIPPED testcase has neither `failure` nor `error`; rendered like the others it
+        #     would read as `test X ... ok`, and every #[ignore]d test would become evidence.
+        io.open(junit, "w", encoding="utf-8").write(
+            '<testsuites><testsuite name="openpulse-modem::notch_rescues_interferer">'
+            '<testcase name="an_ignored_gate"><skipped/></testcase></testsuite></testsuites>\n')
+        try:
+            got = nextest_junit.render(nextest_junit.parse(junit))
+            bad(f"a SKIPPED testcase was rendered instead of refused: {got.splitlines()[3:4]}")
+        except nextest_junit.SkippedInReport:
+            ok("a SKIPPED testcase in the JUnit report is refused, never rendered as ok")
+
     # F. An INVALID gate run (#1151: tree or HEAD moved under it) must not be evidence, even when
     #    its log is complete. Measured before the check existed: it WAS accepted. The PASS control
     #    is what stops this from being satisfied by refusing every verdict.

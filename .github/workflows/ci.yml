@@ -91,6 +91,13 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y libasound2-dev libudev-dev libdbus-1-dev
 
+      # Same pin, same reasons as post-merge-gate.yml's install step — keep the two identical.
+      - name: Install cargo-nextest
+        uses: taiki-e/install-action@6c6fd71fe4fb72c3697d269963d0e15df8adedad # v2
+        with:
+          tool: cargo-nextest@0.9.143
+          fallback: none
+
       - name: Workspace gate (fmt + clippy + tests)
         run: ./scripts/gate.sh
 
@@ -102,6 +109,7 @@ jobs:
           path: |
             target/gate-verdict.json
             target/gate-*.log
+            target/nextest/gate/junit.xml
           if-no-files-found: warn
 
       # cargo-audit was compiled from source on every run (~minutes). Cache the binary, as the

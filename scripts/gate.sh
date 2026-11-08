@@ -27,14 +27,16 @@
 #   3. require `GATE: FAIL` with that test named in the failure list
 #   4. revert
 # `--self-test` automates a NARROWER version of that against a scratch test file: it plants the
-# fixture, runs `cargo test` DIRECTLY, and requires a non-zero status with the planted test named.
-# It does not go through run_step and exits before any verdict is written, so it prints no `GATE:`
-# line and writes no gate-verdict.json — the failure-detection path only. CLAUDE.md rule 3 claimed
+# fixture, runs the gate's own nextest function (`run_nextest`) directly, and requires a non-zero
+# status, the planted test named in the JUnit-derived failure list, and every selected test run
+# (the `--no-fail-fast` property). It does not go through run_step and exits before any verdict is
+# written, so it prints no `GATE:` line and writes no gate-verdict.json — the failure-detection
+# path only. CLAUDE.md rule 3 claimed
 # it "requires GATE: FAIL" until #1242; it has never printed one. A change to the VERDICT path is
 # therefore invisible to it: `python3 scripts/lib/trace.py evidence-self-test` is what covers that.
 #
 # Usage:
-#   scripts/gate.sh            # fmt + clippy + full workspace test
+#   scripts/gate.sh            # fmt + clippy + full workspace test (cargo-nextest + doctests)
 #   scripts/gate.sh --quick    # fmt + clippy only (NOT a gate; prints GATE: PARTIAL, no token)
 #   scripts/gate.sh --self-test
 
@@ -124,6 +126,55 @@ hook_drift() {
     return 1
 }
 
+# ------------------------------------------------------------------ the workspace test step
+#
+# cargo-nextest, not `cargo test` (2026-11-08). `cargo test --workspace` ran the ~400 test
+# binaries one after another: their run times summed to 43.3 min of a 48 min gate. nextest runs
+# binaries and tests in parallel, one process per test, bounded by `.config/nextest.toml` (read its
+# header before touching the thread count or the test groups). What the switch must NOT change is
+# the contract, so each part of it is carried explicitly:
+#   * coverage — nextest does not run doctests, so `cargo test --doc` is its own step; and the
+#     "nextest/cargo test parity" step asks every test binary what `cargo test` would run and
+#     fails on any test nextest would not (scripts/lib/nextest_parity.py);
+#   * `--no-fail-fast` — on the command line AND `fail-fast = false` in the gate profile;
+#   * the counts — from nextest's JUnit report, re-emitted as libtest-shaped lines by
+#     scripts/lib/nextest_junit.py, never scraped from nextest's terminal output (a failing test's
+#     replayed stdout contains libtest's own `test result:` lines, which would be counted);
+#   * trace.py's evidence channel — reads those same libtest-shaped `test <path> ... ok` lines.
+NEXTEST_PROFILE="gate"
+# The two steps whose `test result:` lines are counted. Named ONCE and used by reference by both
+# run_step and the counter: a hand-typed copy would let a rename count nothing and pass on a zero
+# (review 2026-11-08, finding 2 — the shape trace.py's marker matcher already refuses).
+STEP_REPORT="nextest JUnit report"
+STEP_DOCTEST="cargo test --doc (workspace)"
+# The version the gate was validated with (and that CI installs). Recorded in gate-verdict.json.
+NEXTEST_VERSION="0.9.143"
+NEXTEST_CMD="cargo nextest run --workspace --no-default-features --no-fail-fast --profile $NEXTEST_PROFILE"
+DOCTEST_CMD="cargo test --workspace --no-default-features --doc --no-fail-fast"
+
+# Where nextest writes the JUnit report: `<store dir>/<profile>/junit.xml`. The store dir is pinned
+# in .config/nextest.toml (`[store] dir`) and nextest resolves it against the WORKSPACE ROOT, not
+# CARGO_TARGET_DIR — measured 2026-11-08: with the build in ~/cargo-targets, the report still
+# landed in ./target/nextest/gate/. Kept a function so the self-test and the gate share it.
+junit_path() {
+    echo "$REPO_ROOT/target/nextest/$NEXTEST_PROFILE/junit.xml"
+}
+
+# The report step: the JUnit report rendered for the counters and trace.py, and required to hold
+# exactly as many tests as nextest selects — the gate's form of the self-test's property 3.
+report_step() {
+    _want=$(python3 scripts/lib/nextest_parity.py nextest-count) || {
+        echo "cannot count nextest's selection"; return 2; }
+    python3 scripts/lib/nextest_junit.py report "$JUNIT" "$_want"
+}
+
+# Delete the previous report FIRST: a run that dies before writing one must not be judged from
+# the last run's file. A missing report is then a hard failure of the report step.
+run_nextest() {
+    rm -f "$JUNIT"
+    $NEXTEST_CMD
+}
+
 self_test() {
     scratch="crates/openpulse-core/tests/gate_self_test_sabotage.rs"
     # Remove the fixture even if the run is interrupted. An abandoned sabotage file was left in the
@@ -139,15 +190,32 @@ fn gate_self_test_must_fail() {
 }
 RS
     out="$LOG_DIR/gate-selftest-$STAMP.log"
-    cargo test --workspace --no-default-features --no-fail-fast > "$out" 2>&1
+    JUNIT=$(junit_path)
+    # The SAME function the gate's test step runs, so the probe cannot drift from the gate.
+    run_nextest > "$out" 2>&1
     rc=$?
+    want=$(python3 scripts/lib/nextest_parity.py nextest-count 2>>"$out")
+    python3 scripts/lib/nextest_junit.py failures "$JUNIT" > "$out.failures" 2>&1
+    frc=$?
+    python3 scripts/lib/nextest_junit.py report "$JUNIT" > "$out.report" 2>&1
     rm -f "$scratch"
-    if [ "$rc" -ne 0 ] && grep -q "gate_self_test_must_fail" "$out"; then
-        echo "SELF-TEST: PASS — the gate detected the planted failure (exit $rc)"
+    got=$(awk '/^test result:/ {for(i=1;i<=NF;i++) if($i=="passed;"||$i=="failed;") s+=$(i-1)} END {print s+0}' "$out.report")
+    named=0; grep -q "gate_self_test_must_fail" "$out.failures" && named=1
+    nfail=$(grep -c . "$out.failures")
+    # Three properties, each of which a broken step could lose independently:
+    #   1. a non-zero status from the runner;
+    #   2. the planted test named in the JUnit-derived failure list (the gate's failure channel);
+    #   3. EVERY selected test ran — the report's total equals what `nextest list` selects. Without
+    #      `--no-fail-fast` the run stops scheduling after the planted failure and this falls short;
+    #      that is the "count is a lower bound" defect the gate exists to prevent.
+    if [ "$rc" -ne 0 ] && [ "$frc" -eq 0 ] && [ "$named" -eq 1 ] && [ -n "$want" ] && [ "$got" -eq "$want" ]; then
+        echo "SELF-TEST: PASS — the planted failure was detected (exit $rc), named in the JUnit"
+        echo "           failure list ($nfail failed in all), and all $got selected tests ran"
+        rm -f "$out" "$out.failures" "$out.report"
         return 0
     fi
-    echo "SELF-TEST: FAIL — planted failure was NOT detected (exit $rc). The gate is not a gate."
-    echo "           full output: $out"
+    echo "SELF-TEST: FAIL — runner exit $rc, planted test named: $named, tests in report: $got of ${want:-?}"
+    echo "           full output: $out  (failure list: $out.failures)"
     return 1
 }
 
@@ -293,9 +361,21 @@ fi
 
 TEST_CMD="none"
 if [ "$MODE" = "full" ]; then
-    TEST_CMD="cargo test --workspace --no-default-features --no-fail-fast"
+    TEST_CMD="$NEXTEST_CMD && $DOCTEST_CMD"
+    JUNIT=$(junit_path)
+    # Not a skip: the step below fails without it. This only makes the reason readable.
+    if ! cargo nextest --version >/dev/null 2>&1; then
+        echo "  cargo-nextest is not installed: cargo install --locked cargo-nextest --version $NEXTEST_VERSION"
+    fi
     drift_check
-    run_step "cargo test (workspace)" cargo test --workspace --no-default-features --no-fail-fast || rc_total=1
+    run_step "cargo nextest (workspace)" run_nextest || rc_total=1
+    # The report step's output is what the counts below and trace.py read; its status is 2 when the
+    # report is missing (the run died before writing it), 1 when a test failed.
+    run_step "$STEP_REPORT" report_step || rc_total=1
+    drift_check
+    run_step "$STEP_DOCTEST" $DOCTEST_CMD || rc_total=1
+    drift_check
+    run_step "nextest/cargo test parity" python3 scripts/lib/nextest_parity.py check || rc_total=1
     # Traceability is checked INSIDE the gate, not a separately-disableable job: enforced
     # requirements with no in-code binding, cited code/tests that don't exist, REQ<->CAP
     # disagreement, a capability that satisfies a requirement while citing no test (EMPTY-CAP,
@@ -366,20 +446,41 @@ fi
 
 drift_check   # final boundary: nothing moved between the last step and the verdict
 
-# Counts come from the LOG FILE, never from a pipe carrying the runner's output.
-passed=$(awk '/^test result:/ {for(i=1;i<=NF;i++) if($i=="passed;") s+=$(i-1)} END {print s+0}' "$LOG")
-failed=$(awk '/^test result:/ {for(i=1;i<=NF;i++) if($i=="failed;") s+=$(i-1)} END {print s+0}' "$LOG")
-# `grep -c` prints 0 AND exits 1 when there are no matches, so `|| echo 0` appends a SECOND line
-# and `suites` becomes "0\n0" — which produces invalid JSON in gate-verdict.json. Harmless only
-# because --quick returns before the JSON write; fixed rather than left as a latent trap.
-suites=$(grep -c '^test result:' "$LOG" 2>/dev/null | head -1)
-suites=${suites:-0}
+# Counts come from the LOG FILE, never from a pipe carrying the runner's output — and only from the
+# two steps whose `test result:` lines are the gate's own: the JUnit report (libtest-shaped, one per
+# nextest binary) and the doctest run. nextest's own step is EXCLUDED: when a test fails nextest
+# replays its stdout, which holds libtest's `test result:` line for that one-test process, and
+# counting it would double the failure. `step` tracks which run_step section a line is in.
+COUNTED_STEPS="$STEP_REPORT|$STEP_DOCTEST"
+count_field() {  # $1 = passed; | failed; | suites
+    awk -v want="$1" -v steps="$COUNTED_STEPS" '
+        BEGIN { n = split(steps, a, "|"); for (i = 1; i <= n; i++) ok[a[i]] = 1 }
+        /^=== end / { step = ""; next }
+        /^=== (time|tree) / { next }
+        /^=== / { s = substr($0, 5); sub(/: .*/, "", s); step = s; next }
+        !(step in ok) || !/^test result:/ { next }
+        want == "suites" { c++; next }
+        { for (i = 1; i <= NF; i++) if ($i == want) c += $(i-1) }
+        END { print c + 0 }' "$LOG"
+}
+passed=$(count_field "passed;")
+failed=$(count_field "failed;")
+suites=$(count_field "suites")
 
 # The failure list is printed IN FULL. Truncating it is the defect this script exists to prevent.
 if [ "$failed" -gt 0 ] || [ "$rc_total" -ne 0 ]; then
     echo ""
     echo "FAILURES (complete, untruncated):"
-    awk '/^failures:$/{f=1;next} /^test result:/{f=0} f && /^    [a-zA-Z0-9_:]+$/{print "  " $1}' "$LOG" | sort -u
+    if [ "$MODE" = "full" ]; then
+        # nextest failures by binary and test, straight from the JUnit report.
+        python3 scripts/lib/nextest_junit.py failures "$JUNIT" 2>&1 | sed 's/^/  /'
+        # Doctest failures, from the doctest step's own libtest output only.
+        # A doctest's name is `<file> - <item> (line N)`, so it is matched by that shape.
+        awk -v h="=== $STEP_DOCTEST: " -v e="=== end $STEP_DOCTEST:" '
+             index($0, h) == 1 {d=1} index($0, e) == 1 {d=0}
+             d && /^failures:$/{f=1;next} d && /^test result:/{f=0}
+             d && f && /^    [^ ].* \(line [0-9]+\)$/{sub(/^    /, ""); print "  doctest " $0}' "$LOG" | sort -u
+    fi
     grep -E '^error(\[|:)' "$LOG" | sort -u | sed 's/^/  /'
 fi
 
@@ -396,6 +497,13 @@ if [ "$MODE" = "quick" ]; then
     exit $rc_total
 fi
 
+# A full run that counted no tests is not a pass, whatever the statuses say: it means the counter
+# read nothing (a renamed step, a changed header format), not that nothing failed.
+if [ "$MODE" = "full" ] && [ "$passed" -eq 0 ]; then
+    echo "  no tests were counted — the counting channel is broken, so this cannot be a PASS"
+    rc_total=1
+fi
+
 if [ "$rc_total" -eq 0 ] && [ "$failed" -eq 0 ]; then
     result="PASS"
 else
@@ -407,6 +515,9 @@ fi
 # The pin in rust-toolchain is unenforceable on this host (no rustup), so this record is the only
 # thing that makes that drift visible to anything reading the verdict later.
 TOOLCHAIN=$(rustc -V 2>/dev/null || echo "unknown")
+# The test runner is part of what a verdict is attributable to, for the same reason.
+NEXTEST=$(cargo nextest --version 2>/dev/null | head -1)
+NEXTEST=${NEXTEST:-none}
 
 cat > "$VERDICT" <<JSON
 {
@@ -414,6 +525,7 @@ cat > "$VERDICT" <<JSON
   "commit": "$COMMIT",
   "tree": "$DIRTY",
   "toolchain": "$TOOLCHAIN",
+  "nextest": "$NEXTEST",
   "timestamp": "$STAMP",
   "command": "$TEST_CMD",
   "suites": $suites,

@@ -15,6 +15,72 @@ this ledger adds the design rationale and the actually-observed results per chan
 
 ---
 
+## 2026-11-08 — The gate's workspace tests run under cargo-nextest (work plan decision 9: a daily gate)
+
+- **Requirement/change:** `scripts/gate.sh` took 48m26s, 45 min of it `cargo test --workspace
+  --no-default-features --no-fail-fast`, whose ~400 binaries run one after another (their run times
+  sum to 43.3 min; `rho_calibration_receive` alone ~430 s). Decision 9 asks for the gate daily; the
+  maintainer chose cargo-nextest. The contract must not move: same tests, `GATE:` line last, the
+  verdict JSON's fields, an untruncated failure list, `--no-fail-fast` totals, trace.py's evidence.
+- **Design decision:** nextest 0.9.143 (the version the CI action's pinned manifest lists) with
+  `.config/nextest.toml`: `test-threads = 16` (bounded), `retries = 0`, a 20 min `terminate-after`
+  (a hang becomes a named TIMEOUT failure, not a gate with no verdict); test groups for what relied
+  on serial binaries — `twin_daemon_bridge`'s per-process port allocator (max-threads 1), and the
+  two daemon binaries that share 19180/19181 (max-threads 1); daemon integration tests take 4 of
+  the 16 slots (`threads-required`), since each runs two real daemons against a real-time tick; the
+  longest binaries start first. Counts come from nextest's JUnit report, re-emitted in libtest's
+  shape (`scripts/lib/nextest_junit.py`), never from nextest's terminal output, whose replay of a
+  failing test's stdout carries libtest's own `test result:` line. Doctests run as their own step
+  (`cargo test --doc`). A parity step (`scripts/lib/nextest_parity.py`) compares, per binary path,
+  what `cargo test` would run (`--list` minus `--list --ignored`) with nextest's selection. Fable's
+  review (`docs/dev/reviews/review-gate-nextest-2026-11-08.md`): approve with changes, all required
+  ones applied — a `<skipped>` JUnit case is refused, the report must hold exactly nextest's
+  selection, a full run that counts no tests cannot pass, the counted step names are defined once.
+- **Implementation:** `.config/nextest.toml`; `scripts/gate.sh` (`run_nextest`, `report_step`,
+  `junit_path`, `count_field`, `STEP_REPORT`/`STEP_DOCTEST`, `self_test`, verdict field
+  `nextest`); `scripts/lib/nextest_junit.py`; `scripts/lib/nextest_parity.py`;
+  `scripts/lib/trace.py` (evidence-self-test probes G, G2); `.github/workflows/ci.yml` and
+  `post-merge-gate.yml` (taiki-e/install-action at coverage.yml's SHA, `cargo-nextest@0.9.143`,
+  `fallback: none`; the JUnit report uploaded); CLAUDE.md, `docs/dev/verification-mechanics.md`,
+  `docs/dev/release-checklist.md`.
+- **Tests:** `scripts/gate.sh --self-test` (now also requires the report's total to equal nextest's
+  selection); `python3 scripts/lib/trace.py evidence-self-test` probes G and G2; the gate's parity
+  step; the sabotages below.
+- **Test results (this host, 24 threads, 121 GB; build in `~/cargo-targets/openpulse-nextest`,
+  `CARGO_PROFILE_{DEV,TEST}_DEBUG=0`, `CARGO_INCREMENTAL=0`; every full-suite run under the host
+  build lock):**
+  - Baseline `cargo test` at `8cd84d97`: 2831 passed, 0 failed, 147 ignored, 398 `test result:`
+    lines (365 binaries + 33 doctest crates); `muted_failures_move_no_ladder` hung 20 min and was
+    killed by hand (1:02:41 wall with the hang). Per-test set against nextest's JUnit (key: binary
+    file name with hash + test name): **identical** — 2830 nextest tests + 2 doctests — except that
+    killed test, which nextest ran and passed. nextest skipped 147 = cargo's 147 ignored.
+  - nextest alone, 16 threads, before priorities and `threads-required`: 9m52s, 2830/0.
+  - Gate at `903f3bc7`: run 2 FAIL (`id_rides_in_own_keying`, `muted_failures_move_no_ladder`)
+    while another worktree ran an unlocked `cargo test -p openpulse-daemon`; run 3 FAIL
+    (`muted_failures_move_no_ladder`) with a port watcher recording that worktree's
+    `muted_failures_move_no_ladder` listening on 19220/19221, this test's ports; run 4 PASS, 2832/0,
+    **7m42s** (test step 7m26s). Holding 19220 with a plain listener and running the test alone
+    reproduces run 3's failure exactly (300.3 s, `B never logged seven failures after climbing:
+    Elapsed(())`, line 157). Run 2's `id_rides_in_own_keying` was not separated: a collision or CPU
+    contention, both fit (no watcher ran).
+  - Gate at `67fe7447` (with `threads-required`, `terminate-after`): **runs 5–9 all `GATE: PASS`**,
+    suites 350, 2832 passed, 0 failed; gate wall 8m07s–8m17s against 48m26s; test step
+    7m58s–8m00s. `suites` is 350, not 398: JUnit holds the 317 binaries that ran a test (365 minus
+    17 with no tests and 31 with only ignored ones) plus 33 doctest crates.
+  - Peak memory: summed RSS of the test processes, sampled each second, 264–285 MB (16–17
+    processes); largest single process of the gate 250 MB (clippy; 593 MB on a cold clippy). The
+    `free` deltas were 0.1–2.2 GB, noisy with other sessions active. Memory is not what bounds
+    16 threads; CPU headroom for the real-time daemon tests is.
+  - Sabotages, each watched red: two failing tests planted in `openpulse-core` and `openpulse-dsp`
+    → `GATE: FAIL`, `tests_failed=2`, both named by binary in the failure list; `--self-test` PASS,
+    and with `--fail-fast` substituted it FAILs ("tests in report: 925 of 2831"); a test planted
+    and hidden by a nextest `default-filter` → parity FAIL naming it, PASS once restored; the
+    renderer marking every case `ok` → probe G FAIL; deleting only the renderer's
+    `test frame::tests::corrupted_crc_is_rejected ... ok` line from a PASS log → trace check
+    `REQ-FUN-05: CITED-BUT-DIDN'T-RUN`, the unedited log TRACE PASS.
+
+---
+
 ## 2026-11-07 — The preamble detect re-heads a burst opened on hiss; a P-confirmed failure is keyed past the NACK budget (work plan M3, A2)
 
 - **Requirement/change:** REQ-FUN-06. On air (task 28, run f2h, A's IC-9700 on AGC SLOW) B sent 55

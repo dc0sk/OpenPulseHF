@@ -2,7 +2,7 @@
 project: openpulsehf
 doc: docs/dev/release-checklist.md
 status: living
-last_updated: 2026-10-15
+last_updated: 2026-11-08
 ---
 
 # Release Checklist Template
@@ -175,7 +175,9 @@ form previously documented here (`bash scripts/stamp-doc-last-updated.sh`, "upda
 ## Testing Before Release
 
 - [ ] **Run full test suite** (`scripts/gate.sh`, above; it runs
-  `cargo test --workspace --no-default-features --no-fail-fast`)
+  `cargo nextest run --workspace --no-default-features --no-fail-fast --profile gate` plus
+  `cargo test --workspace --no-default-features --doc`, and a parity check against `cargo test`'s
+  selection)
 
 - [ ] **Run integration tests**
   ```bash
