@@ -1,0 +1,2280 @@
+# on-air twin-OTA  freq=144640000 dials A=144640000 B=144641564 profile=fast traffic FT-991A→IC-9700 dur=1200s
+14:19:53  ISS FT-991A: {
+  "active": true,
+  "is_locked": false,
+  "rx_confirmed_level": "SL2",
+  "rx_recommended_level": "SL2",
+  "tx_fec": "rs",
+  "tx_level": "SL3",
+  "tx_mode": "BPSK63"
+}  |  IRS IC-9700: {
+  "active": true,
+  "is_locked": false,
+  "rx_confirmed_level": "SL2",
+  "rx_recommended_level": "SL3",
+  "tx_fec": "rs",
+  "tx_level": "SL2",
+  "tx_mode": "BPSK31"
+}
+14:20:30  ISS FT-991A: {
+  "active": true,
+  "is_locked": false,
+  "rx_confirmed_level": "SL2",
+  "rx_recommended_level": "SL2",
+  "tx_fec": "rs",
+  "tx_level": "SL4",
+  "tx_mode": "BPSK100"
+}  |  IRS IC-9700: {
+  "active": true,
+  "is_locked": false,
+  "rx_confirmed_level": "SL3",
+  "rx_recommended_level": "SL4",
+  "tx_fec": "rs",
+  "tx_level": "SL2",
+  "tx_mode": "BPSK31"
+}
+14:20:54  ISS FT-991A: {
+  "active": true,
+  "is_locked": false,
+  "rx_confirmed_level": "SL2",
+  "rx_recommended_level": "SL2",
+  "tx_fec": "rs",
+  "tx_level": "SL5",
+  "tx_mode": "BPSK250"
+}  |  IRS IC-9700: {
+  "active": true,
+  "is_locked": false,
+  "rx_confirmed_level": "SL4",
+  "rx_recommended_level": "SL5",
+  "tx_fec": "rs",
+  "tx_level": "SL2",
+  "tx_mode": "BPSK31"
+}
+14:21:05  ISS FT-991A: {
+  "active": true,
+  "is_locked": false,
+  "rx_confirmed_level": "SL2",
+  "rx_recommended_level": "SL2",
+  "tx_fec": "rs",
+  "tx_level": "SL6",
+  "tx_mode": "QPSK250-D"
+}  |  IRS IC-9700: {
+  "active": true,
+  "is_locked": false,
+  "rx_confirmed_level": "SL5",
+  "rx_recommended_level": "SL6",
+  "tx_fec": "rs",
+  "tx_level": "SL2",
+  "tx_mode": "BPSK31"
+}
+14:21:11  ISS FT-991A: {
+  "active": true,
+  "is_locked": false,
+  "rx_confirmed_level": "SL2",
+  "rx_recommended_level": "SL2",
+  "tx_fec": "rs",
+  "tx_level": "SL6",
+  "tx_mode": "QPSK250-D"
+}  |  IRS IC-9700: {
+  "active": true,
+  "is_locked": false,
+  "rx_confirmed_level": "SL6",
+  "rx_recommended_level": "SL6",
+  "tx_fec": "rs",
+  "tx_level": "SL2",
+  "tx_mode": "BPSK31"
+}
+14:21:18  ISS FT-991A: {
+  "active": true,
+  "is_locked": false,
+  "rx_confirmed_level": "SL2",
+  "rx_recommended_level": "SL2",
+  "tx_fec": "rs",
+  "tx_level": "SL6",
+  "tx_mode": "QPSK250-D"
+}  |  IRS IC-9700: {
+  "active": true,
+  "is_locked": false,
+  "rx_confirmed_level": "SL6",
+  "rx_recommended_level": "SL6",
+  "tx_fec": "rs",
+  "tx_level": "SL2",
+  "tx_mode": "BPSK31"
+}
+14:21:25  ISS FT-991A: {
+  "active": true,
+  "is_locked": false,
+  "rx_confirmed_level": "SL2",
+  "rx_recommended_level": "SL2",
+  "tx_fec": "softconcatenated",
+  "tx_level": "SL7",
+  "tx_mode": "OFDM52"
+}  |  IRS IC-9700: {
+  "active": true,
+  "is_locked": false,
+  "rx_confirmed_level": "SL6",
+  "rx_recommended_level": "SL7",
+  "tx_fec": "rs",
+  "tx_level": "SL2",
+  "tx_mode": "BPSK31"
+}
+14:21:32  ISS FT-991A: {
+  "active": true,
+  "is_locked": false,
+  "rx_confirmed_level": "SL2",
+  "rx_recommended_level": "SL2",
+  "tx_fec": "softconcatenated",
+  "tx_level": "SL7",
+  "tx_mode": "OFDM52"
+}  |  IRS IC-9700: {
+  "active": true,
+  "is_locked": false,
+  "rx_confirmed_level": "SL7",
+  "rx_recommended_level": "SL7",
+  "tx_fec": "rs",
+  "tx_level": "SL2",
+  "tx_mode": "BPSK31"
+}
+14:21:38  ISS FT-991A: {
+  "active": true,
+  "is_locked": false,
+  "rx_confirmed_level": "SL2",
+  "rx_recommended_level": "SL2",
+  "tx_fec": "softconcatenated",
+  "tx_level": "SL8",
+  "tx_mode": "OFDM52-8PSK"
+}  |  IRS IC-9700: {
+  "active": true,
+  "is_locked": false,
+  "rx_confirmed_level": "SL8",
+  "rx_recommended_level": "SL8",
+  "tx_fec": "rs",
+  "tx_level": "SL2",
+  "tx_mode": "BPSK31"
+}
+14:21:44  ISS FT-991A: {
+  "active": true,
+  "is_locked": false,
+  "rx_confirmed_level": "SL2",
+  "rx_recommended_level": "SL2",
+  "tx_fec": "softconcatenated",
+  "tx_level": "SL9",
+  "tx_mode": "OFDM52-16QAM"
+}  |  IRS IC-9700: {
+  "active": true,
+  "is_locked": false,
+  "rx_confirmed_level": "SL8",
+  "rx_recommended_level": "SL9",
+  "tx_fec": "rs",
+  "tx_level": "SL2",
+  "tx_mode": "BPSK31"
+}
+14:21:50  ISS FT-991A: {
+  "active": true,
+  "is_locked": false,
+  "rx_confirmed_level": "SL2",
+  "rx_recommended_level": "SL2",
+  "tx_fec": "softconcatenated",
+  "tx_level": "SL9",
+  "tx_mode": "OFDM52-16QAM"
+}  |  IRS IC-9700: {
+  "active": true,
+  "is_locked": false,
+  "rx_confirmed_level": "SL9",
+  "rx_recommended_level": "SL9",
+  "tx_fec": "rs",
+  "tx_level": "SL2",
+  "tx_mode": "BPSK31"
+}
+14:21:57  ISS FT-991A: {
+  "active": true,
+  "is_locked": false,
+  "rx_confirmed_level": "SL2",
+  "rx_recommended_level": "SL2",
+  "tx_fec": "softconcatenated",
+  "tx_level": "SL9",
+  "tx_mode": "OFDM52-16QAM"
+}  |  IRS IC-9700: {
+  "active": true,
+  "is_locked": false,
+  "rx_confirmed_level": "SL9",
+  "rx_recommended_level": "SL9",
+  "tx_fec": "rs",
+  "tx_level": "SL2",
+  "tx_mode": "BPSK31"
+}
+14:22:02  ISS FT-991A: {
+  "active": true,
+  "is_locked": false,
+  "rx_confirmed_level": "SL2",
+  "rx_recommended_level": "SL2",
+  "tx_fec": "softconcatenated",
+  "tx_level": "SL9",
+  "tx_mode": "OFDM52-16QAM"
+}  |  IRS IC-9700: {
+  "active": true,
+  "is_locked": false,
+  "rx_confirmed_level": "SL9",
+  "rx_recommended_level": "SL9",
+  "tx_fec": "rs",
+  "tx_level": "SL2",
+  "tx_mode": "BPSK31"
+}
+14:22:10  ISS FT-991A: {
+  "active": true,
+  "is_locked": false,
+  "rx_confirmed_level": "SL2",
+  "rx_recommended_level": "SL2",
+  "tx_fec": "softconcatenated",
+  "tx_level": "SL9",
+  "tx_mode": "OFDM52-16QAM"
+}  |  IRS IC-9700: {
+  "active": true,
+  "is_locked": false,
+  "rx_confirmed_level": "SL9",
+  "rx_recommended_level": "SL9",
+  "tx_fec": "rs",
+  "tx_level": "SL2",
+  "tx_mode": "BPSK31"
+}
+14:22:16  ISS FT-991A: {
+  "active": true,
+  "is_locked": false,
+  "rx_confirmed_level": "SL2",
+  "rx_recommended_level": "SL2",
+  "tx_fec": "softconcatenated",
+  "tx_level": "SL9",
+  "tx_mode": "OFDM52-16QAM"
+}  |  IRS IC-9700: {
+  "active": true,
+  "is_locked": false,
+  "rx_confirmed_level": "SL9",
+  "rx_recommended_level": "SL9",
+  "tx_fec": "rs",
+  "tx_level": "SL2",
+  "tx_mode": "BPSK31"
+}
+14:22:22  ISS FT-991A: {
+  "active": true,
+  "is_locked": false,
+  "rx_confirmed_level": "SL2",
+  "rx_recommended_level": "SL2",
+  "tx_fec": "softconcatenated",
+  "tx_level": "SL9",
+  "tx_mode": "OFDM52-16QAM"
+}  |  IRS IC-9700: {
+  "active": true,
+  "is_locked": false,
+  "rx_confirmed_level": "SL9",
+  "rx_recommended_level": "SL9",
+  "tx_fec": "rs",
+  "tx_level": "SL2",
+  "tx_mode": "BPSK31"
+}
+14:22:28  ISS FT-991A: {
+  "active": true,
+  "is_locked": false,
+  "rx_confirmed_level": "SL2",
+  "rx_recommended_level": "SL2",
+  "tx_fec": "softconcatenated",
+  "tx_level": "SL9",
+  "tx_mode": "OFDM52-16QAM"
+}  |  IRS IC-9700: {
+  "active": true,
+  "is_locked": false,
+  "rx_confirmed_level": "SL9",
+  "rx_recommended_level": "SL9",
+  "tx_fec": "rs",
+  "tx_level": "SL2",
+  "tx_mode": "BPSK31"
+}
+14:22:34  ISS FT-991A: {
+  "active": true,
+  "is_locked": false,
+  "rx_confirmed_level": "SL2",
+  "rx_recommended_level": "SL2",
+  "tx_fec": "softconcatenated",
+  "tx_level": "SL9",
+  "tx_mode": "OFDM52-16QAM"
+}  |  IRS IC-9700: {
+  "active": true,
+  "is_locked": false,
+  "rx_confirmed_level": "SL9",
+  "rx_recommended_level": "SL9",
+  "tx_fec": "rs",
+  "tx_level": "SL2",
+  "tx_mode": "BPSK31"
+}
+14:22:41  ISS FT-991A: {
+  "active": true,
+  "is_locked": false,
+  "rx_confirmed_level": "SL2",
+  "rx_recommended_level": "SL2",
+  "tx_fec": "softconcatenated",
+  "tx_level": "SL9",
+  "tx_mode": "OFDM52-16QAM"
+}  |  IRS IC-9700: {
+  "active": true,
+  "is_locked": false,
+  "rx_confirmed_level": "SL9",
+  "rx_recommended_level": "SL9",
+  "tx_fec": "rs",
+  "tx_level": "SL2",
+  "tx_mode": "BPSK31"
+}
+14:22:47  ISS FT-991A: {
+  "active": true,
+  "is_locked": false,
+  "rx_confirmed_level": "SL2",
+  "rx_recommended_level": "SL2",
+  "tx_fec": "softconcatenated",
+  "tx_level": "SL10",
+  "tx_mode": "OFDM52-32QAM"
+}  |  IRS IC-9700: {
+  "active": true,
+  "is_locked": false,
+  "rx_confirmed_level": "SL9",
+  "rx_recommended_level": "SL10",
+  "tx_fec": "rs",
+  "tx_level": "SL2",
+  "tx_mode": "BPSK31"
+}
+14:22:55  ISS FT-991A: {
+  "active": true,
+  "is_locked": false,
+  "rx_confirmed_level": "SL2",
+  "rx_recommended_level": "SL2",
+  "tx_fec": "softconcatenated",
+  "tx_level": "SL9",
+  "tx_mode": "OFDM52-16QAM"
+}  |  IRS IC-9700: {
+  "active": true,
+  "is_locked": false,
+  "rx_confirmed_level": "SL9",
+  "rx_recommended_level": "SL9",
+  "tx_fec": "rs",
+  "tx_level": "SL2",
+  "tx_mode": "BPSK31"
+}
+14:23:02  ISS FT-991A: {
+  "active": true,
+  "is_locked": false,
+  "rx_confirmed_level": "SL2",
+  "rx_recommended_level": "SL2",
+  "tx_fec": "softconcatenated",
+  "tx_level": "SL9",
+  "tx_mode": "OFDM52-16QAM"
+}  |  IRS IC-9700: {
+  "active": true,
+  "is_locked": false,
+  "rx_confirmed_level": "SL9",
+  "rx_recommended_level": "SL9",
+  "tx_fec": "rs",
+  "tx_level": "SL2",
+  "tx_mode": "BPSK31"
+}
+14:23:10  ISS FT-991A: {
+  "active": true,
+  "is_locked": false,
+  "rx_confirmed_level": "SL2",
+  "rx_recommended_level": "SL2",
+  "tx_fec": "softconcatenated",
+  "tx_level": "SL9",
+  "tx_mode": "OFDM52-16QAM"
+}  |  IRS IC-9700: {
+  "active": true,
+  "is_locked": false,
+  "rx_confirmed_level": "SL9",
+  "rx_recommended_level": "SL9",
+  "tx_fec": "rs",
+  "tx_level": "SL2",
+  "tx_mode": "BPSK31"
+}
+14:23:19  ISS FT-991A: {
+  "active": true,
+  "is_locked": false,
+  "rx_confirmed_level": "SL2",
+  "rx_recommended_level": "SL2",
+  "tx_fec": "softconcatenated",
+  "tx_level": "SL9",
+  "tx_mode": "OFDM52-16QAM"
+}  |  IRS IC-9700: {
+  "active": true,
+  "is_locked": false,
+  "rx_confirmed_level": "SL9",
+  "rx_recommended_level": "SL9",
+  "tx_fec": "rs",
+  "tx_level": "SL2",
+  "tx_mode": "BPSK31"
+}
+14:23:26  ISS FT-991A: {
+  "active": true,
+  "is_locked": false,
+  "rx_confirmed_level": "SL2",
+  "rx_recommended_level": "SL2",
+  "tx_fec": "softconcatenated",
+  "tx_level": "SL9",
+  "tx_mode": "OFDM52-16QAM"
+}  |  IRS IC-9700: {
+  "active": true,
+  "is_locked": false,
+  "rx_confirmed_level": "SL9",
+  "rx_recommended_level": "SL9",
+  "tx_fec": "rs",
+  "tx_level": "SL2",
+  "tx_mode": "BPSK31"
+}
+14:23:34  ISS FT-991A: {
+  "active": true,
+  "is_locked": false,
+  "rx_confirmed_level": "SL2",
+  "rx_recommended_level": "SL2",
+  "tx_fec": "softconcatenated",
+  "tx_level": "SL9",
+  "tx_mode": "OFDM52-16QAM"
+}  |  IRS IC-9700: {
+  "active": true,
+  "is_locked": false,
+  "rx_confirmed_level": "SL9",
+  "rx_recommended_level": "SL9",
+  "tx_fec": "rs",
+  "tx_level": "SL2",
+  "tx_mode": "BPSK31"
+}
+14:23:43  ISS FT-991A: {
+  "active": true,
+  "is_locked": false,
+  "rx_confirmed_level": "SL2",
+  "rx_recommended_level": "SL2",
+  "tx_fec": "softconcatenated",
+  "tx_level": "SL9",
+  "tx_mode": "OFDM52-16QAM"
+}  |  IRS IC-9700: {
+  "active": true,
+  "is_locked": false,
+  "rx_confirmed_level": "SL9",
+  "rx_recommended_level": "SL9",
+  "tx_fec": "rs",
+  "tx_level": "SL2",
+  "tx_mode": "BPSK31"
+}
+14:23:50  ISS FT-991A: {
+  "active": true,
+  "is_locked": false,
+  "rx_confirmed_level": "SL2",
+  "rx_recommended_level": "SL2",
+  "tx_fec": "softconcatenated",
+  "tx_level": "SL9",
+  "tx_mode": "OFDM52-16QAM"
+}  |  IRS IC-9700: {
+  "active": true,
+  "is_locked": false,
+  "rx_confirmed_level": "SL9",
+  "rx_recommended_level": "SL9",
+  "tx_fec": "rs",
+  "tx_level": "SL2",
+  "tx_mode": "BPSK31"
+}
+14:23:58  ISS FT-991A: {
+  "active": true,
+  "is_locked": false,
+  "rx_confirmed_level": "SL2",
+  "rx_recommended_level": "SL2",
+  "tx_fec": "softconcatenated",
+  "tx_level": "SL9",
+  "tx_mode": "OFDM52-16QAM"
+}  |  IRS IC-9700: {
+  "active": true,
+  "is_locked": false,
+  "rx_confirmed_level": "SL9",
+  "rx_recommended_level": "SL9",
+  "tx_fec": "rs",
+  "tx_level": "SL2",
+  "tx_mode": "BPSK31"
+}
+14:24:07  ISS FT-991A: {
+  "active": true,
+  "is_locked": false,
+  "rx_confirmed_level": "SL2",
+  "rx_recommended_level": "SL2",
+  "tx_fec": "softconcatenated",
+  "tx_level": "SL9",
+  "tx_mode": "OFDM52-16QAM"
+}  |  IRS IC-9700: {
+  "active": true,
+  "is_locked": false,
+  "rx_confirmed_level": "SL9",
+  "rx_recommended_level": "SL9",
+  "tx_fec": "rs",
+  "tx_level": "SL2",
+  "tx_mode": "BPSK31"
+}
+14:24:13  ISS FT-991A: {
+  "active": true,
+  "is_locked": false,
+  "rx_confirmed_level": "SL2",
+  "rx_recommended_level": "SL2",
+  "tx_fec": "softconcatenated",
+  "tx_level": "SL9",
+  "tx_mode": "OFDM52-16QAM"
+}  |  IRS IC-9700: {
+  "active": true,
+  "is_locked": false,
+  "rx_confirmed_level": "SL9",
+  "rx_recommended_level": "SL9",
+  "tx_fec": "rs",
+  "tx_level": "SL2",
+  "tx_mode": "BPSK31"
+}
+14:24:24  ISS FT-991A: {
+  "active": true,
+  "is_locked": false,
+  "rx_confirmed_level": "SL2",
+  "rx_recommended_level": "SL2",
+  "tx_fec": "softconcatenated",
+  "tx_level": "SL9",
+  "tx_mode": "OFDM52-16QAM"
+}  |  IRS IC-9700: {
+  "active": true,
+  "is_locked": false,
+  "rx_confirmed_level": "SL9",
+  "rx_recommended_level": "SL9",
+  "tx_fec": "rs",
+  "tx_level": "SL2",
+  "tx_mode": "BPSK31"
+}
+14:24:30  ISS FT-991A: {
+  "active": true,
+  "is_locked": false,
+  "rx_confirmed_level": "SL2",
+  "rx_recommended_level": "SL2",
+  "tx_fec": "softconcatenated",
+  "tx_level": "SL9",
+  "tx_mode": "OFDM52-16QAM"
+}  |  IRS IC-9700: {
+  "active": true,
+  "is_locked": false,
+  "rx_confirmed_level": "SL9",
+  "rx_recommended_level": "SL9",
+  "tx_fec": "rs",
+  "tx_level": "SL2",
+  "tx_mode": "BPSK31"
+}
+14:24:38  ISS FT-991A: {
+  "active": true,
+  "is_locked": false,
+  "rx_confirmed_level": "SL2",
+  "rx_recommended_level": "SL2",
+  "tx_fec": "softconcatenated",
+  "tx_level": "SL9",
+  "tx_mode": "OFDM52-16QAM"
+}  |  IRS IC-9700: {
+  "active": true,
+  "is_locked": false,
+  "rx_confirmed_level": "SL9",
+  "rx_recommended_level": "SL9",
+  "tx_fec": "rs",
+  "tx_level": "SL2",
+  "tx_mode": "BPSK31"
+}
+14:24:44  ISS FT-991A: {
+  "active": true,
+  "is_locked": false,
+  "rx_confirmed_level": "SL2",
+  "rx_recommended_level": "SL2",
+  "tx_fec": "softconcatenated",
+  "tx_level": "SL9",
+  "tx_mode": "OFDM52-16QAM"
+}  |  IRS IC-9700: {
+  "active": true,
+  "is_locked": false,
+  "rx_confirmed_level": "SL9",
+  "rx_recommended_level": "SL9",
+  "tx_fec": "rs",
+  "tx_level": "SL2",
+  "tx_mode": "BPSK31"
+}
+14:24:50  ISS FT-991A: {
+  "active": true,
+  "is_locked": false,
+  "rx_confirmed_level": "SL2",
+  "rx_recommended_level": "SL2",
+  "tx_fec": "softconcatenated",
+  "tx_level": "SL9",
+  "tx_mode": "OFDM52-16QAM"
+}  |  IRS IC-9700: {
+  "active": true,
+  "is_locked": false,
+  "rx_confirmed_level": "SL9",
+  "rx_recommended_level": "SL9",
+  "tx_fec": "rs",
+  "tx_level": "SL2",
+  "tx_mode": "BPSK31"
+}
+14:24:57  ISS FT-991A: {
+  "active": true,
+  "is_locked": false,
+  "rx_confirmed_level": "SL2",
+  "rx_recommended_level": "SL2",
+  "tx_fec": "softconcatenated",
+  "tx_level": "SL9",
+  "tx_mode": "OFDM52-16QAM"
+}  |  IRS IC-9700: {
+  "active": true,
+  "is_locked": false,
+  "rx_confirmed_level": "SL9",
+  "rx_recommended_level": "SL9",
+  "tx_fec": "rs",
+  "tx_level": "SL2",
+  "tx_mode": "BPSK31"
+}
+14:25:03  ISS FT-991A: {
+  "active": true,
+  "is_locked": false,
+  "rx_confirmed_level": "SL2",
+  "rx_recommended_level": "SL2",
+  "tx_fec": "softconcatenated",
+  "tx_level": "SL9",
+  "tx_mode": "OFDM52-16QAM"
+}  |  IRS IC-9700: {
+  "active": true,
+  "is_locked": false,
+  "rx_confirmed_level": "SL9",
+  "rx_recommended_level": "SL9",
+  "tx_fec": "rs",
+  "tx_level": "SL2",
+  "tx_mode": "BPSK31"
+}
+14:25:10  ISS FT-991A: {
+  "active": true,
+  "is_locked": false,
+  "rx_confirmed_level": "SL2",
+  "rx_recommended_level": "SL2",
+  "tx_fec": "softconcatenated",
+  "tx_level": "SL9",
+  "tx_mode": "OFDM52-16QAM"
+}  |  IRS IC-9700: {
+  "active": true,
+  "is_locked": false,
+  "rx_confirmed_level": "SL9",
+  "rx_recommended_level": "SL9",
+  "tx_fec": "rs",
+  "tx_level": "SL2",
+  "tx_mode": "BPSK31"
+}
+14:25:18  ISS FT-991A: {
+  "active": true,
+  "is_locked": false,
+  "rx_confirmed_level": "SL2",
+  "rx_recommended_level": "SL2",
+  "tx_fec": "softconcatenated",
+  "tx_level": "SL9",
+  "tx_mode": "OFDM52-16QAM"
+}  |  IRS IC-9700: {
+  "active": true,
+  "is_locked": false,
+  "rx_confirmed_level": "SL9",
+  "rx_recommended_level": "SL9",
+  "tx_fec": "rs",
+  "tx_level": "SL2",
+  "tx_mode": "BPSK31"
+}
+14:25:28  ISS FT-991A: {
+  "active": true,
+  "is_locked": false,
+  "rx_confirmed_level": "SL2",
+  "rx_recommended_level": "SL2",
+  "tx_fec": "softconcatenated",
+  "tx_level": "SL9",
+  "tx_mode": "OFDM52-16QAM"
+}  |  IRS IC-9700: {
+  "active": true,
+  "is_locked": false,
+  "rx_confirmed_level": "SL9",
+  "rx_recommended_level": "SL9",
+  "tx_fec": "rs",
+  "tx_level": "SL2",
+  "tx_mode": "BPSK31"
+}
+14:25:34  ISS FT-991A: {
+  "active": true,
+  "is_locked": false,
+  "rx_confirmed_level": "SL2",
+  "rx_recommended_level": "SL2",
+  "tx_fec": "softconcatenated",
+  "tx_level": "SL9",
+  "tx_mode": "OFDM52-16QAM"
+}  |  IRS IC-9700: {
+  "active": true,
+  "is_locked": false,
+  "rx_confirmed_level": "SL9",
+  "rx_recommended_level": "SL9",
+  "tx_fec": "rs",
+  "tx_level": "SL2",
+  "tx_mode": "BPSK31"
+}
+14:25:42  ISS FT-991A: {
+  "active": true,
+  "is_locked": false,
+  "rx_confirmed_level": "SL2",
+  "rx_recommended_level": "SL2",
+  "tx_fec": "softconcatenated",
+  "tx_level": "SL9",
+  "tx_mode": "OFDM52-16QAM"
+}  |  IRS IC-9700: {
+  "active": true,
+  "is_locked": false,
+  "rx_confirmed_level": "SL9",
+  "rx_recommended_level": "SL9",
+  "tx_fec": "rs",
+  "tx_level": "SL2",
+  "tx_mode": "BPSK31"
+}
+14:25:50  ISS FT-991A: {
+  "active": true,
+  "is_locked": false,
+  "rx_confirmed_level": "SL2",
+  "rx_recommended_level": "SL2",
+  "tx_fec": "softconcatenated",
+  "tx_level": "SL9",
+  "tx_mode": "OFDM52-16QAM"
+}  |  IRS IC-9700: {
+  "active": true,
+  "is_locked": false,
+  "rx_confirmed_level": "SL9",
+  "rx_recommended_level": "SL9",
+  "tx_fec": "rs",
+  "tx_level": "SL2",
+  "tx_mode": "BPSK31"
+}
+14:25:58  ISS FT-991A: {
+  "active": true,
+  "is_locked": false,
+  "rx_confirmed_level": "SL2",
+  "rx_recommended_level": "SL2",
+  "tx_fec": "softconcatenated",
+  "tx_level": "SL9",
+  "tx_mode": "OFDM52-16QAM"
+}  |  IRS IC-9700: {
+  "active": true,
+  "is_locked": false,
+  "rx_confirmed_level": "SL9",
+  "rx_recommended_level": "SL9",
+  "tx_fec": "rs",
+  "tx_level": "SL2",
+  "tx_mode": "BPSK31"
+}
+14:26:06  ISS FT-991A: {
+  "active": true,
+  "is_locked": false,
+  "rx_confirmed_level": "SL2",
+  "rx_recommended_level": "SL2",
+  "tx_fec": "softconcatenated",
+  "tx_level": "SL9",
+  "tx_mode": "OFDM52-16QAM"
+}  |  IRS IC-9700: {
+  "active": true,
+  "is_locked": false,
+  "rx_confirmed_level": "SL9",
+  "rx_recommended_level": "SL9",
+  "tx_fec": "rs",
+  "tx_level": "SL2",
+  "tx_mode": "BPSK31"
+}
+14:26:14  ISS FT-991A: {
+  "active": true,
+  "is_locked": false,
+  "rx_confirmed_level": "SL2",
+  "rx_recommended_level": "SL2",
+  "tx_fec": "softconcatenated",
+  "tx_level": "SL9",
+  "tx_mode": "OFDM52-16QAM"
+}  |  IRS IC-9700: {
+  "active": true,
+  "is_locked": false,
+  "rx_confirmed_level": "SL9",
+  "rx_recommended_level": "SL9",
+  "tx_fec": "rs",
+  "tx_level": "SL2",
+  "tx_mode": "BPSK31"
+}
+14:26:23  ISS FT-991A: {
+  "active": true,
+  "is_locked": false,
+  "rx_confirmed_level": "SL2",
+  "rx_recommended_level": "SL2",
+  "tx_fec": "softconcatenated",
+  "tx_level": "SL10",
+  "tx_mode": "OFDM52-32QAM"
+}  |  IRS IC-9700: {
+  "active": true,
+  "is_locked": false,
+  "rx_confirmed_level": "SL9",
+  "rx_recommended_level": "SL10",
+  "tx_fec": "rs",
+  "tx_level": "SL2",
+  "tx_mode": "BPSK31"
+}
+14:26:31  ISS FT-991A: {
+  "active": true,
+  "is_locked": false,
+  "rx_confirmed_level": "SL2",
+  "rx_recommended_level": "SL2",
+  "tx_fec": "softconcatenated",
+  "tx_level": "SL9",
+  "tx_mode": "OFDM52-16QAM"
+}  |  IRS IC-9700: {
+  "active": true,
+  "is_locked": false,
+  "rx_confirmed_level": "SL9",
+  "rx_recommended_level": "SL9",
+  "tx_fec": "rs",
+  "tx_level": "SL2",
+  "tx_mode": "BPSK31"
+}
+14:27:04  ISS FT-991A: {
+  "active": true,
+  "is_locked": false,
+  "rx_confirmed_level": "SL2",
+  "rx_recommended_level": "SL2",
+  "tx_fec": "softconcatenated",
+  "tx_level": "SL9",
+  "tx_mode": "OFDM52-16QAM"
+}  |  IRS IC-9700: {
+  "active": true,
+  "is_locked": false,
+  "rx_confirmed_level": "SL9",
+  "rx_recommended_level": "SL9",
+  "tx_fec": "rs",
+  "tx_level": "SL2",
+  "tx_mode": "BPSK31"
+}
+14:27:26  ISS FT-991A: {
+  "active": true,
+  "is_locked": false,
+  "rx_confirmed_level": "SL2",
+  "rx_recommended_level": "SL2",
+  "tx_fec": "softconcatenated",
+  "tx_level": "SL9",
+  "tx_mode": "OFDM52-16QAM"
+}  |  IRS IC-9700: {
+  "active": true,
+  "is_locked": false,
+  "rx_confirmed_level": "SL9",
+  "rx_recommended_level": "SL9",
+  "tx_fec": "rs",
+  "tx_level": "SL2",
+  "tx_mode": "BPSK31"
+}
+14:27:48  ISS FT-991A: {
+  "active": true,
+  "is_locked": false,
+  "rx_confirmed_level": "SL2",
+  "rx_recommended_level": "SL2",
+  "tx_fec": "softconcatenated",
+  "tx_level": "SL9",
+  "tx_mode": "OFDM52-16QAM"
+}  |  IRS IC-9700: {
+  "active": true,
+  "is_locked": false,
+  "rx_confirmed_level": "SL9",
+  "rx_recommended_level": "SL9",
+  "tx_fec": "rs",
+  "tx_level": "SL2",
+  "tx_mode": "BPSK31"
+}
+14:27:53  ISS FT-991A: {
+  "active": true,
+  "is_locked": false,
+  "rx_confirmed_level": "SL2",
+  "rx_recommended_level": "SL2",
+  "tx_fec": "softconcatenated",
+  "tx_level": "SL9",
+  "tx_mode": "OFDM52-16QAM"
+}  |  IRS IC-9700: {
+  "active": true,
+  "is_locked": false,
+  "rx_confirmed_level": "SL9",
+  "rx_recommended_level": "SL9",
+  "tx_fec": "rs",
+  "tx_level": "SL2",
+  "tx_mode": "BPSK31"
+}
+14:28:02  ISS FT-991A: {
+  "active": true,
+  "is_locked": false,
+  "rx_confirmed_level": "SL2",
+  "rx_recommended_level": "SL2",
+  "tx_fec": "softconcatenated",
+  "tx_level": "SL9",
+  "tx_mode": "OFDM52-16QAM"
+}  |  IRS IC-9700: {
+  "active": true,
+  "is_locked": false,
+  "rx_confirmed_level": "SL9",
+  "rx_recommended_level": "SL9",
+  "tx_fec": "rs",
+  "tx_level": "SL2",
+  "tx_mode": "BPSK31"
+}
+14:28:10  ISS FT-991A: {
+  "active": true,
+  "is_locked": false,
+  "rx_confirmed_level": "SL2",
+  "rx_recommended_level": "SL2",
+  "tx_fec": "softconcatenated",
+  "tx_level": "SL9",
+  "tx_mode": "OFDM52-16QAM"
+}  |  IRS IC-9700: {
+  "active": true,
+  "is_locked": false,
+  "rx_confirmed_level": "SL9",
+  "rx_recommended_level": "SL9",
+  "tx_fec": "rs",
+  "tx_level": "SL2",
+  "tx_mode": "BPSK31"
+}
+14:28:16  ISS FT-991A: {
+  "active": true,
+  "is_locked": false,
+  "rx_confirmed_level": "SL2",
+  "rx_recommended_level": "SL2",
+  "tx_fec": "softconcatenated",
+  "tx_level": "SL9",
+  "tx_mode": "OFDM52-16QAM"
+}  |  IRS IC-9700: {
+  "active": true,
+  "is_locked": false,
+  "rx_confirmed_level": "SL9",
+  "rx_recommended_level": "SL9",
+  "tx_fec": "rs",
+  "tx_level": "SL2",
+  "tx_mode": "BPSK31"
+}
+14:28:22  ISS FT-991A: {
+  "active": true,
+  "is_locked": false,
+  "rx_confirmed_level": "SL2",
+  "rx_recommended_level": "SL2",
+  "tx_fec": "softconcatenated",
+  "tx_level": "SL9",
+  "tx_mode": "OFDM52-16QAM"
+}  |  IRS IC-9700: {
+  "active": true,
+  "is_locked": false,
+  "rx_confirmed_level": "SL9",
+  "rx_recommended_level": "SL9",
+  "tx_fec": "rs",
+  "tx_level": "SL2",
+  "tx_mode": "BPSK31"
+}
+14:28:30  ISS FT-991A: {
+  "active": true,
+  "is_locked": false,
+  "rx_confirmed_level": "SL2",
+  "rx_recommended_level": "SL2",
+  "tx_fec": "softconcatenated",
+  "tx_level": "SL9",
+  "tx_mode": "OFDM52-16QAM"
+}  |  IRS IC-9700: {
+  "active": true,
+  "is_locked": false,
+  "rx_confirmed_level": "SL9",
+  "rx_recommended_level": "SL9",
+  "tx_fec": "rs",
+  "tx_level": "SL2",
+  "tx_mode": "BPSK31"
+}
+14:28:39  ISS FT-991A: {
+  "active": true,
+  "is_locked": false,
+  "rx_confirmed_level": "SL2",
+  "rx_recommended_level": "SL2",
+  "tx_fec": "softconcatenated",
+  "tx_level": "SL9",
+  "tx_mode": "OFDM52-16QAM"
+}  |  IRS IC-9700: {
+  "active": true,
+  "is_locked": false,
+  "rx_confirmed_level": "SL9",
+  "rx_recommended_level": "SL9",
+  "tx_fec": "rs",
+  "tx_level": "SL2",
+  "tx_mode": "BPSK31"
+}
+14:28:46  ISS FT-991A: {
+  "active": true,
+  "is_locked": false,
+  "rx_confirmed_level": "SL2",
+  "rx_recommended_level": "SL2",
+  "tx_fec": "softconcatenated",
+  "tx_level": "SL9",
+  "tx_mode": "OFDM52-16QAM"
+}  |  IRS IC-9700: {
+  "active": true,
+  "is_locked": false,
+  "rx_confirmed_level": "SL9",
+  "rx_recommended_level": "SL9",
+  "tx_fec": "rs",
+  "tx_level": "SL2",
+  "tx_mode": "BPSK31"
+}
+14:28:54  ISS FT-991A: {
+  "active": true,
+  "is_locked": false,
+  "rx_confirmed_level": "SL2",
+  "rx_recommended_level": "SL2",
+  "tx_fec": "softconcatenated",
+  "tx_level": "SL9",
+  "tx_mode": "OFDM52-16QAM"
+}  |  IRS IC-9700: {
+  "active": true,
+  "is_locked": false,
+  "rx_confirmed_level": "SL9",
+  "rx_recommended_level": "SL9",
+  "tx_fec": "rs",
+  "tx_level": "SL2",
+  "tx_mode": "BPSK31"
+}
+14:29:02  ISS FT-991A: {
+  "active": true,
+  "is_locked": false,
+  "rx_confirmed_level": "SL2",
+  "rx_recommended_level": "SL2",
+  "tx_fec": "softconcatenated",
+  "tx_level": "SL9",
+  "tx_mode": "OFDM52-16QAM"
+}  |  IRS IC-9700: {
+  "active": true,
+  "is_locked": false,
+  "rx_confirmed_level": "SL9",
+  "rx_recommended_level": "SL9",
+  "tx_fec": "rs",
+  "tx_level": "SL2",
+  "tx_mode": "BPSK31"
+}
+14:29:11  ISS FT-991A: {
+  "active": true,
+  "is_locked": false,
+  "rx_confirmed_level": "SL2",
+  "rx_recommended_level": "SL2",
+  "tx_fec": "softconcatenated",
+  "tx_level": "SL9",
+  "tx_mode": "OFDM52-16QAM"
+}  |  IRS IC-9700: {
+  "active": true,
+  "is_locked": false,
+  "rx_confirmed_level": "SL9",
+  "rx_recommended_level": "SL9",
+  "tx_fec": "rs",
+  "tx_level": "SL2",
+  "tx_mode": "BPSK31"
+}
+14:29:21  ISS FT-991A: {
+  "active": true,
+  "is_locked": false,
+  "rx_confirmed_level": "SL2",
+  "rx_recommended_level": "SL2",
+  "tx_fec": "softconcatenated",
+  "tx_level": "SL9",
+  "tx_mode": "OFDM52-16QAM"
+}  |  IRS IC-9700: {
+  "active": true,
+  "is_locked": false,
+  "rx_confirmed_level": "SL9",
+  "rx_recommended_level": "SL9",
+  "tx_fec": "rs",
+  "tx_level": "SL2",
+  "tx_mode": "BPSK31"
+}
+14:29:33  ISS FT-991A: {
+  "active": true,
+  "is_locked": false,
+  "rx_confirmed_level": "SL2",
+  "rx_recommended_level": "SL2",
+  "tx_fec": "softconcatenated",
+  "tx_level": "SL9",
+  "tx_mode": "OFDM52-16QAM"
+}  |  IRS IC-9700: {
+  "active": true,
+  "is_locked": false,
+  "rx_confirmed_level": "SL9",
+  "rx_recommended_level": "SL9",
+  "tx_fec": "rs",
+  "tx_level": "SL2",
+  "tx_mode": "BPSK31"
+}
+14:29:38  ISS FT-991A: {
+  "active": true,
+  "is_locked": false,
+  "rx_confirmed_level": "SL2",
+  "rx_recommended_level": "SL2",
+  "tx_fec": "softconcatenated",
+  "tx_level": "SL9",
+  "tx_mode": "OFDM52-16QAM"
+}  |  IRS IC-9700: {
+  "active": true,
+  "is_locked": false,
+  "rx_confirmed_level": "SL9",
+  "rx_recommended_level": "SL9",
+  "tx_fec": "rs",
+  "tx_level": "SL2",
+  "tx_mode": "BPSK31"
+}
+14:29:44  ISS FT-991A: {
+  "active": true,
+  "is_locked": false,
+  "rx_confirmed_level": "SL2",
+  "rx_recommended_level": "SL2",
+  "tx_fec": "softconcatenated",
+  "tx_level": "SL9",
+  "tx_mode": "OFDM52-16QAM"
+}  |  IRS IC-9700: {
+  "active": true,
+  "is_locked": false,
+  "rx_confirmed_level": "SL9",
+  "rx_recommended_level": "SL9",
+  "tx_fec": "rs",
+  "tx_level": "SL2",
+  "tx_mode": "BPSK31"
+}
+14:29:50  ISS FT-991A: {
+  "active": true,
+  "is_locked": false,
+  "rx_confirmed_level": "SL2",
+  "rx_recommended_level": "SL2",
+  "tx_fec": "softconcatenated",
+  "tx_level": "SL9",
+  "tx_mode": "OFDM52-16QAM"
+}  |  IRS IC-9700: {
+  "active": true,
+  "is_locked": false,
+  "rx_confirmed_level": "SL9",
+  "rx_recommended_level": "SL9",
+  "tx_fec": "rs",
+  "tx_level": "SL2",
+  "tx_mode": "BPSK31"
+}
+14:29:58  ISS FT-991A: {
+  "active": true,
+  "is_locked": false,
+  "rx_confirmed_level": "SL2",
+  "rx_recommended_level": "SL2",
+  "tx_fec": "softconcatenated",
+  "tx_level": "SL9",
+  "tx_mode": "OFDM52-16QAM"
+}  |  IRS IC-9700: {
+  "active": true,
+  "is_locked": false,
+  "rx_confirmed_level": "SL9",
+  "rx_recommended_level": "SL9",
+  "tx_fec": "rs",
+  "tx_level": "SL2",
+  "tx_mode": "BPSK31"
+}
+14:30:06  ISS FT-991A: {
+  "active": true,
+  "is_locked": false,
+  "rx_confirmed_level": "SL2",
+  "rx_recommended_level": "SL2",
+  "tx_fec": "softconcatenated",
+  "tx_level": "SL9",
+  "tx_mode": "OFDM52-16QAM"
+}  |  IRS IC-9700: {
+  "active": true,
+  "is_locked": false,
+  "rx_confirmed_level": "SL9",
+  "rx_recommended_level": "SL9",
+  "tx_fec": "rs",
+  "tx_level": "SL2",
+  "tx_mode": "BPSK31"
+}
+14:30:14  ISS FT-991A: {
+  "active": true,
+  "is_locked": false,
+  "rx_confirmed_level": "SL2",
+  "rx_recommended_level": "SL2",
+  "tx_fec": "softconcatenated",
+  "tx_level": "SL9",
+  "tx_mode": "OFDM52-16QAM"
+}  |  IRS IC-9700: {
+  "active": true,
+  "is_locked": false,
+  "rx_confirmed_level": "SL9",
+  "rx_recommended_level": "SL9",
+  "tx_fec": "rs",
+  "tx_level": "SL2",
+  "tx_mode": "BPSK31"
+}
+14:30:22  ISS FT-991A: {
+  "active": true,
+  "is_locked": false,
+  "rx_confirmed_level": "SL2",
+  "rx_recommended_level": "SL2",
+  "tx_fec": "softconcatenated",
+  "tx_level": "SL9",
+  "tx_mode": "OFDM52-16QAM"
+}  |  IRS IC-9700: {
+  "active": true,
+  "is_locked": false,
+  "rx_confirmed_level": "SL9",
+  "rx_recommended_level": "SL9",
+  "tx_fec": "rs",
+  "tx_level": "SL2",
+  "tx_mode": "BPSK31"
+}
+14:30:30  ISS FT-991A: {
+  "active": true,
+  "is_locked": false,
+  "rx_confirmed_level": "SL2",
+  "rx_recommended_level": "SL2",
+  "tx_fec": "softconcatenated",
+  "tx_level": "SL9",
+  "tx_mode": "OFDM52-16QAM"
+}  |  IRS IC-9700: {
+  "active": true,
+  "is_locked": false,
+  "rx_confirmed_level": "SL9",
+  "rx_recommended_level": "SL9",
+  "tx_fec": "rs",
+  "tx_level": "SL2",
+  "tx_mode": "BPSK31"
+}
+14:30:39  ISS FT-991A: {
+  "active": true,
+  "is_locked": false,
+  "rx_confirmed_level": "SL2",
+  "rx_recommended_level": "SL2",
+  "tx_fec": "softconcatenated",
+  "tx_level": "SL9",
+  "tx_mode": "OFDM52-16QAM"
+}  |  IRS IC-9700: {
+  "active": true,
+  "is_locked": false,
+  "rx_confirmed_level": "SL9",
+  "rx_recommended_level": "SL9",
+  "tx_fec": "rs",
+  "tx_level": "SL2",
+  "tx_mode": "BPSK31"
+}
+14:30:46  ISS FT-991A: {
+  "active": true,
+  "is_locked": false,
+  "rx_confirmed_level": "SL2",
+  "rx_recommended_level": "SL2",
+  "tx_fec": "softconcatenated",
+  "tx_level": "SL9",
+  "tx_mode": "OFDM52-16QAM"
+}  |  IRS IC-9700: {
+  "active": true,
+  "is_locked": false,
+  "rx_confirmed_level": "SL9",
+  "rx_recommended_level": "SL9",
+  "tx_fec": "rs",
+  "tx_level": "SL2",
+  "tx_mode": "BPSK31"
+}
+14:30:54  ISS FT-991A: {
+  "active": true,
+  "is_locked": false,
+  "rx_confirmed_level": "SL2",
+  "rx_recommended_level": "SL2",
+  "tx_fec": "softconcatenated",
+  "tx_level": "SL9",
+  "tx_mode": "OFDM52-16QAM"
+}  |  IRS IC-9700: {
+  "active": true,
+  "is_locked": false,
+  "rx_confirmed_level": "SL9",
+  "rx_recommended_level": "SL9",
+  "tx_fec": "rs",
+  "tx_level": "SL2",
+  "tx_mode": "BPSK31"
+}
+14:31:02  ISS FT-991A: {
+  "active": true,
+  "is_locked": false,
+  "rx_confirmed_level": "SL2",
+  "rx_recommended_level": "SL2",
+  "tx_fec": "softconcatenated",
+  "tx_level": "SL9",
+  "tx_mode": "OFDM52-16QAM"
+}  |  IRS IC-9700: {
+  "active": true,
+  "is_locked": false,
+  "rx_confirmed_level": "SL9",
+  "rx_recommended_level": "SL9",
+  "tx_fec": "rs",
+  "tx_level": "SL2",
+  "tx_mode": "BPSK31"
+}
+14:31:10  ISS FT-991A: {
+  "active": true,
+  "is_locked": false,
+  "rx_confirmed_level": "SL2",
+  "rx_recommended_level": "SL2",
+  "tx_fec": "softconcatenated",
+  "tx_level": "SL9",
+  "tx_mode": "OFDM52-16QAM"
+}  |  IRS IC-9700: {
+  "active": true,
+  "is_locked": false,
+  "rx_confirmed_level": "SL9",
+  "rx_recommended_level": "SL9",
+  "tx_fec": "rs",
+  "tx_level": "SL2",
+  "tx_mode": "BPSK31"
+}
+14:31:20  ISS FT-991A: {
+  "active": true,
+  "is_locked": false,
+  "rx_confirmed_level": "SL2",
+  "rx_recommended_level": "SL2",
+  "tx_fec": "softconcatenated",
+  "tx_level": "SL9",
+  "tx_mode": "OFDM52-16QAM"
+}  |  IRS IC-9700: {
+  "active": true,
+  "is_locked": false,
+  "rx_confirmed_level": "SL9",
+  "rx_recommended_level": "SL9",
+  "tx_fec": "rs",
+  "tx_level": "SL2",
+  "tx_mode": "BPSK31"
+}
+14:31:29  ISS FT-991A: {
+  "active": true,
+  "is_locked": false,
+  "rx_confirmed_level": "SL2",
+  "rx_recommended_level": "SL2",
+  "tx_fec": "softconcatenated",
+  "tx_level": "SL9",
+  "tx_mode": "OFDM52-16QAM"
+}  |  IRS IC-9700: {
+  "active": true,
+  "is_locked": false,
+  "rx_confirmed_level": "SL9",
+  "rx_recommended_level": "SL9",
+  "tx_fec": "rs",
+  "tx_level": "SL2",
+  "tx_mode": "BPSK31"
+}
+14:31:39  ISS FT-991A: {
+  "active": true,
+  "is_locked": false,
+  "rx_confirmed_level": "SL2",
+  "rx_recommended_level": "SL2",
+  "tx_fec": "softconcatenated",
+  "tx_level": "SL9",
+  "tx_mode": "OFDM52-16QAM"
+}  |  IRS IC-9700: {
+  "active": true,
+  "is_locked": false,
+  "rx_confirmed_level": "SL9",
+  "rx_recommended_level": "SL9",
+  "tx_fec": "rs",
+  "tx_level": "SL2",
+  "tx_mode": "BPSK31"
+}
+14:31:44  ISS FT-991A: {
+  "active": true,
+  "is_locked": false,
+  "rx_confirmed_level": "SL2",
+  "rx_recommended_level": "SL2",
+  "tx_fec": "softconcatenated",
+  "tx_level": "SL9",
+  "tx_mode": "OFDM52-16QAM"
+}  |  IRS IC-9700: {
+  "active": true,
+  "is_locked": false,
+  "rx_confirmed_level": "SL9",
+  "rx_recommended_level": "SL9",
+  "tx_fec": "rs",
+  "tx_level": "SL2",
+  "tx_mode": "BPSK31"
+}
+14:31:50  ISS FT-991A: {
+  "active": true,
+  "is_locked": false,
+  "rx_confirmed_level": "SL2",
+  "rx_recommended_level": "SL2",
+  "tx_fec": "softconcatenated",
+  "tx_level": "SL9",
+  "tx_mode": "OFDM52-16QAM"
+}  |  IRS IC-9700: {
+  "active": true,
+  "is_locked": false,
+  "rx_confirmed_level": "SL9",
+  "rx_recommended_level": "SL9",
+  "tx_fec": "rs",
+  "tx_level": "SL2",
+  "tx_mode": "BPSK31"
+}
+14:31:59  ISS FT-991A: {
+  "active": true,
+  "is_locked": false,
+  "rx_confirmed_level": "SL2",
+  "rx_recommended_level": "SL2",
+  "tx_fec": "softconcatenated",
+  "tx_level": "SL9",
+  "tx_mode": "OFDM52-16QAM"
+}  |  IRS IC-9700: {
+  "active": true,
+  "is_locked": false,
+  "rx_confirmed_level": "SL9",
+  "rx_recommended_level": "SL9",
+  "tx_fec": "rs",
+  "tx_level": "SL2",
+  "tx_mode": "BPSK31"
+}
+14:32:06  ISS FT-991A: {
+  "active": true,
+  "is_locked": false,
+  "rx_confirmed_level": "SL2",
+  "rx_recommended_level": "SL2",
+  "tx_fec": "softconcatenated",
+  "tx_level": "SL9",
+  "tx_mode": "OFDM52-16QAM"
+}  |  IRS IC-9700: {
+  "active": true,
+  "is_locked": false,
+  "rx_confirmed_level": "SL9",
+  "rx_recommended_level": "SL9",
+  "tx_fec": "rs",
+  "tx_level": "SL2",
+  "tx_mode": "BPSK31"
+}
+14:32:14  ISS FT-991A: {
+  "active": true,
+  "is_locked": false,
+  "rx_confirmed_level": "SL2",
+  "rx_recommended_level": "SL2",
+  "tx_fec": "softconcatenated",
+  "tx_level": "SL9",
+  "tx_mode": "OFDM52-16QAM"
+}  |  IRS IC-9700: {
+  "active": true,
+  "is_locked": false,
+  "rx_confirmed_level": "SL9",
+  "rx_recommended_level": "SL9",
+  "tx_fec": "rs",
+  "tx_level": "SL2",
+  "tx_mode": "BPSK31"
+}
+14:32:22  ISS FT-991A: {
+  "active": true,
+  "is_locked": false,
+  "rx_confirmed_level": "SL2",
+  "rx_recommended_level": "SL2",
+  "tx_fec": "softconcatenated",
+  "tx_level": "SL9",
+  "tx_mode": "OFDM52-16QAM"
+}  |  IRS IC-9700: {
+  "active": true,
+  "is_locked": false,
+  "rx_confirmed_level": "SL9",
+  "rx_recommended_level": "SL9",
+  "tx_fec": "rs",
+  "tx_level": "SL2",
+  "tx_mode": "BPSK31"
+}
+14:32:30  ISS FT-991A: {
+  "active": true,
+  "is_locked": false,
+  "rx_confirmed_level": "SL2",
+  "rx_recommended_level": "SL2",
+  "tx_fec": "softconcatenated",
+  "tx_level": "SL9",
+  "tx_mode": "OFDM52-16QAM"
+}  |  IRS IC-9700: {
+  "active": true,
+  "is_locked": false,
+  "rx_confirmed_level": "SL9",
+  "rx_recommended_level": "SL9",
+  "tx_fec": "rs",
+  "tx_level": "SL2",
+  "tx_mode": "BPSK31"
+}
+14:32:38  ISS FT-991A: {
+  "active": true,
+  "is_locked": false,
+  "rx_confirmed_level": "SL2",
+  "rx_recommended_level": "SL2",
+  "tx_fec": "softconcatenated",
+  "tx_level": "SL9",
+  "tx_mode": "OFDM52-16QAM"
+}  |  IRS IC-9700: {
+  "active": true,
+  "is_locked": false,
+  "rx_confirmed_level": "SL9",
+  "rx_recommended_level": "SL9",
+  "tx_fec": "rs",
+  "tx_level": "SL2",
+  "tx_mode": "BPSK31"
+}
+14:32:50  ISS FT-991A: {
+  "active": true,
+  "is_locked": false,
+  "rx_confirmed_level": "SL2",
+  "rx_recommended_level": "SL2",
+  "tx_fec": "softconcatenated",
+  "tx_level": "SL9",
+  "tx_mode": "OFDM52-16QAM"
+}  |  IRS IC-9700: {
+  "active": true,
+  "is_locked": false,
+  "rx_confirmed_level": "SL9",
+  "rx_recommended_level": "SL9",
+  "tx_fec": "rs",
+  "tx_level": "SL2",
+  "tx_mode": "BPSK31"
+}
+14:32:56  ISS FT-991A: {
+  "active": true,
+  "is_locked": false,
+  "rx_confirmed_level": "SL2",
+  "rx_recommended_level": "SL2",
+  "tx_fec": "softconcatenated",
+  "tx_level": "SL9",
+  "tx_mode": "OFDM52-16QAM"
+}  |  IRS IC-9700: {
+  "active": true,
+  "is_locked": false,
+  "rx_confirmed_level": "SL9",
+  "rx_recommended_level": "SL9",
+  "tx_fec": "rs",
+  "tx_level": "SL2",
+  "tx_mode": "BPSK31"
+}
+14:33:04  ISS FT-991A: {
+  "active": true,
+  "is_locked": false,
+  "rx_confirmed_level": "SL2",
+  "rx_recommended_level": "SL2",
+  "tx_fec": "softconcatenated",
+  "tx_level": "SL9",
+  "tx_mode": "OFDM52-16QAM"
+}  |  IRS IC-9700: {
+  "active": true,
+  "is_locked": false,
+  "rx_confirmed_level": "SL9",
+  "rx_recommended_level": "SL9",
+  "tx_fec": "rs",
+  "tx_level": "SL2",
+  "tx_mode": "BPSK31"
+}
+14:33:10  ISS FT-991A: {
+  "active": true,
+  "is_locked": false,
+  "rx_confirmed_level": "SL2",
+  "rx_recommended_level": "SL2",
+  "tx_fec": "softconcatenated",
+  "tx_level": "SL9",
+  "tx_mode": "OFDM52-16QAM"
+}  |  IRS IC-9700: {
+  "active": true,
+  "is_locked": false,
+  "rx_confirmed_level": "SL9",
+  "rx_recommended_level": "SL9",
+  "tx_fec": "rs",
+  "tx_level": "SL2",
+  "tx_mode": "BPSK31"
+}
+14:33:20  ISS FT-991A: {
+  "active": true,
+  "is_locked": false,
+  "rx_confirmed_level": "SL2",
+  "rx_recommended_level": "SL2",
+  "tx_fec": "softconcatenated",
+  "tx_level": "SL9",
+  "tx_mode": "OFDM52-16QAM"
+}  |  IRS IC-9700: {
+  "active": true,
+  "is_locked": false,
+  "rx_confirmed_level": "SL9",
+  "rx_recommended_level": "SL9",
+  "tx_fec": "rs",
+  "tx_level": "SL2",
+  "tx_mode": "BPSK31"
+}
+14:33:32  ISS FT-991A: {
+  "active": true,
+  "is_locked": false,
+  "rx_confirmed_level": "SL1",
+  "rx_recommended_level": "SL1",
+  "tx_fec": "softconcatenated",
+  "tx_level": "SL9",
+  "tx_mode": "OFDM52-16QAM"
+}  |  IRS IC-9700: {
+  "active": true,
+  "is_locked": false,
+  "rx_confirmed_level": "SL9",
+  "rx_recommended_level": "SL9",
+  "tx_fec": "rs",
+  "tx_level": "SL2",
+  "tx_mode": "BPSK31"
+}
+14:33:37  ISS FT-991A: {
+  "active": true,
+  "is_locked": false,
+  "rx_confirmed_level": "SL1",
+  "rx_recommended_level": "SL1",
+  "tx_fec": "softconcatenated",
+  "tx_level": "SL9",
+  "tx_mode": "OFDM52-16QAM"
+}  |  IRS IC-9700: {
+  "active": true,
+  "is_locked": false,
+  "rx_confirmed_level": "SL9",
+  "rx_recommended_level": "SL9",
+  "tx_fec": "rs",
+  "tx_level": "SL2",
+  "tx_mode": "BPSK31"
+}
+14:33:43  ISS FT-991A: {
+  "active": true,
+  "is_locked": false,
+  "rx_confirmed_level": "SL1",
+  "rx_recommended_level": "SL1",
+  "tx_fec": "softconcatenated",
+  "tx_level": "SL10",
+  "tx_mode": "OFDM52-32QAM"
+}  |  IRS IC-9700: {
+  "active": true,
+  "is_locked": false,
+  "rx_confirmed_level": "SL9",
+  "rx_recommended_level": "SL10",
+  "tx_fec": "rs",
+  "tx_level": "SL2",
+  "tx_mode": "BPSK31"
+}
+14:33:52  ISS FT-991A: {
+  "active": true,
+  "is_locked": false,
+  "rx_confirmed_level": "SL1",
+  "rx_recommended_level": "SL1",
+  "tx_fec": "softconcatenated",
+  "tx_level": "SL9",
+  "tx_mode": "OFDM52-16QAM"
+}  |  IRS IC-9700: {
+  "active": true,
+  "is_locked": false,
+  "rx_confirmed_level": "SL9",
+  "rx_recommended_level": "SL9",
+  "tx_fec": "rs",
+  "tx_level": "SL2",
+  "tx_mode": "BPSK31"
+}
+14:33:58  ISS FT-991A: {
+  "active": true,
+  "is_locked": false,
+  "rx_confirmed_level": "SL1",
+  "rx_recommended_level": "SL1",
+  "tx_fec": "softconcatenated",
+  "tx_level": "SL9",
+  "tx_mode": "OFDM52-16QAM"
+}  |  IRS IC-9700: {
+  "active": true,
+  "is_locked": false,
+  "rx_confirmed_level": "SL9",
+  "rx_recommended_level": "SL9",
+  "tx_fec": "rs",
+  "tx_level": "SL2",
+  "tx_mode": "BPSK31"
+}
+14:34:08  ISS FT-991A: {
+  "active": true,
+  "is_locked": false,
+  "rx_confirmed_level": "SL1",
+  "rx_recommended_level": "SL1",
+  "tx_fec": "softconcatenated",
+  "tx_level": "SL9",
+  "tx_mode": "OFDM52-16QAM"
+}  |  IRS IC-9700: {
+  "active": true,
+  "is_locked": false,
+  "rx_confirmed_level": "SL9",
+  "rx_recommended_level": "SL9",
+  "tx_fec": "rs",
+  "tx_level": "SL2",
+  "tx_mode": "BPSK31"
+}
+14:34:15  ISS FT-991A: {
+  "active": true,
+  "is_locked": false,
+  "rx_confirmed_level": "SL1",
+  "rx_recommended_level": "SL1",
+  "tx_fec": "softconcatenated",
+  "tx_level": "SL9",
+  "tx_mode": "OFDM52-16QAM"
+}  |  IRS IC-9700: {
+  "active": true,
+  "is_locked": false,
+  "rx_confirmed_level": "SL9",
+  "rx_recommended_level": "SL9",
+  "tx_fec": "rs",
+  "tx_level": "SL2",
+  "tx_mode": "BPSK31"
+}
+14:34:22  ISS FT-991A: {
+  "active": true,
+  "is_locked": false,
+  "rx_confirmed_level": "SL1",
+  "rx_recommended_level": "SL1",
+  "tx_fec": "softconcatenated",
+  "tx_level": "SL9",
+  "tx_mode": "OFDM52-16QAM"
+}  |  IRS IC-9700: {
+  "active": true,
+  "is_locked": false,
+  "rx_confirmed_level": "SL9",
+  "rx_recommended_level": "SL9",
+  "tx_fec": "rs",
+  "tx_level": "SL2",
+  "tx_mode": "BPSK31"
+}
+14:34:30  ISS FT-991A: {
+  "active": true,
+  "is_locked": false,
+  "rx_confirmed_level": "SL1",
+  "rx_recommended_level": "SL1",
+  "tx_fec": "softconcatenated",
+  "tx_level": "SL9",
+  "tx_mode": "OFDM52-16QAM"
+}  |  IRS IC-9700: {
+  "active": true,
+  "is_locked": false,
+  "rx_confirmed_level": "SL9",
+  "rx_recommended_level": "SL9",
+  "tx_fec": "rs",
+  "tx_level": "SL2",
+  "tx_mode": "BPSK31"
+}
+14:34:38  ISS FT-991A: {
+  "active": true,
+  "is_locked": false,
+  "rx_confirmed_level": "SL1",
+  "rx_recommended_level": "SL1",
+  "tx_fec": "softconcatenated",
+  "tx_level": "SL9",
+  "tx_mode": "OFDM52-16QAM"
+}  |  IRS IC-9700: {
+  "active": true,
+  "is_locked": false,
+  "rx_confirmed_level": "SL9",
+  "rx_recommended_level": "SL9",
+  "tx_fec": "rs",
+  "tx_level": "SL2",
+  "tx_mode": "BPSK31"
+}
+14:34:46  ISS FT-991A: {
+  "active": true,
+  "is_locked": false,
+  "rx_confirmed_level": "SL1",
+  "rx_recommended_level": "SL1",
+  "tx_fec": "softconcatenated",
+  "tx_level": "SL9",
+  "tx_mode": "OFDM52-16QAM"
+}  |  IRS IC-9700: {
+  "active": true,
+  "is_locked": false,
+  "rx_confirmed_level": "SL9",
+  "rx_recommended_level": "SL9",
+  "tx_fec": "rs",
+  "tx_level": "SL2",
+  "tx_mode": "BPSK31"
+}
+14:34:54  ISS FT-991A: {
+  "active": true,
+  "is_locked": false,
+  "rx_confirmed_level": "SL1",
+  "rx_recommended_level": "SL1",
+  "tx_fec": "softconcatenated",
+  "tx_level": "SL9",
+  "tx_mode": "OFDM52-16QAM"
+}  |  IRS IC-9700: {
+  "active": true,
+  "is_locked": false,
+  "rx_confirmed_level": "SL9",
+  "rx_recommended_level": "SL9",
+  "tx_fec": "rs",
+  "tx_level": "SL2",
+  "tx_mode": "BPSK31"
+}
+14:35:02  ISS FT-991A: {
+  "active": true,
+  "is_locked": false,
+  "rx_confirmed_level": "SL1",
+  "rx_recommended_level": "SL1",
+  "tx_fec": "softconcatenated",
+  "tx_level": "SL9",
+  "tx_mode": "OFDM52-16QAM"
+}  |  IRS IC-9700: {
+  "active": true,
+  "is_locked": false,
+  "rx_confirmed_level": "SL9",
+  "rx_recommended_level": "SL9",
+  "tx_fec": "rs",
+  "tx_level": "SL2",
+  "tx_mode": "BPSK31"
+}
+14:35:22  ISS FT-991A: {
+  "active": true,
+  "is_locked": false,
+  "rx_confirmed_level": "SL1",
+  "rx_recommended_level": "SL1",
+  "tx_fec": "softconcatenated",
+  "tx_level": "SL9",
+  "tx_mode": "OFDM52-16QAM"
+}  |  IRS IC-9700: {
+  "active": true,
+  "is_locked": false,
+  "rx_confirmed_level": "SL9",
+  "rx_recommended_level": "SL9",
+  "tx_fec": "rs",
+  "tx_level": "SL2",
+  "tx_mode": "BPSK31"
+}
+14:35:28  ISS FT-991A: {
+  "active": true,
+  "is_locked": false,
+  "rx_confirmed_level": "SL1",
+  "rx_recommended_level": "SL1",
+  "tx_fec": "softconcatenated",
+  "tx_level": "SL9",
+  "tx_mode": "OFDM52-16QAM"
+}  |  IRS IC-9700: {
+  "active": true,
+  "is_locked": false,
+  "rx_confirmed_level": "SL9",
+  "rx_recommended_level": "SL9",
+  "tx_fec": "rs",
+  "tx_level": "SL2",
+  "tx_mode": "BPSK31"
+}
+14:35:34  ISS FT-991A: {
+  "active": true,
+  "is_locked": false,
+  "rx_confirmed_level": "SL1",
+  "rx_recommended_level": "SL1",
+  "tx_fec": "softconcatenated",
+  "tx_level": "SL9",
+  "tx_mode": "OFDM52-16QAM"
+}  |  IRS IC-9700: {
+  "active": true,
+  "is_locked": false,
+  "rx_confirmed_level": "SL9",
+  "rx_recommended_level": "SL9",
+  "tx_fec": "rs",
+  "tx_level": "SL2",
+  "tx_mode": "BPSK31"
+}
+14:35:42  ISS FT-991A: {
+  "active": true,
+  "is_locked": false,
+  "rx_confirmed_level": "SL1",
+  "rx_recommended_level": "SL1",
+  "tx_fec": "softconcatenated",
+  "tx_level": "SL9",
+  "tx_mode": "OFDM52-16QAM"
+}  |  IRS IC-9700: {
+  "active": true,
+  "is_locked": false,
+  "rx_confirmed_level": "SL9",
+  "rx_recommended_level": "SL9",
+  "tx_fec": "rs",
+  "tx_level": "SL2",
+  "tx_mode": "BPSK31"
+}
+14:35:50  ISS FT-991A: {
+  "active": true,
+  "is_locked": false,
+  "rx_confirmed_level": "SL1",
+  "rx_recommended_level": "SL1",
+  "tx_fec": "softconcatenated",
+  "tx_level": "SL9",
+  "tx_mode": "OFDM52-16QAM"
+}  |  IRS IC-9700: {
+  "active": true,
+  "is_locked": false,
+  "rx_confirmed_level": "SL9",
+  "rx_recommended_level": "SL9",
+  "tx_fec": "rs",
+  "tx_level": "SL2",
+  "tx_mode": "BPSK31"
+}
+14:35:58  ISS FT-991A: {
+  "active": true,
+  "is_locked": false,
+  "rx_confirmed_level": "SL1",
+  "rx_recommended_level": "SL1",
+  "tx_fec": "softconcatenated",
+  "tx_level": "SL9",
+  "tx_mode": "OFDM52-16QAM"
+}  |  IRS IC-9700: {
+  "active": true,
+  "is_locked": false,
+  "rx_confirmed_level": "SL9",
+  "rx_recommended_level": "SL9",
+  "tx_fec": "rs",
+  "tx_level": "SL2",
+  "tx_mode": "BPSK31"
+}
+14:36:06  ISS FT-991A: {
+  "active": true,
+  "is_locked": false,
+  "rx_confirmed_level": "SL1",
+  "rx_recommended_level": "SL1",
+  "tx_fec": "softconcatenated",
+  "tx_level": "SL9",
+  "tx_mode": "OFDM52-16QAM"
+}  |  IRS IC-9700: {
+  "active": true,
+  "is_locked": false,
+  "rx_confirmed_level": "SL9",
+  "rx_recommended_level": "SL9",
+  "tx_fec": "rs",
+  "tx_level": "SL2",
+  "tx_mode": "BPSK31"
+}
+14:36:16  ISS FT-991A: {
+  "active": true,
+  "is_locked": false,
+  "rx_confirmed_level": "SL1",
+  "rx_recommended_level": "SL1",
+  "tx_fec": "softconcatenated",
+  "tx_level": "SL9",
+  "tx_mode": "OFDM52-16QAM"
+}  |  IRS IC-9700: {
+  "active": true,
+  "is_locked": false,
+  "rx_confirmed_level": "SL9",
+  "rx_recommended_level": "SL9",
+  "tx_fec": "rs",
+  "tx_level": "SL2",
+  "tx_mode": "BPSK31"
+}
+14:36:22  ISS FT-991A: {
+  "active": true,
+  "is_locked": false,
+  "rx_confirmed_level": "SL1",
+  "rx_recommended_level": "SL1",
+  "tx_fec": "softconcatenated",
+  "tx_level": "SL9",
+  "tx_mode": "OFDM52-16QAM"
+}  |  IRS IC-9700: {
+  "active": true,
+  "is_locked": false,
+  "rx_confirmed_level": "SL9",
+  "rx_recommended_level": "SL9",
+  "tx_fec": "rs",
+  "tx_level": "SL2",
+  "tx_mode": "BPSK31"
+}
+14:36:30  ISS FT-991A: {
+  "active": true,
+  "is_locked": false,
+  "rx_confirmed_level": "SL1",
+  "rx_recommended_level": "SL1",
+  "tx_fec": "softconcatenated",
+  "tx_level": "SL9",
+  "tx_mode": "OFDM52-16QAM"
+}  |  IRS IC-9700: {
+  "active": true,
+  "is_locked": false,
+  "rx_confirmed_level": "SL9",
+  "rx_recommended_level": "SL9",
+  "tx_fec": "rs",
+  "tx_level": "SL2",
+  "tx_mode": "BPSK31"
+}
+14:36:38  ISS FT-991A: {
+  "active": true,
+  "is_locked": false,
+  "rx_confirmed_level": "SL1",
+  "rx_recommended_level": "SL1",
+  "tx_fec": "softconcatenated",
+  "tx_level": "SL9",
+  "tx_mode": "OFDM52-16QAM"
+}  |  IRS IC-9700: {
+  "active": true,
+  "is_locked": false,
+  "rx_confirmed_level": "SL9",
+  "rx_recommended_level": "SL9",
+  "tx_fec": "rs",
+  "tx_level": "SL2",
+  "tx_mode": "BPSK31"
+}
+14:36:46  ISS FT-991A: {
+  "active": true,
+  "is_locked": false,
+  "rx_confirmed_level": "SL1",
+  "rx_recommended_level": "SL1",
+  "tx_fec": "softconcatenated",
+  "tx_level": "SL9",
+  "tx_mode": "OFDM52-16QAM"
+}  |  IRS IC-9700: {
+  "active": true,
+  "is_locked": false,
+  "rx_confirmed_level": "SL9",
+  "rx_recommended_level": "SL9",
+  "tx_fec": "rs",
+  "tx_level": "SL2",
+  "tx_mode": "BPSK31"
+}
+14:36:54  ISS FT-991A: {
+  "active": true,
+  "is_locked": false,
+  "rx_confirmed_level": "SL1",
+  "rx_recommended_level": "SL1",
+  "tx_fec": "softconcatenated",
+  "tx_level": "SL9",
+  "tx_mode": "OFDM52-16QAM"
+}  |  IRS IC-9700: {
+  "active": true,
+  "is_locked": false,
+  "rx_confirmed_level": "SL9",
+  "rx_recommended_level": "SL9",
+  "tx_fec": "rs",
+  "tx_level": "SL2",
+  "tx_mode": "BPSK31"
+}
+14:37:02  ISS FT-991A: {
+  "active": true,
+  "is_locked": false,
+  "rx_confirmed_level": "SL1",
+  "rx_recommended_level": "SL1",
+  "tx_fec": "softconcatenated",
+  "tx_level": "SL9",
+  "tx_mode": "OFDM52-16QAM"
+}  |  IRS IC-9700: {
+  "active": true,
+  "is_locked": false,
+  "rx_confirmed_level": "SL9",
+  "rx_recommended_level": "SL9",
+  "tx_fec": "rs",
+  "tx_level": "SL2",
+  "tx_mode": "BPSK31"
+}
+14:37:10  ISS FT-991A: {
+  "active": true,
+  "is_locked": false,
+  "rx_confirmed_level": "SL1",
+  "rx_recommended_level": "SL1",
+  "tx_fec": "softconcatenated",
+  "tx_level": "SL9",
+  "tx_mode": "OFDM52-16QAM"
+}  |  IRS IC-9700: {
+  "active": true,
+  "is_locked": false,
+  "rx_confirmed_level": "SL9",
+  "rx_recommended_level": "SL9",
+  "tx_fec": "rs",
+  "tx_level": "SL2",
+  "tx_mode": "BPSK31"
+}
+14:37:18  ISS FT-991A: {
+  "active": true,
+  "is_locked": false,
+  "rx_confirmed_level": "SL1",
+  "rx_recommended_level": "SL1",
+  "tx_fec": "softconcatenated",
+  "tx_level": "SL9",
+  "tx_mode": "OFDM52-16QAM"
+}  |  IRS IC-9700: {
+  "active": true,
+  "is_locked": false,
+  "rx_confirmed_level": "SL9",
+  "rx_recommended_level": "SL9",
+  "tx_fec": "rs",
+  "tx_level": "SL2",
+  "tx_mode": "BPSK31"
+}
+14:37:26  ISS FT-991A: {
+  "active": true,
+  "is_locked": false,
+  "rx_confirmed_level": "SL1",
+  "rx_recommended_level": "SL1",
+  "tx_fec": "softconcatenated",
+  "tx_level": "SL9",
+  "tx_mode": "OFDM52-16QAM"
+}  |  IRS IC-9700: {
+  "active": true,
+  "is_locked": false,
+  "rx_confirmed_level": "SL9",
+  "rx_recommended_level": "SL9",
+  "tx_fec": "rs",
+  "tx_level": "SL2",
+  "tx_mode": "BPSK31"
+}
+14:37:34  ISS FT-991A: {
+  "active": true,
+  "is_locked": false,
+  "rx_confirmed_level": "SL1",
+  "rx_recommended_level": "SL1",
+  "tx_fec": "softconcatenated",
+  "tx_level": "SL9",
+  "tx_mode": "OFDM52-16QAM"
+}  |  IRS IC-9700: {
+  "active": true,
+  "is_locked": false,
+  "rx_confirmed_level": "SL9",
+  "rx_recommended_level": "SL9",
+  "tx_fec": "rs",
+  "tx_level": "SL2",
+  "tx_mode": "BPSK31"
+}
+14:37:42  ISS FT-991A: {
+  "active": true,
+  "is_locked": false,
+  "rx_confirmed_level": "SL1",
+  "rx_recommended_level": "SL1",
+  "tx_fec": "softconcatenated",
+  "tx_level": "SL9",
+  "tx_mode": "OFDM52-16QAM"
+}  |  IRS IC-9700: {
+  "active": true,
+  "is_locked": false,
+  "rx_confirmed_level": "SL9",
+  "rx_recommended_level": "SL9",
+  "tx_fec": "rs",
+  "tx_level": "SL2",
+  "tx_mode": "BPSK31"
+}
+14:37:50  ISS FT-991A: {
+  "active": true,
+  "is_locked": false,
+  "rx_confirmed_level": "SL1",
+  "rx_recommended_level": "SL1",
+  "tx_fec": "softconcatenated",
+  "tx_level": "SL9",
+  "tx_mode": "OFDM52-16QAM"
+}  |  IRS IC-9700: {
+  "active": true,
+  "is_locked": false,
+  "rx_confirmed_level": "SL9",
+  "rx_recommended_level": "SL9",
+  "tx_fec": "rs",
+  "tx_level": "SL2",
+  "tx_mode": "BPSK31"
+}
+14:37:58  ISS FT-991A: {
+  "active": true,
+  "is_locked": false,
+  "rx_confirmed_level": "SL1",
+  "rx_recommended_level": "SL1",
+  "tx_fec": "softconcatenated",
+  "tx_level": "SL9",
+  "tx_mode": "OFDM52-16QAM"
+}  |  IRS IC-9700: {
+  "active": true,
+  "is_locked": false,
+  "rx_confirmed_level": "SL9",
+  "rx_recommended_level": "SL9",
+  "tx_fec": "rs",
+  "tx_level": "SL2",
+  "tx_mode": "BPSK31"
+}
+14:38:06  ISS FT-991A: {
+  "active": true,
+  "is_locked": false,
+  "rx_confirmed_level": "SL1",
+  "rx_recommended_level": "SL1",
+  "tx_fec": "softconcatenated",
+  "tx_level": "SL9",
+  "tx_mode": "OFDM52-16QAM"
+}  |  IRS IC-9700: {
+  "active": true,
+  "is_locked": false,
+  "rx_confirmed_level": "SL9",
+  "rx_recommended_level": "SL9",
+  "tx_fec": "rs",
+  "tx_level": "SL2",
+  "tx_mode": "BPSK31"
+}
+14:38:15  ISS FT-991A: {
+  "active": true,
+  "is_locked": false,
+  "rx_confirmed_level": "SL1",
+  "rx_recommended_level": "SL1",
+  "tx_fec": "softconcatenated",
+  "tx_level": "SL9",
+  "tx_mode": "OFDM52-16QAM"
+}  |  IRS IC-9700: {
+  "active": true,
+  "is_locked": false,
+  "rx_confirmed_level": "SL9",
+  "rx_recommended_level": "SL9",
+  "tx_fec": "rs",
+  "tx_level": "SL2",
+  "tx_mode": "BPSK31"
+}
+14:38:23  ISS FT-991A: {
+  "active": true,
+  "is_locked": false,
+  "rx_confirmed_level": "SL1",
+  "rx_recommended_level": "SL1",
+  "tx_fec": "softconcatenated",
+  "tx_level": "SL9",
+  "tx_mode": "OFDM52-16QAM"
+}  |  IRS IC-9700: {
+  "active": true,
+  "is_locked": false,
+  "rx_confirmed_level": "SL9",
+  "rx_recommended_level": "SL9",
+  "tx_fec": "rs",
+  "tx_level": "SL2",
+  "tx_mode": "BPSK31"
+}
+14:38:31  ISS FT-991A: {
+  "active": true,
+  "is_locked": false,
+  "rx_confirmed_level": "SL1",
+  "rx_recommended_level": "SL1",
+  "tx_fec": "softconcatenated",
+  "tx_level": "SL9",
+  "tx_mode": "OFDM52-16QAM"
+}  |  IRS IC-9700: {
+  "active": true,
+  "is_locked": false,
+  "rx_confirmed_level": "SL9",
+  "rx_recommended_level": "SL9",
+  "tx_fec": "rs",
+  "tx_level": "SL2",
+  "tx_mode": "BPSK31"
+}
+14:38:39  ISS FT-991A: {
+  "active": true,
+  "is_locked": false,
+  "rx_confirmed_level": "SL1",
+  "rx_recommended_level": "SL1",
+  "tx_fec": "softconcatenated",
+  "tx_level": "SL9",
+  "tx_mode": "OFDM52-16QAM"
+}  |  IRS IC-9700: {
+  "active": true,
+  "is_locked": false,
+  "rx_confirmed_level": "SL9",
+  "rx_recommended_level": "SL9",
+  "tx_fec": "rs",
+  "tx_level": "SL2",
+  "tx_mode": "BPSK31"
+}
+traffic window complete; waiting up to 900s for both stations' sign-off IDs …
+14:39:45  waiting for sign-off: IC-9700 no (last TX ), FT-991A no (last TX )
+14:40:52  waiting for sign-off: IC-9700 no (last TX ), FT-991A no (last TX )
+14:41:59  waiting for sign-off: IC-9700 no (last TX ), FT-991A no (last TX )
+14:43:06  waiting for sign-off: IC-9700 no (last TX ), FT-991A no (last TX )
+14:44:18  waiting for sign-off: IC-9700 no (last TX ), FT-991A no (last TX )
+14:45:24  waiting for sign-off: IC-9700 no (last TX ), FT-991A no (last TX )
+14:46:31  waiting for sign-off: IC-9700 no (last TX ), FT-991A no (last TX )
+14:47:38  waiting for sign-off: IC-9700 no (last TX ), FT-991A no (last TX )
+14:48:45  waiting for sign-off: IC-9700 no (last TX ), FT-991A no (last TX )
+14:49:52  waiting for sign-off: IC-9700 no (last TX ), FT-991A no (last TX )
+14:50:59  waiting for sign-off: IC-9700 no (last TX ), FT-991A no (last TX )
+14:52:06  waiting for sign-off: IC-9700 no (last TX ), FT-991A no (last TX )
+14:53:13  waiting for sign-off: IC-9700 no (last TX ), FT-991A no (last TX )
+sign-off IDs after the last transmission: IC-9700 no, FT-991A no
+  [IC-9700] evidence: 11858 audit events, rig read-back, config, daemon log
+  [FT-991A] evidence: 12212 audit events, rig read-back, config, daemon log
+evidence: docs/dev/test-reports/onair-twin-ota-20261108-141842-evidence

@@ -1,0 +1,27 @@
+[station]
+callsign = "DC0SK"
+grid_square = "AA00"
+auto_id_signoff_idle_secs = 10
+[audio]
+backend = "cpal"
+device = "pulse"
+[modem]
+mode = "BPSK250"
+profile = "fast"
+ptt_backend = "rigctld"
+ptt_leader_ms = 0
+ota_enabled = true
+ota_profile = "fast"
+notch_enabled = true
+agc_enabled = false
+cessb_enabled = true
+[observability]
+# A2 is scored from the OtaRateDecision events, which the daemon broadcasts but retains only in
+# audit mode (re-baseline item 5).
+audit_mode = true
+archive_dir = "/home/dc0sk/.config/openpulse-twin-ota/openpulse/audit"
+[radio]
+cat_backend = "rigctld"
+rigctld_addr = "127.0.0.1:4532"
+[daemon]
+tcp_port = 9000

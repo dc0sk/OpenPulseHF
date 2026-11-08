@@ -5818,7 +5818,7 @@ production deadline, release; both coarse stages, the former picket stage run by
 - The detector's cost on rpi51 is 743–1 049 µs per block.
 
 
-## Task 32 — R5: the climb memory on air, one run per direction, with an induced demotion (status: planned — needs the maintainer's go to key)
+## Task 32 — R5: the climb memory on air, one run per direction, with an induced demotion (status: Parts A, B (f2l) and C (f2m) done; see Results)
 
 **Why.** #1525 (`85a46288`) changes when the receiver climbs and when it gives a rung back
 (`docs/dev/design/ota-climb-memory.md`; review `docs/dev/reviews/review-ota-climb-memory-2026-11-08.md`,
@@ -5923,3 +5923,123 @@ step. Then restore to v0.
 - no probe above the ceiling happens at all, so the withdraw path was not exercised. Report it;
 - the demotion in clause 2 comes only at the step where frames stop arriving. A silence is not
   rung evidence, so say which case it was.
+
+### Task 32 — Results (station session, 2026-11-08; go quoted by PC1: "all yes")
+
+**Build (branch head `f0a6d27d`, main #1525 merged in), identical on both stations:** server
+`a1dafca7dc61b05cb4528cdadab369a59b3bfa18e63b355d1936f3c361231097`, CLI
+`302c2079f0897abf907df2d9254d84b691f183ace995e57d2924f9b0613610ae`, `twin-traffic.sh`
+`c9e152f32d6b8d5548551b255865b9c45c198b96739672b02eab9dee56fdc373`.
+
+**Part A (nothing transmitted).** Both rigs AGC 2, SQL 0. A: 144640000, RFPOWER 0.0117647, PREAMP 0,
+PKTUSB. B: dial 144641564, RFPOWER 0.05, PREAMP 20, PKTUSB. **Starting drive v0: `A_TX_SINK_VOLUME`
+= 0.15 and `B_TX_SINK_VOLUME` = 0.15** (read back with `onair-setup-audio-routing.sh --verify`;
+RX source volumes 0.44 on A, 1.0 on B). Both restored to exactly 0.15 after each run (verified at the end).
+
+Apparatus and deviations, all disclosed:
+- Drive schedule script (session scratchpad, not committed): v0 until the receiver's confirmed level
+  has been at an OFDM rung (>= SL7) unchanged for 120 s and t0+480 s has passed (cap t0+660 s); then
+  0.075, 0.0375, 0.01875 (and 0.009375 in f2m) for 90 s each, then 0.15. Lowers only.
+- **The "no burst for 60 s" rule used a substitute counter.** The line `burst flushed` does not exist in
+  this build's daemon logs. f2l's counter was OFDM `carrier offset acquired` plus `fec attempt`;
+  it cut the first step at 61 s while preambles were still being confirmed (see f2l). For f2m it was widened
+  to `preamble confirmed|carrier offset acquired|fec attempt|received frame|burst failed`; on the f2l
+  step window that counter matches 5 lines, with gaps under 12 s.
+- **f2m always included v0/16**, where the spec adds it only if v0/8 brings no NACK. It is a lower
+  drive and was in the same go.
+- The audit events carry no timestamps. Times below come from the sender's `OTA ACK received` lines
+  (one per decision: 166 ACK lines against 166 decisions in f2m; 153 against 154 in f2l, so for f2l
+  the index mapping is not exact and I did not use it).
+- `ACK not received` / `send abandoned` counts: 0 in both runs, but the daemon on A runs at
+  `info,ofdm_plugin=debug` only, so for f2m (sender A) my filter could not see the DEBUG line.
+  Treat that zero as "my filter found nothing".
+
+**f2l (B sends, A receives; `fast`, 1200 s; report `onair-twin-ota-20261108-141842`)**
+
+Climb: SL2 to SL9 by t0+186 s (13:21:49); SL9 held to the end. Schedule (UTC): t0 13:18:43; v0/2
+(0.075) 13:26:44, the step was ended at 13:27:45 by my 60 s rule, restored to 0.15; v0/4, v0/8 never ran.
+- Decisions at A (154): hold 96, climb_declined 40, climb_on_evidence 8, probe_withdrawn 4,
+  climb_on_snr 3, nack_hold 3; **nack_step_down 0, FastDownshift 0**. Probes at SL10: 4
+  (13:21:55, 13:22:54, 13:26:30, 13:33:50), each one ProbeWithdrawn to SL9, with ClimbDeclined held
+  for 4, 8, 16 and 16 would-be climbs. The sender does not log the mode of data frames, so the probe
+  frame count is inferred, one per probe (AckUp to SL10 then one NACK); 3 in the first 600 s
+  (the fourth probe, 13:33:50, is after t0+600 s).
+- Frames decoded at A: 149 (OFDM52-16QAM 134, OFDM52-8PSK 3, OFDM52 3, QPSK250-D 3, BPSK250 3,
+  BPSK100 1, BPSK63 1, BPSK31 1). ACK lines applied at B: 153 (AckOk 136, AckUp 11, Nack 6).
+- NACKs received 6, muted 1 (`a burst failed while the channel was still busy; no NACK keyed`,
+  13:27:37). False opens 3, held_no_frame 1 (final counters blocks=18160 opens=151).
+- `OTA climb memory` lines: 44 (4 ProbeWithdrawn, 40 ClimbDeclined), all rung=Sl10 anchor=Sl9,
+  n=4 (13:21:55), 8 (13:22:54), 16 (13:26:30), 16 (13:33:50); airtime_s counts 0 to 38.0.
+- **v0/2 step (13:26:44 to 13:27:45): 0 ACK lines, 0 decodes, 0 NACKs keyed, 1 muted.** The detector
+  confirmed 4 preambles (rho 0.71, 0.70, 0.72, 0.75, down from about 0.91) and counted 3 opens, all 3 false
+  opens (no frame its waveform acquires); no `carrier offset acquired` line in 13:26:54 to 13:27:38. A's
+  receive-audio rms is flat (about 160 to 170 per 10 s) through the step. Level held at SL9, anchor
+  unchanged. Median SNR: no decodes, none. After the restore frames decode again from 13:27:49
+  and no re-climb was needed (the anchor never moved).
+- Sign-off and IDs (from the daemon logs): A (DC0SK) 13:26:39 interval, 13:35:09 interval, 13:38:50
+  sign-off; B (DD2ZM) 13:26:43 with-data, 13:35:24 with-data, 13:40:15 sign-off. The runner's
+  "sign-off IDs after the last transmission" line says "no" for both with an empty last-TX field, as before.
+
+**f2m (A sends, B receives; `fast`, 1200 s; report `onair-twin-ota-20261108-175440`)**
+
+Climb: SL2 to SL9 by t0+217 s (16:58:18); t0 16:54:41. Schedule (UTC): v0/2 (0.075) 17:02:42, v0/4
+(0.0375) 17:04:15, v0/8 (0.01875) 17:05:48, v0/16 (0.009375) 17:07:21, restore to 0.15 17:08:54.
+- Decisions at B (166): hold 97, climb_declined 38, nack_hold 10, climb_on_evidence 9, probe_withdrawn
+  6, climb_on_snr 5, **nack_step_down 1**; FastDownshift 0. Probes at SL10: 5 in the whole run before
+  the steps and after (16:58:22, 16:59:25, 17:02:28, 17:10:28, 17:12:28), each ProbeWithdrawn to SL9; plus
+  one probe at SL9 above the lowered anchor SL8 (17:08:19, withdrawn 17:08:25). 3 SL10 probes in the
+  first 600 s (t0 to t0+600).
+- Frames decoded at B: 150 (OFDM52-16QAM 118, OFDM52-8PSK 22, QPSK250-D 3, BPSK63 2, BPSK250 2,
+  BPSK100 1, BPSK31 1, OFDM52 1). ACK lines applied at A: 166 (AckOk 135, AckUp 14, Nack 17).
+  Muted NACKs 4. False opens 0, held_no_frame 1 (blocks=15804 opens=159).
+- Per step (decisions / decodes ACKed / NACKs / median SNR / level at the end):
+  - v0/2: 13 decisions, 13 AckOk, 0 NACK, 14.5 dB, SL9.
+  - v0/4: 11, 11 AckOk, 0 NACK, 15.9 dB, SL9.
+  - v0/8: 12, 12 AckOk, 0 NACK, 14.3 dB, SL9.
+  - v0/16: 19 ACK lines (10 AckOk, 1 AckUp, 8 Nack), median SNR 7.3 dB (n=11), **ends at SL8**.
+  - restore: 48 ACK lines (40 AckOk, 3 AckUp, 5 Nack), median SNR 13.8 dB, ends at SL9.
+- Non-hold decisions in the lowered steps, time from A's ACK line: 17:07:27, :33, :42, :48
+  nack_hold (SL9); **17:07:54 nack_step_down SL9 to SL8** (33 s into v0/16, frames still decoding:
+  10 AckOk in the step); 17:08:00 and 17:08:09 nack_hold (SL8); 17:08:19 climb_on_evidence SL8 to
+  SL9 (SNR 7.6 dB, still at v0/16); 17:08:25 probe_withdrawn SL9 to SL8.
+- `OTA climb memory` lines: 44 (6 ProbeWithdrawn, 38 ClimbDeclined). The anchor-SL8 line:
+  `17:08:23.997 decision=ProbeWithdrawn rung=Sl9 anchor=Sl8 n=4 left=4` (the backoff restarts at n=4
+  on the new anchor). The ProbeWithdrawn lines, UTC: 16:58:27 rung=Sl10 anchor=Sl9 n=4; 16:59:30 n=8;
+  17:02:37 n=16; 17:08:23 rung=Sl9 anchor=Sl8 n=4; 17:10:38 rung=Sl10 anchor=Sl9 n=4; 17:12:37 n=8.
+  Full lines are in `daemon-b.log.gz`.
+- **Re-climb after the restore (17:08:54): SL8 to SL9 at 17:10:04, 70 s later**; SL10 probe 17:10:28
+  (withdrawn 17:10:39). Back at the pre-step ceiling of SL9 in 70 s.
+- Sign-off and IDs: A (DC0SK) 17:02:45 with-data, 17:11:15 with-data, 17:14:48 sign-off; B (DD2ZM)
+  17:02:42 with-ack, 17:11:12 interval, 17:14:47 sign-off. The runner's sign-off line says "no" again.
+
+**Against the prediction**
+1. No sawtooth: **held in both runs.** Every probe failure was one ProbeWithdrawn to the confirmed
+   rung, never a NackStepDown below it. No NackStepDown at v0 in either run. Probe frames above the
+   ceiling: 3 (f2l) and 3 (f2m) in the first 600 s, against 30 in f2k's whole run.
+2. Clause 2: **shown in f2m only, at v0/16 only.** B keyed 8 NACKs and logged nack_step_down
+   (SL9 to SL8) with frames still decoding (10 of 19), so it is a case of failing frames, not a silence. v0/2, v0/4
+   and v0/8 (6, 12 and 18 dB lower) moved nothing: SNR 14.3 to 15.9 dB, 0 NACKs. In f2l only the first
+   step (v0/2) ran and it ended at 61 s with no decode, no NACK and one muted NACK: the receiver stopped decoding
+   but never keyed a NACK, so no demotion could follow. **Weak: clause 2 is not shown for B to A.**
+3. Clause 1 again: f2m re-climbed to SL9 in 70 s. f2l has no re-climb to measure.
+- Killed-if: none seen (no probe-driven step-down at v0; no step with NACKs and no step-down; no stay
+  below the ceiling after the restore).
+- Weak-if: f2l's clause 2 is the weak case (see above). The f2m demotion is not a silence.
+
+**Not understood / things to check**
+- v0/2 in f2l: preambles were confirmed and bursts failed, but A keyed no NACK and logged one
+  muted-NACK line ("channel still busy"). With 3 false opens and 1 muted, the other bursts were
+  neither NACKed nor logged as muted in that 61 s. I have not traced that.
+- v0/2 to v0/8 left SNR unchanged in f2m while f2l's v0/2 lost the signal (rho 0.91 to 0.70). The
+  two directions respond differently to the same relative drive.
+- f2l: I noticed the run had ended about 3 h late (my wait loop was wrong), so both daemons sat up,
+  rigs idle, from 13:53 to 16:50 UTC until `cleanup`. The PTT watcher logged a few short keyed
+  readings in that gap (13:55 and 16:22 to 16:24 UTC; none above 4 consecutive samples). The daemon
+  logs show no transmission after 13:40:15 and nothing OTA-related after 13:53 in the live logs.
+  I cannot say what those readings were.
+- The ACK-line totals of the pre-step windows in f2l and f2m are identical (63 lines: 49 AckOk, 10
+  AckUp, 4 Nack). The sequences differ, so I take it as coincidence.
+
+Evidence: `docs/dev/test-reports/onair-twin-ota-20261108-141842{.log,-evidence/}` (f2l),
+`onair-twin-ota-20261108-175440{.log,-evidence/}` (f2m), audio
+`on-air/rx-audio-2026-11-01/rx-{a,b}-f2l|f2m-8k.wav.gz`.
