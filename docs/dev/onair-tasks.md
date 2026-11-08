@@ -6049,6 +6049,10 @@ Climb: SL2 to SL9 by t0+217 s (16:58:18); t0 16:54:41. Schedule (UTC): v0/2 (0.0
 - The ACK-line totals of the pre-step windows in f2l and f2m are identical (63 lines: 49 AckOk, 10
   AckUp, 4 Nack). The sequences differ, so I take it as coincidence.
 
+The full audit-events files of both stations for the whole time the f2l daemons ran, to 16:50 UTC, are
+`onair-twin-ota-20261108-141842-evidence/events-{a,b}-full-pre-f2m.ndjson.gz` (the first 11858 and 12212
+lines are the run itself, the same as `events-{a,b}.ndjson.gz`; the rest is the post-run time).
+
 Evidence: `docs/dev/test-reports/onair-twin-ota-20261108-141842{.log,-evidence/}` (f2l),
 `onair-twin-ota-20261108-175440{.log,-evidence/}` (f2m), audio
 `on-air/rx-audio-2026-11-01/rx-{a,b}-f2l|f2m-8k.wav.gz`.
