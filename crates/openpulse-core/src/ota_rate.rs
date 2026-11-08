@@ -70,6 +70,47 @@ const TX_CLIMB_BACKOFF_FIRST: u8 = 4;
 /// The most climbs declined after repeated fall-backs from the same rung (the count doubles each time).
 const TX_CLIMB_BACKOFF_MAX: u8 = 32;
 
+/// After a keyed failure at a probe rung, the receiver declines this many would-be climbs back to it
+/// before probing again (`ota-climb-memory.md`). Not fitted: it mirrors `TX_CLIMB_BACKOFF_FIRST`; the
+/// fallback if HF falsifies it is 1 or 2 (review R3).
+const RX_CLIMB_BACKOFF_FIRST: u8 = 4;
+/// The most would-be climbs declined after repeated failed probes of one rung (doubles per repeat).
+const RX_CLIMB_BACKOFF_MAX: u8 = 16;
+/// Clean airtime at the anchor after which a first backoff lets the rung be probed again. Below SL7
+/// this binds before the count does: 120 s is 2–6 frames there (review R2).
+const RX_CLIMB_BACKOFF_EXPIRY_FIRST_S: f32 = 120.0;
+/// The expiry doubles with the backoff level up to this cap: a dead SL3 ceiling costs ~14 % of
+/// airtime in re-probes, and a recovered one waits at most ~350 s (review R2, option c).
+const RX_CLIMB_BACKOFF_EXPIRY_MAX_S: f32 = 240.0;
+
+/// Decoded airtime in one streak that proves the confirmed rung with a single decode: just under
+/// one 66.56 s SL2 frame, so it means "one SL2 frame" (`ota-climb-memory.md`, change 2). Re-read it
+/// if the SL2 frame length changes.
+const CLIMB_EVIDENCE_AIRTIME_S: f32 = 60.0;
+
+/// The receiver's memory of a probe that failed: the climbs to `rung` it still declines.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct RxClimbBackoff {
+    /// The rung whose probe failed.
+    pub rung: SpeedLevel,
+    /// The confirmed rung the probe started from.
+    pub anchor: SpeedLevel,
+    /// Would-be climbs to `rung` still to decline.
+    pub left: u8,
+    /// This backoff's level: the count it started from, doubling per failed re-probe.
+    pub n: u8,
+    /// Clean airtime decoded at the anchor since the withdraw, in seconds.
+    pub airtime_s: f32,
+}
+
+impl RxClimbBackoff {
+    /// The clean airtime after which the rung may be probed again: doubles with `n`, capped.
+    fn expiry_s(&self) -> f32 {
+        (RX_CLIMB_BACKOFF_EXPIRY_FIRST_S * f32::from(self.n) / f32::from(RX_CLIMB_BACKOFF_FIRST))
+            .min(RX_CLIMB_BACKOFF_EXPIRY_MAX_S)
+    }
+}
+
 /// Outcome of demodulating a received data frame, fed to [`OtaRateController::on_rx_frame`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RxOutcome {
@@ -128,11 +169,16 @@ pub enum RateDecision {
     ClimbOnEvidence,
     /// Decode with neither a clearing SNR nor a proven streak — hold at the confirmed level.
     Hold,
+    /// Keyed failure while a probe is outstanding — withdraw to the confirmed rung, keep the anchor,
+    /// and remember the rung (`ota-climb-memory.md`, change 1).
+    ProbeWithdrawn,
+    /// Decode that would climb to a rung whose probe recently failed — hold, and count the wait down.
+    ClimbDeclined,
 }
 
 impl RateDecision {
     /// Every variant, for exhaustive sweeps.
-    pub const ALL: [RateDecision; 7] = [
+    pub const ALL: [RateDecision; 9] = [
         RateDecision::Locked,
         RateDecision::FastDownshift,
         RateDecision::NackHold,
@@ -140,6 +186,8 @@ impl RateDecision {
         RateDecision::ClimbOnSnr,
         RateDecision::ClimbOnEvidence,
         RateDecision::Hold,
+        RateDecision::ProbeWithdrawn,
+        RateDecision::ClimbDeclined,
     ];
 
     /// Dense index. The exhaustive `match` is the enforcement: adding a variant stops this
@@ -153,6 +201,8 @@ impl RateDecision {
             RateDecision::ClimbOnSnr => 4,
             RateDecision::ClimbOnEvidence => 5,
             RateDecision::Hold => 6,
+            RateDecision::ProbeWithdrawn => 7,
+            RateDecision::ClimbDeclined => 8,
         }
     }
 
@@ -160,7 +210,10 @@ impl RateDecision {
     pub fn is_failure_path(self) -> bool {
         matches!(
             self,
-            RateDecision::FastDownshift | RateDecision::NackHold | RateDecision::NackStepDown
+            RateDecision::FastDownshift
+                | RateDecision::NackHold
+                | RateDecision::NackStepDown
+                | RateDecision::ProbeWithdrawn
         )
     }
 }
@@ -188,6 +241,11 @@ pub struct OtaRateController {
     /// Clean decodes in a row at `rx_confirmed`, for the evidence-based climb. Reset by any failure
     /// and by any level change, so it only ever counts success *at the level being judged*.
     rx_consecutive_ok: u8,
+    /// Decoded airtime in the current success streak, for the airtime-weighted climb. Reset wherever
+    /// `rx_consecutive_ok` is.
+    rx_ok_airtime_s: f32,
+    /// After a keyed failure at a probe rung, the would-be climbs back to it the receiver declines.
+    rx_climb_backoff: Option<RxClimbBackoff>,
     // TX direction (we are the data sender and follow the peer):
     tx_level: SpeedLevel,
     /// The level before the last climb the peer has not yet confirmed: where the sender returns when
@@ -227,6 +285,8 @@ impl OtaRateController {
             rx_confirmed: initial,
             rx_consecutive_nack: 0,
             rx_consecutive_ok: 0,
+            rx_ok_airtime_s: 0.0,
+            rx_climb_backoff: None,
             tx_level: initial,
             tx_before_climb: None,
             tx_climb_backoff: None,
@@ -254,6 +314,7 @@ impl OtaRateController {
         self.tx_level = self.clamp_mapped(self.tx_level);
         self.tx_before_climb = None;
         self.tx_climb_backoff = None;
+        self.rx_climb_backoff = None;
     }
 
     /// Pin both directions to `level` and stop adapting (a manual override).
@@ -265,6 +326,7 @@ impl OtaRateController {
         self.rx_confirmed = l;
         self.tx_before_climb = None;
         self.tx_climb_backoff = None;
+        self.rx_climb_backoff = None;
     }
 
     /// Release a [`lock_level`](Self::lock_level) and resume adapting from the current level.
@@ -486,6 +548,11 @@ impl OtaRateController {
         self.rx_confirmed
     }
 
+    /// The receiver's memory of a failed probe, if any (for the engine's log line, review R3).
+    pub fn rx_climb_backoff(&self) -> Option<RxClimbBackoff> {
+        self.rx_climb_backoff
+    }
+
     /// `(level, mode)` candidates to attempt when demodulating the next data
     /// frame, most-likely first.
     ///
@@ -550,6 +617,22 @@ impl OtaRateController {
         snr_db: Option<f32>,
         verdict: NackVerdict,
     ) -> RxAck {
+        self.on_rx_frame_timed(outcome, snr_db, verdict, None)
+    }
+
+    /// [`on_rx_frame_with`](Self::on_rx_frame_with) with the decoded frame's airtime, so a streak
+    /// whose decodes add up to `CLIMB_EVIDENCE_AIRTIME_S` proves the rung after one decode, and the
+    /// failed-probe memory expires on clean airtime. `None` is the count-only rule.
+    pub fn on_rx_frame_timed(
+        &mut self,
+        outcome: RxOutcome,
+        snr_db: Option<f32>,
+        verdict: NackVerdict,
+        airtime_s: Option<f32>,
+    ) -> RxAck {
+        let airtime_s = airtime_s
+            .filter(|a| a.is_finite() && *a > 0.0)
+            .unwrap_or(0.0);
         // While locked, keep both directions pinned and recommend the locked level.
         if let Some(l) = self.locked {
             let ack_type = match outcome {
@@ -567,6 +650,7 @@ impl OtaRateController {
                 // A failure is evidence against the rung, so the success streak restarts: the
                 // evidence-based climb must never be reachable by alternating pass/fail.
                 self.rx_consecutive_ok = 0;
+                self.rx_ok_airtime_s = 0.0;
                 // #1460 round 4b: a failure whose NACK is not keyed is no ladder evidence. Counting
                 // it stepped the ladder silently, and the next step announced (a leaked NACK) came
                 // several rungs at once, after the sender's frames had already stopped decoding.
@@ -600,6 +684,29 @@ impl OtaRateController {
                     self.rx_consecutive_nack = 0;
                     self.rx_recommended = snr_level.expect("guarded by is_some_and above");
                     RateDecision::FastDownshift
+                } else if verdict == NackVerdict::Keyed && self.rx_recommended > self.rx_confirmed {
+                    // A keyed failure while a probe is outstanding: withdraw to the confirmed rung and
+                    // keep the anchor. Three probe failures stepped the anchor BELOW the rung that kept
+                    // decoding (f2k: ten SL10 → SL8 cycles on a proven SL9) and spent the whole NACK
+                    // budget. A LEAKED failure is not one: by then the unanswered sender is back at the
+                    // anchor, and the leak is the only announced move per 10 min (review R1).
+                    let probe = self.rx_recommended;
+                    let n = match self.rx_climb_backoff {
+                        Some(b) if b.rung == probe => {
+                            b.n.saturating_mul(2).min(RX_CLIMB_BACKOFF_MAX)
+                        }
+                        _ => RX_CLIMB_BACKOFF_FIRST,
+                    };
+                    self.rx_climb_backoff = Some(RxClimbBackoff {
+                        rung: probe,
+                        anchor: self.rx_confirmed,
+                        left: n,
+                        n,
+                        airtime_s: 0.0,
+                    });
+                    self.rx_consecutive_nack = 0;
+                    self.rx_recommended = self.rx_confirmed;
+                    RateDecision::ProbeWithdrawn
                 } else {
                     // SNR doesn't explain the failure (a transient fade or collision at an
                     // otherwise-adequate SNR): keep the consecutive-NACK hysteresis so a single
@@ -616,6 +723,13 @@ impl OtaRateController {
                         RateDecision::NackHold
                     }
                 };
+                // The channel changed under the memory: its evidence is about a rung pair we left.
+                if self
+                    .rx_climb_backoff
+                    .is_some_and(|b| self.rx_confirmed < b.anchor)
+                {
+                    self.rx_climb_backoff = None;
+                }
                 RxAck {
                     ack_type: AckType::Nack,
                     recommended_level: self.rx_recommended,
@@ -632,8 +746,25 @@ impl OtaRateController {
                 // streak evidence about a rung we are no longer on.
                 if self.rx_confirmed == previous_confirmed {
                     self.rx_consecutive_ok = self.rx_consecutive_ok.saturating_add(1);
+                    self.rx_ok_airtime_s += airtime_s;
                 } else {
                     self.rx_consecutive_ok = 1;
+                    self.rx_ok_airtime_s = airtime_s;
+                }
+                // The failed-probe memory: a decode at or above its rung is the observation that
+                // the rung works, and one below its anchor means the channel moved; either drops it.
+                // Otherwise the frame's clean airtime counts toward the expiry, which lets the rung
+                // be probed again but keeps the level, so a re-probe that fails doubles it.
+                let confirmed = self.rx_confirmed;
+                if let Some(b) = self.rx_climb_backoff.as_mut() {
+                    if confirmed >= b.rung || confirmed < b.anchor {
+                        self.rx_climb_backoff = None;
+                    } else {
+                        b.airtime_s += airtime_s;
+                        if b.airtime_s >= b.expiry_s() {
+                            b.left = 0;
+                        }
+                    }
                 }
 
                 // **A decode is an observation; the SNR is a model. The observation wins.**
@@ -663,28 +794,51 @@ impl OtaRateController {
                         .snr_ceiling_for_level(self.rx_confirmed)
                         .is_some_and(|c| s >= c)
                 });
-                let proven_by_success = self.rx_consecutive_ok >= ACK_CLIMB_THRESHOLD;
+                // Change 2: a streak whose decodes add up to one SL2 frame of airtime proves the
+                // rung as three short frames do (3.5 min per SL2 climb on air otherwise). Only with
+                // the withdraw above: alone, a lucky decode's failed climb took three NACKs and the
+                // third stepped onto the MFSK16 sub-floor (`ota-climb-memory.md`, "C2 alone").
+                let proven_by_success = self.rx_consecutive_ok >= ACK_CLIMB_THRESHOLD
+                    || (self.rx_consecutive_ok >= 1
+                        && self.rx_ok_airtime_s >= CLIMB_EVIDENCE_AIRTIME_S);
                 // Precedence when BOTH fire: report `ClimbOnSnr`. The distinction that matters is
                 // whether the estimate was informative at all — a run of `ClimbOnEvidence` with no
                 // `ClimbOnSnr` is the signature of an estimate carrying no information (#934).
                 // At the top of the reachable range a climb has nowhere to go, so it is a hold: a
                 // capped profile (`robust`) would otherwise log a phantom climb on every frame.
-                let at_top = self.next_mapped(self.rx_confirmed) == self.rx_confirmed;
-                let decision = if at_top || !(snr_clears_ceiling || proven_by_success) {
+                let next = self.next_mapped(self.rx_confirmed);
+                let at_top = next == self.rx_confirmed;
+                let wants_climb = !at_top && (snr_clears_ceiling || proven_by_success);
+                // A climb to a rung whose probe recently failed is declined, one count per would-be
+                // climb; a climb on SNR wears the wait down per frame, as the decode failure is an
+                // observation and the reading a model.
+                let declined = wants_climb
+                    && self
+                        .rx_climb_backoff
+                        .is_some_and(|b| b.rung == next && b.left > 0);
+                let decision = if declined {
+                    if let Some(b) = self.rx_climb_backoff.as_mut() {
+                        b.left -= 1;
+                    }
+                    RateDecision::ClimbDeclined
+                } else if !wants_climb {
                     RateDecision::Hold
                 } else if snr_clears_ceiling {
                     RateDecision::ClimbOnSnr
                 } else {
                     RateDecision::ClimbOnEvidence
                 };
-                self.rx_recommended = if snr_clears_ceiling || proven_by_success {
-                    let next = self.next_mapped(self.rx_confirmed);
-                    // Spend the streak on the attempt, so a rung that keeps decoding proposes the
-                    // next step every N frames rather than every frame once the streak is met.
-                    if next != self.rx_confirmed {
-                        self.rx_consecutive_ok = 0;
+                self.rx_recommended = if wants_climb {
+                    // Spend the streak on the attempt (or on the decline), so a rung that keeps
+                    // decoding proposes the next step every N frames rather than every frame once
+                    // the streak is met.
+                    self.rx_consecutive_ok = 0;
+                    self.rx_ok_airtime_s = 0.0;
+                    if declined {
+                        self.rx_confirmed
+                    } else {
+                        next
                     }
-                    next
                 } else {
                     self.rx_confirmed
                 };
@@ -733,7 +887,10 @@ mod tests {
         for d in RateDecision::ALL {
             let expected = matches!(
                 d,
-                RateDecision::FastDownshift | RateDecision::NackHold | RateDecision::NackStepDown
+                RateDecision::FastDownshift
+                    | RateDecision::NackHold
+                    | RateDecision::NackStepDown
+                    | RateDecision::ProbeWithdrawn
             );
             assert_eq!(d.is_failure_path(), expected, "{d:?}");
         }
@@ -968,6 +1125,27 @@ mod tests {
         assert_eq!(last, RateDecision::ClimbOnEvidence);
         note(last);
 
+        // A keyed failure while a probe is outstanding: withdraw to the confirmed rung, anchor kept.
+        let mut c = ctrl();
+        let start = c.rx_confirmed;
+        c.on_rx_frame(RxOutcome::Decoded(start), Some(HIGH_SNR));
+        assert!(
+            c.rx_recommended > start,
+            "precondition: a probe is outstanding"
+        );
+        let ack = c.on_rx_frame(RxOutcome::Failed, None);
+        assert_eq!(ack.decision, RateDecision::ProbeWithdrawn);
+        assert_eq!(ack.ack_type, AckType::Nack);
+        assert_eq!((c.rx_recommended, c.rx_confirmed), (start, start));
+        note(ack.decision);
+
+        // ...and the next would-be climb back to the withdrawn rung is declined.
+        let ack = c.on_rx_frame(RxOutcome::Decoded(start), Some(HIGH_SNR));
+        assert_eq!(ack.decision, RateDecision::ClimbDeclined);
+        assert_eq!(ack.ack_type, AckType::AckOk);
+        assert_eq!(ack.recommended_level, start);
+        note(ack.decision);
+
         // Locked pins both directions regardless of outcome.
         let mut c = ctrl();
         c.lock_level(c.rx_confirmed);
@@ -1087,6 +1265,69 @@ mod tests {
                 }
             }
         }
+
+        // With withdraws and declines: random outcomes, verdicts and ACK loss, a real sender
+        // following each delivered ACK, every rung above SL9 failing. A withdraw or a step moves
+        // the candidates below a sender whose NACK is lost, so the sender may leave them, but only
+        // after a KEYED ACK was lost (a muted failure keys nothing, so it must move nothing), only
+        // above them, and a delivered ACK brings it back.
+        let mut state = 0x9e37_79b9_7f4a_7c15_u64;
+        let mut rnd = move || {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            state
+        };
+        let (mut withdrawn, mut declined) = (0usize, 0usize);
+        for run in 0..20 {
+            let mut c = ctrl();
+            let mut tx = ctrl();
+            // A keyed ACK was lost since the last delivered one.
+            let mut exposed = false;
+            for round in 0..200 {
+                let s = tx.tx_level();
+                let in_set = s == c.rx_recommended_level() || s == c.rx_confirmed_level();
+                if !in_set {
+                    assert!(
+                        exposed && s > c.rx_recommended_level(),
+                        "desync with no lost keyed ACK, or below the candidates: sender {s:?}, \
+                         {{rec {:?}, conf {:?}}} (run {run}, round {round})",
+                        c.rx_recommended_level(),
+                        c.rx_confirmed_level()
+                    );
+                }
+                let r = rnd();
+                let decodes = in_set && s <= SpeedLevel::Sl9 && r % 5 != 0;
+                let outcome = if decodes {
+                    RxOutcome::Decoded(s)
+                } else {
+                    RxOutcome::Failed
+                };
+                let verdict = match (r >> 8) % 8 {
+                    0 => NackVerdict::Muted,
+                    1 => NackVerdict::Leaked,
+                    _ => NackVerdict::Keyed,
+                };
+                let snr = ((r >> 16) % 3 == 0).then_some(HIGH_SNR);
+                let ack = c.on_rx_frame_with(outcome, snr, verdict);
+                withdrawn += usize::from(ack.decision == RateDecision::ProbeWithdrawn);
+                declined += usize::from(ack.decision == RateDecision::ClimbDeclined);
+                let keyed = decodes || verdict != NackVerdict::Muted;
+                if keyed && (r >> 24) % 4 != 0 {
+                    tx.adopt_recommendation_from(
+                        ack.recommended_level,
+                        ack.ack_type == AckType::Nack,
+                    );
+                    exposed = false;
+                } else if keyed {
+                    exposed = true;
+                }
+            }
+        }
+        assert!(
+            withdrawn > 20 && declined > 20,
+            "the sweep must exercise the memory: {withdrawn} withdraws, {declined} declines"
+        );
     }
 
     /// Even when every ACK is lost in the *climb-announcing* direction, a good
@@ -1139,12 +1380,9 @@ mod tests {
     fn transient_failure_at_good_snr_keeps_the_nack_hysteresis() {
         // A failure while the SNR is still adequate (collision / momentary fade) must NOT fast-drop;
         // the consecutive-NACK hysteresis steps the anchor down one rung only at the threshold.
-        let mut c = ctrl();
-        let mut sender_tx = c.tx_level();
-        for _ in 0..10 {
-            let ack = c.on_rx_frame(RxOutcome::Decoded(sender_tx), Some(HIGH_SNR));
-            sender_tx = ack.recommended_level;
-        }
+        // From a settled state: a failure while a probe is outstanding is the probe's, and withdraws
+        // (`a_failed_probe_withdraws_to_the_confirmed_rung_and_keeps_the_anchor`).
+        let mut c = settled();
         let before = c.rx_confirmed;
         assert!(before > c.levels[0]);
         for i in 0..c.profile.nack_threshold {
@@ -1176,11 +1414,25 @@ mod tests {
         c
     }
 
+    /// [`climbed`], then a decode at the confirmed rung that does not climb: no probe outstanding.
+    fn settled() -> OtaRateController {
+        let mut c = climbed();
+        let conf = c.rx_confirmed;
+        let ack = c.on_rx_frame(RxOutcome::Decoded(conf), None);
+        assert_eq!(ack.decision, RateDecision::Hold);
+        assert_eq!(
+            c.rx_recommended, c.rx_confirmed,
+            "settled: no probe outstanding"
+        );
+        c
+    }
+
     #[test]
     fn muted_failures_move_nothing_but_the_climb_streak() {
         // #1460 round 4b: three keyed failures announce one step; three more, muted by the budget,
         // must not take a second, silent one. Without the verdict the sixth failure stepped again.
-        let mut c = climbed();
+        // From a settled state; the probe case is `a_muted_probe_failure_withdraws_nothing`.
+        let mut c = settled();
         let start = c.rx_confirmed;
         let n = c.profile.nack_threshold;
         for _ in 0..n {
@@ -1212,6 +1464,19 @@ mod tests {
         let ack = c.on_rx_frame_with(RxOutcome::Failed, Some(LOW_SNR), NackVerdict::Muted);
         assert_eq!(ack.decision, RateDecision::NackHold);
         assert_eq!(c.rx_recommended, before);
+    }
+
+    /// R1: the leak is the only announced move per 10 min after the budget is spent, and the
+    /// unanswered sender is back at the anchor by then, so a leaked failure at a probe steps the
+    /// anchor as today rather than withdrawing.
+    #[test]
+    fn a_leaked_failure_at_a_probe_steps_down() {
+        let mut c = probing(SpeedLevel::Sl9);
+        let ack = c.on_rx_frame_with(RxOutcome::Failed, None, NackVerdict::Leaked);
+        assert_eq!(ack.decision, RateDecision::NackStepDown);
+        assert_eq!(c.rx_confirmed, SpeedLevel::Sl8);
+        assert_eq!(ack.recommended_level, SpeedLevel::Sl8);
+        assert_eq!(c.rx_climb_backoff, None, "a leak sets no memory");
     }
 
     #[test]
@@ -1401,6 +1666,298 @@ mod tests {
         );
     }
 
+    /// Climbs on clean high-SNR frames until `at` is confirmed and the next rung is recommended.
+    fn probing(at: SpeedLevel) -> OtaRateController {
+        let mut c = ctrl();
+        let mut sender_tx = c.tx_level();
+        for _ in 0..30 {
+            if c.rx_confirmed == at && c.rx_recommended > at {
+                return c;
+            }
+            sender_tx = c
+                .on_rx_frame(RxOutcome::Decoded(sender_tx), Some(HIGH_SNR))
+                .recommended_level;
+        }
+        panic!("never reached a probe from {at:?}");
+    }
+
+    /// Would-be climbs declined at `rung`'s anchor before the next probe of `rung`, with each anchor
+    /// decode carrying `airtime_s` and an SNR that clears the ceiling when `snr` is set.
+    fn declines_before_probe(
+        c: &mut OtaRateController,
+        rung: SpeedLevel,
+        snr: Option<f32>,
+        airtime_s: Option<f32>,
+    ) -> usize {
+        let anchor = c.rx_confirmed;
+        let mut declined = 0;
+        for _ in 0..100 {
+            let ack = c.on_rx_frame_timed(
+                RxOutcome::Decoded(anchor),
+                snr,
+                NackVerdict::Keyed,
+                airtime_s,
+            );
+            match ack.decision {
+                RateDecision::ClimbDeclined => declined += 1,
+                RateDecision::ClimbOnSnr | RateDecision::ClimbOnEvidence => {
+                    assert_eq!(ack.recommended_level, rung);
+                    return declined;
+                }
+                _ => {}
+            }
+        }
+        panic!("{rung:?} was never probed again");
+    }
+
+    /// f2k: on a link whose ceiling is SL9, three failed SL10 frames stepped the anchor to SL8.
+    #[test]
+    fn a_failed_probe_withdraws_to_the_confirmed_rung_and_keeps_the_anchor() {
+        let mut c = probing(SpeedLevel::Sl9);
+        let ack = c.on_rx_frame(RxOutcome::Failed, None);
+        assert_eq!(ack.decision, RateDecision::ProbeWithdrawn);
+        assert_eq!(ack.ack_type, AckType::Nack);
+        assert_eq!(ack.recommended_level, SpeedLevel::Sl9);
+        assert_eq!(
+            (c.rx_recommended, c.rx_confirmed),
+            (SpeedLevel::Sl9, SpeedLevel::Sl9)
+        );
+        assert_eq!(
+            c.rx_climb_backoff(),
+            Some(RxClimbBackoff {
+                rung: SpeedLevel::Sl10,
+                anchor: SpeedLevel::Sl9,
+                left: RX_CLIMB_BACKOFF_FIRST,
+                n: RX_CLIMB_BACKOFF_FIRST,
+                airtime_s: 0.0,
+            })
+        );
+        // The NACK count restarted: two more failures at SL9 hold, the third would step.
+        for _ in 1..c.profile.nack_threshold {
+            let ack = c.on_rx_frame(RxOutcome::Failed, None);
+            assert_eq!(ack.decision, RateDecision::NackHold);
+        }
+        assert_eq!(c.rx_confirmed, SpeedLevel::Sl9, "the probe moved no anchor");
+    }
+
+    #[test]
+    fn a_withdrawn_rung_is_declined_then_reprobed_and_the_wait_doubles_to_16() {
+        let mut c = probing(SpeedLevel::Sl9);
+        let mut waits = Vec::new();
+        for _ in 0..4 {
+            assert_eq!(
+                c.on_rx_frame(RxOutcome::Failed, None).decision,
+                RateDecision::ProbeWithdrawn
+            );
+            // At OFDM a frame is short against the expiry: the count is the operative constant.
+            waits.push(declines_before_probe(
+                &mut c,
+                SpeedLevel::Sl10,
+                Some(HIGH_SNR),
+                Some(0.79),
+            ));
+        }
+        assert_eq!(waits, [4, 8, 16, 16]);
+    }
+
+    /// R2: below SL7 the expiry binds before the count, and it doubles 120 → 240 s, capped.
+    #[test]
+    fn the_memory_expires_after_120_s_then_240_s_of_clean_airtime() {
+        const SL2_FRAME_S: f32 = 66.56;
+        let mut c = ctrl();
+        assert_eq!(c.rx_confirmed, SpeedLevel::Sl2);
+        let ack = c.on_rx_frame_timed(
+            RxOutcome::Decoded(SpeedLevel::Sl2),
+            None,
+            NackVerdict::Keyed,
+            Some(SL2_FRAME_S),
+        );
+        assert_eq!(ack.recommended_level, SpeedLevel::Sl3);
+        let mut waits = Vec::new();
+        for _ in 0..3 {
+            assert_eq!(
+                c.on_rx_frame(RxOutcome::Failed, None).decision,
+                RateDecision::ProbeWithdrawn
+            );
+            waits.push(declines_before_probe(
+                &mut c,
+                SpeedLevel::Sl3,
+                None,
+                Some(SL2_FRAME_S),
+            ));
+        }
+        // 120 s: the 2nd frame (133 s) re-probes; 240 s: the 4th (266 s), and it stays capped there.
+        assert_eq!(waits, [1, 3, 3]);
+    }
+
+    #[test]
+    fn a_decode_at_or_above_the_rung_clears_the_memory() {
+        let mut c = probing(SpeedLevel::Sl9);
+        c.on_rx_frame(RxOutcome::Failed, None);
+        declines_before_probe(&mut c, SpeedLevel::Sl10, Some(HIGH_SNR), None);
+        c.on_rx_frame(RxOutcome::Decoded(SpeedLevel::Sl10), Some(HIGH_SNR));
+        assert_eq!(c.rx_climb_backoff(), None, "the rung decodes after all");
+        // So the next withdrawn probe starts from the first count, not a doubled one.
+        assert_eq!(c.rx_recommended, SpeedLevel::Sl11);
+        c.on_rx_frame(RxOutcome::Failed, None);
+        assert_eq!(
+            c.rx_climb_backoff().map(|b| b.n),
+            Some(RX_CLIMB_BACKOFF_FIRST)
+        );
+    }
+
+    #[test]
+    fn a_step_below_the_anchor_clears_it() {
+        let mut c = probing(SpeedLevel::Sl9);
+        c.on_rx_frame(RxOutcome::Failed, None);
+        assert!(c.rx_climb_backoff().is_some());
+        let mut last = RateDecision::Hold;
+        for _ in 0..c.profile.nack_threshold {
+            last = c.on_rx_frame(RxOutcome::Failed, None).decision;
+        }
+        assert_eq!(last, RateDecision::NackStepDown);
+        assert_eq!(c.rx_confirmed, SpeedLevel::Sl8);
+        assert_eq!(
+            c.rx_climb_backoff(),
+            None,
+            "the channel moved under the memory"
+        );
+        // And a decode below the anchor clears it too.
+        let mut c = probing(SpeedLevel::Sl9);
+        c.on_rx_frame(RxOutcome::Failed, None);
+        c.on_rx_frame(RxOutcome::Decoded(SpeedLevel::Sl8), None);
+        assert_eq!(c.rx_climb_backoff(), None);
+    }
+
+    #[test]
+    fn a_muted_probe_failure_withdraws_nothing() {
+        let mut c = probing(SpeedLevel::Sl9);
+        let ack = c.on_rx_frame_with(RxOutcome::Failed, None, NackVerdict::Muted);
+        assert_eq!(ack.decision, RateDecision::NackHold);
+        assert_eq!(
+            c.rx_recommended,
+            SpeedLevel::Sl10,
+            "a failure nobody hears moves nothing"
+        );
+        assert_eq!(c.rx_climb_backoff(), None);
+    }
+
+    #[test]
+    fn a_lock_or_new_bounds_drop_the_climb_memory() {
+        let mut c = probing(SpeedLevel::Sl9);
+        c.on_rx_frame(RxOutcome::Failed, None);
+        c.lock_level(SpeedLevel::Sl9);
+        c.unlock();
+        assert_eq!(c.rx_climb_backoff(), None);
+        let mut c = probing(SpeedLevel::Sl9);
+        c.on_rx_frame(RxOutcome::Failed, None);
+        c.set_level_bounds(None, None);
+        assert!(c.rx_climb_backoff().is_some(), "unchanged bounds keep it");
+        c.set_level_bounds(Some(SpeedLevel::Sl7), None);
+        assert_eq!(c.rx_climb_backoff(), None);
+    }
+
+    /// Change 2: one SL2 frame's airtime proves the rung, rather than 3 × 70 s on air.
+    #[test]
+    fn one_sl2_frame_of_airtime_proves_the_rung() {
+        let mut c = ctrl();
+        let ack = c.on_rx_frame_timed(
+            RxOutcome::Decoded(SpeedLevel::Sl2),
+            None,
+            NackVerdict::Keyed,
+            Some(66.56),
+        );
+        assert_eq!(ack.decision, RateDecision::ClimbOnEvidence);
+        assert_eq!(ack.ack_type, AckType::AckUp);
+        assert_eq!(ack.recommended_level, SpeedLevel::Sl3);
+    }
+
+    #[test]
+    fn airtime_without_a_decode_proves_nothing() {
+        let mut c = ctrl();
+        c.on_rx_frame_timed(RxOutcome::Failed, None, NackVerdict::Keyed, Some(66.56));
+        let ack = c.on_rx_frame_timed(
+            RxOutcome::Decoded(SpeedLevel::Sl2),
+            None,
+            NackVerdict::Keyed,
+            Some(10.0),
+        );
+        assert_eq!(ack.decision, RateDecision::Hold);
+    }
+
+    #[test]
+    fn a_failure_resets_the_airtime() {
+        let mut c = ctrl();
+        let d = |c: &mut OtaRateController| {
+            c.on_rx_frame_timed(
+                RxOutcome::Decoded(SpeedLevel::Sl2),
+                None,
+                NackVerdict::Keyed,
+                Some(40.0),
+            )
+            .decision
+        };
+        assert_eq!(d(&mut c), RateDecision::Hold);
+        c.on_rx_frame(RxOutcome::Failed, None);
+        assert_eq!(
+            d(&mut c),
+            RateDecision::Hold,
+            "40 s after a failure, not 80 s"
+        );
+        assert_eq!(
+            d(&mut c),
+            RateDecision::ClimbOnEvidence,
+            "80 s in one streak"
+        );
+    }
+
+    #[test]
+    fn no_airtime_is_todays_rule() {
+        let mut c = ctrl();
+        let decisions: Vec<RateDecision> = (0..ACK_CLIMB_THRESHOLD)
+            .map(|_| {
+                c.on_rx_frame(RxOutcome::Decoded(SpeedLevel::Sl2), None)
+                    .decision
+            })
+            .collect();
+        assert_eq!(
+            decisions,
+            [
+                RateDecision::Hold,
+                RateDecision::Hold,
+                RateDecision::ClimbOnEvidence
+            ]
+        );
+    }
+
+    /// Change 2 alone ("C2 alone" in the design): a one-frame SL2 climb that fails took three NACKs,
+    /// and the third stepped onto the MFSK16 sub-floor. There is no switch: the airtime climb exists
+    /// only in a controller that withdraws, and this closed loop is what that pairing buys.
+    #[test]
+    fn an_airtime_climb_that_fails_never_reaches_the_sub_floor() {
+        let mut rx = ctrl();
+        let mut tx = ctrl();
+        let mut probes = 0;
+        for _ in 0..20 {
+            let sent = tx.tx_level();
+            let outcome = if sent == SpeedLevel::Sl3 {
+                probes += 1;
+                RxOutcome::Failed
+            } else {
+                RxOutcome::Decoded(sent)
+            };
+            let ack = rx.on_rx_frame_timed(outcome, None, NackVerdict::Keyed, Some(66.56));
+            tx.adopt_recommendation_from(ack.recommended_level, ack.ack_type == AckType::Nack);
+            assert!(
+                rx.rx_confirmed >= SpeedLevel::Sl2 && tx.tx_level() >= SpeedLevel::Sl2,
+                "the anchor left SL2 for the sub-floor: rx {:?}, tx {:?}",
+                rx.rx_confirmed,
+                tx.tx_level()
+            );
+        }
+        assert!(probes >= 3, "SL3 was probed {probes} times");
+    }
+
     #[test]
     fn cautious_upshift_still_climbs_one_step_only() {
         // The up direction is unchanged: even at unbounded SNR the recommendation advances by at
@@ -1421,13 +1978,39 @@ mod tests {
 mod abstention_tests {
     use super::*;
 
-    fn ctl() -> OtaRateController {
+    fn probing() -> OtaRateController {
         let mut c = OtaRateController::new(SessionProfile::fast());
         // Climb to a rung well above the floor so a downshift has somewhere to fall from.
         for _ in 0..12 {
             c.on_rx_frame(RxOutcome::Decoded(c.rx_recommended_level()), Some(40.0));
         }
+        assert!(c.rx_recommended_level() > c.rx_confirmed_level());
         c
+    }
+
+    /// As [`probing`], then a decode that does not climb: no probe outstanding, so a failure is the
+    /// confirmed rung's and runs the hysteresis rather than withdrawing a probe.
+    fn ctl() -> OtaRateController {
+        let mut c = probing();
+        let conf = c.rx_confirmed_level();
+        assert_eq!(
+            c.on_rx_frame(RxOutcome::Decoded(conf), None).decision,
+            RateDecision::Hold
+        );
+        assert_eq!(c.rx_recommended_level(), conf);
+        c
+    }
+
+    /// The probe case of the test below: a failure with no reading while a probe is outstanding
+    /// withdraws one step to the confirmed rung, never further.
+    #[test]
+    fn a_failed_probe_without_an_snr_reading_withdraws_only_to_the_confirmed_rung() {
+        let mut c = probing();
+        let conf = c.rx_confirmed_level();
+        let ack = c.on_rx_frame(RxOutcome::Failed, None);
+        assert_eq!(ack.decision, RateDecision::ProbeWithdrawn);
+        assert_eq!(ack.recommended_level, conf);
+        assert_eq!(c.rx_confirmed_level(), conf);
     }
 
     // Deliberately carries NO `VERIFIES:` id. #1229's id-conformance check refused the one I first

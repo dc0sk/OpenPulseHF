@@ -28,7 +28,9 @@ use openpulse_core::fec::{
 use openpulse_core::frame::Frame;
 use openpulse_core::hpx::{HpxEvent, HpxSession, HpxState, HpxTransition};
 use openpulse_core::ldpc::{IterativeDecoder, LdpcCodec};
-use openpulse_core::ota_rate::{NackVerdict, OtaRateController, RxOutcome};
+use openpulse_core::ota_rate::{
+    NackVerdict, OtaRateController, RateDecision, RxClimbBackoff, RxOutcome,
+};
 use openpulse_core::plugin::{
     CarrierDetector, CarrierVerdict, ModulationConfig, PluginRegistry, PreambleTemplate,
 };
@@ -825,6 +827,10 @@ pub struct ModemEngine {
     listening_samples: u64,
     /// Shortest frame per `(mode, FEC)`, measured once by modulating a 1-byte payload (#1456).
     shortest_frame_cache: Vec<(String, FecMode, usize)>,
+    /// Coded airtime per `(mode, FEC, payload length)`, for the airtime-weighted climb: the frame's
+    /// length depends on its payload's length only, and modulating a 66 s SL2 frame on every decode
+    /// would sit in the ACK window.
+    decoded_airtime_cache: Vec<(String, FecMode, usize, f32)>,
     /// Samples of pre-trigger ring prepended to the last flushed burst (#1454): non-zero when the
     /// spectral test was true at the burst's open block — which includes a one-read onset that total
     /// power also opened. Taken by `ota_decode_and_ack_inner` and `decode_burst_with_fec`;
@@ -1363,6 +1369,7 @@ impl ModemEngine {
             decode_attempts_past_deadline: 0,
             listening_samples: 0,
             shortest_frame_cache: Vec::new(),
+            decoded_airtime_cache: Vec::new(),
             last_flush_lead: 0,
             last_flush_onset_bound: 0,
             ota_fallback_more: Vec::new(),
@@ -3045,6 +3052,22 @@ impl ModemEngine {
         let n = (secs * f64::from(AudioConfig::default().sample_rate)).round() as usize;
         self.shortest_frame_cache.push((mode.to_string(), fec, n));
         Some(n)
+    }
+
+    /// Coded airtime of a `len`-byte payload at `mode` + `fec`, in seconds, through the transmit
+    /// codecs (`tx_airtime_seconds`) and cached.
+    fn decoded_airtime_s(&mut self, len: usize, mode: &str, fec: FecMode) -> Option<f32> {
+        if let Some((_, _, _, secs)) = self
+            .decoded_airtime_cache
+            .iter()
+            .find(|(m, f, l, _)| m == mode && *f == fec && *l == len)
+        {
+            return Some(*secs);
+        }
+        let secs = self.tx_airtime_seconds(&vec![0; len], mode, fec).ok()? as f32;
+        self.decoded_airtime_cache
+            .push((mode.to_string(), fec, len, secs));
+        Some(secs)
     }
 
     /// Does any FSK4-ACK-length window of `samples` decode as a ShortFEC ACK codeword? Deliberately
@@ -5254,6 +5277,14 @@ impl ModemEngine {
                 }
             }
         }
+        // The decoded frame's own coded airtime, for the airtime-weighted climb and the failed-probe
+        // memory's expiry (`ota-climb-memory.md`, change 2): one SL2 frame proves the rung.
+        let decoded_airtime_s = decoded.as_ref().and_then(|(payload, level, mode)| {
+            let (_, _, fec) = candidates
+                .iter()
+                .find(|(l, m, _)| l == level && m == mode)?;
+            self.decoded_airtime_s(payload.len(), mode, *fec)
+        });
         let ota = self
             .ota
             .as_mut()
@@ -5264,7 +5295,12 @@ impl ModemEngine {
         let decoded_level = decoded.as_ref().map(|(_, level, _)| *level);
         let (rx_ack, decoded) = match decoded {
             Some((payload, level, mode)) => {
-                let ack = ota.on_rx_frame(RxOutcome::Decoded(level), snr);
+                let ack = ota.on_rx_frame_timed(
+                    RxOutcome::Decoded(level),
+                    snr,
+                    verdict,
+                    decoded_airtime_s,
+                );
                 (ack, Some((payload, mode)))
             }
             None => {
@@ -5272,6 +5308,25 @@ impl ModemEngine {
                 (ack, None)
             }
         };
+        // The falsifier of the memory's constants is "the re-probe after a withdraw: decoded or
+        // withdrawn again", read per backoff level (review R3); the event carries no `n`.
+        if matches!(
+            rx_ack.decision,
+            RateDecision::ProbeWithdrawn | RateDecision::ClimbDeclined
+        ) {
+            let memory: Option<RxClimbBackoff> = ota.rx_climb_backoff();
+            if let Some(m) = memory {
+                info!(
+                    decision = ?rx_ack.decision,
+                    rung = ?m.rung,
+                    anchor = ?m.anchor,
+                    n = m.n,
+                    left = m.left,
+                    airtime_s = m.airtime_s,
+                    "OTA climb memory"
+                );
+            }
+        }
         // Emitted on EVERY decision, including ones that move nothing: a failed decode that leaves
         // the level alone is invisible in the periodic `OtaStatus` snapshot, because that snapshot
         // reports state and the state did not change (#1081). The mutable borrow of `self.ota` ends
