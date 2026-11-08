@@ -64,6 +64,7 @@ DAEMON_TCP_PORT="${DAEMON_TCP_PORT:-9000}"
 # Recorded explicitly in every station config, so the bundle's config snapshot attributes any effect
 # to the DSP that ran (re-baseline item 7). Defaults match the daemon's.
 NOTCH_ENABLED="${NOTCH_ENABLED:-true}"; AGC_ENABLED="${AGC_ENABLED:-false}"; CESSB_ENABLED="${CESSB_ENABLED:-true}"
+SIGNOFF_IDLE_SECS="${SIGNOFF_IDLE_SECS:-10}"
 PTT_LEADER_MS="${PTT_LEADER_MS:-0}"   # #1257; measure the rig before raising it
 TRAFFIC_INTERVAL="${TRAFFIC_INTERVAL:-2}"; TRAFFIC_SIZE="${TRAFFIC_SIZE:-128}"
 TRAFFIC_DURATION="${TRAFFIC_DURATION:-120}"
@@ -76,6 +77,7 @@ TRAFFIC_WARMUP="${TRAFFIC_WARMUP:-30}"
 # The daemons' RUST_LOG. `debug` logs each decode attempt and its timing, which a failed on-air run
 # needs (task 11: an `info` log could not say why station B never decoded).
 DAEMON_LOG_LEVEL="${DAEMON_LOG_LEVEL:-info}"
+DAEMON_LOG_LEVEL_B="${DAEMON_LOG_LEVEL_B:-$DAEMON_LOG_LEVEL}"
 # After the traffic window, how long to wait at most for each station's end-of-exchange (sign-off) ID
 # before the logs are collected. The ID waits 10 s after the station's last transmission and for a quiet
 # channel, and the sending daemon keeps sending its queued frames after the traffic script stops: in
@@ -162,6 +164,7 @@ write_config() {  # ssh_fn callsign grid audio_device ptt_backend rigctld_port l
 [station]
 callsign = \"$call\"
 grid_square = \"$grid\"
+auto_id_signoff_idle_secs = $SIGNOFF_IDLE_SECS
 [audio]
 backend = \"cpal\"
 device = \"$dev\"
@@ -229,14 +232,15 @@ same_run_files() {
 }
 
 launch_daemon() {  # ssh_fn repo_dir label
-    local sshfn="$1" repo="$2" label="$3"
+    local sshfn="$1" repo="$2" label="$3" loglevel="$DAEMON_LOG_LEVEL"
+    [[ "$label" == "$B_LABEL" ]] && loglevel="$DAEMON_LOG_LEVEL_B"
     echo "  [$label] launching openpulse-server (control 127.0.0.1:$DAEMON_TCP_PORT)"
     # An old daemon must be gone first, and "ok" is checked on THIS launch's pid: a name match after
     # 2 s could be a stale daemon that outlived the stop while the new one died (review, task 11).
     "$sshfn" "pkill -x $DAEMON_COMM 2>/dev/null; \
         for i in 1 2 3 4 5 6 7 8 9 10; do pgrep -x $DAEMON_COMM >/dev/null || break; sleep 0.5; done; \
         if pgrep -x $DAEMON_COMM >/dev/null; then echo '  [$label] daemon FAILED: an old daemon did not stop'; exit 1; fi; \
-        XDG_CONFIG_HOME=$CFG_DIR RUST_LOG=$DAEMON_LOG_LEVEL \
+        XDG_CONFIG_HOME=$CFG_DIR RUST_LOG=$loglevel \
         nohup $repo/target/release/openpulse-server </dev/null >/tmp/twin-ota-daemon.log 2>&1 & pid=\$!; \
         sleep 2; kill -0 \$pid 2>/dev/null && echo '  [$label] daemon ok' || { echo '  [$label] daemon FAILED'; tail -5 /tmp/twin-ota-daemon.log; exit 1; }"
 }
