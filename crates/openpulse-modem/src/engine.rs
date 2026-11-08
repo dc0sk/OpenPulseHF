@@ -28,7 +28,9 @@ use openpulse_core::fec::{
 use openpulse_core::frame::Frame;
 use openpulse_core::hpx::{HpxEvent, HpxSession, HpxState, HpxTransition};
 use openpulse_core::ldpc::{IterativeDecoder, LdpcCodec};
-use openpulse_core::ota_rate::{NackVerdict, OtaRateController, RateDecision, RxOutcome};
+use openpulse_core::ota_rate::{
+    NackVerdict, OtaRateController, RateDecision, RxClimbBackoff, RxOutcome,
+};
 use openpulse_core::plugin::{
     CarrierDetector, CarrierVerdict, ModulationConfig, PluginRegistry, PreambleTemplate,
 };
@@ -5312,7 +5314,8 @@ impl ModemEngine {
             rx_ack.decision,
             RateDecision::ProbeWithdrawn | RateDecision::ClimbDeclined
         ) {
-            if let Some(m) = ota.rx_climb_backoff() {
+            let memory: Option<RxClimbBackoff> = ota.rx_climb_backoff();
+            if let Some(m) = memory {
                 info!(
                     decision = ?rx_ack.decision,
                     rung = ?m.rung,

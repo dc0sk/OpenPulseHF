@@ -86,7 +86,7 @@ const RX_CLIMB_BACKOFF_EXPIRY_MAX_S: f32 = 240.0;
 /// Decoded airtime in one streak that proves the confirmed rung with a single decode: just under
 /// one 66.56 s SL2 frame, so it means "one SL2 frame" (`ota-climb-memory.md`, change 2). Re-read it
 /// if the SL2 frame length changes.
-pub const CLIMB_EVIDENCE_AIRTIME_S: f32 = 60.0;
+const CLIMB_EVIDENCE_AIRTIME_S: f32 = 60.0;
 
 /// The receiver's memory of a probe that failed: the climbs to `rung` it still declines.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -621,7 +621,7 @@ impl OtaRateController {
     }
 
     /// [`on_rx_frame_with`](Self::on_rx_frame_with) with the decoded frame's airtime, so a streak
-    /// whose decodes add up to [`CLIMB_EVIDENCE_AIRTIME_S`] proves the rung after one decode, and the
+    /// whose decodes add up to `CLIMB_EVIDENCE_AIRTIME_S` proves the rung after one decode, and the
     /// failed-probe memory expires on clean airtime. `None` is the count-only rule.
     pub fn on_rx_frame_timed(
         &mut self,
