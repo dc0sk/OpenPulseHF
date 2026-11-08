@@ -2,7 +2,7 @@
 project: openpulsehf
 doc: docs/dev/project/workplan.md
 status: draft
-last_updated: 2026-11-06
+last_updated: 2026-11-08
 ---
 
 # Work plan — Release 1 ("basic modem")
