@@ -1,7 +1,7 @@
 ---
 project: openpulsehf
 doc: docs/dev/reviews/review-union-ack-recognition-2026-11-08.md
-status: draft
+status: resolved
 last_updated: 2026-11-08
 ---
 
@@ -92,6 +92,10 @@ Reviewer: Fable. It was read-only. Every number was re-derived from the constant
 
 ## Disposition
 
-Pending the maintainer's scope decision on change 2. That decision is whether the peer-liveness
-gate is designed together with this guard. Changes 1 and 3–10 are applied to the design note when it
-is revised.
+The maintainer chose option A on 2026-11-08: build this guard now, and design the peer-liveness gate
+separately, with its own review. Change 2 is stated in the design's "What it does not do". Changes 1
+and 3–10 are applied in the design note.
+
+Change 8's twin test was not built, and the design note says why: in the faster-than-real-time twin
+the wall-clock hold never splits the gaps, and the residual it would show belongs to the gate's
+design. The Pi cost measurement is a merge condition.
