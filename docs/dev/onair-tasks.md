@@ -5818,7 +5818,7 @@ production deadline, release; both coarse stages, the former picket stage run by
 - The detector's cost on rpi51 is 743–1 049 µs per block.
 
 
-## Task 32 — R5: the climb memory on air, one run per direction, with an induced demotion (status: Parts A, B (f2l) and C (f2m) done; see Results)
+## Task 32 — R5: the climb memory on air, one run per direction, with an induced demotion (status: Parts A–C done — reviewed below)
 
 **Why.** #1525 (`85a46288`) changes when the receiver climbs and when it gives a rung back
 (`docs/dev/design/ota-climb-memory.md`; review `docs/dev/reviews/review-ota-climb-memory-2026-11-08.md`,
@@ -6056,3 +6056,73 @@ lines are the run itself, the same as `events-{a,b}.ndjson.gz`; the rest is the 
 Evidence: `docs/dev/test-reports/onair-twin-ota-20261108-141842{.log,-evidence/}` (f2l),
 `onair-twin-ota-20261108-175440{.log,-evidence/}` (f2m), audio
 `on-air/rx-audio-2026-11-01/rx-{a,b}-f2l|f2m-8k.wav.gz`.
+
+### Review of task 32 (pc1 session, 2026-11-08)
+
+The review read the raw logs and event files at `7b91c684` (Fable).
+
+**No sawtooth, both ways — holds.**
+- f2l: 4 `probe_withdrawn` and 0 `nack_step_down`. All 3 `nack_hold` were keyed at the anchor (SL9).
+- f2m: 6 `probe_withdrawn`. The one `nack_step_down` fell in v0/16.
+- The backoff ran 4, 8, 16, 16, which matches the doubling capped at 16.
+- f2m's memory reset to n=4 at 17:10:38 is **not** the expiry: only ≤ 38 s of the 120 s of airtime had accrued.
+  - The memory cleared because the 17:07:54 `NackStepDown` took the confirmed rung below its anchor (`ota_rate.rs`, the
+    "channel changed under the memory" rule; `a_step_below_the_anchor_clears_it`).
+  - That is as designed.
+
+**Clause 2, A→B — holds: a genuine demotion at the anchor.**
+- A's log shows three keyed NACKs from B at 17:07:42, :48 and :54. The last is `recommended=Sl8 from=Sl9`, with no probe outstanding.
+- Frames were still arriving: an ACK at 17:07:36, and decodes at SL8 at 17:08:03, :12 and :15.
+- Every decision is paired with a `ptt_changed`. These were failing frames, not silence.
+- The re-climb at 17:08:19 is the 3-decode rule (7.0, 7.4 and 7.6 dB).
+- **Gap (low, parked):** a `NackStepDown` seeds no memory. So the rung it left is re-probed after 3 decodes, and only that probe's failure (17:08:25) records it. The cost is one probe frame and one NACK per demotion, after which the memory bounds it.
+
+**Clause 2, B→A — not shown. Item 3 explains why.**
+- §A2 asks for clause 2 in both directions. Both ends run the same binary, so A→B shows the mechanism; whether that suffices is the maintainer's call.
+- B→A had about 20 dB less margin at SL9: SNR p50 9.7 dB, against 14.2 dB A→B.
+- A→B's step medians stayed flat across 18 dB of drive (14.5, 15.9, 14.3). That saturation signature points to either the OFDM estimator's ceiling or the TX ALC.
+- The rig meters read null, so the two cannot be separated.
+
+**f2l's v0/2 window: the "not traced" bursts are the specified behaviour, not a #1523 defect.**
+- 13:26:54–13:27:29: four `preamble confirmed` (ρ 0.70–0.75), with **zero** `carrier offset acquired`.
+- The false-open counter stepped 1 → 3, and `held_no_frame` 1.
+- events-a has **no** `ota_rate_decision` between 13:26:43 and 13:27:49.
+- Under decision 4, P counts as evidence only at a burst coherence ≥ 0.8 (`P_EVIDENCE_COHERENCE`). Below that, a burst that also fails the total-power and S tests is "not ladder evidence": no NACK, no decision, nothing muted.
+- The one muted line, at 13:27:37, was a fifth burst. It cleared the floor but was flushed while the channel was busy.
+- **Consequence (medium, parked against decision 4 and the HF plan):**
+  - Frames too weak to *acquire*, as opposed to too weak to *decode*, leave the receiver silent. The sender abandons (B 13:27:04, :26, :47) and the ladder cannot demote.
+  - All three of f2l's "false opens" were real frames, so the false-open counter that HF will read is contaminated by weak real frames.
+  - Not a Release 1 blocker: the sender's silent-window abandon bounds it.
+
+**The post-run keying — explained: the idle daemons NACKed B's noise floor, then each other. Not a foreign signal.**
+- In each episode, B's first burst (rows 557 and 45354) had a DCD energy of 0.0182 and 0.0188. That is B's own idle floor: its post-run busy p10–p50 is 0.018–0.023, with 269 flickers in 3 h. Its RX source volume was 1.0.
+- B's verdict was `leaked`: the budget had banked ≥ 3 from the run (`nack_budget.rs`).
+- From then on, rows line up across the two stations:
+  - A's raised DCD (0.0093–0.0123, against a floor of 0.0067) follows each B keying.
+  - B's raised DCD (0.026–0.060) follows each A keying.
+- A's 9 key-ups are 5 NACKs plus 4 sign-off IDs; B's 7 are 4 plus 3.
+- B's 40 muted holds at 16:22–16:28 are bursts at floor level.
+- An idle OTA-enabled daemon NACKs by design. `ota_active()` is set at startup, there is no peer-liveness gate, and #1456 bounds idle keying at 3 plus 6 per hour. The keying observed is inside that bound.
+- **But #1456's guard has a certain hole** (`engine.rs:5217`):
+  - The guard recognises a heard NACK only up to `2 × fsk4_ack_frame_len`.
+  - B at SL1 keys the K=3 union MFSK16 ACK, which is far longer, so A cannot recognise it as an ACK.
+  - A's SL9 → SL8 step-down at 16:22 was a ladder move on B's NACK.
+- This is a keying-policy item, so its fix needs the mandatory review.
+- Not a Release 1 blocker as it stands: it is bounded, and the runs are attended.
+- **The next key-up may proceed on two conditions:**
+  - the runner tears both daemons down right after the sign-off IDs;
+  - B's DCD squelch sitting at its floor is fixed or accepted (compare #1060).
+
+**Corrections to the spec:**
+- **The 60 s rule's line.** Replace "burst flushed" with two rules:
+  - no `ota_rate_decision` for 60 s while `preamble confirmed` continues means frames are arriving and the receiver is silent (the regime above);
+  - no `preamble confirmed` for 60 s means nothing is arriving.
+- **"As f2k" did not carry over two settings.** The env overrides `SIGNOFF_IDLE_SECS=30` and `DAEMON_LOG_LEVEL_B` were dropped. Name them in the next task.
+
+**Next on air:** if the maintainer wants B→A clause 2, re-run f2l with:
+- finer steps on B (v0/1.4 per step);
+- the corrected rule;
+- the teardown;
+- B's squelch against its floor logged at the start.
+
+Expect silence rather than NACKs below SL9's acquisition limit; that would itself confirm the decision-4 regime.
