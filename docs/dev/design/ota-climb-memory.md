@@ -2,15 +2,18 @@
 project: openpulsehf
 doc: docs/dev/design/ota-climb-memory.md
 status: draft
-last_updated: 2026-11-07
+last_updated: 2026-11-08
 ---
 
 # The receiver remembers a failed climb, and counts climb evidence by airtime
 
 Work plan M3, A2 (stability, both directions). The maintainer chose both changes after the Fable
 comparison with x0rro/xara of 2026-11-07 (`docs/dev/research/xara-comparison.md`, §4). This note
-measures them first. **Not implemented; no production code changed.** The design needs the
-mandatory review before it is built: it changes when and at what level a station transmits.
+measures them first. The design had the mandatory review before it was built, because it changes
+when and at what level a station transmits: **Fable, 2026-11-08, APPROVE WITH CHANGES for both
+changes** (`docs/dev/reviews/review-ota-climb-memory-2026-11-08.md`). The review's changes R1–R6 are
+applied below, each marked with its number; the maintainer chose option (c) for R2 and option (a)
+for R4.
 
 ## Problem — measured on air
 
@@ -243,7 +246,8 @@ release). Every rung's frame has the same length for 1, 64 and 200-byte payloads
 ### Change 1: the receiver remembers a failed probe (`OtaRateController`)
 
 **State.** `rx_climb_backoff: Option<RxClimbBackoff { rung, anchor, left: u8, n: u8, airtime_s: f32 }>`,
-the receiver's mirror of `tx_climb_backoff`.
+the receiver's mirror of `tx_climb_backoff`. The memory keeps its level `n` after `left` reaches 0
+or the expiry fires, so a re-probe that fails again doubles it; only the clears below drop it.
 
 **The probe.** A probe is outstanding when `rx_recommended > rx_confirmed`. The lockstep allows at
 most one mapped step, so the probe rung is `rx_recommended`.
@@ -254,7 +258,7 @@ most one mapped step, so the probe rung is `rx_recommended`.
    holds: a failure nobody hears moves no ladder.
 3. **FastDownshift:** unchanged. It is dormant on air, because a failure carries no SNR. It sets no
    memory: a downshift the SNR explains is not evidence about the probe rung.
-4. **Probe outstanding (verdict Keyed or Leaked): `ProbeWithdrawn`** (new).
+4. **Probe outstanding and verdict Keyed: `ProbeWithdrawn`** (new).
    - `rx_recommended = rx_confirmed`, and the anchor stays.
    - `rx_consecutive_nack = 0`.
    - `rx_climb_backoff = { rung: probe, anchor: rx_confirmed, left: n, n, airtime_s: 0 }`, with
@@ -264,12 +268,26 @@ most one mapped step, so the probe rung is `rx_recommended`.
 5. Otherwise: today's NACK hysteresis, `NackHold`, and at the threshold or on a leak `NackStepDown`.
    **A step that takes the anchor below `backoff.anchor` clears the memory:** the channel changed
    under it, and the evidence is stale.
+   - **R1: a `Leaked` failure keeps today's `NackStepDown`, probe outstanding or not.** After the
+     budget is spent, `failure_verdict` returns `Leaked` once per `LEAK_SAMPLES` (10 min) and
+     `on_ladder_burst` refills the count to 3, so the receiver keys exactly one NACK per 10 min, and
+     it is the leaked one. Meanwhile the unanswered sender has fallen back to the anchor, so the
+     muted failures before the leak were at the anchor, not at the probe. A withdraw there would
+     spend the only announced move per 10 min on nothing, and the anchor would never step down again
+     (the f2h class). Only a **keyed** failure at a probe withdraws; `a_leaked_nack_steps_on_its_own`
+     stays as written.
 
 **On `Decoded(level)`:**
 - The streak, airtime and `rx_confirmed` update as today, plus change 2's airtime.
 - **Clear the memory** on a decode at or above its rung (the observation wins), or below its anchor.
-  Otherwise add the frame's airtime to `backoff.airtime_s`. When that reaches
-  `RX_CLIMB_BACKOFF_MAX_AIRTIME_S`, clear it (the HF bound).
+  Otherwise add the frame's airtime to `backoff.airtime_s`. When that reaches the expiry, set
+  `left = 0` (the HF bound): the next would-be climb is a probe again, and `n` is kept.
+- **R2: the expiry doubles with the backoff level, 120 → 240 s, capped at 240 s**
+  (`RX_CLIMB_BACKOFF_EXPIRY_FIRST_S` at `n = RX_CLIMB_BACKOFF_FIRST`, `RX_CLIMB_BACKOFF_EXPIRY_MAX_S`
+  above it). The 4 → 8 → 16 counts are the operative constant only where a frame is short against
+  the expiry (SL7 and up: 48 SL9 frames are 38 s of airtime). **Below SL7 the expiry binds first**:
+  120 s is 2–6 frames there, so the count never reaches 0 and the doubling of `n` never shows; what
+  doubles is the expiry. See "The expiry: three options" below.
 - **Decline:** when a climb would fire (`snr_clears_ceiling || proven_by_success`, not at the top),
   `next_mapped(rx_confirmed) == backoff.rung` and `left > 0`:
   - `left -= 1`; the streak and its airtime are spent (`rx_consecutive_ok = 0`);
@@ -284,8 +302,8 @@ most one mapped step, so the probe rung is `rx_recommended`.
               3 decodes / SNR clears, no memory                      decode at or above the rung
  CONFIRMED(r) ─────────────────────────────────► PROBING(r+1) ───────────────────────────► CONFIRMED(r+1)
      ▲   ▲                                          │  keyed or leaked failure
-     │   │ memory expires (left = 0,                │  ProbeWithdrawn, NACK(r), anchor stays r
-     │   │ airtime ≥ 120 s), or a decode ≥ r+1      ▼
+     │   │ memory spent (left = 0, or airtime ≥     │  KEYED failure: ProbeWithdrawn, NACK(r),
+     │   │ 120/240 s; n kept), or a decode ≥ r+1    ▼  anchor stays r (a leaked one: NackStepDown)
      │   └──────────────────────────────── BACKED-OFF(r, rung r+1, left = n)
      │                                         │  each would-be climb: ClimbDeclined, left − 1
      │                                         │  left = 0 → the next climb is a probe again (n doubles, cap 16)
@@ -297,12 +315,21 @@ most one mapped step, so the probe rung is `rx_recommended`.
 What the first-failure form gives up:
 - **HARQ on the probe rung.** Today the three SL10 attempts of one message can combine their LLRs
   (`OTA_HARQ_MAX_ATTEMPTS` = 3). On this pair that rescued none: 118 failed SL10 frames across f1c,
-  f1d, f2h, f2i, f2j and f2k, and 0 SL10 decodes in any run. On a link whose frames are
+  f1d, f2h, f2i, f2j and f2k, and 0 SL10 decodes in any run. **That rests on the 0 decodes, not on
+  a log line**: the engine logs no line for a combined decode, so a HARQ rescue is visible only as
+  a decode at the rung, and there were none. On a link whose frames are
   turnaround-bound, a rung that decodes only after 2–3 combined copies delivers less than the rung
   below it delivers in one, so a HARQ-only rung is not worth holding. On HF, with longer frames, this
   is UNCHECKED.
 - **A transient failure at a working probe rung.** It costs one backoff (4 streaks) before the
-  re-probe, and it doubles only if the re-probe fails too.
+  re-probe, and it doubles only if the re-probe fails too. The review's measurement (on-air
+  bundles): SL10 probes, 40 starts, 0 rescued; SL9 probes from SL8, 12 starts, 10 rescued within 2
+  frames. Those SL9 probes exist only because of the SL8 detour that change 1 removes. The
+  working-rung transient failure rate is 5–9 %.
+- **A lost first NACK.** Today, when the probe's first NACK is lost, the sender's second copy still
+  goes out at the probe rung and the probe rung is still a candidate for it (`NackHold` keeps
+  `rx_recommended`). After a withdraw it is not: the second copy fails as a non-candidate, and its
+  NACK again recommends the confirmed rung. That is the cost of withdrawing at the first failure.
 - **A failure at the confirmed rung while a probe is outstanding** (a lost AckUp, or a sender
   declining on its own `tx_climb_backoff`). It is read as a failed probe: it is withdrawn and the
   NACK count restarts. This delays a real demotion by at most one frame per outstanding probe, and
@@ -331,10 +358,52 @@ What the first-failure form gives up:
 
 | constant | value | fitted to | what falsifies it |
 |---|---|---|---|
-| `RX_CLIMB_BACKOFF_FIRST` | 4 climb permissions | Not fitted. It mirrors `TX_CLIMB_BACKOFF_FIRST` (review S2). The sweep over 2, 4 and 8 on f1d, f2i, f2j and f2k moves the ceiling goodput ≤ 1 %, except f2j (890 / 954 / 1075). | On air, the re-probe after a first backoff decodes in most cases: the wait then costs more than the probe it saves. |
+| `RX_CLIMB_BACKOFF_FIRST` | 4 climb permissions | Not fitted. It mirrors `TX_CLIMB_BACKOFF_FIRST` (review S2). The sweep over 2, 4 and 8 on f1d, f2i, f2j and f2k moves the ceiling goodput ≤ 1 %, except f2j (890 / 954 / 1075). | On air, the re-probe after a first backoff decodes in most cases: the wait then costs more than the probe it saves. Measured by the census below (R3). **If HF falsifies 4, the fallback is FIRST = 1 or 2**: the sweep at (2, 16) costs ≤ 1 % against (4, 16), except f2j at −7 %. |
 | `RX_CLIMB_BACKOFF_MAX` | 16 | Fable's cap. The sweep over 8, 16 and 32 differs ≤ 3 %. 16 bounds a fast-rung pin to 16 × 3 × 2.77 s ≈ 133 s at SL9 (measured: 141 s). | An HF run in which a rung recovers and `ClimbDeclined` runs on at it for minutes, with the rung decoding as soon as it is probed. |
-| `RX_CLIMB_BACKOFF_MAX_AIRTIME_S` | 120 s clean airtime at the anchor | The synthetic recovery table (latency ≤ 209 s at every rung; without it 1927 s at SL3). There is **no on-air inventory**: the 2 m ceiling never moved within a run (UNCHECKED on HF). The cost: a never-recovering SL3 ceiling, 53 → 46 B/min. | HF: a withdrawn rung that is still failing when its memory expires, in most expiries. Then the expiry is too short for HF's fade timescale; lengthen it. |
+| `RX_CLIMB_BACKOFF_EXPIRY_FIRST_S` | 120 s clean airtime at the anchor, at the first backoff | The synthetic recovery table (latency ≤ 209 s at every rung; without it 1927 s at SL3). There is **no on-air inventory**: the 2 m ceiling never moved within a run (UNCHECKED on HF). | HF: a withdrawn rung that is still failing when its memory expires, in most expiries. Then the expiry is too short for HF's fade timescale; lengthen it. |
+| `RX_CLIMB_BACKOFF_EXPIRY_MAX_S` | 240 s, from the second backoff on (R2, option c) | Not fitted: the maintainer's choice between the three options below, bounding a lost 2× rate at ~350 s. | HF: re-probes after a 240 s expiry still fail in most cases (lengthen toward option a), or a recovered slow rung is found only at the expiry, repeatedly (shorten toward option b). |
 | `CLIMB_EVIDENCE_AIRTIME_S` | 60 s, with ≥ 1 decode | See below. | See below. |
+
+**The expiry: three options (R2).** The expiry is clean airtime at the anchor. Below SL7, 120 s is
+only 2–6 frames, so the backoff's count never runs out there and the expiry is what spaces the
+re-probes. The arithmetic, on a dead SL3 ceiling over SL2 (one failed SL3 probe ≈ 39 s with its NACK,
+one SL2 cycle ≈ 70 s, the expiry rounded up to whole 66.56 s frames, plus one frame of evidence after
+recovery):
+
+| option | expiry | airtime tax on a dead ceiling | worst-case wait after it recovers |
+|---|---|---|---|
+| (a) | 480 s | ≈ 7 % (39 s per 8 SL2 frames) | ≈ 630 s |
+| (b) | 120 s | ≈ 22 % (a re-probe every ~2 SL2 frames) | ≈ 210 s (the synthetic table: 209 s) |
+| **(c), chosen** | 120 s, then 240 s | ≈ 14 % (the review's figure; 12 % with whole frames) | ≈ 350 s |
+
+- **Why (c):** with it, a 2× rate is lost for at most ~350 s after a ceiling recovers, and the link
+  is never silent: the anchor keeps decoding throughout. (b) spends a fifth of a dead ceiling's
+  airtime on probes; (a) halves (c)'s tax but doubles the wait.
+- **What would move it:** the HF census of R3. Re-probes after a 240 s expiry that mostly fail argue
+  for (a); recoveries found only at the expiry, run after run, argue for (b).
+- **Not bounded by wall time.** The expiry counts decoded airtime only, so a link that decodes
+  little keeps its memory longer in wall time. A bound of `max(airtime, wall time since the
+  withdraw)` is parked as a follow-up (work plan), not built: the engine has no wall clock in the
+  controller, and no measurement yet says it is needed.
+
+**The census (R3).** The engine logs every `ProbeWithdrawn` and `ClimbDeclined` with the memory's
+state (`OTA climb memory decision=… rung=… anchor=… n=… left=…`). A re-probe after a withdraw is the
+next decision whose `from` is the withdrawn rung; its outcome is "decoded" (`decoded_level` = the
+rung) or "withdrawn again" (`decision` = `probe_withdrawn`). One line over an evidence bundle's
+events:
+
+```
+zcat events-a.ndjson.gz | python3 -Ic 'import sys,json;w=None;r={"decoded":0,"withdrawn again":0,"other":0}
+for l in sys.stdin:
+  e=json.loads(l).get("event",{})
+  if e.get("type")!="ota_rate_decision": continue
+  if w and e["from"]==w: r["decoded" if e["decoded_level"]==w else "withdrawn again" if e["decision"]=="probe_withdrawn" else "other"]+=1; w=None
+  if e["decision"]=="probe_withdrawn": w=e["from"]
+print(r)'
+```
+
+and `zgrep -h "OTA climb memory" daemon-a.log.gz` gives each withdraw's `n`, so the outcome can be
+read per backoff level.
 
 **`CLIMB_EVIDENCE_AIRTIME_S` = 60 s.** It is just under one SL2 frame (66.56 s), so it means "one
 SL2 frame". If the SL2 frame length changes, this constant must be re-read.
@@ -369,12 +438,17 @@ frames.
   - The replay: exhaustions 29–40 → 0–10 per 1500 s. f2h's mute (three SL10 NACKs, then decodable
     SL8 frames muted for 10 min) would begin with one NACK spent and two left.
   - The budget constants are unchanged.
-- **The sender's `tx_climb_backoff` and fall-back after silence.** These are independent mechanisms:
+- **The sender's `tx_climb_backoff` and fall-back after silence.** These are separate mechanisms,
+  **coupled** at one point:
   - The receiver's memory is set only by a heard failure. The sender's is set only by
     `fall_back_after_silence`.
   - In f2f and f2g (SL7 unheard) only the sender's acts; with a NACKed ceiling, only the receiver's.
-  - A `ProbeWithdrawn` NACK recommends a lower level, so at the sender it is a step down, which
-    clears `tx_before_climb` and `tx_climb_backoff`, as today's `NackStepDown` does.
+  - **The coupling:** the sender clears `tx_climb_backoff` on any NACK that recommends a lower level.
+    A `ProbeWithdrawn` NACK does, so it is a step down at the sender, which clears
+    `tx_before_climb` and `tx_climb_backoff`, as today's `NackStepDown` does. So a withdraw resets
+    the sender's doubling: on a link where one rung is sometimes silent and sometimes NACKed, the
+    sender's backoff restarts from 4 at each heard failure, and only the receiver's memory carries
+    the count.
   - The sender's backoff has the same HF caveat, unbounded in time (cap 32: 32 × 3 × 6.75 s ≈ 11 min
     at SL6). It is left as it is, and noted for the review.
 - **The lockstep.**
@@ -383,7 +457,10 @@ frames.
   - **A lost withdrawal NACK:** the sender stays at the probe rung, its next frame fails (not a
     candidate), and that NACK again recommends the confirmed rung. The anchor steps only after
     `nack_threshold` such failures, the same exposure as today.
-  - `never_desyncs_under_arbitrary_ack_loss` passed with the prototype on.
+  - `never_desyncs_under_arbitrary_ack_loss` passed with the prototype on. It is extended to random
+    outcomes, verdicts and ACK loss, with withdraws and declines counted, and asserts the exposure
+    above: the sender can leave the candidates only above them, after a lost ACK, and is back in
+    them after the next delivered one.
 - **HARQ:** see the first-failure section above.
 - **`muted_failures_move_no_ladder`:** a muted probe failure withdraws nothing. The twin test's
   "exactly one `NackStepDown`" becomes "exactly one announced move". Measured: with C1 on it fails
@@ -392,8 +469,17 @@ frames.
   - `ProbeWithdrawn` is on the failure path (`is_failure_path`). The anchor does not move, so for
     A2 clause 3 it is **not a demotion**.
   - `ClimbDeclined` is a hold.
-  - Clause 2 needs `NackStepDown` or `FastDownshift`. A ceiling probe no longer supplies one, so
-    demotion is shown, as now, by induced level changes.
+  - Clause 2 needs `NackStepDown` or `FastDownshift`. A ceiling probe no longer supplies one.
+    **R4 (the maintainer chose option a): clause 2 is shown by an induced demotion on air**, by TX
+    power or an attenuator, which §A2 allows and requires to be recorded. Today f2k's ten SL10 → SL8
+    step-downs supplied clause 2 as a side effect of the sawtooth; with change 1 a stable 2 m ceiling
+    produces no natural `NackStepDown`, so the next on-air task and the HF run plan each carry an
+    induced-demotion step (work plan row).
+  - **The existence proof that the anchor still demotes when it degrades:** the review's
+    anchor-degradation model (mean SNR 14 → 10 dB over 600 s) gives the first `NackStepDown` at a
+    median 8.7 s today and 8.5 s with change 1, and 60/60 runs demote under both. In the f2j replay,
+    where SL9 itself fails, change 1 still steps the anchor down (the count is under Implementation,
+    re-measured on the implemented controller).
   - Consumers (found with the grep under Consumer):
     - `openpulse-panel` `connection.rs:213` prints the variant by its `Debug` name, so new variants
       show with no change.
@@ -403,7 +489,13 @@ frames.
     - `ladder_evidence_probe.rs` and the daemon twin tests match `NackStepDown`; they need review.
     - `scripts/run-onair-twin-ota.sh` only names the event in a comment.
   - The JSON names are `probe_withdrawn` and `climb_declined`. Panel and daemon ship together. An
-    older panel against a newer daemon fails to parse that one event.
+    older panel against a newer daemon fails to parse that one event, and its `apply_event` drops an
+    unparseable line silently (`apps/openpulse-panel/src/connection.rs:179`), so it loses only those
+    events. No `#[serde(other)]` catch-all is added: it would make an unknown decision parse as a
+    known one.
+  - **R6:** `RateDecision::ALL` and `all_index` grow to 9 (the two new variants appended, so the
+    existing indices do not move), and `is_failure_path` includes `ProbeWithdrawn`; `ClimbDeclined`
+    is a decode path.
 - **Wire format: none.**
   - The ACK carries `recommended_level` as an absolute level (`ack.rs` byte 3, bits 7:3), and both
     new decisions use existing ACK types (`Nack`, `AckOk`) with a level the sender already handles.
@@ -418,12 +510,19 @@ sabotage:**
    then `NackStepDown` to SL8.
 2. `a_withdrawn_rung_is_declined_then_reprobed_and_the_wait_doubles_to_16`. Sabotage: no doubling.
 3. `a_decode_at_or_above_the_rung_clears_the_memory` and `a_step_below_the_anchor_clears_it`.
-4. `the_memory_expires_after_120_s_of_clean_airtime`. Sabotage: the expiry removed.
+4. `the_memory_expires_after_120_s_then_240_s_of_clean_airtime` (R2), at SL2. Sabotages: the
+   expiry removed; the expiry not doubled.
+4a. `a_leaked_failure_at_a_probe_steps_down` (R1), beside the unchanged
+   `a_leaked_nack_steps_on_its_own`. Sabotage: a leaked failure withdraws.
 5. `a_muted_probe_failure_withdraws_nothing`. Sabotage: the withdrawal placed before the muted
    return.
 6. `a_lock_or_new_bounds_drop_the_climb_memory`.
 7. `one_sl2_frame_of_airtime_proves_the_rung`, `airtime_without_a_decode_proves_nothing`,
    `a_failure_resets_the_airtime` and `no_airtime_is_todays_rule`.
+7a. **Change 2 cannot ship without change 1:** there is no switch, so the airtime climb exists only
+   in a controller that withdraws. `an_airtime_climb_that_fails_never_reaches_the_sub_floor` runs a
+   closed loop (the sender follows the ACKs, SL3 always fails) and asserts the anchor never leaves
+   SL2. Sabotage: the withdraw removed, which is change 2 alone; the third SL3 NACK steps onto SL1.
 8. `never_desyncs_under_arbitrary_ack_loss`, extended to random outcomes with the memory and airtime
    on.
 9. **`every_branch_reports_the_decision_that_actually_ran` must reach the two new variants.**
@@ -468,16 +567,23 @@ rate controller.
   sawtooth that the stability clause could be read against: ten anchor demotions on a stable SL9 in
   f2k. It also removes a third of the ceiling airtime spent on NACKs.
 - Implementing change 1 is in scope for M3 as an A2 stability fix, on the maintainer's go. Change 2
-  is a cold-start speed-up and can follow.
+  is a cold-start speed-up and ships only with change 1.
+- **The review: does not block Release 1; safe for the HF confirmation after R1, R2 and R5.**
+- **R5: one 2 m twin-OTA run per direction on the build with change 1, before the HF trip.** It is
+  the next on-air task to plan (work plan M3 line); it keys the rigs, so it needs the maintainer's
+  go. It is planned in `onair-tasks.md` on `m3/onair`, not here. It carries the induced-demotion
+  step of R4.
 
 ### Parked (work plan rows, post-release)
 
 - the sender's ACK request on silence (a wire change);
 - the PTT stall dead-man;
 - learned per-rung ACK windows;
-- the multi-level climb.
+- the multi-level climb;
+- a wall-clock bound on the receiver's memory, `max(airtime, wall time since the withdraw)` (review,
+  recommended; see "The expiry: three options").
 
-Each is cited to `docs/dev/research/xara-comparison.md` and the Fable comparison of 2026-11-07.
+Each of the first four is cited to `docs/dev/research/xara-comparison.md` and the Fable comparison of 2026-11-07.
 
 ## What this could not establish
 
