@@ -5817,3 +5817,109 @@ production deadline, release; both coarse stages, the former picket stage run by
 - B→A held SL9 (OFDM52 3, 8PSK 33, 16QAM 30). SL10 still never decodes.
 - The detector's cost on rpi51 is 743–1 049 µs per block.
 
+
+## Task 32 — R5: the climb memory on air, one run per direction, with an induced demotion (status: planned — needs the maintainer's go to key)
+
+**Why.** #1525 (`85a46288`) changes when the receiver climbs and when it gives a rung back
+(`docs/dev/design/ota-climb-memory.md`; review `docs/dev/reviews/review-ota-climb-memory-2026-11-08.md`,
+R5):
+- **A keyed failure at a probe withdraws to the confirmed rung** (`ProbeWithdrawn`), keeping the
+  anchor. The rung is then declined (`ClimbDeclined`) for the next 4, 8 and 16 would-be climbs. The
+  memory expires after 120 s, then 240 s, of clean airtime at the anchor (capped).
+- **A leaked failure still steps down** (`NackStepDown`, R1), and a muted one moves nothing.
+- **One SL2 frame of decoded airtime proves the rung.** A streak climbs at ≥ 60 s of decoded
+  airtime, or at 3 decodes.
+
+In f2k (task 31, B→A) the receiver probed SL10 after every three SL9 decodes. Each probe's three
+failures stepped it to SL8: ten SL10 → SL8 → SL9 cycles, 30 of 106 frames at SL10 and 33 at SL8. In
+the twin harness that sawtooth is gone. No run has had the change on air.
+
+**R4 (the maintainer chose option a).** With the memory, a stable 2 m ceiling no longer produces a
+`NackStepDown`, so A2 clause 2 has to be shown by an **induced demotion**: a lowered TX drive,
+recorded as §A2 requires. Task 22 measured how the drive acts:
+- 0.15 → 0.01 put A's level 28 dB down, and B still decoded SL6;
+- at 0.005 (43 dB down) nothing arrived.
+
+The OFDM rungs need far more SNR than SL6, so small steps should make SL9 fail while frames still
+arrive.
+
+**Build:** the branch head (`main` at #1525 plus the task docs). Rebuild and redeploy BOTH stations,
+and record the sha256 of both binaries. Settings, log levels and runner overrides as f2k.
+
+The station rules hold:
+- ask the maintainer before every run;
+- FT-991A at 5 W at most, and never raise either rig's power;
+- record nothing about a host other than rpi51 and rpi53;
+- RSPdx port B empty;
+- no CAT power-off on the IC-9700.
+
+### Part A — nothing transmits
+1. Pull, `deploy`, and check that the two binaries' hashes match.
+2. Read back both rigs: AGC FAST (2) on both, dial, RFPOWER, SQL, PREAMP.
+3. **Record each side's starting drive v0:** `A_TX_SINK_VOLUME` and `B_TX_SINK_VOLUME`, as the runner
+   and profile set them. Every "restore" below means back to exactly v0, never above it.
+
+### Part B — run f2l: B sends, A leads the rate (`fast` profile; keys both rigs: one go)
+As f2k: `TRAFFIC_FROM=B`, `TRAFFIC_INTERVAL=8`. But `TRAFFIC_DURATION=1200`: the schedule needs a
+settled ceiling first, and then the steps.
+
+The drive schedule goes on `B_TX_SINK_VOLUME`; A's stays at v0. Record the UTC time of each change.
+- **v0** until A's confirmed rung has held its ceiling (SL9 in f2k) for at least 120 s, and in any
+  case until t0 + 480 s (clause 3; the memory's first expiry is 120 s).
+- **v0 / 2** for 90 s.
+- **v0 / 4** for 90 s.
+- **v0 / 8** for 90 s.
+- **v0** to the end (clause 1 again: the re-climb).
+
+If a step shows A **no flushed burst at all** for 60 s, note the time and go straight back to v0.
+Nothing arrives below that level, so nothing more can be learned there.
+
+### Part C — run f2m: A sends, B leads the rate (`fast` profile; keys both rigs: one go)
+The same as Part B with the stations swapped: `TRAFFIC_FROM=A`, and the schedule on
+`A_TX_SINK_VOLUME`, the same steps relative to A's own v0.
+
+If v0 / 8 still shows B no NACK keyed, add **v0 / 16** for 90 s before the restore. Task 22 found B's
+SNR reading did not move with A's drive until the signal was nearly gone, so A→B may need the deeper
+step. Then restore to v0.
+
+### Report, per run
+- **Counts:**
+  - frames sent and decoded, ACKs applied, `ACK not received`, and abandoned;
+  - false opens (the detector lines);
+  - NACKs keyed and muted.
+- **The receiver's `ota_rate_decision` events in time order, as a table:** `decision`, `verdict`,
+  from and to level, and SNR, against the drive schedule's UTC times. Count each of `ProbeWithdrawn`,
+  `ClimbDeclined`, `NackStepDown`, `FastDownshift`, `climb_on_evidence` and `climb_on_snr`.
+- **The `OTA climb memory` log lines** (the backoff's rung, count and expiry) in time order.
+- **Frames per level**, and the number of probe frames at the rung above the ceiling (f2k: 30 of
+  106 at SL10).
+- **Per drive step:**
+  - the receiver's decodes, failures, and NACKs keyed;
+  - the level it holds at the end of the step;
+  - its median SNR.
+- **After the restore:** the time from the restore to each climb back, to the pre-step ceiling.
+- **Station IDs and the sign-off line**, as before.
+
+**Prediction:**
+1. **No sawtooth.** At the ceiling, each failed probe gives one `ProbeWithdrawn` back to the
+   confirmed rung, never a `NackStepDown` below it, and then `ClimbDeclined` holds. Probe frames
+   above the ceiling are at most 8 in the first 600 s (f2k: 30 in its run). No decode-driven drop
+   below the proven rung while the drive is at v0.
+2. **Clause 2:** in at least one drive step, with frames still arriving, the receiver keys NACKs and
+   logs `NackStepDown` (or `FastDownshift`) at its anchor rung.
+3. **Clause 1 again:** after the restore, the receiver climbs back to the pre-step ceiling within
+   about 3 min (the OFDM rungs prove a rung at 3 decodes).
+
+**Killed if:**
+- a probe failure steps the anchor below the confirmed rung (`NackStepDown` from a probe while the
+  drive is at v0), which is the sawtooth back;
+- or frames arrive and fail through a whole step with NACKs keyed, but no step-down follows (the
+  memory has suppressed a real demotion);
+- or after the restore the receiver stays below the pre-step ceiling for over 5 min with frames
+  decoding. That would be the memory pinning a rung it should have retried; record its
+  `ClimbDeclined` count and its expiry lines.
+
+**Weak if:**
+- no probe above the ceiling happens at all, so the withdraw path was not exercised. Report it;
+- the demotion in clause 2 comes only at the step where frames stop arriving. A silence is not
+  rung evidence, so say which case it was.
