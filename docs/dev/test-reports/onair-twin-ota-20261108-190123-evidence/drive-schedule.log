@@ -1,0 +1,58 @@
+18:01:24.241598493 t0 (Driving OTA traffic line); v0=0.15
+18:01:24.246770686 A confirmed level -> SL2 (t0+0 s)
+18:03:12.446770824 A confirmed level -> SL3 (t0+108 s)
+18:03:39.497754250 A confirmed level -> SL4 (t0+135 s)
+18:03:48.517149912 A confirmed level -> SL5 (t0+144 s)
+18:03:54.529303494 A confirmed level -> SL6 (t0+150 s)
+18:04:12.565275469 A confirmed level -> SL7 (t0+168 s)
+18:04:24.593423845 A confirmed level -> SL8 (t0+180 s)
+18:04:33.619189670 A confirmed level -> SL9 (t0+189 s)
+18:06:09.838417452 A confirmed level -> SL8 (t0+285 s)
+18:06:24.866776753 A confirmed level -> SL9 (t0+300 s)
+18:09:25.257614247 SL9 held >=120 s and t0+480 passed: start stepping
+18:09:25.259286849 set B_TX_SINK_VOLUME=0.125 (t0+481 s) (hold 90 s)
+==> IC-9700 (rpi51) — set routing (match='Codec', tx-vol=0.15, rx-vol=0.44)
+    RESULT pass sink=87 src=82 default_sink=87 default_src=82 sink_vol=0.15 src_vol=0.44
+==> FT-991A (station-B) — set routing (match='Codec', tx-vol=0.125, rx-vol=1.0)
+    RESULT pass sink=58 src=59 default_sink=58 default_src=59 sink_vol=0.12 src_vol=1.00
+
+PASS: both stations' default sink+source point at their rig CODEC; TX level set.
+      The runner's --device pulse will now reach the radios. Re-run --verify anytime.
+18:09:26.570671968 done
+18:10:56.988744221 set B_TX_SINK_VOLUME=0.104 (t0+572 s) (hold 90 s)
+==> IC-9700 (rpi51) — set routing (match='Codec', tx-vol=0.15, rx-vol=0.44)
+    RESULT pass sink=87 src=82 default_sink=87 default_src=82 sink_vol=0.15 src_vol=0.44
+==> FT-991A (station-B) — set routing (match='Codec', tx-vol=0.104, rx-vol=1.0)
+    RESULT pass sink=58 src=59 default_sink=58 default_src=59 sink_vol=0.10 src_vol=1.00
+
+PASS: both stations' default sink+source point at their rig CODEC; TX level set.
+      The runner's --device pulse will now reach the radios. Re-run --verify anytime.
+18:10:58.069729440 done
+18:12:28.489378211 set B_TX_SINK_VOLUME=0.087 (t0+664 s) (hold 90 s)
+==> IC-9700 (rpi51) — set routing (match='Codec', tx-vol=0.15, rx-vol=0.44)
+    RESULT pass sink=87 src=82 default_sink=87 default_src=82 sink_vol=0.15 src_vol=0.44
+==> FT-991A (station-B) — set routing (match='Codec', tx-vol=0.087, rx-vol=1.0)
+    RESULT pass sink=58 src=59 default_sink=58 default_src=59 sink_vol=0.09 src_vol=1.00
+
+PASS: both stations' default sink+source point at their rig CODEC; TX level set.
+      The runner's --device pulse will now reach the radios. Re-run --verify anytime.
+18:12:29.587093307 done
+18:13:59.986682061 set B_TX_SINK_VOLUME=0.072 (t0+755 s) (hold 90 s)
+==> IC-9700 (rpi51) — set routing (match='Codec', tx-vol=0.15, rx-vol=0.44)
+    RESULT pass sink=87 src=82 default_sink=87 default_src=82 sink_vol=0.15 src_vol=0.44
+==> FT-991A (station-B) — set routing (match='Codec', tx-vol=0.072, rx-vol=1.0)
+    RESULT pass sink=58 src=59 default_sink=58 default_src=59 sink_vol=0.07 src_vol=1.00
+
+PASS: both stations' default sink+source point at their rig CODEC; TX level set.
+      The runner's --device pulse will now reach the radios. Re-run --verify anytime.
+18:14:01.060093574 done
+18:15:01.329638438 STOP RULE (i) no ota_rate_decision for 60 s while preamble confirmed continues at drive 0.072 (step t+60 s): straight to v0
+18:15:01.331509613 set B_TX_SINK_VOLUME=0.15 (t0+817 s) (restore v0, to the end)
+==> IC-9700 (rpi51) — set routing (match='Codec', tx-vol=0.15, rx-vol=0.44)
+    RESULT pass sink=87 src=82 default_sink=87 default_src=82 sink_vol=0.15 src_vol=0.44
+==> FT-991A (station-B) — set routing (match='Codec', tx-vol=0.15, rx-vol=1.0)
+    RESULT pass sink=58 src=59 default_sink=58 default_src=59 sink_vol=0.15 src_vol=1.00
+
+PASS: both stations' default sink+source point at their rig CODEC; TX level set.
+      The runner's --device pulse will now reach the radios. Re-run --verify anytime.
+18:15:02.406033564 done

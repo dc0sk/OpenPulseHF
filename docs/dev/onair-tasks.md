@@ -6127,7 +6127,7 @@ The review read the raw logs and event files at `7b91c684` (Fable).
 
 Expect silence rather than NACKs below SL9's acquisition limit; that would itself confirm the decision-4 regime.
 
-## Task 33 — B→A demotion again, in finer steps (status: planned — the maintainer's go given)
+## Task 33 — B→A demotion again, in finer steps (status: run f2n done; see Results)
 
 **Why.** Task 32 showed A2 clause 2 in A→B only.
 - In f2l (B→A), A's SL9 margin was about 20 dB below A→B's: SNR p50 9.7 dB.
@@ -6195,3 +6195,90 @@ As task 32, plus:
 **Killed if** frames acquire and fail FEC through a whole step with NACKs keyed, but no step-down follows.
 
 **Weak / a different result if** every step goes straight from "decodes" to stop rule (i) with no FEC-failure window. Then clause 2 B→A is unreachable at SL9 on this link by design (decision 4). Say so with the per-step counts.
+
+### Task 33 — Results (station session, 2026-11-08; go quoted by PC1: "rerun the demotion")
+
+**Build unchanged:** server `a1dafca7…`, CLI `302c2079…`, `twin-traffic.sh` `c9e152f3…`, hashes checked identical
+on both stations. **Settings as the spec names them:** `fast`; `TRAFFIC_FROM=B`, interval 8, size 64, duration 1200;
+`SIGNOFF_IDLE_SECS=30` (both configs show `auto_id_signoff_idle_secs = 30`); `info,ofdm_plugin=debug,openpulse_daemon=debug`
+on BOTH daemons (`ACK not received` / `send abandoned` are visible: B logged 18 and 7). AGC 2 on both rigs, read back before
+and after; A RFPOWER 0.0117647, B 0.05 (not changed). v0 = 0.15 on both sides, restored to exactly 0.15 and verified after.
+
+**Deviations, disclosed**
+- **Part A was the run's own warm-up, not a separate step:** the runner started both daemons, then idled 90 s
+  (`TRAFFIC_WARMUP=90`) before traffic (UTC 17:59:54 to 18:01:24). Both idle daemons were watched at 1 s: no key-up
+  in that interval.
+- **The teardown detector missed the sign-offs.** My watcher grepped `kind="sign-off"` in the daemon logs, but the logs carry
+  colour codes between `kind` and `=`, so the grep never matched. Both sign-off IDs were logged at 18:21:51 (A) and
+  18:22:27 (B), about 27 s and 63 s after the window end (18:21:24). `cleanup` ran at the 3-minute limit, 18:24:26 to 18:24:29
+  UTC, about 2 min after both IDs were logged. It is inside the 3 min bound, but not "as soon as". No PTT reading from
+  18:22:27 to `cleanup`.
+- The `fec attempt` line does not exist in this build's logs at these levels. Decodes are the `frame_received` events;
+  FEC failures are not logged as such, so a failed burst shows only as a NACK decision, a false open, or a silent window.
+- The audit events carry no timestamps. Per-step counts map each `ota_rate_decision` to the sender's `OTA ACK received` line
+  (181 decisions, 181 ACK lines); times are the sender's.
+- Squelch threshold: `dcd_squelch` is not set (0 = off, a lower bound only). The adaptive squelch is not logged or
+  exposed, so I cannot report it.
+
+**Part A, idle DCD (events before each station's first transmission, about 90 s):** A heard 2 busy flickers, energies 0.0067 and
+0.0069. B heard 5, energies 0.0192, 0.0228, 0.0229, 0.0230, 0.0245 (median 0.0229). The sample is too small for p10 and p90
+to mean anything. Neither daemon keyed while idle. A's DCD floor is well below B's (B's flickers sat at its own floor,
+as in task 32).
+
+**Schedule (UTC):** t0 18:01:24. A reached SL9 at 18:04:33 (t0+189 s), dropped to SL8 at 18:06:09 and was back at SL9 at 18:06:24; SL9
+held ≥120 s and t0+480 s passed at 18:09:25. Steps: 0.125 18:09:25; 0.104 18:10:57; 0.087 18:12:28; 0.072 18:13:59;
+**stop rule (i) fired at 0.072, 60 s into the step (18:15:01)**: no `ota_rate_decision` at A for 60 s while a preamble was still
+confirmed. Restore to 0.15 at 18:15:01.
+
+**Whole run:** B sent 202 `frame_transmitted` (OFDM52-16QAM 79, OFDM52-8PSK 75, OFDM52 34, OFDM52-32QAM 4, BPSK250 4 of which
+3 are IDs, QPSK250-D 3, BPSK100/63/31 1 each); A decoded 146 (OFDM52-8PSK 64, 16QAM 51, OFDM52 21, BPSK250 4, QPSK250-D 3, BPSK100/63/31
+1 each). 181 ACK lines at B: AckOk 122, AckUp 21, Nack 38. Decisions at A (181): hold 97, climb_declined 25, nack_hold 23,
+climb_on_evidence 18, probe_withdrawn 9, **nack_step_down 6**, climb_on_snr 3. A detector totals: blocks=16813 opens=188 false_opens=12
+held_no_frame=0. B: `ACK not received` 18, `send abandoned` 7. A: 0 and 0 (A did not send data).
+`OTA climb memory` lines at A: 34 (9 ProbeWithdrawn, 25 ClimbDeclined). ProbeWithdrawn, UTC: 18:04:39 Sl10/Sl9 n=4; 18:05:43 Sl10/Sl9
+n=8; 18:06:47 Sl10/Sl9 n=4; 18:08:54 Sl10/Sl9 n=8; 18:10:24 Sl9/Sl8 n=4; 18:11:56 Sl8/Sl7 n=4; 18:15:33 Sl9/Sl8 n=4; 18:17:23 Sl9/Sl8 n=4; 18:20:40
+Sl9/Sl8 n=4 (rung/anchor; n resets to 4 each time the anchor moves). SL10 probes in the first 600 s: 4 (AckUp to SL10 at 18:04:36, 18:05:39, 18:06:38,
+18:08:51; B sent 4 OFDM52-32QAM frames in all).
+
+**NackStepDown at A, six (UTC, from the sender's ACK lines):** 18:06:09 SL9→SL8 (**at v0, before any step**; NACKs at SL9 at 18:04:47, 18:04:51, 18:05:21, 18:06:00, 18:06:05
+before it, 25 s after a probe withdraw at 18:05:44; back at SL9 at 18:06:18, 9 s later); **18:10:12 SL9→SL8 (step 0.125,
+47 s in)**; **18:11:30 SL8→SL7 (step 0.104)**; then post-restore at v0: 18:16:57 SL9→SL8, 18:19:29 SL9→SL8, 18:20:10 SL9→SL8, each followed by a climb back to SL9
+9 s, 17 s and 23 s later.
+
+**Per step (A receives; B sends):**
+
+| step | window UTC | decisions (kind) | B ACK lines (AckOk/AckUp/Nack) | preamble confirmed (n; ρ med, min–max) | carrier-offset acquisitions | detector Δ opens / false_opens / held | muted | B ACK-not-received / abandoned | A median SNR | level at end |
+|---|---|---|---|---|---|---|---|---|---|---|
+| v0 (pre) | 18:01:24–18:09:25 | 70: hold 39, decl 9, nack_hold 5, c_evid 9, c_snr 3, probe_w 4, nsd 1 | 48/12/10 | 64; 0.90, 0.87–0.93 | 93 | 64 / 0 / 0 | 0 | 2 / 0 | 9.3 dB (n=60) | SL9 |
+| 0.125 | 18:09:25–18:10:57 | 18: hold 8, decl 2, nack_hold 5, nsd 1, c_evid 1, probe_w 1 | 10/1/7 | 19; 0.89, 0.85–0.91 | 35 | 18 / 0 / 0 | 0 | 0 / 0 | 6.1 dB (n=11) | SL8 |
+| 0.104 | 18:10:57–18:12:28 | 15: hold 8, decl 2, nack_hold 2, nsd 1, c_evid 1, probe_w 1 | 10/1/4 | 17; 0.82, 0.77–0.84 | 34 | 16 / 3 / 0 | 1 | 3 / 1 | 4.9 dB (n=11) | SL7 |
+| 0.087 | 18:12:28–18:13:59 | 2: hold 1, decl 1 | 2/0/0 | 9; 0.71, 0.63–0.81 | 3 | 8 / 7 / 0 | 0 | 6 / 3 | 2.7 dB (n=2) | SL7 |
+| 0.072 | 18:13:59–18:15:01 | 0 | 0/0/0 | 2; 0.63, 0.60–0.66 | 0 | 1 / 2 / 0 | 0 | 5 / 2 | none | SL7 |
+| v0 (restore) | 18:15:01–18:21:24 | 76: hold 41, decl 11, nack_hold 11, nsd 3, c_evid 7, probe_w 3 | 52/7/17 | 77; 0.87, 0.83–0.90 | 125 | 76 / 0 / 0 | 0 | 2 / 1 | 5.9 dB (n=59) | SL8 |
+
+(nsd = nack_step_down; decl = climb_declined; c_evid = climb_on_evidence; c_snr = climb_on_snr. Every decision's verdict is "keyed"; the one muted
+NACK is the log line `a burst failed while the channel was still busy; no NACK keyed` at 18:12:01 in the 0.104 step.)
+
+**Against the prediction**
+1. **Shown at 0.125, the first step.** A acquired B's SL9 frames (35 carrier-offset acquisitions), they failed (7 NACKs keyed, 5 nack_hold at SL9),
+   and A logged `NackStepDown` SL9→SL8 at 18:10:12, 47 s in. A median SNR 6.1 dB against 9.3 dB before. Clause 2, B→A,
+   is shown with frames still decoding (10 AckOk in the step); it is not a silence case.
+2. A second `NackStepDown` at 0.104 (SL8→SL7, 4 NACKs in the step). 0.087 shows the window the task asked about: 9 preambles at ρ 0.71, 3
+   acquisitions, 7 false opens, no NACK keyed, 2 decisions, and B logged 6 `ACK not received` and 3 `send abandoned`. At 0.072 nothing acquired.
+3. After the restore A climbed from SL7 back to SL9 in **28 s** (SL8 at 18:15:20, SL9 at 18:15:29).
+- Killed-if: not met (a step-down followed in the steps where frames acquired and failed).
+- **Different from f2l, and for review:** A logged four `NackStepDown` at the SL9 ceiling with the drive at v0 (18:06:09 before the steps, and
+  18:16:57, 18:19:29, 18:20:10 after the restore), each followed by a climb back within 9 to 23 s, and the window ended at SL8. A's median SNR at v0
+  after the restore was 5.9 dB, against 9.3 dB before the steps. I have not tested whether the post-restore channel state differs from the pre-step state
+  (the routing script's verify passed at the end with B's drive at 0.15).
+
+**Post-traffic interval (PTT watcher, 1 s, window end 18:21:24 to `cleanup` 18:24:29):** two key-ups only, 18:21:52 A (ALC 0.608333) and
+18:22:26 B (ALC 0.0625), the two sign-off IDs. Nothing after 18:22:26. After `cleanup`: PTT 0 on both rigs (A and B read back
+at 18:25), AGC 2 on both, A at 144640000, B 144641564 at 5 W, drive 0.15 on both. The watcher log is `drive-schedule.log` and
+`ptt-watcher.log` in the evidence directory.
+
+**Station IDs (daemon logs):** A (DC0SK): 18:08:20 interval, **18:13:36 sign-off (mid-run, during the 0.087 step; I have not traced why it fired then)**, 18:21:51 sign-off. B (DD2ZM): 18:08:35 with-data, 18:17:11 with-data, 18:22:27 sign-off. The runner's own sign-off line says
+"no" for both, as before.
+
+Evidence: `docs/dev/test-reports/onair-twin-ota-20261108-190123{.log,-evidence/}`; audio
+`on-air/rx-audio-2026-11-01/rx-{a,b}-f2n-8k.wav.gz`.
