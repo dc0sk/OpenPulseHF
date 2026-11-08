@@ -15,6 +15,52 @@ this ledger adds the design rationale and the actually-observed results per chan
 
 ---
 
+## 2026-11-07 — The preamble detect re-heads a burst opened on hiss; a P-confirmed failure is keyed past the NACK budget (work plan M3, A2)
+
+- **Requirement/change:** REQ-FUN-06. On air (task 28, run f2h, A's IC-9700 on AGC SLOW) B sent 55
+  SL8 frames from 11:06:02 to 11:16:12 UTC, 51 decodable offline, and A keyed nothing. The floor had
+  learned the AGC's post-frame dips (squelch 0.53–0.61× the hiss), total power opened a burst on the
+  hiss about 2 s after each frame, and the next frame sat at the tail of a 66–92k-sample burst out of
+  the decoder's reach; and three SL10 NACKs had spent the #1456 NACK budget, so every failure was muted
+  until the 10-min leak.
+- **Design decision:** `docs/dev/design/ofdm-preamble-detect.md`, Implementation, "The re-head and the
+  budget exemption". Fable's mandatory review (it changes when an ACK/NACK keys): (a) the re-head
+  approved with changes, (b) the exemption approved; R1 (a floor fix) and a sender-side step-down
+  rejected; the maintainer's go given. (a) P's first open in a burst total power or S opened, beyond
+  `lead + first_block + 4·SYM_LEN`, restarts the burst at P's onset as a P-opened burst; the head is
+  dropped (a flushed hiss head would key a NACK on noise) and not learned. Trade-off: a non-OFDM frame
+  in the head (a with-data station ID) is lost. (b) A failed burst with `p_confirmed` and coherence ≥
+  0.8 is keyed and not charged; the busy and no-callsign mutes stand; a foreign OFDM52 sender draws at
+  most 3·(rung − 6) NACKs.
+- **Implementation:** `crates/openpulse-modem/src/engine.rs` (`rehead_at_p`, `take_p_head`,
+  `p_rehead_reach`, `P_REHEAD_REACH_SYMBOLS`, `preamble_detect_reheads`; `set_ota_budget_verdict`,
+  `OtaRxResult::p_evidence`); `crates/openpulse-daemon/src/nack_budget.rs` (`decode_ota_burst`);
+  `crates/openpulse-daemon/src/server.rs` (`log_preamble_detect`: `reheads=`).
+- **Tests:** in-crate `preamble_detect_false_open::{a_burst_opened_on_noise_is_reheaded_at_ps_onset,
+  a_dropped_head_keys_nothing, a_held_fragment_of_a_genuine_frame_is_not_a_false_open}` (the old held
+  fixture re-pointed as the re-head's positive gate; the held case now within reach);
+  `preamble_detect_rehead_trap::the_trapped_stretch_decodes_with_the_rehead` on the new capture
+  `ic9700-ofdm52-f2h-agc-slow-trap.wav` (892 044 B, 1 MB cap in the asset-rule test); daemon
+  `nack_budget::tests::a_p_confirmed_failure_keys_past_the_budget_and_is_not_charged`.
+- **Test results (run at `59752631`, debug, `--no-default-features`, `--no-fail-fast
+  --test-threads=4`):** `openpulse-modem` 682/0 (125 ignored); `openpulse-daemon` 233/0 (2 ignored);
+  `ofdm-plugin` 49/0. Among them, green: `ofdm_preamble_detect` 8 (incl. `two_ofdm_frames_stay_two_bursts`
+  and `ofdm_frames_gather_on_the_second_rig`), `ofdm_detect_fade`, `dcd_agc_pumped_hiss`, `dcd_pre_agc`,
+  `dcd_wideband_long_frame`, `daemon_squelch_noise_floor`, `capture_replay_corpus` 9, `veto_membership_pin`,
+  `dcd_floor_follows_the_filter` 12; daemon `ofdm_detect_twin`, `abandon_burst_when_keying`, the
+  `nack_budget` tests 7. Trap cut: 5/5 decoded, 5 re-heads, squelch/hiss 0.49 at the measured pass's
+  start. Full f2h stretch (Fable's harness, replay from 0, SL8 locked at 440 s, 56 B markers): 1/56 at
+  `b0b3a10b`, 52/56 at the final code (squelch/hiss 0.53–0.59, 59 re-heads, 3 P-confirmed failures
+  keyed, `held_no_frame` +0). Sabotages, each watched red (design note table): reach `usize::MAX` →
+  trap 0/5 and the positive gate red; head flushed → `a_dropped_head_keys_nothing` red (the head keyed a
+  NACK); reach 0 → the held case red; the daemon charging the budget, the engine keeping the budget's
+  mute, and the exemption overriding the busy mute → the exemption gate red each. The first "never
+  re-head" sabotage re-headed every burst (`usize::MAX as isize` is −1); the production comparison is
+  now in `usize`. Clippy (`-D warnings --all-targets`) clean on openpulse-modem and openpulse-daemon;
+  `cargo fmt --all -- --check` clean; `check-trailer.sh` and `reachability.sh check` PASS.
+- **Gate:** not run here (the maintainer's session runs `scripts/gate.sh` and `scripts/slow-tests.sh`).
+- **Gate:** `GATE: PASS 80d08a3e6a1f96c1959e152fec84e59b54ee0636 clean 20261107T185950Z` (suites 398, 2832 passed, 0 failed). `scripts/slow-tests.sh` (all, same tree): `ota_channel_adaptation` 3/0, `spectral_busy_gathers_weak_frames` 2/0, `total_power_bursts_keep_their_head` 1/0, `ofdm_preamble_detect` 2/0, `ofdm_detect_fade` 1/0, `bpsk_settle_sideband` 1/0; `notch_rescues_interferer` 2/1, the known red row #1457 (the same assertion as on main).
+
 ## 2026-11-07 — The BPSK carrier estimate's coarse stage is a dense spectral peak, not a 12.5 Hz picket grid (work plan M3, A2)
 
 - **Requirement/change:** REQ-PHY-03. On air (task 30, run f2j) A's cold trigger settle read +7.21 /

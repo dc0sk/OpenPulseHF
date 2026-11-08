@@ -831,7 +831,7 @@ pub async fn run(cfg: OpenpulseConfig, modem_backend: Box<dyn AudioBackend>) -> 
     // Keyed-NACK budget, leaking with listening time (#1456; `nack_budget.rs`).
     let mut ota_nack_budget = crate::nack_budget::NackBudget::default();
     // The preamble detect's counters last logged (`log_preamble_detect`).
-    let mut p_detect_logged: Option<(u64, u64, u64)> = None;
+    let mut p_detect_logged: Option<(u64, u64, u64, u64)> = None;
     // Periodic station identification (REQ-REG-10): while transmitting, key up and send the
     // callsign at least every `auto_id_interval_secs`. The pure `StationIdTimer` is fed a
     // monotonic ms clock (`id_start`) and armed by polling the engine's `frames_transmitted`
@@ -2676,12 +2676,13 @@ fn build_ptt_controller(
 /// measures P's false-open rate from this line (`ofdm-preamble-detect.md`): `false_opens` counts
 /// failed bursts P itself opened that hold no frame its waveform acquires, `held_no_frame` the same
 /// for bursts P only held after another test opened them (mostly fragments of genuine frames).
-fn log_preamble_detect(engine: &ModemEngine, logged: &mut Option<(u64, u64, u64)>) {
+fn log_preamble_detect(engine: &ModemEngine, logged: &mut Option<(u64, u64, u64, u64)>) {
     let blocks = engine.preamble_detect_blocks_processed();
     let now = (
         engine.preamble_detect_opens(),
         engine.preamble_detect_false_opens(),
         engine.preamble_detect_held_no_frame(),
+        engine.preamble_detect_reheads(),
     );
     if blocks == 0 || *logged == Some(now) {
         return;
@@ -2692,9 +2693,11 @@ fn log_preamble_detect(engine: &ModemEngine, logged: &mut Option<(u64, u64, u64)
         opens = now.0,
         false_opens = now.1,
         held_no_frame = now.2,
+        reheads = now.3,
         us_per_block = engine.preamble_detect_nanos() / blocks / 1000,
         "preamble carrier detect (false_opens: failed bursts P opened with no frame its waveform \
-         acquires; held_no_frame: the same for bursts P only held)"
+         acquires; held_no_frame: the same for bursts P only held; reheads: bursts total power or \
+         the spectral test opened that P restarted at its onset)"
     );
 }
 
