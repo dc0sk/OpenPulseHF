@@ -2,7 +2,7 @@
 project: openpulsehf
 doc: docs/dev/onair-tasks.md
 status: review
-last_updated: 2026-11-01
+last_updated: 2026-11-08
 ---
 
 # On-air task channel (cloud session ↔ station session on rpi51)
@@ -5390,7 +5390,7 @@ As task 26, plus:
 - Unchecked: whether the message delivered at SL6 after each fall-back is the one that went silent at
   SL7. By the code it is: the fall-back continues the same send within its budget.
 
-## Task 28 — B→A OFDM52 with A's AGC off: does A gather the frames? (status: open; maintainer's go given 2026-11-06)
+## Task 28 — B→A OFDM52 with A's AGC off: does A gather the frames? (status: done — reviewed below)
 
 **Why.** f2g's recording of A's receive audio holds six OFDM52 frames from B that decode offline (6/6,
 SNR 8.5–9.0 dB), but the production receive path gathers none of them. Under the IC-9700's AGC FAST,
@@ -5434,4 +5434,386 @@ As task 27, plus:
 **Prediction:** bursts at SL7 times of about 17 000 samples or more, at least one OFDM52 delivered, and
 A's `rx_confirmed_level` reaches SL7. **Killed if** the bursts at SL7 times stay under 0.5 s with AGC
 off: then the AGC is not the mechanism.
+
+
+### Results — Part A, run f2h (B sends, `fast` profile, A's AGC SLOW; 2026-11-06)
+
+**This run used AGC SLOW because the rig refused OFF.** `L AGC 0` on the IC-9700 was answered "Command rejected by the rig" (nothing keyed; AGC read back 2). The maintainer then chose "go for a": AGC SLOW (`L AGC 3`), everything else as f2g. Run on the old branch head `fdf2cec5`; binaries unchanged (server `2f9befd2…`, CLI `53e446cc…`, identical on both stations, not rebuilt). Evidence: `docs/dev/test-reports/onair-twin-ota-20261106-115916-evidence`; receive audio `rx-{a,b}-f2h-8k.wav.gz`. Times UTC (daemon log clock; local = +1 h).
+
+**Rig read-backs (A, IC-9700):** before: AGC 2, RF gain 1, SQL 0, source (PCM2901) volume 0.44. Set `L AGC 3`, read back **AGC 3**, RF gain 1. After the run: set `L AGC 2`, read back **AGC 2**, RF gain 1, dial 144640000, RFPOWER 0.0117647, PTT 0. `wpctl status` after the run lists two PCM2901 sources, vol 0.44 and 0.15 (I did not identify which one the rx check uses; neither was changed by me). FT-991A after: dial 144641564, RFPOWER 0.05, AGC 2, PTT 0. Nothing running.
+
+**rx-level check, AGC SLOW, before the run (PASS):** IC-9700 idle mean_sq 0.000076, gate threshold 0.000228, OK; FT-991A idle mean_sq 0.000347, threshold 0.001041, OK. (With AGC FAST, at the refused-OFF attempt: 0.000106 / 0.000494.)
+
+**Stop rules:** 0 STOP lines (no keying over 70 s).
+
+**Result: with AGC SLOW A gathers and decodes OFDM52 from B, and the link climbs to SL10.**
+- A `frame_received`: OFDM52 8, OFDM52-8PSK 15, OFDM52-16QAM 15, QPSK250-D 3, BPSK250 3, BPSK31 3, BPSK63 1, BPSK100 1. (f2g: no OFDM52 at all.)
+- **A's `ota_rate_decision`s by decoded level (SNR dB, A's estimate):** SL2 3 (−12.0…−0.3), SL3 1 (11.4), SL4 1 (14.2), SL5 1 (14.8), SL6 3 (4.4…9.9), **SL7 8 (2.8…9.6, median 9.1; 6 hold, 2 climb_on_evidence)**, SL8 15 (5.8…9.1, median 8.1), SL9 15 (7.3…10.7, median 9.7). SL10: never decoded; 96 NACK decisions (nack_hold 90, nack_step_down 6, no SNR).
+- **A's `rx_confirmed_level` at the end: SL8** (it reached SL9 several times, then stepped down on SL10 NACKs: SL8→SL9→SL10 attempt→SL8 cycles). `ota_status` event sequence of `rx_confirmed_level`: SL2 282, SL3 25, SL4 12, SL5 8, SL6 36, SL7 46, SL8 10, SL9 38, SL8 619, SL7 15, SL8 9, SL9 15, SL8 14, SL9 17, SL8 13, SL9 16, SL8 13, SL9 128, SL8 258 (counts of consecutive status events).
+- **QPSK/BPSK did not regress:** the SL2→SL6 climb ran as in earlier runs (B's ACKs: SL2→3→4→5→6→7 one climb each).
+- **B (sender):** 65 `OTA ACK received` (first 11:00:27.22, last 11:18:05.90): climbs SL2→…→SL7→SL8→SL9→SL10, then `from=Sl10 to=Sl8` ×4 (A's step-downs) and 8 `from=Sl10 to=Sl10`; per level (`from=`): SL2 3, SL3 1, SL4 1, SL5 1, SL6 3, SL7 11, SL8 17, SL9 16, SL10 12 (sum 65). **26 `OTA send abandoned`**, 74 `message_received` on B. **0 `back to the level before it`; 57 `ACK not received within window`; first `no fall-back` line: 11:06:35.76 `level=Sl8 why="no unconfirmed climb is recorded"`** (10 listed at SL8 from 11:06:35 to 11:09:57, every ~22 s; B sat at SL8 with A silent). This is the other half of the fall-back: it only reverses an unconfirmed climb, and these are SL8 sends after an ACK-confirmed SL8.
+
+**Burst length, A's `received N audio samples` (the first line of each count-down run; each following line is N−32):** I took each run's first line where N jumps up by >200 and N≥5000. In the SL7 window 11:04:15–11:05:10 these are 6571 (11:04:19.54), 8872 and 9600 (11:04:31.34/.46), 8386/8400 (11:04:42.80/.89), 7924/8800 (11:04:46.98/47.02) and 67448/68800 (11:04:59.44/.59); a run of 36303 at 11:04:16.18 precedes it. **None of the SL7-window runs is ~17 600.** I am not sure these runs are the metric you meant; the first lines of the OFDM runs are not the whole frame. 120 runs overall start ≥17 000 (of 336 ≥5000), mostly 36 000–38 000 (13+21) and 62 000–69 000 (45). Raw lines: `grep 'received [0-9]* audio samples' daemon-a.log.gz`.
+
+**Recording levels (crude, 8 kHz decimated file, 0.1 s windows, dBFS rms):** idle before traffic (10:58:40–10:59:08) −46.6; BPSK/QPSK frames (SL2–SL6) −40.1…−41.1; bursts at SL7–SL10 −45.7…−47.4; gaps between frames (10th percentile of all windows) −51.7. My burst segmentation was a simple threshold, not per-frame alignment: **treat these as indicative only, and the OFDM step over the hiss is not measured here** (the hiss moves with the AGC state, and I did not align windows to individual frames; the committed recordings let you do it offline).
+
+**Station IDs / NOTES:** A `interval` 11:08:44.74, `with-ack` 11:17:17.90, `sign-off` 11:19:24.26 and 11:21:10.54; B `with-data` 11:07:23.27, 11:15:57.83.
+
+**Not done / open:** per-frame RMS and the OFDM step over hiss; which burst-length metric PC1 means; why the SL10 never decodes (as in earlier runs); IC-9700 ALC not isolated. The prediction (bursts ≥17 000 at SL7 times) is not met by the lines I extracted, yet OFDM52 delivered and `rx_confirmed_level` reached SL9 (SL8 at the end); the kill condition (bursts under 0.5 s) cannot be judged from my extraction.
+
+### Review of task 28 (pc1 session, 2026-11-06)
+
+**Run as changed:** the IC-9700 refused AGC OFF over CAT (`L AGC 0`, the rig answers NAK). f2h ran with
+A's AGC SLOW (`L AGC 3`) under a revised go, and A was restored to FAST (2) afterwards, read back.
+
+**The mechanism is confirmed. With A's AGC slow, A gathers and decodes B's OFDM:**
+- A received OFDM52 8 times, OFDM52-8PSK 15 times and OFDM52-16QAM 15 times. In f2d–f2g it decoded
+  no OFDM52 at all.
+- B→A climbed to SL9 for the first time, and A's `rx_confirmed_level` reached SL9 and ended at SL8.
+- QPSK and BPSK did not regress.
+- So the f2d–f2g failure was A's AGC FAST compressing the OFDM frame into the gap hiss, as the
+  offline analysis found. It was not B's level, the notch or the frequency offset.
+- The metric I asked for ("bursts ≥ 17 000 samples") was the wrong one. `received N audio samples`
+  is logged once per decode attempt, not per burst, so the station's extraction is not a burst length.
+  The delivered frames settle the question instead.
+
+**This is a diagnostic, not a configuration.** AGC FAST stays the Release 1 operating requirement
+(`dcd-raised-floor.md`), and the fix is the level-independent OFDM detector
+(`docs/dev/design/ofdm-preamble-detect.md`, reviewed, being implemented). f2h is now that detector's
+reference: B→A OFDM is decodable on this pair, and the detector has to gather it under AGC FAST.
+
+**Found: silence at a confirmed rung.** *Corrected 2026-11-07 by an offline analysis (below): the
+stretch ran about 10 min, not 3.5, and it did not recover by itself.*
+- From 11:06:35 to 11:09:57 B sat at SL8, a rung A had confirmed, and A answered nothing: 10
+  `no fall-back` lines (`no unconfirmed climb is recorded`) and 26 abandoned sends. The link recovered
+  by itself after about 3.5 minutes.
+- **Correction (2026-11-07), measured offline:**
+  - **The stretch:** 11:06:02–11:16:12, about 10 min, with 26 `no fall-back` lines, 26 abandons and
+    54 silent windows.
+  - **The frames reached A and were decodable:** B's 55 SL8 frames are all in A's audio, 51 of 55
+    decode offline (SNR median 8.4 dB), preamble ρ 0.857–0.923. Not a fade.
+  - **Why A keyed nothing:** the three SL10 NACKs at 11:05:55–11:06:02 used up the NACK budget
+    (`OTA_NACK_BUDGET` = 3), so A's events show 54 × `nack_hold verdict=muted` until the 10-min leak's
+    `nack_step_down` at 11:16:12. That leak is what ended it.
+  - **Why the decodable frames failed:** under AGC SLOW the noise floor learned only the quiet dips
+    after each frame, so the squelch fell under the hiss. Total power then opened a burst on the hiss
+    about 2 s after each frame, and each frame sat at the tail of a 66–92k-sample burst, out of the
+    decoder's onset reach. The loop sustains itself.
+  - So "silence at a confirmed rung" is the wrong frame: it is a receiver trap plus the NACK budget,
+    not a sender step-down question.
+  - The follow-ups are receiver-side: the preamble detect re-heading a burst opened on hiss, and
+    whether a detect-confirmed failure counts against the budget. See task 31's notes and the work
+    plan.
+- The fall-back after silence covers only an unconfirmed climb, by design.
+- A's SL8 SNR readings had a median of 8.1 dB, near the rung's floor, so a fade on a marginal rung is
+  the likely cause, but it is unchecked.
+- Whether silence at a confirmed rung needs its own step-down is a design question for the A2 ladder,
+  and it goes to review before any change. Parked.
+
+**Also:** SL10 never decodes B→A either (96 NACKs: `nack_hold` 90, `nack_step_down` 6), the same as
+A→B. The level comparison per rung on `rx-a-f2h-8k.wav.gz` (the OFDM step over the hiss under AGC
+SLOW) is to be done offline. The station's crude numbers are indicative only.
+
+## Task 29 — B→A OFDM under AGC FAST with the preamble detect: does the release configuration deliver SL7+? (status: done — reviewed below)
+
+**Why.** Task 28 showed that B→A OFDM is decodable on this pair: with A's AGC SLOW, A decoded 38
+OFDM frames and B→A climbed to SL9. Under AGC FAST, the Release 1 operating requirement, A gathered
+none (f2d–f2g), because the frames sit at about 1.2× the gap hiss. `main` now carries a carrier
+detect that does not depend on level (#1518, `docs/dev/design/ofdm-preamble-detect.md`): it opens on
+the OFDM preamble and holds on the cyclic prefix. f2i is that detector's first run on air.
+
+**Build:** the branch head (`main` at #1518 plus the task docs). Rebuild and redeploy BOTH stations,
+and record the sha256 of both binaries. Settings, log levels and runner overrides as f2h, except
+**A's AGC: FAST (2)**, read back before and after.
+
+### Part A — run f2i (B sends, `fast` profile; keys both rigs: one go)
+
+As f2h: `TRAFFIC_FROM=B`, `TRAFFIC_INTERVAL=8`, `TRAFFIC_DURATION=600`.
+
+**Before:** read back A's AGC (must be 2), RF gain and source volume, and run
+`scripts/onair-rx-level-check.sh`.
+
+**Check the build is the detector's:** on A, the daemon log must show `preamble carrier detect` lines
+once OFDM is among the OTA candidates. If none appears by the time B reaches SL7, report that and stop
+the analysis there; the run itself may continue.
+
+### Report
+
+As task 28, plus:
+- **A's frames received by mode** (OFDM52, OFDM52-8PSK, OFDM52-16QAM …), and A's rate decisions by
+  level with SNR;
+- **every `preamble carrier detect` line on A**: first, last, and the ones at each SL7+ episode, with
+  all fields (blocks, opens, false_opens, held_no_frame, us_per_block);
+- **the detector's cost on rpi51:** the `us_per_block` range, and whether any `capture read holds`
+  line on A coincides with OFDM episodes (count, against f2h);
+- **B's ACKs by send level**, delivered and abandoned counts, and every `back to the level before it`
+  and `no fall-back` line;
+- `preamble carrier detect` lines on B as well: B receives A's ACKs and IDs, never OFDM in this
+  direction, so B's opens should be 0;
+- whether the narrow rungs (BPSK/QPSK) regressed against f2h;
+- the recordings committed as before.
+
+**Prediction:** A delivers OFDM52 at SL7, and B→A reaches SL7 or above under AGC FAST, as f2h did under
+SLOW; A's false_opens stays 0 or near it. **Killed if** no OFDM52 is delivered under FAST with the
+detector running, or if false opens hold the channel busy enough to cost narrow-rung deliveries.
+
+
+### Results — Part A, run f2i (B sends, `fast` profile, A's AGC FAST, preamble carrier detect; 2026-11-06)
+
+**Setup:** rpi51 at `ab7fd2a1` (m3/onair); `deploy` rebuilt on A and copied to station-B. sha256, identical on both stations: server `440f6bc745d501e3c424e1826805d4ff2e03b7cf67c40ac0af8bda1826b7e9c2`, CLI `306ced33dba269476d30ef92879a5cad35bdf9631531344697c423b12ae9fb87`, `twin-traffic.sh` `c9e152f32d6b8d5548551b255865b9c45c198b96739672b02eab9dee56fdc373`. Settings, log levels and local runner overrides as f2h. Times UTC (daemon-log clock; local +1 h). Evidence: `docs/dev/test-reports/onair-twin-ota-20261106-180604-evidence`; receive audio `rx-{a,b}-f2i-8k.wav.gz`.
+
+**Before:** A: AGC 2, RF gain 1, dial 144640000, RFPOWER 0.0117647; PipeWire PCM2901 sources vol 0.15 and 0.44 (unchanged from f2h; which one the check uses not identified). rx-level check PASS: IC-9700 idle mean_sq 0.000120, threshold 0.000359; FT-991A 0.000291, threshold 0.000872. **After (read back):** A AGC 2, RF 1, dial 144640000, RFPOWER 0.0117647, PTT 0; FT-991A dial 144641564, RFPOWER 0.05, AGC 2, PTT 0; nothing running. 0 STOP lines (no keying over 70 s).
+
+**Result: under AGC FAST with the detector, A gathers and decodes OFDM and B→A climbs to SL9.**
+- **A's `frame_received`:** OFDM52 3, OFDM52-8PSK 7, OFDM52-16QAM 49 (59 OFDM frames), QPSK250-D 3, BPSK250 2, BPSK31 3, BPSK63 1, BPSK100 1. (f2h under SLOW: 38 OFDM; f2g under FAST without the detector: 0.)
+- **A's `ota_rate_decision` by decoded level, SNR dB:** SL2 3 (−10.8…−0.9), SL3 1 (10.7), SL4 1 (12.1), SL5 1 (13.7), SL6 3 (9.4…10.1), **SL7 3 (7.8…8.6, median 8.5; 2 hold, 1 climb_on_evidence)**, SL8 7 (4.7…7.7), SL9 49 (2.4…10.5, median 8.9; 34 hold, 15 climb_on_evidence). 12 NACK decisions (nack_hold 11, nack_step_down 1; no SNR). SL10 never decoded.
+- **A's `rx_confirmed_level`:** SL2 → … → SL7 → SL8 → SL9, one dip to SL8, **SL9 at the end** (status-event run lengths: SL2 283, SL3 27, SL4 13, SL5 7, SL6 21, SL7 11, SL8 19, SL9 63, SL8 19, SL9 1114).
+
+**`preamble carrier detect` lines:** A 116, **B 0** (B logged none; B's log level includes `info`; I did not check whether OFDM is a candidate on B). Counters are cumulative: first `17:11:10.017 blocks=1 opens=0`; last `17:18:53.388 blocks=7732 opens=93 false_opens=22 held_no_frame=0 us_per_block=1257`. **`held_no_frame` is 0 in all 116 lines.** The first open is 17:11:11.09 (`opens=1`), 1 s after the SL7 climb ACK at 17:11:10.20. All 116 lines, compact, are in `docs/dev/test-reports/onair-twin-ota-20261106-180604-evidence/` as `preamble-carrier-detect-a.txt` (compact table, A); raw: `zgrep 'preamble carrier detect' daemon-a.log.gz`. Raw first three and last:
+
+```
+17:11:10.017Z blocks=1 opens=0 false_opens=0 held_no_frame=0 us_per_block=0
+17:11:11.089Z blocks=32 opens=1 false_opens=0 held_no_frame=0 us_per_block=843
+17:11:14.687Z blocks=91 opens=2 false_opens=0 held_no_frame=0 us_per_block=997
+...
+17:18:53.388Z blocks=7732 opens=93 false_opens=22 held_no_frame=0 us_per_block=1257
+```
+
+**False opens: 22, not ~0.** `false_opens` steps by 1 at 22 times: 17:11:42.93, 17:11:53.95, 17:12:04.88, 17:12:28.59, 17:12:39.52, 17:13:01.80, 17:13:15.44, 17:13:26.40, 17:13:37.73, 17:13:51.28, 17:14:01.74, 17:14:37.10, 17:14:48.35, 17:15:13.98, 17:15:24.99, 17:15:39.31, 17:15:58.53, 17:16:13.22, 17:16:24.14, 17:16:35.56, 17:17:00.59, 17:18:29.77 (the reported line time, i.e. the next counter line after the failed burst). All are after the SL9 climb. The definition on the line: "failed bursts P opened with no frame its waveform acquires". I did not identify which B transmissions they are (not checked against B's SL10 sends; B's ACKs at SL9 → 10 are 4, plus 5 `from=Sl10` ACKs).
+
+**Detector cost on rpi51:** `us_per_block` 843–1297 (median 1267; the first line, 0, has 1 block). **`capture read holds` on A: 23** (f2h: 111), sizes 8200–10000 samples (8 at 9200, 4 at 9600, 3 at 9400, …); B 0. **22 of A's 23 holds start within about a second of a `false_opens` step** (e.g. holds 17:11:42, 17:11:53, 17:12:04, 17:12:28, 17:13:01, 17:13:15, …); the 23rd is 17:27:17, in the sign-off phase. Coincidence in time only; I did not establish that the holds cause the false opens or the reverse.
+
+**B (sender): ACKs by send level (the `from=` field):** SL2 3, SL3 1, SL4 1, SL5 1, SL6 3, SL7 3, SL8 8, SL9 54, SL10 5 = **79 ACKs received** (first 17:07:15.90, last 17:18:56.33), the SL7 climb ACK at 17:11:10.20. `message_received` events on B: 75 (differs from the 79 ACK lines; not reconciled; 0 `TCP client event receiver lagged` lines on B). **4 `OTA send abandoned`, 23 `ACK not received within window`.**
+- **`back to the level before it`: 2**, both `from=Sl10 to=Sl9`: `17:13:34.790322Z` and `17:16:32.478246Z` (an unconfirmed SL10 climb reversed).
+- **`no fall-back`: 4**, all `level=Sl9 why="no unconfirmed climb is recorded"`: 17:12:02.27, 17:14:10.12, 17:14:56.61, 17:15:33.36.
+- Station IDs: A `sign-off` 17:12:11.20, 17:13:44.14, 17:14:19.98, 17:16:41.94, 17:19:27.71; B `with-data` 17:14:12.58, `sign-off` 17:19:28.04.
+
+**Narrow rungs:** no regression against f2h: the SL2→SL6 climb is one ACK per level (SL2 3, SL3 1, SL4 1, SL5 1, SL6 3), A decoded QPSK250-D 3 and BPSK 7, as in f2h.
+
+**Prediction check:** A delivered OFDM52 at SL7 (3 decodes at 7.8–8.6 dB) and B→A reached SL9 under AGC FAST, so the first part holds. **`false_opens` is 22, not near 0.** The kill condition ("no OFDM52 delivered under FAST", or false opens costing narrow-rung deliveries) is not met: narrow rungs delivered as in f2h; whether the false opens cost anything at SL9 I did not measure.
+
+**Not done / open:** which transmissions the 22 false opens are; per-frame RMS; B shows 0 detector lines (not investigated); the 79 vs 75 count.
+
+### Review of task 29 (pc1 session, 2026-11-06)
+
+**The preamble detect delivers B→A OFDM under AGC FAST, the release configuration.**
+- A decoded 59 OFDM frames (OFDM52 3, OFDM52-8PSK 7, OFDM52-16QAM 49). In f2d–f2g, under the
+  same AGC FAST, it decoded none.
+- B→A reached SL9, and A ended confirmed at SL9: f2h's result under AGC SLOW, now in the release
+  configuration.
+- The narrow rungs did not regress. B's detector stayed silent (0 lines).
+- P's cost on rpi51: 0.8–1.3 ms per block.
+
+**Found: the 22 "false opens" are genuine B frames, and they cost B its NACKs.** Measured offline on
+`rx-a-f2i-8k.wav.gz`, through the production receive path, with A's 93 on-air opens matched one to
+one:
+- **All 22 are B frames that failed to decode:** 15 sent at SL9, 7 at SL10. They were gathered whole
+  (burst lengths match the decoded frames'). None was noise, A's own tail or a station ID.
+- **The cause:** P builds its detectors with `center_frequency` only (`sync_p_units`), so
+  `burst_coherence` searches around 0 Hz. The decoder searches around
+  `center_frequency + afc_correction_hz`, which is −6.7 Hz on A, and the frames sit near −8 Hz. On
+  P's grid the nearest point is 4–8 Hz off, so coherence reads 0.85–0.90, under the 0.9 evidence
+  threshold. On the decoder's grid it reads 0.90–0.96.
+- **The cost:** a burst under the threshold is not ladder evidence, so A keyed no NACK on 21 of
+  them. B sat out its full ACK window each time (about 10.4 s, against about 2.9 s for a NACK). That
+  accounts for 21 of B's 23 silent windows, all 4 abandons and both falls back SL10→SL9. The time
+  lost is about 2.6 min of a 7.7 min OFDM phase (inferred).
+- **This is not as designed.** Decision 4 makes a P-held failed burst evidence when the waveform's
+  own acquisition takes a frame as present, and the decoder's acquisition did.
+- **The replay confirms it:**
+  - false opens reproduce at uniform 400- and 800-sample reads with no holds;
+  - with P and the decoder both at −6.7 Hz, false opens drop to 0, and all 22 bursts NACK.
+- **The read holds on A are effects, not causes.** Each one is the first read after a failed decode
+  that keyed nothing (about 1.1 s on rpi51).
+- Two consequences: until this is fixed, the `false_opens` counter cannot measure P's false-open
+  rate; and the implementation review's "`told` fixed at creation is fine for Release 1" is wrong
+  on air.
+
+**Fix:** under design review before implementing, because it changes when a NACK is keyed. Separate,
+and not this defect: the SL9 bursts that failed and every SL10 frame are undecodable at this link's
+edge (SL9 SNR median 8.9 dB). SL10 has never decoded in either direction.
+
+## Task 30 — f2i again on the fixed detector: does every genuine failed frame NACK? (status: done — reviewed below)
+
+**Why.** In f2i (task 29), the 22 "false opens" were genuine B frames that failed to decode. P judged
+them at 0 Hz instead of the decoder's AFC-corrected told, so they keyed no NACK, and B sat out 21
+silent ACK windows. #1519 makes P judge at the receiver's centre (`rx_center()`), from the refined
+coherence, at a 0.8 threshold. f2j checks that on air.
+
+**Build:** the branch head (`main` at #1519 plus the task docs). Rebuild and redeploy BOTH stations,
+and record the sha256 of both binaries. Settings, log levels and runner overrides as f2i; A on
+AGC FAST (2), read back before and after.
+
+### Part A — run f2j (B sends, `fast` profile; keys both rigs: one go)
+
+As f2i: `TRAFFIC_FROM=B`, `TRAFFIC_INTERVAL=8`, `TRAFFIC_DURATION=600`.
+
+### Report
+
+As task 29, plus:
+- A's `preamble carrier detect` lines: the final counters (`opens`, `false_opens`, `held_no_frame`),
+  and every step of `false_opens`, with its time;
+- A's NACK decisions by level (f2i: 12), and B's `ACK not received` windows (f2i: 23), abandons
+  (f2i: 4) and fall-backs (f2i: 2 SL10→SL9);
+- for each B send at SL9/SL10 that A did not decode: whether B received a NACK or nothing. Take B's
+  send times from its log, and A's outcome from A's decisions;
+- A's `capture read holds` count (f2i: 23);
+- the recordings committed as before.
+
+**Prediction:** `false_opens` near 0, and the SL9/SL10 frames A cannot decode get a NACK instead of
+silence. So B's `ACK not received` windows fall well below f2i's 23, and there are fewer abandons and
+fall-backs. **Killed if** `false_opens` stays well above 0, or if genuine failed frames still leave B
+without an answer.
+
+
+### Results — Part A, run f2j (B sends, `fast` profile, A's AGC FAST, fixed preamble detect; 2026-11-06)
+
+**Setup:** rpi51 at `cf480757` (m3/onair, #1519 plus task docs); `deploy` rebuilt on A and copied to station-B. sha256, identical on both stations: server `1968675730f11fb071a92f7b16660d939d7e1eade08b492d8a19b8ff538c420a`, CLI `4cf9edbcced81f54ead3126dfcc6e9ef276692913c947656bc63b83a1a2c911b`, `twin-traffic.sh` `c9e152f32d6b8d5548551b255865b9c45c198b96739672b02eab9dee56fdc373`. Settings, log levels and local runner overrides as f2i. Times UTC (daemon-log clock; local +1 h). Evidence: `docs/dev/test-reports/onair-twin-ota-20261106-212610-evidence`; receive audio `rx-{a,b}-f2j-8k.wav.gz`.
+
+**Before:** A: AGC 2, RF gain 1, dial 144640000, RFPOWER 0.0117647; PCM2901 sources vol 0.15 and 0.44 (as f2i). rx-level check PASS: IC-9700 idle mean_sq 0.000125, threshold 0.000375; FT-991A 0.000410, threshold 0.001231. **After (read back):** A AGC 2, RF 1, dial 144640000, RFPOWER 0.0117647, PTT 0; FT-991A dial 144641564, RFPOWER 0.05, AGC 2, PTT 0; nothing running. 0 STOP lines (no keying over 70 s).
+
+**Result: `false_opens` 0, and every SL9/SL10 frame A could not decode got a NACK at B.**
+- **A's final detector counters** (110 `preamble carrier detect` lines, 20:33:57.41 to 20:39:54.87): `blocks=4964 opens=109 false_opens=0 held_no_frame=0 us_per_block=992`. **No step of `false_opens`: 0 in all 110 lines**, `held_no_frame` 0 in all. First line `20:33:57.408 blocks=1 opens=0`; first open `20:33:58.525 blocks=33 opens=1`. `us_per_block` 883–1064 (median 995). B: 0 detector lines. All 110 lines compact: `preamble-carrier-detect-a.txt` in the evidence dir.
+- **A's `frame_received`:** OFDM52 6, OFDM52-8PSK 28, OFDM52-16QAM 31 (65 OFDM), QPSK250-D 3, BPSK250 3, BPSK31 2, BPSK63 1, BPSK100 1.
+- **A's rate decisions by decoded level, SNR dB:** SL2 2 (3.7…7.8), SL3 1 (11.1), SL4 1 (13.1), SL5 1 (13.3), SL6 3 (8.9…9.9), SL7 6 (8.2…8.4; 4 hold, 2 climb_on_evidence), SL8 28 (2.2…8.1, median 6.9), SL9 31 (3.4…9.8, median 8.6). SL10 never decoded.
+- **A's NACK decisions: 44** (f2i: 12): nack_hold 36, nack_step_down 8; by A's level at the time (`from`): SL8 2, SL9 30, SL10 12.
+- **B received 44 `ack=Nack`** (equal to A's 44): `recommended=Sl9 from=Sl9 to=Sl9` 26, `recommended=Sl10 from=Sl10 to=Sl10` 8, `recommended=Sl8 from=Sl10 to=Sl8` 4, `recommended=Sl8 from=Sl9 to=Sl8` 3, `recommended=Sl8 from=Sl8 to=Sl8` 2, `recommended=Sl7 from=Sl9 to=Sl7` 1. B's ACK lines in all: 117 (AckOk 53, AckUp 20, Nack 44), first 20:31:11.96, last 20:39:56.89; by send level (`from=`): SL2 2, SL3 1, SL4 1, SL5 1, SL6 3, SL7 6, SL8 30, SL9 61, SL10 12.
+- **SL9/SL10 sends A did not decode → what B got:** SL9: 61 replies, 31 not-NACK (= A's 31 SL9 decodes), 30 NACK. SL10: 12 replies, all NACK (A decoded none). **Every undecoded SL9/SL10 send got a NACK; none was left silent** (all 73 SL9/SL10 sends got a reply: 0 silent windows at SL8–SL10). I matched by counts of B's ACK lines and A's decisions, not by timestamping each send against A's attempt.
+
+**B's silent windows, abandons, fall-backs (f2i: 23 / 4 / 2):** `ACK not received within window` **3** (20:27:28.15, 20:28:45.05, 20:30:01.52), `OTA send abandoned` **1** (20:28:45.05), `back to the level before it` **0**, `no fall-back` **1**: `20:28:45.049038Z INFO OTA: the peer is silent; no fall-back level=Sl2 why="no unconfirmed climb is recorded"`. All three windows are at SL2 before the first ACK (20:31:11.96), i.e. the start of the run, not OFDM. `message_received` on B 74; 0 `TCP client event receiver lagged` lines.
+
+**`capture read holds` on A: 4** (f2i: 23; f2h: 111): 20:27:27 (71 200 samples), 20:28:44 (72 600), 20:30:01 (71 600), 20:40:38 (9 800). **None between 20:33:57 and 20:39:54 (the OFDM episode)**; the first three are at the SL2 start next to B's silent windows, the last in the sign-off phase. B 0.
+
+**Narrow rungs:** SL2→SL6 climbed one ACK per level (SL2 2, SL3 1, SL4 1, SL5 1, SL6 3) with QPSK/BPSK decodes as in f2i; the SL2 start was slow (3 silent windows, 1 abandon, first ACK 20:31:11.96, 4 min after the run began); I did not investigate why.
+
+**Station IDs:** A `with-ack` 20:34:09.27, `sign-off` 20:40:33.19; B `with-data` 20:34:11.91, `sign-off` 20:40:28.48 and 20:41:10.99.
+
+**Prediction check:** `false_opens` near 0: **met (0)**. Undecodable SL9/SL10 frames get a NACK instead of silence: **met** (44 NACKs, 0 silent at SL8–SL10); B's silent windows 3 against 23, abandons 1 against 4, fall-backs 0 against 2. Kill not met. B→A still stops at SL9 (SL10 does not decode; 12 NACKs there).
+
+**Not done / open:** the slow SL2 start (3 silent windows before the first ACK); per-send timestamp matching; the 4 min between the run start and the first ACK was not analysed.
+
+### Review of task 30 (pc1 session, 2026-11-06)
+
+**The fix works on air (#1519). Every genuine failed OFDM frame now gets a NACK.**
+- **The false-open counter is clean:** `false_opens` was 0 in all 110 of A's detector lines (f2i: 22),
+  and `held_no_frame` stayed 0.
+- **A keyed 44 NACKs** (f2i: 12), and B received all 44.
+  - Every SL9 or SL10 send A did not decode got a NACK: SL9 61 replies = 31 decodes + 30 NACKs; SL10
+    12 replies, all NACKs.
+  - This was matched by counts, not per-send timestamps.
+- **No silence on the OFDM rungs:**
+  - B's `ACK not received` windows: 3 (f2i: 23). All three come at SL2, before B's first ACK and
+    before any OFDM.
+  - Abandons: 1 (f2i: 4). Falls back: 0 (f2i: 2).
+- **The OFDM ladder:** A decoded 65 OFDM frames (OFDM52 6, 8PSK 28, 16QAM 31), and B→A held SL9 under
+  AGC FAST. SL10 still never decodes (12 NACKs), which is a rung-edge matter and was not targeted
+  here.
+- **The detector's cost on rpi51:** 883–1 064 µs per block. A had 0 `capture read holds` in the OFDM
+  episode (f2i: 23).
+- The narrow rungs did not regress.
+
+**Open, parked: a slow SL2 start.** The run's first four minutes at SL2 had:
+- 3 silent windows and 1 abandon;
+- A `capture read holds` of about 71 000 samples (≈ 9 s) next to each window.
+
+That is the BPSK31 phase, not OFDM. The detector cannot be involved, because P runs only with an OFDM
+candidate. An SL2 decode or fallback scan of about 9 s on rpi51 missing B's ACK window is the likely
+shape, but it is unchecked. To look at before A2 is scored.
+
+## Task 31 — a cold first contact on the dense BPSK estimator: does B's first SL2 frame decode? (status: done — reviewed below)
+
+**Why.** In f2j (task 30) A's first three SL2 (BPSK31) frames from B failed cold. A's AFC started
+at 0 Hz, B sat at about −9 Hz, and the BPSK settle locked one preamble sideband (±15.6 Hz) off the
+carrier. A keyed nothing; B timed out three times and abandoned a message: about 4 min lost.
+
+#1520 replaces the coarse stage with a dense spectral peak. On f2j's recording, the first frame now
+decodes cold in about 2 s. Every run restarts both daemons, so A's AFC is cold at the start of each
+run, and the first frames of f2k are the test.
+
+**Build:** the branch head (`main` at #1520 plus the task docs). Rebuild and redeploy BOTH stations,
+and record the sha256 of both binaries. Settings, log levels and runner overrides as f2j; A on
+AGC FAST (2), read back before and after.
+
+### Part A — run f2k (B sends, `fast` profile; keys both rigs: one go)
+
+As f2j: `TRAFFIC_FROM=B`, `TRAFFIC_INTERVAL=8`, `TRAFFIC_DURATION=600`.
+
+### Report
+
+As task 30, plus, for the SL2 start:
+- the time of B's first send, of B's first ACK, and the gap between them (f2j: about 4 min);
+- B's `ACK not received` windows and abandons before its first ACK (f2j: 3 and 1);
+- A's `capture read holds` before the first ACK (f2j: three of about 71 000 samples);
+- **A's settled carrier offset on the first decoded frame:** the `afc_correction_hz` A adopts, or the
+  first `carrier offset` / settle line in A's log. And A's decode time for that frame.
+- the full run's results as task 30 (the OFDM phase must not regress: false opens, NACKs, SL9).
+
+**Prediction:** B's first SL2 frame is ACKed, with no silent window or abandon before the first ACK.
+**Killed if** a silent window precedes the first ACK while A's decode of that frame runs into its
+deadline.
+
+**Weak if:** the offset this run is inside ±7.8 Hz. BPSK31 decodes that far off even with a wrong
+settle, so a clean start would then not exercise the fix. Report the offset, so the review can say
+which case it was.
+
+
+### Results — Part A, run f2k (B sends, `fast` profile, A's AGC FAST, dense BPSK estimator; 2026-11-07)
+
+**Setup:** rpi51 at `3b5c677d` (m3/onair, #1520 plus task docs); `deploy` rebuilt on A and copied to station-B. sha256, identical on both stations: server `21829a958b2f6643c446cbed1e0717d973e3afe7458523ca4ff4ed123b1be15b`, CLI `ad77000f8235476a7b4d88e6392b007c8af26f4c0c49e44656ce87b89d04f6f5`, `twin-traffic.sh` `c9e152f32d6b8d5548551b255865b9c45c198b96739672b02eab9dee56fdc373`. Settings, log levels and local runner overrides as f2j. Times UTC (daemon-log clock; local +1 h). Evidence: `docs/dev/test-reports/onair-twin-ota-20261107-144125-evidence`; receive audio `rx-{a,b}-f2k-8k.wav.gz`.
+
+**Before:** A: AGC 2, RF gain 1, dial 144640000, RFPOWER 0.0117647; PCM2901 sources vol 0.15 and 0.44 (as f2j). rx-level check PASS: IC-9700 idle mean_sq 0.000105, threshold 0.000316; FT-991A 0.000367, threshold 0.001102. **After (read back):** A AGC 2, RF 1, dial 144640000, RFPOWER 0.0117647, PTT 0; FT-991A dial 144641564, RFPOWER 0.05, AGC 2, PTT 0; nothing running. 0 STOP lines.
+
+**SL2 start: B's first frame was ACKed, with no silent window and no abandon before the first ACK.**
+- **B's first send** keyed at 13:41:27 (watcher's first keyed reading; B's daemon log carries no send line at this log level, so this is a 1 s poll, not an exact time); that BPSK31 frame ran until about 13:42:33. **B's first ACK 13:42:36.70** (`ack=AckOk recommended=Sl2 from=Sl2 to=Sl2`). Gap about 69 s, which is the frame's own length plus A's ACK, not a timeout (f2j: about 4 min). B's next ACKs at 13:43:46.35 and 13:44:55.95, one per send.
+- **`ACK not received` windows before the first ACK: 0; abandons: 0** (f2j: 3 and 1). The run's only silent window is at 13:49:37.91, in the OFDM phase.
+- **A's `capture read holds` before the first ACK: 0.** A has 1 hold in the whole run, `13:52:44.45 samples=12200 since_ms=1523`, after the sign-off IDs.
+- **A's settled offset on the first decoded frame:** A's first `afc_update` event (BPSK31, the first `frame_received`): **`offset_hz=-0.726`, `correction_hz=-6.314`**; the next updates: −7.424 (BPSK31), −7.910 (BPSK31), −8.261 (BPSK63), −8.308 (BPSK100). So A started from 0.0 and adopted −6.31 Hz on the first frame, −8.3 Hz at the end of the climb. **The first frame's correction, 6.31 Hz, is inside ±7.8 Hz** (the task's "weak if" case): BPSK31 can decode that far off even with a wrong settle, so this clean start does not by itself prove the fix; the offset B sat at, about −8.3 Hz, is outside ±7.8 Hz, the first settle only reached −6.31. A's daemon log (`info,ofdm_plugin=debug`) has no settle or carrier-offset line for BPSK, so there is no other source for the offset.
+- **A's decode time for the first frame:** not logged. The ACK reached B 13:42:36.70, about 3 s after B's frame ended (~13:42:33); I did not measure A's decode more precisely (A's first ACK keying fell between two 1 s polls).
+
+**The full run as task 30 (no regression):**
+- **A's final detector counters** (99 `preamble carrier detect` lines, 13:46:28.68 to 13:52:04.53): `blocks=4831 opens=98 false_opens=0 held_no_frame=0 us_per_block=1005`. **`false_opens` 0 in all 99 lines (no step)**, `held_no_frame` 0 throughout; first open 13:46:29.575 (`blocks=29 opens=1 us_per_block=743`); `us_per_block` 743–1049 (median 1005). B: 0 detector lines. Compact table: `preamble-carrier-detect-a.txt`.
+- **A's `frame_received`:** OFDM52 3, OFDM52-8PSK 33, OFDM52-16QAM 30 (66 OFDM), QPSK250-D 3, BPSK250 3, BPSK31 3, BPSK63 1, BPSK100 1.
+- **A's rate decisions by decoded level, SNR dB:** SL2 3 (−3.2…3.5), SL3 1 (12.4), SL4 1 (13.7), SL5 1 (15.3), SL6 3 (3.3…9.9), SL7 3 (9.5…9.7), SL8 33 (3.7…9.0, median 8.2), SL9 30 (3.5…10.6, median 9.6). SL10 never decoded.
+- **A's NACK decisions: 31** (f2j 44, f2i 12): nack_hold 21, nack_step_down 10; by A's level: SL9 1, SL10 30. **B received 31 `ack=Nack`:** `recommended=Sl10 from=Sl10 to=Sl10` 20, `recommended=Sl8 from=Sl10 to=Sl8` 10, `recommended=Sl9 from=Sl9 to=Sl9` 1.
+- **B's ACK lines:** 106 (AckOk 48, AckUp 27, Nack 31), 13:42:36.70 to 13:52:06.78; by send level (`from=`): SL2 3, SL3 1, SL4 1, SL5 1, SL6 3, SL7 3, SL8 33, SL9 31, SL10 30. SL9: 30 non-NACK (= A's 30 SL9 decodes) and 1 NACK; SL10: 30, all NACK (A decoded none). **Every SL9/SL10 send A did not decode got a NACK; 0 silent** (counts matched, not per-send timestamps).
+- **B:** `ACK not received` 1 (13:49:37.91, no abandon followed), `OTA send abandoned` 0, `back to the level before it` 0, `no fall-back` 0; `message_received` on B 75; 0 `TCP client event receiver lagged` lines. B's `capture read holds` 16, all 13:58:10–14:06:32, after both sign-off IDs (the daemons ran on until the recordings ended), 8000–17800 samples; none in the run window.
+- **Station IDs:** A `with-ack` 13:49:25.82, `sign-off` 13:52:38.12; B `with-data` 13:49:28.24, `sign-off` 13:53:14.12.
+
+**Prediction check:** B's first SL2 frame ACKed with no silent window or abandon before it: **met**. Kill not met. The OFDM phase did not regress (false_opens 0, NACKs answered, SL9 reached; SL10 still undecoded). **Weak-case flag:** first-frame correction −6.31 Hz is inside ±7.8 Hz.
+
+**Not done / open:** A's decode time for the first frame; whether the old build would have failed at this offset (not tested; the run differs from f2j in B's offset at start, which I did not measure); which BPSK sideband the settle chose.
+
+### Review of task 31 (pc1 session, 2026-11-07)
+
+**The prediction is met, and the start by itself is a weak test, as the station flagged.**
+- B's first SL2 frame was ACKed about 3 s after it ended: 0 silent windows and 0 abandons before the
+  first ACK (f2j: about 4 min, 3 and 1).
+- A's first-frame correction was −6.31 Hz, inside BPSK31's ±7.8 Hz native reach.
+
+**The offline counterfactual** (replayed on `rx-a-f2k-8k.wav.gz` with the daemon's construction and the
+production deadline, release; both coarse stages, the former picket stage run by reference):
+- **Fidelity:** the replay's kept AFC on frames 1–3, −6.31 / −7.43 / −7.91 Hz, matches A's on-air
+  `afc_update` events exactly.
+- **Frame 1 (about −6.3 Hz): both stages decode alike** (1.66 s against 1.68 s, 25 attempts each). The
+  old picket settles right at 12 of 13 window starts there (one start lands on a sideband, +9.35 Hz).
+  So f2k's clean start does not, alone, show the fix took effect: the old build would have started
+  cleanly by luck of offset.
+- **Frame 3 (B had drifted to about −7.9 Hz), replayed cold, is the strong confirmation.** The old
+  picket puts all 13 starts on the +15.6 Hz sideband and misses the deadline (235 attempts, 155 past
+  it). The dense stage decodes in 1.79 s. That is f2j's failure reproduced on f2k's own channel, and
+  fixed by #1520.
+
+**Why −6.31 Hz and not about −8.3 Hz:** B's carrier drifted, it was not mis-settled.
+- B drifted about 1.8 Hz downward over 3.5 min (−6.5 → −7.3 Hz across frame 1, about −8.3 Hz by the
+  end of frame 3), measured on the 2fc line of x². The FT-991A warming up under transmit is the likely
+  cause; that is inferred.
+- The settle was within about 0.2 Hz of the carrier at the frame start. The kept AFC lags intra-frame
+  drift by about 1 Hz, through the 0.1 tracking step, which is harmless at these rates.
+
+**The rest of the run did not regress:**
+- false opens 0 in all 99 detector lines;
+- all 31 undecodable SL9/SL10 frames NACKed, all received;
+- 1 silent window in the run (OFDM phase), 0 abandons;
+- B→A held SL9 (OFDM52 3, 8PSK 33, 16QAM 30). SL10 still never decodes.
+- The detector's cost on rpi51 is 743–1 049 µs per block.
 
