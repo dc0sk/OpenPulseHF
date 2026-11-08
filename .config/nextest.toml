@@ -1,0 +1,77 @@
+# cargo-nextest configuration — the runner for `scripts/gate.sh`'s workspace test step.
+#
+# Why nextest: `cargo test --workspace` runs its ~400 test binaries ONE AFTER ANOTHER (measured
+# 2026-11-08: the binaries' run times sum to 43.3 min of a 48 min gate; `rho_calibration_receive`
+# alone is 395 s). nextest runs binaries and tests in parallel, one process per test.
+#
+# Everything here is a SAFETY setting, not a speed knob. Read before changing:
+#
+# * `test-threads` is BOUNDED, never the CPU-count default. A sabotage run on this host once took
+#   32 GB and froze it, and the corruption it caused landed in a different repository. The value
+#   below was chosen from a measured peak (docs/dev/project/traceability.md, 2026-11-08 entry).
+# * `retries = 0`. A retry turns a flake into a pass and hides it; this repo's wall-clock verdicts
+#   (#1066) are exactly the tests a retry would launder.
+# * The test groups below exist because nextest runs EACH TEST IN ITS OWN PROCESS and binaries
+#   CONCURRENTLY, and two things in this tree assumed otherwise. Each group names its reason; do not
+#   fold them into one serial group (the 64 daemon integration tests sum to 9.4 min — serialising
+#   them all would cost about the whole run) and do not delete one without re-checking the port
+#   inventory with the command in its comment.
+
+# Pinned, not left to the default: scripts/gate.sh reads `<dir>/gate/junit.xml`. nextest resolves
+# this against the workspace root even when CARGO_TARGET_DIR points elsewhere; `target/` is
+# gitignored, so the gate's drift guard does not see the report being written.
+[store]
+dir = "target/nextest"
+
+[profile.default]
+test-threads = 16
+retries = 0
+# Report slow tests, never kill them: a timeout is a verdict change, and the gate's contract is
+# that every test runs to its own end. `cargo test` had no timeout either.
+slow-timeout = { period = "120s" }
+
+[test-groups]
+# `twin_daemon_bridge` allocates its daemons' ports from a per-PROCESS atomic counter starting at
+# 19010. Under `cargo test` all 8 tests shared one process, so the counter made them distinct.
+# Under nextest every test is a fresh process and every one starts at 19010 — run two at once and
+# the second daemon cannot bind. Serialising the binary restores the invariant the allocator
+# relied on, without editing the test.
+twin-bridge-port-allocator = { max-threads = 1 }
+# Two daemon test BINARIES hand-pick overlapping ports: `ota_ack_deadline_on_real_time_audio`
+# binds 19180/19181, `repeater_relays_a_daemon_burst` binds 19180–19185. `cargo test` ran binaries
+# one after another, so they never met; nextest runs binaries concurrently. Inventory (comments
+# stripped, every 19xxx literal per file):
+#   for f in $(grep -rlE '\b19[0-9]{3}\b' --include=*.rs crates); do
+#     echo "$f: $(sed -E 's://.*$::' "$f" | grep -oE '\b19[0-9]{3}\b' | sort -un | tr '\n' ' ')"; done
+# All other daemon test binaries' windows are disjoint (2026-11-08); a new one must be too, or join
+# this group.
+daemon-port-19180 = { max-threads = 1 }
+
+[[profile.default.overrides]]
+filter = 'binary_id(openpulse-daemon::twin_daemon_bridge)'
+test-group = 'twin-bridge-port-allocator'
+
+[[profile.default.overrides]]
+filter = 'binary_id(openpulse-daemon::ota_ack_deadline_on_real_time_audio) | binary_id(openpulse-daemon::repeater_relays_a_daemon_burst)'
+test-group = 'daemon-port-19180'
+
+# Start the longest tests first. The run's wall time is bounded below by its longest test
+# (`rho_calibration_receive` ~430 s of a ~590 s run, measured 2026-11-08), and nextest otherwise
+# schedules in binary order, so a long test that starts late extends the run by its own length.
+# A SPEED setting only: a stale list here changes when a test starts, never whether it runs.
+[[profile.default.overrides]]
+filter = 'binary_id(openpulse-modem::rho_calibration_receive)'
+priority = 100
+
+[[profile.default.overrides]]
+filter = 'binary_id(openpulse-modem::f6_capture_class_fixtures) | binary_id(openpulse-modem::mfsk16_harq) | binary_id(openpulse-modem::preamble_correlation_settle) | binary_id(openpulse-modem::capture_replay_corpus)'
+priority = 50
+
+# The gate's profile: the default profile's settings and groups (a custom profile inherits them),
+# plus a JUnit report. `scripts/lib/nextest_junit.py` reads it — the gate's counts, failure list and
+# trace.py's evidence lines come from this file, never from scraping nextest's human output.
+[profile.gate]
+fail-fast = false
+
+[profile.gate.junit]
+path = "junit.xml"
