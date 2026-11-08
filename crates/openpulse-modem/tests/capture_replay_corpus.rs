@@ -115,6 +115,20 @@ fn the_ofdm_detect_excerpts_keep_to_the_asset_rule() {
         "{name} is not plain 16-bit mono PCM"
     );
     assert!(bytes <= 60_000, "{name} is {bytes} B, over its 60 KB cap");
+    // The re-head's trap cut (five SL8 frames of f2h under AGC SLOW): the same format rule, and its
+    // own 1 MB cap.
+    let name = "ic9700-ofdm52-f2h-agc-slow-trap.wav";
+    let c = corpus(name);
+    assert_eq!(c.sample_rate, 8_000, "{name} must be 8 kHz");
+    let bytes = std::fs::metadata(dir.join(name))
+        .unwrap_or_else(|e| panic!("{name}: {e}"))
+        .len();
+    assert_eq!(
+        bytes,
+        44 + 2 * c.samples.len() as u64,
+        "{name} is not plain 16-bit mono PCM"
+    );
+    assert!(bytes <= 1_000_000, "{name} is {bytes} B, over its 1 MB cap");
 }
 
 /// The IC-9700 capture must still be the HOT floor that broke #1020 — above the gate ceiling.

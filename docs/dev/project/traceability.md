@@ -15,6 +15,169 @@ this ledger adds the design rationale and the actually-observed results per chan
 
 ---
 
+## 2026-11-08 — The receiver remembers a failed climb, and one SL2 frame of airtime proves the rung (work plan M3, A2)
+
+- **Requirement/change:** REQ-FUN-06. On air (task 31, f2k, B→A) the receiver re-proposed SL10 after
+  every three clean SL9 decodes; three SL10 failures stepped its anchor to SL8, below the SL9 that
+  kept decoding (ten SL10 → SL8 → SL9 cycles, 30 of 106 frames at SL10, 33 at SL8), and each probe
+  spent the whole #1456 NACK budget (f2h's 10-min mute began with three SL10 NACKs). On the entry
+  rung a climb on evidence took three 66.56 s SL2 frames, 3.5 min.
+- **Design decision:** `docs/dev/design/ota-climb-memory.md`; Fable's mandatory review
+  (`docs/dev/reviews/review-ota-climb-memory-2026-11-08.md`): APPROVE WITH CHANGES for both changes,
+  R1–R6 applied (the maintainer chose option c for R2 and a for R4). Change 1: a **keyed** failure
+  while a probe is outstanding withdraws to the confirmed rung (`ProbeWithdrawn`), the anchor kept,
+  and the rung is declined (`ClimbDeclined`) for 4, 8, 16 would-be climbs; the expiry is clean
+  airtime at the anchor, 120 then 240 s, capped (R2); a leaked failure keeps `NackStepDown` (R1); a
+  muted one moves nothing (#1460). Change 2 (only with change 1): a streak with ≥ 1 decode and ≥ 60 s
+  of decoded airtime proves the rung. Trade-offs: no HARQ on the probe rung (0 SL10 decodes on 2 m);
+  a lost first NACK no longer leaves the probe a candidate; A2 clause 2 is now shown by an induced
+  demotion (R4). Not a wire change.
+- **Implementation:** `crates/openpulse-core/src/ota_rate.rs` (`RxClimbBackoff`, `rx_climb_backoff`,
+  `on_rx_frame_timed`, the withdraw and decline branches, `RateDecision::{ProbeWithdrawn,
+  ClimbDeclined}`, `RX_CLIMB_BACKOFF_*`, `CLIMB_EVIDENCE_AIRTIME_S`);
+  `crates/openpulse-modem/src/engine.rs` (`decoded_airtime_s` and its cache; the `OTA climb memory`
+  log line, R3).
+- **Tests:** in-crate `ota_rate::tests::{a_failed_probe_withdraws_to_the_confirmed_rung_and_keeps_the_anchor,
+  a_withdrawn_rung_is_declined_then_reprobed_and_the_wait_doubles_to_16,
+  the_memory_expires_after_120_s_then_240_s_of_clean_airtime, a_leaked_failure_at_a_probe_steps_down,
+  a_decode_at_or_above_the_rung_clears_the_memory, a_step_below_the_anchor_clears_it,
+  a_muted_probe_failure_withdraws_nothing, a_lock_or_new_bounds_drop_the_climb_memory,
+  one_sl2_frame_of_airtime_proves_the_rung, airtime_without_a_decode_proves_nothing,
+  a_failure_resets_the_airtime, no_airtime_is_todays_rule,
+  an_airtime_climb_that_fails_never_reaches_the_sub_floor}`; `never_desyncs_under_arbitrary_ack_loss`
+  extended to random outcomes, verdicts and ACK loss with withdraws and declines; the variant sweep
+  and four failure tests re-specified from a settled state with probe cases beside them;
+  `openpulse-modem` `decoded_airtime_reaches_the_controller`; daemon twins
+  `a_ceiling_rung_is_probed_with_a_backoff` (new) and `muted_failures_move_no_ladder` (counts
+  announced moves).
+- **Test results (run at `4fdd1f9a`, debug, `--no-default-features`, `--no-fail-fast
+  --test-threads=4`):** `openpulse-core` 585/0 (1 ignored, 26 binaries); `openpulse-modem` 683/0 (125
+  ignored); `openpulse-daemon` 234/0 (2 ignored); `openpulse-linksim` 22/0. The twin: 4 SL9 probes in
+  40 of B's decisions, 0 decodes below SL8, 4 withdraws. Sabotages, each watched red (design note,
+  Implementation table): 14 on the controller (`ota_rate`, 50 tests; the withdraw removed fails 10,
+  a leaked failure withdrawing fails 2), the engine passing `None`, the twin at 24 SL9 probes with
+  the withdraw removed, and `muted_failures_move_no_ladder` at 3 moves with muted failures counted.
+  R4 replay (the design's apparatus re-run on the implemented controller, removed after): f2j
+  `NackStepDown` 29 today, 7 with change 1, 8 with both; it reproduces the design's f2j rows (today
+  102/223/42 frames, change 1 262/130/4). Clippy (`-D warnings --all-targets`) clean on
+  openpulse-core, openpulse-modem and openpulse-daemon; `cargo fmt --all -- --check` clean;
+  `check-trailer.sh`, `reachability.sh check` and `check-doc-stamps.sh` PASS.
+- **Gate:** not run here (the maintainer's session runs `scripts/gate.sh` and `scripts/slow-tests.sh`,
+  `ota` included: CAP-33 drives this controller).
+- **Gate:** `GATE: PASS e0b7f59f57f6970dfec071b2b32a4a5386b5cde6 clean 20261108T115309Z` (nextest; 2848 passed, 0 failed; 9m23s). An earlier `cargo test` gate at `70775e0b` (before the rebase onto #1524) failed only `id_rides_in_own_keying`, under host load from concurrent test runs (cross-worktree fixed-port collisions, #1524 finding); it passed 3/3 alone on a quiet host. `scripts/slow-tests.sh` (all, at `70775e0b`; the rebase brought only CI changes): `ota_channel_adaptation` 3/0, `spectral_busy_gathers_weak_frames` 2/0, `total_power_bursts_keep_their_head` 1/0, `ofdm_preamble_detect` 2/0, `ofdm_detect_fade` 1/0, `bpsk_settle_sideband` 1/0; `notch_rescues_interferer` 2/1, the known red row #1457.
+
+## 2026-11-08 — The gate's workspace tests run under cargo-nextest (work plan decision 9: a daily gate)
+
+- **Requirement/change:** `scripts/gate.sh` took 48m26s, 45 min of it `cargo test --workspace
+  --no-default-features --no-fail-fast`, whose ~400 binaries run one after another (their run times
+  sum to 43.3 min; `rho_calibration_receive` alone ~430 s). Decision 9 asks for the gate daily; the
+  maintainer chose cargo-nextest. The contract must not move: same tests, `GATE:` line last, the
+  verdict JSON's fields, an untruncated failure list, `--no-fail-fast` totals, trace.py's evidence.
+- **Design decision:** nextest 0.9.143 (the version the CI action's pinned manifest lists) with
+  `.config/nextest.toml`: `test-threads = 16` (bounded), `retries = 0`, a 20 min `terminate-after`
+  (a hang becomes a named TIMEOUT failure, not a gate with no verdict); test groups for what relied
+  on serial binaries — `twin_daemon_bridge`'s per-process port allocator (max-threads 1), and the
+  two daemon binaries that share 19180/19181 (max-threads 1); daemon integration tests take 4 of
+  the 16 slots (`threads-required`), since each runs two real daemons against a real-time tick; the
+  longest binaries start first. Counts come from nextest's JUnit report, re-emitted in libtest's
+  shape (`scripts/lib/nextest_junit.py`), never from nextest's terminal output, whose replay of a
+  failing test's stdout carries libtest's own `test result:` line. Doctests run as their own step
+  (`cargo test --doc`). A parity step (`scripts/lib/nextest_parity.py`) compares, per binary path,
+  what `cargo test` would run (`--list` minus `--list --ignored`) with nextest's selection. Fable's
+  review (`docs/dev/reviews/review-gate-nextest-2026-11-08.md`): approve with changes, all required
+  ones applied — a `<skipped>` JUnit case is refused, the report must hold exactly nextest's
+  selection, a full run that counts no tests cannot pass, the counted step names are defined once.
+- **Implementation:** `.config/nextest.toml`; `scripts/gate.sh` (`run_nextest`, `report_step`,
+  `junit_path`, `count_field`, `STEP_REPORT`/`STEP_DOCTEST`, `self_test`, verdict field
+  `nextest`); `scripts/lib/nextest_junit.py`; `scripts/lib/nextest_parity.py`;
+  `scripts/lib/trace.py` (evidence-self-test probes G, G2); `.github/workflows/ci.yml` and
+  `post-merge-gate.yml` (taiki-e/install-action at coverage.yml's SHA, `cargo-nextest@0.9.143`,
+  `fallback: none`; the JUnit report uploaded); CLAUDE.md, `docs/dev/verification-mechanics.md`,
+  `docs/dev/release-checklist.md`.
+- **Tests:** `scripts/gate.sh --self-test` (now also requires the report's total to equal nextest's
+  selection); `python3 scripts/lib/trace.py evidence-self-test` probes G and G2; the gate's parity
+  step; the sabotages below.
+- **Test results (this host, 24 threads, 121 GB; build in `~/cargo-targets/openpulse-nextest`,
+  `CARGO_PROFILE_{DEV,TEST}_DEBUG=0`, `CARGO_INCREMENTAL=0`; every full-suite run under the host
+  build lock):**
+  - Baseline `cargo test` at `8cd84d97`: 2831 passed, 0 failed, 147 ignored, 398 `test result:`
+    lines (365 binaries + 33 doctest crates); `muted_failures_move_no_ladder` hung 20 min and was
+    killed by hand (1:02:41 wall with the hang). Per-test set against nextest's JUnit (key: binary
+    file name with hash + test name): **identical** — 2830 nextest tests + 2 doctests — except that
+    killed test, which nextest ran and passed. nextest skipped 147 = cargo's 147 ignored.
+  - nextest alone, 16 threads, before priorities and `threads-required`: 9m52s, 2830/0.
+  - Gate at `903f3bc7`: run 2 FAIL (`id_rides_in_own_keying`, `muted_failures_move_no_ladder`)
+    while another worktree ran an unlocked `cargo test -p openpulse-daemon`; run 3 FAIL
+    (`muted_failures_move_no_ladder`) with a port watcher recording that worktree's
+    `muted_failures_move_no_ladder` listening on 19220/19221, this test's ports; run 4 PASS, 2832/0,
+    **7m42s** (test step 7m26s). Holding 19220 with a plain listener and running the test alone
+    reproduces run 3's failure exactly (300.3 s, `B never logged seven failures after climbing:
+    Elapsed(())`, line 157). Run 2's `id_rides_in_own_keying` was not separated: a collision or CPU
+    contention, both fit (no watcher ran).
+  - Gate at `67fe7447` (with `threads-required`, `terminate-after`): **runs 5–9 all `GATE: PASS`**,
+    suites 350, 2832 passed, 0 failed; gate wall 8m07s–8m17s against 48m26s; test step
+    7m58s–8m00s. `suites` is 350, not 398: JUnit holds the 317 binaries that ran a test (365 minus
+    17 with no tests and 31 with only ignored ones) plus 33 doctest crates.
+  - Peak memory: summed RSS of the test processes, sampled each second, 264–285 MB (16–17
+    processes); largest single process of the gate 250 MB (clippy; 593 MB on a cold clippy). The
+    `free` deltas were 0.1–2.2 GB, noisy with other sessions active. Memory is not what bounds
+    16 threads; CPU headroom for the real-time daemon tests is.
+  - Sabotages, each watched red: two failing tests planted in `openpulse-core` and `openpulse-dsp`
+    → `GATE: FAIL`, `tests_failed=2`, both named by binary in the failure list; `--self-test` PASS,
+    and with `--fail-fast` substituted it FAILs ("tests in report: 925 of 2831"); a test planted
+    and hidden by a nextest `default-filter` → parity FAIL naming it, PASS once restored; the
+    renderer marking every case `ok` → probe G FAIL; deleting only the renderer's
+    `test frame::tests::corrupted_crc_is_rejected ... ok` line from a PASS log → trace check
+    `REQ-FUN-05: CITED-BUT-DIDN'T-RUN`, the unedited log TRACE PASS.
+
+---
+
+## 2026-11-07 — The preamble detect re-heads a burst opened on hiss; a P-confirmed failure is keyed past the NACK budget (work plan M3, A2)
+
+- **Requirement/change:** REQ-FUN-06. On air (task 28, run f2h, A's IC-9700 on AGC SLOW) B sent 55
+  SL8 frames from 11:06:02 to 11:16:12 UTC, 51 decodable offline, and A keyed nothing. The floor had
+  learned the AGC's post-frame dips (squelch 0.53–0.61× the hiss), total power opened a burst on the
+  hiss about 2 s after each frame, and the next frame sat at the tail of a 66–92k-sample burst out of
+  the decoder's reach; and three SL10 NACKs had spent the #1456 NACK budget, so every failure was muted
+  until the 10-min leak.
+- **Design decision:** `docs/dev/design/ofdm-preamble-detect.md`, Implementation, "The re-head and the
+  budget exemption". Fable's mandatory review (it changes when an ACK/NACK keys): (a) the re-head
+  approved with changes, (b) the exemption approved; R1 (a floor fix) and a sender-side step-down
+  rejected; the maintainer's go given. (a) P's first open in a burst total power or S opened, beyond
+  `lead + first_block + 4·SYM_LEN`, restarts the burst at P's onset as a P-opened burst; the head is
+  dropped (a flushed hiss head would key a NACK on noise) and not learned. Trade-off: a non-OFDM frame
+  in the head (a with-data station ID) is lost. (b) A failed burst with `p_confirmed` and coherence ≥
+  0.8 is keyed and not charged; the busy and no-callsign mutes stand; a foreign OFDM52 sender draws at
+  most 3·(rung − 6) NACKs.
+- **Implementation:** `crates/openpulse-modem/src/engine.rs` (`rehead_at_p`, `take_p_head`,
+  `p_rehead_reach`, `P_REHEAD_REACH_SYMBOLS`, `preamble_detect_reheads`; `set_ota_budget_verdict`,
+  `OtaRxResult::p_evidence`); `crates/openpulse-daemon/src/nack_budget.rs` (`decode_ota_burst`);
+  `crates/openpulse-daemon/src/server.rs` (`log_preamble_detect`: `reheads=`).
+- **Tests:** in-crate `preamble_detect_false_open::{a_burst_opened_on_noise_is_reheaded_at_ps_onset,
+  a_dropped_head_keys_nothing, a_held_fragment_of_a_genuine_frame_is_not_a_false_open}` (the old held
+  fixture re-pointed as the re-head's positive gate; the held case now within reach);
+  `preamble_detect_rehead_trap::the_trapped_stretch_decodes_with_the_rehead` on the new capture
+  `ic9700-ofdm52-f2h-agc-slow-trap.wav` (892 044 B, 1 MB cap in the asset-rule test); daemon
+  `nack_budget::tests::a_p_confirmed_failure_keys_past_the_budget_and_is_not_charged`.
+- **Test results (run at `59752631`, debug, `--no-default-features`, `--no-fail-fast
+  --test-threads=4`):** `openpulse-modem` 682/0 (125 ignored); `openpulse-daemon` 233/0 (2 ignored);
+  `ofdm-plugin` 49/0. Among them, green: `ofdm_preamble_detect` 8 (incl. `two_ofdm_frames_stay_two_bursts`
+  and `ofdm_frames_gather_on_the_second_rig`), `ofdm_detect_fade`, `dcd_agc_pumped_hiss`, `dcd_pre_agc`,
+  `dcd_wideband_long_frame`, `daemon_squelch_noise_floor`, `capture_replay_corpus` 9, `veto_membership_pin`,
+  `dcd_floor_follows_the_filter` 12; daemon `ofdm_detect_twin`, `abandon_burst_when_keying`, the
+  `nack_budget` tests 7. Trap cut: 5/5 decoded, 5 re-heads, squelch/hiss 0.49 at the measured pass's
+  start. Full f2h stretch (Fable's harness, replay from 0, SL8 locked at 440 s, 56 B markers): 1/56 at
+  `b0b3a10b`, 52/56 at the final code (squelch/hiss 0.53–0.59, 59 re-heads, 3 P-confirmed failures
+  keyed, `held_no_frame` +0). Sabotages, each watched red (design note table): reach `usize::MAX` →
+  trap 0/5 and the positive gate red; head flushed → `a_dropped_head_keys_nothing` red (the head keyed a
+  NACK); reach 0 → the held case red; the daemon charging the budget, the engine keeping the budget's
+  mute, and the exemption overriding the busy mute → the exemption gate red each. The first "never
+  re-head" sabotage re-headed every burst (`usize::MAX as isize` is −1); the production comparison is
+  now in `usize`. Clippy (`-D warnings --all-targets`) clean on openpulse-modem and openpulse-daemon;
+  `cargo fmt --all -- --check` clean; `check-trailer.sh` and `reachability.sh check` PASS.
+- **Gate:** not run here (the maintainer's session runs `scripts/gate.sh` and `scripts/slow-tests.sh`).
+- **Gate:** `GATE: PASS 80d08a3e6a1f96c1959e152fec84e59b54ee0636 clean 20261107T185950Z` (suites 398, 2832 passed, 0 failed). `scripts/slow-tests.sh` (all, same tree): `ota_channel_adaptation` 3/0, `spectral_busy_gathers_weak_frames` 2/0, `total_power_bursts_keep_their_head` 1/0, `ofdm_preamble_detect` 2/0, `ofdm_detect_fade` 1/0, `bpsk_settle_sideband` 1/0; `notch_rescues_interferer` 2/1, the known red row #1457 (the same assertion as on main).
+
 ## 2026-11-07 — The BPSK carrier estimate's coarse stage is a dense spectral peak, not a 12.5 Hz picket grid (work plan M3, A2)
 
 - **Requirement/change:** REQ-PHY-03. On air (task 30, run f2j) A's cold trigger settle read +7.21 /

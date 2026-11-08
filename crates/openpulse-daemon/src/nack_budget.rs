@@ -70,7 +70,8 @@ impl NackBudget {
 /// One OTA burst through the receiver's ladder accounting, shared by `server::run`'s rx tick and the
 /// #1460 probes so they cannot drift apart. The budget's verdict reaches the engine before the decode
 /// (a station without a valid callsign keys nothing, so its failures are muted); the budget is
-/// charged after it. Returns the decode and whether its ACK may be keyed.
+/// charged after it, except for a failure the preamble detect confirmed as a frame, which is keyed
+/// and not charged. Returns the decode and whether its ACK may be keyed.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn decode_ota_burst(
     engine: &mut ModemEngine,
@@ -86,12 +87,15 @@ pub(crate) fn decode_ota_burst(
     // out over that frame, unheard: measured on air (task 15), station B flushed 56.5 s of a 66.6 s
     // frame and keyed a NACK over the rest. Muted, so the failure neither keys nor moves the ladder
     // (#1460) and the budget is left alone. A decode is still ACKed.
-    let verdict = if callsign_valid && !channel_busy {
-        budget.failure_verdict(engine.listening_samples())
+    //
+    // The budget's verdict goes in as the budget's: a failed burst the preamble detect confirmed as a
+    // frame is exempt from it (`ofdm-preamble-detect.md`, "The budget exemption"). On air (f2h) three
+    // NACKs spent the budget and A then muted 54 decodable-frame failures for the 10-min leak.
+    if callsign_valid && !channel_busy {
+        engine.set_ota_budget_verdict(budget.failure_verdict(engine.listening_samples()));
     } else {
-        NackVerdict::Muted
-    };
-    engine.set_ota_failure_verdict(verdict);
+        engine.set_ota_failure_verdict(NackVerdict::Muted);
+    }
     // `mode` is this station's ACTIVE mode: what its own non-ladder traffic (station ID, filexfer,
     // handshake, QSY, relay) is sent at. Passing it enables the uncoded fallback for exactly that
     // traffic (#1123); without it an OTA-enabled daemon cannot receive any of it.
@@ -105,8 +109,10 @@ pub(crate) fn decode_ota_burst(
     // A ladder frame resets the budget and is always ACKed; a failed decode is a NACK, keyed only
     // while the leaking budget allows. A `None` ack is non-ladder traffic the uncoded fallback
     // recovered: no evidence about the ladder either way, so it leaves the budget alone (#1123).
+    // A P-confirmed failure is keyed and not charged: it neither spends the budget nor resets it.
+    let exempt = res.payload.is_none() && res.p_evidence;
     let within_budget = res.ack.is_some()
-        && budget.on_ladder_burst(res.payload.is_some(), engine.listening_samples());
+        && (exempt || budget.on_ladder_burst(res.payload.is_some(), engine.listening_samples()));
     // Audit F6 (§97.119): without a valid MYID the daemon cannot auto-ID, so it keys no ACK.
     Ok((res, within_budget && callsign_valid))
 }
@@ -180,6 +186,151 @@ mod tests {
             })
             .collect();
         assert_eq!(keyed, [true, true, true, false]);
+    }
+
+    /// An engine on the `fast` profile locked at SL7, so the preamble detect runs.
+    fn sl7_engine() -> ModemEngine {
+        let mut engine = ModemEngine::new(Box::new(openpulse_audio::LoopbackBackend::new()));
+        engine
+            .register_plugin(Box::new(bpsk_plugin::BpskPlugin::new()))
+            .unwrap();
+        engine
+            .register_plugin(Box::new(fsk4_plugin::Fsk4Plugin::new()))
+            .unwrap();
+        engine
+            .register_plugin(Box::new(ofdm_plugin::OfdmPlugin::new()))
+            .unwrap();
+        engine.start_ota_session(openpulse_core::profile::SessionProfile::fast());
+        engine.ota_lock_level(openpulse_core::rate::SpeedLevel::Sl7);
+        engine
+    }
+
+    /// Deterministic noise, `n` samples at peak `amp`: no frame in it.
+    fn noise(n: usize, amp: f32, mut state: u64) -> Vec<f32> {
+        (0..n)
+            .map(|_| {
+                state ^= state << 13;
+                state ^= state >> 7;
+                state ^= state << 17;
+                ((state >> 40) as f32 / (1u64 << 24) as f32 - 0.5) * amp
+            })
+            .collect()
+    }
+
+    /// 12 s of quiet noise, then a genuine SL7 frame cut after ten data symbols, then 4 s of quiet:
+    /// the preamble detect confirms the frame (its `acquire` coherence clears the evidence threshold)
+    /// and the cut frame fails to decode. Fed through the accumulator so the flushed burst carries
+    /// P's flags; returns that burst.
+    fn p_confirmed_failure(engine: &mut ModemEngine) -> AudioSamples {
+        let lb = openpulse_audio::LoopbackBackend::new();
+        let mut tx = ModemEngine::new(Box::new(lb.clone_shared()));
+        tx.register_plugin(Box::new(ofdm_plugin::OfdmPlugin::new()))
+            .unwrap();
+        tx.transmit_with_fec_mode(
+            &[7u8; 64],
+            "OFDM52",
+            openpulse_core::fec::FecMode::SoftConcatenated,
+            None,
+        )
+        .unwrap();
+        let frame = lb.drain_samples();
+        let fragment = &frame[..11 * 288];
+        let mut x = noise(8_000 * 12, 0.02, 0x1b87_3593);
+        let tail = noise(8_000 * 4 + fragment.len(), 0.02, 0x9e37_79b9);
+        x.extend(fragment.iter().zip(&tail).map(|(v, n)| v * 0.5 + n));
+        x.extend_from_slice(&tail[fragment.len()..]);
+        let mut bursts = Vec::new();
+        for chunk in x.chunks(800) {
+            if let Ok(Some(b)) = engine.accumulate_capture(Some("OFDM52"), chunk.to_vec()) {
+                bursts.push(b);
+            }
+        }
+        assert_eq!(bursts.len(), 1, "the fixture must flush exactly one burst");
+        bursts.remove(0)
+    }
+
+    /// The verdict the engine reported for the last OTA decision.
+    fn last_verdict(
+        rx: &mut tokio::sync::broadcast::Receiver<openpulse_modem::EngineEvent>,
+    ) -> Option<NackVerdict> {
+        let mut last = None;
+        while let Ok(ev) = rx.try_recv() {
+            if let openpulse_modem::EngineEvent::OtaRateDecision { verdict, .. } = ev {
+                last = Some(verdict);
+            }
+        }
+        last
+    }
+
+    /// The budget exemption (`ofdm-preamble-detect.md`, Implementation): with the budget spent, a
+    /// failed burst the preamble detect confirmed as a frame is keyed, moves the ladder as a keyed
+    /// NACK, and is not charged; a failure without P's evidence is still charged and muted. On air
+    /// (f2h) three NACKs spent the budget and A muted 54 decodable-frame failures for 10 min.
+    /// Sabotage: removing the exemption turns it red.
+    #[test]
+    fn a_p_confirmed_failure_keys_past_the_budget_and_is_not_charged() {
+        let mut engine = sl7_engine();
+        let mut rx = engine.subscribe();
+        let burst = AudioSamples {
+            samples: noise(16_000, 0.2, 0x2545_f491),
+        };
+        let mut budget = NackBudget::default();
+        let decode = |engine: &mut ModemEngine, budget: &mut NackBudget, b: &AudioSamples, busy| {
+            decode_ota_burst(engine, budget, true, b, "peer", "BPSK250", busy).unwrap()
+        };
+        let keyed: Vec<bool> = (0..4)
+            .map(|_| decode(&mut engine, &mut budget, &burst, false).1)
+            .collect();
+        assert_eq!(
+            keyed,
+            [true, true, true, false],
+            "the budget must be spent first"
+        );
+        assert_eq!(last_verdict(&mut rx), Some(NackVerdict::Muted));
+
+        let p_burst = p_confirmed_failure(&mut engine);
+        let before = budget.clone();
+        let (res, keyed) = decode(&mut engine, &mut budget, &p_burst, false);
+        assert!(res.payload.is_none(), "the cut frame must not decode");
+        assert!(
+            res.p_evidence,
+            "the fixture is not a P-confirmed failure: vacuous"
+        );
+        assert!(
+            keyed,
+            "a P-confirmed failure was muted by a spent NACK budget"
+        );
+        assert_eq!(
+            last_verdict(&mut rx),
+            Some(NackVerdict::Keyed),
+            "the engine moved the ladder as for a muted failure"
+        );
+        assert_eq!(
+            budget, before,
+            "a P-confirmed failure was charged to the budget"
+        );
+
+        // A failure without P's evidence is still muted: the exemption reset nothing.
+        let (res, keyed) = decode(&mut engine, &mut budget, &burst, false);
+        assert!(
+            !res.p_evidence && !keyed,
+            "a noise failure keyed past the spent budget"
+        );
+        assert_eq!(last_verdict(&mut rx), Some(NackVerdict::Muted));
+
+        // The busy-channel mute stands for a P-confirmed failure too.
+        let p_burst = p_confirmed_failure(&mut engine);
+        let (res, keyed) = decode(&mut engine, &mut budget, &p_burst, true);
+        assert!(res.p_evidence, "second fixture is not P-confirmed: vacuous");
+        assert!(
+            !keyed,
+            "a P-confirmed failure keyed while the channel was still busy"
+        );
+        assert_eq!(
+            last_verdict(&mut rx),
+            Some(NackVerdict::Muted),
+            "the exemption overrode the busy-channel mute"
+        );
     }
 
     #[test]

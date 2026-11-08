@@ -131,7 +131,8 @@ async fn failures_after_the_budget_mutes_take_no_silent_step() {
                 if decoded_level.is_some() {
                     if !climbed && level_num(&to.name()) >= 8 {
                         // SL8 leaves one rung above the SL7 floor. A second step would be clamped
-                        // there but is still reported as `NackStepDown`, so it still shows.
+                        // there but is still reported as `NackStepDown`, so it still shows. `to` is
+                        // the recommendation, so the first failure is at the SL8 probe.
                         climbed = true;
                         reversed.store(true, Ordering::Relaxed);
                     }
@@ -168,14 +169,22 @@ async fn failures_after_the_budget_mutes_take_no_silent_step() {
         ],
         "the budget's verdicts reach the engine: {failures:?}"
     );
-    let steps = failures
+    // An announced move is a step of the anchor or a withdrawn probe (`ota-climb-memory.md`): the
+    // first failure after the climb is at the probe, so it withdraws, and the keyed failures after it
+    // restart the count; a second move of either kind would be one no NACK carried.
+    let moves = failures
         .iter()
-        .filter(|f| f.1 == RateDecision::NackStepDown)
+        .filter(|f| {
+            matches!(
+                f.1,
+                RateDecision::NackStepDown | RateDecision::ProbeWithdrawn
+            )
+        })
         .count();
     assert_eq!(
-        steps,
+        moves,
         1,
-        "one announced step and no silent one among {} failures: {failures:?}",
+        "one announced move and no silent one among {} failures: {failures:?}",
         failures.len()
     );
     assert!(

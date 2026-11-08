@@ -2,7 +2,7 @@
 project: openpulsehf
 doc: CLAUDE.md
 status: living
-last_updated: 2026-10-15
+last_updated: 2026-11-08
 ---
 
 # CLAUDE.md — OpenPulseHF Agent Contract
@@ -22,6 +22,12 @@ cargo build --workspace
 
 # Full test suite (no audio hardware required)
 cargo test --workspace --no-default-features
+
+# The same suite the way scripts/gate.sh runs it: cargo-nextest (binaries and tests in parallel,
+# bounded and grouped by .config/nextest.toml), plus the doctests nextest does not run.
+# Install once: cargo install --locked cargo-nextest --version 0.9.143
+cargo nextest run --workspace --no-default-features --no-fail-fast
+cargo test --workspace --no-default-features --doc
 
 # The acceptance suites held OUT of that run, for runtime (~83 min of the ~2 h gate for the first
 # two). `scripts/gate.sh` does NOT run them; run before any change to the receiver notch, the OTA
@@ -193,7 +199,9 @@ Short form; full wording and history in [`docs/dev/verification-mechanics.md`](d
    `${PIPESTATUS[…]}`/`$pipestatus` (zsh dialect trap). A pipe may shape what you read, never what you
    conclude.
 2. **The workspace gate is `scripts/gate.sh`**; quote results only from its `GATE:` line. It uses
-   `--no-fail-fast` (without it the failure count is a lower bound). `GATE: INVALID` means the tree
+   `--no-fail-fast` (without it the failure count is a lower bound). Its tests run under
+   **cargo-nextest** (since 2026-11-08): counts come from nextest's JUnit report, doctests run as
+   their own step, and a parity step fails if nextest would skip any test `cargo test` runs. `GATE: INVALID` means the tree
    moved during the run — rerun on a quiet checkout, use a `git worktree` for concurrent work. It does
    **not** run the `#[ignore]`d suites (`scripts/slow-tests.sh` does), so `GATE: PASS` does not
    re-prove REQ-QRM-01 or the spectral decode counts.

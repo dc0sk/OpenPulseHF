@@ -80,6 +80,17 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y libasound2-dev libudev-dev libdbus-1-dev
 
+      # The gate's test step runs under cargo-nextest (2026-11-08; see `.config/nextest.toml`).
+      # Same action and SHA as coverage.yml's cargo-llvm-cov install. The version is the one the
+      # gate was validated with (`NEXTEST_VERSION` in scripts/gate.sh), chosen because this action
+      # SHA's manifest lists it with a checksum. `fallback: none` makes an unlisted version FAIL
+      # instead of silently switching to cargo-binstall, a different supply chain. Bump both together.
+      - name: Install cargo-nextest
+        uses: taiki-e/install-action@6c6fd71fe4fb72c3697d269963d0e15df8adedad # v2
+        with:
+          tool: cargo-nextest@0.9.143
+          fallback: none
+
       - name: Workspace gate (fmt + clippy + tests)
         id: gate
         run: ./scripts/gate.sh
@@ -92,6 +103,7 @@ jobs:
           path: |
             target/gate-verdict.json
             target/gate-*.log
+            target/nextest/gate/junit.xml
           if-no-files-found: warn
 
       # A failure on the default branch must not depend on someone reading a notification email.

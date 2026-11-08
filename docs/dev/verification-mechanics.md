@@ -2,7 +2,7 @@
 project: openpulsehf
 doc: docs/dev/verification-mechanics.md
 status: resolved
-last_updated: 2026-11-06
+last_updated: 2026-11-08
 ---
 
 # Verification mechanics — full text and history
@@ -20,11 +20,34 @@ is visible in the transcript rather than indistinguishable from compliance.
    zsh, where the bash form silently yields an empty string**); never from eyeballing piped output.
    Piping to `tail`/`head` to *read* is fine: **a pipe may shape what you read, never what you
    conclude.**
-2. **The workspace gate is `scripts/gate.sh`.** It runs fmt + clippy + `cargo test --workspace
-   --no-default-features --no-fail-fast`, captures real statuses without pipes, prints the failure
+2. **The workspace gate is `scripts/gate.sh`.** It runs fmt + clippy + the workspace tests
+   (`--no-default-features --no-fail-fast`), captures real statuses without pipes, prints the failure
    list **untruncated**, and writes `target/gate-verdict.json`. Quote gate results only from its
    `GATE:` line. `--no-fail-fast` is not optional discipline — without it cargo stops at the first
    failing *binary* and the count is a lower bound (this repo has been bitten twice, #1052 latest).
+   **Since 2026-11-08 the tests run under cargo-nextest**, because `cargo test --workspace` ran its
+   ~400 binaries one after another (43.3 min of a 48 min gate). The switch keeps the contract by
+   construction, not by care, and each part is a separate gate step:
+   - `cargo nextest run --workspace --no-default-features --no-fail-fast --profile gate`, with
+     `fail-fast = false`, `retries = 0` and a **bounded** `test-threads` in `.config/nextest.toml`.
+     nextest runs each test in its own process and binaries concurrently, so two things that
+     relied on `cargo test`'s serial binaries are pinned there as test groups: `twin_daemon_bridge`'s
+     per-process port allocator, and the two daemon binaries that hand-pick overlapping ports. A new
+     daemon test binary that hand-picks a port must take a disjoint window or join a group.
+   - **Counts come from nextest's JUnit report**, never from its terminal output:
+     `scripts/lib/nextest_junit.py` re-emits it as libtest-shaped `test … ok` / `test result:` lines,
+     and only that step's and the doctest step's lines are counted (a failing test's replayed stdout
+     carries libtest's own `test result:` line, which would double the failure). trace.py reads the
+     same lines, so its evidence channel is unchanged; `evidence-self-test` probe G checks the two
+     formats agree.
+   - `cargo test --workspace --no-default-features --doc --no-fail-fast` — nextest does not run
+     doctests.
+   - **The parity step** (`scripts/lib/nextest_parity.py check`) asks every test binary `cargo test`
+     builds which tests it would run (`--list` minus `--list --ignored`) and fails on any test
+     nextest's selection lacks, keyed by binary path. A test nextest silently skipped would
+     otherwise leave a green, smaller run that no count can expose.
+   `suites` in the verdict is now the number of nextest binaries that ran a test plus the
+   doctest crates: a test binary with zero tests no longer prints a `test result:` line.
    **`GATE: INVALID` (exit 3) is not a code failure — do not chase it.** It means the tree or HEAD
    moved while the gate ran, so the verdict is not attributable to any single state of the repo
    (#1151). Rerun on a quiet checkout; put concurrent work in a `git worktree`, never in the
@@ -50,8 +73,9 @@ is visible in the transcript rather than indistinguishable from compliance.
    watched fail is the self-consistent checker it exists to prevent, and so is a *rule* nobody has
    checked against the script.
    - `scripts/gate.sh --self-test` plants a deliberately failing test and requires a non-zero
-     `cargo test` **with that test named in the output**. It calls `cargo test` directly and exits
-     before any verdict is written, so it emits **no `GATE:` line and no `gate-verdict.json`** —
+     status from the gate's own nextest function, **that test named in the JUnit-derived failure
+     list**, and the report's total equal to what `nextest list` selects (the `--no-fail-fast`
+     property). It exits before any verdict is written, so it emits **no `GATE:` line and no `gate-verdict.json`** —
      the rule used to say it "requires `GATE: FAIL`", which it has never printed. It covers the
      failure-detection path ONLY.
    - `python3 scripts/lib/trace.py evidence-self-test` covers the **verdict** path — what a stored

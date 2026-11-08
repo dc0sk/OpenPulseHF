@@ -28,7 +28,9 @@ use openpulse_core::fec::{
 use openpulse_core::frame::Frame;
 use openpulse_core::hpx::{HpxEvent, HpxSession, HpxState, HpxTransition};
 use openpulse_core::ldpc::{IterativeDecoder, LdpcCodec};
-use openpulse_core::ota_rate::{NackVerdict, OtaRateController, RxOutcome};
+use openpulse_core::ota_rate::{
+    NackVerdict, OtaRateController, RateDecision, RxClimbBackoff, RxOutcome,
+};
 use openpulse_core::plugin::{
     CarrierDetector, CarrierVerdict, ModulationConfig, PluginRegistry, PreambleTemplate,
 };
@@ -688,6 +690,10 @@ pub struct OtaRxResult {
     /// Further non-ladder frames the uncoded fallback found after `payload` in the same burst — a
     /// multi-fragment keying (#1461). Always empty for a ladder frame: ARQ keys one per ACK.
     pub more: Vec<Vec<u8>>,
+    /// The burst failed and the preamble detect confirmed a frame in it (the waveform's `acquire`
+    /// coherence ≥ `P_EVIDENCE_COHERENCE`). Its NACK is keyed past a NACK budget handed in with
+    /// [`ModemEngine::set_ota_budget_verdict`], and the caller must not charge the budget for it.
+    pub p_evidence: bool,
 }
 
 /// The modem engine.
@@ -799,6 +805,11 @@ pub struct ModemEngine {
     /// daemon before the decode, taken at the decode's entry so no return path leaves it stale.
     /// Unset is `Keyed`, today's behaviour.
     next_failure_verdict: NackVerdict,
+    /// Whether `next_failure_verdict` is the NACK budget's (`set_ota_budget_verdict`), which a
+    /// P-confirmed failure is exempt from, rather than a mute the caller imposes.
+    next_failure_verdict_from_budget: bool,
+    /// The last OTA decode failed on a burst P confirmed as a frame: [`OtaRxResult::p_evidence`].
+    ota_last_p_evidence: bool,
     /// The latest moment the next OTA burst's decode may finish and still be ACKed inside the sender's
     /// window (`set_ota_ack_deadline`); taken by that decode.
     next_ota_ack_deadline: Option<Instant>,
@@ -816,6 +827,10 @@ pub struct ModemEngine {
     listening_samples: u64,
     /// Shortest frame per `(mode, FEC)`, measured once by modulating a 1-byte payload (#1456).
     shortest_frame_cache: Vec<(String, FecMode, usize)>,
+    /// Coded airtime per `(mode, FEC, payload length)`, for the airtime-weighted climb: the frame's
+    /// length depends on its payload's length only, and modulating a 66 s SL2 frame on every decode
+    /// would sit in the ACK window.
+    decoded_airtime_cache: Vec<(String, FecMode, usize, f32)>,
     /// Samples of pre-trigger ring prepended to the last flushed burst (#1454): non-zero when the
     /// spectral test was true at the burst's open block — which includes a one-read onset that total
     /// power also opened. Taken by `ota_decode_and_ack_inner` and `decode_burst_with_fec`;
@@ -861,6 +876,8 @@ pub struct ModemEngine {
     p_held_no_frame: u64,
     /// Wall time P spent judging blocks, in nanoseconds: the per-read cost the Pi is checked with.
     p_nanos: u64,
+    /// Bursts total power or S opened that P re-headed at its onset (`rehead_at_p`).
+    p_reheads: u64,
     /// The most recent routed audio for a P-opened burst's head, as `rx_ring` but never emptied by
     /// #1454's retention rule: at 400-sample reads total power can flicker over a frame's preamble and
     /// flush a short burst before P's confirm is in, and that flush empties `rx_ring` — the preamble
@@ -1150,6 +1167,12 @@ const P_TOLD_HYSTERESIS_HZ: f32 = 1.0;
 /// noise burst over 0.8.
 const P_EVIDENCE_COHERENCE: f32 = 0.8;
 
+/// Symbols past a burst's onset bound within which its decoder still finds a frame. With OFDM52's
+/// one-symbol acquisition window this covers both terms of the onset scan's reach,
+/// `max(4·acq, onset_bound + acq)` (`burst_onset_scan_bounds`). P re-heads a burst whose first P open
+/// lies beyond it (`rehead_at_p`). The reviewed design's value, not fitted.
+const P_REHEAD_REACH_SYMBOLS: usize = 4;
+
 /// Pre-trigger ring for a burst the spectral test opened, in 512-sample windows (#1454). The same
 /// constant is the minimum spectral span at which a failed burst the spectral test carried counts as
 /// ladder evidence — one name, one number (#1454 design, items 2 and 6). It is set by that rule, and
@@ -1337,6 +1360,8 @@ impl ModemEngine {
             relay_mode: None,
             last_flush_capped: false,
             next_failure_verdict: NackVerdict::Keyed,
+            next_failure_verdict_from_budget: false,
+            ota_last_p_evidence: false,
             next_ota_ack_deadline: None,
             decode_deadline: None,
             non_ladder_decode: false,
@@ -1344,6 +1369,7 @@ impl ModemEngine {
             decode_attempts_past_deadline: 0,
             listening_samples: 0,
             shortest_frame_cache: Vec::new(),
+            decoded_airtime_cache: Vec::new(),
             last_flush_lead: 0,
             last_flush_onset_bound: 0,
             ota_fallback_more: Vec::new(),
@@ -1361,6 +1387,7 @@ impl ModemEngine {
             p_false_opens: 0,
             p_held_no_frame: 0,
             p_nanos: 0,
+            p_reheads: 0,
             p_ring: std::collections::VecDeque::new(),
             rx_burst_p_opened: false,
             rx_burst_p_held: false,
@@ -2609,6 +2636,7 @@ impl ModemEngine {
             ack,
             mode,
             more: Vec::new(),
+            p_evidence: std::mem::take(&mut self.ota_last_p_evidence),
         }))
     }
 
@@ -2914,6 +2942,11 @@ impl ModemEngine {
         self.p_held_no_frame
     }
 
+    /// Bursts total power or the spectral test opened that P re-headed at its preamble's onset.
+    pub fn preamble_detect_reheads(&self) -> u64 {
+        self.p_reheads
+    }
+
     /// Wall time P has spent judging blocks, in nanoseconds (its per-read cost on this host).
     pub fn preamble_detect_nanos(&self) -> u64 {
         self.p_nanos
@@ -3021,6 +3054,22 @@ impl ModemEngine {
         Some(n)
     }
 
+    /// Coded airtime of a `len`-byte payload at `mode` + `fec`, in seconds, through the transmit
+    /// codecs (`tx_airtime_seconds`) and cached.
+    fn decoded_airtime_s(&mut self, len: usize, mode: &str, fec: FecMode) -> Option<f32> {
+        if let Some((_, _, _, secs)) = self
+            .decoded_airtime_cache
+            .iter()
+            .find(|(m, f, l, _)| m == mode && *f == fec && *l == len)
+        {
+            return Some(*secs);
+        }
+        let secs = self.tx_airtime_seconds(&vec![0; len], mode, fec).ok()? as f32;
+        self.decoded_airtime_cache
+            .push((mode.to_string(), fec, len, secs));
+        Some(secs)
+    }
+
     /// Does any FSK4-ACK-length window of `samples` decode as a ShortFEC ACK codeword? Deliberately
     /// keyless and session-blind: any ACK on air is not a ladder frame, including a foreign
     /// station's whose MAC this session cannot check. No CRC check for the same reason: a keyed
@@ -3051,6 +3100,16 @@ impl ModemEngine {
     /// failure moves no ladder (#1460 round 4b). Taken by that burst's decode.
     pub fn set_ota_failure_verdict(&mut self, verdict: NackVerdict) {
         self.next_failure_verdict = verdict;
+        self.next_failure_verdict_from_budget = false;
+    }
+
+    /// As [`set_ota_failure_verdict`](Self::set_ota_failure_verdict), for the NACK budget's verdict:
+    /// a failed burst the preamble detect confirmed as a frame is keyed whatever the budget says, and
+    /// comes back with [`OtaRxResult::p_evidence`] so the caller does not charge it
+    /// (`ofdm-preamble-detect.md`, Implementation, "The budget exemption").
+    pub fn set_ota_budget_verdict(&mut self, verdict: NackVerdict) {
+        self.next_failure_verdict = verdict;
+        self.next_failure_verdict_from_budget = true;
     }
 
     /// The latest moment the next OTA burst's decode may finish and still have its ACK heard inside
@@ -3263,20 +3322,7 @@ impl ModemEngine {
                     .flatten()
                     .filter(|_| self.seam_p);
                 if let Some(onset) = p_head {
-                    let sym = self.p_symbol as isize;
-                    let head = onset - sym;
-                    if head >= 0 {
-                        append_from = (head as usize).min(samples.samples.len());
-                        self.rx_burst_lead = sym as usize;
-                    } else {
-                        let need = head.unsigned_abs();
-                        let take = need.min(self.p_ring.len());
-                        let skip = self.p_ring.len() - take;
-                        self.rx_burst.extend(self.p_ring.iter().skip(skip).copied());
-                        // Ring samples before the preamble, should the ring be shorter than asked.
-                        self.rx_burst_lead = (sym as usize).saturating_sub(need - take);
-                    }
-                    self.rx_burst_p_opened = true;
+                    append_from = self.take_p_head(onset, samples.samples.len());
                 } else if self.seam_s {
                     self.rx_burst_lead = self.rx_ring.len();
                     self.rx_burst.extend(self.rx_ring.iter().copied());
@@ -3296,6 +3342,8 @@ impl ModemEngine {
                 } else {
                     samples.samples.len()
                 };
+            } else if let Some(from) = self.rehead_at_p(samples.samples.len()) {
+                append_from = from;
             }
             self.rx_burst_p_held |= self.seam_p;
             self.push_ring(&samples.samples);
@@ -3449,6 +3497,72 @@ impl ModemEngine {
             }
             Ok(None)
         }
+    }
+
+    /// Start the burst one symbol before P's preamble at `onset` (relative to the current read of
+    /// `read_len` samples): from `p_ring` when the preamble lies in an earlier read, else from this
+    /// read. Marks the burst P-opened and returns where in this read its audio starts.
+    fn take_p_head(&mut self, onset: isize, read_len: usize) -> usize {
+        let sym = self.p_symbol as isize;
+        let head = onset - sym;
+        self.rx_burst_p_opened = true;
+        if head >= 0 {
+            self.rx_burst_lead = sym as usize;
+            return (head as usize).min(read_len);
+        }
+        let need = head.unsigned_abs();
+        let take = need.min(self.p_ring.len());
+        let skip = self.p_ring.len() - take;
+        self.rx_burst.extend(self.p_ring.iter().skip(skip).copied());
+        // Ring samples before the preamble, should the ring be shorter than asked.
+        self.rx_burst_lead = (sym as usize).saturating_sub(need - take);
+        0
+    }
+
+    /// How far into a burst its decoder finds a frame: the burst's lead, its first read, and
+    /// [`P_REHEAD_REACH_SYMBOLS`] symbols of the onset scan.
+    fn p_rehead_reach(&self) -> usize {
+        self.rx_burst_lead + self.rx_burst_first_block + P_REHEAD_REACH_SYMBOLS * self.p_symbol
+    }
+
+    /// The re-head (`ofdm-preamble-detect.md`, Implementation, "The re-head"): P's first open inside
+    /// a burst total power or S opened, beyond the decoder's reach from the burst's head, restarts the
+    /// burst at P's onset, exactly as a burst P opened. Under AGC SLOW (on-air f2h) the floor learned
+    /// the AGC's post-frame dips, total power opened a burst on the hiss about 2 s after each frame,
+    /// and the next frame sat at the tail of a 66–92k-sample burst, out of the decoder's reach.
+    ///
+    /// The head is dropped: not flushed, since a hiss head carries a total-power run past the evidence
+    /// floor and would key a NACK on noise (the #1178 class); not learned, since the floor holds it as
+    /// carrier. A non-OFDM frame in it (a station ID ahead of the data frame) is lost; without the
+    /// re-head the data frame is lost instead. Returns where in this read the burst's audio starts.
+    fn rehead_at_p(&mut self, read_len: usize) -> Option<usize> {
+        if self.rx_burst_p_opened || self.rx_burst_p_held || !self.seam_p {
+            return None;
+        }
+        let onset = self.seam_p_onset?;
+        // Where the burst would start, in the burst gathered so far (before any of this read).
+        let head_in_burst =
+            (self.rx_burst.len() as isize + onset - self.p_symbol as isize).max(0) as usize;
+        let reach = self.p_rehead_reach();
+        if head_in_burst <= reach {
+            return None;
+        }
+        self.noise_floor.discard();
+        self.rx_burst.clear();
+        let from = self.take_p_head(onset, read_len);
+        self.rx_burst_first_block = self.p_symbol;
+        self.rx_burst_tp_run = 0;
+        self.rx_burst_tp_cur = 0;
+        self.rx_burst_s_span = 0;
+        self.s_armed = false;
+        self.p_reheads = self.p_reheads.wrapping_add(1);
+        debug!(
+            head_in_burst,
+            reach,
+            reheads = self.p_reheads,
+            "a burst total power or the spectral test opened was re-headed at the preamble detect's onset"
+        );
+        Some(from)
     }
 
     /// Keep the most recent `S_RING_WINDOWS` of captured audio for an S-opened burst's head (#1454).
@@ -4198,6 +4312,7 @@ impl ModemEngine {
             ack,
             mode,
             more,
+            p_evidence: std::mem::take(&mut self.ota_last_p_evidence),
         })
     }
 
@@ -4276,7 +4391,9 @@ impl ModemEngine {
         let lead = std::mem::take(&mut self.last_flush_lead);
         let onset_bound = std::mem::take(&mut self.last_flush_onset_bound);
         let spans = self.last_flush_spans.take();
-        let verdict = std::mem::take(&mut self.next_failure_verdict);
+        let mut verdict = std::mem::take(&mut self.next_failure_verdict);
+        let verdict_from_budget = std::mem::take(&mut self.next_failure_verdict_from_budget);
+        self.ota_last_p_evidence = false;
         let candidates: Vec<(SpeedLevel, String, FecMode)> = self
             .ota
             .as_ref()
@@ -5041,6 +5158,18 @@ impl ModemEngine {
                 && self
                     .p_burst_coherence(&samples.samples)
                     .is_some_and(|c| c >= P_EVIDENCE_COHERENCE);
+            // The budget exemption: a P-confirmed failure is a frame at a candidate rung by the
+            // strongest evidence this receiver has, so the NACK budget neither mutes it nor (the
+            // caller, reading `p_evidence`) counts it. A mute the caller imposes (the channel still
+            // busy, no valid callsign) stands. Bounded by the ladder: each NACK it keys is a
+            // failure, so a foreign OFDM52 sender draws at most 3·(rung − 6) before the candidates
+            // leave OFDM and P stops.
+            if p_ok {
+                self.ota_last_p_evidence = true;
+                if verdict_from_budget {
+                    verdict = NackVerdict::Keyed;
+                }
+            }
             // Only a burst P itself opened is P's false open: a burst total power or S opened and P
             // only held is usually a fragment of a genuine frame (under an S1 sabotage a genuine SL7
             // frame's fragment counted as one), and HF reads this counter as P's false-open rate.
@@ -5148,6 +5277,14 @@ impl ModemEngine {
                 }
             }
         }
+        // The decoded frame's own coded airtime, for the airtime-weighted climb and the failed-probe
+        // memory's expiry (`ota-climb-memory.md`, change 2): one SL2 frame proves the rung.
+        let decoded_airtime_s = decoded.as_ref().and_then(|(payload, level, mode)| {
+            let (_, _, fec) = candidates
+                .iter()
+                .find(|(l, m, _)| l == level && m == mode)?;
+            self.decoded_airtime_s(payload.len(), mode, *fec)
+        });
         let ota = self
             .ota
             .as_mut()
@@ -5158,7 +5295,12 @@ impl ModemEngine {
         let decoded_level = decoded.as_ref().map(|(_, level, _)| *level);
         let (rx_ack, decoded) = match decoded {
             Some((payload, level, mode)) => {
-                let ack = ota.on_rx_frame(RxOutcome::Decoded(level), snr);
+                let ack = ota.on_rx_frame_timed(
+                    RxOutcome::Decoded(level),
+                    snr,
+                    verdict,
+                    decoded_airtime_s,
+                );
                 (ack, Some((payload, mode)))
             }
             None => {
@@ -5166,6 +5308,25 @@ impl ModemEngine {
                 (ack, None)
             }
         };
+        // The falsifier of the memory's constants is "the re-probe after a withdraw: decoded or
+        // withdrawn again", read per backoff level (review R3); the event carries no `n`.
+        if matches!(
+            rx_ack.decision,
+            RateDecision::ProbeWithdrawn | RateDecision::ClimbDeclined
+        ) {
+            let memory: Option<RxClimbBackoff> = ota.rx_climb_backoff();
+            if let Some(m) = memory {
+                info!(
+                    decision = ?rx_ack.decision,
+                    rung = ?m.rung,
+                    anchor = ?m.anchor,
+                    n = m.n,
+                    left = m.left,
+                    airtime_s = m.airtime_s,
+                    "OTA climb memory"
+                );
+            }
+        }
         // Emitted on EVERY decision, including ones that move nothing: a failed decode that leaves
         // the level alone is invisible in the periodic `OtaStatus` snapshot, because that snapshot
         // reports state and the state did not change (#1081). The mutable borrow of `self.ota` ends
@@ -11582,11 +11743,11 @@ mod preamble_detect_false_open {
         );
     }
 
-    /// 1.5 s of loud noise, so total power opens the burst, running straight into a genuine OFDM52
-    /// frame cut after ten data symbols: P confirms the frame's preamble and holds the burst it did
-    /// not open. The waveform's acquisition searches the burst from its start, which is noise beyond
-    /// its reach, so it finds no frame, and the fragment does not decode.
-    fn held_fragment_fixture() -> Vec<f32> {
+    /// Loud noise for `noise` samples, so total power opens the burst, running straight into a
+    /// genuine OFDM52 frame cut after `data_syms` data symbols, behind 12 s of quiet noise and with
+    /// 4 s of it after. Returns the feed and where the preamble starts in it. P confirms the
+    /// fragment's preamble inside a burst it did not open.
+    fn fragment_after_noise(noise: usize, data_syms: usize) -> (Vec<f32>, usize) {
         let lb = LoopbackBackend::new();
         let mut tx = ModemEngine::new(Box::new(lb.clone_shared()));
         tx.register_plugin(Box::new(ofdm_plugin::OfdmPlugin::new()))
@@ -11594,23 +11755,34 @@ mod preamble_detect_false_open {
         tx.transmit_with_fec_mode(&[7u8; 64], "OFDM52", FecMode::SoftConcatenated, None)
             .expect("tx");
         let frame = lb.drain_samples();
-        let fragment = &frame[..(ofdm_plugin::params::SYM_LEN * 11).min(frame.len())];
+        let fragment = &frame[..(ofdm_plugin::params::SYM_LEN * (1 + data_syms)).min(frame.len())];
         let mut seed = 0x1b87_3593u32;
-        let mut noise = move || {
+        let mut noise_at = move || {
             seed ^= seed << 13;
             seed ^= seed >> 17;
             seed ^= seed << 5;
             (seed as f32 / u32::MAX as f32 - 0.5) * 0.02
         };
-        let mut x: Vec<f32> = (0..8000 * 12).map(|_| noise()).collect();
-        x.extend((0..12_000).map(|_| noise() * 10.0));
-        x.extend(fragment.iter().map(|v| v * 0.5 + noise()));
-        x.extend((0..8000 * 4).map(|_| noise()));
-        x
+        let mut x: Vec<f32> = (0..8000 * 12).map(|_| noise_at()).collect();
+        x.extend((0..noise).map(|_| noise_at() * 10.0));
+        let preamble_at = x.len();
+        x.extend(fragment.iter().map(|v| v * 0.5 + noise_at()));
+        x.extend((0..8000 * 4).map(|_| noise_at()));
+        (x, preamble_at)
     }
 
-    #[test]
-    fn a_held_fragment_of_a_genuine_frame_is_not_a_false_open() {
+    /// One flushed burst of [`run_fragment`]: where it starts on the feed, its lead, whether P opened
+    /// it, whether it decoded, and the ACK type it keyed.
+    #[derive(Debug)]
+    struct FragmentFlush {
+        start: usize,
+        lead: usize,
+        p_opened: bool,
+        decoded: bool,
+        ack: Option<AckType>,
+    }
+
+    fn run_fragment(x: &[f32], read: usize) -> (ModemEngine, Vec<FragmentFlush>) {
         let lb = LoopbackBackend::new();
         let mut e = ModemEngine::new(Box::new(lb.clone_shared()));
         e.register_plugin(Box::new(ofdm_plugin::OfdmPlugin::new()))
@@ -11619,22 +11791,113 @@ mod preamble_detect_false_open {
             .expect("bpsk");
         e.start_ota_session(SessionProfile::fast());
         e.ota_lock_level(SpeedLevel::Sl7);
-        let mut bursts = 0;
-        for chunk in held_fragment_fixture().chunks(800) {
+        let mut out = Vec::new();
+        let mut pos = 0usize;
+        for chunk in x.chunks(read) {
+            pos += chunk.len();
             if let Ok(Some(b)) = e.accumulate_capture(Some("OFDM52"), chunk.to_vec()) {
-                bursts += 1;
+                let p_opened = e.last_flush_spans.is_some_and(|f| f.p_opened);
+                let lead = e.last_flush_lead;
                 let r = e.ota_decode_burst(&b, "S", None).expect("decode call");
-                assert!(r.payload.is_none(), "a cut frame decoded");
+                out.push(FragmentFlush {
+                    start: pos - chunk.len() - b.samples.len(),
+                    lead,
+                    p_opened,
+                    decoded: r.payload.is_some(),
+                    ack: r.ack.map(|a| a.ack_type),
+                });
             }
         }
-        assert!(bursts >= 1, "nothing flushed");
+        (e, out)
+    }
+
+    /// The re-head's positive gate (`ofdm-preamble-detect.md`, Implementation, "The re-head"): 1.5 s
+    /// of loud noise opens a burst on total power, and the fragment's preamble lies beyond the
+    /// decoder's reach from its head, so P restarts the burst one symbol before the preamble, exactly
+    /// as a burst P opened. Sabotage: a reach of `usize::MAX` (never re-heads) turns it red.
+    #[test]
+    fn a_burst_opened_on_noise_is_reheaded_at_ps_onset() {
+        let (x, preamble_at) = fragment_after_noise(12_000, 10);
+        for read in [400usize, 800] {
+            let (e, flushes) = run_fragment(&x, read);
+            assert_eq!(
+                e.preamble_detect_reheads(),
+                1,
+                "{read}-sample reads: P did not re-head the burst ({flushes:?})"
+            );
+            let sym = ofdm_plugin::params::SYM_LEN;
+            let headed: Vec<&FragmentFlush> = flushes.iter().filter(|f| f.p_opened).collect();
+            assert!(
+                headed.len() == 1 && headed[0].start == preamble_at - sym && headed[0].lead == sym,
+                "{read}-sample reads: no burst starts one symbol before the preamble with P's lead \
+                 (preamble at {preamble_at}): {flushes:?}"
+            );
+            assert!(
+                flushes.iter().all(|f| !f.decoded),
+                "{read}-sample reads: a cut frame decoded: {flushes:?}"
+            );
+            assert_eq!(
+                (
+                    e.preamble_detect_held_no_frame(),
+                    e.preamble_detect_false_opens()
+                ),
+                (0, 0),
+                "{read}-sample reads: the re-headed fragment counted as no frame: {flushes:?}"
+            );
+        }
+    }
+
+    /// The re-head drops the burst's head; it does not flush it. A flushed hiss head carries a
+    /// total-power run past the evidence floor and would key a NACK on noise (the #1178 class).
+    /// Sabotage: flushing the head instead turns it red.
+    #[test]
+    fn a_dropped_head_keys_nothing() {
+        let (x, _) = fragment_after_noise(12_000, 10);
+        for read in [400usize, 800] {
+            let (e, flushes) = run_fragment(&x, read);
+            assert_eq!(
+                e.preamble_detect_reheads(),
+                1,
+                "{read}: no re-head, vacuous"
+            );
+            let keyed_on_noise: Vec<&FragmentFlush> = flushes
+                .iter()
+                .filter(|f| !f.p_opened && f.ack.is_some())
+                .collect();
+            assert!(
+                keyed_on_noise.is_empty(),
+                "{read}-sample reads: a burst P did not open keyed an ACK: {flushes:?}"
+            );
+        }
+    }
+
+    /// A failed burst P only held is counted as `held_no_frame`, not as P's false open, because HF
+    /// reads that counter as P's false-open rate. The re-head's fragment behind 0.15 s of loud noise
+    /// instead of 1.5 s: its preamble lies within the decoder's reach of the burst total power opened,
+    /// so the burst is not re-headed, and the waveform's acquisition over the burst reads no coherence
+    /// at the evidence threshold (measured, with 5 or 10 data symbols alike). Sabotage: a reach of 0
+    /// (always re-head) turns it red.
+    #[test]
+    fn a_held_fragment_of_a_genuine_frame_is_not_a_false_open() {
+        let (x, _) = fragment_after_noise(1_200, 10);
+        let (e, flushes) = run_fragment(&x, 800);
+        assert!(!flushes.is_empty(), "nothing flushed");
+        assert_eq!(
+            e.preamble_detect_reheads(),
+            0,
+            "the fragment's preamble lay beyond reach, so this is not the held case: {flushes:?}"
+        );
+        assert!(
+            flushes.iter().all(|f| !f.decoded),
+            "a cut frame decoded: {flushes:?}"
+        );
         assert!(
             e.preamble_detect_opens() >= 1,
             "P never confirmed the fragment's preamble"
         );
         assert!(
             e.preamble_detect_held_no_frame() >= 1,
-            "the fixture did not produce a failed burst P only held (bursts {bursts})"
+            "the fixture did not produce a failed burst P only held: {flushes:?}"
         );
         assert_eq!(
             e.preamble_detect_false_opens(),
@@ -11782,6 +12045,125 @@ mod preamble_detect_told {
         assert!(
             followed >= P_EVIDENCE_COHERENCE,
             "P did not follow the receiver centre to 67.2 Hz: the frame reads {followed:.3} there"
+        );
+    }
+}
+
+#[cfg(test)]
+mod preamble_detect_rehead_trap {
+    //! The re-head's case (`ofdm-preamble-detect.md`, Implementation, "The re-head"): on air (f2h,
+    //! IC-9700 under AGC SLOW) the noise floor learned the AGC's post-frame dips, the squelch sat
+    //! under the hiss, total power opened a burst on the hiss about 2 s after each frame, and the next
+    //! SL8 frame sat at the tail of that burst, out of the decoder's reach. Replayed from the
+    //! recording's start on the daemon path, 1 of 56 frames in the trapped stretch decoded on `main`,
+    //! 52 with the re-head.
+    //!
+    //! The committed cut is 55.75 s of that stretch: it starts in a post-frame dip and holds five SL8
+    //! frames. The floor is pre-warmed by feeding the cut once (the trap's own dynamics, no decode),
+    //! so the measured pass starts trapped with the tracker warm; then the cut is fed again through
+    //! `accumulate_capture` in the daemon's 800-sample reads, with the read after a flush holding the
+    //! busy check's read plus what buffered during the decode, and every burst goes to
+    //! `ota_decode_burst`.
+    //!
+    //! In-crate because the receiver's AFC is private: it is set to the value A's held through the
+    //! stretch in the full replay, so P judges at the on-air told.
+    use super::*;
+    use openpulse_audio::LoopbackBackend;
+    use openpulse_core::profile::SessionProfile;
+
+    const CUT: &str = "ic9700-ofdm52-f2h-agc-slow-trap.wav";
+    /// SL8 frames in the cut.
+    const FRAMES: usize = 5;
+    /// The AFC correction through the trapped stretch in the full replay.
+    const AFC_HZ: f32 = -6.07;
+    /// The read after a flush: the busy check's 400 samples plus 1.7 s buffered while the loop
+    /// decoded (the replay's figure for the daemon's loop).
+    const POST_FLUSH_READ: usize = 400 + 13_600;
+    /// The daemon's configured mode on station A (`config-a.toml`).
+    const MODE: &str = "BPSK250";
+
+    /// The daemon's receive construction: the `hpx_hf` plugins, the notch, a `fast` session, here
+    /// locked at the stretch's rung.
+    fn daemon_engine() -> ModemEngine {
+        let lb = LoopbackBackend::new();
+        let mut e = ModemEngine::new(Box::new(lb.clone_shared()));
+        e.register_plugin(Box::new(bpsk_plugin::BpskPlugin::new()))
+            .expect("bpsk");
+        e.register_plugin(Box::new(qpsk_plugin::QpskPlugin::new()))
+            .expect("qpsk");
+        e.register_plugin(Box::new(fsk4_plugin::Fsk4Plugin::new()))
+            .expect("fsk4");
+        e.register_plugin(Box::new(mfsk16_plugin::Mfsk16Plugin::new()))
+            .expect("mfsk16");
+        e.register_plugin(Box::new(ofdm_plugin::OfdmPlugin::new()))
+            .expect("ofdm");
+        e.enable_notch();
+        e.start_ota_session(SessionProfile::fast());
+        e.ota_lock_level(SpeedLevel::Sl8);
+        e.afc_correction_hz = AFC_HZ;
+        e
+    }
+
+    /// Feed `x` in daemon reads; decode every flushed burst when `decode`. Returns the frames decoded.
+    fn feed(e: &mut ModemEngine, x: &[f32], decode: bool) -> usize {
+        let (mut pos, mut next, mut decoded) = (0usize, 800usize, 0usize);
+        while pos < x.len() {
+            let end = (pos + next).min(x.len());
+            let chunk = x[pos..end].to_vec();
+            pos = end;
+            next = 800;
+            if let Ok(Some(b)) = e.accumulate_capture(Some(MODE), chunk) {
+                next = POST_FLUSH_READ;
+                if decode {
+                    let r = e
+                        .ota_decode_burst(&b, "S", Some(MODE))
+                        .expect("decode call");
+                    decoded += usize::from(r.payload.is_some());
+                }
+            }
+        }
+        decoded
+    }
+
+    /// The hiss: the 60th percentile of the cut's 512-sample window RMS (frames sit at its level
+    /// under the AGC, the dips under it).
+    fn hiss(x: &[f32]) -> f32 {
+        let mut r: Vec<f32> = x
+            .chunks_exact(512)
+            .map(|w| (w.iter().map(|v| v * v).sum::<f32>() / 512.0).sqrt())
+            .collect();
+        r.sort_by(f32::total_cmp);
+        r[r.len() * 6 / 10]
+    }
+
+    /// Gate: the trapped stretch decodes. Sabotage: a reach of `usize::MAX` (P never re-heads) takes
+    /// it to at most one.
+    #[test]
+    fn the_trapped_stretch_decodes_with_the_rehead() {
+        let x = crate::capture_replay::load_corpus(CUT)
+            .expect("f2h trap capture")
+            .samples;
+        let mut e = daemon_engine();
+        feed(&mut e, &x, false);
+        e.abandon_burst();
+        // The precondition the fixture exists for: a warm floor whose squelch sits under the hiss,
+        // so total power opens bursts on it (on air 0.53–0.61 through the stretch).
+        let ratio = e.dcd_squelch() / hiss(&x);
+        assert!(
+            e.dcd_floor_is_warm() && ratio < 0.8,
+            "the pre-warm did not reproduce the trap: warm {}, squelch/hiss {ratio:.2}",
+            e.dcd_floor_is_warm()
+        );
+        let reheads = e.preamble_detect_reheads();
+        let decoded = feed(&mut e, &x, true);
+        let reheads = e.preamble_detect_reheads() - reheads;
+        eprintln!(
+            "trap cut: {decoded} of {FRAMES} decoded, {reheads} re-heads, squelch/hiss {ratio:.2}"
+        );
+        assert!(
+            decoded >= FRAMES - 1,
+            "{decoded} of {FRAMES} trapped SL8 frames decoded (re-heads {reheads}, squelch/hiss \
+             {ratio:.2})"
         );
     }
 }

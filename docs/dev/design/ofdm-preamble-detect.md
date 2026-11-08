@@ -2,7 +2,7 @@
 project: openpulsehf
 doc: docs/dev/design/ofdm-preamble-detect.md
 status: resolved
-last_updated: 2026-11-06
+last_updated: 2026-11-07
 ---
 
 # A level-independent carrier detect for the OFDM rungs: open on the preamble, hold on the cyclic prefix
@@ -670,3 +670,86 @@ applied to the committed tree and restored with `git show HEAD:<path> > <path>`.
 - Gate 11's twin with a `CfoChannel`, so the AFC settles nonzero (on BPSK rungs) before the OFDM phase.
 - `decode_mfsk16_k3_ack` builds its config at the nominal centre, not `rx_center`; FSK's tolerance
   makes that moot at 7 Hz. Noted, not fixed.
+
+### The re-head and the budget exemption (2026-11-07, on-air task 28 correction, run f2h)
+
+**Measured on air.** In f2h A's IC-9700 ran AGC SLOW (the rig refused AGC OFF). From 11:06:02 to
+11:16:12 UTC B sent 55 SL8 frames, all in A's audio and 51 decodable offline, and A keyed nothing:
+- **the receive trap:** the noise floor learned only the AGC's quiet dips after each frame, so the
+  squelch fell to 0.53–0.61× the hiss; total power then opened a burst on the hiss about 2 s after
+  each frame, and the next frame sat at the tail of a 66–92k-sample burst, out of the decoder's onset
+  reach. P held those bursts (`held_no_frame`) but did not own their head;
+- **the NACK budget:** three SL10 NACKs at 11:05:55–11:06:02 spent `OTA_NACK_BUDGET`, so A muted every
+  failure (54 × `nack_hold verdict=muted`) until the 10-min leak.
+
+Replayed from the recording's start through `accumulate_capture` → `ota_decode_burst` with the
+daemon's construction, the budget, the busy check, the post-decode read hold and A's own keyings cut
+(Fable's harness; the ladder locked at SL8 from 440 s): **1 of 56** B markers in the stretch decoded on
+`b0b3a10b`, **52 of 56** with both changes below (re-run on the final code, the same 52; squelch/hiss
+0.53–0.59 through the stretch, 59 re-heads, 3 P-confirmed failures keyed, `held_no_frame` +0).
+Design review (mandatory, it changes when an ACK/NACK keys): Fable, (a) approved with changes, (b)
+approved; the maintainer's go given. R1, a floor fix that skipped the post-flush hang, was rejected;
+so was a sender-side step-down on silence.
+
+**(a) The re-head** (`ModemEngine::rehead_at_p`):
+- When P's **first** open in a burst total power or the spectral test opened lies beyond the decoder's
+  reach from the burst's head, `lead + first_block + P_REHEAD_REACH_SYMBOLS · SYM_LEN` (4 symbols,
+  covering both terms of `burst_onset_scan_bounds`'s reach), the burst restarts at P's onset and is
+  then exactly a P-opened burst: the head from `p_ring` (`take_p_head`, now shared with the P-opened
+  open path), `lead = SYM_LEN`, onset bound 2·SYM_LEN, `p_opened` set, `tp_run`/`s_span` reset.
+- **The head is dropped**, not flushed: a flushed hiss head carries a total-power run past the
+  evidence floor and would key a NACK on noise (the #1178 class). It is not committed to the floor
+  either: the tracker holds it as carrier and `discard`s it ("commit if S never opened" measured
+  identical in the review).
+- **Known trade-off:** a non-OFDM frame in the dropped head (a with-data station ID riding ahead of the
+  data frame) is lost. Without the re-head the data frame is lost instead.
+- **Instrument:** `preamble_detect_reheads`, a plain engine counter, logged as `reheads=` in the
+  daemon's `preamble carrier detect` line.
+- **Found by a sabotage:** the first build compared the head's position with `reach as isize`, and
+  `usize::MAX as isize` is −1, so the "never re-head" sabotage re-headed every burst. The comparison is
+  now in `usize` with the position clamped at 0.
+
+**(b) The budget exemption.** A failed burst with `p_confirmed` and the waveform's `acquire` coherence
+≥ `P_EVIDENCE_COHERENCE` (0.8, the existing P evidence threshold) is keyed, and is not charged to the
+#1456 budget.
+- **API:** the daemon hands the budget's verdict in through `set_ota_budget_verdict`; a mute set with
+  `set_ota_failure_verdict` (the channel still busy, no valid callsign) stays absolute. On such a
+  failure the engine takes a budget verdict as `Keyed`, so the ladder moves as for a keyed NACK, and
+  returns `OtaRxResult::p_evidence`; `nack_budget::decode_ota_burst` then keys it without
+  `on_ladder_burst`, so it neither spends nor resets the budget.
+- **Bound:** another OpenPulse OFDM52 sender on the channel draws at most 3·(rung − 6) keyed NACKs
+  before the ladder leaves OFDM and P stops (`fast`'s `nack_threshold` 3, one rung per three).
+- The `channel_busy` mute is unchanged.
+
+**Gates and sabotages.** Each sabotage applied to the committed tree and restored with
+`git show HEAD:<path> > <path>`.
+
+| Gate | Green | S1 reach `usize::MAX` (never re-heads) | S2 head flushed, not dropped | S5 reach 0 (always re-heads) | S3a daemon charges the budget | S3b engine keeps the budget's mute | S3c exemption overrides the busy mute |
+|---|---|---|---|---|---|---|---|
+| `preamble_detect_rehead_trap::the_trapped_stretch_decodes_with_the_rehead` | 5/5, 5 re-heads | **red** 0/5 | (red: the pre-warm's tracker not warm) | green | — | — | — |
+| `a_burst_opened_on_noise_is_reheaded_at_ps_onset` (the re-pointed fixture) | green | **red** (0 re-heads, lead 2 448) | green | green | — | — | — |
+| `a_dropped_head_keys_nothing` | green | red (vacuity check) | **red** (the head keyed a NACK) | green | — | — | — |
+| `a_held_fragment_of_a_genuine_frame_is_not_a_false_open` (within reach) | green | green | green | **red** (re-headed) | — | — | — |
+| `nack_budget::a_p_confirmed_failure_keys_past_the_budget_and_is_not_charged` | green | — | — | — | **red** (muted) | **red** (`Muted` reported) | **red** (`Keyed` while busy) |
+
+- **The trap cut** (`ic9700-ofdm52-f2h-agc-slow-trap.wav`, 892 KB, `tests/captures/README.md`):
+  55.75 s inside the stretch, starting in a post-frame dip, five SL8 frames. The floor is pre-warmed by
+  feeding the cut once without decoding, the trap's own dynamics; the measured pass then starts warm
+  with the squelch at **0.49×** the hiss (on air 0.53–0.61: deeper, same mechanism; the test asserts
+  < 0.8 and a warm tracker as its precondition). Reads are the daemon's 800 samples, the read after a
+  flush 14 000 (the busy check's 400 plus the 1.7 s the replay takes as buffered during a decode),
+  the AFC −6.07 Hz (the stretch's in the full replay), the ladder locked at SL8. Cold from the dip,
+  without the pre-warm and at AFC 0, the replay harness decodes it 5/5 too, with the squelch at
+  0.40–0.47× and the spectral test cold for the first 24 s.
+- **The re-pointed fixture.** The old `a_held_fragment_of_a_genuine_frame_is_not_a_false_open`
+  fixture (1.5 s of loud noise, then a cut SL7 frame) has its P open beyond reach, so with the
+  re-head its burst is P-opened: it is now the re-head's positive gate. The held case is the same
+  fragment behind 0.15 s of loud noise, within reach. Its burst is not re-headed, and `acquire` over
+  it reads no coherence at the threshold (measured, with 5 or 10 data symbols alike; not explained).
+
+**Parked (one line each):**
+- A plateau learner for the floor under a slow AGC, so the squelch does not follow the dips (post-release).
+- An instrument logging which test held a burst at its flush: the replay-only case of hiss-held bursts
+  with P off while B sends OFDM is otherwise invisible in a daemon log.
+- The rx-level check prints squelch/hiss after 5 min of traffic, so a trapped floor shows before a run
+  is scored.
