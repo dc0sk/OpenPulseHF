@@ -3107,6 +3107,18 @@ impl ModemEngine {
         Some(self.fsk4_ack_frame_len()? + Self::MFSK16_ACK_COPIES * (gap + copy))
     }
 
+    /// How far past a burst's lead each ACK waveform's first codeword can end: one FSK4 ACK, and the
+    /// union's FSK4 copy, gap and first MFSK16 copy, each plus the tail slack.
+    fn ack_head_lens(&self) -> (usize, usize) {
+        let fsk4 = self.fsk4_ack_frame_len().unwrap_or(0);
+        let gap = (Self::MFSK16_ACK_GAP_S * AudioConfig::default().sample_rate as f32) as usize;
+        let copy = Self::MFSK16_ACK_SYMS * Self::MFSK16_ACK_SPS;
+        (
+            fsk4 + Self::ACK_TAIL_SLACK_SAMPLES,
+            fsk4 + gap + copy + Self::ACK_TAIL_SLACK_SAMPLES,
+        )
+    }
+
     /// Does `samples` hold an MFSK16-ACK copy whose ShortFEC codeword decodes? Keyless and
     /// session-blind, as [`holds_an_ack_codeword`](Self::holds_an_ack_codeword) is: a piece of a union
     /// ACK heard on its own carries no FSK4 copy, only MFSK16 ones.
@@ -5245,9 +5257,14 @@ impl ModemEngine {
             // The bound is the longest ACK any station keys, the K=3 union (5.86 s), not one FSK4 ACK:
             // a sub-floor NACK heard whole was past the old 2 × FSK4 bound, and one heard in pieces
             // (the DCD drops in its 0.5 s gaps) carries no FSK4 codeword (`union-ack-recognition.md`).
+            // Both scans look only at the burst's head, where an ACK starts: the union's FSK4 copy leads
+            // it and its first MFSK16 copy follows one gap later; a piece is its own head. Over the
+            // whole 56 k-sample bound they cost 250 ms on x86, which stalls the receive loop.
+            let (fsk4_head, mfsk16_head) = self.ack_head_lens();
+            let head = |n: usize| &samples.samples[..samples.samples.len().min(lead + n)];
             if post <= self.longest_ack_len().unwrap_or(0) + Self::ACK_TAIL_SLACK_SAMPLES
-                && (self.holds_an_ack_codeword(&samples.samples)
-                    || self.holds_an_mfsk16_ack_codeword(&samples.samples))
+                && (self.holds_an_ack_codeword(head(fsk4_head))
+                    || self.holds_an_mfsk16_ack_codeword(head(mfsk16_head)))
             {
                 tracing::debug!("OTA: failed burst is an ACK, not ladder evidence (#1456)");
                 return Ok((None, None, last_err));
