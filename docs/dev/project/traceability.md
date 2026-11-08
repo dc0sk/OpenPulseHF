@@ -15,6 +15,24 @@ this ledger adds the design rationale and the actually-observed results per chan
 
 ---
 
+## 2026-11-08 — The twin rig refuses a port another run holds (verification apparatus; work plan decision 9)
+
+- **Requirement/change:** VO — a twin-harness failure must be attributable. Twin tests bind fixed
+  ports; with two worktrees testing at once, `id_rides_in_own_keying` and
+  `muted_failures_move_no_ladder` failed intermittently. Mechanism: the daemon whose bind failed
+  exited, but `wait_for_port` only checked that something accepted on the port, so the test drove the
+  other run's daemon. A held WebSocket port killed the daemon after its TCP port had answered.
+- **Design decision:** fail fast and say which port. Ephemeral ports would remove the class but need
+  `server::run` to report its bound port (a daemon change), which is out of scope for a harness fix.
+  Tests inside one nextest run already use distinct ports, so the collision is only between runs.
+- **Implementation:** `crates/openpulse-daemon/src/twin.rs` `spawn_pair`: probe-bind both daemons'
+  TCP and WS ports and panic naming a held one; wait for the WS listeners too; assert no daemon has
+  exited once all four answer (`ws_addr`).
+- **Tests:** `crates/openpulse-daemon/tests/twin_refuses_a_port_in_use.rs`
+  (`a_held_control_port_is_refused`, `a_held_websocket_port_is_refused`).
+- **Results:** 2 passed with the change; on the old `twin.rs` (restored from `origin/main`), 2 failed
+  with "test did not panic as expected": the pair started against the held port. Gate: see PR.
+
 ## 2026-11-08 — The receiver remembers a failed climb, and one SL2 frame of airtime proves the rung (work plan M3, A2)
 
 - **Requirement/change:** REQ-FUN-06. On air (task 31, f2k, B→A) the receiver re-proposed SL10 after
