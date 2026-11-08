@@ -6127,7 +6127,7 @@ The review read the raw logs and event files at `7b91c684` (Fable).
 
 Expect silence rather than NACKs below SL9's acquisition limit; that would itself confirm the decision-4 regime.
 
-## Task 33 — B→A demotion again, in finer steps (status: run f2n done; see Results)
+## Task 33 — B→A demotion again, in finer steps (status: run f2n done — reviewed below)
 
 **Why.** Task 32 showed A2 clause 2 in A→B only.
 - In f2l (B→A), A's SL9 margin was about 20 dB below A→B's: SNR p50 9.7 dB.
@@ -6282,3 +6282,70 @@ at 18:25), AGC 2 on both, A at 144640000, B 144641564 at 5 W, drive 0.15 on both
 
 Evidence: `docs/dev/test-reports/onair-twin-ota-20261108-190123{.log,-evidence/}`; audio
 `on-air/rx-audio-2026-11-01/rx-{a,b}-f2n-8k.wav.gz`.
+
+### Review of task 33 (pc1 session, 2026-11-08)
+
+The review (Fable) read f2n's raw logs at `5e39604e`.
+- **The pairing holds.** A's 181 `ota_rate_decision` events pair in order with B's 181 `OTA ACK received` lines, with 0 kind or level mismatches. So the station's timeline is sound.
+- All 181 verdicts are `keyed`, and none `leaked`.
+
+**Clause 2, B→A — holds.** Both step-downs are at the anchor, keyed, and follow no probe. A `NackStepDown` needs no probe outstanding and 3 consecutive failures (`ota_rate.rs`).
+- **18:10:12, SL9 → SL8:**
+  - `nack_hold` at 18:10:04 and 18:10:08, from SL9;
+  - decodes on either side: 18:10:00 at SL9 (8.8 dB), 18:10:15 at SL8 (4.0 dB);
+  - the last withdraw was at 18:08:54, with 7 SL9 decodes since.
+- **18:11:30, SL8 → SL7:** its anchor was SL8 (the memory line at 18:10:40), with decodes before and after.
+- B adopted both.
+- **Capture corroboration is UNCHECKED.** And §A2's "identifiable by baud and bandwidth" cannot tell SL7, SL8 and SL9 apart: they share the OFDM52 geometry and differ only in constellation. The criterion is ill-posed for OFDM rung moves.
+
+**Correction: 0.087 was not an "acquire-but-fail" window.**
+- Of its 9 preambles, the 2 that acquired (pilot coherence 0.91 and 0.87) **decoded**.
+- The other 7 never reached `carrier offset acquired` (ρ 0.63–0.78). They count as false opens, with no decision: the same regime as f2l's v0/2 (parked, #1529).
+- Acquire-then-fail existed only at 0.125 and 0.104.
+- The "carrier-offset acquisitions" column counts log lines, at about 3 per burst. Divide by about 3.
+
+**Post-restore SL9 failures: a real link change, and sharper evidence for the parked climb-memory gap. Medium, not a blocker.**
+- **No step-down at full drive followed a probe failure.** Each of the four (18:06:09, 18:16:57, 18:19:29, 18:20:10) had two `nack_hold` from SL9 after an SL9 decode. So it is not the sawtooth.
+- **9.3 against 5.9 dB mixes levels.** Compared like for like:
+
+  | | before the steps | after the restore |
+  |---|---|---|
+  | SL9 SNR | 9.4 dB (n = 44) | 8.4 dB (n = 3) |
+  | SL8 SNR | 8.3 dB (n = 6) | 5.8 dB (n = 51) |
+  | SL9 frames, decoded / failed | 40 / 6 | 3 / 12 |
+
+  The link sat about 2 dB lower after the restore. B→A SL9 was already marginal at v0: the 18:06:09 step-down came before any step.
+- **The cause is not separable from these logs.** The drive read back 0.15. B's ALC read 0.0625 at all five drives, a quantised floor. `rig_status` has power and ALC null. Thermal drift and propagation are untested. Discriminator: v0 again after 10 min idle, with a working forward-power read.
+- **How the memory cycled here:**
+  1. A climbs, and **one** SL9 decode both confirms SL9 and clears the memory (`confirmed >= rung`).
+  2. Three failures follow, and a `NackStepDown` that seeds nothing.
+  3. Three SL8 decodes, and A climbs again.
+
+  After the restore that gave 6 SL9 climbs in 6 min, 3 decodes and 12 failures, with the backoff restarting at n = 4 each time instead of doubling. **The #1529 parking row should be widened:** one decode at the probe rung both confirms it and clears the memory. It is bounded (adjacent rungs, SL8 at about 90 %).
+
+**A's sign-off at 18:13:36 is by design, not a keying defect. Low, park.**
+- It fires on the station's *own* TX idle (30 s after its 18:13:04 ACK), with a settled quiet channel (`station_id.rs`).
+- It sat in a gap: B keyed at 18:13:28 and 18:13:40.
+- But "idle" ignores the peer. A receive-only station whose peer's frames fail to acquire signs off mid-exchange, and the default idle is 10 s.
+
+**Teardown — no idle keying. The ANSI diagnosis is refuted.**
+- **The key-up counts reconcile.**
+  - A's `ptt_changed` gives 184 key-ups: 181 ACKs and 3 IDs.
+  - B's gives 202, equal to its `frame_transmitted`, IDs included.
+  - Nothing came after the sign-offs.
+- **The 1 s PTT watcher is not a key-up census.** It saw 73 of A's 184 key-ups and missed the 18:13:36 ID entirely.
+- **Not ANSI codes.** Both archived daemon logs contain 0 ESC bytes. The runner's own `signed_off` pipeline, run on them, returns rc = 0. So the live detector's "no" is unexplained by log content.
+- **A certain second defect:** `last_tx` and `signed_off` grep `logged TX metadata`. That is a `debug!` in `openpulse_modem::engine`, never emitted under the run's filter: 0 occurrences.
+
+**Nothing in f2n blocks Release 1.**
+
+**A2 on 2 m, one build (server `a1dafca7`), across f2l, f2m and f2n:**
+
+| clause | B→A (A leads) | A→B (B leads) |
+|---|---|---|
+| 1, climb and decode at the new mode | f2l: SL2 → SL9 by t0 + 186 s; f2n: SL9 at 18:04:33, re-climb 18:15:29 | f2m: SL2 → SL9 by t0 + 217 s; re-climb 17:10:04 |
+| 2, demotion after a logged failure | **f2n** 18:10:12 SL9 → SL8, and 18:11:30 SL8 → SL7 | f2m 17:07:54 SL9 → SL8 |
+| 3, no demotion over clean decodes | f2l: 0 `nack_step_down` over the run, including about 8 min of clean SL9 at v0 | f2m: 36 AckOk and 0 NACK across v0/2–v0/8, SL9 held |
+| corroboration | the sender adopted each move; capture UNCHECKED, and ill-posed for SL7–SL9 | the same |
+
+**Met on 2 m in both directions.** The residual is stated: capture corroboration is unchecked, and the criterion as written is ill-posed for the OFDM rungs.
