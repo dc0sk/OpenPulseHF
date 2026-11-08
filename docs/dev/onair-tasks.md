@@ -6126,3 +6126,72 @@ The review read the raw logs and event files at `7b91c684` (Fable).
 - B's squelch against its floor logged at the start.
 
 Expect silence rather than NACKs below SL9's acquisition limit; that would itself confirm the decision-4 regime.
+
+## Task 33 — B→A demotion again, in finer steps (status: planned — the maintainer's go given)
+
+**Why.** Task 32 showed A2 clause 2 in A→B only.
+- In f2l (B→A), A's SL9 margin was about 20 dB below A→B's: SNR p50 9.7 dB.
+- The first step, v0/2, took B's frames below OFDM acquisition. A heard preambles (ρ 0.70–0.75) but no frame reached the ladder. Under decision 4 that is no evidence, so A sent no NACK and could not demote.
+- This task looks for the window between "SL9 decodes" and "nothing acquires", where frames still acquire but fail FEC. In that window a keyed NACK and a `NackStepDown` are possible.
+- If no such window exists at SL9 B→A, the run shows that instead. That too is a result for §A2 and for the HF plan.
+
+**Build:** unchanged from task 32. Server `a1dafca7…`, CLI `302c2079…`, identical on both stations. No redeploy; check the hashes.
+
+**Settings (named explicitly; "as f2k" did not carry these over in task 32):**
+- `fast` profile;
+- `TRAFFIC_FROM=B`, `TRAFFIC_INTERVAL=8`, `TRAFFIC_DURATION=1200`;
+- `SIGNOFF_IDLE_SECS=30`;
+- `DAEMON_LOG_LEVEL_B` with `openpulse_daemon=debug`, as in f2k. A's at debug too, so `ACK not received` and `send abandoned` are visible on both sides;
+- AGC FAST (2) on both rigs, read back before and after.
+
+The station rules hold:
+- FT-991A at 5 W at most, and never raise either rig's power;
+- record nothing about a host other than rpi51 and rpi53;
+- RSPdx port B empty;
+- no CAT power-off on the IC-9700.
+
+### Part A — nothing transmits
+1. Check the hashes, and read back both rigs.
+2. Record v0 on both sides. It is expected to be 0.15.
+3. **Record each receiver's idle DCD against its floor:** 60 s with both daemons up and nothing keyed. Report the energy of each DCD busy flicker, with p10/p50/p90, and the squelch threshold.
+   - B's post-f2l flickers sat at its own floor (0.018–0.023). One opened the idle NACK ping-pong.
+   - If an idle daemon would key here, stop it before it does: run `cleanup` and report.
+
+### Part B — run f2n: B sends, A leads the rate (keys both rigs: one go)
+The drive schedule goes on `B_TX_SINK_VOLUME`; A's stays at v0. Record the UTC time of each change.
+- **v0** until A's confirmed rung has held SL9 for ≥ 120 s, and in any case until t0 + 480 s.
+- Then steps of **v0 / 1.2 each (about 1.6 dB), 90 s per step**: 0.125, 0.104, 0.087, 0.072, 0.060.
+  - f2l's v0/2 (0.075) was already silent, so the window should sit between 0.125 and 0.072.
+- **Stop rule** (it replaces "burst flushed", which no longer exists):
+  - **(i) Frames arriving, receiver silent:** no `ota_rate_decision` at A for 60 s while A keeps logging `preamble confirmed`. Note the time and the step.
+  - **(ii) Nothing arriving:** no `preamble confirmed` at A for 60 s.
+  - On either one, go straight back to v0.
+- **v0** to the end: the re-climb.
+
+### Teardown (new, from the task 32 review)
+**Run `cleanup` as soon as both stations' sign-off IDs are logged, and no later than 3 min after the traffic window ends,** whether or not the runner's own wait has returned. No OTA-enabled daemon may stay up unattended: an idle daemon NACKs its floor and then the peer's NACKs (task 32, post-run).
+
+After `cleanup`, read back PTT = 0 on both rigs. Report the PTT watcher's lines from the end of the traffic window to `cleanup`.
+
+### Report
+As task 32, plus:
+- **per step:**
+  - A's `preamble confirmed` count and ρ;
+  - `carrier offset acquired` count;
+  - `fec attempt` OK/FAILED;
+  - `ota_rate_decision` count by verdict;
+  - NACKs keyed and muted;
+  - P false opens and `held_no_frame`;
+  - B's `ACK not received` and `send abandoned`;
+  - A's median SNR;
+- which stop rule fired, if any, and at which step;
+- **the post-traffic interval:** every PTT key-up from the traffic window's end to `cleanup`.
+
+**Prediction:**
+- At one of 0.125 / 0.104 / 0.087, A acquires B's SL9 frames (`carrier offset acquired`), but they fail FEC.
+- A keys ≥ 3 NACKs at the anchor, and then a `NackStepDown` SL9 → SL8 (clause 2, B→A).
+- After the restore, A re-climbs to SL9 within about 3 min.
+
+**Killed if** frames acquire and fail FEC through a whole step with NACKs keyed, but no step-down follows.
+
+**Weak / a different result if** every step goes straight from "decodes" to stop rule (i) with no FEC-failure window. Then clause 2 B→A is unreachable at SL9 on this link by design (decision 4). Say so with the per-step counts.
