@@ -825,6 +825,9 @@ pub struct ModemEngine {
     /// Samples fed through `accumulate_capture`: this station's listening time. It stops while the
     /// daemon transmits, because the daemon drops the capture stream then.
     listening_samples: u64,
+    /// `listening_samples` when this engine last decoded an OTA ladder frame or started its OTA session:
+    /// the only evidence of a live peer it has (`idle-nack-gate.md`).
+    last_ladder_decode_at: Option<u64>,
     /// Shortest frame per `(mode, FEC)`, measured once by modulating a 1-byte payload (#1456).
     shortest_frame_cache: Vec<(String, FecMode, usize)>,
     /// Coded airtime per `(mode, FEC, payload length)`, for the airtime-weighted climb: the frame's
@@ -1298,6 +1301,11 @@ const SPECTRUM_TAP_MAX: usize = 16384;
 /// dropped. Three matches the HARQ diversity depth measured in `harq_fade_diversity`.
 const OTA_HARQ_MAX_ATTEMPTS: usize = 3;
 
+/// Listening time after a decoded ladder frame during which a failed burst may draw a NACK: 10 min at
+/// 8 kHz, longer than a live peer's longest failing run (four SL2 frames). The daemon's NACK budget
+/// leaks at the same period (`idle-nack-gate.md`).
+pub const OTA_PEER_LIVE_SAMPLES: u64 = 10 * 60 * 8_000;
+
 /// Frames held for one output stream by [`ModemEngine::transmit_burst`].
 #[derive(Debug, Default)]
 struct TxBurst {
@@ -1368,6 +1376,7 @@ impl ModemEngine {
             last_ota_decode_late: false,
             decode_attempts_past_deadline: 0,
             listening_samples: 0,
+            last_ladder_decode_at: None,
             shortest_frame_cache: Vec::new(),
             decoded_airtime_cache: Vec::new(),
             last_flush_lead: 0,
@@ -2320,6 +2329,9 @@ impl ModemEngine {
         self.ota = Some(OtaRateController::new(profile));
         self.ota_retained_llrs.clear();
         self.ota_retained_session = None;
+        // A session just started counts as a live peer, so a new peer's first failed frame is still
+        // answered (#1456); left idle for `OTA_PEER_LIVE_SAMPLES` with no decode, it stops answering.
+        self.last_ladder_decode_at = Some(self.listening_samples);
     }
 
     /// Set (or clear) the per-session OTA-ACK MAC key derived from the handshake key agreement (E7).
@@ -3190,6 +3202,12 @@ impl ModemEngine {
     /// this station's listening time, which the daemon's NACK budget leaks against (#1456).
     pub fn listening_samples(&self) -> u64 {
         self.listening_samples
+    }
+
+    /// Whether a ladder frame decoded within [`OTA_PEER_LIVE_SAMPLES`] of listening.
+    fn ota_peer_live(&self) -> bool {
+        self.last_ladder_decode_at
+            .is_some_and(|t| self.listening_samples.saturating_sub(t) <= OTA_PEER_LIVE_SAMPLES)
     }
 
     /// Burst cap for what this receiver may actually be sent, not just for the mode it is configured
@@ -5269,6 +5287,17 @@ impl ModemEngine {
                 tracing::debug!("OTA: failed burst is an ACK, not ladder evidence (#1456)");
                 return Ok((None, None, last_err));
             }
+            // With no peer live, a failure the preamble detect did not confirm keys nothing: on air two
+            // idle daemons NACKed their own floor, then each other's NACKs and IDs, too weak to
+            // recognise (task 32; `idle-nack-gate.md`, G1).
+            if !p_ok && !self.ota_peer_live() {
+                tracing::debug!(
+                    "OTA: a failed burst with no live peer is not ladder evidence: no ladder frame \
+                     decoded in the last {} s of listening",
+                    OTA_PEER_LIVE_SAMPLES / 8_000
+                );
+                return Ok((None, None, last_err));
+            }
             for (mode, llrs) in harq_staged {
                 let buf = self.ota_retained_llrs.entry(mode).or_default();
                 buf.push(llrs);
@@ -5279,6 +5308,9 @@ impl ModemEngine {
             }
         }
 
+        if decoded.is_some() {
+            self.last_ladder_decode_at = Some(self.listening_samples);
+        }
         // PAST THE ACK DEADLINE: no ACK can be heard any more, and one keyed now lands on the sender's
         // retransmission. Nor does the ladder move: a decision the sender never hears desynchronises
         // the two stations (task 18, run a2a). A decoded payload is still delivered; the sender

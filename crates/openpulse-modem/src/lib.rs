@@ -17,5 +17,5 @@ pub mod pipeline;
 mod rate_policy;
 pub mod rho_calibration;
 
-pub use engine::{ModemEngine, OtaRxResult};
+pub use engine::{ModemEngine, OtaRxResult, OTA_PEER_LIVE_SAMPLES};
 pub use event::EngineEvent;

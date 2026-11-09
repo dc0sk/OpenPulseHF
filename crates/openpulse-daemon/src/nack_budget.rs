@@ -14,8 +14,9 @@ use openpulse_modem::{ModemEngine, OtaRxResult};
 /// Keyed NACKs allowed in a row with no decode and no leak.
 pub(crate) const OTA_NACK_BUDGET: u32 = 3;
 
-/// Listening time per leaked NACK: 10 min at 8 kHz. Bounds idle keying at 3 + 6 per hour.
-pub(crate) const LEAK_SAMPLES: u64 = 10 * 60 * 8_000;
+/// Listening time per leaked NACK: 10 min at 8 kHz, the engine's peer-liveness window, so one owner
+/// sets both.
+pub(crate) const LEAK_SAMPLES: u64 = openpulse_modem::OTA_PEER_LIVE_SAMPLES;
 
 /// NACKs keyed since the last decode, leaking with listening time.
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -260,6 +261,66 @@ mod tests {
             }
         }
         last
+    }
+
+    /// With no peer live (no ladder frame decoded, and no session started, in `LEAK_SAMPLES` of
+    /// listening) a failure keys nothing and spends no budget, but a failure the preamble detect
+    /// confirmed as a frame still keys: a new peer's OFDM frame is answered (`idle-nack-gate.md`).
+    #[test]
+    fn with_no_live_peer_only_a_p_confirmed_failure_keys() {
+        let mut engine = sl7_engine();
+        // Silence for the listening time, then 60 s of the fixture's quiet noise so the floor
+        // learns the band again (after silence it holds the noise as one burst).
+        let mut left = LEAK_SAMPLES + 8_000 - 60 * 8_000;
+        while left > 0 {
+            let n = left.min(8_000) as usize;
+            assert!(matches!(
+                engine.accumulate_capture(Some("OFDM52"), vec![0.0; n]),
+                Ok(None)
+            ));
+            left -= n as u64;
+        }
+        for chunk in noise(60 * 8_000, 0.02, 0x5851_f42d).chunks(800) {
+            let _ = engine.accumulate_capture(Some("OFDM52"), chunk.to_vec());
+        }
+        let burst = AudioSamples {
+            samples: noise(16_000, 0.2, 0x2545_f491),
+        };
+        let mut budget = NackBudget::default();
+        let (res, keyed) = decode_ota_burst(
+            &mut engine,
+            &mut budget,
+            true,
+            &burst,
+            "peer",
+            "BPSK250",
+            false,
+        )
+        .unwrap();
+        assert!(
+            res.ack.is_none() && !keyed,
+            "a failure with no live peer keyed"
+        );
+        assert_eq!(budget, NackBudget::default(), "it spent budget");
+        let p_burst = p_confirmed_failure(&mut engine);
+        let (res, keyed) = decode_ota_burst(
+            &mut engine,
+            &mut budget,
+            true,
+            &p_burst,
+            "peer",
+            "BPSK250",
+            false,
+        )
+        .unwrap();
+        assert!(
+            res.p_evidence,
+            "the fixture is not a P-confirmed failure: vacuous"
+        );
+        assert!(
+            keyed,
+            "a P-confirmed failure with no live peer keyed nothing"
+        );
     }
 
     /// The budget exemption (`ofdm-preamble-detect.md`, Implementation): with the budget spent, a
