@@ -6350,7 +6350,7 @@ The review (Fable) read f2n's raw logs at `5e39604e`.
 
 **Met on 2 m in both directions.** The residual is stated: capture corroboration is unchecked, and the criterion as written is ill-posed for the OFDM rungs.
 
-## Task 34 — the idle receiver stays quiet: the union-ACK guard and the idle-NACK gate on air (status: run f2o done; see Results)
+## Task 34 — the idle receiver stays quiet: the union-ACK guard and the idle-NACK gate on air (status: run f2o done — reviewed below; #1532's on-air check still open)
 
 **Why.** After f2l's traffic (task 32), both daemons stayed up for about 3 h and keyed an idle ping-pong:
 A keyed 9 times and B 7. A stepped SL9 → SL8 on B's NACK.
@@ -6434,6 +6434,11 @@ which case it was.
 
 ### Task 34 — Results (station session, 2026-11-09; go quoted by PC1: "go for on-air")
 
+> **Correction (review, below).** The run counts in this block are f2n **plus** f2o: the audit file
+> carried f2n's events, because nothing cleared it between the runs. f2o alone: B sent 43 frames, A
+> made 41 decisions and received 39 frames, and B logged 41 ACKs received plus 1 timeout.
+> `p_false_opens` is known unchanged at 0, not unavailable.
+
 **Build:** `m3/onair` @ `cf114fe7` (main at #1531 + #1532). Rebuilt on A, copied to B; hashes identical on both stations:
 server `c481e8277f96f18e8f8edff0c43032f09b2102d8934923777b7f6f8e264f1ff2`, CLI
 `a5642d34de26262e33e6e27b7df8da1127838e580d82b29b567352185a3f4817`, `twin-traffic.sh` `c9e152f3…` (unchanged).
@@ -6496,3 +6501,70 @@ sides before and after (`--verify` pass). Power not touched.
 **Evidence:** `docs/dev/test-reports/onair-twin-ota-20261109-195533{.log,-evidence/}`: both stations' full audit-events
 files (`events-{a,b}.ndjson.gz`, 20113 and 20378 lines) and full daemon logs (`daemon-{a,b}.log.gz`, colour codes
 stripped), configs, rig read-back, `idle-window-watcher.log`. Leak check 0.
+
+### Review of task 34 (pc1 session, 2026-11-09)
+
+The review (Fable) read f2o's raw events and logs at `a869e276`, against f2n and f2l.
+
+**1. No regression: B heard every ACK A keyed. The "41 of 222" was an evidence artefact.**
+- **What happened to the evidence.** The f2o events files begin with 8 536 (A) and 8 622 (B) lines
+  that are byte-identical to f2n's, and B's `message_received id=1` occurs twice, once for f2n
+  (2026-11-08 18:01:23) and once for f2o.
+  - The daemon appends to `$CFG_DIR/openpulse/audit/events.ndjson`, and the runner collects the file
+    whole. `cleanup` would have cleared it, and it was skipped after f2n.
+  - So every count in the Results is f2n + f2o.
+- **f2o alone:** B sent **43** frames (42 data + 1 sign-off ID), and A made **41** decisions, received
+  39 frames and keyed 42 times (41 ACKs + 1 ID).
+- **B's log:** 41 `OTA ACK received` + 1 `ACK not received within window` (18:57:27.95) = **42 outcomes
+  for 42 data frames**.
+- **The match is exact, by type:**
+
+  | A's decisions | B's ACKs |
+  |---|---|
+  | hold 23 + climb_declined 6 | AckOk 29 |
+  | climb_on_evidence 6 + climb_on_snr 3 | AckUp 9 |
+  | nack_hold 1 + probe_withdrawn 2 | Nack 3 |
+
+  The one timeout is a frame A never decided on.
+- **What this shows for #1531:** its refactored sender path (`decode_mfsk16_k3_ack` →
+  `mfsk16_k3_copy_llrs`) ran 41 of 41 on air. The daemon's stdout log is a blocking layer, so the log
+  was not lossy.
+- **The watcher's "43 of 245"** is the same artefact. 43 is every f2o key-up, so the watcher's stop
+  rules were sound.
+- **A small positive:** B logged 0 `ota_rate_decision` in f2o, against 2 in f2n and 18 in f2l.
+  That is consistent with #1531 stopping the sender's loop from NACKing heard ACKs. n is small, so it
+  is noted, not claimed.
+- **Not a blocker.** The runner fix is parked: truncate the audit file per run, or refuse to run on a
+  non-empty one.
+
+**2. The idle window is evidence for #1454 on that day's floor, not for #1532. Its on-air check stays open.**
+- **The guard order** in `ota_decode_burst` is: #1454 (total-power run ≥ floor, or spectral span, or
+  P), then the #1456 floor, then the #1456 ACK guard, then #1532.
+- **Every idle-window burst died at #1454:**
+  - A: 26 × `run 200` and 1 × `run 400`, against a recognition window of 576;
+  - B: 38 × 200, 12 × 400, 2 × 600 and 1 × `span 7600`, against 8 448.
+  - The flickers were 1–3 reads. #1532 was never asked, and for the window's first 10 min both peers
+    were live anyway.
+- **Why f2l was different.**
+  - In f2l, B's rx level had stepped SL2 → SL1 during the run (events index 5443, about 13:27, while
+    its own sends were being abandoned as peer silent), and it stayed SL1 for the 3 h.
+  - At SL1 the recognition floor is short, so B's own-floor flickers passed #1454 (energy 0.018, the
+    same range as today's 0.021–0.030). That produced 32 post-run `nack_hold Sl1`, mostly muted.
+  - Today B never left SL2, plausibly because #1531 stopped the step-down that put it there.
+- **So the spec's "weak" test was the wrong instrument.** DCD opens of one read never reach the gate.
+  By the spec's letter the run is not weak; in substance it is: **#1532 unexercised; #1454 held at
+  floors 576 and 8 448.**
+- **What would exercise #1532:**
+  - On air: a receiver whose rx candidates give a short floor (SL1, or the OFDM rungs at 576), idle
+    for more than 10 min after its last decode. For example, leave the receiving station's rx level
+    at SL1 and idle for 30 min, then count `no live peer` lines. The budget is the safety bound.
+  - Offline: nothing is recorded to replay, since no audio was kept in f2l or f2o.
+- **Not a blocker.** What #1532 prevents is bounded by the 3-NACK budget, and its unit tests passed
+  sabotage. **The on-air check stays a named M3 item, not done.**
+
+**3. The deviations change no result.**
+- `TRAFFIC_SIZE=64` is as in f2n.
+- `SIGNOFF_WAIT_MAX=60` made the runner's own evidence a pre-sign-off snapshot, which the station's
+  full collection supersedes.
+- **`preamble carrier detect` stopped at 19:00:42.9** because the line logs only when its counters
+  change. P ran (SL9 gives OFDM candidates), so `p_false_opens` is **known unchanged at 0**.
