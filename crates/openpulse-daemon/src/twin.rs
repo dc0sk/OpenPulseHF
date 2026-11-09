@@ -184,6 +184,17 @@ async fn spawn_pair(
 ) -> BridgedPair {
     let addr_a = control_addr(&cfg_a);
     let addr_b = control_addr(&cfg_b);
+    let ws_a = ws_addr(&cfg_a);
+    let ws_b = ws_addr(&cfg_b);
+    // The twin tests bind fixed ports, and a run in another worktree may hold one. A daemon whose bind
+    // fails exits, but `wait_for_port` only asks whether SOMETHING accepts there — so the test went on
+    // to drive the other run's daemon (the recurring id_rides_in_own_keying /
+    // muted_failures_move_no_ladder failures). Refuse here, naming the port, instead.
+    for addr in [addr_a, ws_a, addr_b, ws_b] {
+        if let Err(e) = std::net::TcpListener::bind(addr) {
+            panic!("twin port {addr} is not free ({e}) — another twin run (another worktree?) holds it");
+        }
+    }
 
     // Split-buffer loopbacks: a daemon must NOT receive its own transmissions, so
     // TX and RX are separate queues and the bridge moves TX→peer-RX. The harness
@@ -245,10 +256,13 @@ async fn spawn_pair(
         }
     });
 
-    wait_for_port(addr_a).await;
-    wait_for_port(addr_b).await;
+    // Wait for the WS listeners too: `run` binds them after the TCP port, and a failed WS bind ends
+    // the daemon after its TCP port already answered.
+    for addr in [addr_a, ws_a, addr_b, ws_b] {
+        wait_for_port(addr).await;
+    }
 
-    BridgedPair {
+    let pair = BridgedPair {
         addr_a,
         addr_b,
         stop,
@@ -259,7 +273,15 @@ async fn spawn_pair(
         daemon_b: Some(daemon_b),
         exit_a,
         exit_b,
-    }
+    };
+    // The probe above cannot close the window between it and the daemons' binds, so a daemon that
+    // has already exited is the same fault, caught late.
+    let stats = pair.stats();
+    assert!(
+        !stats.daemon_a_exited && !stats.daemon_b_exited,
+        "twin daemon exited during startup: {stats}"
+    );
+    pair
 }
 
 /// Spawn one daemon on a dedicated thread + multi-thread runtime, racing
@@ -321,6 +343,15 @@ fn control_addr(cfg: &OpenpulseConfig) -> SocketAddr {
     format!("{}:{}", cfg.daemon.tcp_bind_addr, cfg.daemon.tcp_port)
         .parse()
         .expect("valid daemon.tcp_bind_addr/tcp_port")
+}
+
+fn ws_addr(cfg: &OpenpulseConfig) -> SocketAddr {
+    format!(
+        "{}:{}",
+        cfg.daemon.websocket_bind_addr, cfg.daemon.websocket_port
+    )
+    .parse()
+    .expect("valid daemon.websocket_bind_addr/websocket_port")
 }
 
 /// Poll until the control port accepts a connection (or give up after ~4 s).

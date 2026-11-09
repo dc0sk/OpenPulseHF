@@ -2,7 +2,7 @@
 project: openpulsehf
 doc: docs/dev/onair-tasks.md
 status: review
-last_updated: 2026-11-01
+last_updated: 2026-11-09
 ---
 
 # On-air task channel (cloud session ↔ station session on rpi51)

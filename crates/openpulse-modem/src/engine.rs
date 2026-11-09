@@ -825,6 +825,9 @@ pub struct ModemEngine {
     /// Samples fed through `accumulate_capture`: this station's listening time. It stops while the
     /// daemon transmits, because the daemon drops the capture stream then.
     listening_samples: u64,
+    /// `listening_samples` when this engine last decoded an OTA ladder frame or started its OTA session:
+    /// the only evidence of a live peer it has (`idle-nack-gate.md`).
+    last_ladder_decode_at: Option<u64>,
     /// Shortest frame per `(mode, FEC)`, measured once by modulating a 1-byte payload (#1456).
     shortest_frame_cache: Vec<(String, FecMode, usize)>,
     /// Coded airtime per `(mode, FEC, payload length)`, for the airtime-weighted climb: the frame's
@@ -1298,6 +1301,11 @@ const SPECTRUM_TAP_MAX: usize = 16384;
 /// dropped. Three matches the HARQ diversity depth measured in `harq_fade_diversity`.
 const OTA_HARQ_MAX_ATTEMPTS: usize = 3;
 
+/// Listening time after a decoded ladder frame during which a failed burst may draw a NACK: 10 min at
+/// 8 kHz, longer than a live peer's longest failing run (four SL2 frames). The daemon's NACK budget
+/// leaks at the same period (`idle-nack-gate.md`).
+pub const OTA_PEER_LIVE_SAMPLES: u64 = 10 * 60 * 8_000;
+
 /// Frames held for one output stream by [`ModemEngine::transmit_burst`].
 #[derive(Debug, Default)]
 struct TxBurst {
@@ -1368,6 +1376,7 @@ impl ModemEngine {
             last_ota_decode_late: false,
             decode_attempts_past_deadline: 0,
             listening_samples: 0,
+            last_ladder_decode_at: None,
             shortest_frame_cache: Vec::new(),
             decoded_airtime_cache: Vec::new(),
             last_flush_lead: 0,
@@ -2320,6 +2329,9 @@ impl ModemEngine {
         self.ota = Some(OtaRateController::new(profile));
         self.ota_retained_llrs.clear();
         self.ota_retained_session = None;
+        // A session just started counts as a live peer, so a new peer's first failed frame is still
+        // answered (#1456); left idle for `OTA_PEER_LIVE_SAMPLES` with no decode, it stops answering.
+        self.last_ladder_decode_at = Some(self.listening_samples);
     }
 
     /// Set (or clear) the per-session OTA-ACK MAC key derived from the handshake key agreement (E7).
@@ -3096,6 +3108,46 @@ impl ModemEngine {
         })
     }
 
+    /// Samples a heard ACK's burst may run past the ACK itself: the DCD's 100 ms hold plus the longest
+    /// receive read seen on air (8 800, a busy Pi 4 loop in f2l), since a burst ends on a read boundary.
+    const ACK_TAIL_SLACK_SAMPLES: usize = 800 + 8_800;
+
+    /// Length of the longest ACK waveform a station keys: the K=3 union of `transmit_ack_mfsk16_k3`.
+    fn longest_ack_len(&self) -> Option<usize> {
+        let gap = (Self::MFSK16_ACK_GAP_S * AudioConfig::default().sample_rate as f32) as usize;
+        let copy = Self::MFSK16_ACK_SYMS * Self::MFSK16_ACK_SPS;
+        Some(self.fsk4_ack_frame_len()? + Self::MFSK16_ACK_COPIES * (gap + copy))
+    }
+
+    /// How far past a burst's lead each ACK waveform's first codeword can end: one FSK4 ACK, and the
+    /// union's FSK4 copy, gap and first MFSK16 copy, each plus the tail slack.
+    fn ack_head_lens(&self) -> (usize, usize) {
+        let fsk4 = self.fsk4_ack_frame_len().unwrap_or(0);
+        let gap = (Self::MFSK16_ACK_GAP_S * AudioConfig::default().sample_rate as f32) as usize;
+        let copy = Self::MFSK16_ACK_SYMS * Self::MFSK16_ACK_SPS;
+        (
+            fsk4 + Self::ACK_TAIL_SLACK_SAMPLES,
+            fsk4 + gap + copy + Self::ACK_TAIL_SLACK_SAMPLES,
+        )
+    }
+
+    /// Does `samples` hold an MFSK16-ACK copy whose ShortFEC codeword decodes? Keyless and
+    /// session-blind, as [`holds_an_ack_codeword`](Self::holds_an_ack_codeword) is: a piece of a union
+    /// ACK heard on its own carries no FSK4 copy, only MFSK16 ones.
+    fn holds_an_mfsk16_ack_codeword(&self, samples: &[f32]) -> bool {
+        let Some(copies) = self.mfsk16_k3_copy_llrs(samples) else {
+            return false;
+        };
+        let fec = ShortFecCodec::new();
+        let decodes = |llrs: &[f32]| {
+            fec.decode(&openpulse_core::fec::hard_decide(llrs))
+                .is_ok_and(|d| d.len() == 5)
+        };
+        let refs: Vec<&[f32]> = copies.iter().map(|c| c.as_slice()).collect();
+        refs.iter().any(|c| decodes(c))
+            || (refs.len() >= 2 && decodes(&openpulse_core::fec::combine_llrs_map(&refs)))
+    }
+
     /// Hand the engine the NACK budget's verdict for the next OTA burst, should it fail: a muted
     /// failure moves no ladder (#1460 round 4b). Taken by that burst's decode.
     pub fn set_ota_failure_verdict(&mut self, verdict: NackVerdict) {
@@ -3150,6 +3202,12 @@ impl ModemEngine {
     /// this station's listening time, which the daemon's NACK budget leaks against (#1456).
     pub fn listening_samples(&self) -> u64 {
         self.listening_samples
+    }
+
+    /// Whether a ladder frame decoded within [`OTA_PEER_LIVE_SAMPLES`] of listening.
+    fn ota_peer_live(&self) -> bool {
+        self.last_ladder_decode_at
+            .is_some_and(|t| self.listening_samples.saturating_sub(t) <= OTA_PEER_LIVE_SAMPLES)
     }
 
     /// Burst cap for what this receiver may actually be sent, not just for the mode it is configured
@@ -5214,10 +5272,30 @@ impl ModemEngine {
             // can answer each other until the daemon's budget runs out.
             // The whole burst, lead included: FSK4-ACK has no preamble, so when the squelch opens on
             // the ACK's second read its first read sits in the ring.
-            if post <= 2 * self.fsk4_ack_frame_len().unwrap_or(0)
-                && self.holds_an_ack_codeword(&samples.samples)
+            // The bound is the longest ACK any station keys, the K=3 union (5.86 s), not one FSK4 ACK:
+            // a sub-floor NACK heard whole was past the old 2 × FSK4 bound, and one heard in pieces
+            // (the DCD drops in its 0.5 s gaps) carries no FSK4 codeword (`union-ack-recognition.md`).
+            // Both scans look only at the burst's head, where an ACK starts: the union's FSK4 copy leads
+            // it and its first MFSK16 copy follows one gap later; a piece is its own head. Over the
+            // whole 56 k-sample bound they cost 250 ms on x86, which stalls the receive loop.
+            let (fsk4_head, mfsk16_head) = self.ack_head_lens();
+            let head = |n: usize| &samples.samples[..samples.samples.len().min(lead + n)];
+            if post <= self.longest_ack_len().unwrap_or(0) + Self::ACK_TAIL_SLACK_SAMPLES
+                && (self.holds_an_ack_codeword(head(fsk4_head))
+                    || self.holds_an_mfsk16_ack_codeword(head(mfsk16_head)))
             {
                 tracing::debug!("OTA: failed burst is an ACK, not ladder evidence (#1456)");
+                return Ok((None, None, last_err));
+            }
+            // With no peer live, a failure the preamble detect did not confirm keys nothing: on air two
+            // idle daemons NACKed their own floor, then each other's NACKs and IDs, too weak to
+            // recognise (task 32; `idle-nack-gate.md`, G1).
+            if !p_ok && !self.ota_peer_live() {
+                tracing::debug!(
+                    "OTA: a failed burst with no live peer is not ladder evidence: no ladder frame \
+                     decoded in the last {} s of listening",
+                    OTA_PEER_LIVE_SAMPLES / 8_000
+                );
                 return Ok((None, None, last_err));
             }
             for (mode, llrs) in harq_staged {
@@ -5230,6 +5308,9 @@ impl ModemEngine {
             }
         }
 
+        if decoded.is_some() {
+            self.last_ladder_decode_at = Some(self.listening_samples);
+        }
         // PAST THE ACK DEADLINE: no ACK can be heard any more, and one keyed now lands on the sender's
         // retransmission. Nor does the ladder move: a decision the sender never hears desynchronises
         // the two stations (task 18, run a2a). A decoded payload is still delivered; the sender
@@ -8974,12 +9055,9 @@ impl ModemEngine {
         }
     }
 
-    /// Union-decode a K=3 MFSK16-ACK from a captured window: **anchor on Costas acquisition** (robust at the
-    /// sub-floor's ≤ 7 dB SNR, where broadband RMS onset just triggers on noise), then — since the 3 copies
-    /// sit exactly a span apart in one transmission — demodulate the slots at `anchor + k·span` and
-    /// `decode_ack_from_llr_copies`. Probing ±2 spans means the anchor can be any of the three copies; the
-    /// per-copy CRC gate rejects a slot that locks silence/a gap.
-    fn decode_mfsk16_k3_ack(&self, samples: &[f32]) -> Option<AckFrame> {
+    /// The descrambled soft LLRs of every MFSK16-ACK copy slot at `anchor + k·span`, anchored on one
+    /// Costas lock, shared by the K=3 listen and the not-evidence guard so the two cannot drift.
+    fn mfsk16_k3_copy_llrs(&self, samples: &[f32]) -> Option<Vec<Vec<f32>>> {
         let copy_len = Self::MFSK16_ACK_SYMS * Self::MFSK16_ACK_SPS;
         if samples.len() < copy_len {
             return None;
@@ -9014,9 +9092,16 @@ impl ModemEngine {
                 copies.push(llrs);
             }
         }
-        if copies.is_empty() {
-            return None;
-        }
+        (!copies.is_empty()).then_some(copies)
+    }
+
+    /// Union-decode a K=3 MFSK16-ACK from a captured window: **anchor on Costas acquisition** (robust at the
+    /// sub-floor's ≤ 7 dB SNR, where broadband RMS onset just triggers on noise), then — since the 3 copies
+    /// sit exactly a span apart in one transmission — demodulate the slots at `anchor + k·span` and
+    /// `decode_ack_from_llr_copies`. Probing ±2 spans means the anchor can be any of the three copies; the
+    /// per-copy CRC gate rejects a slot that locks silence/a gap.
+    fn decode_mfsk16_k3_ack(&self, samples: &[f32]) -> Option<AckFrame> {
+        let copies = self.mfsk16_k3_copy_llrs(samples)?;
         let refs: Vec<&[f32]> = copies.iter().map(|c| c.as_slice()).collect();
         openpulse_core::ack::decode_ack_from_llr_copies_maybe_auth(&refs, self.ack_mac_key.as_ref())
     }
@@ -12164,6 +12249,105 @@ mod preamble_detect_rehead_trap {
             decoded >= FRAMES - 1,
             "{decoded} of {FRAMES} trapped SL8 frames decoded (re-heads {reheads}, squelch/hiss \
              {ratio:.2})"
+        );
+    }
+}
+
+#[cfg(test)]
+mod union_ack_guard_tests {
+    use super::*;
+    use openpulse_audio::LoopbackBackend;
+    use openpulse_core::profile::SessionProfile;
+
+    fn engine(lb: &LoopbackBackend) -> ModemEngine {
+        let mut e = ModemEngine::new(Box::new(lb.clone_shared()));
+        e.register_plugin(Box::new(bpsk_plugin::BpskPlugin::new()))
+            .unwrap();
+        e.register_plugin(Box::new(qpsk_plugin::QpskPlugin::new()))
+            .unwrap();
+        e.register_plugin(Box::new(ofdm_plugin::OfdmPlugin::new()))
+            .unwrap();
+        e.register_plugin(Box::new(mfsk16_plugin::Mfsk16Plugin::new()))
+            .unwrap();
+        e.register_plugin(Box::new(fsk4_plugin::Fsk4Plugin::new()))
+            .unwrap();
+        e
+    }
+
+    fn with_noise(x: &[f32], seed: u32, rel: f32) -> Vec<f32> {
+        let rms = (x.iter().map(|v| v * v).sum::<f32>() / x.len().max(1) as f32).sqrt();
+        let mut s = seed;
+        x.iter()
+            .map(|v| {
+                s = s.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+                v + rel * rms * ((s >> 8) as f32 / (1u32 << 24) as f32 - 0.5) * 3.46
+            })
+            .collect()
+    }
+
+    /// The not-evidence guard must not take a real frame for an ACK: that frame would lose its NACK.
+    /// Every data rung of both profiles (closed lists, each with its own FEC) and the 18-byte station
+    /// ID, clean and under noise at 0 dB and −6 dB, against both recognisers.
+    #[test]
+    fn no_data_frame_or_station_id_is_taken_for_an_ack() {
+        let rx = engine(&LoopbackBackend::new());
+        let mut frames: Vec<(String, Vec<f32>)> = Vec::new();
+        for profile in [SessionProfile::fast(), SessionProfile::robust()] {
+            for level in profile.defined_levels() {
+                let Some(mode) = profile.mode_for(level) else {
+                    continue;
+                };
+                let lb = LoopbackBackend::new();
+                let mut tx = engine(&lb);
+                if tx
+                    .transmit_with_fec_mode(&[0xA5; 64], mode, profile.fec_for(level), None)
+                    .is_ok()
+                {
+                    frames.push((format!("{level:?} {mode}"), lb.drain_samples()));
+                }
+            }
+        }
+        let lb = LoopbackBackend::new();
+        let mut tx = engine(&lb);
+        tx.transmit(b"DE A1AAA/B1BBB ID.", "BPSK250", None).unwrap();
+        frames.push(("station ID BPSK250".into(), lb.drain_samples()));
+        assert!(frames.len() >= 15, "only {} frames built", frames.len());
+        let bound = rx.longest_ack_len().unwrap() + ModemEngine::ACK_TAIL_SLACK_SAMPLES;
+        let mut taken = Vec::new();
+        for (name, f) in &frames {
+            for (seed, rel) in [(0u32, 0.0f32), (1, 1.0), (2, 2.0), (3, 1.0)] {
+                let x = if rel == 0.0 {
+                    f.clone()
+                } else {
+                    with_noise(f, seed, rel)
+                };
+                let x = &x[..x.len().min(bound)];
+                if rx.holds_an_ack_codeword(x) || rx.holds_an_mfsk16_ack_codeword(x) {
+                    taken.push(format!("{name} seed {seed}"));
+                }
+            }
+        }
+        assert!(taken.is_empty(), "frames taken for an ACK: {taken:?}");
+        // The positive control, through the same harness: a real ACK of each waveform is taken.
+        let nack = AckFrame::new(AckType::Nack, "OTHER");
+        let lb = LoopbackBackend::new();
+        let mut tx = engine(&lb);
+        tx.transmit_ack_with_short_fec(&nack, None).unwrap();
+        let fsk4 = with_noise(&lb.drain_samples(), 4, 0.3);
+        tx.transmit_ack_mfsk16_k3(&nack, None).unwrap();
+        let union = with_noise(&lb.drain_samples(), 5, 0.3);
+        let copy = &union[4160 + 4000..4160 + 4000 + 10_240];
+        assert!(
+            rx.holds_an_ack_codeword(&fsk4),
+            "the FSK4 ACK was not taken"
+        );
+        assert!(
+            rx.holds_an_ack_codeword(&union),
+            "the union ACK was not taken"
+        );
+        assert!(
+            rx.holds_an_mfsk16_ack_codeword(copy),
+            "a lone MFSK16-ACK copy was not taken"
         );
     }
 }

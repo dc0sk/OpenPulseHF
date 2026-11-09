@@ -15,6 +15,102 @@ this ledger adds the design rationale and the actually-observed results per chan
 
 ---
 
+## 2026-11-09 — With no live peer, a failed burst the preamble detect did not confirm keys no NACK (work plan M3, A2)
+
+- **Requirement/change:** REQ-FUN-06.
+  - On air (task 32, after f2l) two idle OTA daemons NACKed their own floor, then each other's NACKs
+    and IDs, heard too weak for any codeword or preamble check.
+  - A stepped SL9 → SL8. The NACK budget was the only bound.
+- **Design decision:** `docs/dev/design/idle-nack-gate.md`.
+  - The mandatory review (`docs/dev/reviews/review-idle-nack-gate-2026-11-08.md`) recommended G1 and
+    rejected content recognition.
+  - The maintainer chose G1 with option B, so a newly started OTA session counts as a live peer for
+    10 min; B had its own review check.
+  - The ride-along ID is not restricted (the maintainer).
+  - **Cost:** a station idle for more than 10 min gives no NACK for a new peer's failed first frame.
+- **Implementation:** `crates/openpulse-modem/src/engine.rs`:
+  - `OTA_PEER_LIVE_SAMPLES` and `last_ladder_decode_at`;
+  - `ota_peer_live`;
+  - the no-live-peer return in `ota_decode_and_ack_inner`;
+  - `start_ota_session`.
+
+  Also `crates/openpulse-daemon/src/nack_budget.rs`, where `LEAK_SAMPLES` aliases the constant.
+- **Tests:**
+  - `tests/idle_flicker_is_not_evidence.rs`: `with_no_live_peer_a_failure_keys_nothing`,
+    `a_decode_makes_the_peer_live_again`;
+  - `nack_budget::tests::with_no_live_peer_only_a_p_confirmed_failure_keys`.
+- **Results:**
+  - **With the change:** the modem and daemon suites ran 921 of 921 passed (nextest). The new tests
+    pass.
+  - **Sabotage:**
+    - always-live turns both no-live tests red;
+    - never-live turns `a_frame_failing_at_the_decode_edge_is_still_evidence` and
+      `a_decode_makes_the_peer_live_again` red;
+    - G1 without B turns 19 tests red.
+  - **Not built:** the twin with auto-ID, and the raised-floor idle.
+  - **Gate:**
+    - `GATE: PASS f010785f clean`, 2857 passed and 0 failed.
+    - An earlier gate run at `92e87aa7` failed only `id_rides_in_own_keying`. That is a load flake on
+      `main` too: 2 of 8 under load, against the branch's 0 of 8 (work plan row).
+  - **`scripts/slow-tests.sh ota`:** PASS, 3 of 3.
+
+## 2026-11-08 — A heard sub-floor NACK is not ladder evidence: the K=3 union ACK is recognised whole and in pieces (work plan M3, A2)
+
+- **Requirement/change:** REQ-FUN-06.
+  - On air (task 32, after f2l) an idle receiver stepped SL9 → SL8 on the other station's SL1 NACK.
+  - #1456's guard took a failed burst for an ACK only up to 2 × FSK4 (1.04 s), and only by an FSK4
+    codeword.
+  - The SL1 NACK is the K=3 union ACK: FSK4 + 3 × (0.5 s gap + MFSK16-ACK), 5.86 s. The DCD's 100 ms
+    hold splits it into MFSK16 pieces that carry no FSK4 copy. The event rows show A heard it in
+    pieces.
+- **Design decision:** `docs/dev/design/union-ack-recognition.md`. The mandatory review
+  (`docs/dev/reviews/review-union-ack-recognition-2026-11-08.md`) was APPROVE WITH CHANGES; changes 1
+  and 3–10 are applied.
+  - The bound is `longest_ack_len()` plus a tail slack.
+  - A burst inside it is an ACK by an FSK4 or an MFSK16-ACK codeword. The MFSK16 check anchors on the
+    Costas lock and shares the K=3 listen's slot gathering.
+  - Both scans look only at the burst head.
+  - **Not done:** it does not end the idle ping-pong. A station's trailing sign-off ID still counts
+    (review, change 2). The maintainer chose option A: the peer-liveness gate is designed next.
+- **Implementation:** `crates/openpulse-modem/src/engine.rs`:
+  - `ota_decode_burst`'s guard;
+  - `ACK_TAIL_SLACK_SAMPLES`, `longest_ack_len`, `ack_head_lens`, `holds_an_mfsk16_ack_codeword`;
+  - `mfsk16_k3_copy_llrs`, shared with `decode_mfsk16_k3_ack`.
+- **Tests:**
+  - `crates/openpulse-modem/tests/idle_flicker_is_not_evidence.rs`:
+    `a_union_ack_heard_in_pieces_is_not_evidence`, `a_union_ack_heard_whole_is_not_evidence`,
+    `every_ack_the_transmit_keys_is_not_evidence`;
+  - `engine::union_ack_guard_tests::no_data_frame_or_station_id_is_taken_for_an_ack`, with a positive
+    control in the same harness.
+- **Results:**
+  - **With the change:** all 6 tests in the file and the unit test pass (release).
+  - **Sabotage:**
+    - the old bound turns whole, pieces and the invariant red;
+    - no MFSK16 recogniser turns pieces and the invariant red;
+    - no FSK4 scan turns `an_ack_on_air_is_not_evidence`, pieces and the invariant red.
+  - **Cost, worst case, x86 release:** 19 + 85 ms at the heads (83 + 170 ms over the whole bound).
+    The Pi 5 measured 31 + 126 ms, and station B's Pi 4 68 + 265 ms.
+  - **Gate:** `GATE: PASS 53d07bf2 clean`, 2854 passed and 0 failed. `scripts/slow-tests.sh ota`:
+    PASS, 3 of 3.
+
+## 2026-11-08 — The twin rig refuses a port another run holds (verification apparatus; work plan decision 9)
+
+- **Requirement/change:** VO — a twin-harness failure must be attributable. Twin tests bind fixed
+  ports; with two worktrees testing at once, `id_rides_in_own_keying` and
+  `muted_failures_move_no_ladder` failed intermittently. Mechanism: the daemon whose bind failed
+  exited, but `wait_for_port` only checked that something accepted on the port, so the test drove the
+  other run's daemon. A held WebSocket port killed the daemon after its TCP port had answered.
+- **Design decision:** fail fast and say which port. Ephemeral ports would remove the class but need
+  `server::run` to report its bound port (a daemon change), which is out of scope for a harness fix.
+  Tests inside one nextest run already use distinct ports, so the collision is only between runs.
+- **Implementation:** `crates/openpulse-daemon/src/twin.rs` `spawn_pair`: probe-bind both daemons'
+  TCP and WS ports and panic naming a held one; wait for the WS listeners too; assert no daemon has
+  exited once all four answer (`ws_addr`).
+- **Tests:** `crates/openpulse-daemon/tests/twin_refuses_a_port_in_use.rs`
+  (`a_held_control_port_is_refused`, `a_held_websocket_port_is_refused`).
+- **Results:** 2 passed with the change; on the old `twin.rs` (restored from `origin/main`), 2 failed
+  with "test did not panic as expected": the pair started against the held port. Gate: see PR.
+
 ## 2026-11-08 — The receiver remembers a failed climb, and one SL2 frame of airtime proves the rung (work plan M3, A2)
 
 - **Requirement/change:** REQ-FUN-06. On air (task 31, f2k, B→A) the receiver re-proposed SL10 after
