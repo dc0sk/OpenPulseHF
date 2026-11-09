@@ -15,6 +15,45 @@ this ledger adds the design rationale and the actually-observed results per chan
 
 ---
 
+## 2026-11-09 — With no live peer, a failed burst the preamble detect did not confirm keys no NACK (work plan M3, A2)
+
+- **Requirement/change:** REQ-FUN-06.
+  - On air (task 32, after f2l) two idle OTA daemons NACKed their own floor, then each other's NACKs
+    and IDs, heard too weak for any codeword or preamble check.
+  - A stepped SL9 → SL8. The NACK budget was the only bound.
+- **Design decision:** `docs/dev/design/idle-nack-gate.md`.
+  - The mandatory review (`docs/dev/reviews/review-idle-nack-gate-2026-11-08.md`) recommended G1 and
+    rejected content recognition.
+  - The maintainer chose G1 with option B, so a newly started OTA session counts as a live peer for
+    10 min; B had its own review check.
+  - The ride-along ID is not restricted (the maintainer).
+  - **Cost:** a station idle for more than 10 min gives no NACK for a new peer's failed first frame.
+- **Implementation:** `crates/openpulse-modem/src/engine.rs`:
+  - `OTA_PEER_LIVE_SAMPLES` and `last_ladder_decode_at`;
+  - `ota_peer_live`;
+  - the no-live-peer return in `ota_decode_and_ack_inner`;
+  - `start_ota_session`.
+
+  Also `crates/openpulse-daemon/src/nack_budget.rs`, where `LEAK_SAMPLES` aliases the constant.
+- **Tests:**
+  - `tests/idle_flicker_is_not_evidence.rs`: `with_no_live_peer_a_failure_keys_nothing`,
+    `a_decode_makes_the_peer_live_again`;
+  - `nack_budget::tests::with_no_live_peer_only_a_p_confirmed_failure_keys`.
+- **Results:**
+  - **With the change:** the modem and daemon suites ran 921 of 921 passed (nextest). The new tests
+    pass.
+  - **Sabotage:**
+    - always-live turns both no-live tests red;
+    - never-live turns `a_frame_failing_at_the_decode_edge_is_still_evidence` and
+      `a_decode_makes_the_peer_live_again` red;
+    - G1 without B turns 19 tests red.
+  - **Not built:** the twin with auto-ID, and the raised-floor idle.
+  - **Gate:**
+    - `GATE: PASS f010785f clean`, 2857 passed and 0 failed.
+    - An earlier gate run at `92e87aa7` failed only `id_rides_in_own_keying`. That is a load flake on
+      `main` too: 2 of 8 under load, against the branch's 0 of 8 (work plan row).
+  - **`scripts/slow-tests.sh ota`:** PASS, 3 of 3.
+
 ## 2026-11-08 — A heard sub-floor NACK is not ladder evidence: the K=3 union ACK is recognised whole and in pieces (work plan M3, A2)
 
 - **Requirement/change:** REQ-FUN-06.

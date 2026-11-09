@@ -229,3 +229,88 @@ fn every_ack_the_transmit_keys_is_not_evidence() {
         "the profile no longer keys both ACK waveforms"
     );
 }
+
+/// `samples` of listening time with nothing heard: digital silence, which is cheap, then 60 s of the
+/// recorded idle so the noise floor learns the band again (after silence it would hold the hiss as a
+/// burst). Bursts the idle flushes are dropped undecoded.
+fn listen_quietly(rx: &mut ModemEngine, samples: u64) {
+    let warm = 60 * 8_000;
+    let mut left = samples.saturating_sub(warm as u64);
+    while left > 0 {
+        let n = left.min(8_000) as usize;
+        assert!(
+            matches!(
+                rx.accumulate_capture(Some("BPSK250"), vec![0.0; n]),
+                Ok(None)
+            ),
+            "silence flushed a burst"
+        );
+        left -= n as u64;
+    }
+    let idle = load_corpus("ic9700-idle-250hz.wav").expect("corpus");
+    for chunk in idle.cycled(0, warm).chunks(TICK) {
+        let _ = rx.accumulate_capture(Some("BPSK250"), chunk.to_vec());
+    }
+}
+
+fn failing_qpsk_frame() -> Vec<f32> {
+    let tx_lb = LoopbackBackend::new();
+    let mut tx = engine(&tx_lb);
+    tx.transmit_with_fec_mode(&[7u8; 32], "QPSK250-D", FecMode::Rs, None)
+        .unwrap();
+    over_idle(&tx_lb.drain_samples(), 0.0)
+}
+
+/// On air (task 32) two idle daemons NACKed their own floor, then each other's NACKs and IDs heard too
+/// weak to recognise. With no ladder frame decoded in `OTA_PEER_LIVE_SAMPLES` of listening, a failure
+/// keys nothing and moves no ladder: the frame that keys a NACK in a live session
+/// (`a_frame_failing_at_the_decode_edge_is_still_evidence`), and the other station's FSK4 NACK with its
+/// ID behind it at +1.5 dB (`idle-nack-gate.md`, G1).
+#[test]
+fn with_no_live_peer_a_failure_keys_nothing() {
+    let mut rx = receiver_at_sl6();
+    listen_quietly(&mut rx, openpulse_modem::OTA_PEER_LIVE_SAMPLES + 8_000);
+    let bursts = flushed(&mut rx, &failing_qpsk_frame());
+    assert!(
+        bursts.iter().any(|&(post, _)| post >= 30_000),
+        "the failing frame was never flushed, so this proves nothing; bursts {bursts:?}"
+    );
+    assert!(
+        bursts.iter().all(|&(_, answered)| !answered),
+        "a failure with no live peer keyed a NACK; bursts {bursts:?}"
+    );
+
+    let tx_lb = LoopbackBackend::new();
+    let mut tx = engine(&tx_lb);
+    tx.transmit_ack_with_short_fec(&AckFrame::new(AckType::Nack, "OTHER"), None)
+        .unwrap();
+    tx.transmit(b"DE DD2ZM", "BPSK250", None).unwrap();
+    let bursts = flushed(&mut rx, &over_idle(&tx_lb.drain_samples(), 1.5));
+    assert!(!bursts.is_empty(), "the weak NACK + ID was never flushed");
+    assert!(
+        bursts.iter().all(|&(_, answered)| !answered),
+        "a weak NACK + ID keyed a NACK; bursts {bursts:?}"
+    );
+    assert_eq!(rx.ota_rx_recommended_level(), Some(SpeedLevel::Sl6));
+}
+
+/// The control: a decoded ladder frame makes the peer live again, and the same failure then keys.
+#[test]
+fn a_decode_makes_the_peer_live_again() {
+    let mut rx = receiver_at_sl6();
+    listen_quietly(&mut rx, openpulse_modem::OTA_PEER_LIVE_SAMPLES + 8_000);
+    let tx_lb = LoopbackBackend::new();
+    let mut tx = engine(&tx_lb);
+    tx.transmit_with_fec_mode(&[9u8; 32], "QPSK250-D", FecMode::Rs, None)
+        .unwrap();
+    let bursts = flushed(&mut rx, &over_idle(&tx_lb.drain_samples(), 20.0));
+    assert!(
+        bursts.iter().any(|&(_, answered)| answered),
+        "the clean frame did not decode; bursts {bursts:?}"
+    );
+    let lens = answered(&mut rx, &failing_qpsk_frame());
+    assert!(
+        lens.iter().any(|&n| n >= 30_000),
+        "after a decode the failure keyed no NACK; answered bursts {lens:?}"
+    );
+}
