@@ -6350,7 +6350,7 @@ The review (Fable) read f2n's raw logs at `5e39604e`.
 
 **Met on 2 m in both directions.** The residual is stated: capture corroboration is unchecked, and the criterion as written is ill-posed for the OFDM rungs.
 
-## Task 34 — the idle receiver stays quiet: the union-ACK guard and the idle-NACK gate on air (status: planned — the maintainer's go given)
+## Task 34 — the idle receiver stays quiet: the union-ACK guard and the idle-NACK gate on air (status: run f2o done; see Results)
 
 **Why.** After f2l's traffic (task 32), both daemons stayed up for about 3 h and keyed an idle ping-pong:
 A keyed 9 times and B 7. A stepped SL9 → SL8 on B's NACK.
@@ -6431,3 +6431,68 @@ confirmation.
 **Weak if** the 30 min show no DCD opens past the 10-min mark at either station. Then the gate was
 never asked, because the floor was quiet that day. Report the DCD-open counts, so the review can say
 which case it was.
+
+### Task 34 — Results (station session, 2026-11-09; go quoted by PC1: "go for on-air")
+
+**Build:** `m3/onair` @ `cf114fe7` (main at #1531 + #1532). Rebuilt on A, copied to B; hashes identical on both stations:
+server `c481e8277f96f18e8f8edff0c43032f09b2102d8934923777b7f6f8e264f1ff2`, CLI
+`a5642d34de26262e33e6e27b7df8da1127838e580d82b29b567352185a3f4817`, `twin-traffic.sh` `c9e152f3…` (unchanged).
+**Settings as named:** `fast`; `TRAFFIC_FROM=B`, interval 8, duration 300; `SIGNOFF_IDLE_SECS=30`; both daemons
+`info,openpulse_daemon=debug,openpulse_modem::engine=debug`. AGC FAST (2) on both rigs, read back before (A 144640000, 1.2 W,
+AGC 2, PTT 0; B 144641564, 5 W, AGC 2, PTT 0) and after (same, via rigctld before cleanup and directly after). v0 = 0.15 both
+sides before and after (`--verify` pass). Power not touched.
+
+**Deviations, disclosed**
+- Settings the spec does not name, chosen by me: `TRAFFIC_SIZE=64` (as f2n) and `SIGNOFF_WAIT_MAX=60` (so the runner's
+  `run` action returned after its short wait; its own sign-off check still prints "no" for both, as in every earlier run).
+  Neither changes what is transmitted.
+- First `deploy` call died at once ("A_SSH/B_SSH unset"): I had not sourced the profile. Nothing built or keyed; I reran it.
+- The watcher's stop rules read the daemon logs' `logged TX metadata` lines. That line is logged for only a part of the
+  keyings (B: 43 of 245 key-ups, A: 42 of 226). No stop rule fired, but the idle-window result below is from the daemons'
+  own `ptt_changed` events, not from the watcher.
+- The audit events carry no timestamps. For the idle window I took the events after each station's own sign-off key-up
+  (A's starts 6.6 s before the window, which began at B's sign-off). The DCD-open thirds are by tick position and match the
+  timestamped `burst flushed` log lines exactly (A 11/3/14, B 25/19/9).
+- No audio was recorded (the spec does not ask).
+- Collection (full events, daemon logs) 19:31:30–19:31:41; `cleanup` ran after it, rigs read back PTT 0 on both.
+
+**The run (UTC)**
+- Daemons up 18:55:03; traffic 18:55:33 to 19:00:33 (B to A). Idle window: **19:01:22.8 (B's sign-off, the later) to
+  19:31:25**, both daemons up and attended, nothing sent.
+- A decisions (222): hold 120, climb_declined 31, climb_on_evidence 24, nack_hold 24, probe_withdrawn 11, climb_on_snr 6,
+  nack_step_down 6. Level reached SL10 (B sent 6 OFDM52-32QAM frames); both stations end at SL9.
+- B `frame_transmitted` events 245 (OFDM52-16QAM 105, OFDM52-8PSK 78, OFDM52 37, OFDM52-32QAM 6, QPSK250-D 6, BPSK 13);
+  A `frame_received` 185. B logged 41 `OTA ACK received` lines (AckOk 29, AckUp 9, Nack 3) while A keyed 222 decisions'
+  worth of replies (226 key-ups with 4 IDs). I did not examine that gap.
+- **Last ladder decode:** A 19:00:43.8 (OFDM52-16QAM soft demod; its last ACK keyed 19:00:44.7). B 19:00:44.9 (last
+  `OTA ACK received`, AckOk at SL9). **Sign-off IDs:** A 19:01:16.2, B 19:01:22.8. Both stations' only other decode in the
+  window region: A decoded B's sign-off ID at 19:01:23.1 and B decoded A's at 19:01:16.7 (non-ladder BPSK250 traffic).
+
+**Idle window, from the daemons' own `ptt_changed` events**
+- **Key-ups after the sign-off: A 0, B 0.** Each station's last `ptt_changed` key-up is its sign-off ID; nothing follows
+  it for the 30 min (A 1824 and B 1817 metric ticks in the tail). The 1 s watcher saw no keying either.
+- So no NACK, no ID, nothing "other", at any time after either last ladder decode; the 3-NACK, 10 s and 10 min rules never
+  came near firing.
+
+**Counts in the idle window (per station)**
+| | A | B |
+|---|---|---|
+| DCD opens (`dcd_change` busy) | 28 (11 / 3 / 14 by 10-min thirds) | 53 (25 / 19 / 9) |
+| of them after the 10-min mark | 17 | 28 |
+| `ota_rate_decision` events | 0 | 0 |
+| failed bursts, `OTA: failed burst is not ladder evidence (#1454)` | 26 | 53 |
+| `OTA: a failed burst with no live peer …` | 0 | 0 |
+| `OTA: failed burst is an ACK, not ladder evidence (#1456)` | 0 | 0 |
+
+- Every failed burst in the window (the DCD opens that did not decode) was logged by the **#1454 guard** (total-power run and
+  spectral span), which comes before the new gate. The `no live peer` line did not appear anywhere in either log, in the run
+  or in the window: the new gate was not reached. So this run did not exercise #1532's branch, and the guard that held was
+  the earlier one. The DCD-open counts above are the evidence for the review of which case it was; both stations had opens
+  past the 10-min mark, so it is not the "floor was quiet" case.
+- `p_false_opens` / `held_no_frame`: only A logs the `preamble carrier detect` line, and it stopped being logged after
+  19:00:42.9 (last line: `opens=34 false_opens=0 held_no_frame=0`). B logs none. So there is no start or end value for the
+  window; the last values before it are 0 and 0.
+
+**Evidence:** `docs/dev/test-reports/onair-twin-ota-20261109-195533{.log,-evidence/}`: both stations' full audit-events
+files (`events-{a,b}.ndjson.gz`, 20113 and 20378 lines) and full daemon logs (`daemon-{a,b}.log.gz`, colour codes
+stripped), configs, rig read-back, `idle-window-watcher.log`. Leak check 0.

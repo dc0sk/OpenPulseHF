@@ -1,0 +1,34 @@
+18:55:03 daemons up
+18:55:33 traffic window starts
+18:55:34 B PTT keyed
+18:56:44 A PTT keyed
+18:56:44 B PTT keyed
+18:57:30 B PTT keyed
+18:58:08 B PTT keyed
+18:58:31 A PTT keyed
+18:58:34 B PTT keyed
+18:58:43 B PTT keyed
+18:58:51 B PTT keyed
+18:58:58 B PTT keyed
+18:59:03 A PTT keyed
+18:59:07 B PTT keyed
+18:59:10 A PTT keyed
+18:59:12 B PTT keyed
+18:59:17 A PTT keyed
+18:59:26 B PTT keyed
+18:59:29 A PTT keyed
+18:59:36 B PTT keyed
+18:59:43 B PTT keyed
+18:59:48 A PTT keyed
+19:00:00 B PTT keyed
+19:00:04 A PTT keyed
+19:00:14 B PTT keyed
+19:00:18 A PTT keyed
+19:00:25 B PTT keyed
+19:00:28 A PTT keyed
+19:00:40 B PTT keyed
+19:00:42 A PTT keyed
+19:01:16 A PTT keyed
+19:01:23 both sign-offs logged; window starts at 19:01:22 (A 19:01:16, B 19:01:22); last decodes A 19:01:23 B 19:01:16
+19:31:25 WINDOW_COMPLETE: 30 min idle window over, daemons still up; no cleanup run
+19:31:25 watcher end
