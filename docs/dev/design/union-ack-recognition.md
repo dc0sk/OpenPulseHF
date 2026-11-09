@@ -121,7 +121,7 @@ A slow scan turns the next read into one long read, and a long read is itself a 
     2 700 samples to the next read, which by itself does not make a floor-passing burst.
   - **Which bursts pay it:** only failed bursts between one MFSK16 copy and the bound that hold no FSK4
     codeword, for example a failed SL6 frame (4.18 s).
-  - **The decision is the maintainer's:** accept it, or make the MFSK16 check cheaper first.
+  - **Accepted by the maintainer (2026-11-09).** The optimisation is parked in the work plan.
 
 ### What it does not do
 

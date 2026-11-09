@@ -15,6 +15,33 @@ Reviewer: Fable. It was read-only. Every number was re-derived from the constant
 (3 + 6/h), and the runs are attended. **But the design as written does not end the idle ping-pong**
 (change 2), and must not be presented as doing so.
 
+## Prompt
+
+The reviewer was given:
+- the draft;
+- `engine.rs`: the guard (`evidence_floor`, `post <= 2 × fsk4_ack_frame_len()`,
+  `holds_an_ack_codeword`), `transmit_ack_mfsk16_k3`, `transmit_ota_ack` and the union-listen ACK
+  receive;
+- `reply-window-evidence.md` (item 2) and `nack_budget.rs`;
+- the task 32 review and f2l's full post-run event files on `m3/onair`.
+
+It was asked to falsify:
+1. **The mechanism:** was A's 16:22 step-down caused by B's union ACK, or by B's ID frame or A's own
+   floor? What can the rows show, and what can they not?
+2. **The geometry numbers** and the 70 ms worst-case scan.
+3. **The "pieces" hole:** can the daemon split the union ACK at its gaps (squelch hang, `CaptureGap`,
+   DCD release)?
+4. **The design:**
+   - the bound that ignores the receiver's profile;
+   - FSK4-then-MFSK16 recognition;
+   - the false-recognition estimate;
+   - the layer, against the rejected and parked alternatives.
+5. **The test plan:** does every test fail on today's main where it claims to, and does the negative
+   control sweep a closed list?
+6. **Anything asserted without evidence.**
+
+It was also asked: **"Does this block Release 1? Say so."**
+
 ## Findings and changes
 
 1. **The mechanism: the rows show the pieces case, and not the ID.**
