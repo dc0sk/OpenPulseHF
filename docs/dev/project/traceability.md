@@ -15,6 +15,45 @@ this ledger adds the design rationale and the actually-observed results per chan
 
 ---
 
+## 2026-11-08 — A heard sub-floor NACK is not ladder evidence: the K=3 union ACK is recognised whole and in pieces (work plan M3, A2)
+
+- **Requirement/change:** REQ-FUN-06.
+  - On air (task 32, after f2l) an idle receiver stepped SL9 → SL8 on the other station's SL1 NACK.
+  - #1456's guard took a failed burst for an ACK only up to 2 × FSK4 (1.04 s), and only by an FSK4
+    codeword.
+  - The SL1 NACK is the K=3 union ACK: FSK4 + 3 × (0.5 s gap + MFSK16-ACK), 5.86 s. The DCD's 100 ms
+    hold splits it into MFSK16 pieces that carry no FSK4 copy. The event rows show A heard it in
+    pieces.
+- **Design decision:** `docs/dev/design/union-ack-recognition.md`. The mandatory review
+  (`docs/dev/reviews/review-union-ack-recognition-2026-11-08.md`) was APPROVE WITH CHANGES; changes 1
+  and 3–10 are applied.
+  - The bound is `longest_ack_len()` plus a tail slack.
+  - A burst inside it is an ACK by an FSK4 or an MFSK16-ACK codeword. The MFSK16 check anchors on the
+    Costas lock and shares the K=3 listen's slot gathering.
+  - Both scans look only at the burst head.
+  - **Not done:** it does not end the idle ping-pong. A station's trailing sign-off ID still counts
+    (review, change 2). The maintainer chose option A: the peer-liveness gate is designed next.
+- **Implementation:** `crates/openpulse-modem/src/engine.rs`:
+  - `ota_decode_burst`'s guard;
+  - `ACK_TAIL_SLACK_SAMPLES`, `longest_ack_len`, `ack_head_lens`, `holds_an_mfsk16_ack_codeword`;
+  - `mfsk16_k3_copy_llrs`, shared with `decode_mfsk16_k3_ack`.
+- **Tests:**
+  - `crates/openpulse-modem/tests/idle_flicker_is_not_evidence.rs`:
+    `a_union_ack_heard_in_pieces_is_not_evidence`, `a_union_ack_heard_whole_is_not_evidence`,
+    `every_ack_the_transmit_keys_is_not_evidence`;
+  - `engine::union_ack_guard_tests::no_data_frame_or_station_id_is_taken_for_an_ack`, with a positive
+    control in the same harness.
+- **Results:**
+  - **With the change:** all 6 tests in the file and the unit test pass (release).
+  - **Sabotage:**
+    - the old bound turns whole, pieces and the invariant red;
+    - no MFSK16 recogniser turns pieces and the invariant red;
+    - no FSK4 scan turns `an_ack_on_air_is_not_evidence`, pieces and the invariant red.
+  - **Cost, worst case, x86 release:** 19 + 85 ms at the heads (83 + 170 ms over the whole bound).
+    The Pi 5 measured 31 + 126 ms, and station B's Pi 4 68 + 265 ms.
+  - **Gate:** `GATE: PASS 53d07bf2 clean`, 2854 passed and 0 failed. `scripts/slow-tests.sh ota`:
+    PASS, 3 of 3.
+
 ## 2026-11-08 — The twin rig refuses a port another run holds (verification apparatus; work plan decision 9)
 
 - **Requirement/change:** VO — a twin-harness failure must be attributable. Twin tests bind fixed

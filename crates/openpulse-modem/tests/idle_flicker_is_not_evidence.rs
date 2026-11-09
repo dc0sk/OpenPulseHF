@@ -124,3 +124,108 @@ fn an_ack_on_air_is_not_evidence() {
         "an ACK burst keyed a NACK"
     );
 }
+
+/// Feed `input` in daemon-sized reads; return `(post-lead length, answered with an ACK frame)` for
+/// every flushed burst, so a test can show which case it exercised as well as its verdict.
+fn flushed(rx: &mut ModemEngine, input: &[f32]) -> Vec<(usize, bool)> {
+    let mut out = Vec::new();
+    for chunk in input.chunks(TICK) {
+        if let Ok(Some(b)) = rx.accumulate_capture(Some("BPSK250"), chunk.to_vec()) {
+            let post = b.samples.len() - rx.last_flush_lead();
+            let r = rx
+                .ota_decode_burst(&b, "peer", Some("BPSK250"))
+                .expect("decode");
+            out.push((post, r.ack.is_some()));
+        }
+    }
+    out
+}
+
+fn union_nack() -> Vec<f32> {
+    let tx_lb = LoopbackBackend::new();
+    let mut tx = engine(&tx_lb);
+    tx.transmit_ack_mfsk16_k3(&AckFrame::new(AckType::Nack, "OTHER"), None)
+        .unwrap();
+    tx_lb.drain_samples()
+}
+
+/// A station at SL1 NACKs with the K=3 union ACK: one FSK4 ACK, then three MFSK16-ACK copies after
+/// 0.5 s gaps, 5.86 s in all. The DCD's 100 ms hold drops in the gaps, so it is heard in pieces, and
+/// a lone MFSK16 copy carries no FSK4 codeword. On air (task 32) the receiver stepped SL9 → SL8 on
+/// such a NACK (`design/union-ack-recognition.md`).
+#[test]
+fn a_union_ack_heard_in_pieces_is_not_evidence() {
+    let mut rx = receiver_at_sl6();
+    let bursts = flushed(&mut rx, &over_idle(&union_nack(), 12.0));
+    assert!(
+        bursts.len() >= 2,
+        "the fixture did not split the union ACK; bursts {bursts:?}"
+    );
+    assert!(
+        bursts.iter().all(|&(_, answered)| !answered),
+        "a piece of a union ACK keyed a NACK; bursts {bursts:?}"
+    );
+    assert_eq!(rx.ota_rx_recommended_level(), Some(SpeedLevel::Sl6));
+}
+
+/// The same NACK heard as ONE burst, as under a receiver AGC whose pumped hiss holds the squelch
+/// through the gaps: the gaps are filled with hiss well above the idle. It was past the old
+/// 2 × FSK4 bound, so its FSK4 copy was never looked for.
+#[test]
+fn a_union_ack_heard_whole_is_not_evidence() {
+    let ack = union_nack();
+    let mut input = over_idle(&ack, 12.0);
+    let idle_rms = rms(&load_corpus("ic9700-idle-250hz.wav")
+        .expect("corpus")
+        .samples);
+    let mut seed: u32 = 0x1234_5678;
+    for s in &mut input[10 * 8000..10 * 8000 + ack.len()] {
+        seed = seed.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+        *s += idle_rms * 3.0 * ((seed >> 8) as f32 / (1u32 << 24) as f32 - 0.5) * 3.46;
+    }
+    let mut rx = receiver_at_sl6();
+    let bursts = flushed(&mut rx, &input);
+    assert!(
+        bursts.iter().any(|&(post, _)| post >= ack.len() * 9 / 10),
+        "the fixture did not hold the union ACK as one burst; bursts {bursts:?}"
+    );
+    assert!(
+        bursts.iter().all(|&(_, answered)| !answered),
+        "a whole union ACK keyed a NACK; bursts {bursts:?}"
+    );
+}
+
+/// Every ACK `transmit_ota_ack` can key is recognised as an ACK, so the guard's waveform set cannot
+/// drift from the transmit's. The waveform depends only on whether the recommended level's mode is
+/// MFSK16, so the profile's closed level list is swept one level per waveform.
+#[test]
+fn every_ack_the_transmit_keys_is_not_evidence() {
+    let profile = SessionProfile::fast();
+    let mut waveforms = Vec::new();
+    for level in profile.defined_levels() {
+        let union = profile.mode_for(level) == Some("MFSK16");
+        if waveforms.contains(&union) {
+            continue;
+        }
+        waveforms.push(union);
+        let tx_lb = LoopbackBackend::new();
+        let mut tx = engine(&tx_lb);
+        tx.start_ota_session(profile.clone());
+        tx.transmit_ota_ack(
+            &AckFrame::new(AckType::Nack, "OTHER").with_recommended_level(level),
+            None,
+        )
+        .unwrap();
+        let mut rx = receiver_at_sl6();
+        let bursts = flushed(&mut rx, &over_idle(&tx_lb.drain_samples(), 12.0));
+        assert!(
+            bursts.iter().all(|&(_, answered)| !answered),
+            "the ACK recommending {level:?} keyed a NACK; bursts {bursts:?}"
+        );
+    }
+    assert_eq!(
+        waveforms.len(),
+        2,
+        "the profile no longer keys both ACK waveforms"
+    );
+}
