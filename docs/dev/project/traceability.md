@@ -48,7 +48,11 @@ this ledger adds the design rationale and the actually-observed results per chan
       `a_decode_makes_the_peer_live_again` red;
     - G1 without B turns 19 tests red.
   - **Not built:** the twin with auto-ID, and the raised-floor idle.
-  - **Gate and slow suites:** see PR.
+  - **Gate:**
+    - `GATE: PASS f010785f clean`, 2857 passed and 0 failed.
+    - An earlier gate run at `92e87aa7` failed only `id_rides_in_own_keying`. That is a load flake on
+      `main` too: 2 of 8 under load, against the branch's 0 of 8 (work plan row).
+  - **`scripts/slow-tests.sh ota`:** PASS, 3 of 3.
 
 ## 2026-11-08 — A heard sub-floor NACK is not ladder evidence: the K=3 union ACK is recognised whole and in pieces (work plan M3, A2)
 
