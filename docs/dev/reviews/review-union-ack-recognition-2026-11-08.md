@@ -11,6 +11,8 @@ Subject: `docs/dev/design/union-ack-recognition.md` (draft), on branch `design/u
 at `origin/main` 476c8bae. This is the mandatory review (keying class), held before implementation.
 Reviewer: Fable. It was read-only. Every number was re-derived from the constants; no cargo was run.
 
+## Verdict
+
 **Verdict: APPROVE WITH CHANGES. Does not block Release 1.** The keying is bounded by the budget
 (3 + 6/h), and the runs are attended. **But the design as written does not end the idle ping-pong**
 (change 2), and must not be presented as doing so.
@@ -126,3 +128,18 @@ and 3–10 are applied in the design note.
 Change 8's twin test was not built, and the design note says why: in the faster-than-real-time twin
 the wall-clock hold never splits the gaps, and the residual it would show belongs to the gate's
 design. The Pi cost measurement is a merge condition.
+
+## Consumer
+
+The guard's production consumer is `ModemEngine::ota_decode_burst`'s failed-burst branch, reached from
+the daemon receive loop. The design note's `## Consumer` gives the commands that found it.
+
+## Prior art
+
+#1456 rule 2 (`docs/dev/design/reply-window-evidence.md`, item 2), and the ISS-side union ACK listen.
+See the design note's `## Prior art`.
+
+## Twins
+
+The K=3 ACK listen (`decode_mfsk16_k3_ack`), which now shares `mfsk16_k3_copy_llrs`. The ARDOP TNC and
+the KISS front-end run no OTA ladder. See the design note's `## Twins`.
