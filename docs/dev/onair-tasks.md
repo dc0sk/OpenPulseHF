@@ -6349,3 +6349,85 @@ The review (Fable) read f2n's raw logs at `5e39604e`.
 | corroboration | the sender adopted each move; capture UNCHECKED, and ill-posed for SL7–SL9 | the same |
 
 **Met on 2 m in both directions.** The residual is stated: capture corroboration is unchecked, and the criterion as written is ill-posed for the OFDM rungs.
+
+## Task 34 — the idle receiver stays quiet: the union-ACK guard and the idle-NACK gate on air (status: planned — the maintainer's go given)
+
+**Why.** After f2l's traffic (task 32), both daemons stayed up for about 3 h and keyed an idle ping-pong:
+A keyed 9 times and B 7. A stepped SL9 → SL8 on B's NACK.
+- B NACKed bursts its DCD opened on its own floor, and each station then NACKed the other's NACKs and
+  IDs, heard at +0.5–2 dB.
+- Two fixes are now on `main`:
+  - **#1531, the union-ACK guard:** a heard SL1 K=3 NACK is not ladder evidence, whole or in pieces.
+  - **#1532, the idle-NACK gate:** with no live peer, a failed burst the preamble detect did not
+    confirm keys no NACK. "Live" means a ladder frame decoded, or the OTA session started, within
+    10 min of listening.
+- **The gate's cost, decided by the maintainer:** for the first 10 min after a daemon starts, two idle
+  stations can still echo, bounded at 3 NACKs each by the budget.
+- This task is the on-air check the gate's design names, because the twin could not run it.
+
+**Build:** the branch head (`main` at #1532, plus the task docs). Rebuild and redeploy BOTH stations,
+and record the sha256 of both binaries.
+
+**Settings, named explicitly:**
+- `fast` profile;
+- `TRAFFIC_FROM=B`, `TRAFFIC_INTERVAL=8`, `TRAFFIC_DURATION=300`;
+- `SIGNOFF_IDLE_SECS=30`;
+- AGC FAST (2) on both rigs, read back before and after;
+- log level on **both** daemons: `DAEMON_LOG_LEVEL` and `DAEMON_LOG_LEVEL_B` =
+  `info,openpulse_daemon=debug,openpulse_modem::engine=debug`. The engine's debug line is how a
+  suppressed burst shows:
+  - `OTA: a failed burst with no live peer is not ladder evidence`;
+  - `OTA: failed burst is an ACK, not ladder evidence (#1456)`.
+
+The station rules hold:
+- FT-991A at 5 W at most, and never raise either rig's power;
+- record nothing about a host other than rpi51 and rpi53;
+- RSPdx port B empty;
+- no CAT power-off on the IC-9700.
+
+### Part A — nothing transmits
+1. Pull, deploy, and check the hashes.
+2. Read back both rigs.
+3. Record v0 (expected 0.15 on both).
+
+### Part B — run f2o: a short exchange, then 30 min idle with both daemons up (keys both rigs: one go)
+1. Run f2o as above. The traffic is 5 min, so both stations' last ladder decodes fall near its end.
+2. **Do NOT run `cleanup` after the sign-off IDs.** Leave both daemons up and idle, rigs on, nobody
+   sending, for **30 min after the later of the two sign-off IDs.**
+   - This is the window task 32 had by accident. The episodes there began 15 min and 2.7 h after
+     traffic.
+   - It is attended: the session watches throughout.
+3. Then collect each station's **full** audit-events file and daemon log, as in task 32
+   (`events-*-full-…`), **before** `cleanup`.
+4. Then run `cleanup` and read back PTT = 0 on both rigs.
+
+**Stop at once (`cleanup`) and report** if:
+- a station keys more than 3 NACKs in the idle window;
+- either rig's PTT stays keyed for more than 10 s;
+- anything keys more than 10 min after that station's last ladder decode.
+
+### Report
+- **The run:** as task 32's counts, briefly (frames, ACKs, decisions, the level reached).
+- **Each station's last ladder decode** (UTC), and its sign-off ID.
+- **Every key-up in the idle window**, from the daemon's own `ptt_changed` events, not the 1 s PTT
+  watcher (task 33: the watcher saw 73 of A's 184 key-ups). Give:
+  - the time since that station's last ladder decode;
+  - what it was: a NACK, an ID, or other.
+- **Per station, counts in the idle window:**
+  - DCD opens (`dcd_change` busy);
+  - `ota_rate_decision` events, by verdict;
+  - the two engine debug lines above;
+  - `p_false_opens` and `held_no_frame`, at the end against the start of the window.
+
+**Prediction:**
+- Within 10 min of a station's last decode, at most 3 keyed NACKs (and their IDs) at each station.
+- More than 10 min after it, **zero key-ups**, except a P-confirmed burst. At idle none is expected,
+  so read `p_false_opens`.
+- The `no live peer` line counts the bursts that would have been NACKs before #1532.
+
+**Killed if** a station keys a NACK more than 10 min after its last ladder decode, with no P
+confirmation.
+
+**Weak if** the 30 min show no DCD opens past the 10-min mark at either station. Then the gate was
+never asked, because the floor was quiet that day. Report the DCD-open counts, so the review can say
+which case it was.
