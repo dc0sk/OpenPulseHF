@@ -268,9 +268,25 @@ mod tests {
     /// confirmed as a frame still keys: a new peer's OFDM frame is answered (`idle-nack-gate.md`).
     #[test]
     fn with_no_live_peer_only_a_p_confirmed_failure_keys() {
+        let burst = AudioSamples {
+            samples: noise(16_000, 0.2, 0x2545_f491),
+        };
+        let decode = |engine: &mut ModemEngine, budget: &mut NackBudget, b: &AudioSamples| {
+            decode_ota_burst(engine, budget, true, b, "peer", "BPSK250", false).unwrap()
+        };
+        // The control: a session just started counts as a live peer, so the same failure keys.
+        let mut fresh = sl7_engine();
+        let (_, keyed) = decode(&mut fresh, &mut NackBudget::default(), &burst);
+        assert!(
+            keyed,
+            "the control: a failure in a fresh session keyed nothing"
+        );
+
         let mut engine = sl7_engine();
+        let mut budget = NackBudget::default();
         // Silence for the listening time, then 60 s of the fixture's quiet noise so the floor
-        // learns the band again (after silence it holds the noise as one burst).
+        // learns the band again (after silence it holds the noise as one burst). Bursts it flushes
+        // are decoded, so none leaves its flush state to the burst under test.
         let mut left = LEAK_SAMPLES + 8_000 - 60 * 8_000;
         while left > 0 {
             let n = left.min(8_000) as usize;
@@ -281,22 +297,12 @@ mod tests {
             left -= n as u64;
         }
         for chunk in noise(60 * 8_000, 0.02, 0x5851_f42d).chunks(800) {
-            let _ = engine.accumulate_capture(Some("OFDM52"), chunk.to_vec());
+            if let Ok(Some(b)) = engine.accumulate_capture(Some("OFDM52"), chunk.to_vec()) {
+                decode(&mut engine, &mut budget, &b);
+            }
         }
-        let burst = AudioSamples {
-            samples: noise(16_000, 0.2, 0x2545_f491),
-        };
         let mut budget = NackBudget::default();
-        let (res, keyed) = decode_ota_burst(
-            &mut engine,
-            &mut budget,
-            true,
-            &burst,
-            "peer",
-            "BPSK250",
-            false,
-        )
-        .unwrap();
+        let (res, keyed) = decode(&mut engine, &mut budget, &burst);
         assert!(
             res.ack.is_none() && !keyed,
             "a failure with no live peer keyed"
