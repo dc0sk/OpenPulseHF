@@ -1,17 +1,62 @@
 ---
 project: openpulsehf
 doc: docs/dev/design/idle-nack-gate.md
-status: draft
+status: resolved
 last_updated: 2026-11-08
 ---
 
 # An idle receiver does not answer what is not a peer's frame
 
 Work plan M3, A2 (stability), and the HF confirmation. It changes when a station keys a NACK, so it
-gets the mandatory review **before** it is built. Review: pending.
+had the mandatory review **before** a rule was chosen.
+- **The review: Fable, 2026-11-08, CHANGES** (`docs/dev/reviews/review-idle-nack-gate-2026-11-08.md`).
+  It recommends G1 and rejects G2, G2b and G3.
+- **The maintainer chose G1, plus option B** (2026-11-09): a newly started OTA session also counts as a
+  live peer. The delta B had its own short review check (see the review's Disposition).
+- **The ride-along ID is not restricted to positive ACKs** (the maintainer, 2026-11-09). On a link that
+  only NACKs, a restriction would push the ID to the forced interval ID, which can fall over the
+  peer's frame. And it would not have changed task 32: there the IDs were interval IDs in their own
+  keying.
+- **Implemented 2026-11-09** (see "The rule, as built").
 
-This follows `union-ack-recognition.md`; the maintainer chose option A on 2026-11-08: build that guard
-now, and design this one separately.
+**Corrections the review made to the problem as first written below:**
+- A decoded **1** of B's post-run IDs, not 0.
+- The ride-along ID in front of an ACK **never occurred** on air: every post-run ID was an interval
+  or sign-off ID in its own keying.
+- A's step-down SL9 → SL8 opened the second episode, not the first.
+- **A fourth source:** heard ACKs **too weak to decode**. B kept answering A's FSK4 NACKs at +0.5–1.5 dB.
+  That is why no rule that recognises a burst's content can end the exchange.
+
+## The rule, as built (G1 + B)
+
+- **Where:** in `ota_decode_and_ack_inner`'s failed branch, after the ACK guard
+  (`crates/openpulse-modem/src/engine.rs`).
+- **What:** a failed burst is not ladder evidence (no ACK, no ladder move, no budget charge) unless
+  `p_ok`, or `ota_peer_live()`.
+- **`ota_peer_live()`:** `last_ladder_decode_at` is within `OTA_PEER_LIVE_SAMPLES` (10 min at 8 kHz) of
+  the current `listening_samples`.
+- **`last_ladder_decode_at` is set** when an OTA ladder frame decodes, before the deadline checks: a
+  frame decoded past its ACK window still shows a live peer.
+  - The uncoded fallback returns earlier and does not set it.
+  - Nor does a heard ACK, or the station's own transmission.
+- **B:** `start_ota_session` also sets it.
+  - The production callers are daemon startup under `ota_enabled` (`server.rs`) and the operator's
+    `StartOtaSession` command.
+  - So a freshly started station answers a new peer's first failed frame (#1456's constraint, in the
+    case where it is coherent).
+  - A station left idle for 10 min stops answering.
+- **The clock** is listening time. It stops while the daemon transmits, and the twin is
+  deterministic in it.
+- **One owner for the period:** the daemon's NACK-budget leak `LEAK_SAMPLES` now takes its value from
+  `openpulse_modem::OTA_PEER_LIVE_SAMPLES`.
+
+**What it costs:**
+- **A new peer** that calls a station idle for more than 10 min gets no NACK for a failed first frame.
+  The sender then abandons after its silent windows and falls back. That is the "muted until the next
+  decode" state #1456 called a defect, now limited to an idle station.
+  - The review's remedy, a sender that tries SL1 once before `PeerSilent`, was not chosen.
+- **For the first 10 min after start,** two idle daemons can still echo each other, bounded by the
+  budget (3, plus one per 10 min).
 
 ## Problem — seen on air
 
@@ -45,62 +90,55 @@ and it allows a ladder move per episode.
 silent windows." An idle receiver must still answer **a new peer's first frame**, even when that frame
 fails. Any gate has to keep that.
 
-## Candidate rules (for the review to choose between or refute)
+## Candidate rules (as drafted; the review chose G1)
 
-**G1: peer liveness by time.**
-- A failed burst keys a NACK only if the receiver decoded an OTA ladder frame within `T_live`.
-- `T_live` has to exceed a peer's longest failing run: several SL2 frames of 66.56 s each.
-- **It breaks the constraint:** a new peer's first failed frame gets silence. The sender then abandons
-  after two silent windows, and the climb-into-silence fallback steps it down. Whether that costs a
-  start-up more than today is UNCHECKED.
+- **G1:** peer liveness by time. **Chosen**, with B.
+- **G2:** preamble evidence when no peer is live. **Rejected:**
+  - only the OFDM plugin has a carrier detector;
+  - SL1–SL6 would need four new fitted detectors;
+  - none confirms at +1–2 dB.
+- **G2b:** a length rule for the PN-63 ID. **Rejected:** it is G1 plus a collision with #1452.
+- **G3:** recognise the ID as an ID. **Rejected:** a decoded ID already keys nothing.
 
-**G2: liveness, or the burst is evidently a ladder frame (recommended for review).**
-- With no live peer, a failed burst keys a NACK only if a ladder candidate's **preamble** is confirmed
-  in it, at the candidate's acquisition coherence:
-  - P for the OFDM rungs (`P_EVIDENCE_COHERENCE`);
-  - the PN-63 sync for SL3–SL5;
-  - the existing per-candidate sync elsewhere.
-- **What it stops:**
-  - **hiss** has no preamble;
-  - **a heard ACK** has none: FSK4-ACK and MFSK16-ACK carry no ladder sync.
-- **What it keeps:** a new peer's first frame, which has its preamble.
-- **The open question is the station ID.** It is uncoded in the daemon's mode. On BPSK250 that mode is
-  the SL5 waveform, PN-63 included, so the ID would pass as an SL5 frame. Then G2 alone does not stop
-  the ID-driven exchange.
-  - **G2b:** add a length rule. Every ladder frame has a fixed length for payloads up to 209 B
-    (`ota-climb-memory.md`). A burst that confirms a preamble but is much shorter than the shortest
-    frame of that preamble's rung is a fragment or an ID.
-  - But #1452 keeps fade-split fragments as evidence, so this collides with #1452 **while a peer is
-    live**. It is therefore applied **only when no peer is live**.
+## Tests (as built)
 
-**G3: recognise the ID as an ID.** The ID is not decoded at these levels (0 of 6), so recognition by
-decode fails. Recognising it by structure is the same problem as G2b.
+**Modem**, through `accumulate_capture` and `ota_decode_burst`, over the recorded idle
+(`tests/idle_flicker_is_not_evidence.rs`):
+- **`with_no_live_peer_a_failure_keys_nothing`.** After `OTA_PEER_LIVE_SAMPLES` of listening, two
+  bursts key nothing:
+  - the failing QPSK250-D frame that keys a NACK in a live session;
+  - an FSK4 NACK with a station ID behind it at +1.5 dB.
 
-## Questions for the review
+  Each asserts that its burst was flushed.
+- **`a_decode_makes_the_peer_live_again`.** After the window, a clean frame decodes, and the same
+  failure then keys.
 
-1. **Is G2 + G2b sound?** In particular: does any ladder rung's preamble detector confirm on hiss at
-   the rate B's floor flickers (269 in 3 h)?
-2. **Does a new peer's first frame always confirm its preamble** at the SNR where it would otherwise
-   fail? If a frame below the preamble's acquisition limit gets silence (task 32's decision-4 regime),
-   is that worse than today?
-3. **What should "live" mean?** A decoded ladder frame, any decoded frame, or the daemon's own data
-   transmission (the ISS role)? And over what `T_live`?
-4. **Does the ride-along ID in front of an ACK** need handling here, or in the union guard (a head
-   window extended by the longest ID in the mode)?
-5. **Is the receiver the right layer?** The alternative is the sender: never key a sign-off or
-   ride-along ID with a NACK-only transmission while idle. That removes source 2 only.
+The listening time is silence, then 60 s of idle so the floor re-learns the band. A first version fed
+only silence: nothing flushed, and one test passed vacuously.
 
-## Test plan (sketch; the review decides)
+**Daemon**, `nack_budget::tests::with_no_live_peer_only_a_p_confirmed_failure_keys`:
+- **The control:** a fresh session's failure keys.
+- **The subject:** after the window, the same failure keys nothing and spends no budget, while a
+  P-confirmed failure still keys.
+- A first version had no control and dropped its warm-up flushes undecoded. Their flush state then
+  disqualified the burst under test, so an always-live sabotage passed. Fixed.
 
-The station's own floor and the peer's sign-off ID must key nothing, while a new peer's first failed
-frame still keys a NACK. All through `accumulate_capture` and `ota_decode_burst`, over the recorded
-idle (`tests/idle_flicker_is_not_evidence.rs`):
-- the recorded idle at a raised floor, as B's (RX source 1.0);
-- B's ID at BPSK250 alone, and in front of an FSK4 NACK and of a union NACK;
-- a new peer's first frame at each rung, at its decode edge, with no live peer.
+**Sabotage** (release, on the committed change):
 
-Then a twin through `spawn_bridged_pair` with auto-ID on (`auto_id_signoff_idle_secs = 10`), as on
-air. Expect no idle exchange once traffic stops. Sabotage each rule.
+| sabotage | goes red |
+|---|---|
+| always live | both no-live tests |
+| never live | `a_frame_failing_at_the_decode_edge_is_still_evidence`, `a_decode_makes_the_peer_live_again` |
+| G1 without B | 19 modem and daemon tests that answer a failure in a fresh session |
+
+**Not built:**
+- the review's twin with auto-ID (`spawn_bridged_pair_in_hiss`, traffic then idle);
+- the 30-minute raised-floor idle.
+
+The twin's bridge feeds idle in real time, so the 10-minute window makes it a test over 10 minutes. The
+engine-level tests cover the rule through the production entry. Both are UNCHECKED, and the next 2 m
+run after a deploy is their on-air check: keep the daemons up for over 10 min after the sign-off IDs,
+and count key-ups.
 
 ## Consumer
 
