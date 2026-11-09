@@ -1,7 +1,7 @@
 ---
 project: openpulsehf
 doc: docs/dev/reviews/review-idle-nack-gate-2026-11-08.md
-status: draft
+status: resolved
 last_updated: 2026-11-08
 ---
 
@@ -14,6 +14,27 @@ last_updated: 2026-11-08
   row count serves as the clock, with A ≈ B − 145 s, consistent across both episodes. Plus
   `engine.rs`, `nack_budget.rs`, `server.rs`, `station_id.rs`, `ota_rate.rs`, `bpsk/modulate.rs` and
   the union-ACK branch.
+
+## Prompt
+
+The reviewer was given:
+- the draft;
+- `reply-window-evidence.md`, `nack_budget.rs`, the daemon's OTA receive path (including the
+  ride-along and sign-off IDs), `ota_decode_burst`'s evidence rules and `ofdm-preamble-detect.md`
+  (decision 4);
+- the union-ACK design and its review;
+- the task 32 and 33 reviews, and f2l's full post-run event files.
+
+It was asked to falsify:
+1. the problem statement, from the event rows;
+2. each candidate (G1, G2, G2b, G3): does it end the idle exchange while keeping #1456's constraint?
+3. the ride-along ID's handling and its cost;
+4. whether a simpler rule was missed;
+5. what "live" should mean, and over what `T_live`.
+
+It was asked to recommend one rule with a test list. And: **"Does this block Release 1? Say so."**
+
+## Verdict
 
 **Verdict: CHANGES. Does not block Release 1.** The keying is bounded (3 + 6/h), the runs are
 attended, and A2 is met on 2 m. **Recommend G1** with the semantics below; **reject G2, G2b and G3.**
@@ -150,7 +171,48 @@ Also fix in the design note: the ID is BPSK250 whatever the rung; cite the inter
 
 ## Disposition
 
-Pending the maintainer, who has to decide:
-- G1;
-- the sender-side SL1 fallback for a never-ACKed send;
-- the ID riding only with `AckOk`.
+**The maintainer, 2026-11-09:**
+- **G1 is built.**
+- **Option B is added:** `start_ota_session` counts as a live peer. Bare G1 broke 19 tests that answer
+  a failure in a fresh session, and B keeps #1456's constraint for a freshly started station.
+- **The sender-side SL1 fallback is not chosen.**
+- **The ride-along ID is not restricted** to `AckOk`.
+
+**The check of delta B (Fable, 2026-11-09, read-only, no cargo): APPROVE. Does not block Release 1.**
+1. **It does not reopen the task 32 echo:** on air the echoes began 15 min and 2.7 h after traffic,
+   both past the window.
+   - **Two daemons started together and left idle** can echo for their first 10 min. That is bounded
+     at 3 NACKs (+ IDs) per station: a heard ID decodes only through the uncoded fallback, which
+     neither resets the budget nor sets liveness.
+   - At the window's edge, the leak (`≥`) and liveness (`>`) can allow a 4th NACK on one read. That
+     is negligible.
+2. **No path restarts the session unattended.**
+   - `server.rs:247` runs once, at startup.
+   - `StartOtaSession` is sent only by the CLI `daemon ota start`.
+   - The probe is under `#[cfg(test)]`.
+   - Panel, TUI, ARDOP, KISS, handshake, QSY and the repeater engines do not call it.
+3. **The anchor is right.** `listening_samples` has a single writer and is never reset.
+4. **Liveness is set before the deadline checks**, which is right: a late frame still proves a peer.
+5. **The uncoded fallback is excluded** at all three of its exits.
+6. **The tests are sufficient for the delta.** Optional, not blocking: keying at `LIVE − 1` after
+   start, and `StartOtaSession` re-arming after the window expires.
+   - Add to the on-air check: read `p_false_opens` after the 10-min idle, since P is the only
+     remaining way through the gate.
+   - Park, as pre-existing: the comment at `server.rs:1085` says nothing sets `engine.ota` back to
+     `None`, but `StopOtaSession` does.
+
+## Consumer
+
+`ota_decode_and_ack_inner`'s failed branch, reached through `ModemEngine::ota_decode_burst` from
+`nack_budget::decode_ota_burst` in the daemon's receive loop. The design note's `## Consumer` gives the
+commands.
+
+## Prior art
+
+#1456 (`reply-window-evidence.md`), #1460, #1452, `union-ack-recognition.md`, and
+`ofdm-preamble-detect.md` (decision 4). See the design note.
+
+## Twins
+
+The ARDOP TNC and the KISS front-end run no OTA ladder. The repeater's extra engines start no OTA
+session (delta check, item 2).

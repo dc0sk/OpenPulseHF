@@ -138,7 +138,8 @@ only silence: nothing flushed, and one test passed vacuously.
 The twin's bridge feeds idle in real time, so the 10-minute window makes it a test over 10 minutes. The
 engine-level tests cover the rule through the production entry. Both are UNCHECKED, and the next 2 m
 run after a deploy is their on-air check: keep the daemons up for over 10 min after the sign-off IDs,
-and count key-ups.
+count key-ups from the daemons' `ptt_changed` events, and read `p_false_opens`, since P is the only
+remaining way through the gate (delta check, item 6).
 
 ## Consumer
 
