@@ -2,7 +2,7 @@
 project: openpulsehf
 doc: docs/dev/design/idle-nack-gate.md
 status: resolved
-last_updated: 2026-11-08
+last_updated: 2026-11-09
 ---
 
 # An idle receiver does not answer what is not a peer's frame
