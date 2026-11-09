@@ -6568,3 +6568,84 @@ The review (Fable) read f2o's raw events and logs at `a869e276`, against f2n and
   full collection supersedes.
 - **`preamble carrier detect` stopped at 19:00:42.9** because the line logs only when its counters
   change. P ran (SL9 gives OFDM candidates), so `p_false_opens` is **known unchanged at 0**.
+
+## Task 35 — the idle-NACK gate reached: B's receiver held at SL1, then 30 min idle (status: planned — the maintainer's go given)
+
+**Why.** Task 34's 30 min idle was quiet, but **#1532 was never reached**: every burst died at #1454,
+whose recognition floor was 576 samples at A (OFDM candidates) and 8 448 at B (SL2).
+- In f2l (task 32) the echo started because **B's rx level sat at SL1**. MFSK16's recognition floor is
+  short, so B's own-floor flickers passed #1454 and keyed NACKs.
+- **This task recreates that precondition on purpose:** B's receive side is clamped to SL1, so after
+  10 min idle its floor flickers have to reach the gate.
+- **It also exercises #1531 at the receiver:** B's NACKs at SL1 are K=3 union ACKs, which A must
+  recognise as ACKs, not NACK back.
+
+**Build:** unchanged from task 34 (server `c481e827…`, CLI `a5642d34…`). No redeploy; check the hashes.
+
+**Settings, named explicitly:**
+- `fast` profile;
+- **`TRAFFIC_FROM=A`**, `TRAFFIC_INTERVAL=8`, `TRAFFIC_DURATION=300`, `TRAFFIC_SIZE=64`;
+- `SIGNOFF_IDLE_SECS=30`;
+- AGC FAST (2) on both, read back before and after;
+- log level on both daemons: `info,openpulse_daemon=debug,openpulse_modem::engine=debug`.
+
+**Before traffic** (during the runner's warm-up, after both daemons are up), on **station B**:
+`openpulse-cli daemon ota-bounds --max SL1`. Then read back `ota-status`: `rx_recommended_level` and
+`rx_confirmed_level` must both be SL1. If either is not, `cleanup` and report; key nothing further.
+
+**Clear the audit file** on both stations before the run: an appended file mixed f2n into f2o in
+task 34. If the runner does not, move the old `events.ndjson` aside and record that.
+
+The station rules hold:
+- FT-991A at 5 W at most, and never raise either rig's power;
+- record nothing about a host other than rpi51 and rpi53;
+- RSPdx port B empty;
+- no CAT power-off on the IC-9700.
+
+### Part A — nothing transmits
+1. Check the hashes, and read back both rigs.
+2. Clear (or move aside) the audit files, as above.
+
+### Part B — run f2p: A sends at SL1, then 30 min idle with both daemons up (keys both rigs: one go)
+1. Launch, set B's bounds as above, read them back, and then run the traffic.
+   - A sends MFSK16 (SL1, about 17 s per frame), so 300 s carries about 10–15 frames.
+2. **Do not `cleanup` after the sign-off IDs.** Leave both daemons up, idle and attended, for
+   **30 min after the later sign-off**.
+3. Collect each station's full audit events and daemon log, then `cleanup`, then read back PTT = 0.
+
+**Stop at once (`cleanup`) and report** if:
+- a station keys more than 3 NACKs in the idle window;
+- a PTT stays keyed for more than 10 s;
+- anything keys more than 10 min after that station's last ladder decode.
+
+### Report
+- **The run:**
+  - frames A sent;
+  - B's decodes and its decisions by verdict;
+  - B's `ota-status` read-back before the traffic;
+  - A's ACK outcomes (`OTA ACK received` / `not received`);
+  - all counts from this run's events only.
+- **Each station's last ladder decode** (UTC), and its sign-off ID.
+- **Every key-up in the idle window,** from the daemons' `ptt_changed` events. For each: its time since
+  that station's last decode, and what it was.
+- **Per station, in the idle window,** split at the 10-min mark after that station's last decode:
+  - DCD opens;
+  - bursts held by `not ladder evidence (#1454)`;
+  - `no live peer` lines (the #1532 gate);
+  - `failed burst is an ACK` lines (the #1531 guard);
+  - `ota_rate_decision` events, by verdict.
+
+**Prediction:**
+- **At B:**
+  - **before 10 min:** some floor bursts pass #1454 and reach the decision, with at most 3 keyed
+    NACKs (union ACKs);
+  - **after 10 min:** **zero key-ups**, and `no live peer` lines ≥ 1, so the gate acted.
+- **At A:** no NACK keyed in answer to a B NACK. A's `failed burst is an ACK` lines are expected if
+  A's squelch opens on them.
+
+**Killed if:**
+- a station keys a NACK more than 10 min after its last ladder decode, with no P confirmation;
+- or A keys a NACK in answer to one of B's union NACKs.
+
+**Weak if** B logs no `no live peer` line past the 10-min mark: the gate was not asked again. Then
+report B's #1454 hold count and the floor (`recognition window …`) it held at.
