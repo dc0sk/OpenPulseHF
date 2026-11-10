@@ -2,10 +2,14 @@
 project: openpulsehf
 doc: docs/dev/onair-execution-plan.md
 status: living
-last_updated: 2026-10-17
+last_updated: 2026-11-10
 ---
 
 # On-air execution plan
+
+> **2026-11-10:** the 2 m campaign is done (A2 met in both directions, `project/workplan.md` M3). It ran
+> rpi51 + IC-9700 against the remote FT-991A station (decision 28), not the rpi53 + FT-818 pair named
+> below. The HF run has its own plan: [`onair-hf-plan.md`](onair-hf-plan.md).
 
 The sequenced plan to obtain the on-air evidence **Release 1** needs (work plan milestone **M3**,
 [`project/workplan.md`](project/workplan.md)): **A1** a two-station exchange on the `hpx_hf`
