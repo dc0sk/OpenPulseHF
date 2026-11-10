@@ -1,0 +1,325 @@
+# on-air twin-OTA  freq=144640000 dials A=144640000 B=144641564 profile=fast traffic IC-9700→FT-991A dur=300s
+17:08:56  ISS IC-9700: {
+  "active": true,
+  "is_locked": false,
+  "rx_confirmed_level": "SL1",
+  "rx_recommended_level": "SL1",
+  "tx_fec": "rs",
+  "tx_level": "SL1",
+  "tx_mode": "MFSK16"
+}  |  IRS FT-991A: {
+  "active": true,
+  "is_locked": false,
+  "rx_confirmed_level": "SL1",
+  "rx_recommended_level": "SL1",
+  "tx_fec": "rs",
+  "tx_level": "SL1",
+  "tx_mode": "MFSK16"
+}
+17:09:25  ISS IC-9700: {
+  "active": true,
+  "is_locked": false,
+  "rx_confirmed_level": "SL1",
+  "rx_recommended_level": "SL1",
+  "tx_fec": "rs",
+  "tx_level": "SL1",
+  "tx_mode": "MFSK16"
+}  |  IRS FT-991A: {
+  "active": true,
+  "is_locked": false,
+  "rx_confirmed_level": "SL1",
+  "rx_recommended_level": "SL1",
+  "tx_fec": "rs",
+  "tx_level": "SL1",
+  "tx_mode": "MFSK16"
+}
+17:09:31  ISS IC-9700: {
+  "active": true,
+  "is_locked": false,
+  "rx_confirmed_level": "SL1",
+  "rx_recommended_level": "SL1",
+  "tx_fec": "rs",
+  "tx_level": "SL1",
+  "tx_mode": "MFSK16"
+}  |  IRS FT-991A: {
+  "active": true,
+  "is_locked": false,
+  "rx_confirmed_level": "SL1",
+  "rx_recommended_level": "SL1",
+  "tx_fec": "rs",
+  "tx_level": "SL1",
+  "tx_mode": "MFSK16"
+}
+17:09:55  ISS IC-9700: {
+  "active": true,
+  "is_locked": false,
+  "rx_confirmed_level": "SL1",
+  "rx_recommended_level": "SL1",
+  "tx_fec": "rs",
+  "tx_level": "SL1",
+  "tx_mode": "MFSK16"
+}  |  IRS FT-991A: {
+  "active": true,
+  "is_locked": false,
+  "rx_confirmed_level": "SL1",
+  "rx_recommended_level": "SL1",
+  "tx_fec": "rs",
+  "tx_level": "SL1",
+  "tx_mode": "MFSK16"
+}
+17:10:01  ISS IC-9700: {
+  "active": true,
+  "is_locked": false,
+  "rx_confirmed_level": "SL1",
+  "rx_recommended_level": "SL1",
+  "tx_fec": "rs",
+  "tx_level": "SL1",
+  "tx_mode": "MFSK16"
+}  |  IRS FT-991A: {
+  "active": true,
+  "is_locked": false,
+  "rx_confirmed_level": "SL1",
+  "rx_recommended_level": "SL1",
+  "tx_fec": "rs",
+  "tx_level": "SL1",
+  "tx_mode": "MFSK16"
+}
+17:10:25  ISS IC-9700: {
+  "active": true,
+  "is_locked": false,
+  "rx_confirmed_level": "SL1",
+  "rx_recommended_level": "SL1",
+  "tx_fec": "rs",
+  "tx_level": "SL1",
+  "tx_mode": "MFSK16"
+}  |  IRS FT-991A: {
+  "active": true,
+  "is_locked": false,
+  "rx_confirmed_level": "SL1",
+  "rx_recommended_level": "SL1",
+  "tx_fec": "rs",
+  "tx_level": "SL1",
+  "tx_mode": "MFSK16"
+}
+17:10:30  ISS IC-9700: {
+  "active": true,
+  "is_locked": false,
+  "rx_confirmed_level": "SL1",
+  "rx_recommended_level": "SL1",
+  "tx_fec": "rs",
+  "tx_level": "SL1",
+  "tx_mode": "MFSK16"
+}  |  IRS FT-991A: {
+  "active": true,
+  "is_locked": false,
+  "rx_confirmed_level": "SL1",
+  "rx_recommended_level": "SL1",
+  "tx_fec": "rs",
+  "tx_level": "SL1",
+  "tx_mode": "MFSK16"
+}
+17:10:55  ISS IC-9700: {
+  "active": true,
+  "is_locked": false,
+  "rx_confirmed_level": "SL1",
+  "rx_recommended_level": "SL1",
+  "tx_fec": "rs",
+  "tx_level": "SL1",
+  "tx_mode": "MFSK16"
+}  |  IRS FT-991A: {
+  "active": true,
+  "is_locked": false,
+  "rx_confirmed_level": "SL1",
+  "rx_recommended_level": "SL1",
+  "tx_fec": "rs",
+  "tx_level": "SL1",
+  "tx_mode": "MFSK16"
+}
+17:11:00  ISS IC-9700: {
+  "active": true,
+  "is_locked": false,
+  "rx_confirmed_level": "SL1",
+  "rx_recommended_level": "SL1",
+  "tx_fec": "rs",
+  "tx_level": "SL1",
+  "tx_mode": "MFSK16"
+}  |  IRS FT-991A: {
+  "active": true,
+  "is_locked": false,
+  "rx_confirmed_level": "SL1",
+  "rx_recommended_level": "SL1",
+  "tx_fec": "rs",
+  "tx_level": "SL1",
+  "tx_mode": "MFSK16"
+}
+17:11:25  ISS IC-9700: {
+  "active": true,
+  "is_locked": false,
+  "rx_confirmed_level": "SL1",
+  "rx_recommended_level": "SL1",
+  "tx_fec": "rs",
+  "tx_level": "SL1",
+  "tx_mode": "MFSK16"
+}  |  IRS FT-991A: {
+  "active": true,
+  "is_locked": false,
+  "rx_confirmed_level": "SL1",
+  "rx_recommended_level": "SL1",
+  "tx_fec": "rs",
+  "tx_level": "SL1",
+  "tx_mode": "MFSK16"
+}
+17:11:30  ISS IC-9700: {
+  "active": true,
+  "is_locked": false,
+  "rx_confirmed_level": "SL1",
+  "rx_recommended_level": "SL1",
+  "tx_fec": "rs",
+  "tx_level": "SL1",
+  "tx_mode": "MFSK16"
+}  |  IRS FT-991A: {
+  "active": true,
+  "is_locked": false,
+  "rx_confirmed_level": "SL1",
+  "rx_recommended_level": "SL1",
+  "tx_fec": "rs",
+  "tx_level": "SL1",
+  "tx_mode": "MFSK16"
+}
+17:11:55  ISS IC-9700: {
+  "active": true,
+  "is_locked": false,
+  "rx_confirmed_level": "SL1",
+  "rx_recommended_level": "SL1",
+  "tx_fec": "rs",
+  "tx_level": "SL1",
+  "tx_mode": "MFSK16"
+}  |  IRS FT-991A: {
+  "active": true,
+  "is_locked": false,
+  "rx_confirmed_level": "SL1",
+  "rx_recommended_level": "SL1",
+  "tx_fec": "rs",
+  "tx_level": "SL1",
+  "tx_mode": "MFSK16"
+}
+17:12:00  ISS IC-9700: {
+  "active": true,
+  "is_locked": false,
+  "rx_confirmed_level": "SL1",
+  "rx_recommended_level": "SL1",
+  "tx_fec": "rs",
+  "tx_level": "SL1",
+  "tx_mode": "MFSK16"
+}  |  IRS FT-991A: {
+  "active": true,
+  "is_locked": false,
+  "rx_confirmed_level": "SL1",
+  "rx_recommended_level": "SL1",
+  "tx_fec": "rs",
+  "tx_level": "SL1",
+  "tx_mode": "MFSK16"
+}
+17:12:25  ISS IC-9700: {
+  "active": true,
+  "is_locked": false,
+  "rx_confirmed_level": "SL1",
+  "rx_recommended_level": "SL1",
+  "tx_fec": "rs",
+  "tx_level": "SL1",
+  "tx_mode": "MFSK16"
+}  |  IRS FT-991A: {
+  "active": true,
+  "is_locked": false,
+  "rx_confirmed_level": "SL1",
+  "rx_recommended_level": "SL1",
+  "tx_fec": "rs",
+  "tx_level": "SL1",
+  "tx_mode": "MFSK16"
+}
+17:12:31  ISS IC-9700: {
+  "active": true,
+  "is_locked": false,
+  "rx_confirmed_level": "SL1",
+  "rx_recommended_level": "SL1",
+  "tx_fec": "rs",
+  "tx_level": "SL1",
+  "tx_mode": "MFSK16"
+}  |  IRS FT-991A: {
+  "active": true,
+  "is_locked": false,
+  "rx_confirmed_level": "SL1",
+  "rx_recommended_level": "SL1",
+  "tx_fec": "rs",
+  "tx_level": "SL1",
+  "tx_mode": "MFSK16"
+}
+17:12:55  ISS IC-9700: {
+  "active": true,
+  "is_locked": false,
+  "rx_confirmed_level": "SL1",
+  "rx_recommended_level": "SL1",
+  "tx_fec": "rs",
+  "tx_level": "SL1",
+  "tx_mode": "MFSK16"
+}  |  IRS FT-991A: {
+  "active": true,
+  "is_locked": false,
+  "rx_confirmed_level": "SL1",
+  "rx_recommended_level": "SL1",
+  "tx_fec": "rs",
+  "tx_level": "SL1",
+  "tx_mode": "MFSK16"
+}
+17:13:01  ISS IC-9700: {
+  "active": true,
+  "is_locked": false,
+  "rx_confirmed_level": "SL1",
+  "rx_recommended_level": "SL1",
+  "tx_fec": "rs",
+  "tx_level": "SL1",
+  "tx_mode": "MFSK16"
+}  |  IRS FT-991A: {
+  "active": true,
+  "is_locked": false,
+  "rx_confirmed_level": "SL1",
+  "rx_recommended_level": "SL1",
+  "tx_fec": "rs",
+  "tx_level": "SL1",
+  "tx_mode": "MFSK16"
+}
+17:13:25  ISS IC-9700: {
+  "active": true,
+  "is_locked": false,
+  "rx_confirmed_level": "SL1",
+  "rx_recommended_level": "SL1",
+  "tx_fec": "rs",
+  "tx_level": "SL1",
+  "tx_mode": "MFSK16"
+}  |  IRS FT-991A: {
+  "active": true,
+  "is_locked": false,
+  "rx_confirmed_level": "SL1",
+  "rx_recommended_level": "SL1",
+  "tx_fec": "rs",
+  "tx_level": "SL1",
+  "tx_mode": "MFSK16"
+}
+traffic window complete; waiting up to 900s for both stations' sign-off IDs …
+17:14:35  waiting for sign-off: IC-9700 no (last TX -10T16:1), FT-991A no (last TX -10T16:1)
+17:15:47  waiting for sign-off: IC-9700 no (last TX -10T16:1), FT-991A no (last TX -10T16:1)
+17:16:54  waiting for sign-off: IC-9700 no (last TX -10T16:1), FT-991A no (last TX -10T16:1)
+17:18:11  waiting for sign-off: IC-9700 no (last TX -10T16:1), FT-991A no (last TX -10T16:1)
+17:19:18  waiting for sign-off: IC-9700 no (last TX -10T16:1), FT-991A no (last TX -10T16:1)
+17:20:25  waiting for sign-off: IC-9700 no (last TX -10T16:1), FT-991A no (last TX -10T16:1)
+17:21:37  waiting for sign-off: IC-9700 no (last TX -10T16:1), FT-991A no (last TX -10T16:1)
+17:22:44  waiting for sign-off: IC-9700 no (last TX -10T16:1), FT-991A no (last TX -10T16:1)
+17:23:51  waiting for sign-off: IC-9700 no (last TX -10T16:1), FT-991A no (last TX -10T16:1)
+17:25:02  waiting for sign-off: IC-9700 no (last TX -10T16:1), FT-991A no (last TX -10T16:1)
+17:26:10  waiting for sign-off: IC-9700 no (last TX -10T16:1), FT-991A no (last TX -10T16:1)
+17:27:17  waiting for sign-off: IC-9700 no (last TX -10T16:1), FT-991A no (last TX -10T16:1)
+17:28:24  waiting for sign-off: IC-9700 no (last TX -10T16:1), FT-991A no (last TX -10T16:1)
+sign-off IDs after the last transmission: IC-9700 no, FT-991A no
+  [IC-9700] evidence: 6552 audit events, rig read-back, config, daemon log
+  [FT-991A] evidence: 6537 audit events, rig read-back, config, daemon log
+evidence: docs/dev/test-reports/onair-twin-ota-20261110-170830-evidence

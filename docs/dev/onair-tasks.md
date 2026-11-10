@@ -6774,7 +6774,7 @@ on an ACK's `recommended_level`, or on `fall_back_after_silence`.
 3. a clamped receiver's NACKs into the peer's frame (park);
 4. the corrections to the Results above.
 
-## Task 36 — the watchdog's first run, then #1531 at A and a live peer going quiet, both stations at SL1 (status: planned — the maintainer's go given for Parts A and B)
+## Task 36 — the watchdog's first run, then #1531 at A and a live peer going quiet, both stations at SL1 (status: Parts A (rerun) and B (f2q) done; see Results)
 
 **Why.**
 - **#1534 (the runner watchdog) is new.** It has never run on the stations, and Part A is its first
@@ -6910,3 +6910,65 @@ before: A 144640000, 1.2 W, AGC 2, PTT 0; B 144641564, 5 W, AGC 2, PTT 0; drive 
 
 **Disclosed:** the 180 s run did not produce a runner report or evidence directory (the `run` action ends after printing the
 idle message when `TRAFFIC_DURATION=0`). The watchdog log is `docs/dev/test-reports/watchdog.log`.
+
+### Task 36 — Results, rerun of Part A and Part B (station session, 2026-11-10; go quoted by PC1: "Ok for all 3 of them. Go")
+
+**Setup:** `m3/onair` @ `4be0a9a5` (carries #1535); hashes identical on both stations (server `c481e827…`, CLI `a5642d34…`); self-test
+PASS again. Rigs before: A 144640000, 1.2 W, AGC 2, PTT 0; B 144641564, 5 W, AGC 2, PTT 0; drive 0.15 both. Settings: `fast`,
+`SIGNOFF_IDLE_SECS=30`, both daemons `info,openpulse_daemon=debug,openpulse_modem::engine=debug`. Knobs I added, not named in the spec:
+`TRAFFIC_WARMUP=60` for Part B (so the bounds step ends before traffic). The runner moved each station's audit file aside at launch, so
+every count is this run's own.
+
+**Part A rerun: W1 fired.**
+- `TRAFFIC_DURATION=0 RUN_CAP_SECS=180 … run` at 16:03:14 UTC. `ps` at 16:03:38: `timeout -k 5 300` over the daemon on both stations
+  (A pid 1365549, B pid 508105), as the fix intends.
+- Watchdog log: `watchdog start … cap 180s`, then **`WATCHDOG: cleanup (W1 wall clock: 180s since launch) at 2026-11-10T16:06:19Z`** with
+  both daemons still up, followed by cleanup's lines for both stations (`daemon and rigctld stopped; PTT 0 sent while rigctld ran`).
+  `watchdog.pid` gone; afterwards 0 daemons and 0 rigctld on both stations. The wrapper logged `daemon exited rc=143` on both.
+- Key-ups from `ptt_changed`: A 0 (968 events), B 0 (964). Rigs read back after: A 144640000, 1.2 W, AGC 2, PTT 0; B 144641564, 5 W, AGC 2, PTT 0.
+
+**Part B, run f2q.** Launch 16:07:30 UTC (watchdog cap 2880 s). I did not step in: no hand stop rules, no cleanup by hand.
+- **Bounds:** `ota-bounds --max SL1` on A and B at 16:07:34, read back at 16:07:37 (A) and 16:07:41 (B):
+  `rx_recommended_level` SL1, `rx_confirmed_level` SL1, `tx_level` SL1 on both (`bounds-readback.log`).
+- **Traffic** (A to B, interval 30, 300 s) ran 16:08:30 to 16:13:30. **Sign-off IDs:** A 16:13:51.4, B 16:13:56.9 (the later).
+- **The watchdog:** W1 only, `WATCHDOG: cleanup (W1 wall clock: 2880s since launch) at 2026-11-10T16:55:30Z`, both stations stopped, PTT 0 sent.
+  No W2 to W5. The collector copied the full events and logs from the stopped stations at 16:55:36. Read-back after: A 144640000, 1.2 W,
+  AGC 2, PTT 0; B 144641564, 5 W, AGC 2, PTT 0; drive 0.15 both.
+
+**The exchange**
+- **A sent 10 MFSK16 frames** (16:08:48 to 16:13:18, one per 30 s) and 1 sign-off ID. **B decoded all 10** (10 `frame_received` MFSK16, plus A's ID,
+  non-ladder BPSK250 at 16:13:51), made **10 decisions, all `hold` (keyed)**, and keyed **10 MFSK16-ACK** replies (16:08:56 to 16:13:25) and its ID. **B keyed no NACK.**
+- **A's handling of B's replies:** `OTA ACK received ack=AckOk` ×10 (SL1 → SL1). Around each reply A's engine also logged
+  **`OTA: failed burst is an ACK, not ladder evidence (#1456)` 30 times** (three per reply, 2 to 7 s after it). **A keyed nothing in answer:** its only
+  transmissions are the 10 data frames and its ID. A made 0 `ota_rate_decision` events.
+- **Last ladder decode:** A 16:13:20.1 (last `OTA ACK received`); B about 16:13:22 (it keyed its last ACK at 16:13:25.3; the decode itself is not
+  logged with a time). Both split points below use 16:23:30.
+
+**Idle window after the later sign-off (16:13:56.9) to 16:55:30 UTC**
+- **Key-ups, from `ptt_changed`: A 0, B 0** (each station's last key-up is its sign-off ID; 2502 and 2498 ticks follow).
+- Counts (log timestamps; a column is "to 16:23:30 | after 16:23:30"):
+
+| | A | B |
+|---|---|---|
+| DCD opens (events after the sign-off) | 63 | 50 |
+| bursts flushed | 4 \| 60 | 23 \| 28 |
+| held by #1454 | 3 \| 59 | 22 \| 28 |
+| `no live peer` (#1532) | 0 \| 0 | 0 \| 0 |
+| `failed burst is an ACK` | 0 \| 0 | 0 \| 0 |
+| `ota_rate_decision` | 0 | 0 |
+
+  Before the sign-off: A flushed 33 bursts, with 30 `is an ACK` and 3 #1454; B flushed 19, 8 held by #1454, 0 gate lines.
+- B's #1454 recognition window was **2048** samples; the runs it held were 200 to 600.
+
+**Against the prediction**
+1. **#1531 at A: held.** No A key-up in answer to B's replies; the #1456 ACK guard acted 30 times and `OTA ACK received` 10 times. But B's replies were
+   all positive ACKs, none a NACK, so by the task's own "weak if" **#1531's receiver side was not exercised on a NACK.**
+2. **#1532: not reached.** `no live peer` appears 0 times at either station, before or after 10 min. Every burst in the window died at #1454
+   (A 62, B 50), so the gate was not asked; zero key-ups after 10 min holds trivially. In f2p, with A's SL2 frames still arriving as long runs, the same
+   B receiver logged 926 gate lines. The floor flickers here were all 1 to 3 reads.
+3. **The watchdog:** W1 only, at 2880 s; no W2. **Killed:** no. **Weak:** yes by the second clause (no B NACK); not by the first (B decoded 10 frames).
+
+**Evidence:** `docs/dev/test-reports/onair-twin-ota-20261110-170830{.log,-evidence/}` (the report's clock is local, UTC+1): full events
+(`events-{a,b}.ndjson.gz`, 14 782 and 14 736 lines), daemon logs filtered of the per-block lines (`capture read`, `AFC`, `received N audio samples`, `demodulated`,
+ALSA/JACK noise; removed A 74 045, B 63 620, kept 546 and 398), bounds read-back, collector log, Part A rerun's watchdog log, and
+`docs/dev/test-reports/watchdog.log` (all four watchdog starts). Leak check 0.

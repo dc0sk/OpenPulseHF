@@ -1,0 +1,28 @@
+16:07:34 ota-bounds --max SL1 on A and B
+ok
+A rc=0
+ok
+B rc=0
+16:07:37 A ota-status:
+{
+  "active": true,
+  "is_locked": false,
+  "rx_confirmed_level": "SL1",
+  "rx_recommended_level": "SL1",
+  "tx_fec": "rs",
+  "tx_level": "SL1",
+  "tx_mode": "MFSK16"
+}
+16:07:37 A rx_recommended=SL1 rx_confirmed=SL1 tx=SL1
+16:07:41 B ota-status:
+{
+  "active": true,
+  "is_locked": false,
+  "rx_confirmed_level": "SL1",
+  "rx_recommended_level": "SL1",
+  "tx_fec": "rs",
+  "tx_level": "SL1",
+  "tx_mode": "MFSK16"
+}
+16:07:41 B rx_recommended=SL1 rx_confirmed=SL1 tx=SL1
+16:07:41 BOUNDS OK

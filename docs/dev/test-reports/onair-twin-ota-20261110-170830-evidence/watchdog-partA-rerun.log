@@ -1,0 +1,7 @@
+2026-11-10T15:35:01Z watchdog start: launch 1794324901, traffic end 1794324931, cap 180s
+2026-11-10T15:38:01Z both daemons gone; watchdog exits
+2026-11-10T16:03:14Z watchdog start: launch 1794326594, traffic end 1794326624, cap 180s
+WATCHDOG: cleanup (W1 wall clock: 180s since launch) at 2026-11-10T16:06:19Z
+== cleanup ==
+  [IC-9700] daemon and rigctld stopped; PTT 0 sent while rigctld ran
+  [FT-991A] daemon and rigctld stopped; PTT 0 sent while rigctld ran
