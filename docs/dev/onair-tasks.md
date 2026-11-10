@@ -6774,7 +6774,7 @@ on an ACK's `recommended_level`, or on `fall_back_after_silence`.
 3. a clamped receiver's NACKs into the peer's frame (park);
 4. the corrections to the Results above.
 
-## Task 36 — the watchdog's first run, then #1531 at A and a live peer going quiet, both stations at SL1 (status: Parts A (rerun) and B (f2q) done; see Results)
+## Task 36 — the watchdog's first run, then #1531 at A and a live peer going quiet, both stations at SL1 (status: done — reviewed below)
 
 **Why.**
 - **#1534 (the runner watchdog) is new.** It has never run on the stations, and Part A is its first
@@ -6972,3 +6972,69 @@ every count is this run's own.
 (`events-{a,b}.ndjson.gz`, 14 782 and 14 736 lines), daemon logs filtered of the per-block lines (`capture read`, `AFC`, `received N audio samples`, `demodulated`,
 ALSA/JACK noise; removed A 74 045, B 63 620, kept 546 and 398), bounds read-back, collector log, Part A rerun's watchdog log, and
 `docs/dev/test-reports/watchdog.log` (all four watchdog starts). Leak check 0.
+
+### Review of task 36 (pc1 session, 2026-11-10)
+
+The review (Fable) read the f2q evidence and `watchdog.log` at `e163c844`, against the code at `main`
+fb9323a2. **Nothing blocks Release 1.**
+
+**1. The watchdog works as designed.**
+- **`watchdog.log` has three starts, not four:** 15:35:01, 16:03:14 and 16:07:30. The 15:35 start is the
+  run in which the daemon-side timeout won the race; #1535 fixed that, and the rerun shows it.
+- **The Part A rerun:** W1 fired at +185 s on a 180 s cap. That is one poll late, as expected.
+- **Part B:** W1 fired at +2 880 s exactly (60 + 300 + 2 400 + 120).
+- **The station's correction:** it ran no cleanup by hand. The watchdog did it in both parts.
+- **`rc=143` is expected.** Cleanup's `pkill` SIGTERMs the daemon, and `timeout` exits 128 + 15. A 124
+  would have meant the station cap, which was never reached. The wrapper's text names only 124 and 137;
+  that is cosmetic.
+- **A runner defect, not in the watchdog: the sign-off wait is blind.**
+  - The runner reported `sign-off IDs … no, no`, yet both logs show `logged TX metadata … BPSK250`
+    followed by `kind="sign-off"` (A 16:13:51.5, B 16:13:56.9). That is the order `signed_off` tests.
+  - The live daemon log carries ANSI escapes (the evidence copies are stripped), so the literal never
+    matches, and `last TX` printed `-10T16:1`.
+  - The watchdog is unaffected: it reads the events file. Parked.
+
+**2. #1531's receiver side is shown on air.** The spec's "weak if B keys no NACK" was wrong for the
+guard.
+- **Every ACK at SL1 is the union waveform.** `transmit_ota_ack` keys the K=3 union whenever the
+  recommended level's mode is MFSK16, positive or not.
+- **The guard is type-blind:** `holds_an_mfsk16_ack_codeword` checks only for a 5-byte ShortFEC decode.
+- **All 30 lines are in `ota_decode_burst`'s failed branch.**
+  - They are **pieces**: three per reply, bursts of 12 400–15 000 samples spaced 1.75–1.8 s apart
+    (one MFSK16 copy + 0.5 s gap).
+  - A's ACK listen returned on the union's FSK4 copy, and the three MFSK16 copies then fell into A's
+    burst path.
+  - They passed #1454 (floor 2 048) and the #1456 floor.
+  - **A was live:** its session started within 10 min.
+- **Without #1531** (`git show 9406ab87`), each piece would have been evidence, and A would have keyed up
+  to 3 NACKs over B's positive ACKs.
+
+**3. The cost of a real piece is not what #1531 documented.**
+- **What was measured:** each piece took about 1.5 s of failed-burst processing at A, the Pi 5.
+  - 32 `capture read holds 1.3–1.5 s`, 30 of them paired with the guard;
+  - for example, `fec attempt FAILED` at 16:08:52.831, then `is an ACK` at 16:08:54.377.
+- **What is not measured:** the guard's own share of the 1.5 s. It also includes the other candidates'
+  onset scans.
+- **The correction:** #1531's "worst case 31 + 126 ms (Pi 5)" was measured on **noise**. On a real copy
+  the MFSK16 anchor locks and up to five slots are demodulated, which was never timed.
+- **Why it matters:** a stall above the 0.5 s evidence floor can make the next read a floor-passing burst
+  ("one long read"). Parked with a measurement first.
+
+**4. #1532: close the on-air check. No further airtime.**
+- **Shown on air:**
+  - the expiry branch on real long bursts, with liveness from the session start (f2p: 926 drops after
+    3 budget NACKs);
+  - the decode-driven liveness assignment on the production path (f2q: 10 decodes, no NACK while live).
+- **Not shown on air:** a burst reaching the gate **after** a decode-set liveness expired. That is covered
+  by unit tests only (`with_no_live_peer_a_failure_keys_nothing`, `a_decode_makes_the_peer_live_again`).
+- "Drive A down" is unreliable on a line-of-sight path. Instead, observe `no live peer` lines and NACKs
+  after 10 min of quiet during the HF A1/A2 runs.
+- **A minor point, parked:** `nack_budget.rs` logs "a burst failed while the channel was still busy"
+  even for a burst the engine already dropped at #1454.
+
+**5. A2 on 2 m stands on `a1dafca7`** (tasks 32–33).
+- #1531 and #1532 touch only SL1 ACK recognition and the branch where nothing has decoded for 10 min.
+  An exchange that decodes every 30 s enters neither.
+- #1534 and #1535 change only the runner.
+- The per-build A2 is the HF release-candidate run. Record the build delta in the A2 row. If more engine
+  changes land before the RC, run one 2 m run per direction on the RC before the trip.
