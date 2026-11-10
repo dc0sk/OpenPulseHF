@@ -56,6 +56,24 @@ A_TEST_MODE_EXPECT="${A_TEST_MODE_EXPECT:-${TEST_MODE_EXPECT_A:-}}"; B_TEST_MODE
 # The run refuses a frequency outside this range. A frequency on another band would also switch a
 # rig's per-band settings, the FT-818's FRONT/REAR antenna among them. Widen it only for an HF run.
 BAND_MIN_HZ="${BAND_MIN_HZ:-${BAND2M_MIN_HZ:-144500000}}"; BAND_MAX_HZ="${BAND_MAX_HZ:-${BAND2M_MAX_HZ:-144750000}}"
+# Where a transmission can sit (docs/dev/design/onair-runner-hf.md). The RF a station emits spans its dial
+# minus any DISPLAY-only shift (the FT-991A's menu 065 OTHER SHIFT moves the dial reading, not the RF), plus
+# the rig's TX audio passband: the rig's TX filter, not the waveform, bounds what clipping regrows.
+# Every edge must lie inside BAND_MIN_HZ-BAND_MAX_HZ.
+A_DISPLAY_SHIFT_HZ="${A_DISPLAY_SHIFT_HZ:-0}"; B_DISPLAY_SHIFT_HZ="${B_DISPLAY_SHIFT_HZ:-0}"
+A_TX_LO_HZ="${A_TX_LO_HZ:-0}"; A_TX_HI_HZ="${A_TX_HI_HZ:-3000}"
+B_TX_LO_HZ="${B_TX_LO_HZ:-0}"; B_TX_HI_HZ="${B_TX_HI_HZ:-3000}"
+# The profile's widest waveform, centred on 1500 Hz audio: a sanity floor on the TX passband.
+OCCUPIED_BW_HZ="${OCCUPIED_BW_HZ:-}"
+# The receiving rig's AGC must read FAST (Hamlib's value 2 on the K4, IC-7300 and IC-9700), a Release 1
+# operating requirement (dcd-raised-floor.md). `any` skips the check, and the report says so.
+A_EXPECT_AGC="${A_EXPECT_AGC:-2}"; B_EXPECT_AGC="${B_EXPECT_AGC:-2}"
+# The passband `rigctl m` reads must be at least this; `any` for a rig that reports none (the FT-818 in
+# `keep` reads 0). A narrower filter decodes nothing (#1060).
+A_PASSBAND_EXPECT="${A_PASSBAND_EXPECT:-2400}"; B_PASSBAND_EXPECT="${B_PASSBAND_EXPECT:-2400}"
+# 1 refuses plain USB: on an Icom the USB modulation source is the microphone, so the daemon keys a dead
+# carrier. The rig must be in its data mode (PKTUSB).
+A_REQUIRE_DATA_MODE="${A_REQUIRE_DATA_MODE:-0}"; B_REQUIRE_DATA_MODE="${B_REQUIRE_DATA_MODE:-0}"
 # Power is only ever LOWERED to these, never raised (scripts/lib/rig-power.sh). Set one to empty
 # to leave that rig's power alone.
 A_RFPOWER="${A_RFPOWER-0.10}"; B_RFPOWER="${B_RFPOWER-0.10}"
@@ -118,12 +136,66 @@ die() { echo "ERROR: $*" >&2; exit 1; }
 ssh_a() { ssh ${SSH_OPTS} "${A_SSH}" "$@"; }
 ssh_b() { ssh ${SSH_OPTS} "${B_SSH}" "$@"; }
 
+# ── where and how a station transmits (onair-runner-hf.md): pure checks, exercised by band-self-test ──
+# The RF edges of a station's transmission. Args: dial display_shift tx_lo tx_hi
+rf_edges() { echo "$(( $1 - $2 + $3 )) $(( $1 - $2 + $4 ))"; }
+# Args: label low high band_min band_max
+edges_verdict() {
+    if (( $2 < $4 )); then echo "[$1] the transmission's low edge ${2} Hz is $(( $4 - $2 )) Hz below the band's ${4}"; return; fi
+    if (( $3 > $5 )); then echo "[$1] the transmission's high edge ${3} Hz is $(( $3 - $5 )) Hz above the band's ${5}"; return; fi
+    echo ok
+}
+# The profile's widest waveform: fast's OFDM52 is 2031 Hz, robust's rungs 500 Hz (rounded up).
+profile_bw() { case "$1" in fast) echo 2100 ;; robust) echo 600 ;; *) echo 2100 ;; esac; }
+# Args: label tx_lo tx_hi bw
+passband_floor_verdict() {
+    (( $3 - $2 >= $4 )) && echo ok || echo "[$1] the TX passband ${2}-${3} Hz is narrower than the profile's ${4} Hz"
+}
+# Args: label mode require_data. The hpx_hf audio is defined for the upper sideband.
+mode_verdict() {
+    case "$2" in
+        LSB|PKTLSB|LSB-D|CWR|*LSB*) echo "[$1] mode $2 is a lower-sideband mode; hpx_hf is defined for USB"; return ;;
+    esac
+    if [[ "$3" == 1 && "$2" == USB ]]; then
+        echo "[$1] plain USB on this rig keys the microphone, a dead carrier: use its data mode (PKTUSB)"; return
+    fi
+    echo ok
+}
+# Args: label reading expect
+agc_verdict() {
+    [[ "$3" == any ]] && { echo "ok (AGC not checked: EXPECT_AGC=any)"; return; }
+    [[ "$2" =~ ^[0-9]+$ ]] || { echo "[$1] AGC unreadable ('${2:-nothing}'); expected $3"; return; }
+    [[ "$2" == "$3" ]] && echo ok || echo "[$1] AGC reads $2, expected $3 (FAST is 2)"
+}
+# Args: label reading expect_min
+passband_verdict() {
+    [[ "$3" == any ]] && { echo "ok (passband not checked: PASSBAND_EXPECT=any)"; return; }
+    [[ "$2" =~ ^[0-9]+$ ]] || { echo "[$1] passband unreadable ('${2:-nothing}'); expected at least $3"; return; }
+    (( $2 >= $3 )) && echo ok || echo "[$1] passband reads $2 Hz, under ${3}: a narrow filter decodes nothing (#1060)"
+}
+# Args: label reading. Split must be off: the dial read back is the RX VFO.
+split_verdict() {
+    [[ "$2" == 0 ]] && echo ok || echo "[$1] split reads '${2:-unreadable}': the TX VFO may be elsewhere; turn split off"
+}
+
 preflight() {
     [[ -n "$A_SSH" && -n "$B_SSH" ]] || die "A_SSH/B_SSH unset — source the profile first"
     local f
     for f in "$A_FREQ_HZ" "$B_FREQ_HZ"; do
         (( f >= BAND_MIN_HZ && f <= BAND_MAX_HZ )) \
             || die "dial ${f} Hz (TEST_FREQ_HZ ${TEST_FREQ_HZ} + offset) is outside ${BAND_MIN_HZ}-${BAND_MAX_HZ}; set BAND_MIN_HZ/BAND_MAX_HZ for another band"
+    done
+    local bw v lo hi
+    bw="${OCCUPIED_BW_HZ:-$(profile_bw "$OTA_PROFILE")}"
+    (( bw >= $(profile_bw "$OTA_PROFILE") )) || die "OCCUPIED_BW_HZ=$bw is below the $OTA_PROFILE profile's $(profile_bw "$OTA_PROFILE") Hz; it may only be raised"
+    for st in A B; do
+        local dial_v="${st}_FREQ_HZ" sh_v="${st}_DISPLAY_SHIFT_HZ" lo_v="${st}_TX_LO_HZ" hi_v="${st}_TX_HI_HZ"
+        local mode_v="${st}_TEST_MODE_RIG" exp_v="${st}_TEST_MODE_EXPECT" req_v="${st}_REQUIRE_DATA_MODE"
+        v=$(passband_floor_verdict "$st" "${!lo_v}" "${!hi_v}" "$bw"); [[ "$v" == ok ]] || die "$v; nothing was keyed"
+        read -r lo hi < <(rf_edges "${!dial_v}" "${!sh_v}" "${!lo_v}" "${!hi_v}")
+        v=$(edges_verdict "$st" "$lo" "$hi" "$BAND_MIN_HZ" "$BAND_MAX_HZ"); [[ "$v" == ok ]] || die "$v; set the dial or BAND_MIN_HZ/BAND_MAX_HZ; nothing was keyed"
+        local m="${!mode_v}"; [[ "$m" == keep ]] && m="${!exp_v}"
+        v=$(mode_verdict "$st" "$m" "${!req_v}"); [[ "$v" == ok ]] || die "$v; nothing was keyed"
     done
     [[ "$TRAFFIC_FROM" == "A" || "$TRAFFIC_FROM" == "B" ]] || die "TRAFFIC_FROM must be A or B, not '${TRAFFIC_FROM}'"
     [[ "$CALLSIGN_A" != "N0CALL" && "$CALLSIGN_B" != "N0CALL" ]] || die "set real callsigns"
@@ -141,8 +213,8 @@ start_rigctld() {  # ssh_fn model cat_port cat_baud ptt_port ptt_type rigctld_po
         pgrep -x rigctld >/dev/null && echo '  [$label] rigctld ok' || { echo '  [$label] rigctld FAILED'; exit 1; }"
 }
 
-tune() {  # ssh_fn rigctld_port rfpower mode expected_reading label dial_hz; non-zero stops the run
-    local sshfn="$1" port="$2" power="$3" mode="$4" expect="$5" label="$6" dial="$7" now
+tune() {  # ssh_fn rigctld_port rfpower mode expected_reading label dial_hz station(A|B); non-zero stops the run
+    local sshfn="$1" port="$2" power="$3" mode="$4" expect="$5" label="$6" dial="$7" st="$8" now v
     echo "  [$label] tune → ${dial} Hz (TEST_FREQ_HZ ${TEST_FREQ_HZ} + $(( dial - TEST_FREQ_HZ ))), mode ${mode}"
     "$sshfn" "rigctl -m 2 -r 127.0.0.1:$port F ${dial} 2>/dev/null || echo '  [$label] WARN set freq'"
     # Hamlib 4.6.2's rigctl can print a `rigctld: Hamlib ...` banner line before the reading (task 11),
@@ -171,6 +243,17 @@ tune() {  # ssh_fn rigctld_port rfpower mode expected_reading label dial_hz; non
             return 1
         fi
     fi
+    # The passband (the second line of `m`), split, and the receive AGC, read back before anything keys.
+    local pb_v="${st}_PASSBAND_EXPECT" agc_v="${st}_EXPECT_AGC"
+    now="$("$sshfn" "rigctl -m 2 -r 127.0.0.1:$port m 2>/dev/null | grep -v '^rigctld:' | sed -n 2p" || true)"
+    v=$(passband_verdict "$label" "$now" "${!pb_v}"); echo "  [$label] passband: ${now:-unreadable} → $v"
+    [[ "$v" == ok* ]] || { echo "  ERROR: $v" >&2; return 1; }
+    now="$("$sshfn" "rigctl -m 2 -r 127.0.0.1:$port s 2>/dev/null | grep -v '^rigctld:' | head -n1" || true)"
+    v=$(split_verdict "$label" "$now"); echo "  [$label] split: ${now:-unreadable} → $v"
+    [[ "$v" == ok ]] || { echo "  ERROR: $v" >&2; return 1; }
+    now="$("$sshfn" "rigctl -m 2 -r 127.0.0.1:$port l AGC 2>/dev/null | grep -v '^rigctld:' | tail -n1" || true)"
+    v=$(agc_verdict "$label" "$now" "${!agc_v}"); echo "  [$label] AGC: ${now:-unreadable} → $v"
+    [[ "$v" == ok* ]] || { echo "  ERROR: $v" >&2; return 1; }
     rig_power_lower_only "$sshfn" "127.0.0.1:$port" "$power" "$label"
 }
 
@@ -267,8 +350,9 @@ launch_daemon() {  # ssh_fn repo_dir label rigctld_port
 # (re-baseline item 5): frequency, mode + passband (the filter width), RIT and XIT (the trim).
 rig_readback() {  # ssh_fn rigctld_port label
     local sshfn="$1" port="$2" label="$3"
-    "$sshfn" "echo '# $label'; for c in f m j z; do printf '%s: ' \$c; \
-        rigctl -m 2 -r 127.0.0.1:$port \$c 2>&1 | tr '\n' ' '; echo; done"
+    "$sshfn" "echo '# $label'; for c in f m j z s; do printf '%s: ' \$c; \
+        rigctl -m 2 -r 127.0.0.1:$port \$c 2>&1 | tr '\n' ' '; echo; done; \
+        for l in AGC SWR; do printf 'l %s: ' \$l; rigctl -m 2 -r 127.0.0.1:$port l \$l 2>&1 | tr '\n' ' '; echo; done"
 }
 
 # Pull each station's retained audit events, daemon log and config next to the report.
@@ -324,9 +408,9 @@ do_run() {
     same_run_files || die "the stations' daemon, CLI or traffic script differ or one is missing; nothing was keyed. Copy A's build to B with deploy (two separate builds need not be byte-identical)"
     start_rigctld ssh_a "$A_HAMLIB_MODEL" "$A_CAT_PORT" "$A_CAT_BAUD" "$A_PTT_PORT" "$A_PTT_TYPE" "$A_RIGCTLD_PORT" "$A_LABEL"
     start_rigctld ssh_b "$B_HAMLIB_MODEL" "$B_CAT_PORT" "$B_CAT_BAUD" "$B_PTT_PORT" "$B_PTT_TYPE" "$B_RIGCTLD_PORT" "$B_LABEL"
-    tune ssh_a "$A_RIGCTLD_PORT" "$A_RFPOWER" "$A_TEST_MODE_RIG" "$A_TEST_MODE_EXPECT" "$A_LABEL" "$A_FREQ_HZ" \
+    tune ssh_a "$A_RIGCTLD_PORT" "$A_RFPOWER" "$A_TEST_MODE_RIG" "$A_TEST_MODE_EXPECT" "$A_LABEL" "$A_FREQ_HZ" A \
         || die "station A failed its dial or mode check; nothing was keyed"
-    tune ssh_b "$B_RIGCTLD_PORT" "$B_RFPOWER" "$B_TEST_MODE_RIG" "$B_TEST_MODE_EXPECT" "$B_LABEL" "$B_FREQ_HZ" \
+    tune ssh_b "$B_RIGCTLD_PORT" "$B_RFPOWER" "$B_TEST_MODE_RIG" "$B_TEST_MODE_EXPECT" "$B_LABEL" "$B_FREQ_HZ" B \
         || die "station B failed its dial or mode check; nothing was keyed"
     write_config ssh_a "$CALLSIGN_A" "$GRID_A" "$A_AUDIO_DEVICE" "$A_RIGCTLD_PORT" "$A_LABEL"
     write_config ssh_b "$CALLSIGN_B" "$GRID_B" "$B_AUDIO_DEVICE" "$B_RIGCTLD_PORT" "$B_LABEL"
@@ -553,6 +637,60 @@ do_watchdog_self_test() {
     [ "$fails" -eq 0 ] && echo "WATCHDOG-SELF-TEST: PASS" || { echo "WATCHDOG-SELF-TEST: FAIL ($fails)"; return 1; }
 }
 
+# Preflight and every read-back, then stop: no daemon is launched. It sets each rig's dial, mode and power
+# (lower only), which emits nothing on a receiving rig. rigctld opening a PTT port of type RTS/DTR can assert
+# that line on some interfaces, so this is keyless only for PTT type CAT (review of onair-runner-hf.md).
+do_check() {
+    preflight
+    echo "== check (no daemon is launched) =="
+    echo "  PTT types: A ${A_PTT_TYPE}, B ${B_PTT_TYPE}$([[ "$A_PTT_TYPE" == CAT && "$B_PTT_TYPE" == CAT ]] && echo ' — keyless' || echo ' — NOT guaranteed keyless: an RTS/DTR PTT line can assert when rigctld opens it')"
+    start_rigctld ssh_a "$A_HAMLIB_MODEL" "$A_CAT_PORT" "$A_CAT_BAUD" "$A_PTT_PORT" "$A_PTT_TYPE" "$A_RIGCTLD_PORT" "$A_LABEL"
+    start_rigctld ssh_b "$B_HAMLIB_MODEL" "$B_CAT_PORT" "$B_CAT_BAUD" "$B_PTT_PORT" "$B_PTT_TYPE" "$B_RIGCTLD_PORT" "$B_LABEL"
+    local rc=0
+    tune ssh_a "$A_RIGCTLD_PORT" "$A_RFPOWER" "$A_TEST_MODE_RIG" "$A_TEST_MODE_EXPECT" "$A_LABEL" "$A_FREQ_HZ" A || rc=1
+    tune ssh_b "$B_RIGCTLD_PORT" "$B_RFPOWER" "$B_TEST_MODE_RIG" "$B_TEST_MODE_EXPECT" "$B_LABEL" "$B_FREQ_HZ" B || rc=1
+    rig_readback ssh_a "$A_RIGCTLD_PORT" "$A_LABEL"; rig_readback ssh_b "$B_RIGCTLD_PORT" "$B_LABEL"
+    do_cleanup || rc=1
+    [[ $rc -eq 0 ]] && echo "CHECK: PASS" || { echo "CHECK: FAIL"; return 1; }
+}
+
+# The where-and-how checks against cases that must pass and must fail (onair-runner-hf.md, Verification).
+# Keys nothing and needs no station.
+do_band_self_test() {
+    local fails=0 lo hi
+    bcheck() { if [[ "$2" == "$1"* ]]; then echo "  ok   $3"; else echo "  FAIL $3: want '$1', got '$2'"; fails=$((fails+1)); fi; }
+    # 20 m, 14.101-14.112 MHz (the example segment above the IBP beacons), the TX passband 0-3000 Hz
+    read -r lo hi < <(rf_edges 14108999 0 0 3000); bcheck ok "$(edges_verdict X "$lo" "$hi" 14101000 14112000)" "a dial whose signal ends 1 Hz inside the top edge"
+    read -r lo hi < <(rf_edges 14109001 0 0 3000); bcheck "[X] the transmission's high" "$(edges_verdict X "$lo" "$hi" 14101000 14112000)" "a dial 1 Hz too high"
+    read -r lo hi < <(rf_edges 14101000 0 0 3000); bcheck ok "$(edges_verdict X "$lo" "$hi" 14101000 14112000)" "a dial on the bottom edge"
+    read -r lo hi < <(rf_edges 14100999 0 0 3000); bcheck "[X] the transmission's low" "$(edges_verdict X "$lo" "$hi" 14101000 14112000)" "a dial 1 Hz below the bottom edge"
+    # The FT-991A's display shift: its dial reads 1500 Hz above the RF, so the RF is lower than the dial.
+    read -r lo hi < <(rf_edges 14102000 1500 0 3000); bcheck "[X] the transmission's low" "$(edges_verdict X "$lo" "$hi" 14101000 14112000)" "a 1500 Hz display shift moves the low edge below the band"
+    read -r lo hi < <(rf_edges 14102000 0 0 3000); bcheck ok "$(edges_verdict X "$lo" "$hi" 14101000 14112000)" "the same dial with no shift is inside"
+    # The 2 m defaults with an HF dial are refused.
+    read -r lo hi < <(rf_edges 14105000 0 0 3000); bcheck "[X] the transmission's low" "$(edges_verdict X "$lo" "$hi" 144500000 144750000)" "an HF dial against the 2 m defaults"
+    bcheck ok "$(passband_floor_verdict X 0 3000 2100)" "a 0-3000 Hz TX passband carries fast"
+    bcheck "[X] the TX passband" "$(passband_floor_verdict X 500 2500 2100)" "a 500-2500 Hz TX passband is too narrow for fast"
+    bcheck ok "$(passband_floor_verdict X 500 2500 600)" "500-2500 Hz carries robust"
+    bcheck ok "$(mode_verdict X PKTUSB 1)" "PKTUSB on a rig that needs its data mode"
+    bcheck "[X] plain USB" "$(mode_verdict X USB 1)" "plain USB on an Icom is refused"
+    bcheck ok "$(mode_verdict X USB 0)" "plain USB on a rig whose USB takes the data audio"
+    bcheck "[X] mode LSB" "$(mode_verdict X LSB 0)" "LSB is refused"
+    bcheck "[X] mode PKTLSB" "$(mode_verdict X PKTLSB 0)" "PKTLSB is refused"
+    bcheck ok "$(passband_verdict X 2400 2400)" "a 2400 Hz passband"
+    bcheck "[X] passband reads 2399" "$(passband_verdict X 2399 2400)" "a 2399 Hz passband is refused"
+    bcheck "[X] passband unreadable" "$(passband_verdict X "" 2400)" "an unreadable passband fails closed"
+    bcheck ok "$(passband_verdict X 0 any)" "the FT-818's 0 with PASSBAND_EXPECT=any"
+    bcheck ok "$(agc_verdict X 2 2)" "AGC FAST"
+    bcheck "[X] AGC reads 3" "$(agc_verdict X 3 2)" "AGC SLOW against FAST is refused"
+    bcheck "[X] AGC unreadable" "$(agc_verdict X "RPRT -11" 2)" "an unreadable AGC says unreadable, and fails closed"
+    bcheck "ok (AGC not checked" "$(agc_verdict X 3 any)" "EXPECT_AGC=any passes with a note"
+    bcheck ok "$(split_verdict X 0)" "split off"
+    bcheck "[X] split reads '1'" "$(split_verdict X 1)" "split on is refused"
+    bcheck "[X] split reads 'unreadable'" "$(split_verdict X "")" "an unreadable split fails closed"
+    [ "$fails" -eq 0 ] && echo "BAND-SELF-TEST: PASS" || { echo "BAND-SELF-TEST: FAIL ($fails)"; return 1; }
+}
+
 do_status() {
     echo "== status =="
     for pair in "ssh_a:$A_LABEL" "ssh_b:$B_LABEL"; do
@@ -602,5 +740,7 @@ case "$ACTION" in
     cleanup) do_cleanup ;;
     watchdog) do_watchdog ;;
     watchdog-self-test) do_watchdog_self_test ;;
-    *) die "unknown action '$ACTION' (setup|deploy|run|supervise|status|cleanup|watchdog-self-test)" ;;
+    check) do_check ;;
+    band-self-test) do_band_self_test ;;
+    *) die "unknown action '$ACTION' (setup|deploy|run|supervise|status|cleanup|check|watchdog-self-test|band-self-test)" ;;
 esac
