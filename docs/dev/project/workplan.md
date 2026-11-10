@@ -2,7 +2,7 @@
 project: openpulsehf
 doc: docs/dev/project/workplan.md
 status: draft
-last_updated: 2026-11-09
+last_updated: 2026-11-10
 ---
 
 # Work plan — Release 1 ("basic modem")
@@ -222,6 +222,9 @@ Waiting on the maintainer (`maintainer-todo.md`): the key-to-audio probe, then F
 | Parking (2026-11-09, the idle-gate delta check): the comment at `crates/openpulse-daemon/src/server.rs` (the monitor hoist, "`start_ota_session` runs once … nothing ever sets `engine.ota` back to `None`") is stale. `StopOtaSession` does clear it. Correct the comment | parked |
 | Parking (2026-11-09, task 34 review): the daemon **appends** its audit file (`$CFG_DIR/openpulse/audit/events.ndjson`), and `run-onair-twin-ota.sh` collects it whole. A run after one whose `cleanup` was skipped therefore reports both runs' events: f2o's counts were f2n + f2o, and read as a 41-of-222 ACK loss that did not exist. Truncate the file per run, or refuse `run` on a non-empty one | parked |
 | On-air check of the idle-NACK gate (#1532; task 34 review): task 34's 30 min idle was quiet, but every burst died at #1454 (floors 576 / 8 448), so #1532 was never reached. The precondition is a receiver whose rx candidates give a short floor (SL1, as in f2l, or the OFDM rungs), idle for more than 10 min after its last decode. Count `no live peer` lines; the budget is the safety bound. The weak criterion is bursts that reached the gate, not DCD opens | open |
+| Parking (2026-11-10, task 35 review, f2p; Fable on park or fix): the daemon's silent-peer bound is per SendMessage (`MAX_SILENT_ACK_WINDOWS` = 2, `server.rs`), with no link-down latch across messages: 38 queued messages keyed 76 frames over 96 min to a peer that never answered. The ARDOP path is bounded by Pat's request/response and ARQTIMEOUT (120 s), so a Winlink client cannot drive it. If built: a latch set on PeerSilent and cleared by a decode from the peer. It keys a transmitter, so it needs the mandatory review | parked, post-release |
+| Parking (2026-11-10, task 35 review, f2p; Fable on park or fix): a receiver clamped below the sender's rung by `ota-bounds` sizes its burst cap and recognition window from its own candidates. The sender's frame then cap-flushes, `commit_band` raises the squelch, and the fragments key NACKs into the ongoing frame (3 in f2p, budget-bounded). Unclamped, the lockstep candidate set covers the sender's rung on every traced path. On HF a fade split keys the same NACK by #1452's design: count fade-split NACKs during A1/A2 on HF (M4) before changing anything | parked, post-release; observe at the HF confirmation |
+| Parking (2026-11-10, watchdog): `run-onair-twin-ota.sh watchdog-self-test` is run by hand, not by the gate. Add it as a gate step, as for the other checkers' self-tests (gate.sh `--self-test` after) | parked |
 | Re-rank every `post-release-rerank` issue against what the air showed | after A2 |
 
 **Exit:** evidence bundles for A1, A2, A4, A5 and the ARDOP session in

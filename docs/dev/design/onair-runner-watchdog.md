@@ -1,7 +1,7 @@
 ---
 project: openpulsehf
 doc: docs/dev/design/onair-runner-watchdog.md
-status: draft
+status: resolved
 last_updated: 2026-11-10
 ---
 
@@ -9,7 +9,11 @@ last_updated: 2026-11-10
 
 Work plan M3 (on air on 2 m). This changes when the rigs stop transmitting, because the watchdog runs
 `cleanup`, which can stop a daemon mid-over. So it gets the mandatory review **before** it is built.
-The maintainer chose to build it before any further keying (2026-11-10). Review: pending.
+The maintainer chose to build it before any further keying (2026-11-10).
+- **The review: Fable, 2026-11-10, APPROVE WITH CHANGES**
+  (`docs/dev/reviews/review-onair-runner-watchdog-2026-11-10.md`). All six changes are taken (marked C1–C6
+  below).
+- **Implemented 2026-11-10** (see Implementation).
 
 ## Problem — task 35
 
@@ -87,6 +91,60 @@ the task 34 artefact (an appended file mixing two runs). The previous file is ke
   2. the watchdog fires W1, and `cleanup` reports both daemons stopped.
 
   That needs no transmit go, because nothing transmits. Recorded as task 36 Part A.
+
+## The review's changes (all taken)
+
+- **C1:** `run` refuses while `watchdog.pid` names a live process, so a stale watchdog cannot kill a new
+  run mid-over.
+- **C2:** `cleanup` commands PTT 0 **before** the daemon stop as well as after it. The daemon has no
+  signal handler, so TERM drops it without its PTT guard.
+- **C3:** key-ups are **false → true transitions**, not lines. `ptt-state` re-emits the current state,
+  so a keyed daemon can write `active:true` twice. W4's timer resets whenever the count or the state
+  changes.
+- **C4:** W3 is not a fixed 12. `POST_KEYUPS_MAX` = 2 × (`TRAFFIC_DURATION` / `TRAFFIC_INTERVAL`) + 4,
+  because task 31's normal drain had 13 key-ups after the window.
+- **C5: a station-side bound.** Each daemon launches as
+  `timeout -k 5 RUN_CAP_SECS openpulse-server; rigctl … T 0`, so a dead or hung controller cannot leave
+  a station keying. The trailing `T 0` runs on every stop path.
+- **C6:** `TRAFFIC_DURATION = 0` starts **no traffic**. GNU `timeout 0` disables the timeout, and
+  twin-traffic's `COUNT = 0` is infinite, so the dry run as first designed would have keyed for ever.
+- **Polling filters on the station** (`grep -o` of the PTT events only). The f2p audit file reached
+  310 k lines.
+
+**Corrections to the design above:**
+- **The runner's sign-off wait was already dead.** `signed_off` and `last_tx` grep `logged TX metadata`,
+  a `debug!` the default filter never emits, so `run` always waited the full `SIGNOFF_WAIT_MAX`. That is
+  why this design depends on no log line.
+- **"A dry run with nothing keyed" is not keyless.** With the daemons up, each session is live for its
+  first 10 min (`idle-nack-gate.md`, option B), so a floor flicker can draw up to 3 NACKs. The dry run is
+  therefore part of the next transmit task, under its go, and not a no-go demonstration.
+- **The discovery beacon** keys through `keyed_transmit(ptt, None, …)` with no `ptt_changed` event, so
+  W2–W4 are blind to it. It is off by default, and the runner's config does not enable it.
+
+## Implementation (2026-11-10, branch `feat/onair-watchdog`)
+
+`scripts/run-onair-twin-ota.sh`:
+- **The limits:** `POST_TRAFFIC_SECS`, `RUN_CAP_SECS`, `RUN_CAP_MAX`, `POST_KEY_LIMIT_SECS`,
+  `POST_KEYUPS_MAX`, `PTT_MAX_KEYED_SECS`;
+- **`launch_daemon`:** the audit file set aside as `events.ndjson.prev`, and the `timeout` wrapper with
+  PTT 0;
+- **`do_cleanup`:** PTT 0 before the stop as well;
+- **`do_run`:** the ceiling and stale-watchdog refusals, `start_watchdog`, and no traffic at 0;
+- **the watchdog itself:** `traffic_should_start`, `wd_count_keyups`, `wd_cap_verdict`,
+  `wd_station_verdict`, `wd_probe`, `start_watchdog`, `do_watchdog`;
+- **the actions:** `watchdog` and `watchdog-self-test`.
+
+**`watchdog-self-test`: 20 cases, PASS.** Each rule fires and does not fire on either side of its
+threshold. Duplicate `active:true` is not a key-up. A zero-length window starts no traffic. **The probe's
+own remote command is run by a local shell against a planted audit file.** Its first version failed
+there: an escaped `awk` program arrived mangled, and every station would have read 0 key-ups, leaving
+W2–W4 blind. The station now only filters, and the counting is local.
+
+**Sabotage** (each restored from `HEAD`): with each of W1–W5 removed, with the de-duplication removed,
+and with a zero-length window allowed to start traffic, **exactly that case goes red, 7 of 7.**
+
+**Not yet run on the stations.** The first on-air use is the next transmit task, whose Part A arms it
+with a short cap and expects W1 to fire.
 
 ## What it does not do
 
