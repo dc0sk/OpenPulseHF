@@ -259,7 +259,7 @@ launch_daemon() {  # ssh_fn repo_dir label rigctld_port
         if pgrep -x $DAEMON_COMM >/dev/null; then echo '  [$label] daemon FAILED: an old daemon did not stop'; exit 1; fi; \
         a=$CFG_DIR/openpulse/audit/events.ndjson; [ -f \$a ] && mv \$a \$a.prev; \
         XDG_CONFIG_HOME=$CFG_DIR RUST_LOG=$loglevel \
-        nohup sh -c 'timeout -k 5 $(( RUN_CAP_SECS + STATION_CAP_MARGIN_SECS )) $repo/target/release/openpulse-server; rigctl -m 2 -r 127.0.0.1:$port T 0 >/dev/null 2>&1' </dev/null >/tmp/twin-ota-daemon.log 2>&1 & pid=\$!; \
+        nohup sh -c 'timeout -k 5 $(( RUN_CAP_SECS + STATION_CAP_MARGIN_SECS )) $repo/target/release/openpulse-server; echo \"daemon exited rc=\$? (124 is the station cap, 137 a kill)\"; rigctl -m 2 -r 127.0.0.1:$port T 0 >/dev/null 2>&1' </dev/null >/tmp/twin-ota-daemon.log 2>&1 & pid=\$!; \
         sleep 2; kill -0 \$pid 2>/dev/null && echo '  [$label] daemon ok' || { echo '  [$label] daemon FAILED'; tail -5 /tmp/twin-ota-daemon.log; exit 1; }"
 }
 

@@ -104,7 +104,7 @@ the task 34 artefact (an appended file mixing two runs). The previous file is ke
 - **C4:** W3 is not a fixed 12. `POST_KEYUPS_MAX` = 2 × (`TRAFFIC_DURATION` / `TRAFFIC_INTERVAL`) + 4,
   because task 31's normal drain had 13 key-ups after the window.
 - **C5: a station-side bound.** Each daemon launches as
-  `timeout -k 5 RUN_CAP_SECS openpulse-server; rigctl … T 0`, so a dead or hung controller cannot leave
+  `timeout -k 5 (RUN_CAP_SECS + 120) openpulse-server; rigctl … T 0`. **The margin keeps the station timer above the watchdog's cap** (task 36 A: equal, both daemons ended a poll before W1, and the watchdog stopped nothing; #1535), so a dead or hung controller cannot leave
   a station keying. The trailing `T 0` runs on every stop path.
 - **C6:** `TRAFFIC_DURATION = 0` starts **no traffic**. GNU `timeout 0` disables the timeout, and
   twin-traffic's `COUNT = 0` is infinite, so the dry run as first designed would have keyed for ever.
