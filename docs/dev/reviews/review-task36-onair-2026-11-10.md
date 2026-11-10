@@ -40,8 +40,9 @@ It was also asked: **"Does anything block Release 1?"**
 
 ## Disposition
 
-- **The 1.5 s figure is narrowed:** it is the whole failed-burst processing per piece, and the guard's
-  own share is unmeasured.
+- **The 1.5 s figure is narrowed, then measured.** It is the whole failed-burst processing per piece. A
+  probe the same day attributed it: the #1123 uncoded fallback is 830–1 160 ms on x86, and the guard 19 +
+  60 ms.
 - **#1531's documented "worst case" is corrected in place** to "on noise", in the design note, the
   ledger and the work-plan row.
 - **Applied on this branch:** #1532's row closed, the A2 build-delta note, and four parking rows (the
