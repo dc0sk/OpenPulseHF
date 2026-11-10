@@ -109,7 +109,9 @@ this ledger adds the design rationale and the actually-observed results per chan
     - no MFSK16 recogniser turns pieces and the invariant red;
     - no FSK4 scan turns `an_ack_on_air_is_not_evidence`, pieces and the invariant red.
   - **Cost, worst case, x86 release:** 19 + 85 ms at the heads (83 + 170 ms over the whole bound).
-    The Pi 5 measured 31 + 126 ms, and station B's Pi 4 68 + 265 ms.
+    The Pi 5 measured 31 + 126 ms, and station B's Pi 4 68 + 265 ms, **on noise**. *Correction
+    (2026-11-10, task 36): a real union-ACK piece cost about 1.5 s of failed-burst processing on the Pi 5,
+    and the guard's share of that is unmeasured; see the design note.*
   - **Gate:** `GATE: PASS 53d07bf2 clean`, 2854 passed and 0 failed. `scripts/slow-tests.sh ota`:
     PASS, 3 of 3.
 
