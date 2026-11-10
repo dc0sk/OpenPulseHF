@@ -1,15 +1,20 @@
 ---
 project: openpulsehf
 doc: docs/dev/design/ack-piece-skips-fallback.md
-status: draft
+status: resolved
 last_updated: 2026-11-10
 ---
 
 # A union-ACK piece skips the uncoded fallback
 
 Work plan M4, "before the HF trip" (the parked row on the uncoded-fallback stall). It changes the
-receive path that delivers non-ladder traffic (station IDs, filexfer, handshake, QSY, relay), so it is
-reviewed before it is built. Review: pending.
+receive path that delivers non-ladder traffic (station IDs, filexfer, handshake, QSY, relay, send-message
+bodies), so it was reviewed before it was built.
+- **The review: Fable, 2026-11-10, APPROVE WITH CHANGES**
+  (`docs/dev/reviews/review-ack-piece-skips-fallback-2026-11-10.md`).
+- Its four changes are applied: see "The design, as built". **The condition below under "Design" is
+  superseded.**
+- **Implemented 2026-11-10.**
 
 ## Problem — measured
 
@@ -121,6 +126,69 @@ acquisition-adjacent code. Read `dsp-acquisition-playbook.md` first.
 2. **Is caching the recognisers' result for the burst sound,** given that the guard runs after the
    evidence rules and the probe runs before the fallback?
 3. **Should the larger item** (bounding the fallback for all failed bursts) come first instead?
+
+## The design, as built (the review's changes applied)
+
+**1. The safety condition is geometric** (change 1). The first form, "an MFSK16 codeword and no FSK4
+codeword", inferred structure from a decode that can fail.
+- It would skip an ID in front of a union ACK whose FSK4 copy did not decode, heard as one burst
+  (possible when hiss holds the squelch through the gaps).
+- It would also skip a piece followed by another keying within the DCD hold.
+
+**`is_a_lone_ack_copy` holds only when all three hold:**
+1. **The length.** The burst is no longer past its lead than **one MFSK16 copy + the tail slack**
+   (10 240 + 9 600 = 19 840 samples).
+2. **The margin.** At the active fallback mode, the shortest station ID (`DE` + a three-character
+   call, uncoded) + the FSK4 copy + the gap + an MFSK16 copy is **longer than that bound**.
+   - That is the minimum a burst holding both an ID and an MFSK16 copy can be: about 25 000 samples at
+     BPSK250.
+   - At a mode whose short ID fits inside the bound, **nothing is skipped**.
+   - The ID length is cached per mode.
+3. **The recognisers.** The burst holds an MFSK16-ACK codeword, and holds no FSK4 codeword. The FSK4
+   test is now only a tie-break.
+
+The length is the safety condition. A Costas-anchor position bound (the review's preferred form) was not
+used: it needs a measured "how late the DCD opens after a copy starts", from an audio inventory f2q did
+not record. The length form needs no new constant.
+
+**2. Send-message bodies** were missing from the non-ladder list (change 2). The negative control is
+taken over the **modes** an operator can configure, not over frame content: content is whitened, and only
+the waveform matters.
+
+**3. AFC is restored to `afc_before` before the recognisers** (change 3). The candidate loop leaves the
+last failed try's drift. The result is kept in a function-local variable, and the union-ACK guard reuses
+it.
+
+**4. Test 1 uses an entry counter** (change 4). `fallback_entries` counts every entry to the three
+fallback sites. The existing `fallback_onset_ranks` counts only hits, so it cannot show a skip.
+
+**Tests** (`engine::union_ack_guard_tests`, through `accumulate_capture` and `ota_decode_burst` with the
+fallback mode BPSK250):
+
+| test | shows |
+|---|---|
+| `a_lone_union_ack_copy_skips_the_uncoded_fallback` | `ack_pieces_skipped` = 1 and `fallback_entries` = 0 for the copy, which is still not ladder evidence |
+| `a_station_id_in_front_of_an_ack_is_still_decoded` | the with-ack keying (`transmit`, then `transmit_ota_ack`) in front of an FSK4 ACK and of a union ACK: the ID decodes |
+| `an_id_in_front_of_a_union_ack_with_a_lost_fsk4_copy_is_still_decoded` | the case only the length bound protects: one burst (hiss holds the squelch), the FSK4 copy zeroed, and the ID decodes |
+| `a_mode_whose_short_id_fits_the_bound_skips_nothing` | the margin: at every registered mode whose short ID fits the bound, a real copy is not taken; at BPSK250 it is |
+| `no_uncoded_frame_at_any_mode_is_taken_for_a_lone_ack_copy` | an uncoded ID at every registered mode, clean and under noise, is never taken |
+
+The existing `no_data_frame_or_station_id_is_taken_for_an_ack` is unchanged and green.
+
+**Sabotage** (release, each restored from `HEAD`):
+
+| sabotage | goes red |
+|---|---|
+| S1, the length bound removed | `an_id_in_front_…_lost_fsk4_copy` (the FSK4 tie-break alone does not save it) |
+| S2, the skip removed | `a_lone_union_ack_copy_skips_…` (`fallback_entries` ≥ 1 on today's path) |
+| S3, the margin removed | `a_mode_whose_short_id_fits_the_bound_skips_nothing` (the first version had no test for it, so S3 passed unnoticed, and this test was added) |
+
+**The cost, measured again** with the same probe (x86, release, 3 seeds): one piece took **82–86 ms**
+with the skip, against **830–1 160 ms** before, which is the same as with no fallback mode at all. The
+probe was a temporary unit test, removed after the run; the figures are not reproducible from the tree.
+The Pi 5 figure follows from the station.
+
+**Gate and slow suites:** see the PR.
 
 ## Consumer
 

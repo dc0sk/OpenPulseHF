@@ -15,6 +15,39 @@ this ledger adds the design rationale and the actually-observed results per chan
 
 ---
 
+## 2026-11-10 — A lone union-ACK copy skips the uncoded fallback (work plan M4, before the HF trip)
+
+- **Requirement/change:** REQ-FUN-06.
+  - On air (task 36, the Pi 5) each MFSK16 piece of an SL1 union ACK held the sender's receive loop
+    about 1.5 s. That is above the 0.5 s evidence floor.
+  - Measured: about 750 ms of it is the #1123 uncoded fallback (ranked 58, deferred exhaustive 332,
+    phase-2 acquisition 358 ms, x86), searching a burst that holds only an ACK.
+- **Design decision:** `docs/dev/design/ack-piece-skips-fallback.md`, with its review
+  `docs/dev/reviews/review-ack-piece-skips-fallback-2026-11-10.md` (APPROVE WITH CHANGES, all four
+  applied).
+  - A burst no longer than one MFSK16 copy + the tail slack, holding an MFSK16-ACK codeword and no FSK4
+    codeword, skips all three fallback sites.
+  - The length is the safety condition, used only while the shortest ID + FSK4 + gap + copy at the
+    active mode exceeds it.
+- **Implementation:** `crates/openpulse-modem/src/engine.rs`:
+  - `is_a_lone_ack_copy`, `shortest_id_samples` (cached);
+  - `fallback_entries`, `ack_pieces_skipped`;
+  - the skip at the ranked, deferred and phase-2 sites;
+  - the AFC restore;
+  - the guard reusing the result.
+- **Tests:** `engine::union_ack_guard_tests`:
+  - `a_lone_union_ack_copy_skips_the_uncoded_fallback`;
+  - `a_station_id_in_front_of_an_ack_is_still_decoded`;
+  - `an_id_in_front_of_a_union_ack_with_a_lost_fsk4_copy_is_still_decoded`;
+  - `a_mode_whose_short_id_fits_the_bound_skips_nothing`;
+  - `no_uncoded_frame_at_any_mode_is_taken_for_a_lone_ack_copy`.
+- **Results:**
+  - **With the change:** 6 of 6 `union_ack_guard_tests` pass (release).
+  - **Sabotage:** S1 (no length bound), S2 (no skip) and S3 (no margin) each turn exactly their test red.
+  - **The cost:** one piece is 82–86 ms with the skip, against 830–1 160 ms before (x86; a temporary
+    probe).
+  - **Gate and slow suites:** see the PR.
+
 ## 2026-11-10 — The on-air runner on HF: the transmission's edges inside the segment, and the passband, split and AGC read back (work plan M4)
 
 - **Requirement/change:** a VO: an HF run cannot key outside its segment, in the wrong mode, split, or on
@@ -41,6 +74,7 @@ this ledger adds the design rationale and the actually-observed results per chan
   - `WATCHDOG-SELF-TEST` is still PASS.
   - **Not yet run on the stations.**
   - **Gate:** see the PR.
+
 
 ---
 
