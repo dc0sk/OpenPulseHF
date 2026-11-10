@@ -12597,6 +12597,53 @@ mod union_ack_guard_tests {
         );
     }
 
+    /// The margin: at an active mode whose shortest ID, with the FSK4 copy, the gap and an MFSK16 copy,
+    /// fits inside the lone-copy bound, a burst could hold an ID and still be no longer than a copy. So
+    /// no burst is taken for a lone copy at such a mode, while at BPSK250 the real copy is.
+    #[test]
+    fn a_mode_whose_short_id_fits_the_bound_skips_nothing() {
+        let lb = LoopbackBackend::new();
+        let mut tx = engine(&lb);
+        tx.transmit_ack_mfsk16_k3(&AckFrame::new(AckType::AckOk, "OTHER"), None)
+            .unwrap();
+        let union = lb.drain_samples();
+        let copy = union[4160 + 4000..4160 + 4000 + 10_240].to_vec();
+        let mut rx = sl1_receiver();
+        assert!(
+            rx.is_a_lone_ack_copy(&copy, 0, Some("BPSK250")),
+            "the control: BPSK250's margin holds"
+        );
+        let modes: Vec<String> = rx
+            .plugins
+            .list()
+            .iter()
+            .flat_map(|i| i.supported_modes.clone())
+            .filter(|m| !m.ends_with("-ACK"))
+            .collect();
+        let gap =
+            (ModemEngine::MFSK16_ACK_GAP_S * AudioConfig::default().sample_rate as f32) as usize;
+        let bound = 10_240 + ModemEngine::ACK_TAIL_SLACK_SAMPLES;
+        let fsk4 = rx.fsk4_ack_frame_len().unwrap();
+        let mut short = Vec::new();
+        for m in &modes {
+            if let Some(id) = rx.shortest_id_samples(m) {
+                if id + fsk4 + gap + 10_240 <= bound {
+                    short.push(m.clone());
+                }
+            }
+        }
+        assert!(
+            !short.is_empty(),
+            "no registered mode has an ID short enough to exercise the margin"
+        );
+        for m in &short {
+            assert!(
+                !rx.is_a_lone_ack_copy(&copy, 0, Some(m)),
+                "a lone copy was taken at {m}, whose short ID fits the bound"
+            );
+        }
+    }
+
     /// No uncoded frame at any mode the engine can transmit is taken for a lone ACK copy, clean or under
     /// noise: the modes an operator can set are the closed list (the review: content is whitened, only
     /// the waveform matters).
