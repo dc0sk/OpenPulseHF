@@ -6878,3 +6878,35 @@ If W1 does not fire within 4 min, run `cleanup` by hand, report, and **do not st
 - B keys no NACK, which leaves #1531 at A unexercised.
 
 Say which.
+
+### Task 36 — Results, Part A (station session, 2026-11-10; go quoted by PC1: "go for a and b")
+
+**Part B was not started:** the watchdog did not fire W1 (below), and the spec says to stop there.
+
+**Setup:** `m3/onair` @ `273e2cf1`; hashes identical on both stations (server `c481e827…`, CLI `a5642d34…`). Both rigs read back
+before: A 144640000, 1.2 W, AGC 2, PTT 0; B 144641564, 5 W, AGC 2, PTT 0; drive 0.15 both (`--verify` pass). Settings: `fast`,
+`SIGNOFF_IDLE_SECS=30`, both daemons `info,openpulse_daemon=debug,openpulse_modem::engine=debug`.
+
+1. `watchdog-self-test`: **`WATCHDOG-SELF-TEST: PASS`** (rc 0), nothing keyed.
+2. `TRAFFIC_DURATION=0 RUN_CAP_SECS=180 scripts/run-onair-twin-ota.sh run` at 15:35:01 UTC. The runner said
+   `TRAFFIC_DURATION=0: no traffic is started; the daemons idle under the watchdog` and `watchdog armed (pid 1110079): cap 180s …`.
+3. **`ps` during the run (15:35:25 UTC, 25–28 s after launch), both stations:** each daemon ran under the cap:
+   - A: `1109335 sh -c timeout -k 5 180 …/openpulse-server; rigctl -m 2 -r 127.0.0.1:… T 0 …` and `1109337 timeout -k 5 180 …/target/release/openpulse-server`
+   - B: `298150 sh -c timeout -k 5 180 …/openpulse-server; rigctl -m 2 -r …` and `298176 timeout -k 5 180 …/target/release/openpulse-server`
+4. **The watchdog log, whole:**
+   ```
+   2026-11-10T15:35:01Z watchdog start: launch 1794324901, traffic end 1794324931, cap 180s
+   2026-11-10T15:38:01Z both daemons gone; watchdog exits
+   ```
+   **W1 did not fire.** At exactly 180 s after launch the stations' own `timeout -k 5 180` ended both daemons, and the watchdog's
+   "both daemons gone" exit came in the same poll, before its W1 check, so `WATCHDOG: cleanup (W1 …)` was never printed. Cap and
+   station timeout are the same number, so with no traffic the two end together and the daemon side wins.
+   `watchdog.pid` was gone afterwards. **Left over after the 180 s:** rigctld still running on both stations (daemons 0 on both).
+   The `; rigctl … T 0` after the timeout sent PTT 0, but nothing stopped rigctld: that is what cleanup does.
+5. Per the spec I then ran `cleanup` by hand (15:41 UTC): `[IC-9700] daemon and rigctld stopped; PTT 0 sent while rigctld ran`,
+   `[FT-991A] daemon and rigctld stopped; PTT 0 sent while rigctld ran`.
+6. **Key-ups from the `ptt_changed` events (collected before cleanup):** A 0 (910 events), B 0 (919 events). Neither station keyed.
+7. **Read-back after cleanup:** A 144640000, 1.2 W, AGC 2, PTT 0; B 144641564, 5 W, AGC 2, PTT 0; drive 0.15 both (`--verify` pass).
+
+**Disclosed:** the 180 s run did not produce a runner report or evidence directory (the `run` action ends after printing the
+idle message when `TRAFFIC_DURATION=0`). The watchdog log is `docs/dev/test-reports/watchdog.log`.
