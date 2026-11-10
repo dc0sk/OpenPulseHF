@@ -6569,7 +6569,7 @@ The review (Fable) read f2o's raw events and logs at `a869e276`, against f2n and
 - **`preamble carrier detect` stopped at 19:00:42.9** because the line logs only when its counters
   change. P ran (SL9 gives OFDM candidates), so `p_false_opens` is **known unchanged at 0**.
 
-## Task 35 — the idle-NACK gate reached: B's receiver held at SL1, then 30 min idle (status: run f2p done; see Results)
+## Task 35 — the idle-NACK gate reached: B's receiver held at SL1, then 30 min idle (status: run f2p done — reviewed below; the daemons ran unattended ~15 h)
 
 **Why.** Task 34's 30 min idle was quiet, but **#1532 was never reached**: every burst died at #1454,
 whose recognition floor was 576 samples at A (OFDM candidates) and 8 448 at B (SL2).
@@ -6706,3 +6706,70 @@ read back at 20:17:59: `rx_recommended_level` SL1, `rx_confirmed_level` SL1 (`b-
 (`capture read samples`, `AFC: raw_estimate`, `received N audio samples`, `demodulated N bytes`, and the ALSA/JACK library noise) are removed
 (A 1 295 932 lines, B 2 180 313) to keep the files small; everything else is kept (A 5 589 lines, B 30 196). Also `watcher.log`,
 `b-bounds-readback.log`, configs, rig read-back. Leak check 0.
+
+### Review of task 35 (pc1 session, 2026-11-10)
+
+The review (Fable) read f2p's full events and the filtered daemon logs at `5490d67b`, against the
+code at `main` a520e6f9.
+
+**1. #1532 is shown on air, more narrowly than the Results say.**
+- **The gate's hits are real.** The 926 `no live peer` lines run from 20:28:34.7 to 11:41:57.3. That
+  line is reached only after #1454 and #1456 pass.
+- **B keyed nothing after 20:27:52:** 8 `ptt_changed` in 315 371 events.
+- **The precondition held:** all 5 685 #1454 holds were at a recognition window of 2 048 samples
+  (A: 864 at 8 448).
+- **What the gate bought:** the budget's leak takes its period from the same constant, so without
+  #1532 B would have keyed about one NACK per 10 min of listening for 15.8 h, about 95 key-ups.
+- **B's 3 early NACKs were not idle-floor NACKs.** They fall inside B's live window (session start,
+  option B), and were keyed **during A's second BPSK31 frame**:
+  - A's 67 s frame overran B's SL1 burst cap (`cap-flushed … #1255`, 20:21:19), held there by
+    "channel still busy";
+  - B's DCD then dropped in BPSK31's amplitude dips, and the fragments (`invalid magic`) passed #1454.
+  - **New finding:** a receiver clamped below the sender's rung keys NACKs into the sender's ongoing
+    transmission. Parked; it is bounded by the budget.
+- **Not shown:**
+  - a peer that **was** live and then went quiet: B decoded nothing, and its anchor was the session
+    start;
+  - **#1531's receiver side at A.** A was keying when B's NACKs went out, half-duplex, so "A heard
+    none of B's NACKs" is true but is no evidence about #1531.
+- **A correction:** B's tx SL1 came from `set_level_bounds`, which clamps `tx_level` too, not from a
+  `nack_step_down`.
+
+**2. Why A never adopted SL1 (the spec's error).** The ladder is receiver-led. A's tx level moves only
+on an ACK's `recommended_level`, or on `fall_back_after_silence`.
+- A heard no ACK.
+- The fallback declined 38 times, with `no unconfirmed climb is recorded`: A started at SL2 and never
+  climbed.
+- That is correct behaviour; the spec clamped the wrong side.
+
+**3. A's 96 min of keying is per design, and there is a gap across messages.**
+- Each message is 2 frames, then `send abandoned` (`MAX_SILENT_ACK_WINDOWS` = 2). 38 messages × 2 =
+  **76 frames**, exact.
+- **There is no bound across messages.** Each `SendMessage` runs its own retry loop, and no link-down
+  latch exists, so the keying totals 2 × the queue length.
+- For an unattended station whose client queues (Winlink/Pat) this is a **keying-policy gap**: parked.
+- **A's missing sign-off is by design.** Its last transmission was an interval ID, which clears
+  `tx_since_id`, and `signoff_due` requires that flag. So a run whose last keying is an interval ID
+  never signs off. The stop rules waited for an event the design does not guarantee.
+
+**4. The lapse: the runner has no cap.** `run` returns with the daemons up.
+- **What would have caught it:**
+  - a wall-clock cap from daemon start, with an automatic `cleanup`;
+  - "keyed more than 10 min after max(daemon start, last decode)", measured from `ptt_changed`
+    whatever the sign-offs. That would have fired at about 20:34.
+- **It is a mandatory-review item:** `cleanup` can kill a daemon mid-over, and the rig stays keyed up to
+  about 5.5 s.
+
+**5. Task 36, if run, must pin:**
+- `--max SL1` on **both** stations;
+- A's frames short enough not to overrun B's SL1 cap, so that B's NACKs land in A's ACK window;
+- a traffic volume the window drains;
+- the runner cap from item 4, before any go;
+- B actually decoding, so that "went quiet" is tested;
+- stop rules on time, not on the sign-off.
+
+**None of the findings blocks Release 1.** Ranked:
+1. the runner cap (process, before the next go);
+2. the cross-message keying bound (park, post-release);
+3. a clamped receiver's NACKs into the peer's frame (park);
+4. the corrections to the Results above.
