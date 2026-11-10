@@ -6678,7 +6678,7 @@ read back at 20:17:59: `rx_recommended_level` SL1, `rx_confirmed_level` SL1 (`b-
 
 **The run (f2p events only)**
 - A: 76 `frame_transmitted` BPSK31 + 9 BPSK250 (IDs); 0 `OTA ACK received`, 76 `ACK not received within window`, 38 `send abandoned`;
-  0 `ota_rate_decision`; 0 frames received. Its receiver saw 866 bursts, all failed, 864 logged by #1454; 0 `no live peer`, 0 `failed burst
+  0 `ota_rate_decision`; 0 frames received. Its receiver flushed 866 bursts (all after 21:55:48, since A was transmitting before that), 864 of them held by #1454; 0 `no live peer`, 0 `failed burst
   is an ACK`.
 - B: 4 key-ups: **3 NACKs at 20:21:48, 20:22:01, 20:22:14 UTC** (`MFSK16-ACK`, decisions nack_hold keyed 2, nack_step_down keyed 1, which moved
   B's tx to SL1) and **1 interval ID at 20:27:52**. Decisions by verdict: nack_hold keyed 2, nack_step_down keyed 1, nack_hold muted 35. One
