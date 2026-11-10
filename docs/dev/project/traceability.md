@@ -15,6 +15,26 @@ this ledger adds the design rationale and the actually-observed results per chan
 
 ---
 
+## 2026-11-10 — The on-air runner stops both stations by itself (work plan M3)
+
+- **Requirement/change:** a VO: on-air runs are bounded with nobody watching. In task 35 both daemons
+  stayed up unattended for 15 h, A keying 96 min to a silent peer, because the stop rules waited for a
+  sign-off the design does not guarantee.
+- **Design decision:** `docs/dev/design/onair-runner-watchdog.md`. The mandatory review
+  (`docs/dev/reviews/review-onair-runner-watchdog-2026-11-10.md`) was APPROVE WITH CHANGES; all six are
+  taken.
+- **Implementation:** `scripts/run-onair-twin-ota.sh`:
+  - a detached watchdog, rules W1–W5;
+  - each daemon under `timeout -k 5 RUN_CAP_SECS` and then PTT 0;
+  - PTT 0 before and after the stop in `cleanup`;
+  - `run`'s refusals;
+  - no traffic at a zero-length window;
+  - the audit file set aside at each launch.
+- **Tests:** `run-onair-twin-ota.sh watchdog-self-test`, 20 cases, including the remote probe's own
+  command against a planted audit file.
+- **Results:** `WATCHDOG-SELF-TEST: PASS`. The 7 sabotages (each rule, the de-duplication, and the
+  zero-length window) each turn exactly their case red. Not yet run on the stations.
+
 ## 2026-11-09 — With no live peer, a failed burst the preamble detect did not confirm keys no NACK (work plan M3, A2)
 
 - **Requirement/change:** REQ-FUN-06.

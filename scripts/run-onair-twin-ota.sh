@@ -64,6 +64,7 @@ DAEMON_TCP_PORT="${DAEMON_TCP_PORT:-9000}"
 # Recorded explicitly in every station config, so the bundle's config snapshot attributes any effect
 # to the DSP that ran (re-baseline item 7). Defaults match the daemon's.
 NOTCH_ENABLED="${NOTCH_ENABLED:-true}"; AGC_ENABLED="${AGC_ENABLED:-false}"; CESSB_ENABLED="${CESSB_ENABLED:-true}"
+SIGNOFF_IDLE_SECS="${SIGNOFF_IDLE_SECS:-10}"
 PTT_LEADER_MS="${PTT_LEADER_MS:-0}"   # #1257; measure the rig before raising it
 TRAFFIC_INTERVAL="${TRAFFIC_INTERVAL:-2}"; TRAFFIC_SIZE="${TRAFFIC_SIZE:-128}"
 TRAFFIC_DURATION="${TRAFFIC_DURATION:-120}"
@@ -76,6 +77,7 @@ TRAFFIC_WARMUP="${TRAFFIC_WARMUP:-30}"
 # The daemons' RUST_LOG. `debug` logs each decode attempt and its timing, which a failed on-air run
 # needs (task 11: an `info` log could not say why station B never decoded).
 DAEMON_LOG_LEVEL="${DAEMON_LOG_LEVEL:-info}"
+DAEMON_LOG_LEVEL_B="${DAEMON_LOG_LEVEL_B:-$DAEMON_LOG_LEVEL}"
 # After the traffic window, how long to wait at most for each station's end-of-exchange (sign-off) ID
 # before the logs are collected. The ID waits 10 s after the station's last transmission and for a quiet
 # channel, and the sending daemon keeps sending its queued frames after the traffic script stops: in
@@ -86,6 +88,20 @@ DAEMON_LOG_LEVEL="${DAEMON_LOG_LEVEL:-info}"
 # for many minutes after the window (task 19: still sending when a 180 s wait ran out). 900 s lets that
 # backlog drain; the progress lines show when each station last transmitted.
 SIGNOFF_WAIT_MAX="${SIGNOFF_WAIT_MAX:-900}"
+# The watchdog (docs/dev/design/onair-runner-watchdog.md): bounds that stop both stations with nobody
+# watching. Task 35 left both daemons up for 15 h, A keying 96 min to a silent peer, because the stop
+# rules waited for a sign-off the design does not guarantee. Each rule runs on this host's clock and on
+# the stations' own PTT records. An idle task raises POST_TRAFFIC_SECS explicitly.
+POST_TRAFFIC_SECS="${POST_TRAFFIC_SECS:-$SIGNOFF_WAIT_MAX}"
+RUN_CAP_SECS="${RUN_CAP_SECS:-$(( TRAFFIC_WARMUP + TRAFFIC_DURATION + POST_TRAFFIC_SECS + 120 ))}"
+RUN_CAP_MAX=14400
+# A key-up first seen this long after the traffic window: the 10-min live window plus 5 min.
+POST_KEY_LIMIT_SECS="${POST_KEY_LIMIT_SECS:-900}"
+# Key-ups after the window scale with what was queued (task 31's normal drain was 13).
+POST_KEYUPS_MAX="${POST_KEYUPS_MAX:-$(( 2 * TRAFFIC_DURATION / (TRAFFIC_INTERVAL > 0 ? TRAFFIC_INTERVAL : 1) + 4 ))}"
+# One keying lasts at most an SL2 frame (66.6 s) plus a ride-along ID.
+PTT_MAX_KEYED_SECS="${PTT_MAX_KEYED_SECS:-100}"
+WATCHDOG_POLL_SECS=5
 OUTPUT_DIR="${OUTPUT_DIR:-docs/dev/test-reports}"
 
 ACTION="${1:-supervise}"
@@ -162,6 +178,7 @@ write_config() {  # ssh_fn callsign grid audio_device ptt_backend rigctld_port l
 [station]
 callsign = \"$call\"
 grid_square = \"$grid\"
+auto_id_signoff_idle_secs = $SIGNOFF_IDLE_SECS
 [audio]
 backend = \"cpal\"
 device = \"$dev\"
@@ -228,16 +245,18 @@ same_run_files() {
     [[ "$n" -eq 3 && "$ha" == "$hb" ]]
 }
 
-launch_daemon() {  # ssh_fn repo_dir label
-    local sshfn="$1" repo="$2" label="$3"
+launch_daemon() {  # ssh_fn repo_dir label rigctld_port
+    local sshfn="$1" repo="$2" label="$3" port="$4" loglevel="$DAEMON_LOG_LEVEL"
+    [[ "$label" == "$B_LABEL" ]] && loglevel="$DAEMON_LOG_LEVEL_B"
     echo "  [$label] launching openpulse-server (control 127.0.0.1:$DAEMON_TCP_PORT)"
     # An old daemon must be gone first, and "ok" is checked on THIS launch's pid: a name match after
     # 2 s could be a stale daemon that outlived the stop while the new one died (review, task 11).
     "$sshfn" "pkill -x $DAEMON_COMM 2>/dev/null; \
         for i in 1 2 3 4 5 6 7 8 9 10; do pgrep -x $DAEMON_COMM >/dev/null || break; sleep 0.5; done; \
         if pgrep -x $DAEMON_COMM >/dev/null; then echo '  [$label] daemon FAILED: an old daemon did not stop'; exit 1; fi; \
-        XDG_CONFIG_HOME=$CFG_DIR RUST_LOG=$DAEMON_LOG_LEVEL \
-        nohup $repo/target/release/openpulse-server </dev/null >/tmp/twin-ota-daemon.log 2>&1 & pid=\$!; \
+        a=$CFG_DIR/openpulse/audit/events.ndjson; [ -f \$a ] && mv \$a \$a.prev; \
+        XDG_CONFIG_HOME=$CFG_DIR RUST_LOG=$loglevel \
+        nohup sh -c 'timeout -k 5 $RUN_CAP_SECS $repo/target/release/openpulse-server; rigctl -m 2 -r 127.0.0.1:$port T 0 >/dev/null 2>&1' </dev/null >/tmp/twin-ota-daemon.log 2>&1 & pid=\$!; \
         sleep 2; kill -0 \$pid 2>/dev/null && echo '  [$label] daemon ok' || { echo '  [$label] daemon FAILED'; tail -5 /tmp/twin-ota-daemon.log; exit 1; }"
 }
 
@@ -294,6 +313,11 @@ do_deploy() {
 do_run() {
     preflight
     echo "== run =="
+    [ "$RUN_CAP_SECS" -le "$RUN_CAP_MAX" ] \
+        || die "RUN_CAP_SECS=$RUN_CAP_SECS is above the ${RUN_CAP_MAX} s ceiling; nothing was keyed"
+    if wd_pid=$(cat "$OUTPUT_DIR/watchdog.pid" 2>/dev/null) && kill -0 "$wd_pid" 2>/dev/null; then
+        die "an earlier run's watchdog (pid $wd_pid) is still alive: run cleanup first; nothing was keyed"
+    fi
     same_run_files || die "the stations' daemon, CLI or traffic script differ or one is missing; nothing was keyed. Copy A's build to B with deploy (two separate builds need not be byte-identical)"
     start_rigctld ssh_a "$A_HAMLIB_MODEL" "$A_CAT_PORT" "$A_CAT_BAUD" "$A_PTT_PORT" "$A_PTT_TYPE" "$A_RIGCTLD_PORT" "$A_LABEL"
     start_rigctld ssh_b "$B_HAMLIB_MODEL" "$B_CAT_PORT" "$B_CAT_BAUD" "$B_PTT_PORT" "$B_PTT_TYPE" "$B_RIGCTLD_PORT" "$B_LABEL"
@@ -304,8 +328,9 @@ do_run() {
     write_config ssh_a "$CALLSIGN_A" "$GRID_A" "$A_AUDIO_DEVICE" "$A_RIGCTLD_PORT" "$A_LABEL"
     write_config ssh_b "$CALLSIGN_B" "$GRID_B" "$B_AUDIO_DEVICE" "$B_RIGCTLD_PORT" "$B_LABEL"
     # A dead daemon on one side would leave the other keying to nobody: stop both and end the run.
-    launch_daemon ssh_a "$A_REPO_DIR" "$A_LABEL" || abort_after_launch "$A_LABEL"
-    launch_daemon ssh_b "$B_REPO_DIR" "$B_LABEL" || abort_after_launch "$B_LABEL"
+    launch_daemon ssh_a "$A_REPO_DIR" "$A_LABEL" "$A_RIGCTLD_PORT" || abort_after_launch "$A_LABEL"
+    launch_daemon ssh_b "$B_REPO_DIR" "$B_LABEL" "$B_RIGCTLD_PORT" || abort_after_launch "$B_LABEL"
+    start_watchdog
 
     cat <<EOF
 
@@ -323,6 +348,12 @@ EOF
     else
         iss_fn=ssh_b; iss_repo="$B_REPO_DIR"; iss_label="$B_LABEL"; to_call="$CALLSIGN_A"
         irs_fn=ssh_a; irs_repo="$A_REPO_DIR"; irs_label="$A_LABEL"
+    fi
+    if ! traffic_should_start "$TRAFFIC_DURATION"; then
+        # `timeout 0` disables the timeout and twin-traffic's COUNT=0 is infinite: a zero-length window
+        # must never reach either (watchdog review, change 6).
+        echo "TRAFFIC_DURATION=$TRAFFIC_DURATION: no traffic is started; the daemons idle under the watchdog"
+        return 0
     fi
     echo "Both daemons listening; traffic starts in ${TRAFFIC_WARMUP}s (warm-up) …"
     sleep "${TRAFFIC_WARMUP}"
@@ -385,6 +416,138 @@ wait_for_signoff() {
     echo "sign-off IDs after the last transmission: ${A_LABEL} ${a}, ${B_LABEL} ${b}" | tee -a "$report"
 }
 
+# ── watchdog (docs/dev/design/onair-runner-watchdog.md) ──────────────────────────────────────────────
+# Whether a traffic window of this many seconds starts the traffic script at all.
+traffic_should_start() { [ "${1:-0}" -gt 0 ] 2>/dev/null; }
+
+# Over a stream of audit events on stdin: "<key-ups> <keyed now 0|1>". A key-up is a false->true
+# transition, so a re-emitted state (`ptt-state` writes the current one) is not counted twice.
+WD_AWK='{ s=$NF; if (s=="true" && p!="true") n++; p=s } END { print n+0, (p=="true") ? 1 : 0 }'
+wd_count_keyups() { grep -o '"ptt_changed","active":[a-z]*' | awk -F: "$WD_AWK"; }
+
+# W1: the run's wall-clock cap.  Args: now launch cap
+wd_cap_verdict() { [ "$1" -ge $(( $2 + $3 )) ] && echo "W1 wall clock: ${3}s since launch" || echo ok; }
+
+# W2-W5 for one station. Args: now traffic_end post_limit post_max keyed_max keyups prev_keyups
+# keyups_at_traffic_end(-1 before it) keyed keyed_since fails
+wd_station_verdict() {
+    local now=$1 tend=$2 plim=$3 pmax=$4 kmax=$5 n=$6 prev=$7 at_end=$8 keyed=$9 since=${10} fails=${11}
+    if [ "$fails" -ge 3 ]; then echo "W5 lost sight: $fails polls failed"; return; fi
+    if [ "$keyed" -eq 1 ] && [ $(( now - since )) -gt "$kmax" ]; then
+        echo "W4 stuck key: keyed $(( now - since ))s"; return; fi
+    if [ "$now" -gt $(( tend + plim )) ] && [ "$n" -gt "$prev" ]; then
+        echo "W2 keying $(( now - tend ))s after the traffic window"; return; fi
+    if [ "$at_end" -ge 0 ] && [ $(( n - at_end )) -gt "$pmax" ]; then
+        echo "W3 $(( n - at_end )) key-ups after the traffic window"; return; fi
+    echo ok
+}
+
+# One station's probe: "<daemon running 0|1> <key-ups> <keyed 0|1>". The station only filters (its
+# audit file reached 310 k lines in f2p); the counting is `wd_count_keyups`, here, so the remote string
+# carries no awk program to quote.
+wd_probe() {
+    local out d
+    out=$("$1" "pgrep -x $DAEMON_COMM >/dev/null && echo d=1 || echo d=0; \
+        grep -o '\"ptt_changed\",\"active\":[a-z]*' $CFG_DIR/openpulse/audit/events.ndjson 2>/dev/null; true") || return 1
+    d=$(printf '%s\n' "$out" | sed -n 's/^d=//p')
+    [ -n "$d" ] || return 1
+    echo "$d $(printf '%s\n' "$out" | grep -v '^d=' | wd_count_keyups)"
+}
+
+start_watchdog() {
+    local launch now; launch=$(date +%s)
+    mkdir -p "$OUTPUT_DIR"
+    WD_LAUNCH=$launch WD_TRAFFIC_END=$(( launch + TRAFFIC_WARMUP + TRAFFIC_DURATION )) \
+        setsid nohup bash "$(readlink -f "$0")" watchdog </dev/null >>"$OUTPUT_DIR/watchdog.log" 2>&1 &
+    echo "$!" >"$OUTPUT_DIR/watchdog.pid"
+    echo "  watchdog armed (pid $!): cap ${RUN_CAP_SECS}s, keying ≤ ${POST_KEY_LIMIT_SECS}s and ≤ ${POST_KEYUPS_MAX} key-ups after the traffic, a key ≤ ${PTT_MAX_KEYED_SECS}s; log $OUTPUT_DIR/watchdog.log"
+}
+
+do_watchdog() {
+    local launch=${WD_LAUNCH:?} tend=${WD_TRAFFIC_END:?} now v tag fn d n k
+    declare -A prev=( [a]=0 [b]=0 ) at_end=( [a]=-1 [b]=-1 ) keyed=( [a]=0 [b]=0 ) since=( [a]=$launch [b]=$launch ) fails=( [a]=0 [b]=0 ) up=( [a]=1 [b]=1 )
+    echo "$(date -u +%FT%TZ) watchdog start: launch $launch, traffic end $tend, cap ${RUN_CAP_SECS}s"
+    while :; do
+        now=$(date +%s)
+        v=$(wd_cap_verdict "$now" "$launch" "$RUN_CAP_SECS")
+        for tag in a b; do
+            [ "$v" = ok ] || break
+            fn=ssh_$tag
+            if read -r d n k < <(wd_probe "$fn" 2>/dev/null) && [ -n "$k" ]; then
+                fails[$tag]=0; up[$tag]=$d
+                [ "$n" -ne "${prev[$tag]}" ] || [ "$k" -ne "${keyed[$tag]}" ] && since[$tag]=$now
+                [ "${at_end[$tag]}" -lt 0 ] && [ "$now" -ge "$tend" ] && at_end[$tag]=$n
+                v=$(wd_station_verdict "$now" "$tend" "$POST_KEY_LIMIT_SECS" "$POST_KEYUPS_MAX" "$PTT_MAX_KEYED_SECS" \
+                    "$n" "${prev[$tag]}" "${at_end[$tag]}" "$k" "${since[$tag]}" "${fails[$tag]}")
+                prev[$tag]=$n; keyed[$tag]=$k
+            else
+                fails[$tag]=$(( fails[$tag] + 1 ))
+                v=$(wd_station_verdict "$now" "$tend" "$POST_KEY_LIMIT_SECS" "$POST_KEYUPS_MAX" "$PTT_MAX_KEYED_SECS" \
+                    "${prev[$tag]}" "${prev[$tag]}" "${at_end[$tag]}" 0 "$now" "${fails[$tag]}")
+            fi
+            [ "$v" = ok ] || v="$v (station $tag)"
+        done
+        if [ "$v" != ok ]; then
+            echo "WATCHDOG: cleanup ($v) at $(date -u +%FT%TZ)"
+            until do_cleanup; do
+                [ "$(date +%s)" -ge $(( launch + RUN_CAP_SECS + 600 )) ] && { echo "WATCHDOG: a station stayed unreachable; the station-side timeout bounds it"; break; }
+                sleep 30
+            done
+            rm -f "$OUTPUT_DIR/watchdog.pid"; exit 0
+        fi
+        if [ "${up[a]}" = 0 ] && [ "${up[b]}" = 0 ]; then
+            echo "$(date -u +%FT%TZ) both daemons gone; watchdog exits"
+            rm -f "$OUTPUT_DIR/watchdog.pid"; exit 0
+        fi
+        sleep "$WATCHDOG_POLL_SECS"
+    done
+}
+
+# The decision functions against cases that must fire and must not (onair-runner-watchdog.md,
+# Verification). Keys nothing and needs no station.
+do_watchdog_self_test() {
+    local fails=0 got
+    check() {  # want got label
+        if [[ "$2" == "$1"* ]]; then echo "  ok   $3"; else echo "  FAIL $3: want '$1', got '$2'"; fails=$((fails+1)); fi
+    }
+    # station args: now tend plim pmax kmax n prev at_end keyed since fails
+    check ok   "$(wd_cap_verdict 1099 0 1100)"                          "W1 one second before the cap"
+    check W1   "$(wd_cap_verdict 1100 0 1100)"                          "W1 at the cap"
+    check ok   "$(wd_station_verdict 1899 1000 900 12 100 5 4 0 0 0 0)" "W2 a key-up at traffic end + 899 s"
+    check W2   "$(wd_station_verdict 1901 1000 900 12 100 5 4 0 0 0 0)" "W2 a key-up at traffic end + 901 s"
+    check ok   "$(wd_station_verdict 1901 1000 900 12 100 5 5 0 0 0 0)" "W2 no new key-up past the limit"
+    check ok   "$(wd_station_verdict 1100 1000 900 12 100 12 11 0 0 0 0)" "W3 12 key-ups after the window"
+    check W3   "$(wd_station_verdict 1100 1000 900 12 100 13 12 0 0 0 0)" "W3 13 key-ups after the window"
+    check ok   "$(wd_station_verdict 999 1000 900 12 100 40 39 -1 0 0 0)" "W3 not before the window ends"
+    check ok   "$(wd_station_verdict 1099 1000 900 12 100 1 1 0 1 1000 0)" "W4 keyed 99 s"
+    check W4   "$(wd_station_verdict 1101 1000 900 12 100 1 1 0 1 1000 0)" "W4 keyed 101 s"
+    check ok   "$(wd_station_verdict 1101 1000 900 12 100 1 1 0 0 1000 0)" "W4 a key that has ended"
+    check ok   "$(wd_station_verdict 1100 1000 900 12 100 0 0 0 0 0 2)" "W5 two failed polls"
+    check W5   "$(wd_station_verdict 1100 1000 900 12 100 0 0 0 0 0 3)" "W5 three failed polls"
+    got=$(printf '%s\n' '{"type":"ptt_changed","active":true}' '{"type":"ptt_changed","active":true}' \
+        '{"type":"frame_transmitted"}' '{"type":"ptt_changed","active":false}' '{"type":"ptt_changed","active":true}' | wd_count_keyups)
+    check "2 1" "$got"                                                  "a re-emitted active:true is not a key-up (2 key-ups, keyed)"
+    got=$(printf '%s\n' '{"type":"ptt_changed","active":true}' '{"type":"ptt_changed","active":false}' | wd_count_keyups)
+    check "1 0" "$got"                                                  "one key-up, released"
+    check "0 0" "$(printf '' | wd_count_keyups)"                         "no audit file: 0 key-ups"
+    # The remote probe's own command string, run by a local shell against a planted audit file: the
+    # quoting is the fragile part, so it is exercised as the stations will run it.
+    local tmp; tmp=$(mktemp -d)
+    mkdir -p "$tmp/openpulse/audit"
+    printf '%s\n' '{"type":"ptt_changed","active":true}' '{"type":"ptt_changed","active":false}' \
+        '{"type":"ptt_changed","active":true}' >"$tmp/openpulse/audit/events.ndjson"
+    wd_local() { bash -c "$1"; }
+    got=$(CFG_DIR="$tmp" DAEMON_COMM="zzznoproc" wd_probe wd_local)
+    check "0 2 1" "$got"                                                "the probe as the stations run it (no daemon, 2 key-ups, keyed)"
+    rm -f "$tmp/openpulse/audit/events.ndjson"
+    got=$(CFG_DIR="$tmp" DAEMON_COMM="zzznoproc" wd_probe wd_local)
+    check "0 0 0" "$got"                                                "the probe with no audit file"
+    rm -rf "$tmp"
+    traffic_should_start 0 && got=starts || got=skips; check skips "$got" "TRAFFIC_DURATION=0 starts no traffic"
+    traffic_should_start 300 && got=starts || got=skips; check starts "$got" "TRAFFIC_DURATION=300 starts traffic"
+    [ "$fails" -eq 0 ] && echo "WATCHDOG-SELF-TEST: PASS" || { echo "WATCHDOG-SELF-TEST: FAIL ($fails)"; return 1; }
+}
+
 do_status() {
     echo "== status =="
     for pair in "ssh_a:$A_LABEL" "ssh_b:$B_LABEL"; do
@@ -407,6 +570,7 @@ do_cleanup() {
     for pair in "ssh_a:$A_RIGCTLD_PORT:$A_LABEL" "ssh_b:$B_RIGCTLD_PORT:$B_LABEL"; do
         IFS=: read -r fn port label <<<"$pair"
         out="$("$fn" "stop() { pkill -x \$1 2>/dev/null; for i in 1 2 3 4 5 6 7 8 9 10; do pgrep -x \$1 >/dev/null || return 0; sleep 0.5; done; pkill -KILL -x \$1 2>/dev/null; sleep 0.5; }; \
+            pgrep -x rigctld >/dev/null && rigctl -m 2 -r 127.0.0.1:$port T 0 >/dev/null 2>&1; \
             stop $DAEMON_COMM; \
             if pgrep -x rigctld >/dev/null; then rigctl -m 2 -r 127.0.0.1:$port T 0 >/dev/null 2>&1 && echo ptt0-sent || echo ptt-off-failed; else echo no-rigctld; fi; \
             stop rigctld; \
@@ -431,5 +595,7 @@ case "$ACTION" in
     supervise) do_setup && do_run ;;
     status) do_status ;;
     cleanup) do_cleanup ;;
-    *) die "unknown action '$ACTION' (setup|deploy|run|supervise|status|cleanup)" ;;
+    watchdog) do_watchdog ;;
+    watchdog-self-test) do_watchdog_self_test ;;
+    *) die "unknown action '$ACTION' (setup|deploy|run|supervise|status|cleanup|watchdog-self-test)" ;;
 esac
