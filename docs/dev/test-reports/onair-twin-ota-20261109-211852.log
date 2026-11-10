@@ -1,0 +1,40 @@
+# on-air twin-OTA  freq=144640000 dials A=144640000 B=144641564 profile=fast traffic IC-9700→FT-991A dur=300s
+21:21:26  ISS IC-9700: {
+  "active": true,
+  "is_locked": false,
+  "rx_confirmed_level": "SL2",
+  "rx_recommended_level": "SL2",
+  "tx_fec": "rs",
+  "tx_level": "SL2",
+  "tx_mode": "BPSK31"
+}  |  IRS FT-991A: {
+  "active": true,
+  "is_locked": false,
+  "rx_confirmed_level": "SL1",
+  "rx_recommended_level": "SL1",
+  "tx_fec": "rs",
+  "tx_level": "SL1",
+  "tx_mode": "MFSK16"
+}
+21:23:58  ISS IC-9700: {
+  "active": true,
+  "is_locked": false,
+  "rx_confirmed_level": "SL2",
+  "rx_recommended_level": "SL2",
+  "tx_fec": "rs",
+  "tx_level": "SL2",
+  "tx_mode": "BPSK31"
+}  |  IRS FT-991A: {
+  "active": true,
+  "is_locked": false,
+  "rx_confirmed_level": "SL1",
+  "rx_recommended_level": "SL1",
+  "tx_fec": "rs",
+  "tx_level": "SL1",
+  "tx_mode": "MFSK16"
+}
+traffic window complete; waiting up to 60s for both stations' sign-off IDs …
+sign-off IDs after the last transmission: IC-9700 no, FT-991A no
+  [IC-9700] evidence: 1892 audit events, rig read-back, config, daemon log
+  [FT-991A] evidence: 2254 audit events, rig read-back, config, daemon log
+evidence: docs/dev/test-reports/onair-twin-ota-20261109-211852-evidence

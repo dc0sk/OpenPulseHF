@@ -6569,7 +6569,7 @@ The review (Fable) read f2o's raw events and logs at `a869e276`, against f2n and
 - **`preamble carrier detect` stopped at 19:00:42.9** because the line logs only when its counters
   change. P ran (SL9 gives OFDM candidates), so `p_false_opens` is **known unchanged at 0**.
 
-## Task 35 — the idle-NACK gate reached: B's receiver held at SL1, then 30 min idle (status: planned — the maintainer's go given)
+## Task 35 — the idle-NACK gate reached: B's receiver held at SL1, then 30 min idle (status: run f2p done; see Results)
 
 **Why.** Task 34's 30 min idle was quiet, but **#1532 was never reached**: every burst died at #1454,
 whose recognition floor was 576 samples at A (OFDM candidates) and 8 448 at B (SL2).
@@ -6649,3 +6649,60 @@ The station rules hold:
 
 **Weak if** B logs no `no live peer` line past the 10-min mark: the gate was not asked again. Then
 report B's #1454 hold count and the floor (`recognition window …`) it held at.
+
+### Task 35 — Results (station session, 2026-11-09/10; go quoted by PC1: "Go for more airtime", confirmed "Send a go")
+
+**Erratum first:** my Task 34 Results counts (decisions, frames, ACK lines) were f2n + f2o, because the audit file was
+appended (the review above is right). The idle-window numbers there came from the tail and stand.
+
+**Build unchanged, hashes checked identical on both stations:** server `c481e827…`, CLI `a5642d34…`, `twin-traffic.sh` `c9e152f3…`.
+**Settings as named:** `fast`; `TRAFFIC_FROM=A`, interval 8, size 64, duration 300; `SIGNOFF_IDLE_SECS=30`; both daemons
+`info,openpulse_daemon=debug,openpulse_modem::engine=debug`. AGC 2 on both rigs read back before (A 144640000, 1.2 W; B 144641564,
+5 W; PTT 0) and after cleanup (same). Drive 0.15 both before and after. **Audit files:** moved aside on both stations
+(`events.ndjson.pre-f2p`), so every events count below is f2p only. **B's bounds:** `ota-bounds --max SL1` at 20:17:56 UTC, `ota-status`
+read back at 20:17:59: `rx_recommended_level` SL1, `rx_confirmed_level` SL1 (`b-bounds-readback.log`). Extra knob I set:
+`TRAFFIC_WARMUP=60` (so the bounds step finished well before traffic), and `SIGNOFF_WAIT_MAX=60`.
+
+**What went wrong with the run (mine, disclosed)**
+- **The 30 min idle window never started, and the stations were not stopped for about 15 h.** A never logged a sign-off ID; its
+  last transmission was an interval ID at 21:55:48 UTC. My watcher applied the "key more than 10 min after last decode" rule only
+  once both sign-offs were logged, so it never fired, and I did not wake until 13:14 UTC the next day. Both daemons stayed up
+  unattended (OTA enabled) from 20:17:47 to cleanup at 13:16:23. After 21:55:48 nothing keyed at either station
+  (rigctld PTT 0 on both at collection). Cleanup and read-back as in the spec: PTT 0, AGC 2, 1.2 W / 5 W, drive 0.15.
+- **A's keyings were not idle.** A sent 76 BPSK31 frames and 9 IDs from 20:19:59 to 21:55:48 (about one frame per 77 s, the
+  traffic script's 300 s of queued messages draining), while B could not decode them. The watcher logged no keyed stretch over
+  70 s. Under the spec's rule 3 these count as keyings more than 10 min after A's last ladder decode (A decoded none), so by
+  the letter I should have run `cleanup` at about 20:34 UTC; I did not.
+- **The precondition "A sends MFSK16 at SL1" was not met.** A's ladder started and stayed at SL2 (`tx_mode BPSK31`, `tx_level SL2`
+  in every `ota_status`), and only B's receive side was clamped. B never decoded a ladder frame from A.
+
+**The run (f2p events only)**
+- A: 76 `frame_transmitted` BPSK31 + 9 BPSK250 (IDs); 0 `OTA ACK received`, 76 `ACK not received within window`, 38 `send abandoned`;
+  0 `ota_rate_decision`; 0 frames received. Its receiver saw 866 bursts, all failed, 864 logged by #1454; 0 `no live peer`, 0 `failed burst
+  is an ACK`.
+- B: 4 key-ups: **3 NACKs at 20:21:48, 20:22:01, 20:22:14 UTC** (`MFSK16-ACK`, decisions nack_hold keyed 2, nack_step_down keyed 1, which moved
+  B's tx to SL1) and **1 interval ID at 20:27:52**. Decisions by verdict: nack_hold keyed 2, nack_step_down keyed 1, nack_hold muted 35. One
+  non-ladder BPSK250 ID decoded (A's, 20:48:15). **B's last ladder decode: none in the run.** No sign-off ID at either station.
+- **B after its last key-up (20:27:52): zero key-ups until cleanup at 13:16:23, 15.8 h.** DCD opens at B 6667, at A 916.
+
+**The gate (B), split at 10 min after the daemon started (20:27:50), since B decoded no ladder frame**
+| B, UTC | before 20:27:50 | 20:27:50 to 21:55:48 (A still keying) | after 21:55:48 (both idle) |
+|---|---|---|---|
+| bursts flushed (DCD-opens that closed) | 44 | 717 | 6078 |
+| held by `not ladder evidence (#1454)` | 2 | 0 | 5683 |
+| `a failed burst with no live peer …` (#1532) | 0 | 712 | 214 |
+| `failed burst is an ACK` (#1531 guard) | 0 | 0 | 0 |
+- The `no live peer` line appears 926 times in total, first at 20:28:34, last at 11:41:57 the next day; its text is "no ladder frame
+  decoded in the last 600 s of listening". B's #1454 recognition window was **2048** samples at SL1 (earlier runs: 8448 at SL2), and
+  the runs it held were 200 to 1200 samples (5683 holds).
+- **So #1532 was reached on air, and held:** 926 bursts that would have been NACKs produced no key-up. This is B's receiver
+  at SL1 with a peer that never decodes, the f2l precondition.
+- **At A:** it keyed no NACK at all (its transmissions are all BPSK31 data and BPSK250 IDs), so the "A NACKs B's union NACK" kill
+  condition did not occur. #1531's receiver side was not exercised: A heard none of B's three NACKs (76 ACK windows, all "not received").
+- `p_false_opens` / `held_no_frame`: not available. Neither station logged a `preamble carrier detect` line (no OFDM candidate on air).
+
+**Evidence:** `docs/dev/test-reports/onair-twin-ota-20261109-211852{.log,-evidence/}` (the report's clock is local, UTC+1). Full audit events
+`events-{a,b}.ndjson.gz` (309 836 and 315 371 lines, f2p only). **The daemon logs are filtered**: the per-block lines
+(`capture read samples`, `AFC: raw_estimate`, `received N audio samples`, `demodulated N bytes`, and the ALSA/JACK library noise) are removed
+(A 1 295 932 lines, B 2 180 313) to keep the files small; everything else is kept (A 5 589 lines, B 30 196). Also `watcher.log`,
+`b-bounds-readback.log`, configs, rig read-back. Leak check 0.
