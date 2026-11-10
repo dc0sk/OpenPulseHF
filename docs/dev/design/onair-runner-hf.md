@@ -1,14 +1,18 @@
 ---
 project: openpulsehf
 doc: docs/dev/design/onair-runner-hf.md
-status: draft
+status: resolved
 last_updated: 2026-11-10
 ---
 
 # The on-air runner on HF: the signal's edges inside the segment, the AGC and passband read back, and profiles for the HF pair
 
 Work plan M4, the HF run with the release candidate (`onair-hf-plan.md`, "Runner"). It changes where
-and how the rigs transmit, so it is reviewed before it is built. Review: pending.
+and how the rigs transmit, so it was reviewed before it was built.
+- **The review: Fable, 2026-11-10, APPROVE WITH CHANGES**
+  (`docs/dev/reviews/review-onair-runner-hf-2026-11-10.md`). Its nine changes block the HF run, not the
+  RC.
+- **Implemented 2026-11-10.** See "As built", which supersedes the Design section where they differ.
 
 ## Problem
 
@@ -111,6 +115,63 @@ and how the rigs transmit, so it is reviewed before it is built. Review: pending
 3. Is the SWR stop worth having, given that the rig's own protection exists? And can reading SWR on
    these backends key or interfere?
 
+## As built (the review's nine changes applied)
+
+1. **The edges come from the rig's TX passband, not the waveform** (change 1). The OFDM clip
+   (`clip_iterative`, 12 dB PAPR) and CESSB have no post-filter, so out-of-band regrowth reaches the rig,
+   and the rig's TX filter bounds it.
+   - The edges are `dial − *_DISPLAY_SHIFT_HZ + *_TX_LO_HZ … + *_TX_HI_HZ`, with defaults 0 / 3 000.
+   - `OCCUPIED_BW_HZ` (fast 2 100, robust 600) is now only a floor on the TX passband's width, and may
+     only be raised.
+   - The waveform widths were checked by the review: OFDM52 is 2 031.25 Hz centred on 1 500; MFSK16,
+     the BPSK250 ID and QPSK250-D are 500 Hz; FSK4-ACK is 300 Hz. All are centred on 1 500, and none
+     moves at runtime.
+2. **The display shift** (change 2). The FT-991A's +1 564 Hz is a 64 Hz trim (RF) plus its 1 500 Hz
+   menu 065 shift (the dial only), so `B_DISPLAY_SHIFT_HZ=1500` is in its profile. The edge computed
+   from the dial alone understated the low edge by 1 500 Hz, which is the unsafe direction.
+3. **Split is read and refused** (change 3). The dial read back is the RX VFO; on 2026-10-27 an FT-818
+   transmitted on VFO B elsewhere.
+4. **A per-station passband expectation** (change 4): `*_PASSBAND_EXPECT`, a minimum or `any`, and fail
+   closed. The FT-818 in `keep` reads 0, so its profile says `any`.
+5. **`check` names the PTT type** (change 5). It is keyless only for CAT: rigctld opening an RTS/DTR PTT
+   port can assert that line.
+6. **`EXPECT_AGC` defaults to 2,** which is Hamlib's FAST on the K4, the IC-7300 and the IC-9700
+   (change 6).
+   - **The IC-9700 profile's SLOW (3) is unchanged.** It was the maintainer's measured choice at Gate 3
+     (task 3: FAST 4.9x, SLOW 7.9x), and `dcd-raised-floor.md` asks for FAST.
+   - That conflict goes to the maintainer; this design does not decide it.
+   - An unreadable AGC says "unreadable" and fails closed.
+7. **No SWR stop** (change 7). The K4 has no SWR level, and the IC-7300 reads 0 / 1.0 in receive.
+   Polling the rig during TX is what toggled the FT-818's VFOs. SWR is recorded once in
+   `rig_readback` as evidence.
+8. **The 20 m example starts at 14.101** (change 8). 14.099–14.101 holds the IBP beacons. Corrected in
+   `docs/regulatory.md` too, which was the source of "14.099".
+9. **Plain USB is refused where `*_REQUIRE_DATA_MODE=1`** (change 9), as in the HF profile. On an Icom,
+   USB keys the microphone, a dead carrier. The LSB family is always refused.
+
+**Profiles.**
+- New: `docs/config/onair-k4-ic7300mk2.example.sh`. It holds no host details, and its UNCHECKED items
+  are named.
+- `onair-ic9700-ft991a.example.sh` gains `B_DISPLAY_SHIFT_HZ=1500`.
+- `onair-ic9700-ft818.example.sh` gains `B_PASSBAND_EXPECT=any`, and a note on the AGC conflict.
+- Every variable the HF profile sets is read by the runner (checked by grep, with the filter matching a
+  known variable as control). `ALLOW_TUNER_ON_HIGH_SWR`, which this runner does not read, was dropped.
+
+**Verification.**
+- **`band-self-test`: 26 cases, PASS.** The edges at both band edges ±1 Hz; the display shift; an HF
+  dial against the 2 m defaults; the TX-passband floor; the modes; the passband; the AGC; split.
+- **Sabotage, 9 of 9 red:** each of the low edge, the high edge, the display shift, the USB rule, the LSB
+  rule, the passband minimum, the AGC compare, split, and the TX-passband floor, when removed, turns its
+  cases red.
+- **`preflight`'s wiring, with unreachable hosts** (nothing can be reached, so nothing keys):
+  - an HF dial against the 2 m defaults is refused before any ssh;
+  - the 2 m defaults pass `preflight`, and so does an HF dial with its segment set;
+  - **a dial inside the band (14.110) whose signal crosses the top edge is refused** ("1000 Hz above the
+    band's 14112000"), where the old dial-only guard would have accepted it;
+  - plain USB with `A_REQUIRE_DATA_MODE=1` is refused.
+- `watchdog-self-test` is still PASS.
+- **Not yet run on the stations:** the first `check` on the 2 m pair, then on the HF pair.
+
 ## Consumer
 
 `scripts/run-onair-twin-ota.sh` (`preflight`, `tune`, a new `check` action and `band-self-test`), run
@@ -126,7 +187,9 @@ by the station session. The 2 m and HF profiles in `docs/config/`.
 ## Twins
 
 The other on-air runners:
-- **`run-onair-tx500-kx3.sh`** is the HF-capable twin. Its band guard and AGC handling are
-  UNCHECKED; the review should name what it lacks.
+- **`run-onair-tx500-kx3.sh`** is the HF-capable twin, and **not an HF runner for Release 1** (the
+  review). It lacks a band guard, a fail-closed dial and mode read-back, lower-only power, the AGC,
+  passband and split checks, PTT-off at cleanup, a watchdog, the byte-identical build check, and an
+  evidence read-back. The HF pair runs on `run-onair-twin-ota.sh`.
 - **`run-onair-ic9700-ft991a.sh`** is the 2 m single-run runner.
 - **`onair-station-check.sh`** carries the optional AGC reading.

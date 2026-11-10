@@ -15,6 +15,35 @@ this ledger adds the design rationale and the actually-observed results per chan
 
 ---
 
+## 2026-11-10 — The on-air runner on HF: the transmission's edges inside the segment, and the passband, split and AGC read back (work plan M4)
+
+- **Requirement/change:** a VO: an HF run cannot key outside its segment, in the wrong mode, split, or on
+  the wrong AGC or filter. The software checks no band edge on transmit, and the runner's guard checked
+  only the dial; HF data segments are 13–20 kHz wide.
+- **Design decision:** `docs/dev/design/onair-runner-hf.md`. The mandatory review
+  (`docs/dev/reviews/review-onair-runner-hf-2026-11-10.md`) was APPROVE WITH CHANGES; all nine are
+  applied. The IC-9700's AGC conflict goes to the maintainer.
+- **Implementation:** `scripts/run-onair-twin-ota.sh`:
+  - the checks `rf_edges`, `edges_verdict`, `passband_floor_verdict`, `mode_verdict`, `agc_verdict`,
+    `passband_verdict` and `split_verdict`;
+  - `preflight`'s checks of the edges, the passband floor and the mode;
+  - `tune`'s read-backs of the passband, split and AGC;
+  - `rig_readback`'s evidence;
+  - the `check` and `band-self-test` actions.
+
+  The profiles: `docs/config/onair-k4-ic7300mk2.example.sh` (new), and the FT-991A display shift and the
+  FT-818 passband in the 2 m profiles. `docs/regulatory.md`'s 20 m segment is corrected (the IBP beacons).
+- **Tests:** `band-self-test`, 26 cases, and `preflight`'s wiring against unreachable hosts.
+- **Results:**
+  - **`BAND-SELF-TEST: PASS`.** All 9 sabotages turn their cases red.
+  - **The wiring:** an HF dial on the 2 m defaults is refused; a dial inside the band whose signal
+    crosses the top edge is refused (the old guard accepted it); plain USB on an Icom profile is refused.
+  - `WATCHDOG-SELF-TEST` is still PASS.
+  - **Not yet run on the stations.**
+  - **Gate:** see the PR.
+
+---
+
 ## 2026-11-10 — The on-air runner stops both stations by itself (work plan M3)
 
 - **Requirement/change:** a VO: on-air runs are bounded with nobody watching. In task 35 both daemons

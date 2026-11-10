@@ -50,24 +50,35 @@ and that does not change.
 ## Band and segment
 
 Chosen when the RC is cut. It depends on the stations' distance and the time of day (open question 2).
-- **`fast` profile** (up to about 2 031 Hz occupied): a wide-digital segment, for example 20 m 14.099–
-  14.112 MHz (`docs/regulatory.md`). Wide-digital segments on 40, 15 and 10 m: UNCHECKED in that doc.
+- **`fast` profile** (up to about 2 031 Hz occupied): a wide-digital segment, for example 20 m **14.101–
+  14.112 MHz**. Not from 14.099: **14.099–14.101 holds the IBP beacons** (NCDXF at 14.100), and
+  `docs/regulatory.md`'s "14.099" is misleading there. Wide-digital segments on 40, 15 and 10 m: UNCHECKED in that doc.
   Check them against the IARU R1 bandplan before choosing.
 - **`robust` profile** (≤ 500 Hz): a narrow-digital segment, for example 40 m 7.040–7.060, or 30 m
   10.140–10.150 (`docs/regulatory.md`). 30 m is not on the IC-7300MK2's antenna list.
 - **The software does not check band edges on transmit**: the bandplan applies to QSY only. The
   runner's band guard (`BAND_MIN_HZ` / `BAND_MAX_HZ`) is the only check, and it must be set to the
   chosen segment.
+- **Since `onair-runner-hf.md`, the guard checks the transmission's edges, not the dial:** the dial
+  minus any display-only shift, plus the rig's TX passband (default 0–3 000 Hz). The rig's TX filter
+  bounds what the OFDM clipping regrows.
 - **Identification:** every 10 min and at the end (the default of 600 s).
 
 ## Receive settings (Release 1 operating requirements)
 
-- **AGC FAST on both rigs, read back before and after every run** (`design/dcd-raised-floor.md`). The
-  runner does not set or check rig AGC today (see Runner).
+- **AGC FAST on both rigs, read back before and after every run** (`design/dcd-raised-floor.md`). FAST is
+  Hamlib's value 2 on the K4 and the IC-7300. The runner reads it and refuses anything else; it does not
+  set it.
+  - **An open conflict, the maintainer's:** on 2 m the IC-9700 ran SLOW by the maintainer's measured choice
+    at Gate 3 (task 3: FAST 4.9x, SLOW 7.9x), while `dcd-raised-floor.md` requires FAST. Tasks 29–36 ran
+    FAST.
 - **The receive filter is ≥ 2.4 kHz.** No narrow filter: a 250 Hz filter decodes 0 of 180 (#1060,
   `release-1.0-criteria.md`). The FT-991A's known-good width was 2 400 Hz; for the K4 and the
   IC-7300MK2, UNCHECKED.
-- **DATA / USB-D mode with the rig's own processing off:** NR, NB, its own notch, and any TX
+- **PKTUSB (both backends' name for the data mode).** Plain USB on the IC-7300MK2 keys the microphone, a
+  dead carrier, and the runner refuses it there.
+- **Split off** (the dial read back is the RX VFO); the runner refuses split.
+- **The rig's own processing off:** NR, NB, its own notch, and any TX
   compression or EQ. The exact menu items per rig: UNCHECKED.
 - **Record `notch_enabled`, `agc_enabled` and `cessb_enabled` in every bundle.** The notch ships on,
   and REQ-QRM-01 is unproven since `884d96ed` (#1457).
@@ -110,9 +121,13 @@ These are deferred here by earlier reviews; each is a line in the run's report.
 
 ## Before the trip (engineering)
 
-1. **The uncoded-fallback stall:** each failed burst costs about 1.5 s on a Pi 5 (measured 2026-11-10;
-   the work-plan row). That is above the 0.5 s evidence floor. Design and review are in progress.
-2. **The runner, generalised for HF:** see Runner. Design and review are in progress.
+1. **The uncoded-fallback stall:** each failed burst costs about 1.5 s on a Pi 5, which is above the
+   0.5 s evidence floor.
+   - **For union-ACK pieces it is fixed** (`ack-piece-skips-fallback.md`: 82–86 ms against
+     830–1 160 ms, x86).
+   - **Bounding the fallback for other failed bursts** (fade-split fragments on HF) is still open.
+2. **The runner, generalised for HF:** done, see Runner. The first `check` on the HF pair reads every
+   UNCHECKED item in the profile.
 3. **A 2 m run per direction on the RC**, if engine changes land after `a1dafca7` that an exchange
    enters (the task 36 review).
 4. **The BPSK31 sideband fix** (#1520) is merged; its review's "blocks … before the HF confirmation" is
@@ -125,11 +140,21 @@ These are deferred here by earlier reviews; each is a line in the run's report.
   measured per rig on HF.
 - **The station profiles** (CAT model, audio device, levels, mode) name the IC-9700, FT-991A and
   FT-818. **New profiles are needed for the K4 and the IC-7300MK2.**
-- **Rig AGC is neither set nor checked**, and the FT-818 profile even expects AGC SLOW.
+- **Rig AGC is neither set nor checked.** The FT-818 profile expects the IC-9700 at AGC SLOW, the
+  maintainer's measured 2 m choice (see Receive settings).
 - **`RFPOWER` defaults and the remote station's 5 W cap** belong to the 2 m pair.
 
-The generalisation (a design with its own review) makes the band and segment, the dial offsets, the
-AGC read-back, and the passband explicit per run, and adds K4 and IC-7300MK2 profiles.
+**Done (`design/onair-runner-hf.md`, reviewed):**
+- the transmission's edges inside the segment;
+- the display shift;
+- split, AGC and passband read back and refused when wrong;
+- plain USB refused on an Icom;
+- a keyless `check` action (for PTT type CAT);
+- `band-self-test`;
+- the profile `docs/config/onair-k4-ic7300mk2.example.sh`.
+
+There is no SWR stop: the K4 has no SWR level, and polling during TX toggled a rig's VFOs before. SWR is
+recorded as evidence.
 
 ## Witness
 

@@ -50,6 +50,8 @@ export B_REPO_DIR='${HOME}/openpulse/OpenPulseHF'
 export TEST_FREQ_HZ=144640000            # 2 m (decision 13: HF only with the release candidate)
 # export BAND_MIN_HZ=14000000; export BAND_MAX_HZ=14350000   # the runner refuses anything outside 2 m otherwise
 export TEST_MODE_RIG="USB"               # USB | PKTUSB depending on the rig
+# export B_DISPLAY_SHIFT_HZ=1500           # a dial reading shifted from the RF (FT-991A menu 065 OTHER SHIFT)
+# export A_REQUIRE_DATA_MODE=1             # refuse plain USB on a rig whose USB keys the microphone (Icom)
 # export B_TEST_MODE_RIG="keep"           # per station; `keep` sends no mode (FT-818: DIG/USER-U on the rig)
 # export B_TEST_MODE_EXPECT="..."         # with `keep`: the `rigctl m` reading; the run stops on a mismatch
 export A_RFPOWER=0.10                     # 0.0–1.0; the runner only LOWERS power to this, never raises it
