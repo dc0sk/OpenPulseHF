@@ -188,7 +188,7 @@ with the skip, against **830–1 160 ms** before, which is the same as with no f
 probe was a temporary unit test, removed after the run; the figures are not reproducible from the tree.
 The Pi 5 figure follows from the station.
 
-**Gate and slow suites:** see the PR.
+**Gate:** `GATE: PASS 4d1c0ad7 clean`, 2862 passed and 0 failed. **Slow suites:** `ota` 3 of 3 and `spectral` 3 of 3, PASS.
 
 ## Consumer
 

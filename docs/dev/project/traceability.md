@@ -46,7 +46,8 @@ this ledger adds the design rationale and the actually-observed results per chan
   - **Sabotage:** S1 (no length bound), S2 (no skip) and S3 (no margin) each turn exactly their test red.
   - **The cost:** one piece is 82–86 ms with the skip, against 830–1 160 ms before (x86; a temporary
     probe).
-  - **Gate and slow suites:** see the PR.
+  - **Gate:** `GATE: PASS 4d1c0ad7 clean`, 2862 passed and 0 failed.
+  - **Slow suites:** `scripts/slow-tests.sh ota` PASS (3 of 3), and `spectral` PASS (3 of 3).
 
 ## 2026-11-10 — The on-air runner on HF: the transmission's edges inside the segment, and the passband, split and AGC read back (work plan M4)
 
