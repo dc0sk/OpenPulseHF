@@ -107,12 +107,17 @@ The change sits at the one check in `ota_decode_burst`, the shared seam every OT
 **The cost (change 7): bounded by the stall it causes in the receive loop**, not by the NACK deadline.
 A slow scan turns the next read into one long read, and a long read is itself a floor-passing burst
 (`reply-window-evidence.md`, "One long read").
-- **Correction (2026-11-10, task 36): the figures below are for noise, not the worst case.** On noise the
-  MFSK16 anchor finds nothing. On a real union-ACK piece it locks and up to five copy slots are
-  demodulated, which the probe never timed. On air (f2q, the Pi 5) each real piece took **about 1.5 s** of
-  failed-burst processing (`capture read holds 1.3–1.5 s`, 30 of 32 paired with the guard). The guard's own
-  share of that is unmeasured; it also includes the other candidates' scans. That is above the 0.5 s
-  evidence floor, so the "one long read" risk below is live. Parked, measurement first.
+- **Measured on a real piece (2026-11-10, after task 36).** A temporary probe put one MFSK16-ACK copy, cut
+  from the union waveform, over noise into an SL1-clamped receiver. It went through `accumulate_capture` and
+  `ota_decode_burst`, and each variant ran on a fresh engine fed the identical input. x86, release:
+  - **The guard on a real piece:** the FSK4 scan 19 ms, and the MFSK16 check (codeword found) 60 ms. That is
+    about the same as on noise.
+  - **The whole failed-burst processing:** 830–1 160 ms with the uncoded fallback mode set (BPSK250, as the
+    daemon passes it), and **81–84 ms without it**.
+  - **So f2q's ~1.5 s per piece (Pi 5) is the #1123 uncoded fallback scan, not this guard.** Every failed burst
+    pays it. That is above the 0.5 s evidence floor, so it is parked (see the work plan).
+  - *This replaces the task 36 correction of the same day*, which put the 1.5 s at the guard's door without
+    attributing it.
 - **On noise with no ACK, x86 release:**
   - over the whole 56 480-sample bound: 83 + 170 ms (too slow, hence the head windows);
   - at the heads: **19 + 85 ms**.
