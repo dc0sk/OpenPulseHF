@@ -2,7 +2,7 @@
 project: openpulsehf
 doc: docs/dev/onair-tasks.md
 status: review
-last_updated: 2026-11-09
+last_updated: 2026-11-10
 ---
 
 # On-air task channel (cloud session ↔ station session on rpi51)
@@ -6773,3 +6773,108 @@ on an ACK's `recommended_level`, or on `fall_back_after_silence`.
 2. the cross-message keying bound (park, post-release);
 3. a clamped receiver's NACKs into the peer's frame (park);
 4. the corrections to the Results above.
+
+## Task 36 — the watchdog's first run, then #1531 at A and a live peer going quiet, both stations at SL1 (status: planned — the maintainer's go given for Parts A and B)
+
+**Why.**
+- **#1534 (the runner watchdog) is new.** It has never run on the stations, and Part A is its first
+  use.
+- **Task 35 showed #1532 on air**, but with no peer that was ever live, and without #1531's receiver
+  side at A. It clamped only B, so A kept sending SL2 frames B could not decode.
+- **This task clamps both stations to SL1:**
+  - A sends MFSK16, B decodes it, and B is live;
+  - B's NACKs are K=3 union ACKs, which A must take as ACKs;
+  - then B's peer goes quiet, and the gate has to close 10 min after B's last decode.
+
+**Build:** unchanged from task 34 (server `c481e827…`, CLI `a5642d34…`). **Pull `m3/onair`** for the
+new runner (`d02e8233` or later). No redeploy is needed; check the hashes.
+
+**Settings, named explicitly, for both parts:**
+- `fast` profile;
+- `SIGNOFF_IDLE_SECS=30`;
+- AGC FAST (2) on both, read back before and after;
+- log level on both daemons: `info,openpulse_daemon=debug,openpulse_modem::engine=debug`.
+
+**The watchdog does the stopping.** Do not stand in for it: no hand-run stop rules. But **watch it**
+(`tail -f docs/dev/test-reports/watchdog.log`), and run `cleanup` by hand if it ever fails to act when
+it should.
+
+The station rules hold:
+- FT-991A at 5 W at most, and never raise either rig's power;
+- record nothing about a host other than rpi51 and rpi53;
+- RSPdx port B empty;
+- no CAT power-off on the IC-9700.
+
+### Part A — the watchdog's first run (keys both rigs only if a daemon NACKs its floor: covered by the go)
+
+1. On rpi51: `scripts/run-onair-twin-ota.sh watchdog-self-test`. It must print
+   `WATCHDOG-SELF-TEST: PASS`. It keys nothing.
+2. `TRAFFIC_DURATION=0 RUN_CAP_SECS=180 scripts/run-onair-twin-ota.sh run`.
+   - **No traffic is started** (the runner says so).
+   - **It is not keyless:** each daemon's session counts as a live peer for its first 10 min, so a floor
+     flicker can draw a NACK (at most 3 per station).
+3. **Expect:**
+   - within about 3 min of launch, `WATCHDOG: cleanup (W1 wall clock …)` in `watchdog.log`;
+   - `cleanup`'s lines: both stations' daemon and rigctld stopped, and PTT 0 sent;
+   - `watchdog.pid` gone.
+4. **Report:**
+   - the watchdog's log;
+   - `ps` evidence, during the run, that each daemon ran under `timeout -k 5 180`;
+   - every key-up (from the `ptt_changed` events);
+   - the PTT read-back after.
+
+If W1 does not fire within 4 min, run `cleanup` by hand, report, and **do not start Part B**.
+
+### Part B — run f2q: both stations at SL1, A sends, then 40 min idle under the watchdog (keys both rigs: one go)
+
+- **Settings:** `TRAFFIC_FROM=A`, `TRAFFIC_INTERVAL=30`, `TRAFFIC_DURATION=300`, `TRAFFIC_SIZE=64`,
+  `POST_TRAFFIC_SECS=2400`.
+  - An MFSK16 frame is about 17 s, plus the 9 s ACK window, so 30 s per message lets the queue drain.
+  - The watchdog's other limits are left at their defaults: `POST_KEY_LIMIT_SECS` 900,
+    `POST_KEYUPS_MAX` 24, `PTT_MAX_KEYED_SECS` 100.
+- **Before traffic** (during the warm-up, after both daemons are up), on **both** stations run
+  `openpulse-cli daemon ota-bounds --max SL1`. Read back `ota-status` on both: rx recommended and
+  confirmed, and tx, must all be SL1. If any is not, run `cleanup` and stop.
+- **After the traffic:** no `cleanup` by hand. The watchdog's W1 ends the run at
+  warm-up + 300 + 2400 + 120 s, unless W2–W5 fire first.
+- **Before** the cleanup, if you can: collect the full events and daemon logs as in task 35. The
+  watchdog's cleanup does not collect them, so get them as soon as it fires, from the stopped stations.
+
+**Report** (this run's events only):
+- **The exchange:**
+  - A's frames sent;
+  - B's decodes and its decisions by verdict;
+  - B's NACKs, and A's handling of each: `OTA ACK received` in A's ACK listen, or A's `failed burst is
+    an ACK` line;
+  - whether A keyed anything in answer to a B NACK.
+- **Each station's last ladder decode** (UTC), and its sign-off ID if any.
+- **The idle window, per station,** split at 10 min after that station's last decode:
+  - key-ups (from `ptt_changed`);
+  - DCD opens;
+  - #1454 holds;
+  - `no live peer` lines;
+  - `failed burst is an ACK` lines;
+  - decisions by verdict.
+- **The watchdog:** which rule fired, when, and its log.
+
+**Prediction:**
+1. **#1531 at A:** no A key-up in answer to a B NACK. Each B NACK is an `OTA ACK received` (Nack) in A's
+   ACK listen, or a `failed burst is an ACK` at A.
+2. **#1532, the peer going quiet:** B keys at most 3 NACKs in the 10 min after its last decode, and
+   none after. B logs `no live peer` lines after the 10-min mark.
+   - A decodes no ladder frames, so A's live window is its session start. A may key at most 3 NACKs
+     before 10 min after its launch, and none after.
+3. **The watchdog:** W1 ends the run. Any W2 firing means a key-up more than 15 min after the traffic
+   window, which kills prediction 2.
+
+**Killed if:**
+- A keys a NACK in answer to one of B's union NACKs;
+- or a station keys a NACK more than 10 min after its last ladder decode (or launch), with no P
+  confirmation;
+- or the watchdog fails to act on a rule it should have fired.
+
+**Weak if:**
+- B decodes no frame, which leaves the live-peer case untested again;
+- B keys no NACK, which leaves #1531 at A unexercised.
+
+Say which.
