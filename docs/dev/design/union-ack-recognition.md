@@ -2,7 +2,7 @@
 project: openpulsehf
 doc: docs/dev/design/union-ack-recognition.md
 status: resolved
-last_updated: 2026-11-08
+last_updated: 2026-11-10
 ---
 
 # A heard sub-floor ACK is not ladder evidence: recognise the K=3 union ACK
@@ -107,15 +107,20 @@ The change sits at the one check in `ota_decode_burst`, the shared seam every OT
 **The cost (change 7): bounded by the stall it causes in the receive loop**, not by the NACK deadline.
 A slow scan turns the next read into one long read, and a long read is itself a floor-passing burst
 (`reply-window-evidence.md`, "One long read").
-- **Worst case, x86 release, noise with no ACK:**
+- **Correction (2026-11-10, task 36): the figures below are for noise, not the worst case.** On noise the
+  MFSK16 anchor finds nothing. On a real union-ACK piece it locks and up to five copy slots are
+  demodulated, which the probe never timed. On air (f2q, the Pi 5) each real piece took **about 1.5 s** of
+  failed-burst processing (`capture read holds 1.3–1.5 s`, 30 of 32 paired with the guard). The guard's own
+  share of that is unmeasured; it also includes the other candidates' scans. That is above the 0.5 s
+  evidence floor, so the "one long read" risk below is live. Parked, measurement first.
+- **On noise with no ACK, x86 release:**
   - over the whole 56 480-sample bound: 83 + 170 ms (too slow, hence the head windows);
   - at the heads: **19 + 85 ms**.
 - **Bursts shorter than one MFSK16 copy** skip that check (`mfsk16_k3_copy_llrs` returns `None`).
   That includes every failed OFDM frame (0.79–1.51 s).
-- **The Pi 5 (rpi51, station A), release, the same probe:** **31 + 126 ms** worst case, over five
-  runs. That is under the review's ~200 ms stall bound.
-- **The Pi 4 (station B, the A→B receiver, with the tightest ACK margin):** **68 + 265 ms**, over the
-  review's ~200 ms. It was built with rustc 1.96.1 (station B's toolchain, not the pinned 1.97.1) and
+- **The Pi 5 (rpi51, station A), release, the same probe, on noise:** **31 + 126 ms** over five runs.
+- **The Pi 4 (station B, the A→B receiver, with the tightest ACK margin), on noise:** **68 + 265 ms**,
+  over the review's ~200 ms. It was built with rustc 1.96.1 (station B's toolchain, not the pinned 1.97.1) and
   run with B idle.
   - **What this is still under:** the 0.5 s evidence floor (4 000 samples). A 333 ms stall adds about
     2 700 samples to the next read, which by itself does not make a floor-passing burst.
