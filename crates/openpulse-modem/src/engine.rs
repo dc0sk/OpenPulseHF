@@ -1062,6 +1062,13 @@ pub struct ModemEngine {
     /// correlation onset, index `K` a ranking miss the exhaustive fallback recovered after the coded
     /// scan. The miss column is how K is re-checked on air.
     fallback_onset_ranks: [u64; FALLBACK_RANKED_ONSETS + 1],
+    /// Entries into the uncoded fallback at any of its three sites (ranked, deferred, phase 2), hit or
+    /// miss: `fallback_onset_ranks` counts only hits, so it cannot show a skipped fallback.
+    fallback_entries: u64,
+    /// Bursts taken for a lone MFSK16-ACK copy, for which the fallback was skipped.
+    ack_pieces_skipped: u64,
+    /// The shortest station ID's length at a mode, uncoded: the margin `is_a_lone_ack_copy` needs.
+    shortest_id_cache: Option<(String, usize)>,
     /// Receiver-side streaming AGC on captured audio (default off). Normalises the level so the
     /// PSK/QAM ladder sees a consistent amplitude despite QSB fading and inter-station spread.
     /// Active-span gated: the gain only adapts on carrier-present blocks (RMS ≥ DCD threshold) and
@@ -1439,6 +1446,9 @@ impl ModemEngine {
             rho_rejected_settles: 0,
             rho_accepted_settles: 0,
             fallback_onset_ranks: [0; FALLBACK_RANKED_ONSETS + 1],
+            fallback_entries: 0,
+            ack_pieces_skipped: 0,
+            shortest_id_cache: None,
             agc_enabled: false,
             // target RMS 0.3 (headroom below ±1.0), slow loop (α=0.02), ±40 dB clamp.
             agc: openpulse_dsp::agc::Agc::new(0.3, 0.02, 40.0),
@@ -3131,6 +3141,57 @@ impl ModemEngine {
         )
     }
 
+    /// Is this burst a lone MFSK16-ACK copy: no longer past its lead than one copy and the tail slack,
+    /// with an MFSK16-ACK codeword, and no FSK4 codeword? The length is the safety condition. A
+    /// station ID rides in front of a union ACK's FSK4 copy (`server.rs`, with-ack), so a burst
+    /// that holds one and an MFSK16 copy is at least ID + FSK4 + gap + copy long. The bound is used only
+    /// while that minimum stays above it at `fallback_mode`, and is false otherwise (review of
+    /// `ack-piece-skips-fallback.md`).
+    fn is_a_lone_ack_copy(
+        &mut self,
+        samples: &[f32],
+        lead: usize,
+        fallback_mode: Option<&str>,
+    ) -> bool {
+        let Some(mode) = fallback_mode else {
+            return false;
+        };
+        let copy = Self::MFSK16_ACK_SYMS * Self::MFSK16_ACK_SPS;
+        let bound = copy + Self::ACK_TAIL_SLACK_SAMPLES;
+        if samples.len().saturating_sub(lead) > bound {
+            return false;
+        }
+        let Some(id) = self.shortest_id_samples(mode) else {
+            return false;
+        };
+        let gap = (Self::MFSK16_ACK_GAP_S * AudioConfig::default().sample_rate as f32) as usize;
+        // A burst that also held an ID would hold it in front of the FSK4 copy, the gap and this
+        // MFSK16 copy: that minimum must stay above the bound.
+        if id + self.fsk4_ack_frame_len().unwrap_or(0) + gap + copy <= bound {
+            return false;
+        }
+        let (fsk4_head, mfsk16_head) = self.ack_head_lens();
+        let head = |n: usize| &samples[..samples.len().min(lead + n)];
+        self.holds_an_mfsk16_ack_codeword(head(mfsk16_head))
+            && !self.holds_an_ack_codeword(head(fsk4_head))
+    }
+
+    /// Samples of the shortest station ID at `mode`, uncoded (`DE` and a three-character call),
+    /// cached per mode.
+    fn shortest_id_samples(&mut self, mode: &str) -> Option<usize> {
+        if let Some((m, n)) = &self.shortest_id_cache {
+            if m == mode {
+                return Some(*n);
+            }
+        }
+        let secs = self
+            .tx_airtime_seconds(b"DE A1A", mode, FecMode::None)
+            .ok()?;
+        let n = (secs * f64::from(AudioConfig::default().sample_rate)) as usize;
+        self.shortest_id_cache = Some((mode.to_string(), n));
+        Some(n)
+    }
+
     /// Does `samples` hold an MFSK16-ACK copy whose ShortFEC codeword decodes? Keyless and
     /// session-blind, as [`holds_an_ack_codeword`](Self::holds_an_ack_codeword) is: a piece of a union
     /// ACK heard on its own carries no FSK4 copy, only MFSK16 ones.
@@ -4528,6 +4589,18 @@ impl ModemEngine {
             }
         }
 
+        // A lone MFSK16-ACK copy (`ack-piece-skips-fallback.md`): a piece of a K=3 union ACK heard on
+        // its own. The uncoded fallback cannot find a frame in it and cost ~750 ms per piece on air
+        // (task 36), so all three fallback sites skip it. The ladder candidates above still had first
+        // claim. AFC goes back to `afc_before` first: the loop leaves the last failed try's drift.
+        self.afc_correction_hz = afc_before;
+        let ack_piece =
+            decoded.is_none() && self.is_a_lone_ack_copy(&samples.samples, lead, fallback_mode);
+        if ack_piece {
+            self.ack_pieces_skipped = self.ack_pieces_skipped.wrapping_add(1);
+            debug!("OTA: a lone MFSK16-ACK copy: the uncoded fallback is skipped");
+        }
+
         // Uncoded fallback for NON-LADDER traffic (#1123).
         //
         // The rung candidates above are the only thing this arm used to try, and under a profile
@@ -4574,8 +4647,9 @@ impl ModemEngine {
         // frame whose onset ranked below K is therefore delayed, never lost; the miss is counted.
         // A mode without a template keeps the exhaustive scan here, bit for bit.
         let mut fallback_deferred: Option<&str> = None;
-        if decoded.is_none() {
+        if decoded.is_none() && !ack_piece {
             if let Some(mode) = fallback_mode.filter(|m| !fallback_is_a_candidate(&candidates, m)) {
+                self.fallback_entries = self.fallback_entries.wrapping_add(1);
                 // Same isolation every candidate gets: a failed attempt's AFC drift must not
                 // poison this one.
                 self.afc_correction_hz = afc_before;
@@ -4820,6 +4894,7 @@ impl ModemEngine {
         // HARQ for the reasons the ranked attempt above sits before them.
         if decoded.is_none() {
             if let Some(mode) = fallback_deferred {
+                self.fallback_entries = self.fallback_entries.wrapping_add(1);
                 self.afc_correction_hz = afc_before;
                 self.non_ladder_decode = true;
                 if let Ok((payload, onset)) =
@@ -4865,6 +4940,7 @@ impl ModemEngine {
             // was ACKed (#1123's failure mode), and only its keying's first frame came out (#1461).
             let mut phase2: Vec<(SpeedLevel, String, FecMode)> = candidates.clone();
             let fallback_at = fallback_mode
+                .filter(|_| !ack_piece)
                 .filter(|m| !fallback_is_a_candidate(&candidates, m))
                 .map(|m| {
                     phase2.push((SpeedLevel::Sl1, m.to_string(), FecMode::None));
@@ -4872,6 +4948,9 @@ impl ModemEngine {
                 });
             'settle_scan: for (i, (level, mode, fec)) in phase2.iter().enumerate() {
                 self.non_ladder_decode = fallback_at == Some(i);
+                if fallback_at == Some(i) {
+                    self.fallback_entries = self.fallback_entries.wrapping_add(1);
+                }
                 // The fallback entry, if any, sits past `candidates` and is never short-flagged.
                 // A ladder entry past the ACK deadline skips its acquisition too.
                 if short_of_block.get(i).copied().unwrap_or(false) || self.past_decode_deadline() {
@@ -5281,7 +5360,8 @@ impl ModemEngine {
             let (fsk4_head, mfsk16_head) = self.ack_head_lens();
             let head = |n: usize| &samples.samples[..samples.samples.len().min(lead + n)];
             if post <= self.longest_ack_len().unwrap_or(0) + Self::ACK_TAIL_SLACK_SAMPLES
-                && (self.holds_an_ack_codeword(head(fsk4_head))
+                && (ack_piece
+                    || self.holds_an_ack_codeword(head(fsk4_head))
                     || self.holds_an_mfsk16_ack_codeword(head(mfsk16_head)))
             {
                 tracing::debug!("OTA: failed burst is an ACK, not ladder evidence (#1456)");
@@ -12348,6 +12428,219 @@ mod union_ack_guard_tests {
         assert!(
             rx.holds_an_mfsk16_ack_codeword(copy),
             "a lone MFSK16-ACK copy was not taken"
+        );
+    }
+
+    fn sl1_receiver() -> ModemEngine {
+        let mut rx = engine(&LoopbackBackend::new());
+        rx.start_ota_session(SessionProfile::fast());
+        rx.ota_set_level_bounds(None, Some(SpeedLevel::Sl1));
+        rx
+    }
+
+    /// `signal` at half amplitude, 10 s from the end of 20 s of quiet noise.
+    fn in_noise(signal: &[f32], seed: u32) -> Vec<f32> {
+        let mut x = with_noise(&vec![0.0; 8000 * 20], seed, 0.0);
+        let mut st = seed.wrapping_add(7);
+        for v in &mut x {
+            st = st.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+            *v = ((st >> 8) as f32 / (1u32 << 24) as f32 - 0.5) * 0.01;
+        }
+        let at = x.len() - 8000 * 10;
+        for (k, v) in signal.iter().enumerate() {
+            if at + k < x.len() {
+                x[at + k] += v * 0.5;
+            }
+        }
+        x
+    }
+
+    /// Every flushed burst through the daemon tick's path, with the fallback mode the daemon passes:
+    /// (burst length, decoded payload, fallback entries during its decode, pieces skipped).
+    fn run(rx: &mut ModemEngine, x: &[f32]) -> Vec<(usize, Option<Vec<u8>>, u64, u64)> {
+        let mut out = Vec::new();
+        for c in x.chunks(400) {
+            if let Ok(Some(b)) = rx.accumulate_capture(Some("BPSK250"), c.to_vec()) {
+                let (e0, s0) = (rx.fallback_entries, rx.ack_pieces_skipped);
+                let r = rx
+                    .ota_decode_burst(&b, "peer", Some("BPSK250"))
+                    .expect("decode");
+                out.push((
+                    b.samples.len(),
+                    r.payload,
+                    rx.fallback_entries - e0,
+                    rx.ack_pieces_skipped - s0,
+                ));
+            }
+        }
+        out
+    }
+
+    /// A lone MFSK16-ACK copy, as the MFSK16 pieces of an SL1 union ACK arrive on air (task 36: 30 of
+    /// them, about 750 ms of fallback each), is not searched by the uncoded fallback at any of its three
+    /// sites. It is still not ladder evidence.
+    #[test]
+    fn a_lone_union_ack_copy_skips_the_uncoded_fallback() {
+        let lb = LoopbackBackend::new();
+        let mut tx = engine(&lb);
+        tx.transmit_ack_mfsk16_k3(&AckFrame::new(AckType::AckOk, "OTHER"), None)
+            .unwrap();
+        let union = lb.drain_samples();
+        let copy = &union[4160 + 4000..4160 + 4000 + 10_240];
+        let mut rx = sl1_receiver();
+        let bursts = run(&mut rx, &in_noise(copy, 11));
+        let piece: Vec<_> = bursts.iter().filter(|b| b.0 >= 9_000).collect();
+        assert_eq!(
+            piece.len(),
+            1,
+            "the fixture must flush the copy as one burst: {bursts:?}"
+        );
+        let (_, payload, entries, skipped) = piece[0];
+        assert_eq!(
+            *skipped, 1,
+            "the copy was not taken for a lone ACK copy: {bursts:?}"
+        );
+        assert_eq!(
+            *entries, 0,
+            "the uncoded fallback still ran on the copy: {bursts:?}"
+        );
+        assert!(payload.is_none());
+    }
+
+    /// The safety condition: a station ID keyed in front of the ACK in one keying, as the daemon's
+    /// with-ack ride-along does (`transmit`, then `transmit_ota_ack`), is still decoded by the
+    /// fallback, both in front of an FSK4 ACK and in front of the SL1 union ACK.
+    #[test]
+    fn a_station_id_in_front_of_an_ack_is_still_decoded() {
+        for union in [false, true] {
+            let lb = LoopbackBackend::new();
+            let mut tx = engine(&lb);
+            tx.start_ota_session(SessionProfile::fast());
+            if union {
+                tx.ota_set_level_bounds(None, Some(SpeedLevel::Sl1));
+            }
+            let level = if union {
+                SpeedLevel::Sl1
+            } else {
+                SpeedLevel::Sl6
+            };
+            tx.transmit(b"DE DD2ZM", "BPSK250", None).unwrap();
+            tx.transmit_ota_ack(
+                &AckFrame::new(AckType::AckOk, "OTHER").with_recommended_level(level),
+                None,
+            )
+            .unwrap();
+            let mut rx = sl1_receiver();
+            let bursts = run(&mut rx, &in_noise(&lb.drain_samples(), 13));
+            assert!(
+                bursts
+                    .iter()
+                    .any(|b| b.1.as_deref() == Some(b"DE DD2ZM".as_slice())),
+                "the ID in front of the {} ACK was not decoded: {:?}",
+                if union { "union" } else { "FSK4" },
+                bursts
+                    .iter()
+                    .map(|b| (b.0, b.1.is_some(), b.2, b.3))
+                    .collect::<Vec<_>>()
+            );
+        }
+    }
+
+    /// The case only the length bound protects: an ID in front of a union ACK whose FSK4 copy did not
+    /// survive (SL1 is the rung where FSK4 fails first), heard as ONE burst because hiss holds the
+    /// squelch through the gaps. It holds an MFSK16 codeword and no FSK4 codeword, so the FSK4
+    /// tie-break cannot save it. The ID must still be decoded.
+    #[test]
+    fn an_id_in_front_of_a_union_ack_with_a_lost_fsk4_copy_is_still_decoded() {
+        let lb = LoopbackBackend::new();
+        let mut tx = engine(&lb);
+        tx.transmit(b"DE DD2ZM", "BPSK250", None).unwrap();
+        let id = lb.drain_samples();
+        tx.transmit_ack_mfsk16_k3(&AckFrame::new(AckType::AckOk, "OTHER"), None)
+            .unwrap();
+        let mut union = lb.drain_samples();
+        // The FSK4 copy lost: zeroed, so only the hiss below remains there. Then only the first MFSK16
+        // copy is kept, as a lone piece would be.
+        for v in &mut union[..4160] {
+            *v = 0.0;
+        }
+        union.truncate(4160 + 4000 + 10_240);
+        let mut keying = id.clone();
+        keying.extend_from_slice(&union);
+        let mut x = in_noise(&keying, 17);
+        // Hiss well above the idle across the whole keying, so the squelch holds through the gap.
+        let at = x.len() - 8000 * 10;
+        let mut st: u32 = 99;
+        for v in &mut x[at..at + keying.len()] {
+            st = st.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+            *v += ((st >> 8) as f32 / (1u32 << 24) as f32 - 0.5) * 0.05;
+        }
+        let mut rx = sl1_receiver();
+        let bursts = run(&mut rx, &x);
+        assert!(
+            bursts.iter().any(|b| b.0 >= keying.len() * 9 / 10),
+            "the fixture did not hold the keying as one burst: {:?}",
+            bursts
+                .iter()
+                .map(|b| (b.0, b.1.is_some(), b.2, b.3))
+                .collect::<Vec<_>>()
+        );
+        assert!(
+            bursts
+                .iter()
+                .any(|b| b.1.as_deref() == Some(b"DE DD2ZM".as_slice())),
+            "the ID was lost: {:?}",
+            bursts
+                .iter()
+                .map(|b| (b.0, b.1.is_some(), b.2, b.3))
+                .collect::<Vec<_>>()
+        );
+    }
+
+    /// No uncoded frame at any mode the engine can transmit is taken for a lone ACK copy, clean or under
+    /// noise: the modes an operator can set are the closed list (the review: content is whitened, only
+    /// the waveform matters).
+    #[test]
+    fn no_uncoded_frame_at_any_mode_is_taken_for_a_lone_ack_copy() {
+        let probe = engine(&LoopbackBackend::new());
+        let mut modes: Vec<String> = probe
+            .plugins
+            .list()
+            .iter()
+            .flat_map(|i| i.supported_modes.clone())
+            .filter(|m| !m.ends_with("-ACK"))
+            .collect();
+        modes.sort();
+        modes.dedup();
+        assert!(modes.len() >= 10, "only {} modes listed", modes.len());
+        let mut rx = sl1_receiver();
+        let mut tried = 0;
+        let mut taken = Vec::new();
+        for mode in &modes {
+            let lb = LoopbackBackend::new();
+            let mut tx = engine(&lb);
+            if tx.transmit(b"DE A1A", mode, None).is_err() {
+                continue;
+            }
+            let frame = lb.drain_samples();
+            for (seed, rel) in [(0u32, 0.0f32), (1, 1.0), (2, 2.0)] {
+                let x = if rel == 0.0 {
+                    frame.clone()
+                } else {
+                    with_noise(&frame, seed, rel)
+                };
+                tried += 1;
+                if rx.is_a_lone_ack_copy(&x, 0, Some(mode))
+                    || rx.is_a_lone_ack_copy(&x, 0, Some("BPSK250"))
+                {
+                    taken.push(format!("{mode} seed {seed}"));
+                }
+            }
+        }
+        assert!(tried >= 30, "only {tried} frames tried");
+        assert!(
+            taken.is_empty(),
+            "frames taken for a lone ACK copy: {taken:?}"
         );
     }
 }
