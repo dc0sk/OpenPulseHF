@@ -15,6 +15,70 @@ this ledger adds the design rationale and the actually-observed results per chan
 
 ---
 
+## 2026-11-10 — A lone union-ACK copy skips the uncoded fallback (work plan M4, before the HF trip)
+
+- **Requirement/change:** REQ-FUN-06.
+  - On air (task 36, the Pi 5) each MFSK16 piece of an SL1 union ACK held the sender's receive loop
+    about 1.5 s. That is above the 0.5 s evidence floor.
+  - Measured: about 750 ms of it is the #1123 uncoded fallback (ranked 58, deferred exhaustive 332,
+    phase-2 acquisition 358 ms, x86), searching a burst that holds only an ACK.
+- **Design decision:** `docs/dev/design/ack-piece-skips-fallback.md`, with its review
+  `docs/dev/reviews/review-ack-piece-skips-fallback-2026-11-10.md` (APPROVE WITH CHANGES, all four
+  applied).
+  - A burst no longer than one MFSK16 copy + the tail slack, holding an MFSK16-ACK codeword and no FSK4
+    codeword, skips all three fallback sites.
+  - The length is the safety condition, used only while the shortest ID + FSK4 + gap + copy at the
+    active mode exceeds it.
+- **Implementation:** `crates/openpulse-modem/src/engine.rs`:
+  - `is_a_lone_ack_copy`, `shortest_id_samples` (cached);
+  - `fallback_entries`, `ack_pieces_skipped`;
+  - the skip at the ranked, deferred and phase-2 sites;
+  - the AFC restore;
+  - the guard reusing the result.
+- **Tests:** `engine::union_ack_guard_tests`:
+  - `a_lone_union_ack_copy_skips_the_uncoded_fallback`;
+  - `a_station_id_in_front_of_an_ack_is_still_decoded`;
+  - `an_id_in_front_of_a_union_ack_with_a_lost_fsk4_copy_is_still_decoded`;
+  - `a_mode_whose_short_id_fits_the_bound_skips_nothing`;
+  - `no_uncoded_frame_at_any_mode_is_taken_for_a_lone_ack_copy`.
+- **Results:**
+  - **With the change:** 6 of 6 `union_ack_guard_tests` pass (release).
+  - **Sabotage:** S1 (no length bound), S2 (no skip) and S3 (no margin) each turn exactly their test red.
+  - **The cost:** one piece is 82–86 ms with the skip, against 830–1 160 ms before (x86; a temporary
+    probe).
+  - **Gate:** `GATE: PASS 4d1c0ad7 clean`, 2862 passed and 0 failed.
+  - **Slow suites:** `scripts/slow-tests.sh ota` PASS (3 of 3), and `spectral` PASS (3 of 3).
+
+## 2026-11-10 — The on-air runner on HF: the transmission's edges inside the segment, and the passband, split and AGC read back (work plan M4)
+
+- **Requirement/change:** a VO: an HF run cannot key outside its segment, in the wrong mode, split, or on
+  the wrong AGC or filter. The software checks no band edge on transmit, and the runner's guard checked
+  only the dial; HF data segments are 13–20 kHz wide.
+- **Design decision:** `docs/dev/design/onair-runner-hf.md`. The mandatory review
+  (`docs/dev/reviews/review-onair-runner-hf-2026-11-10.md`) was APPROVE WITH CHANGES; all nine are
+  applied. The IC-9700's AGC conflict goes to the maintainer.
+- **Implementation:** `scripts/run-onair-twin-ota.sh`:
+  - the checks `rf_edges`, `edges_verdict`, `passband_floor_verdict`, `mode_verdict`, `agc_verdict`,
+    `passband_verdict` and `split_verdict`;
+  - `preflight`'s checks of the edges, the passband floor and the mode;
+  - `tune`'s read-backs of the passband, split and AGC;
+  - `rig_readback`'s evidence;
+  - the `check` and `band-self-test` actions.
+
+  The profiles: `docs/config/onair-k4-ic7300mk2.example.sh` (new), and the FT-991A display shift and the
+  FT-818 passband in the 2 m profiles. `docs/regulatory.md`'s 20 m segment is corrected (the IBP beacons).
+- **Tests:** `band-self-test`, 26 cases, and `preflight`'s wiring against unreachable hosts.
+- **Results:**
+  - **`BAND-SELF-TEST: PASS`.** All 9 sabotages turn their cases red.
+  - **The wiring:** an HF dial on the 2 m defaults is refused; a dial inside the band whose signal
+    crosses the top edge is refused (the old guard accepted it); plain USB on an Icom profile is refused.
+  - `WATCHDOG-SELF-TEST` is still PASS.
+  - **Not yet run on the stations.**
+  - **Gate:** `GATE: PASS 1f081178 clean`, 2857 passed and 0 failed (#1539).
+
+
+---
+
 ## 2026-11-10 — The on-air runner stops both stations by itself (work plan M3)
 
 - **Requirement/change:** a VO: on-air runs are bounded with nobody watching. In task 35 both daemons
@@ -109,7 +173,9 @@ this ledger adds the design rationale and the actually-observed results per chan
     - no MFSK16 recogniser turns pieces and the invariant red;
     - no FSK4 scan turns `an_ack_on_air_is_not_evidence`, pieces and the invariant red.
   - **Cost, worst case, x86 release:** 19 + 85 ms at the heads (83 + 170 ms over the whole bound).
-    The Pi 5 measured 31 + 126 ms, and station B's Pi 4 68 + 265 ms.
+    The Pi 5 measured 31 + 126 ms, and station B's Pi 4 68 + 265 ms, **on noise**. *Measured
+    2026-11-10: on a real union-ACK piece the guard costs 19 + 60 ms (x86). f2q's ~1.5 s per piece is the
+    #1123 uncoded fallback (830–1 160 ms against 81–84 ms without it, x86); see the design note.*
   - **Gate:** `GATE: PASS 53d07bf2 clean`, 2854 passed and 0 failed. `scripts/slow-tests.sh ota`:
     PASS, 3 of 3.
 

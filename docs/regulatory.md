@@ -2,7 +2,7 @@
 project: openpulsehf
 doc: docs/regulatory.md
 status: living
-last_updated: 2026-10-15
+last_updated: 2026-11-10
 ---
 
 # Regulatory Compliance
@@ -272,7 +272,8 @@ The IARU (International Amateur Radio Union) publishes band plans for Regions 1 
 | 40 m | 7.040–7.060 MHz | Narrowband digital modes (Region 1) |
 | 30 m | 10.140–10.150 MHz | Digital modes (all regions); 10.147–10.150 recommended for automatic stations |
 | 20 m | 14.070–14.099 MHz | Narrowband digital modes |
-| 20 m | 14.099–14.112 MHz | Beacons and wide-band digital (Region 1 and 2) |
+| 20 m | 14.099–14.101 MHz | IBP beacons (NCDXF at 14.100): never transmit here |
+| 20 m | 14.101–14.112 MHz | Wide-band digital (Region 1 and 2) |
 | 17 m | 18.095–18.105 MHz | Digital modes |
 | 15 m | 21.070–21.150 MHz | Narrowband digital modes |
 | 10 m | 28.050–28.120 MHz | Narrowband digital modes |
@@ -282,7 +283,7 @@ The IARU (International Amateur Radio Union) publishes band plans for Regions 1 
 OpenPulseHF should publish recommended dial frequencies for each supported bandwidth class aligned with the IARU band plan:
 
 - **`robust` profile (SL1–SL6, ≤ 500 Hz occupied BW):** operate in the narrowband digital sub-bands listed above.
-- **`fast` profile (up to ≈2031 Hz occupied BW once it climbs onto the OFDM rungs):** operate in sub-bands designated for wider digital modes where available (e.g. 14.099–14.112 MHz on 20 m, subject to national regulations). Verify with national band plans — not all administrations extend wide-band digital permission to the same segments.
+- **`fast` profile (up to ≈2031 Hz occupied BW once it climbs onto the OFDM rungs):** operate in sub-bands designated for wider digital modes where available (e.g. 14.101–14.112 MHz on 20 m, above the IBP beacons at 14.099–14.101, subject to national regulations). Verify with national band plans — not all administrations extend wide-band digital permission to the same segments.
 - **Relay nodes:** 10.147–10.150 MHz (30 m) is internationally recognised for automatic digital stations. Coordination with other automatic stations on the frequency is expected.
 
 ### Non-interference obligation

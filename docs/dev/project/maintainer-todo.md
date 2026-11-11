@@ -2,7 +2,7 @@
 project: openpulsehf
 doc: docs/dev/project/maintainer-todo.md
 status: draft
-last_updated: 2026-10-14
+last_updated: 2026-11-10
 ---
 
 # Maintainer TODO — what only you can do
@@ -80,10 +80,28 @@ asks first within each section. Report results in chat or as a comment on the li
   gh label delete milestone:M2 -R $R --yes; gh label delete milestone:after-v0.17 -R $R --yes
   ```
 
+## Rig work — M4 HF run (prepare; not yet scheduled)
+
+Plan: [`onair-hf-plan.md`](../onair-hf-plan.md). The pair (decision 28, "most likely"): **Elecraft K4 +
+1:9 unun random wire**, and **IC-7300MK2 + 1:49 end-fed (40/20/15/10 m)**, 100 W at most. Answers
+needed (the plan's open questions):
+- [ ] Where the two stations are and how far apart: this decides the band.
+- [ ] The first band and profile.
+- [ ] The tuners: the K4's ATU on the random wire? The IC-7300MK2 on the end-fed without its tuner? And
+  should a run allow `allow_integrated_tuner_on_high_swr`?
+- [ ] CAT:
+  - does the IC-7300MK2 answer to Hamlib 3073, and on which CI-V address and baud?
+  - the K4's CAT and audio path (USB, or LAN)?
+- [ ] Who attends each station during a run.
+- [ ] The operating power for the first run, within 100 W (proposed 10–20 W to start).
+- [ ] The witness receiver: which station, and which attenuator.
+
 ## Rig work — M3 on air (2 m)
 
-Station pair (decided 2026-10-02): **rpi51 + IC-9700** and **rpi53 + FT-818**, local, 144.640 MHz.
-FT-991A on dd2zm-landline later (remote; its RX path fails offline).
+Station pair as run (decision 28, 2026-11-10): **rpi51 + IC-9700 (A)** against **the remote FT-991A
+station (B)**, 144.640 MHz. The rpi53 + FT-818 pair of 2026-10-02 / decision 27 was not used for the
+evidence. **The 2 m campaign is done:** A2 is met in both directions on one build (tasks 32–33), and the
+idle gate and the watchdog are shown on air (tasks 34–36). See `workplan.md`, M3.
 
 - [ ] **G0–G3 on the 2 m pair**, per the re-baselined [`onair-execution-plan.md`](../onair-execution-plan.md)
   (isolators fitted; G3 decides whether the RFI is gone). Build both ends from the same commit.
