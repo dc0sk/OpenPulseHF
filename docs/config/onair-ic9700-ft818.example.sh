@@ -50,6 +50,8 @@ export A_REPO_DIR='${HOME}/git/OpenPulseHF'
 export A_RFPOWER=0.05                     # IC-9700: ~5 W of 100 W (0.5 would be ~50 W — do not)
 # IC-9700 AGC SLOW (Hamlib reads 3). With FAST the USB audio held a S9+55 dB burst at 4.9x the idle
 # floor and Gate 3 failed; SLOW gave 7.9x (2026-10-27). Set on the rig; the station check reads it.
+# SLOW, the maintainer's measured choice for the IC-9700 at Gate 3 (onair-tasks.md task 3: FAST 4.9x,
+# SLOW 7.9x). dcd-raised-floor.md asks for FAST; the conflict is the maintainer's to settle.
 export A_EXPECT_AGC=3
 
 # ── Station B — FT-818 + SCU-17 on rpi53 ─────────────────────────────────
@@ -90,6 +92,8 @@ export TEST_MODE_RIG_B="keep"             # FT-818: no mode sent; DIG/USER-U is 
 # What `rigctl m` reads once DIG/USER-U is set on the FT-818: PKTUSB (passband 0), read on rpi53 on
 # 2026-10-26 with Hamlib 4.6.2. The run stops if the reading differs.
 export TEST_MODE_EXPECT_B="PKTUSB"
+# The FT-818 in `keep` reads passband 0, so run-onair-twin-ota.sh cannot check its filter.
+export B_PASSBAND_EXPECT=any
 export BAND2M_MIN_HZ=144500000            # the runner refuses to key outside this range
 export BAND2M_MAX_HZ=144750000
 

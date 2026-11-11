@@ -65,6 +65,9 @@ export A_FREQ_OFFSET_HZ=0
 # 2026-10-31: A -> B 3 of 3, B -> A 1 of 1 PASS (onair-tasks.md, task 6). REQUIRES 065 = +1500 on the rig
 # (read back `EX065;` -> EX065+1500;): with 065 at 0 this offset puts the transmission 1.5 kHz off.
 export B_FREQ_OFFSET_HZ=1564
+# 1500 of those 1564 Hz are the FT-991A's menu 065 OTHER SHIFT, which moves the dial reading and not the RF:
+# run-onair-twin-ota.sh computes the transmission's edges from the dial minus this.
+export B_DISPLAY_SHIFT_HZ=1500
 
 # scripts/run-onair-twin-ota.sh (the A2 daemon runner) reads this profile too. It sends this passband
 # with the mode; 2400 is the passband run-onair-ic9700-ft991a.sh uses (its own default is 3000).
