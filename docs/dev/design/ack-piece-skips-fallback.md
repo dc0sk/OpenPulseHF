@@ -2,7 +2,7 @@
 project: openpulsehf
 doc: docs/dev/design/ack-piece-skips-fallback.md
 status: resolved
-last_updated: 2026-11-10
+last_updated: 2026-11-11
 ---
 
 # A union-ACK piece skips the uncoded fallback

@@ -2,7 +2,7 @@
 project: openpulsehf
 doc: docs/dev/reviews/review-ack-piece-skips-fallback-2026-11-10.md
 status: resolved
-last_updated: 2026-11-10
+last_updated: 2026-11-11
 ---
 
 # Review: a union-ACK piece skips the uncoded fallback (2026-11-10)
