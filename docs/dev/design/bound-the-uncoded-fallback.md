@@ -1,7 +1,7 @@
 ---
 project: openpulsehf
 doc: docs/dev/design/bound-the-uncoded-fallback.md
-status: draft
+status: resolved
 last_updated: 2026-11-11
 ---
 
@@ -10,7 +10,16 @@ last_updated: 2026-11-11
 Work plan M4, "before the HF trip" (the parked row on the uncoded-fallback stall). The maintainer,
 2026-11-11: "Bound the fallback now". It changes the receive path that delivers non-ladder traffic
 (station IDs, filexfer, handshake, QSY, relay, send-message bodies), so it is reviewed before it is
-built. Review: pending.
+built.
+- **The review: Fable, 2026-11-11, APPROVE WITH CHANGES**
+  (`docs/dev/reviews/review-bound-the-uncoded-fallback-2026-11-11.md`).
+- **Candidate A's wall-clock budget is rejected as the bound.** It would re-create #1066 (decodes when
+  idle, fails under load) in the receive path, and turn a debug-profile gate test red. **ρ-first
+  ordering is rejected too**, because the rescues are by construction frames the correlation ranked
+  low.
+- **What was built is a deterministic count over a re-ordered set, plus a settle gate on phase 2.** See
+  "As built", which supersedes the Candidates section.
+- **Implemented 2026-11-11.**
 
 ## Problem — measured
 
@@ -37,13 +46,20 @@ three sites, on one 16 k-sample failed burst (x86, release; a probe through `acc
 - **4 of them recovered only by the deferred exhaustive scan**
   (`WARN … ranked below the top 4 correlation peaks and was recovered only by the exhaustive scan`).
   All four were BPSK250 at onsets **2208, 2432, 2208, 2208**, about at the trigger.
-- **Phase-2 fallback decodes are not logged apart** from the other fallback decodes: UNCHECKED how many
-  there were.
+- **Phase-2 fallback decodes ARE logged apart** (corrected by the review), as `ota fallback decoded …
+  after acquisition`. That phrase occurs **0 times** in every on-air daemon log. The control is the same
+  filter finding `ota fallback decoded` 18 times. Two runs were at info level, so for those the 0 is a
+  lower bound. On the evidence, the phase-2 fallback entry has never decoded anything on air.
 - **So the deferred scan rescues about one fallback frame in five.** It cannot simply be skipped.
-- **Its scan order puts those rescues late.** The 64 onsets are ordered nearest
-  `trigger − 1024`, at BPSK250's 32-sample step, so they span `trigger − 2048 … trigger`. A frame at
-  about the trigger is about 1 024 samples from the centre, which is about the 60th onset tried. A
-  count cut keeps the onsets that never rescued and drops the ones that did.
+- **Its scan order puts those rescues late.** The 64 onsets are ordered nearest `trigger − 1024`, at
+  BPSK250's 32-sample step, so they span `trigger − 2048 … trigger`.
+  - **Reconstructed by the review** from the debug runs' `burst flushed … post= burst=` lines, where
+    lead = burst − post:
+    - the 2026-11-04 rescues had leads of **2248 and 2448**, so their frames sat **40 and 16 samples
+      before the trigger**;
+    - they were the **61st and 63rd** onsets tried (0-based), the second one the last of the 64.
+  - The other two rescues ran at info level, and their leads cannot be recovered.
+  - A count cut alone keeps the onsets that never rescued, and drops the ones that did.
 
 ## Candidates (for the review to choose or refute)
 
@@ -87,6 +103,58 @@ three sites, on one 16 k-sample failed burst (x86, release; a probe through `acc
 **The proposal is A**, possibly with B's ρ ordering, which A already uses. It is the only candidate that
 bounds the stall itself, on any CPU, and keeps every onset reachable when time allows. B and C each
 leave phase 2 unbounded.
+
+## As built (the review's changes)
+
+1. **A deterministic count** (change 1). `fallback_rescue_onsets` takes the same 64-onset set, nearest
+   `trigger − 1024`, then **orders it by distance to the trigger** and keeps the first
+   **16** (`OTA_FALLBACK_RESCUE_TRIED`): the 512 samples before the trigger at BPSK250.
+   - The deferred scan and the phase-2 fallback entry share it.
+   - The two reconstructible rescues become the 1st and 0th onsets tried.
+   - There is no wall-clock budget.
+2. **The phase-2 fallback entry runs only off frequency** (change 2). One settle at the trigger decides
+   it, as the coded scan already asks per candidate: `acquire_at_onset` is false inside its deadband.
+   On frequency, phase 1 has already tried the fallback at every rescue onset.
+   `fallback_phase2_settled_on_frequency` counts the skips.
+3. **No ρ-first ordering** (change 3).
+4. **The rescue's WARN carries `lead` and `from_trigger` = onset − lead** (change 4), so the next on-air
+   run measures where rescued frames sit. The rescue's rank in the ρ profile is not logged, because the
+   profile is not kept past the ranked site.
+5. **Tests** (change 5), both through `accumulate_capture` and `ota_decode_burst` with the fallback mode
+   set:
+
+   | test | shows |
+   |---|---|
+   | `the_fallback_rescue_tries_the_trigger_first` | an order test with the ranked site forced to miss (`fallback_ranked_k = 0`): a station ID just after the lead is found by the rescue |
+   | `the_phase2_fallback_entry_runs_only_off_frequency` | a BPSK250 frame whose preamble survives and whose body does not: on frequency, the phase-2 fallback entry is skipped; at +100 Hz it runs |
+
+   The existing suites stay green, including both `off_frequency_fallback_is_not_ladder` tests (+100 Hz,
+   which only phase 2's fallback entry recovers) and `ota_arm_uncoded_dispatch`.
+
+**Sabotage** (release, each restored from `HEAD`):
+
+| sabotage | goes red |
+|---|---|
+| **S1, the old order** (no sort) | the order test, **and both `off_frequency_fallback_is_not_ladder` tests**: with the cap and the old order, phase 2's acquisition span missed the frame, so the reorder is load-bearing for phase 2 too |
+| S2, the gate open | the phase-2 test |
+| S3, the gate shut | the phase-2 test and both off-frequency tests |
+
+**The cost, measured** with a temporary probe, on `main` and on this branch, on the same failed burst
+(21 648 samples: the broken-body BPSK250 frame; x86, release):
+
+| failed burst | `main` | this change |
+|---|---|---|
+| on frequency | 722 ms | **288 ms** |
+| at +100 Hz (phase 2 runs) | 1 258 ms | **507 ms** |
+
+**What this does not reach.**
+- At the Pi 5's ~1.8× x86 seen in f2q, an on-frequency failed burst is still about **520 ms**, just above
+  the 0.5 s evidence floor, and an off-frequency one about 900 ms.
+- The rest is the sites this change does not touch: the ranked site, the coded candidates' scans, and
+  the ladder's own phase 2.
+- **So the stall is cut by about 2.5×, not removed.** The station's Pi 5 figure is still to be measured.
+
+**Gate and slow suites:** see the PR.
 
 ## What it does not do
 
