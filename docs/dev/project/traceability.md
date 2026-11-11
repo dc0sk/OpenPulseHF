@@ -74,7 +74,7 @@ this ledger adds the design rationale and the actually-observed results per chan
     crosses the top edge is refused (the old guard accepted it); plain USB on an Icom profile is refused.
   - `WATCHDOG-SELF-TEST` is still PASS.
   - **Not yet run on the stations.**
-  - **Gate:** see the PR.
+  - **Gate:** `GATE: PASS 1f081178 clean`, 2857 passed and 0 failed (#1539).
 
 
 ---
