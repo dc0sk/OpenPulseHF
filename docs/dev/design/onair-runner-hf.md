@@ -2,7 +2,7 @@
 project: openpulsehf
 doc: docs/dev/design/onair-runner-hf.md
 status: resolved
-last_updated: 2026-11-10
+last_updated: 2026-11-11
 ---
 
 # The on-air runner on HF: the signal's edges inside the segment, the AGC and passband read back, and profiles for the HF pair
@@ -137,9 +137,8 @@ and how the rigs transmit, so it was reviewed before it was built.
    port can assert that line.
 6. **`EXPECT_AGC` defaults to 2,** which is Hamlib's FAST on the K4, the IC-7300 and the IC-9700
    (change 6).
-   - **The IC-9700 profile's SLOW (3) is unchanged.** It was the maintainer's measured choice at Gate 3
-     (task 3: FAST 4.9x, SLOW 7.9x), and `dcd-raised-floor.md` asks for FAST.
-   - That conflict goes to the maintainer; this design does not decide it.
+   - **The IC-9700 profile's SLOW (3) was left for the maintainer**, who chose FAST on 2026-11-11
+     (decision 29). The profile now expects 2.
    - An unreadable AGC says "unreadable" and fails closed.
 7. **No SWR stop** (change 7). The K4 has no SWR level, and the IC-7300 reads 0 / 1.0 in receive.
    Polling the rig during TX is what toggled the FT-818's VFOs. SWR is recorded once in

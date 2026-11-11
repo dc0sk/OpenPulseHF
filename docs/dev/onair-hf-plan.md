@@ -2,7 +2,7 @@
 project: openpulsehf
 doc: docs/dev/onair-hf-plan.md
 status: draft
-last_updated: 2026-11-10
+last_updated: 2026-11-11
 ---
 
 # On-air HF run plan: A1 + A2 with the release candidate
@@ -69,9 +69,8 @@ Chosen when the RC is cut. It depends on the stations' distance and the time of 
 - **AGC FAST on both rigs, read back before and after every run** (`design/dcd-raised-floor.md`). FAST is
   Hamlib's value 2 on the K4 and the IC-7300. The runner reads it and refuses anything else; it does not
   set it.
-  - **An open conflict, the maintainer's:** on 2 m the IC-9700 ran SLOW by the maintainer's measured choice
-    at Gate 3 (task 3: FAST 4.9x, SLOW 7.9x), while `dcd-raised-floor.md` requires FAST. Tasks 29–36 ran
-    FAST.
+  - **Settled (decision 29, 2026-11-11):** FAST on every receiving rig, the IC-9700 on 2 m included. Gate 3
+    had measured SLOW better (task 3), but tasks 29–36 ran FAST.
 - **The receive filter is ≥ 2.4 kHz.** No narrow filter: a 250 Hz filter decodes 0 of 180 (#1060,
   `release-1.0-criteria.md`). The FT-991A's known-good width was 2 400 Hz; for the K4 and the
   IC-7300MK2, UNCHECKED.
@@ -140,8 +139,7 @@ These are deferred here by earlier reviews; each is a line in the run's report.
   measured per rig on HF.
 - **The station profiles** (CAT model, audio device, levels, mode) name the IC-9700, FT-991A and
   FT-818. **New profiles are needed for the K4 and the IC-7300MK2.**
-- **Rig AGC is neither set nor checked.** The FT-818 profile expects the IC-9700 at AGC SLOW, the
-  maintainer's measured 2 m choice (see Receive settings).
+- **Rig AGC was neither set nor checked.** Now it is read back (FAST, decision 29).
 - **`RFPOWER` defaults and the remote station's 5 W cap** belong to the 2 m pair.
 
 **Done (`design/onair-runner-hf.md`, reviewed):**
