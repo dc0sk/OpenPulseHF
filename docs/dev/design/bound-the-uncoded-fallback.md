@@ -154,7 +154,7 @@ leave phase 2 unbounded.
   the ladder's own phase 2.
 - **So the stall is cut by about 2.5×, not removed.** The station's Pi 5 figure is still to be measured.
 
-**Gate and slow suites:** see the PR.
+**Gate:** `GATE: PASS bf28860f clean`, 2864 passed and 0 failed. **Slow suites:** `ota` 3 of 3 and `spectral` 3 of 3, PASS.
 
 ## What it does not do
 
