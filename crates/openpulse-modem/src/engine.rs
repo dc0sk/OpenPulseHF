@@ -367,6 +367,28 @@ const OTA_FALLBACK_RESCUE_ONSETS: usize = 64;
 /// At BPSK31's 256-sample step they span ±8192 either way.
 const OTA_FALLBACK_RESCUE_LEAD_BIAS: usize = 1024;
 
+/// How many of the rescue set's onsets the fallback tries, nearest the trigger first
+/// (`bound-the-uncoded-fallback.md`). The set still spans the whole ring before the trigger; the
+/// order puts the frames the on-air rescues found (16 and 40 samples before the trigger, which the old
+/// order tried 63rd and 61st of 64) first, and the count bounds the cost deterministically: 16 onsets
+/// at BPSK250's 32-sample step are the 512 samples before the trigger.
+const OTA_FALLBACK_RESCUE_TRIED: usize = 16;
+
+/// The fallback's rescue onsets: the set nearest `trigger - OTA_FALLBACK_RESCUE_LEAD_BIAS`, ordered by
+/// distance to the trigger, first `OTA_FALLBACK_RESCUE_TRIED` of them. One function for the deferred
+/// scan and the phase-2 fallback entry, so the two cannot drift.
+fn fallback_rescue_onsets(step: usize, scan_end: usize, trigger: usize) -> Vec<usize> {
+    let mut set = onsets_nearest(
+        step,
+        scan_end,
+        trigger.saturating_sub(OTA_FALLBACK_RESCUE_LEAD_BIAS),
+        OTA_FALLBACK_RESCUE_ONSETS,
+    );
+    set.sort_by_key(|&p| (p.abs_diff(trigger), p));
+    set.truncate(OTA_FALLBACK_RESCUE_TRIED);
+    set
+}
+
 /// Maximum AFC correction magnitude accepted after settling.
 ///
 /// The BPSK coarse stage's acquisition range is ±400 Hz (`range_hz = 400` in the plugin's
@@ -1067,6 +1089,12 @@ pub struct ModemEngine {
     fallback_entries: u64,
     /// Bursts taken for a lone MFSK16-ACK copy, for which the fallback was skipped.
     ack_pieces_skipped: u64,
+    /// Failed bursts whose phase-2 fallback entry was skipped because one settle at the trigger found
+    /// the fallback mode on frequency.
+    fallback_phase2_settled_on_frequency: u64,
+    /// How many correlation-ranked onsets the fallback's first site tries (`FALLBACK_RANKED_ONSETS`).
+    /// A field so a unit test can force the ranked site to miss and test the rescue's order alone.
+    fallback_ranked_k: usize,
     /// The shortest station ID's length at a mode, uncoded: the margin `is_a_lone_ack_copy` needs.
     shortest_id_cache: Option<(String, usize)>,
     /// Receiver-side streaming AGC on captured audio (default off). Normalises the level so the
@@ -1448,6 +1476,8 @@ impl ModemEngine {
             fallback_onset_ranks: [0; FALLBACK_RANKED_ONSETS + 1],
             fallback_entries: 0,
             ack_pieces_skipped: 0,
+            fallback_phase2_settled_on_frequency: 0,
+            fallback_ranked_k: FALLBACK_RANKED_ONSETS,
             shortest_id_cache: None,
             agc_enabled: false,
             // target RMS 0.3 (headroom below ±1.0), slow loop (α=0.02), ±40 dB clamp.
@@ -4047,8 +4077,7 @@ impl ModemEngine {
         let afc_before = self.afc_correction_hz;
         let mut last_err = ModemError::Demodulation("no onset attempted".into());
         let mut found = None;
-        let centre = trigger.saturating_sub(OTA_FALLBACK_RESCUE_LEAD_BIAS);
-        for start in onsets_nearest(step, scan_end, centre, OTA_FALLBACK_RESCUE_ONSETS) {
+        for start in fallback_rescue_onsets(step, scan_end, trigger) {
             let end = (start + max_frame_samples).min(n);
             if start >= end {
                 continue;
@@ -4659,7 +4688,7 @@ impl ModemEngine {
                     mode,
                     &samples.samples,
                     onset_bound,
-                    FALLBACK_RANKED_ONSETS,
+                    self.fallback_ranked_k,
                 ) {
                     Some(onsets) => {
                         let hit = self.decode_at_ranked_onsets(mode, &samples.samples, &onsets);
@@ -4902,6 +4931,8 @@ impl ModemEngine {
                 {
                     self.fallback_onset_ranks[FALLBACK_RANKED_ONSETS] += 1;
                     warn!(
+                        lead,
+                        from_trigger = onset as i64 - lead as i64,
                         "ota fallback: a {mode} frame at onset {onset} ranked below the top \
                          {FALLBACK_RANKED_ONSETS} correlation peaks and was recovered only by the \
                          exhaustive scan"
@@ -4939,8 +4970,39 @@ impl ModemEngine {
             // `Sl1` ladder decode, so an off-frequency station ID or file fragment moved the rung and
             // was ACKed (#1123's failure mode), and only its keying's first frame came out (#1461).
             let mut phase2: Vec<(SpeedLevel, String, FecMode)> = candidates.clone();
-            let fallback_at = fallback_mode
+            // Phase 2's fallback entry acquires an OFF-frequency frame; on frequency, phase 1 already tried
+            // the fallback at every rescue onset. One settle at the trigger says which, as the coded scan
+            // asks per candidate: `acquire_at_onset` is false inside the settle deadband. On air its
+            // 358 ms (x86) per failed burst had decoded nothing (`bound-the-uncoded-fallback.md`).
+            let sr = AudioConfig::default().sample_rate;
+            let fallback_off_frequency = |this: &mut Self, m: &str| -> bool {
+                this.afc_correction_hz = afc_before;
+                let (_, acq, min_frame, _) = this.frame_scan_geometry(m, sr);
+                let veto = this.build_preamble_veto(m, sr);
+                let off = this.acquire_at_onset(
+                    m,
+                    &samples.samples,
+                    lead.min(n),
+                    acq.max(min_frame),
+                    veto.as_ref(),
+                    0,
+                );
+                this.afc_correction_hz = afc_before;
+                off
+            };
+            let fallback_mode_off = match fallback_mode
                 .filter(|_| !ack_piece)
+                .filter(|m| !fallback_is_a_candidate(&candidates, m))
+            {
+                Some(m) => fallback_off_frequency(self, m),
+                None => false,
+            };
+            if fallback_mode.is_some() && !ack_piece && !fallback_mode_off {
+                self.fallback_phase2_settled_on_frequency =
+                    self.fallback_phase2_settled_on_frequency.wrapping_add(1);
+            }
+            let fallback_at = fallback_mode
+                .filter(|_| !ack_piece && fallback_mode_off)
                 .filter(|m| !fallback_is_a_candidate(&candidates, m))
                 .map(|m| {
                     phase2.push((SpeedLevel::Sl1, m.to_string(), FecMode::None));
@@ -4969,12 +5031,7 @@ impl ModemEngine {
                 // trigger (see the constant), and acquires across those onsets only; the ladder
                 // candidates keep their full ascending walk and full-span acquisition.
                 let (onsets, acquire_from, acquire_to) = if fallback_at == Some(i) {
-                    let near = onsets_nearest(
-                        step,
-                        scan_end,
-                        lead.min(n).saturating_sub(OTA_FALLBACK_RESCUE_LEAD_BIAS),
-                        OTA_FALLBACK_RESCUE_ONSETS,
-                    );
+                    let near = fallback_rescue_onsets(step, scan_end, lead.min(n));
                     let lo = near.iter().copied().min().unwrap_or(0);
                     let hi = near.iter().copied().max().unwrap_or(0);
                     (near, lo, hi)
@@ -12688,6 +12745,76 @@ mod union_ack_guard_tests {
         assert!(
             taken.is_empty(),
             "frames taken for a lone ACK copy: {taken:?}"
+        );
+    }
+
+    /// The rescue's order (`bound-the-uncoded-fallback.md`): with the ranked site forced to miss, as it
+    /// missed the four on-air rescues, a station ID whose head sits just before the trigger is found
+    /// inside the 16-onset rescue. The old order (nearest `trigger - 1024`) tried that region about
+    /// 60th of 64, past any cap of 16.
+    #[test]
+    fn the_fallback_rescue_tries_the_trigger_first() {
+        let lb = LoopbackBackend::new();
+        let mut tx = engine(&lb);
+        tx.transmit(b"DE DD2ZM", "BPSK250", None).unwrap();
+        let id = lb.drain_samples();
+        let mut rx = sl1_receiver();
+        rx.fallback_ranked_k = 0;
+        let exhaustive_before = rx.fallback_onset_ranks[FALLBACK_RANKED_ONSETS];
+        let bursts = run(&mut rx, &in_noise(&id, 21));
+        assert!(
+            bursts
+                .iter()
+                .any(|b| b.1.as_deref() == Some(b"DE DD2ZM".as_slice())),
+            "the ID was not rescued: {:?}",
+            bursts
+                .iter()
+                .map(|b| (b.0, b.1.is_some(), b.2))
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(
+            rx.fallback_onset_ranks[FALLBACK_RANKED_ONSETS],
+            exhaustive_before + 1,
+            "the ID was not found by the rescue (the ranked site was forced to miss)"
+        );
+    }
+
+    /// The phase-2 fallback entry runs only for an off-frequency burst. A BPSK250 frame whose preamble
+    /// survives and whose body does not fails every site. On frequency, one settle at the trigger skips
+    /// phase 2's fallback entry; at +100 Hz the entry still runs (`off_frequency_fallback_is_not_ladder`
+    /// is the end-to-end case).
+    #[test]
+    fn the_phase2_fallback_entry_runs_only_off_frequency() {
+        let mut counts = Vec::new();
+        for offset in [0.0f32, 100.0] {
+            let lb = LoopbackBackend::new();
+            let mut tx = engine(&lb);
+            tx.center_frequency += offset;
+            tx.transmit(&[0x5A; 48], "BPSK250", None).unwrap();
+            let mut frame = lb.drain_samples();
+            // Keep the preamble and the first symbols; replace the body with low noise, so no site decodes.
+            let keep = 63 * 32 + 16 * 32;
+            let mut st: u32 = 5;
+            for v in &mut frame[keep..] {
+                st = st.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+                *v = ((st >> 8) as f32 / (1u32 << 24) as f32 - 0.5) * 0.02;
+            }
+            let mut rx = sl1_receiver();
+            let before = rx.fallback_phase2_settled_on_frequency;
+            let bursts = run(&mut rx, &in_noise(&frame, 23));
+            assert!(
+                bursts.iter().all(|b| b.1.is_none()),
+                "a site decoded the broken frame"
+            );
+            counts.push(rx.fallback_phase2_settled_on_frequency - before);
+        }
+        assert!(
+            counts[0] >= 1,
+            "on frequency, the phase-2 fallback entry was not skipped: {counts:?}"
+        );
+        assert_eq!(
+            counts[1], 0,
+            "at +100 Hz the phase-2 fallback entry was skipped: {counts:?}"
         );
     }
 }

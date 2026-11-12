@@ -15,6 +15,33 @@ this ledger adds the design rationale and the actually-observed results per chan
 
 ---
 
+## 2026-11-11 — Bound the uncoded fallback: the rescue tries the trigger first, and phase 2's fallback entry runs only off frequency (work plan M4, before the HF trip)
+
+- **Requirement/change:** REQ-FUN-06. Every failed OTA burst paid the #1123 fallback's deferred
+  exhaustive scan (332 ms x86) and its phase-2 entry (358 ms): about 1.5 s per burst on the Pi 5, above
+  the 0.5 s evidence floor.
+- **Design decision:** `docs/dev/design/bound-the-uncoded-fallback.md`, with its review
+  `docs/dev/reviews/review-bound-the-uncoded-fallback-2026-11-11.md` (APPROVE WITH CHANGES; a count, not a
+  wall-clock budget).
+- **Implementation:** `crates/openpulse-modem/src/engine.rs`:
+  - `fallback_rescue_onsets` and `OTA_FALLBACK_RESCUE_TRIED` (16), shared by the deferred scan and the
+    phase-2 fallback entry;
+  - the phase-2 settle gate, counted in `fallback_phase2_settled_on_frequency`;
+  - `fallback_ranked_k`;
+  - the rescue WARN's `lead` and `from_trigger`.
+- **Tests:** `engine::union_ack_guard_tests::{the_fallback_rescue_tries_the_trigger_first,
+  the_phase2_fallback_entry_runs_only_off_frequency}`. The modem and daemon suites run 929 of 929,
+  including `off_frequency_fallback_is_not_ladder`.
+- **Results:**
+  - **Sabotage:** S1 (the old order) turns the order test and both off-frequency tests red; S2 (the gate
+    open) the phase-2 test; S3 (the gate shut) the phase-2 test and both off-frequency tests.
+  - **The cost** (x86, the same failed burst on `main` and here): on frequency 722 → 288 ms; at +100 Hz
+    1 258 → 507 ms. On the Pi 5 the on-frequency case stays just above the floor.
+  - **Gate:** `GATE: PASS bf28860f clean`, 2864 passed and 0 failed.
+  - **Slow suites:** `ota` 3 of 3 and `spectral` 3 of 3, PASS.
+
+---
+
 ## 2026-11-10 — A lone union-ACK copy skips the uncoded fallback (work plan M4, before the HF trip)
 
 - **Requirement/change:** REQ-FUN-06.
