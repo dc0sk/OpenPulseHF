@@ -2,7 +2,7 @@
 project: openpulsehf
 doc: docs/dev/onair-hf-plan.md
 status: draft
-last_updated: 2026-11-11
+last_updated: 2026-11-12
 ---
 
 # On-air HF run plan: A1 + A2 with the release candidate
@@ -124,7 +124,11 @@ These are deferred here by earlier reviews; each is a line in the run's report.
    0.5 s evidence floor.
    - **For union-ACK pieces it is fixed** (`ack-piece-skips-fallback.md`: 82–86 ms against
      830–1 160 ms, x86).
-   - **Bounding the fallback for other failed bursts** (fade-split fragments on HF) is still open.
+   - **Bounded for every failed burst** (#1542, `bound-the-uncoded-fallback.md`):
+     - the Pi 5 is now 444 ms on frequency (under the floor) and 823 ms off frequency;
+     - a Pi 4 is 921 ms and 1 652 ms.
+
+     **So the HF stations' controllers matter:** see open question 8.
 2. **The runner, generalised for HF:** done, see Runner. The first `check` on the HF pair reads every
    UNCHECKED item in the profile.
 3. **A 2 m run per direction on the RC**, if engine changes land after `a1dafca7` that an exchange
@@ -177,6 +181,8 @@ On 2 m the RSPdx sat beside station A. For HF:
 5. **Who attends each station during a run?** The watchdog bounds a run, but a run is attended.
 6. **The operating power** for the first run, within 100 W.
 7. **The witness receiver:** where, and with which attenuator?
+8. **Which computer controls each HF station?** A failed burst stalls the receive loop for 444 ms on a Pi 5
+   and 921 ms on a Pi 4, on frequency, against the 0.5 s evidence floor. A Pi 5 or faster is under it.
 
 ## Consumer
 

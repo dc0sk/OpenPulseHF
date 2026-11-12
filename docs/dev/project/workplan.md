@@ -2,7 +2,7 @@
 project: openpulsehf
 doc: docs/dev/project/workplan.md
 status: draft
-last_updated: 2026-11-11
+last_updated: 2026-11-12
 ---
 
 # Work plan — Release 1 ("basic modem")
@@ -227,7 +227,11 @@ Waiting on the maintainer (`maintainer-todo.md`): the key-to-audio probe, then F
 | Parking (2026-11-10, watchdog): `run-onair-twin-ota.sh watchdog-self-test` is run by hand, not by the gate. Add it as a gate step, as for the other checkers' self-tests (gate.sh `--self-test` after) | parked |
 | Parking (2026-11-10, #1535 spot-check): if only ONE station's daemon dies during a run, the survivor keeps keying to nobody until the watchdog's W1/W2/W3 fire (pre-existing). Consider W6: a station's daemon gone while the other runs, then cleanup | parked |
 | Parking (2026-11-10, task 36 review): the runner's sign-off wait is blind. The live `/tmp/twin-ota-daemon.log` carries ANSI escapes, so `signed_off`'s `kind="sign-off"` literal never matches and `last_tx`'s `cut` lands 4 bytes early; `run` always waits the full `SIGNOFF_WAIT_MAX`. The watchdog is unaffected, since it reads the events file. Strip ANSI in the remote grep, or run the daemon with ANSI off | parked |
-| Parking (2026-11-10, task 36 review; **measured** the same day): each failed burst costs the #1123 uncoded fallback scan. On a real SL1 union-ACK piece that is 830–1 160 ms of the 0.9–1.2 s failed-burst processing on x86; without the fallback mode it is 81–84 ms, of which the union-ACK guard is 19 + 60 ms. On the Pi 5 (f2q) it was about 1.5 s per piece. That is above the 0.5 s evidence floor ("one long read"), and pre-existing, not from #1531. **The targeted step is done (2026-11-10, `ack-piece-skips-fallback.md`):** a lone union-ACK copy skips the fallback, and one piece costs 82–86 ms against 830–1 160 ms (x86). **Bounded 2026-11-11 (`bound-the-uncoded-fallback.md`):** the rescue tries the 16 onsets nearest the trigger, and phase 2's fallback entry runs only off frequency. A failed burst costs 722 → 288 ms on frequency, and 1 258 → 507 ms at +100 Hz (x86). **Still open:** on the Pi 5 an on-frequency failed burst is about 520 ms, just above the 0.5 s floor. The rest is the ranked site, the coded scans and the ladder's own phase 2. Measure on the station, and decide on HF whether that remainder matters | open; measure on the Pi before the HF trip |
+| Parking (2026-11-10, task 36 review; **measured** the same day): each failed burst costs the #1123 uncoded fallback scan. On a real SL1 union-ACK piece that is 830–1 160 ms of the 0.9–1.2 s failed-burst processing on x86; without the fallback mode it is 81–84 ms, of which the union-ACK guard is 19 + 60 ms. On the Pi 5 (f2q) it was about 1.5 s per piece. That is above the 0.5 s evidence floor ("one long read"), and pre-existing, not from #1531. **The targeted step is done (2026-11-10, `ack-piece-skips-fallback.md`):** a lone union-ACK copy skips the fallback, and one piece costs 82–86 ms against 830–1 160 ms (x86). **Bounded 2026-11-11 (`bound-the-uncoded-fallback.md`):** the rescue tries the 16 onsets nearest the trigger, and phase 2's fallback entry runs only off frequency. A failed burst costs 722 → 288 ms on frequency, and 1 258 → 507 ms at +100 Hz (x86). **Measured on the stations (2026-11-12, before → after):**
+- the Pi 5: on frequency 1 260 → **444 ms** (under the 0.5 s floor), at +100 Hz 2 300 → **823 ms**;
+- the Pi 4: 2 545 → **921 ms** and 4 528 → **1 652 ms**.
+
+**Still above the floor:** off-frequency failed bursts, and every failed burst on a Pi 4. The rest is the ranked site, the coded scans and the ladder's own phase 2. Whether it matters depends on the HF pair's controllers, which are not yet named | open; decide with the HF pair's hardware |
 | Parking (2026-11-10, task 36 review): `nack_budget.rs` logs "a burst failed while the channel was still busy; no NACK keyed" even for a burst the engine already dropped at #1454, which misleads a count of bursts that reached the NACK path. Also the daemon wrapper's rc text names 124 and 137 but not 143 (SIGTERM from cleanup, the normal case) | parked |
 | Re-rank every `post-release-rerank` issue against what the air showed | after A2 |
 
