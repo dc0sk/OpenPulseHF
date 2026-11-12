@@ -2,7 +2,7 @@
 project: openpulsehf
 doc: docs/dev/design/bound-the-uncoded-fallback.md
 status: resolved
-last_updated: 2026-11-11
+last_updated: 2026-11-12
 ---
 
 # Bound the uncoded fallback on every failed burst
@@ -147,12 +147,26 @@ leave phase 2 unbounded.
 | on frequency | 722 ms | **288 ms** |
 | at +100 Hz (phase 2 runs) | 1 258 ms | **507 ms** |
 
-**What this does not reach.**
-- At the Pi 5's ~1.8× x86 seen in f2q, an on-frequency failed burst is still about **520 ms**, just above
-  the 0.5 s evidence floor, and an off-frequency one about 900 ms.
-- The rest is the sites this change does not touch: the ranked site, the coded candidates' scans, and
-  the ladder's own phase 2.
-- **So the stall is cut by about 2.5×, not removed.** The station's Pi 5 figure is still to be measured.
+**Measured on the station hardware (2026-11-12).** The same probe, run by the station session on each
+host, on `main` 0f52fa9c (before) and on bcbb7ba6 (after, this change), with nothing transmitting. The
+figures are the median of 3 rounds:
+
+| host | on frequency, before → after | +100 Hz, before → after |
+|---|---|---|
+| x86 (dev host) | 722 → **288 ms** | 1 258 → **507 ms** |
+| Pi 5 (rpi51, station A) | 1 260 → **444 ms** | 2 300 → **823 ms** |
+| Pi 4 (station B, rustc 1.96.1) | 2 545 → **921 ms** | 4 528 → **1 652 ms** |
+
+- **About 2.8× faster on both Pis**, and 2.5× on x86.
+- **On the Pi 5, an on-frequency failed burst is now under the 0.5 s evidence floor** (444 ms). My
+  earlier estimate of about 520 ms was 1.8× x86; the measured ratio is 1.5×.
+- **Still above the floor:**
+  - an off-frequency failed burst on the Pi 5 (823 ms);
+  - every failed burst on the Pi 4 (921 / 1 652 ms).
+- **The remainder is the sites this change does not touch:** the ranked site, the coded scans, and the
+  ladder's own phase 2.
+- **Whether it matters is a per-station question:** the HF pair's controllers are not yet named (the HF
+  plan's open questions).
 
 **Gate:** `GATE: PASS bf28860f clean`, 2864 passed and 0 failed. **Slow suites:** `ota` 3 of 3 and `spectral` 3 of 3, PASS.
 

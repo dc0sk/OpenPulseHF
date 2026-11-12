@@ -35,8 +35,12 @@ this ledger adds the design rationale and the actually-observed results per chan
 - **Results:**
   - **Sabotage:** S1 (the old order) turns the order test and both off-frequency tests red; S2 (the gate
     open) the phase-2 test; S3 (the gate shut) the phase-2 test and both off-frequency tests.
-  - **The cost** (x86, the same failed burst on `main` and here): on frequency 722 → 288 ms; at +100 Hz
-    1 258 → 507 ms. On the Pi 5 the on-frequency case stays just above the floor.
+  - **The cost** (the same failed burst on `main` and here, median of 3):
+    - x86: on frequency 722 → 288 ms, at +100 Hz 1 258 → 507 ms;
+    - **the Pi 5: 1 260 → 444 ms (now under the floor) and 2 300 → 823 ms**;
+    - the Pi 4: 2 545 → 921 ms and 4 528 → 1 652 ms.
+
+    The Pi figures were measured by the station on 2026-11-12.
   - **Gate:** `GATE: PASS bf28860f clean`, 2864 passed and 0 failed.
   - **Slow suites:** `ota` 3 of 3 and `spectral` 3 of 3, PASS.
 
